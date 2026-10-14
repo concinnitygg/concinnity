@@ -376,7 +376,7 @@ fn counting_references_matches_what_a_rename_moves() {
 #[test]
 fn a_renamed_world_still_builds() {
     let mut world = vec![
-        entry("FramePacing", serde_json::json!({"$id": "gfx"})),
+        entry("GraphicsConfig", serde_json::json!({"$id": "gfx"})),
         entry("Screen", serde_json::json!({"$id": "pause"})),
         entry("Font", serde_json::json!({"$id": "body", "size_px": 20})),
         entry(

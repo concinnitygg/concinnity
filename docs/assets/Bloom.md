@@ -3,8 +3,8 @@
 # Bloom
 
 Bloom: light from the brightest parts of the image spilling softly into
-their surroundings. One per world; with none declared, the defaults below
-apply.
+their surroundings. The `bloom` section of [GraphicsConfig](GraphicsConfig.md);
+a field left unset takes the default below.
 
 ## Parameters
 

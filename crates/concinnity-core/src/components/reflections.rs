@@ -3,8 +3,9 @@
 use crate::components::PassResolution;
 
 /// Reflections on glossy surfaces (water, polished floors): screen-space,
-/// hardware ray-traced, or neither. One per world; with none declared, the
-/// defaults below apply.
+/// hardware ray-traced, or neither. The `reflections` section of
+/// [GraphicsConfig](#graphicsconfig); a field left unset takes the default
+/// below.
 ///
 /// Both methods are on by default, which is the look on capable hardware. The
 /// `Auto` graphics quality preset forces screen-space reflections off below
@@ -13,10 +14,13 @@ use crate::components::PassResolution;
 /// ceiling only ever reduces, so turning a method off here holds on every tier.
 ///
 /// ```rust
-/// # use concinnity_core::components::Reflections;
-/// Reflections {
-///     ray_traced: false,
-///     max_distance: 60.0,
+/// # use concinnity_core::components::{GraphicsConfig, ReflectionsOverrides};
+/// GraphicsConfig {
+///     reflections: ReflectionsOverrides {
+///         ray_traced: Some(false),
+///         max_distance: Some(60.0),
+///         ..Default::default()
+///     },
 ///     ..Default::default()
 /// };
 /// ```
@@ -28,6 +32,7 @@ use crate::components::PassResolution;
     crate::ecs::AssetFields,
     crate::ecs::AssetDefault,
 )]
+#[asset(section)]
 #[serde(default)]
 pub struct Reflections {
     /// Screen-space reflections: mix reflected scene color over glossy

@@ -2,7 +2,9 @@
 //! file the asset owns, `default = <expr>` states the field's default, and
 //! `min = <expr>` / `max = <expr>` / `apply = <class>` declare it a parameter:
 //! the range an authored number is clamped into, and when a change to it takes
-//! effect (`live`, `rebuild`, `variant` or `restart`).
+//! effect (`live`, `rebuild`, `variant` or `restart`). `section` on a struct
+//! generates its sparse override twin; on a field whose type is such a twin,
+//! it clamps that section's parameters along with the parent's.
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -21,6 +23,9 @@ pub(crate) struct AssetAttrs {
     pub(crate) max: Option<Expr>,
     /// When a change to the field takes effect.
     pub(crate) apply: Option<Ident>,
+    /// On a struct, generate its sparse override twin; on a field, the field
+    /// holds such a twin.
+    pub(crate) section: bool,
 }
 
 const APPLY_CLASSES: [(&str, &str); 4] = [
@@ -81,6 +86,8 @@ pub(crate) fn asset_attrs(attrs: &[Attribute]) -> syn::Result<AssetAttrs> {
             };
             if meta.path.is_ident("owned_file") {
                 out.owned_file = true;
+            } else if meta.path.is_ident("section") {
+                out.section = true;
             } else if meta.path.is_ident("default") {
                 once(out.default.is_some(), "default")?;
                 out.default = Some(meta.value()?.parse()?);
@@ -102,8 +109,8 @@ pub(crate) fn asset_attrs(attrs: &[Attribute]) -> syn::Result<AssetAttrs> {
                 out.apply = Some(class);
             } else {
                 return Err(meta.error(
-                    "expected `owned_file`, `default = <expr>`, `min = <expr>`, \
-                     `max = <expr>` or `apply = <class>`",
+                    "expected `owned_file`, `section`, `default = <expr>`, \
+                     `min = <expr>`, `max = <expr>` or `apply = <class>`",
                 ));
             }
             Ok(())

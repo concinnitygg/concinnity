@@ -35,7 +35,7 @@ fn dump_settings_tab_probe_world() {
     };
     let mut assets = vec![
         serde_json::json!({"type":"Window","args":{"$id":"win","width":1280,"height":720}}),
-        serde_json::json!({"type":"FramePacing","args":{"$id":"gfx"}}),
+        serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
         serde_json::json!({"type":"MainMenu","args": crate::authoring::world::args_with_id(menu_args, "main_menu")}),
     ];
     expand_main_menus(&mut assets).unwrap();

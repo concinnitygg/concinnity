@@ -7,6 +7,7 @@ use syn::{Data, DeriveInput, Fields};
 
 use crate::asset_attrs::asset_attrs;
 use crate::schema::{AuthoredField, struct_schema};
+use crate::section::section_twin;
 use crate::serde_attrs::{container_attrs, field_attrs};
 
 /// The impl for `input`, and its schema, or the error naming why it cannot
@@ -25,6 +26,13 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         ));
     };
     let container = container_attrs(&input.attrs)?;
+    let section = asset_attrs(&input.attrs)?;
+    if section.owned_file || section.default.is_some() || section.is_param() {
+        return Err(syn::Error::new_spanned(
+            &input.ident,
+            "a struct's `#[asset(...)]` states only `section`",
+        ));
+    }
     if container.rename_all.is_some() {
         return Err(syn::Error::new_spanned(
             &input.ident,
@@ -64,6 +72,23 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         let ty = &field.ty;
         let asset = asset_attrs(&field.attrs)?;
         let owned = asset.owned_file;
+        if asset.section {
+            if asset.is_param() || key.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    field,
+                    "a section field is neither a parameter nor flattened",
+                ));
+            }
+            let ident = &field.ident;
+            clamps.push(quote! {
+                let mut nested = #fields_path::ClampedParams::new();
+                #fields_path::AssetFields::clamp_params(&mut self.#ident, &mut nested);
+                for clamped in &mut nested {
+                    clamped.section = ::core::option::Option::Some(#key);
+                }
+                out.extend(nested);
+            });
+        }
         if owned && key.is_empty() {
             return Err(syn::Error::new_spanned(
                 field,
@@ -85,7 +110,12 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
                     if let ::core::option::Option::Some((from, to)) =
                         #fields_path::clamp_param(&mut self.#ident, (#meta).range)
                     {
-                        out.push(#fields_path::ClampedParam { key: #key, from, to });
+                        out.push(#fields_path::ClampedParam {
+                            section: ::core::option::Option::None,
+                            key: #key,
+                            from,
+                            to,
+                        });
                     }
                 });
             }
@@ -171,6 +201,11 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let ident = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     let schema = struct_schema(input, &container, &authored)?;
+    let twin = if section.section {
+        section_twin(input, &authored)?
+    } else {
+        quote!()
+    };
     Ok(quote! {
         impl #impl_generics ::concinnity_core::ecs::asset_fields::AssetFields
             for #ident #ty_generics #where_clause
@@ -186,6 +221,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             #change_item
         }
         #schema
+        #twin
     })
 }
 

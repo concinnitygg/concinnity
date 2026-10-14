@@ -186,8 +186,9 @@ overlays the in-engine editor. Neither path exists in a shipped player.
 | Linux    | Vulkan          | none                                           | GLFW (X11 and Wayland)            |
 | iOS      | Metal           | none                                           | Host-owned view through the C ABI |
 
-Exactly one backend is compiled into a build. A build with no backend runs every
-world headless. DirectX 12 can fall back to the WARP software adapter.
+Exactly one backend is compiled into a build. A build with no backend runs a
+world with nothing to draw, or one that declares `AppConfig.headless`, and
+refuses any other. DirectX 12 can fall back to the WARP software adapter.
 
 ### 3.4 Layering rules
 
@@ -331,8 +332,7 @@ A world is a JSONL file: one entry per line, each declaring one asset. An entry
 is a JSON array of two columns, the asset's type and its args.
 
 ```json
-["Background",{"color":[0.5,0.75,1.0,1.0]}]
-["Shadows",{"map_size":2048}]
+["GraphicsConfig",{"background":{"color":[0.5,0.75,1.0,1.0]},"shadows":{"map_size":2048}}]
 ["Camera3D",{"fov_y_degrees":75.0,"position":[0.0,4.0,22.0]}]
 ["Texture",{"$id":"tex_stone","generator":"stone","resolution":256}]
 ["Material",{"$id":"mat_stone","albedo":"tex_stone","roughness":0.88}]
@@ -918,13 +918,13 @@ Systems are then initialized in run order. Graphics init is by far the largest.
 
 Graphics init runs once, on the first tick:
 
-1. **Resolve render settings.** Merge the settings assets (`FramePacing`,
-   `Shadows`, `TextureFiltering`, `AmbientOcclusion`, `Reflections`,
-   `IndirectLighting`, `AntiAliasing`, `Exposure`, `Bloom`, `Vignette`,
-   `Display`, `Culling`, the `ColorLut` strength) and `StreamingConfig` with
-   persisted settings and launch options, and resolve the quality ceiling
-   (section 12.17).
-2. **Drain world content.** Window, background, settings assets, meshes, procedural meshes,
+1. **Resolve render settings.** Take each `GraphicsConfig` section's defaults,
+   replace every field the world sets, cap the result under the quality ceiling
+   (section 12.17), then apply persisted settings and launch options; the
+   `ColorLut` strength and `StreamingConfig` join the same snapshot. A field
+   the world leaves unset follows the quality tier, and a world with no
+   `GraphicsConfig` resolves as one with every field unset.
+2. **Drain world content.** Window, graphics settings, meshes, procedural meshes,
    models, placements, shaders, textures, voxel worlds, block types, rooms.
 3. **Decode geometry.** Mesh payloads, room geometry, skinned geometry with
    skeletons and morph targets. Mesh sources owned by a non-start scene skip
@@ -977,23 +977,26 @@ the render mode every render-band system is gated on. Four conditions are checke
 in order, so the GPU is only probed for a world that would otherwise open a
 window:
 
-| #   | Condition                                   | Result   |
-| --- | ------------------------------------------- | -------- |
-| 1   | The world declares `AppConfig.headless`.    | Headless |
-| 2   | The world holds nothing flagged `renders`.  | Headless |
-| 3   | The build compiles no render backend.       | Headless |
-| 4   | The GPU probe finds no usable device.       | Headless |
-| -   | Otherwise.                                  | Rendered |
+| #   | Condition                                   | Result             |
+| --- | ------------------------------------------- | ------------------ |
+| 1   | The world declares `AppConfig.headless`.    | Headless           |
+| 2   | The world holds nothing flagged `renders`.  | Headless           |
+| 3   | The build compiles no render backend.       | Fails to start     |
+| 4   | The GPU probe finds no usable device.       | Fails to start     |
+| -   | Otherwise.                                  | Rendered           |
 
 The `renders` flag belongs to the registry, the same flag the cook's companion
-pass reads to inject a `Window`, so a cooked world and one assembled in code
-answer identically. It marks what draws: geometry, text, sprites, a screen, a
-window. A camera, a light, or an unplaced mesh draws nothing by itself.
+pass reads to inject a `Window` (and, through the `Window`, an empty
+`GraphicsConfig`), so a cooked world and one assembled in code answer
+identically. It marks what draws: geometry, text, sprites, a screen, a window.
+A camera, a light, or an unplaced mesh draws nothing by itself.
 
-Condition 4 is narrow on purpose: no adapter or device at all. A GPU that is
-present and then fails to build a backend is a startup failure (section 24.3),
-not consent to run blind. `cn list --systems` applies conditions 1 and 2 only, so
-the schedule a world implies does not change with the build host.
+Content that draws needs a renderer: conditions 3 and 4 refuse the run with an
+error naming `AppConfig.headless` rather than running it blind. Condition 4 is
+narrow: no adapter or device at all. A GPU that is present and then fails to
+build a backend is the same startup failure (section 24.3). `cn list --systems`
+applies conditions 1 and 2 only, so the schedule a world implies does not change
+with the build host.
 
 ### 10.2 The frame loop
 
@@ -1648,7 +1651,7 @@ Point and area lights do not cast shadows.
 linear depth, a horizon-search kernel, and a depth-aware blur built from 2 x 2
 gathers. The result is an 8-bit term at render resolution.
 
-**Screen-space global illumination** (`IndirectLighting = ssgi`):
+**Screen-space global illumination** (`indirect_lighting.technique = ssgi`):
 
 1. Build a min/max linear-depth pyramid.
 2. Trace 1 to 4 cosine-weighted hemisphere rays per pixel (default 1) through
@@ -2530,6 +2533,7 @@ dispatches recovery on the class:
 | ---------------- | --------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------- |
 | Missing data     | The primary blob's path does not exist. | "Failed to find the data blob: `<path>`" | "no compiled world data at `<path>`, run `concinnity build` first" |
 | Unreadable data  | The path exists but the load failed.    | "Failed to read the data blob: `<path>`" | "compiled world data at `<path>` failed to load: `<status>`"      |
+| No renderer      | Content that draws, and no backend or GPU. | "This app could not start its renderer." with the cause | "failed to start app: the renderer could not start: `<cause>`" |
 
 Both messages name the path, because the path is the actionable part. Failures
 are always logged, and also shown on screen when a window can be stood up, so a

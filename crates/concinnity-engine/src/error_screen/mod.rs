@@ -36,6 +36,9 @@ const IDENTITY_VIEW: [[f32; 4]; 4] = [
 /// Blocks the calling thread until dismissed, and must run on the main thread:
 /// it creates the process's window.
 pub(crate) fn show(title: &str, message: &str) -> bool {
+    if !crate::device::AVAILABLE {
+        return false;
+    }
     let Some(builtin) = crate::gfx::builtin_font::load(FONT_HANDLE) else {
         return false;
     };

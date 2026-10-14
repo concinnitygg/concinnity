@@ -22,7 +22,7 @@ use concinnity_core::components::Transform;
 use concinnity_core::components::UiAction;
 use concinnity_core::components::UpscaleQuality;
 use concinnity_core::components::compiled_programs;
-use concinnity_core::components::{Background, Culling};
+use concinnity_core::components::{BackgroundOverrides, GraphicsConfig};
 use concinnity_core::components::{
     Camera3D, DespawnRequest, HitRegion, Material, Prop, RenderHandle, ReparentRequest, Scene,
     SceneCommand, Shader, SpawnRequest, Sprite, StreamingConfig, TextLabel, Window,
@@ -283,6 +283,12 @@ fn scene_builder() -> WorldBuilder {
 // The same representative world with a caller-chosen window title, so a test can
 // tell two worlds apart in the captured `InitSnapshot` (the live-swap tests).
 fn titled_scene(title: &str) -> WorldBuilder {
+    configured_scene(title, GraphicsConfig::default())
+}
+
+// The representative world with `graphics` as its settings, over the scene's
+// background color.
+fn configured_scene(title: &str, graphics: GraphicsConfig) -> WorldBuilder {
     let mut b = WorldBuilder::new();
     b.push(Window {
         title: title.to_string(),
@@ -290,8 +296,11 @@ fn titled_scene(title: &str) -> WorldBuilder {
         height: 360,
         ..Default::default()
     });
-    b.push(Background {
-        color: [0.1, 0.2, 0.3, 1.0],
+    b.push(GraphicsConfig {
+        background: BackgroundOverrides {
+            color: Some([0.1, 0.2, 0.3, 1.0]),
+        },
+        ..graphics
     });
     b.push_shaders();
     b.push(Camera3D::bake(Default::default()));
@@ -742,7 +751,7 @@ fn post_settings_under(
 ) -> backend_init::PostSettings {
     let ceiling = resolve_ceiling(preset, &GpuProfile::UNKNOWN);
     let graphics = SettingsLayers::new(world, &ceiling, user).resolve();
-    super::init::post_settings(&graphics, world, &LaunchRequest::default())
+    super::init::post_settings(&graphics, &LaunchRequest::default())
 }
 
 #[test]
@@ -764,14 +773,14 @@ fn post_settings_hdr_samples_follow_the_clamped_aa_mode() {
 }
 
 #[test]
-fn post_settings_upscale_scale_is_native_without_an_anti_aliasing() {
+fn post_settings_upscale_scale_follows_the_render_scale_without_a_section() {
     let user = UserGraphicsSettings {
         render_scale: Some(UpscaleQuality::Performance),
         ..Default::default()
     };
     let undeclared = WorldSettings::default();
-    let native = post_settings_under(&undeclared, &user, QualityPreset::Custom);
-    assert_eq!(native.upscale_scale, 1.0);
+    let scaled = post_settings_under(&undeclared, &user, QualityPreset::Custom);
+    assert_eq!(scaled.upscale_scale, UpscaleQuality::Performance.scale());
 
     let declared = effects_world(&QualityEffects::default());
     let scaled = post_settings_under(&declared, &user, QualityPreset::Custom);
@@ -2103,32 +2112,31 @@ fn effects(f: impl FnOnce(&mut QualityEffects)) -> QualityEffects {
     effects
 }
 
-// The authored settings of a world declaring `effects` and a `Culling`.
+// A `GraphicsConfig` setting every field of the quality-governed sections to
+// `effects`'.
+fn effects_config(effects: QualityEffects) -> GraphicsConfig {
+    GraphicsConfig {
+        ambient_occlusion: effects.ambient_occlusion.into(),
+        reflections: effects.reflections.into(),
+        indirect_lighting: effects.indirect_lighting.into(),
+        anti_aliasing: effects.anti_aliasing.into(),
+        exposure: effects.exposure.into(),
+        ..Default::default()
+    }
+}
+
+// The authored settings of a world setting `effects`.
 fn effects_world(effects: &QualityEffects) -> WorldSettings {
+    let graphics = effects_config(effects.clone());
     WorldSettings::new(WorldAssets {
-        ambient_occlusion: Some(&effects.ambient_occlusion),
-        reflections: Some(&effects.reflections),
-        indirect_lighting: Some(&effects.indirect_lighting),
-        anti_aliasing: Some(&effects.anti_aliasing),
-        exposure: Some(&effects.exposure),
-        culling: Some(&Culling::default()),
+        graphics: Some(&graphics),
         ..Default::default()
     })
 }
 
-// The scene world declaring caller-shaped quality effects, and a `Culling`.
-// The upscaler's render scale is gated on the world declaring an
-// `AntiAliasing`, so any test of that path must author one rather than lean on
-// the defaults.
+// The scene world setting caller-shaped quality effects.
 fn effects_scene(effects: QualityEffects) -> WorldBuilder {
-    let mut b = scene_builder();
-    b.push(effects.ambient_occlusion);
-    b.push(effects.reflections);
-    b.push(effects.indirect_lighting);
-    b.push(effects.anti_aliasing);
-    b.push(effects.exposure);
-    b.push(Culling::default());
-    b
+    configured_scene("mock world", effects_config(effects))
 }
 
 // The resolved settings snapshot init hands to SettingsSystem: the live values
@@ -4578,8 +4586,11 @@ fn an_instanced_vertex_shader_payload_reaches_the_backend() {
         height: 360,
         ..Default::default()
     });
-    b.push(Background {
-        color: [0.1, 0.2, 0.3, 1.0],
+    b.push(GraphicsConfig {
+        background: BackgroundOverrides {
+            color: Some([0.1, 0.2, 0.3, 1.0]),
+        },
+        ..Default::default()
     });
     b.push_shader(&["vertex_main_bindless", "fragment_main_bindless"]);
     b.push(Camera3D::bake(Default::default()));

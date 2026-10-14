@@ -22,15 +22,15 @@ pub(crate) fn select(world: Inner) -> Box<dyn Driver> {
 }
 
 // The loop an already-loaded engine runtime runs on, which is the runtime's own
-// answer: it resolves a world with nothing to draw, a world that asked for
-// headless, a build with no backend, and a machine with no GPU all to the same
-// place. Anything else keeps the windowed loop.
+// answer: a world with nothing to draw and a world that asked for headless run
+// headless. Anything else keeps the engine's loop, whose start refuses a world
+// with something to draw on a build or machine that cannot draw it.
 #[cfg(feature = "std")]
 pub(crate) fn adopt(mut runtime: concinnity_engine::Runtime) -> Box<dyn Driver> {
-    if runtime.render_mode().renders() {
-        Box::new(runtime)
-    } else {
-        headless(runtime.into_world())
+    use concinnity_engine::ecs::render_mode::Resolution;
+    match runtime.render_resolution() {
+        Resolution::Headless(_) => headless(runtime.into_world()),
+        Resolution::Rendered | Resolution::Unavailable(_) => Box::new(runtime),
     }
 }
 
@@ -121,22 +121,38 @@ mod tests {
         assert_default_loop_is_headless(world);
     }
 
-    // With no backend feature there is no renderer to drive, so the loop a
-    // world runs on by default IS the headless one: this plain `run` returns in
-    // process rather than standing up a window and waiting for it. Under a
-    // backend the same call would never return, which is why the assertion is
-    // the backend-free build's alone.
-    #[cfg(not(any(
-        feature = "native",
-        feature = "metal",
-        feature = "directx",
-        feature = "vulkan"
-    )))]
+    // With no backend feature there is no renderer to drive: a world that
+    // draws is refused at start with an error naming the opt-out, rather than
+    // run blind, and the same world declaring `AppConfig.headless` runs in
+    // process. Under a backend the refused run would open a window instead,
+    // which is why the assertion is the backend-free `std` build's alone.
+    #[cfg(all(
+        feature = "std",
+        not(any(
+            feature = "native",
+            feature = "metal",
+            feature = "directx",
+            feature = "vulkan"
+        ))
+    ))]
     #[test]
-    fn the_default_loop_is_headless_with_no_backend_compiled_in() {
+    fn content_that_draws_needs_a_backend_or_the_headless_opt_out() {
         let mut world = World::new();
         world.add_component(Window::default());
+        let refused = App::from_world(world)
+            .run()
+            .expect_err("no backend to draw with");
+        assert!(
+            refused.to_string().contains("AppConfig.headless"),
+            "{refused}"
+        );
 
+        let mut world = World::new();
+        world.add_component(Window::default());
+        world.add_component(AppConfig {
+            headless: true,
+            ..Default::default()
+        });
         App::from_world(world).run().expect("the run ends");
     }
 }

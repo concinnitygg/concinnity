@@ -66,10 +66,7 @@ macro_rules! for_each_component {
             // minted by a running world.
             stored: {
                 Window            => $crate::components::Window { gen, external, singleton, renders, consumed },
-                FramePacing       => $crate::components::FramePacing { gen, external, singleton, consumed },
-                Shadows           => $crate::components::Shadows { gen, external, singleton, consumed },
-                TextureFiltering  => $crate::components::TextureFiltering { gen, external, singleton, consumed },
-                Background        => $crate::components::Background { gen, external, singleton, consumed },
+                GraphicsConfig    => $crate::components::GraphicsConfig { gen, external, singleton, consumed },
                 Shader            => $crate::components::Shader { gen, external, compiled, consumed },
                 Camera3D          => $crate::components::Camera3D { gen, external, useful_blank, live, args: Camera3D },
                 CameraTrack       => $crate::components::CameraTrack { gen, external, singleton, args: CameraTrack },
@@ -91,15 +88,6 @@ macro_rules! for_each_component {
                 BlockType         => $crate::components::BlockType { gen, external, useful_blank, consumed },
                 VoxelChunk        => $crate::components::VoxelChunk { gen, external, compiled, validate: voxel_chunk, consumed },
                 InstancedProp     => $crate::components::InstancedProp { gen, external, renders, validate: instanced_prop, consumed },
-                AmbientOcclusion  => $crate::components::AmbientOcclusion { gen, external, singleton, consumed },
-                Reflections       => $crate::components::Reflections { gen, external, singleton, consumed },
-                IndirectLighting  => $crate::components::IndirectLighting { gen, external, singleton, consumed },
-                AntiAliasing      => $crate::components::AntiAliasing { gen, external, singleton, consumed },
-                Exposure          => $crate::components::Exposure { gen, external, singleton, consumed },
-                Bloom             => $crate::components::Bloom { gen, external, singleton, consumed },
-                Vignette          => $crate::components::Vignette { gen, external, singleton, consumed },
-                Display           => $crate::components::Display { gen, external, singleton, consumed },
-                Culling           => $crate::components::Culling { gen, external, singleton, consumed },
                 Animation         => $crate::components::Animation { gen, external, consumed },
                 SkeletonPose      => $crate::components::SkeletonPose { runtime, build: skeleton_pose },
                 StreamingConfig   => $crate::components::StreamingConfig { gen, external, singleton, consumed },
@@ -479,31 +467,35 @@ mod tests {
     // each value it moved instead of logging it.
     #[test]
     fn validation_clamps_ranged_fields_and_reports_them() {
-        use crate::components::AmbientOcclusion;
+        use crate::components::{AmbientOcclusionOverrides, GraphicsConfig};
         use crate::ecs::asset_fields::ClampedParam;
 
-        let authored = AmbientOcclusion {
-            intensity: 9.0,
-            radius: 0.25,
+        let authored = GraphicsConfig {
+            ambient_occlusion: AmbientOcclusionOverrides {
+                intensity: Some(9.0),
+                radius: Some(0.25),
+                ..Default::default()
+            },
             ..Default::default()
         };
-        let (ComponentAsset::AmbientOcclusion(ao), clamped) =
+        let (ComponentAsset::GraphicsConfig(config), clamped) =
             ComponentAsset::from(authored).validated()
         else {
             panic!("the value keeps its variant through validation");
         };
-        assert_eq!(ao.intensity, 4.0);
-        assert_eq!(ao.radius, 0.25);
+        assert_eq!(config.ambient_occlusion.intensity, Some(4.0));
+        assert_eq!(config.ambient_occlusion.radius, Some(0.25));
         assert_eq!(
             clamped,
             [ClampedParam {
+                section: Some("ambient_occlusion"),
                 key: "intensity",
                 from: 9.0,
                 to: 4.0,
             }]
         );
 
-        let (_, none) = ComponentAsset::from(AmbientOcclusion::default()).validated();
+        let (_, none) = ComponentAsset::from(GraphicsConfig::default()).validated();
         assert!(none.is_empty(), "{none:?}");
     }
 
@@ -511,22 +503,29 @@ mod tests {
     // runtime to report, once.
     #[test]
     fn a_typed_build_keeps_its_clamps_for_the_caller() {
-        use crate::components::{AmbientOcclusion, Bloom};
+        use crate::components::{AmbientOcclusionOverrides, GraphicsConfig};
 
         let mut world = crate::ecs::World::new();
-        world.add_component(AmbientOcclusion {
-            intensity: -1.0,
+        world.add_component(GraphicsConfig {
+            ambient_occlusion: AmbientOcclusionOverrides {
+                intensity: Some(-1.0),
+                ..Default::default()
+            },
             ..Default::default()
         });
-        world.add_component(Bloom::default());
         assert_eq!(
-            world.query::<AmbientOcclusion>().next().unwrap().intensity,
-            0.0
+            world
+                .query::<GraphicsConfig>()
+                .next()
+                .unwrap()
+                .ambient_occlusion
+                .intensity,
+            Some(0.0)
         );
         let clamped = world.take_clamped_params();
         assert_eq!(clamped.len(), 1);
-        assert_eq!(clamped[0].0, "AmbientOcclusion");
-        assert_eq!(clamped[0].1.key, "intensity");
+        assert_eq!(clamped[0].0, "GraphicsConfig");
+        assert_eq!(clamped[0].1.path(), "ambient_occlusion.intensity");
         assert!(world.take_clamped_params().is_empty());
     }
 

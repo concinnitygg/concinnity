@@ -309,7 +309,7 @@ mod tests {
     // The `--systems` path drives end to end on a valid world.
     #[test]
     fn list_with_systems_flag_is_ok() {
-        let (_dir, path) = write_world("[\"FramePacing\",{\"$id\":\"gfx\"}]\n");
+        let (_dir, path) = write_world("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
         list(Some(&path), false, true).unwrap();
     }
 
@@ -383,22 +383,22 @@ mod tests {
 
     #[test]
     fn list_prints_known_and_unknown_types() {
-        // FramePacing resolves through the component registry, AudioClip
+        // GraphicsConfig resolves through the component registry, AudioClip
         // through the resource-asset registry; the made-up type falls back
         // to "?" origin / payload without erroring.
         let (_dir, path) = write_world(concat!(
-            "[\"FramePacing\",{\"$id\":\"gfx\"}]\n",
+            "[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n",
             "[\"AudioClip\",{\"$id\":\"clip\"}]\n",
             "[\"NotARealAssetType\",{\"$id\":\"odd\"}]\n",
-            "[\"FramePacing\",{}]\n",
+            "[\"GraphicsConfig\",{}]\n",
         ));
         list(Some(&path), false, false).unwrap();
     }
 
     #[test]
     fn registration_for_resolves_component_types() {
-        let r = registration_for("FramePacing").unwrap();
-        assert_eq!(r.type_name, "FramePacing");
+        let r = registration_for("GraphicsConfig").unwrap();
+        assert_eq!(r.type_name, "GraphicsConfig");
     }
 
     #[test]
@@ -445,7 +445,7 @@ mod tests {
 
     #[test]
     fn list_expanded_runs_the_build_front_half() {
-        let (_dir, path) = write_world("[\"FramePacing\",{\"$id\":\"gfx\"}]\n");
+        let (_dir, path) = write_world("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
         list(Some(&path), true, false).unwrap();
     }
 

@@ -306,7 +306,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let source = triangle_gltf(dir.path());
         let mut assets = vec![
-            serde_json::json!({"type":"FramePacing","args":{"$id":"gfx"}}),
+            serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
             scene_import("bistro", &source, serde_json::json!({})),
         ];
         let mut report = ExpandReport::default();

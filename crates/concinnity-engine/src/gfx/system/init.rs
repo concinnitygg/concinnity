@@ -21,9 +21,8 @@ use concinnity_core::components::WindowMode;
 use concinnity_core::components::build_skeleton_from_joint_defs;
 use concinnity_core::components::hdr_sample_count;
 use concinnity_core::components::{
-    AmbientOcclusion, AntiAliasing, Background, BlockType, Bloom, Camera3D, Culling, Display,
-    Exposure, FramePacing, HitRegion, IndirectLighting, Material, Model, Reflections, Shader,
-    Shadows, StreamingConfig, TextureFiltering, Vignette, VoxelWorld, Window,
+    BlockType, Camera3D, GraphicsConfig, HitRegion, Material, Model, Shader, StreamingConfig,
+    VoxelWorld, Window,
 };
 use concinnity_core::ecs::FontHandle;
 use concinnity_core::ecs::FrameRateCap;
@@ -246,64 +245,6 @@ fn capture_hud_chips(ctx: &PipelineContext) -> (Vec<AssetId>, Vec<AssetId>) {
     (debug, stat)
 }
 
-// The settings assets a world declares, drained once at init.
-#[derive(Default)]
-struct DeclaredSettings {
-    frame_pacing: Option<FramePacing>,
-    shadows: Option<Shadows>,
-    texture_filtering: Option<TextureFiltering>,
-    ambient_occlusion: Option<AmbientOcclusion>,
-    reflections: Option<Reflections>,
-    indirect_lighting: Option<IndirectLighting>,
-    anti_aliasing: Option<AntiAliasing>,
-    exposure: Option<Exposure>,
-    bloom: Option<Bloom>,
-    vignette: Option<Vignette>,
-    display: Option<Display>,
-    culling: Option<Culling>,
-}
-
-impl DeclaredSettings {
-    fn drain(ctx: &mut PipelineContext) -> Self {
-        fn first<C: concinnity_core::ecs::ComponentSlot>(ctx: &mut PipelineContext) -> Option<C> {
-            ctx.drain::<C>().into_iter().next()
-        }
-        Self {
-            frame_pacing: first(ctx),
-            shadows: first(ctx),
-            texture_filtering: first(ctx),
-            ambient_occlusion: first(ctx),
-            reflections: first(ctx),
-            indirect_lighting: first(ctx),
-            anti_aliasing: first(ctx),
-            exposure: first(ctx),
-            bloom: first(ctx),
-            vignette: first(ctx),
-            display: first(ctx),
-            culling: first(ctx),
-        }
-    }
-
-    fn assets(&self) -> WorldAssets<'_> {
-        WorldAssets {
-            frame_pacing: self.frame_pacing.as_ref(),
-            shadows: self.shadows.as_ref(),
-            texture_filtering: self.texture_filtering.as_ref(),
-            ambient_occlusion: self.ambient_occlusion.as_ref(),
-            reflections: self.reflections.as_ref(),
-            indirect_lighting: self.indirect_lighting.as_ref(),
-            anti_aliasing: self.anti_aliasing.as_ref(),
-            exposure: self.exposure.as_ref(),
-            bloom: self.bloom.as_ref(),
-            vignette: self.vignette.as_ref(),
-            display: self.display.as_ref(),
-            culling: self.culling.as_ref(),
-            lut_strength: None,
-            streaming: None,
-        }
-    }
-}
-
 // The blend strength of the world's first `ColorLut`, read from its compiled
 // payload, or `None` without one.
 fn color_lut_strength(ctx: &mut PipelineContext) -> Option<f32> {
@@ -315,7 +256,6 @@ fn color_lut_strength(ctx: &mut PipelineContext) -> Option<f32> {
 // The post-processing config the backend is built with.
 pub(super) fn post_settings(
     graphics: &ResolvedSettings,
-    authored: &WorldSettings,
     launch: &LaunchRequest,
 ) -> backend_init::PostSettings {
     let aa_mode = graphics.quality.effects.anti_aliasing.mode;
@@ -338,11 +278,7 @@ pub(super) fn post_settings(
         hdr_display: graphics.hdr_display,
         hdr_pq: graphics.hdr_pq,
         temporal_upscaling: graphics.temporal_upscaling,
-        upscale_scale: if authored.anti_aliasing_declared {
-            graphics.quality.render_scale.scale()
-        } else {
-            1.0
-        },
+        upscale_scale: graphics.quality.render_scale.scale(),
         upscale_backend: graphics.upscale_backend,
         dlss_preset: graphics.dlss_preset,
         occlusion_two_pass: graphics.occlusion_two_pass,
@@ -489,17 +425,15 @@ impl GraphicsSystem {
             });
         }
 
-        if let Some(background) = ctx.drain::<Background>().into_iter().next() {
-            self.clear_color = background.color;
-        }
         self.max_frames = launch.max_frames;
         let mut streaming_config = ctx.drain::<StreamingConfig>().into_iter().next();
-        let declared = DeclaredSettings::drain(ctx);
+        let graphics = ctx.drain::<GraphicsConfig>().into_iter().next();
         settings.authored = WorldSettings::new(WorldAssets {
+            graphics: graphics.as_ref(),
             lut_strength: color_lut_strength(ctx),
             streaming: streaming_config.as_ref(),
-            ..declared.assets()
         });
+        self.clear_color = settings.authored.background.color;
         // `--dlss-preset` wins for this launch, shown on the row and never
         // persisted unless the row itself changes.
         settings.session = launch.session_overrides();
@@ -516,7 +450,7 @@ impl GraphicsSystem {
 
         (
             ResolvedRenderConfig {
-                post: post_settings(&settings.graphics, &settings.authored, launch),
+                post: post_settings(&settings.graphics, launch),
                 quality_ceiling: quality.ceiling,
                 streaming_config,
                 world_ambient_intensity: settings.authored.world_ambient(),

@@ -49,25 +49,28 @@ pub(crate) const SECTIONS: &[Section] = &[
     },
     Section {
         title: "Shadows",
-        ty: "Shadows",
+        ty: "GraphicsConfig",
         expand: &[],
         fields: &[
-            ("map_size", "map size"),
-            ("distance", "distance"),
-            ("cascades", "cascades"),
+            ("shadows.map_size", "map size"),
+            ("shadows.distance", "distance"),
+            ("shadows.cascades", "cascades"),
         ],
     },
     Section {
         title: "Ambient / GI",
-        ty: "IndirectLighting",
+        ty: "GraphicsConfig",
         expand: &[],
-        fields: &[("ambient_intensity", "ambient"), ("ssgi_intensity", "SSGI")],
+        fields: &[
+            ("indirect_lighting.ambient_intensity", "ambient"),
+            ("indirect_lighting.ssgi_intensity", "SSGI"),
+        ],
     },
     Section {
         title: "Exposure",
-        ty: "Exposure",
+        ty: "GraphicsConfig",
         expand: &[],
-        fields: &[("ev", "exposure EV")],
+        fields: &[("exposure.ev", "exposure EV")],
     },
 ];
 
@@ -201,7 +204,7 @@ mod tests {
         assert_eq!((s, path), (0, "direction.0"));
         let last = binding_count() - 1;
         let (s, path, _) = binding(last);
-        assert_eq!((s, path), (SECTIONS.len() - 1, "ev"));
+        assert_eq!((s, path), (SECTIONS.len() - 1, "exposure.ev"));
         assert_eq!(section_base(1), SECTIONS[0].fields.len());
     }
 

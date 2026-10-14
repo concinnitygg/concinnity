@@ -3,6 +3,7 @@
 use concinnity_core::components::AppConfig;
 use concinnity_core::ecs::{Clock, MenuActive, StepResult, World};
 use concinnity_core::error::WorldError;
+use concinnity_core::render::error::RenderError;
 use concinnity_host::store::paths::StateTree;
 use concinnity_host::thread::jobs::configure;
 use concinnity_host::thread::jobs::pool;
@@ -10,7 +11,7 @@ use concinnity_host::thread::jobs::pool;
 use crate::app::run::LaunchRequest;
 use crate::app::startup_error::StartupError;
 use crate::blob;
-use crate::ecs::render_mode::{self, RenderMode};
+use crate::ecs::render_mode::{self, RenderMode, Resolution};
 use crate::ecs::{RenderInitFailure, SYSTEMS};
 use crate::shutdown::ShutdownToken;
 
@@ -44,7 +45,7 @@ pub struct Runtime {
     // probes the GPU, and because the caller asks before `start` (a windowed
     // macOS run must activate NSApplication ahead of the first window) while
     // `start` itself needs the same answer once the columns it reads are gone.
-    render_mode: Option<RenderMode>,
+    render_mode: Option<Resolution>,
 }
 
 impl Default for Runtime {
@@ -210,7 +211,7 @@ impl Runtime {
         for (asset, clamped) in self.world.take_clamped_params() {
             tracing::warn!(
                 "{asset}.{}: {} is outside its range, clamped to {}",
-                clamped.key,
+                clamped.path(),
                 clamped.from,
                 clamped.to
             );
@@ -228,8 +229,13 @@ impl Runtime {
         }
         // Before `world.start`, which both drains the columns the resolution
         // reads and runs the gates that read the result.
-        let mode = self.render_mode();
-        self.world.insert_resource(mode);
+        let resolution = self.render_resolution();
+        if let Resolution::Unavailable(why) = resolution {
+            return Err(WorldError::RenderUnavailable(RenderError::Other(
+                why.message().into(),
+            )));
+        }
+        self.world.insert_resource(resolution.mode());
         self.world.start(SYSTEMS)?;
         self.status = RuntimeStatus::Started;
         // A world that resolved to a windowed run and then could not build one
@@ -247,6 +253,13 @@ impl Runtime {
     /// before [`start`](Runtime::start): several of the columns the resolution
     /// reads are drained there.
     pub fn render_mode(&mut self) -> RenderMode {
+        self.render_resolution().mode()
+    }
+
+    /// How this world resolved, including a world with something to draw that
+    /// this build or machine cannot draw, which [`start`](Runtime::start)
+    /// refuses. Cached with [`render_mode`](Runtime::render_mode).
+    pub fn render_resolution(&mut self) -> Resolution {
         *self
             .render_mode
             .get_or_insert_with(|| render_mode::resolve_and_report(&self.world))

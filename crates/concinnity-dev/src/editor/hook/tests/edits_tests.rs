@@ -128,7 +128,7 @@ fn write_jsonl_persists_entries_atomically() {
     let path_str = path.to_str().unwrap().to_string();
 
     let mut h = hook(vec![serde_json::json!({
-        "type": "FramePacing", "args": {"$id": "scene"}
+        "type": "GraphicsConfig", "args": {"$id": "scene"}
     })]);
     h.world_path = path_str.clone();
     let mut world = world_with_fields();
@@ -154,7 +154,7 @@ fn write_jsonl_creates_the_worlds_directory() {
     let path = tree.join("worlds").join("world.jsonl");
 
     let mut h = hook(vec![serde_json::json!({
-        "type": "FramePacing", "args": {"$id": "scene"}
+        "type": "GraphicsConfig", "args": {"$id": "scene"}
     })]);
     h.world_path = path.to_str().unwrap().to_string();
     h.write_jsonl().expect("the write creates its directory");

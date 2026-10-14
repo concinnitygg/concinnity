@@ -39,7 +39,7 @@ fn overview_card(h: &EditorHook, title: &str) -> usize {
 #[test]
 fn behavior_panel_opens_on_the_first_behavior_and_steps_between_them() {
     let (mut h, mut world) = behavior_session(vec![
-        entry("gfx", "FramePacing"),
+        entry("gfx", "GraphicsConfig"),
         behavior("greet", serde_json::json!({"on": "start"})),
         behavior("chase", serde_json::json!({"on": "tick"})),
     ]);
@@ -61,7 +61,7 @@ fn behavior_panel_opens_on_the_first_behavior_and_steps_between_them() {
 // A world with no behaviors is not a dead end: New appends one and opens it.
 #[test]
 fn behavior_new_appends_a_blank_behavior_and_opens_it() {
-    let (mut h, mut world) = behavior_session(vec![entry("gfx", "FramePacing")]);
+    let (mut h, mut world) = behavior_session(vec![entry("gfx", "GraphicsConfig")]);
     assert_eq!(h.behavior_data().total, 0);
 
     h.apply_behavior_action(BehaviorAction::New, &mut world, [0.0, 0.0]);

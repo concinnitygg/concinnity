@@ -1,7 +1,7 @@
 use super::*;
 
 fn gfx() -> serde_json::Value {
-    serde_json::json!({"type":"FramePacing","args":{"$id":"gfx"}})
+    serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}})
 }
 
 fn names_of_type(assets: &[serde_json::Value], t: RegisteredType) -> Vec<String> {

@@ -4,8 +4,9 @@
 
 Scene exposure: a fixed offset in photographic stops, or auto-exposure that
 measures the scene's average brightness each frame and adapts toward a
-balanced mid-tone. One per world; with none declared, the defaults below
-apply.
+balanced mid-tone. The `exposure` section of
+[GraphicsConfig](GraphicsConfig.md); a field left unset takes the default
+below.
 
 When `auto` is on, `ev` acts as an additive bias (in stops) on top of the
 adapted value.

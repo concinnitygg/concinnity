@@ -3,19 +3,21 @@
 use crate::components::Vocabulary;
 
 /// Anti-aliasing and temporal upscaling: how edges are smoothed, and whether
-/// the scene renders below native resolution and is reconstructed to full. One
-/// per world; with none declared, the defaults below apply, except that an
-/// upscaler turned on in the settings menu then runs at native resolution,
-/// where it only anti-aliases.
+/// the scene renders below native resolution and is reconstructed to full. The
+/// `anti_aliasing` section of [GraphicsConfig](#graphicsconfig); a field left
+/// unset takes the default below.
 ///
 /// Temporal anti-aliasing is the default, which is the look on capable
 /// hardware: the `Auto` graphics quality preset clamps it to `fxaa` below the
 /// mid tier.
 ///
 /// ```rust
-/// # use concinnity_core::components::{AaMode, AntiAliasing};
-/// AntiAliasing {
-///     mode: AaMode::Fxaa,
+/// # use concinnity_core::components::{AaMode, AntiAliasingOverrides, GraphicsConfig};
+/// GraphicsConfig {
+///     anti_aliasing: AntiAliasingOverrides {
+///         mode: Some(AaMode::Fxaa),
+///         ..Default::default()
+///     },
 ///     ..Default::default()
 /// };
 /// ```
@@ -27,6 +29,7 @@ use crate::components::Vocabulary;
     crate::ecs::AssetFields,
     crate::ecs::AssetDefault,
 )]
+#[asset(section)]
 #[serde(default)]
 pub struct AntiAliasing {
     /// Anti-aliasing mode. `fxaa` applies a cheap composite-pass edge filter;
@@ -53,7 +56,7 @@ pub struct AntiAliasing {
     pub upscaler: UpscalerBackend,
 }
 
-/// Render-scale preset for `AntiAliasing.upscaling`. The ratio applies to both
+/// Render-scale preset for `GraphicsConfig.anti_aliasing.upscaling`. The ratio applies to both
 /// axes (input pixel count = output * ratio per axis), so `Quality` renders at
 /// 4/9 of the output pixel count, `Performance` at 1/4, and `UltraPerformance`
 /// at 1/9.
@@ -105,7 +108,7 @@ impl UpscaleQuality {
     }
 }
 
-/// Upscaler selector for `AntiAliasing.upscaler`. `Auto` resolves at runtime
+/// Upscaler selector for `GraphicsConfig.anti_aliasing.upscaler`. `Auto` resolves at runtime
 /// to the best available (DLSS, then XeSS, then FSR3); the explicit variants
 /// request a specific upscaler and fall back when it is unavailable. DirectX
 /// and Vulkan both resolve all three, each from the vendor SDK staged beside
@@ -129,7 +132,7 @@ pub enum UpscalerBackend {
     Xess,
 }
 
-/// Anti-aliasing mode for `AntiAliasing.mode`. `Off` runs no edge smoothing;
+/// Anti-aliasing mode for `GraphicsConfig.anti_aliasing.mode`. `Off` runs no edge smoothing;
 /// `Fxaa` applies the composite's single-frame edge filter, which is nearly
 /// free; `Taa` adds a temporal pass that jitters the projection and reprojects
 /// detail across frames for the cleanest edges, at the cost of a velocity

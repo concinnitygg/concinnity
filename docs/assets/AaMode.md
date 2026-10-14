@@ -2,7 +2,7 @@
 
 # AaMode
 
-Anti-aliasing mode for `AntiAliasing.mode`. `Off` runs no edge smoothing;
+Anti-aliasing mode for `GraphicsConfig.anti_aliasing.mode`. `Off` runs no edge smoothing;
 `Fxaa` applies the composite's single-frame edge filter, which is nearly
 free; `Taa` adds a temporal pass that jitters the projection and reprojects
 detail across frames for the cleanest edges, at the cost of a velocity

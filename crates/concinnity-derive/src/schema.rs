@@ -127,7 +127,7 @@ fn default_value(ty: TokenStream, default: &SerdeDefault) -> TokenStream {
 // structurally (`Option`, `Vec`, `Box`, arrays) are unwrapped by their
 // spelling, the way serde itself recognizes `Option`; any other type is
 // classified by the traits it implements.
-fn type_expr(ty: &Type) -> TokenStream {
+pub(crate) fn type_expr(ty: &Type) -> TokenStream {
     let schema = schema_path();
     match ty {
         Type::Array(array) => {

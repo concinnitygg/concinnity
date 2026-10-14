@@ -160,7 +160,7 @@ mod tests {
     fn non_window_assets_are_untouched() {
         let mut assets = vec![
             app("My Game"),
-            serde_json::json!({"type":"FramePacing","args":{"$id":"gfx"}}),
+            serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
         ];
         let mut report = ExpandReport::default();
         apply_app_config(&mut assets, &mut report).unwrap();

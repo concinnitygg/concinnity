@@ -46,10 +46,11 @@ impl EditorHook {
     }
 
     // The (type, template) pair the form needs to open `name` template-aware:
-    // the baseline is the type's defaults with the generated args merged over.
+    // the baseline is the type's defaults with the generated args merged over,
+    // or for a sparse type the generated leaves alone.
     pub(super) fn form_template_for(&mut self, name: &str) -> Option<(String, FormTemplate)> {
         let info = self.template_info(name)?;
-        let defaults = serde_json::Value::Object(form::base_args(&info.asset_type));
+        let defaults = serde_json::Value::Object(form::working_args(&info.asset_type, None));
         let baseline = concinnity_cook::build_only::merge_args(&defaults, &info.baseline);
         Some((
             info.asset_type.clone(),

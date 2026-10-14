@@ -96,12 +96,24 @@ pub struct ParamField {
 /// An authored value a load moved into its field's range.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ClampedParam {
+    /// The key of the section holding the field, for a field nested in one.
+    pub section: Option<&'static str>,
     /// The field's authored key.
     pub key: &'static str,
     /// The authored value.
     pub from: f64,
     /// The value it was clamped to.
     pub to: f64,
+}
+
+impl ClampedParam {
+    /// The field's dotted path: `section.key`, or `key` outside a section.
+    pub fn path(&self) -> alloc::string::String {
+        match self.section {
+            Some(section) => alloc::format!("{section}.{}", self.key),
+            None => alloc::string::String::from(self.key),
+        }
+    }
 }
 
 /// A parameter whose value differs between two values of one asset type.

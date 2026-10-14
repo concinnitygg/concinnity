@@ -12,6 +12,7 @@ mod asset_default;
 mod asset_fields;
 mod docs;
 mod schema;
+mod section;
 mod serde_attrs;
 mod vocabulary;
 
@@ -31,6 +32,11 @@ use proc_macro::TokenStream;
 /// its authored source, which belongs to that asset rather than being shared
 /// content other assets may read. `#[asset(default = ...)]` is read by
 /// `AssetDefault`.
+///
+/// `#[asset(section)]` on the struct also generates `<Name>Overrides`: every
+/// field as an `Option` (unset ones skipped when serialized), `apply_to` onto
+/// the struct, the same parameters, and a schema naming the struct. On a field
+/// holding such a twin it clamps the twin's parameters under the field's key.
 #[proc_macro_derive(AssetFields, attributes(serde, asset))]
 pub fn derive_asset_fields(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);

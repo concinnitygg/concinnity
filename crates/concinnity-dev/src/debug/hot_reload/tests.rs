@@ -1755,7 +1755,7 @@ fn reload_volumetric_fog_removed_asset_pushes_none() {
     assert!(reload_volumetric_fog(&path, &mut last, &mut backend).updated);
 
     // The fog line disappears from the world entirely.
-    let path = write_world_line(dir.path(), r#"["FramePacing",{"$id":"gfx"}]"#);
+    let path = write_world_line(dir.path(), r#"["GraphicsConfig",{"$id":"gfx"}]"#);
     assert!(reload_volumetric_fog(&path, &mut last, &mut backend).updated);
     assert!(last.is_none());
 }
@@ -1837,7 +1837,7 @@ fn reload_procedural_meshes_skips_unchanged_args() {
 #[test]
 fn reload_procedural_meshes_treats_a_missing_jsonl_entry_as_unchanged() {
     let dir = tempfile::tempdir().unwrap();
-    let path = write_world_line(dir.path(), r#"["FramePacing",{"$id":"gfx"}]"#);
+    let path = write_world_line(dir.path(), r#"["GraphicsConfig",{"$id":"gfx"}]"#);
     let mut map = one_proc_mesh_map("box_mesh", normalized_box_args(0.5));
     let mut backend = RecordingBackend::default();
     let r = reload_procedural_meshes(&path, &mut map, &mut backend);
@@ -1937,7 +1937,7 @@ fn reload_stories_missing_world_file_returns_nothing() {
 #[test]
 fn reload_stories_ignores_worlds_without_stories() {
     let dir = tempfile::tempdir().unwrap();
-    let path = write_world_line(dir.path(), r#"["FramePacing",{"$id":"gfx"}]"#);
+    let path = write_world_line(dir.path(), r#"["GraphicsConfig",{"$id":"gfx"}]"#);
     let mut snapshots = std::collections::HashMap::new();
     assert!(reload_stories(&path, &mut snapshots).is_empty());
     assert!(snapshots.is_empty());
@@ -2081,7 +2081,7 @@ fn story_source_dirs_collects_unique_parents_from_story_imports() {
         r#"["StoryImport",{"$id":"s1","source":"stories/tale.md"}]"#,
         r#"["StoryImport",{"$id":"s2","source":"bare.md"}]"#,
         r#"["StoryImport",{"$id":"s3","source":"stories/other.md"}]"#,
-        r#"["FramePacing",{"$id":"gfx"}]"#,
+        r#"["GraphicsConfig",{"$id":"gfx"}]"#,
         r#"["StoryImport",{"$id":"s4"}]"#,
         "not json at all",
     ];

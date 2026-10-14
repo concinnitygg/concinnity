@@ -974,18 +974,28 @@ mod tests {
     // than failing the world.
     #[test]
     fn a_load_clamps_an_out_of_range_parameter() {
-        let ty = RegisteredType::parse("IndirectLighting").unwrap();
+        let ty = RegisteredType::parse("GraphicsConfig").unwrap();
         let back = ty
-            .normalized_args(&serde_json::json!({ "ambient_intensity": 30.0, "ssgi_rays": 0 }))
+            .normalized_args(&serde_json::json!({
+                "indirect_lighting": { "ambient_intensity": 30.0, "ssgi_rays": 0 }
+            }))
             .unwrap();
-        assert_eq!(back["ambient_intensity"], 16.0);
-        assert_eq!(back["ssgi_rays"], 1);
+        // Unset fields stay unset; only the authored values are clamped.
+        assert_eq!(
+            back,
+            serde_json::json!({
+                "indirect_lighting": { "ambient_intensity": 16.0, "ssgi_rays": 1 }
+            })
+        );
         let baked = ty
-            .reserialize_args(&serde_json::json!({ "ambient_intensity": -2.0 }))
+            .reserialize_args(&serde_json::json!({
+                "indirect_lighting": { "ambient_intensity": -2.0 }
+            }))
             .unwrap();
-        let loaded: concinnity_core::components::IndirectLighting =
+        let loaded: concinnity_core::components::GraphicsConfig =
             postcard::from_bytes(&baked).unwrap();
-        assert_eq!(loaded.ambient_intensity, 0.0);
+        assert_eq!(loaded.indirect_lighting.ambient_intensity, Some(0.0));
+        assert_eq!(loaded.indirect_lighting.ssgi_rays, None);
     }
 
     // Convention guard for the asset-reference contract: a user-declarable
@@ -1303,20 +1313,8 @@ mod tests {
             flagged(RegisteredType::singleton),
             [
                 "Window",
-                "FramePacing",
-                "Shadows",
-                "TextureFiltering",
-                "Background",
+                "GraphicsConfig",
                 "CameraTrack",
-                "AmbientOcclusion",
-                "Reflections",
-                "IndirectLighting",
-                "AntiAliasing",
-                "Exposure",
-                "Bloom",
-                "Vignette",
-                "Display",
-                "Culling",
                 "StreamingConfig",
                 "PhysicsConfig",
                 "FrameReport",

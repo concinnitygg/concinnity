@@ -5,17 +5,21 @@ use crate::math::exp2;
 
 /// Scene exposure: a fixed offset in photographic stops, or auto-exposure that
 /// measures the scene's average brightness each frame and adapts toward a
-/// balanced mid-tone. One per world; with none declared, the defaults below
-/// apply.
+/// balanced mid-tone. The `exposure` section of
+/// [GraphicsConfig](#graphicsconfig); a field left unset takes the default
+/// below.
 ///
 /// When `auto` is on, `ev` acts as an additive bias (in stops) on top of the
 /// adapted value.
 ///
 /// ```rust
-/// # use concinnity_core::components::Exposure;
-/// Exposure {
-///     auto: true,
-///     auto_max_ev: 24.0,
+/// # use concinnity_core::components::{ExposureOverrides, GraphicsConfig};
+/// GraphicsConfig {
+///     exposure: ExposureOverrides {
+///         auto: Some(true),
+///         auto_max_ev: Some(24.0),
+///         ..Default::default()
+///     },
 ///     ..Default::default()
 /// };
 /// ```
@@ -27,6 +31,7 @@ use crate::math::exp2;
     crate::ecs::AssetFields,
     crate::ecs::AssetDefault,
 )]
+#[asset(section)]
 #[serde(default)]
 pub struct Exposure {
     /// Exposure offset in photographic stops. Each +1 doubles scene

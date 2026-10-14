@@ -1,16 +1,20 @@
 // Frame-pacing schema.
 
 /// How the render loop paces its frames: how many may be in flight, whether
-/// presentation waits for the display refresh, and the frame-rate cap. One per
-/// world; with none declared, the defaults below apply.
+/// presentation waits for the display refresh, and the frame-rate cap. The
+/// `frame_pacing` section of [GraphicsConfig](#graphicsconfig); a field left
+/// unset takes the default below.
 ///
 /// Pacing is a preference of whoever runs the build rather than a quality
 /// tier, so no graphics quality preset changes it.
 ///
 /// ```rust
-/// # use concinnity_core::components::FramePacing;
-/// FramePacing {
-///     vsync: true,
+/// # use concinnity_core::components::{FramePacingOverrides, GraphicsConfig};
+/// GraphicsConfig {
+///     frame_pacing: FramePacingOverrides {
+///         vsync: Some(true),
+///         ..Default::default()
+///     },
 ///     ..Default::default()
 /// };
 /// ```
@@ -22,6 +26,7 @@
     crate::ecs::AssetFields,
     crate::ecs::AssetDefault,
 )]
+#[asset(section)]
 #[serde(default)]
 pub struct FramePacing {
     /// Preferred number of frames in flight. Higher can smooth pacing at the

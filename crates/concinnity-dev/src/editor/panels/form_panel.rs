@@ -400,16 +400,22 @@ fn vec_expanded(fields: &[FormField], j: usize) -> bool {
 }
 
 // The display caption for a field: a disclosed vector element (`position.0`) reads
-// as its axis (x / y / z / w); every other field keeps its leaf name.
+// as its axis (x / y / z / w); every other field keeps its leaf name. An unset
+// leaf of a sparse type is tagged, since the value it shows is its default.
 fn field_caption(fields: &[FormField], field: &FormField) -> String {
-    element_axis_label(fields, &field.key).unwrap_or_else(|| {
+    let caption = element_axis_label(fields, &field.key).unwrap_or_else(|| {
         field
             .key
             .rsplit('.')
             .next()
             .unwrap_or(&field.key)
             .to_string()
-    })
+    });
+    if field.unset {
+        format!("{caption} {}", super::form::AUTO_LABEL)
+    } else {
+        caption
+    }
 }
 
 // The axis label for `key` when it is an element leaf of a non-color vector
@@ -1203,6 +1209,8 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 0,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         }
     }
 
@@ -1227,6 +1235,8 @@ mod tests {
             variants,
             variant_idx: 0,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         }
     }
 
@@ -1514,6 +1524,8 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 0,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         }];
         place(
             &mut world,
@@ -1549,6 +1561,8 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 0,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         }];
         let v = view(&fields);
         place(&mut world, &v, o, size(v.form_fields.len()));
@@ -1596,6 +1610,8 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 0,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         };
         let fields = [
             FormField {
@@ -1609,6 +1625,8 @@ mod tests {
                 variants: Vec::new(),
                 variant_idx: 0,
                 choices: Vec::new(),
+                sparse: false,
+                unset: false,
             },
             elem("0"),
             elem("1"),
@@ -1653,6 +1671,8 @@ mod tests {
             variants: vec!["left".into(), "center".into(), "right".into()],
             variant_idx: 1,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         }];
         let v = view(&small);
         place(&mut world, &v, o, size(v.form_fields.len()));
@@ -1775,6 +1795,8 @@ mod tests {
             variants: Vec::new(),
             variant_idx: 3,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         }];
         let v = view(&fields);
         place(&mut world, &v, o, size(v.form_fields.len()));
@@ -1867,6 +1889,8 @@ mod tests {
             variants: variants.iter().map(|s| s.to_string()).collect(),
             variant_idx: 0,
             choices: Vec::new(),
+            sparse: false,
+            unset: false,
         }
     }
 

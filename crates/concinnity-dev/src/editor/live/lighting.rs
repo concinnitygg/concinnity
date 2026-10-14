@@ -15,7 +15,7 @@ use concinnity_core::components::DirectionalLight;
 use concinnity_core::ecs::ComponentAsset;
 use concinnity_core::ecs::Entity;
 use concinnity_core::ecs::World;
-use concinnity_engine::live_edit::lighting_preview::{self, SettingsEdit};
+use concinnity_engine::live_edit::lighting_preview;
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 
@@ -47,34 +47,28 @@ pub(super) fn plan(
             }
             Some(Apply::RenderConfig(RenderConfig::Fog(fog)))
         }
-        asset => settings_edit(asset).map(|edit| Apply::RenderConfig(RenderConfig::Settings(edit))),
+        ComponentAsset::GraphicsConfig(graphics) => {
+            Some(Apply::RenderConfig(RenderConfig::Graphics(graphics)))
+        }
+        _ => None,
     }
-}
-
-// The settings edit a baked asset is, or `None` for a type the seam takes none
-// of.
-fn settings_edit(asset: ComponentAsset) -> Option<SettingsEdit> {
-    Some(match asset {
-        ComponentAsset::Shadows(a) => SettingsEdit::Shadows(a),
-        ComponentAsset::AmbientOcclusion(a) => SettingsEdit::AmbientOcclusion(a),
-        ComponentAsset::Reflections(a) => SettingsEdit::Reflections(a),
-        ComponentAsset::IndirectLighting(a) => SettingsEdit::IndirectLighting(a),
-        ComponentAsset::Exposure(a) => SettingsEdit::Exposure(a),
-        ComponentAsset::Bloom(a) => SettingsEdit::Bloom(a),
-        ComponentAsset::Vignette(a) => SettingsEdit::Vignette(a),
-        _ => return None,
-    })
 }
 
 // Whether this is a lighting type at all, and whether every field the edit
 // changed is one the renderer can be handed. The sun and the fog are replaced
-// wholesale, so every field of theirs qualifies; the settings assets carry
-// knobs that size a GPU resource at load beside the ones that do not.
+// wholesale, so every field of theirs qualifies; `GraphicsConfig` carries
+// knobs that size a GPU resource at load beside the ones that do not, each
+// changed key naming its `section.field`.
 fn is_expressible(ct: RegisteredType, keys: &[String]) -> bool {
     match ct {
         RegisteredType::DirectionalLight | RegisteredType::VolumetricFog => true,
-        _ => lighting_preview::live_settings_fields(ct.as_str())
-            .is_some_and(|live| live_keys(keys, live)),
+        RegisteredType::GraphicsConfig => keys.iter().all(|key| {
+            key.split_once('.').is_some_and(|(section, field)| {
+                lighting_preview::live_settings_fields(section)
+                    .is_some_and(|live| live.contains(&field))
+            })
+        }),
+        _ => false,
     }
 }
 
@@ -84,8 +78,8 @@ pub(super) fn commit(world: &mut World, config: RenderConfig) {
         RenderConfig::Fog(fog) => {
             lighting_preview::apply_fog(world, Some(&fog));
         }
-        RenderConfig::Settings(edit) => {
-            lighting_preview::apply_settings(world, &edit);
+        RenderConfig::Graphics(graphics) => {
+            lighting_preview::apply_graphics(world, &graphics);
         }
     }
 }
@@ -97,11 +91,6 @@ pub(super) fn commit_sun(world: &mut World, entity: Entity, light: DirectionalLi
     world.replace_component(entity, ComponentAsset::DirectionalLight(light));
     let lights: Vec<DirectionalLight> = world.query::<DirectionalLight>().cloned().collect();
     lighting_preview::apply_directional_lights(world, &lights);
-}
-
-// Whether every changed key is one the renderer can be handed live.
-fn live_keys(keys: &[String], live: &[&str]) -> bool {
-    keys.iter().all(|k| live.contains(&k.as_str()))
 }
 
 #[cfg(test)]
@@ -136,41 +125,38 @@ mod tests {
     // resolution sizes the shadow array at load, so it rebuilds.
     #[test]
     fn a_shadows_edit_declines_the_load_time_knobs() {
+        let gfx = RegisteredType::GraphicsConfig;
         assert!(is_expressible(
-            RegisteredType::Shadows,
-            &keys(&["distance", "cascades"]),
+            gfx,
+            &keys(&["shadows.distance", "shadows.cascades"])
         ));
-        assert!(!is_expressible(
-            RegisteredType::Shadows,
-            &keys(&["map_size"])
-        ));
+        assert!(!is_expressible(gfx, &keys(&["shadows.map_size"])));
         assert!(
-            !is_expressible(RegisteredType::Shadows, &keys(&["distance", "map_size"]),),
+            !is_expressible(gfx, &keys(&["shadows.distance", "shadows.map_size"])),
             "one knob the renderer cannot take declines the whole change"
         );
         assert!(!is_expressible(
-            RegisteredType::FramePacing,
-            &keys(&["frames_in_flight"]),
+            gfx,
+            &keys(&["frame_pacing.frames_in_flight"])
         ));
+        assert!(!is_expressible(gfx, &keys(&["shadows"])));
     }
 
     // The look-tuning scalars go live; the feature toggles beside them gate
     // passes built at load.
     #[test]
     fn a_look_edit_declines_the_toggles() {
+        let gfx = RegisteredType::GraphicsConfig;
         assert!(is_expressible(
-            RegisteredType::IndirectLighting,
-            &keys(&["ambient_intensity", "ssgi_intensity"]),
+            gfx,
+            &keys(&[
+                "indirect_lighting.ambient_intensity",
+                "indirect_lighting.ssgi_intensity"
+            ]),
         ));
-        assert!(is_expressible(RegisteredType::Exposure, &keys(&["ev"])));
-        assert!(!is_expressible(
-            RegisteredType::AmbientOcclusion,
-            &keys(&["enabled"]),
-        ));
-        assert!(!is_expressible(
-            RegisteredType::AntiAliasing,
-            &keys(&["mode"]),
-        ));
+        assert!(is_expressible(gfx, &keys(&["exposure.ev"])));
+        assert!(!is_expressible(gfx, &keys(&["ambient_occlusion.enabled"])));
+        assert!(!is_expressible(gfx, &keys(&["anti_aliasing.mode"])));
     }
 
     // A world with no renderer has nothing to push to, so every lighting edit
@@ -182,11 +168,10 @@ mod tests {
         for (ty, args, changed) in [
             ("DirectionalLight", json!({ "intensity": 2.0 }), "intensity"),
             ("VolumetricFog", json!({ "density": 0.1 }), "density"),
-            ("Shadows", json!({ "distance": 90 }), "distance"),
             (
-                "IndirectLighting",
-                json!({ "ambient_intensity": 0.5 }),
-                "ambient_intensity",
+                "GraphicsConfig",
+                json!({ "shadows": { "distance": 90 } }),
+                "shadows.distance",
             ),
         ] {
             let ct = RegisteredType::parse(ty).expect("a registered type");
@@ -224,13 +209,5 @@ mod tests {
         assert_eq!(held.direction, edited.direction);
         assert_eq!(held.color, edited.color);
         assert_eq!(held.intensity, edited.intensity);
-    }
-
-    #[test]
-    fn live_keys_needs_every_key() {
-        let live = ["shadow_distance", "shadow_cascades"];
-        assert!(live_keys(&[], &live), "no change is trivially live");
-        assert!(live_keys(&keys(&["shadow_cascades"]), &live));
-        assert!(!live_keys(&keys(&["shadow_cascades", "vsync"]), &live));
     }
 }

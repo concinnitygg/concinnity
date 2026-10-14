@@ -1,8 +1,9 @@
 // Companion-asset declarations. Some assets imply others must exist to
-// function: anything that renders needs a Window to render into. Which types
-// render is the registry's `renders` flag, the same one the runtime resolves a
-// windowed run from. The injection pass in `companion.rs` applies the
-// resulting specs to the world.
+// function: anything that renders needs a Window to render into, and a Window
+// the GraphicsConfig its renderer is configured by. Which types render is the
+// registry's `renders` flag, the same one the runtime resolves a windowed run
+// from. The injection pass in `companion.rs` applies the resulting specs to
+// the world.
 //
 // This is build-time-only authoring logic; the asset data structs live in
 // concinnity-core alongside their runtime `Component` impls.
@@ -32,12 +33,24 @@ fn window_companion() -> Vec<CompanionSpec> {
     }]
 }
 
-// Companion specs implied by one asset of the given type. Every type flagged
-// `renders` in the registry implies a Window; the rest imply none. Window
-// itself is flagged, and implying itself is a no-op the injection pass skips
-// by type.
+// The settings a Window's renderer is built with: every field unset, so each
+// follows the quality tier until the world sets it.
+fn graphics_companion() -> Vec<CompanionSpec> {
+    vec![CompanionSpec {
+        name: "GraphicsConfig",
+        asset_type: RegisteredType::GraphicsConfig,
+        args: serde_json::json!({}),
+    }]
+}
+
+// Companion specs implied by one asset of the given type. A Window implies a
+// GraphicsConfig; every other type flagged `renders` in the registry implies a
+// Window, which then implies its GraphicsConfig on the next round. The rest
+// imply none.
 pub(crate) fn companions_for(asset_type: RegisteredType) -> Vec<CompanionSpec> {
-    if asset_type.renders() {
+    if asset_type == RegisteredType::Window {
+        graphics_companion()
+    } else if asset_type.renders() {
         window_companion()
     } else {
         Vec::new()
@@ -82,11 +95,19 @@ mod tests {
         assert!(companions_for(RegisteredType::PhysicsConfig).is_empty());
     }
 
-    // Content decides whether a world renders, so a settings asset tuning the
-    // renderer implies no Window of its own.
+    // Content decides whether a world renders, so the settings tuning the
+    // renderer imply no Window of their own.
     #[test]
     fn a_settings_asset_implies_no_window() {
-        assert!(companions_for(RegisteredType::Shadows).is_empty());
-        assert!(companions_for(RegisteredType::AntiAliasing).is_empty());
+        assert!(companions_for(RegisteredType::GraphicsConfig).is_empty());
+        assert!(companions_for(RegisteredType::StreamingConfig).is_empty());
+    }
+
+    #[test]
+    fn a_window_implies_its_graphics_config() {
+        let specs = companions_for(RegisteredType::Window);
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].asset_type, RegisteredType::GraphicsConfig);
+        assert_eq!(specs[0].args, serde_json::json!({}));
     }
 }

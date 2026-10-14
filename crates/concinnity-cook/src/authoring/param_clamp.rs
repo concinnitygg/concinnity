@@ -16,7 +16,9 @@ pub(crate) fn clamp_authored<T: AssetFields>(
     for c in clamped {
         warn(format!(
             "{asset}.{}: {} is outside its range, clamped to {}",
-            c.key, c.from, c.to
+            c.path(),
+            c.from,
+            c.to
         ));
     }
     value

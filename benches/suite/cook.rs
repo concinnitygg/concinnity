@@ -24,8 +24,8 @@ fn world_jsonl(props: usize) -> String {
     let mut out = String::with_capacity(props * 128 + 512);
     out.push_str(concat!(
         "[\"Camera3D\",{\"$id\":\"cam\",\"position\":[0,2,12]}]\n",
-        "[\"FramePacing\",{\"$id\":\"gfx\",\"vsync\":false}]\n",
-        "[\"Shadows\",{\"map_size\":0}]\n",
+        "[\"GraphicsConfig\",{\"$id\":\"gfx\",",
+        "\"frame_pacing\":{\"vsync\":false},\"shadows\":{\"map_size\":0}}]\n",
         "[\"ProceduralMesh\",",
         "{\"$id\":\"bench_mesh\",\"generator\":\"box\",\"half_extents\":[0.4,0.4,0.4]}]\n",
         "[\"Texture\",{\"$id\":\"bench_tex\",\"generator\":\"checker\",\"resolution\":64}]\n",

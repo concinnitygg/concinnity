@@ -1,5 +1,9 @@
 use super::*;
-use crate::components::{AaMode, IndirectTechnique, ShadowUpdate};
+use crate::components::{
+    AaMode, AmbientOcclusionOverrides, AntiAliasingOverrides, DisplayOverrides,
+    FramePacingOverrides, IndirectTechnique, PassResolution, ShadowUpdate, ShadowsOverrides,
+    TextureFilteringOverrides,
+};
 use crate::ecs::asset_fields::ApplyClass;
 use crate::render::backend::{GpuProfile, GpuTier};
 use crate::settings::quality::{QualityPreset, resolve_ceiling};
@@ -121,22 +125,30 @@ fn low() -> QualityCeiling {
     ceiling_for(QualityPreset::Low, GpuTier::Integrated)
 }
 
+// The world a sparse `GraphicsConfig` authors.
+fn authored(graphics: GraphicsConfig) -> WorldSettings {
+    WorldSettings::new(WorldAssets {
+        graphics: Some(&graphics),
+        ..Default::default()
+    })
+}
+
 #[test]
 fn a_user_override_beats_the_world_value() {
-    let world = WorldSettings::new(WorldAssets {
-        frame_pacing: Some(&FramePacing {
-            vsync: true,
-            fps_cap: 60,
+    let world = authored(GraphicsConfig {
+        frame_pacing: FramePacingOverrides {
+            vsync: Some(true),
+            fps_cap: Some(60),
             ..Default::default()
-        }),
-        display: Some(&Display {
-            hdr: true,
+        },
+        display: DisplayOverrides {
+            hdr: Some(true),
             ..Default::default()
-        }),
-        anti_aliasing: Some(&AntiAliasing {
-            upscaler: UpscalerBackend::Fsr3,
+        },
+        anti_aliasing: AntiAliasingOverrides {
+            upscaler: Some(UpscalerBackend::Fsr3),
             ..Default::default()
-        }),
+        },
         ..Default::default()
     });
     let user = UserGraphicsSettings {
@@ -167,14 +179,16 @@ fn a_user_override_beats_the_world_value() {
 
 #[test]
 fn the_ceiling_clamps_only_a_knob_the_user_left_alone() {
-    let world = WorldSettings::new(WorldAssets {
-        shadows: Some(&Shadows {
+    let world = authored(GraphicsConfig {
+        shadows: ShadowsOverrides::from(Shadows {
             map_size: 4096,
             update: ShadowUpdate::EveryFrame,
             distance: 200,
             cascades: 4,
         }),
-        texture_filtering: Some(&TextureFiltering { anisotropy: 16 }),
+        texture_filtering: TextureFilteringOverrides {
+            anisotropy: Some(16),
+        },
         ..Default::default()
     });
     let q = resolve_graphics(&world, &UserGraphicsSettings::default(), &low()).quality;
@@ -202,11 +216,11 @@ fn the_ceiling_clamps_only_a_knob_the_user_left_alone() {
 
 #[test]
 fn a_frames_in_flight_override_clamps_to_three() {
-    let world = WorldSettings::new(WorldAssets {
-        frame_pacing: Some(&FramePacing {
-            frames_in_flight: 7,
+    let world = authored(GraphicsConfig {
+        frame_pacing: FramePacingOverrides {
+            frames_in_flight: Some(7),
             ..Default::default()
-        }),
+        },
         ..Default::default()
     });
     let r = resolve_graphics(&world, &UserGraphicsSettings::default(), &low());
@@ -221,11 +235,11 @@ fn a_frames_in_flight_override_clamps_to_three() {
 #[test]
 fn render_scale_takes_the_more_aggressive_of_world_and_ceiling() {
     let scale = |world: UpscaleQuality, user: Option<UpscaleQuality>| {
-        let world = WorldSettings::new(WorldAssets {
-            anti_aliasing: Some(&AntiAliasing {
-                upscale_quality: world,
+        let world = authored(GraphicsConfig {
+            anti_aliasing: AntiAliasingOverrides {
+                upscale_quality: Some(world),
                 ..Default::default()
-            }),
+            },
             ..Default::default()
         });
         let user = UserGraphicsSettings {
@@ -248,16 +262,29 @@ fn render_scale_takes_the_more_aggressive_of_world_and_ceiling() {
     );
 }
 
+// Absence is the section default: an empty `GraphicsConfig`, none at all, and
+// every field set to its default resolve alike.
 #[test]
-fn occlusion_two_pass_is_off_without_a_culling() {
+fn an_unset_field_resolves_like_its_default_set_explicitly() {
     let none = UserGraphicsSettings::default();
-    let r = resolve_graphics(&WorldSettings::default(), &none, &low());
-    assert!(!r.occlusion_two_pass);
-    let declared = WorldSettings::new(WorldAssets {
-        culling: Some(&Culling::default()),
+    let every = GraphicsConfig {
+        culling: Culling::default().into(),
+        anti_aliasing: AntiAliasing::default().into(),
+        shadows: Shadows::default().into(),
         ..Default::default()
-    });
-    assert!(resolve_graphics(&declared, &none, &low()).occlusion_two_pass);
+    };
+    for ceiling in [low(), QualityCeiling::NONE] {
+        let bare = resolve_graphics(&WorldSettings::default(), &none, &ceiling);
+        let empty = resolve_graphics(&authored(GraphicsConfig::default()), &none, &ceiling);
+        let set = resolve_graphics(&authored(every.clone()), &none, &ceiling);
+        assert!(bare.occlusion_two_pass);
+        for r in [&empty, &set] {
+            assert_eq!(r.occlusion_two_pass, bare.occlusion_two_pass);
+            assert_eq!(r.quality.render_scale, bare.quality.render_scale);
+            assert_eq!(r.quality.shadow_map_size, bare.quality.shadow_map_size);
+            assert_eq!(r.quality.shadow_cadence, bare.quality.shadow_cadence);
+        }
+    }
 }
 
 #[test]
@@ -294,11 +321,11 @@ fn the_fxaa_flag_follows_the_clamped_aa_mode() {
 // overrides still carries the user's sub-quality sliders.
 #[test]
 fn the_quality_group_keeps_the_look_tuning_sliders() {
-    let world = WorldSettings::new(WorldAssets {
-        ambient_occlusion: Some(&AmbientOcclusion {
-            radius: 0.5,
+    let world = authored(GraphicsConfig {
+        ambient_occlusion: AmbientOcclusionOverrides {
+            radius: Some(0.5),
             ..Default::default()
-        }),
+        },
         ..Default::default()
     });
     let user = UserGraphicsSettings {
@@ -314,27 +341,29 @@ fn the_quality_group_keeps_the_look_tuning_sliders() {
 // session override beats the user.
 #[test]
 fn each_layer_beats_the_one_below_it() {
-    let world = WorldSettings::new(WorldAssets {
-        shadows: Some(&Shadows {
-            distance: 60,
+    let world = authored(GraphicsConfig {
+        shadows: ShadowsOverrides {
+            distance: Some(60),
             ..Default::default()
-        }),
-        frame_pacing: Some(&FramePacing {
-            fps_cap: 120,
+        },
+        frame_pacing: FramePacingOverrides {
+            fps_cap: Some(120),
             ..Default::default()
-        }),
+        },
         ..Default::default()
     });
     let scene = SceneOverride {
-        shadows: Some(Shadows {
-            distance: 300,
+        graphics: GraphicsConfig {
+            shadows: ShadowsOverrides {
+                distance: Some(300),
+                ..Default::default()
+            },
+            frame_pacing: FramePacingOverrides {
+                fps_cap: Some(90),
+                ..Default::default()
+            },
             ..Default::default()
-        }),
-        frame_pacing: Some(FramePacing {
-            fps_cap: 90,
-            ..Default::default()
-        }),
-        ..Default::default()
+        },
     };
     let none = UserGraphicsSettings::default();
     let mut layers = SettingsLayers::new(&world, &QualityCeiling::NONE, &none);
@@ -371,26 +400,140 @@ fn each_layer_beats_the_one_below_it() {
     assert_eq!(sessioned.quality.shadow_cadence.distance, 200);
 }
 
-// A scene's asset replaces the world's whole, and counts as declared.
+// A scene replaces only the fields it sets; the world's other fields, set or
+// not, show through.
 #[test]
-fn a_scene_asset_counts_as_declared() {
-    let world = WorldSettings::default();
+fn a_scene_replaces_only_the_fields_it_sets() {
+    let world = authored(GraphicsConfig {
+        ambient_occlusion: AmbientOcclusionOverrides {
+            radius: Some(2.0),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
     let none = UserGraphicsSettings::default();
     let mut layers = SettingsLayers::new(&world, &QualityCeiling::NONE, &none);
-    assert!(!layers.resolve().occlusion_two_pass);
     let scene = SceneOverride {
-        culling: Some(Culling::default()),
-        ambient_occlusion: Some(AmbientOcclusion {
-            enabled: false,
+        graphics: GraphicsConfig {
+            ambient_occlusion: AmbientOcclusionOverrides {
+                enabled: Some(false),
+                ..Default::default()
+            },
             ..Default::default()
-        }),
-        ..Default::default()
+        },
     };
     layers.scene = Some(&scene);
     let r = layers.resolve();
     assert!(r.occlusion_two_pass);
-    assert!(!r.quality.effects.ambient_occlusion.enabled);
+    let ao = &r.quality.effects.ambient_occlusion;
+    assert!(!ao.enabled);
+    assert_eq!(ao.radius, 2.0);
     assert!(!layers.resolve_quality().effects.ambient_occlusion.enabled);
+}
+
+// The sparse authored layer sits between the section defaults and the
+// ceiling: a field the world sets replaces the default, the ceiling caps set
+// and unset fields alike, the user beats the ceiling, and the session beats
+// the user.
+#[test]
+fn a_sparse_world_layers_between_the_defaults_and_the_ceiling() {
+    let world = authored(GraphicsConfig {
+        shadows: ShadowsOverrides {
+            map_size: Some(8192),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let none = UserGraphicsSettings::default();
+    let mut layers = SettingsLayers::new(&world, &QualityCeiling::NONE, &none);
+    let top = layers.resolve().quality;
+    assert_eq!(top.shadow_map_size, 8192, "set replaces the default");
+    assert_eq!(top.shadow_cadence.distance, 80, "unset takes the default");
+
+    let low = low();
+    layers.ceiling = &low;
+    let capped = layers.resolve().quality;
+    assert_eq!(capped.shadow_map_size, 1024, "the ceiling caps a set field");
+    assert_eq!(capped.shadow_cadence.distance, 40, "and an unset one");
+
+    let user = UserGraphicsSettings {
+        shadow_map_size: Some(2048),
+        ..Default::default()
+    };
+    layers.user = &user;
+    assert_eq!(layers.resolve().quality.shadow_map_size, 2048);
+    let session = UserGraphicsSettings {
+        shadow_map_size: Some(512),
+        ..Default::default()
+    };
+    layers.session = Some(&session);
+    assert_eq!(layers.resolve().quality.shadow_map_size, 512);
+}
+
+// With nothing authored, each tier's resolution of a quality-governed field
+// is the section default capped by that tier.
+#[test]
+fn an_unset_world_resolves_to_the_tier_capped_defaults() {
+    let none = UserGraphicsSettings::default();
+    let tiers = [
+        (GpuTier::Integrated, QualityCeiling::LOW),
+        (GpuTier::Unknown, QualityCeiling::MEDIUM),
+        (GpuTier::EntryDiscrete, QualityCeiling::MEDIUM),
+        (GpuTier::MidDiscrete, QualityCeiling::HIGH),
+        (GpuTier::HighDiscrete, QualityCeiling::ULTRA),
+    ];
+    for (tier, cap) in tiers {
+        assert_eq!(ceiling_for(QualityPreset::Auto, tier), cap);
+        let r = resolve_graphics(&WorldSettings::default(), &none, &cap);
+        let q = &r.quality;
+        let fx = &q.effects;
+        assert_eq!(q.shadow_map_size, 4096.min(cap.shadow_map_size));
+        let update = match cap.allow_every_frame_shadows {
+            true => ShadowUpdate::EveryFrame,
+            false => ShadowUpdate::Hybrid,
+        };
+        assert_eq!(q.shadow_cadence.update, update);
+        assert_eq!(q.shadow_cadence.distance, 80.min(cap.shadow_distance));
+        assert_eq!(q.shadow_cadence.cascades, 4.min(cap.shadow_cascades));
+        assert_eq!(q.anisotropy, 16.min(cap.anisotropy));
+        assert_eq!(fx.ambient_occlusion.enabled, cap.ssao);
+        assert_eq!(fx.reflections.screen_space, cap.ssr);
+        assert_eq!(fx.reflections.ray_traced, cap.ray_traced_reflections);
+        assert_eq!(fx.reflections.ray_traced_shadows, cap.rt_reflection_shadows);
+        assert_eq!(
+            fx.reflections.ray_traced_resolution,
+            PassResolution::Half.max(cap.rt_reflection_resolution)
+        );
+        assert_eq!(
+            fx.reflections.blur_resolution,
+            PassResolution::Half.max(cap.reflection_blur_resolution)
+        );
+        let technique = match cap.ssgi {
+            true => IndirectTechnique::Ssgi,
+            false => IndirectTechnique::Ibl,
+        };
+        assert_eq!(fx.indirect_lighting.technique, technique);
+        assert_eq!(
+            fx.indirect_lighting.ssgi_resolution,
+            PassResolution::Half.max(cap.ssgi_resolution)
+        );
+        assert_eq!(
+            fx.indirect_lighting.ssgi_rays,
+            crate::components::DEFAULT_SSGI_RAYS.min(cap.ssgi_rays)
+        );
+        assert_eq!(fx.anti_aliasing.mode, cap.aa_mode);
+        assert_eq!(
+            q.render_scale,
+            more_aggressive_upscale(UpscaleQuality::Quality, cap.min_upscale)
+        );
+        // Fields no tier governs resolve to their section defaults.
+        assert_eq!(r.fps_cap, FramePacing::default().fps_cap);
+        assert_eq!(r.frames_in_flight, 2);
+        assert!(!r.vsync && !r.hdr_display && !r.temporal_upscaling);
+        assert!(r.occlusion_two_pass);
+        assert_eq!(fx.ambient_occlusion.radius, 0.5);
+        assert!(!fx.exposure.auto);
+    }
 }
 
 // The device clamps after every layer: an explicit user choice cannot turn on

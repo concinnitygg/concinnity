@@ -204,6 +204,53 @@ mod tests {
         );
     }
 
+    // Content that draws pulls in a Window, and the Window its GraphicsConfig,
+    // with every field unset.
+    #[test]
+    fn rendering_content_injects_a_graphics_config() {
+        let mut assets =
+            vec![serde_json::json!({"type":"TextLabel","args":{"$id":"t","content":"hi"}})];
+        inject(&mut assets);
+        let configs: Vec<_> = assets
+            .iter()
+            .filter(|v| registered_type(v) == Some(RegisteredType::GraphicsConfig))
+            .collect();
+        assert_eq!(configs.len(), 1);
+        assert_eq!(
+            configs[0]["args"],
+            serde_json::json!({"$id": "GraphicsConfig"})
+        );
+    }
+
+    #[test]
+    fn an_authored_graphics_config_is_kept_alone() {
+        let authored = serde_json::json!({
+            "type": "GraphicsConfig",
+            "args": {"shadows": {"map_size": 1024}}
+        });
+        let mut assets = vec![
+            serde_json::json!({"type":"TextLabel","args":{"$id":"t","content":"hi"}}),
+            authored.clone(),
+        ];
+        inject(&mut assets);
+        let configs: Vec<_> = assets
+            .iter()
+            .filter(|v| registered_type(v) == Some(RegisteredType::GraphicsConfig))
+            .collect();
+        assert_eq!(configs, [&authored]);
+    }
+
+    // A world with nothing to draw gets neither a Window nor its settings.
+    #[test]
+    fn an_empty_or_non_rendering_world_gets_no_graphics_config() {
+        let mut empty = Vec::new();
+        inject(&mut empty);
+        assert!(empty.is_empty());
+        let mut physics = vec![serde_json::json!({"type":"PhysicsConfig","args":{}})];
+        inject(&mut physics);
+        assert_eq!(physics.len(), 1);
+    }
+
     #[test]
     fn text_does_not_inject_duplicate_windows() {
         let mut assets = vec![

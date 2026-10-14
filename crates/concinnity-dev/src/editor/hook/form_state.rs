@@ -172,6 +172,8 @@ mod tests {
                 variants: Vec::new(),
                 variant_idx: 0,
                 choices: Vec::new(),
+                sparse: false,
+                unset: false,
             }],
             scroll: 3,
             focus: FormFocus::Field(1),

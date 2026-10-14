@@ -29,18 +29,22 @@ pub enum ShadowUpdate {
 
 /// Cascaded shadow maps for the world's directional lights: their resolution,
 /// how far from the camera they reach, how many cascades split that range, and
-/// how often each is re-rendered. One per world; with none declared, the
-/// defaults below apply.
+/// how often each is re-rendered. The `shadows` section of
+/// [GraphicsConfig](#graphicsconfig); a field left unset takes the default
+/// below.
 ///
 /// The defaults describe the quality capable hardware runs, not what every GPU
 /// runs: the `Auto` graphics quality preset resolves the detected GPU into a
 /// ceiling that caps them tier by tier.
 ///
 /// ```rust
-/// # use concinnity_core::components::Shadows;
-/// Shadows {
-///     map_size: 2048,
-///     distance: 120,
+/// # use concinnity_core::components::{GraphicsConfig, ShadowsOverrides};
+/// GraphicsConfig {
+///     shadows: ShadowsOverrides {
+///         map_size: Some(2048),
+///         distance: Some(120),
+///         ..Default::default()
+///     },
 ///     ..Default::default()
 /// };
 /// ```
@@ -52,6 +56,7 @@ pub enum ShadowUpdate {
     crate::ecs::AssetFields,
     crate::ecs::AssetDefault,
 )]
+#[asset(section)]
 #[serde(default)]
 pub struct Shadows {
     /// Shadow map resolution in texels. `4096` by default, capped by the quality

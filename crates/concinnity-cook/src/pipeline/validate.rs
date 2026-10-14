@@ -105,7 +105,7 @@ mod tests {
         // a Sprite under that screen's prefix, a TextLabel under it, a
         // HitRegion showing another Screen, and a KeyBinding to
         // toggle a third (modal) Screen.
-        let world = r#"["FramePacing",{"$id":"gfx"}]
+        let world = r#"["GraphicsConfig",{"$id":"gfx"}]
 ["Font",{"$id":"f","size_px":20}]
 ["Screen",{"$id":"title_menu","initial":true}]
 ["Sprite",{"$id":"title_menu_bg","x":0,"y":0,"width":640,"height":360,"tint":[0.1,0.1,0.1,1]}]

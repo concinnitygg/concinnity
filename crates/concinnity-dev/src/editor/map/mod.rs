@@ -136,7 +136,11 @@ mod tests {
     fn imported_scene() -> Vec<WorldJsonlAsset> {
         vec![
             asset(RegisteredType::Scene, "bistro", json!({})),
-            asset(RegisteredType::FramePacing, "FramePacing#0", json!({})),
+            asset(
+                RegisteredType::GraphicsConfig,
+                "GraphicsConfig#0",
+                json!({}),
+            ),
             asset(RegisteredType::Camera3D, "Camera3D#0", json!({})),
             asset(
                 RegisteredType::SceneImport,
@@ -198,7 +202,11 @@ mod tests {
     #[test]
     fn a_world_with_nowhere_to_be_maps_to_what_it_declares() {
         let showcase = vec![
-            asset(RegisteredType::FramePacing, "FramePacing#0", json!({})),
+            asset(
+                RegisteredType::GraphicsConfig,
+                "GraphicsConfig#0",
+                json!({}),
+            ),
             asset(RegisteredType::Material, "mat_floor", json!({})),
             asset(RegisteredType::Material, "mat_red", json!({})),
             asset(RegisteredType::Prop, "floor", json!({"mesh": "floor_mesh"})),

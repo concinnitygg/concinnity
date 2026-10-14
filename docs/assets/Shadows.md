@@ -4,8 +4,9 @@
 
 Cascaded shadow maps for the world's directional lights: their resolution,
 how far from the camera they reach, how many cascades split that range, and
-how often each is re-rendered. One per world; with none declared, the
-defaults below apply.
+how often each is re-rendered. The `shadows` section of
+[GraphicsConfig](GraphicsConfig.md); a field left unset takes the default
+below.
 
 The defaults describe the quality capable hardware runs, not what every GPU
 runs: the `Auto` graphics quality preset resolves the detected GPU into a

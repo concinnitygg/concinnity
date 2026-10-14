@@ -54,7 +54,7 @@ fn a_shorthand_with_references_at_none_still_builds() {
             json!({"props": [{"name": "a", "mesh": "box", "material": "m"}]}),
         ),
     ];
-    let mut world = String::from("[\"FramePacing\",{\"$id\":\"gfx\"}]\n");
+    let mut world = String::from("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
     world += &line(
         "ProceduralMesh",
         "box",

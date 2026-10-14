@@ -3,8 +3,9 @@
 # FramePacing
 
 How the render loop paces its frames: how many may be in flight, whether
-presentation waits for the display refresh, and the frame-rate cap. One per
-world; with none declared, the defaults below apply.
+presentation waits for the display refresh, and the frame-rate cap. The
+`frame_pacing` section of [GraphicsConfig](GraphicsConfig.md); a field left
+unset takes the default below.
 
 Pacing is a preference of whoever runs the build rather than a quality
 tier, so no graphics quality preset changes it.

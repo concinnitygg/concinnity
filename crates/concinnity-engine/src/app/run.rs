@@ -324,9 +324,9 @@ pub(crate) fn start_runtime(mut runtime: Runtime, options: RunOptions) -> Result
     Ok(())
 }
 
-// Report a renderer that refused, on screen where one can be stood up. The
-// machine has a GPU (a machine without one runs headless instead of reaching
-// here), so what is actionable is the driver, not the hardware.
+// Report a renderer that refused, or a world that needs one this machine
+// cannot give it, on screen where one can be stood up. A machine with a GPU
+// reaches here when its driver refused, so the driver is what is actionable.
 //
 // The screen draws through the same backend that just failed, so it may well
 // fail too; that is the console fallback, matching the blob-load path.

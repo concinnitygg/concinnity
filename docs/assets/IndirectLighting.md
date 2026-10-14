@@ -4,7 +4,9 @@
 
 Indirect (ambient) lighting: how strong the environment's ambient term is,
 and whether a screen-space bounce lets nearby lit surfaces bleed color onto
-one another. One per world; with none declared, the defaults below apply.
+one another. The `indirect_lighting` section of
+[GraphicsConfig](GraphicsConfig.md); a field left unset takes the default
+below.
 
 The screen-space bounce is on by default, which is the look on capable
 hardware: the `Auto` graphics quality preset clamps it back to `ibl` below

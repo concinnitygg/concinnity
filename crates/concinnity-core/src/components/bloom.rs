@@ -1,14 +1,17 @@
 // Bloom schema.
 
 /// Bloom: light from the brightest parts of the image spilling softly into
-/// their surroundings. One per world; with none declared, the defaults below
-/// apply.
+/// their surroundings. The `bloom` section of [GraphicsConfig](#graphicsconfig);
+/// a field left unset takes the default below.
 ///
 /// ```rust
-/// # use concinnity_core::components::Bloom;
-/// Bloom {
-///     intensity: 0.3,
-///     threshold: 1.2,
+/// # use concinnity_core::components::{BloomOverrides, GraphicsConfig};
+/// GraphicsConfig {
+///     bloom: BloomOverrides {
+///         intensity: Some(0.3),
+///         threshold: Some(1.2),
+///         ..Default::default()
+///     },
 ///     ..Default::default()
 /// };
 /// ```
@@ -20,6 +23,7 @@
     crate::ecs::AssetFields,
     crate::ecs::AssetDefault,
 )]
+#[asset(section)]
 #[serde(default)]
 pub struct Bloom {
     /// Additive bloom contribution. 0 skips bloom entirely.

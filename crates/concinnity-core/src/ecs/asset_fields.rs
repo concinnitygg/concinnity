@@ -430,11 +430,13 @@ mod tests {
             clamped,
             [
                 ClampedParam {
+                    section: None,
                     key: "blend",
                     from: 4.0,
                     to: 1.0
                 },
                 ClampedParam {
+                    section: None,
                     key: "rays",
                     from: 0.0,
                     to: 1.0

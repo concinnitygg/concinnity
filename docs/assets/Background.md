@@ -3,8 +3,9 @@
 # Background
 
 What the frame shows where no surface is drawn and no
-[EnvironmentMap](EnvironmentMap.md) serves as the backdrop. One per world;
-with none declared, the default below applies.
+[EnvironmentMap](EnvironmentMap.md) serves as the backdrop. The `background`
+section of [GraphicsConfig](GraphicsConfig.md); left unset, the default below
+applies.
 
 ## Parameters
 

@@ -1,12 +1,17 @@
 // Visibility-culling schema.
 
-/// How the renderer culls objects the camera cannot see. One per world; with
-/// none declared, two-pass occlusion culling is off.
+/// How the renderer culls objects the camera cannot see. The `culling` section
+/// of [GraphicsConfig](#graphicsconfig); a field left unset takes the default
+/// below.
 ///
 /// ```rust
-/// # use concinnity_core::components::Culling;
-/// Culling {
-///     two_pass_occlusion: false,
+/// # use concinnity_core::components::{CullingOverrides, GraphicsConfig};
+/// GraphicsConfig {
+///     culling: CullingOverrides {
+///         two_pass_occlusion: Some(false),
+///         ..Default::default()
+///     },
+///     ..Default::default()
 /// };
 /// ```
 #[derive(
@@ -17,6 +22,7 @@
     crate::ecs::AssetFields,
     crate::ecs::AssetDefault,
 )]
+#[asset(section)]
 #[serde(default)]
 pub struct Culling {
     /// Two-pass occlusion culling. Reduces objects popping in a frame late when

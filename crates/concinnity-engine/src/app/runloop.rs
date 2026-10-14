@@ -35,12 +35,15 @@ pub fn install_ctrlc_handler(runtime: &Runtime) {
 }
 
 /// Activate NSApplication so AppKit windows can be displayed. Must be called
-/// before any NSWindow is created (i.e. before GraphicsSystem::init()).
+/// before any NSWindow is created (i.e. before GraphicsSystem::init()), on the
+/// main thread; off it, nothing is activated and no window will show.
 #[cfg(target_os = "macos")]
 pub fn activate_app_macos() {
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
-    let mtm = objc2::MainThreadMarker::new()
-        .expect("activate_app_macos must be called from the main thread");
+    let Some(mtm) = objc2::MainThreadMarker::new() else {
+        tracing::warn!("NSApplication not activated: not on the main thread");
+        return;
+    };
     let ns_app = NSApplication::sharedApplication(mtm);
     ns_app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
     ns_app.activate();

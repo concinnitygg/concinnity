@@ -17,7 +17,7 @@ mod benchmark;
 
 use std::path::PathBuf;
 
-use concinnity::components::{FramePacing, Planet};
+use concinnity::components::{GraphicsConfig, Planet};
 use concinnity::{App, cook};
 
 const WORLD: &str = include_str!("planet.jsonl");
@@ -37,7 +37,7 @@ fn run() -> Result<(), String> {
         benchmark::inject(
             &mut world,
             &declared_planet(WORLD)?,
-            declared_pacing(WORLD)?,
+            declared_graphics(WORLD)?,
         );
     }
     let blob = blob_path();
@@ -70,10 +70,10 @@ fn declared_planet(text: &str) -> Result<Planet, String> {
     serde_json::from_value(args).map_err(|e| e.to_string())
 }
 
-// The frame pacing the world file declares, if any, which the benchmark keeps
-// but for the frame-rate cap.
-fn declared_pacing(text: &str) -> Result<Option<FramePacing>, String> {
-    let Ok(args) = declared(text, "FramePacing", &[]) else {
+// The graphics settings the world file declares, if any, which the benchmark
+// keeps but for the frame-rate cap.
+fn declared_graphics(text: &str) -> Result<Option<GraphicsConfig>, String> {
+    let Ok(args) = declared(text, "GraphicsConfig", &[]) else {
         return Ok(None);
     };
     serde_json::from_value(args)

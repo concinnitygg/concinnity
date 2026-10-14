@@ -3,7 +3,9 @@
 //! This replaces asking the world for a marker component. Four things decide
 //! it, and only two of them are the world's own, so the answer is computed
 //! before the world starts and published as a resource the render band's gates
-//! read.
+//! read. A world with something to draw needs a renderer: on a build or a
+//! machine that cannot give it one, it does not quietly run headless; it fails
+//! to start unless it declares `AppConfig.headless`.
 
 use concinnity_core::components::AppConfig;
 use concinnity_core::ecs::World;
@@ -29,15 +31,11 @@ impl RenderMode {
     }
 }
 
-/// Why a world resolved the way it did, for the one log line that says so.
+/// Why a world resolved headless, for the one log line that says so.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeadlessReason {
     /// The world declares `AppConfig.headless`.
     Requested,
-    /// No render backend compiles into this build.
-    NoBackend,
-    /// The machine exposes no usable GPU.
-    NoGpu,
     /// The world holds nothing to draw.
     NothingToDraw,
 }
@@ -46,39 +44,89 @@ impl HeadlessReason {
     fn as_str(self) -> &'static str {
         match self {
             HeadlessReason::Requested => "the world asks for it (AppConfig.headless)",
-            HeadlessReason::NoBackend => "this build compiles no render backend",
-            HeadlessReason::NoGpu => "this machine exposes no usable GPU",
             HeadlessReason::NothingToDraw => "the world holds nothing to draw",
         }
     }
 }
 
-/// Resolve how `world` runs, and why when the answer is headless.
+/// Why a world with something to draw cannot get a renderer here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoRenderer {
+    /// No render backend compiles into this build.
+    NoBackend,
+    /// The machine exposes no usable GPU.
+    NoGpu,
+}
+
+impl NoRenderer {
+    /// What the run reports when it refuses to start.
+    pub fn message(self) -> &'static str {
+        match self {
+            NoRenderer::NoBackend => {
+                "this build compiles no render backend; set AppConfig.headless to run \
+                 the world without one"
+            }
+            NoRenderer::NoGpu => {
+                "no usable GPU was found; set AppConfig.headless to run the world \
+                 without one"
+            }
+        }
+    }
+}
+
+/// How a world resolved for this build and machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resolution {
+    /// A window and a renderer.
+    Rendered,
+    /// No window, for the reason given.
+    Headless(HeadlessReason),
+    /// The world has something to draw and nothing here can draw it.
+    Unavailable(NoRenderer),
+}
+
+impl Resolution {
+    /// The mode a run takes; a world that cannot get its renderer opens no
+    /// window either, and fails at start.
+    pub fn mode(self) -> RenderMode {
+        match self {
+            Resolution::Rendered => RenderMode::Rendered,
+            Resolution::Headless(_) | Resolution::Unavailable(_) => RenderMode::Headless,
+        }
+    }
+}
+
+/// Resolve how `world` runs on this build and machine.
 ///
 /// The checks run cheapest-first, so the GPU probe only happens for a world
 /// that would otherwise open a window. Must be called before
 /// [`World::start`](concinnity_core::ecs::World::start), which drains several
 /// of the columns [`World::renders`] reads.
-pub fn resolve(world: &World) -> (RenderMode, Option<HeadlessReason>) {
-    let headless = |r| (RenderMode::Headless, Some(r));
+pub fn resolve(world: &World) -> Resolution {
+    resolve_with(world, crate::device::AVAILABLE, || {
+        crate::device::probe_gpu_profile().is_some()
+    })
+}
 
+// `resolve` with the build's backend and the machine's GPU as inputs.
+fn resolve_with(world: &World, backend: bool, gpu: impl FnOnce() -> bool) -> Resolution {
     if world
         .query::<AppConfig>()
         .next()
         .is_some_and(|c| c.headless)
     {
-        return headless(HeadlessReason::Requested);
+        return Resolution::Headless(HeadlessReason::Requested);
     }
     if !world.renders() {
-        return headless(HeadlessReason::NothingToDraw);
+        return Resolution::Headless(HeadlessReason::NothingToDraw);
     }
-    if !crate::device::AVAILABLE {
-        return headless(HeadlessReason::NoBackend);
+    if !backend {
+        return Resolution::Unavailable(NoRenderer::NoBackend);
     }
-    if crate::device::probe_gpu_profile().is_none() {
-        return headless(HeadlessReason::NoGpu);
+    if !gpu() {
+        return Resolution::Unavailable(NoRenderer::NoGpu);
     }
-    (RenderMode::Rendered, None)
+    Resolution::Rendered
 }
 
 /// The world's half of the resolution, with no GPU probe: whether the content
@@ -100,14 +148,14 @@ pub fn from_content(world: &World) -> RenderMode {
     }
 }
 
-/// Resolve as [`resolve`] does and log the outcome, so a run that quietly did
+/// Resolve as [`resolve`] does and log a headless outcome, so a run that did
 /// not open a window says why it did not.
-pub fn resolve_and_report(world: &World) -> RenderMode {
-    let (mode, reason) = resolve(world);
-    if let Some(reason) = reason {
+pub fn resolve_and_report(world: &World) -> Resolution {
+    let resolution = resolve(world);
+    if let Resolution::Headless(reason) = resolution {
         tracing::info!("Running headless: {}", reason.as_str());
     }
-    mode
+    resolution
 }
 
 #[cfg(test)]
@@ -127,8 +175,10 @@ mod tests {
             ..Default::default()
         });
 
-        let (_, reason) = resolve(&world);
-        assert_ne!(reason, Some(HeadlessReason::NothingToDraw));
+        assert_ne!(
+            resolve(&world),
+            Resolution::Headless(HeadlessReason::NothingToDraw)
+        );
     }
 
     // A simulation-only world has no window to open, so it resolves headless
@@ -140,7 +190,7 @@ mod tests {
 
         assert_eq!(
             resolve(&world),
-            (RenderMode::Headless, Some(HeadlessReason::NothingToDraw))
+            Resolution::Headless(HeadlessReason::NothingToDraw)
         );
     }
 
@@ -149,7 +199,7 @@ mod tests {
     fn an_empty_world_runs_headless() {
         assert_eq!(
             resolve(&World::new()),
-            (RenderMode::Headless, Some(HeadlessReason::NothingToDraw))
+            Resolution::Headless(HeadlessReason::NothingToDraw)
         );
     }
 
@@ -167,7 +217,7 @@ mod tests {
 
         assert_eq!(
             resolve(&world),
-            (RenderMode::Headless, Some(HeadlessReason::Requested))
+            Resolution::Headless(HeadlessReason::Requested)
         );
     }
 
@@ -179,8 +229,10 @@ mod tests {
         world.add_component(Prop::default());
         world.add_component(AppConfig::default());
 
-        let (_, reason) = resolve(&world);
-        assert_ne!(reason, Some(HeadlessReason::Requested));
+        assert_ne!(
+            resolve(&world),
+            Resolution::Headless(HeadlessReason::Requested)
+        );
     }
 
     // The authoring answer reads the world and nothing else, so it says
@@ -209,5 +261,43 @@ mod tests {
         });
 
         assert_eq!(from_content(&world), RenderMode::Headless);
+    }
+
+    // Content that draws on a machine with no GPU, or a build with no backend,
+    // is refused rather than run headless; the opt-out still runs it, and a
+    // world with nothing to draw never needs one.
+    #[test]
+    fn content_that_draws_needs_a_renderer_unless_it_opts_out() {
+        let mut world = World::new();
+        world.add_component(Prop::default());
+        assert_eq!(
+            resolve_with(&world, true, || false),
+            Resolution::Unavailable(NoRenderer::NoGpu)
+        );
+        assert_eq!(
+            resolve_with(&world, false, || true),
+            Resolution::Unavailable(NoRenderer::NoBackend)
+        );
+        assert_eq!(resolve_with(&world, true, || true), Resolution::Rendered);
+        assert_eq!(
+            Resolution::Unavailable(NoRenderer::NoGpu).mode(),
+            RenderMode::Headless
+        );
+
+        world.add_component(AppConfig {
+            headless: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            resolve_with(&world, false, || false),
+            Resolution::Headless(HeadlessReason::Requested)
+        );
+
+        let mut physics = World::new();
+        physics.add_component(PhysicsConfig::default());
+        assert_eq!(
+            resolve_with(&physics, false, || false),
+            Resolution::Headless(HeadlessReason::NothingToDraw)
+        );
     }
 }

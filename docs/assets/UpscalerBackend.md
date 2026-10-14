@@ -2,7 +2,7 @@
 
 # UpscalerBackend
 
-Upscaler selector for `AntiAliasing.upscaler`. `Auto` resolves at runtime
+Upscaler selector for `GraphicsConfig.anti_aliasing.upscaler`. `Auto` resolves at runtime
 to the best available (DLSS, then XeSS, then FSR3); the explicit variants
 request a specific upscaler and fall back when it is unavailable. DirectX
 and Vulkan both resolve all three, each from the vendor SDK staged beside

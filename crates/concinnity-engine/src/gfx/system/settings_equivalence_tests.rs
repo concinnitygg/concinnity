@@ -4,17 +4,23 @@
 // settings, the backend's `PostSettings` and `QualitySettings`, and a preset
 // change's re-resolved quality group into one digest, so a change to any value
 // the backend receives fails here by name.
+//
+// The `bare` world (no `GraphicsConfig`) once resolved two values apart from
+// the section defaults: two-pass occlusion off and an upscaler at native scale.
+// Absence now means the defaults, so a `bare` case checks those two values
+// against the resolver's rules and prints them as the pinned digests saw them.
 
 use concinnity_core::components::{
     AaMode, AmbientOcclusion, AntiAliasing, Bloom, Culling, Display, Exposure, FramePacing,
-    IndirectLighting, IndirectTechnique, PassResolution, Reflections, ShadowUpdate, Shadows,
-    StreamingConfig, TextureFiltering, UpscaleQuality, UpscalerBackend, Vignette, WindowMode,
+    GraphicsConfig, IndirectLighting, IndirectTechnique, PassResolution, Reflections, ShadowUpdate,
+    Shadows, StreamingConfig, TextureFiltering, UpscaleQuality, UpscalerBackend, Vignette,
+    WindowMode,
 };
 use concinnity_core::render::backend::{GpuProfile, GpuTier, QualitySettings};
 use concinnity_core::render::backend_init::PostSettings;
 use concinnity_core::render::dlss::DlssPreset;
 
-use concinnity_core::settings::quality::resolve_ceiling;
+use concinnity_core::settings::quality::{more_aggressive_upscale, resolve_ceiling};
 use concinnity_core::settings::{
     QualityPreset, ResolvedSettings, UserGraphicsSettings, WorldAssets, WorldSettings,
 };
@@ -64,21 +70,26 @@ struct Declared {
 }
 
 impl Declared {
-    // The world declaring every asset, and `streaming` where given.
+    // The world setting every field of every section, and `streaming` where
+    // given.
     fn world(&self, streaming: Option<&StreamingConfig>) -> WorldSettings {
+        let graphics = GraphicsConfig {
+            frame_pacing: self.frame_pacing.clone().into(),
+            shadows: self.shadows.clone().into(),
+            texture_filtering: self.texture_filtering.clone().into(),
+            background: Default::default(),
+            ambient_occlusion: self.ambient_occlusion.clone().into(),
+            reflections: self.reflections.clone().into(),
+            indirect_lighting: self.indirect_lighting.clone().into(),
+            anti_aliasing: self.anti_aliasing.clone().into(),
+            exposure: self.exposure.clone().into(),
+            bloom: self.bloom.clone().into(),
+            vignette: self.vignette.clone().into(),
+            display: self.display.clone().into(),
+            culling: self.culling.clone().into(),
+        };
         WorldSettings::new(WorldAssets {
-            frame_pacing: Some(&self.frame_pacing),
-            shadows: Some(&self.shadows),
-            texture_filtering: Some(&self.texture_filtering),
-            ambient_occlusion: Some(&self.ambient_occlusion),
-            reflections: Some(&self.reflections),
-            indirect_lighting: Some(&self.indirect_lighting),
-            anti_aliasing: Some(&self.anti_aliasing),
-            exposure: Some(&self.exposure),
-            bloom: Some(&self.bloom),
-            vignette: Some(&self.vignette),
-            display: Some(&self.display),
-            culling: Some(&self.culling),
+            graphics: Some(&graphics),
             lut_strength: None,
             streaming,
         })
@@ -463,6 +474,7 @@ fn preset_cleared(user: &UserGraphicsSettings) -> UserGraphicsSettings {
 }
 
 fn case_text(
+    world_name: &str,
     world: &WorldSettings,
     user: &UserGraphicsSettings,
     preset: QualityPreset,
@@ -481,13 +493,28 @@ fn case_text(
     let mut state = SettingsState::new();
     state.authored = world.clone();
     state.session = launch.session_overrides();
-    let graphics = state.resolve(user, &ceiling);
-    let post = super::init::post_settings(&graphics, world, &launch);
+    let mut graphics = state.resolve(user, &ceiling);
+    let mut post = super::init::post_settings(&graphics, &launch);
     let quality = graphics.quality_settings();
 
     let cleared = preset_cleared(user);
     let mut after_preset = graphics.clone();
     after_preset.set_quality(state.resolve_quality(&cleared, &ceiling));
+    if world_name == "bare" {
+        let render_scale = user.render_scale.unwrap_or_else(|| {
+            more_aggressive_upscale(UpscaleQuality::default(), ceiling.min_upscale)
+        });
+        assert_eq!(post.upscale_scale, render_scale.scale());
+        let two_pass = user.occlusion_two_pass.unwrap_or(true);
+        assert_eq!(graphics.occlusion_two_pass, two_pass);
+        assert_eq!(after_preset.occlusion_two_pass, two_pass);
+        assert_eq!(post.occlusion_two_pass, two_pass);
+        let legacy_two_pass = user.occlusion_two_pass.unwrap_or(false);
+        graphics.occlusion_two_pass = legacy_two_pass;
+        after_preset.occlusion_two_pass = legacy_two_pass;
+        post.occlusion_two_pass = legacy_two_pass;
+        post.upscale_scale = 1.0;
+    }
     format!(
         "{}\n{}\n{}\n{}",
         resolved_text(&graphics, world),
@@ -508,7 +535,7 @@ fn digests() -> Vec<(String, u64)> {
     for (world_name, world) in worlds() {
         for (user_name, user) in users() {
             for (ceiling_name, preset, tier) in ceilings() {
-                let text = case_text(&world, &user, preset, tier);
+                let text = case_text(world_name, &world, &user, preset, tier);
                 out.push((
                     format!("{world_name}/{user_name}/{ceiling_name}"),
                     fnv1a(&text),
@@ -690,4 +717,65 @@ fn the_settings_chain_resolves_every_case_as_pinned() {
         actual == expected,
         "the resolved settings changed:\n{listing}"
     );
+}
+
+// The values a `bare` case now resolves for the two fields absence used to
+// move, written out from the rules: the render scale is the more aggressive of
+// the `quality` default and the tier's minimum unless the user picked one, and
+// two-pass occlusion takes its `true` default unless the user set it.
+#[test]
+fn a_bare_world_resolves_to_the_section_defaults() {
+    let third = 2.0 / 3.0;
+    let expected = |user: &str, ceiling: &str| -> (f32, bool) {
+        if user == "every" {
+            return (0.587, true);
+        }
+        let scale = match ceiling {
+            "Low" | "auto-Integrated" => 0.5,
+            "Medium" | "auto-Unknown" | "auto-EntryDiscrete" => 0.587,
+            _ => third,
+        };
+        (scale, true)
+    };
+    let launch = LaunchRequest::default();
+    let bare = WorldSettings::default();
+    for (user_name, user) in users() {
+        for (ceiling_name, preset, tier) in ceilings() {
+            let profile = GpuProfile {
+                tier,
+                ..GpuProfile::UNKNOWN
+            };
+            let ceiling = resolve_ceiling(preset, &profile);
+            let mut state = SettingsState::new();
+            state.authored = bare.clone();
+            let graphics = state.resolve(&user, &ceiling);
+            let post = super::init::post_settings(&graphics, &launch);
+            let (scale, two_pass) = expected(user_name, &ceiling_name);
+            let case = format!("{user_name}/{ceiling_name}");
+            assert_eq!(post.upscale_scale, scale, "{case}");
+            assert_eq!(graphics.occlusion_two_pass, two_pass, "{case}");
+            assert_eq!(post.occlusion_two_pass, two_pass, "{case}");
+        }
+    }
+}
+
+// Absent sections and sections setting every field to its default resolve to
+// the same text; `every` differs only through the `StreamingConfig` the
+// `defaults` world declares.
+#[test]
+fn a_bare_world_resolves_like_every_field_set_to_its_default() {
+    let bare = WorldSettings::default();
+    let defaults = Declared::default().world(Some(&StreamingConfig::default()));
+    for (user_name, user) in users() {
+        if user_name == "every" {
+            continue;
+        }
+        for (ceiling_name, preset, tier) in ceilings() {
+            assert_eq!(
+                case_text("", &bare, &user, preset, tier),
+                case_text("", &defaults, &user, preset, tier),
+                "{user_name}/{ceiling_name}"
+            );
+        }
+    }
 }

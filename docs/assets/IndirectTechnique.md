@@ -2,7 +2,7 @@
 
 # IndirectTechnique
 
-Indirect-diffuse lighting technique for `IndirectLighting.technique`. `Ibl`
+Indirect-diffuse lighting technique for `GraphicsConfig.indirect_lighting.technique`. `Ibl`
 is the image-based-lighting-only ambient term; `Ssgi` layers a screen-space
 global-illumination bounce on top.
 

@@ -3,10 +3,9 @@
 # AntiAliasing
 
 Anti-aliasing and temporal upscaling: how edges are smoothed, and whether
-the scene renders below native resolution and is reconstructed to full. One
-per world; with none declared, the defaults below apply, except that an
-upscaler turned on in the settings menu then runs at native resolution,
-where it only anti-aliases.
+the scene renders below native resolution and is reconstructed to full. The
+`anti_aliasing` section of [GraphicsConfig](GraphicsConfig.md); a field left
+unset takes the default below.
 
 Temporal anti-aliasing is the default, which is the look on capable
 hardware: the `Auto` graphics quality preset clamps it to `fxaa` below the

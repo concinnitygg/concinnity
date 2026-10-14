@@ -58,7 +58,7 @@ mod tests {
 
     #[test]
     fn explain_prints_a_known_asset() {
-        let (_dir, path) = write_world("[\"FramePacing\",{\"$id\":\"gfx\"}]\n");
+        let (_dir, path) = write_world("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
         explain("gfx", Some(&path)).unwrap();
     }
 
@@ -76,14 +76,14 @@ mod tests {
 
     #[test]
     fn explain_resolves_an_anonymous_label() {
-        let (_dir, path) = write_world("[\"FramePacing\",{}]\n[\"Scene\"]\n");
+        let (_dir, path) = write_world("[\"GraphicsConfig\",{}]\n[\"Scene\"]\n");
         explain("Scene#0", Some(&path)).unwrap();
         assert!(explain("Scene#1", Some(&path)).is_err());
     }
 
     #[test]
     fn explain_of_an_unknown_name_offers_close_matches() {
-        let (_dir, path) = write_world("[\"FramePacing\",{\"$id\":\"gfx\"}]\n");
+        let (_dir, path) = write_world("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
         let err = explain("gf", Some(&path)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         let msg = err.to_string();
@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn explain_of_an_unknown_name_without_matches_has_no_hint() {
-        let (_dir, path) = write_world("[\"FramePacing\",{\"$id\":\"gfx\"}]\n");
+        let (_dir, path) = write_world("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
         let err = explain("zzz_nothing", Some(&path)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         assert!(!err.to_string().contains("close matches"), "got: {err}");

@@ -3,7 +3,7 @@
 use crate::components::{PassResolution, Vocabulary};
 use crate::render::post::ssgi;
 
-/// Indirect-diffuse lighting technique for `IndirectLighting.technique`. `Ibl`
+/// Indirect-diffuse lighting technique for `GraphicsConfig.indirect_lighting.technique`. `Ibl`
 /// is the image-based-lighting-only ambient term; `Ssgi` layers a screen-space
 /// global-illumination bounce on top.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -27,16 +27,21 @@ pub const DEFAULT_SSGI_RAYS: u32 = 1;
 
 /// Indirect (ambient) lighting: how strong the environment's ambient term is,
 /// and whether a screen-space bounce lets nearby lit surfaces bleed color onto
-/// one another. One per world; with none declared, the defaults below apply.
+/// one another. The `indirect_lighting` section of
+/// [GraphicsConfig](#graphicsconfig); a field left unset takes the default
+/// below.
 ///
 /// The screen-space bounce is on by default, which is the look on capable
 /// hardware: the `Auto` graphics quality preset clamps it back to `ibl` below
 /// the high tier.
 ///
 /// ```rust
-/// # use concinnity_core::components::IndirectLighting;
-/// IndirectLighting {
-///     ambient_intensity: 1.5,
+/// # use concinnity_core::components::{GraphicsConfig, IndirectLightingOverrides};
+/// GraphicsConfig {
+///     indirect_lighting: IndirectLightingOverrides {
+///         ambient_intensity: Some(1.5),
+///         ..Default::default()
+///     },
 ///     ..Default::default()
 /// };
 /// ```
@@ -48,6 +53,7 @@ pub const DEFAULT_SSGI_RAYS: u32 = 1;
     crate::ecs::AssetFields,
     crate::ecs::AssetDefault,
 )]
+#[asset(section)]
 #[serde(default)]
 pub struct IndirectLighting {
     /// Indirect-diffuse lighting source. `ibl` uses the environment map's

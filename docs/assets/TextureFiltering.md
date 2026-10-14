@@ -2,8 +2,9 @@
 
 # TextureFiltering
 
-How the scene's surface textures (albedo and normal maps) are filtered.
-One per world; with none declared, the defaults below apply.
+How the scene's surface textures (albedo and normal maps) are filtered. The
+`texture_filtering` section of [GraphicsConfig](GraphicsConfig.md); a field
+left unset takes the default below, capped by the quality tier.
 
 The default describes the quality capable hardware runs: the `Auto`
 graphics quality preset resolves the detected GPU into a ceiling that caps

@@ -71,14 +71,7 @@ pub(crate) fn args_changes(
         let (name, ty) = (name.as_deref()?, field(new, "type")?);
         let old_args = effective(ty, name, &args_of(old), shadows);
         let new_args = effective(ty, name, &args_of(new), shadows);
-        let keys: Vec<String> = new_args
-            .keys()
-            .chain(old_args.keys())
-            .filter(|k| old_args.get(*k) != new_args.get(*k))
-            .cloned()
-            .collect::<std::collections::BTreeSet<String>>()
-            .into_iter()
-            .collect();
+        let keys = changed_keys(ty, &old_args, &new_args);
         if !keys.is_empty() {
             out.push(ArgsChange {
                 name: name.to_string(),
@@ -90,6 +83,42 @@ pub(crate) fn args_changes(
         }
     }
     Some(out)
+}
+
+// The keys whose values differ between `old` and `new`, sorted. A sparse
+// type's sections are compared field by field over their defaults, so a change
+// reads as `section.field`, and setting a field to the default it already
+// showed changes nothing.
+fn changed_keys(ty: &str, old: &Map<String, Value>, new: &Map<String, Value>) -> Vec<String> {
+    use std::collections::BTreeSet;
+    let Some(defaults) = form::sparse_defaults(ty) else {
+        return new
+            .keys()
+            .chain(old.keys())
+            .filter(|k| old.get(*k) != new.get(*k))
+            .cloned()
+            .collect::<BTreeSet<String>>()
+            .into_iter()
+            .collect();
+    };
+    let mut keys = BTreeSet::new();
+    for (section, fields) in &defaults {
+        let Some(fields) = fields.as_object() else {
+            continue;
+        };
+        let leaf = |args: &Map<String, Value>, key: &str| {
+            args.get(section)
+                .and_then(|s| s.get(key))
+                .or_else(|| fields.get(key))
+                .cloned()
+        };
+        for key in fields.keys() {
+            if leaf(old, key) != leaf(new, key) {
+                keys.insert(format!("{section}.{key}"));
+            }
+        }
+    }
+    keys.into_iter().collect()
 }
 
 // What the asset's args amount to: the authored line over the baseline its
@@ -228,5 +257,20 @@ mod tests {
         assert!(same_assets(&before, &after));
         assert!(!same_assets(&before, &[entry("b", "Sprite", json!({}))]));
         assert!(!same_assets(&before, &[json!({ "type": "Sprite" })]));
+    }
+
+    // A sparse type's change names the section field it moved, compared over
+    // the defaults, so writing a default that was already showing is no change.
+    #[test]
+    fn a_graphics_config_change_names_its_section_field() {
+        let before = vec![entry("gfx", "GraphicsConfig", json!({}))];
+        let after = vec![entry(
+            "gfx",
+            "GraphicsConfig",
+            json!({ "shadows": { "distance": 120, "cascades": 4 } }),
+        )];
+        let out = changes(&before, &after).expect("args-only");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].keys, ["shadows.distance"]);
     }
 }

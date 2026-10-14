@@ -1,13 +1,17 @@
 // Display-output schema.
 
 /// How the finished frame is encoded for the display: standard dynamic range,
-/// extended-range HDR, or PQ (HDR10). One per world; with none declared, the
-/// output is standard dynamic range.
+/// extended-range HDR, or PQ (HDR10). The `display` section of
+/// [GraphicsConfig](#graphicsconfig); left unset, the output is standard
+/// dynamic range.
 ///
 /// ```rust
-/// # use concinnity_core::components::Display;
-/// Display {
-///     hdr: true,
+/// # use concinnity_core::components::{DisplayOverrides, GraphicsConfig};
+/// GraphicsConfig {
+///     display: DisplayOverrides {
+///         hdr: Some(true),
+///         ..Default::default()
+///     },
 ///     ..Default::default()
 /// };
 /// ```
@@ -19,6 +23,7 @@
     crate::ecs::AssetFields,
     crate::ecs::AssetDefault,
 )]
+#[asset(section)]
 #[serde(default)]
 pub struct Display {
     /// HDR display output. On a capable display, emits extended-range HDR

@@ -2,8 +2,8 @@
 
 # Vignette
 
-Darkening toward the corners of the frame. One per world; with none
-declared, there is no vignette.
+Darkening toward the corners of the frame. The `vignette` section of
+[GraphicsConfig](GraphicsConfig.md); left unset, there is no vignette.
 
 ## Parameters
 

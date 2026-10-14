@@ -16,7 +16,7 @@
 //! slower host visits the same poses at the same track times and simply
 //! samples fewer of them.
 
-use concinnity::components::{CameraTravel, CameraTurn, Ease, FramePacing, FrameReport, Planet};
+use concinnity::components::{CameraTravel, CameraTurn, Ease, FrameReport, GraphicsConfig, Planet};
 use concinnity::cook::{Camera3D, CameraTrack, WorldBuilder};
 
 // The ground run: this far along the ground, this high over the grass, this
@@ -43,26 +43,22 @@ const ALOFT_PITCH_DEG: f32 = -14.0;
 const CAMERA_FOV_Y_DEGREES: f32 = 70.0;
 
 // What the world file declares that the run replaces: the walker, the camera
-// it steers, which the track drives instead, and the frame pacing.
+// it steers, which the track drives instead, and the graphics settings.
 const WALKER: &str = "RigidBody#0";
 const CAMERA: &str = "cam";
-const PACING: &str = "FramePacing#0";
+const GRAPHICS: &str = "GraphicsConfig#0";
 
 /// Swap the walker for a camera on the path over `planet`, and time the run
 /// uncapped: a capped GPU idles between frames and lowers its clocks.
-pub(crate) fn inject(world: &mut WorldBuilder, planet: &Planet, pacing: Option<FramePacing>) {
+pub(crate) fn inject(world: &mut WorldBuilder, planet: &Planet, graphics: Option<GraphicsConfig>) {
     let path = Path::new(planet);
     world.remove(WALKER).remove(CAMERA);
-    if pacing.is_some() {
-        world.remove(PACING);
+    if graphics.is_some() {
+        world.remove(GRAPHICS);
     }
-    world.add(
-        "pacing",
-        FramePacing {
-            fps_cap: 0,
-            ..pacing.unwrap_or_default()
-        },
-    );
+    let mut graphics = graphics.unwrap_or_default();
+    graphics.frame_pacing.fps_cap = Some(0);
+    world.add("graphics", graphics);
     world.add(
         CAMERA,
         Camera3D {

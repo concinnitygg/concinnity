@@ -5,12 +5,17 @@
 //!
 //! The layers, lowest first:
 //!
-//! 1. The world's authored settings ([`WorldSettings`]), defaults where absent.
-//! 2. A scene's override ([`SceneOverride`]), replacing the world's assets.
-//! 3. The quality ceiling ([`QualityCeiling`]), which only ever reduces.
-//! 4. The user's persisted choices ([`UserGraphicsSettings`]), each of which
+//! 1. Each `GraphicsConfig` section's defaults, the look the top quality tier
+//!    runs.
+//! 2. The world's `GraphicsConfig` ([`WorldSettings`]): each field it sets
+//!    replaces the default.
+//! 3. A scene's override ([`SceneOverride`]), the same sparse shape, replacing
+//!    the fields it sets.
+//! 4. The quality ceiling ([`QualityCeiling`]), which caps the quality-governed
+//!    fields of the result, set or not, and only ever reduces.
+//! 5. The user's persisted choices ([`UserGraphicsSettings`]), each of which
 //!    beats the ceiling for its own setting.
-//! 5. Session overrides, the same shape as the user's, beating them.
+//! 6. Session overrides, the same shape as the user's, beating them.
 //!
 //! Device capabilities clamp after every layer: no setting resolves on that the
 //! device cannot run.
@@ -26,9 +31,9 @@ pub use tunables::post_process_tunables;
 use alloc::borrow::Cow;
 
 use crate::components::{
-    AmbientOcclusion, AntiAliasing, Bloom, Culling, Display, Exposure, FramePacing,
-    IndirectLighting, Reflections, Shadows, StreamingConfig, TextureFiltering, UpscaleQuality,
-    UpscalerBackend, Vignette,
+    AmbientOcclusion, AntiAliasing, Background, Bloom, Culling, Display, Exposure, FramePacing,
+    GraphicsConfig, IndirectLighting, Reflections, Shadows, StreamingConfig, TextureFiltering,
+    UpscaleQuality, UpscalerBackend, Vignette,
 };
 use crate::gfx::render_types::PostProcessTunables;
 use crate::render::backend::{DeviceCapabilities, QualitySettings};
@@ -47,30 +52,8 @@ use crate::settings::user::UserGraphicsSettings;
 /// The settings assets a world declares, each `None` where it declares none.
 #[derive(Clone, Copy, Default)]
 pub struct WorldAssets<'a> {
-    /// The world's `FramePacing`.
-    pub frame_pacing: Option<&'a FramePacing>,
-    /// The world's `Shadows`.
-    pub shadows: Option<&'a Shadows>,
-    /// The world's `TextureFiltering`.
-    pub texture_filtering: Option<&'a TextureFiltering>,
-    /// The world's `AmbientOcclusion`.
-    pub ambient_occlusion: Option<&'a AmbientOcclusion>,
-    /// The world's `Reflections`.
-    pub reflections: Option<&'a Reflections>,
-    /// The world's `IndirectLighting`.
-    pub indirect_lighting: Option<&'a IndirectLighting>,
-    /// The world's `AntiAliasing`.
-    pub anti_aliasing: Option<&'a AntiAliasing>,
-    /// The world's `Exposure`.
-    pub exposure: Option<&'a Exposure>,
-    /// The world's `Bloom`.
-    pub bloom: Option<&'a Bloom>,
-    /// The world's `Vignette`.
-    pub vignette: Option<&'a Vignette>,
-    /// The world's `Display`.
-    pub display: Option<&'a Display>,
-    /// The world's `Culling`.
-    pub culling: Option<&'a Culling>,
+    /// The world's `GraphicsConfig`; `None` sets nothing.
+    pub graphics: Option<&'a GraphicsConfig>,
     /// The `strength` of the world's `ColorLut`.
     pub lut_strength: Option<f32>,
     /// The world's `StreamingConfig`.
@@ -93,33 +76,30 @@ pub struct QualityEffects {
     pub exposure: Exposure,
 }
 
-/// The world's authored graphics values, before any override or ceiling.
+/// The world's authored graphics values, before any override or ceiling:
+/// each section's defaults with the fields the world sets in their place.
 #[derive(Clone, Debug)]
 pub struct WorldSettings {
-    /// `FramePacing`, or its defaults.
+    /// Frame pacing.
     pub frame_pacing: FramePacing,
-    /// `Shadows`, or its defaults.
+    /// Cascaded shadows.
     pub shadows: Shadows,
-    /// `TextureFiltering`, or its defaults.
+    /// Texture filtering.
     pub texture_filtering: TextureFiltering,
-    /// The quality-governed assets, or their defaults.
+    /// The color shown where nothing draws.
+    pub background: Background,
+    /// The quality-governed sections.
     pub effects: QualityEffects,
-    /// `Bloom`, or its defaults.
+    /// Bloom.
     pub bloom: Bloom,
-    /// `Vignette`, or its defaults.
+    /// Vignette.
     pub vignette: Vignette,
-    /// `Display`, or its defaults.
+    /// Display output.
     pub display: Display,
-    /// `Culling`, or its defaults.
+    /// Culling.
     pub culling: Culling,
     /// The `ColorLut` blend; 1.0 without one.
     pub lut_strength: f32,
-    /// Whether the world declares an `AntiAliasing`. Without one an upscaler
-    /// the user turns on runs at native scale.
-    pub anti_aliasing_declared: bool,
-    /// Whether the world declares a `Culling`. Without one two-pass occlusion
-    /// is off.
-    pub culling_declared: bool,
     /// `StreamingConfig.texture_cap`; `None` without a `StreamingConfig`.
     pub texture_cap: Option<u32>,
     /// `StreamingConfig.texture_budget`; `None` without a `StreamingConfig`.
@@ -133,51 +113,45 @@ impl WorldSettings {
             frame_pacing: FramePacing::default(),
             shadows: Shadows::default(),
             texture_filtering: TextureFiltering::default(),
+            background: Background::default(),
             effects: QualityEffects::default(),
             bloom: Bloom::default(),
             vignette: Vignette::default(),
             display: Display::default(),
             culling: Culling::default(),
-            lut_strength: 1.0,
-            anti_aliasing_declared: false,
-            culling_declared: false,
+            lut_strength: assets.lut_strength.unwrap_or(1.0),
             texture_cap: assets.streaming.map(|s| s.texture_cap),
             texture_budget: assets.streaming.map(|s| s.texture_budget),
         };
-        world.adopt(&assets);
+        if let Some(graphics) = assets.graphics {
+            world.apply(graphics);
+        }
         world
     }
 
-    // Take every asset `assets` declares in place of the current copy.
-    fn adopt(&mut self, assets: &WorldAssets<'_>) {
-        fn take<T: Clone>(slot: &mut T, declared: Option<&T>) {
-            if let Some(value) = declared {
-                *slot = value.clone();
-            }
-        }
-        take(&mut self.frame_pacing, assets.frame_pacing);
-        take(&mut self.shadows, assets.shadows);
-        take(&mut self.texture_filtering, assets.texture_filtering);
-        take(
-            &mut self.effects.ambient_occlusion,
-            assets.ambient_occlusion,
-        );
-        take(&mut self.effects.reflections, assets.reflections);
-        take(
-            &mut self.effects.indirect_lighting,
-            assets.indirect_lighting,
-        );
-        take(&mut self.effects.anti_aliasing, assets.anti_aliasing);
-        take(&mut self.effects.exposure, assets.exposure);
-        take(&mut self.bloom, assets.bloom);
-        take(&mut self.vignette, assets.vignette);
-        take(&mut self.display, assets.display);
-        take(&mut self.culling, assets.culling);
-        if let Some(strength) = assets.lut_strength {
-            self.lut_strength = strength;
-        }
-        self.anti_aliasing_declared |= assets.anti_aliasing.is_some();
-        self.culling_declared |= assets.culling.is_some();
+    /// Replace every field `graphics` sets.
+    pub fn apply(&mut self, graphics: &GraphicsConfig) {
+        graphics.frame_pacing.apply_to(&mut self.frame_pacing);
+        graphics.shadows.apply_to(&mut self.shadows);
+        graphics
+            .texture_filtering
+            .apply_to(&mut self.texture_filtering);
+        graphics.background.apply_to(&mut self.background);
+        graphics
+            .ambient_occlusion
+            .apply_to(&mut self.effects.ambient_occlusion);
+        graphics.reflections.apply_to(&mut self.effects.reflections);
+        graphics
+            .indirect_lighting
+            .apply_to(&mut self.effects.indirect_lighting);
+        graphics
+            .anti_aliasing
+            .apply_to(&mut self.effects.anti_aliasing);
+        graphics.exposure.apply_to(&mut self.effects.exposure);
+        graphics.bloom.apply_to(&mut self.bloom);
+        graphics.vignette.apply_to(&mut self.vignette);
+        graphics.display.apply_to(&mut self.display);
+        graphics.culling.apply_to(&mut self.culling);
     }
 
     /// The cascade schedule the world's `Shadows` authors.
@@ -213,56 +187,20 @@ impl Default for WorldSettings {
     }
 }
 
-/// Settings a scene authors over the world's while it is loaded. Each asset
-/// present replaces the world's copy whole.
+/// Settings a scene authors over the world's while it is loaded: each field
+/// its `GraphicsConfig` sets replaces the world's.
 #[derive(Clone, Debug, Default)]
 pub struct SceneOverride {
-    /// The scene's `FramePacing`.
-    pub frame_pacing: Option<FramePacing>,
-    /// The scene's `Shadows`.
-    pub shadows: Option<Shadows>,
-    /// The scene's `TextureFiltering`.
-    pub texture_filtering: Option<TextureFiltering>,
-    /// The scene's `AmbientOcclusion`.
-    pub ambient_occlusion: Option<AmbientOcclusion>,
-    /// The scene's `Reflections`.
-    pub reflections: Option<Reflections>,
-    /// The scene's `IndirectLighting`.
-    pub indirect_lighting: Option<IndirectLighting>,
-    /// The scene's `AntiAliasing`.
-    pub anti_aliasing: Option<AntiAliasing>,
-    /// The scene's `Exposure`.
-    pub exposure: Option<Exposure>,
-    /// The scene's `Bloom`.
-    pub bloom: Option<Bloom>,
-    /// The scene's `Vignette`.
-    pub vignette: Option<Vignette>,
-    /// The scene's `Display`.
-    pub display: Option<Display>,
-    /// The scene's `Culling`.
-    pub culling: Option<Culling>,
+    /// The scene's sparse graphics settings.
+    pub graphics: GraphicsConfig,
 }
 
 impl SceneOverride {
-    /// The world's settings with this scene's assets in place of the world's.
+    /// The world's settings with this scene's set fields in place of the
+    /// world's.
     pub fn over(&self, world: &WorldSettings) -> WorldSettings {
         let mut out = world.clone();
-        out.adopt(&WorldAssets {
-            frame_pacing: self.frame_pacing.as_ref(),
-            shadows: self.shadows.as_ref(),
-            texture_filtering: self.texture_filtering.as_ref(),
-            ambient_occlusion: self.ambient_occlusion.as_ref(),
-            reflections: self.reflections.as_ref(),
-            indirect_lighting: self.indirect_lighting.as_ref(),
-            anti_aliasing: self.anti_aliasing.as_ref(),
-            exposure: self.exposure.as_ref(),
-            bloom: self.bloom.as_ref(),
-            vignette: self.vignette.as_ref(),
-            display: self.display.as_ref(),
-            culling: self.culling.as_ref(),
-            lut_strength: None,
-            streaming: None,
-        });
+        out.apply(&self.graphics);
         out
     }
 }
@@ -459,10 +397,9 @@ pub fn quality_settings(effects: &QualityEffects, hdr_metering: bool) -> Quality
     }
 }
 
-// Each value is the user's choice where they made one, otherwise the world's,
-// clamped under the ceiling if the preset governs it. Settings the world does
-// not author fall back to the engine defaults, and occlusion two-pass is off
-// without a `Culling`.
+// Each value is the user's choice where they made one, otherwise the world's
+// (the section default where the world sets none), clamped under the ceiling
+// if the preset governs it.
 fn resolve_graphics(
     world: &WorldSettings,
     user: &UserGraphicsSettings,
@@ -491,7 +428,7 @@ fn resolve_graphics(
         dlss_preset: user.dlss_preset.unwrap_or_default(),
         occlusion_two_pass: user
             .occlusion_two_pass
-            .unwrap_or(world.culling_declared && world.culling.two_pass_occlusion),
+            .unwrap_or(world.culling.two_pass_occlusion),
         // The user's streaming choices only apply where the world streams.
         texture_cap: world
             .texture_cap

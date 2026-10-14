@@ -277,9 +277,9 @@ fn confirm_add_makes_a_duplicate_name_unique() {
 // instance if it has one (no second append), and adds one if it does not.
 #[test]
 fn config_singleton_picker_edits_existing_else_adds() {
-    // A world that already has a FramePacing: picking it opens an EDIT.
+    // A world that already has a GraphicsConfig: picking it opens an EDIT.
     let mut h = hook(vec![serde_json::json!({
-        "type": "FramePacing", "args": {"$id": "gfx"}
+        "type": "GraphicsConfig", "args": {"$id": "gfx"}
     })]);
     let mut world = world_with_fields();
     h.open[PanelKey::Assets] = true;
@@ -288,8 +288,8 @@ fn config_singleton_picker_edits_existing_else_adds() {
         .picker_options(&world)
         .unwrap()
         .iter()
-        .position(|o| o.name == "FramePacing")
-        .expect("FramePacing is offered in the picker");
+        .position(|o| o.name == "GraphicsConfig")
+        .expect("GraphicsConfig is offered in the picker");
     h.apply_panel(PanelAction::PickOption(gi), &mut world);
     assert!(h.form_open());
     assert_eq!(
@@ -301,7 +301,7 @@ fn config_singleton_picker_edits_existing_else_adds() {
     assert_eq!(
         h.entries
             .iter()
-            .filter(|e| e["type"] == "FramePacing")
+            .filter(|e| e["type"] == "GraphicsConfig")
             .count(),
         1,
         "the singleton was edited in place, never duplicated"
