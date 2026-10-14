@@ -256,8 +256,8 @@ pub(super) fn upload_texture_resource_deferred(
         )));
     }
 
-    // Box-filtered mip chain so the texture minifies through hardware trilinear /
-    // aniso selection instead of aliasing from a single mip-0 sample.
+    // Box-filtered mip chain for the backend's own init-time textures (fallbacks,
+    // text atlases); scene textures arrive with their chain cooked.
     let chain = mipmap::generate_mip_chain(width, height, pixels);
     let levels: Vec<TextureLevel<'_>> = chain
         .iter()
@@ -291,22 +291,14 @@ fn dxgi_texture_format(format: concinnity_core::bake::texture::TextureFormat) ->
     }
 }
 
-// Upload a decoded texture into a 2-D resource. RGBA8 images take the CPU
-// mip-generation path above; block-compressed images (BC1/BC3/BC5/BC7) upload
-// their container mip chain verbatim. Call `write_texture_srv` to bind the
+// Upload a decoded texture into a 2-D resource, every level exactly as the image
+// carries them: RGBA8 with its cooked chain, or a block-compressed
+// (BC1/BC3/BC5/BC7) container chain. Call `write_texture_srv` to bind the
 // result, which picks the view format back off the resource.
 pub(super) fn upload_texture_image_deferred(
     alloc: &DeviceAllocator,
     image: &concinnity_core::bake::texture::TextureImage,
 ) -> RenderResult<(PooledTexture, UploadInFlight)> {
-    use concinnity_core::bake::texture::TextureFormat;
-    if image.format == TextureFormat::Rgba8 {
-        let mip = image
-            .mips
-            .first()
-            .ok_or_else(|| RenderError::Other("RGBA8 texture image has no mip level".into()))?;
-        return upload_texture_resource_deferred(alloc, mip.width, mip.height, &mip.data);
-    }
     let levels: Vec<TextureLevel<'_>> = image
         .mips
         .iter()

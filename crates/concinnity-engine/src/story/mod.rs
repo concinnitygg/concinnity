@@ -193,6 +193,7 @@ fn read_save(path: &Path) -> Option<StorySave> {
     crate::cbor_file::read(path, "StorySystem: save")
 }
 
+#[cfg(test)]
 fn write_save(path: &Path, save: &StorySave) -> std::io::Result<()> {
     crate::cbor_file::write(path, save)
 }
@@ -239,6 +240,8 @@ pub(crate) struct StorySystem {
     // Where the saves live (the project data directory).
     // `None` when no host installed a state root: play works, saving does not.
     save_dir: Option<PathBuf>,
+    // Applies save writes and removals off the sim thread, in order.
+    saves: crate::file_writer::FileWriter,
     // The open menu's option indices into the node's choices (conditions
     // filter gated options out); button i picks menu[i].
     menu: Vec<usize>,
@@ -301,6 +304,7 @@ impl StorySystem {
             in_choice: false,
             vars: HashMap::new(),
             save_dir: tree.map(|tree| tree.saves_dir()),
+            saves: crate::file_writer::FileWriter::new("cn-story-save"),
             menu: Vec::new(),
             typewriter: Typewriter::default(),
             elapsed: 0.0,

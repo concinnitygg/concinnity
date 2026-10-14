@@ -28,7 +28,7 @@ impl StorySystem {
             && self
                 .save_dir
                 .as_deref()
-                .and_then(|dir| read_save(&save_file(dir)))
+                .and_then(|dir| self.read_saved(&save_file(dir)))
                 .is_some();
         let has_slots = self.any_slot_save();
 

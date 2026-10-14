@@ -24,9 +24,14 @@ pub(crate) fn write<T: serde::Serialize>(path: &Path, value: &T) -> std::io::Res
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
+    std::fs::write(path, encode(value)?)
+}
+
+// `value` as the CBOR bytes `write` stores, for a caller that writes elsewhere.
+pub(crate) fn encode<T: serde::Serialize>(value: &T) -> std::io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     ciborium::into_writer(value, &mut bytes).map_err(std::io::Error::other)?;
-    std::fs::write(path, bytes)
+    Ok(bytes)
 }
 
 #[cfg(test)]

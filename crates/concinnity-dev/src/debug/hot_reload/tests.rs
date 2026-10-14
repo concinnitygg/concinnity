@@ -993,8 +993,8 @@ fn decode_asset_batch_decodes_a_png_texture() {
     assert_eq!(batch.textures.len(), 1);
     let tex = &batch.textures[0];
     assert_eq!(tex.slot, 3);
-    assert_eq!((tex.width, tex.height), (1, 1));
-    assert_eq!(tex.pixels, vec![10, 20, 30, 255]);
+    assert_eq!((tex.image.width(), tex.image.height()), (1, 1));
+    assert_eq!(tex.image.mips[0].data, vec![10, 20, 30, 255]);
 }
 
 #[test]
@@ -1220,16 +1220,12 @@ fn poll_pending_assets_reloads_every_texture_through_the_shared_pool() {
         textures: vec![
             DecodedTexture {
                 slot: 2,
-                width: 4,
-                height: 4,
-                pixels: vec![0; 64],
+                image: concinnity_core::bake::texture::TextureImage::rgba8(4, 4, vec![0; 64]),
                 source: "a.png".to_string(),
             },
             DecodedTexture {
                 slot: 5,
-                width: 8,
-                height: 8,
-                pixels: vec![0; 256],
+                image: concinnity_core::bake::texture::TextureImage::rgba8(8, 8, vec![0; 256]),
                 source: "n.png".to_string(),
             },
         ],
@@ -1249,9 +1245,7 @@ fn poll_pending_assets_survives_a_backend_texture_rejection() {
     let batch = DecodedAssetBatch {
         textures: vec![DecodedTexture {
             slot: 0,
-            width: 1,
-            height: 1,
-            pixels: vec![0; 4],
+            image: concinnity_core::bake::texture::TextureImage::rgba8(1, 1, vec![0; 4]),
             source: "a.png".to_string(),
         }],
         ..Default::default()

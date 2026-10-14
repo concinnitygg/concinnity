@@ -11,12 +11,14 @@
 //! that slot (frame `R - depth`) has retired on the GPU. So a slot's storage can
 //! simply be rebuilt in place.
 //!
-//! The rule does NOT extend to the static `rebuild_tlas` path. A sparsely-moving
-//! scene keeps tracing one TLAS across many frames without rebuilding, so that
-//! structure is read by frames the fence does not pair with its writer; see the
-//! `RetirePool` doc comment. Anything published from a ring slot must therefore
-//! be unpublished the moment the skinned path stops running, which is what
-//! `RtFrameSlot::release` is for.
+//! The frame-indexed rule does NOT extend to the static `rebuild_tlas` path. A
+//! sparsely-moving scene keeps tracing one TLAS across many frames without
+//! rebuilding, so that structure is read by frames the fence does not pair with
+//! its writer. That path keeps its TLAS, instance, geometry-table and scratch
+//! buffers in the same slot type, held in a core `StaticRing` that advances one
+//! slot per published rebuild instead. Anything published from a frame-indexed
+//! slot must be unpublished the moment the skinned path stops running, which is
+//! what `RtFrameSlot::release` is for.
 //!
 //! Sizes are high-water: a slot never shrinks, so a steady scene allocates once
 //! and then does nothing.
@@ -62,7 +64,9 @@ pub(super) struct SkinnedBlasSet {
     pub scratch_bytes: usize,
 }
 
-// One in-flight frame's storage.
+// One ring slot's storage: an in-flight frame's on the skinned path, one
+// published rebuild's on the static path.
+#[derive(Default)]
 pub(super) struct RtFrameSlot {
     deformed: Option<Buffer>,
     blas: Vec<Structure>,
@@ -84,20 +88,20 @@ pub(super) struct RtFrameSlot {
 }
 
 impl RtFrameSlot {
-    fn new() -> Self {
+    // A static-path slot that owns the structures a seed build published, so the
+    // ring reuses them a cycle later instead of allocating its first slot fresh.
+    pub(super) fn holding_tlas(
+        tlas: Structure,
+        tlas_size: usize,
+        instances: Buffer,
+        geom_table: Buffer,
+    ) -> Self {
         Self {
-            deformed: None,
-            blas: Vec::new(),
-            descs: Vec::new(),
-            blas_scratch: 0,
-            refit: SkinnedRefit::default(),
-            tlas: None,
-            tlas_size: 0,
-            tlas_desc: None,
-            instances: None,
-            geom_table: None,
-            scratch: None,
-            generation: 0,
+            tlas: Some(tlas),
+            tlas_size,
+            instances: Some(instances),
+            geom_table: Some(geom_table),
+            ..Self::default()
         }
     }
 
@@ -304,7 +308,7 @@ impl RtFrameRing {
     // empty and allocates on its first use.
     pub(super) fn new(depth: usize) -> Self {
         Self {
-            slots: (0..depth.max(1)).map(|_| RtFrameSlot::new()).collect(),
+            slots: (0..depth.max(1)).map(|_| RtFrameSlot::default()).collect(),
         }
     }
 

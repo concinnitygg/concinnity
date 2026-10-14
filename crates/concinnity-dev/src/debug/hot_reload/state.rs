@@ -32,9 +32,8 @@ type Inflight<T> = Mutex<Option<std::sync::mpsc::Receiver<T>>>;
 #[derive(Debug)]
 pub(crate) struct DecodedTexture {
     pub slot: usize,
-    pub width: u32,
-    pub height: u32,
-    pub pixels: Vec<u8>,
+    // RGBA8 with its mip chain, built on the decode worker.
+    pub image: concinnity_core::bake::texture::TextureImage,
     // Source path retained for error logging when the GPU upload fails.
     pub source: String,
 }

@@ -38,11 +38,11 @@ pub(crate) const TEXTURE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"TEX2");
 const HEADER_BYTES: usize = 12;
 
 /// GPU pixel format of a compiled texture payload. RGBA8 is the uncompressed
-/// path (runtime mip generation); the rest are block-compressed formats uploaded
-/// with their container mip chains.
+/// path (mip chain box-filtered by the cook); the rest are block-compressed
+/// formats carrying their container mip chains.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TextureFormat {
-    /// Uncompressed 8-bit RGBA; mips are generated at upload.
+    /// Uncompressed 8-bit RGBA.
     Rgba8,
     /// BC1 block compression.
     Bc1,
@@ -119,8 +119,8 @@ pub struct TextureMip {
 }
 
 /// A decoded 2D texture: its GPU format plus one or more mip levels, level 0
-/// first. The backend uploads `mips` directly for compressed formats and
-/// generates the minification chain from `mips[0]` for RGBA8.
+/// first. The backend uploads `mips` as given, so an image meant to minify
+/// carries its whole chain (see [`TextureImage::with_mip_chain`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextureImage {
     /// GPU pixel format of every mip.
@@ -130,8 +130,7 @@ pub struct TextureImage {
 }
 
 impl TextureImage {
-    /// Wrap a single RGBA8 level (the PNG / JPEG / procedural path). The upload
-    /// path generates the mip chain.
+    /// Wrap a single RGBA8 level (the PNG / JPEG / procedural path).
     pub fn rgba8(width: u32, height: u32, pixels: Vec<u8>) -> Self {
         TextureImage {
             format: TextureFormat::Rgba8,
@@ -140,6 +139,31 @@ impl TextureImage {
                 height,
                 data: pixels,
             }],
+        }
+    }
+
+    /// A single-level RGBA8 image with its full box-filtered mip chain
+    /// ([`generate_mip_chain`](crate::render::mipmap::generate_mip_chain)) appended.
+    /// Every other image, already chained or block compressed, is returned as is.
+    pub fn with_mip_chain(self) -> Self {
+        if self.format != TextureFormat::Rgba8 || self.mips.len() != 1 {
+            return self;
+        }
+        let base = &self.mips[0];
+        if base.data.len() < base.width as usize * base.height as usize * 4 {
+            return self;
+        }
+        let mips = crate::render::mipmap::generate_mip_chain(base.width, base.height, &base.data)
+            .into_iter()
+            .map(|level| TextureMip {
+                width: level.width,
+                height: level.height,
+                data: level.pixels,
+            })
+            .collect();
+        TextureImage {
+            format: TextureFormat::Rgba8,
+            mips,
         }
     }
 
@@ -326,6 +350,39 @@ mod tests {
         let back = round_trip(&image);
         assert_eq!(back, image);
         assert_eq!(back.byte_len(), 16);
+    }
+
+    // The cooked chain is the one the backends used to generate at upload, byte
+    // for byte, and survives the payload round trip.
+    #[test]
+    fn mip_chain_matches_the_upload_time_chain() {
+        let (w, h) = (13u32, 6u32);
+        let pixels: Vec<u8> = (0..w * h * 4).map(|i| (i * 37 % 251) as u8).collect();
+        let image = TextureImage::rgba8(w, h, pixels.clone()).with_mip_chain();
+        let reference = crate::render::mipmap::generate_mip_chain(w, h, &pixels);
+        assert_eq!(image.mips.len(), reference.len());
+        for (mip, level) in image.mips.iter().zip(&reference) {
+            assert_eq!((mip.width, mip.height), (level.width, level.height));
+            assert_eq!(mip.data, level.pixels);
+        }
+        assert_eq!(round_trip(&image), image);
+    }
+
+    #[test]
+    fn mip_chain_leaves_chained_and_compressed_images_alone() {
+        let chained = TextureImage::rgba8(4, 4, vec![7; 64]).with_mip_chain();
+        assert_eq!(chained.clone().with_mip_chain(), chained);
+        let bc = TextureImage {
+            format: TextureFormat::Bc1,
+            mips: vec![TextureMip {
+                width: 8,
+                height: 8,
+                data: vec![0; 32],
+            }],
+        };
+        assert_eq!(bc.clone().with_mip_chain(), bc);
+        let short = TextureImage::rgba8(2, 2, vec![0; 4]);
+        assert_eq!(short.clone().with_mip_chain(), short);
     }
 
     #[test]

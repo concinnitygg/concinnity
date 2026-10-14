@@ -3,10 +3,9 @@
 //! (PNG / JPEG / DDS / TGA / glb-embedded images) into RGBA pixels for both the
 //! build pipeline and the `cn debug` asset hot-reload path.
 //!
-//! Payload format (little-endian):
-//!   u32  width
-//!   u32  height
-//!   width * height * 4 bytes   RGBA, one byte per channel, row-major
+//! Payload format: `concinnity_core::bake::texture::serialize`. RGBA8 images
+//! are stored with their full box-filtered mip chain, so the runtime uploads
+//! levels without generating any.
 //!
 //! File-backed textures are decoded by extension: PNG and JPEG files on disk,
 //! or an image embedded in a `.glb`. Procedural generators produce pixel data
@@ -40,12 +39,15 @@ pub(crate) fn validate_texture_generator(args: &serde_json::Value) -> Result<(),
     }
 }
 
-// Compile a Texture component's JSON args into the tagged texture payload.
+// Compile a Texture component's JSON args into the tagged texture payload,
+// with the mip chain an RGBA8 image minifies through.
 pub(crate) fn compile_texture_payload(
     args: &serde_json::Value,
     assets_dir: Option<&Path>,
 ) -> Result<Vec<u8>, String> {
-    Ok(serialize(&texture_image(args, assets_dir)?))
+    Ok(serialize(
+        &texture_image(args, assets_dir)?.with_mip_chain(),
+    ))
 }
 
 // A Texture's args decoded to RGBA8 pixels: (width, height, pixels). For the
@@ -114,7 +116,7 @@ fn compile_image_source(
 }
 
 // DDS with a stored mip chain passes its BCn blocks through; a top-mip-only DDS
-// decodes to RGBA8 so runtime mip generation applies.
+// decodes to RGBA8 so the cooked RGBA8 chain applies.
 fn compile_dds_source(source: &str, max_size: u32) -> Result<TextureImage, String> {
     let bytes = read_source(source, "DDS texture")?;
     let blocks =
@@ -1270,8 +1272,14 @@ mod tests {
         let image = deserialize(&payload);
         assert_eq!(image.format, TextureFormat::Rgba8);
         assert_eq!((image.width(), image.height()), (2, 1));
-        assert_eq!(image.mips.len(), 1);
         assert_eq!(image.mips[0].data, data);
+        // The stored chain is the one the backends used to box-filter at upload.
+        let reference = concinnity_core::render::mipmap::generate_mip_chain(2, 1, &data);
+        assert_eq!(image.mips.len(), reference.len());
+        for (mip, level) in image.mips.iter().zip(&reference) {
+            assert_eq!((mip.width, mip.height), (level.width, level.height));
+            assert_eq!(mip.data, level.pixels);
+        }
     }
 
     #[test]
@@ -1449,7 +1457,7 @@ mod tests {
 
     #[test]
     fn compile_texture_payload_decodes_a_single_mip_dds_to_rgba8() {
-        // Without a stored chain the blocks decode so runtime mip generation
+        // Without a stored chain the blocks decode so the cooked mip chain
         // still has full-resolution pixels to filter.
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.dds", &bc1_dds(4, 4, 1));
@@ -1620,7 +1628,7 @@ mod tests {
         let args = serde_json::json!({"generator": "checker", "resolution": 16});
         let (w, h, px) = texture_rgba8(&args, None).unwrap();
         assert_eq!((w, h, px.len()), (16, 16, 16 * 16 * 4));
-        let tagged = serialize(&TextureImage::rgba8(w, h, px));
+        let tagged = serialize(&TextureImage::rgba8(w, h, px).with_mip_chain());
         assert_eq!(tagged, compile_texture_payload(&args, None).unwrap());
         assert!(texture_rgba8(&serde_json::json!({}), None).is_err());
     }

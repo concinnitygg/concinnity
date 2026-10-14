@@ -675,8 +675,8 @@ impl MtlContext {
         )
     }
 
-    // Rebuild just the TLAS + geometry table (fresh allocations, static BLAS)
-    // from the current draw-object transforms.
+    // Rebuild just the TLAS + geometry table (next static ring slot, static
+    // BLAS) from the current draw-object transforms.
     fn rebuild_rt_tlas(&mut self, frame_id: u64) -> error::RenderResult<()> {
         let device = self.hw.device.clone();
         let queue = self.hw.command_queue.clone();

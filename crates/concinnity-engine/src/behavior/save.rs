@@ -1,7 +1,9 @@
 // Persisted behavior state, kept in a `state` file under the host's save
 // directory. The state's shape and its keying are the system's (see
-// `concinnity_core::behavior::BehaviorState`); what this owns is the file.
+// `concinnity_core::behavior::BehaviorState`); what this owns is the file,
+// written off the sim thread.
 
+use crate::file_writer::FileWriter;
 use concinnity_core::behavior::{BehaviorState, BehaviorStore};
 use concinnity_host::store::paths::StateTree;
 use std::path::{Path, PathBuf};
@@ -9,32 +11,33 @@ use std::path::{Path, PathBuf};
 #[derive(Debug)]
 pub(crate) struct FileStore {
     dir: PathBuf,
+    writer: FileWriter,
 }
 
 impl FileStore {
     // `None` for a world with no state tree: behaviors run, saving does not.
     pub(crate) fn new(tree: Option<&StateTree>) -> Option<FileStore> {
-        tree.map(|tree| FileStore {
-            dir: tree.saves_dir(),
-        })
+        tree.map(|tree| FileStore::at(&tree.saves_dir()))
     }
 
-    #[cfg(test)]
     pub(crate) fn at(dir: &Path) -> FileStore {
         FileStore {
             dir: dir.to_path_buf(),
+            writer: FileWriter::new("cn-behav-save"),
         }
     }
 }
 
 impl BehaviorStore for FileStore {
     fn read(&self) -> Option<BehaviorState> {
+        self.writer.flush();
         crate::cbor_file::read(&state_file(&self.dir), "BehaviorSystem: saved state")
     }
 
     fn write(&self, state: &BehaviorState) {
-        if let Err(e) = crate::cbor_file::write(&state_file(&self.dir), state) {
-            tracing::warn!("BehaviorSystem: state save failed: {e}");
+        match crate::cbor_file::encode(state) {
+            Ok(bytes) => self.writer.write(state_file(&self.dir), bytes),
+            Err(e) => tracing::warn!("BehaviorSystem: state save failed: {e}"),
         }
     }
 }
@@ -59,9 +62,8 @@ mod tests {
         state.vars.insert("score".into(), BehaviorLiteral::Int(12));
         state.fired.push((3, 0xfeed));
         store.write(&state);
-        assert!(state_file(&dir).exists());
-
         let back = store.read().expect("state readable");
+        assert!(state_file(&dir).exists());
         assert_eq!(back.vars.get("score"), Some(&BehaviorLiteral::Int(12)));
         assert_eq!(back.fired, vec![(3, 0xfeed)]);
     }

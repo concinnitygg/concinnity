@@ -325,6 +325,45 @@ mod tests {
         assert_eq!(ring.take_next().0, 0);
     }
 
+    // Whatever mix of publishes, failed rebuilds, idle frames and takeovers by
+    // another path a ring of `depth` slots sees, the slot it lends was last
+    // traced by a frame the wait on the current tick has retired.
+    #[test]
+    fn a_lent_static_slot_is_never_traced_by_a_frame_in_flight() {
+        for depth in 1..=4usize {
+            let mut ring = StaticRing::new(depth, ());
+            let mut live = Some(0usize);
+            let mut last_traced: Vec<Option<u64>> = vec![None; depth];
+            let mut rng = 0x2545_f491_u32 + depth as u32;
+            for now in 0..2000u64 {
+                rng = rng.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                match rng >> 30 {
+                    0 => {}
+                    action => {
+                        if action == 3 && rng & 1 == 0 {
+                            // Another path published a TLAS of its own.
+                            live = None;
+                        } else {
+                            let (i, slot) = ring.take_next();
+                            if let Some(t) = last_traced[i] {
+                                assert!(t + depth as u64 <= now, "depth {depth} tick {now}");
+                            }
+                            if action == 2 {
+                                ring.put(i, slot);
+                            } else {
+                                ring.publish(i, slot);
+                                live = Some(i);
+                            }
+                        }
+                    }
+                }
+                if let Some(s) = live {
+                    last_traced[s] = Some(now);
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_lent_slot_comes_back_intact() {
         let mut ring = FrameRing::<u32>::new(2);

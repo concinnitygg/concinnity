@@ -71,7 +71,7 @@ pub(crate) fn compile_ktx2(bytes: &[u8]) -> Result<TextureImage, String> {
 
 // A real BCn `vkFormat`: pass the blocks through. Every level is copied (zstd
 // supercompression inflated) into a compressed mip. A single-level source with
-// no chain falls back to RGBA8 so runtime mip generation applies.
+// no chain falls back to RGBA8 so the cooked RGBA8 mip chain applies.
 fn compile_block_format(
     reader: &Reader<&[u8]>,
     format: Format,
@@ -109,7 +109,7 @@ fn compile_block_format(
         level_blocks.push(blocks);
     }
 
-    // A chainless source needs runtime mip generation to stay sharp at
+    // A chainless source needs the cooked RGBA8 mip chain to stay sharp at
     // distance, so it decodes to RGBA8. BC7 has no CPU decoder, so it stays a
     // single compressed level.
     let decodes = level_blocks.len() == 1 && tex_format != TextureFormat::Bc7;
@@ -191,7 +191,7 @@ fn compile_basis(bytes: &[u8]) -> Result<TextureImage, String> {
             .transcode(0, TargetFormat::Rgba32, DecodeFlags::NONE)
             .map_err(|e| format!("KTX2 Basis RGBA transcode failed: {:?}", e))?;
         tracing::info!(
-            "KTX2 Basis texture has no mip chain; transcoded to RGBA8 for runtime mip generation"
+            "KTX2 Basis texture has no mip chain; transcoded to RGBA8 for a cooked mip chain"
         );
         return Ok(TextureImage::rgba8(base.width, base.height, rgba));
     }

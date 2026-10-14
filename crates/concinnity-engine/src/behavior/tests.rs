@@ -171,6 +171,8 @@ fn a_saving_world_restores_its_variable_through_the_file_store() {
         let mut system = BehaviorSystem::new().with_store(Box::new(FileStore::at(&dir)));
         system.init(&mut world.context());
         system.step(&mut world.context());
+        // Dropping the system flushes its pending save.
+        drop(system);
 
         let state = FileStore::at(&dir)
             .read()

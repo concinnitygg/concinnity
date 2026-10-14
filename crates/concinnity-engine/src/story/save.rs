@@ -26,7 +26,7 @@ impl StorySystem {
         } else {
             self.save_dir
                 .as_deref()
-                .and_then(|dir| read_save(&save_file(dir)))
+                .and_then(|dir| self.read_saved(&save_file(dir)))
         };
         match save {
             Some(save) => self.resume_from(save, ctx),
@@ -79,10 +79,7 @@ impl StorySystem {
         let Some(dir) = self.save_dir.as_deref() else {
             return;
         };
-        let save = self.current_save();
-        if let Err(e) = write_save(&save_file(dir), &save) {
-            tracing::warn!("StorySystem: save failed: {e}");
-        }
+        self.queue_save(save_file(dir), &self.current_save());
     }
 
     // A finished story starts fresh next time: drop the auto-save (the title
@@ -92,17 +89,33 @@ impl StorySystem {
             return;
         }
         if let Some(dir) = self.save_dir.as_deref() {
-            let _ = std::fs::remove_file(save_file(dir));
+            self.saves.remove(save_file(dir));
         }
     }
 
     // Whether any manual slot save exists (the title's Load lights up). Scans
     // every logical slot, not just the overlay's visible window.
     pub(super) fn any_slot_save(&self) -> bool {
-        !self.story.save_key.is_empty()
-            && self
-                .save_dir
-                .as_deref()
-                .is_some_and(|dir| (0..SLOT_COUNT).any(|i| slot_file(dir, i).exists()))
+        if self.story.save_key.is_empty() {
+            return false;
+        }
+        self.saves.flush();
+        self.save_dir
+            .as_deref()
+            .is_some_and(|dir| (0..SLOT_COUNT).any(|i| slot_file(dir, i).exists()))
+    }
+
+    // Queue `save` to be written to `path` off the sim thread.
+    pub(super) fn queue_save(&self, path: PathBuf, save: &StorySave) {
+        match crate::cbor_file::encode(save) {
+            Ok(bytes) => self.saves.write(path, bytes),
+            Err(e) => tracing::warn!("StorySystem: save failed: {e}"),
+        }
+    }
+
+    // The save at `path`, once every queued write has landed.
+    pub(super) fn read_saved(&self, path: &Path) -> Option<StorySave> {
+        self.saves.flush();
+        read_save(path)
     }
 }

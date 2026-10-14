@@ -1,7 +1,8 @@
-//! Backend-agnostic mip-chain generation for streamed RGBA8 textures. Each
-//! backend's texture upload calls `generate_mip_chain` and uploads every level,
-//! so albedo and normal maps minify through a proper trilinear chain instead of
-//! aliasing from a single mip-0 sample at a distance.
+//! Backend-agnostic mip-chain generation for RGBA8 textures. The cook stores
+//! every level `generate_mip_chain` produces in the texture payload, and the
+//! backends upload them as given, so albedo and normal maps minify through a
+//! proper trilinear chain instead of aliasing from a single mip-0 sample at a
+//! distance.
 //!
 //! Levels are produced by a 2x2 box filter in stored (RGBA8) space, halving each
 //! axis with floor division so every level's dimensions match the GPU mip

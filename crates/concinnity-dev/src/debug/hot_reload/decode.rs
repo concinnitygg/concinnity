@@ -219,16 +219,17 @@ pub(super) fn decode_asset_batch(
                     assets_dir.as_deref(),
                 )
             };
-            (entry.clone(), decoded)
+            let image = decoded.map(|(w, h, px)| {
+                concinnity_core::bake::texture::TextureImage::rgba8(w, h, px).with_mip_chain()
+            });
+            (entry.clone(), image)
         })
         .collect();
     for (entry, decoded) in texture_results {
         match decoded {
-            Ok((w, h, px)) => batch.textures.push(DecodedTexture {
+            Ok(image) => batch.textures.push(DecodedTexture {
                 slot: entry.slot,
-                width: w,
-                height: h,
-                pixels: px,
+                image,
                 source: entry.source,
             }),
             Err(e) => {
@@ -433,14 +434,7 @@ pub(crate) fn poll_pending_assets(
     let mut failed = batch.decode_failures;
 
     for tex in &batch.textures {
-        // Hot-reload decodes sources to RGBA8; wrap them so the backend
-        // regenerates the mip chain on upload.
-        let image = concinnity_core::bake::texture::TextureImage::rgba8(
-            tex.width,
-            tex.height,
-            tex.pixels.clone(),
-        );
-        let result = backend.update_texture_slot(tex.slot, &image);
+        let result = backend.update_texture_slot(tex.slot, &tex.image);
         match result {
             Ok(()) => reloaded += 1,
             Err(e) => {

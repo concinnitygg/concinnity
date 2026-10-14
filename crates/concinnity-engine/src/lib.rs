@@ -65,6 +65,7 @@ pub mod controller;
 /// `pub` so the binaries install the hooks and the editor composes the
 /// recent-log ring layer into its tracing subscriber.
 pub mod crash;
+pub(crate) mod file_writer;
 pub mod shutdown;
 // 3D positional sound and screen-triggered cues, and the one module that names
 // kira.

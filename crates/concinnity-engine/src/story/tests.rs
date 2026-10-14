@@ -1074,6 +1074,7 @@ fn save_overlay_writes_and_load_resumes() {
     world.step();
     // Overlay dismissed, page restored, slot written.
     assert_eq!(label_content(&world, "s_stage_text"), "Second page.");
+    flush_saves(&mut world);
     let saved = read_save(&slot_file(dir.path(), 0)).expect("slot written");
     assert_eq!(saved.page, 1);
 
@@ -1206,6 +1207,7 @@ fn pause_menu_save_raises_stage_and_opens_slots() {
         .events_mut::<StoryCommand>()
         .send(StoryCommand::Slot(0));
     world.step();
+    flush_saves(&mut world);
     let saved = read_save(&slot_file(dir.path(), 0)).expect("slot written");
     assert_eq!(saved.page, 0);
 }
@@ -1441,6 +1443,15 @@ fn point_saves(world: &mut World, dir: &std::path::Path) {
     for system in world.systems_mut() {
         if let Some(s) = system.downcast_mut::<StorySystem>() {
             s.save_dir = Some(dir.to_path_buf());
+        }
+    }
+}
+
+// Wait until every save the story system queued has reached the disk.
+fn flush_saves(world: &mut World) {
+    for system in world.systems_mut() {
+        if let Some(s) = system.downcast_mut::<StorySystem>() {
+            s.saves.flush();
         }
     }
 }
@@ -1900,6 +1911,7 @@ fn continue_resumes_from_a_written_auto_save() {
     world.step();
 
     // Point the auto-save at page 2.
+    flush_saves(&mut world);
     write_save(
         &save_file(dir.path()),
         &StorySave {
@@ -1927,6 +1939,7 @@ fn continue_from_an_unknown_slug_starts_fresh() {
     point_saves(&mut world, dir.path());
     world.step();
 
+    flush_saves(&mut world);
     write_save(
         &save_file(dir.path()),
         &StorySave {
@@ -1975,6 +1988,7 @@ fn continue_into_a_pageless_node_starts_fresh() {
     point_saves(&mut world, dir.path());
     world.step();
 
+    flush_saves(&mut world);
     write_save(
         &save_file(dir.path()),
         &StorySave {
@@ -2003,6 +2017,7 @@ fn reaching_the_ending_clears_the_auto_save() {
     world.start(SYSTEMS).unwrap();
     point_saves(&mut world, dir.path());
     world.step();
+    flush_saves(&mut world);
     assert!(
         read_save(&save_file(dir.path())).is_some(),
         "the first page auto-saved"
@@ -2017,6 +2032,7 @@ fn reaching_the_ending_clears_the_auto_save() {
         .events_mut::<StoryCommand>()
         .send(StoryCommand::Advance);
     world.step();
+    flush_saves(&mut world);
     assert!(
         read_save(&save_file(dir.path())).is_none(),
         "the ending cleared the auto-save"

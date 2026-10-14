@@ -46,7 +46,7 @@ use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
 use concinnity_core::render::retire_pool::RetirePool;
 use concinnity_core::render::rt_accel::{
     AccelBook, EmptyHead, FailureStreak, InstanceBlas, RefreshMode, RtUpdate, SeedSet,
-    SlotLiveness, empty_head,
+    SlotLiveness, StaticRing, empty_head,
 };
 use concinnity_core::render::rt_geom::RtDynamicMode;
 use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedShape};
@@ -72,7 +72,7 @@ use super::builtin_shaders::compute_pipeline;
 use super::context::write_buffer_slice;
 use super::encode::ComputeEncode;
 use super::error::{allocation_failed, completed_command_buffer};
-use super::rt_ring::{RtFrameRing, SkinnedBlasSet, TlasKey};
+use super::rt_ring::{RtFrameRing, RtFrameSlot, SkinnedBlasSet, TlasKey};
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
 // + color + uv = 14 floats). The RT kernel reads positions at this stride; the
@@ -165,11 +165,6 @@ pub(crate) struct RtAccelData {
     // each instance's model matrix, which the kernel uses to bring the hit
     // normal to world space, so it moves in lockstep with the TLAS transforms.
     pub geom_table: Retained<ProtocolObject<dyn MTLBuffer>>,
-    // Private scratch for the seed build and the static `rebuild_tlas`, which
-    // grows it as the instance count rises. One buffer serves every frame
-    // because both paths commit and wait; the paths that do not (the skinned
-    // update, a topology refresh) take scratch of their own.
-    scratch: Retained<ProtocolObject<dyn MTLBuffer>>,
     // The TLAS instance-descriptor buffer of the last *asynchronous* static
     // build. Only the TLAS build reads it (the built TLAS bakes the instances),
     // so it is not bound to the trace; it is held here because a topology
@@ -201,6 +196,10 @@ pub(crate) struct RtAccelData {
     // Per-in-flight-frame storage the skinned update rebuilds in place instead of
     // allocating fresh. One slot per frame in flight; see `super::rt_ring`.
     ring: RtFrameRing,
+    // The TLAS, instance, geometry-table and scratch buffers the static
+    // `rebuild_tlas` rewrites in place, one slot per published rebuild. Slot 0
+    // holds the seed build's structures.
+    static_ring: StaticRing<RtFrameSlot>,
     // A 1-vertex Shared buffer bound at the deformed-vertex slot whenever no
     // skinned geometry is being traced, so the encoder always has a buffer for
     // the binding the shader declares (the skinned branch is never taken then).
@@ -952,6 +951,7 @@ pub(crate) fn build_rt_accel(
     // so the per-frame TLAS rebuild can reuse the same buffer.
     max_scratch = max_scratch.max(tlas_sizes.buildScratchBufferSize);
 
+    // Freed once the build below completes; the static ring sizes its own.
     let scratch = device
         .newBufferWithLength_options(max_scratch.max(1), MTLResourceOptions::StorageModePrivate)
         .ok_or_else(|| allocation_failed("RT scratch buffer"))?;
@@ -1006,17 +1006,26 @@ pub(crate) fn build_rt_accel(
     check_build_status(&cmd, "acceleration-structure build")?;
 
     let identity_palette = upload_buffer(device, &[IDENTITY4], "RT identity palette")?;
+    let static_ring = StaticRing::new(
+        frames_in_flight,
+        RtFrameSlot::holding_tlas(
+            tlas.clone(),
+            tlas_sizes.accelerationStructureSize,
+            instance_buffer.clone(),
+            geom_table.clone(),
+        ),
+    );
 
     Ok(Some(RtAccelData {
         book,
         tlas,
         geom_table,
-        scratch,
         instance_buffer,
         deformed_verts,
         skinned_indices,
         retire_pool: RetirePool::new(),
         ring: RtFrameRing::new(frames_in_flight),
+        static_ring,
         deformed_dummy,
         identity_palette,
         head_generation: 0,
@@ -1076,11 +1085,12 @@ fn slot_scratch_bytes(blas_scratch: usize, tlas_scratch: usize) -> usize {
 
 impl RtAccelData {
     // Keep the static BLAS; rebuild the TLAS + geometry table from the
-    // transforms the book's `next_step` collected, with fresh allocations, then
-    // build on a separate command buffer (committed and waited). Fresh
-    // allocations mean no prior in-flight frame can observe a half-updated
-    // structure: the old TLAS / table stay alive (retained by their command
-    // buffers) until those frames complete.
+    // transforms the book's `next_step` collected, into the next static ring
+    // slot (see `StaticRing`), committed WITHOUT waiting. Same-queue commit order
+    // runs the build before this frame's reflection trace, as on the skinned
+    // path. The slot after the live one is no longer traced by any frame in
+    // flight, so its buffers are rewritten in place; a failure puts it back
+    // untouched and leaves the live TLAS as it was.
     pub(crate) fn rebuild_tlas(
         &mut self,
         device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
@@ -1088,56 +1098,20 @@ impl RtAccelData {
         draw_objects: &[DrawObject],
         frame_id: u64,
     ) -> RenderResult<()> {
-        // Freshly-transformed draw-object instances, then the cluster instances
-        // (clusters are baked static; their BLAS never move in the head).
         let static_blas_count = self.book.static_blas_count();
         self.book
             .fill_instances(draw_objects, None, |model, _, blas| {
                 book_instance(model, blas, static_blas_count)
             });
-        let instance_count = self.book.instances().len();
-        let instance_buffer =
-            upload_buffer(device, self.book.instances(), "RT instance descriptors")?;
-        let geom_table = upload_buffer(device, self.book.geom_table(), "RT geometry table")?;
-        let tlas_desc = make_tlas_desc(self.book.head(), &instance_buffer, instance_count);
-        let sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
-        let tlas = device
-            .newAccelerationStructureWithSize(sizes.accelerationStructureSize)
-            .ok_or_else(|| allocation_failed("TLAS"))?;
-        // Reuse the scratch sized at init (the prior frame's build completed
-        // before we got here, so it is free) -- but a topology refresh can change
-        // the instance count, and a larger TLAS needs more build scratch than the
-        // init sizing. Grow it when so. Replacing the handle is safe: this path
-        // is synchronous (commit + wait), and an in-flight command buffer that
-        // still references the old scratch retains it independently of this Vec.
-        if (sizes.buildScratchBufferSize as u64) > self.scratch.length() as u64 {
-            self.scratch = device
-                .newBufferWithLength_options(
-                    sizes.buildScratchBufferSize.max(1),
-                    MTLResourceOptions::StorageModePrivate,
-                )
-                .ok_or_else(|| allocation_failed("grown RT scratch buffer"))?;
-        }
-
-        let cmd = command_queue.commandBuffer().ok_or_else(|| {
-            RenderError::Other("failed to create RT rebuild command buffer".into())
-        })?;
-        let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
-            RenderError::Other("failed to create acceleration-structure encoder".into())
-        })?;
-        // Every BLAS the rebuilt TLAS references was built on an earlier command
-        // buffer (none are rebuilt here), so all must be declared resident.
-        declare_blas_resident(&enc, self.book.head());
-        enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
-            &tlas,
-            &tlas_desc,
-            &self.scratch,
-            0,
-        );
-        enc.endEncoding();
-        cmd.commit();
-        cmd.waitUntilCompleted();
-        check_build_status(&cmd, "TLAS rebuild")?;
+        let (index, mut slot) = self.static_ring.take_next();
+        let (tlas, geom_table) = match self.build_static_tlas(device, command_queue, &mut slot) {
+            Ok(built) => built,
+            Err(e) => {
+                self.static_ring.put(index, slot);
+                return Err(e);
+            }
+        };
+        self.static_ring.publish(index, slot);
 
         self.tlas = tlas;
         self.geom_table = geom_table;
@@ -1145,10 +1119,61 @@ impl RtAccelData {
             self.release_skinned(tail, frame_id);
         }
         self.retire_parked(frame_id);
-        // Fresh allocations, so a later skinned update has to retire rather than
-        // drop them.
+        // Not skinned-ring storage, so a later skinned update has to retire
+        // rather than drop them.
         self.ring_published = false;
         Ok(())
+    }
+
+    // Write the book's instances + geometry table into `slot` and commit the TLAS
+    // build over the static head, returning the TLAS and table to publish.
+    fn build_static_tlas(
+        &self,
+        device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+        command_queue: &ProtocolObject<dyn objc2_metal::MTLCommandQueue>,
+        slot: &mut RtFrameSlot,
+    ) -> RenderResult<(Structure, Retained<ProtocolObject<dyn MTLBuffer>>)> {
+        let instances = self.book.instances();
+        let geom = self.book.geom_table();
+        let instance_buffer = slot.instances(device, std::mem::size_of_val(instances))?;
+        let geom_table = slot.geom_table(device, std::mem::size_of_val(geom))?;
+        write_buffer_slice(&instance_buffer, instances)?;
+        write_buffer_slice(&geom_table, geom)?;
+
+        let key = TlasKey {
+            head_generation: self.head_generation,
+            slot_generation: slot.generation(),
+            instance_count: instances.len(),
+        };
+        let tlas_desc = match slot.tlas_desc(key) {
+            Some(desc) => desc,
+            None => {
+                let desc = make_tlas_desc(self.book.head(), &instance_buffer, instances.len());
+                slot.set_tlas_desc(key, desc.clone());
+                desc
+            }
+        };
+        let sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
+        let tlas = slot.tlas(device, sizes.accelerationStructureSize)?;
+        let scratch = slot.scratch(device, sizes.buildScratchBufferSize)?;
+
+        let cmd = command_queue.commandBuffer().ok_or_else(|| {
+            RenderError::Other("failed to create RT rebuild command buffer".into())
+        })?;
+        cmd.setLabel(Some(&crate::metal::pipeline::ns_str("rt_tlas_build")));
+        let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
+            RenderError::Other("failed to create acceleration-structure encoder".into())
+        })?;
+        // Every BLAS the rebuilt TLAS references was built on an earlier command
+        // buffer (none are rebuilt here), so all must be declared resident.
+        declare_blas_resident(&enc, self.book.head());
+        enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
+            &tlas, &tlas_desc, &scratch, 0,
+        );
+        enc.endEncoding();
+        super::fault_log::attach_fault_logger(&cmd, "RT TLAS rebuild");
+        cmd.commit();
+        Ok((tlas, geom_table))
     }
 
     // Whether the BVH has no draw-object and no cluster geometry left.

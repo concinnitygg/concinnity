@@ -456,9 +456,9 @@ impl StreamedUploadRetire {
 // ONLY, fragment-stage scope) orders every later submission on the same queue
 // after the copy, so the image is safe to sample from any subsequently
 // submitted frame; only freeing the returned in-flight resources needs GPU
-// retirement. The chain is box-filtered on the CPU (`concinnity_core::render::mipmap`) and
-// every level is uploaded so the texture minifies through hardware trilinear /
-// aniso selection instead of aliasing from a single mip-0 sample at a distance.
+// retirement. The chain is box-filtered on the CPU (`concinnity_core::render::mipmap`), for
+// the backend's own init-time textures (fallbacks, text atlases); scene textures
+// arrive with their chain cooked and go through `upload_texture_image_deferred`.
 pub(super) fn upload_texture_deferred(
     ctx: &GpuUploadContext,
     width: u32,
@@ -510,21 +510,13 @@ fn vk_texture_format(format: concinnity_core::bake::texture::TextureFormat) -> v
     }
 }
 
-// Upload a decoded texture into a 2-D image. RGBA8 images take the CPU
-// mip-generation path above; block-compressed images (BC1/BC3/BC5/BC7) upload
-// their container mip chain verbatim.
+// Upload a decoded texture into a 2-D image, every level exactly as the image
+// carries them: RGBA8 with its cooked chain, or a block-compressed
+// (BC1/BC3/BC5/BC7) container chain.
 pub(super) fn upload_texture_image_deferred(
     ctx: &GpuUploadContext,
     image: &concinnity_core::bake::texture::TextureImage,
 ) -> error::RenderResult<(GpuImage, UploadInFlight)> {
-    use concinnity_core::bake::texture::TextureFormat;
-    if image.format == TextureFormat::Rgba8 {
-        let mip = image
-            .mips
-            .first()
-            .ok_or_else(|| RenderError::Other("RGBA8 texture image has no mip level".into()))?;
-        return upload_texture_deferred(ctx, mip.width, mip.height, &mip.data);
-    }
     let levels: Vec<TextureLevel<'_>> = image
         .mips
         .iter()

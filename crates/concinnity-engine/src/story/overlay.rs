@@ -268,7 +268,7 @@ impl StorySystem {
         match self
             .save_dir
             .as_deref()
-            .and_then(|dir| read_save(&slot_file(dir, slot)))
+            .and_then(|dir| self.read_saved(&slot_file(dir, slot)))
         {
             Some(save) => format!("Slot {}   {}, page {}", slot + 1, save.slug, save.page + 1),
             None => format!("Slot {}   (empty)", slot + 1),
@@ -287,19 +287,16 @@ impl StorySystem {
         };
         match self.overlay {
             Overlay::SaveMenu => {
-                let save = self.current_save();
-                let path = slot_file(&save_dir, slot);
-                if let Err(e) = write_save(&path, &save) {
-                    tracing::warn!("StorySystem: slot save failed: {e}");
-                }
+                self.queue_save(slot_file(&save_dir, slot), &self.current_save());
                 // The title menu picks up the new slot (its Load button) when
                 // it is next shown.
                 self.close_overlay(ctx);
             }
             Overlay::LoadMenu => {
                 // Picking an empty slot leaves the overlay up.
-                let path = slot_file(&save_dir, slot);
-                let Some(save) = read_save(&path) else { return };
+                let Some(save) = self.read_saved(&slot_file(&save_dir, slot)) else {
+                    return;
+                };
                 self.hide_overlay_furniture(ctx);
                 self.overlay = Overlay::None;
                 self.resume_from(save, ctx);

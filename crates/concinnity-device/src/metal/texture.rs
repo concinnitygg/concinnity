@@ -1,9 +1,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use super::error::allocation_failed;
+use concinnity_core::bake::texture::{TextureFormat, TextureImage};
 use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::mipmap;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureType, MTLTextureUsage};
@@ -11,13 +11,9 @@ use objc2_metal::{MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureType, MT
 use super::allocator::{DeviceAllocator, PooledTexture};
 use super::descriptors::TextureDesc;
 
-// Upload a 2-D RGBA texture from raw pixel bytes with a full mip chain.
-// The chain is box-filtered on the CPU (`concinnity_core::render::mipmap`) and every level
-// is written so the texture minifies through hardware trilinear / aniso
-// selection instead of aliasing from a single mip-0 sample at a distance.
-// The texture is created with ShaderRead usage so it can be sampled in
-// fragment shaders. StorageModeShared is used so the CPU-side pixel data
-// is accessible without an explicit blit encoder.
+// Upload a 2-D RGBA texture from raw pixel bytes with a full mip chain, for the
+// backend's own init-time textures (fallbacks, text atlases). Scene textures
+// arrive with their chain cooked and go through `upload_texture_image`.
 pub(super) fn upload_texture(
     alloc: &DeviceAllocator,
     width: u32,
@@ -34,73 +30,30 @@ pub(super) fn upload_texture(
             base
         )));
     }
-
-    let chain = mipmap::generate_mip_chain(width, height, pixels);
-
-    let desc = TextureDesc {
-        width: width as usize,
-        height: height as usize,
-        mip_count: chain.len(),
-        storage: objc2_metal::MTLStorageMode::Shared,
-        ..Default::default()
-    }
-    .build();
-
-    let texture = alloc.alloc_texture(&desc)?;
-
-    for (mip, level) in chain.iter().enumerate() {
-        // SAFETY: `region` covers exactly mip `mip` of `texture`, and `level.pixels` is `width *
-        // height * 4` bytes -- the size `generate_mip_chain` produced for that level -- so the copy
-        // stays in bounds of both.
-        unsafe {
-            use objc2_metal::MTLRegion;
-            let region = MTLRegion {
-                origin: objc2_metal::MTLOrigin { x: 0, y: 0, z: 0 },
-                size: objc2_metal::MTLSize {
-                    width: level.width as usize,
-                    height: level.height as usize,
-                    depth: 1,
-                },
-            };
-            let bytes_per_row = (level.width * 4) as usize;
-            texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
-                region,
-                mip,
-                std::ptr::NonNull::new(level.pixels.as_ptr() as *mut _)
-                    .ok_or_else(|| RenderError::Other("pixel slice is empty".to_string()))?,
-                bytes_per_row,
-            );
-        }
-    }
-
-    Ok(texture)
+    let image = TextureImage::rgba8(width, height, pixels[..base].to_vec()).with_mip_chain();
+    upload_texture_image(alloc, &image)
 }
 
-// Upload a decoded texture into a 2-D MTLTexture. RGBA8 images take the CPU
-// mip-generation path above; block-compressed images (BC1/BC3/BC5/BC7) upload
-// their container mip chain verbatim, one level per `replaceRegion` with a
-// block-row stride. All Apple GPUs sample BC formats natively.
+// Upload a decoded texture into a 2-D MTLTexture, one level per `replaceRegion`,
+// exactly as the image carries them: RGBA8 with its cooked chain, or a
+// block-compressed (BC1/BC3/BC5/BC7) container chain with a block-row stride.
+// All Apple GPUs sample BC formats natively. StorageModeShared lets the CPU
+// write each level without a blit encoder.
 pub(super) fn upload_texture_image(
     alloc: &DeviceAllocator,
-    image: &concinnity_core::bake::texture::TextureImage,
+    image: &TextureImage,
 ) -> RenderResult<PooledTexture> {
-    use concinnity_core::bake::texture::TextureFormat;
-    let (pixel_format, block_bytes) = match image.format {
-        TextureFormat::Bc1 => (MTLPixelFormat::BC1_RGBA, 8usize),
-        TextureFormat::Bc3 => (MTLPixelFormat::BC3_RGBA, 16),
-        TextureFormat::Bc5 => (MTLPixelFormat::BC5_RGUnorm, 16),
-        TextureFormat::Bc7 => (MTLPixelFormat::BC7_RGBAUnorm, 16),
-        TextureFormat::Rgba8 => {
-            let mip = image.mips.first().ok_or_else(|| {
-                RenderError::Other("RGBA8 texture image has no mip level".to_string())
-            })?;
-            return upload_texture(alloc, mip.width, mip.height, &mip.data);
-        }
+    let pixel_format = match image.format {
+        TextureFormat::Rgba8 => MTLPixelFormat::RGBA8Unorm,
+        TextureFormat::Bc1 => MTLPixelFormat::BC1_RGBA,
+        TextureFormat::Bc3 => MTLPixelFormat::BC3_RGBA,
+        TextureFormat::Bc5 => MTLPixelFormat::BC5_RGUnorm,
+        TextureFormat::Bc7 => MTLPixelFormat::BC7_RGBAUnorm,
     };
-
-    let base = image.mips.first().ok_or_else(|| {
-        RenderError::Other("compressed texture image has no mip level".to_string())
-    })?;
+    let base = image
+        .mips
+        .first()
+        .ok_or_else(|| RenderError::Other("texture image has no mip level".to_string()))?;
 
     let desc = TextureDesc {
         format: pixel_format,
@@ -114,22 +67,27 @@ pub(super) fn upload_texture_image(
     let texture = alloc.alloc_texture(&desc)?;
 
     for (mip, level) in image.mips.iter().enumerate() {
-        let blocks_x = level.width.div_ceil(4) as usize;
-        let blocks_y = level.height.div_ceil(4) as usize;
-        let bytes_per_row = blocks_x * block_bytes;
-        let needed = bytes_per_row * blocks_y;
+        let bytes_per_row = match image.format.block_bytes() {
+            Some(block) => level.width.div_ceil(4) as usize * block,
+            None => level.width as usize * 4,
+        };
+        let needed = image
+            .format
+            .mip_byte_len(level.width, level.height)
+            .map_err(RenderError::Other)?;
         if level.data.len() < needed {
             return Err(RenderError::Other(format!(
-                "compressed mip {} ({}x{}) is {} bytes, need {}",
+                "texture mip {} ({}x{} {:?}) is {} bytes, need {}",
                 mip,
                 level.width,
                 level.height,
+                image.format,
                 level.data.len(),
                 needed
             )));
         }
         // SAFETY: `region` covers exactly mip `mip` of `texture`, and the length check above proved
-        // `level.data` holds at least `bytes_per_row * blocks_y` bytes.
+        // `level.data` holds the whole level at `bytes_per_row`.
         unsafe {
             use objc2_metal::MTLRegion;
             let region = MTLRegion {
@@ -143,9 +101,8 @@ pub(super) fn upload_texture_image(
             texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
                 region,
                 mip,
-                std::ptr::NonNull::new(level.data.as_ptr() as *mut _).ok_or_else(|| {
-                    RenderError::Other("compressed mip data is empty".to_string())
-                })?,
+                std::ptr::NonNull::new(level.data.as_ptr() as *mut _)
+                    .ok_or_else(|| RenderError::Other("texture mip data is empty".to_string()))?,
                 bytes_per_row,
             );
         }
