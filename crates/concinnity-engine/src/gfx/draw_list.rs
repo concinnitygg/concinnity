@@ -549,7 +549,8 @@ pub(crate) fn load_room_geometry(
 }
 
 // Assemble the shared vertex/index buffers and per-object draw records from all
-// scene geometry (props, unreferenced meshes, rooms). Also returns the per-prop
+// scene geometry (props, rooms, terrains). A mesh nothing places draws
+// nothing. Also returns the per-prop
 // draw-index table for runtime model-matrix updates and the GPU-instanced
 // cluster list (one entry per InstancedProp).
 // Returns None if any referenced asset is missing (error already logged).
@@ -599,28 +600,6 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
     // objects.
     let mut mesh_handle_to_draws: std::collections::HashMap<usize, Vec<DrawIndex>> =
         std::collections::HashMap::new();
-
-    // track explicitly referenced mesh handles so unreferenced ones get auto-rendered
-    let mut referenced: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    for item in items {
-        if let Some(mesh) = item.mesh {
-            referenced.insert(mesh.index());
-        }
-        if let Some(model_id) = item.model
-            && let Some(submeshes) = model_map.get(&model_id)
-        {
-            for sub in submeshes {
-                if let Some(sub_mesh) = sub.mesh {
-                    referenced.insert(sub_mesh.index());
-                }
-            }
-        }
-    }
-    for inst in instanced_props {
-        if let Some(mesh) = inst.mesh {
-            referenced.insert(mesh.index());
-        }
-    }
 
     // append_mesh: add a mesh into the shared buffers by handle, return
     // (vertex_offset, vertex_count, index_offset, index_count, lod_slices,
@@ -922,54 +901,6 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             instances: instance_mats,
             lod_alternates,
         });
-    }
-
-    // unreferenced meshes (e.g. a standalone room): identity model matrix, slot 0.
-    // These are drawn unconditionally; culling is disabled via the sentinel AABB.
-    for mesh_handle in 0..mesh_geometry.len() {
-        if referenced.contains(&mesh_handle) {
-            continue;
-        }
-        if let Some((
-            vertex_offset,
-            vertex_count,
-            index_offset,
-            index_count,
-            lod_alternates,
-            _,
-            _,
-        )) = append_mesh(mesh_handle)
-        {
-            // Auto-rendered unreferenced meshes (e.g. a standalone room mesh)
-            // are non-cullable, so distance-keyed LOD swaps make no sense
-            // here. Drop any alternates the build emitted; the LOD0 draw is
-            // the only one that will fire.
-            let _ = lod_alternates;
-            mesh_handle_to_draws
-                .entry(mesh_handle)
-                .or_default()
-                .push(DrawIndex::from_usize(draw_objects.len()));
-            draw_objects.push(DrawObject {
-                vertex_offset,
-                vertex_count,
-                index_offset,
-                index_count,
-                base_vertex: 0,
-                geometry_generation: 0,
-                model: IDENTITY4,
-                texture_slot: 0,
-                normal_map_slot: NO_NORMAL_MAP_SLOT,
-                material: MaterialUniforms::DEFAULT,
-                shader_bucket: 0,
-                visible: true,
-                resident: true,
-                bb_min: UNCULLED_BB.0,
-                bb_max: UNCULLED_BB.1,
-                local_bounds: None,
-                cull_distance: 0.0,
-                lod_alternates: Vec::new(),
-            });
-        }
     }
 
     // Room components placed at the world origin with optional texture.
@@ -1380,10 +1311,10 @@ mod tests {
         assert_eq!(mesh_handle_to_draws.get(&1), Some(&vec![DrawIndex(1)]));
     }
 
-    // A mesh present in the geometry table but referenced by no item, model, or
-    // instanced prop is auto-rendered at the origin with culling disabled.
+    // A mesh present in the geometry table but placed by no item, model, or
+    // instanced prop draws nothing and takes no room in the shared buffers.
     #[test]
-    fn build_draw_list_auto_renders_unreferenced_mesh() {
+    fn build_draw_list_skips_an_unplaced_mesh() {
         let mesh_geometry = vec![unit_quad_mesh()];
 
         let data = build_draw_list(DrawListInputs {
@@ -1398,21 +1329,10 @@ mod tests {
             material_map: &std::collections::HashMap::new(),
         })
         .expect("build_draw_list");
-        let DrawListData {
-            draw_objects,
-            prop_draw_indices: prop_idxs,
-            mesh_handle_to_draws,
-            ..
-        } = data;
 
-        assert!(prop_idxs.is_empty(), "no props drove this draw");
-        assert_eq!(draw_objects.len(), 1);
-        let d = &draw_objects[0];
-        assert_eq!(d.model, IDENTITY4);
-        assert_eq!(d.texture_slot, 0);
-        assert!(!d.cullable(), "unreferenced mesh draws unconditionally");
-        assert!(d.lod_alternates.is_empty());
-        assert_eq!(mesh_handle_to_draws.get(&0), Some(&vec![DrawIndex(0)]));
+        assert!(data.draw_objects.is_empty());
+        assert!(data.vertices.is_empty() && data.indices.is_empty());
+        assert!(data.mesh_handle_to_draws.is_empty());
     }
 
     // A Room is placed at the origin with culling disabled; its cook-assigned
