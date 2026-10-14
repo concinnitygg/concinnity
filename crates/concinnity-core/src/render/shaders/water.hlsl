@@ -482,11 +482,11 @@ float water_foam_lace(float cover, float2 local_xz, float footprint)
 }
 
 // Every wave and ripple at anchor-relative rest XZ `local_xz`, faded by the
-// pixel's footprint (`dx`, `dy`: the rest position's screen derivatives). The
-// analytic partials against (x, z) give the normal at the displaced point;
-// what the fades remove is added to the base roughness as slope variance. A
-// simulated ocean's cascades add their filtered slopes, and the variance
-// their mips averaged away.
+// pixel's footprint (`dx`, `dy`: how far the rest position moves across one
+// pixel, from `water_footprint`). The analytic partials against (x, z) give
+// the normal at the displaced point; what the fades remove is added to the
+// base roughness as slope variance. A simulated ocean's cascades add their
+// filtered slopes, and the variance their mips averaged away.
 WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
 {
     float3 binormal = float3(1.0, 0.0, 0.0); // dP/dx
@@ -629,6 +629,34 @@ int2 water_clamp_pixel(float2 pixel_xy)
     return clamp(int2(pixel_xy), int2(0, 0), last);
 }
 
+// Where the camera ray through screen position `pixel` meets the flat rest
+// plane, in XZ relative to the camera; far along the ray when it never does.
+float2 water_rest_hit(float2 pixel)
+{
+    float2 uv = pixel / max(view.viewport, (float2)(1.0));
+    float2 ndc = float2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    float3 dir = camera_view_ray(view.inv_vp, ndc, view.camera_pos.xyz);
+    float height = view.camera_pos.y - params.anchor.y;
+    float t = -height / (abs(dir.y) > 1e-6 ? dir.y : -1e-6);
+    return (t > 0.0 ? t : 1e7) * dir.xz;
+}
+
+// How far the rest XZ moves across one pixel right (`dx`) and one down (`dy`)
+// from screen position `pixel`, which the wave fades, the cascade filtering
+// and the roughness all read as the pixel's footprint. It is taken from the
+// camera rays through the pixel and its neighbors rather than from screen
+// derivatives of `local_xz`: over the far field's sliver triangles most quads
+// are only partly covered, and there some GPUs return different derivatives
+// for the same quad from one draw to the next, which flickers the shading of
+// whole triangles. The rays depend on the pixel and the view alone. They meet
+// the flat rest plane rather than the displaced crests.
+void water_footprint(float2 pixel, out float2 dx, out float2 dy)
+{
+    float2 center = water_rest_hit(pixel);
+    dx = water_rest_hit(pixel + float2(1.0, 0.0)) - center;
+    dy = water_rest_hit(pixel + float2(0.0, 1.0)) - center;
+}
+
 // Linear camera distance to the scene point a screen NDC position and its stored
 // non-linear depth describe. Gives the water column thickness when differenced
 // against the distance to the surface itself. With no surface behind the water
@@ -685,8 +713,7 @@ struct WaterSurfacePoint
     float camera_distance;
 };
 
-// `dx`, `dy` are the screen derivatives of `i.local_xz`, which the entry
-// takes before its occlusion `discard`: a quad with a killed lane has none.
+// `dx`, `dy` are the pixel's footprint on the rest plane (`water_footprint`).
 WaterSurfacePoint water_surface(WaterVertexOut i, float2 dx, float2 dy)
 {
     WaterSurfacePoint s;
@@ -847,14 +874,12 @@ bool water_occluded(WaterVertexOut i)
 [shader("pixel")]
 TransparentOut water_rt_fragment(WaterVertexOut i)
 {
-    // Derivatives first: after the discard below, a quad on the shoreline may
-    // have lost a lane, and its derivatives are undefined.
-    float2 dx = ddx(i.local_xz);
-    float2 dy = ddy(i.local_xz);
     if (water_occluded(i))
     {
         discard;
     }
+    float2 dx, dy;
+    water_footprint(i.position.xy, dx, dy);
     float3 view_dir = normalize(view.camera_pos.xyz - i.world_pos);
     WaterSurfacePoint s = water_surface(i, dx, dy);
 
@@ -884,14 +909,12 @@ TransparentOut water_rt_fragment(WaterVertexOut i)
 [shader("pixel")]
 TransparentOut water_fragment(WaterVertexOut i)
 {
-    // Derivatives first: after the discard below, a quad on the shoreline may
-    // have lost a lane, and its derivatives are undefined.
-    float2 dx = ddx(i.local_xz);
-    float2 dy = ddy(i.local_xz);
     if (water_occluded(i))
     {
         discard;
     }
+    float2 dx, dy;
+    water_footprint(i.position.xy, dx, dy);
     float3 view_dir = normalize(view.camera_pos.xyz - i.world_pos);
     WaterSurfacePoint s = water_surface(i, dx, dy);
 

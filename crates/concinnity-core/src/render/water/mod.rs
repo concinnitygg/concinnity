@@ -9,6 +9,9 @@ pub mod ocean;
 pub mod ripples;
 pub mod spectrum;
 
+#[cfg(test)]
+mod shader_tests;
+
 use crate::components::{MAX_WATER_WAVES, WaterSurface};
 use crate::gfx::mesh_payload::Vertex;
 use crate::render::wind::WindField;
