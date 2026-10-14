@@ -7,7 +7,7 @@ use alloc::string::String;
 
 use crate::components::Vocabulary;
 
-/// Which of the threads every frame waits on run above normal priority, ahead
+/// Whether the threads every frame waits on run above normal priority, ahead
 /// of the other applications on the machine.
 ///
 /// A frame waits on three kinds of thread: the render thread, the simulation
@@ -17,12 +17,10 @@ use crate::components::Vocabulary;
 /// those other applications: while the raised threads have work, an
 /// application at normal priority waits for a core.
 ///
-/// `all_threads` (the default) raises all three. A frame waits on its job
-/// workers as much as on its render and simulation threads, so on a busy
-/// machine raising only the main two keeps frames no steadier than raising
-/// nothing. `main_threads` does exactly that, leaving the workers to share
-/// the machine. `normal` raises nothing, for an application that should yield
-/// to whatever else is running.
+/// `all_threads` (the default) raises all three: a frame waits on its job
+/// workers as much as on its render and simulation threads, so raising only
+/// some of them keeps frames no steadier than raising none. `normal` raises
+/// nothing, for an application that should yield to whatever else is running.
 ///
 /// Every frame thread is kept off power throttling whichever is chosen. The
 /// setting applies where the platform schedules by priority (Windows); on
@@ -35,10 +33,6 @@ pub enum FramePriority {
     /// Every frame thread at normal priority.
     #[vocab("normal")]
     Normal,
-    /// The render and simulation threads above normal priority, the job
-    /// workers at normal priority.
-    #[vocab("main_threads")]
-    MainThreads,
     /// The render and simulation threads and every job worker above normal
     /// priority.
     #[default]
@@ -47,13 +41,8 @@ pub enum FramePriority {
 }
 
 impl FramePriority {
-    /// Whether the render and simulation threads run above normal priority.
-    pub fn raises_main_threads(self) -> bool {
-        !matches!(self, FramePriority::Normal)
-    }
-
-    /// Whether the job workers run above normal priority.
-    pub fn raises_job_workers(self) -> bool {
+    /// Whether the frame threads run above normal priority.
+    pub fn raises_frame_threads(self) -> bool {
         matches!(self, FramePriority::AllThreads)
     }
 }
@@ -170,11 +159,9 @@ mod tests {
     }
 
     #[test]
-    fn each_priority_raises_its_threads() {
-        let raised = |p: FramePriority| (p.raises_main_threads(), p.raises_job_workers());
-        assert_eq!(raised(FramePriority::Normal), (false, false));
-        assert_eq!(raised(FramePriority::MainThreads), (true, false));
-        assert_eq!(raised(FramePriority::AllThreads), (true, true));
+    fn only_all_threads_raises_the_frame_threads() {
+        assert!(!FramePriority::Normal.raises_frame_threads());
+        assert!(FramePriority::AllThreads.raises_frame_threads());
     }
 }
 

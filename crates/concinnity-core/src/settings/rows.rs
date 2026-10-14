@@ -1,10 +1,10 @@
 //! The settings rows the resolver reads: the quality feature toggles and cycle
 //! knobs the preset governs, and the graphics sliders. Each row states how it
-//! reads and writes its `PostProcessConfig` field, where the user's choice for
-//! it persists, and how a ceiling clamps it. The settings menu drives the same
+//! reads and writes its field of the quality-governed assets, where the user's
+//! choice for it persists, and how a ceiling clamps it. The settings menu drives the same
 //! rows, so what the menu shows is what resolution produces.
 
-use crate::components::{IndirectLighting, PostProcessConfig};
+use crate::components::IndirectTechnique;
 use crate::gfx::auto_exposure::EV_LIMIT;
 use crate::gfx::render_types::PostProcessTunables;
 use crate::math::exp2;
@@ -14,6 +14,7 @@ use crate::settings::levels::{
     ssgi_rays_index,
 };
 use crate::settings::quality::{QualityCeiling, clamp_aa_mode};
+use crate::settings::resolve::QualityEffects;
 use crate::settings::user::UserGraphicsSettings;
 
 /// A shared and a mutable accessor for the same field of `T`.
@@ -37,10 +38,10 @@ macro_rules! lens {
 pub struct QualityToggle {
     /// The settings row.
     pub key: SettingKey,
-    /// Whether the feature is on in a config.
-    pub get: fn(&PostProcessConfig) -> bool,
-    /// Turn the feature on or off in a config.
-    pub set: fn(&mut PostProcessConfig, bool),
+    /// Whether the feature is on.
+    pub get: fn(&QualityEffects) -> bool,
+    /// Turn the feature on or off.
+    pub set: fn(&mut QualityEffects, bool),
     /// Where the user's choice persists.
     pub persisted: Lens<UserGraphicsSettings, Option<bool>>,
     /// Whether the ceiling permits the feature on.
@@ -52,23 +53,23 @@ pub struct QualityToggle {
 pub struct QualityCycle {
     /// The settings row.
     pub key: SettingKey,
-    /// The option index a config's value shows as.
-    pub index: fn(&PostProcessConfig) -> usize,
-    /// Set a config's value to the one at an option index.
-    pub set: fn(&mut PostProcessConfig, usize),
-    /// Write the user's choice, where they made one, over a config.
-    pub overlay: fn(&mut PostProcessConfig, &UserGraphicsSettings),
-    /// Persist a config's value as the user's choice.
-    pub persist: fn(&PostProcessConfig, &mut UserGraphicsSettings),
+    /// The option index the value shows as.
+    pub index: fn(&QualityEffects) -> usize,
+    /// Set the value to the one at an option index.
+    pub set: fn(&mut QualityEffects, usize),
+    /// Write the user's choice, where they made one, over the value.
+    pub overlay: fn(&mut QualityEffects, &UserGraphicsSettings),
+    /// Persist the value as the user's choice.
+    pub persist: fn(&QualityEffects, &mut UserGraphicsSettings),
     /// Whether the user made a choice.
     pub overridden: fn(&UserGraphicsSettings) -> bool,
     /// Forget the user's choice.
     pub clear: fn(&mut UserGraphicsSettings),
-    /// Lower a config's value under the ceiling.
-    pub clamp: fn(&mut PostProcessConfig, &QualityCeiling),
+    /// Lower the value under the ceiling.
+    pub clamp: fn(&mut QualityEffects, &QualityCeiling),
 }
 
-// A toggle whose config, persisted, and ceiling fields share one name.
+// A toggle whose persisted and ceiling fields share one name.
 macro_rules! toggle {
     ($key:ident, $field:ident, $get:expr, $set:expr) => {
         QualityToggle {
@@ -79,24 +80,24 @@ macro_rules! toggle {
             allowed: |ceiling| ceiling.$field,
         }
     };
-    ($key:ident, $field:ident) => {
-        toggle!($key, $field, |cfg| cfg.$field, |cfg, on| cfg.$field = on)
+    ($key:ident, $field:ident, $($path:ident).+) => {
+        toggle!($key, $field, |cfg| cfg.$($path).+, |cfg, on| cfg.$($path).+ = on)
     };
 }
 
-// A cycle knob whose config and persisted fields share one name.
+// A cycle knob over the effects field at `$path`, persisted as `$field`.
 macro_rules! cycle {
-    ($key:ident, $field:ident, $index:path, $at:path, $clamp:expr) => {
+    ($key:ident, $field:ident, $($path:ident).+; $index:path, $at:path, $clamp:expr) => {
         QualityCycle {
             key: SettingKey::$key,
-            index: |cfg| $index(cfg.$field),
-            set: |cfg, index| cfg.$field = $at(index),
+            index: |cfg| $index(cfg.$($path).+),
+            set: |cfg, index| cfg.$($path).+ = $at(index),
             overlay: |cfg, user| {
                 if let Some(v) = user.$field {
-                    cfg.$field = v;
+                    cfg.$($path).+ = v;
                 }
             },
-            persist: |cfg, user| user.$field = Some(cfg.$field),
+            persist: |cfg, user| user.$field = Some(cfg.$($path).+),
             overridden: |user| user.$field.is_some(),
             clear: |user| user.$field = None,
             clamp: $clamp,
@@ -106,23 +107,31 @@ macro_rules! cycle {
 
 /// The quality toggles, in `SettingKey::QUALITY_TOGGLES` order.
 pub static QUALITY_TOGGLES: [QualityToggle; 6] = [
-    toggle!(Ssao, ssao),
-    toggle!(Ssr, ssr),
-    toggle!(RayTracedReflections, ray_traced_reflections),
-    toggle!(RtReflectionShadows, rt_reflection_shadows),
+    toggle!(Ssao, ssao, ambient_occlusion.enabled),
+    toggle!(Ssr, ssr, reflections.screen_space),
+    toggle!(
+        RayTracedReflections,
+        ray_traced_reflections,
+        reflections.ray_traced
+    ),
+    toggle!(
+        RtReflectionShadows,
+        rt_reflection_shadows,
+        reflections.ray_traced_shadows
+    ),
     toggle!(
         Ssgi,
         ssgi,
-        |cfg| cfg.indirect_lighting == IndirectLighting::Ssgi,
+        |cfg| cfg.indirect_lighting.technique == IndirectTechnique::Ssgi,
         |cfg, on| {
-            cfg.indirect_lighting = if on {
-                IndirectLighting::Ssgi
+            cfg.indirect_lighting.technique = if on {
+                IndirectTechnique::Ssgi
             } else {
-                IndirectLighting::Ibl
+                IndirectTechnique::Ibl
             }
         }
     ),
-    toggle!(AutoExposure, auto_exposure),
+    toggle!(AutoExposure, auto_exposure, exposure.auto),
 ];
 
 /// The quality cycle knobs, in `SettingKey::QUALITY_CYCLES` order.
@@ -130,44 +139,58 @@ pub static QUALITY_CYCLES: [QualityCycle; 5] = [
     cycle!(
         AaMode,
         aa_mode,
+        anti_aliasing.mode;
         aa_mode_index,
         aa_mode_at,
-        |cfg, ceiling| cfg.aa_mode = clamp_aa_mode(cfg.aa_mode, ceiling.aa_mode)
+        |cfg, ceiling| {
+            let aa = &mut cfg.anti_aliasing;
+            aa.mode = clamp_aa_mode(aa.mode, ceiling.aa_mode)
+        }
     ),
     cycle!(
         SsgiResolution,
         ssgi_resolution,
+        indirect_lighting.ssgi_resolution;
         pass_resolution_index,
         pass_resolution_at,
-        |cfg, ceiling| cfg.ssgi_resolution = cfg.ssgi_resolution.max(ceiling.ssgi_resolution)
+        |cfg, ceiling| {
+            let gi = &mut cfg.indirect_lighting;
+            gi.ssgi_resolution = gi.ssgi_resolution.max(ceiling.ssgi_resolution)
+        }
     ),
     cycle!(
         SsgiRays,
         ssgi_rays,
+        indirect_lighting.ssgi_rays;
         ssgi_rays_index,
         ssgi_rays_at,
-        |cfg, ceiling| cfg.ssgi_rays = cfg.ssgi_rays.min(ceiling.ssgi_rays)
+        |cfg, ceiling| {
+            let gi = &mut cfg.indirect_lighting;
+            gi.ssgi_rays = gi.ssgi_rays.min(ceiling.ssgi_rays)
+        }
     ),
     cycle!(
         RtReflectionResolution,
         rt_reflection_resolution,
+        reflections.ray_traced_resolution;
         pass_resolution_index,
         pass_resolution_at,
         |cfg, ceiling| {
-            cfg.rt_reflection_resolution = cfg
-                .rt_reflection_resolution
+            let r = &mut cfg.reflections;
+            r.ray_traced_resolution = r
+                .ray_traced_resolution
                 .max(ceiling.rt_reflection_resolution)
         }
     ),
     cycle!(
         ReflectionBlurResolution,
         reflection_blur_resolution,
+        reflections.blur_resolution;
         pass_resolution_index,
         pass_resolution_at,
         |cfg, ceiling| {
-            cfg.reflection_blur_resolution = cfg
-                .reflection_blur_resolution
-                .max(ceiling.reflection_blur_resolution)
+            let r = &mut cfg.reflections;
+            r.blur_resolution = r.blur_resolution.max(ceiling.reflection_blur_resolution)
         }
     ),
 ];
@@ -191,11 +214,12 @@ pub enum GraphicsSliderTarget {
         /// Where the user's choice persists.
         persisted: Lens<UserGraphicsSettings, Option<f32>>,
     },
-    /// A per-feature sub-quality `PostProcessConfig` field, pushed live through
-    /// `update_quality_params`. Look tuning, so no ceiling clamps it.
-    PostConfig {
+    /// A per-feature sub-quality field of the quality-governed assets, pushed
+    /// live through `update_quality_params`. Look tuning, so no ceiling clamps
+    /// it.
+    Effect {
         /// The field.
-        field: Lens<PostProcessConfig, f32>,
+        field: Lens<QualityEffects, f32>,
         /// Where the user's choice persists.
         persisted: Lens<UserGraphicsSettings, Option<f32>>,
     },
@@ -211,7 +235,7 @@ impl GraphicsSliderTarget {
     pub fn persisted(&self) -> &Lens<UserGraphicsSettings, Option<f32>> {
         match self {
             Self::PostProcess { persisted, .. }
-            | Self::PostConfig { persisted, .. }
+            | Self::Effect { persisted, .. }
             | Self::Ambient { persisted } => persisted,
         }
     }
@@ -224,8 +248,8 @@ pub struct GraphicsSlider {
     /// The settings row.
     pub key: SettingKey,
     /// The user-facing value to the applied value, clamped to the engine's
-    /// domain. The clamps mirror `PostProcessConfig::resolve` and each
-    /// feature's `*Settings::resolve`.
+    /// domain. The clamps mirror `post_process_tunables` and each feature's
+    /// `*Settings::resolve`.
     pub apply: fn(f32) -> f32,
     /// What the applied value drives.
     pub target: GraphicsSliderTarget,
@@ -292,48 +316,48 @@ pub static GRAPHICS_SLIDERS: [GraphicsSlider; 16] = [
     GraphicsSlider {
         key: SettingKey::SsaoRadius,
         apply: |v| v.max(1.0e-3),
-        target: GraphicsSliderTarget::PostConfig {
-            field: lens!(ssao_radius),
+        target: GraphicsSliderTarget::Effect {
+            field: lens!(ambient_occlusion.radius),
             persisted: lens!(ssao_radius),
         },
     },
     GraphicsSlider {
         key: SettingKey::SsaoIntensity,
         apply: |v| v.clamp(0.0, 4.0),
-        target: GraphicsSliderTarget::PostConfig {
-            field: lens!(ssao_intensity),
+        target: GraphicsSliderTarget::Effect {
+            field: lens!(ambient_occlusion.intensity),
             persisted: lens!(ssao_intensity),
         },
     },
     GraphicsSlider {
         key: SettingKey::SsrIntensity,
         apply: |v| v.clamp(0.0, 1.0),
-        target: GraphicsSliderTarget::PostConfig {
-            field: lens!(ssr_intensity),
+        target: GraphicsSliderTarget::Effect {
+            field: lens!(reflections.intensity),
             persisted: lens!(ssr_intensity),
         },
     },
     GraphicsSlider {
         key: SettingKey::SsrMaxDistance,
         apply: |v| v.clamp(1.0, 200.0),
-        target: GraphicsSliderTarget::PostConfig {
-            field: lens!(ssr_max_distance),
+        target: GraphicsSliderTarget::Effect {
+            field: lens!(reflections.max_distance),
             persisted: lens!(ssr_max_distance),
         },
     },
     GraphicsSlider {
         key: SettingKey::SsgiIntensity,
         apply: |v| v.clamp(0.0, 4.0),
-        target: GraphicsSliderTarget::PostConfig {
-            field: lens!(ssgi_intensity),
+        target: GraphicsSliderTarget::Effect {
+            field: lens!(indirect_lighting.ssgi_intensity),
             persisted: lens!(ssgi_intensity),
         },
     },
     GraphicsSlider {
         key: SettingKey::SsgiMaxDistance,
         apply: |v| v.clamp(0.5, 100.0),
-        target: GraphicsSliderTarget::PostConfig {
-            field: lens!(ssgi_max_distance),
+        target: GraphicsSliderTarget::Effect {
+            field: lens!(indirect_lighting.ssgi_max_distance),
             persisted: lens!(ssgi_max_distance),
         },
     },
@@ -341,24 +365,24 @@ pub static GRAPHICS_SLIDERS: [GraphicsSlider; 16] = [
     GraphicsSlider {
         key: SettingKey::AutoExposureMinEv,
         apply: |v| v.clamp(-EV_LIMIT, EV_LIMIT),
-        target: GraphicsSliderTarget::PostConfig {
-            field: lens!(auto_exposure_min_ev),
+        target: GraphicsSliderTarget::Effect {
+            field: lens!(exposure.auto_min_ev),
             persisted: lens!(auto_exposure_min_ev),
         },
     },
     GraphicsSlider {
         key: SettingKey::AutoExposureMaxEv,
         apply: |v| v.clamp(-EV_LIMIT, EV_LIMIT),
-        target: GraphicsSliderTarget::PostConfig {
-            field: lens!(auto_exposure_max_ev),
+        target: GraphicsSliderTarget::Effect {
+            field: lens!(exposure.auto_max_ev),
             persisted: lens!(auto_exposure_max_ev),
         },
     },
     GraphicsSlider {
         key: SettingKey::AutoExposureSpeed,
         apply: |v| v.clamp(1.0e-3, 20.0),
-        target: GraphicsSliderTarget::PostConfig {
-            field: lens!(auto_exposure_speed),
+        target: GraphicsSliderTarget::Effect {
+            field: lens!(exposure.auto_speed),
             persisted: lens!(auto_exposure_speed),
         },
     },

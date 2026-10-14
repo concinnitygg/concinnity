@@ -1,10 +1,10 @@
 //! Screen-space reflection (SSR) configuration. Backend-agnostic resolve of the
-//! authored `PostProcessConfig` SSR fields into clamped settings, plus the
+//! authored `Reflections` SSR fields into clamped settings, plus the
 //! per-frame GPU uniform. The screen-space ray-march itself lives in each
 //! backend's shader; this module owns only the parameter math so it can be
 //! unit-tested without a GPU.
 
-use crate::components::PostProcessConfig;
+use crate::components::Reflections;
 use crate::gfx::camera::{camera_to_world, view_ray_scale};
 
 use crate::gfx::render_types::SsrParams;
@@ -81,7 +81,7 @@ pub struct SsrParamsInputs {
 }
 
 impl SsrSettings {
-    /// Resolve the SSR tunables into clamped settings, or `None` when the `ssr`
+    /// Resolve the SSR tunables into clamped settings, or `None` when the `screen_space`
     /// toggle is off.
     ///
     /// Deliberately NOT gated on the intensity, unlike SSAO / SSGI: when a
@@ -89,9 +89,9 @@ impl SsrSettings {
     /// over to the resolve's composite (`ViewUniforms::reflections_enabled`), so
     /// a zero-intensity resolve still carries that term and dropping the pass
     /// changes the image. Measured at 1.53M of 3.28M pixels on a glossy floor.
-    pub fn from_config(cfg: &PostProcessConfig) -> Option<Self> {
-        cfg.ssr
-            .then(|| Self::resolve(cfg.ssr_intensity, cfg.ssr_max_distance))
+    pub fn from_config(cfg: &Reflections) -> Option<Self> {
+        cfg.screen_space
+            .then(|| Self::resolve(cfg.intensity, cfg.max_distance))
     }
 
     /// Clamp the authored intensity / distance into a safe range.
@@ -162,9 +162,9 @@ mod tests {
 
     #[test]
     fn from_config_follows_the_toggle() {
-        assert!(SsrSettings::from_config(&PostProcessConfig::default()).is_some());
-        let off = PostProcessConfig {
-            ssr: false,
+        assert!(SsrSettings::from_config(&Reflections::default()).is_some());
+        let off = Reflections {
+            screen_space: false,
             ..Default::default()
         };
         assert!(SsrSettings::from_config(&off).is_none());
@@ -174,9 +174,9 @@ mod tests {
     fn from_config_keeps_a_zero_intensity() {
         // An active resolve owns the glossy dielectric specular the forward pass
         // hands over, so a zero-intensity resolve still changes the image.
-        let cfg = PostProcessConfig {
-            ssr: true,
-            ssr_intensity: 0.0,
+        let cfg = Reflections {
+            screen_space: true,
+            intensity: 0.0,
             ..Default::default()
         };
         assert!(SsrSettings::from_config(&cfg).is_some());
@@ -184,10 +184,10 @@ mod tests {
 
     #[test]
     fn from_config_resolves_and_clamps_when_enabled() {
-        let cfg = PostProcessConfig {
-            ssr: true,
-            ssr_intensity: 9.0,
-            ssr_max_distance: 1.0e6,
+        let cfg = Reflections {
+            screen_space: true,
+            intensity: 9.0,
+            max_distance: 1.0e6,
             ..Default::default()
         };
         let s = SsrSettings::from_config(&cfg).expect("ssr on");

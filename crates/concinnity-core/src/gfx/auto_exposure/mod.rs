@@ -47,7 +47,7 @@ pub struct AutoExposureSettings {
     /// scene-white back down to a comfortable display mid-tone).
     /// `HDR_MIDDLE_GRAY_LOG2` ≈ -2.47 = perceptual middle-gray, the correct
     /// target on the HDR path where there is no ACES compression. Resolved
-    /// from `PostProcessConfig.hdr_display` at asset time.
+    /// from `Display.hdr` at asset time.
     pub target_log_lum: f32,
 }
 

@@ -1,11 +1,14 @@
 //! What changed between two resolved snapshots, grouped by when each change
 //! takes effect. A resolved value is named by the authored field it resolves
-//! (`PostProcessConfig.ssao`), and takes that field's apply class; the few the
-//! world does not author are named under `UserGraphicsSettings`.
+//! (`AmbientOcclusion.enabled`), and takes that field's apply class; the few
+//! the world does not author are named under `UserGraphicsSettings`.
 
 use alloc::vec::Vec;
 
-use crate::components::{GraphicsConfig, PostProcessConfig, StreamingConfig};
+use crate::components::{
+    AntiAliasing, Bloom, ColorLut, Culling, Display, Exposure, FramePacing, IndirectLighting,
+    Shadows, StreamingConfig, TextureFiltering, Vignette,
+};
 use crate::ecs::asset_fields::{ApplyClass, AssetFields, ParamChange};
 
 use super::ResolvedSettings;
@@ -24,73 +27,113 @@ impl SettingsDiff {
     pub fn between(before: &ResolvedSettings, after: &ResolvedSettings) -> Self {
         let mut changes = Vec::new();
         let (b, a) = (before, after);
-        a.quality
-            .post_config
-            .changed_params(&b.quality.post_config, &mut changes);
+        let (eb, ea) = (&b.quality.effects, &a.quality.effects);
+        ea.ambient_occlusion
+            .changed_params(&eb.ambient_occlusion, &mut changes);
+        ea.reflections.changed_params(&eb.reflections, &mut changes);
+        ea.indirect_lighting
+            .changed_params(&eb.indirect_lighting, &mut changes);
+        ea.anti_aliasing
+            .changed_params(&eb.anti_aliasing, &mut changes);
+        ea.exposure.changed_params(&eb.exposure, &mut changes);
 
-        let mut post = |key: &'static str, changed: bool| {
+        let mut changed = |asset: Asset, key: &'static str, changed: bool| {
             if changed {
-                push::<PostProcessConfig>(&mut changes, "PostProcessConfig", key);
+                asset.push(&mut changes, key);
             }
         };
-        post(
+        changed(
+            Asset::AntiAliasing,
             "upscale_quality",
             a.quality.render_scale != b.quality.render_scale,
         );
         let (tb, ta) = (&b.post_process, &a.post_process);
-        post("exposure_ev", ta.exposure != tb.exposure);
-        post("bloom_intensity", ta.bloom_intensity != tb.bloom_intensity);
-        post("bloom_threshold", ta.bloom_threshold != tb.bloom_threshold);
-        post("bloom_knee", ta.bloom_knee != tb.bloom_knee);
-        post("vignette_strength", ta.vignette != tb.vignette);
-        post("lut_strength", ta.lut_strength != tb.lut_strength);
-        post("aa_mode", ta.fxaa != tb.fxaa);
-        post(
+        changed(Asset::Exposure, "ev", ta.exposure != tb.exposure);
+        changed(
+            Asset::Bloom,
+            "intensity",
+            ta.bloom_intensity != tb.bloom_intensity,
+        );
+        changed(
+            Asset::Bloom,
+            "threshold",
+            ta.bloom_threshold != tb.bloom_threshold,
+        );
+        changed(Asset::Bloom, "knee", ta.bloom_knee != tb.bloom_knee);
+        changed(Asset::Vignette, "strength", ta.vignette != tb.vignette);
+        changed(
+            Asset::ColorLut,
+            "strength",
+            ta.lut_strength != tb.lut_strength,
+        );
+        changed(Asset::AntiAliasing, "mode", ta.fxaa != tb.fxaa);
+        changed(
+            Asset::IndirectLighting,
             "ambient_intensity",
             a.ambient_intensity != b.ambient_intensity,
         );
-        post("hdr_display", a.hdr_display != b.hdr_display);
-        post("hdr_pq", a.hdr_pq != b.hdr_pq);
-        post(
-            "temporal_upscaling",
+        changed(Asset::Display, "hdr", a.hdr_display != b.hdr_display);
+        changed(Asset::Display, "pq", a.hdr_pq != b.hdr_pq);
+        changed(
+            Asset::AntiAliasing,
+            "upscaling",
             a.temporal_upscaling != b.temporal_upscaling,
         );
-        post("upscale_backend", a.upscale_backend != b.upscale_backend);
-        post(
-            "occlusion_two_pass",
+        changed(
+            Asset::AntiAliasing,
+            "upscaler",
+            a.upscale_backend != b.upscale_backend,
+        );
+        changed(
+            Asset::Culling,
+            "two_pass_occlusion",
             a.occlusion_two_pass != b.occlusion_two_pass,
         );
 
-        let mut graphics = |key: &'static str, changed: bool| {
-            if changed {
-                push::<GraphicsConfig>(&mut changes, "GraphicsConfig", key);
-            }
-        };
         let (qb, qa) = (&b.quality, &a.quality);
-        graphics("shadow_map_size", qa.shadow_map_size != qb.shadow_map_size);
-        graphics(
-            "shadow_update",
+        changed(
+            Asset::Shadows,
+            "map_size",
+            qa.shadow_map_size != qb.shadow_map_size,
+        );
+        changed(
+            Asset::Shadows,
+            "update",
             qa.shadow_cadence.update != qb.shadow_cadence.update,
         );
-        graphics(
-            "shadow_distance",
+        changed(
+            Asset::Shadows,
+            "distance",
             qa.shadow_cadence.distance != qb.shadow_cadence.distance,
         );
-        graphics(
-            "shadow_cascades",
+        changed(
+            Asset::Shadows,
+            "cascades",
             qa.shadow_cadence.cascades != qb.shadow_cadence.cascades,
         );
-        graphics("anisotropy", qa.anisotropy != qb.anisotropy);
-        graphics("vsync", a.vsync != b.vsync);
-        graphics("fps_cap", a.fps_cap != b.fps_cap);
-        graphics("frames_in_flight", a.frames_in_flight != b.frames_in_flight);
+        changed(
+            Asset::TextureFiltering,
+            "anisotropy",
+            qa.anisotropy != qb.anisotropy,
+        );
+        changed(Asset::FramePacing, "vsync", a.vsync != b.vsync);
+        changed(Asset::FramePacing, "fps_cap", a.fps_cap != b.fps_cap);
+        changed(
+            Asset::FramePacing,
+            "frames_in_flight",
+            a.frames_in_flight != b.frames_in_flight,
+        );
 
-        if a.texture_cap != b.texture_cap {
-            push::<StreamingConfig>(&mut changes, "StreamingConfig", "texture_cap");
-        }
-        if a.texture_budget != b.texture_budget {
-            push::<StreamingConfig>(&mut changes, "StreamingConfig", "texture_budget");
-        }
+        changed(
+            Asset::StreamingConfig,
+            "texture_cap",
+            a.texture_cap != b.texture_cap,
+        );
+        changed(
+            Asset::StreamingConfig,
+            "texture_budget",
+            a.texture_budget != b.texture_budget,
+        );
 
         // Values only the user sets: the DLSS preset is chosen when the
         // upscaler is built, and the stats overlay reads its toggles each frame.
@@ -153,6 +196,45 @@ fn class_slot(class: ApplyClass) -> usize {
         ApplyClass::Rebuild => 1,
         ApplyClass::Variant => 2,
         ApplyClass::Restart => 3,
+    }
+}
+
+// The assets whose resolved values the diff compares outside the
+// quality-governed effects.
+#[derive(Clone, Copy)]
+enum Asset {
+    AntiAliasing,
+    Exposure,
+    Bloom,
+    Vignette,
+    ColorLut,
+    IndirectLighting,
+    Display,
+    Culling,
+    Shadows,
+    TextureFiltering,
+    FramePacing,
+    StreamingConfig,
+}
+
+impl Asset {
+    // Record a change to this asset's field `key` under the apply class it
+    // declares.
+    fn push(self, changes: &mut Vec<ParamChange>, key: &'static str) {
+        match self {
+            Self::AntiAliasing => push::<AntiAliasing>(changes, "AntiAliasing", key),
+            Self::Exposure => push::<Exposure>(changes, "Exposure", key),
+            Self::Bloom => push::<Bloom>(changes, "Bloom", key),
+            Self::Vignette => push::<Vignette>(changes, "Vignette", key),
+            Self::ColorLut => push::<ColorLut>(changes, "ColorLut", key),
+            Self::IndirectLighting => push::<IndirectLighting>(changes, "IndirectLighting", key),
+            Self::Display => push::<Display>(changes, "Display", key),
+            Self::Culling => push::<Culling>(changes, "Culling", key),
+            Self::Shadows => push::<Shadows>(changes, "Shadows", key),
+            Self::TextureFiltering => push::<TextureFiltering>(changes, "TextureFiltering", key),
+            Self::FramePacing => push::<FramePacing>(changes, "FramePacing", key),
+            Self::StreamingConfig => push::<StreamingConfig>(changes, "StreamingConfig", key),
+        }
     }
 }
 

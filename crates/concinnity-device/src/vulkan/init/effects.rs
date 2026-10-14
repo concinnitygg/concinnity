@@ -659,7 +659,7 @@ pub(super) fn build_world_effects(
     // Auto-exposure (EV adaptation): histogram + average compute
     // pipelines, the device-local histogram + output buffers, and the
     // per-frame readback ring. Built only when the world's
-    // `PostProcessConfig` opted in. With auto-exposure off every
+    // `Exposure` opted in. With auto-exposure off every
     // field below is None and the static authored EV continues to
     // drive `post_process.exposure` unchanged.
     let (auto_exposure, adaptation) = if let Some(settings) = post.auto_exposure.as_ref() {

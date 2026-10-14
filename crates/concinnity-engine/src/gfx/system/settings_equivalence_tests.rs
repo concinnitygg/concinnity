@@ -6,8 +6,9 @@
 // the backend receives fails here by name.
 
 use concinnity_core::components::{
-    AaMode, GraphicsConfig, IndirectLighting, PassResolution, PostProcessConfig, ShadowUpdate,
-    StreamingConfig, UpscaleQuality, UpscalerBackend, WindowMode,
+    AaMode, AmbientOcclusion, AntiAliasing, Bloom, Culling, Display, Exposure, FramePacing,
+    IndirectLighting, IndirectTechnique, PassResolution, Reflections, ShadowUpdate, Shadows,
+    StreamingConfig, TextureFiltering, UpscaleQuality, UpscalerBackend, Vignette, WindowMode,
 };
 use concinnity_core::render::backend::{GpuProfile, GpuTier, QualitySettings};
 use concinnity_core::render::backend_init::PostSettings;
@@ -15,7 +16,7 @@ use concinnity_core::render::dlss::DlssPreset;
 
 use concinnity_core::settings::quality::resolve_ceiling;
 use concinnity_core::settings::{
-    QualityPreset, ResolvedSettings, UserGraphicsSettings, WorldSettings,
+    QualityPreset, ResolvedSettings, UserGraphicsSettings, WorldAssets, WorldSettings,
 };
 
 use crate::app::run::LaunchRequest;
@@ -44,104 +45,181 @@ fn ceilings() -> Vec<(String, QualityPreset, GpuTier)> {
     out
 }
 
+// Every settings asset a world can declare, so a fixture names only what it
+// changes from the defaults.
+#[derive(Default)]
+struct Declared {
+    frame_pacing: FramePacing,
+    shadows: Shadows,
+    texture_filtering: TextureFiltering,
+    ambient_occlusion: AmbientOcclusion,
+    reflections: Reflections,
+    indirect_lighting: IndirectLighting,
+    anti_aliasing: AntiAliasing,
+    exposure: Exposure,
+    bloom: Bloom,
+    vignette: Vignette,
+    display: Display,
+    culling: Culling,
+}
+
+impl Declared {
+    // The world declaring every asset, and `streaming` where given.
+    fn world(&self, streaming: Option<&StreamingConfig>) -> WorldSettings {
+        WorldSettings::new(WorldAssets {
+            frame_pacing: Some(&self.frame_pacing),
+            shadows: Some(&self.shadows),
+            texture_filtering: Some(&self.texture_filtering),
+            ambient_occlusion: Some(&self.ambient_occlusion),
+            reflections: Some(&self.reflections),
+            indirect_lighting: Some(&self.indirect_lighting),
+            anti_aliasing: Some(&self.anti_aliasing),
+            exposure: Some(&self.exposure),
+            bloom: Some(&self.bloom),
+            vignette: Some(&self.vignette),
+            display: Some(&self.display),
+            culling: Some(&self.culling),
+            lut_strength: None,
+            streaming,
+        })
+    }
+}
+
 fn worlds() -> Vec<(&'static str, WorldSettings)> {
-    let above_graphics = GraphicsConfig {
-        frames_in_flight: 3,
-        vsync: true,
-        fps_cap: 0,
-        shadow_map_size: 8192,
-        shadow_update: ShadowUpdate::EveryFrame,
-        shadow_distance: 500,
-        shadow_cascades: 4,
-        anisotropy: 16,
+    let above = Declared {
+        frame_pacing: FramePacing {
+            frames_in_flight: 3,
+            vsync: true,
+            fps_cap: 0,
+        },
+        shadows: Shadows {
+            map_size: 8192,
+            update: ShadowUpdate::EveryFrame,
+            distance: 500,
+            cascades: 4,
+        },
+        texture_filtering: TextureFiltering { anisotropy: 16 },
+        ambient_occlusion: AmbientOcclusion {
+            enabled: true,
+            ..Default::default()
+        },
+        reflections: Reflections {
+            screen_space: true,
+            ray_traced: true,
+            ray_traced_shadows: true,
+            ray_traced_resolution: PassResolution::Full,
+            blur_resolution: PassResolution::Full,
+            ..Default::default()
+        },
+        indirect_lighting: IndirectLighting {
+            technique: IndirectTechnique::Ssgi,
+            ssgi_resolution: PassResolution::Full,
+            ssgi_rays: 4,
+            ..Default::default()
+        },
+        anti_aliasing: AntiAliasing {
+            mode: AaMode::Taa,
+            upscaling: true,
+            upscale_quality: UpscaleQuality::Quality,
+            upscaler: UpscalerBackend::Dlss,
+        },
+        exposure: Exposure {
+            auto: true,
+            ..Default::default()
+        },
+        display: Display {
+            hdr: true,
+            pq: true,
+        },
+        culling: Culling {
+            two_pass_occlusion: true,
+        },
         ..Default::default()
     };
-    let above_post = PostProcessConfig {
-        aa_mode: AaMode::Taa,
-        ssao: true,
-        ssr: true,
-        ray_traced_reflections: true,
-        rt_reflection_shadows: true,
-        rt_reflection_resolution: PassResolution::Full,
-        reflection_blur_resolution: PassResolution::Full,
-        indirect_lighting: IndirectLighting::Ssgi,
-        ssgi_resolution: PassResolution::Full,
-        ssgi_rays: 4,
-        auto_exposure: true,
-        hdr_display: true,
-        hdr_pq: true,
-        temporal_upscaling: true,
-        upscale_quality: UpscaleQuality::Quality,
-        upscale_backend: UpscalerBackend::Dlss,
-        occlusion_two_pass: true,
+    let below = Declared {
+        frame_pacing: FramePacing {
+            frames_in_flight: 1,
+            ..Default::default()
+        },
+        shadows: Shadows {
+            map_size: 512,
+            update: ShadowUpdate::Hybrid,
+            distance: 10,
+            cascades: 1,
+        },
+        texture_filtering: TextureFiltering { anisotropy: 1 },
+        ambient_occlusion: AmbientOcclusion {
+            enabled: false,
+            ..Default::default()
+        },
+        reflections: Reflections {
+            screen_space: false,
+            ray_traced: false,
+            ray_traced_shadows: false,
+            ray_traced_resolution: PassResolution::Quarter,
+            blur_resolution: PassResolution::Quarter,
+            ..Default::default()
+        },
+        indirect_lighting: IndirectLighting {
+            technique: IndirectTechnique::Ibl,
+            ssgi_resolution: PassResolution::Quarter,
+            ssgi_rays: 1,
+            ..Default::default()
+        },
+        anti_aliasing: AntiAliasing {
+            mode: AaMode::Off,
+            upscale_quality: UpscaleQuality::UltraPerformance,
+            ..Default::default()
+        },
+        culling: Culling {
+            two_pass_occlusion: false,
+        },
         ..Default::default()
     };
-    let below_graphics = GraphicsConfig {
-        frames_in_flight: 1,
-        shadow_map_size: 512,
-        shadow_update: ShadowUpdate::Hybrid,
-        shadow_distance: 10,
-        shadow_cascades: 1,
-        anisotropy: 1,
-        ..Default::default()
-    };
-    let below_post = PostProcessConfig {
-        aa_mode: AaMode::Off,
-        ssao: false,
-        ssr: false,
-        ray_traced_reflections: false,
-        rt_reflection_shadows: false,
-        rt_reflection_resolution: PassResolution::Quarter,
-        reflection_blur_resolution: PassResolution::Quarter,
-        indirect_lighting: IndirectLighting::Ibl,
-        ssgi_resolution: PassResolution::Quarter,
-        ssgi_rays: 1,
-        upscale_quality: UpscaleQuality::UltraPerformance,
-        occlusion_two_pass: false,
-        ..Default::default()
-    };
-    let odd_graphics = GraphicsConfig {
-        frames_in_flight: 7,
-        shadow_cascades: 9,
-        anisotropy: 64,
-        ..Default::default()
-    };
-    let odd_post = PostProcessConfig {
-        exposure_ev: 30.0,
-        bloom_intensity: -1.0,
-        vignette_strength: 3.0,
-        ambient_intensity: 40.0,
-        ssao_intensity: 9.0,
-        ssr_max_distance: 5000.0,
-        ssgi_rays: 9,
-        auto_exposure: true,
-        auto_exposure_min_ev: 30.0,
-        auto_exposure_max_ev: -30.0,
+    let odd = Declared {
+        frame_pacing: FramePacing {
+            frames_in_flight: 7,
+            ..Default::default()
+        },
+        shadows: Shadows {
+            cascades: 9,
+            ..Default::default()
+        },
+        texture_filtering: TextureFiltering { anisotropy: 64 },
+        ambient_occlusion: AmbientOcclusion {
+            intensity: 9.0,
+            ..Default::default()
+        },
+        reflections: Reflections {
+            max_distance: 5000.0,
+            ..Default::default()
+        },
+        indirect_lighting: IndirectLighting {
+            ambient_intensity: 40.0,
+            ssgi_rays: 9,
+            ..Default::default()
+        },
+        exposure: Exposure {
+            ev: 30.0,
+            auto: true,
+            auto_min_ev: 30.0,
+            auto_max_ev: -30.0,
+            ..Default::default()
+        },
+        bloom: Bloom {
+            intensity: -1.0,
+            ..Default::default()
+        },
+        vignette: Vignette { strength: 3.0 },
         ..Default::default()
     };
     let streaming = StreamingConfig::default();
     vec![
-        ("bare", WorldSettings::new(None, None, None)),
-        (
-            "defaults",
-            WorldSettings::new(
-                Some(&GraphicsConfig::default()),
-                Some(&PostProcessConfig::default()),
-                Some(&streaming),
-            ),
-        ),
-        (
-            "above",
-            WorldSettings::new(Some(&above_graphics), Some(&above_post), Some(&streaming)),
-        ),
-        (
-            "below",
-            WorldSettings::new(Some(&below_graphics), Some(&below_post), None),
-        ),
-        (
-            "odd",
-            WorldSettings::new(Some(&odd_graphics), Some(&odd_post), None),
-        ),
+        ("bare", WorldSettings::default()),
+        ("defaults", Declared::default().world(Some(&streaming))),
+        ("above", above.world(Some(&streaming))),
+        ("below", below.world(None)),
+        ("odd", odd.world(None)),
     ]
 }
 
@@ -220,13 +298,15 @@ fn users() -> Vec<(&'static str, UserGraphicsSettings)> {
 }
 
 // The values the settings chain resolves, in a shape independent of the
-// structs that carry them.
-fn resolved_text(g: &ResolvedSettings) -> String {
+// structs that carry them. The quality group prints as the single config the
+// pinned digests were taken over: the resolved effects, and the world's values
+// for the fields no layer above it moves.
+fn resolved_text(g: &ResolvedSettings, world: &WorldSettings) -> String {
     format!(
         "{:?}",
         (
             (
-                &g.quality.post_config,
+                &PostProcessConfig::of(&g.quality.effects, world),
                 g.quality.render_scale,
                 g.quality.shadow_map_size,
                 g.quality.shadow_cadence,
@@ -241,6 +321,90 @@ fn resolved_text(g: &ResolvedSettings) -> String {
             (g.texture_cap, g.texture_budget),
         )
     )
+}
+
+// The quality group in the field order the digests were pinned in.
+#[derive(Debug)]
+#[expect(dead_code, reason = "the fields are read only through `Debug`")]
+struct PostProcessConfig {
+    bloom_intensity: f32,
+    bloom_threshold: f32,
+    bloom_knee: f32,
+    exposure_ev: f32,
+    vignette_strength: f32,
+    lut_strength: f32,
+    aa_mode: AaMode,
+    ssao: bool,
+    ssao_radius: f32,
+    ssao_intensity: f32,
+    ssr: bool,
+    ssr_intensity: f32,
+    ssr_max_distance: f32,
+    ray_traced_reflections: bool,
+    rt_reflection_resolution: PassResolution,
+    rt_reflection_shadows: bool,
+    reflection_blur_resolution: PassResolution,
+    indirect_lighting: IndirectTechnique,
+    ambient_intensity: f32,
+    ssgi_intensity: f32,
+    ssgi_max_distance: f32,
+    ssgi_resolution: PassResolution,
+    ssgi_rays: u32,
+    auto_exposure: bool,
+    auto_exposure_min_ev: f32,
+    auto_exposure_max_ev: f32,
+    auto_exposure_speed: f32,
+    hdr_display: bool,
+    hdr_pq: bool,
+    temporal_upscaling: bool,
+    upscale_quality: UpscaleQuality,
+    upscale_backend: UpscalerBackend,
+    occlusion_two_pass: bool,
+}
+
+impl PostProcessConfig {
+    fn of(effects: &concinnity_core::settings::QualityEffects, world: &WorldSettings) -> Self {
+        let ao = &effects.ambient_occlusion;
+        let r = &effects.reflections;
+        let gi = &effects.indirect_lighting;
+        let aa = &effects.anti_aliasing;
+        let ex = &effects.exposure;
+        Self {
+            bloom_intensity: world.bloom.intensity,
+            bloom_threshold: world.bloom.threshold,
+            bloom_knee: world.bloom.knee,
+            exposure_ev: ex.ev,
+            vignette_strength: world.vignette.strength,
+            lut_strength: world.lut_strength,
+            aa_mode: aa.mode,
+            ssao: ao.enabled,
+            ssao_radius: ao.radius,
+            ssao_intensity: ao.intensity,
+            ssr: r.screen_space,
+            ssr_intensity: r.intensity,
+            ssr_max_distance: r.max_distance,
+            ray_traced_reflections: r.ray_traced,
+            rt_reflection_resolution: r.ray_traced_resolution,
+            rt_reflection_shadows: r.ray_traced_shadows,
+            reflection_blur_resolution: r.blur_resolution,
+            indirect_lighting: gi.technique,
+            ambient_intensity: gi.ambient_intensity,
+            ssgi_intensity: gi.ssgi_intensity,
+            ssgi_max_distance: gi.ssgi_max_distance,
+            ssgi_resolution: gi.ssgi_resolution,
+            ssgi_rays: gi.ssgi_rays,
+            auto_exposure: ex.auto,
+            auto_exposure_min_ev: ex.auto_min_ev,
+            auto_exposure_max_ev: ex.auto_max_ev,
+            auto_exposure_speed: ex.auto_speed,
+            hdr_display: world.display.hdr,
+            hdr_pq: world.display.pq,
+            temporal_upscaling: aa.upscaling,
+            upscale_quality: aa.upscale_quality,
+            upscale_backend: aa.upscaler,
+            occlusion_two_pass: world.culling.two_pass_occlusion,
+        }
+    }
 }
 
 fn post_settings_text(p: &PostSettings) -> String {
@@ -326,10 +490,10 @@ fn case_text(
     after_preset.set_quality(state.resolve_quality(&cleared, &ceiling));
     format!(
         "{}\n{}\n{}\n{}",
-        resolved_text(&graphics),
+        resolved_text(&graphics, world),
         post_settings_text(&post),
         quality_text(&quality),
-        resolved_text(&after_preset),
+        resolved_text(&after_preset, world),
     )
 }
 

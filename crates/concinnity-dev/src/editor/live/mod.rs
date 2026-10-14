@@ -20,11 +20,10 @@ mod shape;
 
 use concinnity_cook::authoring::registry::{RegisteredType, ScopeResolution};
 use concinnity_core::components::{
-    CharacterCapsule, CharacterShape, DirectionalLight, GraphicsConfig, PostProcessConfig,
-    Transform, VolumetricFog,
+    CharacterCapsule, CharacterShape, DirectionalLight, Transform, VolumetricFog,
 };
 use concinnity_core::ecs::{ComponentAsset, Entity, World};
-use concinnity_engine::live_edit::shape_preview;
+use concinnity_engine::live_edit::{lighting_preview, shape_preview};
 pub(crate) use diff::{args_changes, same_assets};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -71,9 +70,7 @@ pub(crate) enum Apply {
 /// A render-config asset an edit can push at the running renderer.
 pub(crate) enum RenderConfig {
     Fog(VolumetricFog),
-    Graphics(GraphicsConfig),
-    /// Boxed: it is several times the width of the other two.
-    Post(Box<PostProcessConfig>),
+    Settings(lighting_preview::SettingsEdit),
 }
 
 /// Plan every change as a write against the running world, or `None` when any

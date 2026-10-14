@@ -253,9 +253,9 @@ pub(crate) fn max_size() -> [f32; 2] {
         size()[1] + (ROW_POOL_MAX - ROW_POOL) as f32 * ROW_H,
     ]
 }
-// 17 covers the longest registered type name (`PostProcessConfig`), so a
-// type caption never clips.
-const MAX_TYPE_CHARS: usize = 17;
+// 16 covers the longest registered type names (`AmbientOcclusion`,
+// `IndirectLighting`, `TextureFiltering`), so a type caption never clips.
+const MAX_TYPE_CHARS: usize = 16;
 // The triple-dot button on a hovered name row.
 const DOT_SZ: f32 = 20.0;
 // The floating row menu.
@@ -1909,17 +1909,17 @@ mod tests {
         assert!(!cursor_over_body(o[0] - 5.0, list_top(o) + 5.0, o, size()));
     }
 
-    // Cook `ty` blank in a minimal world: alongside a GraphicsConfig so the
-    // world renders, except for singletons, which cook alone (the fixed
-    // GraphicsConfig line would collide with the GraphicsConfig probe under
-    // the singleton shape rule; a lone singleton still cooks, as a
-    // non-rendering world when it is not itself the renderer config).
+    // Cook `ty` blank in a minimal world: alongside a Window so the world
+    // renders, except for singletons, which cook alone (the fixed Window line
+    // would collide with the Window probe under the singleton shape rule; a
+    // lone singleton still cooks, as a non-rendering world when it does not
+    // render itself).
     fn cook_blank(ty: &str) -> std::io::Result<()> {
         let world = if is_singleton(ty) {
             format!("[\"{ty}\",{{\"$id\":\"probe\"}}]\n")
         } else {
             format!(
-                "[\"GraphicsConfig\",{{\"$id\":\"gfx\"}}]\n\
+                "[\"Window\",{{\"$id\":\"gfx\"}}]\n\
                  [\"{ty}\",{{\"$id\":\"probe\"}}]\n"
             )
         };

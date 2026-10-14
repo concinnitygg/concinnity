@@ -26,7 +26,7 @@ use crate::directx::root_sig::{RootSig, Visibility};
 use crate::directx::texture::{create_uav_buffer, transition_barrier, uav_barrier};
 
 // Auto-exposure (EV adaptation) state. `resources` is `Some` only when the
-// world's `PostProcessConfig` opts in; it holds the histogram + average compute
+// world's `Exposure` opts in; it holds the histogram + average compute
 // PSOs, the histogram UAV, the output UAV, and the per-frame readback buffers.
 // `adaptation` carries the clamped tunables, the authored EV bias and the EMA
 // target; `last_elapsed` is the previous frame's elapsed time used to derive
@@ -49,7 +49,7 @@ pub(in crate::directx) fn compile_auto_exposure_shaders(
 
 // Pair of compute pipelines + GPU buffers + per-frame readback driving the
 // auto-exposure histogram path. Built only when the world's
-// `PostProcessConfig` opts in; the encoder is a no-op otherwise.
+// `Exposure` opts in; the encoder is a no-op otherwise.
 pub(super) struct AutoExposureResources {
     // Build kernel: one thread per HDR-resolve pixel; produces the 256-bin
     // log-luminance histogram in the global UAV.
@@ -102,7 +102,7 @@ impl AutoExposureResources {
     }
 
     // Build all auto-exposure resources. Called from `DxContext::new` only
-    // when `PostProcessConfig.auto_exposure` is enabled.
+    // when `Exposure.auto` is enabled.
     pub(super) fn new(alloc: &DeviceAllocator, hot_reload: bool) -> RenderResult<Self> {
         let device = alloc.device();
         let (build_cs, average_cs) = compile_auto_exposure_shaders(hot_reload)?;

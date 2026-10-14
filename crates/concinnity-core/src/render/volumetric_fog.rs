@@ -135,7 +135,7 @@ impl FogSettings {
 /// The one place the asset becomes settings. Init, the `VolumetricFog`
 /// hot-reload, and the lighting preview all route through here, so `None` means
 /// the same thing on every path and none of them can drift on which fields gate
-/// the pass. Mirrors `PostProcessConfig`'s `*_settings()` resolvers.
+/// the pass. Mirrors the per-effect `from_config` resolvers.
 ///
 /// Deliberately NOT filtered on [`FogSettings::contributes`], unlike the SSAO
 /// and SSGI resolvers. Fog is live-editable: the settings decide whether the

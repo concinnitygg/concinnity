@@ -33,9 +33,8 @@ before sunrise, so neither light pops.
 The defaults are the real sky's: a full moon lights the ground about
 400000 times less than the sun, and the Milky Way is fainter still. A
 world with auto-exposure that should adapt to the night needs its
-[PostProcessConfig](PostProcessConfig.md) to allow it: an
-`auto_exposure_max_ev` of 24, since a moonlit or starlit scene adapts at
-around 19 to 20, and an `exposure_ev` about 4 stops under, so moonlit
+[Exposure](Exposure.md) to allow it: an `auto_max_ev` of 24, since a moonlit
+or starlit scene adapts at around 19 to 20, and an `ev` about 4 stops under, so moonlit
 ground reads while the night stays darker than day and dusk stays dim.
 
 One per world. Brightnesses are relative to the sunlight, so the night

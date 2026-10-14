@@ -28,9 +28,9 @@
 mod logo;
 
 use concinnity::components::{
-    Atmosphere, Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, DirectionalLight,
-    GraphicsConfig, NightSky, PostProcessConfig, ProceduralMesh, Prop, SkyRotation, WaterShape,
-    WaterSurface, Wind, Window,
+    AntiAliasing, Atmosphere, Background, Behavior, BehaviorExpr, BehaviorNode, BehaviorSource,
+    Bloom, Culling, DirectionalLight, Exposure, FramePacing, IndirectLighting, NightSky,
+    ProceduralMesh, Prop, SkyRotation, Vignette, WaterShape, WaterSurface, Wind, Window,
 };
 use concinnity::{App, AssetId, MaterialHandle, MeshHandle, Ref, World, bake};
 
@@ -93,8 +93,10 @@ fn cube_world() -> Result<World, concinnity::Error> {
         resizable: true,
         ..Default::default()
     });
-    world.add_component(GraphicsConfig {
-        clear_color: [0.0, 0.0, 0.0, 1.0],
+    world.add_component(Background {
+        color: [0.0, 0.0, 0.0, 1.0],
+    });
+    world.add_component(FramePacing {
         vsync: true,
         ..Default::default()
     });
@@ -117,14 +119,24 @@ fn cube_world() -> Result<World, concinnity::Error> {
     // this frame to gray. With a fixed exposure the scene is written at that
     // exposure, so the grading here is the grading on screen. Which effects
     // run is not decided here; the quality preset picks those from the GPU.
-    world.add_component(PostProcessConfig {
+    world.add_component(IndirectLighting {
         ambient_intensity: 0.2,
-        bloom_intensity: 0.45,
-        bloom_threshold: 1.2,
-        vignette_strength: 0.3,
-        exposure_ev: -0.1,
         ..Default::default()
     });
+    world.add_component(Bloom {
+        intensity: 0.45,
+        threshold: 1.2,
+        ..Default::default()
+    });
+    world.add_component(Vignette { strength: 0.3 });
+    world.add_component(Exposure {
+        ev: -0.1,
+        ..Default::default()
+    });
+    // Two-pass occlusion culling, and an upscaler at its render scale when the
+    // settings menu turns one on.
+    world.add_component(Culling::default());
+    world.add_component(AntiAliasing::default());
 
     // The sky beyond the air, drawn per pixel, so the stars stay single sharp
     // points. No moon: the green sun is the one body in this sky.

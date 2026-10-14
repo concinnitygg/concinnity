@@ -13,7 +13,7 @@ pub(crate) mod system;
 // field) lives in SettingsSystem's drain, keyed by the same `SettingKey`.
 
 use concinnity_core::components::{
-    ControlsCommand, PostProcessConfig, SettingOp, ShadowUpdate, UpscalerBackend, WindowMode,
+    ControlsCommand, SettingOp, ShadowUpdate, UpscalerBackend, WindowMode,
 };
 use concinnity_core::gfx::auto_exposure::EV_LIMIT;
 use concinnity_core::gfx::render_types::PostProcessTunables;
@@ -26,6 +26,7 @@ use crate::config::Settings;
 // (labels + classification) lives in core so the cook and the client agree on
 // every setting's option count, and is re-exported here alongside the
 // client-only half below.
+use concinnity_core::settings::QualityEffects;
 use concinnity_core::settings::levels::nearest_count_index;
 pub(crate) use concinnity_core::settings::levels::{render_scale_at, render_scale_index};
 use concinnity_core::settings::rows::{
@@ -392,14 +393,14 @@ impl SliderSetting {
     pub(crate) fn current_value(
         &self,
         post_process: &PostProcessTunables,
-        post_config: &PostProcessConfig,
+        effects: &QualityEffects,
         ambient_intensity: f32,
         persisted: &Settings,
     ) -> f32 {
         let stored = match &self.target {
             SliderTarget::Graphics(row) => match &row.target {
                 GraphicsSliderTarget::PostProcess { field, .. } => *(field.get)(post_process),
-                GraphicsSliderTarget::PostConfig { field, .. } => *(field.get)(post_config),
+                GraphicsSliderTarget::Effect { field, .. } => *(field.get)(effects),
                 GraphicsSliderTarget::Ambient { .. } => ambient_intensity,
             },
             SliderTarget::Controls {
@@ -796,7 +797,7 @@ mod tests {
         assert_eq!(fps_cap_index(58), fps_cap_index(60));
         assert_eq!(fps_cap_index(1000), FPS_CAP_VALUES.len() - 1);
         // The engine default has a row of its own.
-        let default_cap = concinnity_core::components::GraphicsConfig::default().fps_cap;
+        let default_cap = concinnity_core::components::FramePacing::default().fps_cap;
         assert_eq!(fps_cap_at(fps_cap_index(default_cap)), default_cap);
     }
 
@@ -1311,7 +1312,7 @@ mod tests {
     #[test]
     fn no_two_sliders_alias_one_field() {
         let mut post_process = PostProcessTunables::DEFAULT;
-        let mut post_config = PostProcessConfig::default();
+        let mut effects = QualityEffects::default();
         let mut cfg = Settings::default();
         let marker = |i: usize| 1000.0 + i as f32;
         for (i, s) in SLIDERS.iter().enumerate() {
@@ -1322,8 +1323,8 @@ mod tests {
                         GraphicsSliderTarget::PostProcess { field, .. } => {
                             *(field.get_mut)(&mut post_process) = marker(i);
                         }
-                        GraphicsSliderTarget::PostConfig { field, .. } => {
-                            *(field.get_mut)(&mut post_config) = marker(i);
+                        GraphicsSliderTarget::Effect { field, .. } => {
+                            *(field.get_mut)(&mut effects) = marker(i);
                         }
                         GraphicsSliderTarget::Ambient { .. } => {}
                     }
@@ -1340,9 +1341,7 @@ mod tests {
                         GraphicsSliderTarget::PostProcess { field, .. } => {
                             Some(*(field.get)(&post_process))
                         }
-                        GraphicsSliderTarget::PostConfig { field, .. } => {
-                            Some(*(field.get)(&post_config))
-                        }
+                        GraphicsSliderTarget::Effect { field, .. } => Some(*(field.get)(&effects)),
                         GraphicsSliderTarget::Ambient { .. } => None,
                     },
                     *(row.target.persisted().get)(&cfg.graphics),
@@ -1386,17 +1385,20 @@ mod tests {
             exposure: 4.0,
             ..PostProcessTunables::DEFAULT
         };
-        let post_config = PostProcessConfig::default();
+        let effects = QualityEffects::default();
         let mut cfg = Settings::default();
         cfg.controls.gamepad_deadzone = Some(0.25);
         let read = |key: SettingKey| {
             slider(key)
                 .unwrap()
-                .current_value(&post_process, &post_config, 1.5, &cfg)
+                .current_value(&post_process, &effects, 1.5, &cfg)
         };
         assert!((read(SettingKey::Exposure) - 2.0).abs() < 1.0e-5);
         assert_eq!(read(SettingKey::AmbientIntensity), 1.5);
-        assert_eq!(read(SettingKey::SsaoRadius), post_config.ssao_radius);
+        assert_eq!(
+            read(SettingKey::SsaoRadius),
+            effects.ambient_occlusion.radius
+        );
         assert_eq!(read(SettingKey::GamepadDeadzone), 25.0);
         assert_eq!(read(SettingKey::Fov), DEFAULT_FOV);
     }
@@ -1405,7 +1407,7 @@ mod tests {
     fn slider_apply_clamps_match_resolve() {
         let apply = |key: SettingKey, v: f32| slider(key).unwrap().apply(v);
         // Out-of-range inputs (e.g. a hand-edited settings.bin) clamp to the
-        // engine's domain, matching PostProcessConfig::resolve.
+        // engine's domain, matching post_process_tunables.
         assert_eq!(apply(SettingKey::BloomIntensity, -5.0), 0.0);
         assert_eq!(apply(SettingKey::Vignette, 2.0), 1.0);
         assert_eq!(apply(SettingKey::LutStrength, -1.0), 0.0);
@@ -1435,7 +1437,7 @@ mod tests {
                 matches!(
                     s.target,
                     SliderTarget::Graphics(GraphicsSlider {
-                        target: GraphicsSliderTarget::PostConfig { .. },
+                        target: GraphicsSliderTarget::Effect { .. },
                         ..
                     })
                 )

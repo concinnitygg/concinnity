@@ -160,7 +160,7 @@ impl SettingsState {
             };
             let value = slider.current_value(
                 &self.graphics.post_process,
-                &self.graphics.quality.post_config,
+                &self.graphics.quality.effects,
                 self.graphics.ambient_intensity,
                 persisted,
             );

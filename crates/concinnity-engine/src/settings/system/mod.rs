@@ -214,9 +214,11 @@ impl SettingsState {
             fog_built: true,
             ..Self::new()
         };
-        state.authored.shadow_map_size = 2048;
-        state.authored.shadow_cadence = shadow_cadence;
-        state.authored.anisotropy = 8;
+        state.authored.shadows.map_size = 2048;
+        state.authored.shadows.update = shadow_cadence.update;
+        state.authored.shadows.distance = shadow_cadence.distance;
+        state.authored.shadows.cascades = shadow_cadence.cascades;
+        state.authored.texture_filtering.anisotropy = 8;
         let g = &mut state.graphics;
         g.quality.shadow_map_size = 2048;
         g.quality.shadow_cadence = shadow_cadence;

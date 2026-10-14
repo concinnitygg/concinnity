@@ -536,7 +536,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         ambient += specular_ibl;
     }
 
-    // Authored indirect-fill multiplier (PostProcessConfig.ambient_intensity);
+    // Authored indirect-fill multiplier (IndirectLighting.ambient_intensity);
     // 1.0 is a no-op. Lifts shadow fill without touching sun-lit surfaces.
     ambient *= LIGHTS.ambient_intensity;
 

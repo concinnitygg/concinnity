@@ -32,7 +32,7 @@ mod tests {
 
     // Starting through the trait reaches the windowed loop's own start, budgets
     // and all, and the second call is refused the same way the inherent one is.
-    // A world with no GraphicsConfig starts without building a GPU.
+    // A world with nothing to draw starts without building a GPU.
     #[test]
     fn a_driver_starts_the_world_it_holds() {
         let mut driver: Box<dyn Driver> = Box::new(Runtime::new());

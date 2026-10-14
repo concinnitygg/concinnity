@@ -12,7 +12,6 @@
 //! nor remotely driven. The interpreted (`cn debug`) path with hot-reload and
 //! the command channel lives in the editor crate.
 
-use concinnity_core::components::GraphicsConfig;
 use concinnity_core::ecs::{ScheduleMode, ViewOverrides};
 use concinnity_core::error::WorldError;
 use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
@@ -84,8 +83,6 @@ pub struct RunOptions {
     /// Capture the last presented frame to this path when the run stops, for
     /// headless verification of the runtime path (`cn run --screenshot`).
     pub screenshot: Option<String>,
-    /// Override the world's `GraphicsConfig.max_frames`, bounding the run.
-    pub max_frames: Option<u64>,
     /// What the launch asks the engine to arm (`cn run` only; [`run_from`] and
     /// [`Runtime::run`] keep the runtime's own).
     pub launch: LaunchRequest,
@@ -101,6 +98,9 @@ pub struct LaunchRequest {
     /// Run as a development session: capture hot-reload sources, load shaders
     /// disk-first, keep frame capture available, and show the debug HUD.
     pub dev_loop: bool,
+    /// Render this many frames, then stop the run. `None` runs until the
+    /// window is closed.
+    pub max_frames: Option<u64>,
     /// Force the DirectX / Vulkan debug layers on or off. `None` follows the
     /// build profile. Metal's layer is set by the process environment instead.
     pub validation: Option<bool>,
@@ -287,11 +287,6 @@ pub(crate) fn start_runtime(mut runtime: Runtime, options: RunOptions) -> Result
     // same answer rather than probing the GPU twice.
     let renders = runtime.render_mode().renders();
 
-    if let Some(max) = options.max_frames {
-        for config in runtime.world_mut().query_mut::<GraphicsConfig>() {
-            config.max_frames = Some(max);
-        }
-    }
     if options.screenshot.is_some() {
         runtime.launch_mut().capture = true;
     }

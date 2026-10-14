@@ -1,5 +1,5 @@
 use super::*;
-use crate::components::{AaMode, IndirectLighting, ShadowUpdate};
+use crate::components::{AaMode, IndirectTechnique, ShadowUpdate};
 use crate::ecs::asset_fields::ApplyClass;
 use crate::render::backend::{GpuProfile, GpuTier};
 use crate::settings::quality::{QualityPreset, resolve_ceiling};
@@ -16,58 +16,75 @@ fn ceiling_for(preset: QualityPreset, tier: GpuTier) -> QualityCeiling {
 }
 
 // The schema defaults author the top-tier look, so the ceiling is what
-// settles a world that declares no PostProcessConfig.
+// settles a world that declares none of the settings assets.
 #[test]
 fn the_low_ceiling_clamps_the_schema_defaults_off() {
-    let mut cfg = PostProcessConfig::default();
+    let mut cfg = QualityEffects::default();
     clamp_quality_under_ceiling(
         &mut cfg,
         &UserGraphicsSettings::default(),
         &ceiling_for(QualityPreset::Low, GpuTier::Integrated),
     );
-    assert!(!cfg.ssao);
-    assert!(!cfg.ssr);
-    assert!(!cfg.ray_traced_reflections);
-    assert_eq!(cfg.indirect_lighting, IndirectLighting::Ibl);
-    assert_eq!(cfg.aa_mode, AaMode::Fxaa);
+    assert!(!cfg.ambient_occlusion.enabled);
+    assert!(!cfg.reflections.screen_space);
+    assert!(!cfg.reflections.ray_traced);
+    assert_eq!(cfg.indirect_lighting.technique, IndirectTechnique::Ibl);
+    assert_eq!(cfg.anti_aliasing.mode, AaMode::Fxaa);
 }
 
 #[test]
 fn the_top_ceiling_leaves_the_schema_defaults_alone() {
-    let mut cfg = PostProcessConfig::default();
+    let mut cfg = QualityEffects::default();
     clamp_quality_under_ceiling(
         &mut cfg,
         &UserGraphicsSettings::default(),
         &ceiling_for(QualityPreset::Ultra, GpuTier::HighDiscrete),
     );
-    assert!(cfg.ssao);
-    assert!(cfg.ssr);
-    assert!(cfg.ray_traced_reflections);
-    assert_eq!(cfg.indirect_lighting, IndirectLighting::Ssgi);
-    assert_eq!(cfg.aa_mode, AaMode::Taa);
+    assert!(cfg.ambient_occlusion.enabled);
+    assert!(cfg.reflections.screen_space);
+    assert!(cfg.reflections.ray_traced);
+    assert_eq!(cfg.indirect_lighting.technique, IndirectTechnique::Ssgi);
+    assert_eq!(cfg.anti_aliasing.mode, AaMode::Taa);
+}
+
+// Effects with every quality-governed feature authored off.
+fn all_off() -> QualityEffects {
+    QualityEffects {
+        ambient_occlusion: AmbientOcclusion {
+            enabled: false,
+            ..Default::default()
+        },
+        reflections: Reflections {
+            screen_space: false,
+            ray_traced: false,
+            ..Default::default()
+        },
+        indirect_lighting: IndirectLighting {
+            technique: IndirectTechnique::Ibl,
+            ..Default::default()
+        },
+        anti_aliasing: AntiAliasing {
+            mode: AaMode::Off,
+            ..Default::default()
+        },
+        exposure: Exposure::default(),
+    }
 }
 
 // A ceiling only reduces: what the world turned off stays off at any tier.
 #[test]
 fn a_ceiling_never_turns_a_feature_back_on() {
-    let mut cfg = PostProcessConfig {
-        ssao: false,
-        ssr: false,
-        ray_traced_reflections: false,
-        indirect_lighting: IndirectLighting::Ibl,
-        aa_mode: AaMode::Off,
-        ..Default::default()
-    };
+    let mut cfg = all_off();
     clamp_quality_under_ceiling(
         &mut cfg,
         &UserGraphicsSettings::default(),
         &ceiling_for(QualityPreset::Ultra, GpuTier::HighDiscrete),
     );
-    assert!(!cfg.ssao);
-    assert!(!cfg.ssr);
-    assert!(!cfg.ray_traced_reflections);
-    assert_eq!(cfg.indirect_lighting, IndirectLighting::Ibl);
-    assert_eq!(cfg.aa_mode, AaMode::Off);
+    assert!(!cfg.ambient_occlusion.enabled);
+    assert!(!cfg.reflections.screen_space);
+    assert!(!cfg.reflections.ray_traced);
+    assert_eq!(cfg.indirect_lighting.technique, IndirectTechnique::Ibl);
+    assert_eq!(cfg.anti_aliasing.mode, AaMode::Off);
 }
 
 // An explicit per-row choice survives a ceiling that would have cleared it.
@@ -78,50 +95,50 @@ fn a_user_override_wins_over_the_ceiling() {
         aa_mode: Some(AaMode::Taa),
         ..UserGraphicsSettings::default()
     };
-    let mut cfg = PostProcessConfig {
-        ssao: false,
-        aa_mode: AaMode::Off,
-        ..Default::default()
-    };
+    let mut cfg = QualityEffects::default();
+    cfg.ambient_occlusion.enabled = false;
+    cfg.anti_aliasing.mode = AaMode::Off;
     overlay_quality_overrides(&mut cfg, &user);
-    assert!(cfg.ssao, "the override applies over the world's value");
+    assert!(
+        cfg.ambient_occlusion.enabled,
+        "the override applies over the world's value"
+    );
     clamp_quality_under_ceiling(
         &mut cfg,
         &user,
         &ceiling_for(QualityPreset::Low, GpuTier::Integrated),
     );
     assert!(
-        cfg.ssao,
+        cfg.ambient_occlusion.enabled,
         "the Low ceiling does not clear an explicit choice"
     );
-    assert_eq!(cfg.aa_mode, AaMode::Taa);
+    assert_eq!(cfg.anti_aliasing.mode, AaMode::Taa);
     // A row the user left alone still clamps.
-    assert!(!cfg.ssr);
+    assert!(!cfg.reflections.screen_space);
 }
 
 fn low() -> QualityCeiling {
     ceiling_for(QualityPreset::Low, GpuTier::Integrated)
 }
 
-fn post_world(post: PostProcessConfig) -> WorldSettings {
-    WorldSettings::new(None, Some(&post), None)
-}
-
 #[test]
 fn a_user_override_beats_the_world_value() {
-    let world = WorldSettings::new(
-        Some(&GraphicsConfig {
+    let world = WorldSettings::new(WorldAssets {
+        frame_pacing: Some(&FramePacing {
             vsync: true,
             fps_cap: 60,
             ..Default::default()
         }),
-        Some(&PostProcessConfig {
-            hdr_display: true,
-            upscale_backend: UpscalerBackend::Fsr3,
+        display: Some(&Display {
+            hdr: true,
             ..Default::default()
         }),
-        None,
-    );
+        anti_aliasing: Some(&AntiAliasing {
+            upscaler: UpscalerBackend::Fsr3,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
     let user = UserGraphicsSettings {
         vsync: Some(false),
         fps_cap: Some(30),
@@ -150,18 +167,16 @@ fn a_user_override_beats_the_world_value() {
 
 #[test]
 fn the_ceiling_clamps_only_a_knob_the_user_left_alone() {
-    let world = WorldSettings::new(
-        Some(&GraphicsConfig {
-            shadow_map_size: 4096,
-            shadow_update: ShadowUpdate::EveryFrame,
-            shadow_distance: 200,
-            shadow_cascades: 4,
-            anisotropy: 16,
-            ..Default::default()
+    let world = WorldSettings::new(WorldAssets {
+        shadows: Some(&Shadows {
+            map_size: 4096,
+            update: ShadowUpdate::EveryFrame,
+            distance: 200,
+            cascades: 4,
         }),
-        None,
-        None,
-    );
+        texture_filtering: Some(&TextureFiltering { anisotropy: 16 }),
+        ..Default::default()
+    });
     let q = resolve_graphics(&world, &UserGraphicsSettings::default(), &low()).quality;
     assert_eq!(q.shadow_map_size, 1024);
     assert_eq!(
@@ -187,14 +202,13 @@ fn the_ceiling_clamps_only_a_knob_the_user_left_alone() {
 
 #[test]
 fn a_frames_in_flight_override_clamps_to_three() {
-    let world = WorldSettings::new(
-        Some(&GraphicsConfig {
+    let world = WorldSettings::new(WorldAssets {
+        frame_pacing: Some(&FramePacing {
             frames_in_flight: 7,
             ..Default::default()
         }),
-        None,
-        None,
-    );
+        ..Default::default()
+    });
     let r = resolve_graphics(&world, &UserGraphicsSettings::default(), &low());
     assert_eq!(r.frames_in_flight, 7, "the world value is not clamped");
     let user = UserGraphicsSettings {
@@ -207,8 +221,11 @@ fn a_frames_in_flight_override_clamps_to_three() {
 #[test]
 fn render_scale_takes_the_more_aggressive_of_world_and_ceiling() {
     let scale = |world: UpscaleQuality, user: Option<UpscaleQuality>| {
-        let world = post_world(PostProcessConfig {
-            upscale_quality: world,
+        let world = WorldSettings::new(WorldAssets {
+            anti_aliasing: Some(&AntiAliasing {
+                upscale_quality: world,
+                ..Default::default()
+            }),
             ..Default::default()
         });
         let user = UserGraphicsSettings {
@@ -232,11 +249,14 @@ fn render_scale_takes_the_more_aggressive_of_world_and_ceiling() {
 }
 
 #[test]
-fn occlusion_two_pass_is_off_without_a_post_process_config() {
+fn occlusion_two_pass_is_off_without_a_culling() {
     let none = UserGraphicsSettings::default();
     let r = resolve_graphics(&WorldSettings::default(), &none, &low());
     assert!(!r.occlusion_two_pass);
-    let declared = post_world(PostProcessConfig::default());
+    let declared = WorldSettings::new(WorldAssets {
+        culling: Some(&Culling::default()),
+        ..Default::default()
+    });
     assert!(resolve_graphics(&declared, &none, &low()).occlusion_two_pass);
 }
 
@@ -253,19 +273,20 @@ fn texture_overrides_apply_only_where_the_world_streams() {
         (r.texture_cap, r.texture_budget),
         (defaults.texture_cap, defaults.texture_budget)
     );
-    let streaming = WorldSettings::new(None, None, Some(&defaults));
+    let streaming = WorldSettings::new(WorldAssets {
+        streaming: Some(&defaults),
+        ..Default::default()
+    });
     let r = resolve_graphics(&streaming, &user, &low());
     assert_eq!((r.texture_cap, r.texture_budget), (10, 1));
 }
 
 #[test]
 fn the_fxaa_flag_follows_the_clamped_aa_mode() {
-    let world = post_world(PostProcessConfig {
-        aa_mode: AaMode::Taa,
-        ..Default::default()
-    });
+    let world = WorldSettings::default();
+    assert_eq!(world.effects.anti_aliasing.mode, AaMode::Taa);
     let r = resolve_graphics(&world, &UserGraphicsSettings::default(), &low());
-    assert_eq!(r.quality.post_config.aa_mode, AaMode::Fxaa);
+    assert_eq!(r.quality.effects.anti_aliasing.mode, AaMode::Fxaa);
     assert_eq!(r.post_process.fxaa, AaMode::Fxaa.fxaa_flag());
 }
 
@@ -273,8 +294,11 @@ fn the_fxaa_flag_follows_the_clamped_aa_mode() {
 // overrides still carries the user's sub-quality sliders.
 #[test]
 fn the_quality_group_keeps_the_look_tuning_sliders() {
-    let world = post_world(PostProcessConfig {
-        ssao_radius: 0.5,
+    let world = WorldSettings::new(WorldAssets {
+        ambient_occlusion: Some(&AmbientOcclusion {
+            radius: 0.5,
+            ..Default::default()
+        }),
         ..Default::default()
     });
     let user = UserGraphicsSettings {
@@ -282,11 +306,7 @@ fn the_quality_group_keeps_the_look_tuning_sliders() {
         ..UserGraphicsSettings::default()
     };
     let q = resolve_quality(&world, &user, &low());
-    assert_eq!(q.post_config.ssao_radius, 1.5);
-}
-
-fn graphics_world(graphics: GraphicsConfig) -> WorldSettings {
-    WorldSettings::new(Some(&graphics), Some(&PostProcessConfig::default()), None)
+    assert_eq!(q.effects.ambient_occlusion.radius, 1.5);
 }
 
 // Each layer beats the one below it: a scene beats the world, the ceiling
@@ -294,18 +314,27 @@ fn graphics_world(graphics: GraphicsConfig) -> WorldSettings {
 // session override beats the user.
 #[test]
 fn each_layer_beats_the_one_below_it() {
-    let world = graphics_world(GraphicsConfig {
-        shadow_distance: 60,
-        fps_cap: 120,
+    let world = WorldSettings::new(WorldAssets {
+        shadows: Some(&Shadows {
+            distance: 60,
+            ..Default::default()
+        }),
+        frame_pacing: Some(&FramePacing {
+            fps_cap: 120,
+            ..Default::default()
+        }),
         ..Default::default()
     });
     let scene = SceneOverride {
-        graphics: Some(GraphicsConfig {
-            shadow_distance: 300,
+        shadows: Some(Shadows {
+            distance: 300,
+            ..Default::default()
+        }),
+        frame_pacing: Some(FramePacing {
             fps_cap: 90,
             ..Default::default()
         }),
-        post_process: None,
+        ..Default::default()
     };
     let none = UserGraphicsSettings::default();
     let mut layers = SettingsLayers::new(&world, &QualityCeiling::NONE, &none);
@@ -342,33 +371,33 @@ fn each_layer_beats_the_one_below_it() {
     assert_eq!(sessioned.quality.shadow_cadence.distance, 200);
 }
 
-// A scene's post-process config replaces the world's whole, including whether
-// the world declared one.
+// A scene's asset replaces the world's whole, and counts as declared.
 #[test]
-fn a_scene_post_process_config_counts_as_declared() {
+fn a_scene_asset_counts_as_declared() {
     let world = WorldSettings::default();
     let none = UserGraphicsSettings::default();
     let mut layers = SettingsLayers::new(&world, &QualityCeiling::NONE, &none);
     assert!(!layers.resolve().occlusion_two_pass);
     let scene = SceneOverride {
-        graphics: None,
-        post_process: Some(PostProcessConfig {
-            ssao: false,
+        culling: Some(Culling::default()),
+        ambient_occlusion: Some(AmbientOcclusion {
+            enabled: false,
             ..Default::default()
         }),
+        ..Default::default()
     };
     layers.scene = Some(&scene);
     let r = layers.resolve();
     assert!(r.occlusion_two_pass);
-    assert!(!r.quality.post_config.ssao);
-    assert!(!layers.resolve_quality().post_config.ssao);
+    assert!(!r.quality.effects.ambient_occlusion.enabled);
+    assert!(!layers.resolve_quality().effects.ambient_occlusion.enabled);
 }
 
 // The device clamps after every layer: an explicit user choice cannot turn on
 // what the hardware cannot run.
 #[test]
 fn capabilities_clamp_after_every_layer() {
-    let world = graphics_world(GraphicsConfig::default());
+    let world = WorldSettings::default();
     let user = UserGraphicsSettings {
         ray_traced_reflections: Some(true),
         upscale_backend: Some(UpscalerBackend::Dlss),
@@ -376,7 +405,7 @@ fn capabilities_clamp_after_every_layer() {
     };
     let mut layers = SettingsLayers::new(&world, &QualityCeiling::NONE, &user);
     let capable = layers.resolve();
-    assert!(capable.quality.post_config.ray_traced_reflections);
+    assert!(capable.quality.effects.reflections.ray_traced);
     assert_eq!(capable.upscale_backend, UpscalerBackend::Dlss);
 
     let caps = DeviceCapabilities {
@@ -386,11 +415,14 @@ fn capabilities_clamp_after_every_layer() {
     };
     layers.capabilities = &caps;
     let r = layers.resolve();
-    assert!(!r.quality.post_config.ray_traced_reflections);
+    assert!(!r.quality.effects.reflections.ray_traced);
     assert!(r.quality_settings().rt_reflections.is_none());
     assert_eq!(r.upscale_backend, UpscalerBackend::Auto);
-    assert!(r.quality.post_config.ssr, "screen-space reflections stay");
-    assert!(!layers.resolve_quality().post_config.ray_traced_reflections);
+    assert!(
+        r.quality.effects.reflections.screen_space,
+        "screen-space reflections stay"
+    );
+    assert!(!layers.resolve_quality().effects.reflections.ray_traced);
 }
 
 #[test]
@@ -406,7 +438,7 @@ fn an_unchanged_snapshot_has_an_empty_diff() {
 // when two resolved values name the same field.
 #[test]
 fn the_diff_groups_changes_by_apply_class() {
-    let world = graphics_world(GraphicsConfig::default());
+    let world = WorldSettings::default();
     let none = UserGraphicsSettings::default();
     let before = SettingsLayers::new(&world, &QualityCeiling::NONE, &none).resolve();
     let user = UserGraphicsSettings {
@@ -429,25 +461,22 @@ fn the_diff_groups_changes_by_apply_class() {
     assert_eq!(
         keys(ApplyClass::Live),
         [
-            ("PostProcessConfig", "ssao_radius"),
-            ("PostProcessConfig", "bloom_intensity"),
-            ("GraphicsConfig", "shadow_distance"),
+            ("AmbientOcclusion", "radius"),
+            ("Bloom", "intensity"),
+            ("Shadows", "distance"),
             ("UserGraphicsSettings", "show_fps"),
         ]
     );
     assert_eq!(
         keys(ApplyClass::Rebuild),
-        [
-            ("PostProcessConfig", "aa_mode"),
-            ("PostProcessConfig", "ssao"),
-        ]
+        [("AmbientOcclusion", "enabled"), ("AntiAliasing", "mode")]
     );
     assert!(keys(ApplyClass::Variant).is_empty());
     assert_eq!(
         keys(ApplyClass::Restart),
         [
-            ("PostProcessConfig", "hdr_display"),
-            ("GraphicsConfig", "shadow_map_size"),
+            ("Display", "hdr"),
+            ("Shadows", "map_size"),
             ("UserGraphicsSettings", "dlss_preset"),
         ]
     );
@@ -458,63 +487,30 @@ fn the_diff_groups_changes_by_apply_class() {
 // none falls back to the restart default by omission.
 #[test]
 fn every_diffed_field_declares_its_apply_class() {
+    use crate::components::ColorLut;
     use crate::ecs::asset_fields::AssetFields;
-    for key in [
-        "upscale_quality",
-        "exposure_ev",
-        "bloom_intensity",
-        "bloom_threshold",
-        "bloom_knee",
-        "vignette_strength",
-        "lut_strength",
-        "aa_mode",
-        "ambient_intensity",
-        "hdr_display",
-        "hdr_pq",
-        "temporal_upscaling",
-        "upscale_backend",
-        "occlusion_two_pass",
-    ] {
-        assert!(
-            PostProcessConfig::param(key)
-                .and_then(|m| m.apply)
-                .is_some(),
-            "{key}"
-        );
+    fn declares<A: AssetFields>(keys: &[&str]) {
+        for key in keys {
+            assert!(A::param(key).and_then(|m| m.apply).is_some(), "{key}");
+        }
     }
-    for key in [
-        "shadow_map_size",
-        "shadow_update",
-        "shadow_distance",
-        "shadow_cascades",
-        "anisotropy",
-        "vsync",
-        "fps_cap",
-        "frames_in_flight",
-    ] {
-        assert!(
-            GraphicsConfig::param(key).and_then(|m| m.apply).is_some(),
-            "{key}"
-        );
-    }
-    for key in ["texture_cap", "texture_budget"] {
-        assert!(
-            StreamingConfig::param(key).and_then(|m| m.apply).is_some(),
-            "{key}"
-        );
-    }
+    declares::<AntiAliasing>(&["upscale_quality", "mode", "upscaling", "upscaler"]);
+    declares::<Exposure>(&["ev"]);
+    declares::<Bloom>(&["intensity", "threshold", "knee"]);
+    declares::<Vignette>(&["strength"]);
+    declares::<ColorLut>(&["strength"]);
+    declares::<IndirectLighting>(&["ambient_intensity"]);
+    declares::<Display>(&["hdr", "pq"]);
+    declares::<Culling>(&["two_pass_occlusion"]);
+    declares::<Shadows>(&["map_size", "update", "distance", "cascades"]);
+    declares::<TextureFiltering>(&["anisotropy"]);
+    declares::<FramePacing>(&["vsync", "fps_cap", "frames_in_flight"]);
+    declares::<StreamingConfig>(&["texture_cap", "texture_budget"]);
 }
 
 #[test]
 fn quality_settings_follow_the_resolved_config() {
-    let world = WorldSettings::new(
-        None,
-        Some(&PostProcessConfig {
-            aa_mode: AaMode::Taa,
-            ..Default::default()
-        }),
-        None,
-    );
+    let world = WorldSettings::default();
     let none = UserGraphicsSettings::default();
     let r = SettingsLayers::new(&world, &low(), &none).resolve();
     let q = r.quality_settings();

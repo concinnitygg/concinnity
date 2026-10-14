@@ -25,26 +25,26 @@ pub(crate) fn clamp_authored<T: AssetFields>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{GraphicsConfig, PostProcessConfig};
+    use concinnity_core::components::{IndirectLighting, Shadows};
 
     #[test]
     fn an_out_of_range_value_is_clamped_with_one_warning_each() {
-        let authored = PostProcessConfig {
-            lut_strength: 3.0,
+        let authored = IndirectLighting {
+            ambient_intensity: 30.0,
             ssgi_rays: 0,
-            bloom_intensity: 0.5,
+            ssgi_intensity: 0.5,
             ..Default::default()
         };
         let mut warnings = Vec::new();
-        let loaded = clamp_authored("PostProcessConfig", authored, |w| warnings.push(w));
-        assert_eq!(loaded.lut_strength, 1.0);
+        let loaded = clamp_authored("IndirectLighting", authored, |w| warnings.push(w));
+        assert_eq!(loaded.ambient_intensity, 16.0);
         assert_eq!(loaded.ssgi_rays, 1);
-        assert_eq!(loaded.bloom_intensity, 0.5);
+        assert_eq!(loaded.ssgi_intensity, 0.5);
         assert_eq!(
             warnings,
             [
-                "PostProcessConfig.lut_strength: 3 is outside its range, clamped to 1",
-                "PostProcessConfig.ssgi_rays: 0 is outside its range, clamped to 1",
+                "IndirectLighting.ambient_intensity: 30 is outside its range, clamped to 16",
+                "IndirectLighting.ssgi_rays: 0 is outside its range, clamped to 1",
             ]
         );
     }
@@ -52,10 +52,8 @@ mod tests {
     #[test]
     fn the_defaults_load_without_a_warning() {
         let mut warnings = Vec::new();
-        clamp_authored("GraphicsConfig", GraphicsConfig::default(), |w| {
-            warnings.push(w)
-        });
-        clamp_authored("PostProcessConfig", PostProcessConfig::default(), |w| {
+        clamp_authored("Shadows", Shadows::default(), |w| warnings.push(w));
+        clamp_authored("IndirectLighting", IndirectLighting::default(), |w| {
             warnings.push(w)
         });
         assert!(warnings.is_empty(), "{warnings:?}");

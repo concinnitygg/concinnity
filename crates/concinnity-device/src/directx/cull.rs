@@ -137,7 +137,7 @@ pub(in crate::directx) struct CullState {
     // The snapshot kernel that fills them from the object buffer.
     pub model_history_root_sig: Option<ID3D12RootSignature>,
     pub model_history_pso: Option<ID3D12PipelineState>,
-    // `PostProcessConfig.occlusion_two_pass`, as requested by the world.
+    // `Culling.two_pass_occlusion`, as requested by the world.
     pub occlusion_two_pass: bool,
     // Hi-Z (depth-mip pyramid) used by the cull kernel for occlusion culling.
     // Built each frame after `execute_graph`; consumed by the *next* frame's

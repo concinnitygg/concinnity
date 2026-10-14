@@ -195,7 +195,7 @@ pub(crate) fn expand_world(
     expand_scene_imports(assets, &mut report, assets_dir)?;
     // Stories expand to External UI assets (Screens, TextLabels, HitRegions)
     // that need no further expansion but must exist before companion
-    // injection so their TextLabels pull in GraphicsConfig + Font companions.
+    // injection so their TextLabels pull in Window + Font companions.
     expand_stories(assets)?;
     expand_camera_shots(assets, assets_dir)?;
     // Character models become the skinned meshes they emit, under their own
@@ -221,7 +221,7 @@ pub(crate) fn expand_world(
     inject_menu_defaults(assets, &mut report)?;
     // Menus expand to External UI assets (Screen / Sprite / TextLabel /
     // HitRegion / KeyBinding) that need no further expansion, but whose
-    // TextLabels must still pull in their GraphicsConfig + Font companions, so
+    // TextLabels must still pull in their Window + Font companions, so
     // this runs before the second companion round.
     expand_main_menus(assets)?;
     // Menus emit OptionSelect rows for their settings sub-screen; expand those to
@@ -233,7 +233,7 @@ pub(crate) fn expand_world(
     // companion injection.
     expand_sliders(assets)?;
     // Panels expand to a background Sprite (+ title TextLabel), also before the
-    // second companion round so those pull in their GraphicsConfig / Font.
+    // second companion round so those pull in their Window / Font.
     expand_panels(assets)?;
     // Second companion round: companions for the assets the defaults and menu
     // passes added. Idempotent for everything round one already covered.
@@ -493,14 +493,14 @@ mod tests {
 
     #[test]
     fn expand_world_from_str_injects_companions() {
-        let content = r#"["GraphicsConfig",{"$id":"gfx"}]"#;
+        let content = r#"["TextLabel",{"$id":"gfx","content":"hi"}]"#;
         let assets = expand_world_from_str(content, None).unwrap();
         assert!(
             assets
                 .iter()
-                .any(|v| registered_type(v) == Some(RegisteredType::GraphicsConfig))
+                .any(|v| registered_type(v) == Some(RegisteredType::TextLabel))
         );
-        // GraphicsConfig pulls in a Window companion.
+        // A TextLabel pulls in a Window companion.
         assert!(
             assets
                 .iter()

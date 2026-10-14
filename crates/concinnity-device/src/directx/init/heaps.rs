@@ -164,7 +164,7 @@ fn create_samplers(
     device: &ID3D12Device,
     base_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     stride: usize,
-    // Scene-sampler max anisotropy from GraphicsConfig.anisotropy, clamped to the
+    // Scene-sampler max anisotropy from TextureFiltering.anisotropy, clamped to the
     // D3D12 1..16 range below.
     anisotropy: u32,
 ) {
@@ -191,7 +191,7 @@ fn create_samplers(
     // [1] Anisotropic repeat (albedo + normal map). Anisotropic filtering plus
     // the unclamped MaxLOD lets minified scene textures trilinear-select down
     // their mip chain instead of aliasing from mip 0. The degree comes from
-    // GraphicsConfig.anisotropy (default 8), clamped to the D3D12 feature-level-11
+    // TextureFiltering.anisotropy (default 8), clamped to the D3D12 feature-level-11
     // guaranteed 1..16 range.
     let linear_samp = D3D12_SAMPLER_DESC {
         Filter: D3D12_FILTER_ANISOTROPIC,

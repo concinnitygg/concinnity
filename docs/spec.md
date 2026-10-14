@@ -331,7 +331,8 @@ A world is a JSONL file: one entry per line, each declaring one asset. An entry
 is a JSON array of two columns, the asset's type and its args.
 
 ```json
-["GraphicsConfig",{"clear_color":[0.5,0.75,1.0,1.0],"shadow_map_size":2048}]
+["Background",{"color":[0.5,0.75,1.0,1.0]}]
+["Shadows",{"map_size":2048}]
 ["Camera3D",{"fov_y_degrees":75.0,"position":[0.0,4.0,22.0]}]
 ["Texture",{"$id":"tex_stone","generator":"stone","resolution":256}]
 ["Material",{"$id":"mat_stone","albedo":"tex_stone","roughness":0.88}]
@@ -917,10 +918,13 @@ Systems are then initialized in run order. Graphics init is by far the largest.
 
 Graphics init runs once, on the first tick:
 
-1. **Resolve render settings.** Merge `GraphicsConfig`, `PostProcessConfig`, and
-   `StreamingConfig` with persisted settings and launch options, and resolve the
-   quality ceiling (section 12.17).
-2. **Drain world content.** Window, graphics config, meshes, procedural meshes,
+1. **Resolve render settings.** Merge the settings assets (`FramePacing`,
+   `Shadows`, `TextureFiltering`, `AmbientOcclusion`, `Reflections`,
+   `IndirectLighting`, `AntiAliasing`, `Exposure`, `Bloom`, `Vignette`,
+   `Display`, `Culling`, the `ColorLut` strength) and `StreamingConfig` with
+   persisted settings and launch options, and resolve the quality ceiling
+   (section 12.17).
+2. **Drain world content.** Window, background, settings assets, meshes, procedural meshes,
    models, placements, shaders, textures, voxel worlds, block types, rooms.
 3. **Decode geometry.** Mesh payloads, room geometry, skinned geometry with
    skeletons and morph targets. Mesh sources owned by a non-start scene skip
@@ -1868,8 +1872,7 @@ to Ultra, re-resolving each launch. A named preset is a fixed ceiling; `Custom`
 imposes none.
 
 **The preset is a ceiling, never a floor.** It only lowers what the world
-authored. `GraphicsConfig` and `PostProcessConfig` default to the look capable
-hardware runs (TAA, ambient occlusion, reflections, SSGI, 4096-texel every-frame
+authored. The settings assets default to the look capable hardware runs (TAA, ambient occlusion, reflections, SSGI, 4096-texel every-frame
 shadows, 16x anisotropy), so a world that authors none of them is settled
 entirely by the preset; a world that wants a cheaper look turns effects off
 itself, which no ceiling can undo. Explicit per-setting user choices win over
@@ -2437,10 +2440,9 @@ scheduling controls:
 | Windows      | Above-normal priority, exempt from power throttling           | Normal priority, efficiency mode |
 | Linux        | No change                                                     | No change                      |
 
-`AppConfig.frame_priority` chooses which threads count as frame threads on
-Windows: `normal` (none raised), `main_threads` (main and sim), or `all_threads`
-(main, sim, and job workers; the default). A refused request is logged once and
-otherwise ignored.
+`AppConfig.frame_priority` chooses whether the frame threads are raised on
+Windows: `normal` (none raised) or `all_threads` (main, sim, and job workers; the
+default). A refused request is logged once and otherwise ignored.
 
 ### 23.3 The job pool
 

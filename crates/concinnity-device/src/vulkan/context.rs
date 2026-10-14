@@ -678,7 +678,7 @@ pub(super) struct FogState {
 }
 
 // Auto-exposure (EV adaptation). `resources` is `Some` only when
-// `PostProcessConfig.auto_exposure` is enabled; it holds the build + average
+// `Exposure.auto` is enabled; it holds the build + average
 // compute pipelines, histogram + output buffers, and the per-frame readback
 // buffers. `adaptation` carries the tunables, the authored EV bias and the EMA
 // target, and `last_elapsed` the previous frame's elapsed time used to derive
@@ -1006,7 +1006,7 @@ pub(super) struct VkHardware {
     // desktop driver keeps the plain layout.
     pub(super) update_after_bind: bool,
     // Resolved swapchain color-output mode, selected when the world's
-    // `PostProcessConfig.hdr_display` was on AND the surface advertised a
+    // `Display.hdr` was on AND the surface advertised a
     // matching HDR color space via the `VK_EXT_swapchain_colorspace` instance
     // extension. Two HDR flavors: `HdrEncoding::ExtendedLinear` runs the
     // swapchain in `R16G16B16A16_SFLOAT` + `EXTENDED_SRGB_LINEAR_EXT` (scRGB
@@ -1115,7 +1115,7 @@ pub(crate) struct VkContext {
     pub(super) pre_exposure: concinnity_core::gfx::auto_exposure::PreExposure,
 
     // Temporal anti-aliasing resources. `Some` only when the world's
-    // `PostProcessConfig` set `taa: true`; `None` skips the velocity pre-pass
+    // `AntiAliasing` set `mode: taa`; `None` skips the velocity pre-pass
     // and history resolve entirely (and the projection jitter with them).
     // Also forced `Some` when temporal upscaling is on (FSR consumes the
     // velocity pre-pass's motion + depth), in which case the TAA *resolve* is
@@ -1128,7 +1128,7 @@ pub(crate) struct VkContext {
     pub(super) post: super::post::PostSupport,
 
     // Temporal upscaling (FSR / DLSS / XeSS, behind `VkUpscaleBackend`). `Some`
-    // only when the world's `PostProcessConfig` set `temporal_upscaling: true`
+    // only when the world's `AntiAliasing` set `upscaling: true`
     // AND a backend resolved + built; `None` renders at native resolution
     // (`render_extent == swapchain.extent`). When `Some`, the scene renders at
     // the reduced `render_extent` and this pass reconstructs the swapchain
@@ -1142,7 +1142,7 @@ pub(crate) struct VkContext {
     pub(super) upscale_requested: crate::upscale_sdk::UpscaleRequest,
 
     // Screen-space ambient occlusion (GTAO) resources. `Some` only when the
-    // world's `PostProcessConfig` set `ssao: true`; `None` binds the
+    // world's `AmbientOcclusion` set `enabled: true`; `None` binds the
     // `ssao_white` 1×1 fallback at set 0 binding 6 so the main pass's SSAO
     // multiplier is a constant 1.0.
     pub(super) ssao: Option<SsaoResources>,
@@ -1161,7 +1161,7 @@ pub(crate) struct VkContext {
     pub(super) reflection_composite: Option<VkReflectionCompositePass>,
 
     // Screen-space global illumination. `Some` only when the world's
-    // `PostProcessConfig` selected `indirect_lighting: ssgi`. The pyramid,
+    // `IndirectLighting` selected `technique: ssgi`. The pyramid,
     // trace and composite run on the hdr_resolve RMW chain after the main pass, reusing
     // `ssr`'s pre-pass G-buffer.
     pub(super) ssgi: Option<SsgiResources>,

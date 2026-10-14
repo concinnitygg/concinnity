@@ -38,7 +38,7 @@ fn compile_auto_exposure_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec
 // Push-constant payload pushed at the top of every compute dispatch.
 // Owns the compute pipelines + GPU buffers + per-frame readback driving
 // the auto-exposure histogram path. Built only when the world's
-// `PostProcessConfig` opts in; the encoder is a no-op otherwise.
+// `Exposure` opts in; the encoder is a no-op otherwise.
 pub(in crate::vulkan) struct AutoExposureResources {
     // Build kernel: one thread per HDR-resolve pixel; merges per-threadgroup
     // local histograms into the global histogram SSBO.
@@ -75,7 +75,7 @@ pub(in crate::vulkan) struct AutoExposureResources {
 
 impl AutoExposureResources {
     // Build all auto-exposure resources. Called from `VkContext::new` only
-    // when `PostProcessConfig.auto_exposure` is enabled.
+    // when `Exposure.auto` is enabled.
     pub(in crate::vulkan) fn new(
         alloc: &DeviceAllocator,
         device: &VkDevice,

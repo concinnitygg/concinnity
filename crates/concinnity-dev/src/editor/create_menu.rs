@@ -225,7 +225,7 @@ mod tests {
         ] {
             assert!(types.contains(&expected), "{expected} missing: {types:?}");
         }
-        for excluded in ["Prop", "Sprite", "GraphicsConfig", "Window", "Material"] {
+        for excluded in ["Prop", "Sprite", "FramePacing", "Window", "Material"] {
             assert!(!types.contains(&excluded), "{excluded} offered: {types:?}");
         }
         let mut sorted = types.clone();

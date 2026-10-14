@@ -82,7 +82,7 @@ impl SettingsState {
     // cannot be re-queried here.
     fn relabel_preset_dependents(&self, ctx: &mut PipelineContext) {
         for row in &QUALITY_TOGGLES {
-            let on = (row.get)(&self.graphics.quality.post_config);
+            let on = (row.get)(&self.graphics.quality.effects);
             self.relabel_option(ctx, row.key, on as usize);
         }
         self.relabel_option(
@@ -91,11 +91,7 @@ impl SettingsState {
             settings::render_scale_index(self.graphics.quality.render_scale),
         );
         for row in &QUALITY_CYCLES {
-            self.relabel_option(
-                ctx,
-                row.key,
-                (row.index)(&self.graphics.quality.post_config),
-            );
+            self.relabel_option(ctx, row.key, (row.index)(&self.graphics.quality.effects));
         }
         for (key, idx) in [
             (
@@ -142,10 +138,10 @@ impl SettingsState {
         opts: RowOptions,
         op: SettingOp,
     ) -> &'static str {
-        let cur = (row.get)(&self.graphics.quality.post_config);
+        let cur = (row.get)(&self.graphics.quality.effects);
         let next = settings::cycle(cur as usize, opts.len(), op);
         let on = next == 1;
-        (row.set)(&mut self.graphics.quality.post_config, on);
+        (row.set)(&mut self.graphics.quality.effects, on);
         *(row.persisted.get_mut)(&mut cfg.graphics) = Some(on);
         self.opt_out_of_preset(ctx, cfg);
         let quality = self.graphics.quality_settings();
@@ -173,17 +169,18 @@ impl SettingsState {
         opts: RowOptions,
         op: SettingOp,
     ) -> &'static str {
-        let cur = (row.index)(&self.graphics.quality.post_config);
+        let cur = (row.index)(&self.graphics.quality.effects);
         let next = settings::cycle(cur, opts.len(), op);
-        (row.set)(&mut self.graphics.quality.post_config, next);
-        (row.persist)(&self.graphics.quality.post_config, &mut cfg.graphics);
+        (row.set)(&mut self.graphics.quality.effects, next);
+        (row.persist)(&self.graphics.quality.effects, &mut cfg.graphics);
         self.opt_out_of_preset(ctx, cfg);
         let quality = self.graphics.quality_settings();
         record_quality_apply(ops, quality);
         // The AA mode also drives the composite FXAA flag, which rides
         // PostProcessParams rather than the rebuild above.
         if row.key == SettingKey::AaMode {
-            self.graphics.post_process.fxaa = self.graphics.quality.post_config.aa_mode.fxaa_flag();
+            self.graphics.post_process.fxaa =
+                self.graphics.quality.effects.anti_aliasing.mode.fxaa_flag();
             let params = self.graphics.post_process;
             ops.record(move |backend| backend.update_post_process(params));
         }

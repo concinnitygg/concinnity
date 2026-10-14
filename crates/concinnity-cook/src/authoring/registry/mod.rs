@@ -513,7 +513,7 @@ macro_rules! define_registered_type {
             /// edit-or-add flow), `useful_blank` (meaningful when declared with
             /// only default args, so authoring tools offer a plain add), and
             /// `renders` (presence implies the world renders; drives the
-            /// GraphicsConfig companion injection at build time).
+            /// Window companion injection at build time).
             pub fn singleton(self) -> bool {
                 match self {
                     $( Self::$variant => __meta_singleton!($($meta)*) ),+
@@ -974,18 +974,18 @@ mod tests {
     // than failing the world.
     #[test]
     fn a_load_clamps_an_out_of_range_parameter() {
-        let ty = RegisteredType::parse("PostProcessConfig").unwrap();
+        let ty = RegisteredType::parse("IndirectLighting").unwrap();
         let back = ty
-            .normalized_args(&serde_json::json!({ "lut_strength": 3.0, "ssgi_rays": 0 }))
+            .normalized_args(&serde_json::json!({ "ambient_intensity": 30.0, "ssgi_rays": 0 }))
             .unwrap();
-        assert_eq!(back["lut_strength"], 1.0);
+        assert_eq!(back["ambient_intensity"], 16.0);
         assert_eq!(back["ssgi_rays"], 1);
         let baked = ty
-            .reserialize_args(&serde_json::json!({ "lut_strength": -2.0 }))
+            .reserialize_args(&serde_json::json!({ "ambient_intensity": -2.0 }))
             .unwrap();
-        let loaded: concinnity_core::components::PostProcessConfig =
+        let loaded: concinnity_core::components::IndirectLighting =
             postcard::from_bytes(&baked).unwrap();
-        assert_eq!(loaded.lut_strength, 0.0);
+        assert_eq!(loaded.ambient_intensity, 0.0);
     }
 
     // Convention guard for the asset-reference contract: a user-declarable
@@ -1303,9 +1303,20 @@ mod tests {
             flagged(RegisteredType::singleton),
             [
                 "Window",
-                "GraphicsConfig",
+                "FramePacing",
+                "Shadows",
+                "TextureFiltering",
+                "Background",
                 "CameraTrack",
-                "PostProcessConfig",
+                "AmbientOcclusion",
+                "Reflections",
+                "IndirectLighting",
+                "AntiAliasing",
+                "Exposure",
+                "Bloom",
+                "Vignette",
+                "Display",
+                "Culling",
                 "StreamingConfig",
                 "PhysicsConfig",
                 "FrameReport",
@@ -1324,7 +1335,6 @@ mod tests {
             flagged(RegisteredType::renders),
             [
                 "Window",
-                "GraphicsConfig",
                 "Prop",
                 "TextLabel",
                 "InstancedProp",

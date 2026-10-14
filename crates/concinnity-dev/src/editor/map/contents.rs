@@ -82,11 +82,7 @@ mod tests {
     fn bistro() -> Vec<WorldJsonlAsset> {
         vec![
             asset(RegisteredType::Scene, "bistro", json!({})),
-            asset(
-                RegisteredType::GraphicsConfig,
-                "GraphicsConfig#0",
-                json!({}),
-            ),
+            asset(RegisteredType::FramePacing, "FramePacing#0", json!({})),
             asset(
                 RegisteredType::SceneImport,
                 "SceneImport#0",
@@ -116,7 +112,7 @@ mod tests {
 
     #[test]
     fn a_place_holding_nothing_says_nothing() {
-        assert_eq!(held_by(&bistro(), "GraphicsConfig#0"), "");
+        assert_eq!(held_by(&bistro(), "FramePacing#0"), "");
     }
 
     // Membership is the arg, never the name: an entry bound to no place is not
@@ -169,6 +165,6 @@ mod tests {
     #[test]
     fn what_the_world_holds_loose_leaves_out_the_places_themselves() {
         let world = bistro();
-        assert_eq!(unplaced(&world, &places(&world)), "1 GraphicsConfig");
+        assert_eq!(unplaced(&world, &places(&world)), "1 FramePacing");
     }
 }

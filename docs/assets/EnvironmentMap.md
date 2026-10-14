@@ -18,7 +18,7 @@ with a hot specular highlight. A panorama inside a `.glb` is a display
 image whose brightest value is white; it is read literally, with the sRGB
 curve inverted and white landing at 1.0 radiance. That makes it an exact
 backdrop and a soft, low-contrast fill light, never a key light. Raise
-[PostProcessConfig](PostProcessConfig.md)'s `ambient_intensity` to lift the
+[IndirectLighting](IndirectLighting.md)'s `ambient_intensity` to lift the
 level rather than expecting the bake to invent range the file lacks.
 
 **`prefilter_face_size` note:** this controls both the reflection detail and
@@ -38,7 +38,7 @@ shows it along that pixel's view direction, at infinite distance, so it
 never clips against the camera's far plane and never moves as the camera
 travels. Set `background` to `false` to use the map for image-based
 lighting only; the background is then
-[GraphicsConfig](GraphicsConfig.md)'s `clear_color`, as it is in a world
+[Background](Background.md)'s `color`, as it is in a world
 with no `EnvironmentMap`. A world uses one map; extra declarations are
 ignored.
 

@@ -215,14 +215,14 @@ impl VkContext {
             })
             .transpose()?;
 
-        // SSAO (only when PostProcessConfig opted in). Rebuilds the depth
+        // SSAO (only when the world opted in). Rebuilds the depth
         // copy, kernel + blur.
         let ssao_rebuilt = rebuild_if_live!(
             self.ssao.is_some(),
             concinnity_core::render::post::ssao::build_pipelines(&self.post_device(0))
         );
 
-        // SSR (only when PostProcessConfig opted in). Rebuilds the resolve.
+        // SSR (only when the world opted in). Rebuilds the resolve.
         let ssr_rebuilt = rebuild_if_live!(
             self.ssr.is_some(),
             concinnity_core::render::post::ssr::build_pipeline(&self.post_device(0))
@@ -251,7 +251,7 @@ impl VkContext {
             )
         );
 
-        // TAA (only when PostProcessConfig opted in). Rebuilds the resolve
+        // TAA (only when the world opted in). Rebuilds the resolve
         // pipeline; the velocity channel lives on the unified G-buffer pre-pass.
         let taa_rebuilt = rebuild_if_live!(
             self.taa.is_some(),

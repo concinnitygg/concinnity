@@ -106,7 +106,7 @@ pub(crate) struct CullState {
     // phase-2 cull reads it. Private storage, never CPU-touched.
     pub status_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     // Two-pass Hi-Z occlusion toggle, resolved from
-    // `PostProcessConfig.occlusion_two_pass`.
+    // `Culling.two_pass_occlusion`.
     pub two_pass_occlusion: bool,
     // Hi-Z (depth-mip pyramid) used by the cull kernel for occlusion culling.
     // Built at the end of `draw_frame`, consumed by the next frame's cull

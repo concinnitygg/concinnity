@@ -28,7 +28,7 @@ pub(super) struct SceneInputs<'a> {
     pub(super) media: &'a MediaPayloads<'a>,
     pub(super) local_lights: &'a [GpuLight],
     pub(super) area_lights: &'a [AreaLightData],
-    // Degree from GraphicsConfig.anisotropy (default 8).
+    // Degree from TextureFiltering.anisotropy (default 8).
     pub(super) anisotropy: u32,
     // Whether the bindless static pass binds the texture pool, whose capacity
     // is capped.

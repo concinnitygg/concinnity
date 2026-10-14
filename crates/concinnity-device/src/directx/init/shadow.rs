@@ -35,7 +35,7 @@ pub(super) fn build_shadow(
     // (every shadow compare passes, so fully lit), declared as Texture2DArray
     // so the shader's binding type stays identical between disabled and
     // enabled cases.
-    // CSM is gated on `shadow_map_size` (from GraphicsConfig; 0 disables
+    // CSM is gated on `Shadows.map_size` (0 disables
     // shadows). The casters draw through the GPU-driven shadow pipeline the
     // cull builds.
     let effective_shadow_size = shadows.map_size;

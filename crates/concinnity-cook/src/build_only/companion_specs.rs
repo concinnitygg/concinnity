@@ -14,7 +14,7 @@ use crate::authoring::registry::RegisteredType;
 // already present.
 #[derive(Debug, Clone)]
 pub(crate) struct CompanionSpec {
-    // Default name for the injected asset (e.g. "GraphicsConfig").
+    // Default name for the injected asset (e.g. "Window").
     pub name: &'static str,
     // The asset type to inject.
     pub asset_type: RegisteredType,
@@ -82,13 +82,11 @@ mod tests {
         assert!(companions_for(RegisteredType::PhysicsConfig).is_empty());
     }
 
-    // A GraphicsConfig no longer marks a world as rendering -- content does --
-    // but declaring one still states the intent, so it keeps pulling in a
-    // Window. That is what leaves an authored world that tunes the renderer
-    // before it has any geometry still opening one.
+    // Content decides whether a world renders, so a settings asset tuning the
+    // renderer implies no Window of its own.
     #[test]
-    fn graphics_config_still_implies_a_window() {
-        let specs = companions_for(RegisteredType::GraphicsConfig);
-        assert!(specs.iter().any(|c| c.asset_type == RegisteredType::Window));
+    fn a_settings_asset_implies_no_window() {
+        assert!(companions_for(RegisteredType::Shadows).is_empty());
+        assert!(companions_for(RegisteredType::AntiAliasing).is_empty());
     }
 }

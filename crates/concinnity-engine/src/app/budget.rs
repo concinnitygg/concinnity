@@ -152,11 +152,7 @@ mod tests {
 
     #[test]
     fn main_threads_take_the_configured_priority() {
-        for priority in [
-            FramePriority::Normal,
-            FramePriority::MainThreads,
-            FramePriority::AllThreads,
-        ] {
+        for priority in [FramePriority::Normal, FramePriority::AllThreads] {
             let tb = ThreadBudget::compute(0, priority);
             assert_eq!(tb.frame_priority, priority);
             assert_eq!(tb.main_thread_role(), ThreadRole::Frame(priority));

@@ -161,6 +161,7 @@ impl RenderArgs {
         LaunchRequest {
             capture: false,
             dev_loop,
+            max_frames: None,
             validation,
             quality_preset: self.quality_preset.map(Into::into),
             rt_dynamic: self.rt_dynamic.map(Into::into),
@@ -263,7 +264,7 @@ pub(crate) struct RunArgs {
     #[arg(long)]
     pub(crate) screenshot: Option<String>,
 
-    /// Stop after this many frames (overrides GraphicsConfig.max_frames)
+    /// Stop after this many frames
     #[arg(long)]
     pub(crate) frames: Option<u64>,
 
@@ -450,6 +451,7 @@ mod tests {
             LaunchRequest {
                 capture: false,
                 dev_loop: true,
+                max_frames: None,
                 validation: Some(true),
                 quality_preset: Some(QualityPreset::Ultra),
                 rt_dynamic: Some(RtDynamicMode::Rebuild),

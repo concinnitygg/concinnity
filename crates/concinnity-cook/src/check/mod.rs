@@ -161,9 +161,8 @@ mod tests {
     }
 
     #[test]
-    fn graphics_config_with_full_render_stack_passes_graphics_rules() {
+    fn a_full_render_stack_passes_graphics_rules() {
         let assets = vec![
-            asset("gfx", RegisteredType::GraphicsConfig, serde_json::json!({})),
             asset("win", RegisteredType::Window, serde_json::json!({})),
             asset(
                 "scene_shader",

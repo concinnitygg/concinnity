@@ -14,9 +14,8 @@
 //! binds cross the seam too, which is what lets a pass's state machine and its
 //! target lifecycle live in this crate.
 //!
-//! Each effect also owns its settings resolve: `from_config` turns the authored
-//! [`PostProcessConfig`](crate::components::PostProcessConfig) fields into
-//! clamped settings, or `None` when the effect is off, and the settings build
+//! Each effect also owns its settings resolve: `from_config` turns the fields
+//! of its authored asset into clamped settings, or `None` when the effect is off, and the settings build
 //! the per-frame uniform once the camera is known.
 
 /// Bloom: the prefilter and the octave chain, written once.

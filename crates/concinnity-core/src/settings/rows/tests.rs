@@ -3,7 +3,7 @@ use crate::components::{AaMode, PassResolution};
 use crate::render::backend::{GpuProfile, GpuTier};
 use crate::settings::options;
 use crate::settings::quality::{QualityPreset, resolve_ceiling};
-use crate::settings::resolve::overlay_quality_overrides;
+use crate::settings::resolve::{QualityEffects, overlay_quality_overrides};
 use alloc::vec::Vec;
 
 fn low_ceiling() -> QualityCeiling {
@@ -57,13 +57,13 @@ fn lookups_find_their_own_rows_only() {
 fn toggle_rows_round_trip_through_set_and_persist() {
     for row in &QUALITY_TOGGLES {
         for on in [true, false] {
-            let mut cfg = PostProcessConfig::default();
+            let mut cfg = QualityEffects::default();
             (row.set)(&mut cfg, on);
             assert_eq!((row.get)(&cfg), on, "{:?} get after set", row.key);
 
             let mut user = UserGraphicsSettings::default();
             *(row.persisted.get_mut)(&mut user) = Some(on);
-            let mut overlaid = PostProcessConfig::default();
+            let mut overlaid = QualityEffects::default();
             (row.set)(&mut overlaid, !on);
             overlay_quality_overrides(&mut overlaid, &user);
             assert_eq!((row.get)(&overlaid), on, "{:?} overlay", row.key);
@@ -76,7 +76,7 @@ fn cycle_rows_round_trip_through_set_and_persist() {
     for row in &QUALITY_CYCLES {
         let count = options(row.key).unwrap().len();
         for index in 0..count {
-            let mut cfg = PostProcessConfig::default();
+            let mut cfg = QualityEffects::default();
             (row.set)(&mut cfg, index);
             assert_eq!((row.index)(&cfg), index, "{:?} get after set", row.key);
 
@@ -87,7 +87,7 @@ fn cycle_rows_round_trip_through_set_and_persist() {
             let mut cleared = user.clone();
             (row.clear)(&mut cleared);
             assert!(!(row.overridden)(&cleared), "{:?} cleared", row.key);
-            let mut overlaid = PostProcessConfig::default();
+            let mut overlaid = QualityEffects::default();
             (row.set)(&mut overlaid, (index + 1) % count);
             (row.overlay)(&mut overlaid, &user);
             assert_eq!((row.index)(&overlaid), index, "{:?} overlay", row.key);
@@ -99,21 +99,20 @@ fn cycle_rows_round_trip_through_set_and_persist() {
 #[test]
 fn cycle_clamp_lowers_to_the_ceiling() {
     let ceiling = low_ceiling();
-    let mut cfg = PostProcessConfig {
-        aa_mode: AaMode::Taa,
-        ssgi_resolution: PassResolution::Full,
-        ssgi_rays: 4,
-        reflection_blur_resolution: PassResolution::Full,
-        ..Default::default()
-    };
+    let mut cfg = QualityEffects::default();
+    cfg.anti_aliasing.mode = AaMode::Taa;
+    cfg.indirect_lighting.ssgi_resolution = PassResolution::Full;
+    cfg.indirect_lighting.ssgi_rays = 4;
+    cfg.reflections.blur_resolution = PassResolution::Full;
     for row in &QUALITY_CYCLES {
         (row.clamp)(&mut cfg, &ceiling);
     }
-    assert_eq!(cfg.aa_mode, ceiling.aa_mode);
-    assert_eq!(cfg.ssgi_resolution, ceiling.ssgi_resolution);
-    assert_eq!(cfg.ssgi_rays, ceiling.ssgi_rays);
+    assert_eq!(cfg.anti_aliasing.mode, ceiling.aa_mode);
+    let gi = &cfg.indirect_lighting;
+    assert_eq!(gi.ssgi_resolution, ceiling.ssgi_resolution);
+    assert_eq!(gi.ssgi_rays, ceiling.ssgi_rays);
     assert_eq!(
-        cfg.reflection_blur_resolution,
+        cfg.reflections.blur_resolution,
         ceiling.reflection_blur_resolution
     );
 }
@@ -127,7 +126,7 @@ fn cycle_clamp_never_raises() {
     for row in &QUALITY_CYCLES {
         let count = options(row.key).unwrap().len();
         for index in 0..count {
-            let mut cfg = PostProcessConfig::default();
+            let mut cfg = QualityEffects::default();
             (row.set)(&mut cfg, index);
             (row.clamp)(&mut cfg, &low);
             let lowered = (row.index)(&cfg);

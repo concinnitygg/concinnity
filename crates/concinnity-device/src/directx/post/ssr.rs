@@ -29,7 +29,7 @@ pub(in crate::directx) struct SsrResolve {
     pub(in crate::directx) output: PostTarget,
 }
 
-// SSR resources held by `DxContext` when `PostProcessConfig.ssr` is on, or when
+// SSR resources held by `DxContext` when `Reflections.screen_space` is on, or when
 // SSGI or RT reflections are (all three reuse the unified G-buffer pre-pass).
 // The resolve half is `Some` only when the SSR resolve itself is authored on.
 pub(in crate::directx) struct SsrResources {

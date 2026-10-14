@@ -23,7 +23,7 @@ pub(crate) type MtlTaaPass = TaaPass<MtlPostPipeline, MtlPostTarget>;
 // jitter counter is here rather than in the shared pass because it also drives
 // the MetalFX upscaler, which runs in the resolve's place.
 pub(crate) struct TaaState {
-    // Toggle resolved from `PostProcessConfig.aa_mode`; false skips the TAA pass
+    // Toggle resolved from `AntiAliasing.mode`; false skips the TAA pass
     // and the projection jitter entirely.
     pub enabled: bool,
     // The resolve. `Some` only when TAA is on (and not bypassed by the

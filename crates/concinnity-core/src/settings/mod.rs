@@ -22,7 +22,8 @@ pub mod user;
 pub use key::{SettingKey, SettingKind};
 pub use quality::{QualityCeiling, QualityPreset};
 pub use resolve::{
-    ResolvedQuality, ResolvedSettings, SceneOverride, SettingsDiff, SettingsLayers, WorldSettings,
+    QualityEffects, ResolvedQuality, ResolvedSettings, SceneOverride, SettingsDiff, SettingsLayers,
+    WorldAssets, WorldSettings,
 };
 pub use user::UserGraphicsSettings;
 

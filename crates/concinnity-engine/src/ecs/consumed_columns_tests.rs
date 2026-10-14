@@ -9,7 +9,7 @@
 //! each component it can build without a graphics device and asserts the
 //! census agrees with what the registry claims.
 //!
-//! The graphics drains (`Window`, `GraphicsConfig`, `Model`, `Decal`, and the
+//! The graphics drains (`Window`, `Shadows`, `Model`, `Decal`, and the
 //! rest of the `GraphicsSystem` init sweep) need a device to reach, so they
 //! stay covered by the flag alone.
 

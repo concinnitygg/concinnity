@@ -10,7 +10,7 @@ use concinnity_core::components::GamepadButton;
 use concinnity_core::components::GamepadMap;
 use concinnity_core::components::UpscalerBackend;
 use concinnity_core::components::{
-    AudioCommand, ControlsCommand, IndirectLighting, InputKey, SettingCommand, SettingOp,
+    AudioCommand, ControlsCommand, IndirectTechnique, InputKey, SettingCommand, SettingOp,
     ShadowUpdate, Sprite, TextLabel, WindowMode,
 };
 use concinnity_core::ecs::asset_id::AssetId;
@@ -89,15 +89,16 @@ impl Fixture {
             distance: settings::shadow_distance_at(0),
             cascades: settings::shadow_cascades_at(0),
         };
-        let authored = WorldSettings {
-            shadow_map_size: settings::shadow_resolution_at(0),
-            shadow_cadence,
-            anisotropy: settings::anisotropy_at(0),
-            ..WorldSettings::default()
-        };
+        let mut authored = WorldSettings::default();
+        authored.shadows.map_size = settings::shadow_resolution_at(0);
+        authored.shadows.update = shadow_cadence.update;
+        authored.shadows.distance = shadow_cadence.distance;
+        authored.shadows.cascades = shadow_cadence.cascades;
+        authored.texture_filtering.anisotropy = settings::anisotropy_at(0);
         let graphics = ResolvedSettings {
             quality: ResolvedQuality {
-                post_config: Default::default(),
+                effects: Default::default(),
+                hdr_metering: false,
                 render_scale: settings::render_scale_at(0),
                 shadow_map_size: settings::shadow_resolution_at(0),
                 shadow_cadence,
@@ -973,7 +974,10 @@ fn aa_mode_cycle_refreshes_the_composite_fxaa_flag() {
         )),
     )]);
 
-    assert_eq!(f.state.graphics.quality.post_config.aa_mode, AaMode::Fxaa);
+    assert_eq!(
+        f.state.graphics.quality.effects.anti_aliasing.mode,
+        AaMode::Fxaa
+    );
     assert_eq!(f.state.graphics.post_process.fxaa, 1.0);
     assert!(f.saw(&Call::UpdatePostProcess));
 
@@ -1144,9 +1148,9 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
     // An authored look with the expensive features on, then a user override that
     // turned one off: picking a preset must re-derive from the authored baseline,
     // not from the override.
-    f.state.authored.post_config.ssao = true;
-    f.state.authored.post_config.ssr = true;
-    f.state.graphics.quality.post_config.ssao = false;
+    f.state.authored.effects.ambient_occlusion.enabled = true;
+    f.state.authored.effects.reflections.screen_space = true;
+    f.state.graphics.quality.effects.ambient_occlusion.enabled = false;
     f.state
         .cycle_value_labels
         .insert(SettingKey::Ssao, TOGGLE_LABEL);
@@ -1162,7 +1166,7 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
 
     assert_eq!(f.state.quality_preset, QualityPreset::Ultra);
     assert!(
-        f.state.graphics.quality.post_config.ssao,
+        f.state.graphics.quality.effects.ambient_occlusion.enabled,
         "the authored feature is restored, not the cleared override"
     );
     assert!(f.saw(&Call::ApplyQualitySettings));
@@ -1196,8 +1200,8 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
 #[test]
 fn graphics_quality_preset_keeps_the_look_tuning_sliders() {
     let mut f = Fixture::new();
-    f.state.authored.post_config.ssao_radius = 0.5;
-    f.state.graphics.quality.post_config.ssao_radius = 1.5;
+    f.state.authored.effects.ambient_occlusion.radius = 0.5;
+    f.state.graphics.quality.effects.ambient_occlusion.radius = 1.5;
     f.state
         .settings_cache
         .as_mut()
@@ -1214,7 +1218,10 @@ fn graphics_quality_preset_keeps_the_look_tuning_sliders() {
         persist: true,
     }]);
 
-    assert_eq!(f.state.graphics.quality.post_config.ssao_radius, 1.5);
+    assert_eq!(
+        f.state.graphics.quality.effects.ambient_occlusion.radius,
+        1.5
+    );
     assert_eq!(f.persisted().graphics.ssao_radius, Some(1.5));
 }
 
@@ -1223,9 +1230,9 @@ fn graphics_quality_preset_keeps_the_look_tuning_sliders() {
 #[test]
 fn low_preset_clamps_the_authored_features_off() {
     let mut f = Fixture::new();
-    f.state.authored.post_config.ssao = true;
-    f.state.authored.post_config.indirect_lighting = IndirectLighting::Ssgi;
-    f.state.graphics.quality.post_config = f.state.authored.post_config.clone();
+    f.state.authored.effects.ambient_occlusion.enabled = true;
+    f.state.authored.effects.indirect_lighting.technique = IndirectTechnique::Ssgi;
+    f.state.graphics.quality.effects = f.state.authored.effects.clone();
 
     f.apply(vec![SettingCommand {
         setting: SettingKey::GraphicsQuality,
@@ -1242,8 +1249,8 @@ fn low_preset_clamps_the_authored_features_off() {
     );
     assert!(!ceiling.ssgi, "the Low ceiling disallows SSGI");
     assert_eq!(
-        f.state.graphics.quality.post_config.indirect_lighting,
-        IndirectLighting::Ibl,
+        f.state.graphics.quality.effects.indirect_lighting.technique,
+        IndirectTechnique::Ibl,
         "the authored feature is clamped off"
     );
 }

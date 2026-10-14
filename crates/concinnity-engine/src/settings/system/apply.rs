@@ -339,8 +339,8 @@ impl SettingsState {
                 }
                 // The stored config is what a later rebuild re-derives from; the
                 // live push mutates the backend's settings without one.
-                GraphicsSliderTarget::PostConfig { field, .. } => {
-                    *(field.get_mut)(&mut self.graphics.quality.post_config) = stored;
+                GraphicsSliderTarget::Effect { field, .. } => {
+                    *(field.get_mut)(&mut self.graphics.quality.effects) = stored;
                     let quality = self.graphics.quality_settings();
                     ops.record(move |backend| backend.update_quality_params(quality));
                 }

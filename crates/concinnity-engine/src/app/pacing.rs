@@ -1,7 +1,7 @@
 //! CPU frame pacer for the FPS cap. Runs at the runtime level, before the world
 //! steps, so no system pays the sleep inside its own step time and the cap
 //! applies whichever systems the world built. The cap value comes from the
-//! `FrameRateCap` resource (published by GraphicsSystem from GraphicsConfig +
+//! `FrameRateCap` resource (published by GraphicsSystem from FramePacing +
 //! the live settings row), lowered to a background rate while the
 //! `WindowMinimized` resource says nothing drawn can be seen.
 

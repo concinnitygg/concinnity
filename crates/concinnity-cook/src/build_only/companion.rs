@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn a_world_supplied_companion_is_recorded_as_an_override() {
         let mut assets = vec![
-            serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
+            serde_json::json!({"type":"TextLabel","args":{"$id":"gfx","content":"hi"}}),
             // "Window" is the name the Window companion injects under.
             serde_json::json!({"type":"Window","args":{"$id":"Window"}}),
         ];
@@ -144,7 +144,8 @@ mod tests {
     // rounds see it in the world and skip the spec.
     #[test]
     fn an_injected_companion_is_not_recorded_as_an_override() {
-        let mut assets = vec![serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}})];
+        let mut assets =
+            vec![serde_json::json!({"type":"TextLabel","args":{"$id":"gfx","content":"hi"}})];
         let mut report = ExpandReport::default();
         inject_companions(&mut assets, &mut report);
         assert!(
@@ -164,7 +165,7 @@ mod tests {
     #[test]
     fn a_differently_named_asset_of_the_same_type_is_not_an_override() {
         let mut assets = vec![
-            serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
+            serde_json::json!({"type":"TextLabel","args":{"$id":"gfx","content":"hi"}}),
             serde_json::json!({"type":"Window","args":{"$id":"main_window"}}),
         ];
         let mut report = ExpandReport::default();
@@ -200,20 +201,6 @@ mod tests {
             assets
                 .iter()
                 .any(|v| registered_type(v) == Some(RegisteredType::Window))
-        );
-    }
-
-    // A world that draws nothing gains no renderer config either: the cook
-    // stopped injecting one once content, not a marker, decided the run mode.
-    #[test]
-    fn nothing_injects_a_graphics_config() {
-        let mut assets =
-            vec![serde_json::json!({"type":"TextLabel","args":{"$id":"t","content":"hi"}})];
-        inject(&mut assets);
-        assert!(
-            !assets
-                .iter()
-                .any(|v| registered_type(v) == Some(RegisteredType::GraphicsConfig))
         );
     }
 
@@ -293,8 +280,9 @@ mod tests {
     }
 
     #[test]
-    fn graphics_config_injects_window() {
-        let mut assets = vec![serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}})];
+    fn a_text_label_injects_a_window() {
+        let mut assets =
+            vec![serde_json::json!({"type":"TextLabel","args":{"$id":"gfx","content":"hi"}})];
         inject(&mut assets);
         assert!(
             assets
@@ -309,7 +297,7 @@ mod tests {
     fn a_typeless_entry_is_skipped() {
         let mut assets = vec![
             serde_json::json!({"args":{"$id":"junk"}}),
-            serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
+            serde_json::json!({"type":"TextLabel","args":{"$id":"gfx","content":"hi"}}),
         ];
         inject(&mut assets);
         assert!(

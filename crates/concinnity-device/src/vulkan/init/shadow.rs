@@ -17,8 +17,8 @@ use crate::vulkan::resources::create_descriptor_set_layout;
 use crate::vulkan::swapchain::create_shadow_framebuffers;
 use crate::vulkan::texture::{create_sampler_shadow, create_shadow_map_array};
 
-// Build the cascade shadow state. CSM is gated on `shadow_map_size` (from
-// GraphicsConfig; 0 disables shadows); the casters draw through the GPU-driven
+// Build the cascade shadow state. CSM is gated on `Shadows.map_size` (0
+// disables shadows); the casters draw through the GPU-driven
 // shadow pipeline the cull builds.
 pub(super) fn build_shadow(
     gpu: &InitGpu<'_>,

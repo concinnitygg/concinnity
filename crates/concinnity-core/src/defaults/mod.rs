@@ -8,8 +8,8 @@
 //! components cross-reference each other by come from the range
 //! [`AssetId::MINTED_BASE`] reserves.
 //!
-//! A world that renders -- one declaring a [`GraphicsConfig`] -- receives the
-//! HUD and loading defaults. The physics default is gated on physics content
+//! A world with a [`Window`] to draw into receives the HUD and loading
+//! defaults; the build gives one to every world holding anything to draw. The physics default is gated on physics content
 //! instead, so the headless tier, which has no renderer and needs no HUD, gets
 //! the [`PhysicsConfig`](crate::components::PhysicsConfig) its simulation
 //! already runs on and nothing else.
@@ -25,7 +25,7 @@ mod hud;
 mod loading;
 mod physics;
 
-use crate::components::{EngineDefaults, GraphicsConfig};
+use crate::components::{EngineDefaults, Window};
 use crate::ecs::asset_id::AssetIdsExhausted;
 use crate::ecs::asset_id::{AssetId, MintedIds};
 use crate::ecs::{FontHandle, PipelineContext};
@@ -53,9 +53,9 @@ fn inject_defaults(
     if toggles.physics_config {
         physics::inject(ctx);
     }
-    // The rest exists to be drawn, and a world with no GraphicsConfig has no
-    // renderer to draw it.
-    if ctx.query::<GraphicsConfig>().next().is_none() {
+    // The rest exists to be drawn, and a world with no window has nothing to
+    // draw it into.
+    if ctx.query::<Window>().next().is_none() {
         return Ok(());
     }
     if toggles.hud {

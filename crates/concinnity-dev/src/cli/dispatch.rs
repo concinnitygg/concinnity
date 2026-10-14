@@ -34,8 +34,10 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
                     concinnity_core::ecs::ScheduleMode::Parallel
                 },
                 screenshot: args.screenshot.clone(),
-                max_frames: args.frames,
-                launch: args.render.launch(args.validation, false),
+                launch: concinnity_engine::app::run::LaunchRequest {
+                    max_frames: args.frames,
+                    ..args.render.launch(args.validation, false)
+                },
             },
         ),
         Commands::Debug(args) => {

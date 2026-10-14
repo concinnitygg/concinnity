@@ -32,7 +32,7 @@ pub(super) struct BillboardSpot {
 }
 
 // name -> interned id -> live entity, the same resolve the gizmo uses. An
-// asset whose component a start-time drain consumed (Window, GraphicsConfig,
+// asset whose component a start-time drain consumed (Window, Shadows,
 // Scene, ...) has no entity left to resolve to.
 pub(super) fn entity_by_name(world: &World, name: &str) -> Option<Entity> {
     world.entity_of(asset_id::lookup(name)?)

@@ -11,10 +11,9 @@ use concinnity_core::components::Children;
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::GlobalTransform;
 use concinnity_core::components::HDR_MULTISAMPLE_COUNT;
-use concinnity_core::components::IndirectLighting;
+use concinnity_core::components::IndirectTechnique;
 use concinnity_core::components::Lifetime;
 use concinnity_core::components::Parent;
-use concinnity_core::components::PostProcessConfig;
 use concinnity_core::components::ShaderPrograms;
 use concinnity_core::components::SkeletonPose;
 use concinnity_core::components::SkinnedMesh;
@@ -23,10 +22,10 @@ use concinnity_core::components::Transform;
 use concinnity_core::components::UiAction;
 use concinnity_core::components::UpscaleQuality;
 use concinnity_core::components::compiled_programs;
+use concinnity_core::components::{Background, Culling};
 use concinnity_core::components::{
-    Camera3D, DespawnRequest, GraphicsConfig, HitRegion, Material, Prop, RenderHandle,
-    ReparentRequest, Scene, SceneCommand, Shader, SpawnRequest, Sprite, StreamingConfig, TextLabel,
-    Window,
+    Camera3D, DespawnRequest, HitRegion, Material, Prop, RenderHandle, ReparentRequest, Scene,
+    SceneCommand, Shader, SpawnRequest, Sprite, StreamingConfig, TextLabel, Window,
 };
 use concinnity_core::ecs::Entity;
 use concinnity_core::ecs::FontHandle;
@@ -70,7 +69,9 @@ use crate::gfx::mock_backend::{
     Call, MockBackend, MockState, TestHooks, recording_hooks, recording_hooks_with,
 };
 use concinnity_core::settings::quality::{QualityPreset, resolve_ceiling};
-use concinnity_core::settings::{SettingsLayers, UserGraphicsSettings, WorldSettings};
+use concinnity_core::settings::{
+    QualityEffects, SettingsLayers, UserGraphicsSettings, WorldAssets, WorldSettings,
+};
 
 const MESH: AssetId = AssetId(1);
 const TEX: AssetId = AssetId(2);
@@ -289,9 +290,8 @@ fn titled_scene(title: &str) -> WorldBuilder {
         height: 360,
         ..Default::default()
     });
-    b.push(GraphicsConfig {
-        clear_color: [0.1, 0.2, 0.3, 1.0],
-        ..Default::default()
+    b.push(Background {
+        color: [0.1, 0.2, 0.3, 1.0],
     });
     b.push_shaders();
     b.push(Camera3D::bake(Default::default()));
@@ -567,7 +567,7 @@ fn pending_backend_hdr_change_forces_full_rebuild() {
     let transplant = MockBackend::transplant(
         Arc::clone(&state_t),
         Some(SwapchainConfig {
-            // The scene world requests no HDR (PostProcessConfig default); an
+            // The scene world requests no HDR (the Display default); an
             // HDR-requesting transplant is a swapchain change.
             frames_in_flight: 2,
             hdr_display: true,
@@ -666,7 +666,6 @@ fn ui_only_world_trims_scene_features() {
     let (state, hooks) = recording_hooks();
     let mut b = WorldBuilder::new();
     b.push(Window::default());
-    b.push(GraphicsConfig::default());
     b.push_shaders();
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
@@ -720,7 +719,7 @@ fn low_preset_ceiling_clamps_quality_knobs() {
     let mut world = scene_builder().build();
     init_graphics(&mut world, hooks);
 
-    // The authored GraphicsConfig defaults (4096 / 80 / 4 / 16) are clamped
+    // The authored Shadows / TextureFiltering defaults (4096 / 80 / 4 / 16) are clamped
     // under the Low ceiling; the authored baselines are kept for a later
     // preset up-shift.
     let s = lock(&state);
@@ -730,10 +729,10 @@ fn low_preset_ceiling_clamps_quality_knobs() {
     assert_eq!(init.shadows.cadence.cascades, 2);
     assert_eq!(init.anisotropy, 4);
     let live = settings_state(&world);
-    assert_eq!(live.authored.shadow_map_size, 4096);
-    assert_eq!(live.authored.shadow_cadence.distance, 80);
-    assert_eq!(live.authored.shadow_cadence.cascades, 4);
-    assert_eq!(live.authored.anisotropy, 16);
+    assert_eq!(live.authored.shadows.map_size, 4096);
+    assert_eq!(live.authored.shadows.distance, 80);
+    assert_eq!(live.authored.shadows.cascades, 4);
+    assert_eq!(live.authored.texture_filtering.anisotropy, 16);
 }
 
 fn post_settings_under(
@@ -748,12 +747,11 @@ fn post_settings_under(
 
 #[test]
 fn post_settings_hdr_samples_follow_the_clamped_aa_mode() {
-    let post = PostProcessConfig {
-        aa_mode: AaMode::Taa,
-        temporal_upscaling: false,
-        ..Default::default()
-    };
-    let world = WorldSettings::new(None, Some(&post), None);
+    let post = effects(|e| {
+        e.anti_aliasing.mode = AaMode::Taa;
+        e.anti_aliasing.upscaling = false;
+    });
+    let world = effects_world(&post);
     let user = UserGraphicsSettings::default();
 
     let unclamped = post_settings_under(&world, &user, QualityPreset::Custom);
@@ -766,7 +764,7 @@ fn post_settings_hdr_samples_follow_the_clamped_aa_mode() {
 }
 
 #[test]
-fn post_settings_upscale_scale_is_native_without_a_post_process_config() {
+fn post_settings_upscale_scale_is_native_without_an_anti_aliasing() {
     let user = UserGraphicsSettings {
         render_scale: Some(UpscaleQuality::Performance),
         ..Default::default()
@@ -775,7 +773,7 @@ fn post_settings_upscale_scale_is_native_without_a_post_process_config() {
     let native = post_settings_under(&undeclared, &user, QualityPreset::Custom);
     assert_eq!(native.upscale_scale, 1.0);
 
-    let declared = WorldSettings::new(None, Some(&PostProcessConfig::default()), None);
+    let declared = effects_world(&QualityEffects::default());
     let scaled = post_settings_under(&declared, &user, QualityPreset::Custom);
     assert_eq!(scaled.upscale_scale, UpscaleQuality::Performance.scale());
 }
@@ -806,7 +804,6 @@ fn a_world_without_a_shader_renders_with_the_engine_program() {
     let (state, hooks) = recording_hooks();
     let mut b = WorldBuilder::new();
     b.push(Window::default());
-    b.push(GraphicsConfig::default());
     b.push_textured_quad(MESH, TEX, MAT, PROP);
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
@@ -825,7 +822,6 @@ fn a_world_with_a_shader_hands_its_programs_to_the_backend() {
     let (state, hooks) = recording_hooks();
     let mut b = WorldBuilder::new();
     b.push(Window::default());
-    b.push(GraphicsConfig::default());
     b.push_shaders();
     b.push_textured_quad(MESH, TEX, MAT, PROP);
     let mut world = b.build();
@@ -1417,14 +1413,14 @@ fn max_frames_stops_the_run() {
     let (_state, hooks) = recording_hooks();
     let mut b = WorldBuilder::new();
     b.push(Window::default());
-    b.push(GraphicsConfig {
-        max_frames: Some(2),
-        ..Default::default()
-    });
     b.push_shaders();
     b.push(Camera3D::bake(Default::default()));
     b.push_textured_quad(MESH, TEX, MAT, PROP);
     let mut world = b.build();
+    world.insert_resource(LaunchRequest {
+        max_frames: Some(2),
+        ..Default::default()
+    });
     let mut gs = init_graphics(&mut world, hooks);
 
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
@@ -1443,14 +1439,14 @@ fn pipelined_max_frames_counts_frames_sent() {
     let (_state, hooks) = recording_hooks();
     let mut b = WorldBuilder::new();
     b.push(Window::default());
-    b.push(GraphicsConfig {
-        max_frames: Some(3),
-        ..Default::default()
-    });
     b.push_shaders();
     b.push(Camera3D::bake(Default::default()));
     b.push_textured_quad(MESH, TEX, MAT, PROP);
     let mut world = b.build();
+    world.insert_resource(LaunchRequest {
+        max_frames: Some(3),
+        ..Default::default()
+    });
     let mut gs = init_graphics(&mut world, hooks);
 
     let (snapshot_tx, snapshot_rx) = std::sync::mpsc::sync_channel(0);
@@ -2100,13 +2096,38 @@ fn system_trait_delegates_to_init_and_step() {
     assert!(shown.contains("failed: false"), "got {shown}");
 }
 
-// The scene world plus a caller-shaped PostProcessConfig. The persisted-override
-// overlay and the upscaler are deliberately gated on the world declaring one
-// (overriding a feature is meaningless without its tunables), so any test of
-// those paths must author a config rather than lean on the defaults.
-fn post_config_scene(cfg: PostProcessConfig) -> WorldBuilder {
+// Quality effects at their defaults, adjusted by `f`.
+fn effects(f: impl FnOnce(&mut QualityEffects)) -> QualityEffects {
+    let mut effects = QualityEffects::default();
+    f(&mut effects);
+    effects
+}
+
+// The authored settings of a world declaring `effects` and a `Culling`.
+fn effects_world(effects: &QualityEffects) -> WorldSettings {
+    WorldSettings::new(WorldAssets {
+        ambient_occlusion: Some(&effects.ambient_occlusion),
+        reflections: Some(&effects.reflections),
+        indirect_lighting: Some(&effects.indirect_lighting),
+        anti_aliasing: Some(&effects.anti_aliasing),
+        exposure: Some(&effects.exposure),
+        culling: Some(&Culling::default()),
+        ..Default::default()
+    })
+}
+
+// The scene world declaring caller-shaped quality effects, and a `Culling`.
+// The upscaler's render scale is gated on the world declaring an
+// `AntiAliasing`, so any test of that path must author one rather than lean on
+// the defaults.
+fn effects_scene(effects: QualityEffects) -> WorldBuilder {
     let mut b = scene_builder();
-    b.push(cfg);
+    b.push(effects.ambient_occlusion);
+    b.push(effects.reflections);
+    b.push(effects.indirect_lighting);
+    b.push(effects.anti_aliasing);
+    b.push(effects.exposure);
+    b.push(Culling::default());
     b
 }
 
@@ -2138,7 +2159,7 @@ fn profile_at(tier: GpuTier) -> GpuProfile {
 // is no ceiling, so each override stands exactly as stored.
 #[test]
 fn persisted_post_process_overrides_win_over_authored_config() {
-    use concinnity_core::components::{AaMode, IndirectLighting, PassResolution};
+    use concinnity_core::components::{AaMode, IndirectTechnique, PassResolution};
 
     let mut settings = crate::config::Settings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Custom);
@@ -2174,14 +2195,13 @@ fn persisted_post_process_overrides_win_over_authored_config() {
     settings.graphics.auto_exposure_speed = Some(3.0);
 
     let (state, hooks) = recording_hooks_with(settings, GpuProfile::UNKNOWN);
-    let mut world = post_config_scene(PostProcessConfig {
+    let mut world = effects_scene(effects(|e| {
         // Deliberately the opposite of every override above, so a value that
         // survives to the backend can only have come from the store.
-        aa_mode: AaMode::Off,
-        ssao: false,
-        exposure_ev: -3.0,
-        ..Default::default()
-    })
+        e.anti_aliasing.mode = AaMode::Off;
+        e.ambient_occlusion.enabled = false;
+        e.exposure.ev = -3.0;
+    }))
     .build();
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
@@ -2201,35 +2221,59 @@ fn persisted_post_process_overrides_win_over_authored_config() {
 
     let live = settings_state(&world);
     // Toggles.
-    assert!(live.graphics.quality.post_config.ssao);
-    assert!(live.graphics.quality.post_config.ssr);
-    assert!(live.graphics.quality.post_config.ray_traced_reflections);
+    assert!(live.graphics.quality.effects.ambient_occlusion.enabled);
+    assert!(live.graphics.quality.effects.reflections.screen_space);
+    assert!(live.graphics.quality.effects.reflections.ray_traced);
     assert_eq!(
-        live.graphics.quality.post_config.indirect_lighting,
-        IndirectLighting::Ssgi
+        live.graphics.quality.effects.indirect_lighting.technique,
+        IndirectTechnique::Ssgi
     );
-    assert!(live.graphics.quality.post_config.auto_exposure);
+    assert!(live.graphics.quality.effects.exposure.auto);
     // Cycles.
-    assert_eq!(live.graphics.quality.post_config.aa_mode, AaMode::Taa);
     assert_eq!(
-        live.graphics.quality.post_config.ssgi_resolution,
+        live.graphics.quality.effects.anti_aliasing.mode,
+        AaMode::Taa
+    );
+    assert_eq!(
+        live.graphics
+            .quality
+            .effects
+            .indirect_lighting
+            .ssgi_resolution,
         PassResolution::Full
     );
-    assert_eq!(live.graphics.quality.post_config.ssgi_rays, 2);
+    assert_eq!(live.graphics.quality.effects.indirect_lighting.ssgi_rays, 2);
     assert_eq!(
-        live.graphics.quality.post_config.reflection_blur_resolution,
+        live.graphics.quality.effects.reflections.blur_resolution,
         PassResolution::Full
     );
     // Sub-quality sliders.
-    assert_eq!(live.graphics.quality.post_config.ssao_radius, 0.9);
-    assert_eq!(live.graphics.quality.post_config.ssao_intensity, 2.0);
-    assert_eq!(live.graphics.quality.post_config.ssr_intensity, 0.4);
-    assert_eq!(live.graphics.quality.post_config.ssr_max_distance, 20.0);
-    assert_eq!(live.graphics.quality.post_config.ssgi_intensity, 1.5);
-    assert_eq!(live.graphics.quality.post_config.ssgi_max_distance, 4.0);
-    assert_eq!(live.graphics.quality.post_config.auto_exposure_min_ev, -4.0);
-    assert_eq!(live.graphics.quality.post_config.auto_exposure_max_ev, 4.0);
-    assert_eq!(live.graphics.quality.post_config.auto_exposure_speed, 3.0);
+    assert_eq!(live.graphics.quality.effects.ambient_occlusion.radius, 0.9);
+    assert_eq!(
+        live.graphics.quality.effects.ambient_occlusion.intensity,
+        2.0
+    );
+    assert_eq!(live.graphics.quality.effects.reflections.intensity, 0.4);
+    assert_eq!(live.graphics.quality.effects.reflections.max_distance, 20.0);
+    assert_eq!(
+        live.graphics
+            .quality
+            .effects
+            .indirect_lighting
+            .ssgi_intensity,
+        1.5
+    );
+    assert_eq!(
+        live.graphics
+            .quality
+            .effects
+            .indirect_lighting
+            .ssgi_max_distance,
+        4.0
+    );
+    assert_eq!(live.graphics.quality.effects.exposure.auto_min_ev, -4.0);
+    assert_eq!(live.graphics.quality.effects.exposure.auto_max_ev, 4.0);
+    assert_eq!(live.graphics.quality.effects.exposure.auto_speed, 3.0);
     // Post-process params: exposure is stored as EV and applied as 2^EV.
     assert_eq!(
         live.graphics.post_process.exposure, 4.0,
@@ -2248,8 +2292,8 @@ fn persisted_post_process_overrides_win_over_authored_config() {
     );
     // The world's pristine config is kept as the baseline a live preset change
     // re-clamps from, untouched by the overrides.
-    assert_eq!(live.authored.post_config.aa_mode, AaMode::Off);
-    assert!(!live.authored.post_config.ssao);
+    assert_eq!(live.authored.effects.anti_aliasing.mode, AaMode::Off);
+    assert!(!live.authored.effects.ambient_occlusion.enabled);
 }
 
 // A weak-tier ceiling forces the world's authored effects off -- but only where
@@ -2257,20 +2301,19 @@ fn persisted_post_process_overrides_win_over_authored_config() {
 // later preset up-shift can restore exactly what the world asked for.
 #[test]
 fn low_preset_forces_authored_effects_off_but_keeps_the_baseline() {
-    use concinnity_core::components::{AaMode, IndirectLighting};
+    use concinnity_core::components::{AaMode, IndirectTechnique};
 
     let mut settings = crate::config::Settings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Low);
     let (state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::Integrated));
-    let mut world = post_config_scene(PostProcessConfig {
-        ssao: true,
-        ssr: true,
-        ray_traced_reflections: true,
-        indirect_lighting: IndirectLighting::Ssgi,
-        auto_exposure: true,
-        aa_mode: AaMode::Taa,
-        ..Default::default()
-    })
+    let mut world = effects_scene(effects(|e| {
+        e.ambient_occlusion.enabled = true;
+        e.reflections.screen_space = true;
+        e.reflections.ray_traced = true;
+        e.indirect_lighting.technique = IndirectTechnique::Ssgi;
+        e.exposure.auto = true;
+        e.anti_aliasing.mode = AaMode::Taa;
+    }))
     .build();
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
@@ -2286,21 +2329,24 @@ fn low_preset_forces_authored_effects_off_but_keeps_the_baseline() {
     }
 
     let live = settings_state(&world);
-    assert!(!live.graphics.quality.post_config.ssao);
-    assert!(!live.graphics.quality.post_config.ssr);
-    assert!(!live.graphics.quality.post_config.ray_traced_reflections);
+    assert!(!live.graphics.quality.effects.ambient_occlusion.enabled);
+    assert!(!live.graphics.quality.effects.reflections.screen_space);
+    assert!(!live.graphics.quality.effects.reflections.ray_traced);
     assert_eq!(
-        live.graphics.quality.post_config.indirect_lighting,
-        IndirectLighting::Ibl
+        live.graphics.quality.effects.indirect_lighting.technique,
+        IndirectTechnique::Ibl
     );
-    assert_ne!(live.graphics.quality.post_config.aa_mode, AaMode::Taa);
+    assert_ne!(
+        live.graphics.quality.effects.anti_aliasing.mode,
+        AaMode::Taa
+    );
     // Auto-exposure is cheap enough that even the weakest ceiling permits it, so
     // the world's authored choice stands.
-    assert!(live.graphics.quality.post_config.auto_exposure);
+    assert!(live.graphics.quality.effects.exposure.auto);
     // The authored baseline survives the clamp, so an up-shift restores it.
-    assert!(live.authored.post_config.ssao);
-    assert!(live.authored.post_config.ssr);
-    assert_eq!(live.authored.post_config.aa_mode, AaMode::Taa);
+    assert!(live.authored.effects.ambient_occlusion.enabled);
+    assert!(live.authored.effects.reflections.screen_space);
+    assert_eq!(live.authored.effects.anti_aliasing.mode, AaMode::Taa);
 }
 
 // An explicit per-row override beats the preset ceiling: the user asked for this
@@ -2315,28 +2361,27 @@ fn an_explicit_override_survives_the_preset_ceiling() {
     settings.graphics.ssao = Some(true);
     settings.graphics.aa_mode = Some(AaMode::Taa);
     let (_state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::Integrated));
-    let mut world = post_config_scene(PostProcessConfig {
-        ssao: true,
-        ssr: true,
-        aa_mode: AaMode::Taa,
-        ..Default::default()
-    })
+    let mut world = effects_scene(effects(|e| {
+        e.ambient_occlusion.enabled = true;
+        e.reflections.screen_space = true;
+        e.anti_aliasing.mode = AaMode::Taa;
+    }))
     .build();
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
     let live = settings_state(&world);
     assert!(
-        live.graphics.quality.post_config.ssao,
+        live.graphics.quality.effects.ambient_occlusion.enabled,
         "the explicit SSAO choice wins"
     );
     assert_eq!(
-        live.graphics.quality.post_config.aa_mode,
+        live.graphics.quality.effects.anti_aliasing.mode,
         AaMode::Taa,
         "explicit AA mode wins"
     );
     assert!(
-        !live.graphics.quality.post_config.ssr,
+        !live.graphics.quality.effects.reflections.screen_space,
         "a row the user never touched still clamps under the ceiling"
     );
 }
@@ -2348,15 +2393,14 @@ fn an_explicit_override_survives_the_preset_ceiling() {
 // result. Both halves are asserted on the same GPU and the same authored world.
 #[test]
 fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
-    let authored = PostProcessConfig {
-        ray_traced_reflections: true,
-        ..Default::default()
-    };
+    let authored = effects(|e| {
+        e.reflections.ray_traced = true;
+    });
     let mut settings = crate::config::Settings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Auto);
 
     let (clamped, hooks) = recording_hooks_with(settings.clone(), profile_at(GpuTier::MidDiscrete));
-    let mut world = post_config_scene(authored.clone()).build();
+    let mut world = effects_scene(authored.clone()).build();
     init_graphics(&mut world, hooks);
     assert_eq!(settings_state(&world).quality_preset, QualityPreset::Auto);
     assert!(
@@ -2365,7 +2409,7 @@ fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
     );
 
     let (forced, hooks) = recording_hooks_with(settings, profile_at(GpuTier::MidDiscrete));
-    let mut world = post_config_scene(authored).build();
+    let mut world = effects_scene(authored).build();
     world.insert_resource(LaunchRequest {
         quality_preset: Some(QualityPreset::Ultra),
         ..Default::default()
@@ -2427,7 +2471,7 @@ fn a_forced_dlss_preset_reaches_the_backend_and_the_menu_unpersisted() {
     saved_settings.graphics.dlss_preset = Some(DlssPreset::K);
     let launch = |forced: Option<DlssPreset>| {
         let (state, hooks) = recording_hooks_with(saved_settings.clone(), GpuProfile::UNKNOWN);
-        let mut b = post_config_scene(Default::default());
+        let mut b = effects_scene(Default::default());
         push_settings_row(&mut b, "dlss_preset", "next", ROW_LABEL);
         let mut world = b.build();
         world.insert_resource(LaunchRequest {
@@ -2569,23 +2613,22 @@ fn a_high_ceiling_never_enables_what_the_world_turned_off() {
     let mut settings = crate::config::Settings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Ultra);
     let (_state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::HighDiscrete));
-    let mut world = post_config_scene(PostProcessConfig {
-        ssao: false,
-        ssr: false,
-        ray_traced_reflections: false,
-        ..Default::default()
-    })
+    let mut world = effects_scene(effects(|e| {
+        e.ambient_occlusion.enabled = false;
+        e.reflections.screen_space = false;
+        e.reflections.ray_traced = false;
+    }))
     .build();
     init_graphics(&mut world, hooks);
 
     let live = settings_state(&world);
     assert_eq!(live.quality_preset, QualityPreset::Ultra);
     assert!(
-        !live.graphics.quality.post_config.ssao,
+        !live.graphics.quality.effects.ambient_occlusion.enabled,
         "a feature turned off stays off"
     );
-    assert!(!live.graphics.quality.post_config.ssr);
-    assert!(!live.graphics.quality.post_config.ray_traced_reflections);
+    assert!(!live.graphics.quality.effects.reflections.screen_space);
+    assert!(!live.graphics.quality.effects.reflections.ray_traced);
 }
 
 // The other direction: a world that authors nothing takes the schema defaults,
@@ -2599,10 +2642,13 @@ fn the_top_tier_runs_the_default_stack_for_a_world_that_authors_nothing() {
     init_graphics(&mut world, hooks);
 
     let live = settings_state(&world);
-    assert!(live.graphics.quality.post_config.ssao);
-    assert!(live.graphics.quality.post_config.ssr);
-    assert!(live.graphics.quality.post_config.ray_traced_reflections);
-    assert_eq!(live.graphics.quality.post_config.aa_mode, AaMode::Taa);
+    assert!(live.graphics.quality.effects.ambient_occlusion.enabled);
+    assert!(live.graphics.quality.effects.reflections.screen_space);
+    assert!(live.graphics.quality.effects.reflections.ray_traced);
+    assert_eq!(
+        live.graphics.quality.effects.anti_aliasing.mode,
+        AaMode::Taa
+    );
 }
 
 // And the tier below it clamps that same default stack down, which is how a
@@ -2616,14 +2662,17 @@ fn a_low_tier_clamps_the_default_stack_off() {
     init_graphics(&mut world, hooks);
 
     let live = settings_state(&world);
-    assert!(!live.graphics.quality.post_config.ssao);
-    assert!(!live.graphics.quality.post_config.ssr);
-    assert!(!live.graphics.quality.post_config.ray_traced_reflections);
+    assert!(!live.graphics.quality.effects.ambient_occlusion.enabled);
+    assert!(!live.graphics.quality.effects.reflections.screen_space);
+    assert!(!live.graphics.quality.effects.reflections.ray_traced);
     assert_eq!(
-        live.graphics.quality.post_config.indirect_lighting,
-        IndirectLighting::Ibl
+        live.graphics.quality.effects.indirect_lighting.technique,
+        IndirectTechnique::Ibl
     );
-    assert_eq!(live.graphics.quality.post_config.aa_mode, AaMode::Fxaa);
+    assert_eq!(
+        live.graphics.quality.effects.anti_aliasing.mode,
+        AaMode::Fxaa
+    );
 }
 
 // Under `Auto` the ceiling re-resolves from the detected tier each launch: a
@@ -2686,7 +2735,7 @@ fn persisted_display_and_system_overrides_reach_the_backend() {
     settings.graphics.show_vram = Some(false);
 
     let (state, hooks) = recording_hooks_with(settings, GpuProfile::UNKNOWN);
-    let mut b = post_config_scene(Default::default());
+    let mut b = effects_scene(Default::default());
     b.push(StreamingConfig::default());
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
@@ -2812,7 +2861,7 @@ fn settings_rows_show_their_live_values_at_init() {
 
     // A classified GPU, so the Auto preset resolves to a named tier below.
     let (_state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::MidDiscrete));
-    let mut b = post_config_scene(Default::default());
+    let mut b = effects_scene(Default::default());
     // (key, verb, label id) for a spread across every value-label arm: booleans,
     // discrete numeric levels, enums, a quality toggle, and a cycle dropdown.
     let rows: Vec<(&str, &str, AssetId)> = vec![
@@ -2904,7 +2953,7 @@ fn slider_rows_sync_their_handle_and_label_to_the_live_value() {
     settings.graphics.vignette = Some(0.5);
     let (_state, hooks) = recording_hooks_with(settings, GpuProfile::UNKNOWN);
 
-    let mut b = post_config_scene(Default::default());
+    let mut b = effects_scene(Default::default());
     // A drag region spanning x = 0..100 with a 10-wide handle: the handle travels
     // the 90 units between the track's start and its own right edge.
     for (key, handle, label) in [
@@ -2980,7 +3029,7 @@ fn slider_rows_sync_their_handle_and_label_to_the_live_value() {
 #[test]
 fn every_owned_slider_key_recovers_a_live_value() {
     let (_state, hooks) = recording_hooks();
-    let mut b = post_config_scene(Default::default());
+    let mut b = effects_scene(Default::default());
     let keys = [
         "exposure",
         "bloom_intensity",
@@ -3160,7 +3209,7 @@ fn a_capability_gated_row_grays_out_its_whole_scroll_row() {
         selectable_upscaler: false,
         ..backend::DeviceCapabilities::ALL
     };
-    let mut b = post_config_scene(Default::default());
+    let mut b = effects_scene(Default::default());
     // The gated row: name + value labels, both listed in one scroll row.
     push_settings_row(&mut b, "upscale_backend", "next", AssetId(600));
     b.push_identified(
@@ -3232,7 +3281,7 @@ fn the_dlss_preset_row_follows_whether_dlss_is_selectable() {
         let mut profile = GpuProfile::UNKNOWN;
         profile.vendor = vendor;
         let (_, hooks) = recording_hooks_with(crate::config::Settings::default(), profile);
-        let mut b = post_config_scene(Default::default());
+        let mut b = effects_scene(Default::default());
         push_settings_row(&mut b, "dlss_preset", "next", AssetId(600));
         let mut world = b.build();
         let gs = init_graphics(&mut world, hooks);
@@ -4529,9 +4578,8 @@ fn an_instanced_vertex_shader_payload_reaches_the_backend() {
         height: 360,
         ..Default::default()
     });
-    b.push(GraphicsConfig {
-        clear_color: [0.1, 0.2, 0.3, 1.0],
-        ..Default::default()
+    b.push(Background {
+        color: [0.1, 0.2, 0.3, 1.0],
     });
     b.push_shader(&["vertex_main_bindless", "fragment_main_bindless"]);
     b.push(Camera3D::bake(Default::default()));
@@ -4566,7 +4614,6 @@ fn a_shader_without_a_payload_fails_init() {
     let (_state, hooks) = recording_hooks();
     let mut b = WorldBuilder::new();
     b.push(Window::default());
-    b.push(GraphicsConfig::default());
     b.push(Shader {
         locator: None,
         ..Default::default()
@@ -4632,7 +4679,7 @@ fn skinned_lod_alternates_rebase_onto_their_slot_vertex_region() {
     );
 }
 
-// A world declaring no Window / GraphicsConfig still builds against the system's
+// A world declaring no Window or settings assets still builds against the system's
 // defaults: the components are optional, and their absence is not an error.
 #[test]
 fn a_world_without_a_window_or_config_builds_on_the_defaults() {

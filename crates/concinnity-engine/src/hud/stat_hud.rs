@@ -107,13 +107,13 @@ fn edr_text(max_edr: Option<f32>) -> String {
 //
 // `EV` is the adapted exposure value the auto-exposure EMA settled on for
 // the most recent frame (the multiplier the post-process stack uses is
-// `2^ev`). Filled when the world's `PostProcessConfig` enables auto-exposure;
+// `2^ev`). Filled when the world's `Exposure` enables auto-exposure;
 // the chip stays blank otherwise so a world without auto-exposure has no orphan
 // reading.
 //
 // `EDR` is the active panel's maximum extended-range color-component
 // multiplier (e.g. `EDR x2.0` on an HDR400 panel, `x8.0` on HDR1000).
-// Filled on Metal when `PostProcessConfig.hdr_display = true` AND the
+// Filled on Metal when `Display.hdr = true` AND the
 // platform reports an EDR headroom above SDR reference white; the chip
 // stays blank on SDR or when the HDR request fell back.
 //

@@ -1,8 +1,8 @@
 //! Compiles a ColorLut component's args into the binary payload the renderer
 //! uploads as a 3D color-grading LUT. The runtime samples this LUT in the
 //! composite (post-process) pass with the display-referred sRGB color as the
-//! texture coordinate, blending the graded result by `PostProcessConfig`'s
-//! `lut_strength`.
+//! texture coordinate, blending the graded result by the `ColorLut`'s
+//! `strength`.
 //!
 //! Two source formats are supported, picked by file extension:
 //!
@@ -18,6 +18,7 @@
 //! u32  magic     = b"LUT3" = 0x3354554c
 //! u32  size      LUT edge length n; the runtime texture is n x n x n
 //! u32  format_id = 0  (RGBA8)
+//! f32  strength  the authored `strength`, clamped to [0, 1]
 //! n*n*n*4 bytes  raw RGBA8, x(red) fastest, then y(green), then z(blue)
 //! ```
 //!
@@ -57,7 +58,16 @@ pub(crate) fn compile_color_lut_payload(
     let (size, data) = decode(&concinnity_host::store::source::resolve_source_path(
         source, assets_dir,
     ))?;
-    Ok(serialize(size, &data))
+    Ok(serialize(size, color_lut_strength(args), &data))
+}
+
+// The blend `strength` a `ColorLut`'s args declare, clamped into its range.
+fn color_lut_strength(args: &serde_json::Value) -> f32 {
+    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+    if !(0.0..=1.0).contains(&strength) {
+        tracing::warn!("ColorLut.strength: {strength} is outside its range, clamped");
+    }
+    strength.clamp(0.0, 1.0)
 }
 
 /// Decode the ColorLut source at `path` the same way `compile_color_lut_payload`
@@ -293,13 +303,28 @@ LUT_3D_SIZE 2
         let src = write_cube(&dir, CUBE_2);
         let payload =
             compile_color_lut_payload(&serde_json::json!({"source": src}), None).expect("compile");
-        // Header: magic "LUT3", size, format 0 (RGBA8), then 2^3 texels.
+        // Header: magic "LUT3", size, format 0 (RGBA8), strength, then 2^3 texels.
         assert_eq!(&payload[0..4], &0x3354554cu32.to_le_bytes());
         assert_eq!(&payload[4..8], &2u32.to_le_bytes());
         assert_eq!(&payload[8..12], &0u32.to_le_bytes());
-        assert_eq!(payload.len(), 12 + 8 * 4);
-        assert_eq!(&payload[12..16], &[0, 0, 0, 255]);
-        assert_eq!(&payload[40..44], &[255, 255, 255, 255]);
+        assert_eq!(&payload[12..16], &1.0f32.to_le_bytes());
+        assert_eq!(payload.len(), 16 + 8 * 4);
+        assert_eq!(&payload[16..20], &[0, 0, 0, 255]);
+        assert_eq!(&payload[44..48], &[255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn compile_color_lut_payload_carries_the_clamped_strength() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = write_cube(&dir, CUBE_2);
+        let strength = |s: f64| {
+            let args = serde_json::json!({"source": src, "strength": s});
+            let payload = compile_color_lut_payload(&args, None).expect("compile");
+            concinnity_core::bake::color_lut::strength(&payload).expect("header")
+        };
+        assert_eq!(strength(0.4), 0.4);
+        assert_eq!(strength(2.0), 1.0);
+        assert_eq!(strength(-1.0), 0.0);
     }
 
     // The build's asset search root is a parameter, so a bare `source` resolves
@@ -330,11 +355,11 @@ LUT_3D_SIZE 2
             compile_color_lut_payload(&serde_json::json!({"source": src}), None).expect("compile");
         assert_eq!(&payload[0..4], &0x3354554cu32.to_le_bytes());
         assert_eq!(&payload[4..8], &2u32.to_le_bytes());
-        assert_eq!(payload.len(), 12 + 8 * 4);
+        assert_eq!(payload.len(), 16 + 8 * 4);
         // Texel (r=0, g=0, b=0) is strip pixel (0, 0).
-        assert_eq!(&payload[12..16], &[0, 0, 42, 255]);
+        assert_eq!(&payload[16..20], &[0, 0, 42, 255]);
         // The last texel (r=1, g=1, b=1) is strip pixel (3, 1).
-        assert_eq!(&payload[40..44], &[30, 10, 42, 255]);
+        assert_eq!(&payload[44..48], &[30, 10, 42, 255]);
     }
 
     #[test]

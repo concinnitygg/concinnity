@@ -344,7 +344,7 @@ pub struct LightUniforms {
     /// Live entries in `point`.
     pub num_point: i32,
     /// Multiplier on the indirect (IBL / flat-fallback) ambient term in the main
-    /// pass, resolved from `PostProcessConfig.ambient_intensity`. 1.0 leaves the
+    /// pass, resolved from `IndirectLighting.ambient_intensity`. 1.0 leaves the
     /// physically derived ambient untouched; higher values lift fill in shadowed
     /// areas the directional light cannot reach. Occupies the first of the two
     /// trailing pad words, so the 400-byte layout is unchanged.
@@ -533,7 +533,7 @@ pub struct ShadowUniforms {
     /// split comparison never selects an unrendered cascade.
     pub cascade_splits: [f32; NUM_SHADOW_CASCADES],
     /// How many of the `NUM_SHADOW_CASCADES` slots are live this frame (1..=4,
-    /// from `GraphicsConfig.shadow_cascades`). The array capacity stays 4; only
+    /// from `Shadows.cascades`). The array capacity stays 4; only
     /// the first `active_cascades` are split, rendered, and sampled. The fragment
     /// shader bounds both its cascade fallback and its cross-cascade blend by this
     /// so it never reads a slot the CPU did not render.
@@ -676,8 +676,9 @@ pub struct TextUniforms {
     pub _pad: [f32; 2],
 }
 
-/// The authored half of [`PostProcessParams`]: everything a `PostProcessConfig`
-/// (or a settings slider) resolves to. Carries no display-output flag, so a
+/// The authored half of [`PostProcessParams`]: everything the `Bloom`,
+/// `Exposure`, `Vignette`, `ColorLut` and `AntiAliasing` assets (or a settings
+/// slider) resolve to. Carries no display-output flag, so a
 /// live push can never disturb the EDR path the backend negotiated at init.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct PostProcessTunables {
@@ -688,7 +689,7 @@ pub struct PostProcessTunables {
     /// Quadratic soft-knee width below the threshold.
     pub bloom_knee: f32,
     /// Linear exposure multiplier applied to HDR radiance before the bloom
-    /// prefilter and the composite tonemap. Resolved from `exposure_ev` as
+    /// prefilter and the composite tonemap. Resolved from `Exposure.ev` as
     /// `2^ev`, so 1.0 is neutral.
     pub exposure: f32,
     /// Vignette strength in `[0, 1]`. 0 disables the corner darkening.
@@ -699,12 +700,12 @@ pub struct PostProcessTunables {
     pub lut_strength: f32,
     /// FXAA edge-filter flag on the SDR path. `1.0` runs the composite's FXAA
     /// pass; `0.0` skips it (the `Off` anti-aliasing mode). Resolved from
-    /// `PostProcessConfig.aa_mode`: on for `Fxaa` and `Taa`, off for `Off`.
+    /// `AntiAliasing.mode`: on for `Fxaa` and `Taa`, off for `Off`.
     pub fxaa: f32,
 }
 
 impl PostProcessTunables {
-    /// Matches `PostProcessConfig::default()`: used when no asset is declared.
+    /// What the assets' defaults resolve to: used when none is declared.
     pub const DEFAULT: Self = Self {
         bloom_intensity: 0.6,
         bloom_threshold: 1.0,
@@ -716,7 +717,7 @@ impl PostProcessTunables {
     };
 }
 
-/// Post-process tunables resolved from the `PostProcessConfig` asset (or its
+/// Post-process tunables resolved from the settings assets (or their
 /// defaults), plus the two display-output flags the backend resolves from the
 /// display's EDR capability at init. Pushed verbatim to the bloom prefilter and
 /// composite fragment shaders, so the layout must stay in sync with the
@@ -731,7 +732,7 @@ pub struct PostProcessParams {
     /// Quadratic soft-knee width below the threshold.
     pub bloom_knee: f32,
     /// Linear exposure multiplier applied to HDR radiance before the bloom
-    /// prefilter and the composite tonemap. Resolved from `exposure_ev` as
+    /// prefilter and the composite tonemap. Resolved from `Exposure.ev` as
     /// `2^ev`, so 1.0 is neutral.
     pub exposure: f32,
     /// Vignette strength in `[0, 1]`. 0 disables the corner darkening.
@@ -756,7 +757,7 @@ pub struct PostProcessParams {
     pub pq_output: f32,
     /// FXAA edge-filter flag on the SDR path. `1.0` runs the composite's
     /// FXAA pass; `0.0` skips it (the `Off` anti-aliasing mode). Resolved
-    /// from `PostProcessConfig.aa_mode`: on for `Fxaa` and `Taa`, off for
+    /// from `AntiAliasing.mode`: on for `Fxaa` and `Taa`, off for
     /// `Off`. Always ignored on the HDR path, which never runs FXAA. Stored
     /// as a float so the shader branches on `> 0.5` without a cast.
     pub fxaa: f32,
@@ -798,7 +799,7 @@ impl PostProcessParams {
 /// `CompositeParams` struct there. 60 bytes.
 ///
 /// The fade is not a `PostProcessParams` field because that struct is resolved
-/// from the `PostProcessConfig` asset and re-pushed whenever a settings slider
+/// from the settings assets and re-pushed whenever a settings slider
 /// moves, which would reset an in-flight fade. It is also pushed to the bloom
 /// prefilter, which has no use for it.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]

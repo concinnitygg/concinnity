@@ -12,7 +12,7 @@ use concinnity_core::render::post::ssgi::{SsgiInputs, SsgiPass, SsgiPipelines};
 use crate::vulkan::context::VkContext;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkPostDevice, post_extent};
 
-// SSGI resources held by `VkContext` when `PostProcessConfig.indirect_lighting`
+// SSGI resources held by `VkContext` when `IndirectLighting.technique`
 // is `ssgi`.
 pub(in crate::vulkan) struct SsgiResources {
     // Resolved authored tunables; turned into a per-frame `SsgiParams` push.

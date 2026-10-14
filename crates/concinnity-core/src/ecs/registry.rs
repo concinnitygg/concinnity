@@ -66,7 +66,10 @@ macro_rules! for_each_component {
             // minted by a running world.
             stored: {
                 Window            => $crate::components::Window { gen, external, singleton, renders, consumed },
-                GraphicsConfig    => $crate::components::GraphicsConfig { gen, external, singleton, renders, consumed },
+                FramePacing       => $crate::components::FramePacing { gen, external, singleton, consumed },
+                Shadows           => $crate::components::Shadows { gen, external, singleton, consumed },
+                TextureFiltering  => $crate::components::TextureFiltering { gen, external, singleton, consumed },
+                Background        => $crate::components::Background { gen, external, singleton, consumed },
                 Shader            => $crate::components::Shader { gen, external, compiled, consumed },
                 Camera3D          => $crate::components::Camera3D { gen, external, useful_blank, live, args: Camera3D },
                 CameraTrack       => $crate::components::CameraTrack { gen, external, singleton, args: CameraTrack },
@@ -88,7 +91,15 @@ macro_rules! for_each_component {
                 BlockType         => $crate::components::BlockType { gen, external, useful_blank, consumed },
                 VoxelChunk        => $crate::components::VoxelChunk { gen, external, compiled, validate: voxel_chunk, consumed },
                 InstancedProp     => $crate::components::InstancedProp { gen, external, renders, validate: instanced_prop, consumed },
-                PostProcessConfig => $crate::components::PostProcessConfig { gen, external, singleton, consumed },
+                AmbientOcclusion  => $crate::components::AmbientOcclusion { gen, external, singleton, consumed },
+                Reflections       => $crate::components::Reflections { gen, external, singleton, consumed },
+                IndirectLighting  => $crate::components::IndirectLighting { gen, external, singleton, consumed },
+                AntiAliasing      => $crate::components::AntiAliasing { gen, external, singleton, consumed },
+                Exposure          => $crate::components::Exposure { gen, external, singleton, consumed },
+                Bloom             => $crate::components::Bloom { gen, external, singleton, consumed },
+                Vignette          => $crate::components::Vignette { gen, external, singleton, consumed },
+                Display           => $crate::components::Display { gen, external, singleton, consumed },
+                Culling           => $crate::components::Culling { gen, external, singleton, consumed },
                 Animation         => $crate::components::Animation { gen, external, consumed },
                 SkeletonPose      => $crate::components::SkeletonPose { runtime, build: skeleton_pose },
                 StreamingConfig   => $crate::components::StreamingConfig { gen, external, singleton, consumed },
@@ -440,10 +451,10 @@ mod tests {
     fn validation_runs_only_where_an_entry_declares_a_clamp() {
         use crate::components::SdfVolume;
 
-        let plain = ComponentAsset::from(Transform::default()).validated();
+        let (plain, _) = ComponentAsset::from(Transform::default()).validated();
         assert_eq!(plain.tag(), ComponentTag::Transform);
 
-        let clamped = ComponentAsset::from(Prop::default()).validated();
+        let (clamped, _) = ComponentAsset::from(Prop::default()).validated();
         assert_eq!(clamped.tag(), ComponentTag::Prop);
 
         // A medium writes no depth, so validation forces its caster off; that
@@ -454,7 +465,7 @@ mod tests {
             max_steps: 9999,
             ..Default::default()
         };
-        let ComponentAsset::SdfVolume(baked) = ComponentAsset::from(volume).validated() else {
+        let (ComponentAsset::SdfVolume(baked), _) = ComponentAsset::from(volume).validated() else {
             panic!("the value keeps its variant through validation");
         };
         assert!(!baked.cast_shadows);
@@ -462,6 +473,61 @@ mod tests {
             baked.max_steps,
             crate::components::sdf_volume::SDF_MAX_STEPS_CEILING
         );
+    }
+
+    // A typed value takes the range clamps a cooked one does, and reports
+    // each value it moved instead of logging it.
+    #[test]
+    fn validation_clamps_ranged_fields_and_reports_them() {
+        use crate::components::AmbientOcclusion;
+        use crate::ecs::asset_fields::ClampedParam;
+
+        let authored = AmbientOcclusion {
+            intensity: 9.0,
+            radius: 0.25,
+            ..Default::default()
+        };
+        let (ComponentAsset::AmbientOcclusion(ao), clamped) =
+            ComponentAsset::from(authored).validated()
+        else {
+            panic!("the value keeps its variant through validation");
+        };
+        assert_eq!(ao.intensity, 4.0);
+        assert_eq!(ao.radius, 0.25);
+        assert_eq!(
+            clamped,
+            [ClampedParam {
+                key: "intensity",
+                from: 9.0,
+                to: 4.0,
+            }]
+        );
+
+        let (_, none) = ComponentAsset::from(AmbientOcclusion::default()).validated();
+        assert!(none.is_empty(), "{none:?}");
+    }
+
+    // `add_component` stores the clamped value and keeps what it moved for the
+    // runtime to report, once.
+    #[test]
+    fn a_typed_build_keeps_its_clamps_for_the_caller() {
+        use crate::components::{AmbientOcclusion, Bloom};
+
+        let mut world = crate::ecs::World::new();
+        world.add_component(AmbientOcclusion {
+            intensity: -1.0,
+            ..Default::default()
+        });
+        world.add_component(Bloom::default());
+        assert_eq!(
+            world.query::<AmbientOcclusion>().next().unwrap().intensity,
+            0.0
+        );
+        let clamped = world.take_clamped_params();
+        assert_eq!(clamped.len(), 1);
+        assert_eq!(clamped[0].0, "AmbientOcclusion");
+        assert_eq!(clamped[0].1.key, "intensity");
+        assert!(world.take_clamped_params().is_empty());
     }
 
     fn baked(discriminant: u8, args_bytes: Vec<u8>, name: Option<AssetId>) -> BlobAssetDef {

@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn written_text_parses_back_to_the_same_entries() {
         let entries = vec![
-            json!({"type": "GraphicsConfig", "args": {"clear_color": [0.05, 0.06, 0.09, 1.0]}}),
+            json!({"type": "Background", "args": {"color": [0.05, 0.06, 0.09, 1.0]}}),
             json!({"type": "Prop", "args": {"$id": "box", "mesh": "m", "nested": {"a": [1]}}}),
             json!({"type": "Include", "args": {"path": "lighting.jsonl"}}),
         ];

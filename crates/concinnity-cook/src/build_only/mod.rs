@@ -137,16 +137,16 @@ mod tests {
     // front-half orchestration on top of it.
     #[test]
     fn prepare_world_expands_and_validates() {
-        let content = r#"["GraphicsConfig",{"$id":"gfx"}]"#;
+        let content = r#"["TextLabel",{"$id":"gfx","content":"hi"}]"#;
         let loaded = prepare_world(content, None).unwrap();
-        // GraphicsConfig pulls in its companions, so the prepared world holds
+        // A TextLabel pulls in its companions, so the prepared world holds
         // more than the single declared asset.
         assert!(loaded.assets.len() > 1);
         assert!(
             loaded
                 .assets
                 .iter()
-                .any(|a| a.asset_type == RegisteredType::GraphicsConfig)
+                .any(|a| a.asset_type == RegisteredType::TextLabel)
         );
         // The authored names are captured before expansion, so the injected
         // companions are not mistaken for what the world declared.

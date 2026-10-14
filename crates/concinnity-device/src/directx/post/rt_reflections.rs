@@ -128,7 +128,7 @@ fn create_rt_psos(
 // Resources
 
 // Hardware-ray-traced-reflection resources held by `DxContext` when the world's
-// `PostProcessConfig` enables `ray_traced_reflections` AND the GPU supports the
+// `Reflections` enables `ray_traced` AND the GPU supports the
 // DXR tier AND the DXC compile + acceleration-structure build succeed; otherwise
 // the context leaves this `None` and the graph falls back to `SsrResolve`.
 pub(in crate::directx) struct RtReflectionsResources {

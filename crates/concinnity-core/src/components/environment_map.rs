@@ -19,7 +19,7 @@ use alloc::string::String;
 /// image whose brightest value is white; it is read literally, with the sRGB
 /// curve inverted and white landing at 1.0 radiance. That makes it an exact
 /// backdrop and a soft, low-contrast fill light, never a key light. Raise
-/// [PostProcessConfig](#postprocessconfig)'s `ambient_intensity` to lift the
+/// [IndirectLighting](#indirectlighting)'s `ambient_intensity` to lift the
 /// level rather than expecting the bake to invent range the file lacks.
 ///
 /// **`prefilter_face_size` note:** this controls both the reflection detail and
@@ -39,7 +39,7 @@ use alloc::string::String;
 /// never clips against the camera's far plane and never moves as the camera
 /// travels. Set `background` to `false` to use the map for image-based
 /// lighting only; the background is then
-/// [GraphicsConfig](#graphicsconfig)'s `clear_color`, as it is in a world
+/// [Background](#background)'s `color`, as it is in a world
 /// with no `EnvironmentMap`. A world uses one map; extra declarations are
 /// ignored.
 ///

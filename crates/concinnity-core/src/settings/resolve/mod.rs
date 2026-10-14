@@ -18,13 +18,17 @@
 mod diff;
 #[cfg(test)]
 mod tests;
+mod tunables;
 
 pub use diff::SettingsDiff;
+pub use tunables::post_process_tunables;
 
 use alloc::borrow::Cow;
 
 use crate::components::{
-    GraphicsConfig, PostProcessConfig, StreamingConfig, UpscaleQuality, UpscalerBackend,
+    AmbientOcclusion, AntiAliasing, Bloom, Culling, Display, Exposure, FramePacing,
+    IndirectLighting, Reflections, Shadows, StreamingConfig, TextureFiltering, UpscaleQuality,
+    UpscalerBackend, Vignette,
 };
 use crate::gfx::render_types::PostProcessTunables;
 use crate::render::backend::{DeviceCapabilities, QualitySettings};
@@ -40,25 +44,82 @@ use crate::settings::rows::{
 };
 use crate::settings::user::UserGraphicsSettings;
 
+/// The settings assets a world declares, each `None` where it declares none.
+#[derive(Clone, Copy, Default)]
+pub struct WorldAssets<'a> {
+    /// The world's `FramePacing`.
+    pub frame_pacing: Option<&'a FramePacing>,
+    /// The world's `Shadows`.
+    pub shadows: Option<&'a Shadows>,
+    /// The world's `TextureFiltering`.
+    pub texture_filtering: Option<&'a TextureFiltering>,
+    /// The world's `AmbientOcclusion`.
+    pub ambient_occlusion: Option<&'a AmbientOcclusion>,
+    /// The world's `Reflections`.
+    pub reflections: Option<&'a Reflections>,
+    /// The world's `IndirectLighting`.
+    pub indirect_lighting: Option<&'a IndirectLighting>,
+    /// The world's `AntiAliasing`.
+    pub anti_aliasing: Option<&'a AntiAliasing>,
+    /// The world's `Exposure`.
+    pub exposure: Option<&'a Exposure>,
+    /// The world's `Bloom`.
+    pub bloom: Option<&'a Bloom>,
+    /// The world's `Vignette`.
+    pub vignette: Option<&'a Vignette>,
+    /// The world's `Display`.
+    pub display: Option<&'a Display>,
+    /// The world's `Culling`.
+    pub culling: Option<&'a Culling>,
+    /// The `strength` of the world's `ColorLut`.
+    pub lut_strength: Option<f32>,
+    /// The world's `StreamingConfig`.
+    pub streaming: Option<&'a StreamingConfig>,
+}
+
+/// The settings the quality preset governs: the features its toggles and
+/// cycle knobs switch, and the look sliders tuning them.
+#[derive(Clone, Debug, Default)]
+pub struct QualityEffects {
+    /// Screen-space ambient occlusion.
+    pub ambient_occlusion: AmbientOcclusion,
+    /// Screen-space and ray-traced reflections.
+    pub reflections: Reflections,
+    /// The ambient term and the screen-space bounce.
+    pub indirect_lighting: IndirectLighting,
+    /// Anti-aliasing and temporal upscaling.
+    pub anti_aliasing: AntiAliasing,
+    /// Fixed and automatic exposure.
+    pub exposure: Exposure,
+}
+
 /// The world's authored graphics values, before any override or ceiling.
 #[derive(Clone, Debug)]
 pub struct WorldSettings {
-    /// `GraphicsConfig.shadow_map_size`.
-    pub shadow_map_size: u32,
-    /// `GraphicsConfig`'s cascade schedule.
-    pub shadow_cadence: ShadowCadence,
-    /// `GraphicsConfig.anisotropy`.
-    pub anisotropy: u32,
-    /// `GraphicsConfig.frames_in_flight`.
-    pub frames_in_flight: u32,
-    /// `GraphicsConfig.vsync`.
-    pub vsync: bool,
-    /// `GraphicsConfig.fps_cap`.
-    pub fps_cap: u32,
-    /// The world's `PostProcessConfig`, or the schema defaults without one.
-    pub post_config: PostProcessConfig,
-    /// Whether the world declares a `PostProcessConfig`.
-    pub post_declared: bool,
+    /// `FramePacing`, or its defaults.
+    pub frame_pacing: FramePacing,
+    /// `Shadows`, or its defaults.
+    pub shadows: Shadows,
+    /// `TextureFiltering`, or its defaults.
+    pub texture_filtering: TextureFiltering,
+    /// The quality-governed assets, or their defaults.
+    pub effects: QualityEffects,
+    /// `Bloom`, or its defaults.
+    pub bloom: Bloom,
+    /// `Vignette`, or its defaults.
+    pub vignette: Vignette,
+    /// `Display`, or its defaults.
+    pub display: Display,
+    /// `Culling`, or its defaults.
+    pub culling: Culling,
+    /// The `ColorLut` blend; 1.0 without one.
+    pub lut_strength: f32,
+    /// Whether the world declares an `AntiAliasing`. Without one an upscaler
+    /// the user turns on runs at native scale.
+    pub anti_aliasing_declared: bool,
+    /// Whether the world declares a `Culling`. Without one two-pass occlusion
+    /// is off.
+    pub culling_declared: bool,
     /// `StreamingConfig.texture_cap`; `None` without a `StreamingConfig`.
     pub texture_cap: Option<u32>,
     /// `StreamingConfig.texture_budget`; `None` without a `StreamingConfig`.
@@ -67,61 +128,88 @@ pub struct WorldSettings {
 
 impl WorldSettings {
     /// The settings a world's declared assets author.
-    pub fn new(
-        graphics: Option<&GraphicsConfig>,
-        post: Option<&PostProcessConfig>,
-        streaming: Option<&StreamingConfig>,
-    ) -> Self {
+    pub fn new(assets: WorldAssets<'_>) -> Self {
         let mut world = Self {
-            shadow_map_size: 0,
-            shadow_cadence: ShadowCadence {
-                update: Default::default(),
-                distance: 0,
-                cascades: 0,
-            },
-            anisotropy: 0,
-            frames_in_flight: 0,
-            vsync: false,
-            fps_cap: 0,
-            post_config: post.cloned().unwrap_or_default(),
-            post_declared: post.is_some(),
-            texture_cap: streaming.map(|s| s.texture_cap),
-            texture_budget: streaming.map(|s| s.texture_budget),
+            frame_pacing: FramePacing::default(),
+            shadows: Shadows::default(),
+            texture_filtering: TextureFiltering::default(),
+            effects: QualityEffects::default(),
+            bloom: Bloom::default(),
+            vignette: Vignette::default(),
+            display: Display::default(),
+            culling: Culling::default(),
+            lut_strength: 1.0,
+            anti_aliasing_declared: false,
+            culling_declared: false,
+            texture_cap: assets.streaming.map(|s| s.texture_cap),
+            texture_budget: assets.streaming.map(|s| s.texture_budget),
         };
-        world.set_graphics(graphics.unwrap_or(&GraphicsConfig::default()));
+        world.adopt(&assets);
         world
     }
 
-    /// Take every value a `GraphicsConfig` authors.
-    pub fn set_graphics(&mut self, g: &GraphicsConfig) {
-        self.shadow_map_size = g.shadow_map_size;
-        self.shadow_cadence = ShadowCadence {
-            update: g.shadow_update,
-            distance: g.shadow_distance,
-            cascades: g.shadow_cascades,
-        };
-        self.anisotropy = g.anisotropy;
-        self.frames_in_flight = g.frames_in_flight;
-        self.vsync = g.vsync;
-        self.fps_cap = g.fps_cap;
+    // Take every asset `assets` declares in place of the current copy.
+    fn adopt(&mut self, assets: &WorldAssets<'_>) {
+        fn take<T: Clone>(slot: &mut T, declared: Option<&T>) {
+            if let Some(value) = declared {
+                *slot = value.clone();
+            }
+        }
+        take(&mut self.frame_pacing, assets.frame_pacing);
+        take(&mut self.shadows, assets.shadows);
+        take(&mut self.texture_filtering, assets.texture_filtering);
+        take(
+            &mut self.effects.ambient_occlusion,
+            assets.ambient_occlusion,
+        );
+        take(&mut self.effects.reflections, assets.reflections);
+        take(
+            &mut self.effects.indirect_lighting,
+            assets.indirect_lighting,
+        );
+        take(&mut self.effects.anti_aliasing, assets.anti_aliasing);
+        take(&mut self.effects.exposure, assets.exposure);
+        take(&mut self.bloom, assets.bloom);
+        take(&mut self.vignette, assets.vignette);
+        take(&mut self.display, assets.display);
+        take(&mut self.culling, assets.culling);
+        if let Some(strength) = assets.lut_strength {
+            self.lut_strength = strength;
+        }
+        self.anti_aliasing_declared |= assets.anti_aliasing.is_some();
+        self.culling_declared |= assets.culling.is_some();
     }
 
-    fn declared_post(&self) -> Option<&PostProcessConfig> {
-        self.post_declared.then_some(&self.post_config)
+    /// The cascade schedule the world's `Shadows` authors.
+    pub fn shadow_cadence(&self) -> ShadowCadence {
+        ShadowCadence {
+            update: self.shadows.update,
+            distance: self.shadows.distance,
+            cascades: self.shadows.cascades,
+        }
     }
 
     /// The ambient (IBL) scale with no user override, the value the static
     /// light uniforms are built with.
     pub fn world_ambient(&self) -> f32 {
-        self.declared_post()
-            .map(|c| c.ambient_intensity())
-            .unwrap_or(1.0)
+        self.effects.indirect_lighting.resolved_ambient()
+    }
+
+    /// The composite tunables the world authors, with no user override.
+    pub fn post_process(&self) -> PostProcessTunables {
+        post_process_tunables(
+            &self.bloom,
+            &self.effects.exposure,
+            &self.vignette,
+            self.lut_strength,
+            self.effects.anti_aliasing.mode,
+        )
     }
 }
 
 impl Default for WorldSettings {
     fn default() -> Self {
-        Self::new(None, None, None)
+        Self::new(WorldAssets::default())
     }
 }
 
@@ -129,23 +217,52 @@ impl Default for WorldSettings {
 /// present replaces the world's copy whole.
 #[derive(Clone, Debug, Default)]
 pub struct SceneOverride {
-    /// The scene's `GraphicsConfig`.
-    pub graphics: Option<GraphicsConfig>,
-    /// The scene's `PostProcessConfig`.
-    pub post_process: Option<PostProcessConfig>,
+    /// The scene's `FramePacing`.
+    pub frame_pacing: Option<FramePacing>,
+    /// The scene's `Shadows`.
+    pub shadows: Option<Shadows>,
+    /// The scene's `TextureFiltering`.
+    pub texture_filtering: Option<TextureFiltering>,
+    /// The scene's `AmbientOcclusion`.
+    pub ambient_occlusion: Option<AmbientOcclusion>,
+    /// The scene's `Reflections`.
+    pub reflections: Option<Reflections>,
+    /// The scene's `IndirectLighting`.
+    pub indirect_lighting: Option<IndirectLighting>,
+    /// The scene's `AntiAliasing`.
+    pub anti_aliasing: Option<AntiAliasing>,
+    /// The scene's `Exposure`.
+    pub exposure: Option<Exposure>,
+    /// The scene's `Bloom`.
+    pub bloom: Option<Bloom>,
+    /// The scene's `Vignette`.
+    pub vignette: Option<Vignette>,
+    /// The scene's `Display`.
+    pub display: Option<Display>,
+    /// The scene's `Culling`.
+    pub culling: Option<Culling>,
 }
 
 impl SceneOverride {
     /// The world's settings with this scene's assets in place of the world's.
     pub fn over(&self, world: &WorldSettings) -> WorldSettings {
         let mut out = world.clone();
-        if let Some(graphics) = &self.graphics {
-            out.set_graphics(graphics);
-        }
-        if let Some(post) = &self.post_process {
-            out.post_config = post.clone();
-            out.post_declared = true;
-        }
+        out.adopt(&WorldAssets {
+            frame_pacing: self.frame_pacing.as_ref(),
+            shadows: self.shadows.as_ref(),
+            texture_filtering: self.texture_filtering.as_ref(),
+            ambient_occlusion: self.ambient_occlusion.as_ref(),
+            reflections: self.reflections.as_ref(),
+            indirect_lighting: self.indirect_lighting.as_ref(),
+            anti_aliasing: self.anti_aliasing.as_ref(),
+            exposure: self.exposure.as_ref(),
+            bloom: self.bloom.as_ref(),
+            vignette: self.vignette.as_ref(),
+            display: self.display.as_ref(),
+            culling: self.culling.as_ref(),
+            lut_strength: None,
+            streaming: None,
+        });
         out
     }
 }
@@ -220,9 +337,13 @@ impl<'a> SettingsLayers<'a> {
 /// changes.
 #[derive(Clone, Debug)]
 pub struct ResolvedQuality {
-    /// The world's config with the user's quality choices overlaid, then
-    /// clamped under the ceiling. The source of truth for the quality rows.
-    pub post_config: PostProcessConfig,
+    /// The world's quality-governed assets with the user's quality choices
+    /// overlaid, then clamped under the ceiling. The source of truth for the
+    /// quality rows.
+    pub effects: QualityEffects,
+    /// The world's `Display.hdr`, which pivots auto-exposure metering toward
+    /// middle gray.
+    pub hdr_metering: bool,
     /// The upscaler's render scale. Sized at launch.
     pub render_scale: UpscaleQuality,
     /// Shadow map resolution. Sized at launch.
@@ -236,13 +357,13 @@ pub struct ResolvedQuality {
 impl ResolvedQuality {
     fn clamp_to(&mut self, capabilities: &DeviceCapabilities) {
         if !capabilities.ray_tracing {
-            self.post_config.ray_traced_reflections = false;
+            self.effects.reflections.ray_traced = false;
         }
     }
 
     /// The per-feature settings the backend builds its quality passes from.
     pub fn quality_settings(&self) -> QualitySettings {
-        quality_settings(&self.post_config)
+        quality_settings(&self.effects, self.hdr_metering)
     }
 }
 
@@ -251,7 +372,7 @@ impl ResolvedQuality {
 pub struct ResolvedSettings {
     /// The preset-governed group.
     pub quality: ResolvedQuality,
-    /// The live composite tunables; `fxaa` follows `quality.post_config.aa_mode`.
+    /// The live composite tunables; `fxaa` follows the resolved AA mode.
     pub post_process: PostProcessTunables,
     /// The ambient (IBL) scale, which rides the light uniforms.
     pub ambient_intensity: f32,
@@ -289,7 +410,7 @@ impl ResolvedSettings {
     /// Adopt a re-resolved quality group, refreshing the composite FXAA flag
     /// from its AA mode.
     pub fn set_quality(&mut self, quality: ResolvedQuality) {
-        self.post_process.fxaa = quality.post_config.aa_mode.fxaa_flag();
+        self.post_process.fxaa = quality.effects.anti_aliasing.mode.fxaa_flag();
         self.quality = quality;
     }
 
@@ -323,53 +444,54 @@ impl Default for ResolvedSettings {
     }
 }
 
-/// The per-feature settings a resolved config builds its quality passes from.
-pub fn quality_settings(cfg: &PostProcessConfig) -> QualitySettings {
+/// The per-feature settings resolved effects build their quality passes from.
+/// `hdr_metering` is the world's `Display.hdr`.
+pub fn quality_settings(effects: &QualityEffects, hdr_metering: bool) -> QualitySettings {
     QualitySettings {
-        taa: cfg.aa_mode.taa_enabled(),
-        ssao: SsaoSettings::from_config(cfg),
-        ssr: SsrSettings::from_config(cfg),
-        rt_reflections: RtReflectionSettings::from_config(cfg),
-        ssgi: SsgiSettings::from_config(cfg),
-        reflection_blur_scale: cfg.reflection_blur_divisor(),
-        auto_exposure: cfg.auto_exposure_settings(),
-        auto_exposure_bias_ev: cfg.exposure_ev,
+        taa: effects.anti_aliasing.mode.taa_enabled(),
+        ssao: SsaoSettings::from_config(&effects.ambient_occlusion),
+        ssr: SsrSettings::from_config(&effects.reflections),
+        rt_reflections: RtReflectionSettings::from_config(&effects.reflections),
+        ssgi: SsgiSettings::from_config(&effects.indirect_lighting),
+        reflection_blur_scale: effects.reflections.blur_divisor(),
+        auto_exposure: effects.exposure.auto_settings(hdr_metering),
+        auto_exposure_bias_ev: effects.exposure.ev,
     }
 }
 
 // Each value is the user's choice where they made one, otherwise the world's,
 // clamped under the ceiling if the preset governs it. Settings the world does
 // not author fall back to the engine defaults, and occlusion two-pass is off
-// without a `PostProcessConfig`.
+// without a `Culling`.
 fn resolve_graphics(
     world: &WorldSettings,
     user: &UserGraphicsSettings,
     ceiling: &QualityCeiling,
 ) -> ResolvedSettings {
-    let post = &world.post_config;
     let streaming = StreamingConfig::default();
+    let aa = &world.effects.anti_aliasing;
     let mut resolved = ResolvedSettings {
         quality: resolve_quality(world, user, ceiling),
-        post_process: post_process_params(world.declared_post(), user),
-        ambient_intensity: ambient_intensity(world.declared_post(), user),
-        vsync: user.vsync.unwrap_or(world.vsync),
-        fps_cap: user.fps_cap.unwrap_or(world.fps_cap),
+        post_process: post_process_params(world, user),
+        ambient_intensity: ambient_intensity(world, user),
+        vsync: user.vsync.unwrap_or(world.frame_pacing.vsync),
+        fps_cap: user.fps_cap.unwrap_or(world.frame_pacing.fps_cap),
         perf_stats: user.perf_stats.unwrap_or(true),
         show_fps: user.show_fps.unwrap_or(true),
         show_vram: user.show_vram.unwrap_or(true),
         frames_in_flight: user
             .frames_in_flight
-            .map_or(world.frames_in_flight as usize, |v| {
+            .map_or(world.frame_pacing.frames_in_flight as usize, |v| {
                 (v as usize).clamp(1, 3)
             }),
-        hdr_display: user.hdr_display.unwrap_or(post.hdr_display),
-        hdr_pq: user.hdr_pq.unwrap_or(post.hdr_pq),
-        temporal_upscaling: user.temporal_upscaling.unwrap_or(post.temporal_upscaling),
-        upscale_backend: user.upscale_backend.unwrap_or(post.upscale_backend),
+        hdr_display: user.hdr_display.unwrap_or(world.display.hdr),
+        hdr_pq: user.hdr_pq.unwrap_or(world.display.pq),
+        temporal_upscaling: user.temporal_upscaling.unwrap_or(aa.upscaling),
+        upscale_backend: user.upscale_backend.unwrap_or(aa.upscaler),
         dlss_preset: user.dlss_preset.unwrap_or_default(),
         occlusion_two_pass: user
             .occlusion_two_pass
-            .unwrap_or(world.declared_post().is_some_and(|c| c.occlusion_two_pass)),
+            .unwrap_or(world.culling_declared && world.culling.two_pass_occlusion),
         // The user's streaming choices only apply where the world streams.
         texture_cap: world
             .texture_cap
@@ -378,7 +500,7 @@ fn resolve_graphics(
             user.texture_budget.unwrap_or(v)
         }),
     };
-    resolved.post_process.fxaa = resolved.quality.post_config.aa_mode.fxaa_flag();
+    resolved.post_process.fxaa = resolved.quality.effects.anti_aliasing.mode.fxaa_flag();
     resolved
 }
 
@@ -387,18 +509,22 @@ fn resolve_quality(
     user: &UserGraphicsSettings,
     ceiling: &QualityCeiling,
 ) -> ResolvedQuality {
-    let mut post_config = world.post_config.clone();
-    overlay_quality_overrides(&mut post_config, user);
-    clamp_quality_under_ceiling(&mut post_config, user, ceiling);
-    let authored = world.shadow_cadence;
+    let mut effects = world.effects.clone();
+    overlay_quality_overrides(&mut effects, user);
+    clamp_quality_under_ceiling(&mut effects, user, ceiling);
+    let authored = world.shadow_cadence();
     ResolvedQuality {
-        post_config,
+        effects,
+        hdr_metering: world.display.hdr,
         render_scale: user.render_scale.unwrap_or_else(|| {
-            more_aggressive_upscale(world.post_config.upscale_quality, ceiling.min_upscale)
+            more_aggressive_upscale(
+                world.effects.anti_aliasing.upscale_quality,
+                ceiling.min_upscale,
+            )
         }),
         shadow_map_size: user
             .shadow_map_size
-            .unwrap_or(world.shadow_map_size.min(ceiling.shadow_map_size)),
+            .unwrap_or(world.shadows.map_size.min(ceiling.shadow_map_size)),
         shadow_cadence: ShadowCadence {
             update: user
                 .shadow_update
@@ -412,20 +538,15 @@ fn resolve_quality(
         },
         anisotropy: user
             .anisotropy
-            .unwrap_or(world.anisotropy.min(ceiling.anisotropy)),
+            .unwrap_or(world.texture_filtering.anisotropy.min(ceiling.anisotropy)),
     }
 }
 
-// The composite tunables: the world's config resolved, then each slider the
-// user has moved. `fxaa` is left as `resolve` seeded it, from the authored AA
-// mode; the caller refreshes it once the override and ceiling settle the mode.
-fn post_process_params(
-    config: Option<&PostProcessConfig>,
-    user: &UserGraphicsSettings,
-) -> PostProcessTunables {
-    let mut params = config
-        .map(|c| c.resolve())
-        .unwrap_or(PostProcessTunables::DEFAULT);
+// The composite tunables: the world's assets resolved, then each slider the
+// user has moved. `fxaa` is left seeded from the authored AA mode; the caller
+// refreshes it once the override and ceiling settle the mode.
+fn post_process_params(world: &WorldSettings, user: &UserGraphicsSettings) -> PostProcessTunables {
+    let mut params = world.post_process();
     for s in &GRAPHICS_SLIDERS {
         if let GraphicsSliderTarget::PostProcess { field, persisted } = &s.target
             && let Some(v) = *(persisted.get)(user)
@@ -436,8 +557,8 @@ fn post_process_params(
     params
 }
 
-fn ambient_intensity(config: Option<&PostProcessConfig>, user: &UserGraphicsSettings) -> f32 {
-    let world = config.map(|c| c.ambient_intensity()).unwrap_or(1.0);
+fn ambient_intensity(world: &WorldSettings, user: &UserGraphicsSettings) -> f32 {
+    let world = world.world_ambient();
     GRAPHICS_SLIDERS
         .iter()
         .find_map(|s| match &s.target {
@@ -450,10 +571,10 @@ fn ambient_intensity(config: Option<&PostProcessConfig>, user: &UserGraphicsSett
 }
 
 /// Overlay the user's sub-quality sliders (look tuning, not preset-governed)
-/// onto a config already carrying the world's values.
-pub fn overlay_quality_scalars(cfg: &mut PostProcessConfig, user: &UserGraphicsSettings) {
+/// onto effects already carrying the world's values.
+pub fn overlay_quality_scalars(cfg: &mut QualityEffects, user: &UserGraphicsSettings) {
     for s in &GRAPHICS_SLIDERS {
-        if let GraphicsSliderTarget::PostConfig { field, persisted } = &s.target
+        if let GraphicsSliderTarget::Effect { field, persisted } = &s.target
             && let Some(v) = *(persisted.get)(user)
         {
             *(field.get_mut)(cfg) = (s.apply)(v);
@@ -461,11 +582,11 @@ pub fn overlay_quality_scalars(cfg: &mut PostProcessConfig, user: &UserGraphicsS
     }
 }
 
-/// Overlay every quality choice the user made onto a config already carrying
+/// Overlay every quality choice the user made onto effects already carrying
 /// the world's values: the feature toggles, the cycle knobs, and the look
-/// sliders. The schema defaults a world without a `PostProcessConfig` falls
-/// back to are a real authored look, so they take the overlay too.
-pub fn overlay_quality_overrides(cfg: &mut PostProcessConfig, user: &UserGraphicsSettings) {
+/// sliders. The schema defaults a world falls back to without an asset are a
+/// real authored look, so they take the overlay too.
+pub fn overlay_quality_overrides(cfg: &mut QualityEffects, user: &UserGraphicsSettings) {
     for row in &QUALITY_TOGGLES {
         if let Some(on) = *(row.persisted.get)(user) {
             (row.set)(cfg, on);
@@ -481,7 +602,7 @@ pub fn overlay_quality_overrides(cfg: &mut PostProcessConfig, user: &UserGraphic
 /// forbids turns off and a cycle knob lowers, except where the user chose that
 /// row. Only ever reduces, so a config within the ceiling passes untouched.
 pub fn clamp_quality_under_ceiling(
-    cfg: &mut PostProcessConfig,
+    cfg: &mut QualityEffects,
     user: &UserGraphicsSettings,
     ceiling: &QualityCeiling,
 ) {

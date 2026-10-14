@@ -1,8 +1,8 @@
 //! Compiles a ColorLut component's args into the binary payload the renderer
 //! uploads as a 3D color-grading LUT. The runtime samples this LUT in the
 //! composite (post-process) pass with the display-referred sRGB color as the
-//! texture coordinate, blending the graded result by `PostProcessConfig`'s
-//! `lut_strength`.
+//! texture coordinate, blending the graded result by the `ColorLut`'s
+//! `strength`.
 //!
 //! Two source formats are supported, picked by file extension:
 //!
@@ -16,6 +16,7 @@
 //!   u32  magic     = b"LUT3" = 0x3354554c
 //!   u32  size      LUT edge length n; the runtime texture is n x n x n
 //!   u32  format_id = 0  (RGBA8)
+//!   f32  strength  blend of the graded color over the ungraded, in [0, 1]
 //!   n*n*n*4 bytes  raw RGBA8, x(red) fastest, then y(green), then z(blue)
 //!
 //! The texel order matches both the Metal 3D-texture upload layout and the
@@ -28,7 +29,7 @@ use alloc::vec::Vec;
 
 pub(crate) const LUT_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"LUT3");
 pub(crate) const LUT_FORMAT_RGBA8: u32 = 0;
-pub(crate) const LUT_PAYLOAD_HEADER_BYTES: usize = 12;
+pub(crate) const LUT_PAYLOAD_HEADER_BYTES: usize = 16;
 
 // Accepted LUT edge lengths. The lower bound keeps trilinear interpolation
 // meaningful; the upper bound caps the payload (128³ RGBA8 is 8 MiB).
@@ -140,14 +141,28 @@ pub fn parse_cube(text: &str) -> Result<(u32, Vec<u8>), String> {
 
 // (de)serialization
 
-/// Pack a cube LUT of edge `size` into its blob payload.
-pub fn serialize(size: u32, data: &[u8]) -> Vec<u8> {
+/// Pack a cube LUT of edge `size`, blended at `strength`, into its blob
+/// payload.
+pub fn serialize(size: u32, strength: f32, data: &[u8]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(LUT_PAYLOAD_HEADER_BYTES + data.len());
     buf.extend_from_slice(&LUT_PAYLOAD_MAGIC.to_le_bytes());
     buf.extend_from_slice(&size.to_le_bytes());
     buf.extend_from_slice(&LUT_FORMAT_RGBA8.to_le_bytes());
+    buf.extend_from_slice(&strength.to_le_bytes());
     buf.extend_from_slice(data);
     buf
+}
+
+/// The blend strength a LUT payload carries, clamped to `[0, 1]`.
+pub fn strength(bytes: &[u8]) -> Result<f32, String> {
+    let mut r = ByteReader::open_payload(
+        bytes,
+        LUT_PAYLOAD_MAGIC,
+        LUT_PAYLOAD_HEADER_BYTES,
+        "ColorLut",
+    )?;
+    r.seek(12)?;
+    Ok(r.f32()?.clamp(0.0, 1.0))
 }
 
 /// Deserialize a LUT payload back into `(size, RGBA8 bytes)`. The byte slice
@@ -254,15 +269,26 @@ mod tests {
     #[test]
     fn payload_round_trip_via_deserialize() {
         let (size, data) = parse_cube(&identity_cube(3)).expect("parse");
-        let blob = serialize(size, &data);
+        let blob = serialize(size, 1.0, &data);
         let (got_size, got) = deserialize(&blob).expect("deserialize");
         assert_eq!(got_size, 3);
         assert_eq!(got, data.as_slice());
     }
 
     #[test]
+    fn the_blend_strength_rides_in_the_header() {
+        let (size, data) = parse_cube(&identity_cube(2)).expect("parse");
+        assert_eq!(strength(&serialize(size, 0.25, &data)), Ok(0.25));
+        assert_eq!(strength(&serialize(size, 3.0, &data)), Ok(1.0));
+        let payload = serialize(size, 0.25, &data);
+        let (got_size, got) = deserialize(&payload).expect("deserialize");
+        assert_eq!(got_size, 2);
+        assert_eq!(got, data.as_slice());
+    }
+
+    #[test]
     fn deserialize_rejects_bad_magic() {
-        let mut blob = serialize(2, &[0u8; 2 * 2 * 2 * 4]);
+        let mut blob = serialize(2, 1.0, &[0u8; 2 * 2 * 2 * 4]);
         blob[0] ^= 0xff;
         assert!(deserialize(&blob).unwrap_err().contains("magic"));
     }
@@ -282,7 +308,7 @@ mod tests {
     #[test]
     fn deserialize_rejects_an_unknown_pixel_format() {
         let (size, data) = parse_cube(&identity_cube(2)).expect("the identity cube parses");
-        let mut bytes = serialize(size, &data);
+        let mut bytes = serialize(size, 1.0, &data);
         // The format id is the third word of the header.
         bytes[8..12].copy_from_slice(&7u32.to_le_bytes());
 
@@ -296,7 +322,7 @@ mod tests {
     #[test]
     fn deserialize_rejects_a_payload_too_short_for_its_declared_size() {
         let (size, data) = parse_cube(&identity_cube(2)).expect("the identity cube parses");
-        let full = serialize(size, &data);
+        let full = serialize(size, 1.0, &data);
         let truncated = &full[..full.len() - 4];
 
         let err = deserialize(truncated).expect_err("a short payload is refused");

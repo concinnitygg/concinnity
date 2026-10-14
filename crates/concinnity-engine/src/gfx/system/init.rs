@@ -21,8 +21,9 @@ use concinnity_core::components::WindowMode;
 use concinnity_core::components::build_skeleton_from_joint_defs;
 use concinnity_core::components::hdr_sample_count;
 use concinnity_core::components::{
-    BlockType, Camera3D, GraphicsConfig, HitRegion, Material, Model, PostProcessConfig, Shader,
-    StreamingConfig, VoxelWorld, Window,
+    AmbientOcclusion, AntiAliasing, Background, BlockType, Bloom, Camera3D, Culling, Display,
+    Exposure, FramePacing, HitRegion, IndirectLighting, Material, Model, Reflections, Shader,
+    Shadows, StreamingConfig, TextureFiltering, Vignette, VoxelWorld, Window,
 };
 use concinnity_core::ecs::FontHandle;
 use concinnity_core::ecs::FrameRateCap;
@@ -70,7 +71,9 @@ use crate::gfx::material_entry::MaterialEntry;
 use crate::settings::system::{SettingsSlot, SettingsState};
 use concinnity_core::settings::quality::{preset_label, resolve_ceiling};
 use concinnity_core::settings::rows::{quality_cycle, quality_toggle};
-use concinnity_core::settings::{QualityCeiling, QualityPreset, ResolvedSettings, WorldSettings};
+use concinnity_core::settings::{
+    QualityCeiling, QualityPreset, ResolvedSettings, WorldAssets, WorldSettings,
+};
 
 // The resolved render config `init_render_settings` returns beside the live
 // settings state: the packed post-processing config handed to the backend ctor,
@@ -79,7 +82,7 @@ struct ResolvedRenderConfig {
     post: backend_init::PostSettings,
     quality_ceiling: QualityCeiling,
     streaming_config: Option<StreamingConfig>,
-    // Raw world ambient (PostProcessConfig::ambient_intensity, no user override),
+    // Raw world ambient (`IndirectLighting.ambient_intensity`, no user override),
     // folded into the static LightUniforms built later in init.
     world_ambient_intensity: f32,
 }
@@ -243,20 +246,86 @@ fn capture_hud_chips(ctx: &PipelineContext) -> (Vec<AssetId>, Vec<AssetId>) {
     (debug, stat)
 }
 
+// The settings assets a world declares, drained once at init.
+#[derive(Default)]
+struct DeclaredSettings {
+    frame_pacing: Option<FramePacing>,
+    shadows: Option<Shadows>,
+    texture_filtering: Option<TextureFiltering>,
+    ambient_occlusion: Option<AmbientOcclusion>,
+    reflections: Option<Reflections>,
+    indirect_lighting: Option<IndirectLighting>,
+    anti_aliasing: Option<AntiAliasing>,
+    exposure: Option<Exposure>,
+    bloom: Option<Bloom>,
+    vignette: Option<Vignette>,
+    display: Option<Display>,
+    culling: Option<Culling>,
+}
+
+impl DeclaredSettings {
+    fn drain(ctx: &mut PipelineContext) -> Self {
+        fn first<C: concinnity_core::ecs::ComponentSlot>(ctx: &mut PipelineContext) -> Option<C> {
+            ctx.drain::<C>().into_iter().next()
+        }
+        Self {
+            frame_pacing: first(ctx),
+            shadows: first(ctx),
+            texture_filtering: first(ctx),
+            ambient_occlusion: first(ctx),
+            reflections: first(ctx),
+            indirect_lighting: first(ctx),
+            anti_aliasing: first(ctx),
+            exposure: first(ctx),
+            bloom: first(ctx),
+            vignette: first(ctx),
+            display: first(ctx),
+            culling: first(ctx),
+        }
+    }
+
+    fn assets(&self) -> WorldAssets<'_> {
+        WorldAssets {
+            frame_pacing: self.frame_pacing.as_ref(),
+            shadows: self.shadows.as_ref(),
+            texture_filtering: self.texture_filtering.as_ref(),
+            ambient_occlusion: self.ambient_occlusion.as_ref(),
+            reflections: self.reflections.as_ref(),
+            indirect_lighting: self.indirect_lighting.as_ref(),
+            anti_aliasing: self.anti_aliasing.as_ref(),
+            exposure: self.exposure.as_ref(),
+            bloom: self.bloom.as_ref(),
+            vignette: self.vignette.as_ref(),
+            display: self.display.as_ref(),
+            culling: self.culling.as_ref(),
+            lut_strength: None,
+            streaming: None,
+        }
+    }
+}
+
+// The blend strength of the world's first `ColorLut`, read from its compiled
+// payload, or `None` without one.
+fn color_lut_strength(ctx: &mut PipelineContext) -> Option<f32> {
+    let locator = ctx.resource::<ColorLutTable>()?.locator(0)?;
+    let bytes = ctx.read_payload(&locator).ok()?;
+    concinnity_core::bake::color_lut::strength(bytes).ok()
+}
+
 // The post-processing config the backend is built with.
 pub(super) fn post_settings(
     graphics: &ResolvedSettings,
     authored: &WorldSettings,
     launch: &LaunchRequest,
 ) -> backend_init::PostSettings {
-    let post_config = &graphics.quality.post_config;
+    let aa_mode = graphics.quality.effects.anti_aliasing.mode;
     let quality = graphics.quality_settings();
     backend_init::PostSettings {
         post_process: graphics.post_process,
         taa_enabled: quality.taa,
         // Restart-class: the main-pass pipelines, render targets and planar /
         // probe faces all bake the count, so a live AA toggle keeps it.
-        hdr_samples: hdr_sample_count(post_config.aa_mode, graphics.temporal_upscaling),
+        hdr_samples: hdr_sample_count(aa_mode, graphics.temporal_upscaling),
         ssao: quality.ssao,
         ssr: quality.ssr,
         ssgi: quality.ssgi,
@@ -269,7 +338,7 @@ pub(super) fn post_settings(
         hdr_display: graphics.hdr_display,
         hdr_pq: graphics.hdr_pq,
         temporal_upscaling: graphics.temporal_upscaling,
-        upscale_scale: if authored.post_declared {
+        upscale_scale: if authored.anti_aliasing_declared {
             graphics.quality.render_scale.scale()
         } else {
             1.0
@@ -338,8 +407,8 @@ fn sync_menu_labels(
         SettingKey::OcclusionTwoPass => Some(g.occlusion_two_pass as usize),
         SettingKey::TextureQuality => Some(crate::settings::texture_quality_index(g.texture_cap)),
         key => quality_toggle(key)
-            .map(|row| (row.get)(&g.quality.post_config) as usize)
-            .or_else(|| quality_cycle(key).map(|row| (row.index)(&g.quality.post_config))),
+            .map(|row| (row.get)(&g.quality.effects) as usize)
+            .or_else(|| quality_cycle(key).map(|row| (row.index)(&g.quality.effects))),
     });
     // After the generic sync: under Auto the master row names the resolved
     // tier ("Auto (High)"), which the static option table cannot express.
@@ -420,18 +489,17 @@ impl GraphicsSystem {
             });
         }
 
-        let graphics_config = ctx.drain::<GraphicsConfig>().into_iter().next();
-        if let Some(args) = &graphics_config {
-            self.clear_color = args.clear_color;
-            self.max_frames = args.max_frames;
+        if let Some(background) = ctx.drain::<Background>().into_iter().next() {
+            self.clear_color = background.color;
         }
-        let post_config = ctx.drain::<PostProcessConfig>().into_iter().next();
+        self.max_frames = launch.max_frames;
         let mut streaming_config = ctx.drain::<StreamingConfig>().into_iter().next();
-        settings.authored = WorldSettings::new(
-            graphics_config.as_ref(),
-            post_config.as_ref(),
-            streaming_config.as_ref(),
-        );
+        let declared = DeclaredSettings::drain(ctx);
+        settings.authored = WorldSettings::new(WorldAssets {
+            lut_strength: color_lut_strength(ctx),
+            streaming: streaming_config.as_ref(),
+            ..declared.assets()
+        });
         // `--dlss-preset` wins for this launch, shown on the row and never
         // persisted unless the row itself changes.
         settings.session = launch.session_overrides();

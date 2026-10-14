@@ -45,7 +45,7 @@ use crate::directx::transparent::TransparentResources;
 // Temporal upscaler (FSR3 via the FidelityFX SDK). Built ahead of the HDR /
 // depth / post-effect targets, because its resolved render dimensions decide
 // the size of every scene target. When the world's
-// `PostProcessConfig.temporal_upscaling` is on AND the FFX DLL loads + the
+// `AntiAliasing.upscaling` is on AND the FFX DLL loads + the
 // context creates successfully, the backend is `Some` and the scene renders at
 // `output * upscale_scale`; FSR reconstructs the drawable resolution into the
 // upscaler's output texture, which bloom + composite sample. Falls back
@@ -470,7 +470,7 @@ pub(super) fn build_particles(
 
 // Auto-exposure: build the histogram + average compute pipelines plus
 // the GPU buffers (histogram UAV, output UAV, per-frame readback)
-// only when the world's PostProcessConfig opted in. With auto-exposure
+// only when the world's Exposure opted in. With auto-exposure
 // off every path below is None and the static authored EV continues
 // to drive `post_process.exposure` unchanged.
 pub(super) fn build_auto_exposure(

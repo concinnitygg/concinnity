@@ -406,7 +406,7 @@ impl MtlContext {
             // alongside `encode_raymarch` (see metal/raymarch.rs).
             raymarch_enabled: !self.raymarch.volumes.is_empty(),
             // Two-pass Hi-Z occlusion. Resolved from
-            // `PostProcessConfig.occlusion_two_pass` (and gated at init on the
+            // `Culling.two_pass_occlusion` (and gated at init on the
             // bindless cull path existing). The graph builder further ANDs this
             // with `bindless_cull_enabled` for this frame, so a frame with no
             // static geometry simply runs single-pass. When on, the builder

@@ -423,12 +423,12 @@ pub(in crate::editor::hook) fn shape_world_entries() -> Vec<serde_json::Value> {
     ]
 }
 
-// A world whose GraphicsConfig pulls in companions, so the expansion has
+// A world whose TextLabel pulls in companions, so the expansion has
 // something to show without needing a scene file on disk.
 pub(in crate::editor::hook) fn expandable_hook() -> EditorHook {
     isolate_state_dir();
     let mut h = hook(vec![serde_json::json!({
-        "type": "GraphicsConfig", "args": {"$id": "gfx"}
+        "type": "TextLabel", "args": {"$id": "gfx", "content": "hi"}
     })]);
     h.open[PanelKey::Assets] = true;
     h

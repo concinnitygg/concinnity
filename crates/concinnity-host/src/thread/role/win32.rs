@@ -81,7 +81,7 @@ mod tests {
             .iter()
             .map(|&role| priority(role) == THREAD_PRIORITY_ABOVE_NORMAL)
             .collect();
-        assert_eq!(above, [false, true, true, false, false, true, false]);
+        assert_eq!(above, [false, true, false, true, false]);
     }
 
     #[test]

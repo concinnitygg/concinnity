@@ -23,7 +23,7 @@ struct LightUniforms
     PointLight pt[MAX_POINT_LIGHTS];
     int num_dir;
     int num_pt;
-    // Indirect-ambient multiplier (PostProcessConfig.ambient_intensity); 1.0
+    // Indirect-ambient multiplier (IndirectLighting.ambient_intensity); 1.0
     // is a no-op.
     float ambient_intensity;
     // Valid entry count in the local-light buffer.

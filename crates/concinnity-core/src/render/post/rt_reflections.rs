@@ -1,15 +1,15 @@
 //! Hardware ray-traced reflection configuration. Backend-agnostic resolve of the
-//! authored `PostProcessConfig` fields into clamped settings, plus the per-frame
+//! authored `Reflections` fields into clamped settings, plus the per-frame
 //! GPU uniform. The acceleration-structure build and the inline ray-trace itself
 //! live in the backend (Metal); this module owns only the parameter math so it
 //! can be unit-tested without a GPU.
 //!
 //! RT reflections replace SSR's screen-space resolve: they reuse the same
-//! authored `ssr_intensity` / `ssr_max_distance` tunables (so a world toggling
+//! authored `intensity` / `max_distance` tunables (so a world toggling
 //! from SSR to RT keeps the same look knobs) but trace a real ray against the
 //! scene BVH, so reflected geometry that is off-screen still appears.
 
-use crate::components::PostProcessConfig;
+use crate::components::Reflections;
 use crate::gfx::camera::{camera_to_world, view_ray_scale};
 
 use crate::gfx::render_types::RtParams;
@@ -75,15 +75,15 @@ pub struct RtParamsInputs {
 
 impl RtReflectionSettings {
     /// Resolve the ray-traced-reflection tunables into clamped settings, or
-    /// `None` when `ray_traced_reflections` is off. Reuses the SSR intensity /
-    /// distance fields; the backend additionally gates on GPU ray-tracing
+    /// `None` when `ray_traced` is off. Shares the `intensity` /
+    /// `max_distance` fields with screen-space reflections; the backend additionally gates on GPU ray-tracing
     /// support. Not gated on the intensity, for the same specular-handover
     /// reason as [`SsrSettings::from_config`](super::ssr::settings::SsrSettings::from_config).
-    pub fn from_config(cfg: &PostProcessConfig) -> Option<Self> {
-        cfg.ray_traced_reflections.then(|| Self {
-            divisor: cfg.rt_reflection_resolution.scale_divisor(),
-            sun_shadows: cfg.rt_reflection_shadows,
-            ..Self::resolve(cfg.ssr_intensity, cfg.ssr_max_distance)
+    pub fn from_config(cfg: &Reflections) -> Option<Self> {
+        cfg.ray_traced.then(|| Self {
+            divisor: cfg.ray_traced_resolution.scale_divisor(),
+            sun_shadows: cfg.ray_traced_shadows,
+            ..Self::resolve(cfg.intensity, cfg.max_distance)
         })
     }
 
@@ -148,9 +148,9 @@ mod tests {
 
     #[test]
     fn from_config_follows_the_toggle() {
-        assert!(RtReflectionSettings::from_config(&PostProcessConfig::default()).is_some());
-        let off = PostProcessConfig {
-            ray_traced_reflections: false,
+        assert!(RtReflectionSettings::from_config(&Reflections::default()).is_some());
+        let off = Reflections {
+            ray_traced: false,
             ..Default::default()
         };
         assert!(RtReflectionSettings::from_config(&off).is_none());
@@ -158,9 +158,9 @@ mod tests {
 
     #[test]
     fn from_config_keeps_a_zero_intensity() {
-        let cfg = PostProcessConfig {
-            ray_traced_reflections: true,
-            ssr_intensity: 0.0,
+        let cfg = Reflections {
+            ray_traced: true,
+            intensity: 0.0,
             ..Default::default()
         };
         assert!(RtReflectionSettings::from_config(&cfg).is_some());
@@ -168,10 +168,10 @@ mod tests {
 
     #[test]
     fn from_config_reuses_ssr_tunables_when_enabled() {
-        let cfg = PostProcessConfig {
-            ray_traced_reflections: true,
-            ssr_intensity: 9.0,
-            ssr_max_distance: 1.0e6,
+        let cfg = Reflections {
+            ray_traced: true,
+            intensity: 9.0,
+            max_distance: 1.0e6,
             ..Default::default()
         };
         let s = RtReflectionSettings::from_config(&cfg).expect("rt on");
@@ -183,9 +183,9 @@ mod tests {
     #[test]
     fn from_config_carries_trace_resolution_and_shadows() {
         use crate::components::PassResolution;
-        let cfg = PostProcessConfig {
-            rt_reflection_resolution: PassResolution::Quarter,
-            rt_reflection_shadows: false,
+        let cfg = Reflections {
+            ray_traced_resolution: PassResolution::Quarter,
+            ray_traced_shadows: false,
             ..Default::default()
         };
         let s = RtReflectionSettings::from_config(&cfg).expect("rt on");

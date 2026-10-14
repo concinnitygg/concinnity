@@ -1,7 +1,7 @@
 //! Runtime application of the Quality-group settings (TAA / SSAO / SSR / SSGI /
 //! auto-exposure). Each gates a render pass whose GPU resources (pipelines,
 //! render targets, descriptor sets) are built once at init from the world's
-//! PostProcessConfig, so applying a change at runtime means building or tearing
+//! settings assets, so applying a change at runtime means building or tearing
 //! down those resources, not flipping a uniform.
 //!
 //! The reconcile below brings each feature's `Option` field to the desired state

@@ -78,8 +78,8 @@ pass_ids! {
     /// backend implements the path; the `Fog` pass trilinear-samples the
     /// volume by (screen_uv, view_z).
     FogFroxel => "fog_froxel",
-    /// Temporal upscaling pass. When the world's `PostProcessConfig`
-    /// enables `temporal_upscaling`, the renderer draws the 3D scene at a
+    /// Temporal upscaling pass. When the world's `AntiAliasing` enables
+    /// `upscaling`, the renderer draws the 3D scene at a
     /// fraction of drawable size and inserts this pass between the post-SSR
     /// scene and the Bloom + Composite stack. The backend runs its
     /// platform-native temporal upscaler (MetalFX on macOS; FSR / DLSS /

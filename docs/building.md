@@ -242,7 +242,7 @@ Linux or Windows. Current deltas against the same scene on Metal:
 
 - Directional lighting reads as fully shadowed, so the sun and ambient terms are
   missing; point, spot, and area lights are correct.
-- `GraphicsConfig.shadow_map_size = 0` (the 1x1 fallback shadow array) renders
+- `Shadows.map_size = 0` (the 1x1 fallback shadow array) renders
   corrupt geometry rather than an unshadowed scene.
 - MoltenVK reports a `maxPerStageDescriptorSamplers` limit of 16, far below what
   desktop drivers allow. The geometry pipeline layout fits by binding fewer

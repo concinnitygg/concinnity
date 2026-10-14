@@ -1,5 +1,5 @@
 //! Backend-agnostic representation of the renderer's swapchain color-output
-//! mode. Built from the world's `PostProcessConfig.hdr_display` request plus
+//! mode. Built from the world's `Display.hdr` request plus
 //! the active display's measured EDR capability (the backend supplies the
 //! capability; this module is pure CPU). The result drives:
 //!

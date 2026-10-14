@@ -371,7 +371,7 @@ pub(crate) fn swap_pixel_format(hdr_mode: HdrOutputMode) -> MTLPixelFormat {
 // Turn display sync (vsync) on or off on the MTKView's backing CAMetalLayer.
 // `displaySyncEnabled` true locks presentation to the display refresh; false
 // presents as soon as a frame is ready (uncapped, possible tearing). Used both
-// at init (to honor GraphicsConfig.vsync) and at runtime (settings menu). A nil
+// at init (to honor FramePacing.vsync) and at runtime (settings menu). A nil
 // or non-CAMetalLayer layer is treated as a no-op, matching configure_hdr_layer.
 pub(crate) fn set_display_sync(mtk_view: &MTKView, on: bool) {
     let Some(layer) = mtk_view.layer() else {

@@ -235,7 +235,6 @@ mod tests {
 
     fn render_stack() -> Vec<WorldJsonlAsset> {
         vec![
-            asset("gfx", RegisteredType::GraphicsConfig, serde_json::json!({})),
             asset("win", RegisteredType::Window, serde_json::json!({})),
             asset(
                 "scene_shader",
@@ -397,23 +396,20 @@ mod tests {
     }
 
     #[test]
-    fn graphics_config_without_a_window_reports_it() {
+    fn a_text_label_without_a_window_reports_it() {
         let assets = vec![asset(
-            "gfx",
-            RegisteredType::GraphicsConfig,
-            serde_json::json!({}),
+            "label",
+            RegisteredType::TextLabel,
+            serde_json::json!({"content": "hi"}),
         )];
         let errs = errors_for(&assets);
         assert!(errs.iter().any(|e| e.contains("no Window")), "{errs:?}");
     }
 
     #[test]
-    fn graphics_config_without_a_shader_is_fine() {
+    fn a_window_without_a_shader_is_fine() {
         // A world that declares no Shader renders with the engine's own program.
-        let assets = vec![
-            asset("gfx", RegisteredType::GraphicsConfig, serde_json::json!({})),
-            asset("win", RegisteredType::Window, serde_json::json!({})),
-        ];
+        let assets = vec![asset("win", RegisteredType::Window, serde_json::json!({}))];
         assert!(errors_for(&assets).is_empty());
     }
 

@@ -15,7 +15,7 @@ use concinnity_core::components::DirectionalLight;
 use concinnity_core::ecs::ComponentAsset;
 use concinnity_core::ecs::Entity;
 use concinnity_core::ecs::World;
-use concinnity_engine::live_edit::lighting_preview;
+use concinnity_engine::live_edit::lighting_preview::{self, SettingsEdit};
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 
@@ -47,30 +47,34 @@ pub(super) fn plan(
             }
             Some(Apply::RenderConfig(RenderConfig::Fog(fog)))
         }
-        ComponentAsset::GraphicsConfig(config) => {
-            Some(Apply::RenderConfig(RenderConfig::Graphics(config)))
-        }
-        ComponentAsset::PostProcessConfig(config) => {
-            Some(Apply::RenderConfig(RenderConfig::Post(Box::new(config))))
-        }
-        _ => None,
+        asset => settings_edit(asset).map(|edit| Apply::RenderConfig(RenderConfig::Settings(edit))),
     }
+}
+
+// The settings edit a baked asset is, or `None` for a type the seam takes none
+// of.
+fn settings_edit(asset: ComponentAsset) -> Option<SettingsEdit> {
+    Some(match asset {
+        ComponentAsset::Shadows(a) => SettingsEdit::Shadows(a),
+        ComponentAsset::AmbientOcclusion(a) => SettingsEdit::AmbientOcclusion(a),
+        ComponentAsset::Reflections(a) => SettingsEdit::Reflections(a),
+        ComponentAsset::IndirectLighting(a) => SettingsEdit::IndirectLighting(a),
+        ComponentAsset::Exposure(a) => SettingsEdit::Exposure(a),
+        ComponentAsset::Bloom(a) => SettingsEdit::Bloom(a),
+        ComponentAsset::Vignette(a) => SettingsEdit::Vignette(a),
+        _ => return None,
+    })
 }
 
 // Whether this is a lighting type at all, and whether every field the edit
 // changed is one the renderer can be handed. The sun and the fog are replaced
-// wholesale, so every field of theirs qualifies; the other two carry knobs that
-// size a GPU resource at load beside the ones that do not.
+// wholesale, so every field of theirs qualifies; the settings assets carry
+// knobs that size a GPU resource at load beside the ones that do not.
 fn is_expressible(ct: RegisteredType, keys: &[String]) -> bool {
     match ct {
         RegisteredType::DirectionalLight | RegisteredType::VolumetricFog => true,
-        RegisteredType::GraphicsConfig => {
-            live_keys(keys, lighting_preview::LIVE_GRAPHICS_CONFIG_FIELDS)
-        }
-        RegisteredType::PostProcessConfig => {
-            live_keys(keys, lighting_preview::LIVE_POST_PROCESS_FIELDS)
-        }
-        _ => false,
+        _ => lighting_preview::live_settings_fields(ct.as_str())
+            .is_some_and(|live| live_keys(keys, live)),
     }
 }
 
@@ -80,11 +84,8 @@ pub(super) fn commit(world: &mut World, config: RenderConfig) {
         RenderConfig::Fog(fog) => {
             lighting_preview::apply_fog(world, Some(&fog));
         }
-        RenderConfig::Graphics(config) => {
-            lighting_preview::apply_graphics_config(world, &config);
-        }
-        RenderConfig::Post(config) => {
-            lighting_preview::apply_post_process_config(world, &config);
+        RenderConfig::Settings(edit) => {
+            lighting_preview::apply_settings(world, &edit);
         }
     }
 }
@@ -134,39 +135,41 @@ mod tests {
     // A shadow knob the per-frame cascade math reads goes live; the map
     // resolution sizes the shadow array at load, so it rebuilds.
     #[test]
-    fn a_graphics_config_edit_declines_the_load_time_knobs() {
+    fn a_shadows_edit_declines_the_load_time_knobs() {
         assert!(is_expressible(
-            RegisteredType::GraphicsConfig,
-            &keys(&["shadow_distance", "shadow_cascades"]),
+            RegisteredType::Shadows,
+            &keys(&["distance", "cascades"]),
         ));
         assert!(!is_expressible(
-            RegisteredType::GraphicsConfig,
-            &keys(&["shadow_map_size"]),
+            RegisteredType::Shadows,
+            &keys(&["map_size"])
         ));
         assert!(
-            !is_expressible(
-                RegisteredType::GraphicsConfig,
-                &keys(&["shadow_distance", "frames_in_flight"]),
-            ),
+            !is_expressible(RegisteredType::Shadows, &keys(&["distance", "map_size"]),),
             "one knob the renderer cannot take declines the whole change"
         );
+        assert!(!is_expressible(
+            RegisteredType::FramePacing,
+            &keys(&["frames_in_flight"]),
+        ));
     }
 
     // The look-tuning scalars go live; the feature toggles beside them gate
     // passes built at load.
     #[test]
-    fn a_post_process_edit_declines_the_toggles() {
+    fn a_look_edit_declines_the_toggles() {
         assert!(is_expressible(
-            RegisteredType::PostProcessConfig,
-            &keys(&["ambient_intensity", "exposure_ev", "ssgi_intensity"]),
+            RegisteredType::IndirectLighting,
+            &keys(&["ambient_intensity", "ssgi_intensity"]),
+        ));
+        assert!(is_expressible(RegisteredType::Exposure, &keys(&["ev"])));
+        assert!(!is_expressible(
+            RegisteredType::AmbientOcclusion,
+            &keys(&["enabled"]),
         ));
         assert!(!is_expressible(
-            RegisteredType::PostProcessConfig,
-            &keys(&["ssao"]),
-        ));
-        assert!(!is_expressible(
-            RegisteredType::PostProcessConfig,
-            &keys(&["aa_mode"]),
+            RegisteredType::AntiAliasing,
+            &keys(&["mode"]),
         ));
     }
 
@@ -179,13 +182,9 @@ mod tests {
         for (ty, args, changed) in [
             ("DirectionalLight", json!({ "intensity": 2.0 }), "intensity"),
             ("VolumetricFog", json!({ "density": 0.1 }), "density"),
+            ("Shadows", json!({ "distance": 90 }), "distance"),
             (
-                "GraphicsConfig",
-                json!({ "shadow_distance": 90 }),
-                "shadow_distance",
-            ),
-            (
-                "PostProcessConfig",
+                "IndirectLighting",
                 json!({ "ambient_intensity": 0.5 }),
                 "ambient_intensity",
             ),

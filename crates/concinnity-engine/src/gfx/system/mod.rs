@@ -15,7 +15,7 @@
 //!   stream_sources.rs  streamed texture payload sources + voxel palette entries
 //!   draw_geometry.rs   draw-object positions + auto-seed triangle gathering
 
-use concinnity_core::components::{GamepadAction, GraphicsConfig};
+use concinnity_core::components::{Background, GamepadAction};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Entity, PipelineContext, StepResult, System};
 use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
@@ -33,7 +33,8 @@ const IDENTITY4: [[f32; 4]; 4] = crate::gfx::draw_list::IDENTITY4;
 //
 // Components drained during init():
 //   Window          -- window title, size, and mode
-//   GraphicsConfig  -- frames-in-flight, clear color, max frames
+//   Background      -- clear color
+//   FramePacing, Shadows, ... -- the settings assets the resolver reads
 //   Mesh            -- raw inline geometry payloads (keyed by asset name)
 //   ProceduralMesh  -- generator-built geometry payloads (keyed by asset name)
 //   Model           -- multi-mesh model definitions (keyed by asset name)
@@ -225,16 +226,15 @@ impl std::fmt::Debug for GraphicsSystem {
 
 impl GraphicsSystem {
     /// Fresh renderer driver with no backend yet, reading and writing under
-    /// `tree`. Config (frames-in-flight, clear color, `max_frames`, shadow-map
-    /// size) is read from the world's `GraphicsConfig` in [`System::init`].
+    /// `tree`. The settings assets (frames in flight, clear color, shadow-map
+    /// size, ...) and the launch's frame cap are read in [`System::init`].
     pub(crate) fn new(tree: Option<&StateTree>) -> Self {
-        // The schema's own defaults, so a world with no GraphicsConfig sees the
-        // same values as one that declares an all-default component.
-        let gfx = GraphicsConfig::default();
         Self {
             state: tree.cloned(),
-            clear_color: gfx.clear_color,
-            max_frames: gfx.max_frames,
+            // The schema's own default, so a world with no Background sees the
+            // same color as one that declares an all-default component.
+            clear_color: Background::default().color,
+            max_frames: None,
             failed: false,
             render_secs: 0.0,
             frame_count: 0,

@@ -50,7 +50,7 @@ pub struct TransparentView {
     /// `[irradiance, intensity, _, _]`: 1 in `irradiance` when the bound
     /// irradiance cube holds the sky's diffuse light (else the water body takes
     /// the main pass's flat ambient), and the authored indirect-light multiplier
-    /// (`PostProcessConfig.ambient_intensity`) in `intensity`.
+    /// (`IndirectLighting.ambient_intensity`) in `intensity`.
     pub ambient: [f32; 4],
 }
 

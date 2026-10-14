@@ -36,15 +36,15 @@ pub(crate) fn adopt(mut runtime: concinnity_engine::Runtime) -> Box<dyn Driver> 
 
 // The headless loop, on every tier: the simulation systems this framework owns,
 // stepped on a fixed virtual timestep with no window and no renderer behind
-// them. A world's `GraphicsConfig` is inert here, since there is no render
-// system for it to gate in.
+// them. A world's `Window` is inert here, since there is no render system for
+// it to gate in.
 pub(crate) fn headless(world: Inner) -> Box<dyn Driver> {
     Box::new(concinnity_core::App::with_systems(world, HEADLESS_SYSTEMS))
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::components::{AppConfig, GraphicsConfig, PhysicsConfig, TextLabel};
+    use crate::components::{AppConfig, PhysicsConfig, TextLabel, Window};
     use crate::{App, World};
 
     // The whole point of the driver being a value: a `std` build can run a
@@ -69,7 +69,7 @@ mod tests {
     #[test]
     fn a_world_that_would_render_runs_headless_as_well() {
         let mut world = World::new();
-        world.add_component(GraphicsConfig::default());
+        world.add_component(Window::default());
         world.add_component(TextLabel {
             content: "Hello, world!".into(),
             ..Default::default()
@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn the_default_loop_is_headless_with_no_backend_compiled_in() {
         let mut world = World::new();
-        world.add_component(GraphicsConfig::default());
+        world.add_component(Window::default());
 
         App::from_world(world).run().expect("the run ends");
     }

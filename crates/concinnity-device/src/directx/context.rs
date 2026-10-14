@@ -769,7 +769,7 @@ pub(crate) struct DxContext {
     // / velocity geometry pre-passes. See [`GbufferResources`].
     pub(super) gbuffer: Option<GbufferResources>,
 
-    // Temporal anti-aliasing. `Some` only when `PostProcessConfig.aa_mode` is set;
+    // Temporal anti-aliasing. `Some` only when `AntiAliasing.mode` is set;
     // when `None` the history resolve and the projection jitter are skipped and
     // the composite samples the HDR scene target directly.
     pub(super) taa: Option<TaaResources>,
@@ -782,7 +782,7 @@ pub(crate) struct DxContext {
     // SSAO (GTAO). See [`SsaoState`].
     pub(super) ssao: SsaoState,
 
-    // SSR. `Some` when `PostProcessConfig.ssr` is set, or when SSGI is on
+    // SSR. `Some` when `Reflections.screen_space` is set, or when SSGI is on
     // (SSGI reuses the depth + normal pre-pass G-buffer). The resolve half
     // (`ssr.resolve`) is `Some` only when SSR itself is authored on; with it
     // off the TAA / bloom / composite passes sample `hdr_srv_gpu` directly as
@@ -791,7 +791,7 @@ pub(crate) struct DxContext {
     // (see `scene_srv_for_post`).
     pub(super) ssr: Option<SsrResources>,
 
-    // SSGI. `Some` only when `PostProcessConfig.indirect_lighting` is `ssgi`.
+    // SSGI. `Some` only when `IndirectLighting.technique` is `ssgi`.
     // A hemisphere-gather + depth-aware-blur composite that bleeds nearby lit
     // surfaces' color onto one another, additively on top of the IBL ambient.
     // Reuses the SSR pre-pass G-buffer (so `ssr` is also `Some` whenever this

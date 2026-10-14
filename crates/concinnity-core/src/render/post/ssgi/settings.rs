@@ -1,5 +1,5 @@
 //! Screen-space global illumination (SSGI) configuration. Backend-agnostic
-//! resolve of the authored `PostProcessConfig` SSGI fields into clamped
+//! resolve of the authored `IndirectLighting` SSGI fields into clamped
 //! settings, plus the per-frame GPU uniform. SSGI reuses the depth + normal
 //! pre-pass G-buffer SSR reads, but integrates bounced radiance over a
 //! cosine-weighted hemisphere instead of along a single reflection vector,
@@ -7,7 +7,7 @@
 //! term. This module owns only the parameter math so it can be unit-tested
 //! without a GPU.
 
-use crate::components::{IndirectLighting, PostProcessConfig};
+use crate::components::{IndirectLighting, IndirectTechnique};
 use crate::gfx::camera::view_ray_scale;
 
 use crate::gfx::render_types::SsgiParams;
@@ -26,7 +26,7 @@ const MAX_DISTANCE: f32 = 100.0;
 // Hemisphere rays traced per pixel each frame. The accumulation averages rays
 // across frames, so more rays per frame buy faster convergence after a
 // disocclusion or a lighting change rather than a smoother steady state. The
-// default is the authored `PostProcessConfig.ssgi_rays` default, owned by the
+// default is the authored `IndirectLighting.ssgi_rays` default, owned by the
 // schema.
 #[cfg(test)]
 pub(crate) const DEFAULT_RAYS: u32 = crate::components::DEFAULT_SSGI_RAYS;
@@ -72,10 +72,10 @@ pub struct SsgiFrame {
 
 impl SsgiSettings {
     /// Resolve the SSGI tunables into clamped settings, or `None` when
-    /// `indirect_lighting` is not `Ssgi`, or its intensity scales the gathered
+    /// `technique` is not `Ssgi`, or its intensity scales the gathered
     /// bounce to zero, so the backend can skip the SSGI passes.
-    pub fn from_config(cfg: &PostProcessConfig) -> Option<Self> {
-        (cfg.indirect_lighting == IndirectLighting::Ssgi)
+    pub fn from_config(cfg: &IndirectLighting) -> Option<Self> {
+        (cfg.technique == IndirectTechnique::Ssgi)
             .then(|| {
                 Self::resolve(
                     cfg.ssgi_intensity,
@@ -160,9 +160,9 @@ mod tests {
 
     #[test]
     fn from_config_follows_indirect_lighting() {
-        assert!(SsgiSettings::from_config(&PostProcessConfig::default()).is_some());
-        let ibl = PostProcessConfig {
-            indirect_lighting: IndirectLighting::Ibl,
+        assert!(SsgiSettings::from_config(&IndirectLighting::default()).is_some());
+        let ibl = IndirectLighting {
+            technique: IndirectTechnique::Ibl,
             ..Default::default()
         };
         assert!(SsgiSettings::from_config(&ibl).is_none());
@@ -170,15 +170,15 @@ mod tests {
 
     #[test]
     fn from_config_drops_an_inert_intensity() {
-        let inert = PostProcessConfig {
-            indirect_lighting: IndirectLighting::Ssgi,
+        let inert = IndirectLighting {
+            technique: IndirectTechnique::Ssgi,
             ssgi_intensity: 0.0,
             ..Default::default()
         };
         assert!(SsgiSettings::from_config(&inert).is_none());
 
-        let faint = PostProcessConfig {
-            indirect_lighting: IndirectLighting::Ssgi,
+        let faint = IndirectLighting {
+            technique: IndirectTechnique::Ssgi,
             ssgi_intensity: 0.05,
             ..Default::default()
         };
@@ -187,8 +187,8 @@ mod tests {
 
     #[test]
     fn from_config_carries_resolution_and_rays() {
-        let cfg = PostProcessConfig {
-            indirect_lighting: IndirectLighting::Ssgi,
+        let cfg = IndirectLighting {
+            technique: IndirectTechnique::Ssgi,
             ssgi_resolution: PassResolution::Quarter,
             ssgi_rays: 2,
             ..Default::default()
@@ -200,8 +200,8 @@ mod tests {
 
     #[test]
     fn from_config_resolves_and_clamps_when_enabled() {
-        let cfg = PostProcessConfig {
-            indirect_lighting: IndirectLighting::Ssgi,
+        let cfg = IndirectLighting {
+            technique: IndirectTechnique::Ssgi,
             ssgi_intensity: 99.0,
             ssgi_max_distance: 1.0e6,
             ..Default::default()
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn zero_intensity_does_not_contribute() {
-        // A world may author `indirect_lighting: ssgi` and dial the intensity to
+        // A world may author `technique: ssgi` and dial the intensity to
         // zero; the settings still resolve, so presence alone cannot gate the pass.
         assert!(!SsgiSettings::resolve(0.0, 8.0, DEFAULT_RAYS, 1).contributes());
         assert!(SsgiSettings::resolve(0.05, 8.0, DEFAULT_RAYS, 1).contributes());

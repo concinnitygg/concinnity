@@ -89,7 +89,7 @@ type Structure = Retained<ProtocolObject<dyn MTLAccelerationStructure>>;
 // docs on [`MtlContext`](super::context::MtlContext) for the exact gates).
 pub(crate) struct RtState {
     // Resolved + clamped tunables. `Some` only when the world's
-    // `PostProcessConfig` sets `ray_traced_reflections` AND the GPU supports
+    // `Reflections` sets `ray_traced` AND the GPU supports
     // ray tracing; gates the RT pass. RT takes precedence over SSR resolve
     // and reuses `ssr.reflection` as its resolve target.
     pub settings: Option<RtReflectionSettings>,

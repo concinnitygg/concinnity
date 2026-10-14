@@ -1,8 +1,8 @@
 //! Screen-space ambient occlusion (GTAO) configuration. Backend-agnostic
-//! resolve of the authored `PostProcessConfig` SSAO fields into clamped
+//! resolve of the authored `AmbientOcclusion` SSAO fields into clamped
 //! settings, plus the per-frame GPU uniform.
 
-use crate::components::PostProcessConfig;
+use crate::components::AmbientOcclusion;
 use crate::gfx::camera::view_ray_scale;
 
 use crate::gfx::render_types::SsaoParams;
@@ -27,11 +27,11 @@ pub struct SsaoSettings {
 
 impl SsaoSettings {
     /// Resolve the SSAO tunables into clamped settings, or `None` when the
-    /// `ssao` toggle is off -- or on with an intensity that cannot darken
+    /// `enabled` toggle is off -- or on with an intensity that cannot darken
     /// anything -- so the backend can skip the SSAO passes entirely.
-    pub fn from_config(cfg: &PostProcessConfig) -> Option<Self> {
-        cfg.ssao
-            .then(|| Self::resolve(cfg.ssao_radius, cfg.ssao_intensity))
+    pub fn from_config(cfg: &AmbientOcclusion) -> Option<Self> {
+        cfg.enabled
+            .then(|| Self::resolve(cfg.radius, cfg.intensity))
             .filter(|s| s.contributes())
     }
 
@@ -74,9 +74,9 @@ mod tests {
 
     #[test]
     fn from_config_follows_the_toggle() {
-        assert!(SsaoSettings::from_config(&PostProcessConfig::default()).is_some());
-        let off = PostProcessConfig {
-            ssao: false,
+        assert!(SsaoSettings::from_config(&AmbientOcclusion::default()).is_some());
+        let off = AmbientOcclusion {
+            enabled: false,
             ..Default::default()
         };
         assert!(SsaoSettings::from_config(&off).is_none());
@@ -87,16 +87,16 @@ mod tests {
         // The backends read presence, so a toggle left on with a value that
         // cannot change a pixel has to resolve away here or the passes run for
         // nothing. Verified pixel-for-pixel neutral.
-        let inert = PostProcessConfig {
-            ssao: true,
-            ssao_intensity: 0.0,
+        let inert = AmbientOcclusion {
+            enabled: true,
+            intensity: 0.0,
             ..Default::default()
         };
         assert!(SsaoSettings::from_config(&inert).is_none());
 
-        let faint = PostProcessConfig {
-            ssao: true,
-            ssao_intensity: 0.05,
+        let faint = AmbientOcclusion {
+            enabled: true,
+            intensity: 0.05,
             ..Default::default()
         };
         assert!(SsaoSettings::from_config(&faint).is_some());
@@ -104,11 +104,10 @@ mod tests {
 
     #[test]
     fn from_config_resolves_and_clamps_when_enabled() {
-        let cfg = PostProcessConfig {
-            ssao: true,
-            ssao_radius: -1.0,
-            ssao_intensity: 99.0,
-            ..Default::default()
+        let cfg = AmbientOcclusion {
+            enabled: true,
+            radius: -1.0,
+            intensity: 99.0,
         };
         let s = SsaoSettings::from_config(&cfg).expect("ssao on");
         assert!(s.radius > 0.0);

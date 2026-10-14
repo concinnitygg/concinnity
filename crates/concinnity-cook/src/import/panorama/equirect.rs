@@ -14,7 +14,7 @@
 // into a bright key light and a hot specular highlight. A panorama capped at
 // white cannot: its image-based lighting is a faithful but low-contrast ambient
 // whose irradiance never exceeds pi. That makes it an exact backdrop and a soft
-// fill light, not a key light. `PostProcessConfig.ambient_intensity` scales the
+// fill light, not a key light. `IndirectLighting.ambient_intensity` scales the
 // ambient term at render time and is the knob for raising it; the bake stays
 // honest about what the file actually contains.
 //

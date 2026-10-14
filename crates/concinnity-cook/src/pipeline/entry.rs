@@ -483,7 +483,7 @@ mod tests {
     #[test]
     fn engine_defaults_reach_the_blob_as_a_component() {
         let world = concat!(
-            r#"["GraphicsConfig",{"$id":"gfx"}]"#,
+            r#"["FramePacing",{"$id":"gfx"}]"#,
             "\n",
             r#"["EngineDefaults",{"$id":"defaults","loading_overlay":false}]"#,
             "\n",
@@ -610,7 +610,7 @@ mod tests {
         std::fs::write(
             &world_path,
             concat!(
-                r#"["GraphicsConfig",{"$id":"gfx"}]"#,
+                r#"["FramePacing",{"$id":"gfx"}]"#,
                 "\n",
                 r#"["Font",{"$id":"f","size_px":20}]"#,
                 "\n",

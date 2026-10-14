@@ -17,7 +17,7 @@ use crate::directx::context::DxContext;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::post::post_device::{DxPostDevice, PooledTarget, PostPipeline, PostTarget};
 
-// SSAO (GTAO). `resources` is `Some` only when `PostProcessConfig.ssao` is set;
+// SSAO (GTAO). `resources` is `Some` only when `AmbientOcclusion.enabled` is set;
 // otherwise the kernel and blur are skipped and the main pass samples the 1x1
 // `white` fallback (always present, so the main-pass root signature's AO SRV
 // slot always points at a valid descriptor) through `white_srv_gpu` for a
@@ -32,7 +32,7 @@ pub(in crate::directx) struct SsaoState {
     pub white_srv_gpu: SrvSlot,
 }
 
-// SSAO resources held by `DxContext` when `PostProcessConfig.ssao` is on.
+// SSAO resources held by `DxContext` when `AmbientOcclusion.enabled` is on.
 pub(in crate::directx) struct SsaoResources {
     // Resolved authored tunables; turned into a per-frame `SsaoParams` push.
     pub(in crate::directx) settings: SsaoSettings,

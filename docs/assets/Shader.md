@@ -10,7 +10,7 @@ backend.
 projection and uses them for every draw a Shader does not claim, so a world
 that wants standard lighting declares no Shader at all. The shadow pass and
 the depth pre-pass are engine-internal and take no Shader stage; enable or
-size shadows with `shadow_map_size` in [GraphicsConfig](GraphicsConfig.md).
+size shadows with `map_size` in [Shadows](Shadows.md).
 
 # The two hooks
 

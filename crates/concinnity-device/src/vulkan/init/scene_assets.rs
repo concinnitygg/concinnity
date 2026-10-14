@@ -45,7 +45,7 @@ pub(super) fn build_scene_assets(
 
     // Anisotropic degree for the scene sampler: enabled only when the device
     // supports `samplerAnisotropy` (the matching feature is turned on in
-    // `device.rs`). Clamp the requested degree (GraphicsConfig.anisotropy) to
+    // `device.rs`). Clamp the requested degree (TextureFiltering.anisotropy) to
     // the GPU's 1..16 range and then to the device limit.
     let scene_aniso = {
         // SAFETY: a property query on a live handle; it only reads.

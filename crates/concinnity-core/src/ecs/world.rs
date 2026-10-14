@@ -15,6 +15,7 @@ use crate::memory::{Arena, MemTag};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
+use crate::ecs::asset_fields::ClampedParam;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::user_system::{self, UserSystem};
 use crate::ecs::waves::{self, ExecSchedule};
@@ -88,6 +89,9 @@ pub struct World {
     // the end of `start()` (after init, when data-dependent declarations are
     // final) and rebuilt when a `Done` system leaves the set.
     schedule: Option<ExecSchedule>,
+    // Values `add_component` moved into their declared ranges, by asset type,
+    // held until the runtime reports them.
+    clamped: Vec<(&'static str, ClampedParam)>,
 }
 
 // A world must stay movable to the simulation thread; a !Send member in any
@@ -133,6 +137,7 @@ impl World {
             entries: &[],
             systems_built: false,
             schedule: None,
+            clamped: Vec::new(),
         }
     }
 
@@ -158,9 +163,20 @@ impl World {
     /// Add one component to the world.
     ///
     /// Only a [`RuntimeComponent`] can be added: a build-only asset is consumed
-    /// by the cook and never reaches a world.
+    /// by the cook and never reaches a world. The value passes the same clamps
+    /// a cooked world's does; each ranged field it moved is kept for
+    /// [`take_clamped_params`](Self::take_clamped_params).
     pub fn add_component<C: RuntimeComponent>(&mut self, c: C) {
-        self.components.push(c.into());
+        let (component, clamped) = c.into().validated();
+        let asset = component.type_name();
+        self.clamped.extend(clamped.into_iter().map(|c| (asset, c)));
+        self.components.push(component);
+    }
+
+    /// Every value [`add_component`](Self::add_component) moved into its
+    /// declared range since the last call, with its asset type's name.
+    pub fn take_clamped_params(&mut self) -> Vec<(&'static str, ClampedParam)> {
+        core::mem::take(&mut self.clamped)
     }
 
     /// Add a baked mesh `payload` and return the handle a
@@ -286,7 +302,7 @@ impl World {
 
     /// Whether an entity is still live. Mirror of `PipelineContext::is_alive`;
     /// guards name-index resolves against entities despawned by the start-time
-    /// drains (Window, GraphicsConfig, Scene, ...).
+    /// drains (Window, Shadows, Scene, ...).
     pub fn is_alive(&self, entity: Entity) -> bool {
         self.components.is_alive(entity)
     }

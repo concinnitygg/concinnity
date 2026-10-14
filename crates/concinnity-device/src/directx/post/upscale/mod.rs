@@ -37,7 +37,7 @@ mod fsr;
 mod xess;
 
 // Temporal upscaling state. `backend` is `Some` only when the world's
-// `PostProcessConfig.temporal_upscaling` is on and a vendor context was created.
+// `AntiAliasing.upscaling` is on and a vendor context was created.
 // `requested` is the upscaler and model the world asked for, kept so a resize
 // rebuilds the same one. `jitter` is the current frame's sub-pixel projection
 // offset in render pixels, set by the frame stages before the parallel fan-out.

@@ -1,6 +1,6 @@
 //! Runtime application of the Quality-group settings (TAA / SSAO / SSR / SSGI /
 //! auto-exposure). Each gates a render pass whose GPU resources (pipelines,
-//! render targets) are built once at init from the world's PostProcessConfig, so
+//! render targets) are built once at init from the world's settings assets, so
 //! applying a change at runtime means building or tearing down those resources.
 //!
 //! Unlike the Vulkan backend, DirectX picks its scene-input + occlusion sources

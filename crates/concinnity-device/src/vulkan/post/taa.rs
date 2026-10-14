@@ -20,7 +20,7 @@ use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkPostDevice, p
 // The shared temporal resolve, holding Vulkan's own pipeline and target types.
 pub(in crate::vulkan) type VkTaaPass = TaaPass<PostPipeline, PostTarget>;
 
-// Temporal-anti-aliasing state. Built only when the world's `PostProcessConfig`
+// Temporal-anti-aliasing state. Built only when the world's `AntiAliasing`
 // asked for it, or when temporal upscaling forced the velocity pre-pass on.
 pub(in crate::vulkan) struct TaaResources {
     // The shared resolve.

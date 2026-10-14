@@ -39,7 +39,7 @@ use super::scoped_encoder::ScopedEncoder;
 // resolved tunables, the EMA-tracked adapted EV, the authored bias, the
 // histogram-build + average compute pipelines, their shared/readback buffers,
 // and the per-frame timing bookkeeping. All `Some` only when the world's
-// `PostProcessConfig` turns auto-exposure on; otherwise the static-exposure
+// `Exposure` turns auto-exposure on; otherwise the static-exposure
 // path drives `post_process.exposure` directly and these stay `None`.
 pub(crate) struct AutoExposureGpu {
     // The tunables, the authored `exposure_ev` bias and the EMA-tracked adapted
@@ -198,7 +198,7 @@ pub(super) struct AutoExposurePipelines {
 // Build the auto-exposure compute pipelines from the single-source
 // `auto_exposure.hlsl`. Each kernel compiles as its own variant so it declares
 // only the resources it binds. Returned only when the world's
-// `PostProcessConfig` opts into auto-exposure; otherwise the histogram pass is
+// `Exposure` opts into auto-exposure; otherwise the histogram pass is
 // skipped entirely.
 pub(super) fn build_auto_exposure_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,

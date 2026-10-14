@@ -325,7 +325,7 @@ impl DxContext {
             })
             .transpose()?;
 
-        // SSAO (only when PostProcessConfig opted in).
+        // SSAO (only when the world opted in).
         let ssao_rebuilt = rebuild_if_live!(
             self.ssao.resources.is_some(),
             concinnity_core::render::post::ssao::build_pipelines(&self.post_device(0))
@@ -337,13 +337,13 @@ impl DxContext {
             concinnity_core::render::post::ssr::build_pipeline(&self.post_device(0))
         );
 
-        // SSGI (only when PostProcessConfig.indirect_lighting == ssgi).
+        // SSGI (only when IndirectLighting.technique == ssgi).
         let ssgi_rebuilt = rebuild_if_live!(
             self.ssgi.is_some(),
             concinnity_core::render::post::ssgi::build_pipelines(&self.post_device(0))
         );
 
-        // TAA (only when PostProcessConfig.aa_mode).
+        // TAA (only when AntiAliasing.mode).
         let taa_rebuilt = rebuild_if_live!(
             self.taa.is_some(),
             concinnity_core::render::post::taa::build_pipeline(&self.post_device(0))

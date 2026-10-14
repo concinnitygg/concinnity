@@ -207,6 +207,14 @@ impl Runtime {
         if self.status != RuntimeStatus::Created {
             return Err(WorldError::AlreadyStarted);
         }
+        for (asset, clamped) in self.world.take_clamped_params() {
+            tracing::warn!(
+                "{asset}.{}: {} is outside its range, clamped to {}",
+                clamped.key,
+                clamped.from,
+                clamped.to
+            );
+        }
         self.install_home();
         self.publish_state_tree();
         self.install_budgets();
@@ -428,7 +436,7 @@ mod tests {
     use concinnity_core::ecs::FrameRateCap;
 
     // Starting the runtime publishes the thread + memory budgets as world resources,
-    // honoring an `AppConfig`'s overrides. A world with no GraphicsConfig starts
+    // honoring an `AppConfig`'s overrides. A world with nothing to draw starts
     // without building a GPU, so this exercises the budget install in isolation.
     #[test]
     fn start_publishes_budgets_honoring_app_config_limits() {
@@ -689,7 +697,7 @@ mod tests {
         runtime.start().unwrap();
         assert!(
             runtime.world().resource::<FrameRateCap>().is_none(),
-            "no cap is published without a GraphicsConfig"
+            "no cap is published without a renderer"
         );
         assert_eq!(runtime.world_step(), StepResult::Done);
     }

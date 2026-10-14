@@ -21,7 +21,7 @@ use crate::vulkan::post::post_device::{
     PostPipeline, PostTarget, VkAttachment, VkPostDevice, post_extent,
 };
 
-// SSAO resources held by `VkContext` when `PostProcessConfig.ssao` is on.
+// SSAO resources held by `VkContext` when `AmbientOcclusion.enabled` is on.
 pub(in crate::vulkan) struct SsaoResources {
     // Resolved authored tunables; turned into a per-frame `SsaoParams` push.
     pub(in crate::vulkan) settings: SsaoSettings,

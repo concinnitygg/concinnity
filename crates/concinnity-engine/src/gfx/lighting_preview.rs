@@ -15,43 +15,68 @@
 //! relaunching would.
 
 use concinnity_core::components::{
-    DirectionalLight, GraphicsConfig, PostProcessConfig, VolumetricFog,
+    AmbientOcclusion, Bloom, DirectionalLight, Exposure, IndirectLighting, Reflections, Shadows,
+    Vignette, VolumetricFog,
 };
 use concinnity_core::ecs::World;
 use concinnity_core::render::ops::RenderOps;
 use concinnity_core::render::volumetric_fog;
+use concinnity_core::settings::{QualityEffects, WorldSettings};
 
 use crate::ecs::ActiveRenderQueues;
 use crate::settings::system::{SettingsSlot, SettingsState};
 
-/// The `GraphicsConfig` fields this module can apply to a running world. The
-/// rest (shadow map resolution, frames in flight, the sampler's anisotropy)
-/// size a GPU resource at load and need the world rebuilt.
-pub const LIVE_GRAPHICS_CONFIG_FIELDS: &[&str] =
-    &["shadow_distance", "shadow_cascades", "shadow_update"];
-
-/// The `PostProcessConfig` fields this module can apply to a running world:
-/// every look-tuning scalar the settings menu exposes as a slider. The feature
-/// toggles and the resolution knobs beside them gate render passes whose
-/// pipelines and targets are built at load, so they need the world rebuilt.
-pub const LIVE_POST_PROCESS_FIELDS: &[&str] = &[
-    "ambient_intensity",
-    "exposure_ev",
-    "bloom_intensity",
-    "bloom_threshold",
-    "bloom_knee",
-    "vignette_strength",
-    "lut_strength",
-    "ssao_radius",
-    "ssao_intensity",
-    "ssr_intensity",
-    "ssr_max_distance",
-    "ssgi_intensity",
-    "ssgi_max_distance",
-    "auto_exposure_min_ev",
-    "auto_exposure_max_ev",
-    "auto_exposure_speed",
+/// The settings assets this module can apply to a running world, each with the
+/// fields it applies live: the shadow cadence the per-frame cascade math reads,
+/// and every look-tuning scalar the settings menu exposes as a slider. The
+/// rest (shadow map resolution, the feature toggles and the resolution knobs)
+/// size or gate a GPU resource built at load and need the world rebuilt.
+pub const LIVE_SETTINGS_FIELDS: &[(&str, &[&str])] = &[
+    ("Shadows", &["distance", "cascades", "update"]),
+    ("AmbientOcclusion", &["radius", "intensity"]),
+    ("Reflections", &["intensity", "max_distance"]),
+    (
+        "IndirectLighting",
+        &["ambient_intensity", "ssgi_intensity", "ssgi_max_distance"],
+    ),
+    (
+        "Exposure",
+        &["ev", "auto_min_ev", "auto_max_ev", "auto_speed"],
+    ),
+    ("Bloom", &["intensity", "threshold", "knee"]),
+    ("Vignette", &["strength"]),
 ];
+
+/// The fields of `asset` this module applies live, or `None` when it applies
+/// none of that type.
+pub fn live_settings_fields(asset: &str) -> Option<&'static [&'static str]> {
+    LIVE_SETTINGS_FIELDS
+        .iter()
+        .find(|(name, _)| *name == asset)
+        .map(|(_, fields)| *fields)
+}
+
+/// An edited settings asset to apply to a running world. Only the fields in
+/// [`LIVE_SETTINGS_FIELDS`] reach the picture; the rest move the authored
+/// baseline the settings menu re-clamps from and take effect at the next
+/// launch.
+#[derive(Clone, Debug)]
+pub enum SettingsEdit {
+    /// The cascade schedule.
+    Shadows(Shadows),
+    /// The occlusion radius and strength.
+    AmbientOcclusion(AmbientOcclusion),
+    /// The reflection strength and reach.
+    Reflections(Reflections),
+    /// The ambient scale and the bounce strength and reach.
+    IndirectLighting(IndirectLighting),
+    /// The exposure offset and the auto-exposure bounds and speed.
+    Exposure(Exposure),
+    /// The bloom tunables.
+    Bloom(Bloom),
+    /// The vignette strength.
+    Vignette(Vignette),
+}
 
 /// Whether the running world has a graphics context to apply a lighting change
 /// to. `false` in a headless world and before graphics init has published its
@@ -100,22 +125,24 @@ pub fn apply_fog(world: &mut World, fog: Option<&VolumetricFog>) -> bool {
     .is_some()
 }
 
-/// Apply an edited `GraphicsConfig`'s shadow knobs. Fields outside
-/// [`LIVE_GRAPHICS_CONFIG_FIELDS`] only move the authored baseline the settings
-/// menu re-clamps from; they take effect at the next launch.
-pub fn apply_graphics_config(world: &mut World, config: &GraphicsConfig) -> bool {
+/// Apply an edited settings asset to a running world. Returns whether the
+/// world took it.
+pub fn apply_settings(world: &mut World, edit: &SettingsEdit) -> bool {
+    match edit {
+        SettingsEdit::Shadows(shadows) => apply_shadows(world, shadows),
+        look => apply_look(world, look),
+    }
+}
+
+// Apply an edited `Shadows`' cascade schedule.
+fn apply_shadows(world: &mut World, shadows: &Shadows) -> bool {
     with_live(world, |state, ops| {
-        state.authored.shadow_map_size = config.shadow_map_size;
-        state.authored.anisotropy = config.anisotropy;
-        state.authored.shadow_cadence.update = config.shadow_update;
-        state.authored.shadow_cadence.distance = config.shadow_distance;
-        state.authored.shadow_cadence.cascades = config.shadow_cascades;
+        state.authored.shadows = shadows.clone();
         let user = state.persisted_graphics().clone();
         let resolved = state.resolve_quality(&user, &state.ceiling());
 
         let quality = &mut state.graphics.quality;
         quality.shadow_map_size = resolved.shadow_map_size;
-        quality.anisotropy = resolved.anisotropy;
         let cadence = resolved.shadow_cadence;
         if cadence != quality.shadow_cadence {
             quality.shadow_cadence = cadence;
@@ -125,29 +152,24 @@ pub fn apply_graphics_config(world: &mut World, config: &GraphicsConfig) -> bool
     .is_some()
 }
 
-/// Apply an edited `PostProcessConfig`'s look-tuning scalars: the composite
-/// params, the per-feature sub-quality settings, and the ambient scale. Fields
-/// outside [`LIVE_POST_PROCESS_FIELDS`] are ignored here.
-pub fn apply_post_process_config(world: &mut World, config: &PostProcessConfig) -> bool {
+// Apply an edited look-tuning asset: the composite params, the per-feature
+// sub-quality settings, and the ambient scale.
+fn apply_look(world: &mut World, edit: &SettingsEdit) -> bool {
     with_live(world, |state, ops| {
-        copy_live_scalars(&mut state.authored.post_config, config);
-        // The edited config counts as declared whether or not the world loaded
-        // with one.
-        let declared = std::mem::replace(&mut state.authored.post_declared, true);
+        adopt_live_scalars(&mut state.authored, edit);
         let user = state.persisted_graphics().clone();
         let resolved = state.resolve(&user, &state.ceiling());
-        state.authored.post_declared = declared;
 
-        let post_config = &mut state.graphics.quality.post_config;
-        copy_live_scalars(post_config, &resolved.quality.post_config);
+        let effects = &mut state.graphics.quality.effects;
+        copy_live_effects(effects, &resolved.quality.effects);
 
         // `fxaa` follows the live AA mode, which no field here can move.
         let mut params = resolved.post_process;
-        params.fxaa = post_config.aa_mode.fxaa_flag();
+        params.fxaa = effects.anti_aliasing.mode.fxaa_flag();
         state.graphics.post_process = params;
         ops.record(move |backend| backend.update_post_process(params));
 
-        let quality = concinnity_core::settings::resolve::quality_settings(post_config);
+        let quality = state.graphics.quality.quality_settings();
         ops.record(move |backend| backend.update_quality_params(quality));
 
         let ambient = resolved.ambient_intensity;
@@ -159,25 +181,55 @@ pub fn apply_post_process_config(world: &mut World, config: &PostProcessConfig) 
     .is_some()
 }
 
-// Copy the fields in `LIVE_POST_PROCESS_FIELDS` from an edited config onto a
-// held one, leaving the toggles and resolution knobs beside them alone.
-fn copy_live_scalars(dst: &mut PostProcessConfig, src: &PostProcessConfig) {
-    dst.ambient_intensity = src.ambient_intensity;
-    dst.exposure_ev = src.exposure_ev;
-    dst.bloom_intensity = src.bloom_intensity;
-    dst.bloom_threshold = src.bloom_threshold;
-    dst.bloom_knee = src.bloom_knee;
-    dst.vignette_strength = src.vignette_strength;
-    dst.lut_strength = src.lut_strength;
-    dst.ssao_radius = src.ssao_radius;
-    dst.ssao_intensity = src.ssao_intensity;
-    dst.ssr_intensity = src.ssr_intensity;
-    dst.ssr_max_distance = src.ssr_max_distance;
-    dst.ssgi_intensity = src.ssgi_intensity;
-    dst.ssgi_max_distance = src.ssgi_max_distance;
-    dst.auto_exposure_min_ev = src.auto_exposure_min_ev;
-    dst.auto_exposure_max_ev = src.auto_exposure_max_ev;
-    dst.auto_exposure_speed = src.auto_exposure_speed;
+// Move the authored baseline's live scalars to an edited asset's, leaving the
+// toggles and resolution knobs beside them alone.
+fn adopt_live_scalars(world: &mut WorldSettings, edit: &SettingsEdit) {
+    let effects = &mut world.effects;
+    match edit {
+        SettingsEdit::Shadows(_) => {}
+        SettingsEdit::AmbientOcclusion(src) => {
+            let dst = &mut effects.ambient_occlusion;
+            dst.radius = src.radius;
+            dst.intensity = src.intensity;
+        }
+        SettingsEdit::Reflections(src) => {
+            let dst = &mut effects.reflections;
+            dst.intensity = src.intensity;
+            dst.max_distance = src.max_distance;
+        }
+        SettingsEdit::IndirectLighting(src) => {
+            let dst = &mut effects.indirect_lighting;
+            dst.ambient_intensity = src.ambient_intensity;
+            dst.ssgi_intensity = src.ssgi_intensity;
+            dst.ssgi_max_distance = src.ssgi_max_distance;
+        }
+        SettingsEdit::Exposure(src) => {
+            let dst = &mut effects.exposure;
+            dst.ev = src.ev;
+            dst.auto_min_ev = src.auto_min_ev;
+            dst.auto_max_ev = src.auto_max_ev;
+            dst.auto_speed = src.auto_speed;
+        }
+        SettingsEdit::Bloom(src) => world.bloom = src.clone(),
+        SettingsEdit::Vignette(src) => world.vignette = src.clone(),
+    }
+}
+
+// Copy the live effect scalars from resolved effects onto held ones.
+fn copy_live_effects(dst: &mut QualityEffects, src: &QualityEffects) {
+    dst.ambient_occlusion.radius = src.ambient_occlusion.radius;
+    dst.ambient_occlusion.intensity = src.ambient_occlusion.intensity;
+    dst.reflections.intensity = src.reflections.intensity;
+    dst.reflections.max_distance = src.reflections.max_distance;
+    let (d, s) = (&mut dst.indirect_lighting, &src.indirect_lighting);
+    d.ambient_intensity = s.ambient_intensity;
+    d.ssgi_intensity = s.ssgi_intensity;
+    d.ssgi_max_distance = s.ssgi_max_distance;
+    let (d, s) = (&mut dst.exposure, &src.exposure);
+    d.ev = s.ev;
+    d.auto_min_ev = s.auto_min_ev;
+    d.auto_max_ev = s.auto_max_ev;
+    d.auto_speed = s.auto_speed;
 }
 
 // Run `f` against the parked settings state and the frame's op queue, taking
@@ -259,12 +311,12 @@ mod tests {
         }
     }
 
-    fn graphics_config() -> GraphicsConfig {
-        GraphicsConfig {
-            shadow_distance: 120,
-            shadow_cascades: 2,
+    fn shadows() -> SettingsEdit {
+        SettingsEdit::Shadows(Shadows {
+            distance: 120,
+            cascades: 2,
             ..Default::default()
-        }
+        })
     }
 
     // A world with no renderer takes nothing, and says so rather than
@@ -273,25 +325,42 @@ mod tests {
     // a field outside these lists waits for a rebuild or a relaunch.
     #[test]
     fn the_live_fields_are_the_ones_the_schema_declares_live() {
+        use concinnity_core::components::{
+            AntiAliasing, Culling, Display, FramePacing, TextureFiltering,
+        };
         use concinnity_core::ecs::AssetFields;
         use concinnity_core::ecs::asset_fields::ApplyClass;
-        let live = |params: &[(&'static str, concinnity_core::ecs::asset_fields::ParamMeta)]| {
-            let mut keys: Vec<&str> = params
+        fn live<A: AssetFields>() -> Vec<&'static str> {
+            let mut keys: Vec<&str> = A::PARAMS
                 .iter()
                 .filter(|(_, meta)| meta.apply == Some(ApplyClass::Live))
                 .map(|(key, _)| *key)
                 .collect();
             keys.sort_unstable();
             keys
+        }
+        let listed = |asset: &str| {
+            let mut keys = live_settings_fields(asset).unwrap_or_default().to_vec();
+            keys.sort_unstable();
+            keys
         };
-        let mut post = LIVE_POST_PROCESS_FIELDS.to_vec();
-        post.sort_unstable();
-        assert_eq!(post, live(PostProcessConfig::PARAMS));
+        assert_eq!(listed("Shadows"), live::<Shadows>());
+        assert_eq!(listed("AmbientOcclusion"), live::<AmbientOcclusion>());
+        assert_eq!(listed("Reflections"), live::<Reflections>());
+        assert_eq!(listed("IndirectLighting"), live::<IndirectLighting>());
+        assert_eq!(listed("Exposure"), live::<Exposure>());
+        assert_eq!(listed("Bloom"), live::<Bloom>());
+        assert_eq!(listed("Vignette"), live::<Vignette>());
         // The frame pacing is live through the settings menu, not this seam.
-        let mut graphics = LIVE_GRAPHICS_CONFIG_FIELDS.to_vec();
-        graphics.extend(["vsync", "fps_cap"]);
-        graphics.sort_unstable();
-        assert_eq!(graphics, live(GraphicsConfig::PARAMS));
+        assert_eq!(live::<FramePacing>(), ["fps_cap", "vsync"]);
+        for none in [
+            live::<TextureFiltering>(),
+            live::<AntiAliasing>(),
+            live::<Display>(),
+            live::<Culling>(),
+        ] {
+            assert!(none.is_empty(), "{none:?}");
+        }
     }
 
     #[test]
@@ -299,13 +368,10 @@ mod tests {
         let mut world = World::new();
         assert!(!is_available(&world));
         assert!(!apply_directional_lights(&mut world, &[]));
-        assert!(!apply_graphics_config(
+        assert!(!apply_settings(&mut world, &shadows()));
+        assert!(!apply_settings(
             &mut world,
-            &GraphicsConfig::default()
-        ));
-        assert!(!apply_post_process_config(
-            &mut world,
-            &PostProcessConfig::default()
+            &SettingsEdit::Bloom(Bloom::default())
         ));
     }
 
@@ -337,7 +403,7 @@ mod tests {
     #[test]
     fn shadow_knobs_push_and_move_their_baselines() {
         let mut f = Fixture::new();
-        assert!(apply_graphics_config(&mut f.world, &graphics_config()));
+        assert!(apply_settings(&mut f.world, &shadows()));
         let calls = f.replay();
         let state = f.state();
         assert_eq!(
@@ -347,9 +413,9 @@ mod tests {
             )]
         );
         assert_eq!(state.graphics.quality.shadow_cadence.distance, 120);
-        assert_eq!(state.authored.shadow_cadence.distance, 120);
+        assert_eq!(state.authored.shadows.distance, 120);
         assert_eq!(state.graphics.quality.shadow_cadence.cascades, 2);
-        assert_eq!(state.authored.shadow_cadence.cascades, 2);
+        assert_eq!(state.authored.shadows.cascades, 2);
     }
 
     // Re-applying the same config records nothing: the seam is edge-triggered,
@@ -357,10 +423,10 @@ mod tests {
     #[test]
     fn an_unchanged_cadence_records_no_call() {
         let mut f = Fixture::new();
-        apply_graphics_config(&mut f.world, &graphics_config());
+        apply_settings(&mut f.world, &shadows());
         f.replay();
         f.calls.lock().unwrap().calls.clear();
-        apply_graphics_config(&mut f.world, &graphics_config());
+        apply_settings(&mut f.world, &shadows());
         assert!(f.replay().is_empty());
     }
 
@@ -374,7 +440,7 @@ mod tests {
         state.graphics.quality.shadow_cadence.distance = 500;
         let mut f = Fixture::with_state(state);
 
-        assert!(apply_graphics_config(&mut f.world, &graphics_config()));
+        assert!(apply_settings(&mut f.world, &shadows()));
         let calls = f.replay();
         let [Call::SetShadowCadence(cadence)] = calls.as_slice() else {
             panic!("one cadence push expected: {calls:?}");
@@ -387,7 +453,7 @@ mod tests {
             "the user's value stands"
         );
         assert_eq!(
-            state.authored.shadow_cadence.distance, 120,
+            state.authored.shadows.distance, 120,
             "the world's value is still recorded as the baseline"
         );
     }
@@ -401,9 +467,11 @@ mod tests {
         let mut f = Fixture::with_state(state);
         let ceiling = f.state().ceiling();
 
-        let mut config = graphics_config();
-        config.shadow_distance = ceiling.shadow_distance + 1_000;
-        assert!(apply_graphics_config(&mut f.world, &config));
+        let config = SettingsEdit::Shadows(Shadows {
+            distance: ceiling.shadow_distance + 1_000,
+            ..Default::default()
+        });
+        assert!(apply_settings(&mut f.world, &config));
         f.replay();
         assert_eq!(
             f.state().graphics.quality.shadow_cadence.distance,
@@ -417,21 +485,37 @@ mod tests {
     #[test]
     fn a_post_process_edit_pushes_every_live_knob() {
         let mut f = Fixture::new();
-        let config = PostProcessConfig {
+        let config = IndirectLighting {
             ambient_intensity: 0.25,
-            exposure_ev: 2.0,
             ssgi_intensity: 0.75,
             ..Default::default()
         };
-        assert!(apply_post_process_config(&mut f.world, &config));
+        let exposure = Exposure {
+            ev: 2.0,
+            ..Default::default()
+        };
+        assert!(apply_settings(
+            &mut f.world,
+            &SettingsEdit::IndirectLighting(config)
+        ));
+        assert!(apply_settings(
+            &mut f.world,
+            &SettingsEdit::Exposure(exposure)
+        ));
         let calls = f.replay();
         assert!(calls.contains(&Call::UpdatePostProcess));
         assert!(calls.contains(&Call::UpdateQualityParams));
         assert!(calls.contains(&Call::SetAmbientIntensity(0.25)));
         let state = f.state();
         assert_eq!(state.graphics.ambient_intensity, 0.25);
-        assert_eq!(state.graphics.quality.post_config.ssgi_intensity, 0.75);
-        assert_eq!(state.authored.post_config.ssgi_intensity, 0.75);
+        let held = &state.graphics.quality.effects;
+        assert_eq!(held.indirect_lighting.ssgi_intensity, 0.75);
+        assert_eq!(held.exposure.ev, 2.0);
+        assert_eq!(
+            state.authored.effects.indirect_lighting.ssgi_intensity,
+            0.75
+        );
+        assert_eq!(state.graphics.post_process.exposure, 4.0);
     }
 
     // The toggles beside the live scalars are not this seam's to move: an edit
@@ -440,21 +524,23 @@ mod tests {
     #[test]
     fn a_post_process_edit_leaves_the_toggles_alone() {
         let mut f = Fixture::new();
-        let config = PostProcessConfig {
-            ssao: !PostProcessConfig::default().ssao,
-            aa_mode: AaMode::Fxaa,
+        let config = AmbientOcclusion {
+            enabled: !AmbientOcclusion::default().enabled,
             ..Default::default()
         };
-        apply_post_process_config(&mut f.world, &config);
+        let held_mode = f.state().graphics.quality.effects.anti_aliasing.mode;
+        assert_ne!(held_mode, AaMode::Off);
+        apply_settings(&mut f.world, &SettingsEdit::AmbientOcclusion(config));
         let state = f.state();
         assert_eq!(
-            state.graphics.quality.post_config.ssao,
-            PostProcessConfig::default().ssao
+            state.graphics.quality.effects.ambient_occlusion.enabled,
+            AmbientOcclusion::default().enabled
         );
         assert_eq!(
-            state.graphics.quality.post_config.aa_mode,
-            PostProcessConfig::default().aa_mode
+            state.authored.effects.ambient_occlusion.enabled,
+            AmbientOcclusion::default().enabled
         );
+        assert_eq!(state.graphics.quality.effects.anti_aliasing.mode, held_mode);
     }
 
     // Fog resolves through the same clamp chain the build runs, and disabling
@@ -508,13 +594,21 @@ mod tests {
     // rebuild forever.
     #[test]
     fn the_live_field_lists_name_real_args() {
-        let graphics = serde_json::to_value(GraphicsConfig::default()).expect("serializes");
-        for field in LIVE_GRAPHICS_CONFIG_FIELDS {
-            assert!(graphics.get(field).is_some(), "GraphicsConfig.{field}");
-        }
-        let post = serde_json::to_value(PostProcessConfig::default()).expect("serializes");
-        for field in LIVE_POST_PROCESS_FIELDS {
-            assert!(post.get(field).is_some(), "PostProcessConfig.{field}");
+        let args = |asset: &str| match asset {
+            "Shadows" => serde_json::to_value(Shadows::default()),
+            "AmbientOcclusion" => serde_json::to_value(AmbientOcclusion::default()),
+            "Reflections" => serde_json::to_value(Reflections::default()),
+            "IndirectLighting" => serde_json::to_value(IndirectLighting::default()),
+            "Exposure" => serde_json::to_value(Exposure::default()),
+            "Bloom" => serde_json::to_value(Bloom::default()),
+            "Vignette" => serde_json::to_value(Vignette::default()),
+            other => panic!("{other} has no args here"),
+        };
+        for (asset, fields) in LIVE_SETTINGS_FIELDS {
+            let args = args(asset).expect("serializes");
+            for field in *fields {
+                assert!(args.get(field).is_some(), "{asset}.{field}");
+            }
         }
     }
 }

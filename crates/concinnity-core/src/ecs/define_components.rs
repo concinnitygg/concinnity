@@ -51,6 +51,33 @@ macro_rules! __cn_validate {
     ($val:expr; $t:tt $($r:tt)*) => { $crate::__cn_validate!($val; $($r)*) };
 }
 
+// Internal helper. Clamps an authored entry's ranged fields in place, pushing
+// one `ClampedParam` per moved value onto `$out`. Only `external` entries whose
+// stored type is also their authored schema carry the ranges; an `args:` entry
+// authors a different type and is clamped there by the cook.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __cn_clamp {
+    ($val:expr, $out:expr; $($meta:tt)*) => {
+        $crate::__cn_clamp!(@scan $val, $out; no; $($meta)*)
+    };
+    (@scan $val:expr, $out:expr; $ext:ident; args: $a:ident $($r:tt)*) => {
+        let _ = (&mut $val, $out);
+    };
+    (@scan $val:expr, $out:expr; $ext:ident; external $($r:tt)*) => {
+        $crate::__cn_clamp!(@scan $val, $out; yes; $($r)*)
+    };
+    (@scan $val:expr, $out:expr; yes;) => {
+        $crate::ecs::asset_fields::AssetFields::clamp_params(&mut $val, $out)
+    };
+    (@scan $val:expr, $out:expr; no;) => {
+        let _ = (&mut $val, $out);
+    };
+    (@scan $val:expr, $out:expr; $ext:ident; $t:tt $($r:tt)*) => {
+        $crate::__cn_clamp!(@scan $val, $out; $ext; $($r)*)
+    };
+}
+
 // Internal helper. Resolves a resource entry's `resource: <Kind>` flag into the
 // handle space it is assigned into.
 #[macro_export]
@@ -205,17 +232,22 @@ macro_rules! define_components {
                 }
             }
 
-            /// Apply the component's registered validation clamps, the ones a
-            /// cooked world's args pass through on their way to the blob. A
-            /// type declaring no clamp is returned unchanged.
-            pub fn validated(self) -> Self {
-                match self {
+            /// Apply the clamps a cooked world's args pass through on their way
+            /// to the blob: each ranged field moved into its declared range,
+            /// then the component's registered validation. Returns the value
+            /// with every range clamp it took, for the caller to report; a type
+            /// declaring neither comes back unchanged with none.
+            pub fn validated(self) -> (Self, $crate::ecs::asset_fields::ClampedParams) {
+                let mut clamped = $crate::ecs::asset_fields::ClampedParams::new();
+                let value = match self {
                     $(
-                        ComponentAsset::$variant(c) => ComponentAsset::$variant(
-                            $crate::__cn_validate!(c; $($meta)*)
-                        ),
+                        ComponentAsset::$variant(mut c) => {
+                            $crate::__cn_clamp!(c, &mut clamped; $($meta)*);
+                            ComponentAsset::$variant($crate::__cn_validate!(c; $($meta)*))
+                        }
                     )+
-                }
+                };
+                (value, clamped)
             }
 
             /// The registry name of the component this value holds.

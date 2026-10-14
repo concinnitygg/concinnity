@@ -115,7 +115,7 @@ mod tests {
     use super::*;
     use concinnity_core::components::{PhysicsConfig, Prop, TextLabel};
 
-    // The README case: content alone decides, with no GraphicsConfig anywhere.
+    // The README case: content alone decides, with no settings asset anywhere.
     // What the resolution lands on depends on whether this build has a backend
     // and the host a GPU, so the assertion is on the REASON: a world with
     // something to draw is never turned down for having nothing to draw.

@@ -211,8 +211,8 @@ pub(crate) fn try_retarget_environment_map(
 
 // Decide which scaffold entries the patch closure should inject. Returns
 // empty when no scaffolding is needed: the target doesn't bootstrap a world,
-// the world already has a renderer-trigger asset (GraphicsSystem /
-// GraphicsConfig / TextLabel / Window), or the target type provides its own
+// the world already has a renderer-trigger asset (a TextLabel, a Window, or
+// any other type that renders), or the target type provides its own
 // renderer trigger (e.g. a text target's TextLabel). Errors when the world
 // file is missing and the target can't bootstrap one: only `.glb`, `.txt`,
 // and `.md` are allowed to create a world from nothing.
@@ -999,12 +999,6 @@ mod tests {
     // jsonl_has_renderer_trigger
 
     #[test]
-    fn renderer_trigger_matches_graphics_config() {
-        let jsonl = r#"["GraphicsConfig",{"$id":"gc"}]"#;
-        assert!(jsonl_has_renderer_trigger(jsonl));
-    }
-
-    #[test]
     fn renderer_trigger_matches_text_label() {
         let jsonl = r#"["TextLabel",{"$id":"lbl"}]"#;
         assert!(jsonl_has_renderer_trigger(jsonl));
@@ -1087,10 +1081,10 @@ mod tests {
     }
 
     #[test]
-    fn scaffold_to_inject_returns_empty_when_world_has_graphics_config() {
+    fn scaffold_to_inject_returns_empty_when_world_has_a_window() {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
-        std::fs::write(&world, r#"["GraphicsConfig",{"$id":"gfx"}]"#).unwrap();
+        std::fs::write(&world, r#"["Window",{"$id":"gfx"}]"#).unwrap();
 
         let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", None).unwrap();
         assert!(scaffold.is_empty());
@@ -1198,7 +1192,7 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
         // Existing world with a renderer trigger: scaffolding wouldn't fire.
-        std::fs::write(&world, r#"["GraphicsConfig",{"$id":"gfx"}]"#).unwrap();
+        std::fs::write(&world, r#"["Window",{"$id":"gfx"}]"#).unwrap();
 
         let err = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some("nope"))
             .expect_err("unknown template should fail fast regardless of scaffold path");

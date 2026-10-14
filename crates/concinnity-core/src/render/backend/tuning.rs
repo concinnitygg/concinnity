@@ -16,7 +16,7 @@ use crate::render::post::ssr::settings::SsrSettings;
 use crate::render::volumetric_fog::FogSettings;
 
 /// The resolved per-feature quality settings for [`RenderTuning::apply_quality_settings`].
-/// `GraphicsSystem` derives these from its stored `PostProcessConfig` (with the
+/// `GraphicsSystem` derives these from its resolved quality effects (with the
 /// user's persisted toggle overrides applied) whenever a Quality-group toggle
 /// changes, so the backend receives ready-to-use settings rather than re-deriving
 /// from the asset. Each `Option` mirrors the init-time gate: `None` means the
@@ -40,7 +40,7 @@ pub struct QualitySettings {
     pub ssgi: Option<SsgiSettings>,
     /// Per-axis divisor for the roughness-aware reflection blur target (the
     /// reduced-resolution first pass of the SSR / RT reflection composite),
-    /// resolved from `PostProcessConfig.reflection_blur_resolution`. Every backend
+    /// resolved from `Reflections.blur_resolution`. Every backend
     /// sizes its blur target at render / this on a live reflection rebuild.
     pub reflection_blur_scale: u32,
     /// Auto-exposure, or `None` when off.

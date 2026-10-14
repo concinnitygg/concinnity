@@ -106,7 +106,7 @@ pub struct ShadowCadence {
     pub cascades: u32,
 }
 
-/// Shadow-mapping knobs from GraphicsConfig. `map_size == 0` disables the
+/// Shadow-mapping knobs from the `Shadows` asset. `map_size == 0` disables the
 /// shadow pipeline and cascade array entirely.
 #[derive(Copy, Clone, Debug)]
 pub struct ShadowParams {
@@ -116,7 +116,7 @@ pub struct ShadowParams {
     pub cadence: ShadowCadence,
 }
 
-/// Post-process and display settings resolved from PostProcessConfig (plus
+/// Post-process and display settings resolved from the settings assets (plus
 /// the user's persisted overrides, the quality-preset ceiling, and the
 /// launch's render requests). Every Option here is an init-time gate: None
 /// allocates nothing.

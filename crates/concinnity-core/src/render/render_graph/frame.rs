@@ -77,14 +77,14 @@ pub struct FrameGraphInputs {
     /// geometry and the graph has no dependency on the cull output.
     pub bindless_cull_enabled: bool,
     /// `true` when the auto-exposure compute pipelines are built (i.e.
-    /// the world declared `PostProcessConfig.auto_exposure`). The graph
+    /// the world declared `Exposure.auto`). The graph
     /// appends an `AutoExposure` compute pass that reads the Main pass's
     /// `hdr_resolve_v1` (pre-decoration) and writes the histogram +
     /// readback buffer. The compile pass's WAR step pins AutoExposure
     /// before the first hdr_resolve post-Main writer (Decals or Fog or
     /// ParticlesDraw) so AutoExposure samples the un-decorated scene.
     pub auto_exposure_enabled: bool,
-    /// `true` when `PostProcessConfig.bloom_intensity > 0.0`. The graph
+    /// `true` when `Bloom.intensity > 0.0`. The graph
     /// adds a `Bloom` pass that thresholds / downsamples / upsamples the
     /// post-TAA scene into the bloom mip chain; Composite reads the
     /// bloom output so the toposort orders Bloom before Composite.
@@ -180,7 +180,7 @@ pub struct FrameGraphInputs {
     /// decoration pass samples.
     pub raymarch_enabled: bool,
     /// `true` when two-pass Hi-Z occlusion culling is requested
-    /// (`PostProcessConfig.occlusion_two_pass`) AND the bindless GPU-cull
+    /// (`Culling.two_pass_occlusion`) AND the bindless GPU-cull
     /// path is active this frame. Only meaningful alongside
     /// `bindless_cull_enabled`; the builder ANDs the two so a world that
     /// asks for two-pass without a bindless shader simply gets the
@@ -193,7 +193,7 @@ pub struct FrameGraphInputs {
     /// combined two-pass result.
     pub two_pass_occlusion_enabled: bool,
     /// `true` when screen-space global illumination is on
-    /// (`PostProcessConfig.indirect_lighting == "ssgi"`); matches
+    /// (`IndirectLighting.technique == "ssgi"`); matches
     /// `self.ssgi_settings.is_some()`. The graph inserts an `Ssgi` render pass
     /// on the hdr_resolve RMW chain right after `Raymarch` and before `Decals`:
     /// it reads the head of the chain (the lit scene, its bounce-radiance

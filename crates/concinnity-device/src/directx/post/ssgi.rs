@@ -15,7 +15,7 @@ use crate::directx::context::DxContext;
 use crate::directx::post::post_device::{DxPostDevice, PostPipeline, PostTarget};
 use crate::directx::texture::transition_barrier;
 
-// SSGI resources held by `DxContext` when `PostProcessConfig.indirect_lighting`
+// SSGI resources held by `DxContext` when `IndirectLighting.technique`
 // is `ssgi`.
 pub(in crate::directx) struct SsgiResources {
     // Resolved authored tunables; turned into a per-frame `SsgiParams` block.

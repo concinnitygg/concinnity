@@ -254,7 +254,7 @@ mod tests {
             })
         };
         assert_eq!(
-            worker_priority(FramePriority::MainThreads),
+            worker_priority(FramePriority::Normal),
             THREAD_PRIORITY_NORMAL.0
         );
         assert_eq!(

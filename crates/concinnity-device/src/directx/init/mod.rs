@@ -80,7 +80,7 @@ impl Features {
         // FSR3 needs the velocity buffer + the TAA-velocity pre-pass
         // PSOs, both of which live inside `TaaResources`. When upscale
         // is on we force the TAA resources to be built even if the
-        // world's `PostProcessConfig.aa_mode` is off; the TAA *resolve*
+        // world's `AntiAliasing.mode` is off; the TAA *resolve*
         // pass is still skipped (see `record_frame::seed_inputs`),
         // because FSR owns the temporal accumulation.
         let taa_enabled = post.taa_enabled || post.temporal_upscaling;

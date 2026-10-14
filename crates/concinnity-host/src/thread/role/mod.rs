@@ -55,8 +55,9 @@ impl ThreadRole {
     /// applications on the machine.
     pub fn raised(self) -> bool {
         match self {
-            ThreadRole::Frame(priority) => priority.raises_main_threads(),
-            ThreadRole::FrameWorker(priority) => priority.raises_job_workers(),
+            ThreadRole::Frame(priority) | ThreadRole::FrameWorker(priority) => {
+                priority.raises_frame_threads()
+            }
             ThreadRole::Background => false,
         }
     }
@@ -89,12 +90,10 @@ fn report_once(reported: &AtomicBool, role: ThreadRole, error: &std::io::Error) 
 }
 
 #[cfg(test)]
-pub(crate) const EVERY_ROLE: [ThreadRole; 7] = [
+pub(crate) const EVERY_ROLE: [ThreadRole; 5] = [
     ThreadRole::Frame(FramePriority::Normal),
-    ThreadRole::Frame(FramePriority::MainThreads),
     ThreadRole::Frame(FramePriority::AllThreads),
     ThreadRole::FrameWorker(FramePriority::Normal),
-    ThreadRole::FrameWorker(FramePriority::MainThreads),
     ThreadRole::FrameWorker(FramePriority::AllThreads),
     ThreadRole::Background,
 ];
@@ -106,7 +105,7 @@ mod tests {
     #[test]
     fn the_priority_decides_which_frame_threads_are_raised() {
         let raised: Vec<bool> = EVERY_ROLE.iter().map(|role| role.raised()).collect();
-        assert_eq!(raised, [false, true, true, false, false, true, false]);
+        assert_eq!(raised, [false, true, false, true, false]);
     }
 
     #[test]

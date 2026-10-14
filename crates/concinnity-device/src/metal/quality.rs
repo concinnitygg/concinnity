@@ -1,7 +1,7 @@
 //! Runtime application of the Quality-group settings (TAA / SSAO / SSR / RT
 //! reflections / SSGI / auto-exposure). Each gates a render pass whose GPU
 //! resources (pipelines, render targets, the ray-tracing acceleration structure)
-//! are built once at init from the world's PostProcessConfig, so applying a
+//! are built once at init from the world's settings assets, so applying a
 //! change at runtime means rebuilding those resources, not flipping a uniform.
 //!
 //! The rebuild reuses the init stages' effect builders -- the exact path

@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn manifest_lines_report_the_world_schedule_with_reasons() {
         let mut world = crate::authoring::build_world_from_str(
-            "[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n\
+            "[\"Window\",{\"$id\":\"gfx\"}]\n\
              [\"Camera3D\",{\"$id\":\"cam\",\"controller\":{\"free_fly\":true}}]\n",
         )
         .unwrap();
@@ -294,8 +294,7 @@ mod tests {
     #[test]
     fn the_manifest_reports_systems_the_engine_defaults_turn_on() {
         let mut world =
-            crate::authoring::build_world_from_str("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n")
-                .unwrap();
+            crate::authoring::build_world_from_str("[\"Window\",{\"$id\":\"gfx\"}]\n").unwrap();
         assert!(
             !manifest_lines(&mut world).join("\n").contains("DebugHud"),
             "the world declares no DebugHud of its own"
@@ -310,7 +309,7 @@ mod tests {
     // The `--systems` path drives end to end on a valid world.
     #[test]
     fn list_with_systems_flag_is_ok() {
-        let (_dir, path) = write_world("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
+        let (_dir, path) = write_world("[\"FramePacing\",{\"$id\":\"gfx\"}]\n");
         list(Some(&path), false, true).unwrap();
     }
 
@@ -384,22 +383,22 @@ mod tests {
 
     #[test]
     fn list_prints_known_and_unknown_types() {
-        // GraphicsConfig resolves through the component registry, AudioClip
+        // FramePacing resolves through the component registry, AudioClip
         // through the resource-asset registry; the made-up type falls back
         // to "?" origin / payload without erroring.
         let (_dir, path) = write_world(concat!(
-            "[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n",
+            "[\"FramePacing\",{\"$id\":\"gfx\"}]\n",
             "[\"AudioClip\",{\"$id\":\"clip\"}]\n",
             "[\"NotARealAssetType\",{\"$id\":\"odd\"}]\n",
-            "[\"GraphicsConfig\",{}]\n",
+            "[\"FramePacing\",{}]\n",
         ));
         list(Some(&path), false, false).unwrap();
     }
 
     #[test]
     fn registration_for_resolves_component_types() {
-        let r = registration_for("GraphicsConfig").unwrap();
-        assert_eq!(r.type_name, "GraphicsConfig");
+        let r = registration_for("FramePacing").unwrap();
+        assert_eq!(r.type_name, "FramePacing");
     }
 
     #[test]
@@ -446,7 +445,7 @@ mod tests {
 
     #[test]
     fn list_expanded_runs_the_build_front_half() {
-        let (_dir, path) = write_world("[\"GraphicsConfig\",{\"$id\":\"gfx\"}]\n");
+        let (_dir, path) = write_world("[\"FramePacing\",{\"$id\":\"gfx\"}]\n");
         list(Some(&path), true, false).unwrap();
     }
 

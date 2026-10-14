@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use super::*;
 use crate::components::{
     DebugHud, EngineDefaults, LoadingOverlay, PhysicsConfig, PropBody, Scene, Screen, Sprite,
-    StatHud, StreamingConfig, TextLabel,
+    StatHud, StreamingConfig, TextLabel, Window,
 };
 use crate::ecs::World;
 use crate::resource::FontTable;
@@ -15,10 +15,10 @@ fn complete(world: &mut World) -> Result<(), WorldError> {
     run(&mut ctx)
 }
 
-// A world with the render marker, so the drawn defaults apply.
+// A world with a window, so the drawn defaults apply.
 fn rendering() -> World {
     let mut world = World::new();
-    world.add_component(GraphicsConfig::default());
+    world.add_component(Window::default());
     world
 }
 

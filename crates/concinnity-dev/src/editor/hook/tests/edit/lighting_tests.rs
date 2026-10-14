@@ -164,7 +164,7 @@ fn lighting_add_row_appends_the_missing_singleton() {
     inject::editor_hud(&mut world);
     let mut h = hook(vec![sun_entry()]);
     h.open[PanelKey::Lighting] = true;
-    assert_eq!(h.lighting_present(), vec![true, false, false, false]);
+    assert_eq!(h.lighting_present(), vec![true, false, false, false, false]);
     h.add_lighting_section(1, &mut world);
     assert_eq!(h.entries.len(), 2);
     assert_eq!(h.entries[1]["type"], "VolumetricFog");
