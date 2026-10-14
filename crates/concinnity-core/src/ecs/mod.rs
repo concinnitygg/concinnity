@@ -37,6 +37,7 @@ pub mod asset_id;
 pub mod handle;
 pub mod locator;
 pub mod name_ref;
+pub mod param_meta;
 pub mod reference;
 pub mod resolver;
 #[cfg(feature = "schema")]

@@ -6,6 +6,7 @@ use crate::components::Vocabulary;
 use crate::gfx::auto_exposure::EV_LIMIT;
 use crate::gfx::render_types::PostProcessTunables;
 use crate::math::exp2;
+use crate::render::post::ssgi;
 
 /// Tunables for the post-process stack. One per world; the first declared
 /// instance wins. With no `PostProcessConfig` present, the defaults below are
@@ -47,57 +48,59 @@ use crate::math::exp2;
 #[serde(default)]
 pub struct PostProcessConfig {
     /// Additive bloom contribution. 0 skips bloom entirely.
-    #[asset(default = 0.6)]
+    #[asset(default = 0.6, min = 0.0, apply = live)]
     pub bloom_intensity: f32,
     /// Brightness threshold for bloom. Pixels brighter than this contribute
     /// fully; pixels within `bloom_knee` below it ramp in softly.
-    #[asset(default = 1.0)]
+    #[asset(default = 1.0, min = 0.0, apply = live)]
     pub bloom_threshold: f32,
     /// Width of the soft knee just below `bloom_threshold`.
-    #[asset(default = 0.5)]
+    #[asset(default = 0.5, min = 0.0, apply = live)]
     pub bloom_knee: f32,
     /// Exposure offset in photographic stops. Each +1 doubles scene
     /// brightness before bloom and tonemapping; 0 is neutral.
+    #[asset(min = -EV_LIMIT, max = EV_LIMIT, apply = live)]
     pub exposure_ev: f32,
     /// Vignette strength in `[0, 1]`. 0 disables the corner darkening.
+    #[asset(min = 0.0, max = 1.0, apply = live)]
     pub vignette_strength: f32,
     /// Color-LUT blend in `[0, 1]`. Mixes the graded color over the ungraded
     /// one by this amount. Only matters when the world declares a
     /// [ColorLut](#colorlut); with none, grading is a no-op at any strength.
-    #[asset(default = 1.0)]
+    #[asset(default = 1.0, min = 0.0, max = 1.0, apply = live)]
     pub lut_strength: f32,
     /// Anti-aliasing mode. `fxaa` applies a cheap composite-pass edge filter;
     /// `taa` (default) adds a temporal pass that jitters the projection and
     /// accumulates detail across frames for the cleanest edges, at the cost of a
     /// velocity pre-pass and a history buffer; `off` disables edge smoothing.
     /// Clamped to `fxaa` below the mid quality tier.
-    #[asset(default = AaMode::Taa)]
+    #[asset(default = AaMode::Taa, apply = rebuild)]
     pub aa_mode: AaMode,
     /// Screen-space ambient occlusion toggle. Darkens creases and contact areas
     /// where ambient light is occluded. On by default, forced off on the lowest
     /// quality tier.
-    #[asset(default = true)]
+    #[asset(default = true, apply = rebuild)]
     pub ssao: bool,
     /// How far the ambient-occlusion search reaches for occluders, in world
     /// units. Larger values pick up broader, softer occlusion.
-    #[asset(default = 0.5)]
+    #[asset(default = 0.5, min = 0.001, apply = live)]
     pub ssao_radius: f32,
-    /// Ambient-occlusion strength, clamped to `[0, 4]`. 1.0 is the natural
-    /// amount; higher values exaggerate the contact darkening.
-    #[asset(default = 1.0)]
+    /// Ambient-occlusion strength. 1.0 is the natural amount; higher values
+    /// exaggerate the contact darkening.
+    #[asset(default = 1.0, min = 0.0, max = 4.0, apply = live)]
     pub ssao_intensity: f32,
     /// Screen-space reflection toggle. Mixes reflected scene color over glossy
     /// surfaces (water, polished floors). On by default, forced off below the
     /// high quality tier.
-    #[asset(default = true)]
+    #[asset(default = true, apply = rebuild)]
     pub ssr: bool,
-    /// Reflection blend strength, clamped to `[0, 1]`. Scales the
-    /// Fresnel-weighted reflection mixed over the base shading.
-    #[asset(default = 0.7)]
+    /// Reflection blend strength. Scales the Fresnel-weighted reflection mixed
+    /// over the base shading.
+    #[asset(default = 0.7, min = 0.0, max = 1.0, apply = live)]
     pub ssr_intensity: f32,
     /// How far a reflection reaches, in world units. Longer reaches catch more
     /// distant reflections, more coarsely.
-    #[asset(default = 40.0)]
+    #[asset(default = 40.0, min = 1.0, max = 1000.0, apply = live)]
     pub ssr_max_distance: f32,
     /// Hardware ray-traced reflection toggle. When the GPU supports ray tracing,
     /// traces real reflection rays so off-screen geometry still appears, instead
@@ -105,19 +108,20 @@ pub struct PostProcessConfig {
     /// `ssr_max_distance` tunables and takes precedence over `ssr`, falling back
     /// to it where ray tracing isn't available. On by default; only the top
     /// quality tier permits it, so everything below falls back to `ssr`.
-    #[asset(default = true)]
+    #[asset(default = true, apply = rebuild)]
     pub ray_traced_reflections: bool,
     /// Internal resolution the ray-traced reflection rays are cast at. `half`
     /// (default) traces a quarter of the pixels and upsamples with a depth- and
     /// normal-aware filter; `full` traces every pixel for the sharpest mirrors;
     /// `quarter` is the cheapest. Only matters when `ray_traced_reflections` is
     /// on.
+    #[asset(apply = rebuild)]
     pub rt_reflection_resolution: PassResolution,
     /// Whether surfaces seen in a ray-traced reflection are shadowed from the
     /// sun. Each reflected hit then casts a second ray toward the sun, which
     /// roughly doubles the trace cost; off lights every reflected surface as if
     /// the sun reached it. Only matters when `ray_traced_reflections` is on.
-    #[asset(default = true)]
+    #[asset(default = true, apply = rebuild)]
     pub rt_reflection_shadows: bool,
     /// Internal resolution of the roughness-aware reflection blur the SSR /
     /// ray-traced reflection composite runs. `half` (default) blurs at a
@@ -126,88 +130,100 @@ pub struct PostProcessConfig {
     /// mirror surfaces stay sharp at any setting (the composite keeps the sharp
     /// reflection for low roughness). Only matters when `ssr` or
     /// `ray_traced_reflections` is on.
+    #[asset(apply = rebuild)]
     pub reflection_blur_resolution: PassResolution,
     /// Indirect-diffuse lighting source. `ibl` uses the environment map's
     /// ambient alone. `ssgi` (default) adds a screen-space global-illumination
     /// pass on top, so nearby lit surfaces bleed color onto one another; the
     /// environment ambient still covers the off-screen / sky fallback. Clamped
     /// back to `ibl` below the high quality tier.
-    #[asset(default = IndirectLighting::Ssgi)]
+    #[asset(default = IndirectLighting::Ssgi, apply = rebuild)]
     pub indirect_lighting: IndirectLighting,
-    /// Multiplier on the indirect (ambient / IBL) lighting term, clamped to
-    /// `[0, 16]`. 1.0 (default) leaves the environment-derived ambient at its
+    /// Multiplier on the indirect (ambient / IBL) lighting term. 1.0 (default) leaves the environment-derived ambient at its
     /// physical level. Raising it lifts fill light in areas the directional
     /// light cannot reach (shadowed facades, alleys) without brightening
     /// directly lit surfaces, which the sun already dominates. Scales the
     /// diffuse and specular IBL together, so reflections stay consistent with
     /// the brighter ambient. Useful for high-contrast exterior scenes where a
     /// strong sun would otherwise crush shadows to black.
-    #[asset(default = 1.0)]
+    #[asset(default = 1.0, min = 0.0, max = 16.0, apply = live)]
     pub ambient_intensity: f32,
-    /// Indirect-bounce strength, clamped to `[0, 4]`. Scales the gathered
-    /// indirect light added on top of the existing shading; 0 makes it a no-op.
+    /// Indirect-bounce strength. Scales the gathered indirect light added on
+    /// top of the existing shading; 0 makes it a no-op.
     /// Only matters when `indirect_lighting` is `ssgi`.
-    #[asset(default = 0.5)]
+    #[asset(default = 0.5, min = 0.0, max = 4.0, apply = live)]
     pub ssgi_intensity: f32,
     /// How far the indirect-light rays reach, in world units. A near-field
     /// effect, so it defaults well below `ssr_max_distance`. Only matters when
     /// `indirect_lighting` is `ssgi`.
-    #[asset(default = 8.0)]
+    #[asset(default = 8.0, min = 0.5, max = 100.0, apply = live)]
     pub ssgi_max_distance: f32,
     /// Internal resolution of the SSGI trace. `half` (default) trades a little
     /// sharpness for a large performance saving; `full` is native; `quarter` is
     /// the cheapest. Only matters when `indirect_lighting` is `ssgi`.
+    #[asset(apply = rebuild)]
     pub ssgi_resolution: PassResolution,
-    /// Hemisphere rays traced per pixel each frame, clamped to `[1, 4]`. The
-    /// indirect light is accumulated over frames, so more rays settle it faster
-    /// after the camera reveals new surfaces or the lighting changes, at a
-    /// higher cost. Only matters when `indirect_lighting` is `ssgi`.
-    #[asset(default = DEFAULT_SSGI_RAYS)]
+    /// Hemisphere rays traced per pixel each frame. The indirect light is
+    /// accumulated over frames, so more rays settle it faster after the camera
+    /// reveals new surfaces or the lighting changes, at a higher cost. Only
+    /// matters when `indirect_lighting` is `ssgi`.
+    #[asset(
+        default = DEFAULT_SSGI_RAYS,
+        min = 1,
+        max = ssgi::settings::MAX_RAYS,
+        apply = rebuild
+    )]
     pub ssgi_rays: u32,
     /// Auto-exposure toggle. Adapts exposure each frame toward a balanced
     /// mid-tone. The authored `exposure_ev` then acts as an additive bias in
     /// stops on top of the adapted value.
+    #[asset(apply = rebuild)]
     pub auto_exposure: bool,
     /// Lower bound on the adapted exposure (EV). The `exposure_ev` bias is
     /// applied before this clamp.
-    #[asset(default = -8.0)]
+    #[asset(default = -8.0, min = -EV_LIMIT, max = EV_LIMIT, apply = live)]
     pub auto_exposure_min_ev: f32,
     /// Upper bound on the adapted exposure (EV): how far a dark scene is
     /// brightened, at most 24. A night under a [NightSky](#nightsky) adapts
     /// at around 19 to 20, so wants 24.
-    #[asset(default = 8.0)]
+    #[asset(default = 8.0, min = -EV_LIMIT, max = EV_LIMIT, apply = live)]
     pub auto_exposure_max_ev: f32,
     /// How quickly exposure chases a new target (per second). Higher converges
     /// faster but can pump under flickering content; 1-3 is comfortable.
-    #[asset(default = 1.5)]
+    #[asset(default = 1.5, min = 0.001, max = 20.0, apply = live)]
     pub auto_exposure_speed: f32,
     /// HDR display output toggle. On a capable display, emits extended-range
     /// HDR instead of the standard tonemapped output. Falls back to standard
     /// output when the display or platform doesn't support HDR.
+    #[asset(apply = restart)]
     pub hdr_display: bool,
     /// PQ (HDR10) output mode. When true, and `hdr_display` is on, and the
     /// display has HDR headroom, output is PQ-encoded for HDR10 panels. No
     /// effect when `hdr_display` is off.
+    #[asset(apply = restart)]
     pub hdr_pq: bool,
     /// Temporal upscaling toggle. Renders the 3D scene at a lower resolution
     /// (set by `upscale_quality`) and reconstructs a full-resolution image,
     /// trading some sharpness for performance. Replaces TAA while on (the `taa`
     /// flag is ignored).
+    #[asset(apply = restart)]
     pub temporal_upscaling: bool,
     /// Render-scale preset for `temporal_upscaling`; each step progressively
     /// lowers the internal resolution. No effect when `temporal_upscaling` is
     /// off.
+    #[asset(apply = restart)]
     pub upscale_quality: UpscaleQuality,
     /// Which upscaler backend `temporal_upscaling` uses. `auto` (default) picks
     /// the best available at runtime (DLSS on NVIDIA RTX, else XeSS, else FSR3);
     /// `fsr3` / `dlss` / `xess` request a specific one and fall back when it is
     /// unavailable on the current GPU or build. No effect when
     /// `temporal_upscaling` is off. Metal treats every value as MetalFX.
+    #[asset(apply = restart)]
     pub upscale_backend: UpscalerBackend,
     /// Two-pass occlusion culling toggle. Reduces objects popping in a frame
     /// late when they're revealed by camera or occluder motion, at the cost of
     /// extra culling work each frame. Needs the bindless GPU-cull path.
-    #[asset(default = true)]
+    #[asset(default = true, apply = restart)]
     pub occlusion_two_pass: bool,
 }
 

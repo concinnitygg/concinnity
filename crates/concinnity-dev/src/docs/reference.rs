@@ -254,6 +254,7 @@ fn field_entry(field: &FieldSchema, defaults: &Defaults, ctx: &mut Ctx) -> Field
             .map(|value| default_text(&value)),
         ty: resolve_type(ty, ctx),
         doc: collapse_doc(field.doc),
+        param: field.param,
     }
 }
 

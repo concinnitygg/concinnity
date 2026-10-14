@@ -6,6 +6,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{DeriveInput, Field, GenericArgument, PathArguments, Type};
 
+use crate::asset_attrs::asset_attrs;
 use crate::docs::doc_text;
 use crate::serde_attrs::{ContainerAttrs, FieldAttrs, SerdeDefault};
 
@@ -22,11 +23,14 @@ pub(crate) fn struct_schema(
     input: &DeriveInput,
     container: &ContainerAttrs,
     fields: &[AuthoredField<'_>],
-) -> TokenStream {
+) -> syn::Result<TokenStream> {
     let schema = schema_path();
     let name = input.ident.to_string();
     let doc = doc_text(&input.attrs);
-    let entries = fields.iter().map(|f| field_entry(f, container));
+    let entries = fields
+        .iter()
+        .map(|f| field_entry(f, container))
+        .collect::<syn::Result<Vec<_>>>()?;
     let default = match &container.default {
         None => quote!(::core::option::Option::None),
         Some(default) => {
@@ -42,7 +46,7 @@ pub(crate) fn struct_schema(
             default: #default,
         }
     };
-    schema_impls(input, &body, quote!(Nested))
+    Ok(schema_impls(input, &body, quote!(Nested)))
 }
 
 /// The `Schema` impl holding `body`, and the `Described` impl that describes
@@ -74,7 +78,7 @@ pub(crate) fn schema_path() -> TokenStream {
     quote!(::concinnity_core::ecs::schema)
 }
 
-fn field_entry(f: &AuthoredField<'_>, container: &ContainerAttrs) -> TokenStream {
+fn field_entry(f: &AuthoredField<'_>, container: &ContainerAttrs) -> syn::Result<TokenStream> {
     let schema = schema_path();
     let key = &f.key;
     let doc = doc_text(&f.field.attrs);
@@ -91,14 +95,16 @@ fn field_entry(f: &AuthoredField<'_>, container: &ContainerAttrs) -> TokenStream
         }
         None => quote!(#schema::FieldDefault::Required),
     };
-    quote! {
+    let param = asset_attrs(&f.field.attrs)?.meta_expr();
+    Ok(quote! {
         #schema::FieldSchema {
             key: #key,
             doc: #doc,
             ty: || #ty_expr,
             default: #default,
+            param: #param,
         }
-    }
+    })
 }
 
 // The default a serde `default` attribute names, boxed for serializing when

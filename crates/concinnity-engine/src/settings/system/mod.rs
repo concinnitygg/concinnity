@@ -31,10 +31,12 @@ use concinnity_core::render::backend;
 use concinnity_core::render::ops::RenderOps;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::snapshot;
-use concinnity_core::settings::SettingKey;
+use concinnity_core::settings::quality::resolve_ceiling;
+use concinnity_core::settings::{
+    QualityCeiling, QualityPreset, ResolvedQuality, ResolvedSettings, SettingKey, SettingsLayers,
+    UserGraphicsSettings, WorldSettings,
+};
 use concinnity_core::window::display_mode;
-
-use crate::gfx::render_config::{GraphicsBaseline, ResolvedGraphics};
 
 mod apply;
 mod quality;
@@ -64,11 +66,11 @@ pub(crate) struct SettingsState {
     pub(crate) cycle_value_labels: std::collections::HashMap<SettingKey, AssetId>,
     // The world's authored graphics values a preset change or authoring edit
     // re-resolves from, and the live resolved values the rows display and cycle.
-    pub(crate) authored: GraphicsBaseline,
-    pub(crate) graphics: ResolvedGraphics,
+    pub(crate) authored: WorldSettings,
+    pub(crate) graphics: ResolvedSettings,
     // The live master "Graphics Quality" preset; an explicit per-row change
     // flips it to Custom.
-    pub(crate) quality_preset: crate::gfx::quality_preset::QualityPreset,
+    pub(crate) quality_preset: QualityPreset,
     pub(crate) gpu_profile: backend::GpuProfile,
     // The captured stats sub-row labels the "Display performance stats" master
     // toggle grays.
@@ -84,7 +86,10 @@ pub(crate) struct SettingsState {
     pub(crate) resolution_row_labels: Vec<(AssetId, [f32; 3])>,
     // The persisted graphics overrides as they stood at init, the fallback for
     // `persisted_graphics` until a settings change loads `settings_cache`.
-    pub(crate) persisted_graphics: crate::config::GraphicsSettings,
+    pub(crate) persisted_graphics: UserGraphicsSettings,
+    // This launch's overrides (`--dlss-preset`), layered over the user's
+    // choices on every resolve and never persisted.
+    pub(crate) session: UserGraphicsSettings,
     // Whether the backend built the fog pass at init. A world that started with
     // fog off cannot be handed fog live; that edit rebuilds instead.
     pub(crate) fog_built: bool,
@@ -172,9 +177,9 @@ impl SettingsState {
             pad_rebind_rows: Vec::new(),
             sliders: Vec::new(),
             cycle_value_labels: std::collections::HashMap::new(),
-            authored: GraphicsBaseline::default(),
-            graphics: ResolvedGraphics::default(),
-            quality_preset: crate::gfx::quality_preset::QualityPreset::Auto,
+            authored: WorldSettings::default(),
+            graphics: ResolvedSettings::default(),
+            quality_preset: QualityPreset::Auto,
             gpu_profile: backend::GpuProfile::UNKNOWN,
             perf_sub_row_labels: Vec::new(),
             window_args: Window::default(),
@@ -182,7 +187,8 @@ impl SettingsState {
             resolution: None,
             current_mode: None,
             resolution_row_labels: Vec::new(),
-            persisted_graphics: crate::config::GraphicsSettings::default(),
+            persisted_graphics: UserGraphicsSettings::default(),
+            session: UserGraphicsSettings::default(),
             fog_built: false,
             settings_cache: None,
             settings_writer: None,
@@ -204,7 +210,7 @@ impl SettingsState {
             cascades: 4,
         };
         let mut state = Self {
-            quality_preset: crate::gfx::quality_preset::QualityPreset::Custom,
+            quality_preset: QualityPreset::Custom,
             fog_built: true,
             ..Self::new()
         };
@@ -226,7 +232,7 @@ impl SettingsState {
 
     // The persisted graphics overrides in force: the in-memory store once a
     // settings change has loaded it, otherwise the snapshot init took from disk.
-    pub(crate) fn persisted_graphics(&self) -> &crate::config::GraphicsSettings {
+    pub(crate) fn persisted_graphics(&self) -> &UserGraphicsSettings {
         match &self.settings_cache {
             Some(cache) => &cache.graphics,
             None => &self.persisted_graphics,
@@ -234,8 +240,41 @@ impl SettingsState {
     }
 
     // The active quality preset's performance ceiling on this GPU.
-    pub(crate) fn ceiling(&self) -> crate::gfx::quality_preset::QualityCeiling {
-        crate::gfx::quality_preset::resolve_ceiling(self.quality_preset, &self.gpu_profile)
+    pub(crate) fn ceiling(&self) -> QualityCeiling {
+        resolve_ceiling(self.quality_preset, &self.gpu_profile)
+    }
+
+    // The resolver's layers: the authored baseline, `ceiling`, the user's
+    // `user` choices and this launch's overrides. The backend reports its
+    // capabilities only once built, so every layer resolves for a device that
+    // can run everything and the backend falls back where it cannot.
+    fn layers<'a>(
+        &'a self,
+        user: &'a UserGraphicsSettings,
+        ceiling: &'a QualityCeiling,
+    ) -> SettingsLayers<'a> {
+        SettingsLayers {
+            session: Some(&self.session),
+            ..SettingsLayers::new(&self.authored, ceiling, user)
+        }
+    }
+
+    // Every setting, resolved under `user`'s choices and `ceiling`.
+    pub(crate) fn resolve(
+        &self,
+        user: &UserGraphicsSettings,
+        ceiling: &QualityCeiling,
+    ) -> ResolvedSettings {
+        self.layers(user, ceiling).resolve()
+    }
+
+    // The preset-governed group, resolved under `user`'s choices and `ceiling`.
+    pub(crate) fn resolve_quality(
+        &self,
+        user: &UserGraphicsSettings,
+        ceiling: &QualityCeiling,
+    ) -> ResolvedQuality {
+        self.layers(user, ceiling).resolve_quality()
     }
 
     // Apply any imperative scene jumps sent by UiInputSystem last tick, copied

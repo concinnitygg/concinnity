@@ -25,6 +25,7 @@ pub use error::AuthoringError;
 
 pub mod field_path;
 pub mod flow;
+pub(crate) mod param_clamp;
 pub mod refs;
 pub mod registry;
 pub(crate) mod resource_type;

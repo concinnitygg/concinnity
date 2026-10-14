@@ -67,16 +67,17 @@ use super::*;
 use crate::app::run::LaunchRequest;
 use crate::gfx::draw_list;
 use crate::gfx::material_entry::MaterialEntry;
-use crate::gfx::render_config::{GraphicsBaseline, ResolvedGraphics, resolve_graphics};
-use crate::settings::quality_rows::{quality_cycle, quality_toggle};
 use crate::settings::system::{SettingsSlot, SettingsState};
+use concinnity_core::settings::quality::{preset_label, resolve_ceiling};
+use concinnity_core::settings::rows::{quality_cycle, quality_toggle};
+use concinnity_core::settings::{QualityCeiling, QualityPreset, ResolvedSettings, WorldSettings};
 
 // The resolved render config `init_render_settings` returns beside the live
 // settings state: the packed post-processing config handed to the backend ctor,
 // the quality ceiling (planar-reflection budget), and the drained StreamingConfig.
 struct ResolvedRenderConfig {
     post: backend_init::PostSettings,
-    quality_ceiling: crate::gfx::quality_preset::QualityCeiling,
+    quality_ceiling: QualityCeiling,
     streaming_config: Option<StreamingConfig>,
     // Raw world ambient (PostProcessConfig::ambient_intensity, no user override),
     // folded into the static LightUniforms built later in init.
@@ -201,8 +202,8 @@ fn font_less_text(ctx: &PipelineContext) -> bool {
 // The GPU the backend is built for and the quality preset resolved against it.
 struct DetectedQuality {
     gpu_profile: backend::GpuProfile,
-    preset: crate::gfx::quality_preset::QualityPreset,
-    ceiling: crate::gfx::quality_preset::QualityCeiling,
+    preset: QualityPreset,
+    ceiling: QualityCeiling,
 }
 
 // The DebugHud chip ids (cursor, camera, sys, passes: the top-right stack
@@ -244,12 +245,12 @@ fn capture_hud_chips(ctx: &PipelineContext) -> (Vec<AssetId>, Vec<AssetId>) {
 
 // The post-processing config the backend is built with.
 pub(super) fn post_settings(
-    graphics: &ResolvedGraphics,
-    authored: &GraphicsBaseline,
+    graphics: &ResolvedSettings,
+    authored: &WorldSettings,
     launch: &LaunchRequest,
 ) -> backend_init::PostSettings {
     let post_config = &graphics.quality.post_config;
-    let quality = derive_quality_settings(post_config);
+    let quality = graphics.quality_settings();
     backend_init::PostSettings {
         post_process: graphics.post_process,
         taa_enabled: quality.taa,
@@ -342,8 +343,7 @@ fn sync_menu_labels(
     });
     // After the generic sync: under Auto the master row names the resolved
     // tier ("Auto (High)"), which the static option table cannot express.
-    let preset_label =
-        crate::gfx::quality_preset::preset_label(settings.quality_preset, &settings.gpu_profile);
+    let preset_label = preset_label(settings.quality_preset, &settings.gpu_profile);
     set_setting_row_label(ctx, SettingKey::GraphicsQuality, &preset_label);
     settings.init_sliders(ctx, persisted);
     settings.init_rebind_rows(ctx);
@@ -362,7 +362,6 @@ impl GraphicsSystem {
         launch: &LaunchRequest,
         persisted: &crate::config::Settings,
     ) -> DetectedQuality {
-        use crate::gfx::quality_preset::QualityPreset;
         let gpu_profile = self.detect_gpu_profile();
         ctx.insert_resource(gpu_profile);
         crate::crash::note(
@@ -377,7 +376,7 @@ impl GraphicsSystem {
                 self.seed_first_launch_preset(persisted);
                 QualityPreset::Auto
             });
-        let ceiling = crate::gfx::quality_preset::resolve_ceiling(preset, &gpu_profile);
+        let ceiling = resolve_ceiling(preset, &gpu_profile);
         tracing::info!(
             "auto-config: GPU tier {:?}, quality preset {:?}",
             gpu_profile.tier,
@@ -428,15 +427,15 @@ impl GraphicsSystem {
         }
         let post_config = ctx.drain::<PostProcessConfig>().into_iter().next();
         let mut streaming_config = ctx.drain::<StreamingConfig>().into_iter().next();
-        settings.authored = GraphicsBaseline::new(
+        settings.authored = WorldSettings::new(
             graphics_config.as_ref(),
             post_config.as_ref(),
             streaming_config.as_ref(),
         );
-        settings.graphics = resolve_graphics(&settings.authored, user_graphics, &quality.ceiling);
         // `--dlss-preset` wins for this launch, shown on the row and never
         // persisted unless the row itself changes.
-        settings.graphics.dlss_preset = launch.resolve_dlss_preset(settings.graphics.dlss_preset);
+        settings.session = launch.session_overrides();
+        settings.graphics = settings.resolve(user_graphics, &quality.ceiling);
         if let Some(sc) = streaming_config.as_mut() {
             sc.texture_cap = settings.graphics.texture_cap;
             sc.texture_budget = settings.graphics.texture_budget;

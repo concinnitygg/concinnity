@@ -15,11 +15,11 @@ use concinnity_core::window::display_mode;
 
 use super::SettingsState;
 use super::rows::{set_label_content, set_rows_grayed, set_sprite_x};
-use crate::config::{GraphicsSettings, Settings};
-use crate::gfx::system as gsys;
+use crate::config::Settings;
 use crate::settings;
-use crate::settings::quality_rows::{quality_cycle, quality_toggle};
 use crate::settings::{SettingKey, SliderSetting, SliderTarget};
+use concinnity_core::settings::UserGraphicsSettings;
+use concinnity_core::settings::rows::{GraphicsSliderTarget, quality_cycle, quality_toggle};
 
 // A cycle row's option labels.
 pub(super) type RowOptions = &'static [&'static str];
@@ -28,7 +28,7 @@ pub(super) type RowOptions = &'static [&'static str];
 pub(super) struct BoolRow {
     pub(super) key: SettingKey,
     pub(super) state: fn(&mut SettingsState) -> &mut bool,
-    pub(super) persisted: fn(&mut GraphicsSettings) -> &mut Option<bool>,
+    pub(super) persisted: fn(&mut UserGraphicsSettings) -> &mut Option<bool>,
 }
 
 // None of these rows is governed by the quality preset. vsync applies live and
@@ -329,26 +329,28 @@ impl SettingsState {
         frac: f32,
     ) -> bool {
         let value = slider.value_at(frac);
-        let stored = (slider.apply)(value);
+        let stored = slider.apply(value);
         match &slider.target {
-            SliderTarget::PostProcess { field, .. } => {
-                *(field.get_mut)(&mut self.graphics.post_process) = stored;
-                let params = self.graphics.post_process;
-                ops.record(move |backend| backend.update_post_process(params));
-            }
-            // The stored config is what a later rebuild re-derives from; the live
-            // push mutates the backend's settings without one.
-            SliderTarget::PostConfig { field, .. } => {
-                *(field.get_mut)(&mut self.graphics.quality.post_config) = stored;
-                let quality = gsys::derive_quality_settings(&self.graphics.quality.post_config);
-                ops.record(move |backend| backend.update_quality_params(quality));
-            }
-            SliderTarget::Ambient { .. } => {
-                self.graphics.ambient_intensity = stored;
-                let params = self.graphics.post_process;
-                ops.record(move |backend| backend.update_post_process(params));
-                ops.record(move |backend| backend.set_ambient_intensity(stored));
-            }
+            SliderTarget::Graphics(row) => match &row.target {
+                GraphicsSliderTarget::PostProcess { field, .. } => {
+                    *(field.get_mut)(&mut self.graphics.post_process) = stored;
+                    let params = self.graphics.post_process;
+                    ops.record(move |backend| backend.update_post_process(params));
+                }
+                // The stored config is what a later rebuild re-derives from; the
+                // live push mutates the backend's settings without one.
+                GraphicsSliderTarget::PostConfig { field, .. } => {
+                    *(field.get_mut)(&mut self.graphics.quality.post_config) = stored;
+                    let quality = self.graphics.quality_settings();
+                    ops.record(move |backend| backend.update_quality_params(quality));
+                }
+                GraphicsSliderTarget::Ambient { .. } => {
+                    self.graphics.ambient_intensity = stored;
+                    let params = self.graphics.post_process;
+                    ops.record(move |backend| backend.update_post_process(params));
+                    ops.record(move |backend| backend.set_ambient_intensity(stored));
+                }
+            },
             SliderTarget::Controls { command, .. } => {
                 ctx.events_mut::<ControlsCommand>().send(command(stored));
             }

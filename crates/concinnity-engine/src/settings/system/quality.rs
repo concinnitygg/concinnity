@@ -12,12 +12,13 @@ use super::SettingsState;
 use super::apply::RowOptions;
 use super::rows::{set_cached_row_label, set_label_content};
 use crate::config::Settings;
-use crate::gfx::quality_preset;
-use crate::gfx::render_config;
-use crate::gfx::system as gsys;
 use crate::settings;
 use crate::settings::SettingKey;
-use crate::settings::quality_rows::{QUALITY_CYCLES, QUALITY_TOGGLES, QualityCycle, QualityToggle};
+use concinnity_core::settings::QualityPreset;
+use concinnity_core::settings::quality::{preset_at, preset_index, preset_label, resolve_ceiling};
+use concinnity_core::settings::rows::{
+    QUALITY_CYCLES, QUALITY_TOGGLES, QualityCycle, QualityToggle,
+};
 
 impl SettingsState {
     // A preset is a performance ceiling over the world's authored look (it never
@@ -25,7 +26,7 @@ impl SettingsState {
     // clears the per-row quality overrides and re-resolves the preset-governed
     // group from the world's baseline under the new ceiling, exactly as the next
     // launch will. Custom resolves to the no-op ceiling (the world's look). See
-    // gfx/quality_preset.rs.
+    // `concinnity_core::settings::quality`.
     pub(super) fn apply_quality_preset(
         &mut self,
         ctx: &mut PipelineContext,
@@ -34,11 +35,11 @@ impl SettingsState {
         cmd: &SettingCommand,
     ) -> bool {
         let opts = settings::options(SettingKey::GraphicsQuality).unwrap_or(&[]);
-        let cur = quality_preset::preset_index(self.quality_preset);
+        let cur = preset_index(self.quality_preset);
         let next = settings::cycle(cur, opts.len(), cmd.op);
-        let preset = quality_preset::preset_at(next);
+        let preset = preset_at(next);
         self.quality_preset = preset;
-        let ceiling = quality_preset::resolve_ceiling(preset, &self.gpu_profile);
+        let ceiling = resolve_ceiling(preset, &self.gpu_profile);
 
         cfg.graphics.quality_preset = Some(preset);
         for row in &QUALITY_TOGGLES {
@@ -53,13 +54,10 @@ impl SettingsState {
         cfg.graphics.shadow_cascades = None;
         cfg.graphics.anisotropy = None;
         cfg.graphics.render_scale = None;
-        self.graphics.set_quality(render_config::resolve_quality(
-            &self.authored,
-            &cfg.graphics,
-            &ceiling,
-        ));
+        self.graphics
+            .set_quality(self.resolve_quality(&cfg.graphics, &ceiling));
 
-        let quality = gsys::derive_quality_settings(&self.graphics.quality.post_config);
+        let quality = self.graphics.quality_settings();
         record_quality_apply(ops, quality);
         // Auto-exposure may have flipped off; re-push the static post-process
         // params so exposure reverts. The fxaa flag rides along.
@@ -72,7 +70,7 @@ impl SettingsState {
 
         self.relabel_preset_dependents(ctx);
         // The master row's own label carries the Auto(tier) suffix.
-        let label = quality_preset::preset_label(preset, &self.gpu_profile);
+        let label = preset_label(preset, &self.gpu_profile);
         if let Some(id) = cmd.value_label {
             set_label_content(ctx, id, &label);
         }
@@ -150,7 +148,7 @@ impl SettingsState {
         (row.set)(&mut self.graphics.quality.post_config, on);
         *(row.persisted.get_mut)(&mut cfg.graphics) = Some(on);
         self.opt_out_of_preset(ctx, cfg);
-        let quality = gsys::derive_quality_settings(&self.graphics.quality.post_config);
+        let quality = self.graphics.quality_settings();
         record_quality_apply(ops, quality);
         // Auto-exposure overwrites the backend's live exposure each frame while
         // it runs, so its copy freezes at the last adapted value once toggled
@@ -180,7 +178,7 @@ impl SettingsState {
         (row.set)(&mut self.graphics.quality.post_config, next);
         (row.persist)(&self.graphics.quality.post_config, &mut cfg.graphics);
         self.opt_out_of_preset(ctx, cfg);
-        let quality = gsys::derive_quality_settings(&self.graphics.quality.post_config);
+        let quality = self.graphics.quality_settings();
         record_quality_apply(ops, quality);
         // The AA mode also drives the composite FXAA flag, which rides
         // PostProcessParams rather than the rebuild above.
@@ -195,7 +193,7 @@ impl SettingsState {
     // An explicit per-row quality change opts the master preset out to Custom
     // (no ceiling clamps the user's choice) and relabels the master row.
     pub(super) fn opt_out_of_preset(&mut self, ctx: &mut PipelineContext, cfg: &mut Settings) {
-        self.quality_preset = quality_preset::QualityPreset::Custom;
+        self.quality_preset = QualityPreset::Custom;
         cfg.graphics.quality_preset = Some(self.quality_preset);
         set_cached_row_label(
             &self.cycle_value_labels,

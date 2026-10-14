@@ -15,17 +15,13 @@
 //!   stream_sources.rs  streamed texture payload sources + voxel palette entries
 //!   draw_geometry.rs   draw-object positions + auto-seed triangle gathering
 
-use concinnity_core::components::{GamepadAction, GraphicsConfig, PostProcessConfig};
+use concinnity_core::components::{GamepadAction, GraphicsConfig};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Entity, PipelineContext, StepResult, System};
 use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_core::input::keymap;
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_core::render::history_reset::HistoryResetTracker;
-use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
-use concinnity_core::render::post::ssao::settings::SsaoSettings;
-use concinnity_core::render::post::ssgi::settings::SsgiSettings;
-use concinnity_core::render::post::ssr::settings::SsrSettings;
 use concinnity_core::render::{backend, overlay_maps, scene_flow, snapshot, text};
 use concinnity_core::settings::SettingKey;
 use concinnity_core::transform::propagation;
@@ -312,7 +308,7 @@ impl GraphicsSystem {
     // Seed and persist the first-launch `Auto` quality preset.
     fn seed_first_launch_preset(&self, persisted: &crate::config::Settings) {
         let mut s = persisted.clone();
-        s.graphics.quality_preset = Some(crate::gfx::quality_preset::QualityPreset::Auto);
+        s.graphics.quality_preset = Some(concinnity_core::settings::QualityPreset::Auto);
         if let Err(e) = s.save(self.state.as_ref()) {
             tracing::warn!("first-launch quality preset save failed: {e}");
         }
@@ -326,22 +322,6 @@ impl System for GraphicsSystem {
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         self.run_step(ctx)
-    }
-}
-
-// Derive the backend's per-feature `QualitySettings` from a resolved config.
-// Mirrors the init-time derivation (the same resolves), so a
-// live rebuild reproduces exactly what a launch with this config would build.
-pub(crate) fn derive_quality_settings(cfg: &PostProcessConfig) -> backend::QualitySettings {
-    backend::QualitySettings {
-        taa: cfg.aa_mode.taa_enabled(),
-        ssao: SsaoSettings::from_config(cfg),
-        ssr: SsrSettings::from_config(cfg),
-        rt_reflections: RtReflectionSettings::from_config(cfg),
-        ssgi: SsgiSettings::from_config(cfg),
-        reflection_blur_scale: cfg.reflection_blur_divisor(),
-        auto_exposure: cfg.auto_exposure_settings(),
-        auto_exposure_bias_ev: cfg.exposure_ev,
     }
 }
 
@@ -364,6 +344,8 @@ mod prop_draws;
 pub(crate) mod scene;
 mod scene_lights;
 pub mod sdf_field_sources;
+#[cfg(test)]
+mod settings_equivalence_tests;
 pub mod shader_sources;
 mod skinned_templates;
 mod stream_plan;

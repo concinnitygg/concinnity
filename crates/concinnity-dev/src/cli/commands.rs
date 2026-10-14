@@ -392,7 +392,7 @@ mod tests {
     use clap::Parser;
     use concinnity_core::render::dlss::DlssPreset;
     use concinnity_core::render::rt_geom::RtDynamicMode;
-    use concinnity_engine::gfx::quality_preset::QualityPreset;
+    use concinnity_core::settings::QualityPreset;
 
     // Every world-launching command carries the render flags, and each one
     // defaults to absent (which the engine resolves to today's behavior).

@@ -80,6 +80,7 @@ mod tests {
         doc: "",
         ty: || FieldType::Float,
         default,
+        param: concinnity_core::ecs::asset_fields::ParamMeta::NONE,
     };
 
     const CONTAINER: TypeSchema = TypeSchema {

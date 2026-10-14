@@ -25,12 +25,12 @@ pub struct StreamingConfig {
     /// Maximum number of textures whose load is started per frame, applied
     /// independently to the color and normal-map pools. A low value spreads the
     /// cost over more frames.
-    #[asset(default = 4)]
+    #[asset(default = 4, apply = restart)]
     pub texture_budget: u32,
     /// Maximum number of textures kept loaded at once, applied independently to
     /// the color and normal-map pools. When exceeded, the farthest-from-camera
     /// textures are dropped.
-    #[asset(default = 96)]
+    #[asset(default = 96, apply = restart)]
     pub texture_cap: u32,
     /// Maximum number of mesh regions whose load is started per frame. A low
     /// value spreads the cost over more frames.

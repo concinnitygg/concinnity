@@ -26,7 +26,7 @@ use tracing_subscriber::EnvFilter;
 use crate::app::runloop;
 use crate::app::runtime::Runtime;
 use crate::app::startup_error::StartupError;
-use crate::gfx::quality_preset::QualityPreset;
+use concinnity_core::settings::{QualityPreset, UserGraphicsSettings};
 
 // Default tracing filter applied when RUST_LOG is unset: info for debug
 // builds, warn for release builds. A RUST_LOG value always takes precedence.
@@ -151,9 +151,13 @@ impl LaunchRequest {
         self.rt_dynamic.unwrap_or_default()
     }
 
-    /// The DLSS render preset: the request, else `persisted`.
-    pub fn resolve_dlss_preset(&self, persisted: DlssPreset) -> DlssPreset {
-        self.dlss_preset.unwrap_or(persisted)
+    /// The settings this launch overrides for its own run, layered over the
+    /// user's persisted choices and never persisted: the requested DLSS preset.
+    pub fn session_overrides(&self) -> UserGraphicsSettings {
+        UserGraphicsSettings {
+            dlss_preset: self.dlss_preset,
+            ..UserGraphicsSettings::default()
+        }
     }
 
     /// Whether skinned meshes join the acceleration structure: the request, else in.
@@ -431,16 +435,23 @@ mod tests {
     }
 
     #[test]
-    fn a_requested_dlss_preset_outranks_the_persisted_one() {
+    fn a_requested_dlss_preset_is_the_only_session_override() {
         assert_eq!(
-            LaunchRequest::default().resolve_dlss_preset(DlssPreset::K),
-            DlssPreset::K
+            LaunchRequest::default().session_overrides(),
+            UserGraphicsSettings::default()
         );
         let forced = LaunchRequest {
             dlss_preset: Some(DlssPreset::M),
             ..Default::default()
         };
-        assert_eq!(forced.resolve_dlss_preset(DlssPreset::K), DlssPreset::M);
+        let user = UserGraphicsSettings {
+            dlss_preset: Some(DlssPreset::K),
+            vsync: Some(true),
+            ..Default::default()
+        };
+        let merged = user.overlaid_by(&forced.session_overrides());
+        assert_eq!(merged.dlss_preset, Some(DlssPreset::M));
+        assert_eq!(merged.vsync, Some(true));
     }
 
     #[test]

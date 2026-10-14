@@ -72,6 +72,8 @@ pub struct FieldSchema {
     pub ty: fn() -> FieldType,
     /// What an omitted key deserializes to.
     pub default: FieldDefault,
+    /// The field's range and apply class, for a field declaring either.
+    pub param: crate::ecs::asset_fields::ParamMeta,
 }
 
 impl FieldSchema {

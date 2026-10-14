@@ -3,7 +3,7 @@
 use concinnity_core::gfx::view_modes::ShowFlags;
 use concinnity_core::render::dlss::DlssPreset;
 use concinnity_core::render::rt_geom::RtDynamicMode;
-use concinnity_engine::gfx::quality_preset::QualityPreset;
+use concinnity_core::settings::QualityPreset;
 
 use crate::export::BundleFormat;
 

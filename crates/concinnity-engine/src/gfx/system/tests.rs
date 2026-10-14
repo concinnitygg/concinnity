@@ -69,8 +69,8 @@ use crate::app::run::LaunchRequest;
 use crate::gfx::mock_backend::{
     Call, MockBackend, MockState, TestHooks, recording_hooks, recording_hooks_with,
 };
-use crate::gfx::quality_preset::{QualityPreset, resolve_ceiling};
-use crate::gfx::render_config::{GraphicsBaseline, resolve_graphics};
+use concinnity_core::settings::quality::{QualityPreset, resolve_ceiling};
+use concinnity_core::settings::{SettingsLayers, UserGraphicsSettings, WorldSettings};
 
 const MESH: AssetId = AssetId(1);
 const TEX: AssetId = AssetId(2);
@@ -332,7 +332,7 @@ fn a_first_launch_persists_the_auto_preset_into_the_state_tree() {
         crate::config::Settings::load(Some(&tree))
             .graphics
             .quality_preset,
-        Some(crate::gfx::quality_preset::QualityPreset::Auto)
+        Some(concinnity_core::settings::quality::QualityPreset::Auto)
     );
 }
 
@@ -737,12 +737,12 @@ fn low_preset_ceiling_clamps_quality_knobs() {
 }
 
 fn post_settings_under(
-    world: &GraphicsBaseline,
-    user: &crate::config::GraphicsSettings,
+    world: &WorldSettings,
+    user: &UserGraphicsSettings,
     preset: QualityPreset,
 ) -> backend_init::PostSettings {
     let ceiling = resolve_ceiling(preset, &GpuProfile::UNKNOWN);
-    let graphics = resolve_graphics(world, user, &ceiling);
+    let graphics = SettingsLayers::new(world, &ceiling, user).resolve();
     super::init::post_settings(&graphics, world, &LaunchRequest::default())
 }
 
@@ -753,8 +753,8 @@ fn post_settings_hdr_samples_follow_the_clamped_aa_mode() {
         temporal_upscaling: false,
         ..Default::default()
     };
-    let world = GraphicsBaseline::new(None, Some(&post), None);
-    let user = crate::config::GraphicsSettings::default();
+    let world = WorldSettings::new(None, Some(&post), None);
+    let user = UserGraphicsSettings::default();
 
     let unclamped = post_settings_under(&world, &user, QualityPreset::Custom);
     assert!(unclamped.taa_enabled);
@@ -767,15 +767,15 @@ fn post_settings_hdr_samples_follow_the_clamped_aa_mode() {
 
 #[test]
 fn post_settings_upscale_scale_is_native_without_a_post_process_config() {
-    let user = crate::config::GraphicsSettings {
+    let user = UserGraphicsSettings {
         render_scale: Some(UpscaleQuality::Performance),
         ..Default::default()
     };
-    let undeclared = GraphicsBaseline::default();
+    let undeclared = WorldSettings::default();
     let native = post_settings_under(&undeclared, &user, QualityPreset::Custom);
     assert_eq!(native.upscale_scale, 1.0);
 
-    let declared = GraphicsBaseline::new(None, Some(&PostProcessConfig::default()), None);
+    let declared = WorldSettings::new(None, Some(&PostProcessConfig::default()), None);
     let scaled = post_settings_under(&declared, &user, QualityPreset::Custom);
     assert_eq!(scaled.upscale_scale, UpscaleQuality::Performance.scale());
 }

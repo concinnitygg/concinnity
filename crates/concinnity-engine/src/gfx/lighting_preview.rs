@@ -7,22 +7,21 @@
 //! keeps the settings state in step so the settings menu and an authoring edit
 //! never disagree about what is live.
 //!
-//! A knob resolves the same way `run_init` resolves it: to the user's persisted
+//! A knob resolves the same way `run_init` resolves it, through the settings
+//! resolver (`concinnity_core::settings::resolve`): to the user's persisted
 //! settings-menu choice where they made one, otherwise to the world's value
-//! under the quality preset's ceiling (`gfx::render_config` holds the shared
-//! expressions). So editing a row the user has overridden moves the authored
-//! baseline and leaves the picture alone, exactly as relaunching would.
+//! under the quality preset's ceiling. So editing a row the user has overridden
+//! moves the authored baseline and leaves the picture alone, exactly as
+//! relaunching would.
 
 use concinnity_core::components::{
     DirectionalLight, GraphicsConfig, PostProcessConfig, VolumetricFog,
 };
 use concinnity_core::ecs::World;
-use concinnity_core::render::backend_init::ShadowCadence;
 use concinnity_core::render::ops::RenderOps;
 use concinnity_core::render::volumetric_fog;
 
 use crate::ecs::ActiveRenderQueues;
-use crate::gfx::render_config as resolve;
 use crate::settings::system::{SettingsSlot, SettingsState};
 
 /// The `GraphicsConfig` fields this module can apply to a running world. The
@@ -106,22 +105,18 @@ pub fn apply_fog(world: &mut World, fog: Option<&VolumetricFog>) -> bool {
 /// menu re-clamps from; they take effect at the next launch.
 pub fn apply_graphics_config(world: &mut World, config: &GraphicsConfig) -> bool {
     with_live(world, |state, ops| {
-        let ceiling = state.ceiling();
+        state.authored.shadow_map_size = config.shadow_map_size;
+        state.authored.anisotropy = config.anisotropy;
+        state.authored.shadow_cadence.update = config.shadow_update;
+        state.authored.shadow_cadence.distance = config.shadow_distance;
+        state.authored.shadow_cadence.cascades = config.shadow_cascades;
         let user = state.persisted_graphics().clone();
-        let authored = &mut state.authored;
+        let resolved = state.resolve_quality(&user, &state.ceiling());
+
         let quality = &mut state.graphics.quality;
-
-        authored.shadow_map_size = config.shadow_map_size;
-        authored.anisotropy = config.anisotropy;
-        quality.shadow_map_size = resolve::shadow_map_size(config.shadow_map_size, &user, &ceiling);
-        quality.anisotropy = resolve::anisotropy(config.anisotropy, &user, &ceiling);
-
-        authored.shadow_cadence = ShadowCadence {
-            update: config.shadow_update,
-            distance: config.shadow_distance,
-            cascades: config.shadow_cascades,
-        };
-        let cadence = resolve::shadow_cadence(authored.shadow_cadence, &user, &ceiling);
+        quality.shadow_map_size = resolved.shadow_map_size;
+        quality.anisotropy = resolved.anisotropy;
+        let cadence = resolved.shadow_cadence;
         if cadence != quality.shadow_cadence {
             quality.shadow_cadence = cadence;
             ops.record(move |backend| backend.set_shadow_cadence(cadence));
@@ -135,24 +130,27 @@ pub fn apply_graphics_config(world: &mut World, config: &GraphicsConfig) -> bool
 /// outside [`LIVE_POST_PROCESS_FIELDS`] are ignored here.
 pub fn apply_post_process_config(world: &mut World, config: &PostProcessConfig) -> bool {
     with_live(world, |state, ops| {
+        copy_live_scalars(&mut state.authored.post_config, config);
+        // The edited config counts as declared whether or not the world loaded
+        // with one.
+        let declared = std::mem::replace(&mut state.authored.post_declared, true);
         let user = state.persisted_graphics().clone();
+        let resolved = state.resolve(&user, &state.ceiling());
+        state.authored.post_declared = declared;
 
         let post_config = &mut state.graphics.quality.post_config;
-        copy_live_scalars(&mut state.authored.post_config, config);
-        copy_live_scalars(post_config, config);
-        resolve::overlay_quality_scalars(post_config, &user);
+        copy_live_scalars(post_config, &resolved.quality.post_config);
 
-        // The composite params re-resolve from the edited config; `fxaa` follows
-        // the live AA mode, which no field here can move.
-        let mut params = resolve::post_process_params(Some(config), &user);
+        // `fxaa` follows the live AA mode, which no field here can move.
+        let mut params = resolved.post_process;
         params.fxaa = post_config.aa_mode.fxaa_flag();
         state.graphics.post_process = params;
         ops.record(move |backend| backend.update_post_process(params));
 
-        let quality = crate::gfx::system::derive_quality_settings(post_config);
+        let quality = concinnity_core::settings::resolve::quality_settings(post_config);
         ops.record(move |backend| backend.update_quality_params(quality));
 
-        let ambient = resolve::ambient_intensity(Some(config), &user);
+        let ambient = resolved.ambient_intensity;
         if ambient != state.graphics.ambient_intensity {
             state.graphics.ambient_intensity = ambient;
             ops.record(move |backend| backend.set_ambient_intensity(ambient));
@@ -271,6 +269,31 @@ mod tests {
 
     // A world with no renderer takes nothing, and says so rather than
     // pretending: that is the signal the caller rebuilds on.
+    // What this module applies live is exactly what the schema declares live:
+    // a field outside these lists waits for a rebuild or a relaunch.
+    #[test]
+    fn the_live_fields_are_the_ones_the_schema_declares_live() {
+        use concinnity_core::ecs::AssetFields;
+        use concinnity_core::ecs::asset_fields::ApplyClass;
+        let live = |params: &[(&'static str, concinnity_core::ecs::asset_fields::ParamMeta)]| {
+            let mut keys: Vec<&str> = params
+                .iter()
+                .filter(|(_, meta)| meta.apply == Some(ApplyClass::Live))
+                .map(|(key, _)| *key)
+                .collect();
+            keys.sort_unstable();
+            keys
+        };
+        let mut post = LIVE_POST_PROCESS_FIELDS.to_vec();
+        post.sort_unstable();
+        assert_eq!(post, live(PostProcessConfig::PARAMS));
+        // The frame pacing is live through the settings menu, not this seam.
+        let mut graphics = LIVE_GRAPHICS_CONFIG_FIELDS.to_vec();
+        graphics.extend(["vsync", "fps_cap"]);
+        graphics.sort_unstable();
+        assert_eq!(graphics, live(GraphicsConfig::PARAMS));
+    }
+
     #[test]
     fn a_world_without_a_renderer_takes_nothing() {
         let mut world = World::new();
@@ -374,7 +397,7 @@ mod tests {
     #[test]
     fn the_quality_ceiling_clamps_an_edited_knob() {
         let mut state = SettingsState::for_tests();
-        state.quality_preset = crate::gfx::quality_preset::QualityPreset::Low;
+        state.quality_preset = concinnity_core::settings::QualityPreset::Low;
         let mut f = Fixture::with_state(state);
         let ceiling = f.state().ceiling();
 

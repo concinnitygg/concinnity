@@ -1,5 +1,6 @@
 //! The client's render layer: the renderer driver, draw list, 2D overlay, asset
-//! streaming, live previews, and quality-preset / render-config resolution.
+//! streaming, and live previews. Settings resolution (the quality preset, its
+//! ceiling, and the layered resolver) lives in `concinnity_core::settings`.
 //!
 //! What these drive lives below the client, in concinnity-core: the GPU data
 //! layouts and render math in `concinnity_core::gfx`, and the
@@ -48,11 +49,6 @@ pub mod streaming;
 // so it stays with the GraphicsSystem tests that consume it.
 #[cfg(test)]
 pub(crate) mod mock_backend;
-/// The master graphics-quality preset and the ceiling it resolves to.
-pub mod quality_preset;
-// How the world's authored render settings resolve against the user's persisted
-// settings-menu choices and the active quality preset's ceiling.
-pub(crate) mod render_config;
 // Every Terrain's cooked payload, decoded for the draw list and the grass.
 pub(crate) mod terrain;
 // A planet's grass layers, resolved at graphics init.

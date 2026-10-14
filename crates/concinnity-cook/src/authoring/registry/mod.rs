@@ -363,7 +363,8 @@ macro_rules! define_registered_type {
             }
             /// Bake a JSON args value into the blob record's component bytes:
             /// deserialize through the typed args schema (interning name-string
-            /// cross-references), apply the type's bake-time validator, and
+            /// cross-references), clamp its ranged parameters with a warning,
+            /// apply the type's bake-time validator, and
             /// serialize the runtime component as postcard. For a pass-through
             /// type the args ARE the component; a divergent type (`args:`
             /// metadata) routes through its `bake` translation in
@@ -388,6 +389,11 @@ macro_rules! define_registered_type {
                                 asset: stringify!($variant),
                                 source,
                             })?;
+                            let typed = crate::authoring::param_clamp::clamp_authored(
+                                stringify!($variant),
+                                typed,
+                                |w| tracing::warn!("{w}"),
+                            );
                             postcard::to_allocvec(&__meta_validate!(typed; $($meta)*)).map_err(
                                 |source| AuthoringError::Encode {
                                     asset: stringify!($variant),
@@ -419,6 +425,11 @@ macro_rules! define_registered_type {
                                 args.clone(),
                             )
                             .map_err(args_err)?;
+                            let typed = crate::authoring::param_clamp::clamp_authored(
+                                stringify!($variant),
+                                typed,
+                                |w| tracing::warn!("{w}"),
+                            );
                             serde_json::to_value(&__meta_validate!(typed; $($meta)*))
                                 .map_err(args_err)
                         }
@@ -957,6 +968,24 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    // An out-of-range parameter loads clamped into its declared range rather
+    // than failing the world.
+    #[test]
+    fn a_load_clamps_an_out_of_range_parameter() {
+        let ty = RegisteredType::parse("PostProcessConfig").unwrap();
+        let back = ty
+            .normalized_args(&serde_json::json!({ "lut_strength": 3.0, "ssgi_rays": 0 }))
+            .unwrap();
+        assert_eq!(back["lut_strength"], 1.0);
+        assert_eq!(back["ssgi_rays"], 1);
+        let baked = ty
+            .reserialize_args(&serde_json::json!({ "lut_strength": -2.0 }))
+            .unwrap();
+        let loaded: concinnity_core::components::PostProcessConfig =
+            postcard::from_bytes(&baked).unwrap();
+        assert_eq!(loaded.lut_strength, 0.0);
     }
 
     // Convention guard for the asset-reference contract: a user-declarable

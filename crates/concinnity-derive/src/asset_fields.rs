@@ -54,15 +54,54 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         authored.push(AuthoredField { field, attrs, key });
     }
 
+    let fields_path = quote!(::concinnity_core::ecs::asset_fields);
+    let asset_name = input.ident.to_string();
     let mut probes = Vec::new();
+    let mut params = Vec::new();
+    let mut clamps = Vec::new();
+    let mut changes = Vec::new();
     for AuthoredField { field, key, .. } in &authored {
         let ty = &field.ty;
-        let owned = asset_attrs(&field.attrs)?.owned_file;
+        let asset = asset_attrs(&field.attrs)?;
+        let owned = asset.owned_file;
         if owned && key.is_empty() {
             return Err(syn::Error::new_spanned(
                 field,
                 "a flattened field cannot be an owned file",
             ));
+        }
+        if asset.is_param() {
+            if key.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    field,
+                    "a flattened field cannot be a parameter",
+                ));
+            }
+            let ident = &field.ident;
+            let meta = asset.meta_expr();
+            params.push(quote!((#key, #meta)));
+            if asset.is_ranged() {
+                clamps.push(quote! {
+                    if let ::core::option::Option::Some((from, to)) =
+                        #fields_path::clamp_param(&mut self.#ident, (#meta).range)
+                    {
+                        out.push(#fields_path::ClampedParam { key: #key, from, to });
+                    }
+                });
+            }
+            if asset.apply.is_some() {
+                changes.push(quote! {
+                    if ::core::cmp::PartialEq::ne(&self.#ident, &other.#ident) {
+                        if let ::core::option::Option::Some(apply) = (#meta).apply {
+                            out.push(#fields_path::ParamChange {
+                                asset: #asset_name,
+                                key: #key,
+                                apply,
+                            });
+                        }
+                    }
+                });
+            }
         }
         let key = if key.is_empty() {
             quote!(::core::option::Option::None)
@@ -80,6 +119,14 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         }
     }
 
+    if !params.is_empty() {
+        probes.push(quote! {
+            for (key, meta) in <Self as #fields_path::AssetFields>::PARAMS {
+                ::concinnity_core::ecs::asset_fields::probe::param(prefix, key, *meta, out);
+            }
+        });
+    }
+
     // A schema with no authored fields names neither the probe traits nor its
     // arguments.
     let body = if probes.is_empty() {
@@ -94,19 +141,49 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         }
     };
 
+    // A schema declaring no parameter keeps the trait's empty defaults.
+    let params_items = if params.is_empty() {
+        quote!()
+    } else {
+        quote! {
+            const PARAMS: &'static [(&'static str, #fields_path::ParamMeta)] = &[#(#params),*];
+        }
+    };
+    let clamp_item = if clamps.is_empty() {
+        quote!()
+    } else {
+        quote! {
+            fn clamp_params(&mut self, out: &mut #fields_path::ClampedParams) {
+                #(#clamps)*
+            }
+        }
+    };
+    let change_item = if changes.is_empty() {
+        quote!()
+    } else {
+        quote! {
+            fn changed_params(&self, other: &Self, out: &mut #fields_path::ParamChanges) {
+                #(#changes)*
+            }
+        }
+    };
+
     let ident = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
-    let schema = struct_schema(input, &container, &authored);
+    let schema = struct_schema(input, &container, &authored)?;
     Ok(quote! {
         impl #impl_generics ::concinnity_core::ecs::asset_fields::AssetFields
             for #ident #ty_generics #where_clause
         {
+            #params_items
             fn collect_fields(
                 prefix: &str,
                 out: &mut ::concinnity_core::ecs::asset_fields::FieldTable,
             ) {
                 #body
             }
+            #clamp_item
+            #change_item
         }
         #schema
     })
@@ -182,6 +259,54 @@ mod tests {
         ] {
             assert!(expand(&input).is_err());
         }
+    }
+
+    #[test]
+    fn a_parameter_is_listed_clamped_and_compared_under_its_key() {
+        let out = expanded(syn::parse_quote! {
+            struct Bloom {
+                #[asset(default = 0.6, min = 0.0, max = 4, apply = live)]
+                #[serde(rename = "strength")]
+                intensity: f32,
+                #[asset(apply = restart)]
+                hdr: bool,
+                plain: f32,
+            }
+        });
+        let params = out
+            .split_once("const PARAMS")
+            .and_then(|(_, rest)| rest.split_once("fn collect_fields"))
+            .map(|(params, _)| params)
+            .expect("a PARAMS table");
+        assert!(params.contains("(\"strength\" ,"), "{params}");
+        assert!(params.contains("(\"hdr\" ,"), "{params}");
+        assert!(!params.contains("\"plain\""), "{params}");
+        // Only the ranged field is clamped; both classed fields are compared.
+        assert_eq!(out.matches("clamp_param (& mut self .").count(), 1, "{out}");
+        assert!(out.contains("clamp_param (& mut self . intensity"), "{out}");
+        assert_eq!(out.matches("PartialEq :: ne").count(), 2, "{out}");
+        assert!(out.contains("asset : \"Bloom\""), "{out}");
+        assert!(out.contains("probe :: param (prefix , key"), "{out}");
+        // The schema carries the same metadata for the docs and the editor.
+        let (_, schema) = out.split_once("# [cfg (feature = \"schema\")]").unwrap();
+        assert_eq!(schema.matches("ApplyClass :: Live").count(), 1, "{schema}");
+        assert_eq!(schema.matches("param :").count(), 3, "{schema}");
+    }
+
+    #[test]
+    fn a_schema_without_parameters_keeps_the_trait_defaults() {
+        let out = expanded(syn::parse_quote! { struct S { #[asset(default = 2)] x: f32 } });
+        assert!(!out.contains("PARAMS"), "{out}");
+        assert!(!out.contains("fn clamp_params"), "{out}");
+        assert!(!out.contains("fn changed_params"), "{out}");
+    }
+
+    #[test]
+    fn a_flattened_parameter_is_refused() {
+        let input = syn::parse_quote! {
+            struct S { #[asset(apply = live)] #[serde(flatten)] x: Inner }
+        };
+        assert!(expand(&input).is_err());
     }
 
     #[test]

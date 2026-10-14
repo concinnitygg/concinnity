@@ -29,11 +29,11 @@ use super::SettingsState;
 use super::writer::SettingsWriter;
 use crate::config::Settings;
 use crate::gfx::mock_backend::{Call, MockBackend, MockState, recording_backend};
-use crate::gfx::quality_preset::QualityPreset;
-use crate::gfx::render_config::{GraphicsBaseline, QualityGraphics, ResolvedGraphics};
 use crate::gfx::system::{RebindViz, SliderViz};
 use crate::settings;
 use crate::settings::SettingKey;
+use concinnity_core::settings::quality::QualityPreset;
+use concinnity_core::settings::resolve::{ResolvedQuality, ResolvedSettings, WorldSettings};
 
 // The value label ids the fixture wires up, so a test can assert a row relabeled
 // without standing up a whole menu.
@@ -89,14 +89,14 @@ impl Fixture {
             distance: settings::shadow_distance_at(0),
             cascades: settings::shadow_cascades_at(0),
         };
-        let authored = GraphicsBaseline {
+        let authored = WorldSettings {
             shadow_map_size: settings::shadow_resolution_at(0),
             shadow_cadence,
             anisotropy: settings::anisotropy_at(0),
-            ..GraphicsBaseline::default()
+            ..WorldSettings::default()
         };
-        let graphics = ResolvedGraphics {
-            quality: QualityGraphics {
+        let graphics = ResolvedSettings {
+            quality: ResolvedQuality {
                 post_config: Default::default(),
                 render_scale: settings::render_scale_at(0),
                 shadow_map_size: settings::shadow_resolution_at(0),
@@ -163,6 +163,7 @@ impl Fixture {
             current_mode: None,
             resolution_row_labels: vec![(RESOLUTION_LABEL, LIT)],
             persisted_graphics: Default::default(),
+            session: Default::default(),
             fog_built: true,
             settings_cache: Some(Settings::default()),
             settings_writer: Some(writer),
@@ -428,7 +429,7 @@ fn exposure_slider_persists_ev_and_applies_the_multiplier() {
     let exposure = settings::slider(SettingKey::Exposure).expect("exposure is a slider");
     assert_eq!(
         f.state.graphics.post_process.exposure,
-        (exposure.apply)(ev),
+        exposure.apply(ev),
         "the live param is the EV mapped through the apply transform"
     );
     assert_eq!(f.label(VALUE_LABEL), (exposure.format)(ev));
@@ -967,7 +968,9 @@ fn aa_mode_cycle_refreshes_the_composite_fxaa_flag() {
     let mut f = Fixture::new();
     f.apply(vec![cycle(
         SettingKey::AaMode,
-        SettingOp::SetIndex(settings::aa_mode_index(AaMode::Fxaa)),
+        SettingOp::SetIndex(concinnity_core::settings::levels::aa_mode_index(
+            AaMode::Fxaa,
+        )),
     )]);
 
     assert_eq!(f.state.graphics.quality.post_config.aa_mode, AaMode::Fxaa);
@@ -976,7 +979,9 @@ fn aa_mode_cycle_refreshes_the_composite_fxaa_flag() {
 
     f.apply(vec![cycle(
         SettingKey::AaMode,
-        SettingOp::SetIndex(settings::aa_mode_index(AaMode::Off)),
+        SettingOp::SetIndex(concinnity_core::settings::levels::aa_mode_index(
+            AaMode::Off,
+        )),
     )]);
     assert_eq!(f.state.graphics.post_process.fxaa, 0.0);
 }
@@ -1148,7 +1153,7 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
 
     f.apply(vec![SettingCommand {
         setting: SettingKey::GraphicsQuality,
-        op: SettingOp::SetIndex(crate::gfx::quality_preset::preset_index(
+        op: SettingOp::SetIndex(concinnity_core::settings::quality::preset_index(
             QualityPreset::Ultra,
         )),
         value_label: Some(QUALITY_LABEL),
@@ -1168,7 +1173,10 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
     assert_eq!(f.label(TOGGLE_LABEL), "On", "the dependent row relabeled");
     assert_eq!(
         f.label(QUALITY_LABEL),
-        crate::gfx::quality_preset::preset_label(QualityPreset::Ultra, &f.state.gpu_profile),
+        concinnity_core::settings::quality::preset_label(
+            QualityPreset::Ultra,
+            &f.state.gpu_profile
+        ),
     );
 
     // Every per-row override is dropped, so the next launch re-resolves them from
@@ -1199,7 +1207,7 @@ fn graphics_quality_preset_keeps_the_look_tuning_sliders() {
 
     f.apply(vec![SettingCommand {
         setting: SettingKey::GraphicsQuality,
-        op: SettingOp::SetIndex(crate::gfx::quality_preset::preset_index(
+        op: SettingOp::SetIndex(concinnity_core::settings::quality::preset_index(
             QualityPreset::High,
         )),
         value_label: Some(QUALITY_LABEL),
@@ -1221,13 +1229,17 @@ fn low_preset_clamps_the_authored_features_off() {
 
     f.apply(vec![SettingCommand {
         setting: SettingKey::GraphicsQuality,
-        op: SettingOp::SetIndex(crate::gfx::quality_preset::preset_index(QualityPreset::Low)),
+        op: SettingOp::SetIndex(concinnity_core::settings::quality::preset_index(
+            QualityPreset::Low,
+        )),
         value_label: Some(QUALITY_LABEL),
         persist: true,
     }]);
 
-    let ceiling =
-        crate::gfx::quality_preset::resolve_ceiling(QualityPreset::Low, &f.state.gpu_profile);
+    let ceiling = concinnity_core::settings::quality::resolve_ceiling(
+        QualityPreset::Low,
+        &f.state.gpu_profile,
+    );
     assert!(!ceiling.ssgi, "the Low ceiling disallows SSGI");
     assert_eq!(
         f.state.graphics.quality.post_config.indirect_lighting,

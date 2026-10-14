@@ -3,8 +3,6 @@
 // scheduled just before it.
 pub(crate) mod system;
 
-pub(crate) mod quality_rows;
-
 // The engine-side registry of user-facing settings a cycle row can change. The
 // ordered option labels live in `concinnity_core::settings` (shared with
 // the build pipeline, which reads a key's label count to pick a stepper vs a
@@ -15,8 +13,7 @@ pub(crate) mod quality_rows;
 // field) lives in SettingsSystem's drain, keyed by the same `SettingKey`.
 
 use concinnity_core::components::{
-    AaMode, ControlsCommand, PassResolution, PostProcessConfig, SettingOp, ShadowUpdate,
-    UpscaleQuality, UpscalerBackend, WindowMode,
+    ControlsCommand, PostProcessConfig, SettingOp, ShadowUpdate, UpscalerBackend, WindowMode,
 };
 use concinnity_core::gfx::auto_exposure::EV_LIMIT;
 use concinnity_core::gfx::render_types::PostProcessTunables;
@@ -24,11 +21,16 @@ use concinnity_core::render::backend;
 use concinnity_core::render::backend::GpuVendor;
 use concinnity_core::render::dlss::DlssPreset;
 
-use crate::config::{GraphicsSettings, Settings};
+use crate::config::Settings;
 // This module presents one settings vocabulary. The option-label registry half
 // (labels + classification) lives in core so the cook and the client agree on
 // every setting's option count, and is re-exported here alongside the
 // client-only half below.
+use concinnity_core::settings::levels::nearest_count_index;
+pub(crate) use concinnity_core::settings::levels::{render_scale_at, render_scale_index};
+use concinnity_core::settings::rows::{
+    GRAPHICS_SLIDERS, GraphicsSlider, GraphicsSliderTarget, Lens,
+};
 pub(crate) use concinnity_core::settings::{SettingKey, options};
 
 // Whether setting `key` can be changed on a device with the given capabilities
@@ -69,7 +71,6 @@ pub(crate) fn setting_available(
 // option index (the ordered labels for these live in core's option registry).
 // An authored value off a discrete level snaps to the nearest.
 const FPS_CAP_VALUES: [u32; 8] = [0, 30, 60, 120, 144, 240, 300, 360];
-const SSGI_RAYS_COUNTS: [u32; 3] = [1, 2, 4];
 const SHADOW_RESOLUTION_SIZES: [u32; 4] = [0, 1024, 2048, 4096];
 const SHADOW_DISTANCE_VALUES: [u32; 4] = [40, 80, 160, 320];
 const SHADOW_CASCADES_VALUES: [u32; 3] = [2, 3, 4];
@@ -113,24 +114,6 @@ pub(crate) fn window_mode_index(mode: WindowMode) -> usize {
         WindowMode::Windowed => 0,
         WindowMode::Borderless => 1,
         WindowMode::Fullscreen => 2,
-    }
-}
-
-// UpscaleQuality for an option index, and the index for a quality.
-pub(crate) fn render_scale_at(index: usize) -> UpscaleQuality {
-    match index {
-        1 => UpscaleQuality::Balanced,
-        2 => UpscaleQuality::Performance,
-        3 => UpscaleQuality::UltraPerformance,
-        _ => UpscaleQuality::Quality,
-    }
-}
-pub(crate) fn render_scale_index(quality: UpscaleQuality) -> usize {
-    match quality {
-        UpscaleQuality::Quality => 0,
-        UpscaleQuality::Balanced => 1,
-        UpscaleQuality::Performance => 2,
-        UpscaleQuality::UltraPerformance => 3,
     }
 }
 
@@ -184,52 +167,6 @@ pub(crate) fn upscale_backend_available(backend: UpscalerBackend, vendor: GpuVen
         UpscalerBackend::Dlss => vendor == GpuVendor::Nvidia,
         UpscalerBackend::Xess => vendor == GpuVendor::Intel,
     }
-}
-
-// Anti-aliasing mode for an option index, and the index for a mode. Order
-// matches AA_MODE_OPTIONS (Off, FXAA, TAA), which is also ascending cost so the
-// index doubles as the aggressiveness rank the preset ceiling clamps against.
-pub(crate) fn aa_mode_at(index: usize) -> AaMode {
-    match index {
-        0 => AaMode::Off,
-        2 => AaMode::Taa,
-        _ => AaMode::Fxaa,
-    }
-}
-pub(crate) fn aa_mode_index(mode: AaMode) -> usize {
-    match mode {
-        AaMode::Off => 0,
-        AaMode::Fxaa => 1,
-        AaMode::Taa => 2,
-    }
-}
-
-// Pass resolution for an option index, and the index for a resolution. Order
-// matches PASS_RESOLUTION_OPTIONS (finest first).
-pub(crate) fn pass_resolution_at(index: usize) -> PassResolution {
-    PassResolution::ALL.get(index).copied().unwrap_or_default()
-}
-pub(crate) fn pass_resolution_index(res: PassResolution) -> usize {
-    res as usize
-}
-
-// SSGI ray counts for an option index, and the menu index nearest an
-// authored count (the world may author a value off the discrete levels; the row
-// then shows the closest one).
-pub(crate) fn ssgi_rays_at(index: usize) -> u32 {
-    *SSGI_RAYS_COUNTS.get(index).unwrap_or(&SSGI_RAYS_COUNTS[0])
-}
-pub(crate) fn ssgi_rays_index(count: u32) -> usize {
-    nearest_count_index(&SSGI_RAYS_COUNTS, count)
-}
-// The index of the level closest to `count` (ties pick the lower level).
-fn nearest_count_index(levels: &[u32], count: u32) -> usize {
-    levels
-        .iter()
-        .enumerate()
-        .min_by_key(|&(_, &v)| v.abs_diff(count))
-        .map(|(i, _)| i)
-        .unwrap_or(0)
 }
 
 // Shadow-map resolution (texels) for an option index, and the menu index nearest
@@ -385,12 +322,6 @@ pub(crate) const DEFAULT_FOV: f32 = 75.0;
 // Fraction of a slider's range one focused Left/Right pulse steps.
 pub(crate) const SLIDER_STEP_FRACTION: f32 = 0.05;
 
-// A shared and a mutable accessor for the same field of `T`.
-pub(crate) struct Lens<T, V> {
-    pub(crate) get: fn(&T) -> &V,
-    pub(crate) get_mut: fn(&mut T) -> &mut V,
-}
-
 macro_rules! lens {
     ($($field:ident).+) => {
         Lens {
@@ -401,29 +332,19 @@ macro_rules! lens {
 }
 
 // The live state a slider's applied value drives, and where its choice persists.
-// The render-side targets persist the user-facing value; `Controls` persists the
+// The graphics targets persist the user-facing value; `Controls` persists the
 // applied value the camera and input sampling read.
 pub(crate) enum SliderTarget {
-    // A `PostProcessTunables` field, pushed live through `update_post_process`.
-    PostProcess {
-        field: Lens<PostProcessTunables, f32>,
-        persisted: Lens<GraphicsSettings, Option<f32>>,
-    },
-    // A per-feature sub-quality `PostProcessConfig` field, pushed live through
-    // `update_quality_params` (no pass rebuild). Look tuning, so no preset ceiling.
-    PostConfig {
-        field: Lens<PostProcessConfig, f32>,
-        persisted: Lens<GraphicsSettings, Option<f32>>,
-    },
-    // The ambient (IBL) scale, which rides `LightUniforms` behind its own setter.
-    Ambient {
-        persisted: Lens<GraphicsSettings, Option<f32>>,
-    },
-    // A camera / input preference, sent live as a `ControlsCommand`. `default` is
-    // the applied value when nothing is persisted.
+    // A graphics setting: its row in the settings resolver holds the clamp and
+    // the resolved state it drives.
+    Graphics(&'static GraphicsSlider),
+    // A camera / input preference, sent live as a `ControlsCommand`. `apply` maps
+    // the user-facing value to the applied one; `default` is the applied value
+    // when nothing is persisted.
     Controls {
         persisted: Lens<Settings, Option<f32>>,
         command: fn(f32) -> ControlsCommand,
+        apply: fn(f32) -> f32,
         default: f32,
     },
 }
@@ -432,9 +353,6 @@ pub(crate) struct SliderSetting {
     pub(crate) key: SettingKey,
     // The (min, max) user-facing value range.
     pub(crate) range: (f32, f32),
-    // User-facing value to applied value, clamped to the engine's domain. Shared
-    // by the live drag and the persisted re-apply at init.
-    pub(crate) apply: fn(f32) -> f32,
     // The inverse of `apply`, so a handle and label re-sync to the live value.
     pub(crate) recover: fn(f32) -> f32,
     // Value-label text for a user-facing value.
@@ -443,6 +361,15 @@ pub(crate) struct SliderSetting {
 }
 
 impl SliderSetting {
+    // User-facing value to applied value, clamped to the engine's domain. Shared
+    // by the live drag and the persisted re-apply at init.
+    pub(crate) fn apply(&self, value: f32) -> f32 {
+        match &self.target {
+            SliderTarget::Graphics(row) => (row.apply)(value),
+            SliderTarget::Controls { apply, .. } => apply(value),
+        }
+    }
+
     // The value at a `0.0..=1.0` fraction of the range. The fraction is clamped.
     pub(crate) fn value_at(&self, fraction: f32) -> f32 {
         let (lo, hi) = self.range;
@@ -470,9 +397,11 @@ impl SliderSetting {
         persisted: &Settings,
     ) -> f32 {
         let stored = match &self.target {
-            SliderTarget::PostProcess { field, .. } => *(field.get)(post_process),
-            SliderTarget::PostConfig { field, .. } => *(field.get)(post_config),
-            SliderTarget::Ambient { .. } => ambient_intensity,
+            SliderTarget::Graphics(row) => match &row.target {
+                GraphicsSliderTarget::PostProcess { field, .. } => *(field.get)(post_process),
+                GraphicsSliderTarget::PostConfig { field, .. } => *(field.get)(post_config),
+                GraphicsSliderTarget::Ambient { .. } => ambient_intensity,
+            },
             SliderTarget::Controls {
                 persisted: lens,
                 default,
@@ -485,13 +414,11 @@ impl SliderSetting {
     // Record the user-facing `value` in the settings store.
     pub(crate) fn persist(&self, cfg: &mut Settings, value: f32) {
         match &self.target {
-            SliderTarget::PostProcess { persisted, .. }
-            | SliderTarget::PostConfig { persisted, .. }
-            | SliderTarget::Ambient { persisted } => {
-                *(persisted.get_mut)(&mut cfg.graphics) = Some(value);
+            SliderTarget::Graphics(row) => {
+                *(row.target.persisted().get_mut)(&mut cfg.graphics) = Some(value);
             }
             SliderTarget::Controls { persisted, .. } => {
-                *(persisted.get_mut)(cfg) = Some((self.apply)(value));
+                *(persisted.get_mut)(cfg) = Some(self.apply(value));
             }
         }
     }
@@ -532,194 +459,130 @@ fn hundred_scale_from(stored: f32, min: f32, max: f32) -> f32 {
     1.0 + (stored - min) / (max - min) * 99.0
 }
 
-// The post-process ranges are practical UI ceilings; `apply` mirrors the clamps
-// in `PostProcessConfig::resolve` and each feature's `*Settings::resolve`.
+// The post-process ranges are practical UI ceilings; the graphics clamps live
+// with their rows in `concinnity_core::settings::rows`.
 pub(crate) static SLIDERS: [SliderSetting; 20] = [
     // Authored in EV (centered on neutral), applied as the multiplier 2^ev.
     SliderSetting {
         key: SettingKey::Exposure,
         range: (-3.0, 3.0),
-        apply: |v| v.clamp(-EV_LIMIT, EV_LIMIT).exp2(),
         // Guard log2(0); the slider range keeps the multiplier well above this.
         recover: |stored| stored.max(1.0e-6).log2(),
         format: format_ev,
-        target: SliderTarget::PostProcess {
-            field: lens!(exposure),
-            persisted: lens!(exposure_ev),
-        },
+        target: SliderTarget::Graphics(&GRAPHICS_SLIDERS[0]),
     },
     SliderSetting {
         key: SettingKey::BloomIntensity,
         range: (0.0, 2.0),
-        apply: |v| v.max(0.0),
         recover: identity,
         format: format_two_decimals,
-        target: SliderTarget::PostProcess {
-            field: lens!(bloom_intensity),
-            persisted: lens!(bloom_intensity),
-        },
+        target: SliderTarget::Graphics(&GRAPHICS_SLIDERS[1]),
     },
     SliderSetting {
         key: SettingKey::BloomThreshold,
         range: (0.0, 4.0),
-        apply: |v| v.max(0.0),
         recover: identity,
         format: format_two_decimals,
-        target: SliderTarget::PostProcess {
-            field: lens!(bloom_threshold),
-            persisted: lens!(bloom_threshold),
-        },
+        target: SliderTarget::Graphics(&GRAPHICS_SLIDERS[2]),
     },
     SliderSetting {
         key: SettingKey::Vignette,
         range: (0.0, 1.0),
-        apply: |v| v.clamp(0.0, 1.0),
         recover: identity,
         format: format_fraction_percent,
-        target: SliderTarget::PostProcess {
-            field: lens!(vignette),
-            persisted: lens!(vignette),
-        },
+        target: SliderTarget::Graphics(&GRAPHICS_SLIDERS[3]),
     },
     SliderSetting {
         key: SettingKey::LutStrength,
         range: (0.0, 1.0),
-        apply: |v| v.clamp(0.0, 1.0),
         recover: identity,
         format: format_fraction_percent,
-        target: SliderTarget::PostProcess {
-            field: lens!(lut_strength),
-            persisted: lens!(lut_strength),
-        },
+        target: SliderTarget::Graphics(&GRAPHICS_SLIDERS[4]),
     },
     SliderSetting {
         key: SettingKey::AmbientIntensity,
         range: (0.0, 4.0),
-        apply: |v| v.clamp(0.0, 16.0),
         recover: identity,
         format: format_two_decimals,
-        target: SliderTarget::Ambient {
-            persisted: lens!(ambient_intensity),
-        },
+        target: SliderTarget::Graphics(&GRAPHICS_SLIDERS[5]),
     },
     // Soft-knee width below the bloom threshold, lower-bounded like the other
     // bloom params.
     SliderSetting {
         key: SettingKey::BloomKnee,
         range: (0.0, 1.0),
-        apply: |v| v.max(0.0),
         recover: identity,
         format: format_two_decimals,
-        target: SliderTarget::PostProcess {
-            field: lens!(bloom_knee),
-            persisted: lens!(bloom_knee),
-        },
+        target: SliderTarget::Graphics(&GRAPHICS_SLIDERS[6]),
     },
     SliderSetting {
         key: SettingKey::SsaoRadius,
         range: (0.05, 2.0),
-        apply: |v| v.max(1.0e-3),
         recover: identity,
         format: format_meters,
-        target: SliderTarget::PostConfig {
-            field: lens!(ssao_radius),
-            persisted: lens!(ssao_radius),
-        },
+        target: SliderTarget::Graphics(&GRAPHICS_SLIDERS[7]),
     },
     SliderSetting {
         key: SettingKey::SsaoIntensity,
         range: (0.0, 4.0),
-        apply: |v| v.clamp(0.0, 4.0),
         recover: identity,
         format: format_two_decimals,
-        target: SliderTarget::PostConfig {
-            field: lens!(ssao_intensity),
-            persisted: lens!(ssao_intensity),
-        },
+        target: SliderTarget::Graphics(&GRAPHICS_SLIDERS[8]),
     },
     SliderSetting {
         key: SettingKey::SsrIntensity,
         range: (0.0, 1.0),
-        apply: |v| v.clamp(0.0, 1.0),
         recover: identity,
         format: format_two_decimals,
-        target: SliderTarget::PostConfig {
-            field: lens!(ssr_intensity),
-            persisted: lens!(ssr_intensity),
-        },
+        target: SliderTarget::Graphics(&GRAPHICS_SLIDERS[9]),
     },
     SliderSetting {
         key: SettingKey::SsrMaxDistance,
         range: (1.0, 200.0),
-        apply: |v| v.clamp(1.0, 200.0),
         recover: identity,
         format: format_meters,
-        target: SliderTarget::PostConfig {
-            field: lens!(ssr_max_distance),
-            persisted: lens!(ssr_max_distance),
-        },
+        target: SliderTarget::Graphics(&GRAPHICS_SLIDERS[10]),
     },
     SliderSetting {
         key: SettingKey::SsgiIntensity,
         range: (0.0, 4.0),
-        apply: |v| v.clamp(0.0, 4.0),
         recover: identity,
         format: format_two_decimals,
-        target: SliderTarget::PostConfig {
-            field: lens!(ssgi_intensity),
-            persisted: lens!(ssgi_intensity),
-        },
+        target: SliderTarget::Graphics(&GRAPHICS_SLIDERS[11]),
     },
     SliderSetting {
         key: SettingKey::SsgiMaxDistance,
         range: (0.5, 40.0),
-        apply: |v| v.clamp(0.5, 100.0),
         recover: identity,
         format: format_meters,
-        target: SliderTarget::PostConfig {
-            field: lens!(ssgi_max_distance),
-            persisted: lens!(ssgi_max_distance),
-        },
+        target: SliderTarget::Graphics(&GRAPHICS_SLIDERS[12]),
     },
     // The resolve also orders the EV bounds (min <= max) when the config is
     // resolved.
     SliderSetting {
         key: SettingKey::AutoExposureMinEv,
         range: (-EV_LIMIT, EV_LIMIT),
-        apply: |v| v.clamp(-EV_LIMIT, EV_LIMIT),
         recover: identity,
         format: format_ev,
-        target: SliderTarget::PostConfig {
-            field: lens!(auto_exposure_min_ev),
-            persisted: lens!(auto_exposure_min_ev),
-        },
+        target: SliderTarget::Graphics(&GRAPHICS_SLIDERS[13]),
     },
     SliderSetting {
         key: SettingKey::AutoExposureMaxEv,
         range: (-EV_LIMIT, EV_LIMIT),
-        apply: |v| v.clamp(-EV_LIMIT, EV_LIMIT),
         recover: identity,
         format: format_ev,
-        target: SliderTarget::PostConfig {
-            field: lens!(auto_exposure_max_ev),
-            persisted: lens!(auto_exposure_max_ev),
-        },
+        target: SliderTarget::Graphics(&GRAPHICS_SLIDERS[14]),
     },
     SliderSetting {
         key: SettingKey::AutoExposureSpeed,
         range: (0.1, 6.0),
-        apply: |v| v.clamp(1.0e-3, 20.0),
         recover: identity,
         format: format_two_decimals,
-        target: SliderTarget::PostConfig {
-            field: lens!(auto_exposure_speed),
-            persisted: lens!(auto_exposure_speed),
-        },
+        target: SliderTarget::Graphics(&GRAPHICS_SLIDERS[15]),
     },
     SliderSetting {
         key: SettingKey::MouseSensitivity,
         range: (1.0, 100.0),
-        apply: |v| hundred_scale_to(v, MOUSE_SENS_MIN, MOUSE_SENS_MAX),
         recover: |stored| hundred_scale_from(stored, MOUSE_SENS_MIN, MOUSE_SENS_MAX),
         format: |v| format!("{}", v.round() as i32),
         target: SliderTarget::Controls {
@@ -728,13 +591,13 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
                 mouse_sensitivity: Some(v),
                 ..ControlsCommand::default()
             },
+            apply: |v| hundred_scale_to(v, MOUSE_SENS_MIN, MOUSE_SENS_MAX),
             default: DEFAULT_MOUSE_SENSITIVITY,
         },
     },
     SliderSetting {
         key: SettingKey::GamepadLookSensitivity,
         range: (1.0, 100.0),
-        apply: |v| hundred_scale_to(v, GAMEPAD_LOOK_MIN, GAMEPAD_LOOK_MAX),
         recover: |stored| hundred_scale_from(stored, GAMEPAD_LOOK_MIN, GAMEPAD_LOOK_MAX),
         format: |v| format!("{}", v.round() as i32),
         target: SliderTarget::Controls {
@@ -743,6 +606,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
                 gamepad_look_sensitivity: Some(v),
                 ..ControlsCommand::default()
             },
+            apply: |v| hundred_scale_to(v, GAMEPAD_LOOK_MIN, GAMEPAD_LOOK_MAX),
             default: DEFAULT_GAMEPAD_LOOK_SENSITIVITY,
         },
     },
@@ -751,7 +615,6 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
     SliderSetting {
         key: SettingKey::GamepadDeadzone,
         range: (0.0, 40.0),
-        apply: |v| v.clamp(0.0, 40.0) / 100.0,
         recover: |stored| stored * 100.0,
         format: |v| format!("{}%", v.round() as i32),
         target: SliderTarget::Controls {
@@ -760,6 +623,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
                 gamepad_deadzone: Some(v),
                 ..ControlsCommand::default()
             },
+            apply: |v| v.clamp(0.0, 40.0) / 100.0,
             default: DEFAULT_GAMEPAD_DEADZONE,
         },
     },
@@ -768,7 +632,6 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
     SliderSetting {
         key: SettingKey::Fov,
         range: (50.0, 100.0),
-        apply: |v| v.clamp(50.0, 100.0),
         recover: identity,
         format: |v| format!("{}\u{00b0}", v.round() as i32),
         target: SliderTarget::Controls {
@@ -777,6 +640,7 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
                 fov_y_degrees: Some(v),
                 ..ControlsCommand::default()
             },
+            apply: |v| v.clamp(50.0, 100.0),
             default: DEFAULT_FOV,
         },
     },
@@ -785,6 +649,11 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::components::{AaMode, PassResolution, UpscaleQuality};
+    use concinnity_core::settings::levels::{
+        SSGI_RAYS_COUNTS, aa_mode_at, aa_mode_index, pass_resolution_at, pass_resolution_index,
+        ssgi_rays_at, ssgi_rays_index,
+    };
 
     #[test]
     fn vsync_options_are_off_then_on() {
@@ -812,7 +681,7 @@ mod tests {
 
     #[test]
     fn graphics_quality_options_match_preset_order() {
-        use crate::gfx::quality_preset::QualityPreset;
+        use concinnity_core::settings::quality::QualityPreset;
         // The master row's labels (in core's registry) must line up 1:1 with the
         // preset cycle order, so an index from `preset_index` selects the right
         // label and vice versa.
@@ -992,14 +861,14 @@ mod tests {
         assert!(options(SettingKey::MouseSensitivity).is_none());
         // The 1..100 UI value maps linearly to radians/pixel and back.
         for &ui in &[1.0_f32, 25.0, 50.0, 100.0] {
-            let stored = (s.apply)(ui);
+            let stored = s.apply(ui);
             let back = (s.recover)(stored);
             assert!((back - ui).abs() < 1.0e-2, "ui={ui} -> {stored} -> {back}");
         }
         // Endpoints land on the radians/pixel span; values rise with the UI value.
-        assert!(((s.apply)(1.0) - MOUSE_SENS_MIN).abs() < 1.0e-9);
-        assert!(((s.apply)(100.0) - MOUSE_SENS_MAX).abs() < 1.0e-9);
-        assert!((s.apply)(10.0) < (s.apply)(90.0));
+        assert!((s.apply(1.0) - MOUSE_SENS_MIN).abs() < 1.0e-9);
+        assert!((s.apply(100.0) - MOUSE_SENS_MAX).abs() < 1.0e-9);
+        assert!(s.apply(10.0) < s.apply(90.0));
         assert_eq!((s.format)(26.3), "26");
         // The authored default recovers to a position inside the track.
         let def = (s.recover)(DEFAULT_MOUSE_SENSITIVITY);
@@ -1016,12 +885,12 @@ mod tests {
         assert!(options(SettingKey::Fov).is_none());
         // The slider value IS the degrees: apply only clamps, recover is identity.
         for &deg in &[50.0_f32, 75.0, 100.0] {
-            let stored = (s.apply)(deg);
+            let stored = s.apply(deg);
             assert!((stored - deg).abs() < 1.0e-6);
             assert!(((s.recover)(stored) - deg).abs() < 1.0e-6);
         }
-        assert_eq!((s.apply)(10.0), 50.0);
-        assert_eq!((s.apply)(200.0), 100.0);
+        assert_eq!(s.apply(10.0), 50.0);
+        assert_eq!(s.apply(200.0), 100.0);
         assert_eq!((s.format)(74.6), "75\u{00b0}");
         assert!((50.0..=100.0).contains(&DEFAULT_FOV));
     }
@@ -1076,13 +945,22 @@ mod tests {
 
     #[test]
     fn rt_reflection_resolution_is_a_quality_cycle() {
-        assert!(quality_rows::quality_cycle(SettingKey::RtReflectionResolution).is_some());
-        assert!(quality_rows::quality_toggle(SettingKey::RtReflectionShadows).is_some());
+        assert!(
+            concinnity_core::settings::rows::quality_cycle(SettingKey::RtReflectionResolution)
+                .is_some()
+        );
+        assert!(
+            concinnity_core::settings::rows::quality_toggle(SettingKey::RtReflectionShadows)
+                .is_some()
+        );
     }
 
     #[test]
     fn reflection_blur_is_a_quality_cycle() {
-        assert!(quality_rows::quality_cycle(SettingKey::ReflectionBlurResolution).is_some());
+        assert!(
+            concinnity_core::settings::rows::quality_cycle(SettingKey::ReflectionBlurResolution)
+                .is_some()
+        );
     }
 
     #[test]
@@ -1098,7 +976,7 @@ mod tests {
             assert!(slider(key).is_none(), "{key:?} should not be a slider");
             assert!(!key.is_quality_toggle(), "{key:?} is not a quality toggle");
             assert!(
-                quality_rows::quality_cycle(key).is_none(),
+                concinnity_core::settings::rows::quality_cycle(key).is_none(),
                 "{key:?} is not a quality cycle knob"
             );
         }
@@ -1418,7 +1296,7 @@ mod tests {
         for s in &SLIDERS {
             let (lo, hi) = s.range;
             for v in [lo, (lo + hi) * 0.5, hi] {
-                let recovered = (s.recover)((s.apply)(v));
+                let recovered = (s.recover)(s.apply(v));
                 assert!(
                     (recovered - v).abs() < 1.0e-3,
                     "{:?}: v={v} recovered={recovered}",
@@ -1438,16 +1316,17 @@ mod tests {
         let marker = |i: usize| 1000.0 + i as f32;
         for (i, s) in SLIDERS.iter().enumerate() {
             match &s.target {
-                SliderTarget::PostProcess { field, persisted } => {
-                    *(field.get_mut)(&mut post_process) = marker(i);
-                    *(persisted.get_mut)(&mut cfg.graphics) = Some(marker(i));
-                }
-                SliderTarget::PostConfig { field, persisted } => {
-                    *(field.get_mut)(&mut post_config) = marker(i);
-                    *(persisted.get_mut)(&mut cfg.graphics) = Some(marker(i));
-                }
-                SliderTarget::Ambient { persisted } => {
-                    *(persisted.get_mut)(&mut cfg.graphics) = Some(marker(i));
+                SliderTarget::Graphics(row) => {
+                    *(row.target.persisted().get_mut)(&mut cfg.graphics) = Some(marker(i));
+                    match &row.target {
+                        GraphicsSliderTarget::PostProcess { field, .. } => {
+                            *(field.get_mut)(&mut post_process) = marker(i);
+                        }
+                        GraphicsSliderTarget::PostConfig { field, .. } => {
+                            *(field.get_mut)(&mut post_config) = marker(i);
+                        }
+                        GraphicsSliderTarget::Ambient { .. } => {}
+                    }
                 }
                 SliderTarget::Controls { persisted, .. } => {
                     *(persisted.get_mut)(&mut cfg) = Some(marker(i));
@@ -1456,15 +1335,18 @@ mod tests {
         }
         for (i, s) in SLIDERS.iter().enumerate() {
             let (live, persisted) = match &s.target {
-                SliderTarget::PostProcess { field, persisted } => (
-                    Some(*(field.get)(&post_process)),
-                    *(persisted.get)(&cfg.graphics),
+                SliderTarget::Graphics(row) => (
+                    match &row.target {
+                        GraphicsSliderTarget::PostProcess { field, .. } => {
+                            Some(*(field.get)(&post_process))
+                        }
+                        GraphicsSliderTarget::PostConfig { field, .. } => {
+                            Some(*(field.get)(&post_config))
+                        }
+                        GraphicsSliderTarget::Ambient { .. } => None,
+                    },
+                    *(row.target.persisted().get)(&cfg.graphics),
                 ),
-                SliderTarget::PostConfig { field, persisted } => (
-                    Some(*(field.get)(&post_config)),
-                    *(persisted.get)(&cfg.graphics),
-                ),
-                SliderTarget::Ambient { persisted } => (None, *(persisted.get)(&cfg.graphics)),
                 SliderTarget::Controls { persisted, .. } => (None, *(persisted.get)(&cfg)),
             };
             if let Some(v) = live {
@@ -1492,7 +1374,7 @@ mod tests {
         assert_eq!(cfg.graphics.ambient_intensity, Some(1.5));
         let mouse = slider(SettingKey::MouseSensitivity).unwrap();
         mouse.persist(&mut cfg, 100.0);
-        assert_eq!(cfg.controls.mouse_sensitivity, Some((mouse.apply)(100.0)));
+        assert_eq!(cfg.controls.mouse_sensitivity, Some(mouse.apply(100.0)));
         let fov = slider(SettingKey::Fov).unwrap();
         fov.persist(&mut cfg, 200.0);
         assert_eq!(cfg.graphics.fov, Some(100.0));
@@ -1521,7 +1403,7 @@ mod tests {
 
     #[test]
     fn slider_apply_clamps_match_resolve() {
-        let apply = |key: SettingKey, v: f32| (slider(key).unwrap().apply)(v);
+        let apply = |key: SettingKey, v: f32| slider(key).unwrap().apply(v);
         // Out-of-range inputs (e.g. a hand-edited settings.bin) clamp to the
         // engine's domain, matching PostProcessConfig::resolve.
         assert_eq!(apply(SettingKey::BloomIntensity, -5.0), 0.0);
@@ -1549,21 +1431,47 @@ mod tests {
         // The sub-quality sliders are look tuning, not preset-governed knobs.
         let quality_params: Vec<SettingKey> = SLIDERS
             .iter()
-            .filter(|s| matches!(s.target, SliderTarget::PostConfig { .. }))
+            .filter(|s| {
+                matches!(
+                    s.target,
+                    SliderTarget::Graphics(GraphicsSlider {
+                        target: GraphicsSliderTarget::PostConfig { .. },
+                        ..
+                    })
+                )
+            })
             .map(|s| s.key)
             .collect();
         assert_eq!(quality_params.len(), 9);
         for key in quality_params {
             assert!(
-                quality_rows::quality_cycle(key).is_none(),
+                concinnity_core::settings::rows::quality_cycle(key).is_none(),
                 "{key:?} should not be preset-governed"
             );
         }
         // bloom_knee is a PostProcessParams field, not a quality param.
         assert!(matches!(
             slider(SettingKey::BloomKnee).unwrap().target,
-            SliderTarget::PostProcess { .. }
+            SliderTarget::Graphics(GraphicsSlider {
+                target: GraphicsSliderTarget::PostProcess { .. },
+                ..
+            })
         ));
+    }
+
+    // Each graphics slider row names the resolver's row for its own key, and
+    // every resolver row has a slider.
+    #[test]
+    fn graphics_sliders_point_at_their_own_resolver_rows() {
+        let mut rows = Vec::new();
+        for s in &SLIDERS {
+            if let SliderTarget::Graphics(row) = &s.target {
+                assert_eq!(row.key, s.key);
+                rows.push(row.key);
+            }
+        }
+        let resolver: Vec<SettingKey> = GRAPHICS_SLIDERS.iter().map(|r| r.key).collect();
+        assert_eq!(rows, resolver);
     }
 
     #[test]

@@ -5,6 +5,7 @@
 // the schema walk that produces them. Page assembly from the finished bodies
 // lives in `page.rs`.
 
+use concinnity_core::ecs::asset_fields::{ApplyClass, ParamMeta};
 use std::collections::HashMap;
 
 // A JSON-shaped description of a field's type. `Enum` carries the accepted
@@ -50,6 +51,8 @@ pub(super) struct FieldEntry {
     // or `None` when the key is required or its default does not serialize.
     pub default: Option<String>,
     pub doc: String,
+    // The field's range and apply class, for a field declaring either.
+    pub param: ParamMeta,
 }
 
 // One value of a documented enum: its serialized string and its own doc line.
@@ -180,7 +183,27 @@ pub(super) fn render_field_bullet(f: &FieldEntry) -> String {
         }
         _ => {}
     }
+    s.push_str(&param_sentences(&f.param));
     s
+}
+
+// The sentences a parameter's range and apply class add to its bullet, each
+// with a leading space; empty for a field declaring neither.
+fn param_sentences(param: &ParamMeta) -> String {
+    let range = match (param.range.min, param.range.max) {
+        (Some(min), Some(max)) => format!(" Clamped to `[{min}, {max}]`."),
+        (Some(min), None) => format!(" At least `{min}`."),
+        (None, Some(max)) => format!(" At most `{max}`."),
+        (None, None) => String::new(),
+    };
+    let apply = match param.apply {
+        Some(ApplyClass::Live) => " Applies live.",
+        Some(ApplyClass::Rebuild) => " Applies live, rebuilding the passes it gates.",
+        Some(ApplyClass::Variant) => " Applies by switching shader variants.",
+        Some(ApplyClass::Restart) => " Applies at the next launch.",
+        None => "",
+    };
+    format!("{range}{apply}")
 }
 
 // Render the `## Parameters` section for a set of fields, or an empty string
@@ -318,7 +341,43 @@ mod tests {
             optional,
             default: default.map(str::to_string),
             doc: doc.to_string(),
+            param: ParamMeta::NONE,
         }
+    }
+
+    #[test]
+    fn a_parameter_states_its_range_and_when_it_applies() {
+        use concinnity_core::ecs::asset_fields::ParamRange;
+        let mut f = field("blend", FieldType::Float, false, Some("0.5"), "How much.");
+        f.param = ParamMeta {
+            range: ParamRange {
+                min: Some(0.0),
+                max: Some(1.5),
+            },
+            apply: Some(ApplyClass::Live),
+        };
+        assert_eq!(
+            render_field_bullet(&f),
+            "- `blend`: A float. How much. Defaults to `0.5`. Clamped to `[0, 1.5]`. Applies live."
+        );
+        f.param.range.max = None;
+        f.param.apply = Some(ApplyClass::Restart);
+        assert!(
+            render_field_bullet(&f).ends_with("At least `0`. Applies at the next launch."),
+            "{}",
+            render_field_bullet(&f)
+        );
+        f.param.range = ParamRange {
+            min: None,
+            max: Some(24.0),
+        };
+        f.param.apply = Some(ApplyClass::Rebuild);
+        assert!(
+            render_field_bullet(&f)
+                .ends_with("At most `24`. Applies live, rebuilding the passes it gates.")
+        );
+        f.param = ParamMeta::NONE;
+        assert!(render_field_bullet(&f).ends_with("Defaults to `0.5`."));
     }
 
     #[test]

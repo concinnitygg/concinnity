@@ -1,15 +1,30 @@
-//! The ordered option labels for every user-facing cycle setting, shared by the
-//! client renderer and the build pipeline. The client's settings drain reads a
-//! key's labels to display + persist the chosen value; the cook reads the label
-//! count to decide whether a settings row expands into a `<`/`>` stepper (two
-//! options) or a click-to-open dropdown (more than two). Keeping the labels here
-//! (not duplicated per crate) means the two never drift on a setting's option
-//! count. How a chosen option is applied stays in the client, keyed by the same
-//! [`SettingKey`].
+//! User-facing settings and how they resolve.
+//!
+//! The ordered option labels for every cycle setting are shared by the client
+//! renderer and the build pipeline: the client's settings drain reads a key's
+//! labels to display + persist the chosen value; the cook reads the label count
+//! to decide whether a settings row expands into a `<`/`>` stepper (two
+//! options) or a click-to-open dropdown (more than two). Keeping the labels
+//! here means the two never drift on a setting's option count.
+//!
+//! [`resolve`] turns the world's authored settings, the quality preset's
+//! ceiling ([`quality`]), and the user's choices ([`user`]) into the snapshot
+//! the renderer is built with, reading the settings rows in [`rows`]. Reading
+//! the user's choices from disk and detecting the GPU are the engine's.
 
 mod key;
+pub mod levels;
+pub mod quality;
+pub mod resolve;
+pub mod rows;
+pub mod user;
 
 pub use key::{SettingKey, SettingKind};
+pub use quality::{QualityCeiling, QualityPreset};
+pub use resolve::{
+    ResolvedQuality, ResolvedSettings, SceneOverride, SettingsDiff, SettingsLayers, WorldSettings,
+};
+pub use user::UserGraphicsSettings;
 
 // Ordered option labels for `vsync`: index 0 is off, index 1 is on.
 pub(crate) const VSYNC_OPTIONS: [&str; 2] = ["Off", "On"];

@@ -11,6 +11,9 @@
 //!
 //! A path field marked `#[asset(owned_file)]` is also recorded as a file the
 //! asset owns: its authored source, as opposed to content other assets share.
+//! A field declaring `#[asset(min = ..., max = ..., apply = ...)]` is recorded
+//! as a parameter ([`ParamField`]): its range, and when a change to it takes
+//! effect.
 //!
 //! Paths are the authored keys: a field's serde `rename` replaces its name, a
 //! `flatten` field contributes its fields at the parent's level, and a `skip`
@@ -22,6 +25,11 @@ use alloc::vec::Vec;
 
 use crate::components::Vocabulary;
 use crate::ecs::reference::{Ref, RefTarget};
+
+pub use crate::ecs::param_meta::{
+    ApplyClass, ClampedParam, ClampedParams, ParamChange, ParamChanges, ParamField, ParamMeta,
+    ParamRange, clamp_param,
+};
 
 /// One reference field: its dotted path and the asset types it may name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,8 +60,9 @@ pub struct ActionField {
     pub extras: &'static [&'static str],
 }
 
-/// The reference, vocabulary, action and owned-file fields one schema declares.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// The reference, vocabulary, action, owned-file and parameter fields one
+/// schema declares.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct FieldTable {
     /// Every reference field, in declaration order.
     pub refs: Vec<RefField>,
@@ -64,14 +73,47 @@ pub struct FieldTable {
     /// The dotted path of every field holding a file the asset owns, in
     /// declaration order.
     pub owned_files: Vec<String>,
+    /// Every field declaring a range or an apply class, in declaration order.
+    pub params: Vec<ParamField>,
 }
 
 /// An authored schema's reference and vocabulary fields, derived from its
 /// field types with `#[derive(AssetFields)]`.
 pub trait AssetFields {
+    /// This schema's own parameters: each field declaring a range or an apply
+    /// class, by authored key, in declaration order.
+    const PARAMS: &'static [(&'static str, ParamMeta)] = &[];
+
     /// Append this schema's fields to `out`, each path under `prefix` (empty
     /// at the top level).
     fn collect_fields(prefix: &str, out: &mut FieldTable);
+
+    /// Clamp every ranged field into its range, recording each value that
+    /// moved.
+    fn clamp_params(&mut self, out: &mut ClampedParams) {
+        let _ = out;
+    }
+
+    /// Record every field with an apply class whose value differs from
+    /// `other`'s.
+    fn changed_params(&self, other: &Self, out: &mut ParamChanges)
+    where
+        Self: Sized,
+    {
+        let _ = (other, out);
+    }
+
+    /// The parameter metadata of the field at authored key `key`, if it
+    /// declares any.
+    fn param(key: &str) -> Option<ParamMeta>
+    where
+        Self: Sized,
+    {
+        Self::PARAMS
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, meta)| *meta)
+    }
 
     /// Both tables at once.
     fn field_table() -> FieldTable
@@ -149,7 +191,10 @@ pub(crate) fn join(prefix: &str, key: Option<&str>) -> String {
 pub mod probe {
     use core::marker::PhantomData;
 
-    use super::{AssetFields, EnumField, FieldTable, RefField, ReferenceField, Vocabulary, join};
+    use super::{
+        AssetFields, EnumField, FieldTable, ParamField, ParamMeta, RefField, ReferenceField,
+        Vocabulary, join,
+    };
 
     /// A zero-sized stand-in for a field of type `T`.
     pub struct Probe<T: ?Sized>(PhantomData<fn() -> *const T>);
@@ -204,6 +249,14 @@ pub mod probe {
     /// Record the field at `key` as a file the asset owns.
     pub fn owned_file(prefix: &str, key: Option<&str>, out: &mut FieldTable) {
         out.owned_files.push(join(prefix, key));
+    }
+
+    /// Record the field at `key` as a parameter.
+    pub fn param(prefix: &str, key: &str, meta: ParamMeta, out: &mut FieldTable) {
+        out.params.push(ParamField {
+            path: join(prefix, Some(key)),
+            meta,
+        });
     }
 
     /// Plain data: nothing to record.
@@ -325,6 +378,102 @@ mod tests {
                 "src",
             ]
         );
+    }
+
+    #[derive(AssetFields, Clone, Copy)]
+    struct Tuning {
+        #[asset(min = 0.0, max = 1.0, apply = live)]
+        blend: f32,
+        #[asset(min = 1, apply = rebuild)]
+        #[serde(rename = "rays")]
+        ray_count: u32,
+        #[asset(apply = restart)]
+        hdr: bool,
+        free: f32,
+    }
+
+    #[derive(AssetFields)]
+    #[expect(dead_code, reason = "only the field types are read")]
+    struct Holder {
+        tuning: Tuning,
+    }
+
+    #[test]
+    fn parameters_are_listed_under_their_authored_keys() {
+        let keys: Vec<_> = Tuning::PARAMS.iter().map(|(k, _)| *k).collect();
+        assert_eq!(keys, ["blend", "rays", "hdr"]);
+        let blend = Tuning::param("blend").expect("blend is a parameter");
+        assert_eq!(blend.range.min, Some(0.0));
+        assert_eq!(blend.range.max, Some(1.0));
+        assert_eq!(blend.apply, Some(ApplyClass::Live));
+        assert_eq!(Tuning::param("rays").unwrap().range.max, None);
+        assert_eq!(Tuning::param("free"), None);
+        let nested = Holder::field_table().params;
+        assert_eq!(
+            paths(&nested, |f| &f.path),
+            ["tuning.blend", "tuning.rays", "tuning.hdr"]
+        );
+        assert_eq!(nested[2].meta.apply, Some(ApplyClass::Restart));
+    }
+
+    #[test]
+    fn a_load_clamps_only_the_out_of_range_values() {
+        let mut t = Tuning {
+            blend: 4.0,
+            ray_count: 0,
+            hdr: true,
+            free: -9.0,
+        };
+        let mut clamped = Vec::new();
+        t.clamp_params(&mut clamped);
+        assert_eq!(
+            clamped,
+            [
+                ClampedParam {
+                    key: "blend",
+                    from: 4.0,
+                    to: 1.0
+                },
+                ClampedParam {
+                    key: "rays",
+                    from: 0.0,
+                    to: 1.0
+                },
+            ]
+        );
+        assert_eq!((t.blend, t.ray_count, t.free), (1.0, 1, -9.0));
+        let mut again = Vec::new();
+        t.clamp_params(&mut again);
+        assert!(again.is_empty(), "a clamped value is in range");
+    }
+
+    #[test]
+    fn a_change_is_reported_with_its_apply_class() {
+        let a = Tuning {
+            blend: 0.5,
+            ray_count: 1,
+            hdr: false,
+            free: 0.0,
+        };
+        let b = Tuning {
+            blend: 0.25,
+            hdr: true,
+            free: 3.0,
+            ..a
+        };
+        let mut changes = Vec::new();
+        a.changed_params(&b, &mut changes);
+        let found: Vec<_> = changes.iter().map(|c| (c.asset, c.key, c.apply)).collect();
+        assert_eq!(
+            found,
+            [
+                ("Tuning", "blend", ApplyClass::Live),
+                ("Tuning", "hdr", ApplyClass::Restart),
+            ]
+        );
+        let mut none = Vec::new();
+        a.changed_params(&a, &mut none);
+        assert!(none.is_empty());
     }
 
     #[test]

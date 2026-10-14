@@ -122,6 +122,7 @@ fn remove_stale_pages(dir: &Path, keep: &BTreeMap<String, String>) -> io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::ecs::asset_fields::{ApplyClass, ParamMeta, ParamRange};
     use concinnity_core::ecs::schema::{
         Body, FieldDefault, FieldSchema, FieldType, TypeSchema, ValueSchema, VariantSchema,
     };
@@ -143,18 +144,21 @@ mod tests {
                 doc: "The mesh\nto draw.",
                 ty: || FieldType::Str,
                 default: FieldDefault::Value(|| Some(Box::new("cube"))),
+                param: ParamMeta::NONE,
             },
             FieldSchema {
                 key: "collider",
                 doc: "The shape it collides with.",
                 ty: || FieldType::Optional(|| FieldType::Nested(&WIDGET_COLLIDER)),
                 default: FieldDefault::Null,
+                param: ParamMeta::NONE,
             },
             FieldSchema {
                 key: "target",
                 doc: "What it points at.",
                 ty: || FieldType::Reference(&[]),
                 default: FieldDefault::Value(|| Some(Box::new(""))),
+                param: ParamMeta::NONE,
             },
         ]),
         default: None,
@@ -171,6 +175,7 @@ mod tests {
                 len: Some(3),
             },
             default: FieldDefault::Container,
+            param: ParamMeta::NONE,
         }]),
         default: Some(|| Some(Box::new(Map::from([("half_extents", [0.5_f32; 3])])))),
     };
@@ -184,18 +189,27 @@ mod tests {
                 doc: "How loud, from silent to full.",
                 ty: || FieldType::Float,
                 default: FieldDefault::Value(|| Some(Box::new(1.0_f32))),
+                param: ParamMeta {
+                    range: ParamRange {
+                        min: Some(0.0),
+                        max: Some(1.0),
+                    },
+                    apply: Some(ApplyClass::Live),
+                },
             },
             FieldSchema {
                 key: "mode",
                 doc: "How it plays.",
                 ty: || FieldType::Enum(&MODE),
                 default: FieldDefault::Required,
+                param: ParamMeta::NONE,
             },
             FieldSchema {
                 key: "widget",
                 doc: "The widget it sits on.",
                 ty: || FieldType::Nested(&WIDGET),
                 default: FieldDefault::Required,
+                param: ParamMeta::NONE,
             },
         ]),
         default: None,
@@ -306,6 +320,14 @@ mod tests {
             "{}",
             gadget.full_doc
         );
+        assert!(
+            gadget.full_doc.contains(
+                "- `volume`: A float. How loud, from silent to full. Defaults to `1.0`. \
+                 Clamped to `[0, 1]`. Applies live."
+            ),
+            "{}",
+            gadget.full_doc
+        );
         let mode = describe(&docs, "Mode");
         assert_eq!(mode.summary, "A set of named string values.");
         assert!(
@@ -323,6 +345,7 @@ mod tests {
             doc: "What a flip sends.",
             ty: || FieldType::Optional(|| FieldType::Enum(&SIGNAL)),
             default: FieldDefault::Null,
+            param: ParamMeta::NONE,
         }]),
         default: None,
     };
