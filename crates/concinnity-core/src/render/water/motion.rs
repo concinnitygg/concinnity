@@ -254,7 +254,7 @@ mod tests {
             strength: 9.0,
             ..Wind::default()
         }));
-        let (bodies, _) = WaterBody::resolve_all([&surface], &wind, OceanQuality::FULL);
+        let (bodies, _) = WaterBody::resolve_all([&surface], &wind, OceanQuality::FULL, None);
         let body = &bodies[0];
         let ocean = body.ocean.as_ref().expect("an ocean");
         let camera = [4.0e5 + 5900.25, 12.0, -2.5e5 - 5800.5];

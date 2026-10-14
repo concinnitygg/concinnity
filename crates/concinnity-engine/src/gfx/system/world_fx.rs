@@ -3,7 +3,7 @@
 use crate::gfx::terrain::{LoadedTerrain, grass_terrains};
 use concinnity_core::components::{
     Atmosphere, Decal, GlassPanel, Grass, NightSky, ParticleEmitter, Planet, SdfVolume,
-    VolumetricFog, WaterSurface, Wind,
+    VolumetricFog, WaterShape, WaterSurface, Wind,
 };
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::ecs::asset_id::AssetId;
@@ -46,8 +46,16 @@ pub(super) fn drain_world_fx(
     // water surface takes its waves from.
     let wind = ctx.drain::<Wind>().into_iter().next();
     let wind_field = WindField::new(wind.as_ref());
+    let planet_shape = planet.map(Planet::shape);
+    let surfaces = ctx.drain::<WaterSurface>();
+    if planet_shape.is_none() && surfaces.iter().any(|s| s.shape == WaterShape::PlanetSea) {
+        tracing::warn!(
+            "GraphicsSystem: a WaterSurface is a planet_sea but the world has no Planet; it is \
+             not drawn"
+        );
+    }
     let (water_surfaces, ocean) =
-        WaterBody::resolve_all(&ctx.drain::<WaterSurface>(), &wind_field, ocean_quality);
+        WaterBody::resolve_all(&surfaces, &wind_field, ocean_quality, planet_shape.as_ref());
     let grass: std::collections::HashMap<AssetId, Grass> = ctx
         .drain_with_ids::<Grass>()
         .into_iter()

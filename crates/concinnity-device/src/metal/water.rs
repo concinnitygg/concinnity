@@ -30,6 +30,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::planet::Rebase;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
 use concinnity_core::render::transparent;
@@ -104,10 +105,44 @@ pub(in crate::metal) fn build_water_surface_record(
         index_count: idxs.len() as u32,
         motion: WaterMotion::new(body, false),
         visible: surface.visible,
-        center: surface.center,
+        center: body.sort_center(),
         // Patched after `assign_planar_slots` runs over all reflectors in init.
         planar_slot: None,
     })
+}
+
+// The pipelines a planet sea draws with, the same three as a rectangle's
+// from the sea's own programs.
+pub(in crate::metal) struct SeaPipelines {
+    pub(in crate::metal) pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    pub(in crate::metal) pipeline_rt: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    pub(in crate::metal) pipeline_rt_textured:
+        Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+}
+
+impl SeaPipelines {
+    // The sea's pipelines, the traced pair only where the device can `trace`.
+    pub(in crate::metal) fn build(
+        device: &ProtocolObject<dyn MTLDevice>,
+        hot_reload: bool,
+        trace: bool,
+    ) -> RenderResult<Self> {
+        let vert = &builtin_shaders::WATER_SEA_VERT;
+        let build = |frag| build_water_pipeline_with(device, hot_reload, vert, frag);
+        let (pipeline_rt, pipeline_rt_textured) = if trace {
+            (
+                Some(build(&builtin_shaders::WATER_SEA_FRAG_RT)?),
+                Some(build(&builtin_shaders::WATER_SEA_FRAG_RT_TEXTURED)?),
+            )
+        } else {
+            (None, None)
+        };
+        Ok(Self {
+            pipeline: build(&builtin_shaders::WATER_SEA_FRAG)?,
+            pipeline_rt,
+            pipeline_rt_textured,
+        })
+    }
 }
 
 impl MtlContext {
@@ -120,6 +155,13 @@ impl MtlContext {
             .surfaces
             .iter()
             .any(|s| s.visible && s.planar_slot.is_some())
+    }
+
+    // Carry the water surfaces into the frame the world moved to.
+    pub(in crate::metal) fn rebase_water(&mut self, rebase: &Rebase) {
+        for surface in &mut self.water.surfaces {
+            surface.motion.rebase(rebase);
+        }
     }
 
     // True when a visible surface samples a simulated ocean, so `WaterSim` has
@@ -159,25 +201,36 @@ impl MtlContext {
         // still takes the planar mirror over its own trace where the surface has
         // a slot, so this picks the fragment, not the reflection source.
         let rt_on = self.rt.accel.is_some();
-        let pipeline = match (
-            rt_on && bindless,
-            &self.water.pipeline_rt_textured,
-            rt_on,
-            &self.water.pipeline_rt,
-        ) {
-            (true, Some(p), _, _) => p,
-            (_, _, true, Some(p)) => p,
-            _ => match &self.water.pipeline {
-                Some(p) => p,
-                None => return,
-            },
+        let pick = |base, rt, rt_textured| match (rt_on && bindless, rt_textured, rt_on, rt) {
+            (true, Some(p), _, _) => Some(p),
+            (_, _, true, Some(p)) => Some(p),
+            _ => base,
         };
+        let Some(rectangle) = pick(
+            self.water.pipeline.as_ref(),
+            self.water.pipeline_rt.as_ref(),
+            self.water.pipeline_rt_textured.as_ref(),
+        ) else {
+            return;
+        };
+        let sea = self.water.sea.as_ref().and_then(|s| {
+            pick(
+                Some(&s.pipeline),
+                s.pipeline_rt.as_ref(),
+                s.pipeline_rt_textured.as_ref(),
+            )
+        });
         let cam = view.camera_pos;
         let planar_set = self.planar_reflection.as_ref();
         for surface in &self.water.surfaces {
             if !surface.visible {
                 continue;
             }
+            let pipeline = match (surface.motion.body().sea.is_some(), sea) {
+                (false, _) => rectangle,
+                (true, Some(p)) => p,
+                (true, None) => continue,
+            };
             // Everything but the motion and the planar flag below is
             // asset-side-static.
             let mut params = surface.motion.params_at(time, [cam[0], cam[1], cam[2]]);
@@ -233,7 +286,12 @@ pub(super) fn build_water_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_water_pipeline_with(device, hot_reload, &builtin_shaders::WATER_FRAG)
+    build_water_pipeline_with(
+        device,
+        hot_reload,
+        &builtin_shaders::WATER_VERT,
+        &builtin_shaders::WATER_FRAG,
+    )
 }
 
 // Build the ray-traced water pipeline: the same vertex layout + blend, but the
@@ -247,7 +305,12 @@ pub(super) fn build_water_pipeline_rt(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_water_pipeline_with(device, hot_reload, &builtin_shaders::WATER_FRAG_RT)
+    build_water_pipeline_with(
+        device,
+        hot_reload,
+        &builtin_shaders::WATER_VERT,
+        &builtin_shaders::WATER_FRAG_RT,
+    )
 }
 
 // Build the textured ray-traced water pipeline: the same trace as the flat RT
@@ -258,7 +321,12 @@ pub(super) fn build_water_pipeline_rt_textured(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_water_pipeline_with(device, hot_reload, &builtin_shaders::WATER_FRAG_RT_TEXTURED)
+    build_water_pipeline_with(
+        device,
+        hot_reload,
+        &builtin_shaders::WATER_VERT,
+        &builtin_shaders::WATER_FRAG_RT_TEXTURED,
+    )
 }
 
 // The water pipelines, whose stages come from the single-source `water.hlsl`.
@@ -267,10 +335,10 @@ pub(super) fn build_water_pipeline_rt_textured(
 fn build_water_pipeline_with(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
+    vertex: &builtin_shaders::ShaderProgram,
     fragment: &builtin_shaders::ShaderProgram,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let vert_fn =
-        builtin_shaders::entry_function(device, &builtin_shaders::WATER_VERT, hot_reload)?;
+    let vert_fn = builtin_shaders::entry_function(device, vertex, hot_reload)?;
     let frag_fn = builtin_shaders::entry_function(device, fragment, hot_reload)?;
     build_transparent_pipeline_stages(device, &vert_fn, &frag_fn)
 }

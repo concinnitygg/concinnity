@@ -228,6 +228,8 @@ pub(super) struct WaterState {
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub pipeline_rt: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub pipeline_rt_textured: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    // The same three for a planet sea, `Some` only when the world has one.
+    pub sea: Option<super::water::SeaPipelines>,
     // One GPU record per `WaterSurface` asset: tessellated VB+IB plus the
     // per-surface fragment / vertex uniforms, built once at init from the
     // asset.

@@ -35,6 +35,7 @@ pub(crate) mod text_label;
 pub(crate) mod texture;
 pub(crate) mod voxel_chunk;
 pub(crate) mod voxel_world;
+pub(crate) mod water_surface;
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
@@ -61,6 +62,7 @@ fn check_authored_asset(
         RegisteredType::AudioCue => audio::check_cue(name, args),
         RegisteredType::PropBody => audio::check_prop_body(name, args),
         RegisteredType::TextLabel => text_label::check(name, args),
+        RegisteredType::WaterSurface => water_surface::check(name, args),
         _ => Ok(()),
     }
 }

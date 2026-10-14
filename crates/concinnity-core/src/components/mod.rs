@@ -336,6 +336,7 @@ pub use voxel_chunk::VoxelChunk;
 pub use voxel_world::VoxelWorld;
 pub use wake_request::WakeRequest;
 pub use water_surface::MAX_WATER_WAVES;
+pub use water_surface::WaterShape;
 pub use water_surface::WaterSurface;
 pub use water_surface::WaterWave;
 pub use wind::Wind;

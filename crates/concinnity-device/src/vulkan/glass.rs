@@ -182,6 +182,7 @@ pub(in crate::vulkan) fn build_glass_producer(
         textured_rt_pso,
         reflection_flat_pso,
         reflection_textured_pso,
+        sea: None,
         records,
         water: Vec::new(),
     })

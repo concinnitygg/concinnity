@@ -1418,6 +1418,7 @@ impl VkContext {
         if let Some(rebase) = &rebase {
             self.decal.set.rebase(rebase);
             self.rebase_grass(rebase);
+            self.rebase_transparent_water(rebase);
         }
         if history_reset {
             self.reset_temporal_history();

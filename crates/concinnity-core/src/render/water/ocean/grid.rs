@@ -33,9 +33,14 @@ impl OceanGrid {
     /// half-widths `extent`: wide enough to reach every corner from anywhere
     /// on the surface.
     pub fn new(peak_wavelength: f32, extent: [f32; 2]) -> Self {
+        Self::reaching(peak_wavelength, 2.0 * hypot(extent[0], extent[1]))
+    }
+
+    /// The grid for a sea peaking at `peak_wavelength` meters, reaching
+    /// `reach` meters from its anchor.
+    pub fn reaching(peak_wavelength: f32, reach: f32) -> Self {
         let inner_cell =
             (peak_wavelength * INNER_CELL_PER_PEAK).clamp(INNER_CELL_RANGE[0], INNER_CELL_RANGE[1]);
-        let reach = 2.0 * hypot(extent[0], extent[1]);
         Self {
             inner_cell,
             growth: growth_to_reach(inner_cell, reach),

@@ -340,6 +340,28 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         program: &shared::WATER_FRAG_RT_TEXTURED,
         registers: WATER_OCEAN_REGISTERS,
     },
+    // A planet sea compiles the same entries under its own gate and binds
+    // exactly what the rectangle's do.
+    DxilAbi {
+        program: &shared::WATER_SEA_VERT,
+        registers: &[("view", "b0"), ("params", "b1")],
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_VERT,
+        registers: WATER_OCEAN_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_FRAG,
+        registers: WATER_OCEAN_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_FRAG_RT,
+        registers: WATER_OCEAN_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_FRAG_RT_TEXTURED,
+        registers: WATER_OCEAN_REGISTERS,
+    },
     // The simulated ocean's kernels, under their own root signature in
     // `directx/water_sim.rs`: the root constants, the spectrum and row
     // transforms as root views, and one table of the four mip UAVs.
@@ -394,6 +416,26 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     },
     DxilAbi {
         program: &shared::WATER_FRAG_RT_TEXTURED,
+        registers: WATER_RT_TEXTURED_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_FRAG,
+        registers: GLASS_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_FRAG,
+        registers: WATER_BODY_LIGHT_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_FRAG_RT,
+        registers: WATER_BODY_LIGHT_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_FRAG_RT,
+        registers: WATER_RT_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_FRAG_RT_TEXTURED,
         registers: WATER_RT_TEXTURED_REGISTERS,
     },
     // The compute families whose root signatures live in
@@ -1252,6 +1294,31 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     },
     MetalAbi {
         program: &shared::WATER_FRAG_RT_TEXTURED,
+        slots: WATER_RT_TEXTURED_SLOTS,
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_SEA_VERT,
+        slots: &[&[
+            ("view", "buffer(5)"),
+            ("params", "buffer(6)"),
+            ("ocean_displacement", "texture(9)"),
+            ("ocean_sampler", "sampler(6)"),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_SEA_FRAG,
+        slots: WATER_SLOTS,
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_SEA_FRAG_RT,
+        slots: WATER_RT_SLOTS,
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_SEA_FRAG_RT_TEXTURED,
         slots: WATER_RT_TEXTURED_SLOTS,
         argument_ids: &[],
     },

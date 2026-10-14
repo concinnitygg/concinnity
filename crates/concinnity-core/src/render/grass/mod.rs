@@ -189,6 +189,11 @@ impl GrassHistory {
         self.wind_map = map_then(self.wind_map, &back);
         self.prev_map = map_then(self.prev_map, &back);
     }
+
+    #[cfg(test)]
+    pub(crate) fn wind_map(&self) -> [[f32; 4]; 2] {
+        self.wind_map
+    }
 }
 
 /// `rows` (each taking a point `(x, y, z, 1)` to one coordinate) applied after

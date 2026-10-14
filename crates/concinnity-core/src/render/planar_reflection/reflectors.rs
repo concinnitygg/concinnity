@@ -84,9 +84,13 @@ impl PlanarReflectors {
     /// (capped at [`MAX_PLANAR_PLANES`]). Water is listed first so it keeps a
     /// slot when the budget is tight.
     pub fn plan(water: &[WaterBody], glass: &[GlassPanel], budget: PlanarBudget) -> Self {
+        // A planet sea is no plane: its degenerate plane takes no slot.
         let planes: Vec<[f32; 4]> = water
             .iter()
-            .map(|w| water_plane(&w.surface))
+            .map(|w| match w.sea {
+                Some(_) => [0.0; 4],
+                None => water_plane(&w.surface),
+            })
             .chain(glass.iter().map(|g| pane_plane(g.normal, g.center)))
             .collect();
         let assignment = assign_planar_slots(&planes, budget.planes.min(MAX_PLANAR_PLANES));
@@ -176,6 +180,28 @@ mod tests {
             half_size: [1.0, 1.5],
             ..Default::default()
         }
+    }
+
+    // A planet sea takes no mirror slot, and leaves the next surface the
+    // first one.
+    #[test]
+    fn a_planet_sea_takes_no_mirror() {
+        use crate::components::WaterShape;
+        let sea = WaterSurface {
+            shape: WaterShape::PlanetSea,
+            ..Default::default()
+        };
+        let planet = crate::components::Planet::default().shape();
+        let (mut water, _) = WaterBody::resolve_all(
+            [&sea],
+            &WindField::STILL,
+            crate::render::water::ocean::OceanQuality::FULL,
+            Some(&planet),
+        );
+        water.push(pool([0.0, 2.0, 0.0]));
+        let r = PlanarReflectors::plan(&water, &[], budget(2));
+        assert_eq!(r.assignment.slots, vec![None, Some(0)]);
+        assert_eq!(r.reflectors.len(), 1);
     }
 
     #[test]

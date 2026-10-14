@@ -58,6 +58,7 @@ use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSetLayout, VkDevice,
 };
+use concinnity_core::planet::Rebase;
 use concinnity_core::render::water::frame::WaterMotion;
 
 // The live acceleration-structure handles wired into the transparent RT
@@ -216,8 +217,18 @@ pub(in crate::vulkan) struct TransparentProducer {
     // panes; `None` for water, which traces in place.
     pub reflection_flat_pso: Option<OwnedPipeline>,
     pub reflection_textured_pso: Option<OwnedPipeline>,
+    // A planet sea's own three, for the water producer's sea records; `None`
+    // when no record is one.
+    pub sea: Option<ShapePipelines>,
     pub records: Vec<TransparentRecord>,
     pub water: Vec<WaterMotion>,
+}
+
+// The base and RT pipelines one water shape draws with.
+pub(in crate::vulkan) struct ShapePipelines {
+    pub pipeline: OwnedPipeline,
+    pub flat_rt_pso: Option<OwnedPipeline>,
+    pub textured_rt_pso: Option<OwnedPipeline>,
 }
 
 impl TransparentProducer {
@@ -254,17 +265,44 @@ impl TransparentProducer {
     // `rt_pipelines_ready` / `rt_textured_ready`, which require the pipeline of
     // every live producer -- so a producer is never asked for one it lacks.
     fn pipeline(&self, rt_live: bool, textured: bool) -> &OwnedPipeline {
-        match (rt_live, textured) {
-            (true, true) => self
-                .textured_rt_pso
-                .as_ref()
-                .expect("rt_textured_ready gated the frame on every producer's textured pipeline"),
-            (true, false) => self
-                .flat_rt_pso
-                .as_ref()
-                .expect("rt_pipelines_ready gated the frame on every producer's flat RT pipeline"),
-            _ => &self.pipeline,
+        pick_pipeline(
+            &self.pipeline,
+            self.flat_rt_pso.as_ref(),
+            self.textured_rt_pso.as_ref(),
+            rt_live,
+            textured,
+        )
+    }
+
+    // The pipeline record `i` draws with: a planet sea's own, or the
+    // producer's.
+    fn record_pipeline(&self, i: usize, rt_live: bool, textured: bool) -> &OwnedPipeline {
+        match &self.sea {
+            Some(sea) if self.water.get(i).is_some_and(|w| w.body().sea.is_some()) => {
+                pick_pipeline(
+                    &sea.pipeline,
+                    sea.flat_rt_pso.as_ref(),
+                    sea.textured_rt_pso.as_ref(),
+                    rt_live,
+                    textured,
+                )
+            }
+            _ => self.pipeline(rt_live, textured),
         }
+    }
+
+    // Whether every record can trace: the flat RT pipeline of the producer
+    // and of its sea, or with `textured` the textured ones.
+    fn traces(&self, textured: bool) -> bool {
+        let built = |flat: &Option<OwnedPipeline>, tex: &Option<OwnedPipeline>| match textured {
+            true => tex.is_some(),
+            false => flat.is_some(),
+        };
+        built(&self.flat_rt_pso, &self.textured_rt_pso)
+            && self
+                .sea
+                .as_ref()
+                .is_none_or(|s| built(&s.flat_rt_pso, &s.textured_rt_pso))
     }
 
     // This producer's reflection pre-pass pipeline, or `None` when it traces in
@@ -274,6 +312,24 @@ impl TransparentProducer {
             true => self.reflection_textured_pso.as_ref(),
             false => self.reflection_flat_pso.as_ref(),
         }
+    }
+}
+
+// The pipeline a frame draws with out of a base / flat RT / textured RT
+// three. The `expect`s are explained on `TransparentProducer::pipeline`.
+fn pick_pipeline<'a>(
+    base: &'a OwnedPipeline,
+    flat_rt: Option<&'a OwnedPipeline>,
+    textured_rt: Option<&'a OwnedPipeline>,
+    rt_live: bool,
+    textured: bool,
+) -> &'a OwnedPipeline {
+    match (rt_live, textured) {
+        (true, true) => textured_rt
+            .expect("rt_textured_ready gated the frame on every producer's textured pipeline"),
+        (true, false) => flat_rt
+            .expect("rt_pipelines_ready gated the frame on every producer's flat RT pipeline"),
+        _ => base,
     }
 }
 
@@ -1729,7 +1785,7 @@ impl TransparentResources {
     pub(in crate::vulkan) fn rt_pipelines_ready(&self) -> bool {
         self.rt.is_some()
             && self.glass.as_ref().is_none_or(|p| p.flat_rt_pso.is_some())
-            && self.water.as_ref().is_none_or(|p| p.flat_rt_pso.is_some())
+            && self.water.as_ref().is_none_or(|p| p.traces(false))
     }
 
     // The see-through meshes this pass was built over, or an empty slice when
@@ -1762,10 +1818,7 @@ impl TransparentResources {
                 .glass
                 .as_ref()
                 .is_none_or(|p| p.textured_rt_pso.is_some())
-            && self
-                .water
-                .as_ref()
-                .is_none_or(|p| p.textured_rt_pso.is_some())
+            && self.water.as_ref().is_none_or(|p| p.traces(true))
             && self
                 .glass_mesh
                 .as_ref()
@@ -2080,6 +2133,15 @@ impl VkContext {
     // transparent content or nothing is visible. Leaves the scene image
     // SHADER_READ_ONLY and the main depth DEPTH_STENCIL_ATTACHMENT_OPTIMAL for the
     // downstream stack.
+    // Carry the water surfaces into the frame the world moved to.
+    pub(in crate::vulkan) fn rebase_transparent_water(&mut self, rebase: &Rebase) {
+        if let Some(water) = self.transparent.as_mut().and_then(|t| t.water.as_mut()) {
+            for motion in &mut water.water {
+                motion.rebase(rebase);
+            }
+        }
+    }
+
     // Write each visible water surface's params, advanced to `time` seconds
     // into the world, into frame slot `frame_idx`'s copy, ahead of this frame's
     // `encode_transparent`.
@@ -2369,17 +2431,19 @@ impl VkContext {
             set_flipped_viewport(device, cmd, extent);
         }
         self.bind_transparent_sets(transparent, &frame, transparent.view_sets[frame_idx].scene);
-        let mut bound: Option<Producer> = None;
+        let mut bound: Option<vk::Pipeline> = None;
         for &(kind, i) in &order {
-            if bound != Some(kind) {
-                let pipeline = match kind {
-                    Producer::GlassMesh => transparent
-                        .glass_mesh
-                        .as_ref()
-                        .expect("the draw order only names live producers")
-                        .pipeline(textured),
-                    _ => transparent.producer(kind).pipeline(rt_live, textured),
-                };
+            let pipeline = match kind {
+                Producer::GlassMesh => transparent
+                    .glass_mesh
+                    .as_ref()
+                    .expect("the draw order only names live producers")
+                    .pipeline(textured),
+                _ => transparent
+                    .producer(kind)
+                    .record_pipeline(i, rt_live, textured),
+            };
+            if bound != Some(pipeline.handle()) {
                 // SAFETY: `cmd` is a command buffer in the recording state, and the pipeline is
                 // live for the call.
                 unsafe {
@@ -2389,7 +2453,7 @@ impl VkContext {
                         pipeline.handle(),
                     );
                 }
-                bound = Some(kind);
+                bound = Some(pipeline.handle());
             }
             self.draw_transparent_entry(transparent, &frame, kind, i);
         }

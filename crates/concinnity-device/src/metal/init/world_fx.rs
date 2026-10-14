@@ -277,10 +277,18 @@ pub(super) fn build_water(
         }
         (Some(ps), ps_rt, ps_rt_tex, records)
     };
+    let sea = water_surfaces
+        .iter()
+        .any(|b| b.sea.is_some())
+        .then(|| {
+            water::SeaPipelines::build(device, hot_reload, raytrace::raytracing_supported(device))
+        })
+        .transpose()?;
     Ok(WaterState {
         pipeline,
         pipeline_rt,
         pipeline_rt_textured,
+        sea,
         surfaces,
         ocean,
     })

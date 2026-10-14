@@ -32,6 +32,9 @@ use alloc::vec::Vec;
 /// longitude grows eastward, toward `+X`. Altitude is measured above
 /// `radius`, height above the ground above the hills.
 ///
+/// A [WaterSurface](#watersurface) whose `shape` is `planet_sea` floods the
+/// planet to its `sea_level`.
+///
 /// ```rust
 /// # use concinnity_core::components::Planet;
 /// Planet {

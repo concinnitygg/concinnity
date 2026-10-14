@@ -9,7 +9,7 @@ use crate::components::{
     Atmosphere, CameraTrackArgs, Decal, DirectionalLight, GlassPanel, Grass, InstancedProp,
     MAX_WATER_WAVES, Material, NightSky, ParticleEmitter, Planet, PointLight, Prop, RectAreaLight,
     ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight, Terrain,
-    VolumetricFog, VoxelChunk, WaterSurface, WaterWave, Wind,
+    VolumetricFog, VoxelChunk, WaterShape, WaterSurface, WaterWave, Wind,
 };
 use crate::math::sqrt;
 use crate::math::vec3;
@@ -164,6 +164,10 @@ pub fn water_surface(mut args: WaterSurface) -> WaterSurface {
     args.fetch_meters = finite_at_least(args.fetch_meters, 1.0, 1000.0);
     args.wind_response = finite_at_least(args.wind_response, 0.0, 1.0);
     args.whitecaps = finite_at_least(args.whitecaps, 0.0, 0.0).min(1.0);
+    args.sea_level = finite_at_least(args.sea_level, 0.0, 0.0);
+    if args.shape == WaterShape::PlanetSea {
+        args.waves.clear();
+    }
     args.waves.truncate(MAX_WATER_WAVES);
     for w in &mut args.waves {
         *w = water_wave(*w);
@@ -485,6 +489,28 @@ mod tests {
             });
             assert_eq!(w.whitecaps, clamped, "{authored}");
         }
+    }
+
+    // A planet sea's height is never below the planet's radius, and it
+    // carries no swell.
+    #[test]
+    fn a_planet_sea_clamps_its_level_and_drops_swell() {
+        for (authored, clamped) in [(-3.0, 0.0), (f32::NAN, 0.0), (12.5, 12.5)] {
+            let w = water_surface(WaterSurface {
+                shape: WaterShape::PlanetSea,
+                sea_level: authored,
+                waves: alloc::vec![WaterWave::default()],
+                ..WaterSurface::default()
+            });
+            assert_eq!(w.sea_level, clamped, "{authored}");
+            assert!(w.waves.is_empty());
+        }
+        let rect = water_surface(WaterSurface {
+            waves: alloc::vec![WaterWave::default()],
+            ..WaterSurface::default()
+        });
+        assert_eq!(rect.shape, WaterShape::Rectangle);
+        assert_eq!(rect.waves.len(), 1);
     }
 
     // A surface whitecaps only when it asks to.

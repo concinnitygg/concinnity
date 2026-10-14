@@ -97,6 +97,34 @@ pub(crate) fn arc_from_up(to: DVec3) -> DMat3 {
     ]
 }
 
+// The rotation the unit quaternion `[x, y, z, w]` describes.
+pub(crate) fn mat_of_quat(q: [f32; 4]) -> DMat3 {
+    let [x, y, z, w] = q.map(f64::from);
+    let n = libm::sqrt(x * x + y * y + z * z + w * w);
+    let [x, y, z, w] = if n > 0.0 {
+        [x / n, y / n, z / n, w / n]
+    } else {
+        [0.0, 0.0, 0.0, 1.0]
+    };
+    [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y + w * z),
+            2.0 * (x * z - w * y),
+        ],
+        [
+            2.0 * (x * y - w * z),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z + w * x),
+        ],
+        [
+            2.0 * (x * z + w * y),
+            2.0 * (y * z - w * x),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ]
+}
+
 // The unit quaternion `[x, y, z, w]` of the rotation `m`.
 pub(crate) fn quat_of(m: &DMat3) -> [f32; 4] {
     let (m00, m11, m22) = (m[0][0], m[1][1], m[2][2]);

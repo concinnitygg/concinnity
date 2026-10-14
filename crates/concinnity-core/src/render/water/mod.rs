@@ -7,19 +7,22 @@ pub mod frame;
 pub mod motion;
 pub mod ocean;
 pub mod ripples;
+pub mod sea;
 pub mod spectrum;
 
 #[cfg(test)]
 mod shader_tests;
 
-use crate::components::{MAX_WATER_WAVES, WaterSurface};
+use crate::components::{MAX_WATER_WAVES, WaterShape, WaterSurface};
 use crate::gfx::mesh_payload::Vertex;
+use crate::planet::PlanetShape;
 use crate::render::wind::WindField;
 use alloc::string::String;
 use alloc::vec::Vec;
 use ocean::grid::OceanGrid;
 use ocean::{BodyOcean, OCEAN_CHOPPINESS, OceanPlan, OceanQuality, OceanSea};
 use ripples::{RIPPLES, Ripple};
+use sea::{SeaBody, SeaSphere};
 use spectrum::{GRAVITY, WIND_SEA_WAVES, Wave, unit_hash, wind_sea};
 
 /// The most waves one surface sums: the wind sea plus the authored swell.
@@ -77,6 +80,9 @@ pub struct WaterBody {
     /// The simulated ocean its wind sea comes from, in place of the summed
     /// sea; `None` for a body whose sea is summed.
     pub ocean: Option<BodyOcean>,
+    /// The planet sea it is, drawn around the planet rather than over a
+    /// rectangle; `None` for a rectangle.
+    pub sea: Option<SeaBody>,
 }
 
 impl WaterBody {
@@ -96,17 +102,23 @@ impl WaterBody {
 
     /// Every surface moved by `wind`, each large one taking its wind sea from
     /// a simulated ocean at `quality` while there is room for its sea, and
-    /// the simulations they share.
+    /// the simulations they share. A planet sea lies on `planet`; with no
+    /// planet it is left out.
     pub fn resolve_all<'a>(
         surfaces: impl IntoIterator<Item = &'a WaterSurface>,
         wind: &WindField,
         quality: OceanQuality,
+        planet: Option<&PlanetShape>,
     ) -> (Vec<Self>, OceanPlan) {
         let mut plan = OceanPlan::new(quality);
         let bodies = surfaces
             .into_iter()
+            .filter(|s| s.shape != WaterShape::PlanetSea || planet.is_some())
             .map(|s| {
                 let surface = crate::components::validate::water_surface(s.clone());
+                if let (WaterShape::PlanetSea, Some(planet)) = (surface.shape, planet) {
+                    return Self::resolve_sea(surface, wind, &mut plan, planet);
+                }
                 let simulated = OceanSea::of(&surface, wind.strength, wind.direction)
                     .and_then(|sea| Some((sea, plan.share(sea, surface.whitecaps > 0.0)?)));
                 match simulated {
@@ -116,6 +128,35 @@ impl WaterBody {
             })
             .collect();
         (bodies, plan)
+    }
+
+    // `surface` as the sea of `planet`: simulated whenever the wind raises a
+    // sea at all and there is room for it, however large its peak, and drawn
+    // on a grid reaching the horizon.
+    fn resolve_sea(
+        surface: WaterSurface,
+        wind: &WindField,
+        plan: &mut OceanPlan,
+        planet: &PlanetShape,
+    ) -> Self {
+        let sea = OceanSea::open(&surface, wind.strength, wind.direction);
+        let peak = sea
+            .and_then(|s| s.shape())
+            .map_or(1.0, |s| s.peak_wavelength());
+        let body = SeaBody::new(SeaSphere::new(planet, surface.sea_level), peak);
+        let shared = sea.and_then(|sea| Some((sea, plan.share(sea, surface.whitecaps > 0.0)?)));
+        let mut water = match shared {
+            Some((sea, index)) => Self::resolve_ocean(surface, wind, &sea, plan, index),
+            None => {
+                let cell = body.grid.inner_cell;
+                Self::with_sea(surface, wind, &[], STILL_RIPPLE_WAVELENGTH, cell, None)
+            }
+        };
+        if let Some(ocean) = water.ocean.as_mut() {
+            ocean.grid = body.grid;
+        }
+        water.sea = Some(body);
+        water
     }
 
     // `surface` with its wind sea simulated by `plan`'s simulation `index`:
@@ -189,6 +230,7 @@ impl WaterBody {
             ripple_wavelength,
             ripples: ripples::ripples(wind.direction, ripple_wavelength),
             ocean,
+            sea: None,
         }
     }
 
@@ -236,9 +278,22 @@ impl WaterBody {
         }
     }
 
+    /// Where the body sorts among the transparent draws, farthest first: a
+    /// rectangle's center, and a planet sea's under everything else, at the
+    /// planet's center.
+    pub fn sort_center(&self) -> [f32; 3] {
+        match &self.sea {
+            Some(sea) => sea.sphere.center.map(|c| c as f32),
+            None => self.surface.center,
+        }
+    }
+
     /// `[inner cell, inner half-width, widening, _]` of the grid the body is
     /// drawn on: an ocean's widening grid, or the surface's uniform one.
     pub fn grid_lane(&self) -> [f32; 4] {
+        if let Some(sea) = &self.sea {
+            return sea.grid.gpu_lane();
+        }
         match &self.ocean {
             Some(ocean) => ocean.grid.gpu_lane(),
             None => [cell_size(&self.surface), 0.0, 0.0, 0.0],
@@ -249,6 +304,9 @@ impl WaterBody {
     /// own tessellation for a summed body, the camera-centered grid for a
     /// simulated one.
     pub fn mesh(&self) -> Result<(Vec<Vertex>, Vec<u16>), String> {
+        if let Some(sea) = &self.sea {
+            return Ok(sea.grid.mesh());
+        }
         if let Some(ocean) = &self.ocean {
             return Ok(ocean.grid.mesh());
         }
@@ -450,7 +508,8 @@ mod tests {
             WaterSurface::default(),
             open_sea([2.0e4, 0.0, 0.0]),
         ];
-        let (bodies, plan) = WaterBody::resolve_all(&surfaces, &fresh_breeze(), OceanQuality::FULL);
+        let (bodies, plan) =
+            WaterBody::resolve_all(&surfaces, &fresh_breeze(), OceanQuality::FULL, None);
         assert_eq!(plan.simulations.len(), 1);
         let sea = &bodies[0];
         let ocean = sea.ocean.as_ref().expect("simulated");
@@ -473,7 +532,7 @@ mod tests {
     #[test]
     fn a_shared_sea_foams_when_any_body_whitecaps() {
         let calm = [open_sea([0.0; 3]), open_sea([2.0e4, 0.0, 0.0])];
-        let (_, plan) = WaterBody::resolve_all(&calm, &fresh_breeze(), OceanQuality::FULL);
+        let (_, plan) = WaterBody::resolve_all(&calm, &fresh_breeze(), OceanQuality::FULL, None);
         assert!(plan.simulations[0].foam.is_none());
 
         let whitecapping = WaterSurface {
@@ -485,7 +544,8 @@ mod tests {
             ..WaterSurface::default()
         };
         let surfaces = [open_sea([0.0; 3]), whitecapping, pond];
-        let (bodies, plan) = WaterBody::resolve_all(&surfaces, &fresh_breeze(), OceanQuality::FULL);
+        let (bodies, plan) =
+            WaterBody::resolve_all(&surfaces, &fresh_breeze(), OceanQuality::FULL, None);
         assert_eq!(plan.simulations.len(), 1);
         assert!(plan.simulations[0].foam.is_some());
         assert!(bodies[2].ocean.is_none());
@@ -500,12 +560,16 @@ mod tests {
             ..open_sea([0.0; 3])
         };
         let (bodies, _) =
-            WaterBody::resolve_all([&calm_swell], &fresh_breeze(), OceanQuality::FULL);
+            WaterBody::resolve_all([&calm_swell], &fresh_breeze(), OceanQuality::FULL, None);
         let [rise, sway] = bodies[0].reach();
         assert!((1.0..4.0).contains(&rise), "{rise}");
         assert!((sway - OCEAN_CHOPPINESS * rise).abs() < 1e-5, "{sway}");
-        let (swell, _) =
-            WaterBody::resolve_all([&open_sea([0.0; 3])], &fresh_breeze(), OceanQuality::FULL);
+        let (swell, _) = WaterBody::resolve_all(
+            [&open_sea([0.0; 3])],
+            &fresh_breeze(),
+            OceanQuality::FULL,
+            None,
+        );
         let [r, s] = swell[0].reach();
         assert!(r > rise + 0.39 && s > sway, "{r} {s}");
     }
@@ -515,7 +579,8 @@ mod tests {
     #[test]
     fn each_path_draws_its_own_grid() {
         let surfaces = [open_sea([0.0; 3]), WaterSurface::default()];
-        let (bodies, _) = WaterBody::resolve_all(&surfaces, &fresh_breeze(), OceanQuality::FULL);
+        let (bodies, _) =
+            WaterBody::resolve_all(&surfaces, &fresh_breeze(), OceanQuality::FULL, None);
         let (sea_v, sea_i) = bodies[0].mesh().unwrap();
         let ocean = bodies[0].ocean.as_ref().unwrap();
         assert_eq!((sea_v.len(), sea_i.len()), {

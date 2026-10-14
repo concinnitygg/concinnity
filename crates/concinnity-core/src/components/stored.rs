@@ -76,7 +76,7 @@ pub use super::variables::{VariableDecl, Variables};
 pub use super::volumetric_fog::VolumetricFog;
 pub use super::voxel_chunk::VoxelChunk;
 pub use super::voxel_world::VoxelWorld;
-pub use super::water_surface::{WaterSurface, WaterWave};
+pub use super::water_surface::{WaterShape, WaterSurface, WaterWave};
 pub use super::wind::Wind;
 pub use super::window::{Window, WindowMode};
 

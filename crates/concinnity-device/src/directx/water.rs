@@ -21,21 +21,43 @@ use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::dump_on_err;
 use crate::directx::transparent::{
-    RecordUpload, TransparentProducer, TransparentRecord, create_transparent_pso,
+    RecordUpload, ShapePsos, TransparentProducer, TransparentRecord, create_transparent_pso,
+};
+use concinnity_core::render::shader_programs::ShaderProgram;
+
+// The programs one water shape draws with: a rectangle's, or a planet sea's.
+struct WaterPrograms {
+    vert: &'static ShaderProgram,
+    frag: &'static ShaderProgram,
+    frag_rt: &'static ShaderProgram,
+    frag_rt_textured: &'static ShaderProgram,
+}
+
+const RECTANGLE: WaterPrograms = WaterPrograms {
+    vert: &builtin_shaders::WATER_VERT,
+    frag: &builtin_shaders::WATER_FRAG,
+    frag_rt: &builtin_shaders::WATER_FRAG_RT,
+    frag_rt_textured: &builtin_shaders::WATER_FRAG_RT_TEXTURED,
 };
 
-// Compile the water vertex + fragment shaders. The fragment comes in an MSAA
+const SEA: WaterPrograms = WaterPrograms {
+    vert: &builtin_shaders::WATER_SEA_VERT,
+    frag: &builtin_shaders::WATER_SEA_FRAG,
+    frag_rt: &builtin_shaders::WATER_SEA_FRAG_RT,
+    frag_rt_textured: &builtin_shaders::WATER_SEA_FRAG_RT_TEXTURED,
+};
+
+// Compile a shape's vertex + fragment shaders. The fragment comes in an MSAA
 // pair, which keeps its depth SRV declaration in sync with the resource's sample
 // count; the vertex reads no depth and serves both pipelines. Used at init and
 // by shader hot-reload.
-pub(in crate::directx) fn compile_water_shaders(
+fn compile_water_shaders(
+    programs: &WaterPrograms,
     msaa_samples: u32,
     hot_reload: bool,
 ) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let vs = builtin_shaders::WATER_VERT.compile(hot_reload)?;
-    let ps = builtin_shaders::WATER_FRAG
-        .at(msaa_samples > 1)
-        .compile(hot_reload)?;
+    let vs = programs.vert.compile(hot_reload)?;
+    let ps = programs.frag.at(msaa_samples > 1).compile(hot_reload)?;
     Ok((vs, ps))
 }
 
@@ -48,7 +70,7 @@ pub(in crate::directx) fn rebuild_water_pso(
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
 ) -> RenderResult<ID3D12PipelineState> {
-    let (vs, ps) = compile_water_shaders(msaa_samples, hot_reload)?;
+    let (vs, ps) = compile_water_shaders(&RECTANGLE, msaa_samples, hot_reload)?;
     dump_on_err(
         info_queue,
         create_transparent_pso(device, root_sig, &vs, &ps),
@@ -64,19 +86,20 @@ struct WaterRtShaders {
     textured_ps: Vec<u8>,
 }
 
-// Compile the flat + textured ray-traced fragments (SM 6.5, for the inline ray
-// query). Returns an `Err` (which the caller turns into a None RT pipeline +
-// the base path) when dxc is unavailable or the shader fails to compile.
-fn compile_water_rt_shaders(msaa_samples: u32, hot_reload: bool) -> RenderResult<WaterRtShaders> {
+// Compile a shape's flat + textured ray-traced fragments (SM 6.5, for the
+// inline ray query). Returns an `Err` (which the caller turns into a None RT
+// pipeline + the base path) when dxc is unavailable or the shader fails to
+// compile.
+fn compile_water_rt_shaders(
+    programs: &WaterPrograms,
+    msaa_samples: u32,
+    hot_reload: bool,
+) -> RenderResult<WaterRtShaders> {
     let msaa = msaa_samples > 1;
     Ok(WaterRtShaders {
-        vs: builtin_shaders::WATER_VERT.compile(hot_reload)?,
-        flat_ps: builtin_shaders::WATER_FRAG_RT
-            .at(msaa)
-            .compile(hot_reload)?,
-        textured_ps: builtin_shaders::WATER_FRAG_RT_TEXTURED
-            .at(msaa)
-            .compile(hot_reload)?,
+        vs: programs.vert.compile(hot_reload)?,
+        flat_ps: programs.frag_rt.at(msaa).compile(hot_reload)?,
+        textured_ps: programs.frag_rt_textured.at(msaa).compile(hot_reload)?,
     })
 }
 
@@ -105,36 +128,13 @@ pub(in crate::directx) fn build_water_producer(
     // keep the probe/sky reflection. From `assign_planar_slots`.
     planar_slots: &[Option<usize>],
 ) -> RenderResult<TransparentProducer> {
-    let WaterBuild {
-        alloc,
-        root_sig,
-        rt_root_sig,
-        msaa_samples,
-        hot_reload,
-        info_queue,
-    } = build;
-    let device = alloc.device();
-    let (vs, ps) = compile_water_shaders(msaa_samples, hot_reload)?;
-    let pso = dump_on_err(
-        info_queue,
-        create_transparent_pso(device, root_sig, &vs, &ps),
-    )?;
-
-    let (flat_rt_pso, textured_rt_pso) = match rt_root_sig {
-        Some(sig) => {
-            match build_water_rt_pipelines(device, sig, msaa_samples, hot_reload, info_queue) {
-                Ok(pair) => (Some(pair.0), Some(pair.1)),
-                Err(e) => {
-                    tracing::warn!(
-                        "water RT reflection pipeline build failed ({e}); \
-                         using the probe/planar water path"
-                    );
-                    (None, None)
-                }
-            }
-        }
-        None => (None, None),
-    };
+    let alloc = build.alloc;
+    let rectangle = build.shape(&RECTANGLE)?;
+    let sea = surfaces
+        .iter()
+        .any(|b| b.sea.is_some())
+        .then(|| build.shape(&SEA))
+        .transpose()?;
 
     let mut records = Vec::with_capacity(surfaces.len());
     let mut water = Vec::with_capacity(surfaces.len());
@@ -150,7 +150,7 @@ pub(in crate::directx) fn build_water_producer(
                 indices: &indices,
                 params: bytemuck::bytes_of(motion.params()),
                 visible: surface.visible,
-                center: surface.center,
+                center: body.sort_center(),
                 planar_slot,
             },
         )?);
@@ -158,35 +158,75 @@ pub(in crate::directx) fn build_water_producer(
     }
 
     Ok(TransparentProducer {
-        pso,
-        flat_rt_pso,
-        textured_rt_pso,
+        pso: rectangle.pso,
+        flat_rt_pso: rectangle.flat_rt_pso,
+        textured_rt_pso: rectangle.textured_rt_pso,
         reflection_flat_pso: None,
         reflection_textured_pso: None,
+        sea,
         records,
         water,
     })
 }
 
-// Compile and build the flat + textured RT water PSOs against the pass's RT root
-// signature. Both use the same render state as the base PSO.
-fn build_water_rt_pipelines(
-    device: &ID3D12Device,
-    rt_root_sig: &ID3D12RootSignature,
-    msaa_samples: u32,
-    hot_reload: bool,
-    info_queue: Option<&ID3D12InfoQueue>,
-) -> RenderResult<(ID3D12PipelineState, ID3D12PipelineState)> {
-    let shaders = compile_water_rt_shaders(msaa_samples, hot_reload)?;
-    let flat = dump_on_err(
-        info_queue,
-        create_transparent_pso(device, rt_root_sig, &shaders.vs, &shaders.flat_ps),
-    )?;
-    let textured = dump_on_err(
-        info_queue,
-        create_transparent_pso(device, rt_root_sig, &shaders.vs, &shaders.textured_ps),
-    )?;
-    Ok((flat, textured))
+impl WaterBuild<'_> {
+    // A shape's PSOs. The RT pair is built whenever the pass has an RT root
+    // signature; a compile failure leaves it absent and the base probe /
+    // planar path runs.
+    fn shape(&self, programs: &WaterPrograms) -> RenderResult<ShapePsos> {
+        let (vs, ps) = compile_water_shaders(programs, self.msaa_samples, self.hot_reload)?;
+        let pso = dump_on_err(
+            self.info_queue,
+            create_transparent_pso(self.alloc.device(), self.root_sig, &vs, &ps),
+        )?;
+        let (flat_rt_pso, textured_rt_pso) = match self.rt_root_sig {
+            Some(sig) => match self.shape_rt(programs, sig) {
+                Ok(pair) => (Some(pair.0), Some(pair.1)),
+                Err(e) => {
+                    tracing::warn!(
+                        "water RT reflection pipeline build failed ({e}); \
+                         using the probe/planar water path"
+                    );
+                    (None, None)
+                }
+            },
+            None => (None, None),
+        };
+        Ok(ShapePsos {
+            pso,
+            flat_rt_pso,
+            textured_rt_pso,
+        })
+    }
+
+    // Compile and build a shape's flat + textured RT PSOs against the pass's
+    // RT root signature. Both use the same render state as the base PSO.
+    fn shape_rt(
+        &self,
+        programs: &WaterPrograms,
+        rt_root_sig: &ID3D12RootSignature,
+    ) -> RenderResult<(ID3D12PipelineState, ID3D12PipelineState)> {
+        let shaders = compile_water_rt_shaders(programs, self.msaa_samples, self.hot_reload)?;
+        let flat = dump_on_err(
+            self.info_queue,
+            create_transparent_pso(
+                self.alloc.device(),
+                rt_root_sig,
+                &shaders.vs,
+                &shaders.flat_ps,
+            ),
+        )?;
+        let textured = dump_on_err(
+            self.info_queue,
+            create_transparent_pso(
+                self.alloc.device(),
+                rt_root_sig,
+                &shaders.vs,
+                &shaders.textured_ps,
+            ),
+        )?;
+        Ok((flat, textured))
+    }
 }
 
 #[cfg(test)]
@@ -201,9 +241,11 @@ mod tests {
     #[test]
     fn water_shaders_compile() {
         concinnity_shader::require_dxc!();
-        for msaa in [1u32, 4] {
-            super::compile_water_shaders(msaa, false)
-                .unwrap_or_else(|e| panic!("water shaders (msaa={msaa}) must compile: {e}"));
+        for programs in [&super::RECTANGLE, &super::SEA] {
+            for msaa in [1u32, 4] {
+                super::compile_water_shaders(programs, msaa, false)
+                    .unwrap_or_else(|e| panic!("water shaders (msaa={msaa}) must compile: {e}"));
+            }
         }
     }
 
@@ -212,9 +254,11 @@ mod tests {
     #[test]
     fn water_rt_shaders_compile() {
         concinnity_shader::require_dxc!();
-        for msaa in [1u32, 4] {
-            super::compile_water_rt_shaders(msaa, false)
-                .unwrap_or_else(|e| panic!("water_rt shaders (msaa={msaa}) must compile: {e}"));
+        for programs in [&super::RECTANGLE, &super::SEA] {
+            for msaa in [1u32, 4] {
+                super::compile_water_rt_shaders(programs, msaa, false)
+                    .unwrap_or_else(|e| panic!("water_rt shaders (msaa={msaa}) must compile: {e}"));
+            }
         }
     }
 }

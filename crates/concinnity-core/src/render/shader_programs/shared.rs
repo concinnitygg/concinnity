@@ -641,6 +641,41 @@ pub static WATER_FRAG_RT_TEXTURED: ShaderProgram = ShaderProgram {
     msaa: true,
 };
 
+// A planet's sea: the same entries over the sea's own grid, bent onto the
+// sphere, with its waves laid out on the planet's cube faces.
+/// `water_vertex` from `water.hlsl`, for a planet sea.
+pub static WATER_SEA_VERT: ShaderProgram = ShaderProgram {
+    file: "water.hlsl",
+    entry: "water_vertex",
+    label: "water_sea_vert.hlsl",
+    gates: &["WATER_SEA"],
+    msaa: false,
+};
+/// `water_fragment` from `water.hlsl`, for a planet sea.
+pub static WATER_SEA_FRAG: ShaderProgram = ShaderProgram {
+    file: "water.hlsl",
+    entry: "water_fragment",
+    label: "water_sea_frag.hlsl",
+    gates: &["WATER_SEA"],
+    msaa: true,
+};
+/// `water_rt_fragment` from `water.hlsl`, for a planet sea.
+pub static WATER_SEA_FRAG_RT: ShaderProgram = ShaderProgram {
+    file: "water.hlsl",
+    entry: "water_rt_fragment",
+    label: "water_sea_frag_rt.hlsl",
+    gates: &["WATER_SEA", "WATER_RT"],
+    msaa: true,
+};
+/// `water_rt_fragment` from `water.hlsl`, for a planet sea.
+pub static WATER_SEA_FRAG_RT_TEXTURED: ShaderProgram = ShaderProgram {
+    file: "water.hlsl",
+    entry: "water_rt_fragment",
+    label: "water_sea_frag_rt_textured.hlsl",
+    gates: &["WATER_SEA", "WATER_RT", "RT_TEXTURED"],
+    msaa: true,
+};
+
 // The simulated ocean's kernels: the row and column halves of its FFT and the
 // mip reduction of its outputs.
 /// `water_fft_rows` from `water_fft.hlsl`.
@@ -811,6 +846,10 @@ pub static ALL: &[&ShaderProgram] = &[
     &WATER_FRAG,
     &WATER_FRAG_RT,
     &WATER_FRAG_RT_TEXTURED,
+    &WATER_SEA_VERT,
+    &WATER_SEA_FRAG,
+    &WATER_SEA_FRAG_RT,
+    &WATER_SEA_FRAG_RT_TEXTURED,
     &WATER_FFT_ROWS,
     &WATER_FFT_COLUMNS,
     &WATER_FFT_COLUMNS_FOAM,
@@ -866,6 +905,9 @@ mod tests {
                 "water_frag.hlsl",
                 "water_frag_rt.hlsl",
                 "water_frag_rt_textured.hlsl",
+                "water_sea_frag.hlsl",
+                "water_sea_frag_rt.hlsl",
+                "water_sea_frag_rt_textured.hlsl",
             ]
         );
     }

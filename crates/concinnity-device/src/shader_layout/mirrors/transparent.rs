@@ -9,7 +9,7 @@ use concinnity_core::gfx::render_types::{
 };
 use concinnity_core::render::uniforms::{
     GlassMeshParams, GlassParams, ProbeSet, ProbeUniforms, TransparentView, WaterOceanGpu,
-    WaterParams, WaterRippleGpu, WaterWaveGpu,
+    WaterParams, WaterRippleGpu, WaterSeaFaceGpu, WaterSeaGpu, WaterWaveGpu,
 };
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror};
@@ -118,6 +118,21 @@ pub(in crate::shader_layout) fn water() -> Vec<Case> {
             rest_bounds,
             grid,
             ocean,
+            sea,
+        })),
+        everywhere(mirror!(WaterSeaFaceGpu => "WaterSeaFace" {
+            rows,
+            warp,
+            ocean_offsets,
+            ripple_offsets,
+        })),
+        everywhere(mirror!(WaterSeaGpu => "WaterSea" {
+            up,
+            tangent_u,
+            tangent_v,
+            shape,
+            wind_map,
+            faces,
         })),
         everywhere(mirror!(ShadowUniforms => "ShadowUniforms" {
             light_vps,

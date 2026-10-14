@@ -1,5 +1,6 @@
 // Animated water-surface schema.
 
+use crate::components::Vocabulary;
 use alloc::vec::Vec;
 
 /// Maximum number of authored swell waves per water surface; the wind's own
@@ -38,6 +39,23 @@ pub struct WaterWave {
     pub steepness: f32,
 }
 
+/// What a [WaterSurface](#watersurface) covers.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, Vocabulary,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WaterShape {
+    /// A horizontal rectangle `extent` around `center`.
+    #[default]
+    #[vocab("rectangle")]
+    Rectangle,
+    /// The sea of the world's [Planet](#planet): water all the way around
+    /// it, `sea_level` meters above its radius, filling every hollow of the
+    /// ground below that height.
+    #[vocab("planet_sea")]
+    PlanetSea,
+}
+
 /// A translucent animated water surface.
 ///
 /// A flat, subdivided horizontal surface moved by the world's `Wind`. The wind
@@ -74,9 +92,20 @@ pub struct WaterWave {
 /// from `shallow_color` to `deep_color` as the water deepens. Shoreline foam
 /// and whitecaps are a lit white surface.
 ///
-/// The surface is positioned by `center` and sized by `extent` (XZ
+/// A `rectangle` surface is positioned by `center` and sized by `extent` (XZ
 /// half-widths). The mesh itself is flat; all height variation comes from the
 /// animated waves.
+///
+/// A `planet_sea` is the ocean of the world's [Planet](#planet): a sphere of
+/// water `sea_level` meters above the planet's radius, so every valley whose
+/// ground lies lower floods, and the coast is wherever the hills rise out of
+/// it. It is always a simulated ocean, its waves fixed to the planet's ground
+/// wherever on it the camera roams, and it curves away to the horizon with
+/// the ground. Its gusts follow the wind in step with the planet's grass. It
+/// reflects the scene by ray tracing, reflection probes or the sky, never by
+/// a planar mirror, and it takes no authored swell: `waves` must be empty.
+/// `center`, `extent` and `subdivisions` do not apply. A world without a
+/// planet draws no planet sea.
 ///
 /// Its sun glint rides the waves, and its reflection and refraction move with
 /// neither the surface nor what they show, so temporal anti-aliasing and
@@ -103,12 +132,17 @@ pub struct WaterWave {
 )]
 #[serde(default)]
 pub struct WaterSurface {
-    /// World-space position of the surface's center.
+    /// What the surface covers: `rectangle` (the default) or `planet_sea`.
+    pub shape: WaterShape,
+    /// Height of a `planet_sea` above the [Planet](#planet)'s radius, in
+    /// meters, at least 0.
+    pub sea_level: f32,
+    /// World-space position of a rectangle's center.
     pub center: [f32; 3],
-    /// Half-width and half-depth of the surface `[x, z]`, in world units.
+    /// Half-width and half-depth of a rectangle `[x, z]`, in world units.
     #[asset(default = [10.0, 10.0])]
     pub extent: [f32; 2],
-    /// Grid subdivisions across the surface. Higher gives smoother waves.
+    /// Grid subdivisions across a rectangle. Higher gives smoother waves.
     /// Clamped to [8, 255].
     #[asset(default = 64)]
     pub subdivisions: u32,
@@ -121,7 +155,8 @@ pub struct WaterSurface {
     /// water the wind never touches, 1 the full wind; above 1 exaggerates it.
     #[asset(default = 1.0)]
     pub wind_response: f32,
-    /// Extra swell rolling over the wind's waves, up to 4. None by default.
+    /// Extra swell rolling over the wind's waves, up to 4. None by default,
+    /// and none on a planet sea.
     pub waves: Vec<WaterWave>,
     /// Linear-space RGB reflectance of deep water's body, each channel in
     /// [0, 1]: the share of the light reaching the surface that a deep column

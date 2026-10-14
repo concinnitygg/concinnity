@@ -123,6 +123,19 @@ impl OceanSea {
         })
     }
 
+    /// The sea `surface` takes under a wind of `wind_speed` m/s toward
+    /// `direction` whatever its size, when the wind raises one at all: a
+    /// planet's sea is always open water.
+    pub fn open(surface: &WaterSurface, wind_speed: f32, direction: [f32; 2]) -> Option<Self> {
+        let wind_speed = wind_speed * surface.wind_response;
+        SeaShape::new(wind_speed, surface.fetch_meters)?;
+        Some(Self {
+            wind_speed,
+            direction,
+            fetch: surface.fetch_meters,
+        })
+    }
+
     /// The spectrum's shape; a sea built by [`OceanSea::of`] always has one.
     pub fn shape(&self) -> Option<SeaShape> {
         SeaShape::new(self.wind_speed, self.fetch)

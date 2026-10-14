@@ -30,6 +30,9 @@ from the center, so a camera at the start facing `-Z` faces north, and
 longitude grows eastward, toward `+X`. Altitude is measured above
 `radius`, height above the ground above the hills.
 
+A [WaterSurface](WaterSurface.md) whose `shape` is `planet_sea` floods the
+planet to its `sea_level`.
+
 ## Parameters
 
 - `center`: An array of 3 floats. World-space center. The default puts the top of a planet of the default radius at the origin.

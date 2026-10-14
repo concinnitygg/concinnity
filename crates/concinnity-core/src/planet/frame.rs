@@ -109,6 +109,22 @@ impl LocalFrame {
     }
 }
 
+impl LocalFrame {
+    /// The frame a world in this one moved to by `rebase`: the same authored
+    /// point under every carried local point.
+    pub fn followed(&self, rebase: &Rebase) -> Self {
+        // new = R old + t, so old = R^T (new - t).
+        let r = dvec::mat_of_quat(rebase.rotation);
+        let back: DMat3 = core::array::from_fn(|c| core::array::from_fn(|row| r[row][c]));
+        let basis = dvec::orthonormalize(&dvec::mul(&self.basis, &back));
+        let shift = dvec::mul_vec(&basis, dvec::from_f32(rebase.translation));
+        Self {
+            origin: dvec::sub(self.origin, shift),
+            basis,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +204,31 @@ mod tests {
         });
         let expected = frame.to_local(dvec::add(origin, dvec::from_f32(offset)));
         assert!(close(placed, expected, 1e-3), "{placed:?} {expected:?}");
+    }
+
+    // A frame carried through the rebase a recentering hands out is that
+    // recentered frame, to the precision of the rebase's own floats.
+    #[test]
+    fn following_a_rebase_lands_on_the_recentered_frame() {
+        let mut frame = LocalFrame::AUTHORED;
+        let mut followed = LocalFrame::AUTHORED;
+        for at in [
+            [900.0, -8.1, -450.0],
+            [-700.0, 3.0, 650.0],
+            [10.0, 0.5, -999.0],
+        ] {
+            let (next, rebase) = frame.recentered(at, up_at(&frame, at));
+            frame = next;
+            followed = followed.followed(&rebase);
+            let origin = dvec::length(dvec::sub(followed.origin, frame.origin));
+            assert!(origin < 2e-3, "{origin}");
+            for c in 0..3 {
+                let axis = dvec::length(dvec::sub(followed.basis[c], frame.basis[c]));
+                assert!(axis < 1e-6, "{axis}");
+            }
+        }
+        let identity = LocalFrame::AUTHORED.followed(&Rebase::IDENTITY);
+        assert_eq!(identity, LocalFrame::AUTHORED);
     }
 
     #[test]

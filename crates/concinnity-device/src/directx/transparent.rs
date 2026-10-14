@@ -38,6 +38,7 @@
 use concinnity_core::components::GlassPanel;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
+use concinnity_core::planet::Rebase;
 use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::rt_reflections::RtParamsInputs;
@@ -232,8 +233,18 @@ pub(in crate::directx) struct TransparentProducer {
     // panes; `None` for water, which traces in place.
     pub reflection_flat_pso: Option<ID3D12PipelineState>,
     pub reflection_textured_pso: Option<ID3D12PipelineState>,
+    // A planet sea's own three, for the water producer's sea records; `None`
+    // when no record is one.
+    pub sea: Option<ShapePsos>,
     pub records: Vec<TransparentRecord>,
     pub water: Vec<WaterMotion>,
+}
+
+// The base and RT PSOs one water shape draws with.
+pub(in crate::directx) struct ShapePsos {
+    pub pso: ID3D12PipelineState,
+    pub flat_rt_pso: Option<ID3D12PipelineState>,
+    pub textured_rt_pso: Option<ID3D12PipelineState>,
 }
 
 impl TransparentProducer {
@@ -269,17 +280,44 @@ impl TransparentProducer {
     // `rt_pipelines_ready` / `rt_textured_ready`, which require the pipeline of
     // every live producer -- so a producer is never asked for one it lacks.
     fn pipeline(&self, rt_live: bool, textured: bool) -> &ID3D12PipelineState {
-        match (rt_live, textured) {
-            (true, true) => self
-                .textured_rt_pso
-                .as_ref()
-                .expect("rt_textured_ready gated the frame on every producer's textured PSO"),
-            (true, false) => self
-                .flat_rt_pso
-                .as_ref()
-                .expect("rt_pipelines_ready gated the frame on every producer's flat RT PSO"),
-            _ => &self.pso,
+        pick_pso(
+            &self.pso,
+            self.flat_rt_pso.as_ref(),
+            self.textured_rt_pso.as_ref(),
+            rt_live,
+            textured,
+        )
+    }
+
+    // The PSO record `i` draws with: a planet sea's own, or the producer's.
+    fn record_pipeline(&self, i: usize, rt_live: bool, textured: bool) -> &ID3D12PipelineState {
+        match &self.sea {
+            Some(sea) if self.water.get(i).is_some_and(|w| w.body().sea.is_some()) => pick_pso(
+                &sea.pso,
+                sea.flat_rt_pso.as_ref(),
+                sea.textured_rt_pso.as_ref(),
+                rt_live,
+                textured,
+            ),
+            _ => self.pipeline(rt_live, textured),
         }
+    }
+
+    // Whether every record can trace: the flat RT PSO of the producer and of
+    // its sea, or with `textured` the textured ones.
+    fn traces(&self, textured: bool) -> bool {
+        let built = |flat: &Option<ID3D12PipelineState>, tex: &Option<ID3D12PipelineState>| {
+            if textured {
+                tex.is_some()
+            } else {
+                flat.is_some()
+            }
+        };
+        built(&self.flat_rt_pso, &self.textured_rt_pso)
+            && self
+                .sea
+                .as_ref()
+                .is_none_or(|s| built(&s.flat_rt_pso, &s.textured_rt_pso))
     }
 
     // This producer's reflection pre-pass PSO, or `None` when it traces in place.
@@ -288,6 +326,26 @@ impl TransparentProducer {
             true => self.reflection_textured_pso.as_ref(),
             false => self.reflection_flat_pso.as_ref(),
         }
+    }
+}
+
+// The PSO a frame draws with out of a base / flat RT / textured RT three.
+// The `expect`s are explained on `TransparentProducer::pipeline`.
+fn pick_pso<'a>(
+    base: &'a ID3D12PipelineState,
+    flat_rt: Option<&'a ID3D12PipelineState>,
+    textured_rt: Option<&'a ID3D12PipelineState>,
+    rt_live: bool,
+    textured: bool,
+) -> &'a ID3D12PipelineState {
+    match (rt_live, textured) {
+        (true, true) => {
+            textured_rt.expect("rt_textured_ready gated the frame on every producer's textured PSO")
+        }
+        (true, false) => {
+            flat_rt.expect("rt_pipelines_ready gated the frame on every producer's flat RT PSO")
+        }
+        _ => base,
     }
 }
 
@@ -1090,7 +1148,7 @@ impl TransparentResources {
     pub(in crate::directx) fn rt_pipelines_ready(&self) -> bool {
         self.rt_root_sig.is_some()
             && self.glass.as_ref().is_none_or(|p| p.flat_rt_pso.is_some())
-            && self.water.as_ref().is_none_or(|p| p.flat_rt_pso.is_some())
+            && self.water.as_ref().is_none_or(|p| p.traces(false))
     }
 
     // True when every live producer also built its textured RT pipeline, so the
@@ -1103,10 +1161,7 @@ impl TransparentResources {
         self.glass
             .as_ref()
             .is_none_or(|p| p.textured_rt_pso.is_some())
-            && self
-                .water
-                .as_ref()
-                .is_none_or(|p| p.textured_rt_pso.is_some())
+            && self.water.as_ref().is_none_or(|p| p.traces(true))
             && self
                 .glass_mesh
                 .as_ref()
@@ -1265,6 +1320,15 @@ impl DxContext {
             self.descriptors.srv_descriptor_size,
             0,
         )
+    }
+
+    // Carry the water surfaces into the frame the world moved to.
+    pub(in crate::directx) fn rebase_transparent_water(&mut self, rebase: &Rebase) {
+        if let Some(water) = self.transparent.as_mut().and_then(|t| t.water.as_mut()) {
+            for motion in &mut water.water {
+                motion.rebase(rebase);
+            }
+        }
     }
 
     // Write each visible water surface's params, advanced to `time` seconds
@@ -1576,21 +1640,23 @@ impl DxContext {
             set_viewport(cmd, (w, h));
         }
 
-        let mut bound: Option<Producer> = None;
+        let mut bound: Option<&ID3D12PipelineState> = None;
         for &(kind, i) in &order {
-            if bound != Some(kind) {
-                let pso = match kind {
-                    Producer::GlassMesh => transparent
-                        .glass_mesh
-                        .as_ref()
-                        .expect("the draw order only names live producers")
-                        .pipeline(textured),
-                    _ => transparent.producer(kind).pipeline(rt_live, textured),
-                };
+            let pso = match kind {
+                Producer::GlassMesh => transparent
+                    .glass_mesh
+                    .as_ref()
+                    .expect("the draw order only names live producers")
+                    .pipeline(textured),
+                _ => transparent
+                    .producer(kind)
+                    .record_pipeline(i, rt_live, textured),
+            };
+            if bound != Some(pso) {
                 // SAFETY: the command list is in the recording state, and the PSO is live for
                 // the call.
                 unsafe { cmd.SetPipelineState(pso) };
-                bound = Some(kind);
+                bound = Some(pso);
             }
             self.draw_transparent_entry(transparent, &frame, kind, i);
         }
