@@ -84,6 +84,8 @@ struct OceanKernels {
     plan: OceanPlan,
     rows: OwnedPipeline,
     columns: OwnedPipeline,
+    // The columns kernel that also steps the foam, for a whitecapping sea.
+    columns_foam: OwnedPipeline,
     mip: OwnedPipeline,
     layout: OwnedPipelineLayout,
     _set_layout: OwnedSetLayout,
@@ -225,6 +227,10 @@ impl OceanKernels {
         };
         let rows_kernel = kernel(&builtin_shaders::WATER_FFT_ROWS, "ocean rows")?;
         let columns = kernel(&builtin_shaders::WATER_FFT_COLUMNS, "ocean columns")?;
+        let columns_foam = kernel(
+            &builtin_shaders::WATER_FFT_COLUMNS_FOAM,
+            "ocean columns with foam",
+        )?;
         let mip = kernel(&builtin_shaders::WATER_MIP, "ocean mips")?;
 
         let levels = displacement.mips.len();
@@ -256,6 +262,7 @@ impl OceanKernels {
             plan: plan.clone(),
             rows: rows_kernel,
             columns,
+            columns_foam,
             mip,
             layout,
             _set_layout: set_layout,
@@ -405,7 +412,12 @@ impl VkContext {
             rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &k.rows);
             rec.dispatch(size, cascades, 1);
             compute_step(rec);
-            rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &k.columns);
+            let columns = if sim.foam.is_some() {
+                &k.columns_foam
+            } else {
+                &k.columns
+            };
+            rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, columns);
             rec.dispatch(size, cascades, 1);
             rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &k.mip);
             for level in 1..levels {

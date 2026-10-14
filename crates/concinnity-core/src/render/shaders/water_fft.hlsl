@@ -7,8 +7,9 @@
 //
 //   WATER_FFT_ROWS     evolves each cascade's initial spectrum to this frame
 //                      and runs the inverse FFT along every row, into `rows`
-//   WATER_FFT_COLUMNS  runs the inverse FFT along every column of `rows`,
-//                      steps the foam, and writes mip 0 of both arrays
+//   WATER_FFT_COLUMNS  runs the inverse FFT along every column of `rows` and
+//                      writes mip 0 of both arrays; with WATER_FOAM it steps
+//                      the foam too
 //   WATER_MIP          reduces both arrays' mip `L - 1` into mip `L` by 2x2
 //                      box averages, which keeps the slope moments exact
 //
@@ -27,9 +28,11 @@
 //   slopes        (sx, sz, sx^2, sz^2): the slope of the displaced surface and
 //                 its square, whose mip averages give the slope variance
 //
-// The foam is the one field that outlives a frame: `foam` keeps each texel's
-// across frames. Each frame it fades by `foam_keep` and is topped up where
-// the Jacobian of the horizontal map, which falls toward zero as crests
+// The foam is the one field that outlives a frame, stepped only by the
+// WATER_FOAM variant of the columns kernel, which runs for a simulation some
+// body asks whitecaps of; the plain variant writes no foam. `foam` keeps each
+// texel's across frames. Each frame it fades by `foam_keep` and is topped up
+// where the Jacobian of the horizontal map, which falls toward zero as crests
 // sharpen and below it where they fold, drops under the cascade's threshold,
 // so a breaking crest leaves a fading streak behind it. The foam reads the
 // Jacobian to first order, `1 + chop * (d dx / dx + d dz / dz)`, a Gaussian
@@ -70,7 +73,7 @@ static const float WATER_FFT_TAU = 6.28318530718;
 #if defined(WATER_FFT_ROWS) || defined(WATER_FFT_COLUMNS)
 [[vk::binding(1, 0)]] RWStructuredBuffer<float4> rows : register(u6);
 #endif
-#if defined(WATER_FFT_COLUMNS)
+#if defined(WATER_FOAM)
 // Each layer's foam, texel after texel, kept across frames.
 [[vk::binding(6, 0)]] RWStructuredBuffer<float> foam : register(u7);
 #endif
@@ -239,6 +242,7 @@ void water_fft_rows(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
 // but finite slope.
 static const float WATER_MIN_JACOBIAN = 0.1;
 
+#if defined(WATER_FOAM)
 // Texel `at`'s foam this frame, of `cascade`, whose first-order Jacobian is
 // `jacobian`:
 // last frame's faded, or what the crest injects, whichever is more. A keep
@@ -253,6 +257,7 @@ float water_foam_step(uint at, uint cascade, float jacobian)
     foam[at] = f;
     return f;
 }
+#endif
 
 [shader("compute")]
 [numthreads(WATER_FFT_THREADS, 1, 1)]
@@ -295,7 +300,11 @@ void water_fft_columns(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID
             // surface where the displacement carried the point.
             float2 slope = float2(jzz * b.x - jxz * b.y, jxx * b.y - jxz * b.x)
                            / max(jacobian, WATER_MIN_JACOBIAN);
+#if defined(WATER_FOAM)
             float f = water_foam_step(water_texel(layer, x, y, size), cascade, jxx + jzz - 1.0);
+#else
+            float f = 0.0;
+#endif
             uint3 texel = uint3(x, y, layer);
             dst_displacement[texel] = float4(chop * a.x, a.z, chop * a.y, f);
             dst_slopes[texel] = float4(slope, slope * slope);

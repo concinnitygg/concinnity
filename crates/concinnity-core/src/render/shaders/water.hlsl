@@ -39,10 +39,11 @@
 //                  the column thickness the main depth gives, an exponential
 //                  falloff over `depth_falloff`.
 //   * Foam       - a lit white diffuse layer: a band where the seabed is just
-//                  below the surface, and on a simulated ocean the whitecaps
-//                  on breaking crests and the streaks they leave, broken up
-//                  by procedural lace. Whitecaps are rough and cover the
-//                  reflection and the sun's glint beneath them.
+//                  below the surface, and on a simulated ocean that asks for
+//                  them the whitecaps on breaking crests and the streaks
+//                  they leave, scaled by their strength and broken up
+//                  by procedural lace. Whitecaps cover the reflection and the
+//                  sun's glint beneath them.
 //   * Reflection - see below, plus a GGX specular lobe for the scene's sun off
 //                  the same wave normal.
 //   * Fresnel    - Schlick with a water-vs-air F0 of 0.02, shaped by
@@ -159,7 +160,7 @@ struct WaterParams
     // The first `displace_count` waves move the grid; the rest shade it.
     uint displace_count;
     // The wind, as wind.hlsl unpacks it: [direction.x, direction.z, strength,
-    // gustiness] and [1 / gust scale, wind response, _, _].
+    // gustiness] and [1 / gust scale, wind response, whitecaps, _].
     float4 wind;
     float4 wind_gust;
     WaterWave waves[WATER_MAX_WAVES];
@@ -418,13 +419,19 @@ float3 water_ocean_displace(float2 xz, float footprint)
     return d;
 }
 
-// The shading at one rest position: the wave normal, the GGX alpha that
-// carries the slopes too fine for the pixel, and the whitecap cover.
+// Whether this body whitecaps. Every whitecap term sits behind it, so a body
+// without them shades exactly as if whitecaps did not exist.
+bool water_whitecaps()
+{
+    return params.ocean.layers.w > 0u;
+}
+
+// The shading at one rest position: the wave normal, and the GGX alpha that
+// carries the slopes too fine for the pixel.
 struct WaterShading
 {
     float3 normal;
     float alpha;
-    float foam;
 };
 
 // Whitecap lace: value noise over two octaves, the coarser this many meters
@@ -485,26 +492,17 @@ WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
     float3 binormal = float3(1.0, 0.0, 0.0); // dP/dx
     float3 tangent = float3(0.0, 0.0, 1.0);  // dP/dz
     float removed = 0.0;
-    // The share of the surface no cascade's whitecap covers.
-    float clear = 1.0;
 
     uint cascades = min(params.ocean.layers.x, WATER_OCEAN_MAX_CASCADES);
-    uint foaming = min(params.ocean.layers.w, cascades);
     for (uint c = 0u; c < cascades; c++)
     {
         float inv_length = params.ocean.inv_lengths[c];
         float layer = float(params.ocean.layers.y + c);
-        float3 uv = float3(water_ocean_uv(local_xz, c), layer);
-        float2 gx = dx * inv_length;
-        float2 gy = dy * inv_length;
-        float4 m = ocean_slopes.SampleGrad(ocean_sampler, uv, gx, gy);
+        float4 m = ocean_slopes.SampleGrad(ocean_sampler, float3(water_ocean_uv(local_xz, c), layer),
+                                           dx * inv_length, dy * inv_length);
         binormal.y += m.x;
         tangent.y += m.y;
         removed += max(m.z - m.x * m.x, 0.0) + max(m.w - m.y * m.y, 0.0);
-        if (c < foaming)
-        {
-            clear *= 1.0 - saturate(ocean_displacement.SampleGrad(ocean_sampler, uv, gx, gy).w);
-        }
     }
 
     uint count = min(params.wave_count, WATER_MAX_WAVES);
@@ -566,8 +564,25 @@ WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
     float base = max(params.roughness, 0.02);
     base *= base;
     o.alpha = sqrt(base * base + removed + variance * WATER_UNRESOLVED_RIPPLE);
-    o.foam = foaming > 0u ? water_foam_lace(1.0 - clear, local_xz, max(length(dx), length(dy))) : 0.0;
     return o;
+}
+
+// The whitecap cover at anchor-relative rest XZ `local_xz`, seen through the
+// pixel footprint `dx`, `dy`: the union of the whitecapping cascades' foam,
+// broken up by the lace.
+float water_whitecap_cover(float2 local_xz, float2 dx, float2 dy)
+{
+    float clear = 1.0;
+    uint foaming = min(params.ocean.layers.w, min(params.ocean.layers.x, WATER_OCEAN_MAX_CASCADES));
+    for (uint c = 0u; c < foaming; c++)
+    {
+        float inv_length = params.ocean.inv_lengths[c];
+        float layer = float(params.ocean.layers.y + c);
+        float3 uv = float3(water_ocean_uv(local_xz, c), layer);
+        clear *= 1.0 - saturate(ocean_displacement.SampleGrad(ocean_sampler, uv, dx * inv_length,
+                                                              dy * inv_length).w);
+    }
+    return water_foam_lace(1.0 - clear, local_xz, max(length(dx), length(dy)));
 }
 
 [shader("vertex")]
@@ -632,8 +647,6 @@ float water_scene_distance(float2 ndc_xy, float depth01)
 // irradiance through `shadow` plus the sky's, both over pi. Without an
 // irradiance cube the sky is the main pass's flat ambient fill.
 static const float WATER_INV_PI = 0.318309886;
-// The GGX alpha whitecaps roughen the surface toward.
-static const float WATER_FOAM_ALPHA = 0.6;
 static const float WATER_FLAT_AMBIENT = 0.03;
 
 float3 water_lambert(float3 n, float shadow)
@@ -663,8 +676,7 @@ float water_sun_shadow(float3 world_pos, float2 screen_xy)
 struct WaterSurfacePoint
 {
     float3 normal;
-    // GGX alpha, the base roughness widened by the slopes the pixel filtered
-    // and by whitecaps.
+    // GGX alpha, the base roughness widened by the slopes the pixel filtered.
     float alpha;
     // The whitecap cover, which hides the reflection and the glint.
     float foam;
@@ -680,8 +692,8 @@ WaterSurfacePoint water_surface(WaterVertexOut i, float2 dx, float2 dy)
     WaterSurfacePoint s;
     WaterShading shading = water_shading(i.local_xz, dx, dy);
     s.normal = shading.normal;
-    s.foam = saturate(shading.foam * params.foam_intensity);
-    s.alpha = max(shading.alpha, s.foam * WATER_FOAM_ALPHA);
+    s.alpha = shading.alpha;
+    s.foam = 0.0;
 
     float2 vp_dim = max(view.viewport, (float2)(1.0));
     s.frag_uv = i.position.xy / vp_dim;
@@ -716,12 +728,16 @@ WaterSurfacePoint water_surface(WaterVertexOut i, float2 dx, float2 dy)
 
     // Foam: a white diffuse surface on the waves in a soft band where the
     // seabed is just below the surface, which is both the shoreline and any
-    // intersection line with standing geometry, and over the whitecaps.
+    // intersection line with standing geometry, then the whitecaps over what
+    // that leaves.
     float foam_t = saturate(1.0 - water_depth / max(params.foam_width, 1e-3));
-    float shore = foam_t * foam_t;
-    float cover = shore + shading.foam * (1.0 - shore);
     float3 foam = water_lambert(s.normal, shadow);
-    s.below = lerp(below, foam, cover * params.foam_intensity);
+    s.below = lerp(below, foam, foam_t * foam_t * params.foam_intensity);
+    if (water_whitecaps())
+    {
+        s.foam = saturate(water_whitecap_cover(i.local_xz, dx, dy) * params.wind_gust.z);
+        s.below = lerp(s.below, foam, s.foam);
+    }
     return s;
 }
 
@@ -803,11 +819,14 @@ TransparentOut water_resolve(WaterSurfacePoint s, float3 view_dir, float3 reflec
 {
     float n_dot_v = saturate(dot(s.normal, view_dir));
     float fresnel = 0.02 + 0.98 * pow(1.0 - n_dot_v, max(params.fresnel_power, 1e-3));
-    // Whitecaps lie on top of the water: what they cover neither mirrors nor
-    // glints.
-    float open = 1.0 - s.foam;
-    float3 glint = water_sun_glint(s.normal, view_dir, s.alpha) * open;
-    float3 color = lerp(s.below, reflection, fresnel * open) + glint;
+    float3 glint = water_sun_glint(s.normal, view_dir, s.alpha);
+    float3 color = lerp(s.below, reflection, fresnel) + glint;
+    if (water_whitecaps())
+    {
+        // Whitecaps lie on top of the water: what they cover neither
+        // mirrors nor glints.
+        color = lerp(color, s.below, s.foam);
+    }
     float near = 1.0 - smoothstep(WATER_REACTIVE_FADE_METERS.x, WATER_REACTIVE_FADE_METERS.y,
                                   s.camera_distance);
     float reactive = max(reactive_luminance(glint), fresnel * WATER_REACTIVE_FRESNEL * near);

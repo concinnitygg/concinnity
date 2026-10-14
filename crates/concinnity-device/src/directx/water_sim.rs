@@ -24,7 +24,9 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
-use super::builtin_shaders::{CompileProgram, WATER_FFT_COLUMNS, WATER_FFT_ROWS, WATER_MIP};
+use super::builtin_shaders::{
+    CompileProgram, WATER_FFT_COLUMNS, WATER_FFT_COLUMNS_FOAM, WATER_FFT_ROWS, WATER_MIP,
+};
 use super::com;
 use super::context::DxContext;
 use super::descriptor_slot::{DescriptorTables, SrvSlot};
@@ -78,6 +80,8 @@ struct OceanKernels {
     root_sig: ID3D12RootSignature,
     rows: ID3D12PipelineState,
     columns: ID3D12PipelineState,
+    // The columns kernel that also steps the foam, for a whitecapping sea.
+    columns_foam: ID3D12PipelineState,
     mip: ID3D12PipelineState,
     spectrum: PooledBuffer,
     row_data: ID3D12Resource,
@@ -192,6 +196,7 @@ impl OceanKernels {
             plan: plan.clone(),
             rows: kernel(&WATER_FFT_ROWS, "ocean rows")?,
             columns: kernel(&WATER_FFT_COLUMNS, "ocean columns")?,
+            columns_foam: kernel(&WATER_FFT_COLUMNS_FOAM, "ocean columns with foam")?,
             mip: kernel(&WATER_MIP, "ocean mips")?,
             root_sig,
             spectrum,
@@ -380,7 +385,11 @@ impl DxContext {
                 cmd.SetPipelineState(&k.rows);
                 cmd.Dispatch(size, cascades, 1);
                 uav_barrier(cmd, &k.row_data);
-                cmd.SetPipelineState(&k.columns);
+                cmd.SetPipelineState(if sim.foam.is_some() {
+                    &k.columns_foam
+                } else {
+                    &k.columns
+                });
                 cmd.Dispatch(size, cascades, 1);
                 cmd.SetPipelineState(&k.mip);
                 for level in 1..k.mips {

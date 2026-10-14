@@ -144,8 +144,9 @@ pub struct OceanSimulation {
     pub cascades: Cascades,
     /// Its first cascade's layer in the shared arrays; the rest follow.
     pub first_layer: u32,
-    /// Where its cascades whitecap.
-    pub foam: foam::FoamCalibration,
+    /// Where its cascades whitecap; `None` while no body sharing it asks for
+    /// whitecaps, which skips the foam step.
+    pub foam: Option<foam::FoamCalibration>,
 }
 
 /// A body's share of a simulated ocean, and the grid it is drawn on.
@@ -181,24 +182,28 @@ impl OceanPlan {
     }
 
     /// The index of the simulation `sea` shares, added if it is new and
-    /// there is room; `None` when every slot holds another sea.
-    pub fn share(&mut self, sea: OceanSea) -> Option<usize> {
+    /// there is room; `None` when every slot holds another sea. A body that
+    /// `whitecaps` makes its simulation foam for every body sharing it.
+    pub fn share(&mut self, sea: OceanSea, whitecaps: bool) -> Option<usize> {
         let index = match self.simulations.iter().position(|s| s.sea == sea) {
             Some(i) => i,
             None if self.simulations.len() < MAX_OCEAN_SIMULATIONS => {
                 let shape = sea.shape()?;
                 let first_layer = self.layer_count();
-                let cascades = Cascades::new(shape.peak_wavelength(), self.quality);
                 self.simulations.push(OceanSimulation {
                     sea,
-                    foam: foam::FoamCalibration::new(&sea, &cascades),
-                    cascades,
+                    cascades: Cascades::new(shape.peak_wavelength(), self.quality),
                     first_layer,
+                    foam: None,
                 });
                 self.simulations.len() - 1
             }
             None => return None,
         };
+        let sim = &mut self.simulations[index];
+        if whitecaps && sim.foam.is_none() {
+            sim.foam = Some(foam::FoamCalibration::new(&sim.sea, &sim.cascades));
+        }
         Some(index)
     }
 
@@ -306,21 +311,46 @@ mod tests {
             direction: [1.0, 0.0],
             fetch: 1.0e5,
         };
-        let a = plan.share(sea(8.0)).unwrap();
-        let b = plan.share(sea(8.0)).unwrap();
+        let a = plan.share(sea(8.0), false).unwrap();
+        let b = plan.share(sea(8.0), false).unwrap();
         assert_eq!(a, b);
         assert_eq!(plan.simulations.len(), 1);
-        let c = plan.share(sea(9.0)).unwrap();
+        let c = plan.share(sea(9.0), false).unwrap();
         assert_eq!(c, 1);
         assert_eq!(plan.simulations[c].first_layer, 3);
         assert_eq!(plan.layer_count(), 6);
         for u in 10..20 {
-            let _ = plan.share(sea(u as f32));
+            let _ = plan.share(sea(u as f32), false);
         }
         assert_eq!(plan.simulations.len(), MAX_OCEAN_SIMULATIONS);
-        assert!(plan.share(sea(30.0)).is_none());
+        assert!(plan.share(sea(30.0), false).is_none());
         // A simulated sea still shares once the plan is full.
-        assert_eq!(plan.share(sea(8.0)), Some(a));
+        assert_eq!(plan.share(sea(8.0), false), Some(a));
+    }
+
+    // A shared simulation foams once any body sharing it asks for
+    // whitecaps, whichever body that is, and for every body after it.
+    #[test]
+    fn a_simulation_foams_when_any_member_whitecaps() {
+        let sea = OceanSea {
+            wind_speed: 12.0,
+            direction: [1.0, 0.0],
+            fetch: 1.0e5,
+        };
+        let mut plan = OceanPlan::new(OceanQuality::FULL);
+        assert_eq!(plan.share(sea, false), Some(0));
+        assert_eq!(plan.share(sea, false), Some(0));
+        assert!(plan.simulations[0].foam.is_none());
+        assert_eq!(plan.share(sea, true), Some(0));
+        let calibrated = foam::FoamCalibration::new(&sea, &plan.simulations[0].cascades);
+        assert_eq!(plan.simulations[0].foam, Some(calibrated));
+        assert_eq!(plan.share(sea, false), Some(0));
+        assert_eq!(plan.simulations[0].foam, Some(calibrated));
+
+        let mut first = OceanPlan::new(OceanQuality::FULL);
+        assert_eq!(first.share(sea, true), Some(0));
+        assert_eq!(first.share(sea, false), Some(0));
+        assert_eq!(first.simulations, plan.simulations);
     }
 
     #[test]

@@ -354,6 +354,15 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             ("rows", "u6"),
             ("dst_displacement", "u2"),
             ("dst_slopes", "u3"),
+        ],
+    },
+    DxilAbi {
+        program: &shared::WATER_FFT_COLUMNS_FOAM,
+        registers: &[
+            ("params", "b0"),
+            ("rows", "u6"),
+            ("dst_displacement", "u2"),
+            ("dst_slopes", "u3"),
             ("foam", "u7"),
         ],
     },
@@ -968,6 +977,16 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     },
     MetalAbi {
         program: &shared::WATER_FFT_COLUMNS,
+        slots: &[&[
+            ("params", "buffer(0)"),
+            ("rows", "buffer(6)"),
+            ("dst_displacement", "texture(2)"),
+            ("dst_slopes", "texture(3)"),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_FFT_COLUMNS_FOAM,
         slots: &[&[
             ("params", "buffer(0)"),
             ("rows", "buffer(6)"),

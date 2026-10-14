@@ -21,13 +21,13 @@ however large the surface or far from the world origin. Pools, ponds and
 small lakes keep a lighter sum of waves. The graphics quality setting
 trades the ocean's finest detail for speed.
 
-A simulated ocean whitecaps: where a crest grows steep enough to break, a
-patch of white foam appears on it and stays behind as the wave runs on,
-thinning into lacy streaks over a few seconds. How much of the sea is
-white follows the wind as at sea: almost none below about 4 m/s, about
-one percent at 10 m/s, a few percent at 14 m/s and more in a gale.
-Whitecaps are rough, so they hide the reflection and the sun's glint
-beneath them. Smaller water never whitecaps.
+A simulated ocean can whitecap, as strongly as `whitecaps` asks (none by
+default): where a crest grows steep enough to break, a patch of white foam
+appears on it and stays behind as the wave runs on, thinning into lacy
+streaks over a few seconds. How much of the sea is white follows the wind
+as at sea: almost none below about 4 m/s, about one percent at 10 m/s, a
+few percent at 14 m/s and more in a gale. Whitecaps hide the reflection
+and the sun's glint beneath them. Smaller water never whitecaps.
 
 Far off, waves too fine to draw fold into a rougher surface, so the sun or
 moon spreads into a glittering path instead of shimmering.
@@ -60,7 +60,8 @@ keep their history, which holds distant waves still.
 - `shallow_color`: An array of 3 floats. Linear-space RGB reflectance of shallow water's body near the shore, each channel in [0, 1]. The seabed seen through the shallows is filtered by it too. Values outside [0, 1] are clamped. Defaults to `[0.2, 0.5, 0.55]`.
 - `depth_falloff_meters`: A float. Depth over which the reflectance blends from shallow to deep, in meters. Defaults to `4.0`.
 - `foam_width_meters`: A float. Width of the shoreline foam band, in meters. Defaults to `0.3`.
-- `foam_intensity`: A float. Strength of the shoreline foam and of an ocean's whitecaps, in [0, 1]. Defaults to `0.8`.
+- `foam_intensity`: A float. Strength of the shoreline foam, in [0, 1]. Defaults to `0.8`.
+- `whitecaps`: A float. Strength of the foam on a simulated ocean's breaking crests, in [0, 1]. 0 is none; smaller water never whitecaps. Values outside [0, 1] are clamped. Defaults to `0.0`.
 - `fresnel_power`: A float. Sharpness of the grazing-angle reflection. Higher confines reflections to steeper viewing angles. Defaults to `5.0`.
 - `roughness`: A float. Surface roughness in [0, 1]. Higher gives blurrier reflections, and pushes a mirrored reflection further off its line with each wave: a near-mirror surface keeps its reflection almost still. Defaults to `0.05`.
 - `refraction_strength`: A float. How strongly the surface bends the view of what's beneath it. Defaults to `0.15`.

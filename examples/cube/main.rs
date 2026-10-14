@@ -206,6 +206,7 @@ fn cube_world() -> Result<World, concinnity::Error> {
         depth_falloff_meters: 1.5,
         foam_width_meters: 0.0,
         foam_intensity: 0.0,
+        whitecaps: 0.0,
         fresnel_power: 0.5,
         roughness: 0.05,
         refraction_strength: 0.02,

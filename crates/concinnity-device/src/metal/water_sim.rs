@@ -26,7 +26,9 @@ use objc2_metal::{
 };
 use std::cell::Cell;
 
-use super::builtin_shaders::{WATER_FFT_COLUMNS, WATER_FFT_ROWS, WATER_MIP, compute_pipeline};
+use super::builtin_shaders::{
+    WATER_FFT_COLUMNS, WATER_FFT_COLUMNS_FOAM, WATER_FFT_ROWS, WATER_MIP, compute_pipeline,
+};
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
 use super::encode::ComputeEncode;
@@ -73,6 +75,8 @@ struct OceanKernels {
     plan: OceanPlan,
     rows: Kernel,
     columns: Kernel,
+    // The columns kernel that also steps the foam, for a whitecapping sea.
+    columns_foam: Kernel,
     mip: Kernel,
     // Every layer's initial spectrum, layer after layer.
     spectrum: Buffer,
@@ -143,6 +147,7 @@ impl OceanSim {
                 plan: plan.clone(),
                 rows: compute_pipeline(device, &WATER_FFT_ROWS, hot_reload)?,
                 columns: compute_pipeline(device, &WATER_FFT_COLUMNS, hot_reload)?,
+                columns_foam: compute_pipeline(device, &WATER_FFT_COLUMNS_FOAM, hot_reload)?,
                 mip: compute_pipeline(device, &WATER_MIP, hot_reload)?,
                 spectrum,
                 row_data,
@@ -287,7 +292,11 @@ impl MtlContext {
             enc.set_value(&params, PARAMS_INDEX);
             enc.set_pipeline(&k.rows);
             dispatch(&enc, [size, cascades, 1], fft);
-            enc.set_pipeline(&k.columns);
+            enc.set_pipeline(if sim.foam.is_some() {
+                &k.columns_foam
+            } else {
+                &k.columns
+            });
             enc.set_texture(&k.displacement_mips[0], DST_DISPLACEMENT_INDEX);
             enc.set_texture(&k.slope_mips[0], DST_SLOPES_INDEX);
             dispatch(&enc, [size, cascades, 1], fft);

@@ -105,7 +105,7 @@ impl WaterBody {
             .map(|s| {
                 let surface = crate::components::validate::water_surface(s.clone());
                 let simulated = OceanSea::of(&surface, wind.strength, wind.direction)
-                    .and_then(|sea| Some((sea, plan.share(sea)?)));
+                    .and_then(|sea| Some((sea, plan.share(sea, surface.whitecaps > 0.0)?)));
                 match simulated {
                     Some((sea, index)) => Self::resolve_ocean(surface, wind, &sea, &plan, index),
                     None => Self::resolve(&surface, wind),
@@ -463,6 +463,29 @@ mod tests {
         let summed = WaterBody::resolve(&WaterSurface::default(), &fresh_breeze());
         assert_eq!(pond.waves, summed.waves);
         assert_eq!(pond.grid_lane(), [cell_size(&pond.surface), 0.0, 0.0, 0.0]);
+    }
+
+    // A sea foams only once a body sharing it asks for whitecaps; a pond's
+    // request raises no simulation.
+    #[test]
+    fn a_shared_sea_foams_when_any_body_whitecaps() {
+        let calm = [open_sea([0.0; 3]), open_sea([2.0e4, 0.0, 0.0])];
+        let (_, plan) = WaterBody::resolve_all(&calm, &fresh_breeze(), OceanQuality::FULL);
+        assert!(plan.simulations[0].foam.is_none());
+
+        let whitecapping = WaterSurface {
+            whitecaps: 0.5,
+            ..open_sea([2.0e4, 0.0, 0.0])
+        };
+        let pond = WaterSurface {
+            whitecaps: 1.0,
+            ..WaterSurface::default()
+        };
+        let surfaces = [open_sea([0.0; 3]), whitecapping, pond];
+        let (bodies, plan) = WaterBody::resolve_all(&surfaces, &fresh_breeze(), OceanQuality::FULL);
+        assert_eq!(plan.simulations.len(), 1);
+        assert!(plan.simulations[0].foam.is_some());
+        assert!(bodies[2].ocean.is_none());
     }
 
     // A simulated sea's crests reach a little past its significant height,

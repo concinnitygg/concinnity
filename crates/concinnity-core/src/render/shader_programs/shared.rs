@@ -659,6 +659,14 @@ pub static WATER_FFT_COLUMNS: ShaderProgram = ShaderProgram {
     gates: &["WATER_FFT_COLUMNS"],
     msaa: false,
 };
+/// `water_fft_columns` from `water_fft.hlsl`, stepping the whitecap foam too.
+pub static WATER_FFT_COLUMNS_FOAM: ShaderProgram = ShaderProgram {
+    file: "water_fft.hlsl",
+    entry: "water_fft_columns",
+    label: "water_fft_columns_foam.hlsl",
+    gates: &["WATER_FFT_COLUMNS", "WATER_FOAM"],
+    msaa: false,
+};
 /// `water_mip` from `water_fft.hlsl`.
 pub static WATER_MIP: ShaderProgram = ShaderProgram {
     file: "water_fft.hlsl",
@@ -805,6 +813,7 @@ pub static ALL: &[&ShaderProgram] = &[
     &WATER_FRAG_RT_TEXTURED,
     &WATER_FFT_ROWS,
     &WATER_FFT_COLUMNS,
+    &WATER_FFT_COLUMNS_FOAM,
     &WATER_MIP,
     &GRASS_GENERATE,
     &GRASS_BEND,

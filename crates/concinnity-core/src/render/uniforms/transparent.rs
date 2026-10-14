@@ -207,7 +207,8 @@ impl WaterRippleGpu {
 #[repr(C)]
 pub struct WaterOceanGpu {
     /// `[cascades, first layer, texels per side, whitecapping cascades]`; no
-    /// cascades for a body whose sea is summed.
+    /// cascades for a body whose sea is summed, and no whitecapping ones for
+    /// a body without whitecaps.
     pub layers: [u32; 4],
     /// One over each cascade's side, per meter; zero past the cascades.
     pub inv_lengths: [f32; 4],
@@ -217,8 +218,9 @@ pub struct WaterOceanGpu {
 }
 
 impl WaterOceanGpu {
-    /// The block for a body's share of an ocean, at no offset.
-    pub fn from_ocean(ocean: &BodyOcean) -> Self {
+    /// The block for a body's share of an ocean, at no offset, sampling the
+    /// foam of its longest cascades when it `whitecaps`.
+    pub fn from_ocean(ocean: &BodyOcean, whitecaps: bool) -> Self {
         let c = &ocean.cascades;
         let mut inv_lengths = [0.0; 4];
         for (slot, &l) in inv_lengths.iter_mut().zip(c.lengths()) {
@@ -229,7 +231,11 @@ impl WaterOceanGpu {
                 c.count() as u32,
                 ocean.first_layer,
                 c.size(),
-                c.count().min(FOAM_CASCADES) as u32,
+                if whitecaps {
+                    c.count().min(FOAM_CASCADES) as u32
+                } else {
+                    0
+                },
             ],
             inv_lengths,
             offsets: [[0.0; 4]; 2],
@@ -280,8 +286,9 @@ pub struct WaterParams {
     /// The wind, `WindField::gpu_rows()[0]`: `[direction.x, direction.z,
     /// strength, gustiness]`.
     pub wind: [f32; 4],
-    /// `[1 / gust_scale, wind_response, _, _]`: the gusts' scale, and how
-    /// strongly the wind roughens this surface.
+    /// `[1 / gust_scale, wind_response, whitecaps, _]`: the gusts' scale, how
+    /// strongly the wind roughens this surface, and how strongly its breaking
+    /// crests foam.
     pub wind_gust: [f32; 4],
     /// Wave coefficients, longest first; the first `wave_count` are live.
     pub waves: [WaterWaveGpu; WATER_MAX_WAVES],
@@ -365,7 +372,7 @@ impl WaterParams {
             wave_count: wave_count as u32,
             displace_count: body.displacing.min(wave_count) as u32,
             wind,
-            wind_gust: [gust[0], surface.wind_response, 0.0, 0.0],
+            wind_gust: [gust[0], surface.wind_response, surface.whitecaps, 0.0],
             waves,
             planar: Self::planar_lane(surface.roughness, planar),
             ripples,
@@ -377,7 +384,7 @@ impl WaterParams {
                 .as_ref()
                 .map_or_else(WaterOceanGpu::default, |o| WaterOceanGpu {
                     offsets: WaterOceanGpu::offsets_lane(&motion.ocean_offsets),
-                    ..WaterOceanGpu::from_ocean(o)
+                    ..WaterOceanGpu::from_ocean(o, surface.whitecaps > 0.0)
                 }),
         }
     }
@@ -553,7 +560,8 @@ mod tests {
     }
 
     // An ocean's block names its cascades, where they sit and how many of
-    // them whitecap: the longest ones, never more than it has.
+    // them whitecap: the longest ones, never more than it has, and none for
+    // a body without whitecaps.
     #[test]
     fn an_ocean_block_names_its_whitecapping_cascades() {
         use crate::render::water::ocean::cascades::Cascades;
@@ -571,11 +579,14 @@ mod tests {
             first_layer: 3,
             grid: OceanGrid::new(56.0, [6000.0, 6000.0]),
         };
-        let full = WaterOceanGpu::from_ocean(&body(3));
+        let full = WaterOceanGpu::from_ocean(&body(3), true);
         assert_eq!(full.layers, [3, 3, 256, FOAM_CASCADES as u32]);
         assert!((full.inv_lengths[0] * 560.0 - 1.0).abs() < 1e-5);
         assert_eq!(full.inv_lengths[3], 0.0);
-        assert_eq!(WaterOceanGpu::from_ocean(&body(1)).layers[3], 1);
+        assert_eq!(WaterOceanGpu::from_ocean(&body(1), true).layers[3], 1);
+        let calm = WaterOceanGpu::from_ocean(&body(3), false);
+        assert_eq!(calm.layers, [3, 3, 256, 0]);
+        assert_eq!(calm.inv_lengths, full.inv_lengths);
     }
 
     // The body colors are reflectances: whatever is authored, each channel the
@@ -676,6 +687,7 @@ mod tests {
             roughness: 0.08,
             refraction_strength: 0.05,
             wind_response: 0.5,
+            whitecaps: 0.75,
             ..Default::default()
         };
         let b = body(&surface);
@@ -707,7 +719,7 @@ mod tests {
         assert_eq!(p.ripple_warp[..2], motion.warp_offset);
         let [wind, gust] = b.wind.gpu_rows();
         assert_eq!(p.wind, wind);
-        assert_eq!(p.wind_gust, [gust[0], 0.5, 0.0, 0.0]);
+        assert_eq!(p.wind_gust, [gust[0], 0.5, 0.75, 0.0]);
         assert_eq!(p.planar, WaterParams::planar_lane(0.08, true));
         assert!(p.planar[0] > 0.5 && p.planar[1] > 0.0);
         // A slotless surface keeps the probe / sky path.

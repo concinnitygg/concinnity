@@ -163,6 +163,7 @@ pub fn water_surface(mut args: WaterSurface) -> WaterSurface {
     args.subdivisions = args.subdivisions.clamp(8, 255);
     args.fetch_meters = finite_at_least(args.fetch_meters, 1.0, 1000.0);
     args.wind_response = finite_at_least(args.wind_response, 0.0, 1.0);
+    args.whitecaps = finite_at_least(args.whitecaps, 0.0, 0.0).min(1.0);
     args.waves.truncate(MAX_WATER_WAVES);
     for w in &mut args.waves {
         *w = water_wave(*w);
@@ -462,12 +463,14 @@ mod tests {
             subdivisions: 3,
             fetch_meters: f32::NAN,
             wind_response: -2.0,
+            whitecaps: 3.0,
             waves: alloc::vec![swell; 6],
             ..WaterSurface::default()
         });
         assert_eq!(w.subdivisions, 8);
         assert_eq!(w.fetch_meters, 1000.0);
         assert_eq!(w.wind_response, 0.0);
+        assert_eq!(w.whitecaps, 1.0);
         assert_eq!(w.waves.len(), MAX_WATER_WAVES);
         let s = w.waves[0];
         assert_eq!(
@@ -475,6 +478,19 @@ mod tests {
             (0.0, 0.01, [1.0, 0.0], 1.0)
         );
         assert!(WaterSurface::default().waves.is_empty());
+        for (authored, clamped) in [(-0.5, 0.0), (f32::NAN, 0.0), (0.4, 0.4)] {
+            let w = water_surface(WaterSurface {
+                whitecaps: authored,
+                ..WaterSurface::default()
+            });
+            assert_eq!(w.whitecaps, clamped, "{authored}");
+        }
+    }
+
+    // A surface whitecaps only when it asks to.
+    #[test]
+    fn water_surface_whitecaps_are_off_by_default() {
+        assert_eq!(WaterSurface::default().whitecaps, 0.0);
     }
 
     #[test]

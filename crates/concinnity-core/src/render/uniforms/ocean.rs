@@ -49,6 +49,7 @@ impl OceanFftParams {
     pub fn simulate(sim: &OceanSimulation, time: f64, foam_keep: f32) -> Self {
         let c = &sim.cascades;
         let size = c.size();
+        let foam = sim.foam.unwrap_or_default();
         Self {
             grid: [
                 size,
@@ -57,8 +58,8 @@ impl OceanFftParams {
                 c.count() as u32,
             ],
             lengths: c.padded_lengths(),
-            foam_thresholds: sim.foam.thresholds,
-            foam_inv_ramps: sim.foam.inv_ramps,
+            foam_thresholds: foam.thresholds,
+            foam_inv_ramps: foam.inv_ramps,
             time_fraction: time_fraction(time),
             choppiness: OCEAN_CHOPPINESS,
             mip_size: size,
@@ -129,8 +130,9 @@ mod tests {
             fetch: 1.0e5,
         };
         let cascades = Cascades::new(56.0, OceanQuality::FULL);
-        let sim = OceanSimulation {
-            foam: FoamCalibration::new(&sea, &cascades),
+        let foam = FoamCalibration::new(&sea, &cascades);
+        let mut sim = OceanSimulation {
+            foam: Some(foam),
             sea,
             cascades,
             first_layer: 3,
@@ -140,13 +142,18 @@ mod tests {
         assert_eq!(p.lengths, sim.cascades.padded_lengths());
         assert_eq!(p.time_fraction, 0.25);
         assert_eq!(p.choppiness, OCEAN_CHOPPINESS);
-        assert_eq!(p.foam_thresholds, sim.foam.thresholds);
-        assert_eq!(p.foam_inv_ramps, sim.foam.inv_ramps);
+        assert_eq!(p.foam_thresholds, foam.thresholds);
+        assert_eq!(p.foam_inv_ramps, foam.inv_ramps);
         assert_eq!(p.foam_keep, 0.5);
         let r = p.reduce(3);
         assert_eq!(r.mip_size, 32);
         assert_eq!(r.grid, p.grid);
         assert_eq!(p.reduce(20).mip_size, 1);
+
+        // Without whitecaps no cascade foams.
+        sim.foam = None;
+        let p = OceanFftParams::simulate(&sim, 0.0, 0.5);
+        assert_eq!(p.foam_inv_ramps, [0.0; 4]);
     }
 
     #[test]

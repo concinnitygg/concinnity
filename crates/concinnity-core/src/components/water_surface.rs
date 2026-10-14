@@ -57,13 +57,13 @@ pub struct WaterWave {
 /// small lakes keep a lighter sum of waves. The graphics quality setting
 /// trades the ocean's finest detail for speed.
 ///
-/// A simulated ocean whitecaps: where a crest grows steep enough to break, a
-/// patch of white foam appears on it and stays behind as the wave runs on,
-/// thinning into lacy streaks over a few seconds. How much of the sea is
-/// white follows the wind as at sea: almost none below about 4 m/s, about
-/// one percent at 10 m/s, a few percent at 14 m/s and more in a gale.
-/// Whitecaps are rough, so they hide the reflection and the sun's glint
-/// beneath them. Smaller water never whitecaps.
+/// A simulated ocean can whitecap, as strongly as `whitecaps` asks (none by
+/// default): where a crest grows steep enough to break, a patch of white foam
+/// appears on it and stays behind as the wave runs on, thinning into lacy
+/// streaks over a few seconds. How much of the sea is white follows the wind
+/// as at sea: almost none below about 4 m/s, about one percent at 10 m/s, a
+/// few percent at 14 m/s and more in a gale. Whitecaps hide the reflection
+/// and the sun's glint beneath them. Smaller water never whitecaps.
 ///
 /// Far off, waves too fine to draw fold into a rougher surface, so the sun or
 /// moon spreads into a glittering path instead of shimmering.
@@ -139,9 +139,13 @@ pub struct WaterSurface {
     /// Width of the shoreline foam band, in meters.
     #[asset(default = 0.30)]
     pub foam_width_meters: f32,
-    /// Strength of the shoreline foam and of an ocean's whitecaps, in [0, 1].
+    /// Strength of the shoreline foam, in [0, 1].
     #[asset(default = 0.8)]
     pub foam_intensity: f32,
+    /// Strength of the foam on a simulated ocean's breaking crests, in [0, 1].
+    /// 0 is none; smaller water never whitecaps. Values outside [0, 1] are
+    /// clamped.
+    pub whitecaps: f32,
     /// Sharpness of the grazing-angle reflection. Higher confines reflections to
     /// steeper viewing angles.
     #[asset(default = 5.0)]
