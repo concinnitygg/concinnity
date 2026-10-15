@@ -8,8 +8,9 @@
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::ssgi::settings::SsgiSettings;
-use concinnity_core::render::post::ssgi::{SsgiInputs, SsgiPass};
+use concinnity_core::render::post::ssgi::{SsgiPass, SsgiResolveInputs, SsgiTraceInputs};
 use objc2::runtime::ProtocolObject;
+use objc2_metal::MTLTexture;
 
 use crate::metal::context::MtlContext;
 use crate::metal::post::post_device::{MtlPostPipeline, MtlPostTarget};
@@ -25,9 +26,48 @@ pub(crate) struct SsgiState {
 }
 
 impl MtlContext {
-    // Encode SSGI: the depth pyramid, the trace over the G-buffer, the
-    // accumulation, and the composite into `hdr_resolve`. Runs on the
-    // hdr_resolve read-modify-write chain after the main pass.
+    // Whether the main pass's screen-indirect texture carries SSGI's bounce:
+    // whenever SSGI is built, which is when the graph runs its resolve.
+    pub(in crate::metal) fn screen_bounce(&self) -> bool {
+        self.ssgi.pass.is_some()
+    }
+
+    // The texture the main pass and the bindless argument buffer sample for
+    // the screen-space indirect light: SSGI's resolved visibility and bounce
+    // while it is built, else the ambient occlusion (or its white fallback).
+    pub(in crate::metal) fn screen_indirect_texture(&self) -> &ProtocolObject<dyn MTLTexture> {
+        match &self.ssgi.pass {
+            Some(pass) => pass.indirect().texture(),
+            None => self.ao_output_texture(),
+        }
+    }
+
+    // Encode the resolve ahead of the main pass: last frame's accumulation
+    // reprojected onto this frame's G-buffer, folded with the occlusion.
+    pub(in crate::metal) fn encode_ssgi_resolve(
+        &self,
+        cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+        ssgi_params: &render_types::SsgiParams,
+    ) -> RenderResult<u32> {
+        let (Some(pass), Some(normal_depth)) = (&self.ssgi.pass, self.gbuffer_normal_depth())
+        else {
+            return Ok(0);
+        };
+        pass.encode_resolve(
+            &self.post_device(),
+            cmd_buf,
+            SsgiResolveInputs {
+                normal_depth,
+                velocity: self.ssgi_velocity()?,
+                occlusion: self.ao_output_texture(),
+            },
+            ssgi_params,
+        )?;
+        Ok(0)
+    }
+
+    // Encode SSGI after the main pass: the depth pyramid, the age, the trace
+    // over the G-buffer and the accumulation the next frame's resolve reads.
     pub(in crate::metal) fn encode_ssgi(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -38,22 +78,23 @@ impl MtlContext {
         else {
             return Ok(0);
         };
-        // Pool-owned, so it is fetched at encode time, like the normals.
-        let velocity = self.gbuffer_velocity().ok_or_else(|| {
-            RenderError::Other("SSGI enabled but the pooled G-buffer velocity is missing".into())
-        })?;
-        let scene = self.targets.hdr.hdr_resolve.as_ref();
         pass.encode(
             &self.post_device(),
             cmd_buf,
-            SsgiInputs {
-                scene,
-                scene_target: scene,
+            SsgiTraceInputs {
+                scene: self.targets.hdr.hdr_resolve.as_ref(),
                 normal_depth,
-                velocity,
+                velocity: self.ssgi_velocity()?,
             },
             ssgi_params,
         )?;
         Ok(0)
+    }
+
+    // Pool-owned, so it is fetched at encode time, like the normals.
+    fn ssgi_velocity(&self) -> RenderResult<&ProtocolObject<dyn MTLTexture>> {
+        self.gbuffer_velocity().ok_or_else(|| {
+            RenderError::Other("SSGI enabled but the pooled G-buffer velocity is missing".into())
+        })
     }
 }

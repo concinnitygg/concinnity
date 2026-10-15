@@ -86,8 +86,8 @@ struct CanopyParams
 Texture2DArray<float> shadow_map : register(t0, space1);
 [[vk::binding(1, 1)]] TextureCube<float4> irradiance_cube : register(t1, space1);
 [[vk::binding(2, 1)]] TextureCube<float4> prefilter_cube : register(t2, space1);
-// Blurred SSAO occlusion (1x1 white when SSAO is disabled).
-[[vk::binding(3, 1)]] Texture2D<float4> ssao_tex : register(t3, space1);
+// The screen-space indirect light (see `screen_indirect_at`).
+[[vk::binding(3, 1)]] Texture2D<float4> screen_indirect : register(t3, space1);
 // Local reflection-probe prefiltered radiance, one cube-array slice per probe.
 [[vk::binding(4, 1)]] TextureCubeArray<float4> probe_cubes : register(t4, space1);
 // Spot shadow map array: one depth slice per shadow-casting spot light.
@@ -154,8 +154,8 @@ StructuredBuffer<GpuLight> local_lights_sb : register(t1);
 // Per-cluster light lists and probe masks the LightCull compute pass writes.
 StructuredBuffer<uint> cluster_list_sb : register(t2);
 StructuredBuffer<GpuObjectData> objects_sb : register(t3);
-// Blurred SSAO occlusion (1x1 white when SSAO is disabled).
-Texture2D<float4> ssao_tex : register(t4);
+// The screen-space indirect light (see `screen_indirect_at`).
+Texture2D<float4> screen_indirect : register(t4);
 TextureCube<float4> irradiance_cube : register(t5);
 TextureCube<float4> prefilter_cube : register(t6);
 // Local reflection-probe prefiltered radiance, one cube-array slice per probe,
@@ -195,8 +195,8 @@ SamplerState cube_sampler : register(s2);
 [[vk::binding(3, 0)]] Texture2DArray<float> shadow_map : register(t3);
 [[vk::binding(4, 0)]] TextureCube<float4> irradiance_cube : register(t4);
 [[vk::binding(5, 0)]] TextureCube<float4> prefilter_cube : register(t5);
-// Blurred SSAO occlusion (1x1 white when SSAO is disabled).
-[[vk::binding(6, 0)]] Texture2D<float4> ssao_tex : register(t6);
+// The screen-space indirect light (see `screen_indirect_at`).
+[[vk::binding(6, 0)]] Texture2D<float4> screen_indirect : register(t6);
 [[vk::binding(7, 0)]] ConstantBuffer<ProbeSet> probe_set_cb : register(b7);
 [[vk::binding(8, 0)]] TextureCubeArray<float4> probe_cubes : register(t8);
 // Per-scene local lights (point + spot + area) for the forward pass.
@@ -302,16 +302,39 @@ float2 spot_shadow_map_size()
     spot_shadow_map.GetDimensions(w, h, e);
     return float2(float(w), float(h));
 }
-// The cube sampler clamps to edge, so the occlusion's border texels never wrap.
-float ssao_sample(float2 uv)
+// The screen-space indirect light at a pixel of the main camera's view.
+struct ScreenIndirect
 {
-    return ssao_tex.Sample(cube_sampler, uv).r;
-}
-float2 ssao_size()
+    // The share of the environment's ambient light that reaches the surface:
+    // the ambient occlusion, lowered further where the bounce rays hit.
+    float visibility;
+    // Light bounced off nearby surfaces, as irradiance over pi: what a white
+    // diffuse surface reflects. Zero without the bounce.
+    float3 bounce;
+};
+
+// The bound target holds the visibility in r and, when `VIEW.screen_bounce` is
+// set, the bounce at the frame's pre-exposure in gba; it is SSAO's occlusion
+// alone, or 1x1 white, otherwise. A probe or mirror face reads neither, since
+// both describe the main camera's view. The cube sampler clamps to edge, so
+// the border texels never wrap.
+ScreenIndirect screen_indirect_at(float2 screen_xy)
 {
-    uint w, h;
-    ssao_tex.GetDimensions(w, h);
-    return float2(float(w), float(h));
+    ScreenIndirect s;
+    s.visibility = 1.0;
+    s.bounce = (float3)(0.0);
+    if (VIEW.ambient_occlusion > 0.5)
+    {
+        uint w, h;
+        screen_indirect.GetDimensions(w, h);
+        float4 t = screen_indirect.Sample(cube_sampler, screen_xy / float2(float(w), float(h)));
+        s.visibility = t.r;
+        if (VIEW.screen_bounce > 0.5)
+        {
+            s.bounce = t.gba / VIEW.pre_exposure;
+        }
+    }
+    return s;
 }
 float3 irradiance_sample(float3 n)
 {

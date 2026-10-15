@@ -134,9 +134,6 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     // Raymarch also snapshots the scene for refractive user shaders: a fragment
     // cannot sample the attachment it is writing.
     ("directx", "raymarch.rs", "hdr_scene_target()"),
-    // The SSGI trace samples the scene its composite blends into, so the node
-    // reads and writes one resource where the graph models a single write.
-    ("directx", "post/ssgi.rs", "hdr_scene_target()"),
     // The translucent pass's refraction snapshot, on whichever scene the graph
     // handed it.
     ("directx", "transparent.rs", "post_scene_target()"),

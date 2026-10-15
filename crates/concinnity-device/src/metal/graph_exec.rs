@@ -212,8 +212,8 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // SSAO kernel + blur params. `Some` only when the `SsaoBlur` pass
     // is in the graph this frame (matches `FrameGraphInputs::ssao_enabled`).
     pub ssao_params: Option<&'a SsaoParams>,
-    // SSGI pyramid, trace and composite params. `Some` only when the `Ssgi` pass is
-    // in the graph this frame (matches `FrameGraphInputs::ssgi_enabled`).
+    // SSGI resolve, pyramid and trace params. `Some` whenever SSGI is built,
+    // which covers every frame its `SsgiResolve` or `Ssgi` pass is in the graph.
     pub ssgi_params: Option<&'a SsgiParams>,
     // RT-reflection params (camera + sun + tunables). `Some` only when the
     // `RtReflections` pass is in the graph this frame (matches
@@ -739,6 +739,11 @@ impl MtlContext {
             PassId::Ssgi => {
                 let ssgi_params = pass_input(params.ssgi_params, PassId::Ssgi, "ssgi_params")?;
                 self.encode_ssgi(cmd_buf, ssgi_params)?
+            }
+            PassId::SsgiResolve => {
+                let ssgi_params =
+                    pass_input(params.ssgi_params, PassId::SsgiResolve, "ssgi_params")?;
+                self.encode_ssgi_resolve(cmd_buf, ssgi_params)?
             }
             PassId::RtReflections => {
                 let rt_params = pass_input(

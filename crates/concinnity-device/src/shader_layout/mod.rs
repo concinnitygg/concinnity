@@ -194,7 +194,7 @@ fn a_world_fragment_declares_the_whole_argument_buffers() {
         "shadow_map",
         "irradiance_cube",
         "prefilter_cube",
-        "ssao_tex",
+        "screen_indirect",
         "probe_cubes",
         "spot_shadow_map",
         "ltc_matrix",
@@ -435,8 +435,10 @@ fn ssr_layouts_match_the_shader() {
 
 #[test]
 fn ssgi_layouts_match_the_shader() {
+    check(&programs::SSGI_AGE, &mirrors::post::ssgi());
     check(&programs::SSGI_TRACE, &mirrors::post::ssgi());
     check(&programs::SSGI_ACCUMULATE, &mirrors::post::ssgi());
+    check(&programs::SSGI_RESOLVE, &mirrors::post::ssgi());
 }
 
 #[test]

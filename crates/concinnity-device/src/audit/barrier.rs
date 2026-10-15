@@ -195,6 +195,10 @@ const AUDITS: &[BackendAudit] = &[
             ),
             ("raymarch.rs", "cmd_pipeline_barrier", 2, Reason::IntraPass),
             ("draw/main.rs", "cmd_pipeline_barrier", 1, Reason::Inline),
+            // SSGI's resolve output, written ahead of the main pass that samples
+            // it: the graph models it, but the registry leaves it to the pass,
+            // whose render pass rests it shader-readable.
+            ("post/ssgi.rs", "cmd_pipeline_barrier", 1, Reason::Inline),
             (
                 "post/upscale/mod.rs",
                 "cmd_pipeline_barrier",
@@ -321,11 +325,6 @@ const AUDITS: &[BackendAudit] = &[
                 3,
                 Reason::IntraPass,
             ),
-            // The SSGI trace samples the scene the composite then blends into,
-            // so this node reads and writes one resource; the graph models that
-            // as a single write and the trace borrows the read state. One site,
-            // called on the way in and on the way out.
-            ("post/ssgi.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
             // The shared post seam's bracket for a target private to its pass
             // (`PostTargetState::Pass`): the SSR reflection target, the SSGI
             // gather target, SSAO's raw occlusion, the reflection blur and the

@@ -871,7 +871,8 @@ impl RenderingBake {
                 sky_rot,
                 irradiance,
                 pre_exposure: FaceStorage::PROBE.scale(),
-                _pad: [0.0; 2],
+                screen_bounce: 0.0,
+                _pad: 0.0,
             };
             buf.write_val(0, &view);
         }

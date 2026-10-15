@@ -43,7 +43,7 @@ const MAIN_BINDLESS_REGISTERS: &[(&str, &str)] = &[
     ("local_lights_sb", "t1"),
     ("cluster_list_sb", "t2"),
     ("objects_sb", "t3"),
-    ("ssao_tex", "t4"),
+    ("screen_indirect", "t4"),
     ("irradiance_cube", "t5"),
     ("prefilter_cube", "t6"),
     ("probe_cubes", "t7"),
@@ -943,7 +943,7 @@ const MAIN_BINDLESS_ARGUMENT_IDS: &[(&str, usize)] = &[
     ("shadow_map", bindless_textures::SHADOW_MAP),
     ("irradiance_cube", bindless_textures::IRRADIANCE_CUBE),
     ("prefilter_cube", bindless_textures::PREFILTER_CUBE),
-    ("ssao_tex", bindless_textures::SSAO),
+    ("screen_indirect", bindless_textures::SCREEN_INDIRECT),
     ("probe_cubes", bindless_textures::PROBE_CUBES),
     ("spot_shadow_map", bindless_textures::SPOT_SHADOW_MAP),
     ("ltc_matrix", bindless_textures::LTC_MATRIX),
@@ -1153,7 +1153,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         argument_ids: &[
             ("shadow_map", bindless_textures::SHADOW_MAP),
             ("irradiance_cube", bindless_textures::IRRADIANCE_CUBE),
-            ("ssao_tex", bindless_textures::SSAO),
+            ("screen_indirect", bindless_textures::SCREEN_INDIRECT),
             ("spot_shadow_map", bindless_textures::SPOT_SHADOW_MAP),
             ("tex_pool", bindless_textures::pool(0)),
             ("tex_sampler", 0),
@@ -1200,7 +1200,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     // The bindless main pass. Its two argument buffers are whole descriptor
     // sets, each at the index `[[cn::metal_argument_buffer(n)]]` names, and the
     // ids inside the texture one are where `metal/cull.rs` writes each member:
-    // the fixed shadow / IBL / SSAO / probe / spot / LTC members first, then
+    // the fixed shadow / IBL / screen-indirect / probe / spot / LTC members first, then
     // the unsized pool. `EngineSamplers` is written 0..2 by
     // `build_bindless_sampler_args`. Only the grass variants read the canopy
     // block, and only the canopy variant its view tables.
@@ -1472,9 +1472,9 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         ]],
         argument_ids: &[],
     },
-    // The SSGI stages read every source but the hit radiance by point load, so
-    // the samplers those sources declare are compiled out and only the scene's
-    // survives.
+    // The SSGI stages read every source but the hit radiance and the occlusion
+    // by point load, so the samplers those sources declare are compiled out and
+    // only the scene's and the occlusion's survive.
     MetalAbi {
         program: &shared::SSGI_DEPTH,
         slots: &[&[("params", "buffer(0)"), ("gbuffer", "texture(0)")]],
@@ -1483,6 +1483,18 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     MetalAbi {
         program: &shared::SSGI_REDUCE,
         slots: &[&[("finer", "texture(0)")]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::SSGI_AGE,
+        slots: &[&[
+            ("params", "buffer(0)"),
+            ("gbuffer", "texture(0)"),
+            ("velocity", "texture(1)"),
+            ("pyramid", "texture(2)"),
+            ("prev_pyramid", "texture(3)"),
+            ("prev_age", "texture(4)"),
+        ]],
         argument_ids: &[],
     },
     MetalAbi {
@@ -1496,6 +1508,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("pyramid", "texture(3)"),
             ("prev_pyramid", "texture(4)"),
             ("history", "texture(5)"),
+            ("age", "texture(6)"),
         ]],
         argument_ids: &[],
     },
@@ -1538,16 +1551,21 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("pyramid", "texture(3)"),
             ("prev_pyramid", "texture(4)"),
             ("history", "texture(5)"),
+            ("age", "texture(6)"),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
-        program: &shared::SSGI_COMPOSITE,
+        program: &shared::SSGI_RESOLVE,
         slots: &[&[
             ("params", "buffer(0)"),
-            ("accum", "texture(0)"),
-            ("pyramid", "texture(1)"),
-            ("gbuffer", "texture(2)"),
+            ("history", "texture(0)"),
+            ("prev_pyramid", "texture(1)"),
+            ("prev_age", "texture(2)"),
+            ("gbuffer", "texture(3)"),
+            ("velocity", "texture(4)"),
+            ("occlusion", "texture(5)"),
+            ("occlusion_samp", "sampler(5)"),
         ]],
         argument_ids: &[],
     },

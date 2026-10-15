@@ -14,7 +14,7 @@
 //   pool_sample                               one albedo / normal / map texel
 //   shadow_map_cmp / shadow_map_size          the cascade depth array
 //   spot_shadow_cmp / spot_shadow_map_size    the spot depth array
-//   ssao_sample / ssao_size                   the blurred occlusion buffer
+//   screen_indirect_at                        the screen-space indirect light
 //   irradiance_sample /
 //   prefilter_sample_bias                     the environment cubes
 //   environment_specular                      the reflection tap: the
@@ -522,16 +522,19 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         }
     }
 
+    // What the surface reflects of diffuse light arriving from every side.
+    float3 diffuse_albedo;
     float3 ambient;
     if (ibl_enabled)
     {
         float3 F_ibl       = fresnel_schlick(NdV, F0);
-        float3 kd_ibl      = (1.0 - F_ibl) * (1.0 - metallic);
+        diffuse_albedo     = (1.0 - F_ibl) * (1.0 - metallic) * albedo;
         float3 irradiance  = irradiance_sample(N);
-        ambient = kd_ibl * albedo * irradiance / PI;
+        ambient = diffuse_albedo * irradiance / PI;
     }
     else
     {
+        diffuse_albedo = (1.0 - metallic) * albedo;
         ambient = (float3)(0.03) * albedo;
     }
 
@@ -564,22 +567,17 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         ambient += specular_ibl;
     }
 
+    // The environment's share is held back where something nearby occludes
+    // it, and what those surfaces reflect arrives instead; direct lighting is
+    // unaffected. The occluders are the bounce's source, so the occlusion does
+    // not dim the bounce itself.
+    ScreenIndirect indirect = screen_indirect_at(screen_xy);
+    ambient = ambient * indirect.visibility + diffuse_albedo * indirect.bounce;
+
     // Authored indirect-fill multiplier (IndirectLighting.ambient_intensity);
     // 1.0 is a no-op. Lifts shadow fill without touching sun-lit surfaces.
     // Under grass, the leaf above keeps part of the sky off the ground.
     ambient *= LIGHTS.ambient_intensity * canopy.ground_sky;
-
-    // SSAO modulates the indirect (ambient / IBL) term only: direct lighting
-    // is unaffected. A 1x1 white view is bound when SSAO is disabled, so this
-    // samples a constant 1.0 then. A probe or mirror face skips it: the
-    // occlusion was computed for the main camera, not the face's viewpoint.
-    float occlusion = 1.0;
-    if (VIEW.ambient_occlusion > 0.5)
-    {
-        float2 ssao_uv = screen_xy / ssao_size();
-        occlusion = ssao_sample(ssao_uv);
-        ambient *= occlusion;
-    }
 
     float3 color = ambient + Lo + emissive;
     if (far_w > 0.0)
@@ -587,7 +585,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         // The blades see the sky their facing toward the viewer sees, as the
         // grass draws do.
         float3 sky = ibl_enabled ? irradiance_sample(canopy.along) / PI : (float3)(0.03);
-        sky *= LIGHTS.ambient_intensity * occlusion;
+        sky = (sky * indirect.visibility + indirect.bounce) * LIGHTS.ambient_intensity;
         float3 ground = ambient + Lo_under + emissive;
         color = lerp(color, canopy_radiance(canopy, sky, ground), far_w);
     }

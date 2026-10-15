@@ -254,6 +254,11 @@ pub(super) static SSR_RESOLVE: Program = Program {
     splices: &[],
 };
 
+pub(super) static SSGI_AGE: Program = Program {
+    row: &shared::SSGI_AGE,
+    splices: &[],
+};
+
 pub(super) static SSGI_TRACE: Program = Program {
     row: &shared::SSGI_TRACE,
     splices: &[],
@@ -261,6 +266,11 @@ pub(super) static SSGI_TRACE: Program = Program {
 
 pub(super) static SSGI_ACCUMULATE: Program = Program {
     row: &shared::SSGI_ACCUMULATE,
+    splices: &[],
+};
+
+pub(super) static SSGI_RESOLVE: Program = Program {
+    row: &shared::SSGI_RESOLVE,
     splices: &[],
 };
 

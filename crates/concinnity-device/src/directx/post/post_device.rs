@@ -495,20 +495,6 @@ impl crate::directx::context::DxContext {
             cluster_list: self.cluster_list_gva(),
         }
     }
-
-    // The single-sample HDR scene the graph drives as `hdr_resolve`, as a post
-    // draw's target.
-    pub(in crate::directx) fn hdr_scene_attachment(&self) -> DxAttachment<'_> {
-        DxAttachment {
-            resource: self.hdr_scene_target(),
-            subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-            rtv: self.hdr_scene_rtv(),
-            extent: FullscreenExtent {
-                width: self.targets.extent.render_width,
-                height: self.targets.extent.render_height,
-            },
-        }
-    }
 }
 
 #[cfg(test)]

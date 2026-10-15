@@ -26,7 +26,8 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             sky_rot,
             irradiance,
             pre_exposure,
-            [_pad] => ["_pad_view1", "_pad_view2"],
+            screen_bounce,
+            [_pad] => ["_pad_view2"],
         })),
         everywhere(mirror!(LightUniforms => "LightUniforms" {
             [directional] => ["dir"],

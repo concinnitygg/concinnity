@@ -5,9 +5,12 @@
 //! `VkPostDevice`.
 
 use ash::vk;
+use concinnity_core::gfx::render_types::SsgiParams;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::ssgi::settings::SsgiSettings;
-use concinnity_core::render::post::ssgi::{SsgiInputs, SsgiPass, SsgiPipelines};
+use concinnity_core::render::post::ssgi::{
+    SsgiPass, SsgiPipelines, SsgiResolveInputs, SsgiTraceInputs,
+};
 
 use crate::vulkan::context::VkContext;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkPostDevice, post_extent};
@@ -60,10 +63,85 @@ impl SsgiResources {
     }
 }
 
+impl SsgiResources {
+    // The resolve output's sampled view, which the main pass's global set binds.
+    pub(in crate::vulkan) fn indirect_view(&self) -> vk::ImageView {
+        self.pass.indirect().view()
+    }
+}
+
 impl VkContext {
-    // Encode SSGI: the depth pyramid, the trace over the G-buffer, the
-    // accumulation, and the composite into this frame's HDR resolve. Runs on
-    // the hdr_resolve read-modify-write chain after the main pass.
+    // Whether the main pass's screen-indirect binding carries SSGI's bounce:
+    // whenever SSGI is built, which is when the graph runs its resolve.
+    pub(in crate::vulkan) fn screen_bounce(&self) -> bool {
+        self.ssgi.is_some()
+    }
+
+    // This frame's SSGI uniform.
+    fn ssgi_params(&self, ssgi: &SsgiResources, fov_y_radians: f32, aspect: f32) -> SsgiParams {
+        ssgi.settings.params(
+            fov_y_radians,
+            aspect,
+            ssgi.pass.frame(),
+            self.pre_exposure.history_scale(),
+        )
+    }
+
+    // Encode the resolve ahead of the main pass: last frame's accumulation
+    // reprojected onto this frame's G-buffer, folded with the occlusion.
+    pub(in crate::vulkan) fn encode_ssgi_resolve(
+        &self,
+        cmd: vk::CommandBuffer,
+        frame_idx: usize,
+        fov_y_radians: f32,
+        aspect: f32,
+    ) {
+        let Some(ssgi) = &self.ssgi else { return };
+        let Some(gbuffer) = self.gbuffer_targets().and_then(|gb| gb.frame(frame_idx)) else {
+            return;
+        };
+        let occlusion = self
+            .targets
+            .transient_pool
+            .view_for("ao_output", frame_idx)
+            .unwrap_or(self.scene.ssao_white.view);
+        let params = self.ssgi_params(ssgi, fov_y_radians, aspect);
+        if let Err(e) = ssgi.pass.encode_resolve(
+            &self.post_device(frame_idx),
+            &cmd,
+            SsgiResolveInputs {
+                normal_depth: gbuffer.normal_depth,
+                velocity: gbuffer.velocity,
+                occlusion,
+            },
+            &params,
+        ) {
+            tracing::error!("SSGI resolve: {e}");
+            return;
+        }
+        // The output rests shader-readable like every pass-owned post target,
+        // but the main render pass's dependency orders no color write before
+        // its fragment reads, so make the resolve's writes visible to them here.
+        let visible = vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ);
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
+        unsafe {
+            self.hw.device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::DependencyFlags::empty(),
+                std::slice::from_ref(&visible),
+                &[],
+                &[],
+            );
+        }
+    }
+
+    // Encode SSGI after the main pass: the depth pyramid, the age, the trace
+    // over the G-buffer and the accumulation the next frame's resolve reads.
     pub(in crate::vulkan) fn encode_ssgi(
         &self,
         cmd: vk::CommandBuffer,
@@ -77,20 +155,12 @@ impl VkContext {
         let Some(gbuffer) = self.gbuffer_targets().and_then(|gb| gb.frame(frame_idx)) else {
             return;
         };
-        let params = ssgi.settings.params(
-            fov_y_radians,
-            aspect,
-            ssgi.pass.frame(),
-            self.pre_exposure.history_scale(),
-        );
-        let device = self.post_device(frame_idx);
-        let scene = self.hdr_scene_attachment(frame_idx);
+        let params = self.ssgi_params(ssgi, fov_y_radians, aspect);
         if let Err(e) = ssgi.pass.encode(
-            &device,
+            &self.post_device(frame_idx),
             &cmd,
-            SsgiInputs {
-                scene: scene.view,
-                scene_target: scene,
+            SsgiTraceInputs {
+                scene: self.hdr_scene_attachment(frame_idx).view,
                 normal_depth: gbuffer.normal_depth,
                 velocity: gbuffer.velocity,
             },

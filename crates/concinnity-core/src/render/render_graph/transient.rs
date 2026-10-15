@@ -141,6 +141,7 @@ pub(crate) fn planning_inputs(build: &FrameGraphInputs) -> FrameGraphInputs {
         raymarch_enabled: true,
         two_pass_occlusion_enabled: true,
         ssgi_enabled: true,
+        ssgi_resolve_enabled: true,
         clustering_enabled: true,
         hiz_build_enabled: true,
         grass_enabled: true,

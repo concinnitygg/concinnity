@@ -420,7 +420,8 @@ impl VkContext {
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
             pre_exposure: self.pre_exposure.value(),
-            _pad: [0.0; 2],
+            screen_bounce: if self.screen_bounce() { 1.0 } else { 0.0 },
+            _pad: 0.0,
         };
         self.uniforms.view_ubo_buffers[frame_idx].write_val(0, &view_uni);
 

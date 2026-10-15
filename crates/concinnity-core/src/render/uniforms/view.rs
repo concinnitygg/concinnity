@@ -89,8 +89,14 @@ pub struct ViewUniforms {
     /// ([`crate::render::radiance_storage::FaceStorage`]). Occupies what was pad space, so the
     /// offsets in the user-shader binding contract are unchanged.
     pub pre_exposure: f32,
+    /// 1.0 when the screen-space indirect target the main pass samples carries
+    /// the bounce of nearby surfaces beside the occlusion (screen-space GI is
+    /// on); 0.0 when it holds the occlusion alone, and for a probe or mirror
+    /// face. Occupies what was pad space, so the offsets in the user-shader
+    /// binding contract are unchanged.
+    pub screen_bounce: f32,
     /// Pads the block to a whole `float4`.
-    pub _pad: [f32; 2],
+    pub _pad: f32,
 }
 
 /// Per-frame view inputs to the unified G-buffer pre-pass. The jittered current
@@ -189,7 +195,8 @@ mod tests {
         assert_eq!(offset_of!(ViewUniforms, sky_rot), 160);
         assert_eq!(offset_of!(ViewUniforms, irradiance), 208);
         assert_eq!(offset_of!(ViewUniforms, pre_exposure), 212);
-        assert_eq!(offset_of!(ViewUniforms, _pad), 216);
+        assert_eq!(offset_of!(ViewUniforms, screen_bounce), 216);
+        assert_eq!(offset_of!(ViewUniforms, _pad), 220);
         assert_eq!(size_of::<ViewUniforms>() % 16, 0);
     }
 

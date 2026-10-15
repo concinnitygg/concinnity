@@ -44,6 +44,7 @@ pub fn apply_view(inputs: &FrameGraphInputs, mode: ViewMode, show: ShowFlags) ->
         out.ssr_enabled = false;
         out.rt_reflections_enabled = false;
         out.ssgi_enabled = false;
+        out.ssgi_resolve_enabled = false;
         out.bloom_enabled = false;
         out.fog_enabled = false;
         out.decals_enabled = false;
@@ -87,6 +88,7 @@ mod tests {
             transparent_enabled: true,
             lines_enabled: true,
             ssgi_enabled: true,
+            ssgi_resolve_enabled: true,
             reactive_mask_enabled: true,
             shadowed_spot_count: 2,
             ..FrameGraphInputs::all_off()
@@ -108,7 +110,10 @@ mod tests {
         assert_eq!(no_shadows.shadowed_spot_count, 0);
         assert!(!m(ShowFlags::FOG).fog_enabled);
         assert!(!m(ShowFlags::BLOOM).bloom_enabled);
-        assert!(!m(ShowFlags::SSGI).ssgi_enabled);
+        let no_ssgi = m(ShowFlags::SSGI);
+        assert!(!no_ssgi.ssgi_enabled);
+        // The main pass still samples the occlusion through the resolve.
+        assert!(no_ssgi.ssgi_resolve_enabled);
         let no_ssr = m(ShowFlags::SSR);
         assert!(!no_ssr.ssr_enabled && !no_ssr.rt_reflections_enabled);
         assert!(!m(ShowFlags::LINES).lines_enabled);
@@ -121,6 +126,7 @@ mod tests {
         for mode in [ViewMode::Unlit, ViewMode::Wireframe] {
             let out = apply_view(&inputs, mode, ShowFlags::all());
             assert!(!out.ssao_enabled && !out.ssr_enabled && !out.ssgi_enabled);
+            assert!(!out.ssgi_resolve_enabled);
             assert!(!out.bloom_enabled && !out.fog_enabled && !out.decals_enabled);
             assert!(!out.taa_enabled && !out.upscale_enabled && !out.velocity_enabled);
             // Shadows follow their show flag, not the mode.

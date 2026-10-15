@@ -26,6 +26,7 @@ use concinnity_core::settings::ResolvedGraphics;
 use super::context::*;
 use super::geometry_upload::GeometryUploads;
 use super::texture::GpuUploadContext;
+use crate::vulkan::descriptor_layout::SCREEN_INDIRECT_BINDING;
 use crate::vulkan::global_set::GlobalBindings;
 
 mod bloom;
@@ -252,6 +253,8 @@ impl VkContext {
             scene: &scene,
             targets: &targets,
             probes: &probe_gpu,
+            // SSGI is built with the effects below, which rewrite this binding.
+            ssgi_indirect: None,
         };
         let plan = cull::plan_cull(&gpu, &world, media.textures);
         let descriptors = descriptors::build_descriptors(
@@ -492,6 +495,9 @@ impl VkContext {
         me.upload_initial_particles(fx.particles)?;
         me.sync_grass_prepass(false);
         me.refresh_gates(&graphics);
+        if me.ssgi.is_some() {
+            me.rewrite_global_binding(SCREEN_INDIRECT_BINDING);
+        }
         // Every init upload above was synchronous (its one-shot idled the
         // queue), so init's remaining staging debris is retirable now; reclaim
         // it so the stats below report the steady footprint, not init's peak.

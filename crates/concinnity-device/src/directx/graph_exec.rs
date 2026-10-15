@@ -1077,6 +1077,9 @@ impl DxContext {
                 .transient_pool
                 .resource_for("bloom_top")
                 .map(|r| (r, SAMPLED)),
+            // SSGI's resolve output: the pass owns it across frames, the resolve
+            // writes it and the main pass samples it, so it rests sampled.
+            "ssgi_indirect" => self.ssgi_indirect_resource().map(|r| (r, SAMPLED)),
             // The cascade array rests sampled: the Shadow producer barrier is the
             // real cross-frame reset for this frame's shadow loop and the Main
             // consumer returns it to sampled. Created sampled, so frame 0's
@@ -1485,6 +1488,14 @@ impl DxContext {
             }
             PassId::Ssgi => {
                 self.encode_ssgi(cmd, params.frame_idx, params.fov_y_radians, params.aspect);
+            }
+            PassId::SsgiResolve => {
+                self.encode_ssgi_resolve(
+                    cmd,
+                    params.frame_idx,
+                    params.fov_y_radians,
+                    params.aspect,
+                );
             }
             PassId::RtReflections => {
                 // Hardware ray-traced reflections (DXR inline `RayQuery`). Traces

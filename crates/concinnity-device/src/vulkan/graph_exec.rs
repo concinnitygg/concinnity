@@ -1176,6 +1176,14 @@ impl VkContext {
             PassId::Ssgi => {
                 self.encode_ssgi(cmd, params.frame_idx, params.fov_y_radians, params.aspect);
             }
+            PassId::SsgiResolve => {
+                self.encode_ssgi_resolve(
+                    cmd,
+                    params.frame_idx,
+                    params.fov_y_radians,
+                    params.aspect,
+                );
+            }
             PassId::RtReflections => {
                 // Hardware ray-traced reflections (inline `rayQueryEXT`). Traces a
                 // reflection ray per glossy pixel against the scene TLAS and

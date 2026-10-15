@@ -3,8 +3,8 @@
 //! settings, plus the per-frame GPU uniform. SSGI reuses the depth + normal
 //! pre-pass G-buffer SSR reads, but integrates bounced radiance over a
 //! cosine-weighted hemisphere instead of along a single reflection vector,
-//! accumulates it over frames, and adds the result on top of the IBL ambient
-//! term. This module owns only the parameter math so it can be unit-tested
+//! accumulates it over frames, and hands the main pass the result as indirect
+//! diffuse light alongside the IBL ambient term. This module owns only the parameter math so it can be unit-tested
 //! without a GPU.
 
 use crate::components::{IndirectLighting, IndirectTechnique};
@@ -12,10 +12,11 @@ use crate::gfx::camera::view_ray_scale;
 
 use crate::gfx::render_types::SsgiParams;
 
-// Upper bound on `intensity`. The composite pass adds the gathered indirect
-// radiance on top of the existing shading, so this is an additive multiplier
-// rather than a `[0, 1]` blend: values above 1 exaggerate the bounce.
-const MAX_INTENSITY: f32 = 4.0;
+// Upper bound on `intensity`. The bounce lights the scene the next frame's trace
+// gathers from, so each pass around the loop scales light by intensity x albedo
+// x the share of rays that hit; at most 1 keeps that below 1 for any albedo
+// under 1, so the loop converges.
+const MAX_INTENSITY: f32 = 1.0;
 
 // Smallest usable ray reach: a ray shorter than this finds nothing.
 const MIN_DISTANCE: f32 = 0.5;
@@ -44,7 +45,7 @@ const THICKNESS_FRACTION: f32 = 1.0 / 6.0;
 /// backend and turned into a per-frame [`SsgiParams`] once the camera is known.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SsgiSettings {
-    /// Indirect-bounce blend strength multiplier in `[0, MAX_INTENSITY]`.
+    /// Indirect-bounce strength in `[0, 1]`.
     pub intensity: f32,
     /// View-space distance a hemisphere ray travels before it misses.
     pub max_distance: f32,
@@ -53,7 +54,7 @@ pub struct SsgiSettings {
     pub rays: u32,
     /// Render-resolution divisor for the trace and its accumulation: 1 is full
     /// resolution, 2 is half (a quarter of the pixels), 4 a quarter. The
-    /// composite is a depth-aware filter, so it upsamples the lower-resolution
+    /// resolve is a depth-aware filter, so it upsamples the lower-resolution
     /// accumulation back to full resolution as it goes.
     pub gi_scale: u32,
 }
@@ -106,10 +107,9 @@ impl SsgiSettings {
         )
     }
 
-    /// Whether the pass can contribute anything to the frame. The composite
-    /// scales the accumulated indirect term by `intensity` and blends it
-    /// additively, so a zero intensity adds exactly zero and every SSGI draw is
-    /// dead weight. Backends gate `FrameGraphInputs::ssgi_enabled` on this so
+    /// Whether the pass can contribute anything to the frame. The resolve
+    /// scales the accumulated bounce by `intensity`, so a zero intensity adds
+    /// exactly zero and every SSGI draw is dead weight. Backends gate `FrameGraphInputs::ssgi_enabled` on this so
     /// the graph drops the node.
     pub fn contributes(&self) -> bool {
         self.intensity > 0.0
@@ -207,7 +207,7 @@ mod tests {
             ..Default::default()
         };
         let s = SsgiSettings::from_config(&cfg).expect("ssgi on");
-        assert_eq!(s.intensity, 4.0);
+        assert_eq!(s.intensity, 1.0);
         assert!(s.max_distance > 0.0 && s.max_distance.is_finite());
     }
 

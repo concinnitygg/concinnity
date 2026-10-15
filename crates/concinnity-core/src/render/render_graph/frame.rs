@@ -38,6 +38,7 @@
 //! order or barriers.
 
 use crate::gfx::render_types::NUM_SHADOW_CASCADES;
+use crate::render::post::ssgi;
 
 use super::{
     BufferDesc, BufferUsage, CompiledGraph, GraphBuilder, GraphError, PassId, PassKind,
@@ -194,14 +195,19 @@ pub struct FrameGraphInputs {
     pub two_pass_occlusion_enabled: bool,
     /// `true` when screen-space global illumination is on
     /// (`IndirectLighting.technique == "ssgi"`); matches
-    /// `self.ssgi_settings.is_some()`. The graph inserts an `Ssgi` render pass
-    /// on the hdr_resolve RMW chain right after `Raymarch` and before `Decals`:
-    /// it reads the head of the chain (the lit scene, its bounce-radiance
-    /// source) and writes the next version with the gathered indirect term
-    /// additively composited in. SSGI reuses the SSR pre-pass G-buffer for
+    /// `self.ssgi_settings.is_some()`. The graph inserts an `Ssgi` render
+    /// pass reading the lit scene right after `Raymarch` (its bounce-radiance
+    /// source) and before `Decals`. SSGI reuses the SSR pre-pass G-buffer for
     /// normals + depth, so `ssr_prepass_enabled` is forced on whenever this is
     /// set.
     pub ssgi_enabled: bool,
+    /// `true` while the main pass samples SSGI's resolved visibility and
+    /// bounce, which it does whenever SSGI is built: the graph inserts an
+    /// `SsgiResolve` render pass ahead of `Main` that writes them. Stays on
+    /// when a show flag or a live change turns `ssgi_enabled` off, so the
+    /// bound target keeps carrying the occlusion; without the trace its
+    /// history lapses and the bounce goes to zero.
+    pub ssgi_resolve_enabled: bool,
     /// `true` when hardware ray-traced reflections are live (RT requested + GPU
     /// supports it + the scene acceleration structure built); matches
     /// `self.rt_accel.is_some()`. The graph adds an `RtReflections` render pass
@@ -353,6 +359,7 @@ impl FrameGraphInputs {
             raymarch_enabled: false,
             two_pass_occlusion_enabled: false,
             ssgi_enabled: false,
+            ssgi_resolve_enabled: false,
             rt_reflections_enabled: false,
             gbuffer_prepass_enabled: false,
             world_hidden: false,
@@ -405,6 +412,7 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
         i.two_pass_occlusion_enabled = true
     }),
     ("ssgi", |i| i.ssgi_enabled = true),
+    ("ssgi_resolve", |i| i.ssgi_resolve_enabled = true),
     ("rt_reflections", |i| i.rt_reflections_enabled = true),
     ("gbuffer_prepass", |i| i.gbuffer_prepass_enabled = true),
     ("world_hidden", |i| i.world_hidden = true),
@@ -705,6 +713,23 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         None
     };
 
+    // SSGI's resolve: last frame's accumulation reprojected onto this frame's
+    // G-buffer, folded with the occlusion into the target Main samples for its
+    // indirect light. Backend-owned and carried across frames, like the
+    // accumulation it reads.
+    let ssgi_indirect_v1 = inputs.ssgi_resolve_enabled.then(|| {
+        let indirect = b.import_texture(ssgi::INDIRECT_LABEL, ssgi_indirect_desc(inputs));
+        let mut resolve = b.add_pass(PassId::SsgiResolve, PassKind::Render);
+        if let Some(g) = gbuffer_v1 {
+            resolve.read_texture(g.normal_depth);
+            resolve.read_texture(g.velocity);
+        }
+        if let Some(h) = ao_output_v1 {
+            resolve.read_texture(h);
+        }
+        resolve.write_texture(indirect)
+    });
+
     // Shadow optionally precedes Main and produces the shadow_map
     // handle Main samples. When off, Main does not declare a shadow_map
     // read, mirroring the encoder's `enable_shadows` shader path.
@@ -833,6 +858,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         if let Some(h) = ao_output_v1 {
             main.read_texture(h);
         }
+        if let Some(h) = ssgi_indirect_v1 {
+            main.read_texture(h);
+        }
         if let Some(g) = grass_v1 {
             g.read_into(&mut main);
         }
@@ -922,13 +950,10 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         h = rm.write_texture(h);
         depth_cur = rm.write_texture(depth_cur);
     }
-    // SSGI reads the lit scene (its bounce-radiance source) and RMWs the
-    // accumulated indirect term back in. Slots right after Raymarch so
-    // it can bounce raymarched surfaces too, and before Decals / Fog /
-    // Particles so those decorations layer on top of the indirect light.
-    // AutoExposure's WAR-read on hdr_resolve_head pins it ahead of SSGI, so the
-    // added bounce doesn't skew the same frame's exposure (the same one-frame
-    // trade-off Raymarch documents).
+    // SSGI reads the lit scene (its bounce-radiance source) into its own
+    // accumulation, which the next frame's resolve hands Main. Slots right
+    // after Raymarch so it can bounce raymarched surfaces too, and before
+    // Decals / Fog / Particles, which are not light a surface reflects.
     if inputs.ssgi_enabled {
         let mut ssgi = b.add_pass(PassId::Ssgi, PassKind::Render);
         ssgi.read_texture(h);
@@ -941,7 +966,6 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         if let Some(v) = velocity_v1 {
             ssgi.read_texture(v);
         }
-        h = ssgi.write_texture(h);
     }
     if inputs.decals_enabled {
         // Projected decals reconstruct each pixel's world position from the
@@ -1479,6 +1503,15 @@ fn ao_output_desc(inputs: &FrameGraphInputs) -> TextureDesc {
     render_res_2d(
         inputs,
         PixelFormat::R8Unorm,
+        TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
+    )
+}
+
+fn ssgi_indirect_desc(inputs: &FrameGraphInputs) -> TextureDesc {
+    // RGBA16F visibility + bounce at HDR dims; sampled by Main's ambient term.
+    render_res_2d(
+        inputs,
+        PixelFormat::Rgba16Float,
         TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
     )
 }
@@ -2608,36 +2641,68 @@ mod tests {
     }
 
     #[test]
-    fn ssgi_pinned_between_auto_exposure_and_decals() {
-        // AutoExposure reads hdr_resolve_v1 (WAR); SSGI RMWs to v2; Decals
-        // RMWs to v3. The toposort orders the three through the version chain.
+    fn ssgi_reads_the_lit_scene_before_decals_and_writes_none_of_it() {
+        // AutoExposure and SSGI both read hdr_resolve_v1; SSGI keeps what it
+        // gathers in its own targets, so Decals RMWs to v2 after both.
         let mut i = all_off();
         i.auto_exposure_enabled = true;
         i.ssgi_enabled = true;
         i.decals_enabled = true;
         let g = build_frame_graph(&i).expect("compiles");
         let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
-        assert_eq!(
-            order,
-            vec![
-                PassId::Main,
-                PassId::AutoExposure,
-                PassId::Ssgi,
-                PassId::Decals,
-                PassId::Composite,
-            ]
+        let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
+        assert!(pos(PassId::Main) < pos(PassId::Ssgi));
+        assert!(pos(PassId::Ssgi) < pos(PassId::Decals));
+        assert!(pos(PassId::AutoExposure) < pos(PassId::Decals));
+        let ssgi = &g.passes[pos(PassId::Ssgi)];
+        assert!(ssgi.writes.is_empty());
+        let main = &g.passes[pos(PassId::Main)];
+        let main_resolve = main.writes.last().expect("hdr_resolve");
+        assert!(
+            ssgi.reads
+                .iter()
+                .any(|r| r.resource_index() == main_resolve.resource_index()
+                    && r.version() == main_resolve.version())
         );
-        // Version chain on hdr_resolve walks 1 → 2 → 3.
-        let ssgi = &g.passes[2];
-        assert_eq!(ssgi.writes[0].version(), 2);
-        let decals = &g.passes[3];
-        assert_eq!(decals.writes[0].version(), 3);
+        let decals = &g.passes[pos(PassId::Decals)];
+        assert_eq!(decals.writes[0].version(), 2);
     }
 
     #[test]
-    fn ssgi_after_raymarch_on_the_chain() {
+    fn the_ssgi_resolve_precedes_main_which_reads_it() {
+        let mut i = all_off();
+        i.gbuffer_prepass_enabled = true;
+        i.ssr_prepass_enabled = true;
+        i.velocity_enabled = true;
+        i.ssao_enabled = true;
+        i.ssgi_enabled = true;
+        i.ssgi_resolve_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+        let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
+        assert!(pos(PassId::GBufferPrepass) < pos(PassId::SsgiResolve));
+        assert!(pos(PassId::SsaoBlur) < pos(PassId::SsgiResolve));
+        assert!(pos(PassId::SsgiResolve) < pos(PassId::Main));
+        let resolve = &g.passes[pos(PassId::SsgiResolve)];
+        let [indirect] = resolve.writes[..] else {
+            panic!("the resolve writes its one output");
+        };
+        let main = &g.passes[pos(PassId::Main)];
+        assert!(main.reads.iter().any(|r| r.resource_version() == indirect));
+        // It reads the occlusion it folds in.
+        let ssao = &g.passes[pos(PassId::SsaoBlur)];
+        assert!(
+            resolve
+                .reads
+                .iter()
+                .any(|r| r.resource_version() == ssao.writes[0])
+        );
+    }
+
+    #[test]
+    fn ssgi_after_raymarch() {
         // With both on, SSGI reads the post-raymarch scene: Raymarch v1→v2,
-        // SSGI v2→v3, SsrResolve reads v3.
+        // SSGI reads v2, SsrResolve reads v2 too.
         let mut i = all_off();
         i.raymarch_enabled = true;
         i.ssgi_enabled = true;
@@ -2646,9 +2711,13 @@ mod tests {
         let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
         let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
         assert!(pos(PassId::Raymarch) < pos(PassId::Ssgi));
-        assert!(pos(PassId::Ssgi) < pos(PassId::SsrResolve));
+        let raymarch = &g.passes[pos(PassId::Raymarch)];
         let ssgi = &g.passes[pos(PassId::Ssgi)];
-        assert_eq!(ssgi.writes[0].version(), 3);
+        assert!(
+            ssgi.reads
+                .iter()
+                .any(|r| r.resource_version() == raymarch.writes[0])
+        );
     }
 
     #[test]

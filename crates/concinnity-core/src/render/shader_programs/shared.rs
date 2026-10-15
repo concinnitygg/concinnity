@@ -305,6 +305,14 @@ pub static SSGI_REDUCE: ShaderProgram = ShaderProgram {
     gates: &["SSGI_REDUCE"],
     msaa: false,
 };
+/// `ssgi_age_fragment` from `ssgi.hlsl`.
+pub static SSGI_AGE: ShaderProgram = ShaderProgram {
+    file: "ssgi.hlsl",
+    entry: "ssgi_age_fragment",
+    label: "ssgi_age.hlsl",
+    gates: &["SSGI_AGE"],
+    msaa: false,
+};
 /// `ssgi_trace_fragment` from `ssgi.hlsl`.
 pub static SSGI_TRACE: ShaderProgram = ShaderProgram {
     file: "ssgi.hlsl",
@@ -321,12 +329,12 @@ pub static SSGI_ACCUMULATE: ShaderProgram = ShaderProgram {
     gates: &["SSGI_ACCUMULATE"],
     msaa: false,
 };
-/// `ssgi_composite_fragment` from `ssgi.hlsl`.
-pub static SSGI_COMPOSITE: ShaderProgram = ShaderProgram {
+/// `ssgi_resolve_fragment` from `ssgi.hlsl`.
+pub static SSGI_RESOLVE: ShaderProgram = ShaderProgram {
     file: "ssgi.hlsl",
-    entry: "ssgi_composite_fragment",
-    label: "ssgi_composite.hlsl",
-    gates: &["SSGI_COMPOSITE"],
+    entry: "ssgi_resolve_fragment",
+    label: "ssgi_resolve.hlsl",
+    gates: &["SSGI_RESOLVE"],
     msaa: false,
 };
 /// `reflection_blur_fragment` from `reflection.hlsl`.
@@ -836,9 +844,10 @@ pub static ALL: &[&ShaderProgram] = &[
     &SSR_RESOLVE,
     &SSGI_DEPTH,
     &SSGI_REDUCE,
+    &SSGI_AGE,
     &SSGI_TRACE,
     &SSGI_ACCUMULATE,
-    &SSGI_COMPOSITE,
+    &SSGI_RESOLVE,
     &REFLECTION_BLUR,
     &REFLECTION_COMPOSITE,
     &FOG_FROXEL,

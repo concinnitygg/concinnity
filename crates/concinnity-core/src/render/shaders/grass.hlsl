@@ -1516,11 +1516,9 @@ float4 grass_radiance(GrassVertexOut p)
     float3 ambient = VIEW.irradiance > 0.5
                    ? albedo * irradiance_sample(N) / PI
                    : (float3)(0.03) * albedo;
+    ScreenIndirect indirect = screen_indirect_at(screen_xy);
+    ambient = ambient * indirect.visibility + albedo * indirect.bounce;
     ambient *= LIGHTS.ambient_intensity * occlusion;
-    if (VIEW.ambient_occlusion > 0.5)
-    {
-        ambient *= ssao_sample(screen_xy / ssao_size());
-    }
     return float4(ambient + Lo * occlusion, 1.0);
 }
 

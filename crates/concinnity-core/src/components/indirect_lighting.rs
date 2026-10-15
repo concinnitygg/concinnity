@@ -57,9 +57,11 @@ pub const DEFAULT_SSGI_RAYS: u32 = 1;
 #[serde(default)]
 pub struct IndirectLighting {
     /// Indirect-diffuse lighting source. `ibl` uses the environment map's
-    /// ambient alone. `ssgi` (default) adds a screen-space global-illumination
-    /// pass on top, so nearby lit surfaces bleed color onto one another; the
-    /// environment ambient still covers the off-screen / sky fallback.
+    /// ambient alone. `ssgi` (default) adds light bounced off nearby surfaces
+    /// on screen, tinted by the surface it lands on, so lit surfaces bleed
+    /// color onto one another; where the bounce finds a surface in the way, the
+    /// environment ambient from that direction is held back, and off-screen
+    /// and open-sky directions keep it.
     #[asset(default = IndirectTechnique::Ssgi, apply = rebuild)]
     pub technique: IndirectTechnique,
     /// Multiplier on the indirect (ambient / IBL) lighting term. 1.0 (default)
@@ -72,10 +74,11 @@ pub struct IndirectLighting {
     /// shadows to black.
     #[asset(default = 1.0, min = 0.0, max = 16.0, apply = live)]
     pub ambient_intensity: f32,
-    /// Indirect-bounce strength. Scales the gathered indirect light added on
-    /// top of the existing shading; 0 makes it a no-op. Only matters when
+    /// Indirect-bounce strength. 1.0 (default) is the physical level: a
+    /// surface receives the light its neighbors reflect, times its own color.
+    /// Lower values weaken the bounce; 0 turns it off. Only matters when
     /// `technique` is `ssgi`.
-    #[asset(default = 0.5, min = 0.0, max = 4.0, apply = live)]
+    #[asset(default = 1.0, min = 0.0, max = 1.0, apply = live)]
     pub ssgi_intensity: f32,
     /// How far the indirect-light rays reach, in world units. A near-field
     /// effect, so it defaults well below the reflection reach. Only matters

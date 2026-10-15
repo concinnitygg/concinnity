@@ -32,8 +32,9 @@ pub(in crate::vulkan) const SHADOW_UBO_BINDING: u32 = 2;
 pub(in crate::vulkan) const SHADOW_MAP_BINDING: u32 = 3;
 pub(in crate::vulkan) const IRRADIANCE_CUBE_BINDING: u32 = 4;
 pub(in crate::vulkan) const PREFILTER_CUBE_BINDING: u32 = 5;
-// This frame's SSAO occlusion, or a 1x1 white image when nothing computes one.
-pub(in crate::vulkan) const SSAO_BINDING: u32 = 6;
+// This frame's screen-space indirect light: the resolved SSGI visibility and
+// bounce, SSAO's occlusion alone, or a 1x1 white image when nothing computes one.
+pub(in crate::vulkan) const SCREEN_INDIRECT_BINDING: u32 = 6;
 // The probe count, the cube array holding a cube per probe, and one parallax
 // record per probe.
 pub(in crate::vulkan) const PROBE_SET_UBO_BINDING: u32 = 7;
@@ -76,7 +77,7 @@ pub(in crate::vulkan) fn global_set() -> [Binding; 23] {
         (SHADOW_MAP_BINDING, T::SAMPLED_IMAGE, fs),
         (IRRADIANCE_CUBE_BINDING, T::SAMPLED_IMAGE, fs),
         (PREFILTER_CUBE_BINDING, T::SAMPLED_IMAGE, fs),
-        (SSAO_BINDING, T::SAMPLED_IMAGE, fs),
+        (SCREEN_INDIRECT_BINDING, T::SAMPLED_IMAGE, fs),
         (PROBE_SET_UBO_BINDING, T::UNIFORM_BUFFER, fs),
         (PROBE_CUBES_BINDING, T::SAMPLED_IMAGE, fs),
         (LOCAL_LIGHT_SSBO_BINDING, T::STORAGE_BUFFER, fs),

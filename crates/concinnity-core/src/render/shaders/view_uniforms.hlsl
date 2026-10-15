@@ -30,7 +30,9 @@ struct ViewUniforms
     // pre-exposure for the main pass, PROBE_STORAGE_SCALE for a probe face,
     // 1.0 for a mirror face.
     float pre_exposure;
-    float _pad_view1;
+    // 1.0 when the screen-space indirect target carries the bounce of nearby
+    // surfaces beside the occlusion; 0.0 when it holds occlusion alone.
+    float screen_bounce;
     float _pad_view2;
 };
 

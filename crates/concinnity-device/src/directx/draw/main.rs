@@ -212,9 +212,9 @@ impl DxContext {
                     crate::directx::canopy::CANOPY_TABLES_ROOT_PARAM,
                     self.canopy.tables_gpu_va(frame_idx),
                 );
-                // [9] descriptor table: blurred SSAO occlusion (or 1x1 white
-                // fallback when SSAO is disabled).
-                cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
+                // [9] descriptor table: the screen-space indirect light (SSGI's
+                // visibility and bounce, SSAO's occlusion, or 1x1 white).
+                cmd.set_graphics_srv_table(9, self.screen_indirect_srv_gpu());
                 // [10] reflection-probe cube array + [11] the live count + [19]
                 // this frame's boxes. The forward shader box-projects + blends them
                 // for the specular reflection; count 0 keeps the sky.
@@ -321,7 +321,7 @@ impl DxContext {
                     crate::directx::canopy::CANOPY_TABLES_ROOT_PARAM,
                     self.canopy.tables_gpu_va(frame_idx),
                 );
-                cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
+                cmd.set_graphics_srv_table(9, self.screen_indirect_srv_gpu());
                 let probes = self.probe_bindings(frame_idx);
                 self.bind_main_probe_set(cmd, probes.set_cbv, probes.records);
                 // ExecuteIndirect #2: skinned tail
@@ -523,7 +523,7 @@ impl DxContext {
                     crate::directx::canopy::CANOPY_TABLES_ROOT_PARAM,
                     self.canopy.tables_gpu_va(frame_idx),
                 );
-                cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
+                cmd.set_graphics_srv_table(9, self.screen_indirect_srv_gpu());
                 let probes = self.probe_bindings(frame_idx);
                 self.bind_main_probe_set(cmd, probes.set_cbv, probes.records);
                 // ExecuteIndirect #1: static + instance prefix against the static

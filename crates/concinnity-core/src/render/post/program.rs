@@ -20,8 +20,8 @@
 use crate::render::shader_programs::ShaderProgram;
 use crate::render::shader_programs::shared::{
     BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, REFLECTION_BLUR, REFLECTION_COMPOSITE,
-    SSAO_BLUR, SSAO_DEPTH, SSAO_KERNEL, SSGI_ACCUMULATE, SSGI_COMPOSITE, SSGI_DEPTH, SSGI_REDUCE,
-    SSGI_TRACE, SSR_RESOLVE, TAA_FRAG,
+    SSAO_BLUR, SSAO_DEPTH, SSAO_KERNEL, SSGI_ACCUMULATE, SSGI_AGE, SSGI_DEPTH, SSGI_REDUCE,
+    SSGI_RESOLVE, SSGI_TRACE, SSR_RESOLVE, TAA_FRAG,
 };
 
 /// A fullscreen post-pass fragment program. The vertex stage is always
@@ -40,15 +40,18 @@ pub enum PostProgram {
     SsgiDepth,
     /// `ssgi_reduce_fragment` from `ssgi.hlsl`: one more level of that pyramid.
     SsgiReduce,
+    /// `ssgi_age_fragment` from `ssgi.hlsl`: how many frames of reprojected
+    /// history the accumulations hold.
+    SsgiAge,
     /// `ssgi_trace_fragment` from `ssgi.hlsl`: the hemisphere rays traced
     /// through the pyramid and accumulated over reprojected history.
     SsgiTrace,
     /// `ssgi_accumulate_fragment` from `ssgi.hlsl`: last frame's long
     /// accumulation, bounded by the trace's short one and blended with it.
     SsgiAccumulate,
-    /// `ssgi_composite_fragment` from `ssgi.hlsl`: the depth-aware upsample the
-    /// accumulated term is blended into the scene through.
-    SsgiComposite,
+    /// `ssgi_resolve_fragment` from `ssgi.hlsl`: the accumulation reprojected
+    /// and upsampled into the visibility and bounce the main pass samples.
+    SsgiResolve,
     /// `bloom_prefilter_fragment` from `bloom.hlsl`: the soft-knee threshold of
     /// the scene into the top bloom octave.
     BloomPrefilter,
@@ -95,14 +98,15 @@ pub struct PostProgramBindings {
 
 impl PostProgram {
     /// Every post program, in declaration order.
-    pub const ALL: [PostProgram; 15] = [
+    pub const ALL: [PostProgram; 16] = [
         PostProgram::TaaResolve,
         PostProgram::SsrResolve,
         PostProgram::SsgiDepth,
         PostProgram::SsgiReduce,
+        PostProgram::SsgiAge,
         PostProgram::SsgiTrace,
         PostProgram::SsgiAccumulate,
-        PostProgram::SsgiComposite,
+        PostProgram::SsgiResolve,
         PostProgram::BloomPrefilter,
         PostProgram::BloomDownsample,
         PostProgram::BloomUpsample,
@@ -121,9 +125,10 @@ impl PostProgram {
             PostProgram::SsrResolve => "ssr resolve",
             PostProgram::SsgiDepth => "ssgi depth",
             PostProgram::SsgiReduce => "ssgi reduce",
+            PostProgram::SsgiAge => "ssgi age",
             PostProgram::SsgiTrace => "ssgi trace",
             PostProgram::SsgiAccumulate => "ssgi accumulate",
-            PostProgram::SsgiComposite => "ssgi composite",
+            PostProgram::SsgiResolve => "ssgi resolve",
             PostProgram::BloomPrefilter => "bloom prefilter",
             PostProgram::BloomDownsample => "bloom downsample",
             PostProgram::BloomUpsample => "bloom upsample",
@@ -142,9 +147,10 @@ impl PostProgram {
             PostProgram::SsrResolve => &SSR_RESOLVE,
             PostProgram::SsgiDepth => &SSGI_DEPTH,
             PostProgram::SsgiReduce => &SSGI_REDUCE,
+            PostProgram::SsgiAge => &SSGI_AGE,
             PostProgram::SsgiTrace => &SSGI_TRACE,
             PostProgram::SsgiAccumulate => &SSGI_ACCUMULATE,
-            PostProgram::SsgiComposite => &SSGI_COMPOSITE,
+            PostProgram::SsgiResolve => &SSGI_RESOLVE,
             PostProgram::BloomPrefilter => &BLOOM_PREFILTER,
             PostProgram::BloomDownsample => &BLOOM_DOWNSAMPLE,
             PostProgram::BloomUpsample => &BLOOM_UPSAMPLE,
@@ -179,14 +185,18 @@ impl PostProgram {
                 constants: 0,
                 probes: false,
             },
-            // scene, G-buffer, velocity, pyramid, previous pyramid, history;
+            // G-buffer, velocity, pyramid, previous pyramid, previous age;
             // `SsgiParams`.
-            PostProgram::SsgiTrace => ssgi(6),
+            PostProgram::SsgiAge => ssgi(5),
+            // scene, G-buffer, velocity, pyramid, previous pyramid, history,
+            // age; `SsgiParams`.
+            PostProgram::SsgiTrace => ssgi(7),
             // fast accumulation, G-buffer, velocity, pyramid, previous pyramid,
-            // history; `SsgiParams`.
-            PostProgram::SsgiAccumulate => ssgi(6),
-            // accumulation, pyramid, G-buffer; `SsgiParams`.
-            PostProgram::SsgiComposite => ssgi(3),
+            // history, age; `SsgiParams`.
+            PostProgram::SsgiAccumulate => ssgi(7),
+            // previous accumulation, previous pyramid, previous age, G-buffer,
+            // velocity, occlusion; `SsgiParams`.
+            PostProgram::SsgiResolve => ssgi(6),
             // The scene; `PostProcessParams`.
             PostProgram::BloomPrefilter => sources(1, BLOOM_PREFILTER_CONSTANTS),
             // The octave it reduces or expands; no constants.
@@ -481,9 +491,10 @@ mod tests {
             (PostProgram::SsrResolve, size_of::<SsrParams>()),
             (PostProgram::SsgiDepth, size_of::<SsgiParams>()),
             (PostProgram::SsgiReduce, 0),
+            (PostProgram::SsgiAge, size_of::<SsgiParams>()),
             (PostProgram::SsgiTrace, size_of::<SsgiParams>()),
             (PostProgram::SsgiAccumulate, size_of::<SsgiParams>()),
-            (PostProgram::SsgiComposite, size_of::<SsgiParams>()),
+            (PostProgram::SsgiResolve, size_of::<SsgiParams>()),
             // The shader declares all of `PostProcessParams`, which
             // `shader_layout`'s bloom mirror holds field by field.
             (PostProgram::BloomPrefilter, size_of::<PostProcessParams>()),

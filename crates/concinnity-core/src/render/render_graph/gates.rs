@@ -7,6 +7,7 @@
 //! occlusion, the Hi-Z pyramid) runs when it was built. Everything else follows
 //! what the world holds this frame ([`FrameFacts`]).
 
+use crate::components::IndirectTechnique;
 use crate::render::planar_reflection::planar_pass_needed;
 use crate::render::post::reflection_path::ReflectionPath;
 use crate::settings::ResolvedGraphics;
@@ -60,6 +61,10 @@ pub struct FeatureGates {
     pub rt_pass: bool,
     /// SSGI runs.
     pub ssgi: bool,
+    /// SSGI is the technique and built, so the main pass samples its resolved
+    /// visibility and bounce. Outlasts `ssgi` while a live change has the trace
+    /// off, which leaves the resolve carrying the occlusion with no bounce.
+    pub ssgi_resolve: bool,
     /// Auto-exposure runs.
     pub auto_exposure: bool,
     /// The G-buffer pre-pass targets exist.
@@ -77,6 +82,8 @@ impl FeatureGates {
             ssr: graphics.ssr().is_some() && built.ssr_resolve,
             rt_pass: graphics.rt_reflections().is_some() && built.rt_pass,
             ssgi: graphics.ssgi().is_some() && built.ssgi,
+            ssgi_resolve: graphics.indirect_lighting.technique == IndirectTechnique::Ssgi
+                && built.ssgi,
             auto_exposure: graphics.auto_exposure().is_some() && built.auto_exposure,
             gbuffer: built.gbuffer,
             traits,
@@ -178,7 +185,7 @@ pub fn frame_graph_inputs(gates: &FeatureGates, facts: &FrameFacts) -> FrameGrap
         particles_enabled: facts.particles,
         fog_enabled: facts.fog,
         decals_enabled: facts.decals,
-        ssr_prepass_enabled: gates.ssr || gates.ssgi || gates.rt_pass,
+        ssr_prepass_enabled: gates.ssr || gates.ssgi || gates.ssgi_resolve || gates.rt_pass,
         ssao_enabled: gates.ssao,
         upscale_enabled: facts.upscaler,
         transparent_enabled: facts.visible_surfaces || mesh_glass,
@@ -196,6 +203,7 @@ pub fn frame_graph_inputs(gates: &FeatureGates, facts: &FrameFacts) -> FrameGrap
         reactive_mask_enabled: gates.traits.reactive_mask,
         upscale_reads_reactive: facts.upscaler && facts.upscaler_reads_reactive,
         ssgi_enabled: gates.ssgi,
+        ssgi_resolve_enabled: gates.ssgi_resolve,
         rt_reflections_enabled: match gates.traits.composite_scene_fixed {
             true => path.rt_node,
             false => path.rt_trace,

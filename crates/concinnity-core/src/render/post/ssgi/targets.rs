@@ -36,6 +36,18 @@ pub fn gi_desc(gi_scale: u32) -> TextureDesc {
     gi_shape(gi_scale, PixelFormat::Rgba16Float, 1)
 }
 
+/// The shape of each age slot: how many frames of history a trace pixel's
+/// accumulations hold, at the trace resolution.
+pub fn age_desc(gi_scale: u32) -> TextureDesc {
+    gi_shape(gi_scale, PixelFormat::R16Float, 1)
+}
+
+/// The shape of the resolve's output the main pass samples: the environment's
+/// visibility and the bounce, at the render resolution.
+pub fn indirect_desc() -> TextureDesc {
+    gi_shape(1, PixelFormat::Rgba16Float, 1)
+}
+
 /// The shape of one depth pyramid for a render resolution of `extent`: the
 /// closest (`r`) and farthest (`g`) linear view depth at the trace resolution,
 /// with as many of [`DEPTH_LEVELS`] levels as that size has.
@@ -84,6 +96,25 @@ mod tests {
         // A render target small enough that the trace resolution cannot hold
         // every level asks for only the levels it has.
         assert_eq!(depth_desc(4, extent(8, 8)).mip_levels, 2);
+    }
+
+    #[test]
+    fn the_age_is_one_channel_at_the_trace_resolution() {
+        let d = age_desc(2);
+        assert_eq!(d.format, PixelFormat::R16Float);
+        assert_eq!(
+            resolve_extent(&d, extent(2560, 1440)),
+            resolve_extent(&gi_desc(2), extent(2560, 1440))
+        );
+    }
+
+    #[test]
+    fn the_indirect_target_follows_the_render_resolution() {
+        let d = indirect_desc();
+        assert_eq!(d.format, PixelFormat::Rgba16Float);
+        assert_eq!(resolve_extent(&d, extent(2560, 1440)), extent(2560, 1440));
+        assert!(d.usage.contains(TextureUsage::RENDER_TARGET));
+        assert!(d.usage.contains(TextureUsage::SHADER_READ));
     }
 
     #[test]

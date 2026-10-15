@@ -8,7 +8,7 @@ use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 
 use super::allocator::DeviceAllocator;
 use super::context::*;
-use super::descriptor_layout::SSAO_BINDING;
+use super::descriptor_layout::SCREEN_INDIRECT_BINDING;
 use super::device::*;
 use super::hiz::{HiZDeviceCtx, HiZTarget};
 use super::post::bloom::composite_bloom_view;
@@ -658,9 +658,10 @@ impl VkContext {
             self.ssao = Some(ssao);
             rebuilt?;
         }
-        // Every global set's SSAO binding follows the rebuilt pool: this frame's
-        // `ao_output`, or the 1x1 white fallback when SSAO is off.
-        self.rewrite_global_binding(SSAO_BINDING);
+        // Every global set's screen-indirect binding follows the rebuilt SSGI
+        // targets and pool: SSGI's resolve, this frame's `ao_output`, or the
+        // 1x1 white fallback.
+        self.rewrite_global_binding(SCREEN_INDIRECT_BINDING);
 
         // Re-point the composite descriptor sets at the rebuilt scene-input
         // image (FSR upscale output > TAA output > reflection composite output >

@@ -338,7 +338,8 @@ impl DxContext {
                 sky_rot: self.state.view.sky_rot,
                 irradiance: self.irradiance_lane(),
                 pre_exposure: FaceStorage::PROBE.scale(),
-                _pad: [0.0; 2],
+                screen_bounce: 0.0,
+                _pad: 0.0,
             };
             let cbv = alloc.alloc_buffer(
                 256,

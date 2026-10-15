@@ -29,8 +29,9 @@ pub mod bindless_textures {
     pub const IRRADIANCE_CUBE: usize = 1;
     /// The sky prefilter cube.
     pub const PREFILTER_CUBE: usize = 2;
-    /// The blurred SSAO occlusion.
-    pub const SSAO: usize = 3;
+    /// The screen-space indirect light: the environment's visibility, and the
+    /// bounce when screen-space GI is on.
+    pub const SCREEN_INDIRECT: usize = 3;
     /// The reflection-probe cube array.
     pub const PROBE_CUBES: usize = 4;
     /// The spot shadow map array.
@@ -111,7 +112,7 @@ mod tests {
             b::SHADOW_MAP,
             b::IRRADIANCE_CUBE,
             b::PREFILTER_CUBE,
-            b::SSAO,
+            b::SCREEN_INDIRECT,
             b::PROBE_CUBES,
             b::SPOT_SHADOW_MAP,
             b::LTC_MATRIX,

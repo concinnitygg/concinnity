@@ -391,7 +391,8 @@ impl MtlContext {
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
             pre_exposure: pass.storage.scale(),
-            _pad: [0.0; 2],
+            screen_bounce: 0.0,
+            _pad: 0.0,
         };
 
         self.bind_clusters(&encoder, pass.clusters);
@@ -630,7 +631,8 @@ impl MtlContext {
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
             pre_exposure: self.pre_exposure.value(),
-            _pad: [0.0; 2],
+            screen_bounce: if self.screen_bounce() { 1.0 } else { 0.0 },
+            _pad: 0.0,
         }
     }
 

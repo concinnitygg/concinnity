@@ -1,19 +1,21 @@
-//! DirectX's share of screen-space global illumination, which is its settings,
-//! where the pass reads and writes this frame, and the one resource state the
-//! graph cannot express for it. Every stage -- the pipelines, the depth
+//! DirectX's share of screen-space global illumination, which is its settings
+//! and where the pass reads and writes this frame. Every stage -- the pipelines, the depth
 //! pyramids, the accumulation and all the draws -- is written once in
 //! `concinnity_core::render::post::ssgi` and reaches D3D12 through
 //! `DxPostDevice`.
 
+use concinnity_core::gfx::render_types::SsgiParams;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::ssgi::settings::SsgiSettings;
-use concinnity_core::render::post::ssgi::{SsgiPass, SsgiPipelines, SsgiTraceInputs};
+use concinnity_core::render::post::ssgi::{
+    SsgiPass, SsgiPipelines, SsgiResolveInputs, SsgiTraceInputs,
+};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::context::DxContext;
+use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::post::post_device::{DxPostDevice, PostPipeline, PostTarget};
-use crate::directx::texture::transition_barrier;
 
 // SSGI resources held by `DxContext` when `IndirectLighting.technique`
 // is `ssgi`.
@@ -67,10 +69,71 @@ impl SsgiResources {
 }
 
 impl DxContext {
-    // Encode SSGI: the depth pyramid, the trace over the G-buffer, the
-    // accumulation, and the composite into the scene spine (`hdr_resolve`, or
-    // `hdr_color` with MSAA off). Runs on the hdr_resolve read-modify-write
-    // chain after the main pass.
+    // Whether the main pass's screen-indirect table carries SSGI's bounce:
+    // whenever SSGI is built, which is when the graph runs its resolve.
+    pub(in crate::directx) fn screen_bounce(&self) -> bool {
+        self.ssgi.is_some()
+    }
+
+    // The table the main pass samples the screen-space indirect light through:
+    // SSGI's resolved visibility and bounce while it is built, else the
+    // ambient occlusion (or its white fallback).
+    pub(in crate::directx) fn screen_indirect_srv_gpu(&self) -> SrvSlot {
+        match &self.ssgi {
+            Some(ssgi) => ssgi.pass.indirect().srv_gpu(),
+            None => self.ssao_ao_srv_gpu(),
+        }
+    }
+
+    // SSGI's resolve output, for the graph to move between the resolve's write
+    // and the main pass's read.
+    pub(in crate::directx) fn ssgi_indirect_resource(&self) -> Option<&ID3D12Resource> {
+        self.ssgi
+            .as_ref()
+            .map(|ssgi| ssgi.pass.indirect().resource())
+    }
+
+    // This frame's SSGI uniform.
+    fn ssgi_params(&self, ssgi: &SsgiResources, fov_y_radians: f32, aspect: f32) -> SsgiParams {
+        ssgi.settings.params(
+            fov_y_radians,
+            aspect,
+            ssgi.pass.frame(),
+            self.pre_exposure.history_scale(),
+        )
+    }
+
+    // Encode the resolve ahead of the main pass: last frame's accumulation
+    // reprojected onto this frame's G-buffer, folded with the occlusion, into
+    // the output the graph has put in RENDER_TARGET.
+    pub(in crate::directx) fn encode_ssgi_resolve(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
+        fov_y_radians: f32,
+        aspect: f32,
+    ) {
+        let (Some(ssgi), Some(gbuffer)) = (&self.ssgi, &self.gbuffer) else {
+            return;
+        };
+        let params = self.ssgi_params(ssgi, fov_y_radians, aspect);
+        if let Err(e) = ssgi.pass.encode_resolve(
+            &self.post_device(frame_idx),
+            cmd,
+            SsgiResolveInputs {
+                normal_depth: gbuffer.normal_depth_srv_gpu,
+                velocity: gbuffer.velocity_srv_gpu,
+                occlusion: self.ssao_ao_srv_gpu(),
+            },
+            &params,
+        ) {
+            tracing::error!("SSGI resolve: {e}");
+        }
+    }
+
+    // Encode SSGI after the main pass: the depth pyramid, the age, the trace
+    // over the G-buffer and the accumulation the next frame's resolve reads.
+    // The graph has put the scene it samples in the shader-resource state.
     pub(in crate::directx) fn encode_ssgi(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -78,66 +141,22 @@ impl DxContext {
         fov_y_radians: f32,
         aspect: f32,
     ) {
-        let Some(ssgi) = &self.ssgi else { return };
         // With no G-buffer there is nothing to trace against, so skip rather
         // than read a stale descriptor.
-        let Some(gbuffer) = &self.gbuffer else { return };
-        let params = ssgi.settings.params(
-            fov_y_radians,
-            aspect,
-            ssgi.pass.frame(),
-            self.pre_exposure.history_scale(),
-        );
-        let device = self.post_device(frame_idx);
-        let normal_depth = gbuffer.normal_depth_srv_gpu;
-        if let Err(e) = ssgi
-            .pass
-            .encode_pyramid(&device, cmd, normal_depth, &params)
-        {
-            tracing::error!("SSGI: {e}");
+        let (Some(ssgi), Some(gbuffer)) = (&self.ssgi, &self.gbuffer) else {
             return;
-        }
-
-        // The trace samples the scene spine while the composite blends into it,
-        // so this node reads and writes one resource. The graph models that as a
-        // single write and leaves the spine in RENDER_TARGET; sampling it needs
-        // the shader-resource state, so borrow it for the trace and hand it
-        // back. Finer than one-state-per-resource, hence inline.
-        let borrow = |from, to| {
-            // SAFETY: the command list is in the recording state, and the
-            // resource the barrier names is live for the call.
-            unsafe {
-                cmd.ResourceBarrier(&[transition_barrier(self.hdr_scene_target(), from, to)]);
-            }
         };
-        borrow(
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
-        let traced = ssgi.pass.encode_trace(
-            &device,
+        let params = self.ssgi_params(ssgi, fov_y_radians, aspect);
+        if let Err(e) = ssgi.pass.encode(
+            &self.post_device(frame_idx),
             cmd,
             SsgiTraceInputs {
                 scene: self.targets.hdr.srv_gpu,
-                normal_depth,
+                normal_depth: gbuffer.normal_depth_srv_gpu,
                 velocity: gbuffer.velocity_srv_gpu,
             },
             &params,
-        );
-        borrow(
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-        );
-        let result = traced.and_then(|()| {
-            ssgi.pass.encode_composite(
-                &device,
-                cmd,
-                self.hdr_scene_attachment(),
-                normal_depth,
-                &params,
-            )
-        });
-        if let Err(e) = result {
+        ) {
             tracing::error!("SSGI: {e}");
         }
     }

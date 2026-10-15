@@ -76,7 +76,10 @@ fn a_feature_the_apply_did_not_build_stays_off() {
             "ssao" => expected.ssao = false,
             "ssr" => expected.ssr = false,
             "rt" => expected.rt_pass = false,
-            "ssgi" => expected.ssgi = false,
+            "ssgi" => {
+                expected.ssgi = false;
+                expected.ssgi_resolve = false;
+            }
             "ae" => expected.auto_exposure = false,
             _ => expected.gbuffer = false,
         }
@@ -91,6 +94,8 @@ fn an_inert_ssgi_intensity_turns_its_gate_off() {
     let mut g = every_feature();
     g.indirect_lighting.ssgi_intensity = 0.0;
     assert!(!gates(&g).ssgi);
+    // Still built, so the main pass keeps sampling its resolve.
+    assert!(gates(&g).ssgi_resolve);
 }
 
 fn facts() -> FrameFacts {
@@ -298,10 +303,25 @@ fn a_running_upscaler_replaces_taa() {
 fn ssgi_needs_motion_and_the_pre_pass() {
     let g = FeatureGates {
         ssgi: true,
+        ssgi_resolve: true,
         ..FeatureGates::default()
     };
     let i = inputs(&g, &facts());
     assert!(i.ssgi_enabled && i.velocity_enabled && i.ssr_prepass_enabled);
+    assert!(i.ssgi_resolve_enabled);
+}
+
+// A built SSGI whose trace a live change turned off keeps resolving the
+// occlusion the main pass samples, over a current pre-pass.
+#[test]
+fn a_built_ssgi_resolves_with_its_trace_off() {
+    let g = FeatureGates {
+        ssgi_resolve: true,
+        ..FeatureGates::default()
+    };
+    let i = inputs(&g, &facts());
+    assert!(!i.ssgi_enabled);
+    assert!(i.ssgi_resolve_enabled && i.ssr_prepass_enabled);
 }
 
 #[test]

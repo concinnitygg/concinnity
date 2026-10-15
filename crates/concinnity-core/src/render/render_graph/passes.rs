@@ -139,13 +139,17 @@ pass_ids! {
     /// Screen-space global illumination. A refinement of SSR: it reuses the
     /// SSR depth + normal pre-pass G-buffer and screen-space ray-march, but
     /// integrates bounced radiance over a cosine-weighted hemisphere instead
-    /// of along one reflection vector. Sits on the hdr_resolve RMW chain (after
-    /// `Raymarch`, before `Decals`): it reads the lit scene as the bounce
-    /// radiance source and additively composites the gathered + denoised
-    /// indirect term back into it, so the near-field color bleed layers on top
-    /// of the IBL ambient. Gated on `FrameGraphInputs::ssgi_enabled`; when
-    /// `indirect_lighting` is IBL-only the slot is omitted entirely.
+    /// of along one reflection vector. Reads the lit scene after `Raymarch`
+    /// as the bounce radiance source and accumulates what it gathers in its
+    /// own targets, which the next frame's `SsgiResolve` hands the main pass.
+    /// Gated on `FrameGraphInputs::ssgi_enabled`; when `indirect_lighting` is
+    /// IBL-only the slot is omitted entirely.
     Ssgi => "ssgi",
+    /// The SSGI accumulation reprojected onto this frame's G-buffer and
+    /// upsampled to full resolution, ahead of `Main`: the environment's
+    /// visibility and the bounce the main pass shades as indirect diffuse
+    /// light. Present with `Ssgi`.
+    SsgiResolve => "ssgi_resolve",
     /// Hardware ray-traced reflections. Occupies the same scene-pre-taa slot as
     /// `SsrResolve` (reads the post-decoration `hdr_resolve`, writes
     /// `scene_pre_taa`) and takes precedence over it: when this pass is live the

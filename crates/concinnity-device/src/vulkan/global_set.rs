@@ -11,9 +11,9 @@ use super::descriptor_layout::{
     AREA_LIGHT_SSBO_BINDING, CLUSTER_LIST_SSBO_BINDING, CLUSTER_PARAMS_UBO_BINDING,
     CUBE_SAMPLER_BINDING, IRRADIANCE_CUBE_BINDING, LIGHT_UBO_BINDING, LINEAR_SAMPLER_BINDING,
     LOCAL_LIGHT_SSBO_BINDING, LTC_MAGNITUDE_BINDING, LTC_MATRIX_BINDING, PREFILTER_CUBE_BINDING,
-    PROBE_CUBES_BINDING, PROBE_RECORDS_SSBO_BINDING, PROBE_SET_UBO_BINDING, SHADOW_MAP_BINDING,
-    SHADOW_SAMPLER_BINDING, SHADOW_UBO_BINDING, SPOT_SHADOW_DATA_SSBO_BINDING,
-    SPOT_SHADOW_MAP_BINDING, SSAO_BINDING, VIEW_UBO_BINDING,
+    PROBE_CUBES_BINDING, PROBE_RECORDS_SSBO_BINDING, PROBE_SET_UBO_BINDING,
+    SCREEN_INDIRECT_BINDING, SHADOW_MAP_BINDING, SHADOW_SAMPLER_BINDING, SHADOW_UBO_BINDING,
+    SPOT_SHADOW_DATA_SSBO_BINDING, SPOT_SHADOW_MAP_BINDING, VIEW_UBO_BINDING,
 };
 use super::descriptor_layout::{CANOPY_TABLES_SSBO_BINDING, CANOPY_UBO_BINDING};
 use super::light_cull::VkLightCull;
@@ -65,21 +65,26 @@ pub(in crate::vulkan) struct GlobalBindings<'a> {
     pub(in crate::vulkan) scene: &'a VkSceneAssets,
     pub(in crate::vulkan) targets: &'a VkTargets,
     pub(in crate::vulkan) probes: &'a ProbeSetGpu,
+    // SSGI's resolved visibility and bounce, which the main camera samples in
+    // place of the occlusion while SSGI is built.
+    pub(in crate::vulkan) ssgi_indirect: Option<vk::ImageView>,
 }
 
 impl GlobalBindings<'_> {
-    // Frame `frame`'s main-camera set: its view, lights, SSAO occlusion (white
-    // when nothing computes one), probe set and cluster grid.
+    // Frame `frame`'s main-camera set: its view, lights, screen-space indirect
+    // light (SSGI's resolve, else SSAO's occlusion, else white), probe set and
+    // cluster grid.
     pub(in crate::vulkan) fn frame(&self, frame: usize) -> GlobalSetContents {
         GlobalSetContents {
             view: self.uniforms.view_ubo_buffers[frame].buffer(),
             light: self.uniforms.light_ubo_buffers[frame].buffer(),
             shadow: self.shadow.ubos[frame].buffer(),
-            ssao: self
-                .targets
-                .transient_pool
-                .view_for("ao_output", frame)
-                .unwrap_or(self.scene.ssao_white.view),
+            screen_indirect: self.ssgi_indirect.unwrap_or_else(|| {
+                self.targets
+                    .transient_pool
+                    .view_for("ao_output", frame)
+                    .unwrap_or(self.scene.ssao_white.view)
+            }),
             probe_set: self.uniforms.probe_set_ubo_buffers[frame].buffer(),
             probe_cubes: self.probes.bound_cubes().view(),
             probe_records: self.probes.records[frame].buffer(),
@@ -99,9 +104,9 @@ impl GlobalBindings<'_> {
 
     // A set for an off-camera render (a probe face, a planar mirror) through
     // `view`, `light`, `shadow` and `canopy`. It reads no probe, so a capture
-    // never recurses into the set it feeds; no SSAO, which is the main
-    // camera's; and no cluster grid unless one binned for its viewpoint is
-    // added (`with_clusters`).
+    // never recurses into the set it feeds; no screen-space indirect light,
+    // which is the main camera's; and no cluster grid unless one binned for its
+    // viewpoint is added (`with_clusters`).
     pub(in crate::vulkan) fn off_camera(
         &self,
         view: vk::Buffer,
@@ -127,7 +132,7 @@ impl GlobalBindings<'_> {
             shadow_map: self.shadow.map.view,
             irradiance: self.scene.env_map.irradiance.view,
             prefilter: self.scene.env_map.prefilter.view,
-            ssao: self.scene.ssao_white.view,
+            screen_indirect: self.scene.ssao_white.view,
             probe_set: self.probes.stand_in_set.buffer(),
             probe_cubes: self.probes.stand_in.view(),
             local_lights: self.uniforms.local_light_buffer.buffer(),
@@ -174,6 +179,7 @@ impl VkContext {
             scene: &self.scene,
             targets: &self.targets,
             probes: &self.probe.gpu,
+            ssgi_indirect: self.ssgi.as_ref().map(|s| s.indirect_view()),
         }
     }
 }
@@ -188,7 +194,7 @@ pub(in crate::vulkan) struct GlobalSetContents {
     shadow_map: vk::ImageView,
     irradiance: vk::ImageView,
     prefilter: vk::ImageView,
-    ssao: vk::ImageView,
+    screen_indirect: vk::ImageView,
     probe_set: vk::Buffer,
     probe_cubes: vk::ImageView,
     local_lights: vk::Buffer,
@@ -289,7 +295,7 @@ impl GlobalSetContents {
             image(SHADOW_MAP_BINDING, self.shadow_map),
             image(IRRADIANCE_CUBE_BINDING, self.irradiance),
             image(PREFILTER_CUBE_BINDING, self.prefilter),
-            image(SSAO_BINDING, self.ssao),
+            image(SCREEN_INDIRECT_BINDING, self.screen_indirect),
             ubo(PROBE_SET_UBO_BINDING, self.probe_set),
             GlobalDescriptor::image(PROBE_CUBES_BINDING, self.probe_cubes, PROBE_CUBES_LAYOUT),
             ssbo(LOCAL_LIGHT_SSBO_BINDING, self.local_lights),
@@ -353,7 +359,7 @@ mod tests {
             shadow_map: vk::ImageView::null(),
             irradiance: vk::ImageView::null(),
             prefilter: vk::ImageView::null(),
-            ssao: vk::ImageView::null(),
+            screen_indirect: vk::ImageView::null(),
             probe_set: vk::Buffer::null(),
             probe_cubes: vk::ImageView::null(),
             local_lights: vk::Buffer::null(),
@@ -401,7 +407,7 @@ mod tests {
             shadow_map: view(103),
             irradiance: view(104),
             prefilter: view(105),
-            ssao: view(106),
+            screen_indirect: view(106),
             probe_set: buffer(107),
             probe_cubes: view(108),
             local_lights: buffer(109),

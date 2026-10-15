@@ -332,7 +332,8 @@ impl DxContext {
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
             pre_exposure: self.pre_exposure.value(),
-            _pad: [0.0; 2],
+            screen_bounce: if self.screen_bounce() { 1.0 } else { 0.0 },
+            _pad: 0.0,
         };
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges
