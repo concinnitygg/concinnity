@@ -82,8 +82,12 @@ pub struct GrassLayerGpu {
     pub macro_variation: f32,
     /// How strongly blades crowd toward their clump's center, in [0, 1].
     pub clumping: f32,
+    /// The side-on and top-down axes of the ellipse the blades' projection
+    /// along a direct light follows
+    /// ([`projection_axes`](crate::render::grass::canopy::projection_axes)).
+    pub light_projection: [f32; 2],
     /// Keeps the record a whole number of rows.
-    pub _pad: [f32; 3],
+    pub _pad: f32,
 }
 
 /// Per-frame grass parameters: the camera, the wind, the occlusion test, the
@@ -365,7 +369,8 @@ mod tests {
         assert_eq!(offset_of!(GrassLayerGpu, tip_color), 112);
         assert_eq!(offset_of!(GrassLayerGpu, macro_variation), 124);
         assert_eq!(offset_of!(GrassLayerGpu, clumping), 128);
-        assert_eq!(offset_of!(GrassLayerGpu, _pad), 132);
+        assert_eq!(offset_of!(GrassLayerGpu, light_projection), 132);
+        assert_eq!(offset_of!(GrassLayerGpu, _pad), 140);
     }
 
     #[test]

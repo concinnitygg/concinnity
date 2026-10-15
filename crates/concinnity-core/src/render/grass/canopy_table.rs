@@ -21,7 +21,7 @@ pub const CANOPY_TABLE_ANGLES: usize = 16;
 pub const CANOPY_TABLE_DEPTHS: usize = 16;
 
 /// `float4` rows in each cell of a layer's table.
-pub const CANOPY_TABLE_ROWS: usize = 4;
+pub const CANOPY_TABLE_ROWS: usize = 3;
 
 /// `float4` rows in one layer's table.
 pub const CANOPY_TABLE_LEN: usize = CANOPY_TABLE_ANGLES * CANOPY_TABLE_DEPTHS * CANOPY_TABLE_ROWS;
@@ -77,14 +77,8 @@ fn cell(view: &CanopyView, projection: f32) -> [[f32; 4]; CANOPY_TABLE_ROWS] {
     let (u, l) = (&view.upper, &view.lower);
     [
         [u.share / stopped, projection, u.height, u.ramp],
-        [
-            u.occlusion,
-            u.ramp_occlusion,
-            u.direct_occlusion,
-            u.ramp_direct_occlusion,
-        ],
+        [u.occlusion, u.ramp_occlusion, u.above, l.above],
         [l.height, l.ramp, l.occlusion, l.ramp_occlusion],
-        [l.direct_occlusion, l.ramp_direct_occlusion, 0.0, 0.0],
     ]
 }
 
@@ -137,7 +131,7 @@ pub fn table_view(table: &[[f32; 4]], mu: f32, leaf_area: f32) -> CanopyView {
     let depth = fetch(table, x, 0.0, 0)[1] * leaf_area / mu;
     let stopped = 1.0 - exp(-depth);
     let y = depth_unit(depth) * (CANOPY_TABLE_DEPTHS - 1) as f32;
-    let [r0, r1, r2, r3] = core::array::from_fn(|r| fetch(table, x, y, r));
+    let [r0, r1, r2] = core::array::from_fn(|r| fetch(table, x, y, r));
     let upper = r0[0].clamp(0.0, 1.0) * stopped;
     CanopyView {
         ground: 1.0 - stopped,
@@ -147,8 +141,7 @@ pub fn table_view(table: &[[f32; 4]], mu: f32, leaf_area: f32) -> CanopyView {
             ramp: r0[3],
             occlusion: r1[0],
             ramp_occlusion: r1[1],
-            direct_occlusion: r1[2],
-            ramp_direct_occlusion: r1[3],
+            above: r1[2],
         },
         lower: CanopyBand {
             share: stopped - upper,
@@ -156,8 +149,7 @@ pub fn table_view(table: &[[f32; 4]], mu: f32, leaf_area: f32) -> CanopyView {
             ramp: r2[1],
             occlusion: r2[2],
             ramp_occlusion: r2[3],
-            direct_occlusion: r3[0],
-            ramp_direct_occlusion: r3[1],
+            above: r1[3],
         },
     }
 }
@@ -166,15 +158,17 @@ pub fn table_view(table: &[[f32; 4]], mu: f32, leaf_area: f32) -> CanopyView {
 mod tests {
     use super::*;
 
-    fn band_terms(b: &CanopyBand) -> [f32; 6] {
-        [
-            b.height,
-            b.ramp,
-            b.occlusion,
-            b.ramp_occlusion,
-            b.direct_occlusion,
-            b.ramp_direct_occlusion,
-        ]
+    fn band_terms(b: &CanopyBand) -> [f32; 5] {
+        [b.height, b.ramp, b.occlusion, b.ramp_occlusion, b.above]
+    }
+
+    #[test]
+    fn the_table_shape_is_the_shaders() {
+        let src = crate::render::shaders::CANOPY;
+        let uint = |name| crate::render::shader_consts::uint(src, name);
+        assert_eq!(uint("CANOPY_TABLE_ANGLES"), CANOPY_TABLE_ANGLES);
+        assert_eq!(uint("CANOPY_TABLE_DEPTHS"), CANOPY_TABLE_DEPTHS);
+        assert_eq!(uint("CANOPY_TABLE_ROWS"), CANOPY_TABLE_ROWS);
     }
 
     #[test]

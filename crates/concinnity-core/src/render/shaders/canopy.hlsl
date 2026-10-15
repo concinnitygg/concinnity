@@ -77,11 +77,20 @@ float grass_root_occlusion(float t)
     return lerp(0.25, 1.0, smoothstep(0.0, 0.6, t));
 }
 
-// How much of a direct light reaches a point `t` up the blade inside the
-// field.
-float grass_direct_share(float t)
+// How much of a direct light from `L` reaches a point inside the field, given
+// `depth`: the blade's up times the leaf area above the point times the top-down
+// axis of its projection ellipse (xyz), and the leaf above times the side-on
+// axis (w). Mirrors render::grass::canopy::ellipse_projection.
+float grass_light_through(float4 depth, float3 L)
 {
-    return lerp(0.55, 1.0, t);
+    float top = length(depth.xyz);
+    if (top <= 1e-6)
+    {
+        return 1.0;
+    }
+    float mu = dot(L, depth.xyz) / top;
+    float side = depth.w * depth.w * (1.0 - saturate(mu * mu));
+    return exp(-sqrt(top * top * mu * mu + side) / max(mu, 0.02));
 }
 
 // ---- The far field's canopy ----
@@ -107,8 +116,7 @@ struct CanopyBand
     float ramp;
     float occlusion;
     float ramp_occlusion;
-    float direct_occlusion;
-    float ramp_direct_occlusion;
+    float above;
 };
 
 // Where a view stops in the canopy: the ground's share, and the two bands
@@ -148,6 +156,9 @@ struct CanopyShade
     bool lower_lit;
     float4 upper_direct;
     float4 lower_direct;
+    // The leaf area standing above each band, which a direct light crosses on
+    // its way down to it.
+    float2 above;
     // What both bands multiply the sky and local lights' albedo term (rgb)
     // and sheen (w) by.
     float4 open;
@@ -159,7 +170,7 @@ struct CanopyShade
 // view's angle and the optical depth it crosses.
 #define CANOPY_TABLE_ANGLES 16u
 #define CANOPY_TABLE_DEPTHS 16u
-#define CANOPY_TABLE_ROWS 4u
+#define CANOPY_TABLE_ROWS 3u
 static const float CANOPY_MIN_MU = 0.02;
 static const float CANOPY_DEPTH_KNEE = 0.25;
 static const float CANOPY_MAX_DEPTH = 400.0;
@@ -224,7 +235,6 @@ void canopy_add_view(inout CanopyView view, uint layer, float x, float mu, float
     float4 r0 = canopy_table_row(at, 0u);
     float4 r1 = canopy_table_row(at, 1u);
     float4 r2 = canopy_table_row(at, 2u);
-    float2 r3 = canopy_table_row(at, 3u).xy;
     float upper = w * saturate(r0.x) * stopped;
     float lower = w * stopped - upper;
     view.ground += w * (1.0 - stopped);
@@ -233,15 +243,13 @@ void canopy_add_view(inout CanopyView view, uint layer, float x, float mu, float
     view.upper.ramp += upper * r0.w;
     view.upper.occlusion += upper * r1.x;
     view.upper.ramp_occlusion += upper * r1.y;
-    view.upper.direct_occlusion += upper * r1.z;
-    view.upper.ramp_direct_occlusion += upper * r1.w;
+    view.upper.above += upper * r1.z;
     view.lower.share += lower;
     view.lower.height += lower * r2.x;
     view.lower.ramp += lower * r2.y;
     view.lower.occlusion += lower * r2.z;
     view.lower.ramp_occlusion += lower * r2.w;
-    view.lower.direct_occlusion += lower * r3.x;
-    view.lower.ramp_direct_occlusion += lower * r3.y;
+    view.lower.above += lower * r1.w;
 }
 
 // A band's terms summed by share, as means.
@@ -252,8 +260,7 @@ CanopyBand canopy_band_mean(CanopyBand band)
     band.ramp *= n;
     band.occlusion *= n;
     band.ramp_occlusion *= n;
-    band.direct_occlusion *= n;
-    band.ramp_direct_occlusion *= n;
+    band.above *= n;
     return band;
 }
 
@@ -438,12 +445,12 @@ CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color,
     c.upper_tilt = canopy_tilt(bend, upper.height);
     c.lower_tilt = canopy_tilt(bend, lower.height);
     c.lower_lit = lower.share > 1e-3;
-    c.upper_direct = canopy_band_weights(upper.share, root, span, upper.direct_occlusion,
-                                         upper.ramp_direct_occlusion);
-    c.lower_direct = canopy_band_weights(lower.share, root, span, lower.direct_occlusion,
-                                         lower.ramp_direct_occlusion);
-    c.open = canopy_band_weights(upper.share, root, span, upper.occlusion, upper.ramp_occlusion)
-           + canopy_band_weights(lower.share, root, span, lower.occlusion, lower.ramp_occlusion);
+    c.upper_direct = canopy_band_weights(upper.share, root, span, upper.occlusion,
+                                         upper.ramp_occlusion);
+    c.lower_direct = canopy_band_weights(lower.share, root, span, lower.occlusion,
+                                         lower.ramp_occlusion);
+    c.open = c.upper_direct + c.lower_direct;
+    c.above = float2(upper.above, lower.above) * c.leaf_area;
 
     float3 flat_view = V - c.up * dot(V, c.up);
     float flat_len = length(flat_view);
@@ -494,8 +501,8 @@ float4 canopy_facings_light(float2 tilt, float3 v, float3 l, float3 h, GrassLigh
 }
 
 // Gather a direct light from `L` at `radiance` (shadowing applied) into the
-// canopy: the facings around the view at each band's height, the lower band
-// only where a view can reach it.
+// canopy: the facings around the view at each band's height, through the leaf
+// above it, the lower band only where a view can reach it.
 void canopy_add_light(inout CanopyShade c, float3 V, float3 L, float3 radiance)
 {
     // A light below the ground's horizon reaches no blade of the field: near
@@ -511,11 +518,13 @@ void canopy_add_light(inout CanopyShade c, float3 V, float3 L, float3 radiance)
     float3 v = canopy_frame(c, V);
     float3 l = canopy_frame(c, L);
     float3 h = canopy_frame(c, pair.H);
-    float4 hi = canopy_facings_light(c.upper_tilt, v, l, h, pair);
+    float mu = max(l.z, CANOPY_MIN_MU);
+    float2 through = exp(-canopy_table_projection(c.table, canopy_angle_coord(mu)) / mu * c.above);
+    float4 hi = canopy_facings_light(c.upper_tilt, v, l, h, pair) * through.x;
     float3 lit = c.upper_direct.rgb * hi.xyz + c.upper_direct.w * hi.w;
     if (c.lower_lit)
     {
-        float4 lo = canopy_facings_light(c.lower_tilt, v, l, h, pair);
+        float4 lo = canopy_facings_light(c.lower_tilt, v, l, h, pair) * through.y;
         lit += c.lower_direct.rgb * lo.xyz + c.lower_direct.w * lo.w;
     }
     c.light += lit * radiance;

@@ -55,6 +55,14 @@ pub struct Exposure {
     /// faster but can pump under flickering content; 1-3 is comfortable.
     #[asset(default = 1.5, min = 0.001, max = 20.0, apply = live)]
     pub auto_speed: f32,
+    /// Extra stops auto-exposure adds once a scene is dark, on top of `ev`.
+    /// Fully adapted, a moonlit night otherwise shows about as bright as a
+    /// day; a negative value keeps it darker, so night reads as night. It
+    /// eases in as the scene's mean luminance falls from the end of dusk to
+    /// moonlight (from about 2^-15 to 2^-22, for a sun of a few units'
+    /// intensity), so day and dusk are untouched. 0 adapts a night like a day.
+    #[asset(min = -EV_LIMIT, max = EV_LIMIT, apply = live)]
+    pub auto_night_ev: f32,
 }
 
 impl Exposure {
@@ -75,6 +83,7 @@ impl Exposure {
                 self.auto_speed,
                 hdr_display,
             )
+            .with_night_bias(self.auto_night_ev)
         })
     }
 }
@@ -125,5 +134,13 @@ mod tests {
         assert_eq!(s.min_ev, -4.0);
         assert_eq!(s.max_ev, 6.0);
         assert_eq!(s.speed, 2.0);
+        assert_eq!(s.night_bias_ev, 0.0);
+        let night = Exposure {
+            auto: true,
+            auto_night_ev: -3.0,
+            ..Default::default()
+        };
+        let s = night.auto_settings(false).expect("auto-exposure on");
+        assert_eq!(s.night_bias_ev, -3.0);
     }
 }

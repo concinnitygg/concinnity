@@ -119,10 +119,9 @@ pub struct CanopyBand {
     pub occlusion: f32,
     /// The mean of the ramp times the occlusion.
     pub ramp_occlusion: f32,
-    /// The mean of the direct share times the occlusion.
-    pub direct_occlusion: f32,
-    /// The mean of the ramp, the direct share and the occlusion together.
-    pub ramp_direct_occlusion: f32,
+    /// The mean share of the field's leaf area standing above it, which a
+    /// direct light crosses on its way down ([`leaf_above`]).
+    pub above: f32,
 }
 
 /// Where a view ray into the field stops: on the ground between the blades,
@@ -151,10 +150,54 @@ pub fn root_occlusion(t: f32) -> f32 {
     0.25 + 0.75 * s * s * (3.0 - 2.0 * s)
 }
 
-/// How much of a direct light reaches height `t` inside the field. Mirrors
-/// `grass_direct_share`.
-pub fn direct_share(t: f32) -> f32 {
-    0.55 + 0.45 * t
+// The share of one blade's area above height `t` along it.
+fn blade_area_above(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    let k = 1.0 + WIDTH_TAPER;
+    ((1.0 - t) - (1.0 - powf(t, k)) / k) / (1.0 - 1.0 / k)
+}
+
+/// The share of a field's leaf area standing above height `z`, in units of
+/// its mean blade height, for blades varying in height by `height_variance`:
+/// what a direct light crosses on its way down to there. Mirrors
+/// `grass_leaf_above`.
+pub fn leaf_above(z: f32, height_variance: f32) -> f32 {
+    let heights = class_heights(height_variance);
+    let total: f32 = heights.iter().sum();
+    heights
+        .iter()
+        .map(|&h| h * blade_area_above(z / h))
+        .sum::<f32>()
+        / total
+}
+
+/// How many view cosines [`projection_axes`] fits its ellipse over.
+const PROJECTION_FIT_STEPS: usize = 64;
+
+/// The side-on and top-down axes of the ellipse that stands for
+/// [`projection`] where no canopy table is read (the blade draws), scaled so
+/// it errs as far over as under. See [`ellipse_projection`].
+pub fn projection_axes(bend: f32) -> [f32; 2] {
+    let axes = [projection(bend, 0.0), projection(bend, 1.0)];
+    let (mut low, mut high) = (f32::MAX, 0.0f32);
+    for i in 0..=PROJECTION_FIT_STEPS {
+        let mu = i as f32 / PROJECTION_FIT_STEPS as f32;
+        let fit = ellipse_projection(axes, mu);
+        if fit > 1e-6 {
+            let r = projection(bend, mu) / fit;
+            low = low.min(r);
+            high = high.max(r);
+        }
+    }
+    let scale = if high > 0.0 { 0.5 * (low + high) } else { 1.0 };
+    axes.map(|a| a * scale)
+}
+
+/// The projection along view cosine `mu` of blades whose ellipse has `axes`
+/// (side-on, top-down). Mirrors `grass_light_depth`.
+pub fn ellipse_projection(axes: [f32; 2], mu: f32) -> f32 {
+    let mu = mu.clamp(0.0, 1.0);
+    sqrt(axes[1] * axes[1] * mu * mu + axes[0] * axes[0] * (1.0 - mu * mu))
 }
 
 /// The blade heights a field's height variation spreads its blades over, as
@@ -181,18 +224,19 @@ pub fn canopy_view(bend: f32, height_variance: f32, mu: f32, leaf_area: f32) -> 
     let top = heights.iter().fold(0.0f32, |a, &h| a.max(h));
     // Per segment: the area seen there, and its area-weighted terms.
     let mut seen = [0.0f32; CANOPY_SEGMENTS];
-    let mut terms = [[0.0f32; 6]; CANOPY_SEGMENTS];
+    let mut terms = [[0.0f32; 5]; CANOPY_SEGMENTS];
     for j in 0..CANOPY_SEGMENTS {
         let z = top * segment_height(j);
+        let above = leaf_above(z, height_variance);
         for &h in &heights {
             if z >= h {
                 continue;
             }
             let t = z / h;
             let a = blade_width(t) * part_projection(blade_tilt(bend, t), mu);
-            let (r, o, d) = (ramp(t), root_occlusion(t), direct_share(t));
+            let (r, o) = (ramp(t), root_occlusion(t));
             seen[j] += a;
-            for (acc, f) in terms[j].iter_mut().zip([t, r, o, r * o, d * o, r * d * o]) {
+            for (acc, f) in terms[j].iter_mut().zip([t, r, o, r * o, above]) {
                 *acc += a * f;
             }
         }
@@ -212,13 +256,12 @@ pub fn canopy_view(bend: f32, height_variance: f32, mu: f32, leaf_area: f32) -> 
         let p = stopped / seen[j].max(1e-9);
         let b = &mut bands[j * 2 / CANOPY_SEGMENTS];
         b.share += stopped;
-        let [t, r, o, ro, dout, rdo] = terms[j];
+        let [t, r, o, ro, above] = terms[j];
         b.height += p * t;
         b.ramp += p * r;
         b.occlusion += p * o;
         b.ramp_occlusion += p * ro;
-        b.direct_occlusion += p * dout;
-        b.ramp_direct_occlusion += p * rdo;
+        b.above += p * above;
     }
     let [upper, lower] = bands.map(|mut b| {
         let n = b.share.max(1e-9);
@@ -226,8 +269,7 @@ pub fn canopy_view(bend: f32, height_variance: f32, mu: f32, leaf_area: f32) -> 
         b.ramp /= n;
         b.occlusion /= n;
         b.ramp_occlusion /= n;
-        b.direct_occlusion /= n;
-        b.ramp_direct_occlusion /= n;
+        b.above /= n;
         b
     });
     CanopyView {
@@ -633,20 +675,20 @@ mod tests {
                         let heights = class_heights(hv);
                         let top = heights.iter().fold(0.0f32, |a, &h| a.max(h));
                         // Per fine step: the seen area, and its sums of t and of
-                        // the ramp, direct share and occlusion product.
+                        // the leaf above.
                         let steps: alloc::vec::Vec<[f32; 3]> = (0..n)
                             .map(|i| {
                                 let z = top * (1.0 - (i as f32 + 0.5) / n as f32);
                                 let mut acc = [0.0f32; 3];
+                                let above = leaf_above(z, hv);
                                 for &h in &heights {
                                     if z < h {
                                         let t = z / h;
                                         let a = blade_width(t)
                                             * part_projection(blade_tilt(bend, t), mu);
-                                        let rdo = ramp(t) * direct_share(t) * root_occlusion(t);
                                         acc[0] += a;
                                         acc[1] += a * t;
-                                        acc[2] += a * rdo;
+                                        acc[2] += a * above;
                                     }
                                 }
                                 acc
@@ -673,8 +715,7 @@ mod tests {
                             assert!((b.share - w[0]).abs() < 0.04, "{case}");
                             if w[0] > 0.05 {
                                 assert!((b.height - w[1] / w[0]).abs() < 0.05, "{case}");
-                                let rdo = w[2] / w[0];
-                                assert!((b.ramp_direct_occlusion - rdo).abs() < 0.05, "{case}");
+                                assert!((b.above - w[2] / w[0]).abs() < 0.05, "{case}");
                             }
                         }
                     }
@@ -806,6 +847,63 @@ mod tests {
         assert!((blade_tilt(CANOPY_BEND, 1.0) - PI / 2.0).abs() < 1e-6);
         assert_eq!(blade_tilt(0.0, 0.7), 0.0);
         assert!(blade_tilt(CANOPY_BEND, 0.5) < blade_tilt(CANOPY_BEND, 0.8));
+    }
+
+    // All of the leaf stands above the ground and none above the tallest
+    // tips, falling in between; a blade's narrow tip holds little of it.
+    #[test]
+    fn the_leaf_above_falls_from_the_ground_to_the_tips() {
+        for hv in [0.0, 0.45, 1.0] {
+            assert!((leaf_above(0.0, hv) - 1.0).abs() < 1e-6);
+            let top = class_heights(hv).iter().fold(0.0f32, |a, &h| a.max(h));
+            assert!(leaf_above(top, hv).abs() < 1e-6);
+            let mut last = 1.0;
+            for i in 1..=40 {
+                let z = top * i as f32 / 40.0;
+                let a = leaf_above(z, hv);
+                assert!(a <= last + 1e-6, "{hv} {z}: {a} after {last}");
+                last = a;
+            }
+        }
+        // Even blades: the share above the middle, integrated finely.
+        let n = 4000;
+        let (mut above, mut total) = (0.0, 0.0);
+        for i in 0..n {
+            let t = (i as f32 + 0.5) / n as f32;
+            total += blade_width(t);
+            if t > 0.5 {
+                above += blade_width(t);
+            }
+        }
+        assert!((leaf_above(0.5, 0.0) - above / total).abs() < 1e-3);
+        assert!(leaf_above(0.5, 0.0) < 0.35);
+    }
+
+    #[test]
+    fn the_leaf_constants_are_the_shaders() {
+        let src = crate::render::shaders::GRASS_FIELD;
+        let float = |name| crate::render::shader_consts::float(src, name);
+        assert_eq!(float("GRASS_WIDTH_TAPER"), WIDTH_TAPER);
+        assert_eq!(float("GRASS_HEIGHT_CLASS"), CANOPY_HEIGHT_CLASSES[2]);
+        assert_eq!(CANOPY_HEIGHT_CLASSES[0], -CANOPY_HEIGHT_CLASSES[2]);
+    }
+
+    // The ellipse the blade draws use stays within a few percent of the
+    // projection from straight down to grazing, for any bend.
+    #[test]
+    fn the_projection_ellipse_fits_the_blades() {
+        for bend in [0.0, CANOPY_BEND, 0.5, canopy_bend(8.0, 0.2), 0.95] {
+            let axes = projection_axes(bend);
+            for i in 0..=100 {
+                let mu = i as f32 / 100.0;
+                let want = projection(bend, mu);
+                let got = ellipse_projection(axes, mu);
+                assert!(
+                    (got - want).abs() <= 0.06 * want + 1e-6,
+                    "{bend} {mu}: {got} {want}"
+                );
+            }
+        }
     }
 
     fn terrain(layers: Vec<Grass>) -> GrassTerrain {

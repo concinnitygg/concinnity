@@ -39,7 +39,13 @@ pub const LIVE_SETTINGS_FIELDS: &[(&str, &[&str])] = &[
     ),
     (
         "exposure",
-        &["ev", "auto_min_ev", "auto_max_ev", "auto_speed"],
+        &[
+            "ev",
+            "auto_min_ev",
+            "auto_max_ev",
+            "auto_speed",
+            "auto_night_ev",
+        ],
     ),
     ("bloom", &["intensity", "threshold", "knee"]),
     ("vignette", &["strength"]),
@@ -159,6 +165,7 @@ fn adopt_live(world: &mut WorldSettings, edited: &WorldSettings) -> LiveChanges 
     adopt!(exposure.auto_min_ev);
     adopt!(exposure.auto_max_ev);
     adopt!(exposure.auto_speed);
+    adopt!(exposure.auto_night_ev);
     adopt!(bloom.intensity);
     adopt!(bloom.threshold);
     adopt!(bloom.knee);
@@ -200,6 +207,7 @@ fn copy_live_fields(dst: &mut ResolvedGraphics, src: &ResolvedGraphics) {
     d.auto_min_ev = s.auto_min_ev;
     d.auto_max_ev = s.auto_max_ev;
     d.auto_speed = s.auto_speed;
+    d.auto_night_ev = s.auto_night_ev;
     dst.bloom = src.bloom.clone();
     dst.vignette = src.vignette.clone();
     dst.lut_strength = src.lut_strength;

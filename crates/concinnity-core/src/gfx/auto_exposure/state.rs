@@ -46,7 +46,8 @@ impl AutoExposureState {
 
     /// Step the EMA one frame: take the GPU-measured average log-luminance
     /// (base-2), turn it into a target EV (the offset that maps the scene
-    /// mean onto `settings.target_log_lum` plus the authored `ev_bias`),
+    /// mean onto `settings.target_log_lum` plus the authored `ev_bias` and,
+    /// for a dark scene, the settings' night bias),
     /// then move `current_ev` toward it by the clamped EMA rate. Returns
     /// the new clamped EV. `dt` is the frame time in seconds; non-finite or
     /// non-positive values short-circuit (the EV stays where it was, no
@@ -63,8 +64,9 @@ impl AutoExposureState {
         // ACES then compresses), perceptual middle-gray on the HDR path
         // (target_log_lum=log2(0.18), no ACES). `exposure = 2^target_ev`
         // then satisfies `avg_lum * exposure = 2^target_log_lum` modulo bias.
-        let target = (settings.target_log_lum - avg_log_lum + ev_bias)
-            .clamp(settings.min_ev, settings.max_ev);
+        let target =
+            (settings.target_log_lum - avg_log_lum + ev_bias + settings.night_bias(avg_log_lum))
+                .clamp(settings.min_ev, settings.max_ev);
         if !dt.is_finite() || dt <= 0.0 || !target.is_finite() {
             self.current_ev = self.current_ev.clamp(settings.min_ev, settings.max_ev);
             return self.current_ev;
@@ -205,6 +207,22 @@ mod tests {
             state.update(0.0, 1.0, &settings, 1.0 / 60.0);
         }
         assert!((state.current_ev - 1.0).abs() < 1.0e-3);
+    }
+
+    // A moonlit scene settles the night bias darker than the plain target; a
+    // day scene the same settings meet settles exactly on it.
+    #[test]
+    fn update_adds_the_night_bias_to_a_dark_scene() {
+        let settings = AutoExposureSettings::resolve(-8.0, 24.0, 10.0, false).with_night_bias(-3.0);
+        let settle = |avg: f32| {
+            let mut state = AutoExposureState { current_ev: 0.0 };
+            for _ in 0..400 {
+                state.update(avg, -4.0, &settings, 1.0 / 60.0);
+            }
+            state.current_ev
+        };
+        assert!((settle(-23.6) - (23.6 - 4.0 - 3.0)).abs() < 1.0e-3);
+        assert!((settle(-4.4) - (4.4 - 4.0)).abs() < 1.0e-3);
     }
 
     #[test]

@@ -30,6 +30,15 @@ pub const EV_LIMIT: f32 = 24.0;
 /// because the ACES tonemap implicitly compressed scene-white back down).
 pub const HDR_MIDDLE_GRAY_LOG2: f32 = -2.473;
 
+/// How many stops under a luminance of 1 a scene's mean sits where the night
+/// bias starts to ease in: the end of civil dusk under a sun of a few units'
+/// intensity.
+pub const NIGHT_BIAS_START: f32 = 15.0;
+
+/// How many stops under a luminance of 1 a scene's mean sits where the night
+/// bias applies in full: a moonlit night under the same sun.
+pub const NIGHT_BIAS_FULL: f32 = 22.0;
+
 /// Clamped auto-exposure tunables resolved from the authored asset fields. Held
 /// by the backend; the per-frame EMA in `AutoExposureState::update` reads them
 /// to clamp the adapted EV and drive its adaptation rate.
@@ -49,6 +58,10 @@ pub struct AutoExposureSettings {
     /// target on the HDR path where there is no ACES compression. Resolved
     /// from `Display.hdr` at asset time.
     pub target_log_lum: f32,
+    /// Stops added to the target of a dark scene, eased in by its measured
+    /// mean luminance between [`NIGHT_BIAS_START`] and [`NIGHT_BIAS_FULL`]
+    /// stops under 1. Negative keeps a fully adapted night darker than a day.
+    pub night_bias_ev: f32,
 }
 
 impl AutoExposureSettings {
@@ -67,7 +80,26 @@ impl AutoExposureSettings {
             max_ev: hi,
             speed: speed.clamp(MIN_SPEED, MAX_SPEED),
             target_log_lum: if hdr_aware { HDR_MIDDLE_GRAY_LOG2 } else { 0.0 },
+            night_bias_ev: 0.0,
         }
+    }
+
+    /// These settings with `night_bias_ev` as the dark-scene bias, clamped to
+    /// the exposure range.
+    pub fn with_night_bias(self, night_bias_ev: f32) -> Self {
+        Self {
+            night_bias_ev: night_bias_ev.clamp(-EV_LIMIT, EV_LIMIT),
+            ..self
+        }
+    }
+
+    /// The night bias for a scene whose measured mean log2 luminance is
+    /// `avg_log_lum`: none down to [`NIGHT_BIAS_START`] stops under 1, all
+    /// of it from [`NIGHT_BIAS_FULL`] on, a smoothstep between.
+    pub fn night_bias(&self, avg_log_lum: f32) -> f32 {
+        let t = ((-avg_log_lum - NIGHT_BIAS_START) / (NIGHT_BIAS_FULL - NIGHT_BIAS_START))
+            .clamp(0.0, 1.0);
+        self.night_bias_ev * t * t * (3.0 - 2.0 * t)
     }
 
     /// The darkest log2 luminance the histogram measures: two stops under
@@ -100,6 +132,33 @@ mod tests {
 
     // The default range keeps the fixed floor; a night range reaches down to
     // a scene two stops under what the clamp can lift.
+    #[test]
+    fn the_night_bias_eases_in_as_the_scene_darkens() {
+        let s = AutoExposureSettings::resolve(-8.0, 24.0, 1.0, false).with_night_bias(-3.0);
+        // Day, dusk and the start of the ramp take none of it.
+        for lum in [2.0, -4.4, -9.1, -13.3, -NIGHT_BIAS_START] {
+            assert_eq!(s.night_bias(lum), 0.0, "{lum}");
+        }
+        // A moonlit night and darker take all of it.
+        for lum in [-NIGHT_BIAS_FULL, -22.8, -23.6, -40.0] {
+            assert_eq!(s.night_bias(lum), -3.0, "{lum}");
+        }
+        let mid = s.night_bias(-0.5 * (NIGHT_BIAS_START + NIGHT_BIAS_FULL));
+        assert!((mid + 1.5).abs() < 1e-5, "{mid}");
+        let mut last = 0.0;
+        for i in 0..=40 {
+            let b = s.night_bias(-(5.0 + i as f32 * 0.5));
+            assert!(b <= last + 1e-6, "{i}: {b} after {last}");
+            last = b;
+        }
+        // Off by default, and clamped to the exposure range.
+        assert_eq!(
+            AutoExposureSettings::resolve(-8.0, 24.0, 1.0, false).night_bias(-30.0),
+            0.0
+        );
+        assert_eq!(s.with_night_bias(-100.0).night_bias_ev, -EV_LIMIT);
+    }
+
     #[test]
     fn the_histogram_floor_follows_the_max_ev() {
         assert_eq!(

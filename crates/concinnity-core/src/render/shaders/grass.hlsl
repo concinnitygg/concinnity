@@ -98,9 +98,10 @@ struct GrassLayer
     // xyz = linear RGB at the tip, w = how far the field's color drifts.
     float4 tip_color_macro;
     float clumping;
+    // The side-on and top-down axes of the ellipse a blade's projection along
+    // a light follows (see grass_light_through).
+    float2 light_projection;
     float _pad0;
-    float _pad1;
-    float _pad2;
 };
 
 // Matches MAX_GRASS_LAYERS in render::uniforms::grass.
@@ -235,17 +236,29 @@ uint grass_lod_at(GrassParams p, float dist)
     return dist < p.lod_distances.x ? 0u : (dist < p.lod_distances.y ? 1u : 2u);
 }
 
-// A blade's bits: 12 of its clump's hash, 12 of its own, and the slot of the
-// layer it belongs to, so the draws can vary hue per clump and per blade and
-// read the layer's look.
-uint grass_blade_bits(uint clump_hash, uint blade_hash, uint layer_slot)
+// The leaf area a blade's bits resolve, in square meters of blade per square
+// meter of ground.
+static const float GRASS_LEAF_AREA_STEP = 0.25;
+
+// A blade's bits: the leaf area around it in GRASS_LEAF_AREA_STEPs (4 bits),
+// 12 of its clump's hash, 12 of its own, and the slot of the layer it belongs
+// to, so the draws can vary hue per clump and per blade, read the layer's look
+// and shade the blade by the leaf around it.
+uint grass_blade_bits(uint clump_hash, uint blade_hash, uint layer_slot, float leaf_area)
 {
-    return ((clump_hash & 0xfffu) << 16u) | ((blade_hash & 0xfffu) << 4u) | (layer_slot & 0xfu);
+    uint leaf = min(uint(max(leaf_area, 0.0) / GRASS_LEAF_AREA_STEP + 0.5), 15u);
+    return (leaf << 28u) | ((clump_hash & 0xfffu) << 16u) | ((blade_hash & 0xfffu) << 4u)
+         | (layer_slot & 0xfu);
 }
 
 uint grass_bits_layer(uint bits)
 {
     return bits & 0xfu;
+}
+
+float grass_bits_leaf_area(uint bits)
+{
+    return float(bits >> 28u) * GRASS_LEAF_AREA_STEP;
 }
 
 uint grass_pack_half2(float2 v)
@@ -534,7 +547,8 @@ bool grass_tile_visible(GrassLayer L, int2 tile)
 // normal and the up it stands along, its place on the ground's own plane (for
 // the clump lattice) with the plane's two axes in the frame, the clump it
 // belongs to, its fixed ground point (for the field's slow drift), its hash,
-// and the share of the layer's density that grows there.
+// the share of the layer's density that grows there, and the leaf area around
+// it.
 struct GrassSite
 {
     float3 root;
@@ -548,6 +562,7 @@ struct GrassSite
     float2 clump_center;
     float3 ground_point;
     float density;
+    float leaf_area;
 };
 
 // The ground under world `xz` on layer `L`'s terrain: the unit normal (xyz)
@@ -607,13 +622,23 @@ float grass_mask_density(GrassLayer L, float2 st)
 
 // The clump `xz` belongs to on layer `L`, salted by `salt`, and where a blade
 // placed at `xz` grows once drawn toward its center: returns the clump's hash
-// and writes its center and the blade's place.
-uint grass_clump(GrassLayer L, float2 xz, uint salt, out float2 center, out float2 gathered)
+// and writes its center, the blade's place and how crowded the blades grow
+// there, as a multiple of the layer's mean.
+uint grass_clump(GrassLayer L, float2 xz, uint salt, out float2 center, out float2 gathered,
+                 out float crowding)
 {
     float spot;
     uint h = grass_clump_at(xz, L.clump_size, L.seed, salt, center, spot);
     gathered = center + (xz - center) * grass_gather_scale(spot, L.clumping);
+    crowding = grass_crowding(spot, L.clumping);
     return h;
+}
+
+// The leaf area around blades of layer `L` growing at `density` blades per
+// square meter, crowded by `crowding`.
+float grass_site_leaf_area(GrassLayer L, float density, float crowding)
+{
+    return density * crowding * L.height * L.width * (1.0 - 1.0 / (1.0 + GRASS_WIDTH_TAPER));
 }
 
 // The bend of the field's cell `cell` in half `half_index` of the window whose
@@ -685,7 +710,8 @@ bool grass_terrain_site(GrassLayer L, int2 cell, out GrassSite site)
     uint h = grass_hash(grass_hash2(cell) ^ L.seed);
     float2 placed = (float2(cell) + float2(grass_unit(h, 3u), grass_unit(h, 4u))) * L.cell_size;
     float2 xz;
-    site.clump_hash = grass_clump(L, placed, 0u, site.clump_center, xz);
+    float crowding;
+    site.clump_hash = grass_clump(L, placed, 0u, site.clump_center, xz, crowding);
     if (any(xz < L.rect.xy) || any(xz >= L.rect.zw))
     {
         return false;
@@ -701,6 +727,7 @@ bool grass_terrain_site(GrassLayer L, int2 cell, out GrassSite site)
     site.hash = h;
     site.ground_point = float3(xz.x, 0.0, xz.y);
     site.density = grass_mask_density(L, st);
+    site.leaf_area = grass_site_leaf_area(L, site.density / (L.cell_size * L.cell_size), crowding);
     return true;
 }
 
@@ -841,7 +868,8 @@ GrassSite grass_planet_site(GrassLayer L, PlanetGrassTile T, uint2 g, uint2 cell
     // Drawn toward its clump's center, the blade roots on the tile's surface
     // there instead; the surface runs on past the tile's edge.
     float2 placed = (float2(face_cell) + jitter) * L.cell_size;
-    site.clump_hash = grass_clump(L, placed, face_salt, site.clump_center, site.plane);
+    float crowding;
+    site.clump_hash = grass_clump(L, placed, face_salt, site.clump_center, site.plane, crowding);
     if (L.clumping > 0.0)
     {
         jitter += (site.plane - placed) / L.cell_size;
@@ -860,6 +888,7 @@ GrassSite grass_planet_site(GrassLayer L, PlanetGrassTile T, uint2 g, uint2 cell
     site.ground_point = dir * grass.planet_radius;
     site.density = saturate(density * area)
                  * grass_meadow_density(dir, grass.planet_center_scale.w, L.seed);
+    site.leaf_area = grass_site_leaf_area(L, site.density / max(area, 1e-6), crowding);
     return site;
 }
 
@@ -937,7 +966,7 @@ bool grass_grow(GrassLayer L, uint slot, GrassSite site, out GrassBlade blade, o
 
     blade.root_facing = float4(root, facing);
     blade.shape = uint4(asuint(height), asuint(width), grass_pack_half2(lean2),
-                        grass_blade_bits(ch, h, slot));
+                        grass_blade_bits(ch, h, slot, site.leaf_area));
     // The field's slow drift where the blade stands, which the draws tint it
     // by, as the far field past the blades does.
     float slope = 1.0 - saturate(dot(site.normal, site.up));
@@ -1167,7 +1196,7 @@ GrassCurve grass_curve(GrassBlade blade, float time, float2 trample)
     float2 lean = float2(f16tof32(blade.shape.z & 0xffffu), f16tof32(blade.shape.z >> 16u));
     uint bits = blade.shape.w;
     float stiffness = grass.layers[grass_bits_layer(bits)].stiffness;
-    float phase = grass_unit(bits, 14u);
+    float phase = grass_unit(bits & 0x0fffffffu, 14u);
 
     float trample_len = length(trample);
     float pressed = saturate(trample_len / GRASS_TRAMPLE_FULL) * lerp(1.0, 0.8, stiffness);
@@ -1230,7 +1259,7 @@ GrassVertex grass_curve_vertex(GrassCurve c, uint q, float u, float4 eye)
     toward *= dot(toward, c.side) < 0.0 ? -1.0 : 1.0;
     float3 across = normalize(lerp(c.side, toward, edge * edge * 0.6));
 
-    float half_width = 0.5 * c.width * (1.0 - pow(t, 1.4)) * (1.0 + 0.3 * edge);
+    float half_width = 0.5 * c.width * (1.0 - pow(t, GRASS_WIDTH_TAPER)) * (1.0 + 0.3 * edge);
     GrassVertex v;
     v.world_pos = pos + across * (u * half_width);
     v.normal = normal;
@@ -1374,7 +1403,23 @@ struct GrassVertexOut
     // x = t up the blade, y = u across it, z = view depth.
     [[vk::location(5)]] float3 t_u_depth : TEXCOORD5;
     [[vk::location(6)]] float3 tip_color : TEXCOORD6;
+    // The leaf above the point that a direct light crosses (see
+    // grass_light_through).
+    [[vk::location(7)]] float4 light_depth : TEXCOORD7;
 };
+
+// The leaf a direct light crosses down to height `t` along `blade`: the leaf
+// around it, the share of it standing above that height, and the projection
+// ellipse of its layer's blades, as grass_light_through reads them.
+float4 grass_light_depth(GrassBlade blade, float t)
+{
+    GrassLayer L = grass.layers[grass_bits_layer(blade.shape.w)];
+    float z = t * asfloat(blade.shape.x) / max(L.height, 1e-4);
+    float leaf = grass_bits_leaf_area(blade.shape.w) * grass_leaf_above(z, L.height_variance);
+    float2 up_xz = grass_unpack_half2(blade.bend.z);
+    float3 up = float3(up_xz.x, sqrt(saturate(1.0 - dot(up_xz, up_xz))), up_xz.y);
+    return float4(up * (leaf * L.light_projection.y), leaf * L.light_projection.x);
+}
 
 [shader("vertex")]
 GrassVertexOut grass_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID)
@@ -1392,6 +1437,7 @@ GrassVertexOut grass_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID)
     o.to_camera = cam - v.world_pos;
     grass_colors(blade.shape.w, grass_unpack_half2(blade.bend.w), o.root_color, o.tip_color);
     o.t_u_depth = float3(v.t, v.u, -mul(VIEW.view_mat, float4(v.world_pos, 1.0)).z);
+    o.light_depth = grass_light_depth(blade, v.t);
     return o;
 }
 
@@ -1418,8 +1464,8 @@ float4 grass_radiance(GrassVertexOut p)
         float3 L = normalize(LIGHTS.dir[i].dir_i.xyz);
         float3 radiance = LIGHTS.dir[i].col.xyz * LIGHTS.dir[i].dir_i.w;
         float s = (i == 0) ? shadow : 1.0;
-        // Blades deep in the field see less of the sky's direct light too.
-        Lo += grass_light(albedo, N, V, L, radiance) * s * lerp(0.55, 1.0, t);
+        // Blades deep in the field get the light the leaf above lets through.
+        Lo += grass_light(albedo, N, V, L, radiance) * s * grass_light_through(p.light_depth, L);
     }
 
     // Point and spot lights from the fragment's cluster; area lights are left

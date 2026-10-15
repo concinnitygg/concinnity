@@ -629,7 +629,7 @@ impl GrassField {
                         distance,
                     )
                 });
-                place_planet(grass, &tiles, params, planet_tiles)
+                place_planet(grass, &tiles, self.wind.strength, params, planet_tiles)
             }
             None => self.place_terrain(position, distance, params),
         }
@@ -644,7 +644,7 @@ impl GrassField {
         let reach = self.layers_in_reach(position, distance);
         let mut dispatch = [1u32; 3];
         for (slot, (layer, tiles)) in reach.iter().enumerate() {
-            params.layers[slot] = layer_gpu(layer, tiles);
+            params.layers[slot] = layer_gpu(layer, tiles, self.wind.strength);
             dispatch[0] = dispatch[0].max(layer.grid.groups_per_tile());
             dispatch[1] = dispatch[1].max(tiles.len());
         }
@@ -732,6 +732,7 @@ fn planet_ground_under(planet: &PlanetView<'_>, base: [f32; 3]) -> f32 {
 fn place_planet(
     planet: &PlanetGrass,
     tiles: &PlanetGrassTiles,
+    wind_speed: f32,
     mut params: GrassParams,
     planet_tiles: &mut Vec<PlanetGrassTileGpu>,
 ) -> GrassPass {
@@ -742,7 +743,7 @@ fn place_planet(
         planet.layers.len().min(MAX_GRASS_LAYERS)
     };
     for (slot, layer) in planet.layers.iter().take(layers).enumerate() {
-        params.layers[slot] = planet_layer_gpu(layer);
+        params.layers[slot] = planet_layer_gpu(layer, wind_speed);
         params.planet_density[slot] = layer.density;
         dispatch[0] = dispatch[0].max((layer.cells * layer.cells).div_ceil(GRASS_GROUP_SIZE));
     }
@@ -756,7 +757,7 @@ fn place_planet(
     GrassPass { params, dispatch }
 }
 
-fn planet_layer_gpu(layer: &planet::PlanetGrassLayer) -> GrassLayerGpu {
+fn planet_layer_gpu(layer: &planet::PlanetGrassLayer, wind_speed: f32) -> GrassLayerGpu {
     let look = &layer.look;
     GrassLayerGpu {
         seed: layer.seed,
@@ -773,8 +774,15 @@ fn planet_layer_gpu(layer: &planet::PlanetGrassLayer) -> GrassLayerGpu {
         tip_color: look.tip_color,
         macro_variation: look.macro_variation,
         clumping: look.clumping,
+        light_projection: light_projection(look, wind_speed),
         ..GrassLayerGpu::default()
     }
+}
+
+// The projection ellipse of blades of `look` bending in a wind of mean
+// `wind_speed`, which the blade draws shade direct light through.
+fn light_projection(look: &GrassBladeLook, wind_speed: f32) -> [f32; 2] {
+    canopy::projection_axes(canopy::canopy_bend(wind_speed, look.stiffness))
 }
 
 // A frustum's planes as the block's `(normal, d)` rows.
@@ -814,7 +822,7 @@ pub fn tile_bounds(layer: &GrassLayerGpu, tile_size: f32, tile: [i32; 2]) -> ([f
     )
 }
 
-fn layer_gpu(layer: &GrassLayer, tiles: &TileRange) -> GrassLayerGpu {
+fn layer_gpu(layer: &GrassLayer, tiles: &TileRange, wind_speed: f32) -> GrassLayerGpu {
     let ground = &layer.ground;
     let look = &layer.look;
     let mask = layer.mask.as_ref();
@@ -848,7 +856,8 @@ fn layer_gpu(layer: &GrassLayer, tiles: &TileRange) -> GrassLayerGpu {
         tip_color: look.tip_color,
         macro_variation: look.macro_variation,
         clumping: look.clumping,
-        _pad: [0.0; 3],
+        light_projection: light_projection(look, wind_speed),
+        _pad: 0.0,
     }
 }
 

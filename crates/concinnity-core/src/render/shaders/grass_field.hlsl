@@ -79,6 +79,16 @@ float grass_gather_scale(float spot, float clumping)
     return center + (1.0 - center) * spot;
 }
 
+// How densely blades grow under `clumping` once a blade placed at `spot` is
+// gathered toward its clump's center, as a multiple of the layer's mean: the
+// inverse of the area the gathering shrinks the ground around it to.
+float grass_crowding(float spot, float clumping)
+{
+    float center = 1.0 - GRASS_GATHER * clumping;
+    float pull = 1.0 - center;
+    return 1.0 / ((center + pull * spot) * (center + 2.0 * pull * spot));
+}
+
 // How densely blades grow at `spot` under `clumping`, as a multiple of the
 // layer's mean. Mirrors render::grass::clumping::gathered_density.
 float grass_gathered_density(float spot, float clumping)
@@ -86,7 +96,7 @@ float grass_gathered_density(float spot, float clumping)
     float center = 1.0 - GRASS_GATHER * clumping;
     float pull = 1.0 - center;
     float from = 2.0 * spot / (center + sqrt(center * center + 4.0 * pull * spot));
-    return 1.0 / ((center + pull * from) * (center + 2.0 * pull * from));
+    return grass_crowding(from, clumping);
 }
 
 // How far a clump's hue leans toward the dry tint, from its hash. The draws
@@ -298,4 +308,31 @@ float2 grass_face_coords(float3 dir, out uint face)
 uint grass_face_salt(uint face)
 {
     return grass_hash(face + 0x51ed27u);
+}
+
+// Matches WIDTH_TAPER in render::grass::canopy: a blade's width tapers as
+// 1 - t^GRASS_WIDTH_TAPER from root to tip.
+static const float GRASS_WIDTH_TAPER = 1.4;
+
+// Matches the outer CANOPY_HEIGHT_CLASSES in render::grass::canopy.
+static const float GRASS_HEIGHT_CLASS = 0.4665;
+
+// The share of one blade's area above height `t` along it.
+float grass_blade_area_above(float t)
+{
+    t = saturate(t);
+    float k = 1.0 + GRASS_WIDTH_TAPER;
+    return ((1.0 - t) - (1.0 - pow(t, k)) / k) / (1.0 - 1.0 / k);
+}
+
+// The share of a field's leaf area standing above height `z`, in units of its
+// mean blade height, for blades varying in height by `variance`: what a direct
+// light crosses on its way down to there. Mirrors
+// render::grass::canopy::leaf_above.
+float grass_leaf_above(float z, float variance)
+{
+    float3 h = max(1.0 + variance * float3(-GRASS_HEIGHT_CLASS, 0.0, GRASS_HEIGHT_CLASS), 0.1);
+    float3 a = h * float3(grass_blade_area_above(z / h.x), grass_blade_area_above(z / h.y),
+                          grass_blade_area_above(z / h.z));
+    return (a.x + a.y + a.z) / (h.x + h.y + h.z);
 }

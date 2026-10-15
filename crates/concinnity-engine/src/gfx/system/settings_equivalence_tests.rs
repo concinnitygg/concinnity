@@ -486,12 +486,29 @@ fn quality_text(g: &ResolvedGraphics, world: &WorldSettings) -> String {
 fn legacy_exposure(
     g: &ResolvedGraphics,
     world: &WorldSettings,
-) -> (
-    Option<concinnity_core::gfx::auto_exposure::AutoExposureSettings>,
-    f32,
-) {
+) -> (Option<AutoExposureSettings>, f32) {
     let w = &world.graphics;
-    (g.exposure.auto_settings(w.display.hdr), w.exposure.ev)
+    let settings = g.exposure.auto_settings(w.display.hdr).map(|s| {
+        // No case authors a night bias; the digests predate it.
+        assert_eq!(s.night_bias_ev, 0.0);
+        AutoExposureSettings {
+            min_ev: s.min_ev,
+            max_ev: s.max_ev,
+            speed: s.speed,
+            target_log_lum: s.target_log_lum,
+        }
+    });
+    (settings, w.exposure.ev)
+}
+
+// The auto-exposure settings in the shape the digests were pinned over.
+#[derive(Debug)]
+#[expect(dead_code, reason = "the fields are read only through `Debug`")]
+struct AutoExposureSettings {
+    min_ev: f32,
+    max_ev: f32,
+    speed: f32,
+    target_log_lum: f32,
 }
 
 // The user's choices after a preset change: every preset-governed override
