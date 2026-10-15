@@ -824,6 +824,44 @@ fn auto_exposure_meters_for_the_resolved_display() {
     assert_eq!(g.auto_exposure(), g.exposure.auto_settings(false));
 }
 
+// The authored night vision reaches the auto-exposure settings the backends
+// adapt with, and applies live.
+#[test]
+fn night_vision_resolves_into_the_auto_exposure() {
+    let world = authored(GraphicsConfig {
+        exposure: crate::components::ExposureOverrides {
+            auto: Some(true),
+            auto_night_ev: Some(-3.0),
+            night_vision: Some(0.75),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let none = UserGraphicsSettings::default();
+    let on = SettingsLayers::new(&world, &QualityCeiling::NONE, &none).resolve();
+    let ae = on.graphics.auto_exposure().expect("auto-exposure on");
+    assert_eq!(ae.night_vision, 0.75);
+    assert_eq!(ae.night_bias_ev, -3.0);
+    let world_off = authored(GraphicsConfig {
+        exposure: crate::components::ExposureOverrides {
+            auto: Some(true),
+            auto_night_ev: Some(-3.0),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let off = SettingsLayers::new(&world_off, &QualityCeiling::NONE, &none).resolve();
+    assert_eq!(off.graphics.exposure.night_vision, 0.0);
+    let diff = on.diff(&off);
+    let live: Vec<(&str, &str)> = diff
+        .class(ApplyClass::Live)
+        .iter()
+        .map(|c| (c.asset, c.key))
+        .collect();
+    assert_eq!(live, [("Exposure", "night_vision")]);
+    assert_eq!(diff.costliest(), Some(ApplyClass::Live));
+}
+
 // A preset change adopts the re-resolved quality group and leaves every other
 // resolved value as it was.
 #[test]

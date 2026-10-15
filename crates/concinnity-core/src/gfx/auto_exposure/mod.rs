@@ -2,9 +2,14 @@
 //! luminance histogram the backends measure a frame with, and the running EMA
 //! that turns that measurement into the next frame's exposure.
 
+mod night_vision;
 mod pre_exposure;
 mod state;
 
+pub use night_vision::{
+    METER_CALIBRATION, PHOTOPIC_LUMINANCE, SCOTOPIC_LUMINANCE, SUNLIGHT_LUX, ev100,
+    luminance_at_ev100, night_vision_weight, rod_share, scene_ev100,
+};
 pub use pre_exposure::PreExposure;
 pub use state::{
     AutoExposureState, ExposureAdaptation, HISTOGRAM_BINS, LUM_LOG2_MAX, LUM_LOG2_MIN,
@@ -62,6 +67,10 @@ pub struct AutoExposureSettings {
     /// mean luminance between [`NIGHT_BIAS_START`] and [`NIGHT_BIAS_FULL`]
     /// stops under 1. Negative keeps a fully adapted night darker than a day.
     pub night_bias_ev: f32,
+    /// How far, in `[0, 1]`, the composite turns a dark scene to night
+    /// vision: desaturated toward the rods' luminance with a blue cast, by
+    /// the rods' share of sight at the adapted scene luminance.
+    pub night_vision: f32,
 }
 
 impl AutoExposureSettings {
@@ -81,6 +90,7 @@ impl AutoExposureSettings {
             speed: speed.clamp(MIN_SPEED, MAX_SPEED),
             target_log_lum: if hdr_aware { HDR_MIDDLE_GRAY_LOG2 } else { 0.0 },
             night_bias_ev: 0.0,
+            night_vision: 0.0,
         }
     }
 
@@ -89,6 +99,19 @@ impl AutoExposureSettings {
     pub fn with_night_bias(self, night_bias_ev: f32) -> Self {
         Self {
             night_bias_ev: night_bias_ev.clamp(-EV_LIMIT, EV_LIMIT),
+            ..self
+        }
+    }
+
+    /// These settings with `night_vision` as the night-vision strength,
+    /// clamped to `[0, 1]`.
+    pub fn with_night_vision(self, night_vision: f32) -> Self {
+        Self {
+            night_vision: if night_vision.is_nan() {
+                0.0
+            } else {
+                night_vision.clamp(0.0, 1.0)
+            },
             ..self
         }
     }
@@ -157,6 +180,16 @@ mod tests {
             0.0
         );
         assert_eq!(s.with_night_bias(-100.0).night_bias_ev, -EV_LIMIT);
+    }
+
+    #[test]
+    fn night_vision_is_off_by_default_and_clamped() {
+        let s = AutoExposureSettings::resolve(-8.0, 24.0, 1.0, false);
+        assert_eq!(s.night_vision, 0.0);
+        assert_eq!(s.with_night_vision(0.4).night_vision, 0.4);
+        assert_eq!(s.with_night_vision(3.0).night_vision, 1.0);
+        assert_eq!(s.with_night_vision(-1.0).night_vision, 0.0);
+        assert_eq!(s.with_night_vision(f32::NAN).night_vision, 0.0);
     }
 
     #[test]

@@ -489,8 +489,10 @@ fn legacy_exposure(
 ) -> (Option<AutoExposureSettings>, f32) {
     let w = &world.graphics;
     let settings = g.exposure.auto_settings(w.display.hdr).map(|s| {
-        // No case authors a night bias; the digests predate it.
+        // No case authors a night bias or night vision; the digests predate
+        // them.
         assert_eq!(s.night_bias_ev, 0.0);
+        assert_eq!(s.night_vision, 0.0);
         AutoExposureSettings {
             min_ev: s.min_ev,
             max_ev: s.max_ev,

@@ -125,6 +125,10 @@ pub struct FrameParams<'a> {
     /// Where the camera and the sun are about the planet, in a world with an
     /// `Atmosphere`; the backend draws the sky and the haze from it.
     pub atmosphere: Option<crate::render::atmosphere::AtmosphereFrame>,
+    /// The authored intensity of the world's sun (its first directional
+    /// light), which stands for full sunlight when the scene's luminance is
+    /// read in absolute units.
+    pub sunlight: f32,
 }
 
 /// The per-frame drive: what every graphics backend must implement for a world

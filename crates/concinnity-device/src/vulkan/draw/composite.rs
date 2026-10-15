@@ -105,6 +105,11 @@ impl fullscreen::CompositeEncoder for VkContext {
                 depth_near,
                 depth_far,
                 reactive_valid: if args.reactive_valid { 1.0 } else { 0.0 },
+                night_vision: self
+                    .auto_exposure
+                    .adaptation
+                    .as_ref()
+                    .map_or(0.0, |a| a.night_vision(self.state.view.sunlight)),
             };
             cmd_push_constants(
                 device,

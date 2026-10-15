@@ -981,6 +981,7 @@ impl DxContext {
             rebase,
             grass_benders,
             atmosphere,
+            sunlight,
         } = params;
         let elapsed = elapsed_f64 as f32;
         if let Some(atmo) = self.atmosphere.as_mut() {
@@ -994,6 +995,7 @@ impl DxContext {
         self.state.view.near = near;
         self.state.view.view_distance = view_distance;
         self.state.view.sky_rot = with_sky_cube_scale(sky_rot, self.atmosphere.is_some());
+        self.state.view.sunlight = sunlight;
         self.apply_pending_rebuilds()?;
         // A moved world's decals and grass move with it whatever happens to
         // history.

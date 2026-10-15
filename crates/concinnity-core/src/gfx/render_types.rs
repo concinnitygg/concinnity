@@ -795,7 +795,7 @@ impl PostProcessParams {
 /// Fragment constants for the composite pass: the authored post-process
 /// tunables plus the scene-transition fade the backend owns. Pushed verbatim to
 /// the composite fragment shader, so the layout must stay in sync with the
-/// `CompositeParams` struct there. 60 bytes.
+/// `CompositeParams` struct there. 64 bytes.
 ///
 /// The fade is not a `PostProcessParams` field because that struct is resolved
 /// from the settings assets and re-pushed whenever a settings slider
@@ -824,6 +824,10 @@ pub struct CompositeParams {
     /// 1.0 when the reactive mask was written this frame; the reactive view
     /// shows black otherwise.
     pub reactive_valid: f32,
+    /// How far, in `[0, 1]`, the scene is shown as night vision sees it:
+    /// blended toward the rods' luminance with a blue cast, before the
+    /// tonemap. 0 leaves the color untouched.
+    pub night_vision: f32,
 }
 
 /// The farthest distance the depth channel view tells apart for a camera that
@@ -1991,11 +1995,12 @@ mod tests {
         assert_eq!(offset_of!(FogParams, _pad3), 168);
     }
 
-    // Fifteen scalars: the post tunables with the pre-exposure, the fade, the
-    // view selector, the depth view's two distances and the reactive flag.
+    // Sixteen scalars: the post tunables with the pre-exposure, the fade, the
+    // view selector, the depth view's two distances, the reactive flag and
+    // the night-vision weight.
     #[test]
     fn composite_params_layout_matches_shaders() {
-        assert_eq!(size_of::<CompositeParams>(), 60);
+        assert_eq!(size_of::<CompositeParams>(), 64);
         assert_eq!(offset_of!(CompositeParams, post), 0);
         assert_eq!(size_of::<PostProcessParams>(), 40);
         assert_eq!(offset_of!(PostProcessParams, exposure), 12);
@@ -2006,6 +2011,7 @@ mod tests {
         assert_eq!(offset_of!(CompositeParams, depth_near), 48);
         assert_eq!(offset_of!(CompositeParams, depth_far), 52);
         assert_eq!(offset_of!(CompositeParams, reactive_valid), 56);
+        assert_eq!(offset_of!(CompositeParams, night_vision), 60);
     }
 
     #[test]

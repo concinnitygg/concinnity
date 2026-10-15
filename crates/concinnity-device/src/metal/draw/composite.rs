@@ -112,6 +112,12 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
             depth_near,
             depth_far,
             reactive_valid: if self.reactive_valid { 1.0 } else { 0.0 },
+            night_vision: self
+                .ctx
+                .auto_exposure
+                .adaptation
+                .as_ref()
+                .map_or(0.0, |a| a.night_vision(self.ctx.state.view.sunlight)),
         };
         enc.set_fragment_value(&composite, 0);
         // Fullscreen triangle: 3 vertices, no vertex buffer (the shared

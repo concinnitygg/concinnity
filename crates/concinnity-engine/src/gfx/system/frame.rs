@@ -623,6 +623,7 @@ impl GraphicsSystem {
             history_reset,
             rebase,
             atmosphere,
+            sunlight: super::scene_lights::sunlight(ctx),
         };
         // Adopt the overlay draw list wholesale and hand the spent one back to
         // OverlaySystem, which recycles its buffers into the next build.

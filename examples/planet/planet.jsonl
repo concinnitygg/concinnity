@@ -1,5 +1,5 @@
 ["Window",{"title":"Planet","width":1600,"height":900,"resizable":true}]
-["GraphicsConfig",{"shadows":{"map_size":2048},"ambient_occlusion":{"enabled":true,"radius":0.5},"anti_aliasing":{"mode":"taa"},"exposure":{"ev":-4.0,"auto":true,"auto_max_ev":24.0,"auto_speed":4.0,"auto_night_ev":-3.0},"bloom":{"intensity":0.3,"threshold":1.2}}]
+["GraphicsConfig",{"shadows":{"map_size":2048},"ambient_occlusion":{"enabled":true,"radius":0.5},"anti_aliasing":{"mode":"taa"},"exposure":{"ev":-4.0,"auto":true,"auto_max_ev":24.0,"auto_speed":4.0,"auto_night_ev":-3.0,"night_vision":1.0},"bloom":{"intensity":0.3,"threshold":1.2}}]
 ["DirectionalLight",{"color":[1.0,0.98,0.95],"direction":[1.0,0.0,0.35],"intensity":3.2}]
 ["SkyRotation",{"axis":[0.0,0.0,-1.0],"degrees_per_second":1.5,"angle_deg":120.0}]
 ["Atmosphere",{"apparent_radius_km":6360.0}]

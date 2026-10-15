@@ -51,6 +51,8 @@ pub struct FrameScalars {
     /// Where the camera and the sun are about the planet, for a world with an
     /// `Atmosphere`.
     pub atmosphere: Option<crate::render::atmosphere::AtmosphereFrame>,
+    /// The authored intensity of the world's sun.
+    pub sunlight: f32,
 }
 
 impl Default for FrameScalars {
@@ -71,6 +73,7 @@ impl Default for FrameScalars {
             history_reset: crate::render::history_reset::HistoryResetCauses::NONE,
             rebase: None,
             atmosphere: None,
+            sunlight: crate::gfx::render_types::LightUniforms::DEFAULT.directional[0].intensity,
         }
     }
 }

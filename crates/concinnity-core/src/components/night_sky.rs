@@ -32,8 +32,10 @@
 /// 400000 times less than the sun, and the Milky Way is fainter still. A
 /// world with auto-exposure that should adapt to the night needs its
 /// [Exposure](#exposure) to allow it: an `auto_max_ev` of 24, since a moonlit
-/// or starlit scene adapts at around 19 to 20, and an `auto_night_ev` of about
-/// -3, so moonlit ground reads while the night stays darker than day.
+/// or starlit scene adapts at around 19 to 20, an `auto_night_ev` of about
+/// -3, so moonlit ground reads while the night stays darker than day, and a
+/// `night_vision` of 1, so a moonlit scene loses its color as the eye's
+/// rods take over.
 ///
 /// One per world. Brightnesses are relative to the sunlight, so the night
 /// keeps its balance with any sun.

@@ -126,6 +126,11 @@ impl fullscreen::CompositeEncoder for DxContext {
                 depth_near,
                 depth_far,
                 reactive_valid: if args.reactive_valid { 1.0 } else { 0.0 },
+                night_vision: self
+                    .auto_exposure
+                    .adaptation
+                    .as_ref()
+                    .map_or(0.0, |a| a.night_vision(self.state.view.sunlight)),
             };
             cmd.set_graphics_root_constants(2, &composite);
             // Root param [3]: 3D color-grading LUT SRV (t2).

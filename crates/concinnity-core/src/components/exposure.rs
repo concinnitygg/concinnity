@@ -63,6 +63,18 @@ pub struct Exposure {
     /// intensity), so day and dusk are untouched. 0 adapts a night like a day.
     #[asset(min = -EV_LIMIT, max = EV_LIMIT, apply = live)]
     pub auto_night_ev: f32,
+    /// How strongly, in `[0, 1]`, a dark scene is shown as night vision sees
+    /// it, with `auto` on. At 1 a scene dark enough for the eye's rods alone
+    /// (under about 0.01 cd/m2) loses its color: it shows in the rods'
+    /// brightness, under which blues stay lighter and reds go dark, with a
+    /// slight blue cast. Through twilight levels, up to about 3 cd/m2, it
+    /// blends in from full color. The level is the scene's mean luminance the
+    /// exposure has adapted to, read in cd/m2 by taking the world's sun (its
+    /// first [DirectionalLight](#directionallight)) as 100000 lux of
+    /// sunlight, so a day stays in full color whatever the sun's intensity.
+    /// 0 keeps full color at any level.
+    #[asset(min = 0.0, max = 1.0, apply = live)]
+    pub night_vision: f32,
 }
 
 impl Exposure {
@@ -84,6 +96,7 @@ impl Exposure {
                 hdr_display,
             )
             .with_night_bias(self.auto_night_ev)
+            .with_night_vision(self.night_vision)
         })
     }
 }
@@ -142,5 +155,18 @@ mod tests {
         };
         let s = night.auto_settings(false).expect("auto-exposure on");
         assert_eq!(s.night_bias_ev, -3.0);
+        assert_eq!(s.night_vision, 0.0);
+        let rods = Exposure {
+            auto: true,
+            night_vision: 1.0,
+            ..Default::default()
+        };
+        let s = rods.auto_settings(false).expect("auto-exposure on");
+        assert_eq!(s.night_vision, 1.0);
+        let over = Exposure {
+            night_vision: 4.0,
+            ..rods
+        };
+        assert_eq!(over.auto_settings(false).unwrap().night_vision, 1.0);
     }
 }

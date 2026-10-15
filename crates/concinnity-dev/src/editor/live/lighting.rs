@@ -47,9 +47,9 @@ pub(super) fn plan(
             }
             Some(Apply::RenderConfig(RenderConfig::Fog(fog)))
         }
-        ComponentAsset::GraphicsConfig(graphics) => {
-            Some(Apply::RenderConfig(RenderConfig::Graphics(graphics)))
-        }
+        ComponentAsset::GraphicsConfig(graphics) => Some(Apply::RenderConfig(
+            RenderConfig::Graphics(Box::new(graphics)),
+        )),
         _ => None,
     }
 }

@@ -177,6 +177,9 @@ pub struct SceneView {
     /// Rows of the sky's inverse rotation, uploaded into every uniform block
     /// whose pass samples the environment cubemaps.
     pub sky_rot: [[f32; 4]; 3],
+    /// The world's sun intensity, which stands for full sunlight when the
+    /// scene's luminance is read in absolute units.
+    pub sunlight: f32,
 }
 
 impl SceneView {
@@ -191,6 +194,7 @@ impl SceneView {
             view_distance: None,
             matrix: IDENTITY,
             sky_rot: SkyOrientation::IDENTITY_ROWS,
+            sunlight: 1.0,
         }
     }
 }

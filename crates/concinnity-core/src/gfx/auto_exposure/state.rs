@@ -3,7 +3,7 @@
 // histogram itself is built in the backend's compute shader; only the reduction
 // and the EMA live here, so both can be unit-tested without a GPU.
 
-use super::AutoExposureSettings;
+use super::{AutoExposureSettings, night_vision_weight};
 use crate::math::{exp, exp2};
 
 /// Lowest log2(luminance) the histogram bins span. Pixels darker than this fall
@@ -32,6 +32,10 @@ pub struct AutoExposureState {
     /// [`AutoExposureState::update`]; the backend reads it back out to set the
     /// exposure multiplier the post passes push to the GPU.
     pub current_ev: f32,
+    /// The scene's mean log2 luminance the eye is adapted to: the measured
+    /// mean, eased in at the same rate as `current_ev` and free of its clamp
+    /// and biases.
+    pub adapted_log_lum: f32,
 }
 
 impl AutoExposureState {
@@ -39,8 +43,10 @@ impl AutoExposureState {
     /// range: a neutral starting point before the first GPU measurement
     /// arrives. The first `update` call snaps it toward the real scene EV.
     pub fn new(settings: &AutoExposureSettings) -> Self {
+        let current_ev = (settings.min_ev + settings.max_ev) * 0.5;
         Self {
-            current_ev: (settings.min_ev + settings.max_ev) * 0.5,
+            current_ev,
+            adapted_log_lum: settings.target_log_lum - current_ev,
         }
     }
 
@@ -72,6 +78,7 @@ impl AutoExposureState {
             return self.current_ev;
         }
         let blend = 1.0 - exp(-settings.speed * dt);
+        self.adapted_log_lum += (avg_log_lum - self.adapted_log_lum) * blend;
         self.current_ev = (self.current_ev + (target - self.current_ev) * blend)
             .clamp(settings.min_ev, settings.max_ev);
         self.current_ev
@@ -102,6 +109,22 @@ impl ExposureAdaptation {
     /// The EV currently applied.
     pub fn current_ev(&self) -> f32 {
         self.state.current_ev
+    }
+
+    /// The scene's mean log2 luminance the eye is currently adapted to.
+    pub fn adapted_log_lum(&self) -> f32 {
+        self.state.adapted_log_lum
+    }
+
+    /// How far, in `[0, 1]`, the composite turns the image to night vision
+    /// for a world whose sun has intensity `sunlight`: the settings' strength
+    /// times the rods' share at the adapted luminance.
+    pub fn night_vision(&self, sunlight: f32) -> f32 {
+        night_vision_weight(
+            self.settings.night_vision,
+            self.state.adapted_log_lum,
+            sunlight,
+        )
     }
 
     /// Step one frame of `dt` seconds from the GPU's measured average log2
@@ -164,7 +187,10 @@ mod tests {
     #[test]
     fn update_pulls_current_ev_toward_target() {
         let settings = AutoExposureSettings::resolve(-8.0, 8.0, 4.0, false);
-        let mut state = AutoExposureState { current_ev: 0.0 };
+        let mut state = AutoExposureState {
+            current_ev: 0.0,
+            adapted_log_lum: 0.0,
+        };
         // avg_log_lum = 2.0 -> target_ev = -2.0 (dim the scene by two stops).
         let ev = state.update(2.0, 0.0, &settings, 1.0);
         assert!(ev < 0.0, "ev should move toward target_ev = -2.0, got {ev}");
@@ -180,7 +206,10 @@ mod tests {
     #[test]
     fn update_clamps_to_settings_bounds() {
         let settings = AutoExposureSettings::resolve(-1.0, 1.0, 5.0, false);
-        let mut state = AutoExposureState { current_ev: 0.0 };
+        let mut state = AutoExposureState {
+            current_ev: 0.0,
+            adapted_log_lum: 0.0,
+        };
         // avg_log_lum = -10 would ask for target_ev = +10, clamped to +1.
         for _ in 0..100 {
             state.update(-10.0, 0.0, &settings, 1.0 / 60.0);
@@ -191,7 +220,10 @@ mod tests {
     #[test]
     fn update_short_circuits_non_finite_dt() {
         let settings = AutoExposureSettings::resolve(-2.0, 2.0, 1.0, false);
-        let mut state = AutoExposureState { current_ev: 0.5 };
+        let mut state = AutoExposureState {
+            current_ev: 0.5,
+            adapted_log_lum: 0.0,
+        };
         let ev = state.update(5.0, 0.0, &settings, f32::NAN);
         assert_eq!(ev, 0.5);
         let ev = state.update(5.0, 0.0, &settings, -1.0);
@@ -201,7 +233,10 @@ mod tests {
     #[test]
     fn update_honors_ev_bias() {
         let settings = AutoExposureSettings::resolve(-8.0, 8.0, 10.0, false);
-        let mut state = AutoExposureState { current_ev: 0.0 };
+        let mut state = AutoExposureState {
+            current_ev: 0.0,
+            adapted_log_lum: 0.0,
+        };
         // avg_log_lum = 0, bias = +1 -> target_ev = +1 (over-expose by one stop).
         for _ in 0..200 {
             state.update(0.0, 1.0, &settings, 1.0 / 60.0);
@@ -215,7 +250,10 @@ mod tests {
     fn update_adds_the_night_bias_to_a_dark_scene() {
         let settings = AutoExposureSettings::resolve(-8.0, 24.0, 10.0, false).with_night_bias(-3.0);
         let settle = |avg: f32| {
-            let mut state = AutoExposureState { current_ev: 0.0 };
+            let mut state = AutoExposureState {
+                current_ev: 0.0,
+                adapted_log_lum: 0.0,
+            };
             for _ in 0..400 {
                 state.update(avg, -4.0, &settings, 1.0 / 60.0);
             }
@@ -251,8 +289,14 @@ mod tests {
         // instead of scene-white.
         let sdr = AutoExposureSettings::resolve(-8.0, 8.0, 10.0, false);
         let hdr = AutoExposureSettings::resolve(-8.0, 8.0, 10.0, true);
-        let mut state_sdr = AutoExposureState { current_ev: 0.0 };
-        let mut state_hdr = AutoExposureState { current_ev: 0.0 };
+        let mut state_sdr = AutoExposureState {
+            current_ev: 0.0,
+            adapted_log_lum: 0.0,
+        };
+        let mut state_hdr = AutoExposureState {
+            current_ev: 0.0,
+            adapted_log_lum: 0.0,
+        };
         for _ in 0..500 {
             state_sdr.update(0.0, 0.0, &sdr, 1.0 / 60.0);
             state_hdr.update(0.0, 0.0, &hdr, 1.0 / 60.0);
@@ -299,6 +343,35 @@ mod tests {
         adaptation.settings = AutoExposureSettings::resolve(-8.0, 0.5, 10.0, false);
         adaptation.step(0.0, 1.0 / 60.0);
         assert!(adaptation.current_ev() <= 0.5);
+    }
+
+    // The adapted luminance eases toward the measurement at the exposure's
+    // rate, past the EV clamp, and night vision follows it: none by day, all
+    // of it once a moonlit night has settled, never a jump in between.
+    #[test]
+    fn night_vision_follows_the_adapted_luminance() {
+        let settings = AutoExposureSettings::resolve(-8.0, 12.0, 2.0, false).with_night_vision(1.0);
+        let mut adaptation = ExposureAdaptation::new(settings, -4.0);
+        for _ in 0..600 {
+            adaptation.step(-4.4, 1.0 / 60.0);
+        }
+        assert!((adaptation.adapted_log_lum() + 4.4).abs() < 1e-3);
+        assert_eq!(adaptation.night_vision(3.2), 0.0);
+        let mut last = 0.0;
+        for _ in 0..1200 {
+            adaptation.step(-23.6, 1.0 / 60.0);
+            let w = adaptation.night_vision(3.2);
+            assert!(w >= last && w - last < 0.1, "{w} after {last}");
+            last = w;
+        }
+        assert!((adaptation.adapted_log_lum() + 23.6).abs() < 1e-3);
+        assert!(adaptation.current_ev() <= 12.0);
+        assert_eq!(last, 1.0);
+        let off = ExposureAdaptation {
+            settings: settings.with_night_vision(0.0),
+            ..adaptation
+        };
+        assert_eq!(off.night_vision(3.2), 0.0);
     }
 
     #[test]

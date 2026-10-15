@@ -70,7 +70,7 @@ pub(crate) enum Apply {
 /// A render-config asset an edit can push at the running renderer.
 pub(crate) enum RenderConfig {
     Fog(VolumetricFog),
-    Graphics(GraphicsConfig),
+    Graphics(Box<GraphicsConfig>),
 }
 
 /// Plan every change as a write against the running world, or `None` when any

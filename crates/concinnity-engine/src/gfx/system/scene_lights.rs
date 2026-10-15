@@ -65,10 +65,38 @@ pub(super) fn lights_under_sky<'a>(
     }))
 }
 
+// The authored intensity of the world's sun: its first directional light, or
+// the neutral sun a world with none is lit by.
+pub(super) fn sunlight(ctx: &PipelineContext) -> f32 {
+    ctx.query::<DirectionalLight>()
+        .next()
+        .map_or(LightUniforms::DEFAULT.directional[0].intensity, |l| {
+            l.intensity
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use concinnity_core::ecs::World;
+
+    #[test]
+    fn the_sunlight_is_the_first_directional_light() {
+        let mut world = World::new();
+        assert_eq!(
+            sunlight(&world.context()),
+            LightUniforms::DEFAULT.directional[0].intensity
+        );
+        world.push(DirectionalLight {
+            intensity: 3.2,
+            ..Default::default()
+        });
+        world.push(DirectionalLight {
+            intensity: 0.5,
+            ..Default::default()
+        });
+        assert_eq!(sunlight(&world.context()), 3.2);
+    }
 
     // A frame move carries each kind of local light to where the move says,
     // and the packed lights the backend rewrites are the carried ones.

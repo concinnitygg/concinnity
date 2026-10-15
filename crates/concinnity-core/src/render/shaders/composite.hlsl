@@ -10,9 +10,10 @@
 // alike. Textures 3-7 are declared but sampled only while a channel view is
 // active.
 
-// Layout matches `CompositeParams` in render_types.rs (60 B): the
+// Layout matches `CompositeParams` in render_types.rs (64 B): the
 // `PostProcessParams` fields followed by the fade, the channel-view selector,
-// the depth view's distance range, and whether the reactive mask was written.
+// the depth view's distance range, whether the reactive mask was written, and
+// the night-vision weight.
 struct CompositeParams
 {
     float bloom_intensity;
@@ -46,6 +47,8 @@ struct CompositeParams
     float depth_far;
     // 1 when the reactive mask was written this frame.
     float reactive_valid;
+    // How far the scene is shown as the rods see it, in [0, 1].
+    float night_vision;
 };
 
 [[vk::binding(0, 0)]] Texture2D<float4> hdr_tex : register(t0);
@@ -80,6 +83,13 @@ struct CompositeParams
 // HDR reference white, which keeps SDR-range content from looking dim beside
 // HDR highlights. Not the scRGB unit, which is 80 nits by definition.
 static const float PQ_REFERENCE_WHITE_NITS = 203.0;
+
+// Scales the rods' luminance so D65 white keeps its photopic luminance.
+static const float SCOTOPIC_WHITE_SCALE = 0.388642;
+
+// The rods' hue at unit luminance in linear sRGB: CIE chromaticity
+// (0.25, 0.25), the blue shift of night rendering (Jensen et al. 2000).
+static const float3 SCOTOPIC_TINT = float3(0.70617, 0.98988, 1.96567);
 
 // Width of the color-grading LUT along one axis.
 float lut_axis_size()
@@ -121,24 +131,40 @@ float fxaa_luma(float3 rgb)
     return dot(rgb, float3(0.299, 0.587, 0.114));
 }
 
-// Scene color = exposed HDR resolve + bloom. Exposure scales the HDR tap
+// Luminance as the rods see it, from CIE XYZ (Durand and Dorsey 2000):
+// blues stay lighter and reds go dark next to the photopic luminance.
+float scotopic_luminance(float3 c)
+{
+    float x = dot(c, float3(0.4124, 0.3576, 0.1805));
+    float y = dot(c, float3(0.2126, 0.7152, 0.0722));
+    float z = dot(c, float3(0.0193, 0.1192, 0.9505));
+    float v = y * (1.33 * (1.0 + (y + z) / max(x, 1e-10)) - 1.68);
+    return max(v, 0.0) * SCOTOPIC_WHITE_SCALE;
+}
+
+// Scene color = exposed HDR resolve + bloom, blended toward night vision when
+// `night` is set. Exposure scales the HDR tap
 // only - the bloom mip already carries the exposure applied in the prefilter.
 // The bloom sample is skipped when bloom is disabled so an uninitialized bloom
 // target is never read.
-float3 scene_sample(float2 uv)
+float3 scene_sample(float2 uv, bool night)
 {
     float3 c = hdr_tex.Sample(hdr_tex_samp, uv).rgb * post.exposure;
     if (post.bloom_intensity > 0.0)
     {
         c += bloom_tex.Sample(bloom_tex_samp, uv).rgb * post.bloom_intensity;
     }
+    if (night)
+    {
+        c = lerp(c, scotopic_luminance(c) * SCOTOPIC_TINT, post.night_vision);
+    }
     return c;
 }
 
 // Scene sample -> ACES tonemap -> gamma 2.2 encode.
-float3 tonemap(float2 uv)
+float3 tonemap(float2 uv, bool night)
 {
-    return pow(aces_narkowicz(scene_sample(uv)), (float3)(1.0 / 2.2));
+    return pow(aces_narkowicz(scene_sample(uv, night)), (float3)(1.0 / 2.2));
 }
 
 // Smooth radial corner darkening. `strength` 0 disables it; 1 fully darkens the
@@ -214,16 +240,11 @@ float3 channel_view(float2 uv)
     return (float3)(0.0);
 }
 
-[shader("pixel")]
-float4 composite_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
+// The composited scene. Called with `night` as a literal on each side of one
+// uniform branch, so the night-vision terms are compiled only into the night
+// path.
+float4 composite_scene(float2 uv, bool night)
 {
-    // Channel views replace the composited scene with one prepass channel; the
-    // text overlay still draws after in this same pass.
-    if (post.view_mode != 0u)
-    {
-        return float4(channel_view(uv), 1.0);
-    }
-
     float2 inv_size = 1.0 / texture_size(hdr_tex);
     // The scene fade rides the vignette multiplier: both are plain scalars on
     // the output color, so the HDR path fades in linear light ahead of the
@@ -242,7 +263,7 @@ float4 composite_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     // because it is a multiplicative falloff defined on luminance.
     if (post.hdr_output > 0.5)
     {
-        float3 hdr_vig = scene_sample(uv) * vig;
+        float3 hdr_vig = scene_sample(uv, night) * vig;
         if (post.pq_output > 0.5)
         {
             return float4(pq_encode(hdr_vig * PQ_REFERENCE_WHITE_NITS), 1.0);
@@ -251,7 +272,7 @@ float4 composite_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     }
 
     // Composite bloom onto the HDR scene, then ACES tonemap + gamma encode.
-    float3 c = tonemap(uv);
+    float3 c = tonemap(uv, night);
 
     // FXAA is gated by post.fxaa (off for the Off anti-aliasing mode). When
     // disabled, grade + vignette the tonemapped center directly and skip the
@@ -264,10 +285,10 @@ float4 composite_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     // FXAA 3.11-style edge detection on the encoded image. Each neighbor is
     // composited with bloom and remapped through the same tonemap + gamma so
     // luma compares stay consistent with the center sample.
-    float3 n = tonemap(uv + float2(0.0, -inv_size.y));
-    float3 s = tonemap(uv + float2(0.0,  inv_size.y));
-    float3 e = tonemap(uv + float2( inv_size.x, 0.0));
-    float3 w = tonemap(uv + float2(-inv_size.x, 0.0));
+    float3 n = tonemap(uv + float2(0.0, -inv_size.y), night);
+    float3 s = tonemap(uv + float2(0.0,  inv_size.y), night);
+    float3 e = tonemap(uv + float2( inv_size.x, 0.0), night);
+    float3 w = tonemap(uv + float2(-inv_size.x, 0.0), night);
 
     float l_c = fxaa_luma(c);
     float l_n = fxaa_luma(n);
@@ -292,11 +313,28 @@ float4 composite_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     bool horizontal = horz_diff >= vert_diff;
 
     float2 step_dir = horizontal ? float2(0.0, inv_size.y) : float2(inv_size.x, 0.0);
-    float3 a = tonemap(uv + step_dir * 0.5);
-    float3 b = tonemap(uv - step_dir * 0.5);
+    float3 a = tonemap(uv + step_dir * 0.5, night);
+    float3 b = tonemap(uv - step_dir * 0.5, night);
     float3 blended = (c + a + b) * (1.0 / 3.0);
 
     // Grade the FXAA-resolved color, then vignette last so it darkens the
     // final composited result.
     return float4(grade(blended) * vig, 1.0);
+}
+
+[shader("pixel")]
+float4 composite_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
+{
+    // Channel views replace the composited scene with one prepass channel; the
+    // text overlay still draws after in this same pass.
+    if (post.view_mode != 0u)
+    {
+        return float4(channel_view(uv), 1.0);
+    }
+    [branch]
+    if (post.night_vision > 0.0)
+    {
+        return composite_scene(uv, true);
+    }
+    return composite_scene(uv, false);
 }

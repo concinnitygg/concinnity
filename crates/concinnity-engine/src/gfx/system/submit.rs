@@ -127,6 +127,7 @@ pub(crate) fn submit(
         rebase: snap.frame.rebase,
         grass_benders: &snap.grass_benders,
         atmosphere: snap.frame.atmosphere,
+        sunlight: snap.frame.sunlight,
     }) {
         Ok(()) => {
             policy.frame_succeeded();
