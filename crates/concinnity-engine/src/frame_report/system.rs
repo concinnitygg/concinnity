@@ -2,13 +2,15 @@
 // reports what the run cost when it ends.
 
 use concinnity_core::camera_track::CameraTrackStatus;
+use concinnity_core::components::FrameCapture;
 use concinnity_core::components::{CameraTrack, FrameReport};
-use concinnity_core::ecs::{PipelineContext, StepResult, System};
+use concinnity_core::ecs::{PipelineContext, StepResult, System, WindowMinimized};
 use concinnity_core::profile::RenderStats;
 use std::time::Instant;
 
 use crate::ecs::FrameCaptureRequest;
 use crate::frame_report::capture::{CAPTURE_DROPPED_FRAMES, CaptureSchedule};
+use crate::frame_report::hidden::HiddenFrames;
 use crate::frame_report::reduce::{ReduceOptions, Report};
 use crate::frame_report::report::to_text;
 use crate::frame_report::sample::{FrameRun, FrameSample};
@@ -29,6 +31,11 @@ const MICROS_PER_MILLI: f32 = 1_000.0;
 /// A declared capture is requested on the step the run reaches its moment, so
 /// the next frame drawn shows the pose that step left. That frame and the few
 /// after it are not recorded.
+///
+/// A frame run while the window is minimized or hidden draws nothing, so it
+/// and the few after the window shows again are not recorded either. The
+/// report says how many there were, and a capture due among them is skipped
+/// rather than saving whatever was last shown.
 #[derive(Debug)]
 pub struct FrameReportSystem {
     run: FrameRun,
@@ -51,6 +58,9 @@ pub struct FrameReportSystem {
     // Captures requested, and the frames left unrecorded around them.
     captured: u32,
     dropped: u32,
+    hidden: HiddenFrames,
+    // Captures that came due while the window could not show them.
+    hidden_captures: Vec<FrameCapture>,
 }
 
 // What one step knows about its frame before the profile rotates in the
@@ -81,6 +91,8 @@ impl FrameReportSystem {
             excluded: 0,
             captured: 0,
             dropped: 0,
+            hidden: HiddenFrames::default(),
+            hidden_captures: Vec::new(),
         }
     }
 
@@ -107,6 +119,24 @@ impl FrameReportSystem {
             println!(
                 "frame report: {} frame(s) around {} capture(s) left out of the measurement",
                 self.dropped, self.captured,
+            );
+        }
+        if self.hidden.total() > 0 {
+            let segments: Vec<String> = self
+                .hidden
+                .by_segment()
+                .map(|(segment, count)| format!("{} {count}", self.run.segment_name(segment)))
+                .collect();
+            println!(
+                "frame report: the window was hidden, so {} frame(s) past the warm-up ({}) were left out of the measurement",
+                self.hidden.total(),
+                segments.join(", "),
+            );
+        }
+        for skipped in &self.hidden_captures {
+            println!(
+                "frame report: the window was hidden at {:.1}s, so {} was not captured",
+                skipped.seconds, skipped.path,
             );
         }
         for missed in self.captures.missed() {
@@ -151,7 +181,14 @@ impl System for FrameReportSystem {
             frame_us,
             render,
         };
-        let recorded = if self.excluded > 0 {
+        let hidden = ctx.resource::<WindowMinimized>().is_some_and(|m| m.0);
+        let past_warmup = run_seconds >= self.options.warmup_seconds;
+        let unseen = self
+            .hidden
+            .leaves_out(hidden, this_frame.segment, past_warmup);
+        let recorded = if unseen {
+            None
+        } else if self.excluded > 0 {
             self.excluded -= 1;
             self.dropped += 1;
             None
@@ -173,9 +210,13 @@ impl System for FrameReportSystem {
         }
 
         if let Some(capture) = self.captures.due(run_seconds) {
-            ctx.insert_resource(FrameCaptureRequest(capture.path));
-            self.excluded = CAPTURE_DROPPED_FRAMES;
-            self.captured += 1;
+            if unseen {
+                self.hidden_captures.push(capture);
+            } else {
+                ctx.insert_resource(FrameCaptureRequest(capture.path));
+                self.excluded = CAPTURE_DROPPED_FRAMES;
+                self.captured += 1;
+            }
         }
 
         if status.is_some_and(|s| s.finished) && self.stop_when_complete {
@@ -470,6 +511,59 @@ mod tests {
         }
         let at = requested_at.expect("the track passed the capture's moment");
         assert!(at >= 0.05, "requested at {at}s");
+        forget_report(system);
+    }
+
+    #[test]
+    fn frames_run_while_the_window_is_hidden_go_unrecorded_and_are_tallied() {
+        use crate::frame_report::hidden::RESTORE_DROPPED_FRAMES;
+
+        let mut world = World::new();
+        let mut system = FrameReportSystem::new(&FrameReport {
+            warmup_seconds: 0.0,
+            ..Default::default()
+        });
+        system.init(&mut world.context());
+        system.step(&mut world.context());
+        system.step(&mut world.context());
+        world.insert_resource(WindowMinimized(true));
+        for _ in 0..3 {
+            system.step(&mut world.context());
+        }
+        world.insert_resource(WindowMinimized(false));
+        for _ in 0..RESTORE_DROPPED_FRAMES {
+            system.step(&mut world.context());
+        }
+        // Only the frame before the window hid made it in.
+        assert_eq!(system.run().samples.len(), 1);
+        system.step(&mut world.context());
+        system.step(&mut world.context());
+        assert_eq!(system.run().samples.len(), 2);
+        assert_eq!(system.hidden.total(), 3 + RESTORE_DROPPED_FRAMES);
+        forget_report(system);
+    }
+
+    #[test]
+    fn a_capture_due_while_the_window_is_hidden_is_skipped() {
+        use concinnity_core::components::FrameCapture;
+
+        let mut world = World::new();
+        let mut system = FrameReportSystem::new(&FrameReport {
+            warmup_seconds: 0.0,
+            captures: vec![FrameCapture {
+                seconds: 0.0,
+                path: "a.png".to_string(),
+            }],
+            ..Default::default()
+        });
+        system.init(&mut world.context());
+        system.step(&mut world.context());
+        world.insert_resource(WindowMinimized(true));
+        system.step(&mut world.context());
+        assert!(world.resource::<FrameCaptureRequest>().is_none());
+        assert_eq!(system.captured, 0);
+        assert_eq!(system.hidden_captures.len(), 1);
+        assert_eq!(system.captures.missed().count(), 0);
         forget_report(system);
     }
 
