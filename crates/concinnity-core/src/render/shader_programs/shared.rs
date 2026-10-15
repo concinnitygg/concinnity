@@ -33,11 +33,24 @@ pub static MAIN_BINDLESS_CANOPY_FRAG: ShaderProgram = ShaderProgram {
     msaa: false,
 };
 
-/// The engine's main fragment, with or without the far-field canopy.
-pub fn main_bindless_frag(canopy: bool) -> &'static ShaderProgram {
-    match canopy {
-        true => &MAIN_BINDLESS_CANOPY_FRAG,
-        false => &MAIN_BINDLESS_FRAG,
+/// `fragment_main_bindless` from `main_bindless.hlsl` under
+/// `SURFACE_GRASS_GROUND`: the main fragment that shades the ground under
+/// grass without the canopy.
+pub static MAIN_BINDLESS_GROUND_FRAG: ShaderProgram = ShaderProgram {
+    file: "main_bindless.hlsl",
+    entry: "fragment_main_bindless",
+    label: "main_bindless_ground_frag.hlsl",
+    gates: &[super::surface::GROUND_GATE],
+    msaa: false,
+};
+
+/// The engine's main fragment that shades `grass`.
+pub fn main_bindless_frag(grass: super::surface::GrassShading) -> &'static ShaderProgram {
+    use super::surface::GrassShading;
+    match grass {
+        GrassShading::None => &MAIN_BINDLESS_FRAG,
+        GrassShading::Ground => &MAIN_BINDLESS_GROUND_FRAG,
+        GrassShading::Canopy => &MAIN_BINDLESS_CANOPY_FRAG,
     }
 }
 
@@ -793,6 +806,7 @@ pub static ALL: &[&ShaderProgram] = &[
     &MAIN_BINDLESS_VERT,
     &MAIN_BINDLESS_FRAG,
     &MAIN_BINDLESS_CANOPY_FRAG,
+    &MAIN_BINDLESS_GROUND_FRAG,
     &LIGHT_CULL,
     &MODEL_HISTORY,
     &CULL_PHASE1,

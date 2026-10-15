@@ -10,6 +10,7 @@ use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
+use concinnity_core::render::shader_programs::surface::GrassShading;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLDevice;
@@ -24,8 +25,8 @@ use super::raymarch::{VolumePipelines, build_volume_pipelines};
 pub(super) struct MtlPipelineBuilder {
     pub device: Retained<ProtocolObject<dyn MTLDevice>>,
     pub targets: BucketBuild,
-    // Per bucket: its main fragment compiles the far-field canopy.
-    pub canopy: Vec<bool>,
+    // Per bucket: what of the grass its main fragment shades.
+    pub grass: Vec<GrassShading>,
 }
 
 // A world Shader's main-pass and pre-pass pipelines and what they were built
@@ -54,7 +55,7 @@ impl PipelineBuilder for MtlPipelineBuilder {
                 &make_vertex_descriptor(),
                 bucket as usize,
                 Some(programs),
-                self.canopy.get(bucket as usize).is_some_and(|c| *c),
+                self.grass.get(bucket as usize).copied().unwrap_or_default(),
                 self.targets,
             )
         })?;
@@ -143,7 +144,7 @@ mod tests {
                 main: pipeline.clone(),
                 prepass: Some(pipeline.clone()),
                 programs: None,
-                canopy: false,
+                grass: GrassShading::None,
             },
         }))
     }

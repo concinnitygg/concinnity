@@ -80,7 +80,7 @@ pub(crate) struct CullState {
     // decision dispatch on the same encoder.
     pub encode_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
     // How many shader buckets this world routes between: the world Shader
-    // count, clamped to MAX_SHADER_BUCKETS. Fixed at init.
+    // count plus any grass twins. Fixed at init.
     pub bucket_count: usize,
     // One indirect command buffer per shader bucket (index = bucket); the
     // cull kernel encodes each record's draw into its bucket's ICB and resets
@@ -450,7 +450,7 @@ impl MtlContext {
                 .state
                 .horizon_occluder
                 .and_then(|o| o.seen_from(cam_pos)),
-            canopy_twin: self.cull.world_pipelines.canopy_twin(),
+            grass_twins: self.cull.world_pipelines.grass_twins(),
         };
         let texture_count = self.scene.textures.len();
         let (objects, objects_fresh) = self.rings.object.slot_fresh(

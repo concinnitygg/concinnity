@@ -9,6 +9,7 @@
 
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::shader_programs::surface::GrassShading;
 use objc2::rc::Retained;
 use objc2_metal::{MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction};
 use std::sync::atomic::Ordering;
@@ -166,7 +167,7 @@ impl MtlContext {
                 device,
                 0,
                 self.world_shader.as_ref(),
-                false,
+                GrassShading::None,
                 build,
                 self.cull.main_pipeline.as_ref(),
                 None,
@@ -371,7 +372,7 @@ impl MtlContext {
                 &self.hw.device,
                 0,
                 Some(programs),
-                false,
+                GrassShading::None,
                 self.bucket_build(),
                 self.cull.main_pipeline.as_ref(),
                 prepared,

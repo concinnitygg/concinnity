@@ -13,6 +13,7 @@
 use ash::vk;
 use concinnity_core::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::shader_programs::surface::GrassShading;
 use concinnity_core::render::world_pipelines::{BucketSource, check_rebuild, replace_bucket};
 
 use super::context::VkContext;
@@ -34,8 +35,8 @@ impl VkContext {
         programs: &concinnity_core::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<()> {
-        let canopy = self.cull.world_pipelines.canopy(bucket as usize);
-        let pipelines = self.bucket_pipelines(bucket, programs, canopy, prepared, false)?;
+        let grass = self.cull.world_pipelines.grass(bucket as usize);
+        let pipelines = self.bucket_pipelines(bucket, programs, grass, prepared, false)?;
         // The displaced pipelines drop into the device's retire queue, which
         // holds them until every frame in flight that recorded against them
         // retires.
@@ -51,7 +52,7 @@ impl VkContext {
         &self,
         bucket: u32,
         programs: &concinnity_core::components::ShaderPrograms,
-        canopy: bool,
+        grass: GrassShading,
         prepared: Option<PreparedPipelines>,
         live_prepass: bool,
     ) -> RenderResult<BucketPipelines> {
@@ -62,7 +63,7 @@ impl VkContext {
         replace_bucket(
             bucket as usize,
             live_prepass,
-            world_shader_for(prepared, &self.pipeline_gate, targets).filter(|p| p.canopy == canopy),
+            world_shader_for(prepared, &self.pipeline_gate, targets).filter(|p| p.grass == grass),
             |p: &BucketPipelines| p.prepass.is_some(),
             || {
                 build_world_shader_pipeline(
@@ -70,7 +71,7 @@ impl VkContext {
                     targets,
                     bucket as usize,
                     programs,
-                    canopy,
+                    grass,
                 )
             },
         )
@@ -92,7 +93,7 @@ impl VkContext {
                 .bucket_pipeline_targets()
                 .and_then(|targets| world_shader_for(prepared, &self.pipeline_gate, targets));
             self.update_default_world_shader(programs, prepared)?;
-            self.update_canopy_twin(programs)?;
+            self.update_grass_twins(programs)?;
             return Ok(PipelineSwap::Swapped);
         }
         self.cull.world_pipelines.slot(bucket)?;
@@ -101,26 +102,32 @@ impl VkContext {
         }
         let live_prepass = (self.cull.world_pipelines.get(bucket as usize))
             .is_some_and(|live| live.prepass.is_some());
-        let canopy = self.cull.world_pipelines.canopy(bucket as usize);
-        let pipelines = self.bucket_pipelines(bucket, programs, canopy, prepared, live_prepass)?;
+        let grass = self.cull.world_pipelines.grass(bucket as usize);
+        let pipelines = self.bucket_pipelines(bucket, programs, grass, prepared, live_prepass)?;
         self.cull.world_pipelines.install(bucket, pipelines)?;
         Ok(PipelineSwap::Swapped)
     }
 
-    // Rebuild the default Shader's canopy twin from its fresh programs, when
-    // the world has one. Built here rather than on a worker: only a hot reload
-    // of the default Shader reaches it.
-    fn update_canopy_twin(
+    // Rebuild the default Shader's grass twins from its fresh programs, when
+    // the world has them. Built here rather than on a worker: only a hot reload
+    // of the default Shader reaches them.
+    fn update_grass_twins(
         &mut self,
         programs: &concinnity_core::components::ShaderPrograms,
     ) -> RenderResult<()> {
-        let Some(twin) = self.cull.world_pipelines.canopy_twin() else {
-            return Ok(());
-        };
-        let live_prepass = (self.cull.world_pipelines.get(twin as usize))
-            .is_some_and(|live| live.prepass.is_some());
-        let pipelines = self.bucket_pipelines(twin, programs, true, None, live_prepass)?;
-        self.cull.world_pipelines.install(twin, pipelines)?;
+        let twins = self.cull.world_pipelines.grass_twins();
+        for (twin, grass) in [
+            (twins.canopy, GrassShading::Canopy),
+            (twins.ground, GrassShading::Ground),
+        ] {
+            let Some(twin) = twin else {
+                continue;
+            };
+            let live_prepass = (self.cull.world_pipelines.get(twin as usize))
+                .is_some_and(|live| live.prepass.is_some());
+            let pipelines = self.bucket_pipelines(twin, programs, grass, None, live_prepass)?;
+            self.cull.world_pipelines.install(twin, pipelines)?;
+        }
         Ok(())
     }
 
@@ -214,7 +221,7 @@ impl VkContext {
             let source = BucketSource {
                 programs: live.programs.as_ref(),
                 deferred: false,
-                canopy: live.canopy,
+                grass: live.grass,
             };
             let pipelines =
                 build_bucket_pipeline(&self.hw.device, targets, bucket, &source, engine)?;
@@ -232,7 +239,7 @@ impl VkContext {
             gate: self.pipeline_gate.clone(),
             world: self.bucket_pipeline_targets(),
             volumes: self.volume_pipeline_targets(),
-            canopy: self.cull.world_pipelines.canopy_flags(),
+            grass: self.cull.world_pipelines.grass_shadings(),
         })
     }
 

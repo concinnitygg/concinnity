@@ -9,6 +9,7 @@
 
 use ash::vk;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::shader_programs::surface::GrassShading;
 use concinnity_core::render::world_pipelines::{BucketSource, check_rebuild, replace_bucket};
 use std::sync::atomic::Ordering;
 
@@ -425,7 +426,7 @@ impl VkContext {
             &BucketSource {
                 programs: world,
                 deferred: false,
-                canopy: false,
+                grass: GrassShading::None,
             },
             engine,
         )?;

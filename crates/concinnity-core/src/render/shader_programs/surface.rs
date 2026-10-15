@@ -23,9 +23,27 @@ pub const FRAGMENT_MARKER: &str = "{SURFACE_FRAGMENT}";
 /// The gate the G-buffer pre-pass entries compile under.
 pub const PREPASS_GATE: &str = "SURFACE_PREPASS";
 
-/// The gate the main fragment compiles under to shade a far band as grass
-/// canopy. Without it the band is a constant 0 and the canopy code folds away.
+/// The gate the main fragment compiles under to shade the ground under grass
+/// and a far band as grass canopy. Without it (or [`GROUND_GATE`]) the band is
+/// a constant 0 and the grass code folds away.
 pub const CANOPY_GATE: &str = "SURFACE_CANOPY";
+
+/// The gate the main fragment compiles under to shade the ground under grass
+/// alone, for draws wholly nearer than their far band.
+pub const GROUND_GATE: &str = "SURFACE_GRASS_GROUND";
+
+/// What a main fragment shades of the grass a surface grows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GrassShading {
+    /// Nothing: the surface grows no grass.
+    #[default]
+    None,
+    /// The ground under the grass (litter, patches, the leaf's shade), for a
+    /// draw that cannot reach its far band.
+    Ground,
+    /// The ground under the grass and the canopy past the blades.
+    Canopy,
+}
 
 /// One entry point of one main-pass file. The vertex entries carry the
 /// world's `transform`, the main fragment entry its `shade`.
@@ -57,6 +75,13 @@ pub const MAIN_FRAGMENT_CANOPY: Program = Program {
     entry: "fragment_main_bindless",
     gates: &[CANOPY_GATE],
 };
+/// The bindless main-pass fragment entry that shades the ground under grass
+/// without the canopy.
+pub const MAIN_FRAGMENT_GROUND: Program = Program {
+    file: "main_bindless.hlsl",
+    entry: "fragment_main_bindless",
+    gates: &[GROUND_GATE],
+};
 /// The G-buffer pre-pass vertex entry.
 pub const PREPASS_VERTEX: Program = Program {
     file: "main_bindless.hlsl",
@@ -71,20 +96,22 @@ pub const PREPASS_FRAGMENT: Program = Program {
 };
 
 /// Every program a world Shader compiles, on every host: the bindless main
-/// pair, the canopy main fragment and the pre-pass pair.
+/// pair, the canopy and ground main fragments and the pre-pass pair.
 pub const ALL: &[Program] = &[
     MAIN_VERTEX,
     MAIN_FRAGMENT,
     MAIN_FRAGMENT_CANOPY,
+    MAIN_FRAGMENT_GROUND,
     PREPASS_VERTEX,
     PREPASS_FRAGMENT,
 ];
 
-/// The main fragment, with or without the far-field canopy.
-pub fn main_fragment(canopy: bool) -> &'static Program {
-    match canopy {
-        true => &MAIN_FRAGMENT_CANOPY,
-        false => &MAIN_FRAGMENT,
+/// The main fragment that shades `grass`.
+pub fn main_fragment(grass: GrassShading) -> &'static Program {
+    match grass {
+        GrassShading::None => &MAIN_FRAGMENT,
+        GrassShading::Ground => &MAIN_FRAGMENT_GROUND,
+        GrassShading::Canopy => &MAIN_FRAGMENT_CANOPY,
     }
 }
 
@@ -187,10 +214,10 @@ mod tests {
         }
     }
 
-    // The main pair, the canopy fragment and the pre-pass pair are the whole
+    // The main pair, the grass fragments and the pre-pass pair are the whole
     // table, each gated only by what it compiles.
     #[test]
-    fn the_main_pair_canopy_fragment_and_prepass_pair_are_the_whole_table() {
+    fn the_main_pair_grass_fragments_and_prepass_pair_are_the_whole_table() {
         let rows: Vec<(&str, &[&str])> = ALL.iter().map(|p| (p.entry, p.gates)).collect();
         assert_eq!(
             rows,
@@ -198,6 +225,7 @@ mod tests {
                 ("vertex_main_bindless", &[][..]),
                 ("fragment_main_bindless", &[][..]),
                 ("fragment_main_bindless", &[CANOPY_GATE][..]),
+                ("fragment_main_bindless", &[GROUND_GATE][..]),
                 ("vertex_prepass_bindless", &[PREPASS_GATE][..]),
                 ("fragment_prepass_bindless", &[PREPASS_GATE][..]),
             ]
@@ -218,16 +246,22 @@ mod tests {
         assert!(!main.contains("#define SURFACE_PREPASS"));
     }
 
-    // Only the canopy fragment compiles the canopy, and it differs from the
-    // plain fragment by its gate alone.
+    // Each grass fragment carries its own gate alone, and differs from the
+    // plain fragment by that gate only.
     #[test]
-    fn only_the_canopy_fragment_carries_the_canopy_gate() {
-        assert_eq!(main_fragment(false), &MAIN_FRAGMENT);
-        assert_eq!(main_fragment(true), &MAIN_FRAGMENT_CANOPY);
+    fn each_grass_fragment_carries_only_its_gate() {
+        assert_eq!(main_fragment(GrassShading::None), &MAIN_FRAGMENT);
+        assert_eq!(main_fragment(GrassShading::Ground), &MAIN_FRAGMENT_GROUND);
+        assert_eq!(main_fragment(GrassShading::Canopy), &MAIN_FRAGMENT_CANOPY);
         let plain = source(&MAIN_FRAGMENT, Platform::Metal, &fragment_only());
         let canopy = source(&MAIN_FRAGMENT_CANOPY, Platform::Metal, &fragment_only());
+        let ground = source(&MAIN_FRAGMENT_GROUND, Platform::Metal, &fragment_only());
         assert!(!plain.contains("#define SURFACE_CANOPY"));
+        assert!(!plain.contains("#define SURFACE_GRASS_GROUND"));
         assert!(canopy.contains("#define SURFACE_CANOPY 1\n"));
+        assert!(!canopy.contains("#define SURFACE_GRASS_GROUND"));
+        assert!(ground.contains("#define SURFACE_GRASS_GROUND 1\n"));
+        assert!(!ground.contains("#define SURFACE_CANOPY"));
         let body = |src: &str| -> Vec<String> {
             src.lines()
                 .filter(|l| !l.starts_with("#line ") && !l.starts_with("#define "))
@@ -236,6 +270,11 @@ mod tests {
         };
         assert_eq!(
             body(&canopy),
+            body(&plain),
+            "the gate is the only difference"
+        );
+        assert_eq!(
+            body(&ground),
             body(&plain),
             "the gate is the only difference"
         );

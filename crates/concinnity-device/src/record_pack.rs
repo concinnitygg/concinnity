@@ -111,7 +111,7 @@ mod tests {
             cam_pos: [0.0; 3],
             mesh_glass_active: false,
             horizon: None,
-            canopy_twin: None,
+            grass_twins: Default::default(),
         };
         packer.pack(
             StaticPack {

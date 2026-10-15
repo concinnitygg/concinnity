@@ -12,6 +12,7 @@ use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
+use concinnity_core::render::shader_programs::surface::GrassShading;
 use windows::Win32::Graphics::Direct3D12::{ID3D12Device, ID3D12InfoQueue, ID3D12RootSignature};
 
 use super::init::pipelines::{BucketPsos, BucketRootSigs, WorldPsoTargets, build_world_shader_pso};
@@ -42,8 +43,8 @@ pub(super) struct DxPipelineBuilder {
     pub world: Option<Targets<BucketRootSigs>>,
     // `None` when the world declares no volume.
     pub volumes: Option<Targets<VolumeRootSigs>>,
-    // Per bucket: its main fragment compiles the far-field canopy.
-    pub canopy: Vec<bool>,
+    // Per bucket: what of the grass its main fragment shades.
+    pub grass: Vec<GrassShading>,
 }
 
 // A world Shader's main-pass and pre-pass PSOs and what they were built for.
@@ -79,7 +80,7 @@ impl PipelineBuilder for DxPipelineBuilder {
             },
             bucket as usize,
             programs,
-            self.canopy.get(bucket as usize).is_some_and(|c| *c),
+            self.grass.get(bucket as usize).copied().unwrap_or_default(),
         )?;
         Ok(PreparedPipelines::new(PreparedWorldShader {
             targets,

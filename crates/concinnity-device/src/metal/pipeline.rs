@@ -246,10 +246,7 @@ mod tests {
 
     #[test]
     fn the_bucket_count_matches_render_types() {
-        use concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
-        assert_eq!(
-            encode_const("MAX_SHADER_BUCKETS") as usize,
-            MAX_SHADER_BUCKETS
-        );
+        use concinnity_core::gfx::render_types::MAX_DRAW_BUCKETS;
+        assert_eq!(encode_const("MAX_DRAW_BUCKETS") as usize, MAX_DRAW_BUCKETS);
     }
 }

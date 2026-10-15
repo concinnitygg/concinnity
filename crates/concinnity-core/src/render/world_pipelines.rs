@@ -9,9 +9,10 @@
 //! Only a bucket that draws a surface growing grass (one with a far band)
 //! compiles the grass ground and canopy into its main fragment, since that code
 //! costs every pixel of the program carrying it. A world Shader that draws one
-//! compiles it into its own bucket; the default keeps its bucket without it and
-//! gains a canopy twin past the last world Shader, which the far-band records
-//! route to.
+//! compiles it into its own bucket. The default keeps its bucket without it and
+//! gains two twins past the last world Shader: a canopy twin for the far-band
+//! draws that reach their band, and a ground twin, without the canopy, for
+//! those wholly nearer. The twins share one Shader's place in the budget.
 
 use alloc::format;
 use alloc::string::ToString;
@@ -22,33 +23,45 @@ use crate::components::ShaderPrograms;
 use crate::gfx::render_types::MAX_SHADER_BUCKETS;
 use crate::render::backend_init::WorldShader;
 use crate::render::error::{RenderError, RenderResult};
+use crate::render::shader_programs::surface::GrassShading;
 
 /// What one shader bucket compiles: a world Shader's programs or the engine's
-/// own, with or without the far-field canopy.
+/// own, and what of the grass its main fragment shades.
 #[derive(Debug, Clone, Copy)]
 pub struct BucketSource<'a> {
     /// The world Shader's programs; `None` for the engine's own.
     pub programs: Option<&'a ShaderPrograms>,
     /// The Shader's payload waits on a scene other than the start scene.
     pub deferred: bool,
-    /// The main fragment shades a far band as grass canopy.
-    pub canopy: bool,
+    /// What of the grass the main fragment shades.
+    pub grass: GrassShading,
+}
+
+/// The buckets the default Shader's far-band draws route to, when any draw
+/// under it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GrassTwins {
+    /// Shades the ground under the grass and the canopy past the blades.
+    pub canopy: Option<u32>,
+    /// Shades the ground alone, for draws wholly nearer than their band.
+    pub ground: Option<u32>,
 }
 
 /// Every shader bucket a world draws with.
 #[derive(Debug, Clone)]
 pub struct BucketPlan<'a> {
-    /// By bucket index: one per world Shader, then the default's canopy twin.
+    /// By bucket index: one per world Shader, then the default's canopy and
+    /// ground twins.
     pub sources: Vec<BucketSource<'a>>,
-    /// The bucket the default Shader's far-band draws route to, when any
-    /// draws under it.
-    pub canopy_twin: Option<u32>,
+    /// Where the default Shader's far-band draws route.
+    pub twins: GrassTwins,
 }
 
 impl<'a> BucketPlan<'a> {
     /// The plan for `shaders`, indexed by ShaderHandle value with the world
     /// default at 0. Fails when the buckets exceed what a cull dispatch can
-    /// route between.
+    /// route between: [`MAX_SHADER_BUCKETS`], the default's two twins counted
+    /// as one.
     pub fn new(shaders: &[WorldShader<'a>]) -> RenderResult<Self> {
         let mut sources: Vec<BucketSource<'a>> = shaders
             .iter()
@@ -56,36 +69,40 @@ impl<'a> BucketPlan<'a> {
             .map(|(bucket, s)| BucketSource {
                 programs: s.programs,
                 deferred: s.deferred,
-                canopy: bucket > 0 && s.canopy,
+                grass: match bucket > 0 && s.canopy {
+                    true => GrassShading::Canopy,
+                    false => GrassShading::None,
+                },
             })
             .collect();
-        let canopy_twin = match shaders.first() {
-            Some(default) if default.canopy => {
+        let mut twins = GrassTwins::default();
+        if let Some(default) = shaders.first().filter(|d| d.canopy) {
+            for grass in [GrassShading::Canopy, GrassShading::Ground] {
                 sources.push(BucketSource {
                     programs: default.programs,
                     deferred: default.deferred,
-                    canopy: true,
+                    grass,
                 });
-                Some((sources.len() - 1) as u32)
             }
-            _ => None,
-        };
-        if sources.len() > MAX_SHADER_BUCKETS {
+            let ground = sources.len() - 1;
+            twins = GrassTwins {
+                canopy: Some(ground as u32 - 1),
+                ground: Some(ground as u32),
+            };
+        }
+        let budgeted = sources.len() - usize::from(twins.ground.is_some());
+        if budgeted > MAX_SHADER_BUCKETS {
             return Err(RenderError::Other(format!(
-                "world needs {} shader buckets ({} Shaders{}) but at most \
+                "world needs {budgeted} shader buckets ({} Shaders{}) but at most \
                  {MAX_SHADER_BUCKETS} are supported",
-                sources.len(),
                 shaders.len(),
-                match canopy_twin {
+                match twins.canopy {
                     Some(_) => " and the default Shader's grass canopy",
                     None => "",
                 }
             )));
         }
-        Ok(Self {
-            sources,
-            canopy_twin,
-        })
+        Ok(Self { sources, twins })
     }
 
     /// The buckets past the default.
@@ -98,9 +115,9 @@ impl<'a> BucketPlan<'a> {
 #[derive(Debug)]
 pub struct WorldPipelines<P> {
     slots: Vec<Option<P>>,
-    // Per slot: the bucket's main fragment compiles the canopy.
-    canopy: Vec<bool>,
-    canopy_twin: Option<u32>,
+    // Per slot: what of the grass the bucket's main fragment shades.
+    grass: Vec<GrassShading>,
+    twins: GrassTwins,
 }
 
 impl<P> Default for WorldPipelines<P> {
@@ -111,12 +128,12 @@ impl<P> Default for WorldPipelines<P> {
 
 impl<P> WorldPipelines<P> {
     /// A table over `slots`, slot `i` holding bucket `i + 1`, none of which
-    /// compiles the canopy.
+    /// shades grass.
     pub fn new(slots: Vec<Option<P>>) -> Self {
         Self {
-            canopy: vec![false; slots.len()],
+            grass: vec![GrassShading::None; slots.len()],
             slots,
-            canopy_twin: None,
+            twins: GrassTwins::default(),
         }
     }
 
@@ -134,29 +151,35 @@ impl<P> WorldPipelines<P> {
             });
         }
         Ok(Self {
-            canopy: plan.extra().iter().map(|s| s.canopy).collect(),
+            grass: plan.extra().iter().map(|s| s.grass).collect(),
             slots,
-            canopy_twin: plan.canopy_twin,
+            twins: plan.twins,
         })
     }
 
-    /// Whether `bucket`'s main fragment compiles the canopy. The default
-    /// never does.
-    pub fn canopy(&self, bucket: usize) -> bool {
+    /// What of the grass `bucket`'s main fragment shades. The default shades
+    /// none.
+    pub fn grass(&self, bucket: usize) -> GrassShading {
         bucket
             .checked_sub(1)
-            .and_then(|slot| self.canopy.get(slot))
-            .is_some_and(|c| *c)
+            .and_then(|slot| self.grass.get(slot))
+            .copied()
+            .unwrap_or_default()
     }
 
-    /// Every bucket's canopy flag, the default's first.
-    pub fn canopy_flags(&self) -> Vec<bool> {
-        (0..self.bucket_count()).map(|b| self.canopy(b)).collect()
+    /// What of the grass every bucket shades, the default's first.
+    pub fn grass_shadings(&self) -> Vec<GrassShading> {
+        (0..self.bucket_count()).map(|b| self.grass(b)).collect()
     }
 
-    /// The bucket the default Shader's far-band draws route to.
+    /// The buckets the default Shader's far-band draws route to.
+    pub fn grass_twins(&self) -> GrassTwins {
+        self.twins
+    }
+
+    /// The bucket that shades the default Shader's far bands with the canopy.
     pub fn canopy_twin(&self) -> Option<u32> {
-        self.canopy_twin
+        self.twins.canopy
     }
 
     /// Shader buckets, the default included.
@@ -373,26 +396,34 @@ mod tests {
         }
     }
 
-    fn canopy_of(plan: &BucketPlan<'_>) -> Vec<bool> {
-        plan.sources.iter().map(|s| s.canopy).collect()
+    use GrassShading::{Canopy, Ground, None as Bare};
+
+    fn grass_of(plan: &BucketPlan<'_>) -> Vec<GrassShading> {
+        plan.sources.iter().map(|s| s.grass).collect()
     }
 
-    // A world with no far band has one bucket per Shader, none with canopy.
+    // A world with no far band has one bucket per Shader, none shading grass.
     #[test]
-    fn without_a_far_band_no_bucket_compiles_the_canopy() {
+    fn without_a_far_band_no_bucket_shades_grass() {
         let plan = BucketPlan::new(&[shader(false, false), shader(false, false)]).unwrap();
-        assert_eq!(canopy_of(&plan), [false, false]);
-        assert_eq!(plan.canopy_twin, None);
+        assert_eq!(grass_of(&plan), [Bare, Bare]);
+        assert_eq!(plan.twins, GrassTwins::default());
     }
 
-    // A far band under the default adds a canopy twin past the last Shader and
-    // leaves the default bucket itself without the canopy.
+    // A far band under the default adds a canopy twin and a ground twin past
+    // the last Shader and leaves the default bucket itself without grass.
     #[test]
-    fn a_far_band_under_the_default_adds_a_twin_past_the_last_shader() {
+    fn a_far_band_under_the_default_adds_both_twins_past_the_last_shader() {
         let plan = BucketPlan::new(&[shader(true, false), shader(false, false)]).unwrap();
-        assert_eq!(canopy_of(&plan), [false, false, true]);
-        assert_eq!(plan.canopy_twin, Some(2));
-        assert_eq!(plan.extra().len(), 2);
+        assert_eq!(grass_of(&plan), [Bare, Bare, Canopy, Ground]);
+        assert_eq!(
+            plan.twins,
+            GrassTwins {
+                canopy: Some(2),
+                ground: Some(3),
+            }
+        );
+        assert_eq!(plan.extra().len(), 3);
     }
 
     // A world Shader under a far band compiles the canopy into its own bucket.
@@ -404,26 +435,30 @@ mod tests {
             shader(false, false),
         ])
         .unwrap();
-        assert_eq!(canopy_of(&plan), [false, true, false]);
-        assert_eq!(plan.canopy_twin, None);
+        assert_eq!(grass_of(&plan), [Bare, Canopy, Bare]);
+        assert_eq!(plan.twins, GrassTwins::default());
     }
 
-    // The twin counts toward the routing budget, and the error names it.
+    // The twins take one Shader's place in the budget between them, and the
+    // error names them.
     #[test]
-    fn the_twin_counts_toward_the_bucket_budget() {
+    fn the_twins_count_once_toward_the_bucket_budget() {
         let full = vec![shader(false, false); MAX_SHADER_BUCKETS];
         assert!(BucketPlan::new(&full).is_ok());
         let mut over = full.clone();
         over[0].canopy = true;
         let err = BucketPlan::new(&over).unwrap_err().to_string();
         assert!(err.contains("grass canopy"), "{err}");
-        assert!(BucketPlan::new(&over[1..]).is_ok());
+        assert!(err.contains("needs 9 shader buckets"), "{err}");
+        let fits = BucketPlan::new(&over[..MAX_SHADER_BUCKETS - 1]).unwrap();
+        assert_eq!(fits.sources.len(), MAX_SHADER_BUCKETS + 1);
+        assert!(fits.sources.len() <= crate::gfx::render_types::MAX_DRAW_BUCKETS);
     }
 
     // The table builds every bucket past the default except deferred ones,
-    // remembers which compile the canopy, and where the twin is.
+    // remembers what of the grass each shades, and where the twins are.
     #[test]
-    fn the_table_built_from_a_plan_keeps_its_canopy_flags() {
+    fn the_table_built_from_a_plan_keeps_its_grass_shadings() {
         let plan = BucketPlan::new(&[
             shader(true, false),
             shader(true, true),
@@ -432,22 +467,24 @@ mod tests {
         .unwrap();
         let mut built = Vec::new();
         let t = WorldPipelines::build(&plan, |bucket, source| {
-            built.push((bucket, source.canopy));
+            built.push((bucket, source.grass));
             Ok::<_, ()>(bucket)
         })
         .unwrap();
-        assert_eq!(built, [(2, false), (3, true)]);
-        assert_eq!(t.bucket_count(), 4);
-        assert_eq!(t.resident_buckets().collect::<Vec<_>>(), [2, 3]);
-        assert_eq!(t.canopy_flags(), [false, true, false, true]);
+        assert_eq!(built, [(2, Bare), (3, Canopy), (4, Ground)]);
+        assert_eq!(t.bucket_count(), 5);
+        assert_eq!(t.resident_buckets().collect::<Vec<_>>(), [2, 3, 4]);
+        assert_eq!(t.grass_shadings(), [Bare, Canopy, Bare, Canopy, Ground]);
         assert_eq!(t.canopy_twin(), Some(3));
-        assert!(!t.canopy(0) && !t.canopy(9));
+        assert_eq!(t.grass_twins().ground, Some(4));
+        assert_eq!(t.grass(0), Bare);
+        assert_eq!(t.grass(9), Bare);
     }
 
     #[test]
-    fn a_plain_table_has_no_canopy() {
+    fn a_plain_table_shades_no_grass() {
         let t = table();
-        assert_eq!(t.canopy_flags(), [false; 4]);
-        assert_eq!(t.canopy_twin(), None);
+        assert_eq!(t.grass_shadings(), [Bare; 4]);
+        assert_eq!(t.grass_twins(), GrassTwins::default());
     }
 }

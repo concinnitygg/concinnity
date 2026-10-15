@@ -480,7 +480,7 @@ impl DxContext {
                     .state
                     .horizon_occluder
                     .and_then(|o| o.seen_from(cam_pos)),
-                canopy_twin: self.cull.world_pipelines.canopy_twin(),
+                grass_twins: self.cull.world_pipelines.grass_twins(),
             },
             &|obj| pool_object_record(obj, texture_count),
         );
@@ -495,7 +495,7 @@ impl DxContext {
         // `resident` clear disables it, and the cull kernel never reads a disabled
         // record's stale object.
         let runtime_base = self.runtime_record_base();
-        let canopy_twin = self.cull.world_pipelines.canopy_twin();
+        let grass_twins = self.cull.world_pipelines.grass_twins();
         let n_resident_runtime = self.for_each_runtime_record(|k, i, obj| {
             let Some((rec, arg)) = records
                 .get_mut(runtime_base + k)
@@ -519,7 +519,7 @@ impl DxContext {
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | draw_args_bucket_bits(draw_bucket(obj, canopy_twin))
+                    | draw_args_bucket_bits(draw_bucket(obj, cam_pos, grass_twins))
                     | model_history.draw_flags(runtime_base + k, i),
             };
         });

@@ -119,6 +119,10 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         program: &shared::MAIN_BINDLESS_CANOPY_FRAG,
         registers: MAIN_BINDLESS_REGISTERS,
     },
+    DxilAbi {
+        program: &shared::MAIN_BINDLESS_GROUND_FRAG,
+        registers: MAIN_BINDLESS_REGISTERS,
+    },
     // The draw cull. Its registers are pinned in the source because declaration
     // order would hand `cull_status` u0 and `commands` u1, the reverse of what
     // `directx/cull.rs` binds; the shadow variant declares no status or Hi-Z.
@@ -909,7 +913,7 @@ impl MetalAbi {
     }
 }
 
-// The bindless main fragment's discrete slots, both variants.
+// The bindless main fragment's discrete slots, every variant.
 const MAIN_BINDLESS_SLOTS: &[(&str, &str)] = &[
     ("view_cb", "buffer(0)"),
     ("lights_cb", "buffer(4)"),
@@ -931,6 +935,9 @@ const CANOPY_SLOTS: &[(&str, &str)] = &[
     ("canopy_cb", "buffer(21)"),
     ("canopy_tables_sb", "buffer(22)"),
 ];
+
+// The ground under grass reads the canopy block but none of its view tables.
+const GRASS_GROUND_SLOTS: &[(&str, &str)] = &[("canopy_cb", "buffer(21)")];
 
 const MAIN_BINDLESS_ARGUMENT_IDS: &[(&str, usize)] = &[
     ("shadow_map", bindless_textures::SHADOW_MAP),
@@ -1195,8 +1202,8 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     // ids inside the texture one are where `metal/cull.rs` writes each member:
     // the fixed shadow / IBL / SSAO / probe / spot / LTC members first, then
     // the unsized pool. `EngineSamplers` is written 0..2 by
-    // `build_bindless_sampler_args`. Only the canopy variant reads the canopy
-    // block and its view tables.
+    // `build_bindless_sampler_args`. Only the grass variants read the canopy
+    // block, and only the canopy variant its view tables.
     MetalAbi {
         program: &shared::MAIN_BINDLESS_FRAG,
         slots: &[MAIN_BINDLESS_SLOTS],
@@ -1205,6 +1212,11 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     MetalAbi {
         program: &shared::MAIN_BINDLESS_CANOPY_FRAG,
         slots: &[MAIN_BINDLESS_SLOTS, CANOPY_SLOTS],
+        argument_ids: MAIN_BINDLESS_ARGUMENT_IDS,
+    },
+    MetalAbi {
+        program: &shared::MAIN_BINDLESS_GROUND_FRAG,
+        slots: &[MAIN_BINDLESS_SLOTS, GRASS_GROUND_SLOTS],
         argument_ids: MAIN_BINDLESS_ARGUMENT_IDS,
     },
     MetalAbi {

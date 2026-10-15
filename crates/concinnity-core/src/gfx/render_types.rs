@@ -1697,11 +1697,16 @@ impl DrawArgsFlags {
     pub(crate) const BUCKET_SHIFT: u32 = 8;
 }
 
-/// Upper bound on world shader buckets a cull dispatch can route between (the
-/// ICB argument-buffer array length in the Metal encode kernel). Mirrored by
-/// MAX_SHADER_BUCKETS in cull_encode.metal, enforced by the world-shape check,
-/// and quoted as a number in the Shader asset docs.
+/// Upper bound on the Shaders a world's buckets are budgeted for, the default
+/// and its grass twins (counted as one) included. Enforced by the world-shape
+/// check and quoted as a number in the Shader asset docs.
 pub const MAX_SHADER_BUCKETS: usize = 8;
+
+/// Upper bound on shader buckets a cull dispatch can route between (the ICB
+/// argument-buffer array length in the Metal encode kernel): the budgeted
+/// Shaders plus the default's second grass twin. Mirrored by MAX_DRAW_BUCKETS
+/// in cull_encode.metal.
+pub const MAX_DRAW_BUCKETS: usize = MAX_SHADER_BUCKETS + 1;
 
 /// Pack the per-frame cull-decision bits for one `DrawObject`. Mirrors the
 /// CPU `visible = BVH(cullable) + always_draw` partition: an object draws when
@@ -1733,7 +1738,7 @@ pub fn draw_args_no_history() -> u32 {
 /// region that does not exist; the world-shape check fails such a world at build
 /// time, so the clamp is a backstop.
 pub fn draw_args_bucket_bits(shader_bucket: u32) -> u32 {
-    let bucket = (shader_bucket as usize).min(MAX_SHADER_BUCKETS - 1) as u32;
+    let bucket = (shader_bucket as usize).min(MAX_DRAW_BUCKETS - 1) as u32;
     bucket << DrawArgsFlags::BUCKET_SHIFT
 }
 
@@ -2540,8 +2545,8 @@ mod tests {
         assert_eq!(draw_args_bucket_bits(1), 1 << 8);
         assert_eq!(draw_args_bucket_bits(3), 3 << 8);
         // A bucket past the routing budget clamps to the last routable one.
-        let last = (MAX_SHADER_BUCKETS - 1) as u32;
-        assert_eq!(draw_args_bucket_bits(MAX_SHADER_BUCKETS as u32), last << 8);
+        let last = (MAX_DRAW_BUCKETS - 1) as u32;
+        assert_eq!(draw_args_bucket_bits(MAX_DRAW_BUCKETS as u32), last << 8);
         assert_eq!(draw_args_bucket_bits(u32::MAX), last << 8);
         // Packed alongside the decision bits, each half reads back unchanged.
         let flags = draw_args_flags(true, true, true) | draw_args_bucket_bits(2);

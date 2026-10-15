@@ -14,6 +14,7 @@ use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
+use concinnity_core::render::shader_programs::surface::GrassShading;
 
 use super::owned::VkDevice;
 use super::pipeline::{BucketPipelineTargets, BucketPipelines, build_world_shader_pipeline};
@@ -54,8 +55,8 @@ pub(super) struct VkPipelineBuilder {
     pub world: Option<BucketPipelineTargets>,
     // `None` when the world has no raymarch pass.
     pub volumes: Option<VolumePipelineTargets>,
-    // Per bucket: its main fragment compiles the far-field canopy.
-    pub canopy: Vec<bool>,
+    // Per bucket: what of the grass its main fragment shades.
+    pub grass: Vec<GrassShading>,
 }
 
 // A world Shader's main-pass and pre-pass pipelines and what they were built
@@ -84,9 +85,9 @@ impl PipelineBuilder for VkPipelineBuilder {
             .world
             .ok_or_else(|| RenderError::Other("the GPU-driven main pass is not live".into()))?;
         let _open = self.gate.enter()?;
-        let canopy = self.canopy.get(bucket as usize).is_some_and(|c| *c);
+        let grass = self.grass.get(bucket as usize).copied().unwrap_or_default();
         let pipelines =
-            build_world_shader_pipeline(&self.device, targets, bucket as usize, programs, canopy)?;
+            build_world_shader_pipeline(&self.device, targets, bucket as usize, programs, grass)?;
         Ok(PreparedPipelines::new(PreparedWorldShader {
             gate: self.gate.clone(),
             targets,

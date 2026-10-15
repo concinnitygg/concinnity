@@ -6,6 +6,7 @@ use ash::vk;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend_init::WorldShader;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::shader_programs::surface::GrassShading;
 use concinnity_core::render::world_pipelines::{BucketPlan, BucketSource, WorldPipelines};
 
 use super::CullPlan;
@@ -166,7 +167,7 @@ pub(super) fn build_bindless_pass(
         let default_source = BucketSource {
             programs: world_shaders[0].programs,
             deferred: false,
-            canopy: false,
+            grass: GrassShading::None,
         };
         let pipelines =
             build_bucket_pipeline(device, bucket_targets, 0, &default_source, &engine_spv)?;
@@ -251,6 +252,7 @@ pub(super) fn build_bindless_pass(
                 vert: Vec::new(),
                 frag: Vec::new(),
                 canopy_frag: Vec::new(),
+                ground_frag: Vec::new(),
                 prepass_vert: Vec::new(),
                 prepass_frag: Vec::new(),
             },

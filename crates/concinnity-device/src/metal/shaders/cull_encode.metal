@@ -19,10 +19,10 @@ struct GpuDrawArgs {
 };
 
 // The record's shader bucket rides the upper flag bits; values and layout are
-// locked to gfx::render_types::{DrawArgsFlags::BUCKET_SHIFT, MAX_SHADER_BUCKETS}.
+// locked to gfx::render_types::{DrawArgsFlags::BUCKET_SHIFT, MAX_DRAW_BUCKETS}.
 constant uint DRAW_BUCKET_SHIFT  = 8u;
 constant uint DRAW_BUCKET_MASK   = 0xffu;
-constant uint MAX_SHADER_BUCKETS = 8u;
+constant uint MAX_DRAW_BUCKETS   = 9u;
 
 // Mirrors metal::uniforms::EncodeParams (32 B). The slot grid is
 // `region_count * object_count`: one region for the main, phase-2 and mirror
@@ -45,7 +45,7 @@ struct EncodeParams {
 // Only the first `bucket_count` entries are encoded; the kernel never
 // constructs a command against an entry past that.
 struct ICBContainer {
-    array<command_buffer, MAX_SHADER_BUCKETS> icbs [[id(0)]];
+    array<command_buffer, MAX_DRAW_BUCKETS> icbs [[id(0)]];
 };
 
 kernel void cull_encode(

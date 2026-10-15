@@ -7,6 +7,7 @@
 
 use concinnity_core::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::shader_programs::surface::GrassShading;
 use std::sync::Arc;
 
 use super::MtlContext;
@@ -26,9 +27,8 @@ impl MtlContext {
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<()> {
         self.cull.world_pipelines.slot(bucket)?;
-        let canopy = self.cull.world_pipelines.canopy(bucket as usize);
-        let prepared =
-            world_shader_for(prepared, self.bucket_build()).filter(|p| p.canopy == canopy);
+        let grass = self.cull.world_pipelines.grass(bucket as usize);
+        let prepared = world_shader_for(prepared, self.bucket_build()).filter(|p| p.grass == grass);
         let pipelines = match prepared {
             Some(pipelines) => pipelines,
             None => build_bucket_pipelines(
@@ -36,7 +36,7 @@ impl MtlContext {
                 &make_vertex_descriptor(),
                 bucket as usize,
                 Some(programs),
-                canopy,
+                grass,
                 self.bucket_build(),
             )?,
         };
@@ -58,7 +58,7 @@ impl MtlContext {
         if bucket == 0 {
             let prepared = world_shader_for(prepared, self.bucket_build());
             self.update_default_world_shader(programs, prepared)?;
-            self.update_canopy_twin(programs)?;
+            self.update_grass_twins(programs)?;
             return Ok(PipelineSwap::Swapped);
         }
         self.cull.world_pipelines.slot(bucket)?;
@@ -70,7 +70,7 @@ impl MtlContext {
             &self.hw.device,
             bucket as usize,
             Some(programs),
-            self.cull.world_pipelines.canopy(bucket as usize),
+            self.cull.world_pipelines.grass(bucket as usize),
             build,
             self.cull.world_pipelines.get(bucket as usize),
             world_shader_for(prepared, build),
@@ -79,26 +79,32 @@ impl MtlContext {
         Ok(PipelineSwap::Swapped)
     }
 
-    // Rebuild the default Shader's canopy twin from its fresh programs, when
-    // the world has one. Built here rather than on a worker: only a hot reload
-    // of the default Shader reaches it.
-    fn update_canopy_twin(
+    // Rebuild the default Shader's grass twins from its fresh programs, when
+    // the world has them. Built here rather than on a worker: only a hot reload
+    // of the default Shader reaches them.
+    fn update_grass_twins(
         &mut self,
         programs: &concinnity_core::components::ShaderPrograms,
     ) -> RenderResult<()> {
-        let Some(twin) = self.cull.world_pipelines.canopy_twin() else {
-            return Ok(());
-        };
-        let pipelines = replacement(
-            &self.hw.device,
-            twin as usize,
-            Some(programs),
-            true,
-            self.bucket_build(),
-            self.cull.world_pipelines.get(twin as usize),
-            None,
-        )?;
-        self.cull.world_pipelines.install(twin, pipelines)?;
+        let twins = self.cull.world_pipelines.grass_twins();
+        for (twin, grass) in [
+            (twins.canopy, GrassShading::Canopy),
+            (twins.ground, GrassShading::Ground),
+        ] {
+            let Some(twin) = twin else {
+                continue;
+            };
+            let pipelines = replacement(
+                &self.hw.device,
+                twin as usize,
+                Some(programs),
+                grass,
+                self.bucket_build(),
+                self.cull.world_pipelines.get(twin as usize),
+                None,
+            )?;
+            self.cull.world_pipelines.install(twin, pipelines)?;
+        }
         Ok(())
     }
 
@@ -108,7 +114,7 @@ impl MtlContext {
         Arc::new(MtlPipelineBuilder {
             device: self.hw.device.clone(),
             targets: self.bucket_build(),
-            canopy: self.cull.world_pipelines.canopy_flags(),
+            grass: self.cull.world_pipelines.grass_shadings(),
         })
     }
 

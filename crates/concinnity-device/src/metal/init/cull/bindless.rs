@@ -5,6 +5,7 @@ use super::CullInputs;
 use crate::metal::init::InitGpu;
 use crate::metal::init::pipelines::{self, BucketPipelines};
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::shader_programs::surface::GrassShading;
 use concinnity_core::render::world_pipelines::{BucketPlan, WorldPipelines};
 
 pub(super) struct BindlessPass {
@@ -41,7 +42,7 @@ pub(super) fn build_bindless_pass(
             inputs.vert_desc,
             0,
             world_shaders[0].programs,
-            false,
+            GrassShading::None,
             build,
         )?)
     } else {
@@ -66,7 +67,7 @@ pub(super) fn build_bindless_pass(
                 inputs.vert_desc,
                 bucket,
                 source.programs,
-                source.canopy,
+                source.grass,
                 build,
             )
         })?

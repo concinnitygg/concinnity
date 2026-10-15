@@ -292,15 +292,20 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // A surface growing grass has litter on its ground and the leaf above
     // shading it, and past where the blades end it is shaded as the canopy
     // they make. The pixel's footprint is taken here, in uniform control flow.
-    // Only the SURFACE_CANOPY variant, which every surface growing grass draws
-    // under, carries the ground and the canopy: in every other program the
-    // band is a constant 0 and the canopy code folds away.
+    // Only the grass variants, which every surface growing grass draws under,
+    // carry the ground: SURFACE_CANOPY with the canopy, SURFACE_GRASS_GROUND
+    // without it for draws wholly nearer than their band. In every other
+    // program the band is a constant 0 and the grass code folds away.
     float3 V_far = cam_pos - v.world_pos;
     float far_dist = length(V_far);
     float footprint = max(length(ddx(v.world_pos)), length(ddy(v.world_pos)));
     CanopyShade canopy = (CanopyShade)0;
+#if defined(SURFACE_CANOPY) || defined(SURFACE_GRASS_GROUND)
 #ifdef SURFACE_CANOPY
     float far_w = canopy_band(od, far_dist);
+#else
+    const float far_w = 0.0;
+#endif
     canopy = canopy_at(od, v.world_pos, v.normal, v.color, albedo, V_far / max(far_dist, 1e-4),
                        footprint, far_w > 0.0);
     albedo = canopy.ground_albedo;

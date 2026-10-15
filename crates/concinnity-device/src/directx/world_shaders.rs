@@ -15,6 +15,7 @@
 
 use concinnity_core::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::shader_programs::surface::GrassShading;
 use concinnity_core::render::world_pipelines::{BucketSource, check_rebuild, replace_bucket};
 use std::sync::Arc;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -37,8 +38,8 @@ impl DxContext {
         programs: &concinnity_core::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<()> {
-        let canopy = self.cull.world_pipelines.canopy(bucket as usize);
-        let psos = self.bucket_psos(bucket, programs, canopy, prepared, false)?;
+        let grass = self.cull.world_pipelines.grass(bucket as usize);
+        let psos = self.bucket_psos(bucket, programs, grass, prepared, false)?;
         self.install_bucket(bucket, psos)
     }
 
@@ -50,7 +51,7 @@ impl DxContext {
         &self,
         bucket: u32,
         programs: &concinnity_core::components::ShaderPrograms,
-        canopy: bool,
+        grass: GrassShading,
         prepared: Option<PreparedPipelines>,
         live_prepass: bool,
     ) -> RenderResult<BucketPsos> {
@@ -61,7 +62,7 @@ impl DxContext {
         replace_bucket(
             bucket as usize,
             live_prepass,
-            world_shader_for(prepared, &targets).filter(|p| p.canopy == canopy),
+            world_shader_for(prepared, &targets).filter(|p| p.grass == grass),
             |p: &BucketPsos| p.prepass.is_some(),
             || {
                 build_world_shader_pso(
@@ -74,7 +75,7 @@ impl DxContext {
                     },
                     bucket as usize,
                     programs,
-                    canopy,
+                    grass,
                 )
             },
         )
@@ -168,7 +169,7 @@ impl DxContext {
                 &BucketSource {
                     programs: live.programs.as_ref(),
                     deferred: false,
-                    canopy: live.canopy,
+                    grass: live.grass,
                 },
             )?;
             check_rebuild(bucket, live.prepass.is_some(), psos.prepass.is_some())?;
@@ -206,7 +207,7 @@ impl DxContext {
                 .world_pso_targets()
                 .and_then(|targets| world_shader_for(prepared, &targets));
             self.update_default_world_shader(programs, prepared)?;
-            self.update_canopy_twin(programs)?;
+            self.update_grass_twins(programs)?;
             return Ok(PipelineSwap::Swapped);
         }
         self.cull.world_pipelines.slot(bucket)?;
@@ -215,26 +216,33 @@ impl DxContext {
         }
         let live_prepass = (self.cull.world_pipelines.get(bucket as usize))
             .is_some_and(|live| live.prepass.is_some());
-        let canopy = self.cull.world_pipelines.canopy(bucket as usize);
-        let psos = self.bucket_psos(bucket, programs, canopy, prepared, live_prepass)?;
+        let grass = self.cull.world_pipelines.grass(bucket as usize);
+        let psos = self.bucket_psos(bucket, programs, grass, prepared, live_prepass)?;
         self.install_bucket(bucket, psos)?;
         Ok(PipelineSwap::Swapped)
     }
 
-    // Rebuild the default Shader's canopy twin from its fresh programs, when
-    // the world has one. Built here rather than on a worker: only a hot reload
-    // of the default Shader reaches it.
-    fn update_canopy_twin(
+    // Rebuild the default Shader's grass twins from its fresh programs, when
+    // the world has them. Built here rather than on a worker: only a hot reload
+    // of the default Shader reaches them.
+    fn update_grass_twins(
         &mut self,
         programs: &concinnity_core::components::ShaderPrograms,
     ) -> RenderResult<()> {
-        let Some(twin) = self.cull.world_pipelines.canopy_twin() else {
-            return Ok(());
-        };
-        let live_prepass = (self.cull.world_pipelines.get(twin as usize))
-            .is_some_and(|live| live.prepass.is_some());
-        let psos = self.bucket_psos(twin, programs, true, None, live_prepass)?;
-        self.install_bucket(twin, psos)
+        let twins = self.cull.world_pipelines.grass_twins();
+        for (twin, grass) in [
+            (twins.canopy, GrassShading::Canopy),
+            (twins.ground, GrassShading::Ground),
+        ] {
+            let Some(twin) = twin else {
+                continue;
+            };
+            let live_prepass = (self.cull.world_pipelines.get(twin as usize))
+                .is_some_and(|live| live.prepass.is_some());
+            let psos = self.bucket_psos(twin, programs, grass, None, live_prepass)?;
+            self.install_bucket(twin, psos)?;
+        }
+        Ok(())
     }
 
     // What a world Shader's PSOs are built against here, or `None` when the
@@ -278,7 +286,7 @@ impl DxContext {
             info_queue: self.hw.info_queue.clone(),
             world: self.world_pso_targets(),
             volumes: self.volume_pso_targets(),
-            canopy: self.cull.world_pipelines.canopy_flags(),
+            grass: self.cull.world_pipelines.grass_shadings(),
         })
     }
 
