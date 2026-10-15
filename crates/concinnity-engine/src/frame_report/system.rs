@@ -7,6 +7,8 @@ use concinnity_core::ecs::{PipelineContext, StepResult, System};
 use concinnity_core::profile::RenderStats;
 use std::time::Instant;
 
+use crate::ecs::FrameCaptureRequest;
+use crate::frame_report::capture::{CAPTURE_DROPPED_FRAMES, CaptureSchedule};
 use crate::frame_report::reduce::{ReduceOptions, Report};
 use crate::frame_report::report::to_text;
 use crate::frame_report::sample::{FrameRun, FrameSample};
@@ -23,6 +25,10 @@ const MICROS_PER_MILLI: f32 = 1_000.0;
 /// frame the world reports the measurement complete, which leaves that last
 /// frame unrecorded; a run cut short before that reports on the way out
 /// instead, and says so.
+///
+/// A declared capture is requested on the step the run reaches its moment, so
+/// the next frame drawn shows the pose that step left. That frame and the few
+/// after it are not recorded.
 #[derive(Debug)]
 pub struct FrameReportSystem {
     run: FrameRun,
@@ -39,6 +45,12 @@ pub struct FrameReportSystem {
     // Fallback clock for a world that publishes no run position of its own, so
     // the warm-up discard and the time column still mean something.
     started: Option<Instant>,
+    captures: CaptureSchedule,
+    // Frames still to leave unrecorded behind the latest capture.
+    excluded: u32,
+    // Captures requested, and the frames left unrecorded around them.
+    captured: u32,
+    dropped: u32,
 }
 
 // What one step knows about its frame before the profile rotates in the
@@ -65,6 +77,10 @@ impl FrameReportSystem {
             reported: false,
             previous: None,
             started: None,
+            captures: CaptureSchedule::new(&report.captures),
+            excluded: 0,
+            captured: 0,
+            dropped: 0,
         }
     }
 
@@ -86,6 +102,18 @@ impl FrameReportSystem {
                 "frame report: no frames past the {:.1}s warm-up, so there is nothing to measure",
                 self.options.warmup_seconds,
             ),
+        }
+        if self.captured > 0 {
+            println!(
+                "frame report: {} frame(s) around {} capture(s) left out of the measurement",
+                self.dropped, self.captured,
+            );
+        }
+        for missed in self.captures.missed() {
+            println!(
+                "frame report: the run ended before {:.1}s, so {} was not captured",
+                missed.seconds, missed.path,
+            );
         }
     }
 }
@@ -123,7 +151,14 @@ impl System for FrameReportSystem {
             frame_us,
             render,
         };
-        if let Some(frame) = self.pending.replace(this_frame) {
+        let recorded = if self.excluded > 0 {
+            self.excluded -= 1;
+            self.dropped += 1;
+            None
+        } else {
+            Some(this_frame)
+        };
+        if let Some(frame) = std::mem::replace(&mut self.pending, recorded) {
             let systems = ctx.profile.system_timings();
             self.run.capture_system_names(systems);
             self.run.samples.push(FrameSample::new(
@@ -135,6 +170,12 @@ impl System for FrameReportSystem {
                 ctx.profile.render_handoffs(),
                 ctx.profile.system_fan_outs(),
             ));
+        }
+
+        if let Some(capture) = self.captures.due(run_seconds) {
+            ctx.insert_resource(FrameCaptureRequest(capture.path));
+            self.excluded = CAPTURE_DROPPED_FRAMES;
+            self.captured += 1;
         }
 
         if status.is_some_and(|s| s.finished) && self.stop_when_complete {
@@ -217,6 +258,7 @@ mod tests {
             warmup_seconds: 4.5,
             budget_ms: 8.0,
             stop_when_complete: false,
+            ..Default::default()
         });
         assert_eq!(system.options.warmup_seconds, 4.5);
         assert_eq!(system.options.budget_us, 8_000);
@@ -362,6 +404,72 @@ mod tests {
         // Still measuring, and the run is not claimed to be a whole one.
         assert!(!system.run().completed);
         assert!(system.run().samples.len() >= 2);
+        forget_report(system);
+    }
+
+    #[test]
+    fn a_capture_is_requested_once_and_the_frames_it_stalls_go_unrecorded() {
+        use concinnity_core::components::FrameCapture;
+
+        let mut world = World::new();
+        let mut system = FrameReportSystem::new(&FrameReport {
+            warmup_seconds: 0.0,
+            captures: vec![FrameCapture {
+                seconds: 0.0,
+                path: "a.png".to_string(),
+            }],
+            ..Default::default()
+        });
+        system.init(&mut world.context());
+        // The first step only starts the clock; the second is the first frame
+        // measured, and the capture is due on it.
+        system.step(&mut world.context());
+        system.step(&mut world.context());
+        let request = world.remove_resource::<FrameCaptureRequest>();
+        assert_eq!(request.map(|r| r.0).as_deref(), Some("a.png"));
+
+        let stalled = CAPTURE_DROPPED_FRAMES as usize;
+        for _ in 0..stalled {
+            system.step(&mut world.context());
+        }
+        // Only the frame the capture was requested on made it in.
+        assert_eq!(system.run().samples.len(), 1);
+        system.step(&mut world.context());
+        system.step(&mut world.context());
+        assert_eq!(system.run().samples.len(), 2);
+        assert!(world.resource::<FrameCaptureRequest>().is_none());
+        assert_eq!(system.dropped, CAPTURE_DROPPED_FRAMES);
+        assert_eq!(system.captured, 1);
+        forget_report(system);
+    }
+
+    #[test]
+    fn a_capture_waits_for_the_track_to_reach_its_moment() {
+        use concinnity_core::components::FrameCapture;
+
+        let (mut world, mut camera, _) = world_with(track(vec![leg(60.0, 1.0, "approach")]));
+        let mut system = FrameReportSystem::new(&FrameReport {
+            warmup_seconds: 0.0,
+            captures: vec![FrameCapture {
+                seconds: 0.05,
+                path: "a.png".to_string(),
+            }],
+            ..Default::default()
+        });
+        camera.init(&mut world.context());
+        system.init(&mut world.context());
+        let mut requested_at = None;
+        for _ in 0..10 {
+            step(&mut world, &mut camera, &mut system);
+            if world.remove_resource::<FrameCaptureRequest>().is_some() {
+                assert!(requested_at.is_none(), "requested twice");
+                requested_at = world
+                    .resource::<CameraTrackStatus>()
+                    .map(|s| s.elapsed_seconds);
+            }
+        }
+        let at = requested_at.expect("the track passed the capture's moment");
+        assert!(at >= 0.05, "requested at {at}s");
         forget_report(system);
     }
 

@@ -59,10 +59,13 @@ pub(in crate::vulkan) const PROBE_RECORDS_SSBO_BINDING: u32 = 17;
 pub(in crate::vulkan) const SHADOW_SAMPLER_BINDING: u32 = 18;
 pub(in crate::vulkan) const CUBE_SAMPLER_BINDING: u32 = 19;
 pub(in crate::vulkan) const LINEAR_SAMPLER_BINDING: u32 = 20;
+// The far field's canopy block, and its layers' view tables.
+pub(in crate::vulkan) const CANOPY_UBO_BINDING: u32 = 21;
+pub(in crate::vulkan) const CANOPY_TABLES_SSBO_BINDING: u32 = 22;
 
 // Every binding of global set 0, each count 1. The layout, the per-stage budget
 // and every pool that allocates the set are built from this table.
-pub(in crate::vulkan) fn global_set() -> [Binding; 21] {
+pub(in crate::vulkan) fn global_set() -> [Binding; 23] {
     use vk::DescriptorType as T;
     let fs = vk::ShaderStageFlags::FRAGMENT;
     let vs_fs = vk::ShaderStageFlags::VERTEX | fs;
@@ -88,6 +91,8 @@ pub(in crate::vulkan) fn global_set() -> [Binding; 21] {
         (SHADOW_SAMPLER_BINDING, T::SAMPLER, fs),
         (CUBE_SAMPLER_BINDING, T::SAMPLER, fs),
         (LINEAR_SAMPLER_BINDING, T::SAMPLER, fs),
+        (CANOPY_UBO_BINDING, T::UNIFORM_BUFFER, fs),
+        (CANOPY_TABLES_SSBO_BINDING, T::STORAGE_BUFFER, fs),
     ]
 }
 
@@ -299,6 +304,8 @@ mod tests {
                 (18, T::SAMPLER, fs),
                 (19, T::SAMPLER, fs),
                 (20, T::SAMPLER, fs),
+                (21, T::UNIFORM_BUFFER, fs),
+                (22, T::STORAGE_BUFFER, fs),
             ]
         );
     }
@@ -311,14 +318,14 @@ mod tests {
             .sum()
     }
 
-    // One global set needs five uniform buffers, five storage buffers, eight
+    // One global set needs six uniform buffers, six storage buffers, eight
     // images and three samplers; `n` sets need `n` times that.
     #[test]
     fn pool_sizes_scale_the_table_by_the_set_count() {
         use vk::DescriptorType as T;
         let sizes = PoolSizes::default().sets(&global_set(), 3).build();
-        assert_eq!(count_of(&sizes, T::UNIFORM_BUFFER), 15);
-        assert_eq!(count_of(&sizes, T::STORAGE_BUFFER), 15);
+        assert_eq!(count_of(&sizes, T::UNIFORM_BUFFER), 18);
+        assert_eq!(count_of(&sizes, T::STORAGE_BUFFER), 18);
         assert_eq!(count_of(&sizes, T::SAMPLED_IMAGE), 24);
         assert_eq!(count_of(&sizes, T::SAMPLER), 9);
         assert_eq!(sizes.len(), 4, "one entry per type");

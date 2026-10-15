@@ -131,6 +131,11 @@ impl ActiveRenderQueues {
 #[derive(Default)]
 pub(crate) struct RenderOpFailures(pub Vec<concinnity_core::render::ops::OpFailure>);
 
+// A frame the report wants saved: the PNG path for the next frame drawn.
+// Written by FrameReportSystem; GraphicsSystem moves it onto that frame's
+// snapshot.
+pub(crate) struct FrameCaptureRequest(pub String);
+
 // The pipelined driver's channel pair, published (parked, so the per-step
 // take never re-boxes) before the world moves to the simulation thread.
 // Present exactly when frames are pipelined: GraphicsSystem's step extracts

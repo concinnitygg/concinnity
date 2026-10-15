@@ -2564,6 +2564,25 @@ fn a_capture_launch_request_reaches_the_backend() {
     assert!(lock(&state).init.as_ref().unwrap().capture);
 }
 
+// A frame report that saves frames along the way keeps the presented frame
+// readable, with no launch request asking for it.
+#[test]
+fn a_frame_report_with_captures_arms_frame_capture() {
+    use concinnity_core::components::{FrameCapture, FrameReport};
+
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    world.add_component(FrameReport {
+        captures: vec![FrameCapture {
+            seconds: 1.0,
+            path: "shot.png".to_string(),
+        }],
+        ..Default::default()
+    });
+    init_graphics(&mut world, hooks);
+    assert!(lock(&state).init.as_ref().unwrap().capture);
+}
+
 // A development session keeps frame capture available without a screenshot.
 #[test]
 fn a_dev_loop_launch_arms_frame_capture() {

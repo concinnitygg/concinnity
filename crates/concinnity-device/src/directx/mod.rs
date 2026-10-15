@@ -8,6 +8,7 @@ mod auto_exposure;
 mod backend;
 mod barrier_translate;
 pub(crate) mod builtin_shaders;
+mod canopy;
 mod com;
 mod context;
 mod cull;

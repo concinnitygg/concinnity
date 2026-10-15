@@ -640,6 +640,13 @@ pub(super) struct VkUniforms {
     // change mutates this and re-arms `light_dirty`; `record_frame` writes the
     // frame's own slot, so no in-flight read is ever raced.
     pub(super) light_uniforms: render_types::LightUniforms,
+    // Per-frame-in-flight canopy block (global set 0 binding 21), persistently
+    // mapped and rewritten each frame, and the block last written, which a
+    // probe capture snapshots.
+    pub(super) canopy_buffers: Vec<PooledBuffer>,
+    pub(super) canopy: concinnity_core::render::uniforms::canopy::CanopyParams,
+    // The canopy's view tables (binding 22).
+    pub(super) canopy_tables: super::canopy::VkCanopyTables,
 }
 
 impl VkUniforms {
@@ -648,6 +655,8 @@ impl VkUniforms {
     pub(super) fn destroy(&mut self) {
         self.view_ubo_buffers.clear();
         self.probe_set_ubo_buffers.clear();
+        self.canopy_buffers.clear();
+        self.canopy_tables.clear();
         self.light_ubo_buffers.clear();
         self.local_light_buffer = PooledBuffer::null();
     }

@@ -83,6 +83,11 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{LIGHT_TYPES}", "light_types.hlsl"),
     ("{RAYMARCH_COMMON}", "raymarch_common.hlsl"),
     ("{MAIN_SHADING}", "main_shading.hlsl"),
+    // CANOPY trails MAIN_SHADING, which carries its marker, and leads
+    // GRASS_FIELD, whose marker it carries; the grass kernel carries
+    // GRASS_FIELD too.
+    ("{CANOPY}", "canopy.hlsl"),
+    ("{GRASS_FIELD}", "grass_field.hlsl"),
     // SURFACE_INPUTS trails MAIN_SHADING, which carries its marker, and
     // SPECULAR_AA trails SURFACE_INPUTS; the raymarch pre-pass carries it too.
     ("{SURFACE_INPUTS}", "surface_inputs.hlsl"),

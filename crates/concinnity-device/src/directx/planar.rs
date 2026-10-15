@@ -632,6 +632,8 @@ impl DxContext {
                     view_gva: set.view_gvas[ring],
                     light_gva: params.light_gva,
                     shadow_ubo_gva: params.shadow_ubo_gva,
+                    canopy_gva: self.canopy.gpu_va(params.frame_idx),
+                    canopy_tables_gva: self.canopy.tables_gpu_va(params.frame_idx),
                     clusters: clustered[slot].then(|| set.cluster_grid(slot, params.frame_idx)),
                     storage,
                 },

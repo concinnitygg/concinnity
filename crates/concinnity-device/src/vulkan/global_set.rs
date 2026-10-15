@@ -15,6 +15,7 @@ use super::descriptor_layout::{
     SHADOW_SAMPLER_BINDING, SHADOW_UBO_BINDING, SPOT_SHADOW_DATA_SSBO_BINDING,
     SPOT_SHADOW_MAP_BINDING, SSAO_BINDING, VIEW_UBO_BINDING,
 };
+use super::descriptor_layout::{CANOPY_TABLES_SSBO_BINDING, CANOPY_UBO_BINDING};
 use super::light_cull::VkLightCull;
 use super::owned::VkDevice;
 use super::probe_set::{PROBE_CUBES_LAYOUT, ProbeSetGpu};
@@ -36,6 +37,20 @@ impl GlobalSamplers {
             linear: scene.linear_sampler.handle(),
         }
     }
+}
+
+// The far field's canopy block and view tables a set binds.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct CanopyBuffers {
+    pub(in crate::vulkan) block: vk::Buffer,
+    pub(in crate::vulkan) tables: vk::Buffer,
+}
+
+impl CanopyBuffers {
+    const NULL: Self = Self {
+        block: vk::Buffer::null(),
+        tables: vk::Buffer::null(),
+    };
 }
 
 // The lighting, shadow, environment and probe resources a global set is built
@@ -69,25 +84,36 @@ impl GlobalBindings<'_> {
             probe_cubes: self.probes.bound_cubes().view(),
             probe_records: self.probes.records[frame].buffer(),
             cluster_params: self.light_cull.params_buffers[frame].buffer(),
+            canopy: self.canopy(frame),
             ..self.shared()
         }
     }
 
+    // Frame `frame`'s canopy block and view tables.
+    pub(in crate::vulkan) fn canopy(&self, frame: usize) -> CanopyBuffers {
+        CanopyBuffers {
+            block: self.uniforms.canopy_buffers[frame].buffer(),
+            tables: self.uniforms.canopy_tables.buffer(frame),
+        }
+    }
+
     // A set for an off-camera render (a probe face, a planar mirror) through
-    // `view`, `light` and `shadow`. It reads no probe, so a capture never
-    // recurses into the set it feeds; no SSAO, which is the main camera's; and
-    // no cluster grid unless one binned for its viewpoint is added
-    // (`with_clusters`).
+    // `view`, `light`, `shadow` and `canopy`. It reads no probe, so a capture
+    // never recurses into the set it feeds; no SSAO, which is the main
+    // camera's; and no cluster grid unless one binned for its viewpoint is
+    // added (`with_clusters`).
     pub(in crate::vulkan) fn off_camera(
         &self,
         view: vk::Buffer,
         light: vk::Buffer,
         shadow: vk::Buffer,
+        canopy: CanopyBuffers,
     ) -> GlobalSetContents {
         GlobalSetContents {
             view,
             light,
             shadow,
+            canopy,
             ..self.shared()
         }
     }
@@ -114,6 +140,7 @@ impl GlobalBindings<'_> {
             ltc_magnitude: self.area_light.ltc_magnitude.view,
             probe_records: self.probes.stand_in_records.buffer(),
             samplers: GlobalSamplers::of(self.shadow, self.scene),
+            canopy: CanopyBuffers::NULL,
         }
     }
 }
@@ -174,6 +201,7 @@ pub(in crate::vulkan) struct GlobalSetContents {
     ltc_magnitude: vk::ImageView,
     probe_records: vk::Buffer,
     samplers: GlobalSamplers,
+    canopy: CanopyBuffers,
 }
 
 impl GlobalSetContents {
@@ -243,7 +271,7 @@ impl GlobalDescriptor {
 }
 
 impl GlobalSetContents {
-    fn descriptors(&self) -> [GlobalDescriptor; 21] {
+    fn descriptors(&self) -> [GlobalDescriptor; 23] {
         let ubo = |binding, buffer| {
             GlobalDescriptor::buffer(binding, vk::DescriptorType::UNIFORM_BUFFER, buffer)
         };
@@ -276,6 +304,8 @@ impl GlobalSetContents {
             sampler(SHADOW_SAMPLER_BINDING, self.samplers.shadow),
             sampler(CUBE_SAMPLER_BINDING, self.samplers.cube),
             sampler(LINEAR_SAMPLER_BINDING, self.samplers.linear),
+            ubo(CANOPY_UBO_BINDING, self.canopy.block),
+            ssbo(CANOPY_TABLES_SSBO_BINDING, self.canopy.tables),
         ]
     }
 
@@ -340,6 +370,7 @@ mod tests {
                 cube: vk::Sampler::null(),
                 linear: vk::Sampler::null(),
             },
+            canopy: CanopyBuffers::NULL,
         }
     }
 
@@ -386,6 +417,10 @@ mod tests {
                 shadow: sampler(118),
                 cube: sampler(119),
                 linear: sampler(120),
+            },
+            canopy: CanopyBuffers {
+                block: buffer(121),
+                tables: buffer(122),
             },
         }
     }

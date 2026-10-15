@@ -429,6 +429,15 @@ impl VkContext {
                 &self.uniforms.light_uniforms,
             );
         }
+        self.uniforms.canopy = match &self.grass {
+            Some(grass) => self.state.canopy_params(&grass.field.canopy),
+            None => Default::default(),
+        };
+        self.uniforms.canopy_buffers[frame_idx].write_val(0, &self.uniforms.canopy);
+        self.uniforms.canopy_tables.update(
+            self.grass.as_ref().map_or(&[], |g| g.field.canopy.tables()),
+            frame_idx,
+        );
 
         // Reflection-probe count + records (global set 0 bindings 7 + 17): count
         // 0 (sky reflection) until a probe bakes, so the forward shader keeps the

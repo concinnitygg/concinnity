@@ -76,8 +76,10 @@ pub struct GrassLayerGpu {
     /// How far, in meters, a blade can reach from its root in any direction:
     /// its tallest height, bent any way, plus half its widest width.
     pub reach: f32,
-    /// Linear RGB at the tip; `w` unused.
-    pub tip_color: [f32; 4],
+    /// Linear RGB at the tip.
+    pub tip_color: [f32; 3],
+    /// How far the field's color drifts across hundreds of meters, in [0, 1].
+    pub macro_variation: f32,
 }
 
 /// Per-frame grass parameters: the camera, the wind, the occlusion test, the
@@ -156,8 +158,8 @@ pub struct GrassParams {
     pub planet_tile_base: u32,
     /// Records this run reads from the planet tile buffer.
     pub planet_tile_count: u32,
-    /// Keeps the wind map on a 16-byte row.
-    pub _pad: u32,
+    /// The planet's radius, in meters; 0 on terrain.
+    pub planet_radius: f32,
     /// The rows that take a point of the simulated frame, `(x, y, z, 1)`, to
     /// the ground-plane coordinates the wind's gusts are laid out in: the same
     /// place on the ground keeps its coordinates when the frame moves.
@@ -231,7 +233,8 @@ pub struct GpuGrassBlade {
     pub shape: [u32; 4],
     /// How far it is trampled, `[x, z]` as two halves, this frame (`x`) and
     /// last frame (`y`); the `x` and `z` of the up it stands along as two
-    /// halves (`z`), its `y` the rest of the unit length; `w` unused.
+    /// halves (`z`), its `y` the rest of the unit length; the field's drift
+    /// where it stands, dry and lush, as two halves (`w`).
     pub bend: [u32; 4],
 }
 
@@ -322,7 +325,7 @@ mod tests {
         assert_eq!(offset_of!(GrassParams, ground), 432);
         assert_eq!(offset_of!(GrassParams, planet_tile_base), 436);
         assert_eq!(offset_of!(GrassParams, planet_tile_count), 440);
-        assert_eq!(offset_of!(GrassParams, _pad), 444);
+        assert_eq!(offset_of!(GrassParams, planet_radius), 444);
         assert_eq!(offset_of!(GrassParams, wind_map), 448);
         assert_eq!(offset_of!(GrassParams, bend_prev_map), 480);
         assert_eq!(offset_of!(GrassParams, planet_density), 512);
@@ -356,6 +359,7 @@ mod tests {
         assert_eq!(offset_of!(GrassLayerGpu, root_color), 96);
         assert_eq!(offset_of!(GrassLayerGpu, reach), 108);
         assert_eq!(offset_of!(GrassLayerGpu, tip_color), 112);
+        assert_eq!(offset_of!(GrassLayerGpu, macro_variation), 124);
     }
 
     #[test]

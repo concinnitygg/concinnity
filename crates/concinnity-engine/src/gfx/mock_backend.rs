@@ -177,6 +177,8 @@ pub(crate) enum Call {
         prepared: Option<String>,
     },
     EvictWorldShader(u32),
+    // The presented frame saved to this path.
+    Screenshot(String),
 }
 
 // Shared mutable state behind the mock: the ordered call log, the captured
@@ -780,5 +782,10 @@ impl BackendProbe for MockBackend {
 
     fn render_stats(&self) -> concinnity_core::profile::RenderStats {
         self.state.lock().unwrap().render_stats
+    }
+
+    fn screenshot(&mut self, path: &str) -> RenderResult<String> {
+        self.record(Call::Screenshot(path.to_string()));
+        Ok(path.to_string())
     }
 }

@@ -1570,7 +1570,7 @@ impl GraphicsSystem {
         let planet_grass = planet.as_ref().and_then(|p| {
             crate::gfx::planet_grass::resolve(p, &crate::gfx::terrain::grass_by_id(ctx))
         });
-        let planet_far_field = planet_grass.as_ref().and_then(|g| g.far_field());
+        let planet_far_field = planet_grass.as_ref().map(|g| g.far_field());
         let fx = drain_world_fx(
             ctx,
             texture_count,
@@ -1600,7 +1600,7 @@ impl GraphicsSystem {
         // A shipped run leaves shader hot-reload off, so the backend never spawns
         // the filesystem watcher.
         let hot_reload = launch.dev_loop;
-        let capture = launch.frame_capture();
+        let capture = launch.frame_capture() || declares_frame_captures(ctx);
         let embedded_surface = ctx
             .resource::<concinnity_core::render::backend_init::EmbeddedSurface>()
             .copied();
@@ -1829,4 +1829,11 @@ fn set_setting_row_label(ctx: &mut PipelineContext, key: SettingKey, text: &str)
     if let Some(id) = label_id {
         crate::ecs::by_asset_id::set_text(ctx, id.id(), text);
     }
+}
+
+// Whether the world's frame report saves frames as it goes, which needs the
+// presented frame readable just as an exit screenshot does.
+fn declares_frame_captures(ctx: &PipelineContext) -> bool {
+    ctx.query::<concinnity_core::components::FrameReport>()
+        .any(|report| !report.captures.is_empty())
 }

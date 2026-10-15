@@ -227,6 +227,7 @@ impl DxContext {
                 &self.uniforms.light_uniforms,
             );
         }
+        self.upload_canopy(frame_idx);
 
         // Push this frame's skinning matrices into the per-frame joint buffers
         // before the skin fold reads them. No-op when no SkinnedMesh is

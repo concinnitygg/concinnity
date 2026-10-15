@@ -145,6 +145,19 @@ pub(super) fn build_scene_resources(
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?);
     }
+    // Per-frame-in-flight canopy block ring, rewritten each frame.
+    let canopy = concinnity_core::render::uniforms::canopy::CanopyParams::default();
+    let mut canopy_buffers = Vec::with_capacity(frames);
+    for _ in 0..frames {
+        let ubo = alloc.create_buffer(
+            std::mem::size_of_val(&canopy) as u64,
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        ubo.write_val(0, &canopy);
+        canopy_buffers.push(ubo);
+    }
+    let canopy_tables = crate::vulkan::canopy::VkCanopyTables::new(alloc, frames)?;
     // Static per-scene local-light SSBO; uploaded once below, never per-frame.
     let local_light_buffer = alloc.create_buffer(
         local_light_size,
@@ -183,6 +196,9 @@ pub(super) fn build_scene_resources(
             local_light_buffer,
             cluster_reach: concinnity_core::render::cluster_range::ClusterReach::new(local_lights),
             light_uniforms,
+            canopy_buffers,
+            canopy,
+            canopy_tables,
         },
         light_cull,
     ))

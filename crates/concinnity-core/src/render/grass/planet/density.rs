@@ -31,8 +31,9 @@ fn lattice(c: [i32; 3], salt: u32) -> f32 {
     (h >> 8) as f32 * (1.0 / 16_777_216.0)
 }
 
-// Trilinear value noise in [0, 1] at lattice position `p`.
-fn value_noise(p: [f32; 3], salt: u32) -> f32 {
+/// Trilinear value noise in [0, 1] at lattice position `p`, salted: the
+/// kernel's `grass_value_noise3`.
+pub fn value_noise(p: [f32; 3], salt: u32) -> f32 {
     let cell = p.map(floor);
     let f: [f32; 3] = core::array::from_fn(|i| {
         let t = p[i] - cell[i];

@@ -54,6 +54,8 @@ const MAIN_BINDLESS_REGISTERS: &[(&str, &str)] = &[
     ("ltc_matrix", "t18"),
     ("ltc_magnitude", "t19"),
     ("material_params_sb", "t20"),
+    ("canopy_cb", "b8"),
+    ("canopy_tables_sb", "t24"),
     ("tex_pool", "t0, space1"),
     ("shadow_sampler", "s0"),
     ("linear_sampler", "s1"),
@@ -1168,6 +1170,8 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("cluster_list_sb", "buffer(12)"),
             ("spot_shadows_sb", "buffer(13)"),
             ("area_lights_sb", "buffer(14)"),
+            ("canopy_cb", "buffer(21)"),
+            ("canopy_tables_sb", "buffer(22)"),
         ]],
         argument_ids: &[
             ("shadow_map", bindless_textures::SHADOW_MAP),

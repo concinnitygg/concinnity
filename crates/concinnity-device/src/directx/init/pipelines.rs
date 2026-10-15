@@ -129,6 +129,10 @@ pub(super) fn create_main_bindless_root_signature(
         // the grass draw's vertex stage reads (`directx/grass.rs`).
         .cbv(7, Vertex)
         .srv(23, Vertex)
+        // [23] the far field's canopy block at b8 and [24] its view tables at
+        // t24 (`directx/canopy.rs`).
+        .cbv(8, Pixel)
+        .srv(24, Pixel)
         .input_layout()
         .build(device, "main bindless root sig")
 }

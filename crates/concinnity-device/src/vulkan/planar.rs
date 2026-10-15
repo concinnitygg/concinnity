@@ -351,7 +351,7 @@ struct MirrorBuffers {
 }
 
 // What a planar global set holds: its (plane, frame) reflected view and cluster
-// grid, and that frame's light and shadow UBOs.
+// grid, and that frame's light, shadow and canopy UBOs.
 fn global_contents(
     bindings: &GlobalBindings<'_>,
     mirror: MirrorBuffers,
@@ -362,6 +362,7 @@ fn global_contents(
             mirror.view,
             bindings.uniforms.light_ubo_buffers[frame].buffer(),
             bindings.shadow.ubos[frame].buffer(),
+            bindings.canopy(frame),
         )
         .with_clusters(mirror.cluster_params, mirror.cluster_lists)
 }

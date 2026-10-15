@@ -10,6 +10,7 @@
 //! that binds it.
 
 pub mod bindless;
+pub mod canopy;
 pub mod directx;
 pub mod geometry;
 pub mod grass;

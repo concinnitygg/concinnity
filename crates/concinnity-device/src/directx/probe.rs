@@ -96,8 +96,12 @@ pub(crate) struct RenderingBake {
     // lighting set, decoupled from the frame's per-frame CBV writes).
     light_gva: u64,
     shadow_gva: u64,
+    canopy_gva: u64,
+    canopy_tables_gva: u64,
     _light_cbv: PooledBuffer,
     _shadow_cbv: PooledBuffer,
+    _canopy_cbv: PooledBuffer,
+    _canopy_tables: PooledBuffer,
     // The capture cube each face is copied into, and the probe cube the convolution
     // will write. Allocated with the capture because face 0 copies into it, and
     // handed to the prefiltering slot once every face has landed.
@@ -144,6 +148,8 @@ pub(in crate::directx) struct FaceUniforms<'a> {
     pub view_gva: u64,
     pub light_gva: u64,
     pub shadow_ubo_gva: u64,
+    pub canopy_gva: u64,
+    pub canopy_tables_gva: u64,
     pub clusters: Option<ClusterGrid<'a>>,
     pub storage: FaceStorage,
 }
@@ -301,6 +307,12 @@ impl DxContext {
             )
         };
         let (shadow_cbv, shadow_gva) = make_snapshot_cbv(alloc, shadow_bytes)?;
+        let (canopy_cbv, canopy_gva) =
+            make_snapshot_cbv(alloc, bytemuck::bytes_of(&self.canopy.params.get()))?;
+        let (canopy_tables, canopy_tables_gva) = make_snapshot_cbv(
+            alloc,
+            bytemuck::cast_slice(self.canopy.tables.borrow().as_slice()),
+        )?;
 
         // Per-face ViewUniforms CBVs, the only per-face binding.
         // The capture renders with the real env IBL (so the scene carries ambient
@@ -377,8 +389,12 @@ impl DxContext {
             view_gvas,
             light_gva,
             shadow_gva,
+            canopy_gva,
+            canopy_tables_gva,
             _light_cbv: light_cbv,
             _shadow_cbv: shadow_cbv,
+            _canopy_cbv: canopy_cbv,
+            _canopy_tables: canopy_tables,
             prefilter,
             cmd_allocs: Vec::with_capacity(CAPTURE_FACES),
             cmd_lists: Vec::with_capacity(CAPTURE_FACES),
@@ -438,6 +454,8 @@ impl DxContext {
                 view_gva,
                 light_gva,
                 shadow_ubo_gva: shadow_gva,
+                canopy_gva: bake.canopy_gva,
+                canopy_tables_gva: bake.canopy_tables_gva,
                 clusters: None,
                 storage: FaceStorage::PROBE,
             },
@@ -686,6 +704,8 @@ impl DxContext {
             view_gva,
             light_gva,
             shadow_ubo_gva,
+            canopy_gva,
+            canopy_tables_gva,
             clusters,
             storage,
         } = uniforms;
@@ -786,6 +806,11 @@ impl DxContext {
             cmd.SetGraphicsRootShaderResourceView(
                 super::material_params::MATERIAL_PARAMS_ROOT_PARAM,
                 material_params_gva,
+            );
+            cmd.SetGraphicsRootConstantBufferView(super::canopy::CANOPY_ROOT_PARAM, canopy_gva);
+            cmd.SetGraphicsRootShaderResourceView(
+                super::canopy::CANOPY_TABLES_ROOT_PARAM,
+                canopy_tables_gva,
             );
             // [12] per-scene GpuLight storage buffer (t1). Probe + planar faces
             // reuse the bindless main PSO, which references it unconditionally.

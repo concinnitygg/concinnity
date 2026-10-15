@@ -11,7 +11,12 @@
 //! The rows carry the segment the frame was drawn in, where the run names one,
 //! so the same reduction runs over each stretch of the run as well as over the
 //! whole of it.
+//!
+//! A report that saves frames as images asks the render side for each one as
+//! the run reaches its moment, and leaves the frames the readback stalls out
+//! of the measurement.
 
+mod capture;
 mod reduce;
 mod report;
 mod sample;

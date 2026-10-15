@@ -38,7 +38,7 @@ pub use super::exposure::{Exposure, ExposureOverrides};
 pub use super::file::FileKind;
 pub use super::fps_counter::FpsCounter;
 pub use super::frame_pacing::{FramePacing, FramePacingOverrides};
-pub use super::frame_report::FrameReport;
+pub use super::frame_report::{FrameCapture, FrameReport};
 pub use super::glass_panel::GlassPanel;
 pub use super::graphics_config::GraphicsConfig;
 pub use super::grass::Grass;

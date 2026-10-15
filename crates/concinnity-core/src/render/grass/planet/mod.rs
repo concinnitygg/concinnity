@@ -1,22 +1,21 @@
 //! Grass on a planet: the layers a `Planet` declares, grown over the tiles it
 //! is drawn with. Blades are placed in cells fixed to the planet's faces
 //! ([`cells`]), thinned by a meadow laid over the sphere ([`density`]), and
-//! rooted on the drawn tiles' own meshes ([`tiles`]); the tiles' far field is
-//! tinted with the same meadow ([`tint`]).
+//! rooted on the drawn tiles' own meshes ([`tiles`]); the far field past them
+//! is thinned by the same meadow (see [`super::canopy`]).
 
 pub mod cells;
 pub mod density;
 pub mod tiles;
-pub mod tint;
 
 use alloc::vec::Vec;
 
 use super::GrassBladeLook;
+use super::canopy::{CanopyField, CanopyRange};
 use crate::components::Grass;
 use crate::math::noise::lcg_hash;
 use crate::planet::PlanetShape;
 use cells::PlanetGrassGrid;
-use tint::PlanetFarField;
 
 /// One look grown over a planet.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -74,9 +73,10 @@ impl PlanetGrass {
         })
     }
 
-    /// The color the planet's ground blends toward past the blades.
-    pub fn far_field(&self) -> Option<PlanetFarField> {
-        PlanetFarField::new(&self.layers, self.meadow_scale)
+    /// The run of the canopy block's layers the planet's far field shades
+    /// with.
+    pub fn far_field(&self) -> CanopyRange {
+        CanopyField::for_planet(self, 0.0).1
     }
 }
 
@@ -121,6 +121,6 @@ mod tests {
             Some(l.cells),
             g.grid.cells_per_tile(Grass::default().density)
         );
-        assert!(g.far_field().is_some());
+        assert_eq!(g.far_field().count, 2);
     }
 }

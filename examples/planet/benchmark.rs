@@ -15,8 +15,17 @@
 //! cutting through them. The track runs on the fixed simulation clock, so a
 //! slower host visits the same poses at the same track times and simply
 //! samples fewer of them.
+//!
+//! The run can also save a few of its frames, at fixed moments of the path:
+//! the meadow by day and by night, and the view from aloft by day. The sky
+//! turns from afternoon through night to the next morning over the run, so
+//! each moment is placed where the sun is up or down, not only by stretch.
 
-use concinnity::components::{CameraTravel, CameraTurn, Ease, FrameReport, GraphicsConfig, Planet};
+use std::path::Path as FilePath;
+
+use concinnity::components::{
+    CameraTravel, CameraTurn, Ease, FrameCapture, FrameReport, GraphicsConfig, Planet,
+};
 use concinnity::cook::{Camera3D, CameraTrack, WorldBuilder};
 
 // The ground run: this far along the ground, this high over the grass, this
@@ -42,17 +51,32 @@ const GROUND_PITCH_DEG: f32 = -6.0;
 const ALOFT_PITCH_DEG: f32 = -14.0;
 const CAMERA_FOV_Y_DEGREES: f32 = 70.0;
 
-// What the world file declares that the run replaces: the walker, the camera
-// it steers, which the track drives instead, and the graphics settings.
-const WALKER: &str = "RigidBody#0";
+// What the world file declares that the run replaces: the camera, which the
+// track drives instead, and the graphics settings.
 const CAMERA: &str = "cam";
 const GRAPHICS: &str = "GraphicsConfig#0";
 
-/// Swap the walker for a camera on the path over `planet`, and time the run
-/// uncapped: a capped GPU idles between frames and lowers its clocks.
-pub(crate) fn inject(world: &mut WorldBuilder, planet: &Planet, graphics: Option<GraphicsConfig>) {
+// The frames saved with `--capture`: the file name, the segment the frame is
+// taken in, and how far through that segment. The sun sets about a third of
+// the way along the ground and rises again near the end of the cruise.
+const CAPTURES: [(&str, &str, f32); 3] = [
+    ("ground-day.png", "ground", 0.15),
+    ("aloft-day.png", "aloft", 0.9),
+    ("ground-night.png", "ground", 0.9),
+];
+
+/// Swap the world's camera for one on the path over `planet`, and time the run
+/// uncapped: a capped GPU idles between frames and lowers its clocks. With a
+/// `capture_dir`, the run also saves its fixed moments there.
+pub(crate) fn inject(
+    world: &mut WorldBuilder,
+    planet: &Planet,
+    graphics: Option<GraphicsConfig>,
+    capture_dir: Option<&FilePath>,
+) {
     let path = Path::new(planet);
-    world.remove(WALKER).remove(CAMERA);
+    let captures = capture_dir.map_or_else(Vec::new, |dir| captures(&path.travel, dir));
+    world.remove(CAMERA);
     if graphics.is_some() {
         world.remove(GRAPHICS);
     }
@@ -82,9 +106,57 @@ pub(crate) fn inject(world: &mut WorldBuilder, planet: &Planet, graphics: Option
         "report",
         FrameReport {
             warmup_seconds: WARMUP_SECONDS,
+            captures,
             ..Default::default()
         },
     );
+}
+
+// The fixed moments as captures written into `dir`.
+fn captures(travel: &[CameraTravel], dir: &FilePath) -> Vec<FrameCapture> {
+    CAPTURES
+        .iter()
+        .filter_map(|&(file, segment, through)| {
+            let (start, end) = segment_span(travel, segment)?;
+            Some(FrameCapture {
+                seconds: start + (end - start) * through,
+                path: dir.join(file).to_string_lossy().into_owned(),
+            })
+        })
+        .collect()
+}
+
+// When the named segment starts and ends on the track: from the leg that
+// opens it to the next leg that opens another.
+fn segment_span(travel: &[CameraTravel], segment: &str) -> Option<(f32, f32)> {
+    let mut at = 0.0;
+    let mut span: Option<(f32, f32)> = None;
+    for leg in travel {
+        if !leg.segment.is_empty() && span.is_some() {
+            break;
+        }
+        let seconds = leg_seconds(leg);
+        if leg.segment == segment {
+            span = Some((at, at));
+        }
+        at += seconds;
+        if let Some((_, end)) = &mut span {
+            *end = at;
+        }
+    }
+    span
+}
+
+// How long a leg runs: its own duration, or the one its distance and speed
+// imply.
+fn leg_seconds(leg: &CameraTravel) -> f32 {
+    if leg.seconds > 0.0 {
+        leg.seconds
+    } else if leg.speed > 0.0 {
+        leg.distance / leg.speed
+    } else {
+        0.0
+    }
 }
 
 // The path north from the start: where the camera begins, and the legs it
@@ -183,4 +255,140 @@ fn stops() -> Vec<(f64, f64, f32, &'static str)> {
         first = false;
     }
     stops
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use concinnity::components::{DirectionalLight, SkyRotation};
+
+    fn planet() -> Planet {
+        crate::declared_planet(crate::WORLD).expect("the world declares a planet")
+    }
+
+    fn sky() -> SkyRotation {
+        let args = crate::declared(crate::WORLD, "SkyRotation", &[]).expect("a turning sky");
+        serde_json::from_value(args).expect("parses")
+    }
+
+    fn sun() -> DirectionalLight {
+        let args = crate::declared(crate::WORLD, "DirectionalLight", &[]).expect("a sun");
+        serde_json::from_value(args).expect("parses")
+    }
+
+    fn moment(file: &str) -> f32 {
+        let path = Path::new(&planet());
+        captures(&path.travel, FilePath::new("shots"))
+            .into_iter()
+            .find(|c| c.path.ends_with(file))
+            .map(|c| c.seconds)
+            .expect("a capture of that name")
+    }
+
+    // Where the camera is `t` seconds into the track: each leg runs at an
+    // even rate along its step.
+    fn camera_at(path: &Path, t: f32) -> [f64; 3] {
+        let mut position = path.start.map(f64::from);
+        let mut at = 0.0;
+        for leg in &path.travel {
+            let seconds = leg_seconds(leg);
+            let through = if seconds > 0.0 {
+                ((t - at) / seconds).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            for (p, d) in position.iter_mut().zip(leg.direction) {
+                *p += f64::from(d) * f64::from(through);
+            }
+            at += seconds;
+        }
+        position
+    }
+
+    fn normalize(v: [f64; 3]) -> [f64; 3] {
+        let length = v.iter().map(|c| c * c).sum::<f64>().sqrt();
+        v.map(|c| c / length)
+    }
+
+    fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+        a.iter().zip(b).map(|(x, y)| x * y).sum()
+    }
+
+    // The sun's height over the camera's horizon `t` seconds into the run, in
+    // degrees: the declared light turned with the sky, against the planet's up
+    // where the camera is.
+    fn sun_elevation_deg(t: f32) -> f64 {
+        let planet = planet();
+        let sky = sky();
+        let light = sun();
+
+        // The sky turns a body the way a planet's spin does: a negative turn
+        // about the pole in the right-handed sense.
+        let k = normalize(sky.axis.map(f64::from));
+        let v = normalize(light.direction.map(f64::from));
+        let angle = -f64::from(sky.angle_deg + sky.degrees_per_second * t).to_radians();
+        let cross = [
+            k[1] * v[2] - k[2] * v[1],
+            k[2] * v[0] - k[0] * v[2],
+            k[0] * v[1] - k[1] * v[0],
+        ];
+        let along = dot(k, v) * (1.0 - angle.cos());
+        let sun: [f64; 3] =
+            std::array::from_fn(|i| v[i] * angle.cos() + cross[i] * angle.sin() + k[i] * along);
+
+        let camera = camera_at(&Path::new(&planet), t);
+        let up = normalize(std::array::from_fn(|i| {
+            camera[i] - f64::from(planet.center[i])
+        }));
+        dot(sun, up).asin().to_degrees()
+    }
+
+    #[test]
+    fn the_ground_segment_starts_after_the_settle_and_runs_its_length() {
+        let path = Path::new(&planet());
+        let (start, end) = segment_span(&path.travel, "ground").expect("a ground segment");
+        assert_eq!(start, SETTLE_SECONDS);
+        let flat = (GROUND_METERS / f64::from(GROUND_SPEED)) as f32;
+        // The hills make the run a little longer than the flat distance.
+        assert!(
+            end - start >= flat * 0.999 && end - start < flat * 1.02,
+            "{start}..{end}"
+        );
+    }
+
+    #[test]
+    fn segments_follow_one_another() {
+        let path = Path::new(&planet());
+        let span = |name| segment_span(&path.travel, name).expect(name);
+        assert_eq!(span("ground").1, span("climb").0);
+        assert_eq!(span("climb").1, span("aloft").0);
+        assert!(segment_span(&path.travel, "nowhere").is_none());
+    }
+
+    #[test]
+    fn every_capture_lands_in_its_segment_inside_the_directory() {
+        let path = Path::new(&planet());
+        let dir = FilePath::new("shots");
+        let captures = captures(&path.travel, dir);
+        assert_eq!(captures.len(), CAPTURES.len());
+        for (capture, (file, segment, _)) in captures.iter().zip(CAPTURES) {
+            assert_eq!(FilePath::new(&capture.path), dir.join(file));
+            let (start, end) = segment_span(&path.travel, segment).expect(segment);
+            assert!(
+                capture.seconds > start && capture.seconds < end,
+                "{capture:?}"
+            );
+            assert!(capture.seconds > WARMUP_SECONDS);
+        }
+    }
+
+    #[test]
+    fn the_day_captures_have_the_sun_up_and_the_night_one_has_it_down() {
+        let ground_day = sun_elevation_deg(moment("ground-day.png"));
+        let aloft_day = sun_elevation_deg(moment("aloft-day.png"));
+        let ground_night = sun_elevation_deg(moment("ground-night.png"));
+        assert!(ground_day > 15.0, "{ground_day} deg");
+        assert!(aloft_day > 10.0, "{aloft_day} deg");
+        assert!(ground_night < -30.0, "{ground_night} deg");
+    }
 }

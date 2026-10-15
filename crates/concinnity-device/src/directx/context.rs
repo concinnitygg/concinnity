@@ -867,6 +867,9 @@ pub(crate) struct DxContext {
     // The grass field, when the world grows one and the GPU-driven main pass
     // exists to draw it in. See [`super::grass`].
     pub(super) grass: Option<super::grass::GrassResources>,
+    // The far field's canopy block, one copy per frame in flight. See
+    // [`super::canopy`].
+    pub(super) canopy: super::canopy::DxCanopy,
 
     // Per-frame command allocators + lists (start / per-pass / end). See
     // `DxCommands`.

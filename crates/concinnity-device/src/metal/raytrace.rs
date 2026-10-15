@@ -1758,7 +1758,7 @@ fn check_build_status(
 }
 
 // Upload a `#[repr(C)]` slice to a new shared GPU buffer.
-fn upload_buffer<T: Copy>(
+pub(super) fn upload_buffer<T: Copy>(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     data: &[T],
     what: &str,

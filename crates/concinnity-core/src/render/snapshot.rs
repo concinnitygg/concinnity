@@ -8,6 +8,7 @@
 use crate::gfx::render_types::{DrawIndex, LineVertex, SkinnedIndex, TextDrawCall};
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
 use crate::render::scene_flow::SceneControl;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 type Mat4 = [[f32; 4]; 4];
@@ -182,6 +183,8 @@ pub struct RenderSnapshot {
     pub scene_ops: Vec<SceneOp>,
     /// Everything that may be trampling grass this frame.
     pub grass_benders: Vec<crate::render::grass::GrassBender>,
+    /// Save the frame to this PNG path once it is presented.
+    pub capture: Option<String>,
 }
 
 impl RenderSnapshot {
@@ -197,6 +200,7 @@ impl RenderSnapshot {
         self.lines.clear();
         self.scene_ops.clear();
         self.grass_benders.clear();
+        self.capture = None;
     }
 }
 

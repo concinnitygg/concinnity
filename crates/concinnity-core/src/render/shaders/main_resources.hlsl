@@ -43,6 +43,35 @@ struct GpuMaterialParams
     float4 values[2];
 };
 
+// Mirrors `CanopyLayerGpu` in concinnity-core/src/render/uniforms/canopy.rs
+// (64 B): one grass layer as the far field past its blades reads it.
+struct CanopyLayer
+{
+    float4 root_color_variation;
+    float4 tip_color_macro;
+    // x = clump size, y = height variance, z = leaf area, w = mean bend.
+    float4 shape;
+    uint seed;
+    float sky_projection;
+    float _pad0;
+    float _pad1;
+};
+
+// Matches MAX_CANOPY_LAYERS in render::uniforms::canopy.
+#define CANOPY_MAX_LAYERS 16
+
+// Mirrors `CanopyParams` in concinnity-core/src/render/uniforms/canopy.rs
+// (1088 B): every far field's layers, and the planet's axes in the frame.
+struct CanopyParams
+{
+    float4 planet_rows[3];
+    float planet_radius;
+    float meadow_scale;
+    float meadow_mean;
+    uint layer_count;
+    CanopyLayer layers[CANOPY_MAX_LAYERS];
+};
+
 // ---- Resource bindings ----
 
 #ifdef CN_BACKEND_METAL
@@ -95,6 +124,9 @@ SamplerState tex_sampler : register(s0, space2);
 [[vk::binding(10, 0)]] StructuredBuffer<ProbeUniforms> probe_records_sb : register(t15);
 // The material parameter table, indexed by GpuObjectData.params_index.
 [[vk::binding(11, 0)]] StructuredBuffer<GpuMaterialParams> material_params_sb : register(t16);
+// The far field's canopy block, and its layers' view tables.
+[[vk::binding(15, 0)]] ConstantBuffer<CanopyParams> canopy_cb : register(b21);
+[[vk::binding(16, 0)]] StructuredBuffer<float4> canopy_tables_sb : register(t22);
 
 // The pool's sampler, under the name the other hosts declare it by.
 #define linear_sampler tex_sampler
@@ -137,6 +169,9 @@ Texture2D<float4> ltc_matrix : register(t18);
 Texture2D<float4> ltc_magnitude : register(t19);
 // The material parameter table, indexed by GpuObjectData.params_index.
 StructuredBuffer<GpuMaterialParams> material_params_sb : register(t20);
+// The far field's canopy block, and its layers' view tables.
+ConstantBuffer<CanopyParams> canopy_cb : register(b8);
+StructuredBuffer<float4> canopy_tables_sb : register(t24);
 // Bindless texture pool: [albedo textures..] ++ [normal maps..]. Unbounded so
 // the shader never over-declares the host's per-frame descriptor region.
 Texture2D<float4> tex_pool[] : register(t0, space1);
@@ -187,6 +222,9 @@ SamplerState cube_sampler : register(s2);
 [[vk::binding(1, 1)]] Texture2D<float4> tex_pool[] : register(t1, space1);
 // The material parameter table, indexed by GpuObjectData.params_index.
 [[vk::binding(2, 1)]] StructuredBuffer<GpuMaterialParams> material_params_sb : register(t2, space1);
+// The far field's canopy block, and its layers' view tables.
+[[vk::binding(21, 0)]] ConstantBuffer<CanopyParams> canopy_cb : register(b21);
+[[vk::binding(22, 0)]] StructuredBuffer<float4> canopy_tables_sb : register(t22);
 
 
 #endif // binding model
@@ -234,6 +272,8 @@ static ViewUniforms surface_view;
 #define SPOT_SHADOWS spot_shadows_sb
 #define AREA_LIGHTS area_lights_sb
 #define MATERIAL_PARAMS material_params_sb
+#define CANOPY canopy_cb
+#define CANOPY_TABLES canopy_tables_sb
 #define probe_cube_sampler cube_sampler
 
 float4 pool_sample(uint idx, float2 uv)

@@ -1,7 +1,6 @@
 //! Every `Terrain`'s cooked payload, decoded once at graphics init: its grid
 //! becomes the terrain's static draws, and with its masks the ground its grass
-//! layers grow on and the far-field color its surface blends toward past the
-//! blades. The components stay in place for the physics system, which inits
+//! layers grow on and the far field its surface is shaded as past the blades. The components stay in place for the physics system, which inits
 //! after graphics and builds each terrain's collider from the same payload.
 
 use std::collections::HashMap;
@@ -13,7 +12,7 @@ use concinnity_core::gfx::frustum;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{DrawObject, FarFieldTint};
 use concinnity_core::render::grass::GrassTerrain;
-use concinnity_core::render::grass::tint::{FarField, far_field_band};
+use concinnity_core::render::grass::tint::{FarField, far_field_band, far_fields};
 use concinnity_core::terrain::payload::TerrainPayload;
 use concinnity_core::terrain::{terrain_chunks, terrain_chunks_colored};
 use concinnity_core::transform::trs_matrix;
@@ -24,8 +23,7 @@ use crate::gfx::material_entry::MaterialEntry;
 pub(crate) struct LoadedTerrain {
     pub(crate) terrain: Terrain,
     pub(crate) payload: TerrainPayload,
-    /// The color its surface blends toward past the blades, when it grows
-    /// grass.
+    /// What its surface is shaded as past the blades, when it grows grass.
     pub(crate) far_field: Option<FarField>,
 }
 
@@ -64,9 +62,9 @@ pub(crate) fn load_terrains(ctx: &mut PipelineContext) -> Option<(Vec<LoadedTerr
             far_field: None,
         });
     }
-    let grass = grass_by_id(ctx);
-    for t in &mut loaded {
-        t.far_field = FarField::of(&grass_terrain(t, &grass));
+    let fields = far_fields(&grass_terrains(&loaded, &grass_by_id(ctx)));
+    for (t, far) in loaded.iter_mut().zip(fields) {
+        t.far_field = far;
     }
     Some((loaded, blobs))
 }
@@ -120,9 +118,9 @@ pub(crate) fn append_terrain_draws(
             material.uniforms.far_field = FarFieldTint {
                 start,
                 end,
-                luma: far.luma,
+                canopy: far.canopy.packed(),
             };
-            terrain_chunks_colored(grid, &far.colors)
+            terrain_chunks_colored(grid, &far.shares)
         }
         None => terrain_chunks(grid),
     };
@@ -161,6 +159,7 @@ mod tests {
     use super::*;
     use concinnity_core::components::TerrainLayer;
     use concinnity_core::ecs::Ref;
+    use concinnity_core::render::grass::CanopyRange;
     use concinnity_core::terrain::{DensityMask, TERRAIN_CHUNK_CELLS, TerrainGrid};
 
     fn loaded(resolution: u32, layers: Vec<TerrainLayer>) -> LoadedTerrain {
@@ -230,8 +229,8 @@ mod tests {
         );
     }
 
-    // A terrain under grass carries its far-field colors per corner and the
-    // blade fade's band in every chunk's material.
+    // A terrain under grass carries its layers' densities per corner, and the
+    // blade fade's band and its canopy run in every chunk's material.
     #[test]
     fn a_grassy_terrain_carries_its_far_field() {
         let mut t = loaded(4, Vec::new());
@@ -239,9 +238,14 @@ mod tests {
         let colors: Vec<[f32; 3]> = (0..side * side)
             .map(|i| [0.01 * i as f32, 0.1, 0.0])
             .collect();
+        let canopy = CanopyRange {
+            first: 2,
+            count: 1,
+            planet: false,
+        };
         t.far_field = Some(FarField {
-            colors: colors.clone(),
-            luma: 0.07,
+            shares: colors.clone(),
+            canopy,
         });
         let (mut vertices, mut indices, mut draws) = (Vec::new(), Vec::new(), Vec::new());
         append_terrain_draws(
@@ -258,7 +262,7 @@ mod tests {
                 FarFieldTint {
                     start,
                     end,
-                    luma: 0.07
+                    canopy: canopy.packed(),
                 }
             );
         }

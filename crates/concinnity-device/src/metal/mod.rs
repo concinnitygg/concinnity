@@ -7,6 +7,7 @@ mod auto_exposure;
 mod backend;
 mod bindless_args;
 mod bucket_pipelines;
+mod canopy;
 mod context;
 mod cull;
 mod cull_readback;

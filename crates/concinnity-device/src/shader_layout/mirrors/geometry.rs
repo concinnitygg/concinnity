@@ -119,7 +119,7 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
             ground,
             planet_tile_base,
             planet_tile_count,
-            _pad,
+            planet_radius,
             wind_map,
             bend_prev_map,
             planet_density,
@@ -158,7 +158,7 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
             cell_size,
             cells_per_side,
             [root_color, reach] => ["root_color_reach"],
-            tip_color,
+            [tip_color, macro_variation] => ["tip_color_macro"],
         })),
         everywhere(mirror!(GpuGrassBlade => "GrassBlade" {
             root_facing,

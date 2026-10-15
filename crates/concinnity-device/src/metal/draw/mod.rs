@@ -254,6 +254,14 @@ impl MtlContext {
             _ => render_graph::build_frame_graph(&graph_inputs)
                 .map_err(|e| error::RenderError::Other(format!("frame graph: {e}")))?,
         };
+        self.canopy = match &self.grass {
+            Some(grass) => self.state.canopy_params(&grass.field.canopy),
+            None => Default::default(),
+        };
+        self.canopy_tables.update(
+            &self.hw.device,
+            self.grass.as_ref().map_or(&[], |g| g.field.canopy.tables()),
+        )?;
         // The grass kernel's inputs, advanced only on a frame whose graph runs it,
         // so the draw-argument slot it fills alternates frame to frame.
         let grass_frame = (graph_inputs.grass_enabled && !graph_inputs.world_hidden)

@@ -17,14 +17,18 @@
 //! coordinates through every move of the simulated frame.
 
 pub mod bend;
+pub mod canopy;
+pub mod canopy_table;
 mod ground;
 pub mod lod;
 pub mod planet;
 pub mod shadow;
 pub mod tiles;
 pub mod tint;
+pub mod variation;
 
 pub use bend::{BendHistory, GrassBender};
+pub use canopy::{CanopyField, CanopyRange};
 pub use ground::{GrassGround, GrassGroundBuffers, GrassMask, GroundSample};
 pub use lod::GrassCapacity;
 pub use planet::PlanetGrass;
@@ -73,6 +77,8 @@ pub struct GrassBladeLook {
     pub tip_color: [f32; 3],
     /// Hue and brightness variation, in [0, 1].
     pub color_variation: f32,
+    /// How far the field's color drifts over hundreds of meters, in [0, 1].
+    pub macro_variation: f32,
 }
 
 impl GrassBladeLook {
@@ -86,6 +92,7 @@ impl GrassBladeLook {
             root_color: g.root_color,
             tip_color: g.tip_color,
             color_variation: g.color_variation,
+            macro_variation: g.macro_variation,
         }
     }
 }
@@ -242,6 +249,43 @@ pub struct GrassFrame {
     pub planet_tiles: Vec<PlanetGrassTileGpu>,
 }
 
+/// One terrain layer that grows blades: where it sits among the terrains, its
+/// validated look, the cell grid its density resolves to, and the seed the
+/// kernel salts it with.
+#[derive(Debug, Clone)]
+pub(crate) struct GrownLayer {
+    pub terrain: usize,
+    pub layer: usize,
+    pub grass: Grass,
+    pub grid: GrassGrid,
+    pub seed: u32,
+}
+
+/// Every layer of `terrains` that grows blades, in declaration order: the
+/// layers the kernel draws, and the ones the far field shades.
+pub(crate) fn grown_layers(terrains: &[GrassTerrain]) -> Vec<GrownLayer> {
+    let mut out = Vec::new();
+    for (ti, terrain) in terrains.iter().enumerate() {
+        for (li, (grass, _)) in terrain.layers.iter().enumerate() {
+            if !grass.visible {
+                continue;
+            }
+            let grass = crate::components::validate::grass(grass.clone());
+            let Some(grid) = GrassGrid::for_density(grass.density) else {
+                continue;
+            };
+            out.push(GrownLayer {
+                terrain: ti,
+                layer: li,
+                grass,
+                grid,
+                seed: lcg_hash(out.len() as u32 ^ 0x5bd1_e995),
+            });
+        }
+    }
+    out
+}
+
 /// Every grass layer in the world, resolved once from its terrains.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrassField {
@@ -260,6 +304,8 @@ pub struct GrassField {
     pub blade_height: f32,
     /// The planet the layers grow on instead of terrains.
     pub planet: Option<PlanetGrass>,
+    /// What the far fields past the blades are shaded with.
+    pub canopy: CanopyField,
 }
 
 // The frame a planet's tiles are drawn in this frame, from any one of them.
@@ -279,42 +325,40 @@ impl GrassField {
         let mut layers = Vec::new();
         let mut capacities = Vec::new();
         let mut shadow_capacity = 0u32;
-        for terrain in terrains {
-            let mut heights_offset = None;
-            for (grass, mask) in &terrain.layers {
-                if !grass.visible {
-                    continue;
-                }
-                let grass = crate::components::validate::grass(grass.clone());
-                let Some(grid) = GrassGrid::for_density(grass.density) else {
-                    continue;
-                };
-                let offset =
-                    *heights_offset.get_or_insert_with(|| buffers.push_heights(&terrain.grid));
-                let ground = GrassGround::new(terrain.center, &terrain.grid, offset);
-                capacities.push(lod::lod_capacities(
-                    &ground.rect,
-                    &grid,
-                    GRASS_DRAW_DISTANCE,
-                ));
-                shadow_capacity = shadow_capacity.saturating_add(lod::shadow_capacity(
-                    &ground.rect,
-                    &grid,
-                    GRASS_SHADOW_DISTANCE,
-                    GRASS_DRAW_DISTANCE,
-                ));
-                layers.push(GrassLayer {
-                    ground,
-                    mask: mask.as_ref().map(|m| buffers.push_mask(m)),
-                    look: GrassBladeLook::of(&grass),
-                    grid,
-                    seed: lcg_hash(layers.len() as u32 ^ 0x5bd1_e995),
-                });
+        let mut heights_offset = None;
+        let mut last_terrain = None;
+        for grown in grown_layers(terrains) {
+            let terrain = &terrains[grown.terrain];
+            if last_terrain != Some(grown.terrain) {
+                last_terrain = Some(grown.terrain);
+                heights_offset = None;
             }
+            let offset = *heights_offset.get_or_insert_with(|| buffers.push_heights(&terrain.grid));
+            let ground = GrassGround::new(terrain.center, &terrain.grid, offset);
+            capacities.push(lod::lod_capacities(
+                &ground.rect,
+                &grown.grid,
+                GRASS_DRAW_DISTANCE,
+            ));
+            shadow_capacity = shadow_capacity.saturating_add(lod::shadow_capacity(
+                &ground.rect,
+                &grown.grid,
+                GRASS_SHADOW_DISTANCE,
+                GRASS_DRAW_DISTANCE,
+            ));
+            let mask = &terrain.layers[grown.layer].1;
+            layers.push(GrassLayer {
+                ground,
+                mask: mask.as_ref().map(|m| buffers.push_mask(m)),
+                look: GrassBladeLook::of(&grown.grass),
+                grid: grown.grid,
+                seed: grown.seed,
+            });
         }
         if layers.is_empty() {
             return None;
         }
+        let wind_field = WindField::new(wind);
         let blade_height = layers
             .iter()
             .map(|l| l.look.height * (1.0 + l.look.height_variance))
@@ -322,16 +366,18 @@ impl GrassField {
         Some(Self {
             layers,
             buffers,
-            wind: WindField::new(wind),
+            wind: wind_field,
             capacity: GrassCapacity::sum(capacities),
             shadow_capacity: shadow_capacity.clamp(1, tiles::MAX_GRASS_BLADES),
             blade_height,
             planet: None,
+            canopy: CanopyField::for_terrains(terrains, wind_field.strength).0,
         })
     }
 
     /// The grass `planet` grows, swaying in `wind`.
     pub fn resolve_planet(planet: PlanetGrass, wind: Option<&Wind>) -> Self {
+        let wind_field = WindField::new(wind);
         // A planet's ground is unbounded; its blades stand at most at the
         // layer's density, with a margin for slopes holding more ground than
         // their footprint.
@@ -364,10 +410,11 @@ impl GrassField {
         Self {
             layers: Vec::new(),
             buffers: GrassGroundBuffers::default(),
-            wind: WindField::new(wind),
+            wind: wind_field,
             capacity,
             shadow_capacity: shadow_capacity.clamp(1, tiles::MAX_GRASS_BLADES),
             blade_height,
+            canopy: CanopyField::for_planet(&planet, wind_field.strength).0,
             planet: Some(planet),
         }
     }
@@ -511,7 +558,7 @@ impl GrassField {
             },
             planet_tile_base: 0,
             planet_tile_count: 0,
-            _pad: 0,
+            planet_radius: self.planet.as_ref().map_or(0.0, |p| p.shape.radius as f32),
             wind_map,
             bend_prev_map,
             planet_density: [0.0; MAX_GRASS_LAYERS],
@@ -713,7 +760,8 @@ fn planet_layer_gpu(layer: &planet::PlanetGrassLayer) -> GrassLayerGpu {
         cells_per_side: layer.cells,
         root_color: look.root_color,
         reach: blade_reach(look),
-        tip_color: [look.tip_color[0], look.tip_color[1], look.tip_color[2], 0.0],
+        tip_color: look.tip_color,
+        macro_variation: look.macro_variation,
         ..GrassLayerGpu::default()
     }
 }
@@ -785,7 +833,8 @@ fn layer_gpu(layer: &GrassLayer, tiles: &TileRange) -> GrassLayerGpu {
         cells_per_side: layer.grid.cells_per_side,
         root_color: look.root_color,
         reach: blade_reach(look),
-        tip_color: [look.tip_color[0], look.tip_color[1], look.tip_color[2], 0.0],
+        tip_color: look.tip_color,
+        macro_variation: look.macro_variation,
     }
 }
 

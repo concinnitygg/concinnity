@@ -20,7 +20,6 @@ use concinnity_core::planet::{
 };
 use concinnity_core::render::backend::{ChunkMesh, PlanetChunk};
 use concinnity_core::render::error;
-use concinnity_core::render::grass::planet::tint::PlanetFarField;
 use concinnity_core::render::ops::{OpFailure, RenderOps};
 
 use super::worker::Worker;
@@ -191,13 +190,8 @@ pub(crate) fn tile_mesh_size() -> (usize, usize) {
 }
 
 impl PlanetTiles {
-    /// Tiles of `planet` drawn with `material`; with `far_field`, every
-    /// tile's vertices carry the color its grass shows from afar.
-    pub(crate) fn new(
-        planet: &PlanetFrame,
-        material: TileMaterial,
-        far_field: Option<PlanetFarField>,
-    ) -> Self {
+    /// Tiles of `planet` drawn with `material`.
+    pub(crate) fn new(planet: &PlanetFrame, material: TileMaterial) -> Self {
         let lod = TileLod::new(planet.shape, concinnity_core::planet::FINEST_CELL_SIZE);
         let (result_tx, results) = std::sync::mpsc::channel::<(TileId, TileMesh)>();
         let workers = (0..WORKERS)
@@ -205,12 +199,11 @@ impl PlanetTiles {
                 let (request_tx, request_rx) = std::sync::mpsc::channel::<TileId>();
                 let results = result_tx.clone();
                 let shape = lod.shape;
-                let far_field = far_field.clone();
                 Worker::spawn(
                     &format!("cn-planet-tiles-{i}"),
                     request_rx,
                     request_tx,
-                    move |rx| build_tiles(shape, far_field, rx, results),
+                    move |rx| build_tiles(shape, rx, results),
                 )
             })
             .collect();
@@ -372,19 +365,15 @@ impl PlanetTiles {
     }
 }
 
-// A worker: build every requested tile's mesh, tinted with `far_field`, and
-// send it back, until the streamer is dropped.
+// A worker: build every requested tile's mesh and send it back, until the
+// streamer is dropped.
 fn build_tiles(
     shape: concinnity_core::planet::PlanetShape,
-    far_field: Option<PlanetFarField>,
     requests: Receiver<TileId>,
     results: Sender<(TileId, TileMesh)>,
 ) {
     while let Ok(id) = requests.recv() {
-        let mut mesh = tile_mesh(&shape, id);
-        if let Some(far) = &far_field {
-            far.tint(&shape, &mut mesh);
-        }
+        let mesh = tile_mesh(&shape, id);
         if results.send((id, mesh)).is_err() {
             break;
         }

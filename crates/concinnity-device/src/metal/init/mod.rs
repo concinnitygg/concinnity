@@ -341,6 +341,8 @@ impl MtlContext {
             instanced,
             scene,
             light_uniforms,
+            canopy: Default::default(),
+            canopy_tables: Default::default(),
             shadow,
             spot_shadow,
             probe,

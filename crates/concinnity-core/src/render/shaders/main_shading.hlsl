@@ -265,24 +265,9 @@ float ltc_evaluate(float3 N, float3 V, float3 P, float3x3 m_inv, float3 corners[
     return two_sided ? abs(form_factor) : max(-form_factor, 0.0);
 }
 
-// ---- The shading model ----
+{CANOPY}
 
-// The surface's albedo from its material's: multiplied by the vertex color,
-// or, on a terrain under grass, blended toward the far-field color its vertex
-// color carries across the band where the blades fade out. That color is
-// premultiplied by the grass's coverage, which its luminance gives back, so
-// bare ground keeps the material.
-float3 surface_albedo(GpuObjectData od, float3 material, float3 color, float dist)
-{
-    if (od.far_end <= 0.0)
-    {
-        return material * color;
-    }
-    float w = saturate((dist - od.far_start) / max(od.far_end - od.far_start, 1e-3));
-    float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
-    float coverage = od.far_luma > 0.0 ? saturate(luma / od.far_luma) : 0.0;
-    return lerp(material, color + (1.0 - coverage) * material, w);
-}
+// ---- The shading model ----
 
 // The forward shading model. `od` is the object record the GPU-driven pass
 // reads straight out of the per-frame buffer.
@@ -300,13 +285,28 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // annotates it there).
     float4 albedo_samp = pool_sample(od.albedo_index, v.uv);
     surface_cutout(od, albedo_samp.a);
-    float3 albedo = surface_albedo(od, albedo_samp.rgb * tint, v.color,
-                                   distance(cam_pos, v.world_pos));
+    // A surface under grass carries its layers' densities in its vertex color
+    // rather than a multiplier on its albedo.
+    float3 albedo = albedo_samp.rgb * tint * (od.far_end > 0.0 ? (float3)(1.0) : v.color);
+
+    // Past where the blades end, the surface is shaded as the canopy they
+    // make. The pixel's footprint is taken here, in uniform control flow.
+    float3 V_far = cam_pos - v.world_pos;
+    float far_dist = length(V_far);
+    float footprint = max(length(ddx(v.world_pos)), length(ddy(v.world_pos)));
+    float far_w = canopy_band(od, far_dist);
+    CanopyShade canopy = (CanopyShade)0;
+    if (far_w > 0.0)
+    {
+        canopy = canopy_at(od, v.world_pos, v.normal, v.color, V_far / max(far_dist, 1e-4),
+                           footprint);
+    }
 
     // Unlit view mode: the surface's base color, no lighting.
     if (VIEW.shade_mode > 0.5)
     {
-        return float4(albedo, 1.0);
+        return float4(far_w > 0.0 ? lerp(albedo, canopy_albedo_seen(canopy, albedo), far_w) : albedo,
+                      1.0);
     }
 
     // Per-material emissive texture carries the color (the scalar factor is a
@@ -341,6 +341,8 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     float3 energy_ms = 1.0 + F0 * (1.0 / max(ess, 0.001) - 1.0);
 
     float3 Lo = (float3)(0.0);
+    // The direct light the ground under a canopy still gets.
+    float3 Lo_under = (float3)(0.0);
 
     for (int i = 0; i < LIGHTS.num_dir; i++)
     {
@@ -360,7 +362,13 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         float3 diff = kd * albedo / PI;
 
         float s = (i == 0) ? shadow : 1.0;
-        Lo += (diff + spec) * radiance * NdL * s;
+        float3 direct = (diff + spec) * radiance * NdL * s;
+        Lo += direct;
+        if (far_w > 0.0)
+        {
+            Lo_under += direct * canopy_transmit(canopy, L);
+            canopy_add_light(canopy, V, L, radiance * s);
+        }
     }
 
     // Clustered light and probe lookup: when clustering is active (the main
@@ -491,7 +499,15 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         float3 kd   = (1.0 - F) * (1.0 - metallic);
         float3 spec = (D * G * F) / max(4.0 * NdV * NdL, 0.001) * energy_ms;
         float3 diff = kd * albedo / PI;
-        Lo += (diff + spec) * radiance * NdL;
+        float3 direct = (diff + spec) * radiance * NdL;
+        Lo += direct;
+        if (far_w > 0.0)
+        {
+            // Local lights light the canopy from its facing toward the
+            // viewer alone.
+            Lo_under += direct * canopy_transmit(canopy, L);
+            canopy_add_local_light(canopy, V, L, radiance);
+        }
     }
 
     float3 ambient;
@@ -544,13 +560,24 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // is unaffected. A 1x1 white view is bound when SSAO is disabled, so this
     // samples a constant 1.0 then. A probe or mirror face skips it: the
     // occlusion was computed for the main camera, not the face's viewpoint.
+    float occlusion = 1.0;
     if (VIEW.ambient_occlusion > 0.5)
     {
         float2 ssao_uv = screen_xy / ssao_size();
-        ambient *= ssao_sample(ssao_uv);
+        occlusion = ssao_sample(ssao_uv);
+        ambient *= occlusion;
     }
 
     float3 color = ambient + Lo + emissive;
+    if (far_w > 0.0)
+    {
+        // The blades see the sky their facing toward the viewer sees, as the
+        // grass draws do.
+        float3 sky = ibl_enabled ? irradiance_sample(canopy.along) / PI : (float3)(0.03);
+        sky *= LIGHTS.ambient_intensity * occlusion;
+        float3 ground = ambient * canopy_ground_sky(canopy) + Lo_under + emissive;
+        color = lerp(color, canopy_radiance(canopy, sky, ground), far_w);
+    }
 
     return float4(color, albedo_samp.a);
 }

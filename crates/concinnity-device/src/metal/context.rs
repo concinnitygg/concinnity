@@ -632,6 +632,11 @@ pub(crate) struct MtlContext {
     pub(super) scene: MtlSceneAssets,
     // All scene lights packed and pushed to the fragment shader at buffer(4).
     pub(super) light_uniforms: LightUniforms,
+    // The far field's canopy block, refreshed each frame and pushed to the
+    // fragment shader at buffer(21).
+    pub(super) canopy: concinnity_core::render::uniforms::canopy::CanopyParams,
+    // Its layers' view tables, at buffer(22).
+    pub(super) canopy_tables: super::canopy::CanopyTables,
     // Cascaded shadow map + its schedule. See [`ShadowState`].
     pub(super) shadow: ShadowState,
     // Spot-light shadow slices + their schedule. See [`SpotShadowState`].

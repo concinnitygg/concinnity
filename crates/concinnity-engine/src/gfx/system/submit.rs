@@ -166,12 +166,30 @@ pub(crate) fn submit(
     let mut render_stats = backend.render_stats();
     render_stats.render_cpu_us = micros_since(started).saturating_sub(render_stats.gpu_wait_us);
     render_stats.replay_us = replay_us;
+    // Taken after the stats so the readback stall stays out of this frame's
+    // render time.
+    if let Some(path) = snap.capture.take() {
+        capture_frame(backend, &path, skipped);
+    }
     SubmitOutcome {
         result: StepResult::Continue,
         render_stats: Some(render_stats),
         replay,
         device_lost: false,
         skipped,
+    }
+}
+
+// Save the frame just presented to `path`. A dropped frame presented nothing
+// new, so there is nothing to save.
+fn capture_frame(backend: &mut dyn RenderBackend, path: &str, skipped: bool) {
+    if skipped {
+        tracing::warn!("frame capture {path} skipped: the frame was dropped");
+        return;
+    }
+    match backend.screenshot(path) {
+        Ok(saved) => tracing::info!("frame capture saved: {saved}"),
+        Err(e) => tracing::warn!("frame capture {path} failed: {e}"),
     }
 }
 
@@ -281,6 +299,47 @@ mod tests {
     fn a_draw_failing_for_another_reason_raises_no_memory_pressure() {
         let outcome = draw_failing_with(error::RenderError::Other("draw".into()));
         assert!(!outcome.replay.memory_pressure);
+    }
+
+    // The backend calls one frame carrying `capture` makes, after a draw that
+    // fails with `fail` when one is given.
+    fn captured(capture: Option<&str>, fail: Option<error::RenderError>) -> Vec<Call> {
+        let (state, mut backend) = recording_backend();
+        state.lock().unwrap().fail_draw = fail;
+        let mut snap = RenderSnapshot {
+            capture: capture.map(str::to_string),
+            ..Default::default()
+        };
+        submit(&mut FramePolicy::default(), &mut snap, &mut backend);
+        assert!(snap.capture.is_none(), "a capture is taken once");
+        let calls = state.lock().unwrap().calls.clone();
+        calls
+            .into_iter()
+            .filter(|c| matches!(c, Call::DrawFrame { .. } | Call::Screenshot(_)))
+            .collect()
+    }
+
+    #[test]
+    fn a_frame_carrying_a_capture_is_saved_after_it_is_drawn() {
+        let calls = captured(Some("shot.png"), None);
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert!(matches!(calls[0], Call::DrawFrame { .. }));
+        assert_eq!(calls[1], Call::Screenshot("shot.png".to_string()));
+    }
+
+    #[test]
+    fn a_frame_without_a_capture_saves_nothing() {
+        let calls = captured(None, None);
+        assert!(!calls.iter().any(|c| matches!(c, Call::Screenshot(_))));
+    }
+
+    #[test]
+    fn a_dropped_frame_saves_nothing() {
+        let calls = captured(
+            Some("shot.png"),
+            Some(error::RenderError::Other("draw".into())),
+        );
+        assert!(!calls.iter().any(|c| matches!(c, Call::Screenshot(_))));
     }
 
     #[test]

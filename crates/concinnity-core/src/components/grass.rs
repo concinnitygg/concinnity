@@ -15,6 +15,12 @@
 /// at the tip, with light passing through it when the sun is behind. Blades are
 /// drawn out to a fixed distance from the camera and thin out toward it.
 ///
+/// Past where the blades end, the ground is shaded as the field they make seen
+/// from afar: the same colors, clumps and bare patches, brighter and greener
+/// along the ground toward the horizon, darker looking straight down into it.
+/// Across hundreds of meters the field also drifts between greener and drier
+/// stretches, drier still on slopes, by `macro_variation`.
+///
 /// ```rust
 /// # use concinnity_core::components::Grass;
 /// Grass {
@@ -62,6 +68,11 @@ pub struct Grass {
     /// How much hue and brightness vary between clumps and blades, in [0, 1].
     #[asset(default = 0.35)]
     pub color_variation: f32,
+    /// How much the field's color drifts over hundreds of meters to
+    /// kilometers, in [0, 1]: patches of deeper and lighter green, drier
+    /// stretches, and drier grass on slopes. 0 grows one color everywhere.
+    #[asset(default = 0.5)]
+    pub macro_variation: f32,
     /// When false no terrain grows this grass.
     #[asset(default = true)]
     pub visible: bool,

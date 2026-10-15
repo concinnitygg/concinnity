@@ -18,6 +18,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("atmosphere_types.hlsl", ATMOSPHERE_TYPES),
     ("auto_exposure.hlsl", AUTO_EXPOSURE),
     ("bloom.hlsl", BLOOM),
+    ("canopy.hlsl", CANOPY),
     ("cluster_types.hlsl", CLUSTER_TYPES),
     ("composite.hlsl", COMPOSITE),
     ("cull.hlsl", CULL),
@@ -31,6 +32,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("glass_mesh.hlsl", GLASS_MESH),
     ("glass_reflection.hlsl", GLASS_REFLECTION),
     ("grass.hlsl", GRASS),
+    ("grass_field.hlsl", GRASS_FIELD),
     ("hdr_store.hlsl", HDR_STORE),
     ("hiz_build.hlsl", HIZ_BUILD),
     ("hiz_test.hlsl", HIZ_TEST),
@@ -103,6 +105,8 @@ pub const ATMOSPHERE_TYPES: &str = include_str!("shaders/atmosphere_types.hlsl")
 pub const AUTO_EXPOSURE: &str = include_str!("shaders/auto_exposure.hlsl");
 /// `bloom.hlsl`.
 pub const BLOOM: &str = include_str!("shaders/bloom.hlsl");
+/// `canopy.hlsl`.
+pub const CANOPY: &str = include_str!("shaders/canopy.hlsl");
 /// `cluster_types.hlsl`.
 pub const CLUSTER_TYPES: &str = include_str!("shaders/cluster_types.hlsl");
 /// `composite.hlsl`.
@@ -129,6 +133,8 @@ pub const GLASS_MESH: &str = include_str!("shaders/glass_mesh.hlsl");
 pub const GLASS_REFLECTION: &str = include_str!("shaders/glass_reflection.hlsl");
 /// `grass.hlsl`.
 pub const GRASS: &str = include_str!("shaders/grass.hlsl");
+/// `grass_field.hlsl`.
+pub const GRASS_FIELD: &str = include_str!("shaders/grass_field.hlsl");
 /// `hdr_store.hlsl`.
 pub const HDR_STORE: &str = include_str!("shaders/hdr_store.hlsl");
 /// `hiz_build.hlsl`.

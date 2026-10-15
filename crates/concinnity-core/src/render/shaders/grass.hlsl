@@ -95,7 +95,8 @@ struct GrassLayer
     uint cells_per_side;
     // xyz = linear RGB at the root, w = how far a blade reaches from its root.
     float4 root_color_reach;
-    float4 tip_color;
+    // xyz = linear RGB at the tip, w = how far the field's color drifts.
+    float4 tip_color_macro;
 };
 
 // Matches MAX_GRASS_LAYERS in render::uniforms::grass.
@@ -153,7 +154,8 @@ struct GrassParams
     uint ground;
     uint planet_tile_base;
     uint planet_tile_count;
-    uint _pad;
+    // The planet's radius, in meters.
+    float planet_radius;
     // Rows over (x, y, z, 1): the ground-plane coordinates the wind's gusts
     // are laid out in.
     float4 wind_map[2];
@@ -199,11 +201,16 @@ struct GrassBlade
     // halves, w = the blade's bits (see grass_blade_bits).
     uint4 shape;
     // How far it is trampled, [x, z] as two halves: x this frame, y last frame;
-    // z = the x and z of the up it stands along as two halves.
+    // z = the x and z of the up it stands along as two halves; w = the field's
+    // drift where it stands (see grass_macro) as two halves.
     uint4 bend;
 };
 
-static const float GRASS_TAU = 6.28318530718;
+#if defined(GRASS_BEND) || defined(GRASS_GENERATE) || defined(GRASS_SHADOW)
+{GRASS_FIELD}
+#else
+{MAIN_RESOURCES}
+#endif
 
 // Strip pairs at detail level `lod`: every level keeps every other pair of the
 // last, so its pairs sit at LOD0 pair indices that are multiples of 2^lod.
@@ -222,25 +229,6 @@ uint grass_lod_vertices(uint lod)
 uint grass_lod_at(GrassParams p, float dist)
 {
     return dist < p.lod_distances.x ? 0u : (dist < p.lod_distances.y ? 1u : 2u);
-}
-
-// One 32-bit hash step (PCG).
-uint grass_hash(uint v)
-{
-    uint state = v * 747796405u + 2891336453u;
-    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
-    return (word >> 22u) ^ word;
-}
-
-uint grass_hash2(int2 c)
-{
-    return grass_hash(asuint(c.x) + grass_hash(asuint(c.y)));
-}
-
-// A unit float from `h` mixed with `salt`, so one hash yields many draws.
-float grass_unit(uint h, uint salt)
-{
-    return float(grass_hash(h ^ salt) >> 8u) * (1.0 / 16777216.0);
 }
 
 // A blade's bits: 12 of its clump's hash, 12 of its own, and the slot of the
@@ -540,8 +528,9 @@ bool grass_tile_visible(GrassLayer L, int2 tile)
 
 // Where a blade grows, whatever ground it grows on: its root, the ground's
 // normal and the up it stands along, its place on the ground's own plane (for
-// the clump lattice) with the plane's two axes in the frame, its hash, and the
-// share of the layer's density that grows there.
+// the clump lattice) with the plane's two axes in the frame, its fixed ground
+// point (for the field's slow drift), its hash, and the share of the layer's
+// density that grows there.
 struct GrassSite
 {
     float3 root;
@@ -553,6 +542,7 @@ struct GrassSite
     uint hash;
     // Salts the clump lattice, so lattices on different faces differ.
     uint clump_salt;
+    float3 ground_point;
     float density;
 };
 
@@ -616,30 +606,7 @@ float grass_mask_density(GrassLayer L, float2 st)
 // its center.
 uint grass_clump(GrassLayer L, float2 xz, uint salt, out float2 center)
 {
-    float2 p = xz / L.clump_size;
-    int2 base = int2(floor(p));
-    float best = 1e30;
-    uint best_hash = 0u;
-    center = xz;
-    [unroll]
-    for (int dz = -1; dz <= 1; dz++)
-    {
-        [unroll]
-        for (int dx = -1; dx <= 1; dx++)
-        {
-            int2 cell = base + int2(dx, dz);
-            uint h = grass_hash(grass_hash2(cell) ^ L.seed ^ salt) ^ 0x9e3779b9u;
-            float2 c = float2(cell) + float2(grass_unit(h, 1u), grass_unit(h, 2u));
-            float d = dot(c - p, c - p);
-            if (d < best)
-            {
-                best = d;
-                best_hash = h;
-                center = c * L.clump_size;
-            }
-        }
-    }
-    return best_hash;
+    return grass_clump_at(xz, L.clump_size, L.seed, salt, center);
 }
 
 // The bend of the field's cell `cell` in half `half_index` of the window whose
@@ -698,8 +665,8 @@ float grass_coverage(float keep)
     {
         return 1.0;
     }
-    float band = grass.thinning.y;
-    float span = 1.0 - band;
+    float span = 1.0 - grass.thinning.y;
+    float band = max(grass.thinning.y * keep, 1e-6);
     return (grass_shrink_ramp(keep, band) - grass_shrink_ramp(keep - span, band)) / span;
 }
 
@@ -724,70 +691,12 @@ bool grass_terrain_site(GrassLayer L, int2 cell, out GrassSite site)
     site.plane_v = float3(0.0, 0.0, 1.0);
     site.hash = h;
     site.clump_salt = 0u;
+    site.ground_point = float3(xz.x, 0.0, xz.y);
     site.density = grass_mask_density(L, st);
     return true;
 }
 
 // ---- A planet's ground ----
-
-// The unit direction through face coordinates (s, t) of cube face `face`.
-// Mirrors render::grass::planet::cells::face_direction and
-// planet::CubeFace::direction.
-float3 grass_face_direction(uint face, float s, float t)
-{
-    float3 n;
-    float3 u;
-    float3 v;
-    switch (face)
-    {
-    case 0u: n = float3(1, 0, 0); u = float3(0, 0, -1); v = float3(0, 1, 0); break;
-    case 1u: n = float3(-1, 0, 0); u = float3(0, 0, 1); v = float3(0, 1, 0); break;
-    case 2u: n = float3(0, 1, 0); u = float3(1, 0, 0); v = float3(0, 0, -1); break;
-    case 3u: n = float3(0, -1, 0); u = float3(1, 0, 0); v = float3(0, 0, 1); break;
-    case 4u: n = float3(0, 0, 1); u = float3(1, 0, 0); v = float3(0, 1, 0); break;
-    default: n = float3(0, 0, -1); u = float3(-1, 0, 0); v = float3(0, 1, 0); break;
-    }
-    float3 c = n + u * s + v * t;
-    float3 c2 = c * c;
-    float3 p = c * sqrt(max(float3(1.0 - c2.y * 0.5 - c2.z * 0.5 + c2.y * c2.z / 3.0,
-                                   1.0 - c2.z * 0.5 - c2.x * 0.5 + c2.z * c2.x / 3.0,
-                                   1.0 - c2.x * 0.5 - c2.y * 0.5 + c2.x * c2.y / 3.0), 0.0));
-    float len = length(p);
-    return len > 1e-12 ? p / len : float3(0.0, 1.0, 0.0);
-}
-
-// A unit value at a 3D lattice point, salted. Mirrors
-// render::grass::planet::density.
-float grass_lattice3(int3 c, uint salt)
-{
-    uint h = grass_hash(asuint(c.x) + grass_hash(asuint(c.y) + grass_hash(asuint(c.z) ^ salt)));
-    return float(h >> 8u) * (1.0 / 16777216.0);
-}
-
-float grass_value_noise3(float3 p, uint salt)
-{
-    float3 cell = floor(p);
-    float3 f = p - cell;
-    f = f * f * (3.0 - 2.0 * f);
-    int3 c = int3(cell);
-    float x00 = lerp(grass_lattice3(c, salt), grass_lattice3(c + int3(1, 0, 0), salt), f.x);
-    float x10 = lerp(grass_lattice3(c + int3(0, 1, 0), salt), grass_lattice3(c + int3(1, 1, 0), salt), f.x);
-    float x01 = lerp(grass_lattice3(c + int3(0, 0, 1), salt), grass_lattice3(c + int3(1, 0, 1), salt), f.x);
-    float x11 = lerp(grass_lattice3(c + int3(0, 1, 1), salt), grass_lattice3(c + int3(1, 1, 1), salt), f.x);
-    return lerp(lerp(x00, x10, f.y), lerp(x01, x11, f.y), f.z);
-}
-
-// The share of a layer's density the meadow grows in unit direction `dir`
-// from the planet's center. Mirrors
-// render::grass::planet::density::meadow_density.
-float grass_meadow_density(float3 dir, float scale, uint seed)
-{
-    float3 p = dir * scale;
-    float3 q = p * 2.07 + 13.1;
-    float n = grass_value_noise3(p, seed) * 0.65 + grass_value_noise3(q, seed ^ 0x68e31da4u) * 0.35;
-    float t = saturate((n - 0.30) / (0.42 - 0.30));
-    return t * t * (3.0 - 2.0 * t);
-}
 
 // Vertex `i` of the shared stream: its position (xyz) and normal.
 float3 grass_mesh_position(uint i)
@@ -894,7 +803,7 @@ GrassSite grass_planet_site(GrassLayer L, PlanetGrassTile T, uint2 g, uint2 cell
     uint face = T.face_level & 0xffu;
     uint level = (T.face_level >> 8u) & 0xffu;
     int2 face_cell = (int2(T.tile * T.grass_tiles + g)) * int(k) + int2(cell);
-    uint face_salt = grass_hash(face + 0x51ed27u);
+    uint face_salt = grass_face_salt(face);
     uint h = grass_hash(grass_hash2(face_cell) ^ face_salt ^ L.seed);
     float2 jitter = float2(grass_unit(h, 3u), grass_unit(h, 4u));
     float cells = float(T.grass_tiles * k);
@@ -927,6 +836,7 @@ GrassSite grass_planet_site(GrassLayer L, PlanetGrassTile T, uint2 g, uint2 cell
     float face_cells = float((T.grass_tiles << level) * k);
     float2 st = (float2(face_cell) + jitter) / face_cells * 2.0 - 1.0;
     float3 dir = grass_face_direction(face, st.x, st.y);
+    site.ground_point = dir * grass.planet_radius;
     site.density = saturate(density * area)
                  * grass_meadow_density(dir, grass.planet_center_scale.w, L.seed);
     return site;
@@ -960,7 +870,7 @@ bool grass_grow(GrassLayer L, uint slot, GrassSite site, out GrassBlade blade, o
     {
         return false;
     }
-    float shrink = saturate((keep - threshold) / band);
+    float shrink = saturate((keep - threshold) / max(band * keep, 1e-6));
 
     float2 clump_center;
     uint ch = grass_clump(L, site.plane, site.clump_salt, clump_center);
@@ -1007,8 +917,12 @@ bool grass_grow(GrassLayer L, uint slot, GrassSite site, out GrassBlade blade, o
     blade.root_facing = float4(root, facing);
     blade.shape = uint4(asuint(height), asuint(width), grass_pack_half2(lean2),
                         grass_blade_bits(ch, h, slot));
+    // The field's slow drift where the blade stands, which the draws tint it
+    // by, as the far field past the blades does.
+    float slope = 1.0 - saturate(dot(site.normal, site.up));
+    float2 drift = grass_macro(site.ground_point, L.seed, slope, L.tip_color_macro.w, 1.0);
     blade.bend = uint4(grass_pack_half2(bend_now), grass_pack_half2(bend_prev),
-                       grass_pack_half2(site.up.xz), 0u);
+                       grass_pack_half2(site.up.xz), grass_pack_half2(drift));
     lod = grass_lod_at(grass, dist);
     return true;
 }
@@ -1161,8 +1075,6 @@ void grass_generate(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
 #ifdef GRASS_SHADOW
 [[vk::binding(0, 0)]] ConstantBuffer<GrassParams> grass : register(b0);
 [[vk::binding(1, 0)]] StructuredBuffer<GrassBlade> grass_blades : register(t1);
-#else
-{MAIN_RESOURCES}
 #endif
 
 #ifdef GRASS_SHADOW
@@ -1386,25 +1298,20 @@ GrassBlade grass_drawn_blade(uint vid, uint iid)
     return grass_blades[grass.lod_base[lod] + iid];
 }
 
-// The blade's color at height `t`: its layer's root-to-tip ramp, with hue and
-// brightness shifted per clump and per blade.
-float3 grass_albedo(float t, uint bits)
+// The blade's colors at its root and its tip: its layer's, with hue and
+// brightness shifted per clump and per blade and tinted by the field's
+// `drift` where it stands. The fragment ramps between them by its own height,
+// so a coarse strip shows the same ramp as a fine one.
+void grass_colors(uint bits, float2 drift, out float3 root, out float3 tip)
 {
     GrassLayer L = grass.layers[grass_bits_layer(bits)];
-    float clump_r = grass_unit(bits >> 16u, 15u);
     float blade_r = grass_unit((bits >> 4u) & 0xfffu, 16u);
-    float3 ramp = lerp(L.root_color_reach.rgb, L.tip_color.rgb, smoothstep(0.0, 1.0, t));
     float v = L.color_variation;
     // Drier clumps lean yellow; every blade jitters in brightness.
-    float3 dry = ramp * float3(1.35, 1.1, 0.55);
-    float3 color = lerp(ramp, dry, v * clump_r * clump_r);
-    return color * (1.0 + v * (blade_r - 0.5) * 0.8);
-}
-
-// How much of the sky reaches a point `t` up the blade inside the field.
-float grass_root_occlusion(float t)
-{
-    return lerp(0.25, 1.0, smoothstep(0.0, 0.6, t));
+    float3 tint = lerp((float3)(1.0), GRASS_DRY_TINT, v * grass_clump_dryness(bits >> 16u))
+                * grass_macro_tint(drift) * (1.0 + v * (blade_r - 0.5) * 0.8);
+    root = L.root_color_reach.rgb * tint;
+    tip = L.tip_color_macro.rgb * tint;
 }
 
 // The normal the light sees: the blade's front turned toward the viewer, then
@@ -1441,9 +1348,11 @@ struct GrassVertexOut
     [[vk::location(1)]] float3 normal : TEXCOORD1;
     [[vk::location(2)]] float3 side : TEXCOORD2;
     [[vk::location(3)]] float3 to_camera : TEXCOORD3;
-    [[vk::location(4)]] float3 albedo : TEXCOORD4;
+    // The blade's colors at its root and its tip (see grass_colors).
+    [[vk::location(4)]] float3 root_color : TEXCOORD4;
     // x = t up the blade, y = u across it, z = view depth.
     [[vk::location(5)]] float3 t_u_depth : TEXCOORD5;
+    [[vk::location(6)]] float3 tip_color : TEXCOORD6;
 };
 
 [shader("vertex")]
@@ -1460,29 +1369,9 @@ GrassVertexOut grass_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID)
     o.normal = v.normal;
     o.side = v.side;
     o.to_camera = cam - v.world_pos;
-    o.albedo = grass_albedo(v.t, blade.shape.w);
+    grass_colors(blade.shape.w, grass_unpack_half2(blade.bend.w), o.root_color, o.tip_color);
     o.t_u_depth = float3(v.t, v.u, -mul(VIEW.view_mat, float4(v.world_pos, 1.0)).z);
     return o;
-}
-
-// Light arriving from `L` at `radiance`: wrapped diffuse on the lit face,
-// light carried through the blade when the source is behind it, and a soft
-// sheen.
-float3 grass_light(float3 albedo, float3 N, float3 V, float3 L, float3 radiance)
-{
-    float ndl = dot(N, L);
-    float3 diffuse = albedo * (saturate((ndl + 0.35) / 1.35) / PI);
-    float behind = saturate(-ndl);
-    float through = pow(saturate(dot(V, -L)), 4.0);
-    float3 translucent = albedo * float3(1.1, 1.25, 0.6) * (0.35 * behind + 0.9 * through) / PI;
-    float3 H = normalize(V + L);
-    float nl = saturate(ndl);
-    float nv = max(dot(N, V), 1e-3);
-    const float roughness = 0.5;
-    float spec = distribution_ggx(N, H, roughness) * geometry_smith(N, V, L, roughness)
-               / max(4.0 * nv * nl, 1e-3);
-    float3 sheen = fresnel_schlick(saturate(dot(H, V)), (float3)(0.04)) * spec * 0.5;
-    return (diffuse + translucent) * radiance + sheen * radiance * nl;
 }
 
 // The blade's lit color in absolute radiance.
@@ -1490,7 +1379,7 @@ float4 grass_radiance(GrassVertexOut p)
 {
     float t = p.t_u_depth.x;
     float view_depth = p.t_u_depth.z;
-    float3 albedo = p.albedo;
+    float3 albedo = lerp(p.root_color, p.tip_color, smoothstep(0.0, 1.0, t));
     if (VIEW.shade_mode > 0.5)
     {
         return float4(albedo, 1.0);

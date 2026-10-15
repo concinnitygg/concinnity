@@ -989,6 +989,8 @@ struct BakeResources {
     view_bufs: Vec<PooledBuffer>,
     light: PooledBuffer,
     shadow: PooledBuffer,
+    canopy: PooledBuffer,
+    canopy_tables: PooledBuffer,
 }
 
 impl BakeResources {
@@ -1123,6 +1125,12 @@ impl BakeResources {
         // Snapshot lighting (so all faces share one set) and six per-face view UBOs.
         let light = make_ubo_bytes(alloc, bytemuck::bytes_of(&ctx.uniforms.light_uniforms))?;
         let shadow = make_ubo_bytes(alloc, bytemuck::bytes_of(&ctx.shadow.uniforms))?;
+        let canopy = make_ubo_bytes(alloc, bytemuck::bytes_of(&ctx.uniforms.canopy))?;
+        let canopy_tables = make_host_buffer(
+            alloc,
+            bytemuck::cast_slice(ctx.uniforms.canopy_tables.rows()),
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+        )?;
         let view_size = std::mem::size_of::<ViewUniforms>() as u64;
         let mut view_bufs = Vec::with_capacity(CAPTURE_FACES);
         for _ in 0..CAPTURE_FACES {
@@ -1253,6 +1261,8 @@ impl BakeResources {
             view_bufs,
             light,
             shadow,
+            canopy,
+            canopy_tables,
         };
         let bindings = ctx.global_bindings();
         for (face, &set) in bake.global_sets.iter().enumerate() {
@@ -1268,6 +1278,10 @@ impl BakeResources {
             self.view_bufs[face].buffer(),
             self.light.buffer(),
             self.shadow.buffer(),
+            super::global_set::CanopyBuffers {
+                block: self.canopy.buffer(),
+                tables: self.canopy_tables.buffer(),
+            },
         )
     }
 }
@@ -1277,12 +1291,18 @@ fn make_ubo_bytes(
     alloc: &super::allocator::DeviceAllocator,
     bytes: &[u8],
 ) -> RenderResult<PooledBuffer> {
+    make_host_buffer(alloc, bytes, vk::BufferUsageFlags::UNIFORM_BUFFER)
+}
+
+// Create a HOST_VISIBLE buffer for `usage` holding `bytes` (at least 16 bytes
+// long, so an empty source still binds), persistently mapped.
+fn make_host_buffer(
+    alloc: &super::allocator::DeviceAllocator,
+    bytes: &[u8],
+    usage: vk::BufferUsageFlags,
+) -> RenderResult<PooledBuffer> {
     let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-    let buf = alloc.create_buffer(
-        bytes.len() as u64,
-        vk::BufferUsageFlags::UNIFORM_BUFFER,
-        host,
-    )?;
+    let buf = alloc.create_buffer((bytes.len() as u64).max(16), usage, host)?;
     buf.write_bytes(0, bytes);
     Ok(buf)
 }

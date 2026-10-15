@@ -9,7 +9,7 @@ use concinnity_core::ecs::{MaterialHandle, PayloadLocator};
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::mesh_seed::MeshSeedRegion;
 use concinnity_core::gfx::render_types::{DrawIndex, DrawObject, InstancedCluster};
-use concinnity_core::render::grass::planet::tint::PlanetFarField;
+use concinnity_core::render::grass::CanopyRange;
 
 use super::GraphicsSystem;
 use super::mesh_seed_compaction::{
@@ -117,7 +117,7 @@ pub(super) struct StreamingSetup<'a> {
     pub(super) voxel_world: Option<VoxelWorld>,
     pub(super) planet: Option<Planet>,
     // The color the planet's ground blends toward past its grass.
-    pub(super) planet_far_field: Option<PlanetFarField>,
+    pub(super) planet_far_field: Option<CanopyRange>,
     pub(super) block_types: &'a HashMap<AssetId, BlockType>,
     pub(super) material_map: &'a HashMap<MaterialHandle, MaterialEntry>,
 }

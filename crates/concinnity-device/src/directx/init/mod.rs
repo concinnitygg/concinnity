@@ -468,6 +468,7 @@ impl DxContext {
             geometry_uploads: std::cell::RefCell::new(GeometryUploads::new(hw.frames())),
             skinned: SkinnedState::new(),
             uniforms,
+            canopy: super::canopy::DxCanopy::new(&hw.alloc, hw.frames())?,
             light_cull,
             cull,
             text,

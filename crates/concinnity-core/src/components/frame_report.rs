@@ -1,5 +1,8 @@
 // Frame-report schema: how a world asks its frames to be measured.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 /// A 60 Hz frame, the budget a report counts against unless a world says
 /// otherwise.
 const DEFAULT_BUDGET_MS: f32 = 1000.0 / 60.0;
@@ -16,6 +19,9 @@ const DEFAULT_BUDGET_MS: f32 = 1000.0 / 60.0;
 /// A run that names segments as it goes is reported segment by segment as well
 /// as whole, so a cost that belongs to one stretch of it says so instead of
 /// spreading itself thinly over the average.
+///
+/// A run can also save pictures of itself at fixed moments, so the images and
+/// the numbers come from the same frames of the same run.
 ///
 /// ```rust
 /// # use concinnity_core::components::FrameReport;
@@ -60,4 +66,37 @@ pub struct FrameReport {
     /// reaches the end of its path.
     #[asset(default = true)]
     pub stop_when_complete: bool,
+    /// Frames saved as PNG images along the way, each the first frame drawn at
+    /// or after its moment of the run.
+    ///
+    /// The run is timed on the same clock the warm-up is, so where a
+    /// [CameraTrack](#cameratrack) drives the camera a capture shows the same
+    /// pose on every run. Reading a frame back stalls the GPU, so the frame
+    /// saved and the few after it are left out of the measurement, and the
+    /// report says how many were.
+    pub captures: Vec<FrameCapture>,
+}
+
+/// One frame a [FrameReport](#framereport) saves as an image.
+///
+/// ```rust
+/// # use concinnity_core::components::{FrameCapture, FrameReport};
+/// FrameReport {
+///     captures: vec![FrameCapture {
+///         seconds: 30.0,
+///         path: "captures/sunset.png".to_string(),
+///     }],
+///     ..Default::default()
+/// };
+/// ```
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
+#[serde(default)]
+pub struct FrameCapture {
+    /// How many seconds into the run the frame is taken.
+    pub seconds: f32,
+    /// Where the PNG is written. A relative path is taken from the working
+    /// directory the run was started in.
+    pub path: String,
 }

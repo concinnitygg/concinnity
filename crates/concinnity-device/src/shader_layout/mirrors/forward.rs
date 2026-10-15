@@ -7,6 +7,7 @@ use concinnity_core::gfx::render_types::{
     LightUniforms, PointLightData, ShadowUniforms, SpotShadowData,
 };
 use concinnity_core::render::uniforms::ViewUniforms;
+use concinnity_core::render::uniforms::canopy::{CanopyLayerGpu, CanopyParams};
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror};
 
@@ -72,7 +73,23 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             [bb_min, cull_distance] => ["bb_min_cull_distance"],
             [bb_max, alpha_cutoff] => ["bb_max_alpha_cutoff"],
             params_index,
-            [far_field] => ["far_start", "far_end", "far_luma"],
+            [far_field] => ["far_start", "far_end", "far_canopy"],
+        })),
+        everywhere(mirror!(CanopyParams => "CanopyParams" {
+            planet_rows,
+            planet_radius,
+            meadow_scale,
+            meadow_mean,
+            layer_count,
+            layers,
+        })),
+        everywhere(mirror!(CanopyLayerGpu => "CanopyLayer" {
+            [root_color, color_variation] => ["root_color_variation"],
+            [tip_color, macro_variation] => ["tip_color_macro"],
+            [clump_size, height_variance, leaf_area, bend] => ["shape"],
+            seed,
+            sky_projection,
+            [_pad] => ["_pad0", "_pad1"],
         })),
     ];
     cases.extend(light_cull());

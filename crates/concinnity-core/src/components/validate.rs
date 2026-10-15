@@ -210,6 +210,7 @@ pub fn grass(mut args: Grass) -> Grass {
     args.clump_size = finite_at_least(args.clump_size, 0.05, 0.6);
     args.stiffness = finite_at_least(args.stiffness, 0.0, 0.0).min(1.0);
     args.color_variation = finite_at_least(args.color_variation, 0.0, 0.0).min(1.0);
+    args.macro_variation = finite_at_least(args.macro_variation, 0.0, 0.0).min(1.0);
     for c in args.root_color.iter_mut().chain(args.tip_color.iter_mut()) {
         *c = finite_at_least(*c, 0.0, 0.0);
     }

@@ -689,6 +689,10 @@ impl MtlContext {
         enc.set_fragment_value(view_uniforms, 0);
         enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 1);
         enc.set_fragment_value(&self.light_uniforms, 4);
+        enc.set_fragment_value(&self.canopy, 21);
+        if let Some(tables) = self.canopy_tables.buffer() {
+            enc.set_fragment_buffer(tables, 0, crate::metal::canopy::CANOPY_TABLES_BUFFER_INDEX);
+        }
         // Local-light storage buffer at fragment buffer(8). Encoder-bound
         // buffers are inherited by the ICB-executed bindless draws (the same
         // way the object buffer at binding 9 is), so this single bind covers

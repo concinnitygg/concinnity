@@ -204,6 +204,14 @@ impl DxContext {
                     crate::directx::material_params::MATERIAL_PARAMS_ROOT_PARAM,
                     self.material_params_gva(frame_idx),
                 );
+                cmd.SetGraphicsRootConstantBufferView(
+                    crate::directx::canopy::CANOPY_ROOT_PARAM,
+                    self.canopy.gpu_va(frame_idx),
+                );
+                cmd.SetGraphicsRootShaderResourceView(
+                    crate::directx::canopy::CANOPY_TABLES_ROOT_PARAM,
+                    self.canopy.tables_gpu_va(frame_idx),
+                );
                 // [9] descriptor table: blurred SSAO occlusion (or 1x1 white
                 // fallback when SSAO is disabled).
                 cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
@@ -304,6 +312,14 @@ impl DxContext {
                 cmd.SetGraphicsRootShaderResourceView(
                     crate::directx::material_params::MATERIAL_PARAMS_ROOT_PARAM,
                     self.material_params_gva(frame_idx),
+                );
+                cmd.SetGraphicsRootConstantBufferView(
+                    crate::directx::canopy::CANOPY_ROOT_PARAM,
+                    self.canopy.gpu_va(frame_idx),
+                );
+                cmd.SetGraphicsRootShaderResourceView(
+                    crate::directx::canopy::CANOPY_TABLES_ROOT_PARAM,
+                    self.canopy.tables_gpu_va(frame_idx),
                 );
                 cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
                 let probes = self.probe_bindings(frame_idx);
@@ -498,6 +514,14 @@ impl DxContext {
                 cmd.SetGraphicsRootShaderResourceView(
                     crate::directx::material_params::MATERIAL_PARAMS_ROOT_PARAM,
                     self.material_params_gva(frame_idx),
+                );
+                cmd.SetGraphicsRootConstantBufferView(
+                    crate::directx::canopy::CANOPY_ROOT_PARAM,
+                    self.canopy.gpu_va(frame_idx),
+                );
+                cmd.SetGraphicsRootShaderResourceView(
+                    crate::directx::canopy::CANOPY_TABLES_ROOT_PARAM,
+                    self.canopy.tables_gpu_va(frame_idx),
                 );
                 cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
                 let probes = self.probe_bindings(frame_idx);

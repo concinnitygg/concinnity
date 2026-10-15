@@ -146,6 +146,35 @@ pub fn face_direction(face: CubeFace, s: f32, t: f32) -> [f32; 3] {
     crate::math::vec3::normalize_or(p, 1e-12, [0.0, 1.0, 0.0])
 }
 
+/// The face and face coordinates (`s`, `t`) the unit direction `dir` passes
+/// through: [`face_direction`] inverted, in single precision, the shader's
+/// `grass_face_coords` line for line. The face is the cube axis `dir` leans
+/// along most.
+pub fn face_coords(dir: [f32; 3]) -> (CubeFace, [f32; 2]) {
+    let a = dir.map(f32::abs);
+    let face = if a[0] >= a[1] && a[0] >= a[2] {
+        if dir[0] >= 0.0 { 0 } else { 1 }
+    } else if a[1] >= a[2] {
+        if dir[1] >= 0.0 { 2 } else { 3 }
+    } else if dir[2] >= 0.0 {
+        4
+    } else {
+        5
+    };
+    let face = CubeFace(face);
+    let [_, u, v] = face.axes();
+    let x: f32 = (0..3).map(|i| dir[i] * u[i] as f32).sum();
+    let y: f32 = (0..3).map(|i| dir[i] * v[i] as f32).sum();
+    // The spherify solved for the cube point, written so that no term
+    // cancels near the face's middle.
+    let (x2, y2) = (2.0 * x * x, 2.0 * y * y);
+    let d = (3.0 + x2 - y2) * (3.0 + x2 - y2) - 12.0 * x2;
+    let root = crate::math::sqrt(d.max(0.0));
+    let s = x * crate::math::sqrt(12.0 / (3.0 + x2 - y2 + root));
+    let t = y * crate::math::sqrt(12.0 / (3.0 - x2 + y2 + root));
+    (face, [s.clamp(-1.0, 1.0), t.clamp(-1.0, 1.0)])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,6 +256,39 @@ mod tests {
         assert!((a[0] as u64) < g.face_cells(cells));
         // Every cell of a face fits the kernel's signed 32-bit coordinates.
         assert!(g.face_cells(g.cells_per_tile(MAX_GRASS_DENSITY).unwrap()) < 1 << 31);
+    }
+
+    // Inverting the spherify lands back on the cell the kernel placed a
+    // blade in: within a centimeter on a 50 km planet, everywhere on every
+    // face, including its middle and its edges.
+    #[test]
+    fn face_coords_invert_the_direction() {
+        let extent = 50_000.0 * core::f64::consts::FRAC_PI_2;
+        for face in CubeFace::ALL {
+            for i in 0..=40 {
+                for j in 0..=40 {
+                    let s = -1.0 + f64::from(i) / 20.0;
+                    let t = -1.0 + f64::from(j) / 20.0;
+                    let (s, t) = (s + 1e-5 * f64::from(j), t - 1e-6 * f64::from(i));
+                    let dir = face.direction(s.clamp(-1.0, 1.0), t.clamp(-1.0, 1.0));
+                    let (got, st) = face_coords(dvec::to_f32(dir));
+                    if i == 0 || i == 40 || j == 0 || j == 40 {
+                        // Edges belong to either face; the point must agree.
+                        let back = face_direction(got, st[0], st[1]);
+                        let miss = (0..3).map(|k| (f64::from(back[k]) - dir[k]).abs());
+                        assert!(miss.fold(0.0, f64::max) < 1e-6, "{face:?} {s} {t}");
+                        continue;
+                    }
+                    assert_eq!(got, face, "{s} {t}");
+                    let ds = (f64::from(st[0]) - s.clamp(-1.0, 1.0)) * extent * 0.5;
+                    let dt = (f64::from(st[1]) - t.clamp(-1.0, 1.0)) * extent * 0.5;
+                    assert!(
+                        ds.abs() < 1e-2 && dt.abs() < 1e-2,
+                        "{face:?} {s} {t}: {ds} {dt}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -7,9 +7,10 @@
 //!
 //! Every blade carries a stable hash `u` in [0, 1). A blade survives while the
 //! field's keep fraction at its distance exceeds `u * (1 - GRASS_SHRINK_BAND)`,
-//! and is full height once the keep fraction clears that by the shrink band, so
-//! as the camera backs away each blade sinks out of view over the band before
-//! the kernel drops it.
+//! and is full height once the keep fraction clears that by the shrink band's
+//! share of the keep fraction, so as the camera backs away each blade sinks out
+//! of view before the kernel drops it, while where the keep fraction holds
+//! steady most survivors stand at full height.
 
 use super::tiles::{GrassGrid, GroundRect, MAX_GRASS_BLADES};
 use crate::math::ceil;
@@ -39,8 +40,8 @@ pub const GRASS_FULL_DENSITY_DISTANCE: f32 = 10.0;
 /// The fewest blades distance thinning keeps, as a fraction of the field.
 pub const GRASS_MIN_KEEP: f32 = 0.25;
 
-/// The span of the hash, as a fraction of it, over which a thinned-out blade
-/// shrinks from full height to nothing.
+/// The share of the keep fraction over which a thinned-out blade shrinks from
+/// full height to nothing.
 pub const GRASS_SHRINK_BAND: f32 = 0.3;
 
 /// The last share of the draw distance over which the field fades out and the
@@ -102,11 +103,16 @@ pub fn survives(keep: f32, u: f32) -> bool {
     u * hash_span() < keep
 }
 
+// The span of the keep fraction over which a blade shrinks at keep `keep`.
+fn shrink_band(keep: f32) -> f32 {
+    GRASS_SHRINK_BAND * keep
+}
+
 /// The height scale of the blade with hash `u` at keep fraction `keep`: 1
 /// once the keep fraction clears the blade by the shrink band, falling to 0
 /// where the blade is dropped.
 pub fn shrink(keep: f32, u: f32) -> f32 {
-    ((keep - u * hash_span()) / GRASS_SHRINK_BAND).clamp(0.0, 1.0)
+    ((keep - u * hash_span()) / shrink_band(keep).max(1e-6)).clamp(0.0, 1.0)
 }
 
 /// The field's mean blade height scale at keep fraction `keep`, over every
@@ -119,7 +125,7 @@ pub fn coverage(keep: f32) -> f32 {
     if keep >= 1.0 {
         return 1.0;
     }
-    let band = GRASS_SHRINK_BAND;
+    let band = shrink_band(keep).max(1e-6);
     let ramp = |t: f32| {
         if t <= 0.0 {
             0.0
@@ -351,10 +357,26 @@ mod tests {
             assert!(!survives(gone, u));
             assert_eq!(shrink(gone, u), 0.0);
             if gone > 1e-3 {
-                assert!(survives(gone + 1e-3, u));
-                assert!(shrink(gone + 1e-3, u) < 0.01);
+                let just = gone * 1.001;
+                assert!(survives(just, u));
+                assert!(shrink(just, u) < 0.01);
             }
         }
+    }
+
+    // Where the keep fraction holds at its floor, far from the camera, most
+    // survivors stand at full height: only those near the threshold shrink.
+    #[test]
+    fn survivors_past_the_floor_mostly_stand_full_height() {
+        let n = 20_000;
+        let survivors: alloc::vec::Vec<f32> = (0..n)
+            .map(|i| (i as f32 + 0.5) / n as f32)
+            .filter(|&u| survives(GRASS_MIN_KEEP, u))
+            .map(|u| shrink(GRASS_MIN_KEEP, u))
+            .collect();
+        let full = survivors.iter().filter(|&&s| s >= 1.0).count();
+        let share = full as f32 / survivors.len() as f32;
+        assert!((share - (1.0 - GRASS_SHRINK_BAND)).abs() < 0.01, "{share}");
     }
 
     #[test]

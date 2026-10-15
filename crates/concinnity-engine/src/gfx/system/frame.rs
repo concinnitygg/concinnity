@@ -262,6 +262,10 @@ impl GraphicsSystem {
         {
             queues.ops.drain_into(&mut snap.ops);
         }
+        snap.capture = ctx
+            .resources
+            .remove::<crate::ecs::FrameCaptureRequest>()
+            .map(|request| request.0);
 
         // The FPS-cap pacer runs at the runtime level before the world steps (see
         // `app::pacing`), so the frame time here already reflects the capped
@@ -718,6 +722,24 @@ mod tests {
         let mut snap = RenderSnapshot::default();
         gs.extract(&mut world.context(), &mut snap);
         snap
+    }
+
+    // A requested capture rides the next frame extracted, and only that one.
+    #[test]
+    fn a_capture_request_rides_the_next_frame_only() {
+        let mut world = World::new();
+        world.insert_resource(crate::ecs::FrameCaptureRequest("shot.png".to_string()));
+        let mut gs = GraphicsSystem::new(None);
+        assert_eq!(
+            extract_once(&mut gs, &mut world).capture.as_deref(),
+            Some("shot.png")
+        );
+        assert!(
+            world
+                .resource::<crate::ecs::FrameCaptureRequest>()
+                .is_none()
+        );
+        assert_eq!(extract_once(&mut gs, &mut world).capture, None);
     }
 
     // The sky reaches the frame twice: as the rows every cubemap sample is

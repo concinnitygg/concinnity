@@ -23,7 +23,7 @@ use crate::gfx::streaming::planet::{PlanetTiles, TileMaterial, tile_mesh_size};
 use concinnity_core::components::Planet;
 use concinnity_core::gfx::render_types::FarFieldTint;
 use concinnity_core::planet::{LocalFrame, MAX_RESIDENT_TILES, PlanetFrame};
-use concinnity_core::render::grass::planet::tint::PlanetFarField;
+use concinnity_core::render::grass::CanopyRange;
 use concinnity_core::render::grass::tint::far_field_band;
 
 // Default fractions of the GPU's reported memory each streaming pool may hold
@@ -705,7 +705,7 @@ impl GraphicsSystem {
     pub(super) fn setup_planet_streaming(
         &mut self,
         planet: &Planet,
-        far_field: Option<PlanetFarField>,
+        far_field: Option<CanopyRange>,
         material_map: &std::collections::HashMap<MaterialHandle, MaterialEntry>,
     ) {
         let entry = planet
@@ -729,7 +729,7 @@ impl GraphicsSystem {
             material.material.far_field = FarFieldTint {
                 start,
                 end,
-                luma: far.luma,
+                canopy: far.packed(),
             };
         }
         let (vertices, indices) = tile_mesh_size();
@@ -756,7 +756,7 @@ impl GraphicsSystem {
             MAX_RESIDENT_TILES,
             (vertex_bytes + index_bytes) / 1024,
         );
-        self.planet_tiles = Some(PlanetTiles::new(&frame, material, far_field));
+        self.planet_tiles = Some(PlanetTiles::new(&frame, material));
     }
 }
 

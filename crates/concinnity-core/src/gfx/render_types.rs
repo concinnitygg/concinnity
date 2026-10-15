@@ -159,21 +159,20 @@ pub struct MaterialUniforms {
     pub far_field: FarFieldTint,
 }
 
-/// The distance band over which a terrain's surface blends from its material
-/// toward the far-field color its grass shows from afar. A surface with a band
-/// carries that color, premultiplied by the grass's coverage, in its vertex
-/// color, rather than a multiplier on its albedo.
+/// The distance band over which a surface under grass blends from its
+/// material toward the canopy its grass makes from afar, and which of the
+/// canopy block's layers that is. A terrain with a band carries each layer's
+/// density in its vertex color, rather than a multiplier on its albedo.
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct FarFieldTint {
     /// Distance from the camera, in meters, where the blend starts.
     pub start: f32,
-    /// Distance where the surface shows the far-field color alone; 0 for no
-    /// band.
+    /// Distance where the surface shows the canopy alone; 0 for no band.
     pub end: f32,
-    /// Luminance of a fully covered far-field color: a vertex color's
-    /// luminance over it is the coverage there.
-    pub luma: f32,
+    /// The canopy block's layers the surface shades with, packed by
+    /// `CanopyRange::packed`.
+    pub canopy: u32,
 }
 
 impl FarFieldTint {
@@ -181,7 +180,7 @@ impl FarFieldTint {
     pub const NONE: Self = Self {
         start: 0.0,
         end: 0.0,
-        luma: 0.0,
+        canopy: 0,
     };
 }
 
@@ -2252,7 +2251,7 @@ mod tests {
         assert_eq!(offset_of!(GpuObjectData, far_field), 148);
         assert_eq!(offset_of!(FarFieldTint, start), 0);
         assert_eq!(offset_of!(FarFieldTint, end), 4);
-        assert_eq!(offset_of!(FarFieldTint, luma), 8);
+        assert_eq!(offset_of!(FarFieldTint, canopy), 8);
         assert_eq!(size_of::<FarFieldTint>(), 12);
     }
 
@@ -2487,7 +2486,7 @@ mod tests {
         obj.material.far_field = FarFieldTint {
             start: 45.0,
             end: 60.0,
-            luma: 0.12,
+            canopy: 0x0001_0201,
         };
         assert_eq!(
             pack_object_record(&obj, 0, 1).far_field,
