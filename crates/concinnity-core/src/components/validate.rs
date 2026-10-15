@@ -208,10 +208,16 @@ pub fn grass(mut args: Grass) -> Grass {
     args.width = finite_at_least(args.width, 0.001, 0.03);
     args.density = finite_at_least(args.density, 0.0, 0.0);
     args.clump_size = finite_at_least(args.clump_size, 0.05, 0.6);
+    args.clumping = finite_at_least(args.clumping, 0.0, 0.0).min(1.0);
     args.stiffness = finite_at_least(args.stiffness, 0.0, 0.0).min(1.0);
     args.color_variation = finite_at_least(args.color_variation, 0.0, 0.0).min(1.0);
     args.macro_variation = finite_at_least(args.macro_variation, 0.0, 0.0).min(1.0);
-    for c in args.root_color.iter_mut().chain(args.tip_color.iter_mut()) {
+    for c in args
+        .root_color
+        .iter_mut()
+        .chain(args.tip_color.iter_mut())
+        .chain(args.litter_color.iter_mut().flatten())
+    {
         *c = finite_at_least(*c, 0.0, 0.0);
     }
     args
@@ -549,9 +555,11 @@ mod tests {
             width: -0.5,
             density: -10.0,
             clump_size: 0.0,
+            clumping: 2.0,
             stiffness: 1.5,
             root_color: [-1.0, f32::NAN, 0.5],
             tip_color: [0.2, 0.3, 0.4],
+            litter_color: Some([f32::INFINITY, -0.1, 0.05]),
             color_variation: -0.2,
             ..Grass::default()
         });
@@ -560,6 +568,8 @@ mod tests {
         assert_eq!(g.width, 0.001);
         assert_eq!(g.density, 0.0);
         assert_eq!(g.clump_size, 0.05);
+        assert_eq!(g.clumping, 1.0);
+        assert_eq!(g.litter_color, Some([0.0, 0.0, 0.05]));
         assert_eq!(g.stiffness, 1.0);
         assert_eq!(g.root_color, [0.0, 0.0, 0.5]);
         assert_eq!(g.tip_color, [0.2, 0.3, 0.4]);
@@ -571,9 +581,12 @@ mod tests {
         let d = Grass::default();
         let g = grass(d.clone());
         assert_eq!(
-            (g.height, g.width, g.density, g.clump_size),
-            (d.height, d.width, d.density, d.clump_size)
+            (g.height, g.width, g.density, g.clump_size, g.clumping),
+            (d.height, d.width, d.density, d.clump_size, d.clumping)
         );
+        assert_eq!(g.litter_color, None);
+        // The default field gathers, short of the strongest clumping.
+        assert!(d.clumping > 0.0 && d.clumping < 1.0);
         let w = wind(Wind::default());
         assert_eq!(
             (w.direction, w.strength, w.gustiness, w.gust_scale),

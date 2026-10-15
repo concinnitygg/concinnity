@@ -159,6 +159,8 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
             cells_per_side,
             [root_color, reach] => ["root_color_reach"],
             [tip_color, macro_variation] => ["tip_color_macro"],
+            clumping,
+            [_pad] => ["_pad0", "_pad1", "_pad2"],
         })),
         everywhere(mirror!(GpuGrassBlade => "GrassBlade" {
             root_facing,

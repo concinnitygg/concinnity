@@ -19,7 +19,9 @@
 pub mod bend;
 pub mod canopy;
 pub mod canopy_table;
+pub mod clumping;
 mod ground;
+pub mod litter;
 pub mod lod;
 pub mod planet;
 pub mod shadow;
@@ -69,12 +71,16 @@ pub struct GrassBladeLook {
     pub width: f32,
     /// Clump diameter, in meters.
     pub clump_size: f32,
+    /// How strongly blades crowd toward their clump's center, in [0, 1].
+    pub clumping: f32,
     /// Resistance to bending, in [0, 1].
     pub stiffness: f32,
     /// Linear RGB at the root.
     pub root_color: [f32; 3],
     /// Linear RGB at the tip.
     pub tip_color: [f32; 3],
+    /// Linear RGB of the dead grass on the ground under the blades.
+    pub litter_color: [f32; 3],
     /// Hue and brightness variation, in [0, 1].
     pub color_variation: f32,
     /// How far the field's color drifts over hundreds of meters, in [0, 1].
@@ -88,9 +94,13 @@ impl GrassBladeLook {
             height_variance: g.height_variance,
             width: g.width,
             clump_size: g.clump_size,
+            clumping: g.clumping,
             stiffness: g.stiffness,
             root_color: g.root_color,
             tip_color: g.tip_color,
+            litter_color: g
+                .litter_color
+                .unwrap_or_else(|| litter::litter_color(g.root_color)),
             color_variation: g.color_variation,
             macro_variation: g.macro_variation,
         }
@@ -762,6 +772,7 @@ fn planet_layer_gpu(layer: &planet::PlanetGrassLayer) -> GrassLayerGpu {
         reach: blade_reach(look),
         tip_color: look.tip_color,
         macro_variation: look.macro_variation,
+        clumping: look.clumping,
         ..GrassLayerGpu::default()
     }
 }
@@ -773,14 +784,15 @@ fn planes(frustum: &Frustum) -> [[f32; 4]; 6] {
         .map(|p| [p.normal[0], p.normal[1], p.normal[2], p.d])
 }
 
-/// How far a blade of `look` can reach from its root in any direction: its
-/// tallest height, since a bent blade keeps its length, plus half its widest
-/// width, distance widening and edge-on widening included. Mirrors the
-/// kernel's height and width draws.
+/// How far a blade of `look` can reach from where its cell places it, in any
+/// direction: its tallest height, since a bent blade keeps its length, plus
+/// half its widest width, distance widening and edge-on widening included,
+/// plus the farthest clumping moves it. Mirrors the kernel's height and width
+/// draws.
 pub fn blade_reach(look: &GrassBladeLook) -> f32 {
     let tallest = look.height * (1.0 + look.height_variance);
     let widest = look.width * 1.25 * lod::max_width_scale() * 1.3;
-    tallest + 0.5 * widest
+    tallest + 0.5 * widest + clumping::max_gather_offset(look.clump_size, look.clumping)
 }
 
 /// The box every blade rooted in tile `tile` of `layer` stays inside, swaying
@@ -835,6 +847,8 @@ fn layer_gpu(layer: &GrassLayer, tiles: &TileRange) -> GrassLayerGpu {
         reach: blade_reach(look),
         tip_color: look.tip_color,
         macro_variation: look.macro_variation,
+        clumping: look.clumping,
+        _pad: [0.0; 3],
     }
 }
 

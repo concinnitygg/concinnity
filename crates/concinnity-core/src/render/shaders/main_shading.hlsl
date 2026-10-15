@@ -289,24 +289,25 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // rather than a multiplier on its albedo.
     float3 albedo = albedo_samp.rgb * tint * (od.far_end > 0.0 ? (float3)(1.0) : v.color);
 
-    // Past where the blades end, the surface is shaded as the canopy they
-    // make. The pixel's footprint is taken here, in uniform control flow. Only
-    // the SURFACE_CANOPY variant carries the canopy: in every other program
-    // the band is a constant 0 and the canopy code folds away.
+    // A surface growing grass has litter on its ground and the leaf above
+    // shading it, and past where the blades end it is shaded as the canopy
+    // they make. The pixel's footprint is taken here, in uniform control flow.
+    // Only the SURFACE_CANOPY variant, which every surface growing grass draws
+    // under, carries the ground and the canopy: in every other program the
+    // band is a constant 0 and the canopy code folds away.
     float3 V_far = cam_pos - v.world_pos;
     float far_dist = length(V_far);
     float footprint = max(length(ddx(v.world_pos)), length(ddy(v.world_pos)));
+    CanopyShade canopy = (CanopyShade)0;
 #ifdef SURFACE_CANOPY
     float far_w = canopy_band(od, far_dist);
+    canopy = canopy_at(od, v.world_pos, v.normal, v.color, albedo, V_far / max(far_dist, 1e-4),
+                       footprint, far_w > 0.0);
+    albedo = canopy.ground_albedo;
 #else
     const float far_w = 0.0;
+    canopy.ground_sky = 1.0;
 #endif
-    CanopyShade canopy = (CanopyShade)0;
-    if (far_w > 0.0)
-    {
-        canopy = canopy_at(od, v.world_pos, v.normal, v.color, V_far / max(far_dist, 1e-4),
-                           footprint);
-    }
 
     // Unlit view mode: the surface's base color, no lighting.
     if (VIEW.shade_mode > 0.5)
@@ -560,7 +561,8 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
 
     // Authored indirect-fill multiplier (IndirectLighting.ambient_intensity);
     // 1.0 is a no-op. Lifts shadow fill without touching sun-lit surfaces.
-    ambient *= LIGHTS.ambient_intensity;
+    // Under grass, the leaf above keeps part of the sky off the ground.
+    ambient *= LIGHTS.ambient_intensity * canopy.ground_sky;
 
     // SSAO modulates the indirect (ambient / IBL) term only: direct lighting
     // is unaffected. A 1x1 white view is bound when SSAO is disabled, so this
@@ -581,7 +583,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         // grass draws do.
         float3 sky = ibl_enabled ? irradiance_sample(canopy.along) / PI : (float3)(0.03);
         sky *= LIGHTS.ambient_intensity * occlusion;
-        float3 ground = ambient * canopy.ground_sky + Lo_under + emissive;
+        float3 ground = ambient + Lo_under + emissive;
         color = lerp(color, canopy_radiance(canopy, sky, ground), far_w);
     }
 

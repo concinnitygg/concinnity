@@ -55,13 +55,15 @@ struct CanopyLayer
     float sky_projection;
     float _pad0;
     float _pad1;
+    // xyz = linear RGB of the litter under the blades, w = clumping.
+    float4 litter_clumping;
 };
 
 // Matches MAX_CANOPY_LAYERS in render::uniforms::canopy.
 #define CANOPY_MAX_LAYERS 16
 
 // Mirrors `CanopyParams` in concinnity-core/src/render/uniforms/canopy.rs
-// (1088 B): every far field's layers, and the planet's axes in the frame.
+// (1344 B): every far field's layers, and the planet's axes in the frame.
 struct CanopyParams
 {
     float4 planet_rows[3];

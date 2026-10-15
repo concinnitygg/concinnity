@@ -125,6 +125,9 @@ struct CanopyView
 // light is multiplied by, so little stays live through the light loops.
 struct CanopyShade
 {
+    // The ground's albedo under the grass: the surface's own, strewn with the
+    // layers' litter.
+    float3 ground_albedo;
     // Blades' up, and the view's direction along the ground.
     float3 up;
     float3 along;
@@ -269,11 +272,15 @@ float4 canopy_band_weights(float share, float3 root, float3 span, float plain, f
     return share * float4(root * plain + span * ramp, plain);
 }
 
-// The canopy at `pos` on surface `od`, the vertex color `color` carrying a
-// terrain's layer densities and `normal` the ground's, seen along `V` from a
-// pixel covering `footprint` meters of ground.
-CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color, float3 V,
-                      float footprint)
+// The ground and the canopy at `pos` on surface `od` of albedo `albedo`, the
+// vertex color `color` carrying a terrain's layer densities and `normal` the
+// ground's, seen along `V` from a pixel covering `footprint` meters of ground.
+// Every pixel of a surface growing grass takes its ground from here: litter
+// strewn by each layer's density share, broken up by patches of earth and
+// dry litter, and how much of the sky the leaf above lets reach it. Only a
+// pixel past where the blades start to fade (`far`) goes on to the canopy.
+CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color, float3 albedo,
+                      float3 V, float footprint, bool far)
 {
     // A block not filled this frame (no grass resolved, or no planet tile
     // drawn) holds no layers and no planet, and the canopy is bare ground.
@@ -292,6 +299,7 @@ CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color,
     float3 ground_point = float3(pos.x, 0.0, pos.z);
     uint salt = 0u;
     c.up = float3(0.0, 1.0, 0.0);
+    c.ground_albedo = albedo;
     if (planet)
     {
         float4 p = float4(pos, 1.0);
@@ -313,7 +321,8 @@ CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color,
     float slope = 1.0 - saturate(dot(normalize(normal), c.up));
 
     // The first layers' weights, which their views are blended by, and the
-    // leaf-area weighted blade colors at the root and the tip.
+    // leaf-area weighted blade colors at the root and the tip; the litter by
+    // density share, and how much of the ground no layer covers.
     float4 weights = (float4)(0.0);
     float weight = 0.0;
     float most = -1.0;
@@ -321,6 +330,9 @@ CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color,
     float3 tip = (float3)(0.0);
     float bend = 0.0;
     float sky_projection = 0.0;
+    float3 litter = (float3)(0.0);
+    float litter_weight = 0.0;
+    float open_ground = 1.0;
     for (uint i = 0u; i < count; i++)
     {
         CanopyLayer L = CANOPY.layers[first + i];
@@ -334,45 +346,77 @@ CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color,
                              meadow_detail);
             }
         }
-        // A clump's own hue and height, where a pixel can hold a clump.
-        float clump_detail = 1.0 - smoothstep(0.35, 1.0, footprint / L.shape.x);
+        litter += share * L.litter_clumping.rgb;
+        litter_weight += share;
+        open_ground *= 1.0 - saturate(share);
+
+        // A clump's own hue, height and crowding, where a pixel past the
+        // blades can hold a clump.
+        float clump_detail = far ? 1.0 - smoothstep(0.35, 1.0, footprint / L.shape.x) : 0.0;
         float dryness = 1.0 / 3.0;
         float height = 1.0;
+        float crowd = 1.0;
         if (clump_detail > 0.0)
         {
             float2 center;
-            uint ch = grass_clump_at(plane, L.shape.x, L.seed, salt, center);
+            float spot;
+            uint ch = grass_clump_at(plane, L.shape.x, L.seed, salt, center, spot);
             dryness = lerp(dryness, grass_clump_dryness(ch), clump_detail);
             height = lerp(height, grass_clump_height(ch, L.shape.y), clump_detail);
+            crowd = lerp(crowd, grass_gathered_density(spot, L.litter_clumping.w), clump_detail);
         }
-        float dry = L.root_color_variation.w * dryness;
-        float2 drift = grass_macro(ground_point, L.seed, slope, L.tip_color_macro.w, macro_detail);
-        float3 tint = lerp((float3)(1.0), GRASS_DRY_TINT, dry) * grass_macro_tint(drift);
-        float area = L.shape.z * share * height;
+        float area = L.shape.z * share * height * crowd;
         c.leaf_area += area;
         // Every layer weighs in a little even where it is bare, so the colors
         // stay defined where nothing grows.
         float w = area + 1e-4;
-        root += w * L.root_color_variation.rgb * tint;
-        tip += w * L.tip_color_macro.rgb * tint;
-        bend += w * L.shape.w;
         sky_projection += w * L.sky_projection;
         weight += w;
-        if (i < 4u)
+        if (far)
         {
-            weights[i] = w;
-        }
-        if (w > most)
-        {
-            most = w;
-            c.table = first + i;
+            float dry = L.root_color_variation.w * dryness;
+            float2 drift = grass_macro(ground_point, L.seed, slope, L.tip_color_macro.w,
+                                       macro_detail);
+            float3 tint = lerp((float3)(1.0), GRASS_DRY_TINT, dry) * grass_macro_tint(drift);
+            root += w * L.root_color_variation.rgb * tint;
+            tip += w * L.tip_color_macro.rgb * tint;
+            bend += w * L.shape.w;
+            if (i < 4u)
+            {
+                weights[i] = w;
+            }
+            if (w > most)
+            {
+                most = w;
+                c.table = first + i;
+            }
         }
     }
     weight = max(weight, 1e-6);
+    sky_projection /= weight;
+
+    // Matches SKY_MU in render::grass::canopy.
+    const float sky_mu = 2.0 / 3.0;
+    c.ground_sky = exp(-sky_projection * c.leaf_area / sky_mu);
+
+    // The ground: the surface's own albedo as bare earth, darker in patches,
+    // under litter where the layers grow, lighter and yellower where it lies
+    // dry.
+    if (count > 0u)
+    {
+        float3 v = grass_ground_variation(ground_point, footprint);
+        float3 shed = litter / max(litter_weight, 1e-6);
+        shed *= lerp((float3)(1.0), GRASS_LITTER_DRY, v.z);
+        c.ground_albedo = lerp(albedo * v.y, shed, (1.0 - open_ground) * v.x);
+    }
+    if (!far)
+    {
+        return c;
+    }
+
     root /= weight;
     tip /= weight;
     bend /= weight;
-    sky_projection /= weight;
 
     // Where the view stops, each layer's table read at the field's whole leaf
     // area and blended by the layer's share of it.
@@ -388,11 +432,8 @@ CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color,
     CanopyBand upper = canopy_band_mean(view.upper);
     CanopyBand lower = canopy_band_mean(view.lower);
 
-    // Matches SKY_MU in render::grass::canopy.
-    const float sky_mu = 2.0 / 3.0;
     float3 span = tip - root;
     c.ground = view.ground;
-    c.ground_sky = exp(-sky_projection * c.leaf_area / sky_mu);
     c.seen = upper.share * (root + span * upper.ramp) + lower.share * (root + span * lower.ramp);
     c.upper_tilt = canopy_tilt(bend, upper.height);
     c.lower_tilt = canopy_tilt(bend, lower.height);

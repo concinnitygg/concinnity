@@ -106,7 +106,9 @@ A world may declare up to 8 Shaders in total.
   A Material naming a Shader cannot be used by an
   [InstancedProp](InstancedProp.md), a [SkinnedMesh](SkinnedMesh.md), or a
   [VoxelWorld](VoxelWorld.md); give those a Material without one.
-- **At most 8 Shaders**, the world default included.
+- **At most 8 Shaders**, the world default included, or 7 when grass draws
+  a far field over ground shaded by the world default, which takes a slot of
+  its own.
 
 Planar reflections are the one case with no build-time signal: a surface
 reflected in a mirror is drawn with the world default Shader regardless of

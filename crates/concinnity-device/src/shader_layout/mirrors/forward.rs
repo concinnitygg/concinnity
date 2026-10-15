@@ -99,6 +99,7 @@ pub(in crate::shader_layout) fn canopy() -> Vec<Case> {
             seed,
             sky_projection,
             [_pad] => ["_pad0", "_pad1"],
+            [litter_color, clumping] => ["litter_clumping"],
         })),
     ]
 }

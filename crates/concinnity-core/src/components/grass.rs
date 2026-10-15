@@ -5,15 +5,21 @@
 ///
 /// A `Grass` grows only where a [Terrain](#terrain) layer names it: the
 /// terrain sets where the blades root and which way the ground slopes, and the
-/// layer's mask sets where they grow. Blades are scattered evenly at `density`
-/// per square meter, gathered into clumps about `clump_size` meters across
-/// whose blades share their height and lean, and placed the same way on every
-/// run. Blades on a slope lean downhill.
+/// layer's mask sets where they grow. Blades grow at `density` per square
+/// meter in clumps about `clump_size` meters across whose blades share their
+/// height and lean, crowding toward each clump's middle by `clumping` and
+/// thinning between clumps, and are placed the same way on every run. Blades
+/// on a slope lean downhill.
 ///
 /// Each blade is real geometry: a tapered strip that curves under its own
 /// weight and the wind, shaded from `root_color` at the ground to `tip_color`
 /// at the tip, with light passing through it when the sun is behind. Blades are
 /// drawn out to a fixed distance from the camera and thin out toward it.
+///
+/// The ground under the blades is strewn with dead grass of `litter_color`,
+/// the more so the denser the grass grows, and lies darker the more leaf
+/// shades it. Across it, patches of bare earth (the terrain's own material)
+/// and lighter, drier litter break it up at a few scales.
 ///
 /// Past where the blades end, the ground is shaded as the field they make seen
 /// from afar: the same colors, clumps and bare patches, brighter and greener
@@ -55,6 +61,11 @@ pub struct Grass {
     /// Typical clump diameter, in meters.
     #[asset(default = 0.6)]
     pub clump_size: f32,
+    /// How strongly blades crowd toward the middle of their clump, in [0, 1],
+    /// leaving the ground between clumps sparser but never bare. 0 spreads
+    /// them evenly. The blade count is the same either way.
+    #[asset(default = 0.5)]
+    pub clumping: f32,
     /// How firmly blades resist bending, in [0, 1]. 0 lies flat in a strong
     /// wind; 1 barely moves.
     #[asset(default = 0.5)]
@@ -65,6 +76,9 @@ pub struct Grass {
     /// Linear-space RGB color at the blade tip.
     #[asset(default = [0.2, 0.32, 0.065])]
     pub tip_color: [f32; 3],
+    /// Linear-space RGB color of the dead grass on the ground under the
+    /// blades. `None` derives it from `root_color`, darker and browner.
+    pub litter_color: Option<[f32; 3]>,
     /// How much hue and brightness vary between clumps and blades, in [0, 1].
     #[asset(default = 0.35)]
     pub color_variation: f32,

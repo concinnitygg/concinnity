@@ -118,6 +118,7 @@
 - [FileKind](FileKind.md) - The category of file content, inferred from the extension when not supplied.
 - [FollowController](FollowController.md) - Third-person follow settings carried on a [CameraController](CameraController.md).
 - [FollowDrive](FollowDrive.md) - How a followed character converts movement input into displacement.
+- [FrameCapture](FrameCapture.md) - One frame a [FrameReport](FrameReport.md) saves as an image.
 - [FramePacing](FramePacing.md) - How the render loop paces its frames: how many may be in flight, whether presentation waits for the display refresh, and the frame-rate cap. The `frame_pacing` section of [GraphicsConfig](GraphicsConfig.md); a field left unset takes the default below.
 - [FramePriority](FramePriority.md) - Whether the threads every frame waits on run above normal priority, ahead of the other applications on the machine.
 - [IndirectLighting](IndirectLighting.md) - Indirect (ambient) lighting: how strong the environment's ambient term is, and whether a screen-space bounce lets nearby lit surfaces bleed color onto one another. The `indirect_lighting` section of [GraphicsConfig](GraphicsConfig.md); a field left unset takes the default below.

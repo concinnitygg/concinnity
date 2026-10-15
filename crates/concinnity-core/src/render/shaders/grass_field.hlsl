@@ -29,12 +29,16 @@ float grass_unit(uint h, uint salt)
 // The clump `p` (meters on the ground's plane) belongs to, for clumps
 // `clump_size` across salted by `seed` and `salt`: the nearest center of a
 // jittered lattice of clump-sized cells. Returns its hash and writes its
-// center.
-uint grass_clump_at(float2 p_m, float clump_size, uint seed, uint salt, out float2 center)
+// center, and the point's spot in the clump's cell: its distance to the
+// nearest center over its distance to the second nearest, 0 at the center and
+// 1 on the cell's edge. Mirrors render::grass::clumping::clump_at.
+uint grass_clump_at(float2 p_m, float clump_size, uint seed, uint salt, out float2 center,
+                    out float spot)
 {
     float2 p = p_m / clump_size;
     int2 base = int2(floor(p));
     float best = 1e30;
+    float second = 1e30;
     uint best_hash = 0u;
     center = p_m;
     [unroll]
@@ -49,13 +53,40 @@ uint grass_clump_at(float2 p_m, float clump_size, uint seed, uint salt, out floa
             float d = dot(c - p, c - p);
             if (d < best)
             {
+                second = best;
                 best = d;
                 best_hash = h;
                 center = c * clump_size;
             }
+            else if (d < second)
+            {
+                second = d;
+            }
         }
     }
+    spot = min(sqrt(best / max(second, 1e-12)), 1.0);
     return best_hash;
+}
+
+// Matches GATHER_STRENGTH in render::grass::clumping.
+static const float GRASS_GATHER = 0.65;
+
+// The share of its distance to its clump's center a blade at `spot` keeps
+// under `clumping`. Mirrors render::grass::clumping::gather_scale.
+float grass_gather_scale(float spot, float clumping)
+{
+    float center = 1.0 - GRASS_GATHER * clumping;
+    return center + (1.0 - center) * spot;
+}
+
+// How densely blades grow at `spot` under `clumping`, as a multiple of the
+// layer's mean. Mirrors render::grass::clumping::gathered_density.
+float grass_gathered_density(float spot, float clumping)
+{
+    float center = 1.0 - GRASS_GATHER * clumping;
+    float pull = 1.0 - center;
+    float from = 2.0 * spot / (center + sqrt(center * center + 4.0 * pull * spot));
+    return 1.0 / ((center + pull * from) * (center + 2.0 * pull * from));
 }
 
 // How far a clump's hue leans toward the dry tint, from its hash. The draws
@@ -137,6 +168,69 @@ float2 grass_macro(float3 p, uint seed, float slope, float amount, float near_de
 float3 grass_macro_tint(float2 m)
 {
     return lerp((float3)(1.0), GRASS_DRY_TINT, m.x) * (1.0 + 0.3 * m.y);
+}
+
+// How much lighter and paler litter lies where it is driest.
+static const float3 GRASS_LITTER_DRY = float3(1.5, 1.3, 0.95);
+
+// Matches LITTER_SCALES in render::grass::litter.
+static const float3 GRASS_LITTER_SCALES = float3(0.45, 1.8, 7.0);
+
+// A unit value at a 3D lattice point, salted, from a single hash step: cheap
+// enough for noise evaluated on every pixel of the ground. Mirrors
+// render::grass::litter::patch_lattice.
+float grass_patch_lattice(int3 c, uint salt)
+{
+    uint h = grass_hash((asuint(c.x) * 0x8da6b343u) ^ (asuint(c.y) * 0xd8163841u)
+                        ^ (asuint(c.z) * 0xcb1ab31fu) ^ salt);
+    return float(h >> 8u) * (1.0 / 16777216.0);
+}
+
+float grass_patch_value_noise3(float3 p, uint salt)
+{
+    float3 cell = floor(p);
+    float3 f = p - cell;
+    f = f * f * (3.0 - 2.0 * f);
+    int3 c = int3(cell);
+    float x00 = lerp(grass_patch_lattice(c, salt), grass_patch_lattice(c + int3(1, 0, 0), salt), f.x);
+    float x10 = lerp(grass_patch_lattice(c + int3(0, 1, 0), salt),
+                     grass_patch_lattice(c + int3(1, 1, 0), salt), f.x);
+    float x01 = lerp(grass_patch_lattice(c + int3(0, 0, 1), salt),
+                     grass_patch_lattice(c + int3(1, 0, 1), salt), f.x);
+    float x11 = lerp(grass_patch_lattice(c + int3(0, 1, 1), salt),
+                     grass_patch_lattice(c + int3(1, 1, 1), salt), f.x);
+    return lerp(lerp(x00, x10, f.y), lerp(x01, x11, f.y), f.z);
+}
+
+// A patch noise at fixed ground point `p` for patches `scale` meters across,
+// faded toward its mean where a pixel covering `footprint` meters cannot
+// hold them.
+float grass_patch_noise(float3 p, float scale, uint salt, float footprint)
+{
+    float detail = 1.0 - smoothstep(scale * 0.5, scale * 2.0, footprint);
+    if (detail <= 0.0)
+    {
+        return 0.5;
+    }
+    return 0.5 + (grass_patch_value_noise3(p / scale, salt) - 0.5) * detail;
+}
+
+// What lies on the ground under grass at fixed point `p` (meters) under a
+// pixel covering `footprint` meters: how much of it is litter rather than
+// bare earth (x, in [0.35, 1]), how dark the earth is (y, a multiplier in
+// [0.65, 1]), and how dry and light the litter is (z, in [0, 1]). Mirrors
+// render::grass::litter::ground_variation.
+float3 grass_ground_variation(float3 p, float footprint)
+{
+    float fine = grass_patch_noise(p, GRASS_LITTER_SCALES.x, 0x6a09e667u, footprint);
+    float mid = grass_patch_noise(p, GRASS_LITTER_SCALES.y, 0xbb67ae85u, footprint);
+    float broad = grass_patch_noise(p, GRASS_LITTER_SCALES.z, 0x3c6ef372u, footprint);
+    float patch_ = fine * 0.25 + mid * 0.35 + broad * 0.4;
+    // Weighted so the dry litter falls about as often on earth as on litter.
+    float dry = fine * 0.6 + (1.0 - mid) * 0.4;
+    return float3(0.35 + 0.65 * smoothstep(0.36, 0.52, patch_),
+                  0.65 + 0.35 * smoothstep(0.3, 0.46, patch_),
+                  smoothstep(0.55, 0.7, dry));
 }
 
 // The unit direction through face coordinates (s, t) of cube face `face`.

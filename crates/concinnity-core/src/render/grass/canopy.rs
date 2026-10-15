@@ -254,6 +254,8 @@ impl CanopyLayerGpu {
             seed,
             sky_projection: projection(bend, SKY_MU),
             _pad: [0.0; 2],
+            litter_color: look.litter_color,
+            clumping: look.clumping,
         }
     }
 }
@@ -446,6 +448,7 @@ mod tests {
     use crate::components::Grass;
     use crate::math::vec3::{cross, dot, normalize_or, scale};
     use crate::planet::{CubeFace, TileId};
+    use crate::render::grass::litter::litter_color;
     use crate::terrain::TerrainGrid;
     use alloc::vec;
 
@@ -786,6 +789,15 @@ mod tests {
         assert_eq!(rec.bend, canopy_bend(4.0, look.stiffness));
         assert_eq!(rec.macro_variation, g.macro_variation);
         assert_eq!(rec.sky_projection, projection(rec.bend, SKY_MU));
+        assert_eq!(rec.clumping, g.clumping);
+        assert_eq!(rec.litter_color, litter_color(g.root_color));
+        // An authored litter color is taken as it is.
+        let named = Grass {
+            litter_color: Some([0.1, 0.07, 0.03]),
+            ..g
+        };
+        let rec = CanopyLayerGpu::of(&GrassBladeLook::of(&named), 100.0, 1, 0.0);
+        assert_eq!(rec.litter_color, [0.1, 0.07, 0.03]);
     }
 
     #[test]

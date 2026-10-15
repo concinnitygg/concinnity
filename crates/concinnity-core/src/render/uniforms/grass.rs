@@ -28,7 +28,7 @@ pub const MAX_GRASS_LAYERS: usize = 16;
 
 /// One grass layer as a frame's kernel and draws read it: the terrain it roots
 /// in, the block of tiles this frame covers on it, and the look of its blades.
-/// 128 bytes, every member in its own 16-byte row.
+/// 144 bytes, every member in its own 16-byte row.
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct GrassLayerGpu {
@@ -80,6 +80,10 @@ pub struct GrassLayerGpu {
     pub tip_color: [f32; 3],
     /// How far the field's color drifts across hundreds of meters, in [0, 1].
     pub macro_variation: f32,
+    /// How strongly blades crowd toward their clump's center, in [0, 1].
+    pub clumping: f32,
+    /// Keeps the record a whole number of rows.
+    pub _pad: [f32; 3],
 }
 
 /// Per-frame grass parameters: the camera, the wind, the occlusion test, the
@@ -295,7 +299,7 @@ mod tests {
 
     #[test]
     fn grass_params_layout_matches_msl() {
-        assert_eq!(size_of::<GrassParams>(), 576 + 128 * MAX_GRASS_LAYERS);
+        assert_eq!(size_of::<GrassParams>(), 576 + 144 * MAX_GRASS_LAYERS);
         assert_eq!(offset_of!(GrassParams, cam_pos), 0);
         assert_eq!(offset_of!(GrassParams, draw_distance), 12);
         assert_eq!(offset_of!(GrassParams, frustum), 16);
@@ -336,7 +340,7 @@ mod tests {
 
     #[test]
     fn grass_layer_layout_matches_msl() {
-        assert_eq!(size_of::<GrassLayerGpu>(), 128);
+        assert_eq!(size_of::<GrassLayerGpu>(), 144);
         assert_eq!(offset_of!(GrassLayerGpu, rect), 0);
         assert_eq!(offset_of!(GrassLayerGpu, tile_origin), 16);
         assert_eq!(offset_of!(GrassLayerGpu, tile_count), 24);
@@ -360,6 +364,8 @@ mod tests {
         assert_eq!(offset_of!(GrassLayerGpu, reach), 108);
         assert_eq!(offset_of!(GrassLayerGpu, tip_color), 112);
         assert_eq!(offset_of!(GrassLayerGpu, macro_variation), 124);
+        assert_eq!(offset_of!(GrassLayerGpu, clumping), 128);
+        assert_eq!(offset_of!(GrassLayerGpu, _pad), 132);
     }
 
     #[test]

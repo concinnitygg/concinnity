@@ -69,7 +69,7 @@
 
 {WIND}
 
-// Mirrors `GrassLayerGpu` in render::uniforms::grass (128 B).
+// Mirrors `GrassLayerGpu` in render::uniforms::grass (144 B).
 struct GrassLayer
 {
     // The terrain's min x, min z, max x, max z.
@@ -97,6 +97,10 @@ struct GrassLayer
     float4 root_color_reach;
     // xyz = linear RGB at the tip, w = how far the field's color drifts.
     float4 tip_color_macro;
+    float clumping;
+    float _pad0;
+    float _pad1;
+    float _pad2;
 };
 
 // Matches MAX_GRASS_LAYERS in render::uniforms::grass.
@@ -528,9 +532,9 @@ bool grass_tile_visible(GrassLayer L, int2 tile)
 
 // Where a blade grows, whatever ground it grows on: its root, the ground's
 // normal and the up it stands along, its place on the ground's own plane (for
-// the clump lattice) with the plane's two axes in the frame, its fixed ground
-// point (for the field's slow drift), its hash, and the share of the layer's
-// density that grows there.
+// the clump lattice) with the plane's two axes in the frame, the clump it
+// belongs to, its fixed ground point (for the field's slow drift), its hash,
+// and the share of the layer's density that grows there.
 struct GrassSite
 {
     float3 root;
@@ -540,8 +544,8 @@ struct GrassSite
     float3 plane_u;
     float3 plane_v;
     uint hash;
-    // Salts the clump lattice, so lattices on different faces differ.
-    uint clump_salt;
+    uint clump_hash;
+    float2 clump_center;
     float3 ground_point;
     float density;
 };
@@ -601,12 +605,15 @@ float grass_mask_density(GrassLayer L, float2 st)
     return top + (bottom - top) * s.y;
 }
 
-// The clump `xz` belongs to on layer `L`: the nearest center of a jittered
-// lattice of clump-sized cells, salted by `salt`. Returns its hash and writes
-// its center.
-uint grass_clump(GrassLayer L, float2 xz, uint salt, out float2 center)
+// The clump `xz` belongs to on layer `L`, salted by `salt`, and where a blade
+// placed at `xz` grows once drawn toward its center: returns the clump's hash
+// and writes its center and the blade's place.
+uint grass_clump(GrassLayer L, float2 xz, uint salt, out float2 center, out float2 gathered)
 {
-    return grass_clump_at(xz, L.clump_size, L.seed, salt, center);
+    float spot;
+    uint h = grass_clump_at(xz, L.clump_size, L.seed, salt, center, spot);
+    gathered = center + (xz - center) * grass_gather_scale(spot, L.clumping);
+    return h;
 }
 
 // The bend of the field's cell `cell` in half `half_index` of the window whose
@@ -676,7 +683,9 @@ bool grass_terrain_site(GrassLayer L, int2 cell, out GrassSite site)
 {
     site = (GrassSite)0;
     uint h = grass_hash(grass_hash2(cell) ^ L.seed);
-    float2 xz = (float2(cell) + float2(grass_unit(h, 3u), grass_unit(h, 4u))) * L.cell_size;
+    float2 placed = (float2(cell) + float2(grass_unit(h, 3u), grass_unit(h, 4u))) * L.cell_size;
+    float2 xz;
+    site.clump_hash = grass_clump(L, placed, 0u, site.clump_center, xz);
     if (any(xz < L.rect.xy) || any(xz >= L.rect.zw))
     {
         return false;
@@ -690,7 +699,6 @@ bool grass_terrain_site(GrassLayer L, int2 cell, out GrassSite site)
     site.plane_u = float3(1.0, 0.0, 0.0);
     site.plane_v = float3(0.0, 0.0, 1.0);
     site.hash = h;
-    site.clump_salt = 0u;
     site.ground_point = float3(xz.x, 0.0, xz.y);
     site.density = grass_mask_density(L, st);
     return true;
@@ -715,8 +723,9 @@ float3 grass_mesh_normal(uint i)
 #define GRASS_PLANET_TILE_CELLS 32u
 
 // A point of planet tile `T`'s surface: the tile's own triangle under (fs, ft)
-// across it, each in [0, 1], interpolated in the mesh's frame. The cell
-// splits along the same diagonal the mesh's indices do.
+// across it, each in [0, 1], interpolated in the mesh's frame; a little past
+// an edge, the edge's triangle runs on. The cell splits along the same
+// diagonal the mesh's indices do.
 struct GrassMeshPoint
 {
     float3 position;
@@ -729,8 +738,8 @@ struct GrassMeshPoint
 GrassMeshPoint grass_mesh_point(PlanetGrassTile T, float2 f)
 {
     float n = float(GRASS_PLANET_TILE_CELLS);
-    float2 g = saturate(f) * n;
-    float2 cell = min(floor(g), n - 1.0);
+    float2 g = f * n;
+    float2 cell = clamp(floor(g), 0.0, n - 1.0);
     float2 r = g - cell;
     uint side = GRASS_PLANET_TILE_CELLS + 1u;
     uint i00 = T.vertex_base + uint(cell.y) * side + uint(cell.x);
@@ -814,20 +823,32 @@ GrassSite grass_planet_site(GrassLayer L, PlanetGrassTile T, uint2 g, uint2 cell
     site.up = normalize(site.root - grass.planet_center_scale.xyz);
     float3 edge_s = grass_tile_vector(T, m.edge_s);
     float3 edge_t = grass_tile_vector(T, m.edge_t);
-    site.plane = (float2(face_cell) + jitter) * L.cell_size;
     site.plane_u = normalize(edge_s);
     site.plane_v = normalize(edge_t);
     site.hash = h;
-    site.clump_salt = face_salt;
 
     // Most far candidates fall to distance thinning, so that is tested before
-    // the meadow noise: a dropped candidate keeps density 0 and never pays for
-    // it. grass_grow makes the same test, so the field is unchanged.
+    // the clump lattice and the meadow noise: a dropped candidate keeps
+    // density 0 and never pays for them. grass_grow tests again at the root
+    // the blade is drawn to.
     float dist = distance(site.root, grass.cam_pos_distance.xyz);
     float keep = grass_thinning(dist) * grass_fade(dist);
     if (dist > grass.cull_distance || grass_unit(h, 5u) * (1.0 - grass.thinning.y) >= keep)
     {
         return site;
+    }
+
+    // Drawn toward its clump's center, the blade roots on the tile's surface
+    // there instead; the surface runs on past the tile's edge.
+    float2 placed = (float2(face_cell) + jitter) * L.cell_size;
+    site.clump_hash = grass_clump(L, placed, face_salt, site.clump_center, site.plane);
+    if (L.clumping > 0.0)
+    {
+        jitter += (site.plane - placed) / L.cell_size;
+        m = grass_mesh_point(T, (float2(g * k + cell) + jitter) / cells);
+        site.root = grass_tile_point(T, m.position);
+        site.normal = normalize(grass_tile_vector(T, m.normal));
+        site.up = normalize(site.root - grass.planet_center_scale.xyz);
     }
 
     // The share of a blade's ground this cell holds, then the meadow.
@@ -872,8 +893,8 @@ bool grass_grow(GrassLayer L, uint slot, GrassSite site, out GrassBlade blade, o
     }
     float shrink = saturate((keep - threshold) / max(band * keep, 1e-6));
 
-    float2 clump_center;
-    uint ch = grass_clump(L, site.plane, site.clump_salt, clump_center);
+    float2 clump_center = site.clump_center;
+    uint ch = site.clump_hash;
     float clump_r = grass_unit(ch, 6u);
     float height = L.height
                  * (1.0 + L.height_variance * ((clump_r - 0.5) * 1.2 + (grass_unit(h, 7u) - 0.5) * 0.8));

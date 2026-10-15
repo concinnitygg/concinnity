@@ -24,34 +24,14 @@ pub struct PackView {
     pub canopy_twin: Option<u32>,
 }
 
-/// The shader bucket `obj` draws under from `cam_pos`: its own, except that a
-/// default-Shader draw with a far band reaching past `FarFieldTint::start` goes
-/// to `canopy_twin`. A draw wholly nearer than the band stays on the program
-/// without the canopy. An unbounded draw counts as reaching it.
-pub fn draw_bucket(obj: &DrawObject, cam_pos: [f32; 3], canopy_twin: Option<u32>) -> u32 {
+/// The shader bucket `obj` draws under: its own, except that a default-Shader
+/// draw with a far band (a surface growing grass) goes to `canopy_twin`, whose
+/// program shades the ground under the grass and the canopy past the blades.
+pub fn draw_bucket(obj: &DrawObject, canopy_twin: Option<u32>) -> u32 {
     match canopy_twin {
-        Some(twin) if obj.shader_bucket == 0 && reaches_far_band(obj, cam_pos) => twin,
+        Some(twin) if obj.shader_bucket == 0 && obj.material.far_field.end > 0.0 => twin,
         _ => obj.shader_bucket,
     }
-}
-
-fn reaches_far_band(obj: &DrawObject, cam_pos: [f32; 3]) -> bool {
-    let band = obj.material.far_field;
-    if band.end <= 0.0 {
-        return false;
-    }
-    if !obj.cullable() {
-        return true;
-    }
-    let farthest_sq: f32 = (0..3)
-        .map(|i| {
-            let d = (cam_pos[i] - obj.bb_min[i])
-                .abs()
-                .max((obj.bb_max[i] - cam_pos[i]).abs());
-            d * d
-        })
-        .sum();
-    farthest_sq > band.start * band.start
 }
 
 /// One pack of the static draws: draw `i` fills record `i` of both outputs,
@@ -166,7 +146,7 @@ fn draw_args(
         // The shader bucket rides the upper flag bits so the cull kernel can
         // route the record's command into that bucket's region.
         flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-            | draw_args_bucket_bits(draw_bucket(obj, view.cam_pos, view.canopy_twin))
+            | draw_args_bucket_bits(draw_bucket(obj, view.canopy_twin))
             | history.draw_flags(index, index),
     }
 }
@@ -331,36 +311,26 @@ mod tests {
         obj
     }
 
-    // Only a default-Shader draw whose far band reaches past its start from
-    // the eye goes to the canopy twin.
+    // Every default-Shader draw with a far band goes to the canopy twin,
+    // however near, since it grows grass the ground under which it shades.
     #[test]
-    fn a_far_band_in_reach_routes_to_the_canopy_twin() {
-        let eye = [0.0, 2.0, 0.0];
-        // Its far corner is ~71 m away: past the band's start.
-        assert_eq!(draw_bucket(&far_banded(0.0), eye, Some(3)), 3);
+    fn a_far_band_routes_to_the_canopy_twin() {
+        assert_eq!(draw_bucket(&far_banded(0.0), Some(3)), 3);
+        assert_eq!(draw_bucket(&far_banded(5_000.0), Some(3)), 3);
         // Without a twin it keeps its own bucket.
-        assert_eq!(draw_bucket(&far_banded(0.0), eye, None), 0);
-        // Wholly within 60 m of the eye: no pixel can reach the band.
-        let mut near = far_banded(0.0);
-        near.bb_min = [-20.0, 0.0, -20.0];
-        near.bb_max = [20.0, 1.0, 20.0];
-        assert_eq!(draw_bucket(&near, eye, Some(3)), 0);
-        // Unbounded: counts as reaching it.
-        near.bb_min = [f32::NAN; 3];
-        assert_eq!(draw_bucket(&near, eye, Some(3)), 3);
+        assert_eq!(draw_bucket(&far_banded(0.0), None), 0);
     }
 
     // A draw without a band, or under a world Shader, keeps its bucket.
     #[test]
     fn only_default_shader_far_bands_route_to_the_twin() {
         use crate::gfx::render_types::FarFieldTint;
-        let eye = [0.0, 2.0, 0.0];
         let mut plain = far_banded(500.0);
         plain.material.far_field = FarFieldTint::NONE;
-        assert_eq!(draw_bucket(&plain, eye, Some(3)), 0);
+        assert_eq!(draw_bucket(&plain, Some(3)), 0);
         let mut shaded = far_banded(500.0);
         shaded.shader_bucket = 2;
-        assert_eq!(draw_bucket(&shaded, eye, Some(3)), 2);
+        assert_eq!(draw_bucket(&shaded, Some(3)), 2);
     }
 
     // The routed bucket is what the record's flags carry.

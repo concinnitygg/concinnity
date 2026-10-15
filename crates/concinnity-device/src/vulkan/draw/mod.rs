@@ -228,7 +228,7 @@ impl VkContext {
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | draw_args_bucket_bits(draw_bucket(obj, cam_pos, canopy_twin))
+                    | draw_args_bucket_bits(draw_bucket(obj, canopy_twin))
                     | model_history.draw_flags(runtime_base + k, i),
             };
             args.write_val((runtime_base + k) * args_stride, &rec);

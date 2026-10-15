@@ -6,9 +6,9 @@
 /// together.
 pub const MAX_CANOPY_LAYERS: usize = 16;
 
-/// One grass layer as its far field reads it: the blade look, how much leaf
-/// it grows, and how its blades lean. 64 bytes, every member in its own
-/// 16-byte row.
+/// One grass layer as its ground and far field read it: the blade look, how
+/// much leaf it grows, how its blades lean and crowd, and the litter they
+/// shed. 80 bytes, every member in its own 16-byte row.
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct CanopyLayerGpu {
@@ -38,10 +38,14 @@ pub struct CanopyLayerGpu {
     pub sky_projection: f32,
     /// Keeps the record a whole number of rows.
     pub _pad: [f32; 2],
+    /// Linear RGB of the dead grass on the ground.
+    pub litter_color: [f32; 3],
+    /// How strongly blades crowd toward their clump's center, in [0, 1].
+    pub clumping: f32,
 }
 
 /// The canopy block: every far field's layers, and the frame a planet's ground
-/// is laid out in. 1088 bytes.
+/// is laid out in. 1344 bytes.
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct CanopyParams {
@@ -75,7 +79,7 @@ mod tests {
     // Mirrors `CanopyLayer` in shaders/canopy.hlsl.
     #[test]
     fn canopy_layer_matches_hlsl() {
-        assert_eq!(size_of::<CanopyLayerGpu>(), 64);
+        assert_eq!(size_of::<CanopyLayerGpu>(), 80);
         assert_eq!(offset_of!(CanopyLayerGpu, root_color), 0);
         assert_eq!(offset_of!(CanopyLayerGpu, color_variation), 12);
         assert_eq!(offset_of!(CanopyLayerGpu, tip_color), 16);
@@ -87,6 +91,8 @@ mod tests {
         assert_eq!(offset_of!(CanopyLayerGpu, seed), 48);
         assert_eq!(offset_of!(CanopyLayerGpu, sky_projection), 52);
         assert_eq!(offset_of!(CanopyLayerGpu, _pad), 56);
+        assert_eq!(offset_of!(CanopyLayerGpu, litter_color), 64);
+        assert_eq!(offset_of!(CanopyLayerGpu, clumping), 76);
     }
 
     // Mirrors `CanopyParams` in shaders/canopy.hlsl.
@@ -98,7 +104,7 @@ mod tests {
         assert_eq!(offset_of!(CanopyParams, meadow_mean), 56);
         assert_eq!(offset_of!(CanopyParams, layer_count), 60);
         assert_eq!(offset_of!(CanopyParams, layers), 64);
-        assert_eq!(size_of::<CanopyParams>(), 1088);
+        assert_eq!(size_of::<CanopyParams>(), 1344);
         // Metal sets the block inline, which caps it at 4 KiB.
         const { assert!(size_of::<CanopyParams>() <= 4096) };
         assert_eq!(CanopyParams::default().layer_count, 0);

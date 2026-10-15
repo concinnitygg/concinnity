@@ -4,7 +4,7 @@
 ["SkyRotation",{"axis":[0.0,0.0,-1.0],"degrees_per_second":1.5,"angle_deg":120.0}]
 ["Atmosphere",{"apparent_radius_km":6360.0}]
 ["NightSky",{"moon_start_deg":135.0,"galaxies":16}]
-["Material",{"$id":"turf","tint":[0.11,0.15,0.06],"roughness":0.92}]
+["Material",{"$id":"turf","tint":[0.07,0.052,0.034],"roughness":0.95}]
 ["Wind",{"direction":[1.0,0.35],"strength":4.0,"gustiness":0.6,"gust_scale":16.0}]
 ["Grass",{"$id":"meadow","height":0.55,"height_variance":0.45,"width":0.03,"density":100.0,"clump_size":0.7}]
 ["Planet",{"center":[0.0,-50000.0,0.0],"radius":50000.0,"amplitude":40.0,"feature_size":2000.0,"octaves":8,"seed":4,"material":"turf","layers":[{"grass":"meadow"}]}]
