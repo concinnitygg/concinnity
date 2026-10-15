@@ -111,6 +111,7 @@ mod tests {
             cam_pos: [0.0; 3],
             mesh_glass_active: false,
             horizon: None,
+            canopy_twin: None,
         };
         packer.pack(
             StaticPack {

@@ -14,7 +14,7 @@
 
 use concinnity_core::components::ShaderPrograms;
 use concinnity_core::platform::Platform;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::shader_programs::surface::{self, Sources};
 use concinnity_core::render::shader_source;
 use std::borrow::Cow;
@@ -26,7 +26,7 @@ pub(crate) struct Request {
     pub hot_reload: bool,
 }
 
-/// The artifact holding `entry`: the cook's when the engine template it was
+/// The artifact holding `program`: the cook's when the engine template it was
 /// built against still matches, and `compile` of the assembled source when it
 /// does not.
 ///
@@ -36,16 +36,12 @@ pub(crate) struct Request {
 /// `shader::compile::cooked`, which picks the target the way the cook does.
 pub(crate) fn artifact<'a>(
     programs: &'a ShaderPrograms,
-    entry: &str,
+    program: &surface::Program,
     req: &Request,
     compile: impl FnOnce(Platform, &str, &str, &str) -> RenderResult<Vec<u8>>,
 ) -> RenderResult<Cow<'a, [u8]>> {
     let label = programs.name.as_str();
-    let program = surface::program(entry).ok_or_else(|| {
-        RenderError::ShaderCompile(format!(
-            "Shader '{label}': no main-pass entry named '{entry}'"
-        ))
-    })?;
+    let entry = program.entry;
     let source = source(program, req, &programs.sources());
     let digest = shader_source::source_digest(&source);
     if let Some(bytes) = programs.artifact(entry, digest) {
@@ -76,6 +72,7 @@ mod tests {
     use super::*;
     use concinnity_core::components::ShaderSource;
     use concinnity_core::components::compiled_programs::CompiledProgram;
+    use concinnity_core::render::error::RenderError;
 
     const SHADE: &str = "float4 shade(VertexOut v, GpuObjectData od) { return (float4)(1.0); }";
 
@@ -90,7 +87,7 @@ mod tests {
         panic!("a matching artifact reached the compiler")
     }
 
-    fn stored(platform: Platform, entry: &str, bytes: &[u8]) -> ShaderPrograms {
+    fn stored(platform: Platform, program: &surface::Program, bytes: &[u8]) -> ShaderPrograms {
         let mut programs = ShaderPrograms {
             name: "wall".to_string(),
             vertex: None,
@@ -100,10 +97,9 @@ mod tests {
             },
             programs: Vec::new(),
         };
-        let program = surface::program(entry).unwrap();
         let src = surface::source(program, platform, &programs.sources());
         programs.programs.push(CompiledProgram {
-            entry: entry.to_string(),
+            entry: program.entry.to_string(),
             source_digest: shader_source::source_digest(&src),
             artifact: bytes.to_vec(),
         });
@@ -114,10 +110,10 @@ mod tests {
     // is the shipped path and the one that must never reach a compiler.
     #[test]
     fn a_matching_artifact_is_taken_without_compiling() {
-        for entry in ["vertex_main_bindless", "fragment_main_bindless"] {
-            let programs = stored(Platform::Metal, entry, b"stored bytes");
-            let got =
-                artifact(&programs, entry, &request(Platform::Metal), no_compile).expect("stored");
+        for program in surface::ALL {
+            let programs = stored(Platform::Metal, program, b"stored bytes");
+            let got = artifact(&programs, program, &request(Platform::Metal), no_compile)
+                .expect("stored");
             assert_eq!(got.as_ref(), b"stored bytes");
             assert!(matches!(got, Cow::Borrowed(_)), "no compile was needed");
         }
@@ -127,9 +123,9 @@ mod tests {
     // the backend define every source leads with.
     #[test]
     fn an_artifact_from_another_host_does_not_match() {
-        let metal = stored(Platform::Metal, "fragment_main_bindless", b"stored bytes");
-        let program = surface::program("fragment_main_bindless").unwrap();
-        let other_host = surface::source(program, Platform::Vulkan, &metal.sources());
+        let metal = stored(Platform::Metal, &surface::MAIN_FRAGMENT, b"stored bytes");
+        let other_host =
+            surface::source(&surface::MAIN_FRAGMENT, Platform::Vulkan, &metal.sources());
         assert!(
             metal
                 .artifact(
@@ -140,34 +136,42 @@ mod tests {
         );
     }
 
-    // An entry the table does not name is a caller bug, reported by name
-    // rather than compiled into nothing.
+    // The canopy fragment shares the plain fragment's entry name; its gate
+    // gives it a digest of its own, so neither takes the other's artifact.
     #[test]
-    fn an_unknown_entry_is_an_error() {
-        let programs = stored(Platform::Metal, "fragment_main_bindless", b"x");
-        let err = artifact(
+    fn the_canopy_fragment_never_takes_the_plain_artifact() {
+        let programs = stored(Platform::Metal, &surface::MAIN_FRAGMENT, b"plain");
+        let req = request(Platform::Metal);
+        let got = artifact(
             &programs,
-            "no_such_entry",
-            &request(Platform::Metal),
-            no_compile,
+            &surface::MAIN_FRAGMENT_CANOPY,
+            &req,
+            |_, _, _, src| {
+                assert!(src.contains("#define SURFACE_CANOPY 1"));
+                Ok(b"canopy".to_vec())
+            },
         )
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("no_such_entry"), "got: {err}");
+        .expect("compiled");
+        assert_eq!(got.as_ref(), b"canopy");
+        let plain = artifact(&programs, &surface::MAIN_FRAGMENT, &req, no_compile).expect("stored");
+        assert_eq!(plain.as_ref(), b"plain");
     }
 
     // A miss compiles the entry's own program from the source this host
     // assembles, and a failure names the Shader and the entry.
     #[test]
     fn a_stale_artifact_compiles_its_entry_and_names_the_shader() {
-        let mut programs = stored(Platform::Metal, "fragment_main_bindless", b"stale");
+        let mut programs = stored(Platform::Metal, &surface::MAIN_FRAGMENT, b"stale");
         programs.programs[0].source_digest ^= 1;
-        let program = surface::program("fragment_main_bindless").unwrap();
-        let want = surface::source(program, Platform::Metal, &programs.sources());
+        let want = surface::source(
+            &surface::MAIN_FRAGMENT,
+            Platform::Metal,
+            &programs.sources(),
+        );
         let req = request(Platform::Metal);
         let got = artifact(
             &programs,
-            "fragment_main_bindless",
+            &surface::MAIN_FRAGMENT,
             &req,
             |platform, file, entry, src| {
                 assert_eq!(platform, Platform::Metal);
@@ -182,7 +186,7 @@ mod tests {
         .expect("compiled");
         assert_eq!(got.as_ref(), b"fresh");
 
-        let err = artifact(&programs, "fragment_main_bindless", &req, |_, _, _, _| {
+        let err = artifact(&programs, &surface::MAIN_FRAGMENT, &req, |_, _, _, _| {
             Err(RenderError::ShaderCompile("no compiler".to_string()))
         })
         .unwrap_err()

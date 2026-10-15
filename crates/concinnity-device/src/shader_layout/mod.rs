@@ -132,6 +132,14 @@ fn main_bindless_layouts_match_the_shader() {
     );
 }
 
+#[test]
+fn canopy_layouts_match_the_shader() {
+    check(
+        &programs::MAIN_BINDLESS_CANOPY_FRAG,
+        &mirrors::forward::canopy(),
+    );
+}
+
 // The Metal main pass reaches every texture and sampler through the argument
 // buffers at buffer(7) and buffer(10), never through a discrete slot: an
 // indirect command carries no texture binding, so a discrete one would be

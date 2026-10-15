@@ -64,41 +64,37 @@ pub(super) fn cull_encode_library(
     )
 }
 
-// The entries a world Shader's main-pass and pre-pass pipelines take their
-// stages from.
-pub(super) const WORLD_VERTEX_ENTRY: &str = surface::MAIN_VERTEX.entry;
-pub(super) const WORLD_FRAGMENT_ENTRY: &str = surface::MAIN_FRAGMENT.entry;
-pub(super) const WORLD_PREPASS_VERTEX_ENTRY: &str = surface::PREPASS_VERTEX.entry;
-pub(super) const WORLD_PREPASS_FRAGMENT_ENTRY: &str = surface::PREPASS_FRAGMENT.entry;
-
-// The world Shader's MSL for `entry`: the cook's text, or a compile of the
+// The world Shader's MSL for `program`: the cook's text, or a compile of the
 // current templates when it predates them.
 fn world_msl<'a>(
     programs: &'a concinnity_core::components::ShaderPrograms,
-    entry: &str,
+    program: &surface::Program,
     hot_reload: bool,
 ) -> RenderResult<Cow<'a, [u8]>> {
     let req = crate::shader::surface_source::Request {
         platform: concinnity_core::platform::Platform::Metal,
         hot_reload,
     };
-    crate::shader::surface_source::artifact(programs, entry, &req, crate::shader::compile::cooked)
+    crate::shader::surface_source::artifact(programs, program, &req, crate::shader::compile::cooked)
 }
 
-fn world_label(entry: &str) -> String {
-    format!("world shader {entry}")
+fn world_label(program: &surface::Program) -> String {
+    match program.gates {
+        [] => format!("world shader {}", program.entry),
+        gates => format!("world shader {} {}", program.entry, gates.join(" ")),
+    }
 }
 
-// The world Shader's function for `entry`. Each entry is its own translation,
-// so a pipeline takes its two stages from two of these.
+// The world Shader's function for `program`. Each program is its own
+// translation, so a pipeline takes its two stages from two of these.
 pub(super) fn world_function(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
     programs: &concinnity_core::components::ShaderPrograms,
-    entry: &str,
+    program: &surface::Program,
 ) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLFunction>>> {
-    let msl = world_msl(programs, entry, hot_reload)?;
-    super::msl_cache::cooked_function(device, &msl, entry, &world_label(entry))
+    let msl = world_msl(programs, program, hot_reload)?;
+    super::msl_cache::cooked_function(device, &msl, program.entry, &world_label(program))
 }
 
 // Load a MTLLibrary from raw .metallib bytes via a DispatchData.

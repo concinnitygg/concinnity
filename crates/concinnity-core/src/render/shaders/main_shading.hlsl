@@ -290,11 +290,17 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     float3 albedo = albedo_samp.rgb * tint * (od.far_end > 0.0 ? (float3)(1.0) : v.color);
 
     // Past where the blades end, the surface is shaded as the canopy they
-    // make. The pixel's footprint is taken here, in uniform control flow.
+    // make. The pixel's footprint is taken here, in uniform control flow. Only
+    // the SURFACE_CANOPY variant carries the canopy: in every other program
+    // the band is a constant 0 and the canopy code folds away.
     float3 V_far = cam_pos - v.world_pos;
     float far_dist = length(V_far);
     float footprint = max(length(ddx(v.world_pos)), length(ddy(v.world_pos)));
+#ifdef SURFACE_CANOPY
     float far_w = canopy_band(od, far_dist);
+#else
+    const float far_w = 0.0;
+#endif
     CanopyShade canopy = (CanopyShade)0;
     if (far_w > 0.0)
     {

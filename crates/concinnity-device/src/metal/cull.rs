@@ -148,6 +148,17 @@ pub(crate) struct CullState {
     pub mirror_icb_capacity: usize,
 }
 
+impl CullState {
+    // The main pipeline a planar mirror's single stream draws under in place
+    // of the default's: the canopy twin's, when the world has one.
+    pub(in crate::metal) fn mirror_canopy_pipeline(
+        &self,
+    ) -> Option<&Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
+        let twin = self.world_pipelines.canopy_twin()?;
+        Some(&self.world_pipelines.get(twin as usize)?.main)
+    }
+}
+
 // One planar slot's mirror cull output: an ICB the cull kernel writes the
 // reflected-frustum draws into, plus the argument buffer wiring that ICB into
 // the kernel. Built by `ensure_mirror_icb_capacity`, consumed by
@@ -439,6 +450,7 @@ impl MtlContext {
                 .state
                 .horizon_occluder
                 .and_then(|o| o.seen_from(cam_pos)),
+            canopy_twin: self.cull.world_pipelines.canopy_twin(),
         };
         let texture_count = self.scene.textures.len();
         let (objects, objects_fresh) = self.rings.object.slot_fresh(

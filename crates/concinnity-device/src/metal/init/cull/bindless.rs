@@ -4,9 +4,8 @@
 use super::CullInputs;
 use crate::metal::init::InitGpu;
 use crate::metal::init::pipelines::{self, BucketPipelines};
-use concinnity_core::gfx::render_types;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::world_pipelines::WorldPipelines;
+use concinnity_core::render::world_pipelines::{BucketPlan, WorldPipelines};
 
 pub(super) struct BindlessPass {
     pub(super) active: bool,
@@ -42,22 +41,18 @@ pub(super) fn build_bindless_pass(
             inputs.vert_desc,
             0,
             world_shaders[0].programs,
+            false,
             build,
         )?)
     } else {
         None
     };
 
-    // Material-referenced shaders (ShaderHandle 1..) each get a bindless
-    // pipeline; the cull kernel routes their draws into per-bucket ICBs.
-    let world_pipelines = if inputs.features.scene && world_shaders.len() > 1 {
-        let max = render_types::MAX_SHADER_BUCKETS;
-        if world_shaders.len() > max {
-            return Err(RenderError::Other(format!(
-                "world declares {} Shaders but at most {max} are supported",
-                world_shaders.len()
-            )));
-        }
+    // Material-referenced shaders (ShaderHandle 1..), and the default's
+    // canopy twin, each get a bindless pipeline; the cull kernel routes their
+    // draws into per-bucket ICBs.
+    let plan = BucketPlan::new(world_shaders)?;
+    let world_pipelines = if inputs.features.scene && !plan.extra().is_empty() {
         if !active {
             return Err(RenderError::Other(
                 "material-referenced Shaders need the GPU-driven main pass, which a \
@@ -65,7 +60,16 @@ pub(super) fn build_bindless_pass(
                     .into(),
             ));
         }
-        pipelines::build_world_pipelines(device, inputs.vert_desc, &world_shaders[1..], build)?
+        WorldPipelines::build(&plan, |bucket, source| {
+            pipelines::build_bucket_pipelines(
+                device,
+                inputs.vert_desc,
+                bucket,
+                source.programs,
+                source.canopy,
+                build,
+            )
+        })?
     } else {
         WorldPipelines::default()
     };

@@ -168,7 +168,7 @@ impl VkContext {
         // only the material-referenced buckets can be.
         let &WorldShader {
             programs: world_programs,
-            deferred: _,
+            ..
         } = world_shaders
             .first()
             .ok_or_else(|| RenderError::Other("BackendInit carried no shaders".to_string()))?;

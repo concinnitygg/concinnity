@@ -158,7 +158,7 @@ pub(super) fn build_cull(
         },
     )?;
     let world_pipelines = bindless::build_world_pipelines(gpu, &bindless, world_shaders)?;
-    let shader_bucket_count = 1 + world_pipelines.len();
+    let shader_bucket_count = world_pipelines.bucket_count();
     let compute = compute::build_compute_cull(
         gpu,
         compute::ComputeInputs {
@@ -213,9 +213,7 @@ pub(super) fn build_cull(
         bindless_set_layout: bindless.set_layout,
         bindless_pool_size: plan.bindless_pool_size,
         bindless_update_after_bind: plan.bindless_uab,
-        world_pipelines: concinnity_core::render::world_pipelines::WorldPipelines::new(
-            world_pipelines,
-        ),
+        world_pipelines,
         bucket_stride: plan.n_cull,
         bindless_main_spv: bindless.main_spv,
         prepass_layout: bindless.prepass_layout,

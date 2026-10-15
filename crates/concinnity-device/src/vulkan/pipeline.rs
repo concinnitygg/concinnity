@@ -3,9 +3,10 @@
 // cooked artifacts.
 
 use ash::vk;
-use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::shader_programs::surface;
 use concinnity_core::render::shadow_bias;
+use concinnity_core::render::world_pipelines::BucketSource;
 
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{OwnedPipeline, VkDevice};
@@ -25,6 +26,8 @@ pub(super) fn is_spirv(bytes: &[u8]) -> bool {
 pub(super) struct BindlessSpv {
     pub vert: Vec<u8>,
     pub frag: Vec<u8>,
+    // The main fragment that shades a far band as canopy.
+    pub canopy_frag: Vec<u8>,
     pub prepass_vert: Vec<u8>,
     pub prepass_frag: Vec<u8>,
 }
@@ -35,11 +38,13 @@ pub(super) struct BindlessSpv {
 // is the world's compiles the same file through `world_entry` instead.
 pub(super) fn compile_bindless_shaders(hot_reload: bool) -> RenderResult<BindlessSpv> {
     use super::builtin_shaders::{
-        MAIN_BINDLESS_FRAG, MAIN_BINDLESS_VERT, MAIN_PREPASS_FRAG, MAIN_PREPASS_VERT,
+        MAIN_BINDLESS_CANOPY_FRAG, MAIN_BINDLESS_FRAG, MAIN_BINDLESS_VERT, MAIN_PREPASS_FRAG,
+        MAIN_PREPASS_VERT,
     };
     Ok(BindlessSpv {
         vert: MAIN_BINDLESS_VERT.compile(hot_reload)?,
         frag: MAIN_BINDLESS_FRAG.compile(hot_reload)?,
+        canopy_frag: MAIN_BINDLESS_CANOPY_FRAG.compile(hot_reload)?,
         prepass_vert: MAIN_PREPASS_VERT.compile(hot_reload)?,
         prepass_frag: MAIN_PREPASS_FRAG.compile(hot_reload)?,
     })
@@ -183,18 +188,18 @@ impl<'d> GraphicsStages<'d> {
     }
 }
 
-// The world Shader's program for `entry`, as SPIR-V: the cook's artifact when
-// the engine template still matches, else a compile here.
+// The world Shader's `program`, as SPIR-V: the cook's artifact when the
+// engine template still matches, else a compile here.
 pub(super) fn world_entry(
     world: &concinnity_core::components::ShaderPrograms,
-    entry: &str,
+    program: &surface::Program,
     hot_reload: bool,
 ) -> RenderResult<Vec<u8>> {
     let req = crate::shader::surface_source::Request {
         platform: concinnity_core::platform::Platform::Vulkan,
         hot_reload,
     };
-    crate::shader::surface_source::artifact(world, entry, &req, crate::shader::compile::cooked)
+    crate::shader::surface_source::artifact(world, program, &req, crate::shader::compile::cooked)
         .map(|c| c.into_owned())
 }
 
@@ -277,6 +282,8 @@ pub(super) struct BucketPipelines {
     // The world Shader the bucket compiles, `None` for the engine's own
     // programs, kept so the pre-pass can be built or rebuilt later.
     pub programs: Option<concinnity_core::components::ShaderPrograms>,
+    // The main fragment compiles the far-field canopy.
+    pub canopy: bool,
 }
 
 // What a bucket's pre-pass pipeline is built against: the G-buffer's render
@@ -313,13 +320,19 @@ pub(super) fn build_bucket_pipeline(
     device: &VkDevice,
     targets: BucketPipelineTargets,
     bucket: usize,
-    shader: backend_init::WorldShader<'_>,
+    source: &BucketSource<'_>,
     engine_default: &BindlessSpv,
 ) -> RenderResult<BucketPipelines> {
-    match shader.programs {
-        Some(programs) => build_world_shader_pipeline(device, targets, bucket, programs),
+    match source.programs {
+        Some(programs) => {
+            build_world_shader_pipeline(device, targets, bucket, programs, source.canopy)
+        }
         None => {
-            let main = create_bucket_main(device, targets, bucket, engine_default)?;
+            let frag = match source.canopy {
+                true => &engine_default.canopy_frag,
+                false => &engine_default.frag,
+            };
+            let main = create_bucket_main(device, targets, bucket, &engine_default.vert, frag)?;
             let prepass = targets.prepass.and_then(|prepass| {
                 let stages = (
                     &engine_default.prepass_vert[..],
@@ -331,6 +344,7 @@ pub(super) fn build_bucket_pipeline(
                 main,
                 prepass,
                 programs: None,
+                canopy: source.canopy,
             })
         }
     }
@@ -344,17 +358,11 @@ pub(super) fn build_world_shader_pipeline(
     targets: BucketPipelineTargets,
     bucket: usize,
     programs: &concinnity_core::components::ShaderPrograms,
+    canopy: bool,
 ) -> RenderResult<BucketPipelines> {
-    use concinnity_core::render::shader_programs::surface;
-    let entry =
-        |program: surface::Program| world_entry(programs, program.entry, targets.hot_reload);
-    let spv = BindlessSpv {
-        vert: entry(surface::MAIN_VERTEX)?,
-        frag: entry(surface::MAIN_FRAGMENT)?,
-        prepass_vert: Vec::new(),
-        prepass_frag: Vec::new(),
-    };
-    let main = create_bucket_main(device, targets, bucket, &spv)?;
+    let vert = world_entry(programs, &surface::MAIN_VERTEX, targets.hot_reload)?;
+    let frag = world_entry(programs, surface::main_fragment(canopy), targets.hot_reload)?;
+    let main = create_bucket_main(device, targets, bucket, &vert, &frag)?;
     let prepass = targets.prepass.and_then(|prepass| {
         build_world_prepass(device, prepass, bucket, programs, targets.hot_reload)
     });
@@ -362,6 +370,7 @@ pub(super) fn build_world_shader_pipeline(
         main,
         prepass,
         programs: Some(programs.clone()),
+        canopy,
     })
 }
 
@@ -375,9 +384,8 @@ pub(super) fn build_world_prepass(
     programs: &concinnity_core::components::ShaderPrograms,
     hot_reload: bool,
 ) -> Option<OwnedPipeline> {
-    use concinnity_core::render::shader_programs::surface;
-    let stages = world_entry(programs, surface::PREPASS_VERTEX.entry, hot_reload).and_then(|vs| {
-        world_entry(programs, surface::PREPASS_FRAGMENT.entry, hot_reload).map(|fs| (vs, fs))
+    let stages = world_entry(programs, &surface::PREPASS_VERTEX, hot_reload).and_then(|vs| {
+        world_entry(programs, &surface::PREPASS_FRAGMENT, hot_reload).map(|fs| (vs, fs))
     });
     match stages {
         Ok((vs, fs)) => build_bucket_prepass(device, prepass, bucket, (&vs, &fs)),
@@ -418,9 +426,10 @@ fn create_bucket_main(
     device: &VkDevice,
     targets: BucketPipelineTargets,
     bucket: usize,
-    spv: &BindlessSpv,
+    vert: &[u8],
+    frag: &[u8],
 ) -> RenderResult<OwnedPipeline> {
-    if spv.vert.is_empty() || spv.frag.is_empty() {
+    if vert.is_empty() || frag.is_empty() {
         return Err(RenderError::Other(format!(
             "shader bucket {bucket} carries no SPIR-V stages"
         )));
@@ -430,40 +439,13 @@ fn create_bucket_main(
         MeshPipelineTargets {
             render_pass: targets.render_pass,
             layout: targets.layout,
-            vert_spv: &spv.vert,
-            frag_spv: &spv.frag,
+            vert_spv: vert,
+            frag_spv: frag,
         },
         targets.msaa_samples,
         targets.swapchain_format,
     )
     .map_err(|e| e.context(format_args!("shader bucket {bucket}")))
-}
-
-// Build the per-bucket pipeline table from the world's material-referenced
-// shaders. Index `b` holds bucket `b + 1`'s pipeline; `None` marks a bucket the
-// streaming pump installs later (its Shader is owned by a scene that has not
-// pinned, so `decode_shaders` deferred its payload).
-pub(super) fn build_world_pipeline_table(
-    device: &VkDevice,
-    targets: BucketPipelineTargets,
-    bucket_shaders: &[backend_init::WorldShader<'_>],
-    engine_default: &BindlessSpv,
-) -> RenderResult<Vec<Option<BucketPipelines>>> {
-    let mut table = Vec::with_capacity(bucket_shaders.len());
-    for (i, shader) in bucket_shaders.iter().enumerate() {
-        if shader.deferred {
-            table.push(None);
-            continue;
-        }
-        table.push(Some(build_bucket_pipeline(
-            device,
-            targets,
-            i + 1,
-            *shader,
-            engine_default,
-        )?));
-    }
-    Ok(table)
 }
 
 pub(super) fn create_main_pipeline(
@@ -702,7 +684,7 @@ mod tests {
         };
         let compiled: Vec<Vec<u8>> = concinnity_core::render::shader_programs::surface::ALL
             .iter()
-            .map(|p| world_entry(&programs, p.entry, false).unwrap())
+            .map(|p| world_entry(&programs, p, false).unwrap())
             .collect();
         assert!(
             compiled.iter().all(|s| is_spirv(s)),

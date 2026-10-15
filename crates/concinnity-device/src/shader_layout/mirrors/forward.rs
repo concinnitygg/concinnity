@@ -75,6 +75,15 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             params_index,
             [far_field] => ["far_start", "far_end", "far_canopy"],
         })),
+    ];
+    cases.extend(light_cull());
+    cases
+}
+
+// The far-field canopy's block and layers. Only the canopy variant of the main
+// fragment compiles them, so they are checked against it.
+pub(in crate::shader_layout) fn canopy() -> Vec<Case> {
+    vec![
         everywhere(mirror!(CanopyParams => "CanopyParams" {
             planet_rows,
             planet_radius,
@@ -91,9 +100,7 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             sky_projection,
             [_pad] => ["_pad0", "_pad1"],
         })),
-    ];
-    cases.extend(light_cull());
-    cases
+    ]
 }
 
 // The parameter table's row. Only a variant whose hooks read a parameter

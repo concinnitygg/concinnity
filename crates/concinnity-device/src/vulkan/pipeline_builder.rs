@@ -54,6 +54,8 @@ pub(super) struct VkPipelineBuilder {
     pub world: Option<BucketPipelineTargets>,
     // `None` when the world has no raymarch pass.
     pub volumes: Option<VolumePipelineTargets>,
+    // Per bucket: its main fragment compiles the far-field canopy.
+    pub canopy: Vec<bool>,
 }
 
 // A world Shader's main-pass and pre-pass pipelines and what they were built
@@ -82,8 +84,9 @@ impl PipelineBuilder for VkPipelineBuilder {
             .world
             .ok_or_else(|| RenderError::Other("the GPU-driven main pass is not live".into()))?;
         let _open = self.gate.enter()?;
+        let canopy = self.canopy.get(bucket as usize).is_some_and(|c| *c);
         let pipelines =
-            build_world_shader_pipeline(&self.device, targets, bucket as usize, programs)?;
+            build_world_shader_pipeline(&self.device, targets, bucket as usize, programs, canopy)?;
         Ok(PreparedPipelines::new(PreparedWorldShader {
             gate: self.gate.clone(),
             targets,

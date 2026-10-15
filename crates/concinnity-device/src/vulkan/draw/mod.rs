@@ -137,7 +137,9 @@ impl VkContext {
             GpuDrawArgs, GpuObjectData, albedo_pool_index, draw_args_bucket_bits, draw_args_flags,
             normal_pool_index, pack_skinned_record,
         };
-        use concinnity_core::render::record_pack::{PackView, StaticPack, pool_object_record};
+        use concinnity_core::render::record_pack::{
+            PackView, StaticPack, draw_bucket, pool_object_record,
+        };
         let texture_count = self.scene.textures.len() as u32;
         let record_stride = std::mem::size_of::<GpuObjectData>();
         let args_stride = std::mem::size_of::<GpuDrawArgs>();
@@ -183,6 +185,7 @@ impl VkContext {
                     cam_pos,
                     mesh_glass_active,
                     horizon,
+                    canopy_twin: self.cull.world_pipelines.canopy_twin(),
                 },
                 &|obj| pool_object_record(obj, texture_count),
             ),
@@ -204,6 +207,7 @@ impl VkContext {
         // one draws unconditionally; a freed slot's `resident` clear disables
         // it, and the cull kernel skips a disabled record's stale object.
         let runtime_base = self.runtime_record_base();
+        let canopy_twin = self.cull.world_pipelines.canopy_twin();
         let n_resident_runtime = self.for_each_runtime_record(|k, i, obj| {
             objects.write_val(
                 (runtime_base + k) * record_stride,
@@ -224,7 +228,7 @@ impl VkContext {
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | draw_args_bucket_bits(obj.shader_bucket)
+                    | draw_args_bucket_bits(draw_bucket(obj, cam_pos, canopy_twin))
                     | model_history.draw_flags(runtime_base + k, i),
             };
             args.write_val((runtime_base + k) * args_stride, &rec);

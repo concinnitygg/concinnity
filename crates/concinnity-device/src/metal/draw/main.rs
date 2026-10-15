@@ -755,6 +755,11 @@ impl MtlContext {
         let override_holder;
         let bucket_icbs: &[Retained<_>] = match icb_override {
             Some(icb) => {
+                // Every record of the mirror stream draws under one program,
+                // which must shade the far bands the canopy twin otherwise does.
+                if let Some(twin) = self.cull.mirror_canopy_pipeline() {
+                    enc.set_pipeline(twin);
+                }
                 override_holder = [objc2::Message::retain(icb)];
                 &override_holder
             }

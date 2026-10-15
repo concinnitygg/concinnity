@@ -5,7 +5,8 @@
 use ash::vk;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend_init::WorldShader;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::world_pipelines::{BucketPlan, BucketSource, WorldPipelines};
 
 use super::CullPlan;
 use crate::vulkan::context::{VkDescriptors, VkSceneAssets, VkTargets};
@@ -162,8 +163,13 @@ pub(super) fn build_bindless_pass(
             hot_reload,
             template_generation: 0,
         };
+        let default_source = BucketSource {
+            programs: world_shaders[0].programs,
+            deferred: false,
+            canopy: false,
+        };
         let pipelines =
-            build_bucket_pipeline(device, bucket_targets, 0, world_shaders[0], &engine_spv)?;
+            build_bucket_pipeline(device, bucket_targets, 0, &default_source, &engine_spv)?;
 
         // Per-frame GpuObjectData storage buffers, persistently mapped.
         // Sized for `n_cull` so the instanced merge's records fit past the
@@ -244,6 +250,7 @@ pub(super) fn build_bindless_pass(
             BindlessSpv {
                 vert: Vec::new(),
                 frag: Vec::new(),
+                canopy_frag: Vec::new(),
                 prepass_vert: Vec::new(),
                 prepass_frag: Vec::new(),
             },
@@ -267,27 +274,19 @@ pub(super) fn build_bindless_pass(
     })
 }
 
-// Material-referenced shaders (ShaderHandle 1..) each get their own main-pass
-// and pre-pass pipelines, so their draws route into their own region of the
-// GPU-culled command buffer.
+// Material-referenced shaders (ShaderHandle 1..), and the default's canopy
+// twin, each get their own main-pass and pre-pass pipelines, so their draws
+// route into their own region of the GPU-culled command buffer.
 pub(super) fn build_world_pipelines(
     gpu: &InitGpu<'_>,
     bindless: &BindlessPass,
     world_shaders: &[WorldShader<'_>],
-) -> RenderResult<Vec<Option<BucketPipelines>>> {
-    let bucket_shaders = world_shaders.get(1..).unwrap_or(&[]);
-    let Some(targets) = bindless
-        .bucket_targets
-        .filter(|_| !bucket_shaders.is_empty())
-    else {
-        return Ok(Vec::new());
+) -> RenderResult<WorldPipelines<BucketPipelines>> {
+    let plan = BucketPlan::new(world_shaders)?;
+    let Some(targets) = bindless.bucket_targets.filter(|_| !plan.extra().is_empty()) else {
+        return Ok(WorldPipelines::default());
     };
-    let max = render_types::MAX_SHADER_BUCKETS;
-    if bucket_shaders.len() + 1 > max {
-        return Err(RenderError::Other(format!(
-            "world declares {} Shaders but at most {max} can be routed",
-            bucket_shaders.len() + 1
-        )));
-    }
-    build_world_pipeline_table(&gpu.hw.device, targets, bucket_shaders, &bindless.main_spv)
+    WorldPipelines::build(&plan, |bucket, source| {
+        build_bucket_pipeline(&gpu.hw.device, targets, bucket, source, &bindless.main_spv)
+    })
 }

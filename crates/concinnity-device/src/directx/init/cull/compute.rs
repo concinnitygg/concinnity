@@ -89,7 +89,7 @@ pub(super) fn build_compute_cull(
 
     let draw_args_size =
         align256((n_cull * std::mem::size_of::<render_types::GpuDrawArgs>()) as u64);
-    let indirect_size = indirect_buffer_size(1 + bindless.world_pipelines.len(), n_cull);
+    let indirect_size = indirect_buffer_size(bindless.world_pipelines.bucket_count(), n_cull);
     // Always allocated when the cull path is active (matches Metal); resting
     // state `UAV` so it binds as a root UAV with no transition.
     let status_size = status_buffer_size(n_cull);

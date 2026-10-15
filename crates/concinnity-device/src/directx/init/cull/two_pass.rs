@@ -43,7 +43,7 @@ pub(super) fn build_two_pass_cull(
         gpu.hw.info_queue.as_ref(),
         create_cull_pso(device, crs, &cs2),
     )?;
-    let indirect_size = indirect_buffer_size(1 + bindless.world_pipelines.len(), plan.n_cull);
+    let indirect_size = indirect_buffer_size(bindless.world_pipelines.bucket_count(), plan.n_cull);
     // One per frame plus the reserved reflection-probe capture slot, matching
     // the phase-1 indirect buffers.
     let mut indirect_buffers: Vec<ID3D12Resource> = Vec::with_capacity(gpu.hw.frames() + 1);

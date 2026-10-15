@@ -115,6 +115,10 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         program: &shared::MAIN_BINDLESS_FRAG,
         registers: MAIN_BINDLESS_REGISTERS,
     },
+    DxilAbi {
+        program: &shared::MAIN_BINDLESS_CANOPY_FRAG,
+        registers: MAIN_BINDLESS_REGISTERS,
+    },
     // The draw cull. Its registers are pinned in the source because declaration
     // order would hand `cull_status` u0 and `commands` u1, the reverse of what
     // `directx/cull.rs` binds; the shadow variant declares no status or Hi-Z.
@@ -905,6 +909,44 @@ impl MetalAbi {
     }
 }
 
+// The bindless main fragment's discrete slots, both variants.
+const MAIN_BINDLESS_SLOTS: &[(&str, &str)] = &[
+    ("view_cb", "buffer(0)"),
+    ("lights_cb", "buffer(4)"),
+    ("shadow_cb", "buffer(5)"),
+    ("probe_set_cb", "buffer(6)"),
+    ("probe_records_sb", "buffer(15)"),
+    ("spvDescriptorSet1", "buffer(7)"),
+    ("local_lights_sb", "buffer(8)"),
+    ("objects_sb", "buffer(9)"),
+    ("spvDescriptorSet2", "buffer(10)"),
+    ("cluster_cb", "buffer(11)"),
+    ("cluster_list_sb", "buffer(12)"),
+    ("spot_shadows_sb", "buffer(13)"),
+    ("area_lights_sb", "buffer(14)"),
+];
+
+// The far-field canopy's block and view tables, read by the canopy variant.
+const CANOPY_SLOTS: &[(&str, &str)] = &[
+    ("canopy_cb", "buffer(21)"),
+    ("canopy_tables_sb", "buffer(22)"),
+];
+
+const MAIN_BINDLESS_ARGUMENT_IDS: &[(&str, usize)] = &[
+    ("shadow_map", bindless_textures::SHADOW_MAP),
+    ("irradiance_cube", bindless_textures::IRRADIANCE_CUBE),
+    ("prefilter_cube", bindless_textures::PREFILTER_CUBE),
+    ("ssao_tex", bindless_textures::SSAO),
+    ("probe_cubes", bindless_textures::PROBE_CUBES),
+    ("spot_shadow_map", bindless_textures::SPOT_SHADOW_MAP),
+    ("ltc_matrix", bindless_textures::LTC_MATRIX),
+    ("ltc_magnitude", bindless_textures::LTC_MAGNITUDE),
+    ("tex_pool", bindless_textures::pool(0)),
+    ("tex_sampler", 0),
+    ("shadow_sampler", 1),
+    ("cube_sampler", 2),
+];
+
 const METAL_ENTRY_ABI: &[MetalAbi] = &[
     // The draw cull's decision half. Its buffers are pinned by register() and
     // the Hi-Z texture takes texture(0) from declaration order; the slots are
@@ -1153,40 +1195,17 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     // ids inside the texture one are where `metal/cull.rs` writes each member:
     // the fixed shadow / IBL / SSAO / probe / spot / LTC members first, then
     // the unsized pool. `EngineSamplers` is written 0..2 by
-    // `build_bindless_sampler_args`.
+    // `build_bindless_sampler_args`. Only the canopy variant reads the canopy
+    // block and its view tables.
     MetalAbi {
         program: &shared::MAIN_BINDLESS_FRAG,
-        slots: &[&[
-            ("view_cb", "buffer(0)"),
-            ("lights_cb", "buffer(4)"),
-            ("shadow_cb", "buffer(5)"),
-            ("probe_set_cb", "buffer(6)"),
-            ("probe_records_sb", "buffer(15)"),
-            ("spvDescriptorSet1", "buffer(7)"),
-            ("local_lights_sb", "buffer(8)"),
-            ("objects_sb", "buffer(9)"),
-            ("spvDescriptorSet2", "buffer(10)"),
-            ("cluster_cb", "buffer(11)"),
-            ("cluster_list_sb", "buffer(12)"),
-            ("spot_shadows_sb", "buffer(13)"),
-            ("area_lights_sb", "buffer(14)"),
-            ("canopy_cb", "buffer(21)"),
-            ("canopy_tables_sb", "buffer(22)"),
-        ]],
-        argument_ids: &[
-            ("shadow_map", bindless_textures::SHADOW_MAP),
-            ("irradiance_cube", bindless_textures::IRRADIANCE_CUBE),
-            ("prefilter_cube", bindless_textures::PREFILTER_CUBE),
-            ("ssao_tex", bindless_textures::SSAO),
-            ("probe_cubes", bindless_textures::PROBE_CUBES),
-            ("spot_shadow_map", bindless_textures::SPOT_SHADOW_MAP),
-            ("ltc_matrix", bindless_textures::LTC_MATRIX),
-            ("ltc_magnitude", bindless_textures::LTC_MAGNITUDE),
-            ("tex_pool", bindless_textures::pool(0)),
-            ("tex_sampler", 0),
-            ("shadow_sampler", 1),
-            ("cube_sampler", 2),
-        ],
+        slots: &[MAIN_BINDLESS_SLOTS],
+        argument_ids: MAIN_BINDLESS_ARGUMENT_IDS,
+    },
+    MetalAbi {
+        program: &shared::MAIN_BINDLESS_CANOPY_FRAG,
+        slots: &[MAIN_BINDLESS_SLOTS, CANOPY_SLOTS],
+        argument_ids: MAIN_BINDLESS_ARGUMENT_IDS,
     },
     MetalAbi {
         program: &shared::MAIN_BINDLESS_VERT,

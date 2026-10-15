@@ -336,6 +336,7 @@ mod backend_handoff;
 mod blob_release;
 pub(crate) mod character_shape;
 mod draw_geometry;
+mod far_band_shaders;
 mod frame;
 pub(crate) mod frame_policy;
 mod grass_benders;

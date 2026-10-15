@@ -543,7 +543,7 @@ impl VkContext {
             storage,
         } = view;
         let (Some(pipeline), Some(layout)) = (
-            self.cull.bindless_pipeline.as_ref(),
+            self.face_bindless_pipeline(),
             self.cull.bindless_pipeline_layout.as_ref(),
         ) else {
             return;

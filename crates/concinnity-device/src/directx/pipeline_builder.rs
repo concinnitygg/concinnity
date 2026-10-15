@@ -42,6 +42,8 @@ pub(super) struct DxPipelineBuilder {
     pub world: Option<Targets<BucketRootSigs>>,
     // `None` when the world declares no volume.
     pub volumes: Option<Targets<VolumeRootSigs>>,
+    // Per bucket: its main fragment compiles the far-field canopy.
+    pub canopy: Vec<bool>,
 }
 
 // A world Shader's main-pass and pre-pass PSOs and what they were built for.
@@ -77,6 +79,7 @@ impl PipelineBuilder for DxPipelineBuilder {
             },
             bucket as usize,
             programs,
+            self.canopy.get(bucket as usize).is_some_and(|c| *c),
         )?;
         Ok(PreparedPipelines::new(PreparedWorldShader {
             targets,

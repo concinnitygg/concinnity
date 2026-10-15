@@ -372,6 +372,21 @@ impl DxContext {
         self.cull.world_pipelines.bucket_count()
     }
 
+    // The main PSO a probe or planar face draws its one command stream under:
+    // the canopy twin's when the world has one, so a far band seen in a face
+    // keeps its canopy, else the default's.
+    pub(in crate::directx) fn face_bindless_pso(&self) -> Option<&ID3D12PipelineState> {
+        let twin = self
+            .cull
+            .world_pipelines
+            .canopy_twin()
+            .and_then(|twin| self.cull.world_pipelines.get(twin as usize));
+        match twin {
+            Some(psos) => Some(&psos.main),
+            None => self.cull.main_bindless_pso.as_ref(),
+        }
+    }
+
     // Byte offset of shader bucket `b`'s command region in an indirect buffer.
     pub(in crate::directx) fn bucket_region_offset(&self, bucket: usize) -> u64 {
         (bucket * self.cull.bucket_stride) as u64 * INDIRECT_COMMAND_STRIDE as u64
@@ -409,7 +424,9 @@ impl DxContext {
             GpuDrawArgs, GpuObjectData, albedo_pool_index, draw_args_bucket_bits, draw_args_flags,
             normal_pool_index, pack_skinned_record,
         };
-        use concinnity_core::render::record_pack::{PackView, StaticPack, pool_object_record};
+        use concinnity_core::render::record_pack::{
+            PackView, StaticPack, draw_bucket, pool_object_record,
+        };
         let (Some(&objects), Some(&args)) = (
             self.cull.object_buffer_ptrs.get(slot),
             self.cull.draw_args_buffer_ptrs.get(slot),
@@ -463,6 +480,7 @@ impl DxContext {
                     .state
                     .horizon_occluder
                     .and_then(|o| o.seen_from(cam_pos)),
+                canopy_twin: self.cull.world_pipelines.canopy_twin(),
             },
             &|obj| pool_object_record(obj, texture_count),
         );
@@ -477,6 +495,7 @@ impl DxContext {
         // `resident` clear disables it, and the cull kernel never reads a disabled
         // record's stale object.
         let runtime_base = self.runtime_record_base();
+        let canopy_twin = self.cull.world_pipelines.canopy_twin();
         let n_resident_runtime = self.for_each_runtime_record(|k, i, obj| {
             let Some((rec, arg)) = records
                 .get_mut(runtime_base + k)
@@ -500,7 +519,7 @@ impl DxContext {
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | draw_args_bucket_bits(obj.shader_bucket)
+                    | draw_args_bucket_bits(draw_bucket(obj, cam_pos, canopy_twin))
                     | model_history.draw_flags(runtime_base + k, i),
             };
         });

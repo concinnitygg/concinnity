@@ -741,11 +741,7 @@ impl DxContext {
                 bottom: height as i32,
             },
         };
-        let bindless_pso = self
-            .cull
-            .main_bindless_pso
-            .as_ref()
-            .expect("bindless PSO is live");
+        let bindless_pso = self.face_bindless_pso().expect("bindless PSO is live");
         let bindless_root = self
             .cull
             .main_bindless_root_sig

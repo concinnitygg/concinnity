@@ -23,6 +23,10 @@ pub const FRAGMENT_MARKER: &str = "{SURFACE_FRAGMENT}";
 /// The gate the G-buffer pre-pass entries compile under.
 pub const PREPASS_GATE: &str = "SURFACE_PREPASS";
 
+/// The gate the main fragment compiles under to shade a far band as grass
+/// canopy. Without it the band is a constant 0 and the canopy code folds away.
+pub const CANOPY_GATE: &str = "SURFACE_CANOPY";
+
 /// One entry point of one main-pass file. The vertex entries carry the
 /// world's `transform`, the main fragment entry its `shade`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +51,12 @@ pub const MAIN_FRAGMENT: Program = Program {
     entry: "fragment_main_bindless",
     gates: &[],
 };
+/// The bindless main-pass fragment entry that shades a far band as canopy.
+pub const MAIN_FRAGMENT_CANOPY: Program = Program {
+    file: "main_bindless.hlsl",
+    entry: "fragment_main_bindless",
+    gates: &[CANOPY_GATE],
+};
 /// The G-buffer pre-pass vertex entry.
 pub const PREPASS_VERTEX: Program = Program {
     file: "main_bindless.hlsl",
@@ -60,20 +70,29 @@ pub const PREPASS_FRAGMENT: Program = Program {
     gates: &[PREPASS_GATE],
 };
 
-/// Every entry a world Shader compiles, on every host: the bindless main pair
-/// and the pre-pass pair.
-pub const ALL: &[Program] = &[MAIN_VERTEX, MAIN_FRAGMENT, PREPASS_VERTEX, PREPASS_FRAGMENT];
+/// Every program a world Shader compiles, on every host: the bindless main
+/// pair, the canopy main fragment and the pre-pass pair.
+pub const ALL: &[Program] = &[
+    MAIN_VERTEX,
+    MAIN_FRAGMENT,
+    MAIN_FRAGMENT_CANOPY,
+    PREPASS_VERTEX,
+    PREPASS_FRAGMENT,
+];
+
+/// The main fragment, with or without the far-field canopy.
+pub fn main_fragment(canopy: bool) -> &'static Program {
+    match canopy {
+        true => &MAIN_FRAGMENT_CANOPY,
+        false => &MAIN_FRAGMENT,
+    }
+}
 
 impl Program {
     /// The variant defines: each gate as `1`.
     pub fn defines(&self) -> Vec<(&'static str, &'static str)> {
         self.gates.iter().map(|g| (*g, "1")).collect()
     }
-}
-
-/// The entry named `entry`.
-pub fn program(entry: &str) -> Option<&'static Program> {
-    ALL.iter().find(|p| p.entry == entry)
 }
 
 /// The world's two files.
@@ -157,7 +176,7 @@ mod tests {
             let rows: Vec<Row> = ALL
                 .iter()
                 .map(|p| Row {
-                    label: String::from(p.entry),
+                    label: alloc::format!("{}{:?}", p.entry, p.gates),
                     file: p.file,
                     entry: p.entry,
                     defines: p.defines(),
@@ -168,62 +187,73 @@ mod tests {
         }
     }
 
-    // The main pair and the pre-pass pair are the whole table, and only the
-    // pre-pass compiles under its gate.
+    // The main pair, the canopy fragment and the pre-pass pair are the whole
+    // table, each gated only by what it compiles.
     #[test]
-    fn the_two_pairs_are_the_whole_table() {
-        let entries: Vec<&str> = ALL.iter().map(|p| p.entry).collect();
+    fn the_main_pair_canopy_fragment_and_prepass_pair_are_the_whole_table() {
+        let rows: Vec<(&str, &[&str])> = ALL.iter().map(|p| (p.entry, p.gates)).collect();
         assert_eq!(
-            entries,
+            rows,
             [
-                "vertex_main_bindless",
-                "fragment_main_bindless",
-                "vertex_prepass_bindless",
-                "fragment_prepass_bindless",
+                ("vertex_main_bindless", &[][..]),
+                ("fragment_main_bindless", &[][..]),
+                ("fragment_main_bindless", &[CANOPY_GATE][..]),
+                ("vertex_prepass_bindless", &[PREPASS_GATE][..]),
+                ("fragment_prepass_bindless", &[PREPASS_GATE][..]),
             ]
         );
-        for p in ALL {
-            let gated = p.entry.contains("prepass");
-            assert_eq!(p.gates == [PREPASS_GATE], gated, "{}", p.entry);
-            assert_eq!(p.gates.is_empty(), !gated, "{}", p.entry);
-        }
     }
 
     // The pre-pass runs the world's vertex hook, so the world's vertex file is
     // in its text, and the gate leads the text past the backend define.
     #[test]
     fn the_prepass_carries_the_world_vertex_hook_under_its_gate() {
-        for entry in ["vertex_prepass_bindless", "fragment_prepass_bindless"] {
-            let src = source(
-                program(entry).unwrap(),
-                Platform::Vulkan,
-                &vertex_and_fragment(),
-            );
+        for program in [&PREPASS_VERTEX, &PREPASS_FRAGMENT] {
+            let src = source(program, Platform::Vulkan, &vertex_and_fragment());
             assert!(src.starts_with("#define CN_BACKEND_VULKAN 1\n#define SURFACE_PREPASS 1\n"));
             assert!(src.contains("VertexOut transform(float4x4 m,"));
-            assert!(src.contains(&alloc::format!("{entry}(")));
+            assert!(src.contains(&alloc::format!("{}(", program.entry)));
         }
         let main = source(&MAIN_VERTEX, Platform::Vulkan, &vertex_and_fragment());
         assert!(!main.contains("#define SURFACE_PREPASS"));
     }
 
+    // Only the canopy fragment compiles the canopy, and it differs from the
+    // plain fragment by its gate alone.
     #[test]
-    fn every_entry_is_found_by_name_and_names_are_unique() {
-        for p in ALL {
-            assert_eq!(program(p.entry).map(|q| q.entry), Some(p.entry));
-        }
-        assert!(program("no_such_entry").is_none());
-        let mut names: Vec<&str> = ALL.iter().map(|p| p.entry).collect();
-        names.sort_unstable();
-        names.dedup();
-        assert_eq!(names.len(), ALL.len());
+    fn only_the_canopy_fragment_carries_the_canopy_gate() {
+        assert_eq!(main_fragment(false), &MAIN_FRAGMENT);
+        assert_eq!(main_fragment(true), &MAIN_FRAGMENT_CANOPY);
+        let plain = source(&MAIN_FRAGMENT, Platform::Metal, &fragment_only());
+        let canopy = source(&MAIN_FRAGMENT_CANOPY, Platform::Metal, &fragment_only());
+        assert!(!plain.contains("#define SURFACE_CANOPY"));
+        assert!(canopy.contains("#define SURFACE_CANOPY 1\n"));
+        let body = |src: &str| -> Vec<String> {
+            src.lines()
+                .filter(|l| !l.starts_with("#line ") && !l.starts_with("#define "))
+                .map(String::from)
+                .collect()
+        };
+        assert_eq!(
+            body(&canopy),
+            body(&plain),
+            "the gate is the only difference"
+        );
+    }
+
+    #[test]
+    fn programs_are_unique_by_entry_and_gates() {
+        let mut keys: Vec<(&str, &[&str])> = ALL.iter().map(|p| (p.entry, p.gates)).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), ALL.len());
     }
 
     // The fragment file replaces the engine's default `shade`; an undeclared
     // vertex file leaves the default `transform` in place.
     #[test]
     fn the_world_fragment_replaces_the_default_and_the_vertex_default_stays() {
-        let frag = program("fragment_main_bindless").unwrap();
+        let frag = &MAIN_FRAGMENT;
         let src = source(frag, Platform::Metal, &fragment_only());
         assert!(src.contains(SHADE));
         assert!(
@@ -242,10 +272,8 @@ mod tests {
     // land in it and both stages assemble to identical text.
     #[test]
     fn the_pair_assembles_to_one_text() {
-        let vert = program("vertex_main_bindless").unwrap();
-        let frag = program("fragment_main_bindless").unwrap();
-        let a = source(vert, Platform::Metal, &fragment_only());
-        let b = source(frag, Platform::Metal, &fragment_only());
+        let a = source(&MAIN_VERTEX, Platform::Metal, &fragment_only());
+        let b = source(&MAIN_FRAGMENT, Platform::Metal, &fragment_only());
         assert_eq!(a, b);
         assert!(a.contains(SHADE));
         assert!(a.starts_with("#define CN_BACKEND_METAL 1\n"));

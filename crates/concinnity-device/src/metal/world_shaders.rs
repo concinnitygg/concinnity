@@ -26,13 +26,17 @@ impl MtlContext {
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<()> {
         self.cull.world_pipelines.slot(bucket)?;
-        let pipelines = match world_shader_for(prepared, self.bucket_build()) {
+        let canopy = self.cull.world_pipelines.canopy(bucket as usize);
+        let prepared =
+            world_shader_for(prepared, self.bucket_build()).filter(|p| p.canopy == canopy);
+        let pipelines = match prepared {
             Some(pipelines) => pipelines,
             None => build_bucket_pipelines(
                 &self.hw.device,
                 &make_vertex_descriptor(),
                 bucket as usize,
                 Some(programs),
+                canopy,
                 self.bucket_build(),
             )?,
         };
@@ -54,6 +58,7 @@ impl MtlContext {
         if bucket == 0 {
             let prepared = world_shader_for(prepared, self.bucket_build());
             self.update_default_world_shader(programs, prepared)?;
+            self.update_canopy_twin(programs)?;
             return Ok(PipelineSwap::Swapped);
         }
         self.cull.world_pipelines.slot(bucket)?;
@@ -65,6 +70,7 @@ impl MtlContext {
             &self.hw.device,
             bucket as usize,
             Some(programs),
+            self.cull.world_pipelines.canopy(bucket as usize),
             build,
             self.cull.world_pipelines.get(bucket as usize),
             world_shader_for(prepared, build),
@@ -73,12 +79,36 @@ impl MtlContext {
         Ok(PipelineSwap::Swapped)
     }
 
+    // Rebuild the default Shader's canopy twin from its fresh programs, when
+    // the world has one. Built here rather than on a worker: only a hot reload
+    // of the default Shader reaches it.
+    fn update_canopy_twin(
+        &mut self,
+        programs: &concinnity_core::components::ShaderPrograms,
+    ) -> RenderResult<()> {
+        let Some(twin) = self.cull.world_pipelines.canopy_twin() else {
+            return Ok(());
+        };
+        let pipelines = replacement(
+            &self.hw.device,
+            twin as usize,
+            Some(programs),
+            true,
+            self.bucket_build(),
+            self.cull.world_pipelines.get(twin as usize),
+            None,
+        )?;
+        self.cull.world_pipelines.install(twin, pipelines)?;
+        Ok(())
+    }
+
     // A builder for this context's world Shader and volume pipelines, for a
     // streaming or hot-reload worker.
     pub(super) fn pipeline_builder(&self) -> Arc<dyn PipelineBuilder> {
         Arc::new(MtlPipelineBuilder {
             device: self.hw.device.clone(),
             targets: self.bucket_build(),
+            canopy: self.cull.world_pipelines.canopy_flags(),
         })
     }
 

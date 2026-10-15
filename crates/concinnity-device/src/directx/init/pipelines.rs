@@ -8,9 +8,10 @@
 //! bloom/TAA/SSAO live in `directx/post/`; the GPU-cull compute pipeline lives
 //! in `directx/cull.rs`.
 
-use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::shader_programs::surface;
 use concinnity_core::render::shadow_bias;
+use concinnity_core::render::world_pipelines::BucketSource;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -24,19 +25,19 @@ use crate::directx::texture::HDR_FORMAT;
 
 // Shader compilation
 
-// The world Shader's program for `entry`, as a DXIL container: the cook's
-// artifact when the engine template still matches, else a compile here. The
-// DXIL pool is unbounded, so no pool size reaches the text.
+// The world Shader's `program`, as a DXIL container: the cook's artifact when
+// the engine template still matches, else a compile here. The DXIL pool is
+// unbounded, so no pool size reaches the text.
 pub(in crate::directx) fn world_entry(
     world: &concinnity_core::components::ShaderPrograms,
-    entry: &str,
+    program: &surface::Program,
     hot_reload: bool,
 ) -> RenderResult<Vec<u8>> {
     let req = crate::shader::surface_source::Request {
         platform: concinnity_core::platform::Platform::DirectX,
         hot_reload,
     };
-    crate::shader::surface_source::artifact(world, entry, &req, crate::shader::compile::cooked)
+    crate::shader::surface_source::artifact(world, program, &req, crate::shader::compile::cooked)
         .map(|c| c.into_owned())
 }
 
@@ -50,6 +51,7 @@ pub(in crate::directx) fn compile_main_bindless_shaders(
     Ok(BindlessMainShaders {
         vs: builtin_shaders::MAIN_BINDLESS_VERT.compile(hot_reload)?,
         ps: builtin_shaders::MAIN_BINDLESS_FRAG.compile(hot_reload)?,
+        canopy_ps: builtin_shaders::MAIN_BINDLESS_CANOPY_FRAG.compile(hot_reload)?,
         prepass_vs: builtin_shaders::MAIN_PREPASS_VERT.compile(hot_reload)?,
         prepass_ps: builtin_shaders::MAIN_PREPASS_FRAG.compile(hot_reload)?,
     })
@@ -246,6 +248,8 @@ pub(in crate::directx) fn create_shadow_pso(
 pub(in crate::directx) struct BindlessMainShaders {
     pub vs: Vec<u8>,
     pub ps: Vec<u8>,
+    // The main fragment that shades a far band as canopy.
+    pub canopy_ps: Vec<u8>,
     pub prepass_vs: Vec<u8>,
     pub prepass_ps: Vec<u8>,
 }
@@ -261,6 +265,8 @@ pub(in crate::directx) struct BucketPsos {
     // The world Shader the bucket compiles, `None` for the engine's own
     // programs, kept so the pre-pass can be built or rebuilt later.
     pub programs: Option<concinnity_core::components::ShaderPrograms>,
+    // The main fragment compiles the far-field canopy.
+    pub canopy: bool,
 }
 
 // The root signatures a bucket's PSOs bind: the main pass's, and the G-buffer
@@ -283,26 +289,36 @@ pub(in crate::directx) fn build_bucket_pipeline(
     info_queue: Option<&ID3D12InfoQueue>,
     targets: BucketPipelineTargets<'_>,
     bucket: usize,
-    shader: backend_init::WorldShader<'_>,
+    source: &BucketSource<'_>,
 ) -> RenderResult<BucketPsos> {
-    match shader.programs {
-        Some(programs) => {
-            build_world_shader_pso(device, info_queue, targets.world(), bucket, programs)
-        }
+    match source.programs {
+        Some(programs) => build_world_shader_pso(
+            device,
+            info_queue,
+            targets.world(),
+            bucket,
+            programs,
+            source.canopy,
+        ),
         None => {
             let engine = targets.engine_default;
-            create_bucket_psos(
+            let mut psos = create_bucket_psos(
                 device,
                 info_queue,
                 targets.world(),
                 bucket,
                 BucketStages {
                     vs: &engine.vs,
-                    ps: &engine.ps,
+                    ps: match source.canopy {
+                        true => &engine.canopy_ps,
+                        false => &engine.ps,
+                    },
                     prepass_vs: &engine.prepass_vs,
                     prepass_ps: &engine.prepass_ps,
                 },
-            )
+            )?;
+            psos.canopy = source.canopy;
+            Ok(psos)
         }
     }
 }
@@ -314,12 +330,10 @@ pub(in crate::directx) fn build_world_shader_pso(
     targets: WorldPsoTargets<'_>,
     bucket: usize,
     programs: &concinnity_core::components::ShaderPrograms,
+    canopy: bool,
 ) -> RenderResult<BucketPsos> {
-    use concinnity_core::render::shader_programs::surface;
-    let entry =
-        |program: surface::Program| world_entry(programs, program.entry, targets.hot_reload);
-    let vs = entry(surface::MAIN_VERTEX)?;
-    let ps = entry(surface::MAIN_FRAGMENT)?;
+    let vs = world_entry(programs, &surface::MAIN_VERTEX, targets.hot_reload)?;
+    let ps = world_entry(programs, surface::main_fragment(canopy), targets.hot_reload)?;
     // A pre-pass that does not compile costs the bucket its G-buffer draws,
     // not its shading: `create_bucket_psos` warns over the empty stages.
     let (prepass_vs, prepass_ps) = match targets.root_sigs.prepass {
@@ -339,6 +353,7 @@ pub(in crate::directx) fn build_world_shader_pso(
         },
     )?;
     psos.programs = Some(programs.clone());
+    psos.canopy = canopy;
     Ok(psos)
 }
 
@@ -349,9 +364,8 @@ fn world_prepass_stages(
     hot_reload: bool,
     bucket: usize,
 ) -> (Vec<u8>, Vec<u8>) {
-    use concinnity_core::render::shader_programs::surface;
-    let stages = world_entry(programs, surface::PREPASS_VERTEX.entry, hot_reload).and_then(|vs| {
-        world_entry(programs, surface::PREPASS_FRAGMENT.entry, hot_reload).map(|ps| (vs, ps))
+    let stages = world_entry(programs, &surface::PREPASS_VERTEX, hot_reload).and_then(|vs| {
+        world_entry(programs, &surface::PREPASS_FRAGMENT, hot_reload).map(|ps| (vs, ps))
     });
     stages.unwrap_or_else(|e| {
         tracing::warn!("shader bucket {bucket}'s G-buffer pre-pass did not build: {e}");
@@ -456,6 +470,7 @@ fn create_bucket_psos(
         main,
         prepass,
         programs: None,
+        canopy: false,
     })
 }
 
@@ -485,32 +500,6 @@ pub(in crate::directx) struct WorldPsoTargets<'a> {
     pub root_sigs: &'a BucketRootSigs,
     pub msaa_samples: u32,
     pub hot_reload: bool,
-}
-
-// Build the per-bucket pipeline table from the world's material-referenced
-// shaders. Index `b` holds bucket `b + 1`'s pipeline; `None` marks a bucket the
-// streaming pump installs later (its Shader is owned by a scene that has not
-// pinned, so `decode_shaders` handed over an all-empty payload).
-pub(super) fn build_world_pipeline_table(
-    device: &ID3D12Device,
-    info_queue: Option<&ID3D12InfoQueue>,
-    targets: BucketPipelineTargets<'_>,
-    bucket_shaders: &[backend_init::WorldShader<'_>],
-) -> RenderResult<Vec<Option<BucketPsos>>> {
-    let mut table = Vec::with_capacity(bucket_shaders.len());
-    for (i, shader) in bucket_shaders.iter().enumerate() {
-        let bucket = i + 1;
-        // A bucket whose Shader a non-start scene owns has no payload yet; the
-        // streaming pump installs it when that scene pins.
-        if shader.deferred {
-            table.push(None);
-            continue;
-        }
-        table.push(Some(build_bucket_pipeline(
-            device, info_queue, targets, bucket, *shader,
-        )?));
-    }
-    Ok(table)
 }
 
 #[cfg(test)]

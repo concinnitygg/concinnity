@@ -96,6 +96,12 @@ pub(super) static MAIN_BINDLESS_FRAG: Program = Program {
     splices: &[],
 };
 
+// The fragment that shades a far band as canopy.
+pub(super) static MAIN_BINDLESS_CANOPY_FRAG: Program = Program {
+    row: &shared::MAIN_BINDLESS_CANOPY_FRAG,
+    splices: &[],
+};
+
 // The same fragment compiled around a world `shade` that samples only the last
 // texture member, through the last sampler.
 pub(super) static MAIN_BINDLESS_FRAG_LATE_MEMBER_SHADE: Program = Program {

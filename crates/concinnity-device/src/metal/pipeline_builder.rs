@@ -24,6 +24,8 @@ use super::raymarch::{VolumePipelines, build_volume_pipelines};
 pub(super) struct MtlPipelineBuilder {
     pub device: Retained<ProtocolObject<dyn MTLDevice>>,
     pub targets: BucketBuild,
+    // Per bucket: its main fragment compiles the far-field canopy.
+    pub canopy: Vec<bool>,
 }
 
 // A world Shader's main-pass and pre-pass pipelines and what they were built
@@ -52,6 +54,7 @@ impl PipelineBuilder for MtlPipelineBuilder {
                 &make_vertex_descriptor(),
                 bucket as usize,
                 Some(programs),
+                self.canopy.get(bucket as usize).is_some_and(|c| *c),
                 self.targets,
             )
         })?;
@@ -140,6 +143,7 @@ mod tests {
                 main: pipeline.clone(),
                 prepass: Some(pipeline.clone()),
                 programs: None,
+                canopy: false,
             },
         }))
     }

@@ -19,6 +19,39 @@ pub struct PackView {
     /// A planet's horizon seen from the eye: a bounded draw wholly behind it
     /// is disabled in every pass.
     pub horizon: Option<Horizon>,
+    /// The bucket the default Shader's far-band draws route to (see
+    /// [`crate::render::world_pipelines`]); `None` when the world has none.
+    pub canopy_twin: Option<u32>,
+}
+
+/// The shader bucket `obj` draws under from `cam_pos`: its own, except that a
+/// default-Shader draw with a far band reaching past `FarFieldTint::start` goes
+/// to `canopy_twin`. A draw wholly nearer than the band stays on the program
+/// without the canopy. An unbounded draw counts as reaching it.
+pub fn draw_bucket(obj: &DrawObject, cam_pos: [f32; 3], canopy_twin: Option<u32>) -> u32 {
+    match canopy_twin {
+        Some(twin) if obj.shader_bucket == 0 && reaches_far_band(obj, cam_pos) => twin,
+        _ => obj.shader_bucket,
+    }
+}
+
+fn reaches_far_band(obj: &DrawObject, cam_pos: [f32; 3]) -> bool {
+    let band = obj.material.far_field;
+    if band.end <= 0.0 {
+        return false;
+    }
+    if !obj.cullable() {
+        return true;
+    }
+    let farthest_sq: f32 = (0..3)
+        .map(|i| {
+            let d = (cam_pos[i] - obj.bb_min[i])
+                .abs()
+                .max((obj.bb_max[i] - cam_pos[i]).abs());
+            d * d
+        })
+        .sum();
+    farthest_sq > band.start * band.start
 }
 
 /// One pack of the static draws: draw `i` fills record `i` of both outputs,
@@ -133,7 +166,7 @@ fn draw_args(
         // The shader bucket rides the upper flag bits so the cull kernel can
         // route the record's command into that bucket's region.
         flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-            | draw_args_bucket_bits(obj.shader_bucket)
+            | draw_args_bucket_bits(draw_bucket(obj, view.cam_pos, view.canopy_twin))
             | history.draw_flags(index, index),
     }
 }
@@ -207,6 +240,7 @@ mod tests {
             cam_pos: [0.0, 0.0, 0.0],
             mesh_glass_active: true,
             horizon: None,
+            canopy_twin: None,
         }
     }
 
@@ -280,6 +314,69 @@ mod tests {
             .map(|(i, o)| draw_args(o, i, &view, &mut window).flags & DrawArgsFlags::ENABLED != 0)
             .collect();
         assert_eq!(enabled, vec![false, true, true]);
+    }
+
+    // A ground draw 100 m wide whose far band starts at 60 m.
+    fn far_banded(center_z: f32) -> DrawObject {
+        use crate::gfx::render_types::FarFieldTint;
+        let mut obj = objects(1).remove(0);
+        obj.shader_bucket = 0;
+        obj.bb_min = [-50.0, 0.0, center_z - 50.0];
+        obj.bb_max = [50.0, 1.0, center_z + 50.0];
+        obj.material.far_field = FarFieldTint {
+            start: 60.0,
+            end: 120.0,
+            canopy: 1,
+        };
+        obj
+    }
+
+    // Only a default-Shader draw whose far band reaches past its start from
+    // the eye goes to the canopy twin.
+    #[test]
+    fn a_far_band_in_reach_routes_to_the_canopy_twin() {
+        let eye = [0.0, 2.0, 0.0];
+        // Its far corner is ~71 m away: past the band's start.
+        assert_eq!(draw_bucket(&far_banded(0.0), eye, Some(3)), 3);
+        // Without a twin it keeps its own bucket.
+        assert_eq!(draw_bucket(&far_banded(0.0), eye, None), 0);
+        // Wholly within 60 m of the eye: no pixel can reach the band.
+        let mut near = far_banded(0.0);
+        near.bb_min = [-20.0, 0.0, -20.0];
+        near.bb_max = [20.0, 1.0, 20.0];
+        assert_eq!(draw_bucket(&near, eye, Some(3)), 0);
+        // Unbounded: counts as reaching it.
+        near.bb_min = [f32::NAN; 3];
+        assert_eq!(draw_bucket(&near, eye, Some(3)), 3);
+    }
+
+    // A draw without a band, or under a world Shader, keeps its bucket.
+    #[test]
+    fn only_default_shader_far_bands_route_to_the_twin() {
+        use crate::gfx::render_types::FarFieldTint;
+        let eye = [0.0, 2.0, 0.0];
+        let mut plain = far_banded(500.0);
+        plain.material.far_field = FarFieldTint::NONE;
+        assert_eq!(draw_bucket(&plain, eye, Some(3)), 0);
+        let mut shaded = far_banded(500.0);
+        shaded.shader_bucket = 2;
+        assert_eq!(draw_bucket(&shaded, eye, Some(3)), 2);
+    }
+
+    // The routed bucket is what the record's flags carry.
+    #[test]
+    fn the_record_carries_the_routed_bucket() {
+        use crate::gfx::render_types::DrawArgsFlags;
+        let view = PackView {
+            cam_pos: [0.0, 2.0, 0.0],
+            canopy_twin: Some(3),
+            ..view()
+        };
+        let mut tracker = ModelHistory::new();
+        tracker.begin(HistoryMode::Untracked, 1);
+        let mut window = tracker.window();
+        let args = draw_args(&far_banded(0.0), 0, &view, &mut window);
+        assert_eq!(args.flags >> DrawArgsFlags::BUCKET_SHIFT, 3);
     }
 
     #[test]

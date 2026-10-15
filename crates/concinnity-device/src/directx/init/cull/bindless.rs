@@ -4,6 +4,7 @@
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend_init::{SceneData, WorldShader};
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::world_pipelines::{BucketPlan, WorldPipelines};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::CullPlan;
@@ -13,7 +14,7 @@ use crate::directx::error::map_hresult;
 use crate::directx::init::InitGpu;
 use crate::directx::init::pipelines::{
     BindlessMainShaders, BucketPipelineTargets, BucketPsos, BucketRootSigs, build_bucket_pipeline,
-    build_world_pipeline_table, compile_main_bindless_shaders, create_main_bindless_root_signature,
+    compile_main_bindless_shaders, create_main_bindless_root_signature,
 };
 use crate::directx::material_params::DxMaterialParams;
 
@@ -25,7 +26,7 @@ pub(super) struct BindlessPass {
     pub(super) psos: BucketPsos,
     // The cull command signature rebuilt against the pre-pass root signature.
     pub(super) prepass_cmd_sig: ID3D12CommandSignature,
-    pub(super) world_pipelines: Vec<Option<BucketPsos>>,
+    pub(super) world_pipelines: WorldPipelines<BucketPsos>,
     pub(super) shaders: BindlessMainShaders,
     pub(super) object_buffers: Vec<PooledBuffer>,
     pub(super) object_ptrs: Vec<*mut u8>,
@@ -50,11 +51,12 @@ pub(super) fn build_bindless_pass(
     let info_queue = gpu.hw.info_queue.as_ref();
     let hot_reload = gpu.hot_reload;
     let n_cull = plan.n_cull;
-    let world_default = world_shaders
-        .first()
-        .copied()
-        .ok_or_else(|| RenderError::Other("BackendInit carried no shaders".to_string()))?;
-    let bucket_shaders = world_shaders.get(1..).unwrap_or(&[]);
+    if world_shaders.is_empty() {
+        return Err(RenderError::Other(
+            "BackendInit carried no shaders".to_string(),
+        ));
+    }
+    let buckets = BucketPlan::new(world_shaders)?;
     // The GPU-driven main pass and its G-buffer pre-pass. The engine's pairs
     // are compiled regardless of the world default: they are the programs for
     // every bucket that declares no Shader, and the main pair the source of the
@@ -80,23 +82,14 @@ pub(super) fn build_bindless_pass(
         engine_default: &bindless_main_shaders,
         hot_reload,
     };
-    let psos = build_bucket_pipeline(device, info_queue, targets, 0, world_default)?;
+    let psos = build_bucket_pipeline(device, info_queue, targets, 0, &buckets.sources[0])?;
 
-    // Material-referenced shaders (ShaderHandle 1..) each get their own
-    // main-pass pipeline, so their draws route into their own region of the
-    // GPU-culled command buffer.
-    let world_pipelines = if bucket_shaders.is_empty() {
-        Vec::new()
-    } else {
-        let max = render_types::MAX_SHADER_BUCKETS;
-        if bucket_shaders.len() + 1 > max {
-            return Err(RenderError::Other(format!(
-                "world declares {} Shaders but at most {max} can be routed",
-                bucket_shaders.len() + 1
-            )));
-        }
-        build_world_pipeline_table(device, info_queue, targets, bucket_shaders)?
-    };
+    // Material-referenced shaders (ShaderHandle 1..), and the default's canopy
+    // twin, each get their own main-pass pipeline, so their draws route into
+    // their own region of the GPU-culled command buffer.
+    let world_pipelines = WorldPipelines::build(&buckets, |bucket, source| {
+        build_bucket_pipeline(device, info_queue, targets, bucket, source)
+    })?;
 
     // Per-frame StructuredBuffer<GpuObjectData> upload buffers. Allocated only
     // when the world has anything to drive; rebuilt each frame in

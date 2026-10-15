@@ -12,9 +12,8 @@
 
 use ash::vk;
 use concinnity_core::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
-use concinnity_core::render::backend_init::WorldShader;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::world_pipelines::{check_rebuild, replace_bucket};
+use concinnity_core::render::world_pipelines::{BucketSource, check_rebuild, replace_bucket};
 
 use super::context::VkContext;
 use super::pipeline::{
@@ -35,7 +34,8 @@ impl VkContext {
         programs: &concinnity_core::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<()> {
-        let pipelines = self.bucket_pipelines(bucket, programs, prepared, false)?;
+        let canopy = self.cull.world_pipelines.canopy(bucket as usize);
+        let pipelines = self.bucket_pipelines(bucket, programs, canopy, prepared, false)?;
         // The displaced pipelines drop into the device's retire queue, which
         // holds them until every frame in flight that recorded against them
         // retires.
@@ -51,6 +51,7 @@ impl VkContext {
         &self,
         bucket: u32,
         programs: &concinnity_core::components::ShaderPrograms,
+        canopy: bool,
         prepared: Option<PreparedPipelines>,
         live_prepass: bool,
     ) -> RenderResult<BucketPipelines> {
@@ -61,9 +62,17 @@ impl VkContext {
         replace_bucket(
             bucket as usize,
             live_prepass,
-            world_shader_for(prepared, &self.pipeline_gate, targets),
+            world_shader_for(prepared, &self.pipeline_gate, targets).filter(|p| p.canopy == canopy),
             |p: &BucketPipelines| p.prepass.is_some(),
-            || build_world_shader_pipeline(&self.hw.device, targets, bucket as usize, programs),
+            || {
+                build_world_shader_pipeline(
+                    &self.hw.device,
+                    targets,
+                    bucket as usize,
+                    programs,
+                    canopy,
+                )
+            },
         )
     }
 
@@ -83,6 +92,7 @@ impl VkContext {
                 .bucket_pipeline_targets()
                 .and_then(|targets| world_shader_for(prepared, &self.pipeline_gate, targets));
             self.update_default_world_shader(programs, prepared)?;
+            self.update_canopy_twin(programs)?;
             return Ok(PipelineSwap::Swapped);
         }
         self.cull.world_pipelines.slot(bucket)?;
@@ -91,9 +101,27 @@ impl VkContext {
         }
         let live_prepass = (self.cull.world_pipelines.get(bucket as usize))
             .is_some_and(|live| live.prepass.is_some());
-        let pipelines = self.bucket_pipelines(bucket, programs, prepared, live_prepass)?;
+        let canopy = self.cull.world_pipelines.canopy(bucket as usize);
+        let pipelines = self.bucket_pipelines(bucket, programs, canopy, prepared, live_prepass)?;
         self.cull.world_pipelines.install(bucket, pipelines)?;
         Ok(PipelineSwap::Swapped)
+    }
+
+    // Rebuild the default Shader's canopy twin from its fresh programs, when
+    // the world has one. Built here rather than on a worker: only a hot reload
+    // of the default Shader reaches it.
+    fn update_canopy_twin(
+        &mut self,
+        programs: &concinnity_core::components::ShaderPrograms,
+    ) -> RenderResult<()> {
+        let Some(twin) = self.cull.world_pipelines.canopy_twin() else {
+            return Ok(());
+        };
+        let live_prepass = (self.cull.world_pipelines.get(twin as usize))
+            .is_some_and(|live| live.prepass.is_some());
+        let pipelines = self.bucket_pipelines(twin, programs, true, None, live_prepass)?;
+        self.cull.world_pipelines.install(twin, pipelines)?;
+        Ok(())
     }
 
     // What every bucket's pipelines are built against here, or `None` when the
@@ -183,12 +211,13 @@ impl VkContext {
             let Some(live) = self.cull.world_pipelines.get(bucket) else {
                 continue;
             };
-            let shader = WorldShader {
+            let source = BucketSource {
                 programs: live.programs.as_ref(),
                 deferred: false,
+                canopy: live.canopy,
             };
             let pipelines =
-                build_bucket_pipeline(&self.hw.device, targets, bucket, shader, engine)?;
+                build_bucket_pipeline(&self.hw.device, targets, bucket, &source, engine)?;
             check_rebuild(bucket, live.prepass.is_some(), pipelines.prepass.is_some())?;
             rebuilt.push((bucket, pipelines));
         }
@@ -203,6 +232,7 @@ impl VkContext {
             gate: self.pipeline_gate.clone(),
             world: self.bucket_pipeline_targets(),
             volumes: self.volume_pipeline_targets(),
+            canopy: self.cull.world_pipelines.canopy_flags(),
         })
     }
 

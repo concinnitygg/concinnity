@@ -121,9 +121,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         prepass_root_sig: Some(bindless.prepass_root_sig),
         prepass_cmd_sig: Some(bindless.prepass_cmd_sig),
         main_prepass_pso: bindless.psos.prepass,
-        world_pipelines: concinnity_core::render::world_pipelines::WorldPipelines::new(
-            bindless.world_pipelines,
-        ),
+        world_pipelines: bindless.world_pipelines,
         bucket_stride: plan.n_cull,
         bindless_main_shaders: bindless.shaders,
         object_buffer_resources: bindless.object_buffers,

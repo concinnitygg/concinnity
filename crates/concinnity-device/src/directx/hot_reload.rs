@@ -7,9 +7,8 @@
 //! called with `hot_reload = true`. Production `cn run` never sets it. Mirrors
 //! src/metal/hot_reload.rs.
 
-use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::world_pipelines::{check_rebuild, replace_bucket};
+use concinnity_core::render::world_pipelines::{BucketSource, check_rebuild, replace_bucket};
 use std::sync::atomic::Ordering;
 
 use super::context::DxContext;
@@ -504,9 +503,10 @@ impl DxContext {
                 hot_reload: self.hot_reload.enabled,
             },
             0,
-            backend_init::WorldShader {
+            &BucketSource {
                 programs: world,
                 deferred: false,
+                canopy: false,
             },
         )?;
         check_rebuild(

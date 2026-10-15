@@ -62,6 +62,10 @@ pub struct WorldShader<'a> {
     /// scene owns it: the backend leaves the bucket's pipeline unbuilt and the
     /// streaming pump installs it when that scene pins.
     pub deferred: bool,
+    /// A surface with a far band (`FarFieldTint::end > 0`) draws under this
+    /// Shader, so its draws need the canopy (see
+    /// [`crate::render::world_pipelines`]).
+    pub canopy: bool,
 }
 
 /// Decoded image payloads: texture pools, glyph atlases, and the serialized
@@ -352,6 +356,7 @@ impl<'a> BackendInit<'a> {
             shaders: vec![WorldShader {
                 programs: None,
                 deferred: false,
+                canopy: false,
             }],
             media: MediaPayloads {
                 textures: &[],

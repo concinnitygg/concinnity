@@ -5,29 +5,157 @@
 //! pipeline, so it is always resident and has no slot here. Bucket `b` reads
 //! slot `b - 1`, which stays empty while the scene owning its Shader has not
 //! pinned.
+//!
+//! Only a bucket that draws a far band compiles the grass canopy into its main
+//! fragment, since that code costs every pixel of the program carrying it. A
+//! world Shader that draws one compiles it into its own bucket; the default
+//! keeps its bucket without it and gains a canopy twin past the last world
+//! Shader, which the far-band records route to.
 
 use alloc::format;
 use alloc::string::ToString;
+use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::components::ShaderPrograms;
+use crate::gfx::render_types::MAX_SHADER_BUCKETS;
+use crate::render::backend_init::WorldShader;
 use crate::render::error::{RenderError, RenderResult};
+
+/// What one shader bucket compiles: a world Shader's programs or the engine's
+/// own, with or without the far-field canopy.
+#[derive(Debug, Clone, Copy)]
+pub struct BucketSource<'a> {
+    /// The world Shader's programs; `None` for the engine's own.
+    pub programs: Option<&'a ShaderPrograms>,
+    /// The Shader's payload waits on a scene other than the start scene.
+    pub deferred: bool,
+    /// The main fragment shades a far band as grass canopy.
+    pub canopy: bool,
+}
+
+/// Every shader bucket a world draws with.
+#[derive(Debug, Clone)]
+pub struct BucketPlan<'a> {
+    /// By bucket index: one per world Shader, then the default's canopy twin.
+    pub sources: Vec<BucketSource<'a>>,
+    /// The bucket the default Shader's far-band draws route to, when any
+    /// draws under it.
+    pub canopy_twin: Option<u32>,
+}
+
+impl<'a> BucketPlan<'a> {
+    /// The plan for `shaders`, indexed by ShaderHandle value with the world
+    /// default at 0. Fails when the buckets exceed what a cull dispatch can
+    /// route between.
+    pub fn new(shaders: &[WorldShader<'a>]) -> RenderResult<Self> {
+        let mut sources: Vec<BucketSource<'a>> = shaders
+            .iter()
+            .enumerate()
+            .map(|(bucket, s)| BucketSource {
+                programs: s.programs,
+                deferred: s.deferred,
+                canopy: bucket > 0 && s.canopy,
+            })
+            .collect();
+        let canopy_twin = match shaders.first() {
+            Some(default) if default.canopy => {
+                sources.push(BucketSource {
+                    programs: default.programs,
+                    deferred: default.deferred,
+                    canopy: true,
+                });
+                Some((sources.len() - 1) as u32)
+            }
+            _ => None,
+        };
+        if sources.len() > MAX_SHADER_BUCKETS {
+            return Err(RenderError::Other(format!(
+                "world needs {} shader buckets ({} Shaders{}) but at most \
+                 {MAX_SHADER_BUCKETS} are supported",
+                sources.len(),
+                shaders.len(),
+                match canopy_twin {
+                    Some(_) => " and the default Shader's grass canopy",
+                    None => "",
+                }
+            )));
+        }
+        Ok(Self {
+            sources,
+            canopy_twin,
+        })
+    }
+
+    /// The buckets past the default.
+    pub fn extra(&self) -> &[BucketSource<'a>] {
+        self.sources.get(1..).unwrap_or_default()
+    }
+}
 
 /// One optional pipeline per shader bucket past the default.
 #[derive(Debug)]
 pub struct WorldPipelines<P> {
     slots: Vec<Option<P>>,
+    // Per slot: the bucket's main fragment compiles the canopy.
+    canopy: Vec<bool>,
+    canopy_twin: Option<u32>,
 }
 
 impl<P> Default for WorldPipelines<P> {
     fn default() -> Self {
-        Self { slots: Vec::new() }
+        Self::new(Vec::new())
     }
 }
 
 impl<P> WorldPipelines<P> {
-    /// A table over `slots`, slot `i` holding bucket `i + 1`.
+    /// A table over `slots`, slot `i` holding bucket `i + 1`, none of which
+    /// compiles the canopy.
     pub fn new(slots: Vec<Option<P>>) -> Self {
-        Self { slots }
+        Self {
+            canopy: vec![false; slots.len()],
+            slots,
+            canopy_twin: None,
+        }
+    }
+
+    /// The table for `plan`, each bucket past the default built by `build`
+    /// unless its Shader is deferred.
+    pub fn build<E>(
+        plan: &BucketPlan<'_>,
+        mut build: impl FnMut(usize, &BucketSource<'_>) -> Result<P, E>,
+    ) -> Result<Self, E> {
+        let mut slots = Vec::with_capacity(plan.extra().len());
+        for (i, source) in plan.extra().iter().enumerate() {
+            slots.push(match source.deferred {
+                true => None,
+                false => Some(build(i + 1, source)?),
+            });
+        }
+        Ok(Self {
+            canopy: plan.extra().iter().map(|s| s.canopy).collect(),
+            slots,
+            canopy_twin: plan.canopy_twin,
+        })
+    }
+
+    /// Whether `bucket`'s main fragment compiles the canopy. The default
+    /// never does.
+    pub fn canopy(&self, bucket: usize) -> bool {
+        bucket
+            .checked_sub(1)
+            .and_then(|slot| self.canopy.get(slot))
+            .is_some_and(|c| *c)
+    }
+
+    /// Every bucket's canopy flag, the default's first.
+    pub fn canopy_flags(&self) -> Vec<bool> {
+        (0..self.bucket_count()).map(|b| self.canopy(b)).collect()
+    }
+
+    /// The bucket the default Shader's far-band draws route to.
+    pub fn canopy_twin(&self) -> Option<u32> {
+        self.canopy_twin
     }
 
     /// Shader buckets, the default included.
@@ -234,5 +362,91 @@ mod tests {
         assert_eq!(t.evict(7), None);
         assert!(t.install(0, "zero").is_err());
         assert_eq!(t.resident_buckets().collect::<Vec<_>>(), [1, 2]);
+    }
+
+    fn shader(canopy: bool, deferred: bool) -> WorldShader<'static> {
+        WorldShader {
+            programs: None,
+            deferred,
+            canopy,
+        }
+    }
+
+    fn canopy_of(plan: &BucketPlan<'_>) -> Vec<bool> {
+        plan.sources.iter().map(|s| s.canopy).collect()
+    }
+
+    // A world with no far band has one bucket per Shader, none with canopy.
+    #[test]
+    fn without_a_far_band_no_bucket_compiles_the_canopy() {
+        let plan = BucketPlan::new(&[shader(false, false), shader(false, false)]).unwrap();
+        assert_eq!(canopy_of(&plan), [false, false]);
+        assert_eq!(plan.canopy_twin, None);
+    }
+
+    // A far band under the default adds a canopy twin past the last Shader and
+    // leaves the default bucket itself without the canopy.
+    #[test]
+    fn a_far_band_under_the_default_adds_a_twin_past_the_last_shader() {
+        let plan = BucketPlan::new(&[shader(true, false), shader(false, false)]).unwrap();
+        assert_eq!(canopy_of(&plan), [false, false, true]);
+        assert_eq!(plan.canopy_twin, Some(2));
+        assert_eq!(plan.extra().len(), 2);
+    }
+
+    // A world Shader under a far band compiles the canopy into its own bucket.
+    #[test]
+    fn a_far_band_under_a_world_shader_compiles_into_its_bucket() {
+        let plan = BucketPlan::new(&[
+            shader(false, false),
+            shader(true, false),
+            shader(false, false),
+        ])
+        .unwrap();
+        assert_eq!(canopy_of(&plan), [false, true, false]);
+        assert_eq!(plan.canopy_twin, None);
+    }
+
+    // The twin counts toward the routing budget, and the error names it.
+    #[test]
+    fn the_twin_counts_toward_the_bucket_budget() {
+        let full = vec![shader(false, false); MAX_SHADER_BUCKETS];
+        assert!(BucketPlan::new(&full).is_ok());
+        let mut over = full.clone();
+        over[0].canopy = true;
+        let err = BucketPlan::new(&over).unwrap_err().to_string();
+        assert!(err.contains("grass canopy"), "{err}");
+        assert!(BucketPlan::new(&over[1..]).is_ok());
+    }
+
+    // The table builds every bucket past the default except deferred ones,
+    // remembers which compile the canopy, and where the twin is.
+    #[test]
+    fn the_table_built_from_a_plan_keeps_its_canopy_flags() {
+        let plan = BucketPlan::new(&[
+            shader(true, false),
+            shader(true, true),
+            shader(false, false),
+        ])
+        .unwrap();
+        let mut built = Vec::new();
+        let t = WorldPipelines::build(&plan, |bucket, source| {
+            built.push((bucket, source.canopy));
+            Ok::<_, ()>(bucket)
+        })
+        .unwrap();
+        assert_eq!(built, [(2, false), (3, true)]);
+        assert_eq!(t.bucket_count(), 4);
+        assert_eq!(t.resident_buckets().collect::<Vec<_>>(), [2, 3]);
+        assert_eq!(t.canopy_flags(), [false, true, false, true]);
+        assert_eq!(t.canopy_twin(), Some(3));
+        assert!(!t.canopy(0) && !t.canopy(9));
+    }
+
+    #[test]
+    fn a_plain_table_has_no_canopy() {
+        let t = table();
+        assert_eq!(t.canopy_flags(), [false; 4]);
+        assert_eq!(t.canopy_twin(), None);
     }
 }

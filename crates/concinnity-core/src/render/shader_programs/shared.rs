@@ -23,6 +23,23 @@ pub static MAIN_BINDLESS_FRAG: ShaderProgram = ShaderProgram {
     gates: &[],
     msaa: false,
 };
+/// `fragment_main_bindless` from `main_bindless.hlsl` under `SURFACE_CANOPY`:
+/// the main fragment that shades a far band as grass canopy.
+pub static MAIN_BINDLESS_CANOPY_FRAG: ShaderProgram = ShaderProgram {
+    file: "main_bindless.hlsl",
+    entry: "fragment_main_bindless",
+    label: "main_bindless_canopy_frag.hlsl",
+    gates: &[super::surface::CANOPY_GATE],
+    msaa: false,
+};
+
+/// The engine's main fragment, with or without the far-field canopy.
+pub fn main_bindless_frag(canopy: bool) -> &'static ShaderProgram {
+    match canopy {
+        true => &MAIN_BINDLESS_CANOPY_FRAG,
+        false => &MAIN_BINDLESS_FRAG,
+    }
+}
 
 // The draw cull's decision. Metal runs it as the first half of the cull and
 // turns the `cull_status` it writes into the indirect command buffer with the
@@ -775,6 +792,7 @@ pub static GRASS_FRAG: ShaderProgram = ShaderProgram {
 pub static ALL: &[&ShaderProgram] = &[
     &MAIN_BINDLESS_VERT,
     &MAIN_BINDLESS_FRAG,
+    &MAIN_BINDLESS_CANOPY_FRAG,
     &LIGHT_CULL,
     &MODEL_HISTORY,
     &CULL_PHASE1,

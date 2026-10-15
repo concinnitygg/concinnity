@@ -35,7 +35,7 @@ use concinnity_core::ecs::SkinnedMeshHandle;
 use concinnity_core::ecs::TextureHandle;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::geometry::payload_joints_to_defs;
-use concinnity_core::gfx::render_types::SkinnedIndex;
+use concinnity_core::gfx::render_types::{FarFieldTint, SkinnedIndex};
 use concinnity_core::gfx::{mesh_payload, render_types};
 use concinnity_core::render::{backend, backend_init, text};
 use concinnity_core::resource::ColorLutTable;
@@ -1551,6 +1551,13 @@ impl GraphicsSystem {
             },
         )?;
 
+        // Taken before streaming plans its geometry, so a Shader's far band is
+        // seen whichever scene its draws stream with.
+        let far_bands: Vec<(u32, FarFieldTint)> = draw_objects
+            .iter()
+            .map(|d| (d.shader_bucket, d.material.far_field))
+            .collect();
+
         let stream_plan = plan_stream_geometry(StreamGeometry {
             vertices: &mut all_vertices,
             indices: &mut all_indices,
@@ -1662,9 +1669,15 @@ impl GraphicsSystem {
             // entry 0 is the world default program.
             shaders: decoded_shaders
                 .iter()
-                .map(|s| WorldShader {
+                .zip(super::far_band_shaders::far_band_shaders(
+                    decoded_shaders.len(),
+                    far_bands,
+                    planet_far_field.is_some(),
+                ))
+                .map(|(s, canopy)| WorldShader {
                     programs: s.programs.as_ref(),
                     deferred: s.deferred,
+                    canopy,
                 })
                 .collect(),
             media: MediaPayloads {
