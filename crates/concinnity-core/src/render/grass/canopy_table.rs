@@ -1,7 +1,7 @@
 //! A grass layer's canopy view, tabulated: where view rays stop in the field
 //! ([`canopy_view`]) over the view's angle and how much of the view the blades
 //! stop, so the main pass reads it with one bilinear fetch rather than walking
-//! the blades per pixel. Matches `canopy_table_view` in `shaders/canopy.hlsl`.
+//! the blades per pixel. Matches `canopy_add_view` in `shaders/canopy.hlsl`.
 //!
 //! The angle axis is even in the view's angle from the blades' up. The depth
 //! axis is the optical depth the view crosses, spaced logarithmically: how

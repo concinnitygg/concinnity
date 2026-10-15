@@ -581,7 +581,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         // grass draws do.
         float3 sky = ibl_enabled ? irradiance_sample(canopy.along) / PI : (float3)(0.03);
         sky *= LIGHTS.ambient_intensity * occlusion;
-        float3 ground = ambient * canopy_ground_sky(canopy) + Lo_under + emissive;
+        float3 ground = ambient * canopy.ground_sky + Lo_under + emissive;
         color = lerp(color, canopy_radiance(canopy, sky, ground), far_w);
     }
 

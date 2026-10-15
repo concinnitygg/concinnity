@@ -298,7 +298,7 @@ struct PlanetCanopy {
 }
 
 /// The cosine from the blades' up the sky is taken to reach the ground along,
-/// on average. Matches the shaders' `canopy_ground_sky`.
+/// on average. Matches `sky_mu` in the shaders' `canopy_at`.
 pub const SKY_MU: f32 = 2.0 / 3.0;
 
 /// Every far field's layers in the world, and the planet they may grow on:

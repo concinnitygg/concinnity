@@ -15,10 +15,6 @@
 
 {GRASS_FIELD}
 
-// The two parts of the light a blade of unit albedo returns from `L`: what
-// multiplies the albedo (xyz: wrapped diffuse on the lit face, and light
-// carried through the blade when the source is behind it), and the soft
-// sheen (w), which does not.
 // The parts of grass_light_terms set by the view and the light alone, which
 // every normal lit from them shares.
 struct GrassLightPair
@@ -37,24 +33,35 @@ GrassLightPair grass_light_pair(float3 V, float3 L)
     return p;
 }
 
-float4 grass_light_terms_from(float3 N, float3 V, float3 L, GrassLightPair p)
+// The two parts of the light a blade of unit albedo returns from `L`: what
+// multiplies the albedo (xyz: wrapped diffuse on the lit face, and light
+// carried through the blade when the source is behind it), and the soft
+// sheen (w), which does not. Taken from the normal's cosines with the light,
+// the view and the half vector; the GGX lobe and its shadowing share one
+// division.
+float4 grass_light_terms_dots(float ndl, float ndv, float ndh, GrassLightPair p)
 {
-    float ndl = dot(N, L);
     float diffuse = saturate((ndl + 0.35) / 1.35) / PI;
     float behind = saturate(-ndl);
     float carried = (0.35 * behind + 0.9 * p.through) / PI;
     float nl = saturate(ndl);
-    float nv = max(dot(N, V), 1e-3);
+    float nv = max(ndv, 0.0);
     const float roughness = 0.5;
-    float spec = distribution_ggx(N, p.H, roughness) * geometry_smith(N, V, L, roughness)
-               / max(4.0 * nv * nl, 1e-3);
+    const float a2 = roughness * roughness * roughness * roughness;
+    const float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+    float nh = max(ndh, 0.0);
+    float d = nh * nh * (a2 - 1.0) + 1.0;
+    float spec = a2 * nv * nl
+               / ((PI * d * d + 0.0001) * (nv * (1.0 - k) + k) * (nl * (1.0 - k) + k)
+                  * max(4.0 * max(ndv, 1e-3) * nl, 1e-3));
     float sheen = p.fresnel * spec * 0.5 * nl;
     return float4(diffuse + carried * float3(1.1, 1.25, 0.6), sheen);
 }
 
 float4 grass_light_terms(float3 N, float3 V, float3 L)
 {
-    return grass_light_terms_from(N, V, L, grass_light_pair(V, L));
+    GrassLightPair p = grass_light_pair(V, L);
+    return grass_light_terms_dots(dot(N, L), dot(N, V), dot(N, p.H), p);
 }
 
 // Light arriving at a blade from `L` at `radiance`.
@@ -104,36 +111,45 @@ struct CanopyBand
     float ramp_direct_occlusion;
 };
 
-// What the canopy is at one ground point, and how it is seen and lit there.
-struct CanopyShade
+// Where a view stops in the canopy: the ground's share, and the two bands
+// with their terms summed by share.
+struct CanopyView
 {
-    // Blades' up, and the view's direction along the ground with its side.
-    float3 up;
-    float3 along;
-    float3 across;
-    float leaf_area;
-    float bend;
-    // The blade area seen per unit of leaf area along the sky's mean
-    // direction, and the layer whose table a light's way through is read
-    // from: the one growing the most leaf.
-    float sky_projection;
-    uint table;
-    // The leaf-area weighted blade colors at the root and the tip.
-    float3 root;
-    float3 tip;
-    // Where the view stops: the ground's share, and the two bands.
     float ground;
     CanopyBand upper;
     CanopyBand lower;
-    // Direct light gathered for each band, per unit of radiance at the band's
-    // height: what the albedo multiplies, and the sheen it does not. Local
-    // lights are gathered apart, since the blades take them whole.
-    float3 upper_light;
-    float3 upper_sheen;
-    float3 lower_light;
-    float3 lower_sheen;
-    float3 local_light;
-    float3 local_sheen;
+};
+
+// What the canopy is at one ground point, and how it is seen and lit there.
+// The bands' shares and blade colors are folded into the colors each kind of
+// light is multiplied by, so little stays live through the light loops.
+struct CanopyShade
+{
+    // Blades' up, and the view's direction along the ground.
+    float3 up;
+    float3 along;
+    float leaf_area;
+    // The layer whose table a light's way through is read from: the one
+    // growing the most leaf.
+    uint table;
+    // The ground's share of the view, and how much of the sky reaches it.
+    float ground;
+    float ground_sky;
+    // The albedo the bands show, for the unlit view.
+    float3 seen;
+    // Each band's blade tilt, and what its share of the view multiplies a
+    // direct light's albedo term (rgb) and sheen (w) by. The lower band takes
+    // direct light only where a view can reach it.
+    float2 upper_tilt;
+    float2 lower_tilt;
+    bool lower_lit;
+    float4 upper_direct;
+    float4 lower_direct;
+    // What both bands multiply the sky and local lights' albedo term (rgb)
+    // and sheen (w) by.
+    float4 open;
+    // The light gathered so far.
+    float3 light;
 };
 
 // Matches render::grass::canopy_table: each layer's view, tabulated over the
@@ -182,20 +198,21 @@ float canopy_angle_coord(float mu)
          * float(CANOPY_TABLE_ANGLES - 1u);
 }
 
-// Blade area of `layer` seen per unit of leaf area along view cosine `mu`.
-float canopy_table_projection(uint layer, float mu)
+// Blade area of `layer` seen per unit of leaf area at fractional angle row
+// `x`. It depends on the angle alone, so only the first depth row is read.
+float canopy_table_projection(uint layer, float x)
 {
-    return canopy_table_row(canopy_table_at(layer, canopy_angle_coord(mu), 0.0), 0u).y;
+    CanopyTableAt at = canopy_table_at(layer, x, 0.0);
+    uint2 cells = (at.base + at.i * CANOPY_TABLE_DEPTHS) * CANOPY_TABLE_ROWS;
+    return lerp(CANOPY_TABLES[cells.x].y, CANOPY_TABLES[cells.y].y, at.f.x);
 }
 
-// Add where rays seen along `mu` stop in `layer`'s canopy of `leaf_area`,
-// weighted by `w`, into `c`: the ground's share, and each band's share with
-// its terms summed by share. Mirrors render::grass::canopy_table::table_view.
-void canopy_add_view(inout CanopyShade c, uint layer, float mu, float leaf_area, float w)
+// Add where rays seen along `mu` (at fractional angle row `x`) stop in
+// `layer`'s canopy of `leaf_area`, weighted by `w`, into `view`. Mirrors
+// render::grass::canopy_table::table_view.
+void canopy_add_view(inout CanopyView view, uint layer, float x, float mu, float leaf_area, float w)
 {
-    mu = max(mu, CANOPY_MIN_MU);
-    float x = canopy_angle_coord(mu);
-    float depth = canopy_table_row(canopy_table_at(layer, x, 0.0), 0u).y * leaf_area / mu;
+    float depth = canopy_table_projection(layer, x) * leaf_area / mu;
     float stopped = 1.0 - exp(-depth);
     float y = saturate(log(1.0 + max(depth, 0.0) / CANOPY_DEPTH_KNEE)
                        / log(1.0 + CANOPY_MAX_DEPTH / CANOPY_DEPTH_KNEE))
@@ -207,21 +224,21 @@ void canopy_add_view(inout CanopyShade c, uint layer, float mu, float leaf_area,
     float2 r3 = canopy_table_row(at, 3u).xy;
     float upper = w * saturate(r0.x) * stopped;
     float lower = w * stopped - upper;
-    c.ground += w * (1.0 - stopped);
-    c.upper.share += upper;
-    c.upper.height += upper * r0.z;
-    c.upper.ramp += upper * r0.w;
-    c.upper.occlusion += upper * r1.x;
-    c.upper.ramp_occlusion += upper * r1.y;
-    c.upper.direct_occlusion += upper * r1.z;
-    c.upper.ramp_direct_occlusion += upper * r1.w;
-    c.lower.share += lower;
-    c.lower.height += lower * r2.x;
-    c.lower.ramp += lower * r2.y;
-    c.lower.occlusion += lower * r2.z;
-    c.lower.ramp_occlusion += lower * r2.w;
-    c.lower.direct_occlusion += lower * r3.x;
-    c.lower.ramp_direct_occlusion += lower * r3.y;
+    view.ground += w * (1.0 - stopped);
+    view.upper.share += upper;
+    view.upper.height += upper * r0.z;
+    view.upper.ramp += upper * r0.w;
+    view.upper.occlusion += upper * r1.x;
+    view.upper.ramp_occlusion += upper * r1.y;
+    view.upper.direct_occlusion += upper * r1.z;
+    view.upper.ramp_direct_occlusion += upper * r1.w;
+    view.lower.share += lower;
+    view.lower.height += lower * r2.x;
+    view.lower.ramp += lower * r2.y;
+    view.lower.occlusion += lower * r2.z;
+    view.lower.ramp_occlusion += lower * r2.w;
+    view.lower.direct_occlusion += lower * r3.x;
+    view.lower.ramp_direct_occlusion += lower * r3.y;
 }
 
 // A band's terms summed by share, as means.
@@ -241,7 +258,15 @@ CanopyBand canopy_band_mean(CanopyBand band)
 float canopy_transmit(CanopyShade c, float3 L)
 {
     float mu = max(dot(L, c.up), CANOPY_MIN_MU);
-    return exp(-canopy_table_projection(c.table, mu) * c.leaf_area / mu);
+    return exp(-canopy_table_projection(c.table, canopy_angle_coord(mu)) * c.leaf_area / mu);
+}
+
+// What a band of blade colors `root` to `root + span` shows a light whose
+// albedo term `ramp` and `plain` weight the tip and the root by, with its
+// sheen weighted by `plain`, scaled by the band's share of the view.
+float4 canopy_band_weights(float share, float3 root, float3 span, float plain, float ramp)
+{
+    return share * float4(root * plain + span * ramp, plain);
 }
 
 // The canopy at `pos` on surface `od`, the vertex color `color` carrying a
@@ -287,10 +312,15 @@ CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color,
     float macro_detail = 1.0 - smoothstep(30.0, 90.0, footprint);
     float slope = 1.0 - saturate(dot(normalize(normal), c.up));
 
-    // The first layers' weights, which their views are blended by.
+    // The first layers' weights, which their views are blended by, and the
+    // leaf-area weighted blade colors at the root and the tip.
     float4 weights = (float4)(0.0);
     float weight = 0.0;
     float most = -1.0;
+    float3 root = (float3)(0.0);
+    float3 tip = (float3)(0.0);
+    float bend = 0.0;
+    float sky_projection = 0.0;
     for (uint i = 0u; i < count; i++)
     {
         CanopyLayer L = CANOPY.layers[first + i];
@@ -323,10 +353,10 @@ CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color,
         // Every layer weighs in a little even where it is bare, so the colors
         // stay defined where nothing grows.
         float w = area + 1e-4;
-        c.root += w * L.root_color_variation.rgb * tint;
-        c.tip += w * L.tip_color_macro.rgb * tint;
-        c.bend += w * L.shape.w;
-        c.sky_projection += w * L.sky_projection;
+        root += w * L.root_color_variation.rgb * tint;
+        tip += w * L.tip_color_macro.rgb * tint;
+        bend += w * L.shape.w;
+        sky_projection += w * L.sky_projection;
         weight += w;
         if (i < 4u)
         {
@@ -339,44 +369,92 @@ CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color,
         }
     }
     weight = max(weight, 1e-6);
-    c.root /= weight;
-    c.tip /= weight;
-    c.bend /= weight;
-    c.sky_projection /= weight;
+    root /= weight;
+    tip /= weight;
+    bend /= weight;
+    sky_projection /= weight;
 
     // Where the view stops, each layer's table read at the field's whole leaf
     // area and blended by the layer's share of it.
-    float mu = dot(V, c.up);
+    float mu = max(dot(V, c.up), CANOPY_MIN_MU);
+    float x = canopy_angle_coord(mu);
     float viewed = max(weights.x + weights.y + weights.z + weights.w, 1e-6);
-    c.ground = count == 0u ? 1.0 : 0.0;
+    CanopyView view = (CanopyView)0;
+    view.ground = count == 0u ? 1.0 : 0.0;
     for (uint k = 0u; k < min(count, 4u); k++)
     {
-        canopy_add_view(c, first + k, mu, c.leaf_area, weights[k] / viewed);
+        canopy_add_view(view, first + k, x, mu, c.leaf_area, weights[k] / viewed);
     }
-    c.upper = canopy_band_mean(c.upper);
-    c.lower = canopy_band_mean(c.lower);
+    CanopyBand upper = canopy_band_mean(view.upper);
+    CanopyBand lower = canopy_band_mean(view.lower);
+
+    // Matches SKY_MU in render::grass::canopy.
+    const float sky_mu = 2.0 / 3.0;
+    float3 span = tip - root;
+    c.ground = view.ground;
+    c.ground_sky = exp(-sky_projection * c.leaf_area / sky_mu);
+    c.seen = upper.share * (root + span * upper.ramp) + lower.share * (root + span * lower.ramp);
+    c.upper_tilt = canopy_tilt(bend, upper.height);
+    c.lower_tilt = canopy_tilt(bend, lower.height);
+    c.lower_lit = lower.share > 1e-3;
+    c.upper_direct = canopy_band_weights(upper.share, root, span, upper.direct_occlusion,
+                                         upper.ramp_direct_occlusion);
+    c.lower_direct = canopy_band_weights(lower.share, root, span, lower.direct_occlusion,
+                                         lower.ramp_direct_occlusion);
+    c.open = canopy_band_weights(upper.share, root, span, upper.occlusion, upper.ramp_occlusion)
+           + canopy_band_weights(lower.share, root, span, lower.occlusion, lower.ramp_occlusion);
+
     float3 flat_view = V - c.up * dot(V, c.up);
     float flat_len = length(flat_view);
     float3 any_side = abs(c.up.x) < 0.9 ? float3(1.0, 0.0, 0.0) : float3(0.0, 0.0, 1.0);
     c.along = flat_len > 1e-4 ? flat_view / flat_len : normalize(cross(c.up, any_side));
-    c.across = cross(c.up, c.along);
     return c;
 }
 
-// The normal of the blade facing `front`, tilted by its curve (cosine and
-// sine of the tilt in `tilt`), turned toward the viewer, and how much of it
-// faces the viewer.
-float4 canopy_facing(CanopyShade c, float3 front, float2 tilt, float3 V)
+// A direction in the canopy's frame: along the view's way over the ground,
+// across it, and up.
+float3 canopy_frame(CanopyShade c, float3 d)
 {
-    float3 n = front * tilt.x - c.up * tilt.y;
-    n = dot(n, V) < 0.0 ? -n : n;
-    return float4(n, dot(n, V));
+    return float3(dot(d, c.along), dot(d, cross(c.up, c.along)), dot(d, c.up));
+}
+
+// The light a facing returns, weighted by how much of it faces the viewer,
+// given its normal's cosines with the view, the light and the half vector;
+// the normal is turned toward the viewer first.
+float4 canopy_facing_light(float nv, float nl, float nh, GrassLightPair pair, inout float total)
+{
+    float s = nv < 0.0 ? -1.0 : 1.0;
+    total += s * nv;
+    return s * nv * grass_light_terms_dots(s * nl, s * nv, s * nh, pair);
+}
+
+// The light the facings around the view return at a height whose blades tilt
+// by `tilt` (cosine, sine), averaged by how much of each faces the viewer.
+// `v`, `l` and `h` are the view, light and half vector in the canopy's frame.
+// Facing j and facing CANOPY_FACINGS - 1 - j mirror each other across the
+// view, so they differ only in the across part of their normals.
+float4 canopy_facings_light(float2 tilt, float3 v, float3 l, float3 h, GrassLightPair pair)
+{
+    float4 k = (float4)(0.0);
+    float total = 0.0;
+    [unroll]
+    for (uint j = 0u; j < CANOPY_FACINGS / 2u; j++)
+    {
+        float a = GRASS_TAU * (float(j) + 0.5) / float(CANOPY_FACINGS);
+        float3 n = float3(cos(a) * tilt.x, sin(a) * tilt.x, -tilt.y);
+        float3 rest = float3(n.x * v.x + n.z * v.z, n.x * l.x + n.z * l.z, n.x * h.x + n.z * h.z);
+        float3 side = n.y * float3(v.y, l.y, h.y);
+        float3 one = rest + side;
+        float3 other = rest - side;
+        k += canopy_facing_light(one.x, one.y, one.z, pair, total);
+        k += canopy_facing_light(other.x, other.y, other.z, pair, total);
+    }
+    return k / max(total, 1e-4);
 }
 
 // Gather a direct light from `L` at `radiance` (shadowing applied) into the
-// canopy's bands: the facings around the view at each band's height, each
-// weighted by how much of it faces the viewer; the lower band only where a
-// view can reach it.
+// canopy: the facings around the view at each band's height, the lower band
+// only where a view can reach it.
 void canopy_add_light(inout CanopyShade c, float3 V, float3 L, float3 radiance)
 {
     // A light below the ground's horizon reaches no blade of the field: near
@@ -389,36 +467,17 @@ void canopy_add_light(inout CanopyShade c, float3 V, float3 L, float3 radiance)
         return;
     }
     GrassLightPair pair = grass_light_pair(V, L);
-    bool lower = c.lower.share > 1e-3;
-    float2 cs_hi = canopy_tilt(c.bend, c.upper.height);
-    float2 cs_lo = canopy_tilt(c.bend, c.lower.height);
-    float4 hi = (float4)(0.0);
-    float4 lo = (float4)(0.0);
-    float2 total = (float2)(0.0);
-    [unroll]
-    for (uint j = 0u; j < CANOPY_FACINGS; j++)
+    float3 v = canopy_frame(c, V);
+    float3 l = canopy_frame(c, L);
+    float3 h = canopy_frame(c, pair.H);
+    float4 hi = canopy_facings_light(c.upper_tilt, v, l, h, pair);
+    float3 lit = c.upper_direct.rgb * hi.xyz + c.upper_direct.w * hi.w;
+    if (c.lower_lit)
     {
-        float a = GRASS_TAU * (float(j) + 0.5) / float(CANOPY_FACINGS);
-        float3 front = c.along * cos(a) + c.across * sin(a);
-        float4 n = canopy_facing(c, front, cs_hi, V);
-        hi += n.w * grass_light_terms_from(n.xyz, V, L, pair);
-        total.x += n.w;
-        if (lower)
-        {
-            n = canopy_facing(c, front, cs_lo, V);
-            lo += n.w * grass_light_terms_from(n.xyz, V, L, pair);
-            total.y += n.w;
-        }
+        float4 lo = canopy_facings_light(c.lower_tilt, v, l, h, pair);
+        lit += c.lower_direct.rgb * lo.xyz + c.lower_direct.w * lo.w;
     }
-    hi /= max(total.x, 1e-4);
-    c.upper_light += hi.xyz * radiance;
-    c.upper_sheen += hi.w * radiance;
-    if (lower)
-    {
-        lo /= max(total.y, 1e-4);
-        c.lower_light += lo.xyz * radiance;
-        c.lower_sheen += lo.w * radiance;
-    }
+    c.light += lit * radiance;
 }
 
 // Gather a local light from `L` at `radiance` into the canopy, lit at the
@@ -426,47 +485,22 @@ void canopy_add_light(inout CanopyShade c, float3 V, float3 L, float3 radiance)
 void canopy_add_local_light(inout CanopyShade c, float3 V, float3 L, float3 radiance)
 {
     float4 k = grass_light_terms(c.along, V, L);
-    c.local_light += k.xyz * radiance;
-    c.local_sheen += k.w * radiance;
+    c.light += (c.open.rgb * k.xyz + c.open.w * k.w) * radiance;
 }
 
-// One band's radiance: its blades' mean color times what their heights let
-// through of the gathered direct light and of the sky and local lights, plus
-// the sheen.
-float3 canopy_band_radiance(CanopyShade c, CanopyBand b, float3 direct, float3 sheen, float3 sky)
-{
-    float3 span = c.tip - c.root;
-    float3 lit = c.root * b.direct_occlusion + span * b.ramp_direct_occlusion;
-    float3 open = c.root * b.occlusion + span * b.ramp_occlusion;
-    return lit * direct + open * (sky + c.local_light) + sheen * b.direct_occlusion
-         + c.local_sheen * b.occlusion;
-}
-
-// The canopy's color seen along `V`: the upper and lower blades lit by what
-// was gathered plus `sky` (the irradiance their facing sees, ambient scale
-// and screen-space occlusion applied), over `ground`, the surface's own
-// radiance under the canopy.
+// The canopy's color: the blades lit by the gathered light plus `sky` (the
+// irradiance their facing toward the viewer sees, ambient scale and
+// screen-space occlusion applied), over `ground`, the surface's own radiance
+// under the canopy.
 float3 canopy_radiance(CanopyShade c, float3 sky, float3 ground)
 {
-    return c.upper.share * canopy_band_radiance(c, c.upper, c.upper_light, c.upper_sheen, sky)
-         + c.lower.share * canopy_band_radiance(c, c.lower, c.lower_light, c.lower_sheen, sky)
-         + c.ground * ground;
+    return c.light + c.open.rgb * sky + c.ground * ground;
 }
 
-// The canopy's albedo seen along `V`, for the unlit view.
+// The canopy's albedo seen along the view, for the unlit view.
 float3 canopy_albedo_seen(CanopyShade c, float3 ground)
 {
-    float3 span = c.tip - c.root;
-    return c.upper.share * (c.root + span * c.upper.ramp)
-         + c.lower.share * (c.root + span * c.lower.ramp) + c.ground * ground;
-}
-
-// How much of the sky reaches the ground under the canopy.
-float canopy_ground_sky(CanopyShade c)
-{
-    // Matches SKY_MU in render::grass::canopy.
-    const float mu = 2.0 / 3.0;
-    return exp(-c.sky_projection * c.leaf_area / mu);
+    return c.seen + c.ground * ground;
 }
 
 // How far into its far-field band a surface `dist` from the camera is: 0
