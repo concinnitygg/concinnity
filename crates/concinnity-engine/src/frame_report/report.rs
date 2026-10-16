@@ -46,6 +46,7 @@ pub fn to_text(report: &Report) -> String {
         report.overall.draw_calls_mean,
         report.overall.objects_mean,
     );
+    write_pacing(&mut out, report);
     write_slowest(&mut out, &report.slowest);
 
     // The pass block is medians, like the table above it, because a backend
@@ -62,10 +63,12 @@ pub fn to_text(report: &Report) -> String {
             ),
             "of the GPU frame",
             segment.passes.iter().map(|p| {
-                // A pass timed inside the one above it is indented under it.
-                let name = match p.within {
-                    Some(_) => format!("  {}", p.name),
-                    None => p.name.clone(),
+                // A pass timed inside the one above it is indented under it,
+                // and one beside the frame on the async queue is marked.
+                let name = match (&p.within, p.async_queue) {
+                    (Some(_), _) => format!("  {}", p.name),
+                    (None, true) => format!("{} (async)", p.name),
+                    (None, false) => p.name.clone(),
                 };
                 (name, p.median_us, p.share)
             }),
@@ -132,12 +135,37 @@ fn write_block(
             let _ = writeln!(out, "{heading}:");
             started = true;
         }
+        // A negative share is a row taken away from the others.
+        let sign = if share < 0.0 { -1.0 } else { 1.0 };
         let _ = writeln!(
             out,
             "  {:<20} {:>7.3} ms  {:>5.1}% {of_what}",
             name,
-            mean_us as f32 / MICROS_PER_MILLI,
+            sign * mean_us as f32 / MICROS_PER_MILLI,
             share * 100.0,
+        );
+    }
+}
+
+// How evenly each stretch's motion matched its frame times, and how often the
+// simulated frame moved under the camera.
+fn write_pacing(out: &mut String, report: &Report) {
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "camera pacing, run time shown per frame over frame time (1.00x is even):"
+    );
+    let _ = writeln!(
+        out,
+        "  {:<16} {:>7} {:>7} {:>7} {:>7} {:>8}",
+        "segment", "p5", "p50", "p95", "still", "rebases",
+    );
+    for segment in core::iter::once(&report.overall).chain(&report.segments) {
+        let p = &segment.pacing;
+        let _ = writeln!(
+            out,
+            "  {:<16} {:>6.2}x {:>6.2}x {:>6.2}x {:>7} {:>8}",
+            segment.name, p.p5, p.p50, p.p95, p.still_frames, segment.rebases,
         );
     }
 }
@@ -153,13 +181,17 @@ fn write_slowest(out: &mut String, frames: &[SlowFrame]) {
     for frame in frames {
         let _ = writeln!(
             out,
-            "  {:.2} ms at {:.2} s in {}: cpu {:.2} ms, blocked on GPU {:.2} ms, gpu {:.2} ms",
+            "  {:.2} ms at {:.2} s in {}: cpu {:.2} ms, blocked on GPU {:.2} ms, gpu {:.2} ms (gaps {:.2}, overlap {:.2}), run step {:.2} ms{}",
             ms(frame.frame_us),
             frame.run_seconds,
             frame.segment,
             ms(frame.cpu_us),
             ms(frame.gpu_wait_us),
             ms(frame.gpu_frame_us),
+            ms(frame.gpu_gap_us),
+            ms(frame.gpu_overlap_us),
+            ms(frame.run_step_us),
+            if frame.rebased { ", frame moved" } else { "" },
         );
         write_costs(out, "cpu", &frame.cpu);
         write_costs(out, "gpu", &frame.passes);
@@ -230,7 +262,10 @@ mod tests {
             run_seconds,
             segment,
             frame_us,
+            run_step_us: frame_us,
+            rebased: false,
             gpu_frame_us: frame_us / 2,
+            gpu_overlap_us: 0,
             gpu_wait_us: 250,
             render_cpu_us: 0,
             replay_us: 0,
@@ -242,6 +277,7 @@ mod tests {
             objects: 512,
             vram_bytes: 512 << 20,
             pass_us: [0; MAX_PASS_TIMINGS],
+            async_pass_mask: 0,
             system_us: [0; MAX_SYSTEM_TIMINGS],
             system_fan_out: [FanOutTiming::default(); MAX_SYSTEM_TIMINGS],
         }
@@ -320,6 +356,53 @@ mod tests {
         let main = text.find("\n  main ").expect("main row");
         let sky = text.find("\n    sky ").expect("indented sky row");
         assert!(main < sky, "{text}");
+    }
+
+    #[test]
+    fn an_async_pass_is_marked_and_the_gap_is_named() {
+        let mut first = sample(0.0, Some(0), 10_000);
+        first.pass_us[0] = 3_000;
+        first.pass_us[1] = 1_000;
+        first.async_pass_mask = 0b10;
+        let run = FrameRun {
+            samples: vec![first].into(),
+            segments: vec!["approach".to_string()],
+            pass_names: vec!["main".to_string(), "light_cull".to_string()],
+            system_names: Vec::new(),
+            completed: true,
+        };
+        let text = to_text(&report_of(run));
+        assert!(text.contains("\n  gaps "), "{text}");
+        assert!(text.contains("\n  light_cull (async) "), "{text}");
+    }
+
+    #[test]
+    fn the_overlap_with_the_previous_frame_is_taken_away() {
+        let mut first = sample(0.0, Some(0), 10_000);
+        first.pass_us[0] = 6_000;
+        first.gpu_overlap_us = 1_500;
+        let run = FrameRun {
+            samples: vec![first].into(),
+            segments: vec!["approach".to_string()],
+            pass_names: vec!["main".to_string()],
+            system_names: Vec::new(),
+            completed: true,
+        };
+        let text = to_text(&report_of(run));
+        assert!(
+            text.contains("  overlap with previous frame  -1.500 ms  -30.0% of the GPU frame"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn pacing_is_listed_per_segment() {
+        let text = rendered();
+        assert!(text.contains("camera pacing"), "{text}");
+        assert!(
+            text.contains("\n  approach           1.00x   1.00x   1.00x       0        0\n"),
+            "{text}"
+        );
     }
 
     #[test]

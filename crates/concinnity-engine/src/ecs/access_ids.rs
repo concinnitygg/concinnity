@@ -102,6 +102,7 @@ define_access_ids! {
         crate::gfx::overlay::OverlayAssets,
         crate::gfx::overlay::OverlayRecycle,
         concinnity_core::planet::FrameRebases,
+        concinnity_core::camera_track::CameraTrackStatus,
     ],
     events: [
         ControlsCommand,

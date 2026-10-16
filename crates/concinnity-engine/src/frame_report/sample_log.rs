@@ -80,13 +80,16 @@ impl From<Vec<FrameSample>> for SampleLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frame_report::sample::FrameTiming;
     use concinnity_core::profile::RenderStats;
 
     fn frame(n: usize) -> FrameSample {
         FrameSample::new(
-            n as f32,
-            None,
-            n as u32,
+            FrameTiming {
+                run_seconds: n as f32,
+                frame_us: n as u32,
+                ..Default::default()
+            },
             &RenderStats::default(),
             &[],
             &[],

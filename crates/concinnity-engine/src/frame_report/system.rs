@@ -5,6 +5,7 @@ use concinnity_core::camera_track::CameraTrackStatus;
 use concinnity_core::components::FrameCapture;
 use concinnity_core::components::{CameraTrack, FrameReport};
 use concinnity_core::ecs::{PipelineContext, StepResult, System, WindowMinimized};
+use concinnity_core::planet::FrameRebases;
 use concinnity_core::profile::RenderStats;
 use std::time::Instant;
 
@@ -13,7 +14,7 @@ use crate::frame_report::capture::{CAPTURE_DROPPED_FRAMES, CaptureSchedule};
 use crate::frame_report::hidden::HiddenFrames;
 use crate::frame_report::reduce::{ReduceOptions, Report};
 use crate::frame_report::report::to_text;
-use crate::frame_report::sample::{FrameRun, FrameSample};
+use crate::frame_report::sample::{FrameRun, FrameSample, FrameTiming};
 
 const MICROS_PER_MILLI: f32 = 1_000.0;
 
@@ -52,6 +53,9 @@ pub struct FrameReportSystem {
     // Fallback clock for a world that publishes no run position of its own, so
     // the warm-up discard and the time column still mean something.
     started: Option<Instant>,
+    // The run position and frame-move count the previous step saw.
+    previous_run_seconds: f32,
+    previous_rebases: u64,
     captures: CaptureSchedule,
     // Frames still to leave unrecorded behind the latest capture.
     excluded: u32,
@@ -67,9 +71,7 @@ pub struct FrameReportSystem {
 // step's system timings.
 #[derive(Debug, Clone, Copy)]
 struct PendingFrame {
-    run_seconds: f32,
-    segment: Option<u32>,
-    frame_us: u32,
+    timing: FrameTiming,
     render: RenderStats,
 }
 
@@ -87,6 +89,8 @@ impl FrameReportSystem {
             reported: false,
             previous: None,
             started: None,
+            previous_run_seconds: 0.0,
+            previous_rebases: 0,
             captures: CaptureSchedule::new(&report.captures),
             excluded: 0,
             captured: 0,
@@ -160,6 +164,19 @@ impl System for FrameReportSystem {
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         let now = Instant::now();
         let started = *self.started.get_or_insert(now);
+        let status = ctx.resource::<CameraTrackStatus>().copied();
+        let run_seconds = status.map_or_else(
+            || now.duration_since(started).as_secs_f32(),
+            |s| s.elapsed_seconds,
+        );
+        let rebases = ctx
+            .resource::<FrameRebases>()
+            .map_or(0, FrameRebases::count);
+        let run_step_us =
+            ((run_seconds - self.previous_run_seconds).max(0.0) * 1_000_000.0).round() as u32;
+        let rebased = rebases != self.previous_rebases;
+        self.previous_run_seconds = run_seconds;
+        self.previous_rebases = rebases;
         let Some(previous) = self.previous.replace(now) else {
             return StepResult::Continue;
         };
@@ -168,24 +185,23 @@ impl System for FrameReportSystem {
             .as_micros()
             .min(u32::MAX.into()) as u32;
 
-        let status = ctx.resource::<CameraTrackStatus>().copied();
-        let run_seconds = status.map_or_else(
-            || now.duration_since(started).as_secs_f32(),
-            |s| s.elapsed_seconds,
-        );
         let render = ctx.profile.render;
         self.run.capture_pass_names(&render);
         let this_frame = PendingFrame {
-            run_seconds,
-            segment: status.and_then(|s| s.segment),
-            frame_us,
+            timing: FrameTiming {
+                run_seconds,
+                segment: status.and_then(|s| s.segment),
+                frame_us,
+                run_step_us,
+                rebased,
+            },
             render,
         };
         let hidden = ctx.resource::<WindowMinimized>().is_some_and(|m| m.0);
         let past_warmup = run_seconds >= self.options.warmup_seconds;
         let unseen = self
             .hidden
-            .leaves_out(hidden, this_frame.segment, past_warmup);
+            .leaves_out(hidden, this_frame.timing.segment, past_warmup);
         let recorded = if unseen {
             None
         } else if self.excluded > 0 {
@@ -199,9 +215,7 @@ impl System for FrameReportSystem {
             let systems = ctx.profile.system_timings();
             self.run.capture_system_names(systems);
             self.run.samples.push(FrameSample::new(
-                frame.run_seconds,
-                frame.segment,
-                frame.frame_us,
+                frame.timing,
                 &frame.render,
                 systems,
                 ctx.profile.render_handoffs(),
@@ -402,6 +416,41 @@ mod tests {
         assert!(run.samples.iter().all(|s| s.segment == Some(0)));
         // Track time advances on the fixed step, so successive samples differ.
         assert!(run.samples.get(1).unwrap().run_seconds > run.samples.get(0).unwrap().run_seconds);
+        forget_report(system);
+    }
+
+    #[test]
+    fn samples_carry_the_track_time_each_frame_showed_and_the_frame_moves() {
+        use concinnity_core::ecs::SimTiming;
+        use concinnity_core::planet::Rebase;
+
+        let (mut world, mut camera, mut system) =
+            world_with(track(vec![leg(60.0, 1.0, "approach")]));
+        world.insert_resource(FrameRebases::default());
+        camera.init(&mut world.context());
+        system.init(&mut world.context());
+        for ticks in [1, 1, 2, 1, 1] {
+            if ticks == 2 {
+                world.insert_resource(SimTiming {
+                    ticks,
+                    ..Default::default()
+                });
+                if let Some(rebases) = world.resource_mut::<FrameRebases>() {
+                    rebases.push(Rebase::IDENTITY);
+                }
+            } else {
+                world.insert_resource(SimTiming::default());
+            }
+            step(&mut world, &mut camera, &mut system);
+        }
+        let steps: Vec<(u32, bool)> = system
+            .run()
+            .samples
+            .iter()
+            .map(|s| (s.run_step_us, s.rebased))
+            .collect();
+        // The first frame is never recorded and the last is still pending.
+        assert_eq!(steps, [(16_667, false), (33_333, true), (16_667, false)]);
         forget_report(system);
     }
 

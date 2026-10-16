@@ -358,6 +358,10 @@ impl MtlContext {
         // slots would still be a few frames stale when the composite retires.
         let gpu_time = std::sync::Arc::clone(&self.diagnostics.gpu_time_us);
         let pass_times = std::sync::Arc::clone(&self.diagnostics.pass_times_us);
+        let pass_async = std::sync::Arc::clone(&self.diagnostics.pass_async_mask);
+        let gpu_overlap = std::sync::Arc::clone(&self.diagnostics.gpu_overlap_us);
+        let span_end = std::sync::Arc::clone(&self.diagnostics.gpu_span_end_ns);
+        let async_mask = graph.async_pass_mask();
         // The composite command buffer's own GPU span, published by its handler
         // as the fallback whole-frame time when per-pass timing is unavailable.
         let composite_span_us = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
@@ -379,20 +383,32 @@ impl MtlContext {
             Box::new(move || {
                 use std::sync::atomic::Ordering as AtomicOrdering;
                 let mut frame_us = composite_span_us.load(AtomicOrdering::Relaxed);
+                let mut overlap_us = 0;
                 if let Some(buf) = &pass_buffer {
                     let mask = active_mask.load(AtomicOrdering::Relaxed);
                     let per_pass = super::pass_timing::resolve(&buf.0, mask);
                     for (slot, micros) in pass_times.iter().zip(per_pass.iter()) {
                         slot.store(*micros, AtomicOrdering::Relaxed);
                     }
-                    // First pass start to last pass end, across both queues:
-                    // the frame's GPU span, which the per-pass times cannot be
-                    // summed into once passes overlap.
-                    if let Some(span_us) = super::pass_timing::frame_span_us(&buf.0, mask) {
-                        frame_us = span_us;
+                    pass_async.store(async_mask, AtomicOrdering::Relaxed);
+                    // First graphics-queue pass start to last end, clipped at
+                    // the previous frame's end: what this frame added to the
+                    // GPU timeline, which the per-pass times cannot be summed
+                    // into once passes overlap.
+                    if let Some((start, end)) =
+                        super::pass_timing::frame_span(&buf.0, mask, async_mask)
+                    {
+                        let previous = span_end.fetch_max(end, AtomicOrdering::Relaxed);
+                        let span = concinnity_core::render::pass_timing::FrameSpan::after(
+                            start, end, previous,
+                        );
+                        let micros = |ns: u64| (ns / 1000).min(u64::from(u32::MAX)) as u32;
+                        frame_us = micros(span.own);
+                        overlap_us = micros(span.overlap);
                     }
                 }
                 gpu_time.store(frame_us, AtomicOrdering::Relaxed);
+                gpu_overlap.store(overlap_us, AtomicOrdering::Relaxed);
             })
         });
 

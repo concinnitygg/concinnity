@@ -92,8 +92,8 @@ pub(super) fn position_debug_hud(
     position_chip_strip(ctx, chip_ids, loaded_fonts, strip);
 }
 
-// Pack the StatHud chips (fps, vram, ev, edr) into a tight strip from the
-// top-left of the window. Measured each frame (same timing rationale as the
+// Pack the StatHud chips (fps, gpu wait, vram, ram, ev, edr, track) into a
+// tight strip from the top-left of the window. Measured each frame (same timing rationale as the
 // DebugHud stack) so a chip that changes width re-packs its neighbors.
 pub(super) fn position_stat_hud(
     ctx: &mut PipelineContext,

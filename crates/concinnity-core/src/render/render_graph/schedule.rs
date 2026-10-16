@@ -627,6 +627,25 @@ mod tests {
     }
 
     #[test]
+    fn the_async_pass_mask_names_exactly_the_async_queue_passes() {
+        use crate::render::render_graph::frame::{FrameGraphInputs, build_frame_graph};
+
+        let mut inputs = FrameGraphInputs::all_off();
+        inputs.bindless_cull_enabled = true;
+        inputs.auto_exposure_enabled = true;
+        inputs.transparent_enabled = true;
+        inputs.planar_reflection_enabled = true;
+        inputs.two_pass_occlusion_enabled = true;
+        let g = build_frame_graph(&inputs).expect("frame graph compiles");
+        let mask = g.async_pass_mask();
+        assert_ne!(mask, 0);
+        for p in &g.passes {
+            let bit = mask & (1u64 << (p.id as usize)) != 0;
+            assert_eq!(bit, p.queue == PassQueue::AsyncCompute, "{:?}", p.id);
+        }
+    }
+
+    #[test]
     fn planar_mirrors_leave_the_compute_passes_after_main_free_to_overlap() {
         // The mirror renders read only the cull output and the shadow maps, so
         // the compute passes between Main and the decorations are unordered

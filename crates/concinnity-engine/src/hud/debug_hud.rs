@@ -28,8 +28,8 @@ const PASSES_CHIP_TOP_N: usize = 6;
 // `RenderStats.pass_times_us` array. Picks the top
 // [`PASSES_CHIP_TOP_N`] entries by GPU microseconds, descending, one per
 // line as `name µs`. Returns an empty string when every slot is at the
-// default `("", 0)` (the chip then renders nothing, DX/Vulkan keep it
-// blank until their per-pass timing pools land).
+// default `("", 0)`, as on a device without timestamp support, so the chip
+// renders nothing.
 //
 // Each value is one pass's own GPU occupancy, so the passes on a queue
 // sum to at most that queue's share of `gpu_frame_us`. They still do not

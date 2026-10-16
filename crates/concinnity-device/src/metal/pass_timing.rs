@@ -34,7 +34,8 @@
 //! distinct, ordered values), so there is no boundary to work around here.
 //!
 //! Summing. Fragment phases serialize on a queue in the common case, so the
-//! graphics queue's per-pass sum is bounded by the frame's GPU span and falls
+//! graphics queue's per-pass sum is bounded by the frame's GPU span (which is
+//! taken over the graphics queue alone, see [`frame_span`]) and falls
 //! short of it by the vertex/tiling bubbles no fragment phase covers. Two things
 //! break the bound rather than the measurement: the async-compute queue's passes
 //! overlap the graphics ones, so the relation holds per queue and not overall,
@@ -180,16 +181,15 @@ impl PassTimingResources {
         &self.buffers[self.frame_slot]
     }
 
-    // Pick which sample buffer the next set of `attach_*` calls binds to.
-    // Call at the top of each frame; the completion handler for the same
-    // frame resolves the same buffer.
+    // Move to the next sample buffer and return its slot: the buffer every
+    // `attach_*` call binds to until the next `begin_frame`, and the one the
+    // same frame's completion handler resolves.
     pub(super) fn begin_frame(&mut self) -> usize {
-        let slot = self.frame_slot;
         self.frame_slot = (self.frame_slot + 1) % self.buffers.len();
         // Reset the per-frame attached mask; the passes that run this frame set
         // their bits via `attach_*`, and the resolve zeroes the rest.
         self.attached.store(0, std::sync::atomic::Ordering::Relaxed);
-        slot
+        self.frame_slot
     }
 
     // Bitmask of the passes attached since the last `begin_frame`. Captured
@@ -446,7 +446,15 @@ fn ran_this_frame(samples: &[u64; SAMPLE_COUNT], attached: u64, i: usize) -> boo
 // stopped running keeps its last timestamps in the buffer, and one of those
 // anchoring `min_start` stretches the span across every frame since -- a
 // setting toggled off mid-session read as a six-second frame.
+#[cfg(test)]
 fn span_us(samples: &[u64; SAMPLE_COUNT], attached: u64) -> Option<u32> {
+    let (start, end) = span_bounds(samples, attached)?;
+    Some(((end - start) / 1000).min(u32::MAX as u64) as u32)
+}
+
+// The earliest sampled start and latest sampled end, in GPU nanoseconds, with
+// the same masking as [`span_us`].
+fn span_bounds(samples: &[u64; SAMPLE_COUNT], attached: u64) -> Option<(u64, u64)> {
     let mut min_start = u64::MAX;
     let mut max_end = 0u64;
     for i in 0..PASS_COUNT {
@@ -456,10 +464,7 @@ fn span_us(samples: &[u64; SAMPLE_COUNT], attached: u64) -> Option<u32> {
         min_start = min_start.min(samples[i * 2]);
         max_end = max_end.max(samples[i * 2 + 1]);
     }
-    if max_end <= min_start {
-        return None;
-    }
-    Some(((max_end - min_start) / 1000).min(u32::MAX as u64) as u32)
+    (max_end > min_start).then_some((min_start, max_end))
 }
 
 // Resolve a frame's sample buffer into per-pass microsecond deltas, one entry
@@ -476,24 +481,22 @@ pub(super) fn resolve(
     }
 }
 
-// Whole-frame GPU span in microseconds: the earliest sampled pass start to the
-// latest sampled pass end across this frame's buffer. A single command buffer's
-// `GPUStartTime` / `GPUEndTime` covers only its own slice of the frame (the
-// frame is split across many command buffers), so summing or reading one buffer
+// Whole-frame GPU span: the earliest sampled start and the latest sampled end
+// of the frame's graphics-queue passes, in GPU nanoseconds. A single command
+// buffer's `GPUStartTime` / `GPUEndTime` covers only its own slice of the frame
+// (the frame is split across many command buffers), so reading one buffer
 // under-reports the true frame time. The pass timestamps all share one GPU
-// clock, so min-start to max-end across them is the real GPU-busy span.
+// clock, so min-start to max-end across them is the frame's span on the queue.
 //
-// The earliest start is a render pass's fragment phase or a compute encoder's
-// start, so a frame whose leading work is a render pass's vertex/tiling phase
-// would begin its span slightly late. Every graph leads with the compute cull,
-// which anchors the span at the frame's first encoder.
+// The async-queue passes in `async_mask` are left out: they overlap the
+// graphics queue rather than extend it.
 //
-// Returns `None` when no pass wrote a valid timestamp pair.
-pub(super) fn frame_span_us(
+pub(super) fn frame_span(
     buffer: &ProtocolObject<dyn MTLCounterSampleBuffer>,
     attached: u64,
-) -> Option<u32> {
-    span_us(&read_samples(buffer)?, attached)
+    async_mask: u64,
+) -> Option<(u64, u64)> {
+    span_bounds(&read_samples(buffer)?, attached & !async_mask)
 }
 
 #[cfg(test)]
@@ -601,7 +604,8 @@ mod tests {
     fn the_graphics_queue_sum_is_bounded_by_the_span() {
         let samples = serial_frame();
         let d = durations_us(&samples, serial_mask());
-        let span = span_us(&samples, serial_mask()).expect("a written frame has a span") as u64;
+        let graphics = serial_mask() & !(1u64 << (PassId::Cull as usize));
+        let span = span_us(&samples, graphics).expect("a written frame has a span") as u64;
         let sum = sum_us(&d, &GRAPHICS);
         assert!(
             sum <= span,
@@ -615,11 +619,22 @@ mod tests {
     }
 
     #[test]
-    fn the_span_covers_both_queues() {
-        let samples = serial_frame();
-        // Cull runs on the async queue from 0, before any graphics pass, so the
-        // span starts there -- which is why the sum relation is per queue.
-        assert_eq!(span_us(&samples, serial_mask()), Some(13_800));
+    fn async_work_is_left_out_of_the_graphics_span() {
+        let mut samples = serial_frame();
+        // An async pass committed with this frame runs while the previous one
+        // still holds the graphics queue, a whole frame interval earlier.
+        write(
+            &mut samples,
+            PassId::LightCull,
+            CLOCK - 20_000_000,
+            CLOCK - 19_000_000,
+        );
+        let mask = serial_mask() | 1u64 << (PassId::LightCull as usize);
+        let async_mask = 1u64 << (PassId::Cull as usize) | 1u64 << (PassId::LightCull as usize);
+        // Across both queues the frame reads more than twice its own span.
+        assert_eq!(span_us(&samples, mask), Some(33_800));
+        // The graphics queue alone starts at the prepass.
+        assert_eq!(span_us(&samples, mask & !async_mask), Some(12_400));
     }
 
     #[test]
@@ -657,6 +672,24 @@ mod tests {
         let live = mask | 1u64 << (PassId::Ssgi as usize);
         assert_eq!(durations_us(&s, live)[PassId::Ssgi as usize], 2_000);
         assert!(span_us(&s, live).unwrap() > 9_000_000);
+    }
+
+    // A frame's passes have to write the buffer its completion handler reads.
+    // When they did not, each resolve read the previous frame's passes beside
+    // the next frame's first ones, and the span came out two frames long.
+    #[test]
+    fn a_frame_attaches_to_the_buffer_it_resolves() {
+        let Some(device) = objc2_metal::MTLCreateSystemDefaultDevice() else {
+            return;
+        };
+        let Some(mut timing) = PassTimingResources::new(&device, 2) else {
+            return;
+        };
+        for _ in 0..3 {
+            let slot = timing.begin_frame();
+            let resolved = timing.buffer_for(slot);
+            assert!(std::ptr::eq(timing.active(), &*resolved), "slot {slot}");
+        }
     }
 
     #[test]

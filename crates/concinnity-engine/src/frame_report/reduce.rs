@@ -5,7 +5,7 @@ use concinnity_core::render::render_graph::PassId;
 use serde::Serialize;
 
 use crate::frame_report::sample::{FrameRun, FrameSample};
-use crate::frame_report::stats::{Distribution, mean_u32};
+use crate::frame_report::stats::{Distribution, mean_u32, nearest_rank};
 
 /// How many passes a segment lists. The tail is noise next to the handful that
 /// own the frame.
@@ -14,11 +14,21 @@ const PASSES_REPORTED: usize = 8;
 /// How many systems a segment lists, on the same reasoning.
 const SYSTEMS_REPORTED: usize = 6;
 
-/// The row that closes a pass list: the median GPU frame less every pass listed
-/// above it. It covers the passes that fell below the cut, the ones the backend
-/// times no part of, and the gaps between them. Without it a list of the eight
-/// largest passes reads as if it were the whole frame.
-const UNATTRIBUTED: &str = "unattributed";
+/// The row for the graphics-queue passes that fell below the cut, as the
+/// median over the frames of what they came to together.
+const OTHER_PASSES: &str = "other passes";
+
+/// The row for graphics-queue time no timed pass covers: a render pass's
+/// vertex and tiling phase where no other pass's fragment phase hides it, a
+/// wait on the async queue, and the GPU idling between command buffers.
+/// Without it a list of the largest passes reads as if it were the whole frame.
+const GAPS: &str = "gaps";
+
+/// The row that closes a pass list, taken away from the rows above it: the
+/// part of the frame's span that ran while the previous frame was still on the
+/// GPU. Its passes are timed in full, but that time is the previous frame's
+/// as much as this one's, so the GPU frame leaves it out.
+const OVERLAP: &str = "overlap with previous frame";
 
 /// A system below this share of the stepped CPU work is not what is limiting
 /// it. Ranking the rest would rank noise.
@@ -77,7 +87,8 @@ pub struct PassShare {
     /// of a few hundred frames moves a mean past the slowest frame the segment
     /// actually drew.
     pub median_us: u32,
-    /// That median as a share of the segment's median GPU frame, in `0..=1`.
+    /// That median as a share of the segment's median GPU frame, in `0..=1`,
+    /// or negative for the overlap row, which is taken away from the rest.
     ///
     /// Reported alongside the microseconds because per-pass timings co-vary
     /// strongly, even between passes that share no work: a pass whose absolute
@@ -89,6 +100,11 @@ pub struct PassShare {
     /// left out of the remainder.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub within: Option<String>,
+    /// Whether the pass ran on the async compute queue in most of the frames
+    /// it ran in. Such a pass overlaps the GPU frame rather than adding to it,
+    /// so it is listed after the rows that add up to the frame.
+    #[serde(skip_serializing_if = "core::ops::Not::not")]
+    pub async_queue: bool,
 }
 
 /// One system's CPU contribution to a segment's frame, or the render side's
@@ -171,9 +187,17 @@ pub struct SlowFrame {
     /// The largest CPU costs, systems and the render submission together,
     /// largest first. Zero rows are left out.
     pub cpu: Vec<FrameCost>,
-    /// The largest passes of the GPU frame it reported, largest first, leaving
-    /// out a pass timed inside another.
+    /// The largest graphics-queue passes of the GPU frame it reported,
+    /// largest first, leaving out a pass timed inside another.
     pub passes: Vec<FrameCost>,
+    /// The part of that frame's span no timed graphics pass covers.
+    pub gpu_gap_us: u32,
+    /// The part of that frame's span it shared with the frame before it.
+    pub gpu_overlap_us: u32,
+    /// Microseconds of run time the frame advanced.
+    pub run_step_us: u32,
+    /// Whether the simulated frame moved under the camera that frame.
+    pub rebased: bool,
     /// The fan-outs it waited on, the render recording first. Ones that did
     /// not run are left out.
     pub fan_outs: Vec<FanOutCost>,
@@ -216,6 +240,10 @@ pub struct SegmentReport {
     pub objects_mean: u32,
     /// Largest GPU memory reading seen.
     pub vram_peak_bytes: u64,
+    /// How evenly the run's clock advanced against the frames that showed it.
+    pub pacing: Pacing,
+    /// Frames on which the simulated frame moved under the camera.
+    pub rebases: usize,
     /// The passes that owned the GPU frame, largest first.
     pub passes: Vec<PassShare>,
     /// The systems that owned the CPU frame, and the render submission beside
@@ -227,6 +255,49 @@ pub struct SegmentReport {
     /// otherwise read as faster than any one of its fan-outs. Ones that never
     /// ran are left out.
     pub fan_outs: Vec<FanOutCost>,
+}
+
+/// How much run time each frame showed against how long it took, as a ratio:
+/// 1.0 is a frame whose motion matched its own frame time.
+///
+/// A clock that moves in whole fixed steps under frames that do not divide
+/// them evenly shows two or three different amounts of motion at one steady
+/// frame time. That reads as judder on screen and never as a frame-time hitch,
+/// so it is measured here rather than inferred from the frame times.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
+pub struct Pacing {
+    /// 5th percentile of the ratio.
+    pub p5: f32,
+    /// Median of the ratio.
+    pub p50: f32,
+    /// 95th percentile of the ratio.
+    pub p95: f32,
+    /// Frames that advanced the run's clock not at all, and so showed the
+    /// same pose as the frame before.
+    pub still_frames: usize,
+}
+
+impl Pacing {
+    fn of(frames: &[&FrameSample]) -> Self {
+        // Thousandths, so the nearest-rank percentiles stay on frames that
+        // happened.
+        let mut ratios: Vec<u32> = frames
+            .iter()
+            .filter(|s| s.frame_us > 0)
+            .map(|s| (u64::from(s.run_step_us) * 1_000 / u64::from(s.frame_us)) as u32)
+            .collect();
+        if ratios.is_empty() {
+            return Self::default();
+        }
+        ratios.sort_unstable();
+        let at = |q| nearest_rank(&ratios, q) as f32 / 1_000.0;
+        Self {
+            p5: at(0.05),
+            p50: at(0.50),
+            p95: at(0.95),
+            still_frames: frames.iter().filter(|s| s.run_step_us == 0).count(),
+        }
+    }
 }
 
 /// A whole run, reduced.
@@ -301,18 +372,13 @@ fn slowest_frames(measured: &[&FrameSample], run: &FrameRun) -> Vec<SlowFrame> {
                     .map(|(slot, name)| (name, sample.system_us[slot]))
                     .chain(core::iter::once((RENDER_SUBMIT, sample.render_cpu_us))),
             ),
-            passes: {
-                let us = |name: &str| {
-                    named_slots(&run.pass_names)
-                        .find(|(_, n)| *n == name)
-                        .map_or(0, |(slot, _)| sample.pass_us[slot])
-                };
-                largest(
-                    named_slots(&run.pass_names)
-                        .filter(|(_, name)| counted_in(name, |outer| us(outer) > 0).is_none())
-                        .map(|(slot, name)| (name, sample.pass_us[slot])),
-                )
-            },
+            passes: largest(
+                graphics_passes(sample, run).map(|(slot, name)| (name, sample.pass_us[slot])),
+            ),
+            gpu_gap_us: gap_us(sample, run),
+            gpu_overlap_us: sample.gpu_overlap_us,
+            run_step_us: sample.run_step_us,
+            rebased: sample.rebased,
             fan_outs: fan_out_slots(run)
                 .map(|(slot, name)| FanOutCost::of(name, fan_out_in(sample, slot)))
                 .filter(|cost| cost.wall_us > 0)
@@ -457,6 +523,8 @@ fn summarize(
         draw_calls_mean: mean_u32(frames.iter().map(|s| s.draw_calls)),
         objects_mean: mean_u32(frames.iter().map(|s| s.objects)),
         vram_peak_bytes: frames.iter().map(|s| s.vram_bytes).max().unwrap_or(0),
+        pacing: Pacing::of(frames),
+        rebases: frames.iter().filter(|s| s.rebased).count(),
         passes: pass_shares(frames, run, gpu.p50_us, options.budget_us),
         systems: system_costs(frames, run),
         fan_outs: fan_out_means(frames, run),
@@ -526,18 +594,25 @@ fn span_seconds(frames: &[&FrameSample]) -> f32 {
 // The passes that owned the GPU frame, largest first, with each one's share of
 // it, and a pass timed inside another listed right below it. Passes that never
 // ran are left out rather than listed as zero.
+//
+// The graphics-queue passes come first, closed by the passes below the cut and
+// the gaps between them, so those rows add up to the median GPU frame. The
+// async-queue passes follow: they ran beside the frame rather than inside it.
 fn pass_shares(
     frames: &[&FrameSample],
     run: &FrameRun,
     gpu_median_us: u32,
     budget_us: u32,
 ) -> Vec<PassShare> {
+    let share_of = |us: u32| {
+        if gpu_median_us == 0 {
+            0.0
+        } else {
+            us as f32 / gpu_median_us as f32
+        }
+    };
     let mut column: Vec<u32> = Vec::with_capacity(frames.len());
-    let mut shares: Vec<PassShare> = run
-        .pass_names
-        .iter()
-        .enumerate()
-        .filter(|(_, name)| !name.is_empty())
+    let mut shares: Vec<PassShare> = named_slots(&run.pass_names)
         .filter_map(|(slot, name)| {
             column.clear();
             column.extend(frames.iter().map(|s| s.pass_us[slot]));
@@ -546,39 +621,101 @@ fn pass_shares(
                 return None;
             }
             Some(PassShare {
-                name: name.clone(),
+                name: name.to_string(),
                 median_us,
-                share: if gpu_median_us == 0 {
-                    0.0
-                } else {
-                    median_us as f32 / gpu_median_us as f32
-                },
+                share: share_of(median_us),
                 within: None,
+                async_queue: mostly_async(frames, slot),
             })
         })
         .collect();
     shares.sort_unstable_by_key(|p| core::cmp::Reverse(p.median_us));
-    let mut shares = nest(shares);
-
-    // Passes on separate queues overlap, so their times can sum past the frame
-    // they ran in; there is nothing left over to report when they do. A backend
-    // that timed nothing gets no row either: the remainder corrects a partial
-    // list rather than standing in for one.
-    let listed: u32 = shares
-        .iter()
-        .filter(|p| p.within.is_none())
-        .map(|p| p.median_us)
-        .sum();
-    let rest = gpu_median_us.saturating_sub(listed);
-    if rest > 0 && !shares.is_empty() {
-        shares.push(PassShare {
-            name: UNATTRIBUTED.to_string(),
-            median_us: rest,
-            share: rest as f32 / gpu_median_us as f32,
-            within: None,
-        });
+    let (async_rows, graphics): (Vec<PassShare>, Vec<PassShare>) =
+        shares.into_iter().partition(|p| p.async_queue);
+    let mut rows = nest(graphics);
+    // A backend that timed nothing gets no closing rows: they correct a
+    // partial list rather than standing in for one.
+    if !rows.is_empty() {
+        let listed: Vec<&str> = rows.iter().map(|p| p.name.as_str()).collect();
+        column.clear();
+        column.extend(frames.iter().map(|s| unlisted_graphics_us(s, run, &listed)));
+        let other = Distribution::of(&mut column, budget_us).p50_us;
+        let top: u32 = rows
+            .iter()
+            .filter(|p| p.within.is_none())
+            .map(|p| p.median_us)
+            .sum();
+        column.clear();
+        column.extend(frames.iter().map(|s| s.gpu_overlap_us));
+        let overlap = Distribution::of(&mut column, budget_us).p50_us;
+        let gaps = (gpu_median_us + overlap).saturating_sub(top + other);
+        for (name, us, sign) in [
+            (OTHER_PASSES, other, 1.0),
+            (GAPS, gaps, 1.0),
+            (OVERLAP, overlap, -1.0),
+        ] {
+            if us > 0 {
+                rows.push(PassShare {
+                    name: name.to_string(),
+                    median_us: us,
+                    share: sign * share_of(us),
+                    within: None,
+                    async_queue: false,
+                });
+            }
+        }
     }
-    shares
+    rows.extend(async_rows.into_iter().take(PASSES_REPORTED));
+    rows
+}
+
+// Whether pass `slot` ran on the async queue in more than half the frames it
+// ran in.
+fn mostly_async(frames: &[&FrameSample], slot: usize) -> bool {
+    let bit = 1u64 << slot;
+    let (ran, on_async) = frames.iter().filter(|s| s.pass_us[slot] > 0).fold(
+        (0usize, 0usize),
+        |(ran, on_async), s| {
+            (
+                ran + 1,
+                on_async + usize::from(s.async_pass_mask & bit != 0),
+            )
+        },
+    );
+    on_async * 2 > ran
+}
+
+// The pass slots one frame timed on the graphics queue at the top level: not
+// on the async queue, and not inside another pass that ran that frame.
+fn graphics_passes<'a>(
+    sample: &'a FrameSample,
+    run: &'a FrameRun,
+) -> impl Iterator<Item = (usize, &'a str)> + 'a {
+    let us = |name: &str| {
+        named_slots(&run.pass_names)
+            .find(|(_, n)| *n == name)
+            .map_or(0, |(slot, _)| sample.pass_us[slot])
+    };
+    named_slots(&run.pass_names)
+        .filter(move |(slot, _)| sample.async_pass_mask & (1u64 << slot) == 0)
+        .filter(move |(_, name)| counted_in(name, |outer| us(outer) > 0).is_none())
+}
+
+// What one frame's top-level graphics passes outside `listed` came to.
+fn unlisted_graphics_us(sample: &FrameSample, run: &FrameRun, listed: &[&str]) -> u32 {
+    graphics_passes(sample, run)
+        .filter(|(_, name)| !listed.contains(name))
+        .map(|(slot, _)| sample.pass_us[slot])
+        .fold(0, u32::saturating_add)
+}
+
+// The graphics-queue time one frame's timed passes leave uncovered, over its
+// whole span, the part shared with the previous frame included.
+fn gap_us(sample: &FrameSample, run: &FrameRun) -> u32 {
+    let passes = graphics_passes(sample, run)
+        .map(|(slot, _)| sample.pass_us[slot])
+        .fold(0, u32::saturating_add);
+    (sample.gpu_frame_us + sample.gpu_overlap_us).saturating_sub(passes)
 }
 
 // Cut a cost-ordered pass list to the passes a segment reports, each followed
@@ -612,7 +749,10 @@ mod tests {
             run_seconds,
             segment,
             frame_us,
+            run_step_us: frame_us,
+            rebased: false,
             gpu_frame_us: frame_us / 2,
+            gpu_overlap_us: 0,
             gpu_wait_us: 100,
             render_cpu_us: 0,
             replay_us: 0,
@@ -624,6 +764,7 @@ mod tests {
             objects: 400,
             vram_bytes: 1 << 20,
             pass_us: [0; MAX_PASS_TIMINGS],
+            async_pass_mask: 0,
             system_us: [0; MAX_SYSTEM_TIMINGS],
             system_fan_out: [FanOutTiming::default(); MAX_SYSTEM_TIMINGS],
         }
@@ -765,28 +906,156 @@ mod tests {
         let report = Report::of(&run, no_warmup()).expect("measured frames");
         let passes = &report.overall.passes;
         assert_eq!(passes.len(), 2);
-        assert_eq!(passes[1].name, UNATTRIBUTED);
+        assert_eq!(passes[1].name, GAPS);
         assert_eq!(passes[1].median_us, 7_500);
         assert!((passes.iter().map(|p| p.share).sum::<f32>() - 1.0).abs() < 1e-4);
     }
 
-    // Passes on separate queues overlap, so a sum past the frame is ordinary
-    // rather than a mistake, and there is nothing left over to name.
+    // An async-queue pass runs beside the frame, so it is listed after the
+    // rows that add up to the frame and stays out of them.
     #[test]
-    fn overlapping_passes_that_outlast_the_frame_leave_no_remainder() {
+    fn an_async_pass_is_listed_after_the_frame_and_left_out_of_its_rows() {
         let mut only = sample(0.0, Some(0), 20_000);
+        // gpu_frame is 10_000us: main 8_000 on the graphics queue, and a 7_000
+        // async pass that would leave nothing over if it were counted.
         only.pass_us[0] = 8_000;
         only.pass_us[1] = 7_000;
+        only.async_pass_mask = 0b10;
         let mut run = run_of(vec![only]);
-        run.pass_names = vec!["main".to_string(), "async".to_string()];
+        run.pass_names = vec!["main".to_string(), "light_cull".to_string()];
         let report = Report::of(&run, no_warmup()).expect("measured frames");
-        let names: Vec<&str> = report
+        let rows: Vec<(&str, u32, bool)> = report
             .overall
             .passes
             .iter()
-            .map(|p| p.name.as_str())
+            .map(|p| (p.name.as_str(), p.median_us, p.async_queue))
             .collect();
-        assert_eq!(names, ["main", "async"]);
+        assert_eq!(
+            rows,
+            [
+                ("main", 8_000, false),
+                (GAPS, 2_000, false),
+                ("light_cull", 7_000, true),
+            ]
+        );
+    }
+
+    // The rows above the async ones add up to the median GPU frame: the listed
+    // passes, the ones below the cut together, and the gaps between them.
+    #[test]
+    fn the_graphics_rows_add_up_to_the_gpu_frame() {
+        let passes = PASSES_REPORTED + 3;
+        let mut frames = Vec::new();
+        for n in 0..5 {
+            let mut f = sample(n as f32, Some(0), 30_000);
+            f.gpu_frame_us = 20_000 + n * 10;
+            f.gpu_overlap_us = 4_000;
+            for slot in 0..passes {
+                f.pass_us[slot] = 2_000 - slot as u32 * 100;
+            }
+            // One async pass that overlaps the frame.
+            f.pass_us[passes] = 5_000;
+            f.async_pass_mask = 1 << passes;
+            frames.push(f);
+        }
+        let mut run = run_of(frames);
+        run.pass_names = (0..=passes).map(|i| format!("pass{i}")).collect();
+        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let segment = &report.overall;
+        let frame: Vec<&PassShare> = segment.passes.iter().filter(|p| !p.async_queue).collect();
+        assert_eq!(frame.len(), PASSES_REPORTED + 3);
+        let other = frame[PASSES_REPORTED];
+        assert_eq!(other.name, OTHER_PASSES);
+        // The three passes below the cut: 1_200 + 1_100 + 1_000.
+        assert_eq!(other.median_us, 3_300);
+        assert_eq!(frame[PASSES_REPORTED + 1].name, GAPS);
+        let overlap = frame[PASSES_REPORTED + 2];
+        assert_eq!((overlap.name.as_str(), overlap.median_us), (OVERLAP, 4_000));
+        let total: i64 = frame
+            .iter()
+            .map(|p| i64::from(p.median_us) * if p.share < 0.0 { -1 } else { 1 })
+            .sum();
+        assert_eq!(total, i64::from(segment.gpu.p50_us));
+        let shares: f32 = frame.iter().map(|p| p.share).sum();
+        assert!((shares - 1.0).abs() < 1e-4, "{shares}");
+        assert!(segment.passes.last().is_some_and(|p| p.async_queue));
+    }
+
+    // A pass that moves between queues as features toggle is classed by
+    // where it ran most.
+    #[test]
+    fn a_pass_is_async_only_where_it_mostly_ran_async() {
+        let mut frames = Vec::new();
+        for n in 0..3 {
+            let mut f = sample(n as f32, Some(0), 20_000);
+            f.pass_us[0] = 1_000;
+            f.async_pass_mask = u64::from(n == 0);
+            frames.push(f);
+        }
+        let mut run = run_of(frames);
+        run.pass_names = vec!["hiz_build".to_string()];
+        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        assert!(!report.overall.passes[0].async_queue);
+    }
+
+    #[test]
+    fn a_slow_frame_leaves_async_passes_out_and_names_its_gap() {
+        let mut slow = sample(0.0, Some(0), 40_000);
+        // gpu_frame is 20_000us.
+        slow.pass_us[0] = 12_000;
+        slow.pass_us[1] = 3_000;
+        slow.pass_us[2] = 9_000;
+        slow.async_pass_mask = 0b100;
+        slow.gpu_overlap_us = 1_000;
+        slow.rebased = true;
+        slow.run_step_us = 33_333;
+        let mut run = run_of(vec![slow]);
+        run.pass_names = vec![
+            "main".to_string(),
+            "shadow".to_string(),
+            "ocean".to_string(),
+        ];
+        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let frame = &report.slowest[0];
+        let names: Vec<&str> = frame.passes.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["main", "shadow"]);
+        // 20_000 + 1_000 of span less the 15_000 its graphics passes cover.
+        assert_eq!(frame.gpu_gap_us, 6_000);
+        assert_eq!(frame.gpu_overlap_us, 1_000);
+        assert!(frame.rebased);
+        assert_eq!(frame.run_step_us, 33_333);
+    }
+
+    // Frames at a steady 22 ms over a 60 Hz clock show one step, then two:
+    // even frame times, uneven motion.
+    #[test]
+    fn pacing_measures_motion_against_frame_time() {
+        let mut frames = Vec::new();
+        for n in 0..20 {
+            let mut f = sample(n as f32, Some(0), 22_000);
+            f.run_step_us = if n % 3 == 2 { 33_333 } else { 16_667 };
+            frames.push(f);
+        }
+        frames[5].run_step_us = 0;
+        frames[7].rebased = true;
+        let report = Report::of(&run_of(frames), no_warmup()).expect("measured frames");
+        let pacing = report.overall.pacing;
+        assert_eq!(pacing.p5, 0.0);
+        assert!((pacing.p50 - 0.757).abs() < 1e-3, "{pacing:?}");
+        assert!((pacing.p95 - 1.515).abs() < 1e-3, "{pacing:?}");
+        assert_eq!(pacing.still_frames, 1);
+        assert_eq!(report.overall.rebases, 1);
+    }
+
+    #[test]
+    fn even_motion_paces_at_one() {
+        let run = run_of((0..10).map(|n| sample(n as f32, Some(0), 16_000)).collect());
+        let pacing = Report::of(&run, no_warmup())
+            .expect("measured frames")
+            .overall
+            .pacing;
+        assert_eq!((pacing.p5, pacing.p50, pacing.p95), (1.0, 1.0, 1.0));
+        assert_eq!(pacing.still_frames, 0);
     }
 
     // Vulkan and DirectX time the sky inside the main pass. Its row sits
@@ -814,7 +1083,7 @@ mod tests {
                 ("main", None, 6_000),
                 ("sky", Some("main"), 1_000),
                 ("shadow", None, 3_000),
-                (UNATTRIBUTED, None, 1_000),
+                (GAPS, None, 1_000),
             ]
         );
         let top: f32 = report
@@ -833,8 +1102,8 @@ mod tests {
         let mut run = run_of(vec![folded]);
         run.pass_names = vec!["shadow".to_string(), "main".to_string(), "sky".to_string()];
         let metal = Report::of(&run, no_warmup()).expect("measured frames");
-        let unattributed = |r: &Report| r.overall.passes.last().map(|p| p.median_us);
-        assert_eq!(unattributed(&metal), unattributed(&report));
+        let gaps = |r: &Report| r.overall.passes.last().map(|p| p.median_us);
+        assert_eq!(gaps(&metal), gaps(&report));
     }
 
     // With no enclosing pass on the list there is nothing to count it twice in.
@@ -874,7 +1143,7 @@ mod tests {
             .filter(|p| p.within.is_none())
             .map(|p| p.name.as_str())
             .collect();
-        assert_eq!(segment, ["shadow", "sky", UNATTRIBUTED]);
+        assert_eq!(segment, ["shadow", "sky", GAPS]);
     }
 
     #[test]

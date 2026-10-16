@@ -207,7 +207,7 @@ struct DetectedQuality {
 }
 
 // The DebugHud chip ids (cursor, camera, sys, passes: the top-right stack
-// order) and the StatHud chip ids (fps, gpu wait, vram, ram, ev, edr: the
+// order) and the StatHud chip ids (fps, gpu wait, vram, ram, ev, edr, track: the
 // top-left strip order) the frame step anchors. Passes is last because its
 // height follows the frame's step count.
 fn capture_hud_chips(ctx: &PipelineContext) -> (Vec<AssetId>, Vec<AssetId>) {
@@ -233,6 +233,7 @@ fn capture_hud_chips(ctx: &PipelineContext) -> (Vec<AssetId>, Vec<AssetId>) {
                 s.ram_label,
                 s.ev_label,
                 s.edr_label,
+                s.track_label,
             ]
             .into_iter()
             .flatten()

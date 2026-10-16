@@ -23,13 +23,14 @@ const DEBUG_SLOTS: [Slot<DebugHud>; 4] = [
     |h| &mut h.sys_label,
 ];
 
-const STAT_SLOTS: [Slot<StatHud>; 6] = [
+const STAT_SLOTS: [Slot<StatHud>; 7] = [
     |h| &mut h.fps_label,
     |h| &mut h.gpu_wait_label,
     |h| &mut h.vram_label,
     |h| &mut h.ram_label,
     |h| &mut h.ev_label,
     |h| &mut h.edr_label,
+    |h| &mut h.track_label,
 ];
 
 // Every rendering world gets the developer HUD; only a world that declares a

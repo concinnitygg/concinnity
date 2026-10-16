@@ -24,8 +24,18 @@ pub struct FrameSample {
     /// Wall-clock microseconds since the previous frame: the frame time a
     /// player would feel.
     pub frame_us: u32,
-    /// GPU microseconds for the most recently completed frame.
+    /// Microseconds of run time the frame advanced, against `frame_us`. The
+    /// run's clock moves in whole fixed steps, so a frame can show more or
+    /// less motion than the time it took: steady frame times over uneven
+    /// steps read as judder that `frame_us` alone never shows.
+    pub run_step_us: u32,
+    /// Whether the simulated frame moved under the camera this frame.
+    pub rebased: bool,
+    /// GPU microseconds for the most recently completed frame: its span after
+    /// the previous frame's ended.
     pub gpu_frame_us: u32,
+    /// Microseconds of that frame's span it shared with the frame before it.
+    pub gpu_overlap_us: u32,
     /// Microseconds the CPU spent blocked on the GPU.
     pub gpu_wait_us: u32,
     /// Microseconds of CPU work the render side spent submitting the frame,
@@ -54,6 +64,9 @@ pub struct FrameSample {
     /// Per-pass GPU microseconds, in the backend's slot order. Named by
     /// [`FrameRun::pass_names`], which shares the slot order.
     pub pass_us: [u32; MAX_PASS_TIMINGS],
+    /// Bit `i` set when pass slot `i` ran on the async compute queue, beside
+    /// `gpu_frame_us` rather than inside it.
+    pub async_pass_mask: u64,
     /// Per-system CPU microseconds, in schedule order, with the time a system
     /// spent handing its frame to the renderer taken out: that is the render
     /// side's, and `render_cpu_us` carries its work. Named by
@@ -69,9 +82,7 @@ impl FrameSample {
     /// `handoffs` and `fan_outs` are the per-system render handoff and fan-out
     /// timing recorded beside `systems`.
     pub fn new(
-        run_seconds: f32,
-        segment: Option<u32>,
-        frame_us: u32,
+        timing: FrameTiming,
         render: &RenderStats,
         systems: &[(&'static str, u32)],
         handoffs: &[(&'static str, u32)],
@@ -96,10 +107,13 @@ impl FrameSample {
             }
         }
         Self {
-            run_seconds,
-            segment,
-            frame_us,
+            run_seconds: timing.run_seconds,
+            segment: timing.segment,
+            frame_us: timing.frame_us,
+            run_step_us: timing.run_step_us,
+            rebased: timing.rebased,
             gpu_frame_us: render.gpu_frame_us,
+            gpu_overlap_us: render.gpu_overlap_us,
             gpu_wait_us: render.gpu_wait_us,
             render_cpu_us: render.render_cpu_us,
             replay_us: render.replay_us,
@@ -111,10 +125,27 @@ impl FrameSample {
             objects: render.objects,
             vram_bytes: render.vram_bytes,
             pass_us,
+            async_pass_mask: render.async_pass_mask,
             system_us,
             system_fan_out,
         }
     }
+}
+
+/// Where one frame sat on the run's clocks: what a sample carries beside the
+/// render stats and system timings.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FrameTiming {
+    /// See [`FrameSample::run_seconds`].
+    pub run_seconds: f32,
+    /// See [`FrameSample::segment`].
+    pub segment: Option<u32>,
+    /// See [`FrameSample::frame_us`].
+    pub frame_us: u32,
+    /// See [`FrameSample::run_step_us`].
+    pub run_step_us: u32,
+    /// See [`FrameSample::rebased`].
+    pub rebased: bool,
 }
 
 /// Everything one run recorded: the frames, the names for the two index
@@ -182,6 +213,13 @@ impl FrameRun {
 mod tests {
     use super::*;
 
+    fn timing(frame_us: u32) -> FrameTiming {
+        FrameTiming {
+            frame_us,
+            ..Default::default()
+        }
+    }
+
     fn render_with(passes: &[(&'static str, u32)]) -> RenderStats {
         let mut r = RenderStats {
             gpu_frame_us: 8_000,
@@ -200,11 +238,18 @@ mod tests {
 
     #[test]
     fn a_sample_carries_the_render_stats_and_the_pass_slots() {
+        let mut render = render_with(&[("main", 4_000)]);
+        render.async_pass_mask = 0b10;
+        render.gpu_overlap_us = 900;
         let s = FrameSample::new(
-            1.5,
-            Some(2),
-            16_000,
-            &render_with(&[("main", 4_000)]),
+            FrameTiming {
+                run_seconds: 1.5,
+                segment: Some(2),
+                frame_us: 16_000,
+                run_step_us: 16_667,
+                rebased: true,
+            },
+            &render,
             &[("GraphicsSystem", 700)],
             &[],
             &[],
@@ -212,6 +257,9 @@ mod tests {
         assert_eq!(s.run_seconds, 1.5);
         assert_eq!(s.segment, Some(2));
         assert_eq!(s.frame_us, 16_000);
+        assert_eq!((s.run_step_us, s.rebased), (16_667, true));
+        assert_eq!(s.async_pass_mask, 0b10);
+        assert_eq!(s.gpu_overlap_us, 900);
         assert_eq!((s.gpu_frame_us, s.gpu_wait_us), (8_000, 500));
         assert_eq!(s.render_cpu_us, 1_200);
         assert_eq!((s.draw_calls, s.objects), (120, 900));
@@ -225,9 +273,7 @@ mod tests {
     #[test]
     fn a_systems_render_handoff_is_taken_out_of_its_own_span_only() {
         let s = FrameSample::new(
-            0.0,
-            None,
-            16_000,
+            timing(16_000),
             &render_with(&[]),
             &[("PhysicsSystem", 400), ("GraphicsSystem", 9_000)],
             &[("GraphicsSystem", 8_700)],
@@ -240,9 +286,7 @@ mod tests {
     #[test]
     fn a_handoff_longer_than_its_span_leaves_zero_rather_than_wrapping() {
         let s = FrameSample::new(
-            0.0,
-            None,
-            16_000,
+            timing(16_000),
             &render_with(&[]),
             &[("GraphicsSystem", 100)],
             &[("GraphicsSystem", 900)],
@@ -265,9 +309,7 @@ mod tests {
         render.packing_fan_out = fan_out(150);
         render.pass_record_us[3] = 1_700;
         let s = FrameSample::new(
-            0.0,
-            None,
-            16_000,
+            timing(16_000),
             &render,
             &[("PhysicsSystem", 400), ("BehaviorSystem", 900)],
             &[],

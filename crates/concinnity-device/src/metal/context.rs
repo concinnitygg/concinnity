@@ -386,6 +386,14 @@ pub(super) struct Diagnostics {
     // writes it and `render_stats()` that reads it.
     pub pass_times_us:
         std::sync::Arc<[std::sync::atomic::AtomicU32; super::pass_timing::PASS_COUNT]>,
+    // The async-queue passes of the frame `pass_times_us` was resolved from,
+    // one bit per pass, published beside it.
+    pub pass_async_mask: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    // The part of that frame's graphics-queue span shared with the frame before
+    // it, in microseconds, and the latest span end seen, in GPU nanoseconds,
+    // which the next frame's span is clipped against.
+    pub gpu_overlap_us: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    pub gpu_span_end_ns: std::sync::Arc<std::sync::atomic::AtomicU64>,
     // Atomic accumulator the parallel-dispatched workers fetch_add their draw
     // counts into. Drained into `diagnostics.frame_stats.draw_calls` at the end of
     // `execute_graph`. AtomicU32 because workers may run concurrently.
@@ -1212,6 +1220,14 @@ impl MtlContext {
                 self.diagnostics.pass_times_us[i].load(std::sync::atomic::Ordering::Relaxed);
             stats.pass_times_us[i] = (*name, micros);
         }
+        stats.gpu_overlap_us = self
+            .diagnostics
+            .gpu_overlap_us
+            .load(std::sync::atomic::Ordering::Relaxed);
+        stats.async_pass_mask = self
+            .diagnostics
+            .pass_async_mask
+            .load(std::sync::atomic::Ordering::Relaxed);
         // Surface the auto-exposure EMA state. `None` when the world did not
         // opt in to auto-exposure (the static-exposure path leaves the field
         // empty so the StatHud chip stays blank).

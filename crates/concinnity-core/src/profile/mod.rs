@@ -46,10 +46,19 @@ pub struct RenderStats {
     /// templates. Drains by one when a skinned instance spawns and refills when
     /// one despawns, so a probe can watch the free-list recycle directly.
     pub skinned_pool_free: u32,
-    /// GPU execution time of the most recently completed frame, in
-    /// microseconds. Reported one or more frames late: the GPU timestamps are
-    /// only known once that frame's command buffer completion handler fires.
+    /// GPU time of the most recently completed frame, in microseconds: the
+    /// span of its graphics-queue work after the previous frame's ended, so in
+    /// steady state it is never longer than the frame interval. The part of
+    /// the span shared with the previous frame is `gpu_overlap_us`.
+    /// Async-queue work is left out; it overlaps the span rather than extending
+    /// it. Reported one or more frames late: the GPU timestamps are only known
+    /// once that frame's command buffer completion handler fires.
     pub gpu_frame_us: u32,
+    /// Microseconds of the same frame's graphics-queue span that ran while the
+    /// previous frame's work was still on the GPU. Its passes are timed in
+    /// full, so they add up to `gpu_frame_us` plus this. Zero on a backend that
+    /// does not split the span.
+    pub gpu_overlap_us: u32,
     /// Microseconds the CPU spent blocked on the GPU inside the backend's
     /// per-frame draw call: the frames-in-flight fence or semaphore that paces
     /// the CPU against GPU retirement, plus the swapchain / drawable acquire.
@@ -101,6 +110,11 @@ pub struct RenderStats {
     /// `("", 0)`. Slot order is backend-defined and stable for the process
     /// lifetime.
     pub pass_times_us: [PassTiming; MAX_PASS_TIMINGS],
+    /// Bit `i` set when slot `i` of `pass_times_us` ran on the async compute
+    /// queue, beside the graphics queue rather than inside its span. Those
+    /// passes overlap `gpu_frame_us` instead of adding to it. Zero on a backend
+    /// that records every pass on one queue.
+    pub async_pass_mask: u64,
     /// Current adapted exposure value (EV) from the auto-exposure EMA.
     /// `None` when the world did not opt in to auto-exposure (or the active
     /// backend has not yet wired the readout). The `StatHud` overlay reads
@@ -127,6 +141,7 @@ impl Default for RenderStats {
             skinned_visible: 0,
             skinned_pool_free: 0,
             gpu_frame_us: 0,
+            gpu_overlap_us: 0,
             gpu_wait_us: 0,
             render_cpu_us: 0,
             replay_us: 0,
@@ -137,6 +152,7 @@ impl Default for RenderStats {
             vram_bytes: 0,
             transient_pool_bytes: 0,
             pass_times_us: [("", 0); MAX_PASS_TIMINGS],
+            async_pass_mask: 0,
             auto_exposure_ev: None,
             max_edr: None,
         }

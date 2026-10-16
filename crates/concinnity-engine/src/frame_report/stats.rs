@@ -59,8 +59,9 @@ impl Distribution {
     }
 }
 
-// The smallest sample at or above quantile `q` of an already sorted slice.
-fn nearest_rank(sorted: &[u32], q: f32) -> u32 {
+// The smallest sample at or above quantile `q` of an already sorted, non-empty
+// slice.
+pub(super) fn nearest_rank(sorted: &[u32], q: f32) -> u32 {
     let rank = (q * sorted.len() as f32).ceil() as usize;
     sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
 }

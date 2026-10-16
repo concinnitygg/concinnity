@@ -64,9 +64,75 @@ pub fn decode_frame_block(
     (frame_us, passes)
 }
 
+/// One frame's GPU span on the queue that paces frames, split against the
+/// frame before it.
+///
+/// Consecutive frames overlap on the GPU: the next frame's leading compute
+/// starts while the previous frame's last passes still run. A frame's span is
+/// then its latency, and summing spans counts the overlap twice, so the span
+/// is clipped at the previous frame's end. The clipped part is what the frame
+/// added to the GPU timeline, which in steady state is at most the frame
+/// interval.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FrameSpan {
+    /// Span time after the previous frame's end.
+    pub own: u64,
+    /// Span time shared with the previous frame.
+    pub overlap: u64,
+}
+
+impl FrameSpan {
+    /// Split the span `start..end` against `previous_end`, the end of the
+    /// frame before it, in the same timestamp units.
+    pub fn after(start: u64, end: u64, previous_end: u64) -> Self {
+        let span = end.saturating_sub(start);
+        let overlap = previous_end.saturating_sub(start).min(span);
+        Self {
+            own: span - overlap,
+            overlap,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_frame_after_the_previous_one_keeps_its_whole_span() {
+        assert_eq!(
+            FrameSpan::after(100, 130, 90),
+            FrameSpan {
+                own: 30,
+                overlap: 0
+            }
+        );
+    }
+
+    #[test]
+    fn a_frame_started_under_the_previous_one_owns_only_what_follows_it() {
+        // Spans of 30 every 25: each frame shares 5 with the one before, and
+        // what it owns is the interval.
+        assert_eq!(
+            FrameSpan::after(125, 155, 130),
+            FrameSpan {
+                own: 25,
+                overlap: 5
+            }
+        );
+    }
+
+    #[test]
+    fn a_frame_inside_the_previous_one_owns_nothing() {
+        assert_eq!(
+            FrameSpan::after(100, 120, 150),
+            FrameSpan {
+                own: 0,
+                overlap: 20
+            }
+        );
+        assert_eq!(FrameSpan::after(100, 90, 0), FrameSpan::default());
+    }
 
     #[test]
     fn whole_frame_pair_heads_each_block() {

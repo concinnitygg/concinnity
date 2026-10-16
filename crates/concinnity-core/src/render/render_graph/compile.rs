@@ -214,6 +214,15 @@ impl CompiledGraph {
         self.passes.iter().find(|p| p.id == id)
     }
 
+    /// One bit per [`PassId`] the schedule put on the async compute queue,
+    /// bit `id as usize`.
+    pub fn async_pass_mask(&self) -> u64 {
+        self.passes
+            .iter()
+            .filter(|p| p.queue == PassQueue::AsyncCompute)
+            .fold(0, |mask, p| mask | 1u64 << (p.id as usize))
+    }
+
     /// Whether pass `b` depends on pass `a`, transitively, through the read /
     /// write edges. What correctness requires, independent of the schedule.
     pub fn depends_on(&self, a: usize, b: usize) -> bool {

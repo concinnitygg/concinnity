@@ -11,18 +11,24 @@ use crate::ecs::Ref;
 /// frame rate, `gpu_wait_label` the part of the frame the CPU spent blocked on
 /// the GPU, `vram_label` the GPU-memory use, `ram_label` the host process
 /// memory (resident set size, against the memory budget when known), `ev_label`
-/// the auto-exposure value, and `edr_label` the HDR headroom multiplier. Chips
-/// whose stat is unavailable stay blank. The frame-rate, blocked-on-GPU, and
-/// GPU-memory chips are shown or hidden from the in-game video settings
-/// ("Display performance stats"); the host-memory, exposure, and HDR chips show
-/// whenever their reading is available.
+/// the auto-exposure value, `edr_label` the HDR headroom multiplier, and
+/// `track_label` how far a [CameraTrack](#cameratrack) has run and the segment
+/// it is in. Chips whose stat is unavailable stay blank. The frame-rate,
+/// blocked-on-GPU, and GPU-memory chips are shown or hidden from the in-game
+/// video settings ("Display performance stats"); the host-memory, exposure,
+/// HDR, and track chips show whenever their reading is available.
 ///
 /// `GPU WAIT` is the frame's fence / semaphore and swapchain-acquire time, the
-/// share of the frame the CPU spent waiting rather than working. It reads near
-/// the frame time on a GPU-bound scene and near zero on a CPU-bound one.
+/// share of the frame the CPU spent waiting rather than working, averaged over
+/// the same window as the frame rate. It reads near the frame time on a
+/// GPU-bound scene and near zero on a CPU-bound one.
+///
+/// `TRACK` reads the track's own clock, the one a
+/// [FrameReport](#framereport) times its frames on, so a moment seen on screen
+/// (`TRACK 47.3 s ground`) can be found in the report by its time.
 ///
 /// The chips are packed into a tight strip anchored at the top-left of the
-/// window, left to right in the order fps, gpu wait, vram, ram, ev, edr; a blank chip
+/// window, left to right in the order fps, gpu wait, vram, ram, ev, edr, track; a blank chip
 /// reserves no width, so hidden readouts leave no gap. Their on-screen position
 /// is fixed by the engine rather than the authored coordinates.
 ///
@@ -50,4 +56,6 @@ pub struct StatHud {
     pub ev_label: Option<Ref<TextLabel>>,
     /// [TextLabel](#textlabel) that receives the HDR-headroom chip text.
     pub edr_label: Option<Ref<TextLabel>>,
+    /// [TextLabel](#textlabel) that receives the camera-track chip text.
+    pub track_label: Option<Ref<TextLabel>>,
 }

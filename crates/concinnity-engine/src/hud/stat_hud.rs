@@ -7,8 +7,9 @@
 //! resource); the exposure and HDR chips show whenever their feature is active.
 //! Developer readouts (passes / cursor / camera) live on `DebugHud`.
 
-use concinnity_core::components::StatHud;
+use concinnity_core::camera_track::CameraTrackStatus;
 use concinnity_core::components::TextLabel;
+use concinnity_core::components::{CameraTrack, StatHud};
 use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Access, FrameTime, HudPrefs, PipelineContext, StepResult, System};
@@ -38,6 +39,16 @@ fn gpu_wait_text(micros: u32) -> String {
         format!("GPU WAIT {micros} us")
     } else {
         format!("GPU WAIT {:.1} ms", micros as f32 / 1000.0)
+    }
+}
+
+// Build the camera-track chip text from the track's own clock, the one a
+// FrameReport times its frames on, with the segment the track is in when it
+// names one.
+fn track_text(elapsed_secs: f32, segment: Option<&str>) -> String {
+    match segment {
+        Some(name) if !name.is_empty() => format!("TRACK {elapsed_secs:.1} s {name}"),
+        _ => format!("TRACK {elapsed_secs:.1} s"),
     }
 }
 
@@ -97,7 +108,12 @@ fn edr_text(max_edr: Option<f32>) -> String {
 // the swapchain / drawable acquire). It is part of the graphics system's own
 // CPU span, so subtracting it from that span gives the CPU work the frame did;
 // a GPU-bound frame reads near the frame time here and near zero when the CPU
-// is the bottleneck. Rides the same "Display performance stats" toggle as `FPS`.
+// is the bottleneck. Averaged over the frame-rate window, the way the frame
+// report's mean is. Rides the same "Display performance stats" toggle as `FPS`.
+//
+// `TRACK` is a `CameraTrack`'s elapsed time and segment, rewritten every frame
+// its tenth of a second changes, on the clock the frame report times frames
+// on. Blank in a world without a track.
 //
 // `VRAM` is the render device's current allocation; on Apple Silicon's
 // unified memory that is its share of system RAM. Filled on Metal
@@ -134,10 +150,18 @@ pub(crate) struct StatHudSystem {
     ram_label: Option<AssetId>,
     ev_label: Option<AssetId>,
     edr_label: Option<AssetId>,
+    track_label: Option<AssetId>,
     // The frame-rate averaging window, which also paces the emit.
     window: RateWindow,
-    // Most recent blocked-on-GPU sample for one frame, microseconds.
-    gpu_wait_us: u32,
+    // Blocked-on-GPU microseconds summed over the frames of the current
+    // window, so the chip averages over the same frames as the frame rate.
+    gpu_wait_sum_us: u64,
+    gpu_wait_frames: u32,
+    // The track's segment names, read once at init; a track does not change
+    // under a running world.
+    track_segments: Vec<String>,
+    // The track chip's current text, rewritten only when it changes.
+    track_text: String,
     // Most recent GPU-memory sample, bytes.
     vram_bytes: u64,
     // Most recent host resident-set size, bytes; `None` when the platform
@@ -162,8 +186,12 @@ impl StatHudSystem {
             ram_label: config.ram_label.map(Ref::id),
             ev_label: config.ev_label.map(Ref::id),
             edr_label: config.edr_label.map(Ref::id),
+            track_label: config.track_label.map(Ref::id),
             window: RateWindow::default(),
-            gpu_wait_us: 0,
+            gpu_wait_sum_us: 0,
+            gpu_wait_frames: 0,
+            track_segments: Vec::new(),
+            track_text: String::new(),
             vram_bytes: 0,
             ram_bytes: None,
             ev: None,
@@ -186,7 +214,16 @@ impl System for StatHudSystem {
                 HudPrefs,
                 FrameTime,
                 crate::app::budget::MemoryBudget,
+                CameraTrackStatus,
             ])
+    }
+
+    fn init(&mut self, ctx: &mut PipelineContext) {
+        self.track_segments = ctx
+            .query::<CameraTrack>()
+            .next()
+            .map(|track| track.segments.clone())
+            .unwrap_or_default();
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
@@ -198,10 +235,25 @@ impl System for StatHudSystem {
             .resource::<HudPrefs>()
             .map_or((true, true), |p| (p.show_fps, p.show_vram));
 
-        self.gpu_wait_us = ctx.profile.render.gpu_wait_us;
+        self.gpu_wait_sum_us += u64::from(ctx.profile.render.gpu_wait_us);
+        self.gpu_wait_frames += 1;
         self.vram_bytes = ctx.profile.render.vram_bytes;
         self.ev = ctx.profile.render.auto_exposure_ev;
         self.max_edr = ctx.profile.render.max_edr;
+
+        // Every frame rather than on the emit tick: a moment called out on
+        // screen should match the report to the tenth of a second.
+        if let Some(status) = ctx.resource::<CameraTrackStatus>().copied() {
+            let segment = status
+                .segment
+                .and_then(|i| self.track_segments.get(i as usize))
+                .map(String::as_str);
+            let text = track_text(status.elapsed_seconds, segment);
+            if text != self.track_text {
+                self.track_text.clone_from(&text);
+                Self::write_chip(ctx, self.track_label, text);
+            }
+        }
 
         let dt = ctx.resource::<FrameTime>().copied().unwrap_or_default().dt;
         if let Some((frames, elapsed)) = self.window.tick(dt, EMIT_INTERVAL_SECS) {
@@ -237,7 +289,8 @@ impl System for StatHudSystem {
                 ctx,
                 self.gpu_wait_label,
                 if show_fps {
-                    gpu_wait_text(self.gpu_wait_us)
+                    let mean = self.gpu_wait_sum_us / u64::from(self.gpu_wait_frames.max(1));
+                    gpu_wait_text(mean as u32)
                 } else {
                     String::new()
                 },
@@ -245,6 +298,8 @@ impl System for StatHudSystem {
             Self::write_chip(ctx, self.ram_label, ram_text(self.ram_bytes, budget_mib));
             Self::write_chip(ctx, self.ev_label, ev_text(self.ev));
             Self::write_chip(ctx, self.edr_label, edr_text(self.max_edr));
+            self.gpu_wait_sum_us = 0;
+            self.gpu_wait_frames = 0;
         }
         StepResult::Continue
     }
@@ -486,6 +541,58 @@ mod tests {
         assert_eq!(chip(&world, 1), "", "fps chip hidden");
         assert_eq!(chip(&world, 2), "", "vram chip hidden");
         assert_eq!(chip(&world, 4), "", "gpu wait chip hidden");
+    }
+
+    #[test]
+    fn track_text_names_the_time_and_segment() {
+        assert_eq!(track_text(47.26, Some("ground")), "TRACK 47.3 s ground");
+        assert_eq!(track_text(3.0, None), "TRACK 3.0 s");
+        assert_eq!(track_text(3.0, Some("")), "TRACK 3.0 s");
+    }
+
+    // The track chip reads the track's own clock every frame, with the
+    // segment named from the track, and stays blank without a track.
+    #[test]
+    fn the_track_chip_follows_the_track_clock() {
+        use concinnity_core::components::cook::CameraTrack as CameraTrackArgs;
+
+        let mut world = World::new();
+        world.add_component(StatHud {
+            track_label: Some(Ref::new(AssetId(5))),
+            ..StatHud::default()
+        });
+        world.push_identified(AssetId(5), TextLabel::default());
+        world.add_component(CameraTrack::bake(CameraTrackArgs::default()));
+        if let Some(track) = world.query_mut::<CameraTrack>().next() {
+            track.segments = vec!["settle".to_string(), "ground".to_string()];
+        }
+        world.start(SYSTEMS).unwrap();
+        world.step();
+        assert_eq!(chip(&world, 5), "", "no track status yet");
+        world.insert_resource(CameraTrackStatus {
+            elapsed_seconds: 47.04,
+            segment: Some(1),
+            ..Default::default()
+        });
+        world.step();
+        assert_eq!(chip(&world, 5), "TRACK 47.0 s ground");
+    }
+
+    // The GPU WAIT chip is the mean over the window's frames rather than the
+    // last frame's reading.
+    #[test]
+    fn the_gpu_wait_chip_averages_its_window() {
+        let mut world = hud_world();
+        world.start(SYSTEMS).unwrap();
+        world.insert_resource(FrameTime {
+            dt: 0.25,
+            elapsed: 0.0,
+        });
+        for wait in [2_000, 4_000] {
+            world.context().profile.render.gpu_wait_us = wait;
+            world.step();
+        }
+        assert_eq!(chip(&world, 4), "GPU WAIT 3.0 ms");
     }
 
     // Sub-millisecond waits stay in microseconds so a CPU-bound frame is

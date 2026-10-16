@@ -1,7 +1,7 @@
 //! Per-frame submission bookkeeping: the transient buffer rings and the pass
 //! timing diagnostics.
 
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::{Arc, Mutex};
 
 use concinnity_core::profile::RenderStats;
@@ -60,6 +60,9 @@ pub(super) fn build_diagnostics(gpu: &InitGpu<'_>) -> Diagnostics {
         device_error: Arc::new(Mutex::new(None)),
         pass_timing,
         pass_times_us: Arc::new(std::array::from_fn(|_| AtomicU32::new(0))),
+        pass_async_mask: Arc::new(AtomicU64::new(0)),
+        gpu_overlap_us: Arc::new(AtomicU32::new(0)),
+        gpu_span_end_ns: Arc::new(AtomicU64::new(0)),
         draw_calls_accum: AtomicU32::new(0),
     }
 }
