@@ -36,6 +36,13 @@ pub(crate) const LUT_PAYLOAD_HEADER_BYTES: usize = 16;
 const MIN_LUT_SIZE: u32 = 2;
 const MAX_LUT_SIZE: u32 = 128;
 
+/// Edge length from which the composite lets the sampler's trilinear filter
+/// blend a LUT; smaller LUTs are blended in full float. The filter's
+/// fixed-point weights step a read by about 1/256 of a texel span, which on a
+/// 2x2x2 LUT is a whole 8-bit output step. `LUT_FILTER_MIN_SIZE` in
+/// composite.hlsl.
+pub const LUT_FILTER_MIN_SIZE: u32 = 16;
+
 /// Classify a `ColorLut` source path by extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LutFormat {
@@ -328,5 +335,28 @@ mod tests {
         let err = deserialize(truncated).expect_err("a short payload is refused");
         assert!(err.contains("too short"), "{err}");
         assert!(err.contains(&format!("size {size}")), "{err}");
+    }
+
+    #[test]
+    fn the_filter_threshold_matches_the_shader() {
+        let src = crate::render::shaders::COMPOSITE;
+        assert_eq!(
+            crate::render::shader_consts::uint(src, "LUT_FILTER_MIN_SIZE"),
+            LUT_FILTER_MIN_SIZE as usize
+        );
+        assert!((MIN_LUT_SIZE..=MAX_LUT_SIZE).contains(&LUT_FILTER_MIN_SIZE));
+    }
+
+    // A hardware-filtered read moves in steps of one weight step (8 fractional
+    // bits, the D3D minimum) of one texel span. From the threshold up that
+    // stays under half an 8-bit output step; at the smallest LUT it is about a
+    // whole step, the banding the float blend exists for.
+    #[test]
+    fn hardware_filter_steps_stay_under_half_an_output_step_from_the_threshold() {
+        let output_steps = |size: u32| 255.0 / ((size - 1) as f32 * 256.0);
+        for size in LUT_FILTER_MIN_SIZE..=MAX_LUT_SIZE {
+            assert!(output_steps(size) < 0.5, "{size}: {}", output_steps(size));
+        }
+        assert!(output_steps(MIN_LUT_SIZE) > 0.9);
     }
 }

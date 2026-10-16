@@ -331,6 +331,19 @@ fn texture_overrides_apply_only_where_the_world_streams() {
     assert_eq!((r.texture_cap, r.texture_budget), (10, 1));
 }
 
+// Without a `ColorLut` there is nothing to grade, so the composite skips the
+// LUT; with one, its own strength blends it in.
+#[test]
+fn the_lut_strength_comes_from_the_color_lut() {
+    let none = WorldSettings::new(WorldAssets::default());
+    assert_eq!(none.post_process().lut_strength, 0.0);
+    let graded = WorldSettings::new(WorldAssets {
+        lut_strength: Some(0.6),
+        ..Default::default()
+    });
+    assert_eq!(graded.post_process().lut_strength, 0.6);
+}
+
 #[test]
 fn the_fxaa_flag_follows_the_clamped_aa_mode() {
     let world = WorldSettings::default();

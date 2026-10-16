@@ -68,7 +68,7 @@ impl WorldSettings {
     /// The settings a world's declared assets author.
     pub fn new(assets: WorldAssets<'_>) -> Self {
         let mut graphics = ResolvedGraphics {
-            lut_strength: assets.lut_strength.unwrap_or(1.0),
+            lut_strength: assets.lut_strength.unwrap_or(0.0),
             ..ResolvedGraphics::default()
         };
         if let Some(authored) = assets.graphics {

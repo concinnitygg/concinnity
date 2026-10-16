@@ -49,7 +49,7 @@ mod tests {
             &Bloom::default(),
             &Exposure::default(),
             &Vignette::default(),
-            1.0,
+            0.0,
             AntiAliasing::default().mode,
         );
         assert_eq!(defaults, PostProcessTunables::DEFAULT);

@@ -17,7 +17,7 @@
 //! samples fewer of them.
 //!
 //! The run can also save a few of its frames, at fixed moments of the path:
-//! the meadow by day and by night, and the view from aloft by day. The sky
+//! the meadow by day and by night, and the view from aloft through dawn. The sky
 //! turns from afternoon through night to the next morning over the run, so
 //! each moment is placed where the sun is up or down, not only by stretch.
 
@@ -59,8 +59,10 @@ const GRAPHICS: &str = "GraphicsConfig#0";
 // The frames saved with `--capture`: the file name, the segment the frame is
 // taken in, and how far through that segment. The sun sets about a third of
 // the way along the ground and rises again near the end of the cruise.
-const CAPTURES: [(&str, &str, f32); 4] = [
+const CAPTURES: [(&str, &str, f32); 6] = [
     ("ground-day.png", "ground", 0.15),
+    ("aloft-twilight.png", "aloft", 0.55),
+    ("aloft-dawn.png", "aloft", 0.61),
     ("aloft-sunrise.png", "aloft", 0.65),
     ("aloft-day.png", "aloft", 0.9),
     ("ground-night.png", "ground", 0.9),
@@ -399,5 +401,15 @@ mod tests {
     fn the_sunrise_capture_has_the_sun_low() {
         let sunrise = sun_elevation_deg(moment("aloft-sunrise.png"));
         assert!(sunrise > 0.5 && sunrise < 8.0, "{sunrise} deg");
+    }
+
+    // The twilight pair brackets the sun crossing the horizon, where the sky's
+    // color changes fastest from the horizon up and around the sun.
+    #[test]
+    fn the_twilight_captures_bracket_the_horizon() {
+        let twilight = sun_elevation_deg(moment("aloft-twilight.png"));
+        let dawn = sun_elevation_deg(moment("aloft-dawn.png"));
+        assert!(twilight > -4.0 && twilight < 0.0, "{twilight} deg");
+        assert!(dawn > 0.0 && dawn < 2.5, "{dawn} deg");
     }
 }

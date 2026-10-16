@@ -50,7 +50,7 @@ pub struct ResolvedGraphics {
     pub culling: Culling,
     /// Planet terrain tile detail.
     pub planet_detail: PlanetDetail,
-    /// The `ColorLut` blend; 1.0 without one.
+    /// The `ColorLut` blend; 0 without one.
     pub lut_strength: f32,
     /// The DLSS render preset, chosen by the user only.
     pub dlss_preset: DlssPreset,
@@ -73,7 +73,7 @@ impl Default for ResolvedGraphics {
             display: Display::default(),
             culling: Culling::default(),
             planet_detail: PlanetDetail::default(),
-            lut_strength: 1.0,
+            lut_strength: 0.0,
             dlss_preset: DlssPreset::default(),
         }
     }

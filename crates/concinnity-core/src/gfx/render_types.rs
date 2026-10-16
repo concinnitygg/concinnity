@@ -694,8 +694,8 @@ pub struct PostProcessTunables {
     /// Vignette strength in `[0, 1]`. 0 disables the corner darkening.
     pub vignette: f32,
     /// Color-LUT blend in `[0, 1]`: `mix(scene, graded, lut_strength)` in the
-    /// composite pass. Has no effect when no `ColorLut` is declared: the
-    /// renderer then binds an identity LUT, so the grade is a no-op.
+    /// composite pass. 0 skips the LUT, and is what a world without a
+    /// `ColorLut` resolves to.
     pub lut_strength: f32,
     /// FXAA edge-filter flag on the SDR path. `1.0` runs the composite's FXAA
     /// pass; `0.0` skips it (the `Off` anti-aliasing mode). Resolved from
@@ -711,7 +711,7 @@ impl PostProcessTunables {
         bloom_knee: 0.5,
         exposure: 1.0,
         vignette: 0.0,
-        lut_strength: 1.0,
+        lut_strength: 0.0,
         fxaa: 1.0,
     };
 }
@@ -737,8 +737,8 @@ pub struct PostProcessParams {
     /// Vignette strength in `[0, 1]`. 0 disables the corner darkening.
     pub vignette: f32,
     /// Color-LUT blend in `[0, 1]`: `mix(scene, graded, lut_strength)` in the
-    /// composite pass. Has no effect when no `ColorLut` is declared: the
-    /// renderer then binds an identity LUT, so the grade is a no-op.
+    /// composite pass. 0 skips the LUT, and is what a world without a
+    /// `ColorLut` resolves to.
     pub lut_strength: f32,
     /// HDR display output flag. `0.0` = SDR path (ACES tonemap + gamma 2.2 +
     /// FXAA + ColorLut, output BGRA8Unorm). `1.0` = HDR EDR path (no tonemap

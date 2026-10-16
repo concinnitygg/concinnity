@@ -1,8 +1,8 @@
 // Final composite: bloom onto the exposed HDR scene, then either the SDR
 // chain (ACES tonemap, gamma 2.2, FXAA, color-grading LUT) or the HDR EDR
-// passthrough, plus the vignette, the scene-transition fade, and the G-buffer
-// channel views. Single source for every backend; pairs with
-// `fullscreen_vertex` in fullscreen.hlsl.
+// passthrough, plus the vignette, the scene-transition fade, the dither ahead
+// of an integer target's quantization, and the G-buffer channel views. Single
+// source for every backend; pairs with `fullscreen_vertex` in fullscreen.hlsl.
 //
 // Each source is a texture and a `SamplerState`: Vulkan binds the textures at
 // 0..7 and their samplers at 8..15. The register numbers are the Metal indices
@@ -182,21 +182,54 @@ float fade_scale()
     return 1.0 - saturate(post.fade);
 }
 
-// Sample the 3D color-grading LUT with the tonemapped, display-referred sRGB
-// color. The half-texel correction maps an input of 0 / 1 to the centers of
-// the first / last texels so trilinear filtering stays accurate edge to edge; a
-// 2x2x2 identity LUT then reproduces the input exactly.
+// Edge length from which the sampler's trilinear filter blends the LUT. Its
+// fixed-point weights step a read by about 1/256 of a texel span, well under
+// an 8-bit step at this size; smaller LUTs are blended in float. Mirrors
+// `bake::color_lut::LUT_FILTER_MIN_SIZE`.
+static const uint LUT_FILTER_MIN_SIZE = 16u;
+
+// The LUT's texel holding grid point `cell`, read at its center, where the
+// filter's weights are exactly 0 and 1.
+float3 lut_texel(float3 cell, float n)
+{
+    return lut_tex.SampleLevel(lut_tex_samp, (cell + 0.5) / n, 0.0).rgb;
+}
+
+// The eight texels around grid position `p` blended in full float.
+float3 lut_blend(float3 p, float n)
+{
+    float3 cell = min(floor(p), n - 2.0);
+    float3 f = p - cell;
+    float3 x00 = lerp(lut_texel(cell, n), lut_texel(cell + float3(1, 0, 0), n), f.x);
+    float3 x10 = lerp(lut_texel(cell + float3(0, 1, 0), n), lut_texel(cell + float3(1, 1, 0), n), f.x);
+    float3 x01 = lerp(lut_texel(cell + float3(0, 0, 1), n), lut_texel(cell + float3(1, 0, 1), n), f.x);
+    float3 x11 = lerp(lut_texel(cell + float3(0, 1, 1), n), lut_texel(cell + float3(1, 1, 1), n), f.x);
+    return lerp(lerp(x00, x10, f.y), lerp(x01, x11, f.y), f.z);
+}
+
+// The 3D color-grading LUT at the tonemapped, display-referred sRGB color:
+// 0 and 1 land on the first and last texels.
 float3 apply_lut(float3 c)
 {
     float n = lut_axis_size();
-    float3 uvw = saturate(c) * ((n - 1.0) / n) + (0.5 / n);
-    return lut_tex.Sample(lut_tex_samp, uvw).rgb;
+    float3 p = saturate(c) * (n - 1.0);
+    [branch]
+    if (n >= float(LUT_FILTER_MIN_SIZE))
+    {
+        return lut_tex.SampleLevel(lut_tex_samp, (p + 0.5) / n, 0.0).rgb;
+    }
+    return lut_blend(p, n);
 }
 
 // Blend the LUT-graded color over the input by `lut_strength`. Grading the
 // display-referred LDR result keeps the LUT independent of exposure / tonemap.
 float3 grade(float3 c)
 {
+    [branch]
+    if (post.lut_strength <= 0.0)
+    {
+        return c;
+    }
     return lerp(c, apply_lut(c), post.lut_strength);
 }
 
@@ -322,8 +355,30 @@ float4 composite_scene(float2 uv, bool night)
     return float4(grade(blended) * vig, 1.0);
 }
 
+// One step of triangular noise per pixel in [-1, 1): the sum of two 16-bit
+// uniforms, the halves of one PCG hash of the pixel.
+float dither_noise(uint2 pixel)
+{
+    uint state = (pixel.x | (pixel.y << 16u)) * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    uint h = (word >> 22u) ^ word;
+    return float((h & 0xffffu) + (h >> 16u)) * (1.0 / 65536.0) - 1.0;
+}
+
+// The encoded color with the pixel's noise added ahead of the target's
+// quantization, so a gradient shallower than a step per pixel dissolves into
+// grain instead of bands. `steps` is the target's top code. The noise narrows
+// toward 0 and 1, which stay exact.
+float3 dither_encoded(float3 c, uint2 pixel, float steps)
+{
+    float3 room = saturate(min(c, 1.0 - c) * steps);
+    return c + dither_noise(pixel) * room / steps;
+}
+
 [shader("pixel")]
-float4 composite_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
+float4 composite_fragment(
+    [[vk::location(0)]] float2 uv : TEXCOORD0,
+    float4 sv_pos : SV_Position) : SV_Target
 {
     // Channel views replace the composited scene with one prepass channel; the
     // text overlay still draws after in this same pass.
@@ -331,10 +386,21 @@ float4 composite_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     {
         return float4(channel_view(uv), 1.0);
     }
+    float4 c;
     [branch]
     if (post.night_vision > 0.0)
     {
-        return composite_scene(uv, true);
+        c = composite_scene(uv, true);
     }
-    return composite_scene(uv, false);
+    else
+    {
+        c = composite_scene(uv, false);
+    }
+    // The SDR target holds 8 bits a channel and HDR10 10; scRGB is float.
+    if (post.hdr_output > 0.5 && post.pq_output < 0.5)
+    {
+        return c;
+    }
+    float steps = post.hdr_output > 0.5 ? 1023.0 : 255.0;
+    return float4(dither_encoded(c.rgb, uint2(sv_pos.xy), steps), c.a);
 }
