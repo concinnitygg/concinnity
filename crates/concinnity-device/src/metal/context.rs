@@ -615,6 +615,9 @@ pub(crate) struct MtlContext {
     // switched off under the same gate so the drawable is blit-readable.
     // Mirrors the DX/VK `last_present_index`.
     pub(super) last_present_texture: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
+    // Frame captures asked of `draw_frame`: their read-back buffers and the
+    // writer they are handed to once their command buffer completes.
+    pub(super) frame_capture: super::screenshot::MtlFrameCaptures,
     // GPU-driven main pass + cull feature state: the main and world-shader
     // pipelines, the phase-1/phase-2 cull pipelines, their indirect command
     // buffers + argument encoders/buffers, the per-object status buffer, the

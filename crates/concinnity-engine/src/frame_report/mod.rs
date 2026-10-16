@@ -13,9 +13,8 @@
 //! whole of it.
 //!
 //! A report that saves frames as images asks the render side for each one as
-//! the run reaches its moment, and leaves the frames the readback stalls out
-//! of the measurement. So are frames run while the window is minimized or
-//! hidden, which draw nothing.
+//! the run reaches its moment. Frames run while the window is minimized or
+//! hidden draw nothing and are left out of the measurement.
 
 mod capture;
 mod hidden;

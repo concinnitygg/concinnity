@@ -41,6 +41,11 @@ impl RenderBackend for MtlContext {
         fn wait_idle(&self);
     }
 
+    fn finish_captures(&mut self) {
+        debug_assert_main_thread("finish_captures");
+        self.finish_frame_captures();
+    }
+
     fn prepare_frame(&mut self) {
         debug_assert_main_thread("prepare_frame");
         MtlContext::prepare_frame(self);

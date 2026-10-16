@@ -881,6 +881,9 @@ pub(crate) struct DxContext {
     // CPU/GPU frame synchronization (one monotonic fence + per-slot values).
     // See `DxFrameSync`.
     pub(super) frame_sync: DxFrameSync,
+    // Frame captures asked of `draw_frame`: their read-back buffers, the
+    // captures awaiting their frame's fence, and the writer.
+    pub(super) frame_capture: super::screenshot::DxFrameCaptures,
     pub(super) current_frame: usize,
     // `prepare_frame` already took the next frame's turn on the swapchain's
     // frame-latency waitable, which counts, so the draw must not wait on it again.
@@ -989,7 +992,9 @@ impl DxContext {
             atmosphere,
             sunlight,
             input_sampled_us,
+            capture,
         } = params;
+        self.frame_capture.arm(capture);
         let elapsed = elapsed_f64 as f32;
         if let Some(atmo) = self.atmosphere.as_mut() {
             atmo.frame = atmosphere;
@@ -1026,6 +1031,8 @@ impl DxContext {
         let frame = self.current_frame;
 
         let gpu_wait = self.wait_frame_slot(frame)?;
+        self.retire_frame_captures();
+        self.reserve_frame_capture();
         // Staged geometry writes go ahead of everything this frame submits.
         self.flush_geometry_uploads()?;
         self.service_background_work(elapsed, frame);
@@ -1132,6 +1139,9 @@ impl DxContext {
             ssgi.advance();
         }
 
+        let end_cmd = self.commands.end_command_lists[frame].clone();
+        let capture = self.record_frame_capture(&end_cmd, &back_buffer);
+
         self.finish_frame_stats();
         let started = std::time::Instant::now();
         let submitted = self.close_end_list(frame).and_then(|()| {
@@ -1146,6 +1156,14 @@ impl DxContext {
         let mut stats = self.diagnostics.frame_stats.get();
         stats.submit_present_us = started.elapsed().as_micros().min(u32::MAX.into()) as u32;
         self.diagnostics.frame_stats.set(stats);
+        // A submitted frame's capture waits for the fence value it signaled; a
+        // failed one is reported as a dropped frame by the caller.
+        if let Some(capture) = capture
+            && submitted.is_ok()
+        {
+            self.frame_capture
+                .park(self.frame_sync.fence_values[frame], capture);
+        }
         // A frame that took the history prime but never reached the GPU leaves
         // the ring unwritten, so the next frame primes instead.
         if submitted.is_err() && recorded.primed_model_history {

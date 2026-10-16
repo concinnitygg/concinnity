@@ -2,10 +2,6 @@
 
 use concinnity_core::components::FrameCapture;
 
-/// Frames left out of the measurement from a capture on: the frame saved,
-/// whose readback stalls the GPU, and those a pipelined run delays behind it.
-pub(crate) const CAPTURE_DROPPED_FRAMES: u32 = 4;
-
 /// The captures a report has yet to take, handed out as the run reaches them.
 #[derive(Debug, Default)]
 pub(crate) struct CaptureSchedule {

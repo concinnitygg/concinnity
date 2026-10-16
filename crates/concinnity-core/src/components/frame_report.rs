@@ -71,9 +71,9 @@ pub struct FrameReport {
     ///
     /// The run is timed on the same clock the warm-up is, so where a
     /// [CameraTrack](#cameratrack) drives the camera a capture shows the same
-    /// pose on every run. Reading a frame back stalls the GPU, so the frame
-    /// saved and the few after it are left out of the measurement, and the
-    /// report says how many were.
+    /// pose on every run. A capture is copied out within its frame and written
+    /// to disk in the background, so the frames around it are measured like any
+    /// other.
     pub captures: Vec<FrameCapture>,
 }
 

@@ -134,6 +134,12 @@ pub struct FrameParams<'a> {
     /// that can tell when the frame's GPU work finished on that clock reports
     /// both as `RenderStats::gpu_done`.
     pub input_sampled_us: Option<u64>,
+    /// Save the image this frame presents as a PNG at this path, or `None`.
+    /// The copy rides the frame's own submission and the file is written off
+    /// the frame path once the frame retires, so a capture costs the frame
+    /// nothing it shows; [`RenderBackend::finish_captures`] waits the writes
+    /// out. The outcome is logged.
+    pub capture: Option<&'a str>,
 }
 
 /// The per-frame drive: what every graphics backend must implement for a world
@@ -176,6 +182,9 @@ pub trait RenderBackend:
     fn pump_events(&mut self) {}
     /// Per-frame drive. See [`FrameParams`] for the inputs.
     fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()>;
+    /// Block until every frame capture asked of [`Self::draw_frame`] so far is
+    /// written to disk or has failed. Waits for the GPU first.
+    fn finish_captures(&mut self) {}
     /// Push the camera's view matrix, column-major.
     fn update_view(&mut self, matrix: [[f32; 4]; 4]) {
         if let Some(scene) = self.scene_mut() {

@@ -103,7 +103,9 @@ pub(crate) enum Call {
         show: view_modes::ShowFlags,
         history_reset: bool,
         rebase: Option<concinnity_core::planet::Rebase>,
+        capture: Option<String>,
     },
+    FinishCaptures,
     UpdateView([[f32; 4]; 4]),
     UpdateModel(DrawIndex),
     RetireDrawObject(DrawIndex),
@@ -443,6 +445,10 @@ impl RenderBackend for MockBackend {
         self.record(Call::WaitIdle);
     }
 
+    fn finish_captures(&mut self) {
+        self.record(Call::FinishCaptures);
+    }
+
     fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()> {
         let mut s = self.state.lock().unwrap();
         s.calls.push(Call::DrawFrame {
@@ -453,6 +459,7 @@ impl RenderBackend for MockBackend {
             show: params.show,
             history_reset: params.history_reset,
             rebase: params.rebase,
+            capture: params.capture.map(str::to_string),
         });
         if !s.draw_duration.is_zero() {
             std::thread::sleep(s.draw_duration);

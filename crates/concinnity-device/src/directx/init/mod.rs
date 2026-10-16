@@ -153,9 +153,7 @@ impl DxContext {
             hdr_samples,
             launch,
             hot_reload,
-            // DirectX retains the presented back-buffer index unconditionally,
-            // so capture needs no arming here.
-            capture: _,
+            capture,
             embedded_surface: _,
             scene: world,
             shaders: world_shaders,
@@ -497,6 +495,7 @@ impl DxContext {
             grass,
             commands,
             frame_sync,
+            frame_capture: crate::frame_capture::FrameCaptures::new(capture),
             current_frame: 0,
             frame_latency_reserved: false,
             stream: StreamState::new(hw.frames()),

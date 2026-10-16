@@ -1,28 +1,37 @@
-//! Headless frame capture for the Vulkan backend. The `screenshot` debug tool
-//! call routes here (via `RenderBackend::screenshot`) to copy
-//! the most recently presented swapchain image into a host-visible buffer and
-//! encode it to a PNG on disk. This is the on-GPU verification path the renderer
-//! otherwise leaves to a human eyeballing the live window: a headless probe can
-//! now assert on actual pixels.
+//! Frame capture for the Vulkan backend, two ways.
+//!
+//! A frame asked to capture (`FrameParams::capture`) copies its swapchain image
+//! into a reused host-visible buffer at the tail of its own end command buffer,
+//! after the composite render pass left the image in `PRESENT_SRC_KHR`. The
+//! capture is parked under its frame slot and handed to the shared capture
+//! writer once that slot's fence has been waited, so the presenting thread
+//! neither waits nor encodes.
+//!
+//! The `screenshot` debug call instead reads back the last presented image on
+//! demand and blocks: it idles the device, copies on a one-shot buffer, then
+//! decodes and encodes on the calling thread. A swapchain rebuild clears
+//! `swapchain.last_present_index`, so a capture in the brief window before the
+//! next present returns a clean error rather than reading an unrendered image.
 //!
 //! The swapchain images are created with `TRANSFER_SRC` usage (see
-//! `swapchain.rs`) so the presented image can be copied. Capture is synchronous:
-//! it idles the device, copies the last-presented image (still in
-//! `PRESENT_SRC_KHR`) into the buffer, restores the image to `PRESENT_SRC_KHR`,
-//! then maps + decodes + PNG-encodes on the CPU. The read-back buffer and the
-//! per-pixel decode both follow the swapchain format (4-byte SDR `BGRA8` or
-//! 8-byte HDR `RGBA16F`), not a fixed texel size. A swapchain rebuild clears
-//! `swapchain.last_present_index`, so a capture in the brief window before the next present
-//! returns a clean error rather than reading an unrendered image.
+//! `swapchain.rs`) so the presented image can be copied. Both read-backs follow
+//! the swapchain format's texel size (4-byte SDR `BGRA8` or 8-byte HDR
+//! `RGBA16F`); a fixed 4 B/px would overflow the copy on the HDR path.
 
 use ash::vk;
-use concinnity_core::gfx::image_decode::{self, PixelLayout};
+use concinnity_core::gfx::image_decode::PixelLayout;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hdr_output::{HdrEncoding, HdrOutputMode};
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
+use super::owned::VkDevice;
 use super::texture::one_shot_submit;
-use crate::png_encode::encode_png;
+use crate::frame_capture::{self, CaptureImage, FrameCaptures, Mapped, PendingCapture};
+
+/// The Vulkan backend's frame captures, parked under the frame slot whose
+/// fence retires them.
+pub(in crate::vulkan) type VkFrameCaptures = FrameCaptures<PooledBuffer, usize>;
 
 impl VkContext {
     // Capture the last presented frame to a PNG at `path`. Returns the path on
@@ -54,108 +63,192 @@ impl VkContext {
         unsafe { self.hw.device.device_wait_idle() }
             .map_err(|e| super::error::map_vk_result(e, "screenshot: wait idle"))?;
 
-        // Host-visible readback buffer, tightly packed at the swapchain
-        // format's texel size. The SDR swapchain is `BGRA8_UNORM` (4 B/px), but
-        // the HDR swapchain is `R16G16B16A16_SFLOAT` (8 B/px); sizing this for a
-        // fixed 4 B/px overflows the `vkCmdCopyImageToBuffer` on the HDR path and
-        // loses the device, so derive it from the actual format.
-        let bytes_per_pixel = swapchain_bytes_per_pixel(self.swapchain.format) as u64;
-        let byte_size = (width as u64) * (height as u64) * bytes_per_pixel;
-        let readback = self.hw.alloc.create_buffer(
-            byte_size,
-            vk::BufferUsageFlags::TRANSFER_DST,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
+        let image = self.capture_image();
+        let Mapped {
+            buffer: readback,
+            mapped,
+        } = readback_buffer(&self.hw.alloc, image.byte_len())?;
 
-        // Copy the presented image into the buffer, bracketing with
-        // PRESENT_SRC <-> TRANSFER_SRC barriers so the image is left exactly as
-        // present expects it for the next acquire.
         let device = self.hw.device.clone();
-        let copied = one_shot_submit(
+        one_shot_submit(
             &device,
             self.commands.command_pool,
             self.hw.graphics_queue,
-            |cmd| {
-                let to_src = image_barrier(
-                    src_image,
-                    vk::ImageLayout::PRESENT_SRC_KHR,
-                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    vk::AccessFlags::empty(),
-                    vk::AccessFlags::TRANSFER_READ,
-                );
-                let region = vk::BufferImageCopy::default()
-                    .buffer_offset(0)
-                    .buffer_row_length(0)
-                    .buffer_image_height(0)
-                    .image_subresource(vk::ImageSubresourceLayers {
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
-                        mip_level: 0,
-                        base_array_layer: 0,
-                        layer_count: 1,
-                    })
-                    .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-                    .image_extent(vk::Extent3D {
-                        width,
-                        height,
-                        depth: 1,
-                    });
-                let to_present = image_barrier(
-                    src_image,
-                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    vk::ImageLayout::PRESENT_SRC_KHR,
-                    vk::AccessFlags::TRANSFER_READ,
-                    vk::AccessFlags::empty(),
-                );
-                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-                // slice these commands name is live for the call.
-                unsafe {
-                    device.cmd_pipeline_barrier(
-                        cmd,
-                        vk::PipelineStageFlags::TOP_OF_PIPE,
-                        vk::PipelineStageFlags::TRANSFER,
-                        vk::DependencyFlags::empty(),
-                        &[],
-                        &[],
-                        &[to_src],
-                    );
-                    device.cmd_copy_image_to_buffer(
-                        cmd,
-                        src_image,
-                        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                        readback.buffer(),
-                        std::slice::from_ref(&region),
-                    );
-                    device.cmd_pipeline_barrier(
-                        cmd,
-                        vk::PipelineStageFlags::TRANSFER,
-                        vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                        vk::DependencyFlags::empty(),
-                        &[],
-                        &[],
-                        &[to_present],
-                    );
-                }
-            },
-        );
+            |cmd| encode_copy(&device, cmd, src_image, &readback, &image),
+        )?;
+        // SAFETY: the buffer is `image.byte_len()` mapped bytes, and the copy into it completed
+        // (one_shot_submit waits its fence).
+        let bytes = unsafe { std::slice::from_raw_parts(mapped, image.byte_len()) };
+        frame_capture::save_png(path, &image, bytes)?;
+        Ok(path.to_string())
+    }
 
-        // Map + swizzle + encode, then always free the buffer.
-        let result = copied.and_then(|()| {
-            // SAFETY: the buffer is HOST_COHERENT and `byte_size` bytes long; the
-            // copy above completed (one_shot_submit waits its fence).
-            let raw =
-                unsafe { std::slice::from_raw_parts(readback.mapped_ptr(), byte_size as usize) };
-            // The HDR float swapchain needs the encoding to decode for display:
-            // scRGB-linear gets the sRGB OETF, PQ-encoded code values pass
-            // through (not display-correct, but a valid PNG rather than a crash).
-            let encoding = match self.hw.hdr_mode {
-                HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
-                HdrOutputMode::Sdr => None,
-            };
-            let rgba =
-                image_decode::decode_to_rgba8(raw, classify(self.swapchain.format, encoding));
-            encode_png(path, width, height, &rgba)
+    // Keep a read-back buffer the size of the swapchain ready, so the frame
+    // that captures allocates nothing.
+    pub(in crate::vulkan) fn reserve_frame_capture(&mut self) {
+        let image = self.capture_image();
+        let alloc = &self.hw.alloc;
+        self.frame_capture
+            .reserve(image.byte_len(), |len| readback_buffer(alloc, len));
+    }
+
+    // Record this frame's capture, if one is armed: copy swapchain image
+    // `image_index` (in `PRESENT_SRC_KHR` after the composite) into a read-back
+    // buffer on `cmd`, leaving it in `PRESENT_SRC_KHR` for the present.
+    pub(in crate::vulkan) fn record_frame_capture(
+        &mut self,
+        cmd: vk::CommandBuffer,
+        image_index: u32,
+    ) -> Option<PendingCapture> {
+        let path = self.frame_capture.take_armed()?;
+        let src_image = *self.swapchain.images.get(image_index as usize)?;
+        let image = self.capture_image();
+        let alloc = &self.hw.alloc;
+        let (readback, pending) = match self
+            .frame_capture
+            .begin(path.clone(), image, |len| readback_buffer(alloc, len))
+        {
+            Ok(lent) => lent,
+            Err(e) => {
+                tracing::warn!("frame capture {path} failed: {e}");
+                return None;
+            }
+        };
+        encode_copy(&self.hw.device, cmd, src_image, &readback, &image);
+        Some(pending)
+    }
+
+    // Hand the writer the captures frame slot `frame` carried, once its fence
+    // has been waited.
+    pub(in crate::vulkan) fn retire_frame_captures(&mut self, frame: usize) {
+        // SAFETY: called after the wait on `frame`'s fence, which the submission
+        // carrying the copy signals.
+        unsafe { self.frame_capture.retire(|&slot| slot == frame) };
+    }
+
+    // Write every capture recorded so far, once the GPU has finished them.
+    pub(in crate::vulkan) fn finish_frame_captures(&mut self) {
+        self.wait_idle();
+        // SAFETY: the device is idle.
+        unsafe { self.frame_capture.finish() };
+    }
+
+    // The swapchain image as it reads back: tightly packed at its format's
+    // texel size.
+    fn capture_image(&self) -> CaptureImage {
+        // The HDR float swapchain needs the encoding to decode for display:
+        // scRGB-linear gets the sRGB OETF, PQ-encoded code values pass through
+        // (not display-correct, but a valid PNG rather than a crash).
+        let encoding = match self.hw.hdr_mode {
+            HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
+            HdrOutputMode::Sdr => None,
+        };
+        CaptureImage::tight(
+            self.swapchain.extent.width.max(1),
+            self.swapchain.extent.height.max(1),
+            classify(self.swapchain.format, encoding),
+        )
+    }
+}
+
+// A `len`-byte host-visible buffer a copy can write, preferring cached memory
+// so the writer reads it back quickly. Mapped for its whole life.
+fn readback_buffer(alloc: &DeviceAllocator, len: usize) -> RenderResult<Mapped<PooledBuffer>> {
+    let visible = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+    let usage = vk::BufferUsageFlags::TRANSFER_DST;
+    let buffer = alloc
+        .create_buffer(
+            len as u64,
+            usage,
+            visible | vk::MemoryPropertyFlags::HOST_CACHED,
+        )
+        .or_else(|_| alloc.create_buffer(len as u64, usage, visible))?;
+    let mapped = buffer.mapped_ptr() as *const u8;
+    if mapped.is_null() {
+        return Err(RenderError::Other(
+            "frame capture: read-back buffer is not host-mapped".into(),
+        ));
+    }
+    Ok(Mapped { buffer, mapped })
+}
+
+// Copy `src_image`, in `PRESENT_SRC_KHR` once the color attachment writes
+// before it are done, into `readback` laid out as `image`, return the image to
+// `PRESENT_SRC_KHR`, and make the copy visible to the host.
+fn encode_copy(
+    device: &VkDevice,
+    cmd: vk::CommandBuffer,
+    src_image: vk::Image,
+    readback: &PooledBuffer,
+    image: &CaptureImage,
+) {
+    let to_src = image_barrier(
+        src_image,
+        vk::ImageLayout::PRESENT_SRC_KHR,
+        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+        vk::AccessFlags::TRANSFER_READ,
+    );
+    let region = vk::BufferImageCopy::default()
+        .buffer_offset(0)
+        .buffer_row_length(0)
+        .buffer_image_height(0)
+        .image_subresource(vk::ImageSubresourceLayers {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            mip_level: 0,
+            base_array_layer: 0,
+            layer_count: 1,
+        })
+        .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+        .image_extent(vk::Extent3D {
+            width: image.width,
+            height: image.height,
+            depth: 1,
         });
-        result.map(|()| path.to_string())
+    let to_present = image_barrier(
+        src_image,
+        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        vk::ImageLayout::PRESENT_SRC_KHR,
+        vk::AccessFlags::TRANSFER_READ,
+        vk::AccessFlags::empty(),
+    );
+    let to_host = vk::BufferMemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+        .dst_access_mask(vk::AccessFlags::HOST_READ)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .buffer(readback.buffer())
+        .offset(0)
+        .size(vk::WHOLE_SIZE);
+    // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice these
+    // commands name is live for the call; the caller keeps the image and buffer alive until the
+    // buffer has executed.
+    unsafe {
+        device.cmd_pipeline_barrier(
+            cmd,
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[to_src],
+        );
+        device.cmd_copy_image_to_buffer(
+            cmd,
+            src_image,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            readback.buffer(),
+            std::slice::from_ref(&region),
+        );
+        device.cmd_pipeline_barrier(
+            cmd,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::BOTTOM_OF_PIPE | vk::PipelineStageFlags::HOST,
+            vk::DependencyFlags::empty(),
+            &[],
+            std::slice::from_ref(&to_host),
+            &[to_present],
+        );
     }
 }
 
@@ -185,18 +278,6 @@ fn image_barrier(
         })
 }
 
-// Bytes per texel for the swapchain color formats this backend can present.
-// The swapchain only ever resolves to one of these (see `create_swapchain_inner`
-// in swapchain.rs): `BGRA8_UNORM` for SDR, `R16G16B16A16_SFLOAT` for the scRGB /
-// PQ-float HDR path, or `A2B10G10R10_UNORM_PACK32` for the packed PQ fallback.
-// Unknown formats default to 4, the common 32-bit-texel case.
-fn swapchain_bytes_per_pixel(format: vk::Format) -> u32 {
-    match format {
-        vk::Format::R16G16B16A16_SFLOAT => 8,
-        _ => 4,
-    }
-}
-
 // Classify the swapchain color format (+ resolved HDR encoding) into the
 // backend-free `PixelLayout` the shared decoder understands. Almost always BGRA8
 // on Windows; the float HDR swapchain and the packed 2-10-10-10 PQ fallback are
@@ -217,21 +298,6 @@ fn classify(format: vk::Format, encoding: Option<HdrEncoding>) -> PixelLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn bytes_per_pixel_matches_swapchain_formats() {
-        // SDR + the packed PQ fallback are 4 B/px; the float HDR swapchain is 8.
-        assert_eq!(swapchain_bytes_per_pixel(vk::Format::B8G8R8A8_UNORM), 4);
-        assert_eq!(swapchain_bytes_per_pixel(vk::Format::R8G8B8A8_UNORM), 4);
-        assert_eq!(
-            swapchain_bytes_per_pixel(vk::Format::A2B10G10R10_UNORM_PACK32),
-            4
-        );
-        assert_eq!(
-            swapchain_bytes_per_pixel(vk::Format::R16G16B16A16_SFLOAT),
-            8
-        );
-    }
 
     #[test]
     fn classify_maps_swapchain_formats_to_pixel_layouts() {

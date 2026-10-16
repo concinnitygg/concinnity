@@ -110,6 +110,7 @@ fn run_loop(backend: &mut dyn RenderBackend, message: &str, fonts: &FontSet) {
             grass_benders: &[],
             atmosphere: None,
             sunlight: 1.0,
+            capture: None,
         }) {
             // The screen cannot report its own failure to draw; the log is all
             // that is left, and staying in the loop would spin on it.

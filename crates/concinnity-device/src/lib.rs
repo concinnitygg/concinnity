@@ -15,6 +15,9 @@ pub(crate) mod directx;
 // impls with.
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod forward;
+// Copying presented frames out and writing them as PNGs off the frame path.
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
+pub(crate) mod frame_capture;
 // The CPU's blocked-on-GPU time, shared by the three backends so
 // `RenderStats::gpu_wait_us` means the same thing on each.
 #[cfg(any(backend_metal, backend_dx, backend_vk))]

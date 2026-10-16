@@ -145,9 +145,7 @@ impl VkContext {
             hdr_samples,
             launch,
             hot_reload,
-            // Vulkan retains the presented swapchain index unconditionally, so
-            // capture needs no arming here.
-            capture: _,
+            capture,
             embedded_surface: _,
             scene: world,
             shaders: world_shaders,
@@ -463,6 +461,7 @@ impl VkContext {
             skinned: VkSkinned::new(),
             uniforms,
             frame_sync,
+            frame_capture: crate::frame_capture::FrameCaptures::new(capture),
             current_frame: 0,
             frame_input_sampled_us: vec![None; frames],
             frames_in_flight: frames,

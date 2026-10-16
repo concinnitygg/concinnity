@@ -10,7 +10,7 @@ use concinnity_core::profile::RenderStats;
 use std::time::Instant;
 
 use crate::ecs::FrameCaptureRequest;
-use crate::frame_report::capture::{CAPTURE_DROPPED_FRAMES, CaptureSchedule};
+use crate::frame_report::capture::CaptureSchedule;
 use crate::frame_report::hidden::HiddenFrames;
 use crate::frame_report::reduce::{ReduceOptions, Report};
 use crate::frame_report::report::to_text;
@@ -60,11 +60,6 @@ pub struct FrameReportSystem {
     // Each tick's pose, paired with its frame's GPU completion once it lands.
     shown: ShownFrames,
     captures: CaptureSchedule,
-    // Frames still to leave unrecorded behind the latest capture.
-    excluded: u32,
-    // Captures requested, and the frames left unrecorded around them.
-    captured: u32,
-    dropped: u32,
     hidden: HiddenFrames,
     // Captures that came due while the window could not show them.
     hidden_captures: Vec<FrameCapture>,
@@ -96,9 +91,6 @@ impl FrameReportSystem {
             previous_rebases: 0,
             shown: ShownFrames::default(),
             captures: CaptureSchedule::new(&report.captures),
-            excluded: 0,
-            captured: 0,
-            dropped: 0,
             hidden: HiddenFrames::default(),
             hidden_captures: Vec::new(),
         }
@@ -122,12 +114,6 @@ impl FrameReportSystem {
                 "frame report: no frames past the {:.1}s warm-up, so there is nothing to measure",
                 self.options.warmup_seconds,
             ),
-        }
-        if self.captured > 0 {
-            println!(
-                "frame report: {} frame(s) around {} capture(s) left out of the measurement",
-                self.dropped, self.captured,
-            );
         }
         if self.hidden.total() > 0 {
             let segments: Vec<String> = self
@@ -223,15 +209,7 @@ impl System for FrameReportSystem {
         let unseen = self
             .hidden
             .leaves_out(hidden, this_frame.timing.segment, past_warmup);
-        let recorded = if unseen {
-            None
-        } else if self.excluded > 0 {
-            self.excluded -= 1;
-            self.dropped += 1;
-            None
-        } else {
-            Some(this_frame)
-        };
+        let recorded = (!unseen).then_some(this_frame);
         if let Some(frame) = std::mem::replace(&mut self.pending, recorded) {
             let systems = ctx.profile.system_timings();
             self.run.capture_system_names(systems);
@@ -244,13 +222,13 @@ impl System for FrameReportSystem {
             ));
         }
 
+        // A capture costs its frame nothing it shows, so the frames around it
+        // are measured like any other.
         if let Some(capture) = self.captures.due(run_seconds) {
             if unseen {
                 self.hidden_captures.push(capture);
             } else {
                 ctx.insert_resource(FrameCaptureRequest(capture.path));
-                self.excluded = CAPTURE_DROPPED_FRAMES;
-                self.captured += 1;
             }
         }
 
@@ -580,7 +558,7 @@ mod tests {
     }
 
     #[test]
-    fn a_capture_is_requested_once_and_the_frames_it_stalls_go_unrecorded() {
+    fn a_capture_is_requested_once_and_the_frames_around_it_are_measured() {
         use concinnity_core::components::FrameCapture;
 
         let mut world = World::new();
@@ -600,18 +578,12 @@ mod tests {
         let request = world.remove_resource::<FrameCaptureRequest>();
         assert_eq!(request.map(|r| r.0).as_deref(), Some("a.png"));
 
-        let stalled = CAPTURE_DROPPED_FRAMES as usize;
-        for _ in 0..stalled {
-            system.step(&mut world.context());
-        }
-        // Only the frame the capture was requested on made it in.
-        assert_eq!(system.run().samples.len(), 1);
+        // Each frame is recorded once the next step closes it: the capture's
+        // and the one after it are both in.
         system.step(&mut world.context());
         system.step(&mut world.context());
         assert_eq!(system.run().samples.len(), 2);
         assert!(world.resource::<FrameCaptureRequest>().is_none());
-        assert_eq!(system.dropped, CAPTURE_DROPPED_FRAMES);
-        assert_eq!(system.captured, 1);
         forget_report(system);
     }
 
@@ -692,7 +664,6 @@ mod tests {
         world.insert_resource(WindowMinimized(true));
         system.step(&mut world.context());
         assert!(world.resource::<FrameCaptureRequest>().is_none());
-        assert_eq!(system.captured, 0);
         assert_eq!(system.hidden_captures.len(), 1);
         assert_eq!(system.captures.missed().count(), 0);
         forget_report(system);

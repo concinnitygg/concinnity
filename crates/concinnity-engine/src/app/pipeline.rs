@@ -101,6 +101,7 @@ pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
     // queue can no longer signal.
     if !rendered.device_lost {
         backend.wait_idle();
+        backend.finish_captures();
         if let Some(path) = screenshot {
             match backend.screenshot(path) {
                 Ok(saved) => tracing::info!("screenshot saved: {}", saved),

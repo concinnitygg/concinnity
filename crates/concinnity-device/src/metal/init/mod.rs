@@ -330,6 +330,7 @@ impl MtlContext {
 
         let mut ctx = Self {
             last_present_texture: None,
+            frame_capture: crate::frame_capture::FrameCaptures::new(capture),
             cull,
             arg_buffers,
             state: SceneState::new(

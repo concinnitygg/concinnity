@@ -82,7 +82,9 @@ impl MtlContext {
             atmosphere,
             sunlight,
             input_sampled_us,
+            capture,
         } = params;
+        self.frame_capture.arm(capture);
         let elapsed = elapsed_f64 as f32;
         let mtm = objc2::MainThreadMarker::new().ok_or_else(|| {
             error::RenderError::Other("draw_frame must be called from the main thread".into())

@@ -36,6 +36,11 @@ impl RenderBackend for DxContext {
         fn pump_events(&mut self);
         fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()>;
     }
+
+    fn finish_captures(&mut self) {
+        debug_assert_main_thread("finish_captures");
+        self.finish_frame_captures();
+    }
 }
 
 impl SkinnedDraws for DxContext {

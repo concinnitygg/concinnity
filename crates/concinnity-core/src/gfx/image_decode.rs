@@ -30,6 +30,16 @@ pub enum PixelLayout {
     A2b10g10r10,
 }
 
+impl PixelLayout {
+    /// Bytes one texel of this layout occupies in the read-back.
+    pub fn bytes_per_pixel(self) -> usize {
+        match self {
+            PixelLayout::Rgba16F { .. } => 8,
+            PixelLayout::Bgra8 | PixelLayout::Rgba8 | PixelLayout::A2b10g10r10 => 4,
+        }
+    }
+}
+
 /// Convert the tightly-packed read-back bytes to opaque RGBA8, decoding per the
 /// classified layout. The alpha channel is forced to 255 so a saved image is
 /// opaque regardless of the composited alpha.
@@ -146,6 +156,15 @@ fn u10_to_u8(v: u32) -> u8 {
 mod tests {
     use super::*;
     use alloc::vec;
+
+    #[test]
+    fn only_the_half_float_layout_is_eight_bytes_a_texel() {
+        assert_eq!(PixelLayout::Bgra8.bytes_per_pixel(), 4);
+        assert_eq!(PixelLayout::Rgba8.bytes_per_pixel(), 4);
+        assert_eq!(PixelLayout::A2b10g10r10.bytes_per_pixel(), 4);
+        assert_eq!(PixelLayout::Rgba16F { scrgb: true }.bytes_per_pixel(), 8);
+        assert_eq!(PixelLayout::Rgba16F { scrgb: false }.bytes_per_pixel(), 8);
+    }
 
     #[test]
     fn f16_round_trips_reference_values() {

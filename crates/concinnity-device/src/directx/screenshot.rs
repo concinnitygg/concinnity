@@ -1,32 +1,37 @@
-//! Headless frame capture for the D3D12 backend. The `screenshot` debug tool
-//! call routes here (via `RenderBackend::screenshot`) to copy
-//! the most recently presented swapchain back-buffer into a readback buffer and
-//! encode it to a PNG on disk. This is the on-GPU verification path the renderer
-//! otherwise leaves to a human eyeballing the live window: a headless probe can
-//! now assert on actual pixels. Mirrors src/vulkan/screenshot.rs.
+//! Frame capture for the D3D12 backend, two ways.
 //!
-//! Capture is synchronous: it idles the GPU (so the last-presented buffer is
-//! stable and no in-flight command list still references it), copies the
-//! last-presented back-buffer (still in `PRESENT`) into a `READBACK` buffer on a
-//! one-shot DIRECT command list, restores the buffer to `PRESENT`, then maps +
-//! de-pads + decodes + PNG-encodes on the CPU. The readback buffer is sized from
-//! `GetCopyableFootprints` (D3D12 aligns each row to
-//! `D3D12_TEXTURE_DATA_PITCH_ALIGNMENT` = 256), so the per-row de-pad below
-//! strips that padding back to a tight RGBA8 image. A swapchain rebuild clears
-//! `swapchain.last_present_index`, so a capture in the brief window before the next
-//! present returns a clean error rather than reading an unrendered buffer.
+//! A frame asked to capture (`FrameParams::capture`) copies its back buffer
+//! into a reused `READBACK` buffer at the tail of its own end command list,
+//! between the composite's `PRESENT` transition and the present. The capture
+//! is parked under the fence value the frame signals and handed to the shared
+//! capture writer once that value completes, so the presenting thread neither
+//! waits nor encodes.
+//!
+//! The `screenshot` debug call instead reads back the last presented back
+//! buffer on demand and blocks: it idles the GPU, copies on a one-shot list,
+//! then decodes and encodes on the calling thread. A swapchain rebuild clears
+//! `swapchain.last_present_index`, so a capture in the brief window before the
+//! next present returns a clean error rather than reading an unrendered buffer.
+//!
+//! Both size the read-back from the copyable footprint: D3D12 aligns each row
+//! to `D3D12_TEXTURE_DATA_PITCH_ALIGNMENT` (256 bytes), which the decode strips.
 
-use concinnity_core::gfx::image_decode::{self, PixelLayout};
+use concinnity_core::gfx::image_decode::PixelLayout;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hdr_output::HdrEncoding;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use super::context::DxContext;
 use super::texture::{one_shot_submit, transition_barrier};
 use crate::directx::error::map_hresult;
-use crate::png_encode::encode_png;
+use crate::frame_capture::{self, CaptureImage, FrameCaptures, Mapped, PendingCapture};
+
+/// The D3D12 backend's frame captures, parked under the fence value their
+/// frame signals.
+pub(crate) type DxFrameCaptures = FrameCaptures<PooledBuffer, u64>;
 
 impl DxContext {
     // Capture the last presented frame to a PNG at `path`. Returns the path on
@@ -57,134 +62,166 @@ impl DxContext {
         // in-flight command list still references the resources we touch.
         self.wait_idle();
 
-        // Describe the back-buffer so `GetCopyableFootprints` can hand back the
-        // placed-footprint layout (row pitch, total padded size) the copy needs.
-        let tex_desc = D3D12_RESOURCE_DESC {
-            Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-            Alignment: 0,
-            Width: width as u64,
-            Height: height,
-            DepthOrArraySize: 1,
-            MipLevels: 1,
-            Format: self.swapchain.format,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
-            Flags: D3D12_RESOURCE_FLAG_NONE,
-        };
-        let mut layout = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
-        let mut row_count: u32 = 0;
-        let mut row_size: u64 = 0;
-        let mut total_size: u64 = 0;
-        // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it
-        // fills are live locals that outlive the call.
-        unsafe {
-            self.hw.device.GetCopyableFootprints(
-                &tex_desc,
-                0,
-                1,
-                0,
-                Some(&mut layout),
-                Some(&mut row_count),
-                Some(&mut row_size),
-                Some(&mut total_size),
-            );
-        }
+        // Host-readable buffer sized for the padded footprint, mapped for its
+        // life.
+        let (layout, image) = self.capture_footprint();
+        let Mapped {
+            buffer: readback,
+            mapped,
+        } = readback_buffer(&self.hw.alloc, image.byte_len())?;
 
-        // Host-readable buffer sized for the padded footprint. READBACK heap
-        // resources start in COPY_DEST and never need a barrier.
-        let readback = self.hw.alloc.alloc_buffer(
-            total_size,
-            D3D12_HEAP_TYPE_READBACK,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-        )?;
-
-        // Copy the presented back-buffer into the readback buffer, bracketing
-        // with PRESENT <-> COPY_SOURCE barriers so the buffer is left exactly as
-        // the next present expects it. `one_shot_submit` fence-waits internally.
+        // Copy the presented back-buffer into the readback buffer, leaving it in
+        // PRESENT for the next present. `one_shot_submit` fence-waits internally.
         // Leaking a back-buffer reference here would later block `ResizeBuffers`;
         // `readback` / `back_buffer` outlive the synchronous `one_shot_submit`.
-        let dst_loc = D3D12_TEXTURE_COPY_LOCATION {
-            pResource: com::borrowed(&readback),
-            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-                PlacedFootprint: layout,
-            },
-        };
-        let src_loc = D3D12_TEXTURE_COPY_LOCATION {
-            pResource: com::borrowed(&back_buffer),
-            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-                SubresourceIndex: 0,
-            },
-        };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
-            let to_src = transition_barrier(
-                &back_buffer,
-                D3D12_RESOURCE_STATE_PRESENT,
-                D3D12_RESOURCE_STATE_COPY_SOURCE,
-            );
-            cmd.ResourceBarrier(&[to_src]);
-            cmd.CopyTextureRegion(&dst_loc, 0, 0, 0, &src_loc, None);
-            let to_present = transition_barrier(
-                &back_buffer,
-                D3D12_RESOURCE_STATE_COPY_SOURCE,
-                D3D12_RESOURCE_STATE_PRESENT,
-            );
-            cmd.ResourceBarrier(&[to_present]);
+        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| {
+            encode_copy(cmd, &back_buffer, &readback, layout);
         })?;
 
-        // Map + de-pad + decode, then always unmap. The readback rows are padded
-        // to `layout.Footprint.RowPitch`; `row_size` is the tight byte width.
-        let row_pitch = layout.Footprint.RowPitch as usize;
-        let tight_row = row_size as usize;
-        let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
-        // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
-        // that receives the mapping.
-        unsafe { readback.Map(0, None, Some(&mut map_ptr)) }
-            .map_err(|e| map_hresult(e.code(), "screenshot: map readback"))?;
-        // The copy completed (one_shot_submit waits its fence). Read each row's
-        // tight span out of the padded footprint into a contiguous source image.
-        let mut packed = vec![0u8; tight_row * height as usize];
-        for row in 0..height as usize {
-            // SAFETY: the readback buffer holds `row_pitch * height` bytes (the padded footprint
-            // the copy was sized from), so `row * row_pitch` addresses the start of a row inside
-            // it.
-            let src = unsafe { (map_ptr as *const u8).add(row * row_pitch) };
-            // SAFETY: `tight_row` bytes are valid within each padded row.
-            let src_slice = unsafe { std::slice::from_raw_parts(src, tight_row) };
-            packed[row * tight_row..(row + 1) * tight_row].copy_from_slice(src_slice);
-        }
-        // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past
-        // this call.
-        unsafe { readback.Unmap(0, None) };
-
-        let rgba = image_decode::decode_to_rgba8(
-            &packed,
-            classify(self.swapchain.format, self.hw.hdr_encoding()),
-        );
-        encode_png(path, width, height, &rgba)?;
+        // SAFETY: the mapping spans the `image.byte_len()` bytes the buffer was sized from, and
+        // the copy into it completed (one_shot_submit waits its fence).
+        let bytes = unsafe { std::slice::from_raw_parts(mapped, image.byte_len()) };
+        frame_capture::save_png(path, &image, bytes)?;
         Ok(path.to_string())
+    }
+
+    // Keep a read-back buffer for the swapchain's footprint ready, so the frame
+    // that captures allocates nothing.
+    pub(in crate::directx) fn reserve_frame_capture(&mut self) {
+        let (_, image) = self.capture_footprint();
+        let alloc = &self.hw.alloc;
+        self.frame_capture
+            .reserve(image.byte_len(), |len| readback_buffer(alloc, len));
+    }
+
+    // Record this frame's capture, if one is armed: copy `back_buffer` (in
+    // `PRESENT` after the composite) into a read-back buffer on `cmd`, leaving
+    // it in `PRESENT` for the present.
+    pub(in crate::directx) fn record_frame_capture(
+        &mut self,
+        cmd: &ID3D12GraphicsCommandList,
+        back_buffer: &ID3D12Resource,
+    ) -> Option<PendingCapture> {
+        let path = self.frame_capture.take_armed()?;
+        let (footprint, image) = self.capture_footprint();
+        let alloc = &self.hw.alloc;
+        let (readback, pending) = match self
+            .frame_capture
+            .begin(path.clone(), image, |len| readback_buffer(alloc, len))
+        {
+            Ok(lent) => lent,
+            Err(e) => {
+                tracing::warn!("frame capture {path} failed: {e}");
+                return None;
+            }
+        };
+        encode_copy(cmd, back_buffer, &readback, footprint);
+        Some(pending)
+    }
+
+    // Hand the writer every capture whose frame's fence value has completed.
+    pub(in crate::directx) fn retire_frame_captures(&mut self) {
+        // SAFETY: a property query on a live fence; it only reads.
+        let completed = unsafe { self.frame_sync.fence.GetCompletedValue() };
+        // SAFETY: a capture is parked under the fence value its frame signals
+        // after the copy, so a completed value means the copy is done.
+        unsafe { self.frame_capture.retire(|&value| value <= completed) };
+    }
+
+    // Write every capture recorded so far, once the GPU has finished them.
+    pub(in crate::directx) fn finish_frame_captures(&mut self) {
+        self.wait_idle();
+        // SAFETY: the queue is idle.
+        unsafe { self.frame_capture.finish() };
+    }
+
+    // The swapchain back buffer's copy footprint, and the image it reads back
+    // as.
+    fn capture_footprint(&self) -> (D3D12_PLACED_SUBRESOURCE_FOOTPRINT, CaptureImage) {
+        let width = self.targets.extent.output_width.max(1);
+        let height = self.targets.extent.output_height.max(1);
+        let layout = classify(self.swapchain.format, self.hw.hdr_encoding());
+        let tight = CaptureImage::tight(width, height, layout);
+        let image = CaptureImage {
+            row_pitch: padded_row_pitch(tight.row_bytes()),
+            ..tight
+        };
+        let footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
+            Offset: 0,
+            Footprint: D3D12_SUBRESOURCE_FOOTPRINT {
+                Format: self.swapchain.format,
+                Width: width,
+                Height: height,
+                Depth: 1,
+                RowPitch: image.row_pitch as u32,
+            },
+        };
+        (footprint, image)
     }
 }
 
-// Bytes per texel for the swapchain color formats this backend can present.
-// The DX swapchain only ever resolves to `B8G8R8A8_UNORM` for SDR or
-// `R16G16B16A16_FLOAT` for the HDR (scRGB-linear / PQ-float) path; see
-// `init/bootstrap.rs`. Unknown formats default to 4, the common 32-bit-texel case.
-// The capture path sizes its readback from `GetCopyableFootprints` (which also
-// folds in the 256-byte row alignment), so this helper only documents +
-// asserts the format-to-texel-size mapping under test.
-#[cfg(test)]
-fn swapchain_bytes_per_pixel(format: DXGI_FORMAT) -> u32 {
-    match format {
-        DXGI_FORMAT_R16G16B16A16_FLOAT => 8,
-        _ => 4,
+// Copy `back_buffer`, in `PRESENT`, into `readback` laid out as `footprint`,
+// and return it to `PRESENT`.
+fn encode_copy(
+    cmd: &ID3D12GraphicsCommandList,
+    back_buffer: &ID3D12Resource,
+    readback: &ID3D12Resource,
+    footprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
+) {
+    let dst = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: com::borrowed(readback),
+        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            PlacedFootprint: footprint,
+        },
+    };
+    let src = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: com::borrowed(back_buffer),
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            SubresourceIndex: 0,
+        },
+    };
+    // SAFETY: the command list is in the recording state, and both resources are live for the
+    // call; the caller keeps them alive until the list has executed.
+    unsafe {
+        cmd.ResourceBarrier(&[transition_barrier(
+            back_buffer,
+            D3D12_RESOURCE_STATE_PRESENT,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+        )]);
+        cmd.CopyTextureRegion(&dst, 0, 0, 0, &src, None);
+        cmd.ResourceBarrier(&[transition_barrier(
+            back_buffer,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_PRESENT,
+        )]);
     }
+}
+
+// A row of `row_bytes` padded to the pitch alignment a buffer copy needs.
+fn padded_row_pitch(row_bytes: usize) -> usize {
+    let align = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT as usize;
+    row_bytes.div_ceil(align) * align
+}
+
+// A `len`-byte READBACK buffer, mapped for its whole life. READBACK heap
+// resources start in COPY_DEST and never need a barrier.
+fn readback_buffer(alloc: &DeviceAllocator, len: usize) -> RenderResult<Mapped<PooledBuffer>> {
+    let buffer = alloc.alloc_buffer(
+        len as u64,
+        D3D12_HEAP_TYPE_READBACK,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+    )?;
+    let mut mapped = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
+    // that receives the mapping. A READBACK buffer may stay mapped while the GPU writes it.
+    unsafe { buffer.Map(0, None, Some(&mut mapped)) }
+        .map_err(|e| map_hresult(e.code(), "frame capture: map readback"))?;
+    Ok(Mapped {
+        buffer,
+        mapped: mapped as *const u8,
+    })
 }
 
 // Classify the swapchain color format (+ resolved HDR encoding) into the
@@ -206,11 +243,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bytes_per_pixel_matches_swapchain_formats() {
-        // The SDR swapchain is 4 B/px; the float HDR swapchain is 8.
-        assert_eq!(swapchain_bytes_per_pixel(DXGI_FORMAT_B8G8R8A8_UNORM), 4);
-        assert_eq!(swapchain_bytes_per_pixel(DXGI_FORMAT_R8G8B8A8_UNORM), 4);
-        assert_eq!(swapchain_bytes_per_pixel(DXGI_FORMAT_R16G16B16A16_FLOAT), 8);
+    fn copy_rows_pad_to_the_pitch_alignment() {
+        assert_eq!(padded_row_pitch(256), 256);
+        assert_eq!(padded_row_pitch(257), 512);
+        // 1920 BGRA8 texels.
+        assert_eq!(padded_row_pitch(7680), 7680);
+        // 1366 BGRA8 texels.
+        assert_eq!(padded_row_pitch(5464), 5632);
     }
 
     #[test]

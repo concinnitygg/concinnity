@@ -317,6 +317,7 @@ pub(crate) fn start_runtime(mut runtime: Runtime, options: RunOptions) -> Result
             // The serial loop: no per-tick hook; a rendering macOS world pumps
             // the Cocoa run loop, every other case uses the tight loop.
             runloop::run_loop(&mut runtime, cfg!(target_os = "macos") && renders, |_| {});
+            finish_frame_captures(&mut runtime);
             capture_exit_screenshot(&mut runtime, options.screenshot.as_deref());
         }
     }
@@ -337,6 +338,18 @@ fn report_render_failure(cause: &concinnity_core::render::error::RenderError) {
     );
     if !crate::error_screen::show("Concinnity", &message) {
         eprintln!("{message}");
+    }
+}
+
+// Let the frame captures a serial run asked for finish writing before the
+// process can exit. The backend is still parked in the world.
+fn finish_frame_captures(runtime: &mut Runtime) {
+    if let Some(backend) = runtime
+        .world_mut()
+        .resource_mut::<crate::ecs::ActiveRenderBackend>()
+        .and_then(|slot| slot.0.as_mut())
+    {
+        backend.finish_captures();
     }
 }
 

@@ -129,6 +129,7 @@ pub(crate) fn submit(
         atmosphere: snap.frame.atmosphere,
         sunlight: snap.frame.sunlight,
         input_sampled_us: snap.frame.input_sampled_us,
+        capture: snap.capture.as_deref(),
     }) {
         Ok(()) => {
             policy.frame_succeeded();
@@ -168,10 +169,12 @@ pub(crate) fn submit(
     let mut render_stats = backend.render_stats();
     render_stats.render_cpu_us = micros_since(started).saturating_sub(render_stats.gpu_wait_us);
     render_stats.replay_us = replay_us;
-    // Taken after the stats so the readback stall stays out of this frame's
-    // render time.
-    if let Some(path) = snap.capture.take() {
-        capture_frame(backend, &path, skipped);
+    // The backend saves a capture from the frame it rode; a dropped frame
+    // presented nothing to save.
+    if let Some(path) = snap.capture.take()
+        && skipped
+    {
+        tracing::warn!("frame capture {path} skipped: the frame was dropped");
     }
     SubmitOutcome {
         result: StepResult::Continue,
@@ -179,19 +182,6 @@ pub(crate) fn submit(
         replay,
         device_lost: false,
         skipped,
-    }
-}
-
-// Save the frame just presented to `path`. A dropped frame presented nothing
-// new, so there is nothing to save.
-fn capture_frame(backend: &mut dyn RenderBackend, path: &str, skipped: bool) {
-    if skipped {
-        tracing::warn!("frame capture {path} skipped: the frame was dropped");
-        return;
-    }
-    match backend.screenshot(path) {
-        Ok(saved) => tracing::info!("frame capture saved: {saved}"),
-        Err(e) => tracing::warn!("frame capture {path} failed: {e}"),
     }
 }
 
@@ -303,9 +293,9 @@ mod tests {
         assert!(!outcome.replay.memory_pressure);
     }
 
-    // The backend calls one frame carrying `capture` makes, after a draw that
+    // The capture each drawn frame asked the backend for, after a draw that
     // fails with `fail` when one is given.
-    fn captured(capture: Option<&str>, fail: Option<error::RenderError>) -> Vec<Call> {
+    fn captured(capture: Option<&str>, fail: Option<error::RenderError>) -> Vec<Option<String>> {
         let (state, mut backend) = recording_backend();
         state.lock().unwrap().fail_draw = fail;
         let mut snap = RenderSnapshot {
@@ -315,33 +305,47 @@ mod tests {
         submit(&mut FramePolicy::default(), &mut snap, &mut backend);
         assert!(snap.capture.is_none(), "a capture is taken once");
         let calls = state.lock().unwrap().calls.clone();
+        assert!(
+            !calls.iter().any(|c| matches!(c, Call::Screenshot(_))),
+            "a frame capture never takes the blocking screenshot"
+        );
         calls
             .into_iter()
-            .filter(|c| matches!(c, Call::DrawFrame { .. } | Call::Screenshot(_)))
+            .filter_map(|c| match c {
+                Call::DrawFrame { capture, .. } => Some(capture),
+                _ => None,
+            })
             .collect()
     }
 
     #[test]
-    fn a_frame_carrying_a_capture_is_saved_after_it_is_drawn() {
-        let calls = captured(Some("shot.png"), None);
-        assert_eq!(calls.len(), 2, "{calls:?}");
-        assert!(matches!(calls[0], Call::DrawFrame { .. }));
-        assert_eq!(calls[1], Call::Screenshot("shot.png".to_string()));
-    }
-
-    #[test]
-    fn a_frame_without_a_capture_saves_nothing() {
-        let calls = captured(None, None);
-        assert!(!calls.iter().any(|c| matches!(c, Call::Screenshot(_))));
-    }
-
-    #[test]
-    fn a_dropped_frame_saves_nothing() {
-        let calls = captured(
-            Some("shot.png"),
-            Some(error::RenderError::Other("draw".into())),
+    fn a_frame_carrying_a_capture_asks_its_own_draw_for_it() {
+        assert_eq!(
+            captured(Some("shot.png"), None),
+            [Some("shot.png".to_string())]
         );
-        assert!(!calls.iter().any(|c| matches!(c, Call::Screenshot(_))));
+    }
+
+    #[test]
+    fn a_frame_without_a_capture_asks_for_none() {
+        assert_eq!(captured(None, None), [None]);
+    }
+
+    #[test]
+    fn a_dropped_frame_does_not_carry_its_capture_to_the_next() {
+        let (state, mut backend) = recording_backend();
+        state.lock().unwrap().fail_draw = Some(error::RenderError::Other("draw".into()));
+        let mut snap = RenderSnapshot {
+            capture: Some("shot.png".to_string()),
+            ..Default::default()
+        };
+        let mut policy = FramePolicy::default();
+        let outcome = submit(&mut policy, &mut snap, &mut backend);
+        assert!(outcome.skipped);
+        state.lock().unwrap().fail_draw = None;
+        submit(&mut policy, &mut snap, &mut backend);
+        let last = state.lock().unwrap().last_draw_frame();
+        assert!(matches!(last, Some(Call::DrawFrame { capture: None, .. })));
     }
 
     #[test]

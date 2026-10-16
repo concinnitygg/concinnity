@@ -435,6 +435,9 @@ impl MtlContext {
             pending_terminal,
             submission_token,
         } = frame;
+        let texture = drawable.texture();
+        self.reserve_frame_capture(&texture);
+        self.record_frame_capture(&cmd_buf, &texture);
         cmd_buf.presentDrawable(ProtocolObject::from_ref(&*drawable));
 
         // Retain this drawable's color texture so the headless `screenshot`
@@ -447,7 +450,7 @@ impl MtlContext {
         // same-queue FIFO order guarantees it is fully rendered, and a
         // read-only blit may run alongside the compositor's scan-out.
         if self.capture {
-            self.last_present_texture = Some(drawable.texture());
+            self.last_present_texture = Some(texture);
         }
 
         // The presenting command buffer's own completion handler. It reports

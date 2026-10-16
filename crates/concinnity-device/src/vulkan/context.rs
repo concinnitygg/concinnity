@@ -1297,6 +1297,9 @@ pub(crate) struct VkContext {
 
     // Per-frame-in-flight synchronization primitives. See `VkFrameSync`.
     pub(super) frame_sync: VkFrameSync,
+    // Frame captures asked of `draw_frame`: their read-back buffers, the
+    // captures awaiting their frame slot's fence, and the writer.
+    pub(super) frame_capture: super::screenshot::VkFrameCaptures,
     pub(super) current_frame: usize,
     // When the input each frame slot's last frame showed was sampled, on the
     // host clock, read back beside that frame's timestamps.
@@ -1420,7 +1423,9 @@ impl VkContext {
             atmosphere,
             sunlight,
             input_sampled_us,
+            capture,
         } = params;
+        self.frame_capture.arm(capture);
         let elapsed = elapsed_f64 as f32;
         if let Some(atmo) = self.atmosphere.as_mut() {
             atmo.frame = atmosphere;
@@ -1460,6 +1465,8 @@ impl VkContext {
 
         let frame = self.current_frame;
         let mut gpu_wait = self.wait_frame_slot(frame)?;
+        self.retire_frame_captures(frame);
+        self.reserve_frame_capture();
         // Staged geometry writes go ahead of everything this frame submits.
         self.flush_geometry_uploads()?;
         self.service_background_work(elapsed, frame);
@@ -1520,6 +1527,8 @@ impl VkContext {
             world_hidden,
         )?;
 
+        let capture = self.record_frame_capture(cmd, image_index);
+
         // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
         unsafe { device.end_command_buffer(cmd) }
             .map_err(|e| super::error::map_vk_result(e, "end cmd buf"))?;
@@ -1532,6 +1541,13 @@ impl VkContext {
         let mut stats = self.frame_stats.get();
         stats.submit_present_us = started.elapsed().as_micros().min(u32::MAX.into()) as u32;
         self.frame_stats.set(stats);
+        // A submitted frame's capture waits for its slot's fence; a failed one
+        // is reported as a dropped frame by the caller.
+        if let Some(capture) = capture
+            && submitted.is_ok()
+        {
+            self.frame_capture.park(frame, capture);
+        }
         submitted
     }
 
