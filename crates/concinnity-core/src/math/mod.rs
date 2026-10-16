@@ -1,7 +1,9 @@
 //! The scalar, vector and rotation primitives the rest of the vocabulary is
 //! built from: the f32 transcendentals `core` leaves to a math library, the
-//! 3-component vector ops every layout and transform reaches for, and the
-//! quaternion / Euler convention rotations are authored and stepped in.
+//! 3-component vector ops every layout and transform reaches for (and their
+//! double-precision twins), and the quaternion / Euler convention rotations
+//! are authored and stepped in.
+pub mod dvec3;
 pub mod noise;
 pub mod pick;
 mod rotation;

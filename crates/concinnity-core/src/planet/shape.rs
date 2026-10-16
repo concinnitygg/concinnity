@@ -4,6 +4,7 @@
 // from here, so they cannot disagree about where the ground is.
 
 use super::dvec::{self, DMat3, DVec3};
+use crate::math::dvec3;
 use crate::math::noise::lcg_hash;
 
 /// Fewest octaves a planet's height noise sums.
@@ -57,22 +58,22 @@ impl PlanetShape {
         let mut sum = 0.0;
         let mut gradient = [0.0; 3];
         for octave in self.octave_lattices() {
-            let p = dvec::add(dvec::mul_vec(&octave.to_lattice, dir), octave.offset);
+            let p = dvec3::add(dvec::mul_vec(&octave.to_lattice, dir), octave.offset);
             let (value, grad) = value_noise(p, octave.salt);
             sum += value * octave.weight;
             let along = dvec::mul_transpose_vec(&octave.to_lattice, grad);
-            gradient = dvec::add(gradient, dvec::scale(along, octave.weight));
+            gradient = dvec3::add(gradient, dvec3::scale(along, octave.weight));
         }
         let k = self.noise_scale();
-        (sum * k, dvec::scale(gradient, k))
+        (sum * k, dvec3::scale(gradient, k))
     }
 
     /// The ground point in direction `dir` (unit length), in authored
     /// coordinates.
     pub fn surface(&self, dir: DVec3) -> DVec3 {
-        dvec::add(
+        dvec3::add(
             self.center,
-            dvec::scale(dir, self.radius + self.height(dir)),
+            dvec3::scale(dir, self.radius + self.height(dir)),
         )
     }
 
@@ -88,10 +89,10 @@ impl PlanetShape {
     pub fn surface_and_normal(&self, dir: DVec3) -> (DVec3, DVec3) {
         let (height, gradient) = self.height_gradient(dir);
         let r = self.radius + height;
-        let along = dvec::sub(gradient, dvec::scale(dir, dvec::dot(dir, gradient)));
-        let tilt = dvec::scale(along, 1.0 / r.max(1e-3));
-        let point = dvec::add(self.center, dvec::scale(dir, r));
-        (point, dvec::normalize_or(dvec::sub(dir, tilt), dir))
+        let along = dvec3::sub(gradient, dvec3::scale(dir, dvec3::dot(dir, gradient)));
+        let tilt = dvec3::scale(along, 1.0 / r.max(1e-3));
+        let point = dvec3::add(self.center, dvec3::scale(dir, r));
+        (point, dvec3::normalize_or(dvec3::sub(dir, tilt), dir))
     }
 
     /// The steepest the ground can rise along it anywhere, in meters per
@@ -109,7 +110,7 @@ impl PlanetShape {
 
     /// The direction from the center to authored point `p`.
     pub fn up_at(&self, p: DVec3) -> DVec3 {
-        dvec::normalize_or(dvec::sub(p, self.center), [0.0, 1.0, 0.0])
+        dvec3::normalize_or(dvec3::sub(p, self.center), [0.0, 1.0, 0.0])
     }
 
     // Lattice cells of the broadest octave per unit of direction.
@@ -253,17 +254,17 @@ impl CubeFace {
     pub(crate) fn locate(c: DVec3) -> (Self, f64, f64) {
         let face = Self::ALL
             .into_iter()
-            .max_by(|a, b| dvec::dot(a.axes()[0], c).total_cmp(&dvec::dot(b.axes()[0], c)))
+            .max_by(|a, b| dvec3::dot(a.axes()[0], c).total_cmp(&dvec3::dot(b.axes()[0], c)))
             .unwrap_or(Self(0));
         let [n, u, v] = face.axes();
-        let on_plane = dvec::scale(c, 1.0 / dvec::dot(n, c).max(1e-12));
-        (face, dvec::dot(on_plane, u), dvec::dot(on_plane, v))
+        let on_plane = dvec3::scale(c, 1.0 / dvec3::dot(n, c).max(1e-12));
+        (face, dvec3::dot(on_plane, u), dvec3::dot(on_plane, v))
     }
 
     // The point of the cube's space at face coordinates `(s, t)`.
     pub(crate) fn cube_point(self, s: f64, t: f64) -> DVec3 {
         let [n, u, v] = self.axes();
-        dvec::add(n, dvec::add(dvec::scale(u, s), dvec::scale(v, t)))
+        dvec3::add(n, dvec3::add(dvec3::scale(u, s), dvec3::scale(v, t)))
     }
 }
 
@@ -278,7 +279,7 @@ fn spherify(c: DVec3) -> DVec3 {
     ];
     // Exact on the cube; outside it (a tile's border ring) only close, so
     // land on the sphere either way.
-    dvec::normalize_or(p, [0.0, 1.0, 0.0])
+    dvec3::normalize_or(p, [0.0, 1.0, 0.0])
 }
 
 #[cfg(test)]
@@ -303,7 +304,7 @@ mod tests {
         let mut hi = f64::NEG_INFINITY;
         for i in 0..400 {
             let a = i as f64 * 0.0137;
-            let dir = dvec::normalize_or([libm::sin(a), libm::cos(a * 0.7), 0.3], [0.0; 3]);
+            let dir = dvec3::normalize_or([libm::sin(a), libm::cos(a * 0.7), 0.3], [0.0; 3]);
             let h = s.height(dir);
             assert!((0.0..=60.0).contains(&h), "{h}");
             assert_eq!(h, s.height(dir));
@@ -329,8 +330,8 @@ mod tests {
         let step = 1.0 / 50_000.0;
         for i in 0..200 {
             let a = 0.3 + i as f64 * step;
-            let d0 = dvec::normalize_or([libm::sin(a), 1.0, 0.2], [0.0; 3]);
-            let d1 = dvec::normalize_or([libm::sin(a + step), 1.0, 0.2], [0.0; 3]);
+            let d0 = dvec3::normalize_or([libm::sin(a), 1.0, 0.2], [0.0; 3]);
+            let d1 = dvec3::normalize_or([libm::sin(a + step), 1.0, 0.2], [0.0; 3]);
             assert!((s.height(d0) - s.height(d1)).abs() < 0.5);
         }
     }
@@ -341,10 +342,10 @@ mod tests {
             let [n, _, _] = face.axes();
             for (s, t) in [(0.0, 0.0), (1.0, 1.0), (-1.0, 0.5), (0.25, -1.0)] {
                 let d = face.direction(s, t);
-                assert!((dvec::length(d) - 1.0).abs() < 1e-12);
-                assert!(dvec::dot(d, n) > 0.5);
+                assert!((dvec3::length(d) - 1.0).abs() < 1e-12);
+                assert!(dvec3::dot(d, n) > 0.5);
             }
-            assert!((dvec::dot(face.direction(0.0, 0.0), n) - 1.0).abs() < 1e-12);
+            assert!((dvec3::dot(face.direction(0.0, 0.0), n) - 1.0).abs() < 1e-12);
         }
     }
 
@@ -357,7 +358,7 @@ mod tests {
             let t = -1.0 + i as f64 * 0.25;
             let a = CubeFace(0).direction(-1.0, t);
             let b = CubeFace(4).direction(1.0, t);
-            assert!(dvec::length(dvec::sub(a, b)) < 1e-14, "{a:?} {b:?}");
+            assert!(dvec3::length(dvec3::sub(a, b)) < 1e-14, "{a:?} {b:?}");
         }
     }
 
@@ -366,10 +367,10 @@ mod tests {
         let s = shape();
         let dir = CubeFace(2).direction(0.1, -0.2);
         let p = s.surface(dir);
-        let r = dvec::length(dvec::sub(p, s.center));
+        let r = dvec3::length(dvec3::sub(p, s.center));
         assert!((r - 50_000.0 - s.height(dir)).abs() < 1e-6);
         let up = s.up_at(p);
-        assert!(dvec::length(dvec::sub(up, dir)) < 1e-12);
+        assert!(dvec3::length(dvec3::sub(up, dir)) < 1e-12);
     }
 
     // The analytic gradient is the height's own slope.
@@ -379,7 +380,7 @@ mod tests {
         let e = 1e-7;
         for i in 0..50 {
             let a = 0.3 + i as f64 * 0.0011;
-            let dir = dvec::normalize_or([libm::sin(a), 1.0, libm::cos(a * 3.0) * 0.4], [0.0; 3]);
+            let dir = dvec3::normalize_or([libm::sin(a), 1.0, libm::cos(a * 3.0) * 0.4], [0.0; 3]);
             let (_, g) = s.height_gradient(dir);
             for axis in 0..3 {
                 let mut hi = dir;
@@ -409,7 +410,7 @@ mod tests {
             let (fs, ft) = (-0.4 + i as f64 * 3.7e-4, 0.1 + i as f64 * 1.3e-4);
             let a = face.direction(fs, ft);
             let b = face.direction(fs + 2e-5, ft - 1e-5);
-            let run = 50_000.0 * libm::acos(dvec::dot(a, b).min(1.0));
+            let run = 50_000.0 * libm::acos(dvec3::dot(a, b).min(1.0));
             steepest = steepest.max((s.height(a) - s.height(b)).abs() / run);
         }
         assert!(steepest <= bound, "{steepest} > {bound}");
@@ -448,16 +449,16 @@ mod tests {
         for i in 0..40 {
             let (fs, ft) = (-0.3 + i as f64 * 0.013, 0.2 - i as f64 * 0.007);
             let n = s.normal(face.direction(fs, ft));
-            let ds = dvec::sub(
+            let ds = dvec3::sub(
                 s.surface(face.direction(fs + e, ft)),
                 s.surface(face.direction(fs - e, ft)),
             );
-            let dt = dvec::sub(
+            let dt = dvec3::sub(
                 s.surface(face.direction(fs, ft + e)),
                 s.surface(face.direction(fs, ft - e)),
             );
-            let exact = dvec::normalize_or(dvec::cross(ds, dt), [0.0; 3]);
-            assert!(dvec::dot(n, exact) > 1.0 - 1e-8, "{n:?} {exact:?}");
+            let exact = dvec3::normalize_or(dvec3::cross(ds, dt), [0.0; 3]);
+            assert!(dvec3::dot(n, exact) > 1.0 - 1e-8, "{n:?} {exact:?}");
         }
     }
 
@@ -479,7 +480,7 @@ mod tests {
     fn no_crease_runs_along_the_axes() {
         let s = shape();
         let across = |x: f64, z: f64| {
-            let dir = dvec::normalize_or([x / 50_000.0, 1.0, z / 50_000.0], [0.0; 3]);
+            let dir = dvec3::normalize_or([x / 50_000.0, 1.0, z / 50_000.0], [0.0; 3]);
             s.height_gradient(dir).1[0].abs()
         };
         let mean = |x: f64| (0..200).map(|i| across(x, -20.0 * i as f64)).sum::<f64>() / 200.0;

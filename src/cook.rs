@@ -162,6 +162,25 @@ impl WorldBuilder {
         self
     }
 
+    /// Lay world file text over the assets already declared. An entry with
+    /// the `$id` of a declared asset, or with no `$id` and the type of an
+    /// anonymous one, patches the first such asset: objects merge field by
+    /// field, and anything else, `null` included, replaces the field. Any
+    /// other entry is declared as [`add_jsonl`](Self::add_jsonl) declares it.
+    ///
+    /// ```no_run
+    /// # use concinnity::cook;
+    /// cook::world()
+    ///     .add_jsonl(r#"["Camera3D",{"$id":"cam","fov_y_degrees":60.0}]"#)
+    ///     .overlay_jsonl(r#"["Camera3D",{"$id":"cam","controller":null}]"#)
+    ///     .write_blob("data/0")
+    ///     .expect("the world is written to data/0");
+    /// ```
+    pub fn overlay_jsonl(&mut self, text: &str) -> &mut Self {
+        self.0.overlay_jsonl(text);
+        self
+    }
+
     /// Remove the declared asset `handle` names: its `$id`, or the label of
     /// an anonymous entry, such as `RigidBody#0`. Naming nothing is an error
     /// at compile.

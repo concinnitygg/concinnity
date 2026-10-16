@@ -1,59 +1,13 @@
-// Double-precision vectors and rotations for positions on a planet, where an
-// f32 runs out of digits long before the planet does.
+// Double-precision rotations for positions on a planet, beside the vectors in
+// `math::dvec3`.
 
-/// A double-precision 3-vector.
-pub type DVec3 = [f64; 3];
+pub use crate::math::dvec3::DVec3;
+use crate::math::dvec3::{cross, dot, normalize_or, scale, sub};
 
 /// A column-major double-precision 3x3 matrix, `m[col][row]`.
 pub type DMat3 = [[f64; 3]; 3];
 
 pub(crate) const DMAT3_IDENTITY: DMat3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-
-pub(crate) fn add(a: DVec3, b: DVec3) -> DVec3 {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-pub(crate) fn sub(a: DVec3, b: DVec3) -> DVec3 {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-pub(crate) fn scale(v: DVec3, s: f64) -> DVec3 {
-    [v[0] * s, v[1] * s, v[2] * s]
-}
-
-pub(crate) fn dot(a: DVec3, b: DVec3) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-pub(crate) fn cross(a: DVec3, b: DVec3) -> DVec3 {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
-pub(crate) fn length(v: DVec3) -> f64 {
-    libm::sqrt(dot(v, v))
-}
-
-// `v` scaled to unit length, or `fallback` when it has no direction.
-pub(crate) fn normalize_or(v: DVec3, fallback: DVec3) -> DVec3 {
-    let len = length(v);
-    if len > 1e-300 && len.is_finite() {
-        scale(v, 1.0 / len)
-    } else {
-        fallback
-    }
-}
-
-pub(crate) fn from_f32(v: [f32; 3]) -> DVec3 {
-    [f64::from(v[0]), f64::from(v[1]), f64::from(v[2])]
-}
-
-pub(crate) fn to_f32(v: DVec3) -> [f32; 3] {
-    [v[0] as f32, v[1] as f32, v[2] as f32]
-}
 
 // `m * v`.
 pub(crate) fn mul_vec(m: &DMat3, v: DVec3) -> DVec3 {
@@ -173,6 +127,7 @@ pub(crate) fn quat_of(m: &DMat3) -> [f32; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::dvec3::{length, to_f32};
 
     fn close(a: DVec3, b: DVec3, tol: f64) -> bool {
         (0..3).all(|i| (a[i] - b[i]).abs() < tol)

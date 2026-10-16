@@ -720,7 +720,7 @@ impl PostProcessTunables {
 /// defaults), plus the two display-output flags the backend resolves from the
 /// display's EDR capability at init. Pushed verbatim to the bloom prefilter and
 /// composite fragment shaders, so the layout must stay in sync with the
-/// `PostUniforms` struct in those shaders. 40 bytes.
+/// `PostUniforms` struct in those shaders. 36 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct PostProcessParams {
@@ -760,11 +760,6 @@ pub struct PostProcessParams {
     /// `Off`. Always ignored on the HDR path, which never runs FXAA. Stored
     /// as a float so the shader branches on `> 0.5` without a cast.
     pub fxaa: f32,
-    /// The scale the HDR chain is written at; 1.0 here. The shaders' copy
-    /// ([`crate::gfx::auto_exposure::PreExposure::post_params`]) carries the
-    /// frame's value, with it divided out of `exposure`, and the bloom
-    /// prefilter divides it out of its firefly weight.
-    pub pre_exposure: f32,
 }
 
 impl PostProcessParams {
@@ -2052,23 +2047,22 @@ mod tests {
         assert_eq!(offset_of!(FogParams, _pad3), 168);
     }
 
-    // Sixteen scalars: the post tunables with the pre-exposure, the fade, the
-    // view selector, the depth view's two distances, the reactive flag and
-    // the night-vision weight.
+    // Fifteen scalars: the post tunables, the fade, the view selector, the
+    // depth view's two distances, the reactive flag and the night-vision
+    // weight.
     #[test]
     fn composite_params_layout_matches_shaders() {
-        assert_eq!(size_of::<CompositeParams>(), 64);
+        assert_eq!(size_of::<CompositeParams>(), 60);
         assert_eq!(offset_of!(CompositeParams, post), 0);
-        assert_eq!(size_of::<PostProcessParams>(), 40);
+        assert_eq!(size_of::<PostProcessParams>(), 36);
         assert_eq!(offset_of!(PostProcessParams, exposure), 12);
         assert_eq!(offset_of!(PostProcessParams, fxaa), 32);
-        assert_eq!(offset_of!(PostProcessParams, pre_exposure), 36);
-        assert_eq!(offset_of!(CompositeParams, fade), 40);
-        assert_eq!(offset_of!(CompositeParams, view_mode), 44);
-        assert_eq!(offset_of!(CompositeParams, depth_near), 48);
-        assert_eq!(offset_of!(CompositeParams, depth_far), 52);
-        assert_eq!(offset_of!(CompositeParams, reactive_valid), 56);
-        assert_eq!(offset_of!(CompositeParams, night_vision), 60);
+        assert_eq!(offset_of!(CompositeParams, fade), 36);
+        assert_eq!(offset_of!(CompositeParams, view_mode), 40);
+        assert_eq!(offset_of!(CompositeParams, depth_near), 44);
+        assert_eq!(offset_of!(CompositeParams, depth_far), 48);
+        assert_eq!(offset_of!(CompositeParams, reactive_valid), 52);
+        assert_eq!(offset_of!(CompositeParams, night_vision), 56);
     }
 
     #[test]

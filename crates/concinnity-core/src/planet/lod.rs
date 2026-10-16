@@ -7,10 +7,11 @@
 // that range, so a tile and its children look alike wherever the quadtree
 // swaps them.
 
+use crate::math::dvec3;
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
-use super::dvec::{self, DVec3};
+use super::dvec::DVec3;
 use super::seams::{DrawnTile, balance, seams};
 use super::shape::{CubeFace, PlanetShape};
 use super::tile::{MAX_TILE_LEVEL, TILE_CELLS, TileBounds, TileId, tile_bounds};
@@ -37,6 +38,12 @@ pub const RANGE_CELL_POINTS: f64 = 8.0;
 /// are chosen again, as a fraction of its height over the highest ground, or
 /// of the finest level's range when that is more.
 pub const REPLAN_DRIFT: f64 = 0.05;
+
+/// How far a tile's flat cells may sag under the sphere at most, as a
+/// fraction of the planet's radius: the coarsest level any tile is drawn at
+/// keeps its cells this close to the curve wherever the camera is, so ground
+/// seen from far off holds its height as well as its outline.
+pub const MAX_CELL_SAG: f64 = 2e-5;
 
 /// A split tile's children stay resident until the camera is this many times
 /// their level's range away, so hovering at the split does not rebuild them.
@@ -126,6 +133,18 @@ impl TileView {
     }
 }
 
+// The coarsest level whose nominal cells sag at most `MAX_CELL_SAG` of the
+// radius: a cell spanning `a` radians sags `a^2 / 8` of it.
+fn sag_level() -> u8 {
+    let face = core::f64::consts::FRAC_PI_2 / f64::from(TILE_CELLS);
+    let widest = libm::sqrt(8.0 * MAX_CELL_SAG);
+    let mut level = 0u8;
+    while level < MAX_TILE_LEVEL && face / f64::from(1u32 << level) > widest {
+        level += 1;
+    }
+    level
+}
+
 /// How many logical points a radian of view spans, near the middle of a
 /// view `viewport_height` points tall with a vertical field of view of
 /// `fov_y_degrees`; 0 for a view with no height.
@@ -147,6 +166,9 @@ pub struct TileLod {
     pub shape: PlanetShape,
     /// The deepest level any tile reaches.
     pub max_level: u8,
+    /// The coarsest level any tile is drawn at, once resident: its cells sag
+    /// at most [`MAX_CELL_SAG`] of the radius under the sphere.
+    pub min_level: u8,
 }
 
 impl TileLod {
@@ -163,6 +185,7 @@ impl TileLod {
         Self {
             shape,
             max_level: level,
+            min_level: sag_level().min(level),
         }
     }
 
@@ -181,7 +204,13 @@ impl TileLod {
     /// How far a vertex of a tile at `level`, `distance` meters from `view`'s
     /// camera, has morphed toward the parent's mesh: 0 until
     /// [`MORPH_START`] of the level's range, 1 from the range on.
+    ///
+    /// A tile at [`Self::min_level`] or coarser never gives way to its
+    /// parent, so never morphs.
     pub fn morph(&self, level: u8, distance: f64, view: &TileView) -> f64 {
+        if level <= self.min_level {
+            return 0.0;
+        }
         let range = self.range(level, view);
         ((distance - MORPH_START * range) / ((1.0 - MORPH_START) * range)).clamp(0.0, 1.0)
     }
@@ -192,15 +221,15 @@ impl TileLod {
     /// nearer the camera than its children's range, where they would be
     /// morphed short of its mesh.
     pub fn drift(&self, view: &TileView) -> f64 {
-        let height = dvec::length(dvec::sub(view.eye, self.shape.center))
+        let height = dvec3::length(dvec3::sub(view.eye, self.shape.center))
             - self.shape.radius
             - self.shape.amplitude;
         REPLAN_DRIFT * height.max(self.range(self.max_level, view))
     }
 
     // How near a camera within `slack` of `view`'s can come to `tile`, over
-    // its children's range: below 1 the tile splits into them. Infinite for a
-    // tile at the deepest level.
+    // its children's range: below 1 the tile splits into them. 0 for a tile
+    // coarser than the coarsest drawn level, infinite for one at the deepest.
     fn nearness(
         &self,
         tile: TileId,
@@ -211,8 +240,11 @@ impl TileLod {
         if tile.level >= self.max_level {
             return f64::INFINITY;
         }
+        if tile.level < self.min_level {
+            return 0.0;
+        }
         let b = bounds.get(tile);
-        let gap = dvec::length(dvec::sub(view.eye, b.center)) - b.radius - slack;
+        let gap = dvec3::length(dvec3::sub(view.eye, b.center)) - b.radius - slack;
         gap / self.range(tile.level + 1, view)
     }
 
@@ -456,10 +488,10 @@ mod tests {
             assert!(drift > 0.0);
             let sel = l.select(&v, &|_| true, &mut c);
             for step in [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, -1.0, 0.0]] {
-                let moved = dvec::add(eye, dvec::scale(step, drift * 0.99));
+                let moved = dvec3::add(eye, dvec3::scale(step, drift * 0.99));
                 for d in sel.draw.iter().filter(|d| d.id.level < l.max_level) {
                     let b = c.get(d.id);
-                    let gap = dvec::length(dvec::sub(moved, b.center)) - b.radius;
+                    let gap = dvec3::length(dvec3::sub(moved, b.center)) - b.radius;
                     assert!(
                         gap >= l.range(d.id.level + 1, &v) - 1e-6,
                         "{:?} at {height} m",
@@ -497,6 +529,46 @@ mod tests {
                 up = p.parent();
             }
         }
+    }
+
+    // The coarsest drawn level's cells sag under the sphere within the bound,
+    // and a level coarser would not, on a planet of any size.
+    #[test]
+    fn the_coarsest_level_keeps_its_cells_near_the_sphere() {
+        for radius in [5_000.0, 50_000.0, 6_371_000.0] {
+            let shape = PlanetShape {
+                radius,
+                ..lod().shape
+            };
+            let l = TileLod::new(shape, 1.0);
+            assert!(l.min_level > 0 && l.min_level < l.max_level);
+            let sag = |level: u8| {
+                let a = l.nominal_width(level) / f64::from(TILE_CELLS) / radius;
+                a * a / 8.0
+            };
+            assert!(sag(l.min_level) <= MAX_CELL_SAG, "{radius}");
+            assert!(sag(l.min_level - 1) > MAX_CELL_SAG, "{radius}");
+        }
+        // A planet too small for the bound stops at its finest level.
+        let tiny = TileLod::new(lod().shape, 1e9);
+        assert_eq!(tiny.min_level, tiny.max_level);
+    }
+
+    // However far the camera, every resident face draws no tile coarser
+    // than the coarsest level, and those never morph.
+    #[test]
+    fn a_far_camera_draws_no_tile_coarser_than_the_coarsest_level() {
+        let l = lod();
+        let far = [0.0, 150_000.0, 0.0];
+        let v = view(far, MAX_RANGE_WIDTHS);
+        let sel = l.select(&v, &|_| true, &mut cache(&l));
+        assert!(sel.draw.iter().all(|d| d.id.level == l.min_level));
+        assert_eq!(sel.draw.len(), 6 << (2 * l.min_level));
+        assert_eq!(l.morph(l.min_level, 1e12, &v), 0.0);
+        assert_eq!(l.morph(l.min_level + 1, 1e12, &v), 1.0);
+        // Until its children arrive, a coarser tile stands in for them.
+        let sel = l.select(&v, &|t: TileId| t.level == 0, &mut cache(&l));
+        assert_eq!(sel.draw.len(), 6);
     }
 
     // A wider view reaches each level farther, so more tiles are drawn.
@@ -592,8 +664,8 @@ mod tests {
             for height in [2.0, 62.0, 900.0, 20_000.0] {
                 for i in 0..6 {
                     let a = 0.2 + i as f64 * 0.31;
-                    let up = dvec::normalize_or([libm::sin(a), 2.0, libm::cos(a * 1.7)], [0.0; 3]);
-                    let eye = dvec::add(l.shape.center, dvec::scale(up, 50_000.0 + height));
+                    let up = dvec3::normalize_or([libm::sin(a), 2.0, libm::cos(a * 1.7)], [0.0; 3]);
+                    let eye = dvec3::add(l.shape.center, dvec3::scale(up, 50_000.0 + height));
                     let v = view(eye, widths);
                     let sel = l.select(&v, &|_| true, &mut bounds);
                     for d in &sel.draw {
@@ -603,7 +675,7 @@ mod tests {
                             }
                             seams_seen += 1;
                             for p in side_points(d.id, side) {
-                                let dist = dvec::length(dvec::sub(p, eye));
+                                let dist = dvec3::length(dvec3::sub(p, eye));
                                 assert_eq!(l.morph(d.id.level, dist, &v), 1.0, "{:?}", d.id);
                                 assert_eq!(l.morph(d.id.level - 1, dist, &v), 0.0, "{:?}", d.id);
                             }
@@ -668,9 +740,10 @@ mod tests {
         let mut most = 0;
         for i in 0..24 {
             let a = i as f64 * 0.27;
-            let up = dvec::normalize_or([libm::sin(a), libm::cos(a), libm::sin(a * 3.1)], [0.0; 3]);
+            let up =
+                dvec3::normalize_or([libm::sin(a), libm::cos(a), libm::sin(a * 3.1)], [0.0; 3]);
             for height in [2.0, 62.0, 500.0, 5_000.0] {
-                let cam = dvec::add(l.shape.center, dvec::scale(up, 50_000.0 + height));
+                let cam = dvec3::add(l.shape.center, dvec3::scale(up, 50_000.0 + height));
                 let v = view(cam, MAX_RANGE_WIDTHS);
                 most = most.max(l.select(&v, &|_| true, &mut cache(&l)).retained.len());
             }

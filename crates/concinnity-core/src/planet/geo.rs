@@ -5,6 +5,7 @@ use super::PlanetFrame;
 use super::dvec::{self, DVec3};
 use super::shape::PlanetShape;
 use crate::math::Quat;
+use crate::math::dvec3;
 
 // The north pole's direction from the center, in authored coordinates.
 const NORTH: DVec3 = [0.0, 0.0, -1.0];
@@ -72,24 +73,24 @@ pub struct CameraGeo {
 /// degrees, in authored coordinates.
 pub fn geo_direction(latitude: f64, longitude: f64) -> DVec3 {
     let (lat, lon) = (latitude.to_radians(), longitude.to_radians());
-    let around = dvec::add(
-        dvec::scale(PRIME, libm::cos(lon)),
-        dvec::scale(EAST, libm::sin(lon)),
+    let around = dvec3::add(
+        dvec3::scale(PRIME, libm::cos(lon)),
+        dvec3::scale(EAST, libm::sin(lon)),
     );
-    dvec::add(
-        dvec::scale(around, libm::cos(lat)),
-        dvec::scale(NORTH, libm::sin(lat)),
+    dvec3::add(
+        dvec3::scale(around, libm::cos(lat)),
+        dvec3::scale(NORTH, libm::sin(lat)),
     )
 }
 
 /// The `(latitude, longitude)` in degrees of the direction `dir` from a
 /// planet's center (any length), in authored coordinates.
 pub fn geo_lat_lon(dir: DVec3) -> (f64, f64) {
-    let d = dvec::normalize_or(dir, PRIME);
-    let (e, p) = (dvec::dot(d, EAST), dvec::dot(d, PRIME));
+    let d = dvec3::normalize_or(dir, PRIME);
+    let (e, p) = (dvec3::dot(d, EAST), dvec3::dot(d, PRIME));
     let around = libm::sqrt(e * e + p * p);
     // atan2 keeps its precision at the poles, where asin's slope blows up.
-    let lat = libm::atan2(dvec::dot(d, NORTH), around);
+    let lat = libm::atan2(dvec3::dot(d, NORTH), around);
     let lon = if around < 1e-12 {
         0.0
     } else {
@@ -101,19 +102,19 @@ pub fn geo_lat_lon(dir: DVec3) -> (f64, f64) {
 /// The `[east, north, up]` unit axes at the direction `up` from a planet's
 /// center, in authored coordinates. At a pole east is authored `+X`.
 pub fn geo_axes(up: DVec3) -> [DVec3; 3] {
-    let up = dvec::normalize_or(up, PRIME);
-    let east = dvec::normalize_or(dvec::cross(NORTH, up), EAST);
-    let north = dvec::cross(up, east);
+    let up = dvec3::normalize_or(up, PRIME);
+    let east = dvec3::normalize_or(dvec3::cross(NORTH, up), EAST);
+    let north = dvec3::cross(up, east);
     [east, north, up]
 }
 
 impl PlanetShape {
     /// Where the authored point `p` is on the planet.
     pub fn geo_at(&self, p: DVec3) -> GeoPosition {
-        let rel = dvec::sub(p, self.center);
+        let rel = dvec3::sub(p, self.center);
         let (latitude, longitude) = geo_lat_lon(rel);
-        let altitude = dvec::length(rel) - self.radius;
-        let ground = self.height(dvec::normalize_or(rel, PRIME));
+        let altitude = dvec3::length(rel) - self.radius;
+        let ground = self.height(dvec3::normalize_or(rel, PRIME));
         GeoPosition {
             latitude,
             longitude,
@@ -127,7 +128,7 @@ impl PlanetShape {
     pub fn geo_point(&self, latitude: f64, longitude: f64, height_above_ground: f64) -> DVec3 {
         let dir = geo_direction(latitude, longitude);
         let r = self.radius + self.height(dir) + height_above_ground;
-        dvec::add(self.center, dvec::scale(dir, r))
+        dvec3::add(self.center, dvec3::scale(dir, r))
     }
 }
 
@@ -135,7 +136,7 @@ impl PlanetShape {
 // `up`, or 0 for a direction straight up or down.
 fn heading_of(up: DVec3, forward: DVec3) -> f64 {
     let [east, north, _] = geo_axes(up);
-    let (e, n) = (dvec::dot(forward, east), dvec::dot(forward, north));
+    let (e, n) = (dvec3::dot(forward, east), dvec3::dot(forward, north));
     if e * e + n * n < 1e-24 {
         return 0.0;
     }
@@ -147,9 +148,9 @@ fn heading_of(up: DVec3, forward: DVec3) -> f64 {
 fn heading_direction(up: DVec3, heading: f64) -> DVec3 {
     let [east, north, _] = geo_axes(up);
     let h = heading.to_radians();
-    dvec::add(
-        dvec::scale(north, libm::cos(h)),
-        dvec::scale(east, libm::sin(h)),
+    dvec3::add(
+        dvec3::scale(north, libm::cos(h)),
+        dvec3::scale(east, libm::sin(h)),
     )
 }
 
@@ -169,7 +170,7 @@ impl PlanetFrame {
             longitude: at.longitude,
             height_above_ground: at.height_above_ground,
             heading: heading_of(
-                dvec::sub(world, self.shape.center),
+                dvec3::sub(world, self.shape.center),
                 self.frame.dir_to_world(forward),
             ),
         }
@@ -182,12 +183,12 @@ impl PlanetFrame {
         let world = self
             .shape
             .geo_point(pose.latitude, pose.longitude, pose.height_above_ground);
-        let up = dvec::sub(world, self.shape.center);
+        let up = dvec3::sub(world, self.shape.center);
         let forward = heading_direction(up, pose.heading);
-        let up = dvec::normalize_or(up, PRIME);
-        let right = dvec::cross(forward, up);
-        let local = |d: DVec3| dvec::from_f32(self.frame.dir_to_local(d));
-        let basis = [local(right), local(up), local(dvec::scale(forward, -1.0))];
+        let up = dvec3::normalize_or(up, PRIME);
+        let right = dvec3::cross(forward, up);
+        let local = |d: DVec3| dvec3::from_f32(self.frame.dir_to_local(d));
+        let basis = [local(right), local(up), local(dvec3::scale(forward, -1.0))];
         (self.frame.to_local(world), dvec::quat_of(&basis))
     }
 
@@ -196,7 +197,7 @@ impl PlanetFrame {
     /// degrees clockwise from north.
     pub fn yaw_for_heading(&self, p: [f32; 3], heading: f64) -> f32 {
         let world = self.frame.to_world(p);
-        let up_world = dvec::sub(world, self.shape.center);
+        let up_world = dvec3::sub(world, self.shape.center);
         let forward = self
             .frame
             .dir_to_local(heading_direction(up_world, heading));
@@ -209,7 +210,7 @@ impl PlanetFrame {
     /// the planet's up there looks along.
     pub fn heading_for_yaw(&self, p: [f32; 3], yaw: f32) -> f64 {
         let world = self.frame.to_world(p);
-        let up_world = dvec::sub(world, self.shape.center);
+        let up_world = dvec3::sub(world, self.shape.center);
         let up = self.frame.dir_to_local(up_world);
         let level = [-libm::sinf(yaw), 0.0, -libm::cosf(yaw)];
         let forward = crate::gfx::camera::tilt_to_up(up, level);
@@ -252,7 +253,7 @@ mod tests {
     #[test]
     fn the_reference_points_sit_where_the_conventions_say() {
         let at = |lat, lon| geo_direction(lat, lon);
-        let near = |a: DVec3, b: DVec3| dvec::length(dvec::sub(a, b)) < 1e-12;
+        let near = |a: DVec3, b: DVec3| dvec3::length(dvec3::sub(a, b)) < 1e-12;
         assert!(near(at(0.0, 0.0), [0.0, 1.0, 0.0]), "prime meridian on +Y");
         assert!(near(at(90.0, 0.0), [0.0, 0.0, -1.0]), "north pole on -Z");
         assert!(near(at(-90.0, 0.0), [0.0, 0.0, 1.0]), "south pole on +Z");
@@ -316,17 +317,17 @@ mod tests {
         );
         for (lat, lon) in [(30.0, 60.0), (-70.0, -120.0), (90.0, 0.0), (-90.0, 0.0)] {
             let [e, n, u] = geo_axes(geo_direction(lat, lon));
-            let c = dvec::cross(e, n);
-            assert!(dvec::length(dvec::sub(c, u)) < 1e-12, "{lat} {lon}");
-            assert!(dvec::dot(e, n).abs() < 1e-12);
+            let c = dvec3::cross(e, n);
+            assert!(dvec3::length(dvec3::sub(c, u)) < 1e-12, "{lat} {lon}");
+            assert!(dvec3::dot(e, n).abs() < 1e-12);
         }
         // Walking north along a meridian, the north axis points to the next
         // point along it.
         let a = geo_direction(10.0, 25.0);
         let b = geo_direction(10.001, 25.0);
         let [_, n, _] = geo_axes(a);
-        let step = dvec::normalize_or(dvec::sub(b, a), [0.0; 3]);
-        assert!(dvec::dot(step, n) > 0.999_999);
+        let step = dvec3::normalize_or(dvec3::sub(b, a), [0.0; 3]);
+        assert!(dvec3::dot(step, n) > 0.999_999);
     }
 
     fn moved_frame() -> PlanetFrame {

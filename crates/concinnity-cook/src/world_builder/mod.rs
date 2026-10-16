@@ -13,9 +13,10 @@ use concinnity_host::store::blob::BlobData;
 
 use crate::authoring::registry::{Authored, RegisteredType, asset_entry, set_reference};
 use crate::authoring::world::{
-    entry_handle, entry_handles, find_entry, parse_world_jsonl, write_world_jsonl,
+    anonymous_label, entry_handle, entry_handles, entry_id, find_entry, parse_world_jsonl,
+    write_world_jsonl,
 };
-use crate::build_only::{LoadedWorld, prepare_world};
+use crate::build_only::{LoadedWorld, merge_args, prepare_world};
 use crate::pipeline::{PipelineResult, build_compiled, write_blobs_to};
 
 mod error;
@@ -98,19 +99,71 @@ impl WorldBuilder {
             }
         };
         for entry in entries {
-            let ty = entry.get("type").and_then(|t| t.as_str()).unwrap_or("");
-            let Some(registered) = RegisteredType::parse(ty) else {
-                self.error.get_or_insert((
-                    std::io::ErrorKind::InvalidData,
-                    format!("unknown asset type '{ty}'"),
-                ));
-                return self;
-            };
-            self.entries.push(entry);
-            let id = entry_handle(&self.entries, self.entries.len() - 1).unwrap_or_default();
-            self.declared.push((id, registered.as_str()));
+            if !self.push_entry(entry) {
+                break;
+            }
         }
         self
+    }
+
+    /// Lay world file text over the assets already declared. An entry with
+    /// the `$id` of a declared asset, or with no `$id` and the type of an
+    /// anonymous one, patches the first such asset: objects merge field by
+    /// field, and anything else, `null` included, replaces the field. Any
+    /// other entry is declared as [`add_jsonl`](Self::add_jsonl) declares it.
+    pub fn overlay_jsonl(&mut self, text: &str) -> &mut Self {
+        let entries = match parse_world_jsonl(text) {
+            Ok(entries) => entries,
+            Err(e) => {
+                self.error
+                    .get_or_insert((std::io::ErrorKind::InvalidData, e.to_string()));
+                return self;
+            }
+        };
+        for entry in entries {
+            let ty = entry.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            let handle = entry_id(&entry).map_or_else(|| anonymous_label(ty, 0), str::to_string);
+            let Some(index) = find_entry(&self.entries, &handle) else {
+                if !self.push_entry(entry) {
+                    break;
+                }
+                continue;
+            };
+            let target = &mut self.entries[index];
+            if target.get("type") != entry.get("type") {
+                self.error.get_or_insert((
+                    std::io::ErrorKind::InvalidData,
+                    format!("overlay of \"{handle}\" as a {ty}: it is declared as another type"),
+                ));
+                break;
+            }
+            let args = merge_args(&target["args"], &entry["args"]);
+            target["args"] = args;
+        }
+        self
+    }
+
+    /// The args of the declared asset `handle` names (its `$id`, or the label
+    /// of an anonymous entry, such as `Planet#0`) as authored, references
+    /// still by name.
+    pub fn declared_args(&self, handle: &str) -> Option<&serde_json::Value> {
+        find_entry(&self.entries, handle).and_then(|i| self.entries[i].get("args"))
+    }
+
+    // Declare one parsed entry, or note why it cannot be and refuse it.
+    fn push_entry(&mut self, entry: serde_json::Value) -> bool {
+        let ty = entry.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        let Some(registered) = RegisteredType::parse(ty) else {
+            self.error.get_or_insert((
+                std::io::ErrorKind::InvalidData,
+                format!("unknown asset type '{ty}'"),
+            ));
+            return false;
+        };
+        self.entries.push(entry);
+        let id = entry_handle(&self.entries, self.entries.len() - 1).unwrap_or_default();
+        self.declared.push((id, registered.as_str()));
+        true
     }
 
     /// Remove the declared asset `handle` names: its `$id`, or the label of
@@ -314,6 +367,54 @@ mod tests {
             errs.iter().any(|e| e.contains("no_such_body")),
             "got: {errs:?}"
         );
+    }
+
+    const BASE: &str = r#"["GraphicsConfig",{"bloom":{"intensity":0.3,"threshold":1.2}}]
+["Camera3D",{"$id":"cam","pitch":0.05,"controller":{"move_speed":5.0}}]
+["Camera3D",{"$id":"other","pitch":0.5}]"#;
+
+    // An entry without an `$id` patches the anonymous one of its type, nested
+    // objects field by field.
+    #[test]
+    fn an_overlay_merges_into_the_entry_of_its_type() {
+        let mut spec = builder();
+        spec.add_jsonl(BASE).overlay_jsonl(
+            r#"["GraphicsConfig",{"bloom":{"intensity":0.0},"frame_pacing":{"fps_cap":0}}]"#,
+        );
+        let graphics = spec.declared_args("GraphicsConfig#0").expect("declared");
+        assert_eq!(graphics["bloom"]["intensity"], 0.0);
+        assert_eq!(graphics["bloom"]["threshold"], 1.2);
+        assert_eq!(graphics["frame_pacing"]["fps_cap"], 0);
+        assert_eq!(spec.declared().count(), 3);
+    }
+
+    // An `$id` picks its entry among several of a type, `null` clears a field,
+    // and an entry naming nothing declared is added.
+    #[test]
+    fn an_overlay_patches_by_id_and_adds_the_rest() {
+        let mut spec = builder();
+        spec.add_jsonl(BASE).overlay_jsonl(
+            "[\"Camera3D\",{\"$id\":\"cam\",\"controller\":null}]\n\
+             [\"FrameReport\",{\"warmup_seconds\":2.5}]",
+        );
+        let cam = spec.declared_args("cam").expect("declared");
+        assert_eq!(cam["controller"], serde_json::Value::Null);
+        assert_eq!(cam["pitch"], 0.05);
+        assert_eq!(spec.declared_args("other").expect("declared")["pitch"], 0.5);
+        assert_eq!(
+            spec.declared().last(),
+            Some(("FrameReport#0", "FrameReport"))
+        );
+        spec.compile().expect("the overlaid world compiles");
+    }
+
+    #[test]
+    fn an_overlay_cannot_change_an_entrys_type() {
+        let mut spec = builder();
+        spec.add_jsonl(BASE)
+            .overlay_jsonl(r#"["DirectionalLight",{"$id":"cam"}]"#);
+        assert!(spec.compile().is_err());
+        assert!(spec.declared_args("nothing").is_none());
     }
 
     #[test]

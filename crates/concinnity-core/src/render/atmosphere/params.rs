@@ -90,6 +90,7 @@ impl AtmosphereParams {
     pub fn new(s: &AtmosphereSettings, frame: &AtmosphereFrame, view: &AtmosphereView) -> Self {
         let v3 = |v: [f32; 3], w: f32| [v[0], v[1], v[2], w];
         let table = s.with_ground_radius(frame.sky_ground_radius);
+        let air = &table.air;
         let camera = frame.table_camera_km(s);
         let disc: [f32; 3] = core::array::from_fn(|i| {
             frame.sun_illuminance[i] * frame.sun_transmittance[i] * s.sun_disc_intensity
@@ -103,11 +104,11 @@ impl AtmosphereParams {
         };
         Self {
             inv_vp: view.inv_vp,
-            rayleigh: v3(s.rayleigh_scattering, -1.0 / s.rayleigh_scale_height),
-            mie_scattering: v3(s.mie_scattering, -1.0 / s.mie_scale_height),
-            mie_extinction: v3(s.mie_extinction, s.mie_anisotropy),
-            ozone: v3(s.ozone_absorption, s.ozone_center),
-            ground_albedo: v3(s.ground_albedo, s.ozone_half_width),
+            rayleigh: v3(air.rayleigh_scattering, -1.0 / air.rayleigh_scale_height),
+            mie_scattering: v3(air.mie_scattering, -1.0 / air.mie_scale_height),
+            mie_extinction: v3(air.mie_extinction, s.mie_anisotropy),
+            ozone: v3(air.ozone_absorption, air.ozone_center),
+            ground_albedo: v3(s.ground_albedo, air.ozone_half_width),
             radii: [
                 table.bottom_radius,
                 table.top_radius,
@@ -212,7 +213,7 @@ mod tests {
 
     // With an apparent radius the tables sit over the bigger ground, the
     // camera as high above it as above the true one, and the view lane keeps
-    // the true planet.
+    // the true planet and its own thin air.
     #[test]
     fn an_apparent_radius_splits_the_tables_from_the_view() {
         let s = AtmosphereSettings::resolve(
@@ -237,7 +238,10 @@ mod tests {
         );
         assert_eq!([p.radii[0], p.radii[1]], [6360.0, 6460.0]);
         assert!((p.camera[3] - 6360.1).abs() < 1e-2, "{:?}", p.camera);
-        assert_eq!([p.view_ground[0], p.view_ground[1]], [50.0, 150.0]);
+        assert_eq!(p.view_ground[0], 50.0);
+        assert_eq!(p.view_ground[1], s.top_radius);
+        // Near the ground the tables' air is the authored air.
+        assert!((p.rayleigh[3] + 1.0 / 8.0).abs() < 1e-7);
         assert!((p.view_ground[2] - 50.1).abs() < 1e-4);
     }
 }

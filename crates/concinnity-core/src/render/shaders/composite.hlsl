@@ -32,9 +32,6 @@ struct CompositeParams
     // 1.0 = run the FXAA edge filter on the SDR path; 0.0 = skip it (the Off
     // anti-aliasing mode). Ignored on the HDR path, which never runs FXAA.
     float fxaa;
-    // The scale the HDR chain was written at; `exposure` already has it
-    // divided out.
-    float pre_exposure;
     // Scene-transition fade to black in [0, 1]. 0 leaves the frame untouched.
     float fade;
     // Channel view selector (ViewMode discriminant): 0 composites the scene;

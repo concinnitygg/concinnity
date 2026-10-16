@@ -24,6 +24,9 @@ pub struct TileMorphFrame {
     /// How far level 0 reaches, in meters; each level reaches half as far as
     /// the one above it.
     pub level0_range: f32,
+    /// The coarsest level tiles are drawn at: no parent replaces a tile
+    /// there, so it reaches without end and only its seams morph it.
+    pub coarsest_level: u8,
 }
 
 impl TileMorphFrame {
@@ -34,9 +37,14 @@ impl TileMorphFrame {
         let Some(tile) = tile else {
             return GpuTileMorph::default();
         };
+        let range = if tile.level <= self.coarsest_level {
+            UNBOUNDED_RANGE
+        } else {
+            libm::ldexpf(self.level0_range, -i32::from(tile.level))
+        };
         GpuTileMorph {
             eye: self.eye,
-            range: libm::ldexpf(self.level0_range, -i32::from(tile.level)),
+            range,
             prev_eye: self.prev_eye,
             seams: packed_seams(tile.seams),
             vertex_base,
@@ -44,6 +52,10 @@ impl TileMorphFrame {
         }
     }
 }
+
+// A range no eye comes near the morph of, finite so the shader's arithmetic
+// on it stays exact.
+const UNBOUNDED_RANGE: f32 = 1e30;
 
 // How many cells in from a seam side the side's pin fades out over, so the
 // rows between a pinned edge and an interior morphed by distance do not fold.
@@ -149,7 +161,8 @@ pub fn morph_point(grid: &[[f32; 3]], i: usize, j: usize, k: f32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::planet::dvec::{self, DVec3};
+    use crate::math::dvec3;
+    use crate::planet::dvec::DVec3;
     use crate::planet::shape::{CubeFace, PlanetShape};
     use crate::planet::tile::{TileId, tile_mesh};
     use alloc::vec::Vec;
@@ -184,7 +197,7 @@ mod tests {
             (gt.floor() as usize).min(side - 2),
         );
         let (rs, rt) = (gs - ci as f64, gt - cj as f64);
-        let at = |i: usize, j: usize| dvec::add(origin, dvec::from_f32(grid[j * side + i]));
+        let at = |i: usize, j: usize| dvec3::add(origin, dvec3::from_f32(grid[j * side + i]));
         let (p00, p10, p01, p11) = (
             at(ci, cj),
             at(ci + 1, cj),
@@ -192,19 +205,19 @@ mod tests {
             at(ci + 1, cj + 1),
         );
         if rs + rt <= 1.0 {
-            dvec::add(
+            dvec3::add(
                 p00,
-                dvec::add(
-                    dvec::scale(dvec::sub(p10, p00), rs),
-                    dvec::scale(dvec::sub(p01, p00), rt),
+                dvec3::add(
+                    dvec3::scale(dvec3::sub(p10, p00), rs),
+                    dvec3::scale(dvec3::sub(p01, p00), rt),
                 ),
             )
         } else {
-            dvec::add(
+            dvec3::add(
                 p11,
-                dvec::add(
-                    dvec::scale(dvec::sub(p01, p11), 1.0 - rs),
-                    dvec::scale(dvec::sub(p10, p11), 1.0 - rt),
+                dvec3::add(
+                    dvec3::scale(dvec3::sub(p01, p11), 1.0 - rs),
+                    dvec3::scale(dvec3::sub(p10, p11), 1.0 - rt),
                 ),
             )
         }
@@ -231,18 +244,18 @@ mod tests {
                 for i in 0..=n {
                     let still = morph_point(&c_grid, i, j, 0.0);
                     assert_eq!(still, c_grid[j * (n + 1) + i]);
-                    let p = dvec::add(c_origin, dvec::from_f32(morph_point(&c_grid, i, j, 1.0)));
+                    let p = dvec3::add(c_origin, dvec3::from_f32(morph_point(&c_grid, i, j, 1.0)));
                     let at = (
                         ox + i as f64 / n as f64 * 0.5,
                         oy + j as f64 / n as f64 * 0.5,
                     );
                     let want = on_mesh(p_origin, &p_grid, at.0, at.1);
                     assert!(
-                        dvec::length(dvec::sub(p, want)) < 2e-3,
+                        dvec3::length(dvec3::sub(p, want)) < 2e-3,
                         "{child:?} ({i}, {j})"
                     );
-                    let raw = dvec::add(c_origin, dvec::from_f32(still));
-                    moved = moved.max(dvec::length(dvec::sub(p, raw)));
+                    let raw = dvec3::add(c_origin, dvec3::from_f32(still));
+                    moved = moved.max(dvec3::length(dvec3::sub(p, raw)));
                 }
             }
             assert!(moved > 0.01, "the morph moves the odd corners: {moved}");
@@ -356,6 +369,7 @@ mod tests {
             eye: [1.0, 2.0, 3.0],
             prev_eye: [4.0, 5.0, 6.0],
             level0_range: 1024.0,
+            coarsest_level: 2,
         };
         let seams = TileSeams {
             coarser: 0b0101,
@@ -368,5 +382,28 @@ mod tests {
         assert_eq!(row.seams, 0b0010_0101);
         assert_eq!(row.vertex_base, 77);
         assert_eq!(frame.row(None, 77), GpuTileMorph::default());
+    }
+
+    // A tile at the coarsest drawn level never morphs by distance, however
+    // far, but still pins its edge beside a coarser tile drawn while its
+    // own children load.
+    #[test]
+    fn the_coarsest_level_morphs_only_at_its_seams() {
+        let frame = TileMorphFrame {
+            eye: [0.0; 3],
+            prev_eye: [0.0; 3],
+            level0_range: 1024.0,
+            coarsest_level: 2,
+        };
+        let seams = TileSeams {
+            coarser: TileSide::MinS.bit(),
+            finer: 0,
+        };
+        let row = frame.row(Some(PlanetTileDraw { level: 2, seams }), 0);
+        assert!(row.range > 0.0);
+        assert_eq!(morph_factor(&row, 5, 3, 1e9), 0.0);
+        assert_eq!(morph_factor(&row, 0, 3, 1e9), 1.0);
+        let finer = frame.row(Some(PlanetTileDraw { level: 3, seams }), 0);
+        assert_eq!(morph_factor(&finer, 5, 3, 1e9), 1.0);
     }
 }

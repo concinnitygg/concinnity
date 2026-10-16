@@ -117,7 +117,9 @@ pub struct Atmosphere {
     pub apparent_radius_km: Option<f32>,
     /// Heights above the ground, in kilometers, between which the sky fades
     /// from `apparent_radius_km` to the true radius as the camera climbs, so
-    /// the planet's limb seen from high up is its own.
+    /// the planet's limb seen from high up is its own. The air's heights
+    /// describe it over the apparent ground and shrink in proportion with the
+    /// radius, its coefficients growing to keep its optical depth.
     #[asset(default = [1.0, 20.0])]
     pub apparent_radius_fade_km: [f32; 2],
 }

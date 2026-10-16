@@ -348,7 +348,6 @@ mod tests {
             hdr_output: 1.0,
             pq_output: 1.0,
             fxaa: 1.0,
-            pre_exposure: 1.0,
         }
     }
 
@@ -501,7 +500,7 @@ mod tests {
             draws[0].constants,
             &bytemuck::bytes_of(&p)[..BLOOM_PREFILTER_CONSTANTS]
         );
-        assert_eq!(draws[0].constants.len(), 40);
+        assert_eq!(draws[0].constants.len(), 36);
         assert!(draws[1..].iter().all(|d| d.constants.is_empty()));
     }
 

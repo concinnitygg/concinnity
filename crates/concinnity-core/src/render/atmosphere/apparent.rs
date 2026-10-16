@@ -6,21 +6,31 @@
 //! ground, fading to the true radius as it climbs, so the ground sees an
 //! Earth-like sky and the limb seen from high up is the planet's own.
 //!
+//! The air fades with the ground: its thickness, its layers' heights and the
+//! inverse of its coefficients all scale with the ground radius, so at every
+//! step of the fade the air keeps its proportion to the ground and a path
+//! across it loses the same light. From high up the planet wears a shell as
+//! thin, relative to its size, as Earth's.
+//!
 //! The two planets put the horizon at different depths below the level, so
 //! the sky is looked up with the horizon warped: a view ray's angle from the
 //! zenith is stretched so the true horizon lands on the table's, and the sky
 //! meets the drawn ground at its true limb. The sun's place in the table and
 //! its color are warped the same way.
 
+use super::air::AirProfile;
 use super::lut::horizon_angles;
 use crate::math::{exp, ln};
 
-/// An apparent ground radius, and the heights above the true ground over
-/// which the sky fades from it to the true radius. Kilometers.
+/// An apparent ground radius, the air over it, and the heights above the
+/// true ground over which the sky fades from it to the true radius.
+/// Kilometers.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ApparentGround {
     /// The radius the sky is drawn over near the ground.
     pub radius: f32,
+    /// The air as it is over the apparent ground.
+    pub air: AirProfile,
     /// Height at which the fade to the true radius starts.
     pub fade_start: f32,
     /// Height from which the true radius is used.
@@ -43,6 +53,12 @@ impl ApparentGround {
         let x = (height - self.fade_start) / (self.fade_end - self.fade_start).max(1e-6);
         let t = x * x * (3.0 - 2.0 * x);
         exp(ln(self.radius) + (ln(true_radius) - ln(self.radius)) * t)
+    }
+
+    /// The air over ground of `radius`: the apparent ground's air scaled by
+    /// the ratio of the radii, so it keeps its proportion to the ground.
+    pub fn air_over(&self, radius: f32) -> AirProfile {
+        self.air.scaled(radius / self.radius)
     }
 }
 
@@ -75,37 +91,43 @@ mod tests {
     use super::*;
     use core::f32::consts::{FRAC_PI_2, PI};
 
-    const SMALL: ApparentGround = ApparentGround {
-        radius: 6360.0,
-        fade_start: 1.0,
-        fade_end: 20.0,
-    };
+    // Earth's air over an apparent Earth, fading out between 1 and 20 km.
+    fn small() -> ApparentGround {
+        let earth = crate::components::Atmosphere::default();
+        let s = super::super::AtmosphereSettings::resolve(&earth, None);
+        ApparentGround {
+            radius: 6360.0,
+            air: s.air,
+            fade_start: 1.0,
+            fade_end: 20.0,
+        }
+    }
 
     // Below the fade the apparent radius, above it the true one, and between
     // them every radius in order.
     #[test]
     fn the_ground_radius_fades_with_height() {
-        assert_eq!(SMALL.ground_radius(50.0, 0.0), 6360.0);
-        assert_eq!(SMALL.ground_radius(50.0, 1.0), 6360.0);
-        assert_eq!(SMALL.ground_radius(50.0, 20.0), 50.0);
-        assert_eq!(SMALL.ground_radius(50.0, 400.0), 50.0);
+        assert_eq!(small().ground_radius(50.0, 0.0), 6360.0);
+        assert_eq!(small().ground_radius(50.0, 1.0), 6360.0);
+        assert_eq!(small().ground_radius(50.0, 20.0), 50.0);
+        assert_eq!(small().ground_radius(50.0, 400.0), 50.0);
         let mut last = 6360.0;
         for h in 1..38 {
-            let r = SMALL.ground_radius(50.0, 1.0 + h as f32 * 0.5);
+            let r = small().ground_radius(50.0, 1.0 + h as f32 * 0.5);
             assert!(r < last && r >= 50.0, "{h}: {r}");
             last = r;
         }
         // Halfway through the fade the radius is the geometric mean.
-        let mid = SMALL.ground_radius(50.0, 10.5);
+        let mid = small().ground_radius(50.0, 10.5);
         assert!((mid - (6360.0_f32 * 50.0).sqrt()).abs() < 1.0, "{mid}");
     }
 
     // The ends of the fade join the flat parts without a jump.
     #[test]
     fn the_fade_is_continuous_at_its_ends() {
-        let below = SMALL.ground_radius(50.0, 1.0 + 1e-3);
+        let below = small().ground_radius(50.0, 1.0 + 1e-3);
         assert!((below - 6360.0).abs() < 0.1, "{below}");
-        let above = SMALL.ground_radius(50.0, 20.0 - 1e-3);
+        let above = small().ground_radius(50.0, 20.0 - 1e-3);
         assert!((above - 50.0).abs() < 0.01, "{above}");
     }
 
@@ -129,26 +151,51 @@ mod tests {
         }
     }
 
-    // Looking a ray up against the true horizon reads the table, built over
-    // the apparent ground, at the warped angle: the true horizon on the
-    // table's.
+    // A ray looked up against the true horizon is warped onto the table's
+    // and read there: the true horizon reads the table's middle row, and the
+    // rays above and below it keep their order.
     #[test]
     fn the_lookup_reads_the_table_at_the_warped_angle() {
-        use super::super::lut::{sky_view_direction, sky_view_uv};
+        use super::super::lut::sky_view_uv;
         let (view_b, view_r) = (50.0, 50.4);
-        let (table_b, table_r) = (6360.0, 6360.4);
+        let (table_b, table_t, table_r) = (6360.0, 6460.0, 6360.4);
         let view = zenith_horizon(view_b, view_r);
         let table = zenith_horizon(table_b, table_r);
-        for i in 1..32 {
-            let angle = PI * i as f32 / 32.0;
-            let uv = sky_view_uv(view_b, view_r, crate::math::cos(angle), 0.5);
-            let (table_cos, _) = sky_view_direction(table_b, table_r, uv);
-            let expected = table_view_angle(angle, view, table);
-            let got = crate::math::acos(table_cos);
-            assert!(
-                (got - expected).abs() < 2e-3,
-                "{angle}: {got} vs {expected}"
+        let read = |angle: f32| {
+            let warped = table_view_angle(angle, view, table);
+            sky_view_uv(table_b, table_t, table_r, warped, 0.5)[1]
+        };
+        assert!((read(view) - 0.5).abs() < 1e-5, "{}", read(view));
+        let mut last = -1.0;
+        for i in 0..=64 {
+            let v = read(PI * i as f32 / 64.0);
+            assert!(v >= last, "{i}: {v} after {last}");
+            last = v;
+        }
+    }
+
+    // The air keeps its proportion to the ground through the fade: authored
+    // at the apparent radius, Earth's ratio of thickness to radius at the
+    // true one, and scaled in between with the radius.
+    #[test]
+    fn the_air_follows_the_ground_radius() {
+        assert_eq!(small().air_over(6360.0), small().air);
+        for h in [0.0, 0.5, 1.0] {
+            assert_eq!(
+                small().air_over(small().ground_radius(50.0, h)),
+                small().air
             );
+        }
+        let own = small().air_over(50.0);
+        assert!((own.height - 100.0 * 50.0 / 6360.0).abs() < 1e-5);
+        let mut last = small().air.height;
+        for i in 1..=76 {
+            let h = 1.0 + i as f32 * 0.25;
+            let r = small().ground_radius(50.0, h);
+            let air = small().air_over(r);
+            assert!(air.height < last, "{h}");
+            assert!((air.height / r - 100.0 / 6360.0).abs() < 1e-6, "{h}");
+            last = air.height;
         }
     }
 

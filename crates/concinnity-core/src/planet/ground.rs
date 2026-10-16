@@ -92,6 +92,7 @@ fn ground_y(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::dvec3;
 
     fn shape() -> PlanetShape {
         PlanetShape {
@@ -119,7 +120,7 @@ mod tests {
                 let z = cz - 32.0 + row as f32 * 4.0;
                 let y = cy + patch.grid.heights()[row * side + col];
                 let world = frame.to_world([x, y, z]);
-                let r = dvec::length(dvec::sub(world, s.center));
+                let r = dvec3::length(dvec3::sub(world, s.center));
                 let expected = s.radius + s.height(s.up_at(world));
                 assert!((r - expected).abs() < 0.01, "{r} vs {expected}");
             }

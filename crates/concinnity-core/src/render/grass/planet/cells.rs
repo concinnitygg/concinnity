@@ -9,7 +9,7 @@
 //! square of cells. A blade belongs to exactly one drawn tile, whose mesh it
 //! roots on.
 
-use crate::planet::dvec;
+use crate::math::dvec3;
 use crate::planet::{CubeFace, FINEST_CELL_SIZE, PlanetShape, TileId, TileLod};
 use crate::render::grass::tiles::{GRASS_TILE_SIZE, MAX_GRASS_DENSITY};
 
@@ -107,9 +107,9 @@ impl PlanetGrassGrid {
 // sphere per unit of face coordinates squared.
 fn area_scale(face: CubeFace, s: f64, t: f64) -> f64 {
     let h = 1e-4;
-    let ds = dvec::sub(face.direction(s + h, t), face.direction(s - h, t));
-    let dt = dvec::sub(face.direction(s, t + h), face.direction(s, t - h));
-    dvec::length(dvec::cross(ds, dt)) / (4.0 * h * h)
+    let ds = dvec3::sub(face.direction(s + h, t), face.direction(s - h, t));
+    let dt = dvec3::sub(face.direction(s, t + h), face.direction(s, t - h));
+    dvec3::length(dvec3::cross(ds, dt)) / (4.0 * h * h)
 }
 
 // The largest area scale anywhere on a face over the one at its middle, from
@@ -271,7 +271,7 @@ mod tests {
                     let t = -1.0 + f64::from(j) / 20.0;
                     let (s, t) = (s + 1e-5 * f64::from(j), t - 1e-6 * f64::from(i));
                     let dir = face.direction(s.clamp(-1.0, 1.0), t.clamp(-1.0, 1.0));
-                    let (got, st) = face_coords(dvec::to_f32(dir));
+                    let (got, st) = face_coords(dvec3::to_f32(dir));
                     if i == 0 || i == 40 || j == 0 || j == 40 {
                         // Edges belong to either face; the point must agree.
                         let back = face_direction(got, st[0], st[1]);

@@ -5,7 +5,8 @@
 //! at `a` from the face's center, so by at most a quarter at the cube's
 //! corners. Two faces sharing an edge stretch equally along it.
 
-use crate::planet::{DVec3, dvec};
+use crate::math::dvec3;
+use crate::planet::DVec3;
 
 /// One face of the cube: its normal and the two axes its plane is laid out
 /// along, in the planet's authored axes. The four faces around `+Y` continue
@@ -21,7 +22,7 @@ const Y: DVec3 = [0.0, 1.0, 0.0];
 const Z: DVec3 = [0.0, 0.0, 1.0];
 
 fn neg(v: DVec3) -> DVec3 {
-    dvec::scale(v, -1.0)
+    dvec3::scale(v, -1.0)
 }
 
 impl SeaFace {
@@ -59,7 +60,7 @@ impl SeaFace {
 
     /// The authored direction `d` in the face's own axes `[u, normal, v]`.
     pub fn coords(&self, d: DVec3) -> DVec3 {
-        self.axes.map(|a| dvec::dot(a, d))
+        self.axes.map(|a| dvec3::dot(a, d))
     }
 
     /// Where the unit direction `d` lands on the face's plane, in meters on
@@ -76,9 +77,9 @@ impl SeaFace {
         let q = a * a + b * b;
         let f = [2.0 * a, 1.0 - q, 2.0 * b].map(|c| c / (1.0 + q));
         let [u, n, v] = self.axes;
-        dvec::add(
-            dvec::add(dvec::scale(u, f[0]), dvec::scale(n, f[1])),
-            dvec::scale(v, f[2]),
+        dvec3::add(
+            dvec3::add(dvec3::scale(u, f[0]), dvec3::scale(n, f[1])),
+            dvec3::scale(v, f[2]),
         )
     }
 
@@ -94,12 +95,12 @@ impl SeaFace {
         let [x, n, z] = self.coords(d);
         let [u_axis, n_axis, v_axis] = self.axes;
         let along = |a: DVec3| {
-            let flat = dvec::sub(a, dvec::scale(d, dvec::dot(a, d)));
-            dvec::normalize_or(flat, u_axis)
+            let flat = dvec3::sub(a, dvec3::scale(d, dvec3::dot(a, d)));
+            dvec3::normalize_or(flat, u_axis)
         };
         // The gradients of u / (1 + n) and v / (1 + n).
-        let gu = dvec::sub(dvec::scale(u_axis, 1.0 + n), dvec::scale(n_axis, x));
-        let gv = dvec::sub(dvec::scale(v_axis, 1.0 + n), dvec::scale(n_axis, z));
+        let gu = dvec3::sub(dvec3::scale(u_axis, 1.0 + n), dvec3::scale(n_axis, x));
+        let gv = dvec3::sub(dvec3::scale(v_axis, 1.0 + n), dvec3::scale(n_axis, z));
         [along(gu), along(gv)]
     }
 }
@@ -113,7 +114,7 @@ mod tests {
     }
 
     fn close(a: DVec3, b: DVec3, tol: f64) -> bool {
-        dvec::length(dvec::sub(a, b)) < tol
+        dvec3::length(dvec3::sub(a, b)) < tol
     }
 
     // Every face is a right-handed orthonormal basis whose normal points out
@@ -122,9 +123,9 @@ mod tests {
     fn every_face_is_a_right_handed_basis() {
         for (i, face) in all().enumerate() {
             let [u, n, v] = face.axes();
-            assert!(close(dvec::cross(u, n), v, 1e-12), "{i}");
+            assert!(close(dvec3::cross(u, n), v, 1e-12), "{i}");
             assert_eq!(n[i / 2], if i % 2 == 0 { 1.0 } else { -1.0 }, "{i}");
-            assert_eq!(SeaFace::holding(dvec::scale(n, 3.0)), face);
+            assert_eq!(SeaFace::holding(dvec3::scale(n, 3.0)), face);
         }
     }
 
@@ -138,9 +139,9 @@ mod tests {
             assert!(face.project(r, n).iter().all(|c| c.abs() < 1e-9));
             assert!((face.stretch(n) - 1.0).abs() < 1e-12);
             for d in [[0.3, 0.9, -0.2], [0.7, 0.7, 0.1], [-0.5, 0.6, 0.6]] {
-                let d = dvec::normalize_or(d, Y);
+                let d = dvec3::normalize_or(d, Y);
                 let back = face.unproject(r, face.project(r, d));
-                if dvec::dot(d, n) > 0.0 {
+                if dvec3::dot(d, n) > 0.0 {
                     assert!(close(back, d, 1e-12), "{back:?} {d:?}");
                 }
             }
@@ -155,15 +156,15 @@ mod tests {
         let r = 50_000.0;
         let face = SeaFace::of_axis(1, true);
         for d in [[0.0, 1.0, 0.0], [0.6, 0.75, 0.2], [-0.3, 0.8, -0.5]] {
-            let d = dvec::normalize_or(d, Y);
+            let d = dvec3::normalize_or(d, Y);
             let [tu, tv] = face.tangents(d);
-            assert!(dvec::dot(tu, tv).abs() < 1e-9);
-            assert!(dvec::dot(tu, d).abs() < 1e-9);
+            assert!(dvec3::dot(tu, tv).abs() < 1e-9);
+            assert!(dvec3::dot(tu, d).abs() < 1e-9);
             let k = face.stretch(d);
             let s0 = face.project(r, d);
             let step = 0.01;
             for (t, axis) in [(tu, 0), (tv, 1)] {
-                let moved = dvec::normalize_or(dvec::add(d, dvec::scale(t, step / r)), Y);
+                let moved = dvec3::normalize_or(dvec3::add(d, dvec3::scale(t, step / r)), Y);
                 let s1 = face.project(r, moved);
                 let ds = [s1[0] - s0[0], s1[1] - s0[1]];
                 assert!((ds[axis] - k * step).abs() < 1e-6, "{ds:?} {k}");
@@ -180,7 +181,7 @@ mod tests {
         for (axis, positive, u_or_v) in [(0, true, 0), (0, false, 0), (2, true, 1), (2, false, 1)] {
             let side = SeaFace::of_axis(axis, positive);
             let [_, n, _] = side.axes();
-            let edge = dvec::normalize_or(dvec::add(Y, n), Y);
+            let edge = dvec3::normalize_or(dvec3::add(Y, n), Y);
             assert!((top.stretch(edge) - side.stretch(edge)).abs() < 1e-12);
             let a = top.tangents(edge)[u_or_v];
             let b = side.tangents(edge)[u_or_v];

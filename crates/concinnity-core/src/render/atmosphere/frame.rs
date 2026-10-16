@@ -240,10 +240,11 @@ mod tests {
             a.sun_transmittance,
             b.sun_transmittance
         );
-        let high = [0.0, 80.0, 0.0];
-        assert_eq!(
-            AtmosphereFrame::new(&own, high, &sun),
-            AtmosphereFrame::new(&seen, high, &sun)
-        );
+        // High above, the tables are the planet's own and its air, as thin
+        // beside it as Earth's, lies below the camera: the sun is undimmed.
+        let high = AtmosphereFrame::new(&seen, [0.0, 80.0, 0.0], &sun);
+        assert_eq!(high.sky_ground_radius, 50.0);
+        assert_eq!(high.table_camera_km(&seen), high.camera_km);
+        assert_eq!(high.sun_transmittance, [1.0; 3]);
     }
 }

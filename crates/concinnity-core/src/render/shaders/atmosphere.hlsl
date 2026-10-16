@@ -244,16 +244,26 @@ void atmosphere_sky_view_kernel(uint3 id : SV_DispatchThreadID)
     float r = atmo_camera_radius();
     float2 uv = (float2(id.xy) + 0.5) / float2(SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT);
     float2 view = sky_view_direction(r, uv);
-    float sin_view = sqrt(saturate(1.0 - view.x * view.x));
+    float sin_view = sin(view.x);
     float sin_az = sqrt(saturate(1.0 - view.y * view.y));
     // The table's own frame: the camera on +Y, the sun in the XY plane.
-    float3 dir = float3(sin_view * view.y, view.x, sin_view * sin_az);
+    float3 dir = float3(sin_view * view.y, cos(view.x), sin_view * sin_az);
     float mu_s = dot(atmo_camera_up(), atmo_table_sun());
     float3 sun = float3(sqrt(saturate(1.0 - mu_s * mu_s)), mu_s, 0.0);
-    float3 origin = float3(0.0, r, 0.0);
+    // From above the air the march starts where the ray enters it; a ray
+    // that misses it sees only what lies beyond.
+    float enter = ray_enter(r, dir.y, atmo_top());
+    if (enter < 0.0)
+    {
+        atmo_out[id.xy] = float4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
+    float3 origin = float3(0.0, r, 0.0) + dir * enter;
+    float r0 = length(origin);
+    float mu0 = dot(origin, dir) / r0;
 
-    float ground = ray_ground(r, dir.y);
-    float length_km = ground >= 0.0 ? ground : ray_exit(r, dir.y, atmo_top());
+    float ground = ray_ground(r0, mu0);
+    float length_km = ground >= 0.0 ? ground : ray_exit(r0, mu0, atmo_top());
     float dt = length_km / float(SKY_VIEW_STEPS);
     float3 radiance = (float3)0.0;
     float3 throughput = (float3)1.0;
@@ -281,7 +291,8 @@ void atmosphere_sky_view_kernel(uint3 id : SV_DispatchThreadID)
 
 #ifdef ATMOSPHERE_AERIAL
 // One thread per froxel column; it marches the column's view ray slice by
-// slice, each slice storing what lies between the camera and its depth.
+// slice, each slice storing what lies between the ray's entry into the air
+// (the camera, inside it) and its depth, out to the ray's reach.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void atmosphere_aerial_kernel(uint3 id : SV_DispatchThreadID)
@@ -293,14 +304,23 @@ void atmosphere_aerial_kernel(uint3 id : SV_DispatchThreadID)
     float2 uv = (float2(id.xy) + 0.5) / float(AERIAL_SIZE);
     float2 ndc = float2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
     float3 dir = normalize(camera_view_ray(ATMO.inv_vp, ndc, ATMO.cam_pos.xyz));
-    float3 origin = atmo_camera_up() * atmo_camera_radius();
+    float2 span = atmo_aerial_span(dir);
+    if (span.x < 0.0)
+    {
+        for (uint z = 0u; z < AERIAL_SIZE; ++z)
+        {
+            atmo_out[uint3(id.xy, z)] = (float4)0.0;
+        }
+        return;
+    }
+    float3 origin = atmo_camera_up() * atmo_camera_radius() + dir * span.x;
     float3 sun = atmo_table_sun();
     float3 radiance = (float3)0.0;
     float3 throughput = (float3)1.0;
     float near = 0.0;
     for (uint z = 0u; z < AERIAL_SIZE; ++z)
     {
-        float far = aerial_slice_distance(float(z));
+        float far = aerial_slice_distance(float(z), span.y);
         float dt = far - near;
         atmo_step(origin + dir * (near + 0.5 * dt), dir, sun, dt, radiance, throughput);
         near = far;
@@ -362,7 +382,7 @@ void atmosphere_sky_cube_kernel(uint3 id : SV_DispatchThreadID)
         return;
     }
     float3 n = cube_texel_world_dir(id.z, id.xy, SKY_CUBE_FACE);
-    float4 view = sky_view_lut.SampleLevel(lut_sampler, sky_view_uv_of(n), 0.0);
+    float4 view = atmo_sky_view(sky_view_lut, lut_sampler, n);
     // The cube holds radiance at its storage scale; the table holds it
     // pre-exposed.
     float3 l = view.rgb / ATMO.cam_pos.w;
@@ -398,7 +418,7 @@ void atmosphere_irradiance_kernel(uint lane : SV_GroupIndex)
     for (uint k = 0u; k < per_lane; ++k)
     {
         float3 d = fibonacci_direction(lane * per_lane + k, IRRADIANCE_SAMPLES);
-        float4 view = sky_view_lut.SampleLevel(lut_sampler, sky_view_uv_of(d), 0.0);
+        float4 view = atmo_sky_view(sky_view_lut, lut_sampler, d);
         float3 l = view.rgb / ATMO.cam_pos.w;
         if (night_sky_on())
         {
@@ -474,13 +494,21 @@ float4 aerial_perspective_fragment(
     {
         discard;
     }
-    float distance = length(world - ATMO.cam_pos.xyz) * ATMO.radii.w;
+    float3 to_world = world - ATMO.cam_pos.xyz;
+    float2 span = atmo_aerial_span(normalize(to_world));
+    if (span.x < 0.0)
+    {
+        discard;
+    }
+    float distance = max(length(to_world) * ATMO.radii.w - span.x, 0.0);
     // Slices are centered, so a surface nearer than the first slice's center
     // fades in from no haze at the camera.
-    float slice = aerial_slice_of(distance) * float(AERIAL_SIZE);
+    float slice = aerial_slice_of(distance, span.y) * float(AERIAL_SIZE);
     float fade = saturate(slice * 2.0);
     float w = max(slice, 0.5) / float(AERIAL_SIZE);
-    // The volume already holds its in-scattered light pre-exposed.
-    return aerial_volume.SampleLevel(lut_sampler, float3(uv, w), 0.0) * fade;
+    // The volume already holds its in-scattered light pre-exposed. Across
+    // the screen it is read through the B-spline: a froxel column is wide,
+    // and a linear read draws its grid into the haze.
+    return atmo_bspline_slice(aerial_volume, lut_sampler, uv, w, float(AERIAL_SIZE)) * fade;
 }
 #endif

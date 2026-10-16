@@ -8,11 +8,11 @@
 float atmo_bottom() { return ATMO.radii.x; }
 float atmo_top() { return ATMO.radii.y; }
 
-// The camera's distance from the center, kept inside the air: from above the
-// top the tables are read as if from just under it.
+// The camera's distance from the center, kept above the ground. From above
+// the air the tables' rays start where they enter it.
 float atmo_camera_radius()
 {
-    return clamp(ATMO.camera.w, atmo_bottom() + 1e-3, atmo_top() - 1e-3);
+    return max(ATMO.camera.w, atmo_bottom() + 1e-3);
 }
 
 float3 atmo_camera_up()
@@ -54,6 +54,23 @@ float ray_exit(float r, float mu, float radius)
 {
     float disc = r * r * (mu * mu - 1.0) + radius * radius;
     return max(-r * mu + sqrt(max(disc, 0.0)), 0.0);
+}
+
+// Distance along a ray from radius `r` with up-cosine `mu` to where it enters
+// the sphere of `radius`: 0 from inside it, -1 when it starts outside and
+// misses. `ray_enter` in render::atmosphere.
+float ray_enter(float r, float mu, float radius)
+{
+    if (r <= radius)
+    {
+        return 0.0;
+    }
+    float disc = r * r * (mu * mu - 1.0) + radius * radius;
+    if (mu >= 0.0 || disc < 0.0)
+    {
+        return -1.0;
+    }
+    return -r * mu - sqrt(disc);
 }
 
 // Distance to the ground along the ray, or -1 when it misses.
@@ -127,10 +144,10 @@ float2 atmo_horizon_angles(float r)
 }
 
 // The camera's distance from the center of the planet the sky is seen over,
-// kept inside its air as `atmo_camera_radius` keeps the tables'.
+// kept above its ground as `atmo_camera_radius` keeps the tables'.
 float atmo_view_camera_radius()
 {
-    return clamp(ATMO.view_ground.z, ATMO.view_ground.x + 1e-3, ATMO.view_ground.y - 1e-3);
+    return max(ATMO.view_ground.z, ATMO.view_ground.x + 1e-3);
 }
 
 // `atmo_horizon_angles` for the planet the sky is seen over.
@@ -188,50 +205,61 @@ float3 atmo_table_sun()
     return up * cos(a) + flat_sun * (sin(a) / len);
 }
 
-// `sky_view_uv` in render::atmosphere, for a horizon at `angles`
-// (`atmo_horizon_angles`).
-float2 sky_view_uv_at(float2 angles, float view_cos, float azimuth_cos)
+// `sky_angles` in render::atmosphere: the angles from the zenith where the
+// sky-view table's rays from radius `r` start to meet the air, the horizon,
+// and the horizon's depth below the level.
+float3 atmo_sky_angles(float r)
 {
-    float view_angle = acos(clamp(view_cos, -1.0, 1.0));
+    float2 horizon = atmo_horizon_angles(r);
+    float rim = r > atmo_top() ? ATMO_PI - asin(min(atmo_top() / r, 1.0)) : 0.0;
+    return float3(min(rim, horizon.x), horizon);
+}
+
+// `sky_view_uv` in render::atmosphere, for the table's `angles`
+// (`atmo_sky_angles`).
+float2 sky_view_uv_at(float3 angles, float view_angle, float azimuth_cos)
+{
     float v;
-    if (view_angle < angles.x)
+    if (view_angle < angles.y)
     {
-        v = 0.5 * (1.0 - sqrt(max(1.0 - view_angle / angles.x, 0.0)));
+        float x = max((view_angle - angles.x) / max(angles.y - angles.x, 1e-6), 0.0);
+        v = 0.5 * (1.0 - sqrt(max(1.0 - x, 0.0)));
     }
     else
     {
-        v = 0.5 + 0.5 * sqrt(max((view_angle - angles.x) / max(angles.y, 1e-6), 0.0));
+        v = 0.5 + 0.5 * sqrt(max((view_angle - angles.y) / max(angles.z, 1e-6), 0.0));
     }
     float azimuth = acos(clamp(azimuth_cos, -1.0, 1.0)) / ATMO_PI;
     return float2(unit_to_texels(sqrt(max(azimuth, 0.0)), float(SKY_VIEW_WIDTH)),
                   unit_to_texels(v, float(SKY_VIEW_HEIGHT)));
 }
 
-// The view and azimuth cosines a sky-view coordinate holds.
+// The view angle from the zenith and the azimuth cosine a sky-view
+// coordinate holds.
 float2 sky_view_direction(float r, float2 uv)
 {
-    float2 angles = atmo_horizon_angles(r);
+    float3 angles = atmo_sky_angles(r);
     float u = texels_to_unit(uv.x, float(SKY_VIEW_WIDTH));
     float v = texels_to_unit(uv.y, float(SKY_VIEW_HEIGHT));
     float view_angle;
     if (v < 0.5)
     {
         float c = 1.0 - 2.0 * v;
-        view_angle = angles.x * (1.0 - c * c);
+        view_angle = angles.x + (angles.y - angles.x) * (1.0 - c * c);
     }
     else
     {
         float c = 2.0 * v - 1.0;
-        view_angle = angles.x + angles.y * c * c;
+        view_angle = angles.y + angles.z * c * c;
     }
-    return float2(cos(view_angle), cos(u * u * ATMO_PI));
+    return float2(view_angle, cos(u * u * ATMO_PI));
 }
 
 // The sky-view coordinate of world direction `dir` seen from the camera:
-// its cosine to the camera's up, and the cosine of its azimuth from the sun's
-// about that up. Mapped against the true horizon, so the table's horizon
-// lands on it.
-float2 sky_view_uv_of(float3 dir)
+// its angle from the camera's up, warped onto the tables' horizon, and the
+// cosine of its azimuth from the sun's about that up. z is 1 when the ray
+// passes above the air seen from outside it, and meets none of it.
+float3 sky_view_uv_of(float3 dir)
 {
     float3 up = atmo_camera_up();
     float view_cos = dot(dir, up);
@@ -243,20 +271,115 @@ float2 sky_view_uv_of(float3 dir)
     float azimuth_cos = (lv > 1e-10 && ls > 1e-10)
         ? dot(view_flat, sun_flat) * rsqrt(lv * ls)
         : 1.0;
-    return sky_view_uv_at(atmo_view_horizon_angles(), view_cos, azimuth_cos);
+    float view_angle = atmo_table_view_angle(acos(clamp(view_cos, -1.0, 1.0)));
+    float3 angles = atmo_sky_angles(atmo_camera_radius());
+    float2 uv = sky_view_uv_at(angles, view_angle, azimuth_cos);
+    return float3(uv, view_angle < angles.x ? 1.0 : 0.0);
+}
+
+// `bspline_taps` in render::atmosphere: a cubic B-spline over a table of
+// `size` texels read as two bilinear taps per axis, so what it holds bends
+// smoothly through the texel centers where a linear read creases. `h0` and
+// `h1` are the taps' coordinates and `g0` the first's weight; the second's
+// is 1 - g0.
+void atmo_bspline_taps(float2 uv, float2 size, out float2 h0, out float2 h1, out float2 g0)
+{
+    float2 x = uv * size - 0.5;
+    float2 i = floor(x);
+    float2 f = x - i;
+    float2 f2 = f * f;
+    float2 f3 = f2 * f;
+    float2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+    float2 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+    float2 w3 = f3 / 6.0;
+    g0 = w0 + w1;
+    h0 = (i - 0.5 + w1 / g0) / size;
+    h1 = (i + 1.5 + w3 / max(1.0 - g0, 1e-6)) / size;
+}
+
+// The sky-view table read through the B-spline, its taps kept to the half
+// of the table, sky or ground, that `uv` is in. `sky_view_row_taps` in
+// render::atmosphere.
+float4 atmo_sky_view_sample(Texture2D<float4> lut, SamplerState lut_s, float2 uv)
+{
+    float2 size = float2(SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT);
+    float2 h0;
+    float2 h1;
+    float2 g0;
+    atmo_bspline_taps(uv, size, h0, h1, g0);
+    float2 g1 = 1.0 - g0;
+    float lo = uv.y < 0.5 ? 0.5 / size.y : 0.5 + 0.5 / size.y;
+    float hi = uv.y < 0.5 ? 0.5 - 0.5 / size.y : 1.0 - 0.5 / size.y;
+    h0.y = clamp(h0.y, lo, hi);
+    h1.y = clamp(h1.y, lo, hi);
+    return g0.y * (g0.x * lut.SampleLevel(lut_s, h0, 0.0)
+                 + g1.x * lut.SampleLevel(lut_s, float2(h1.x, h0.y), 0.0))
+         + g1.y * (g0.x * lut.SampleLevel(lut_s, float2(h0.x, h1.y), 0.0)
+                 + g1.x * lut.SampleLevel(lut_s, h1, 0.0));
+}
+
+// A slice `w` deep of a volume read through the B-spline across its other
+// two axes, which are `size` texels each.
+float4 atmo_bspline_slice(Texture3D<float4> volume, SamplerState s, float2 uv, float w, float size)
+{
+    float2 h0;
+    float2 h1;
+    float2 g0;
+    atmo_bspline_taps(uv, (float2)size, h0, h1, g0);
+    float2 g1 = 1.0 - g0;
+    return g0.y * (g0.x * volume.SampleLevel(s, float3(h0, w), 0.0)
+                 + g1.x * volume.SampleLevel(s, float3(h1.x, h0.y, w), 0.0))
+         + g1.y * (g0.x * volume.SampleLevel(s, float3(h0.x, h1.y, w), 0.0)
+                 + g1.x * volume.SampleLevel(s, float3(h1, w), 0.0));
+}
+
+// The sky along world direction `dir` from the sky-view table: radiance at
+// the frame's pre-exposure, and in alpha the light from beyond the air that
+// survives the ray. A ray that misses the air carries all of it.
+float4 atmo_sky_view(Texture2D<float4> lut, SamplerState lut_s, float3 dir)
+{
+    float3 uv = sky_view_uv_of(dir);
+    if (uv.z > 0.0)
+    {
+        return float4(0.0, 0.0, 0.0, 1.0);
+    }
+    return atmo_sky_view_sample(lut, lut_s, uv.xy);
+}
+
+// `aerial_span` in render::atmosphere for a ray from the camera along `dir`:
+// x = where it enters the tables' air, y = how far past that the aerial
+// volume's slices reach, both km; x is -1 when the ray misses the air. The
+// reach ends a Rayleigh scale height under the ground the ray strikes, or at
+// its closest approach to the center if it passes over.
+float2 atmo_aerial_span(float3 dir)
+{
+    float r = atmo_camera_radius();
+    float mu = dot(atmo_camera_up(), dir);
+    float enter = ray_enter(r, mu, atmo_top());
+    if (enter < 0.0)
+    {
+        return float2(-1.0, 0.0);
+    }
+    float scale_height = -1.0 / ATMO.rayleigh.w;
+    float end = ray_enter(r, mu, max(atmo_bottom() - scale_height, 0.0));
+    if (end < 0.0)
+    {
+        end = -r * mu > enter ? -r * mu : 1e30;
+    }
+    return float2(enter, clamp(end - enter, 0.0, AERIAL_MAX_DISTANCE_KM));
 }
 
 // `aerial_slice_of` in render::atmosphere: the volume's depth coordinate of a
-// point `distance` km away.
-float aerial_slice_of(float distance)
+// point `distance` km past the ray's entry, for slices reaching `reach`.
+float aerial_slice_of(float distance, float reach)
 {
-    return min(sqrt(max(distance / AERIAL_MAX_DISTANCE_KM, 0.0)), 1.0);
+    return min(sqrt(max(distance / max(reach, 1e-6), 0.0)), 1.0);
 }
 
-float aerial_slice_distance(float slice)
+float aerial_slice_distance(float slice, float reach)
 {
     float w = (slice + 0.5) / float(AERIAL_SIZE);
-    return AERIAL_MAX_DISTANCE_KM * w * w;
+    return reach * w * w;
 }
 
 float rayleigh_phase(float nu)

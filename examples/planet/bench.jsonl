@@ -1,0 +1,3 @@
+["GraphicsConfig",{"frame_pacing":{"fps_cap":0}}]
+["Camera3D",{"$id":"cam","fov_y_degrees":70.0,"controller":null}]
+["FrameReport",{"warmup_seconds":2.5}]

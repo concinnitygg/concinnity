@@ -162,6 +162,7 @@ fn morph_frame(
         eye: planet.frame.to_local(view.eye),
         prev_eye: planet.frame.to_local(prev_eye),
         level0_range: lod.range(0, view) as f32,
+        coarsest_level: lod.min_level,
     }
 }
 

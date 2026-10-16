@@ -13,7 +13,7 @@
 use ash::vk;
 use concinnity_core::gfx::auto_exposure::HISTOGRAM_BINS;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::uniforms::AutoExposureParams;
+use concinnity_core::render::uniforms::{AutoExposureParams, ExposureMeasurement};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
@@ -63,12 +63,12 @@ pub(in crate::vulkan) struct AutoExposureResources {
     // Device-local 256-bin u32 histogram. The build kernel atomically
     // increments bins into it; the average kernel reads and clears them.
     histogram_buffer: PooledBuffer,
-    // Device-local single f32 the average kernel writes; copied into the
+    // Device-local measurement the average kernel writes; copied into the
     // per-frame readback after each dispatch.
     output_buffer: PooledBuffer,
 
-    // Per-frame HOST_VISIBLE readback buffers. Each holds 4 bytes (one
-    // f32). Persistently mapped; the CPU reads this frame's slot at the top
+    // Per-frame HOST_VISIBLE readback buffers. Each holds one
+    // `ExposureMeasurement`. Persistently mapped; the CPU reads this frame's slot at the top
     // of a later frame after the fence wait gates this slot's previous copy.
     readback_buffers: Vec<PooledBuffer>,
 }
@@ -122,7 +122,7 @@ impl AutoExposureResources {
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let output_bytes = std::mem::size_of::<f32>() as vk::DeviceSize;
+        let output_bytes = std::mem::size_of::<ExposureMeasurement>() as vk::DeviceSize;
         let output_buffer = alloc.create_buffer(
             output_bytes,
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
@@ -310,21 +310,22 @@ impl VkContext {
         let Some(readback) = resources.readback_buffers.get(frame_idx) else {
             return;
         };
-        let ptr = readback.mapped_ptr() as *const f32;
+        let ptr = readback.mapped_ptr() as *const ExposureMeasurement;
 
-        // Read the previous frame's average log-luminance for this slot. The
-        // fence wait above this call already gated the GPU work that wrote
-        // it, so the HOST_COHERENT mapping reflects the committed value.
+        // Read the previous frame's measurement for this slot. The fence wait
+        // above already gated the GPU work that wrote it, so the HOST_COHERENT
+        // mapping reflects the committed value.
         // SAFETY: `ptr` is the HOST_COHERENT mapping of this slot's output buffer, which holds one
-        // f32; the fence wait above gated the GPU write, so the value is committed and initialized.
-        let avg_log_lum = unsafe { ptr.read() };
+        // `ExposureMeasurement`; the fence wait above gated the GPU write, so the value is
+        // committed and initialized.
+        let measured = unsafe { ptr.read() };
 
         let dt = (elapsed - self.auto_exposure.last_elapsed).max(0.0);
         self.auto_exposure.last_elapsed = elapsed;
 
         // `self.post_process.exposure` is the linear multiplier the bloom
         // prefilter and composite consume.
-        self.post_process.exposure = adaptation.step(avg_log_lum, dt);
+        self.post_process.exposure = adaptation.step(measured, dt);
     }
 
     // Encode the auto-exposure histogram passes against the current frame's
@@ -428,7 +429,7 @@ impl VkContext {
             &[],
         );
 
-        // Copy the freshly-written average to this slot's readback buffer.
+        // Copy the freshly-written measurement to this slot's readback buffer.
         let readback = resources
             .readback_buffers
             .get(frame_idx)
@@ -436,7 +437,7 @@ impl VkContext {
         let copy = vk::BufferCopy {
             src_offset: 0,
             dst_offset: 0,
-            size: std::mem::size_of::<f32>() as vk::DeviceSize,
+            size: std::mem::size_of::<ExposureMeasurement>() as vk::DeviceSize,
         };
         rec.copy_buffer(
             resources.output_buffer.buffer(),

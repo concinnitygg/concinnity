@@ -1,7 +1,8 @@
 // The planet as an occluder: the sphere of its lowest ground, seen from one
 // eye, hides everything wholly behind its horizon.
 
-use super::dvec::{self, DVec3};
+use super::dvec::DVec3;
+use crate::math::dvec3;
 
 /// The planet's lowest ground seen from one eye: a sphere that hides whatever
 /// lies wholly inside the cone it subtends past the circle where the eye's
@@ -28,15 +29,15 @@ impl Horizon {
     /// or `None` when the eye is on or inside the sphere, where it hides
     /// nothing.
     pub fn new(eye: DVec3, center: DVec3, radius: f64, keep_within: f64) -> Option<Self> {
-        let to_center = dvec::sub(center, eye);
-        let d = dvec::length(to_center);
+        let to_center = dvec3::sub(center, eye);
+        let d = dvec3::length(to_center);
         if !(radius > 0.0 && d > radius) {
             return None;
         }
         let sin = radius / d;
         Some(Self {
             eye,
-            axis: dvec::scale(to_center, 1.0 / d),
+            axis: dvec3::scale(to_center, 1.0 / d),
             // (d^2 - r^2) / d, factored so a far eye keeps its precision.
             plane: (d - radius) * (d + radius) / d,
             sin,
@@ -48,9 +49,9 @@ impl Horizon {
     /// Whether the sphere of `radius` around `center` lies wholly behind the
     /// horizon.
     pub fn hides_sphere(&self, center: DVec3, radius: f64) -> bool {
-        let v = dvec::sub(center, self.eye);
-        let along = dvec::dot(v, self.axis);
-        let dist2 = dvec::dot(v, v);
+        let v = dvec3::sub(center, self.eye);
+        let along = dvec3::dot(v, self.axis);
+        let dist2 = dvec3::dot(v, v);
         if libm::sqrt(dist2) - radius <= self.keep_within || along - radius <= self.plane {
             return false;
         }
@@ -63,7 +64,7 @@ impl Horizon {
     pub fn hides_box(&self, lo: [f32; 3], hi: [f32; 3]) -> bool {
         let center = core::array::from_fn(|i| 0.5 * (f64::from(lo[i]) + f64::from(hi[i])));
         let half: DVec3 = core::array::from_fn(|i| 0.5 * (f64::from(hi[i]) - f64::from(lo[i])));
-        self.hides_sphere(center, dvec::length(half))
+        self.hides_sphere(center, dvec3::length(half))
     }
 }
 
@@ -82,8 +83,8 @@ impl HorizonOccluder {
     /// [`HORIZON_SHADOW_REACH`](super::HORIZON_SHADOW_REACH) of it.
     pub fn seen_from(&self, eye: [f32; 3]) -> Option<Horizon> {
         Horizon::new(
-            dvec::from_f32(eye),
-            dvec::from_f32(self.center),
+            dvec3::from_f32(eye),
+            dvec3::from_f32(self.center),
             f64::from(self.radius),
             super::HORIZON_SHADOW_REACH,
         )

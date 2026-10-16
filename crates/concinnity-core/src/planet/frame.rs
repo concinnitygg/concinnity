@@ -4,6 +4,7 @@
 
 use super::dvec::{self, DMat3, DVec3};
 use super::rebase::Rebase;
+use crate::math::dvec3;
 
 /// Where the simulated frame sits in the world it was authored in.
 ///
@@ -40,27 +41,27 @@ impl LocalFrame {
 
     /// The frame's local point `p` in authored coordinates.
     pub fn to_world(&self, p: [f32; 3]) -> DVec3 {
-        dvec::add(self.origin, dvec::mul_vec(&self.basis, dvec::from_f32(p)))
+        dvec3::add(self.origin, dvec::mul_vec(&self.basis, dvec3::from_f32(p)))
     }
 
     /// The authored point `w` in this frame, in double precision.
     pub fn to_local_f64(&self, w: DVec3) -> DVec3 {
-        dvec::mul_transpose_vec(&self.basis, dvec::sub(w, self.origin))
+        dvec::mul_transpose_vec(&self.basis, dvec3::sub(w, self.origin))
     }
 
     /// The authored point `w` in this frame.
     pub fn to_local(&self, w: DVec3) -> [f32; 3] {
-        dvec::to_f32(self.to_local_f64(w))
+        dvec3::to_f32(self.to_local_f64(w))
     }
 
     /// The authored direction `d` in this frame.
     pub fn dir_to_local(&self, d: DVec3) -> [f32; 3] {
-        dvec::to_f32(dvec::mul_transpose_vec(&self.basis, d))
+        dvec3::to_f32(dvec::mul_transpose_vec(&self.basis, d))
     }
 
     /// The local direction `d` in authored coordinates.
     pub fn dir_to_world(&self, d: [f32; 3]) -> DVec3 {
-        dvec::mul_vec(&self.basis, dvec::from_f32(d))
+        dvec::mul_vec(&self.basis, dvec3::from_f32(d))
     }
 
     /// The rotation taking an authored direction into this frame, column-major.
@@ -92,7 +93,7 @@ impl LocalFrame {
     /// axes carries across unchanged.
     pub fn recentered(&self, at: [f32; 3], up: DVec3) -> (Self, Rebase) {
         let up_local =
-            dvec::normalize_or(dvec::mul_transpose_vec(&self.basis, up), [0.0, 1.0, 0.0]);
+            dvec3::normalize_or(dvec::mul_transpose_vec(&self.basis, up), [0.0, 1.0, 0.0]);
         let turn = dvec::arc_from_up(up_local);
         let frame = Self {
             origin: self.to_world(at),
@@ -100,10 +101,10 @@ impl LocalFrame {
         };
         // new = turn^T (old - at)
         let inverse: DMat3 = core::array::from_fn(|c| core::array::from_fn(|r| turn[r][c]));
-        let shift = dvec::mul_vec(&inverse, dvec::from_f32(at));
+        let shift = dvec::mul_vec(&inverse, dvec3::from_f32(at));
         let rebase = Rebase {
             rotation: dvec::quat_of(&inverse),
-            translation: dvec::to_f32(dvec::scale(shift, -1.0)),
+            translation: dvec3::to_f32(dvec3::scale(shift, -1.0)),
         };
         (frame, rebase)
     }
@@ -117,9 +118,9 @@ impl LocalFrame {
         let r = dvec::mat_of_quat(rebase.rotation);
         let back: DMat3 = core::array::from_fn(|c| core::array::from_fn(|row| r[row][c]));
         let basis = dvec::orthonormalize(&dvec::mul(&self.basis, &back));
-        let shift = dvec::mul_vec(&basis, dvec::from_f32(rebase.translation));
+        let shift = dvec::mul_vec(&basis, dvec3::from_f32(rebase.translation));
         Self {
-            origin: dvec::sub(self.origin, shift),
+            origin: dvec3::sub(self.origin, shift),
             basis,
         }
     }
@@ -136,7 +137,7 @@ mod tests {
     const CENTER: DVec3 = [0.0, -50_000.0, 0.0];
 
     fn up_at(frame: &LocalFrame, p: [f32; 3]) -> DVec3 {
-        dvec::normalize_or(dvec::sub(frame.to_world(p), CENTER), [0.0, 1.0, 0.0])
+        dvec3::normalize_or(dvec3::sub(frame.to_world(p), CENTER), [0.0, 1.0, 0.0])
     }
 
     #[test]
@@ -178,11 +179,11 @@ mod tests {
             let (next, rebase) = frame.recentered(at, up_at(&frame, at));
             local = rebase.apply_point(local);
             frame = next;
-            let drift = dvec::length(dvec::sub(frame.to_world(local), landmark));
+            let drift = dvec3::length(dvec3::sub(frame.to_world(local), landmark));
             assert!(drift < 0.2, "{drift}");
             let b = &frame.basis;
-            assert!((dvec::length(b[0]) - 1.0).abs() < 1e-12);
-            assert!(dvec::dot(b[0], b[1]).abs() < 1e-12);
+            assert!((dvec3::length(b[0]) - 1.0).abs() < 1e-12);
+            assert!(dvec3::dot(b[0], b[1]).abs() < 1e-12);
         }
         // Forty kilometers on, the frame's own up is still the radial up.
         let up = frame.dir_to_local(up_at(&frame, [0.0; 3]));
@@ -202,7 +203,7 @@ mod tests {
         let placed: [f32; 3] = core::array::from_fn(|i| {
             m[0][i] * offset[0] + m[1][i] * offset[1] + m[2][i] * offset[2] + m[3][i]
         });
-        let expected = frame.to_local(dvec::add(origin, dvec::from_f32(offset)));
+        let expected = frame.to_local(dvec3::add(origin, dvec3::from_f32(offset)));
         assert!(close(placed, expected, 1e-3), "{placed:?} {expected:?}");
     }
 
@@ -220,10 +221,10 @@ mod tests {
             let (next, rebase) = frame.recentered(at, up_at(&frame, at));
             frame = next;
             followed = followed.followed(&rebase);
-            let origin = dvec::length(dvec::sub(followed.origin, frame.origin));
+            let origin = dvec3::length(dvec3::sub(followed.origin, frame.origin));
             assert!(origin < 2e-3, "{origin}");
             for c in 0..3 {
-                let axis = dvec::length(dvec::sub(followed.basis[c], frame.basis[c]));
+                let axis = dvec3::length(dvec3::sub(followed.basis[c], frame.basis[c]));
                 assert!(axis < 1e-6, "{axis}");
             }
         }
@@ -241,6 +242,6 @@ mod tests {
         let by_rows: [f32; 3] = core::array::from_fn(|i| r[0][i] * 0.0 + r[1][i] * 0.0 + r[2][i]);
         assert!(close(by_rows, new.dir_to_local(d), 1e-6));
         let back = new.dir_to_world(new.dir_to_local([0.3, 0.4, 0.5]));
-        assert!(close(dvec::to_f32(back), [0.3, 0.4, 0.5], 1e-6));
+        assert!(close(dvec3::to_f32(back), [0.3, 0.4, 0.5], 1e-6));
     }
 }

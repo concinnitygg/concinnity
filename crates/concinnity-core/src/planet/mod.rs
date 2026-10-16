@@ -37,8 +37,8 @@ pub use geo::{CameraGeo, GeoPose, GeoPosition, geo_axes, geo_direction, geo_lat_
 pub use ground::{GroundPatch, ground_patch};
 pub use horizon::{Horizon, HorizonOccluder};
 pub use lod::{
-    MAX_RANGE_WIDTHS, MIN_RANGE_WIDTHS, MORPH_START, RANGE_CELL_POINTS, REPLAN_DRIFT, RETAIN_RANGE,
-    TileBoundsCache, TileLod, TileSelection, TileView, points_per_radian,
+    MAX_CELL_SAG, MAX_RANGE_WIDTHS, MIN_RANGE_WIDTHS, MORPH_START, RANGE_CELL_POINTS, REPLAN_DRIFT,
+    RETAIN_RANGE, TileBoundsCache, TileLod, TileSelection, TileView, points_per_radian,
 };
 pub use morph::{TileMorphFrame, morph_factor, morph_point, packed_seams, parent_span};
 pub use rebase::{FrameRebases, Rebase, RebaseCursor, needs_rebase};
@@ -69,11 +69,6 @@ pub const REBASE_DISTANCE: f32 = 1_000.0;
 /// hides it, in meters: twice the longest shadow distance a camera can be set
 /// to, so a caster just below the horizon still shadows the ground in view.
 pub const HORIZON_SHADOW_REACH: f64 = 640.0;
-
-/// An f32 point widened to double precision.
-pub fn dvec_from_f32(v: [f32; 3]) -> DVec3 {
-    dvec::from_f32(v)
-}
 
 /// Where a planet world's simulated frame is, and the planet it sits on:
 /// published by the planet system for every system that places things on the

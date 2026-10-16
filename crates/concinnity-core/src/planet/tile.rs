@@ -1,9 +1,10 @@
 // One square of a planet's surface: a quadtree node on one cube face, and the
 // mesh a worker builds for it from the planet's shape.
 
+use crate::math::dvec3;
 use alloc::vec::Vec;
 
-use super::dvec::{self, DVec3};
+use super::dvec::DVec3;
 use super::shape::{CubeFace, PlanetShape};
 use crate::gfx::mesh_payload::Vertex;
 
@@ -166,7 +167,7 @@ pub fn tile_bounds(shape: &PlanetShape, tile: TileId) -> TileBounds {
     });
     let at = |i: usize, j: usize| dirs[j * BOUND_SAMPLES + i];
     // The widest step between neighboring samples, along the ground.
-    let arc = |a: DVec3, b: DVec3| shape.radius * libm::acos(dvec::dot(a, b).clamp(-1.0, 1.0));
+    let arc = |a: DVec3, b: DVec3| shape.radius * libm::acos(dvec3::dot(a, b).clamp(-1.0, 1.0));
     let mut spacing: f64 = 0.0;
     for j in 0..=n {
         for i in 0..n {
@@ -189,15 +190,15 @@ pub fn tile_bounds(shape: &PlanetShape, tile: TileId) -> TileBounds {
     let lo = (lo - slack).max(0.0);
     let hi = (hi + slack).min(shape.amplitude.max(0.0));
 
-    let center = dvec::add(
+    let center = dvec3::add(
         shape.center,
-        dvec::scale(tile.direction(0.5, 0.5), shape.radius + (lo + hi) * 0.5),
+        dvec3::scale(tile.direction(0.5, 0.5), shape.radius + (lo + hi) * 0.5),
     );
     let mut radius: f64 = 0.0;
     for &d in &dirs {
         for r in [shape.radius + lo, shape.radius + hi] {
-            let p = dvec::add(shape.center, dvec::scale(d, r));
-            radius = radius.max(dvec::length(dvec::sub(p, center)));
+            let p = dvec3::add(shape.center, dvec3::scale(d, r));
+            radius = radius.max(dvec3::length(dvec3::sub(p, center)));
         }
     }
     let a = tile.direction(0.0, 0.5);
@@ -259,15 +260,15 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
         for i in 0..side {
             let dir = corner_dir(i, j);
             let (p, normal) = shape.surface_and_normal(dir);
-            let tangent = dvec::normalize_or(
-                dvec::sub(u_axis, dvec::scale(normal, dvec::dot(normal, u_axis))),
-                dvec::cross(normal, [0.0, 0.0, 1.0]),
+            let tangent = dvec3::normalize_or(
+                dvec3::sub(u_axis, dvec3::scale(normal, dvec3::dot(normal, u_axis))),
+                dvec3::cross(normal, [0.0, 0.0, 1.0]),
             );
             points.push(p);
             vertices.push(Vertex {
-                pos: dvec::to_f32(dvec::sub(p, origin)),
-                normal: dvec::to_f32(normal),
-                tangent: dvec::to_f32(tangent),
+                pos: dvec3::to_f32(dvec3::sub(p, origin)),
+                normal: dvec3::to_f32(normal),
+                tangent: dvec3::to_f32(tangent),
                 color: [1.0; 3],
                 uv: uv(i, j),
             });
@@ -277,7 +278,7 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
     let radial = vertices
         .iter()
         .fold([f32::INFINITY, f32::NEG_INFINITY], |[lo, hi], v| {
-            let h = dvec::dot(dvec::from_f32(v.pos), up) as f32;
+            let h = dvec3::dot(dvec3::from_f32(v.pos), up) as f32;
             [lo.min(h), hi.max(h)]
         });
 
@@ -324,11 +325,11 @@ fn morph_extent(points: &[DVec3], n: usize) -> f32 {
     for j in 0..side {
         for i in 0..side {
             if let Some([a, b]) = super::morph::parent_span(i, j) {
-                let mid = dvec::scale(
-                    dvec::add(points[a.1 * side + a.0], points[b.1 * side + b.0]),
+                let mid = dvec3::scale(
+                    dvec3::add(points[a.1 * side + a.0], points[b.1 * side + b.0]),
                     0.5,
                 );
-                most = most.max(dvec::length(dvec::sub(mid, points[j * side + i])));
+                most = most.max(dvec3::length(dvec3::sub(mid, points[j * side + i])));
             }
         }
     }
@@ -371,10 +372,10 @@ mod tests {
         // The children's outer corners are the parent's corners.
         let a = t.direction(0.0, 0.0);
         let b = kids[0].direction(0.0, 0.0);
-        assert!(dvec::length(dvec::sub(a, b)) < 1e-15);
+        assert!(dvec3::length(dvec3::sub(a, b)) < 1e-15);
         let c = t.direction(1.0, 1.0);
         let d = kids[3].direction(1.0, 1.0);
-        assert!(dvec::length(dvec::sub(c, d)) < 1e-15);
+        assert!(dvec3::length(dvec3::sub(c, d)) < 1e-15);
     }
 
     // Every surface vertex lies inside its tile's bounds, at every level,
@@ -395,8 +396,8 @@ mod tests {
                 let b = tile_bounds(&s, t);
                 let mesh = tile_mesh(&s, t);
                 for v in &mesh.vertices[..side * side] {
-                    let p = dvec::add(mesh.origin, dvec::from_f32(v.pos));
-                    let gap = dvec::length(dvec::sub(p, b.center)) - b.radius;
+                    let p = dvec3::add(mesh.origin, dvec3::from_f32(v.pos));
+                    let gap = dvec3::length(dvec3::sub(p, b.center)) - b.radius;
                     assert!(gap <= 1e-3 * (1.0 + b.radius * 1e-4), "{t:?} {gap}");
                 }
             }
@@ -436,7 +437,7 @@ mod tests {
                             assert!(
                                 theirs
                                     .iter()
-                                    .any(|&o| dvec::length(dvec::sub(e, o)) < 1e-12),
+                                    .any(|&o| dvec3::length(dvec3::sub(e, o)) < 1e-12),
                                 "{t:?} {side:?} -> {across:?}"
                             );
                         }
@@ -495,7 +496,7 @@ mod tests {
         let [lo, hi] = mesh.radial;
         assert!(lo < hi);
         for v in &mesh.vertices[..side * side] {
-            let h = dvec::dot(dvec::from_f32(v.pos), up) as f32;
+            let h = dvec3::dot(dvec3::from_f32(v.pos), up) as f32;
             assert!(h >= lo && h <= hi);
         }
     }
@@ -508,7 +509,7 @@ mod tests {
         let mesh = tile_mesh(&s, deep_tile());
         let side = TILE_CELLS as usize + 1;
         let surface_tris = (side - 1) * (side - 1) * 2;
-        let up = dvec::to_f32(s.up_at(mesh.origin));
+        let up = dvec3::to_f32(s.up_at(mesh.origin));
         for tri in mesh.indices[..surface_tris * 3].chunks_exact(3) {
             let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| mesh.vertices[i as usize].pos);
             assert!(dot(cross(sub(b, a), sub(c, a)), up) > 0.0);
@@ -564,9 +565,9 @@ mod tests {
         for j in 0..side {
             let va = ma.vertices[j * side + side - 1];
             let vb = mb.vertices[j * side];
-            let pa = dvec::add(ma.origin, dvec::from_f32(va.pos));
-            let pb = dvec::add(mb.origin, dvec::from_f32(vb.pos));
-            assert!(dvec::length(dvec::sub(pa, pb)) < 0.01, "{pa:?} {pb:?}");
+            let pa = dvec3::add(ma.origin, dvec3::from_f32(va.pos));
+            let pb = dvec3::add(mb.origin, dvec3::from_f32(vb.pos));
+            assert!(dvec3::length(dvec3::sub(pa, pb)) < 0.01, "{pa:?} {pb:?}");
             assert!(dot(va.normal, vb.normal) > 1.0 - 1e-6);
         }
     }
@@ -597,9 +598,9 @@ mod tests {
         for j in (0..side).step_by(2) {
             let vf = mf.vertices[j * side + n];
             let vc = mc.vertices[(j / 2) * side];
-            let pf = dvec::add(mf.origin, dvec::from_f32(vf.pos));
-            let pc = dvec::add(mc.origin, dvec::from_f32(vc.pos));
-            assert!(dvec::length(dvec::sub(pf, pc)) < 0.01, "{pf:?} {pc:?}");
+            let pf = dvec3::add(mf.origin, dvec3::from_f32(vf.pos));
+            let pc = dvec3::add(mc.origin, dvec3::from_f32(vc.pos));
+            assert!(dvec3::length(dvec3::sub(pf, pc)) < 0.01, "{pf:?} {pc:?}");
             assert!(dot(vf.normal, vc.normal) > 1.0 - 1e-6, "corner {j}");
         }
     }

@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 
 use super::cells::PlanetGrassGrid;
 use crate::gfx::render_types::GpuTileMorph;
-use crate::planet::dvec;
+use crate::math::dvec3;
 use crate::planet::{PlanetShape, TileId};
 use crate::render::uniforms::grass::{MAX_PLANET_GRASS_TILES, PlanetGrassTileGpu};
 use crate::transform::Mat4;
@@ -54,8 +54,8 @@ fn translation(model: &Mat4) -> [f64; 3] {
 /// The planet's center in the frame `tile` is drawn in.
 pub fn planet_center(shape: &PlanetShape, tile: &DrawnPlanetTile) -> [f32; 3] {
     let dir = tile.id.direction(0.5, 0.5);
-    let to_origin = dvec::scale(dir, shape.radius + shape.height(dir));
-    dvec::to_f32(dvec::sub(
+    let to_origin = dvec3::scale(dir, shape.radius + shape.height(dir));
+    dvec3::to_f32(dvec3::sub(
         translation(&tile.model),
         rotate(&tile.model, to_origin),
     ))
@@ -87,7 +87,7 @@ fn unmorphed(morph: &GpuTileMorph, origin: [f64; 3], reach: f64) -> bool {
         return true;
     }
     let start = crate::planet::MORPH_START * f64::from(morph.range);
-    let gap = dvec::length(dvec::sub(origin, dvec::from_f32(morph.eye)));
+    let gap = dvec3::length(dvec3::sub(origin, dvec3::from_f32(morph.eye)));
     morph.seams == 0 && gap + reach < start
 }
 
@@ -128,13 +128,13 @@ fn records_in_reach(
     camera: [f32; 3],
     distance: f32,
 ) -> Vec<(f64, PlanetGrassTileGpu)> {
-    let cam = dvec::from_f32(camera);
-    let center = dvec::from_f32(center);
+    let cam = dvec3::from_f32(camera);
+    let center = dvec3::from_f32(center);
     let mut near: Vec<(f64, PlanetGrassTileGpu)> = drawn
         .iter()
         .filter_map(|tile| {
             let origin = translation(&tile.model);
-            let gap = dvec::length(dvec::sub(origin, cam));
+            let gap = dvec3::length(dvec3::sub(origin, cam));
             if gap > f64::from(distance) + tile_reach(shape, grid, tile.id.level) {
                 return None;
             }
@@ -163,23 +163,23 @@ fn block(
     distance: f64,
 ) -> Option<PlanetGrassTileGpu> {
     let origin = translation(&tile.model);
-    let rho = dvec::length(dvec::sub(origin, center));
+    let rho = dvec3::length(dvec3::sub(origin, center));
     let corner = |fs: f64, ft: f64| {
-        dvec::add(
+        dvec3::add(
             center,
-            rotate(&tile.model, dvec::scale(tile.id.direction(fs, ft), rho)),
+            rotate(&tile.model, dvec3::scale(tile.id.direction(fs, ft), rho)),
         )
     };
     let p00 = corner(0.0, 0.0);
-    let es = dvec::sub(corner(1.0, 0.0), p00);
-    let et = dvec::sub(corner(0.0, 1.0), p00);
-    let q = dvec::sub(cam, p00);
-    let (ss, st, tt) = (dvec::dot(es, es), dvec::dot(es, et), dvec::dot(et, et));
+    let es = dvec3::sub(corner(1.0, 0.0), p00);
+    let et = dvec3::sub(corner(0.0, 1.0), p00);
+    let q = dvec3::sub(cam, p00);
+    let (ss, st, tt) = (dvec3::dot(es, es), dvec3::dot(es, et), dvec3::dot(et, et));
     let det = ss * tt - st * st;
     if det <= 0.0 {
         return None;
     }
-    let (qs, qt) = (dvec::dot(q, es), dvec::dot(q, et));
+    let (qs, qt) = (dvec3::dot(q, es), dvec3::dot(q, et));
     let u = (qs * tt - qt * st) / det;
     let v = (qt * ss - qs * st) / det;
     let n = grid.tiles_per_side(tile.id.level);
@@ -240,7 +240,7 @@ mod tests {
     fn moved() -> LocalFrame {
         let up = |p: [f32; 3]| {
             let w = LocalFrame::AUTHORED.to_world(p);
-            dvec::normalize_or(dvec::sub(w, shape().center), [0.0, 1.0, 0.0])
+            dvec3::normalize_or(dvec3::sub(w, shape().center), [0.0, 1.0, 0.0])
         };
         let at = [700.0, 30.0, -714.0];
         LocalFrame::AUTHORED.recentered(at, up(at)).0
@@ -273,7 +273,7 @@ mod tests {
         let grid = PlanetGrassGrid::new(&s);
         let frame = LocalFrame::AUTHORED;
         let lod = TileLod::new(s, crate::planet::FINEST_CELL_SIZE);
-        let cam_world = dvec::add(
+        let cam_world = dvec3::add(
             s.center,
             [0.0, s.radius + s.height([0.0, 1.0, 0.0]) + 1.7, 0.0],
         );
@@ -348,7 +348,7 @@ mod tests {
             y: 521,
         };
         let dir = parent.direction(0.5, 0.5);
-        let cam_world = dvec::add(s.surface(dir), dvec::scale(dir, 1.7));
+        let cam_world = dvec3::add(s.surface(dir), dvec3::scale(dir, 1.7));
         let run = |frame: &LocalFrame| {
             let tiles: Vec<DrawnPlanetTile> = parent
                 .children()
@@ -378,7 +378,7 @@ mod tests {
         let mut stack: Vec<TileId> = (0..6).map(|f| TileId::root(CubeFace(f))).collect();
         while let Some(t) = stack.pop() {
             let b = crate::planet::tile_bounds(s, t);
-            if dvec::length(dvec::sub(camera, b.center)) - b.radius > reach {
+            if dvec3::length(dvec3::sub(camera, b.center)) - b.radius > reach {
                 continue;
             }
             if t.level >= max_level {
@@ -437,7 +437,7 @@ mod tests {
                 (-0.999, 0.999),
             ] {
                 let dir = CubeFace(2).direction(fs, ft);
-                let cam_world = dvec::add(s.surface(dir), dvec::scale(dir, 1.7));
+                let cam_world = dvec3::add(s.surface(dir), dvec3::scale(dir, 1.7));
                 let center = frame.to_local(s.center);
                 let cam = frame.to_local(cam_world);
                 let finest: Vec<_> = finest_around(&s, level, cam_world, 200.0)
@@ -501,7 +501,7 @@ mod tests {
             x: 1 << (lod.max_level - 1),
             y: 1 << (lod.max_level - 1),
         };
-        let cam = frame.to_local(dvec::add(
+        let cam = frame.to_local(dvec3::add(
             s.center,
             [0.0, s.radius + s.height([0.0, 1.0, 0.0]) + 1.7, 0.0],
         ));

@@ -65,6 +65,19 @@ impl AutoExposureParams {
     }
 }
 
+/// What the auto-exposure average kernel measures of a frame, read back by
+/// the CPU. Matches `ExposureMeasurement` in `shaders/auto_exposure.hlsl`.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::NoUninit)]
+#[repr(C)]
+pub struct ExposureMeasurement {
+    /// Mean log2 luminance of the pixels above the histogram floor.
+    pub mean_log_lum: f32,
+    /// Log2 luminance the brightest
+    /// [`HIGHLIGHT_FRACTION`](crate::gfx::auto_exposure::HIGHLIGHT_FRACTION)
+    /// of all pixels starts at.
+    pub highlight_log_lum: f32,
+}
+
 /// Per-dispatch params for the Hi-Z build kernels: four tightly-packed uints.
 /// Matches `HizParams` in `shaders/hiz_build.hlsl`. 16 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
@@ -136,6 +149,13 @@ mod tests {
         assert_eq!(offset_of!(AutoExposureParams, lum_log2_range), 4);
         assert_eq!(offset_of!(AutoExposureParams, lum_to_bin_scale), 8);
         assert_eq!(offset_of!(AutoExposureParams, pre_exposure), 12);
+    }
+
+    #[test]
+    fn exposure_measurement_layout_matches_shader() {
+        assert_eq!(size_of::<ExposureMeasurement>(), 8);
+        assert_eq!(offset_of!(ExposureMeasurement, mean_log_lum), 0);
+        assert_eq!(offset_of!(ExposureMeasurement, highlight_log_lum), 4);
     }
 
     // The scale maps the whole log-luminance span onto exactly the bin count.

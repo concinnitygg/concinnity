@@ -75,6 +75,13 @@ pub struct Exposure {
     /// 0 keeps full color at any level.
     #[asset(min = 0.0, max = 1.0, apply = live)]
     pub night_vision: f32,
+    /// How many stops over white the brightest 0.1% of the frame may sit, with
+    /// `auto` on. Auto-exposure brightens no further than this allows, so a
+    /// small bright subject in a mostly dark frame, such as a sunlit planet
+    /// against black space, keeps its detail instead of blowing out. 24
+    /// leaves exposure to the frame's average alone.
+    #[asset(default = 2.0, min = 0.0, max = EV_LIMIT, apply = live)]
+    pub auto_highlight_ev: f32,
 }
 
 impl Exposure {
@@ -97,6 +104,7 @@ impl Exposure {
             )
             .with_night_bias(self.auto_night_ev)
             .with_night_vision(self.night_vision)
+            .with_highlight_headroom(self.auto_highlight_ev)
         })
     }
 }
@@ -104,6 +112,7 @@ impl Exposure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gfx::auto_exposure::HIGHLIGHT_HEADROOM_EV;
 
     #[test]
     fn ev_resolves_to_power_of_two_multiplier() {
@@ -168,5 +177,24 @@ mod tests {
             ..rods
         };
         assert_eq!(over.auto_settings(false).unwrap().night_vision, 1.0);
+    }
+
+    #[test]
+    fn auto_settings_carry_the_highlight_headroom() {
+        let cfg = Exposure {
+            auto: true,
+            ..Default::default()
+        };
+        assert_eq!(cfg.auto_highlight_ev, HIGHLIGHT_HEADROOM_EV);
+        let s = cfg.auto_settings(false).expect("auto-exposure on");
+        assert_eq!(s.highlight_headroom_ev, HIGHLIGHT_HEADROOM_EV);
+        let wide = Exposure {
+            auto_highlight_ev: 5.0,
+            ..cfg
+        };
+        assert_eq!(
+            wide.auto_settings(false).unwrap().highlight_headroom_ev,
+            5.0
+        );
     }
 }

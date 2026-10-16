@@ -491,15 +491,16 @@ impl GrassField {
         }
     }
 
-    // The planet's frame this frame, from its drawn tiles; `None` off a
-    // planet or before any tile is drawn.
+    // The planet's frame this frame, from its finest drawn tile, the one
+    // placed nearest the frame's origin; `None` off a planet or before any
+    // tile is drawn.
     fn planet_view<'a>(&'a self, tiles: &'a [DrawnPlanetTile]) -> Option<PlanetView<'a>> {
         let grass = self.planet.as_ref()?;
-        let first = tiles.first()?;
+        let finest = tiles.iter().max_by_key(|t| t.id.level)?;
         Some(PlanetView {
             grass,
-            center: planet_center(&grass.shape, first),
-            model: first.model,
+            center: planet_center(&grass.shape, finest),
+            model: finest.model,
             tiles,
         })
     }
@@ -714,16 +715,16 @@ impl GrassField {
 // on `planet`: the planet's own surface along the radial through it, set
 // below `base` along the frame's vertical.
 fn planet_ground_under(planet: &PlanetView<'_>, base: [f32; 3]) -> f32 {
-    use crate::planet::dvec;
-    let offset = dvec::sub(dvec::from_f32(base), dvec::from_f32(planet.center));
+    use crate::math::dvec3;
+    let offset = dvec3::sub(dvec3::from_f32(base), dvec3::from_f32(planet.center));
     let m = &planet.model;
     // The model's rotation takes planet directions into the frame; its
     // transpose takes them back.
     let world: [f64; 3] =
         core::array::from_fn(|c| (0..3).map(|r| f64::from(m[c][r]) * offset[r]).sum());
-    let dir = dvec::normalize_or(world, [0.0, 1.0, 0.0]);
+    let dir = dvec3::normalize_or(world, [0.0, 1.0, 0.0]);
     let shape = &planet.grass.shape;
-    let gap = dvec::length(offset) - (shape.radius + shape.height(dir));
+    let gap = dvec3::length(offset) - (shape.radius + shape.height(dir));
     base[1] - gap as f32
 }
 
@@ -1340,7 +1341,7 @@ mod tests {
             let f = field();
             let (tiles, cam) = standing();
             let s = shape();
-            let under = crate::planet::dvec::normalize_or([0.5, 50_000.0, 0.5], [0.0; 3]);
+            let under = crate::math::dvec3::normalize_or([0.5, 50_000.0, 0.5], [0.0; 3]);
             let ground = s.height(under) as f32;
             let benders = [
                 GrassBender {

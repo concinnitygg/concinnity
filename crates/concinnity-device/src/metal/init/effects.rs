@@ -15,6 +15,7 @@ use concinnity_core::render::post::ssgi::SsgiPass;
 use concinnity_core::render::post::ssgi::settings::SsgiSettings;
 use concinnity_core::render::post::ssr::SsrPass;
 use concinnity_core::render::post::ssr::settings::SsrSettings;
+use concinnity_core::render::uniforms::ExposureMeasurement;
 use concinnity_core::settings::ResolvedGraphics;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -367,7 +368,7 @@ fn make_auto_exposure_histogram(
 fn make_auto_exposure_output(
     device: &ProtocolObject<dyn MTLDevice>,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
-    let out_bytes = vec![0u8; std::mem::size_of::<f32>()];
+    let out_bytes = vec![0u8; std::mem::size_of::<ExposureMeasurement>()];
     // SAFETY: the pointer and length describe the live `out_bytes` allocation, and Metal copies
     // those bytes into the new buffer before the call returns.
     unsafe {

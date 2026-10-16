@@ -632,6 +632,7 @@ mod tests {
             eye: [1.0, 2.0, 3.0],
             prev_eye: [1.5, 2.0, 3.0],
             level0_range: 4096.0,
+            coarsest_level: 0,
         };
         let view = PackView {
             tile_morph: Some(morph),

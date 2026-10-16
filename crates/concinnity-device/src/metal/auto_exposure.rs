@@ -50,7 +50,7 @@ pub(crate) struct AutoExposureGpu {
     // 256-bin global histogram the build kernel accumulates into (shared
     // storage so the average kernel can read + clear it in one pass).
     pub histogram: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-    // One-float readback buffer per frame-in-flight; the average kernel writes
+    // One-measurement readback buffer per frame-in-flight; the average kernel writes
     // this frame's slot and the CPU reads that same slot `depth` frames later,
     // past the fence that retired its writer. Empty when auto-exposure is off.
     pub outputs: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
@@ -76,16 +76,16 @@ impl MtlContext {
             return;
         };
 
-        // Read this slot's average log-luminance. The frames-in-flight fence
+        // Read this slot's measurement. The frames-in-flight fence
         // has already retired the frame that wrote it, so the value is a
         // completed GPU write exactly `depth` frames old -- deterministic
         // rather than whichever frame the GPU last happened to finish.
-        // SAFETY: `output_buf` is shared storage of at least one f32 (the kernel's average
-        // log-luminance output), so `contents()` is a live CPU mapping of it. A torn read is
-        // impossible for a single aligned f32, and the unwritten value the first `depth` frames
-        // see is the zero the buffer was created with.
-        let avg_log_lum = unsafe {
-            let ptr = output_buf.contents().as_ptr() as *const f32;
+        // SAFETY: `output_buf` is shared storage of one `ExposureMeasurement` (the average
+        // kernel's output), so `contents()` is a live CPU mapping of it, and the fence retired
+        // its writer. The unwritten value the first `depth` frames see is the zero the buffer
+        // was created with.
+        let measured = unsafe {
+            let ptr = output_buf.contents().as_ptr() as *const ExposureMeasurement;
             ptr.read()
         };
 
@@ -96,7 +96,7 @@ impl MtlContext {
         // and bloom prefilter consume; it already folds in the authored
         // exposure_ev when auto-exposure is off, so we only overwrite it here
         // when the GPU path owns the value.
-        self.post_process.exposure = adaptation.step(avg_log_lum, dt);
+        self.post_process.exposure = adaptation.step(measured, dt);
     }
 
     // Encode the auto-exposure histogram passes against `hdr_resolve`. The
@@ -164,7 +164,7 @@ impl MtlContext {
 
         // Average kernel: one threadgroup of 256 threads reduces the
         // histogram and clears it for the next frame. The output buffer at
-        // buffer(1) receives the count-weighted average log-luminance.
+        // buffer(1) receives the frame's measurement.
         enc.set_pipeline(&pipelines.average);
         enc.set_buffer(histogram, 0, 0);
         enc.set_buffer(output, 0, 1);

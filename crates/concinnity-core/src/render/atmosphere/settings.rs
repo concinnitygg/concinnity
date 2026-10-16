@@ -1,8 +1,9 @@
 //! The authored `Atmosphere` resolved against the world it sits in.
 
+use super::air::AirProfile;
 use super::apparent::ApparentGround;
 use crate::components::Atmosphere;
-use crate::math::{cos, exp};
+use crate::math::cos;
 use crate::render::night_sky::NightSkySettings;
 
 /// Meters in a kilometer: world units are meters, the atmosphere's are
@@ -19,24 +20,10 @@ pub struct AtmosphereSettings {
     pub bottom_radius: f32,
     /// Radius of the top of the air, in kilometers.
     pub top_radius: f32,
-    /// Rayleigh scattering per kilometer at the ground.
-    pub rayleigh_scattering: [f32; 3],
-    /// Rayleigh scale height, in kilometers.
-    pub rayleigh_scale_height: f32,
-    /// Mie scattering per kilometer at the ground.
-    pub mie_scattering: [f32; 3],
-    /// Mie scattering plus absorption per kilometer at the ground.
-    pub mie_extinction: [f32; 3],
-    /// Mie scale height, in kilometers.
-    pub mie_scale_height: f32,
+    /// The air over the planet's own ground.
+    pub air: AirProfile,
     /// Mie phase anisotropy.
     pub mie_anisotropy: f32,
-    /// Ozone absorption per kilometer at the layer's center.
-    pub ozone_absorption: [f32; 3],
-    /// Height of the ozone layer's center, in kilometers.
-    pub ozone_center: f32,
-    /// Half the ozone layer's width, in kilometers.
-    pub ozone_half_width: f32,
     /// Albedo of the ground under the air.
     pub ground_albedo: [f32; 3],
     /// Cosine of the sun disc's angular radius.
@@ -48,7 +35,7 @@ pub struct AtmosphereSettings {
     /// the world origin.
     pub planet_center: Option<[f64; 3]>,
     /// The radius the sky is drawn over near the ground, when it is not the
-    /// true one.
+    /// true one, and the air as authored over it.
     pub apparent: Option<ApparentGround>,
     /// The night sky drawn behind the air, if the world has one.
     pub night: Option<NightSkySettings>,
@@ -65,27 +52,34 @@ impl AtmosphereSettings {
             None => a.planet_radius_km,
         };
         let half_angle = (a.sun_angular_diameter_deg * 0.5).to_radians();
-        Self {
-            bottom_radius,
-            top_radius: bottom_radius + a.height_km,
+        let authored = AirProfile {
+            height: a.height_km,
             rayleigh_scattering: a.rayleigh_scattering,
             rayleigh_scale_height: a.rayleigh_scale_height_km,
             mie_scattering: a.mie_scattering,
             mie_extinction: core::array::from_fn(|i| a.mie_scattering[i] + a.mie_absorption[i]),
             mie_scale_height: a.mie_scale_height_km,
-            mie_anisotropy: a.mie_anisotropy,
             ozone_absorption: a.ozone_absorption,
             ozone_center: a.ozone_center_km,
             ozone_half_width: a.ozone_width_km * 0.5,
+        };
+        let apparent = a.apparent_radius_km.map(|radius| ApparentGround {
+            radius,
+            air: authored,
+            fade_start: a.apparent_radius_fade_km[0],
+            fade_end: a.apparent_radius_fade_km[1],
+        });
+        let air = apparent.map_or(authored, |ap| ap.air_over(bottom_radius));
+        Self {
+            bottom_radius,
+            top_radius: bottom_radius + air.height,
+            air,
+            mie_anisotropy: a.mie_anisotropy,
             ground_albedo: a.ground_albedo,
             sun_cos_radius: cos(half_angle),
             sun_disc_intensity: a.sun_disc_intensity,
             planet_center: planet.map(|(center, _)| center),
-            apparent: a.apparent_radius_km.map(|radius| ApparentGround {
-                radius,
-                fade_start: a.apparent_radius_fade_km[0],
-                fade_end: a.apparent_radius_fade_km[1],
-            }),
+            apparent,
             night: None,
         }
     }
@@ -124,35 +118,20 @@ impl AtmosphereSettings {
         }
     }
 
-    /// These settings over ground of `radius`, the air keeping its thickness.
+    /// These settings over ground of `radius`. With an apparent radius the
+    /// air keeps its proportion to the ground, exactly as authored over the
+    /// apparent ground; without one it keeps its thickness.
     pub fn with_ground_radius(&self, radius: f32) -> Self {
         if radius == self.bottom_radius {
             return *self;
         }
+        let air = self.apparent.map_or(self.air, |ap| ap.air_over(radius));
         Self {
             bottom_radius: radius,
-            top_radius: radius + (self.top_radius - self.bottom_radius),
+            top_radius: radius + air.height,
+            air,
             ..*self
         }
-    }
-
-    /// Extinction per kilometer at `height` kilometers above the ground: what
-    /// the air takes out of a beam crossing it. Mirrors `medium_extinction` in
-    /// atmosphere_common.hlsl.
-    pub fn extinction_at(&self, height: f32) -> [f32; 3] {
-        let rayleigh = exp(-height.max(0.0) / self.rayleigh_scale_height);
-        let mie = exp(-height.max(0.0) / self.mie_scale_height);
-        let ozone = self.ozone_density(height);
-        core::array::from_fn(|i| {
-            self.rayleigh_scattering[i] * rayleigh
-                + self.mie_extinction[i] * mie
-                + self.ozone_absorption[i] * ozone
-        })
-    }
-
-    // The ozone layer's relative density: a tent peaking at its center.
-    fn ozone_density(&self, height: f32) -> f32 {
-        (1.0 - (height - self.ozone_center).abs() / self.ozone_half_width).max(0.0)
     }
 
     /// The camera relative to the planet's center, in kilometers, from its
@@ -182,8 +161,8 @@ mod tests {
         let s = AtmosphereSettings::resolve(&Atmosphere::default(), None);
         assert_eq!(s.bottom_radius, 6360.0);
         assert_eq!(s.top_radius, 6460.0);
-        assert!((s.mie_extinction[0] - 0.00444).abs() < 1e-6);
-        assert_eq!(s.ozone_half_width, 15.0);
+        assert!((s.air.mie_extinction[0] - 0.00444).abs() < 1e-6);
+        assert_eq!(s.air.ozone_half_width, 15.0);
         // A 0.53 degree disc has a 0.265 degree radius.
         assert!((s.sun_cos_radius - cos(0.265_f32.to_radians())).abs() < 1e-7);
         assert_eq!(s.planet_center, None);
@@ -191,23 +170,78 @@ mod tests {
         assert_eq!(s.sky_ground_radius(3.0), 6360.0);
     }
 
-    // An apparent radius builds the sky over a bigger ground near the
-    // planet, keeping the air's thickness, and the true one high above it.
-    #[test]
-    fn an_apparent_radius_moves_the_sky_ground() {
-        let s = AtmosphereSettings::resolve(
+    fn small_planet() -> AtmosphereSettings {
+        AtmosphereSettings::resolve(
             &Atmosphere {
                 apparent_radius_km: Some(6360.0),
                 ..Default::default()
             },
             Some(([0.0, -50_000.0, 0.0], 50_000.0)),
-        );
+        )
+    }
+
+    // An apparent radius builds the sky over a bigger ground near the
+    // planet, with the air as authored, and over the true one high above it,
+    // the air as thin beside it as Earth's beside Earth.
+    #[test]
+    fn an_apparent_radius_moves_the_sky_ground() {
+        let s = small_planet();
         assert_eq!(s.sky_ground_radius(0.1), 6360.0);
         assert_eq!(s.sky_ground_radius(30.0), 50.0);
         let table = s.with_ground_radius(s.sky_ground_radius(0.1));
         assert_eq!(table.bottom_radius, 6360.0);
         assert_eq!(table.top_radius, 6460.0);
         assert_eq!(s.with_ground_radius(50.0), s);
+        let thickness = s.top_radius - s.bottom_radius;
+        assert!(
+            (thickness - 100.0 * 50.0 / 6360.0).abs() < 1e-4,
+            "{thickness}"
+        );
+        assert!((s.air.rayleigh_scale_height - 8.0 * 50.0 / 6360.0).abs() < 1e-5);
+    }
+
+    // Up to the fade's start the tables' air is the authored air, bit for
+    // bit.
+    #[test]
+    fn the_air_near_the_ground_is_as_authored() {
+        let s = small_planet();
+        let earth = AtmosphereSettings::resolve(&Atmosphere::default(), None);
+        for h in [0.0, 0.002, 0.1, 0.5, 1.0] {
+            let table = s.with_ground_radius(s.sky_ground_radius(h));
+            assert_eq!(table.air, earth.air, "{h}");
+            assert_eq!(table.top_radius, earth.top_radius, "{h}");
+        }
+    }
+
+    // Through the fade the air thins in step with the ground, never jumping,
+    // and every column straight up or along the ground keeps its optical
+    // depth.
+    #[test]
+    fn the_air_fades_with_the_ground_keeping_its_depth() {
+        use super::super::optics::optical_depth;
+        let s = small_planet();
+        let table_at = |h: f32| s.with_ground_radius(s.sky_ground_radius(h));
+        let ground = table_at(0.0);
+        let zenith = optical_depth(&ground, ground.bottom_radius, 1.0);
+        let grazing = optical_depth(&ground, ground.bottom_radius, 0.0);
+        let mut last = ground.top_radius - ground.bottom_radius;
+        for i in 1..=200 {
+            let h = 1.0 + 19.0 * i as f32 / 200.0;
+            let table = table_at(h);
+            let thickness = table.top_radius - table.bottom_radius;
+            let ratio = thickness / table.bottom_radius;
+            assert!((ratio - 100.0 / 6360.0).abs() < 1e-6, "{h}: {ratio}");
+            assert!(thickness < last, "{h}: {thickness} after {last}");
+            assert!(last - thickness < 3.0, "{h}: jumped {last} -> {thickness}");
+            last = thickness;
+            let z = optical_depth(&table, table.bottom_radius, 1.0);
+            let g = optical_depth(&table, table.bottom_radius, 0.0);
+            for c in 0..3 {
+                assert!((z[c] - zenith[c]).abs() < zenith[c] * 1e-3, "{h} {c}");
+                assert!((g[c] - grazing[c]).abs() < grazing[c] * 1e-3, "{h} {c}");
+            }
+        }
+        assert_eq!(table_at(20.0), s);
     }
 
     // A planet's radius replaces the authored one, and the air keeps its
@@ -229,7 +263,7 @@ mod tests {
         let s = AtmosphereSettings::vacuum(Some(([0.0, -50_000.0, 0.0], 50_000.0)));
         assert_eq!(s.bottom_radius, 50.0);
         for h in [0.0, 5.0, 25.0, 90.0] {
-            assert_eq!(s.extinction_at(h), [0.0; 3]);
+            assert_eq!(s.air.extinction_at(h), [0.0; 3]);
         }
         assert_eq!(s.ground_albedo, [0.0; 3]);
         assert!(s.night.is_none());
@@ -251,22 +285,22 @@ mod tests {
             None,
         );
         assert_eq!(s.top_radius - s.bottom_radius, 1.0);
-        assert!(s.rayleigh_scale_height > 0.0);
-        assert_eq!(s.mie_scattering, [0.0, 0.0, 0.5]);
+        assert!(s.air.rayleigh_scale_height > 0.0);
+        assert_eq!(s.air.mie_scattering, [0.0, 0.0, 0.5]);
         assert_eq!(s.mie_anisotropy, 0.99);
     }
 
     #[test]
     fn extinction_thins_with_height_and_peaks_in_the_ozone() {
         let s = AtmosphereSettings::resolve(&Atmosphere::default(), None);
-        let ground = s.extinction_at(0.0);
-        let high = s.extinction_at(60.0);
+        let ground = s.air.extinction_at(0.0);
+        let high = s.air.extinction_at(60.0);
         assert!((0..3).all(|i| high[i] < ground[i] * 0.05));
         // Ozone alone at its center, beside the thin air there.
-        let at_layer = s.extinction_at(25.0);
-        let below = s.extinction_at(8.0);
-        assert!(at_layer[1] > s.ozone_absorption[1]);
-        assert!(at_layer[1] - s.ozone_absorption[1] < below[1]);
+        let at_layer = s.air.extinction_at(25.0);
+        let below = s.air.extinction_at(8.0);
+        assert!(at_layer[1] > s.air.ozone_absorption[1]);
+        assert!(at_layer[1] - s.air.ozone_absorption[1] < below[1]);
     }
 
     // Without a planet the ground's top is at the world origin; with one the

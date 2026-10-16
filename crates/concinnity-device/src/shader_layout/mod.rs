@@ -448,6 +448,9 @@ fn auto_exposure_layouts_match_the_shader() {
         &programs::AUTO_EXPOSURE_BUILD,
         &mirrors::post::auto_exposure(),
     );
+    let mut average = mirrors::post::auto_exposure();
+    average.extend(mirrors::post::exposure_measurement());
+    check(&programs::AUTO_EXPOSURE_AVERAGE, &average);
 }
 
 #[test]

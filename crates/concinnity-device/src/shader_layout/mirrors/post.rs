@@ -6,7 +6,9 @@ use concinnity_core::gfx::render_types::{
     CompositeParams, PostProcessParams, SsaoParams, SsgiParams, SsrParams,
 };
 use concinnity_core::render::atmosphere::AtmosphereParams;
-use concinnity_core::render::uniforms::{AutoExposureParams, HizParams, TaaParams};
+use concinnity_core::render::uniforms::{
+    AutoExposureParams, ExposureMeasurement, HizParams, TaaParams,
+};
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror};
 
@@ -58,7 +60,6 @@ pub(in crate::shader_layout) fn bloom() -> Vec<Case> {
             hdr_output,
             pq_output,
             fxaa,
-            pre_exposure,
         }),
     )]
 }
@@ -76,7 +77,6 @@ pub(in crate::shader_layout) fn composite() -> Vec<Case> {
         [post.hdr_output] => ["hdr_output"],
         [post.pq_output] => ["pq_output"],
         [post.fxaa] => ["fxaa"],
-        [post.pre_exposure] => ["pre_exposure"],
         fade,
         view_mode,
         depth_near,
@@ -138,6 +138,15 @@ pub(in crate::shader_layout) fn auto_exposure() -> Vec<Case> {
             lum_log2_range,
             lum_to_bin_scale,
             pre_exposure,
+        }),
+    )]
+}
+
+pub(in crate::shader_layout) fn exposure_measurement() -> Vec<Case> {
+    vec![everywhere(
+        mirror!(ExposureMeasurement => "ExposureMeasurement" {
+            mean_log_lum,
+            highlight_log_lum,
         }),
     )]
 }

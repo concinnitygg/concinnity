@@ -30,6 +30,7 @@
 //! and the sun's color is computed from the same transmittance the GPU table
 //! holds.
 
+mod air;
 mod air_tables;
 mod apparent;
 mod frame;
@@ -41,14 +42,15 @@ mod settings;
 mod sh;
 mod sky_cube;
 
+pub use air::AirProfile;
 pub use air_tables::AirTables;
 pub use apparent::{ApparentGround, table_view_angle, zenith_horizon};
 pub use frame::{AtmosphereFrame, sun_light};
 pub use lut::{
     AERIAL_MAX_DISTANCE_KM, AERIAL_SIZE, IRRADIANCE_FACE, MULTISCATTER_SIZE, SKY_CUBE_FACE,
     SKY_VIEW_HEIGHT, SKY_VIEW_WIDTH, TRANSMITTANCE_HEIGHT, TRANSMITTANCE_WIDTH,
-    aerial_slice_distance, aerial_slice_of, sky_view_direction, sky_view_uv, transmittance_r_mu,
-    transmittance_uv,
+    aerial_slice_distance, aerial_slice_of, aerial_span, bspline_taps, sky_angles,
+    sky_view_direction, sky_view_row_taps, sky_view_uv, transmittance_r_mu, transmittance_uv,
 };
 pub use optics::{
     disc_set_depth, disc_visible_fraction, optical_depth, sun_visible_fraction, transmittance,

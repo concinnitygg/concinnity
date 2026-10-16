@@ -17,8 +17,7 @@
 
 #ifdef BLOOM_PREFILTER
 // `PostProcessParams` in render_types.rs; the prefilter reads the threshold,
-// the knee, the exposure (which applies to the pre-exposed scene) and the
-// pre-exposure.
+// the knee and the exposure (which applies to the pre-exposed scene).
 struct PostProcessParams
 {
     float bloom_intensity;
@@ -30,7 +29,6 @@ struct PostProcessParams
     float hdr_output;
     float pq_output;
     float fxaa;
-    float pre_exposure;
 };
 
 [[vk::push_constant]] ConstantBuffer<PostProcessParams> post : register(b0);
@@ -43,16 +41,17 @@ float bloom_luma(float3 c)
 
 // Karis weight: attenuate bright 2x2 groups so a single firefly does not
 // dominate the downsample. Applied only on the first (prefilter) downsample, to
-// the group's absolute radiance (`inv_pre` divides the pre-exposure out).
-float karis_weight(float3 c, float inv_pre)
+// the group's exposed radiance, so it holds back the same highlights at any
+// exposure.
+float karis_weight(float3 c, float to_exposed)
 {
-    return 1.0 / (1.0 + bloom_luma(c) * inv_pre);
+    return 1.0 / (1.0 + bloom_luma(c) * to_exposed);
 }
 
 // 13-tap downsample (Jimenez/CoD). When `karis` is set, the 13 taps are grouped
-// into five overlapping 2x2 boxes and luma-weighted, with `inv_pre` the
-// reciprocal of the source's pre-exposure.
-float3 downsample_13(float2 uv, float2 texel, bool karis, float inv_pre)
+// into five overlapping 2x2 boxes and luma-weighted, with `to_exposed` the
+// scale from the source to the exposed scene.
+float3 downsample_13(float2 uv, float2 texel, bool karis, float to_exposed)
 {
     float3 a = src.Sample(src_sampler, uv + texel * float2(-2.0, -2.0)).rgb;
     float3 b = src.Sample(src_sampler, uv + texel * float2( 0.0, -2.0)).rgb;
@@ -75,11 +74,11 @@ float3 downsample_13(float2 uv, float2 texel, bool karis, float inv_pre)
         float3 g2 = (d + e + g + h) * (0.125 / 4.0);
         float3 g3 = (e + f + h + i) * (0.125 / 4.0);
         float3 g4 = (j + k + l + m) * (0.5 / 4.0);
-        g0 *= karis_weight(g0, inv_pre);
-        g1 *= karis_weight(g1, inv_pre);
-        g2 *= karis_weight(g2, inv_pre);
-        g3 *= karis_weight(g3, inv_pre);
-        g4 *= karis_weight(g4, inv_pre);
+        g0 *= karis_weight(g0, to_exposed);
+        g1 *= karis_weight(g1, to_exposed);
+        g2 *= karis_weight(g2, to_exposed);
+        g3 *= karis_weight(g3, to_exposed);
+        g4 *= karis_weight(g4, to_exposed);
         return g0 + g1 + g2 + g3 + g4;
     }
 
@@ -113,7 +112,7 @@ float3 prefilter_threshold(float3 c, float threshold, float knee)
 float4 bloom_prefilter_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
 {
     float2 texel = 1.0 / texture_size(src);
-    float3 c = downsample_13(uv, texel, true, 1.0 / post.pre_exposure);
+    float3 c = downsample_13(uv, texel, true, post.exposure);
     // Exposure applies before the threshold so the soft-knee cut tracks the
     // exposed scene the composite pass tonemaps, not the raw HDR radiance.
     c *= post.exposure;

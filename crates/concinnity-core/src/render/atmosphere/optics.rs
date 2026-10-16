@@ -14,6 +14,21 @@ pub(super) fn ray_exit(r: f32, mu: f32, radius: f32) -> f32 {
     (-r * mu + sqrt(disc.max(0.0))).max(0.0)
 }
 
+/// Distance from radius `r` along a ray whose cosine to the local up is `mu`
+/// to where it enters the sphere of `radius`: 0 from inside it, negative
+/// when it starts outside and misses. Mirrors `ray_enter` in
+/// atmosphere_common.hlsl.
+pub(super) fn ray_enter(r: f32, mu: f32, radius: f32) -> f32 {
+    if r <= radius {
+        return 0.0;
+    }
+    let disc = r * r * (mu * mu - 1.0) + radius * radius;
+    if mu >= 0.0 || disc < 0.0 {
+        return -1.0;
+    }
+    -r * mu - sqrt(disc)
+}
+
 /// Whether a ray from radius `r` with cosine `mu` hits the ground sphere.
 /// Mirrors `ray_hits_ground` in atmosphere_common.hlsl.
 pub(super) fn ray_hits_ground(r: f32, mu: f32, bottom: f32) -> bool {
@@ -23,14 +38,19 @@ pub(super) fn ray_hits_ground(r: f32, mu: f32, bottom: f32) -> bool {
 /// Optical depth (extinction integrated over distance) from radius `r` with
 /// cosine `mu` to the top of the air, midpoint-sampled in
 /// [`TRANSMITTANCE_STEPS`] steps exactly as the transmittance kernel takes it.
+/// From above the air the path is sampled from where it enters it.
 pub fn optical_depth(s: &AtmosphereSettings, r: f32, mu: f32) -> [f32; 3] {
-    let length = ray_exit(r, mu, s.top_radius);
+    let enter = ray_enter(r, mu, s.top_radius);
+    if enter < 0.0 {
+        return [0.0; 3];
+    }
+    let length = ray_exit(r, mu, s.top_radius) - enter;
     let dt = length / TRANSMITTANCE_STEPS as f32;
     let mut depth = [0.0_f32; 3];
     for i in 0..TRANSMITTANCE_STEPS {
-        let t = (i as f32 + 0.5) * dt;
+        let t = enter + (i as f32 + 0.5) * dt;
         let rt = sqrt(t * t + 2.0 * r * mu * t + r * r);
-        let ext = s.extinction_at(rt - s.bottom_radius);
+        let ext = s.air.extinction_at(rt - s.bottom_radius);
         for (d, e) in depth.iter_mut().zip(ext) {
             *d += e * dt;
         }
@@ -162,9 +182,7 @@ mod tests {
         let s = earth();
         let d = optical_depth(&s, s.bottom_radius, 1.0);
         for (i, depth) in d.into_iter().enumerate() {
-            let expected = s.rayleigh_scattering[i] * s.rayleigh_scale_height
-                + s.mie_extinction[i] * s.mie_scale_height
-                + s.ozone_absorption[i] * s.ozone_half_width;
+            let expected = s.air.zenith_depth()[i];
             assert!(
                 (depth - expected).abs() < expected * 0.03,
                 "{i}: {depth} vs {expected}"
@@ -268,6 +286,27 @@ mod tests {
         // A sun overhead is nearly white either way.
         let noon = sun_transmittance_seen(&small, &table, r, 1.0);
         assert!(noon.iter().all(|&t| t > 0.7), "{noon:?}");
+    }
+
+    // From above the air the sun seen past the limb is dimmed and reddened
+    // by the air its light crosses, as much as from the top of the air.
+    #[test]
+    fn the_limb_dims_the_sun_seen_from_above_the_air() {
+        let s = earth();
+        let r = s.top_radius + 3000.0;
+        let below = |grazing: f32| -crate::math::sqrt(1.0 - (grazing / r) * (grazing / r));
+        let through = transmittance(&s, r, below(s.bottom_radius + 15.0));
+        assert!(
+            through[0] < 0.9 && through[2] < 0.5 * through[0],
+            "{through:?}"
+        );
+        let clear = transmittance(&s, r, below(s.top_radius + 1.0));
+        assert_eq!(clear, [1.0; 3]);
+        // The same path read from the top of the air, where it enters.
+        let enter = ray_enter(r, below(s.bottom_radius + 15.0), s.top_radius);
+        assert!(enter > 0.0);
+        assert!(ray_enter(r, 0.2, s.top_radius) < 0.0);
+        assert_eq!(ray_enter(s.bottom_radius, -0.2, s.top_radius), 0.0);
     }
 
     #[test]

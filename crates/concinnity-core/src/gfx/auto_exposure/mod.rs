@@ -35,6 +35,15 @@ pub const EV_LIMIT: f32 = 24.0;
 /// because the ACES tonemap implicitly compressed scene-white back down).
 pub const HDR_MIDDLE_GRAY_LOG2: f32 = -2.473;
 
+/// Share of a frame's pixels, the black ones counted, that the highlight
+/// measurement takes as the frame's brightest.
+pub const HIGHLIGHT_FRACTION: f32 = 0.001;
+
+/// Default for how many stops over white the brightest
+/// [`HIGHLIGHT_FRACTION`] of a frame may sit after exposure: under the ACES
+/// tonemap 2 stops (4x white) shows near white without clipping hard.
+pub const HIGHLIGHT_HEADROOM_EV: f32 = 2.0;
+
 /// How many stops under a luminance of 1 a scene's mean sits where the night
 /// bias starts to ease in: the end of civil dusk under a sun of a few units'
 /// intensity.
@@ -71,6 +80,11 @@ pub struct AutoExposureSettings {
     /// vision: desaturated toward the rods' luminance with a blue cast, by
     /// the rods' share of sight at the adapted scene luminance.
     pub night_vision: f32,
+    /// How many stops over white (a linear 1.0 after exposure) the brightest
+    /// [`HIGHLIGHT_FRACTION`] of a frame may sit: the adapted EV is held down
+    /// to keep it there, so a small bright subject in a dark frame is not
+    /// blown out.
+    pub highlight_headroom_ev: f32,
 }
 
 impl AutoExposureSettings {
@@ -91,7 +105,27 @@ impl AutoExposureSettings {
             target_log_lum: if hdr_aware { HDR_MIDDLE_GRAY_LOG2 } else { 0.0 },
             night_bias_ev: 0.0,
             night_vision: 0.0,
+            highlight_headroom_ev: HIGHLIGHT_HEADROOM_EV,
         }
+    }
+
+    /// These settings with `highlight_headroom_ev` as the highlight headroom,
+    /// clamped to `[0, EV_LIMIT]`.
+    pub fn with_highlight_headroom(self, highlight_headroom_ev: f32) -> Self {
+        Self {
+            highlight_headroom_ev: if highlight_headroom_ev.is_nan() {
+                HIGHLIGHT_HEADROOM_EV
+            } else {
+                highlight_headroom_ev.clamp(0.0, EV_LIMIT)
+            },
+            ..self
+        }
+    }
+
+    /// The highest EV that keeps a frame whose brightest pixels start at
+    /// `highlight_log_lum` within the highlight headroom.
+    pub fn highlight_cap(&self, highlight_log_lum: f32) -> f32 {
+        self.highlight_headroom_ev - highlight_log_lum
     }
 
     /// These settings with `night_bias_ev` as the dark-scene bias, clamped to
@@ -180,6 +214,24 @@ mod tests {
             0.0
         );
         assert_eq!(s.with_night_bias(-100.0).night_bias_ev, -EV_LIMIT);
+    }
+
+    #[test]
+    fn highlight_headroom_defaults_and_clamps() {
+        let s = AutoExposureSettings::resolve(-8.0, 24.0, 1.0, false);
+        assert_eq!(s.highlight_headroom_ev, HIGHLIGHT_HEADROOM_EV);
+        assert_eq!(s.with_highlight_headroom(3.5).highlight_headroom_ev, 3.5);
+        assert_eq!(s.with_highlight_headroom(-1.0).highlight_headroom_ev, 0.0);
+        assert_eq!(
+            s.with_highlight_headroom(100.0).highlight_headroom_ev,
+            EV_LIMIT
+        );
+        assert_eq!(
+            s.with_highlight_headroom(f32::NAN).highlight_headroom_ev,
+            HIGHLIGHT_HEADROOM_EV
+        );
+        // Brightest pixels at 2^3 with two stops of headroom allow EV -1.
+        assert_eq!(s.highlight_cap(3.0), -1.0);
     }
 
     #[test]

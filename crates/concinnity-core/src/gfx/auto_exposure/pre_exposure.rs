@@ -15,8 +15,7 @@
 //!   neither flashes nor lags.
 //! - Auto-exposure measures luminance with the pre-exposure divided out.
 //! - Bloom and the composite take [`PreExposure::post_params`]: the exposure
-//!   with the pre-exposure divided out, and the pre-exposure itself for the
-//!   bloom prefilter's firefly weight.
+//!   with the pre-exposure divided out.
 //! - The main pass clears to the authored background times the pre-exposure
 //!   ([`PreExposure::clear_color`]).
 //! - A planar mirror is drawn every frame, at the frame's pre-exposure, and
@@ -88,11 +87,10 @@ impl PreExposure {
 
     /// The post-process block bloom and the composite read: its `exposure`
     /// scales the pre-exposed chain, so the pre-exposure is divided out of
-    /// it, and `pre_exposure` carries the value itself.
+    /// it.
     pub fn post_params(&self, post: &PostProcessParams) -> PostProcessParams {
         PostProcessParams {
             exposure: post.exposure / self.current,
-            pre_exposure: self.current,
             ..*post
         }
     }
@@ -121,7 +119,6 @@ mod tests {
             hdr_output: 0.0,
             pq_output: 0.0,
             fxaa: 1.0,
-            pre_exposure: 1.0,
         }
     }
 
@@ -180,7 +177,6 @@ mod tests {
         let p = PreExposure::new(16.0);
         let folded = p.post_params(&post());
         assert_eq!(folded.exposure, 0.5 / 16.0);
-        assert_eq!(folded.pre_exposure, 16.0);
         assert_eq!(folded.bloom_threshold, 1.0);
         assert_eq!(folded.fxaa, 1.0);
         // What the composite tonemaps is unchanged: radiance x pre x
@@ -204,6 +200,5 @@ mod tests {
     fn unit_post_params_are_the_authored_block() {
         let unit = PreExposure::UNIT.post_params(&post());
         assert_eq!(unit.exposure, post().exposure);
-        assert_eq!(unit.pre_exposure, 1.0);
     }
 }

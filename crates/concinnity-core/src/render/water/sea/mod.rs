@@ -20,7 +20,8 @@ pub use face::SeaFace;
 use super::WaterBody;
 use super::motion::BodyMotion;
 use super::ocean::grid::OceanGrid;
-use crate::planet::{DVec3, LocalFrame, PlanetShape, dvec};
+use crate::math::dvec3;
+use crate::planet::{DVec3, LocalFrame, PlanetShape};
 
 /// The faces a sea's shader reads: the three around the corner of the cube
 /// nearest the anchor, which hold everything within the horizon.
@@ -131,13 +132,13 @@ impl WaterBody {
         let sea = self.sea.as_ref()?;
         let sphere = &sea.sphere;
         let r = sphere.radius;
-        let eye = dvec::sub(frame.to_world(camera), sphere.center);
-        let height = dvec::length(eye) - r;
-        let dir = dvec::normalize_or(eye, [0.0, 1.0, 0.0]);
+        let eye = dvec3::sub(frame.to_world(camera), sphere.center);
+        let height = dvec3::length(eye) - r;
+        let dir = dvec3::normalize_or(eye, [0.0, 1.0, 0.0]);
 
         let home = SeaFace::holding(dir);
         let a = home.unproject(r, sea.grid.snap(home.project(r, dir)));
-        let anchor = frame.to_local(dvec::add(sphere.center, dvec::scale(a, r)));
+        let anchor = frame.to_local(dvec3::add(sphere.center, dvec3::scale(a, r)));
         let [tu, tv] = home.tangents(a);
         let grid_scale = (1.0 / home.stretch(a)) as f32;
 
@@ -218,13 +219,13 @@ mod tests {
         let camera = [3.2, 40.0, -7.9];
         let m = body.sea_motion_at(5.0, &frame, camera).unwrap();
         let a = frame.to_world(m.anchor);
-        let off = dvec::length(dvec::sub(a, sphere.center)) - sphere.radius;
+        let off = dvec3::length(dvec3::sub(a, sphere.center)) - sphere.radius;
         assert!(off.abs() < 1e-2, "{off}");
         assert!((m.anchor[0] - camera[0]).abs() < 2.0 && (m.anchor[2] - camera[2]).abs() < 2.0);
         assert!((m.anchor[1] - 12.0).abs() < 0.01, "{:?}", m.anchor);
-        let up = dvec::from_f32(m.up);
+        let up = dvec3::from_f32(m.up);
         for t in m.tangents {
-            assert!(dvec::dot(dvec::from_f32(t), up).abs() < 1e-6);
+            assert!(dvec3::dot(dvec3::from_f32(t), up).abs() < 1e-6);
         }
         assert!((m.grid_scale - 1.0).abs() < 1e-6);
         // 28 m over the sea, the horizon is about 1.7 km out.

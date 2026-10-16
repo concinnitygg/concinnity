@@ -1,10 +1,12 @@
-// The per-frame exponential-moving-average update: it takes a GPU-measured
-// average log-luminance and produces the next frame's exposure multiplier. The
-// histogram itself is built in the backend's compute shader; only the reduction
-// and the EMA live here, so both can be unit-tested without a GPU.
+// The per-frame exponential-moving-average update: it takes the GPU-measured
+// mean and highlight log-luminance and produces the next frame's exposure
+// multiplier. The histogram itself is built in the backend's compute shader;
+// only the reduction and the EMA live here, so both can be unit-tested
+// without a GPU.
 
 use super::{AutoExposureSettings, night_vision_weight};
 use crate::math::{exp, exp2};
+use crate::render::uniforms::ExposureMeasurement;
 
 /// Lowest log2(luminance) the histogram bins span. Pixels darker than this fall
 /// in bin 0. Roughly matches a moonlit interior at the dim end.
@@ -50,21 +52,28 @@ impl AutoExposureState {
         }
     }
 
-    /// Step the EMA one frame: take the GPU-measured average log-luminance
-    /// (base-2), turn it into a target EV (the offset that maps the scene
-    /// mean onto `settings.target_log_lum` plus the authored `ev_bias` and,
-    /// for a dark scene, the settings' night bias),
-    /// then move `current_ev` toward it by the clamped EMA rate. Returns
-    /// the new clamped EV. `dt` is the frame time in seconds; non-finite or
-    /// non-positive values short-circuit (the EV stays where it was, no
-    /// NaN propagation into the post pass).
+    /// Step the EMA one frame: take the GPU measurement, turn its mean
+    /// log2 luminance into a target EV (the offset that maps the scene mean
+    /// onto `settings.target_log_lum` plus the authored `ev_bias` and, for a
+    /// dark scene, the settings' night bias), hold that under the EV that
+    /// keeps the measured highlight within the settings' headroom, then move
+    /// `current_ev` toward it by the clamped EMA rate. Returns the new
+    /// clamped EV. `dt` is the frame time in seconds; non-finite or
+    /// non-positive values short-circuit (the EV stays where it was, no NaN
+    /// propagation into the post pass). A non-finite highlight caps nothing.
     pub fn update(
         &mut self,
-        avg_log_lum: f32,
+        measured: ExposureMeasurement,
         ev_bias: f32,
         settings: &AutoExposureSettings,
         dt: f32,
     ) -> f32 {
+        let avg_log_lum = measured.mean_log_lum;
+        let cap = if measured.highlight_log_lum.is_finite() {
+            settings.highlight_cap(measured.highlight_log_lum)
+        } else {
+            f32::INFINITY
+        };
         // The target EV shifts the scene's geometric-mean luminance onto the
         // configured pivot: scene-white on the SDR path (target_log_lum=0,
         // ACES then compresses), perceptual middle-gray on the HDR path
@@ -72,6 +81,7 @@ impl AutoExposureState {
         // then satisfies `avg_lum * exposure = 2^target_log_lum` modulo bias.
         let target =
             (settings.target_log_lum - avg_log_lum + ev_bias + settings.night_bias(avg_log_lum))
+                .min(cap)
                 .clamp(settings.min_ev, settings.max_ev);
         if !dt.is_finite() || dt <= 0.0 || !target.is_finite() {
             self.current_ev = self.current_ev.clamp(settings.min_ev, settings.max_ev);
@@ -127,15 +137,13 @@ impl ExposureAdaptation {
         )
     }
 
-    /// Step one frame of `dt` seconds from the GPU's measured average log2
-    /// luminance, returning the linear exposure multiplier the post passes
-    /// apply. A non-finite measurement reads as the histogram's floor.
-    pub fn step(&mut self, measured_log_lum: f32, dt: f32) -> f32 {
-        let measured = if measured_log_lum.is_finite() {
-            measured_log_lum
-        } else {
-            LUM_LOG2_MIN
-        };
+    /// Step one frame of `dt` seconds from the GPU's measurement, returning
+    /// the linear exposure multiplier the post passes apply. A non-finite
+    /// mean reads as the histogram's floor.
+    pub fn step(&mut self, mut measured: ExposureMeasurement, dt: f32) -> f32 {
+        if !measured.mean_log_lum.is_finite() {
+            measured.mean_log_lum = LUM_LOG2_MIN;
+        }
         let ev = self
             .state
             .update(measured, self.bias_ev, &self.settings, dt);
@@ -170,17 +178,57 @@ pub(crate) fn average_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
     }
 }
 
+// The log-luminance the brightest `HIGHLIGHT_FRACTION` of all pixels starts
+// at, bin 0 counted in. Mirrors the average kernel the way
+// `average_log_luminance` does: the crossing bin is split as if its pixels
+// spread evenly, and a crossing in bin 0 (or an empty histogram) reads as
+// the floor.
+#[cfg(test)]
+pub(crate) fn highlight_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
+    let step = (LUM_LOG2_MAX - LUM_LOG2_MIN) / HISTOGRAM_BINS as f32;
+    let total: u32 = histogram.iter().sum();
+    if total == 0 {
+        return LUM_LOG2_MIN;
+    }
+    let wanted = super::HIGHLIGHT_FRACTION * total as f32;
+    let mut above = 0u32;
+    for (i, &n) in histogram.iter().enumerate().rev() {
+        let at = above + n;
+        if at as f32 >= wanted && (above as f32) < wanted {
+            if i == 0 {
+                break;
+            }
+            let inside = (wanted - above as f32) / n as f32;
+            return LUM_LOG2_MIN + (i as f32 + 1.0 - inside) * step;
+        }
+        above = at;
+    }
+    LUM_LOG2_MIN
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::auto_exposure::HDR_MIDDLE_GRAY_LOG2;
+    use crate::gfx::auto_exposure::{HDR_MIDDLE_GRAY_LOG2, HIGHLIGHT_FRACTION};
+
+    // A frame of one luminance throughout: its highlights are its mean.
+    fn even(log_lum: f32) -> ExposureMeasurement {
+        ExposureMeasurement {
+            mean_log_lum: log_lum,
+            highlight_log_lum: log_lum,
+        }
+    }
 
     #[test]
-    fn histogram_bins_match_the_shader() {
+    fn histogram_constants_match_the_shader() {
         let src = crate::render::shaders::AUTO_EXPOSURE;
         assert_eq!(
             crate::render::shader_consts::uint(src, "HISTOGRAM_BINS"),
             HISTOGRAM_BINS
+        );
+        assert_eq!(
+            crate::render::shader_consts::float(src, "HIGHLIGHT_FRACTION"),
+            HIGHLIGHT_FRACTION
         );
     }
 
@@ -192,13 +240,13 @@ mod tests {
             adapted_log_lum: 0.0,
         };
         // avg_log_lum = 2.0 -> target_ev = -2.0 (dim the scene by two stops).
-        let ev = state.update(2.0, 0.0, &settings, 1.0);
+        let ev = state.update(even(2.0), 0.0, &settings, 1.0);
         assert!(ev < 0.0, "ev should move toward target_ev = -2.0, got {ev}");
         assert!(ev > -2.0, "ev should not overshoot in one step, got {ev}");
 
         // Many steps converge.
         for _ in 0..200 {
-            state.update(2.0, 0.0, &settings, 1.0 / 60.0);
+            state.update(even(2.0), 0.0, &settings, 1.0 / 60.0);
         }
         assert!((state.current_ev + 2.0).abs() < 1.0e-3);
     }
@@ -212,7 +260,7 @@ mod tests {
         };
         // avg_log_lum = -10 would ask for target_ev = +10, clamped to +1.
         for _ in 0..100 {
-            state.update(-10.0, 0.0, &settings, 1.0 / 60.0);
+            state.update(even(-10.0), 0.0, &settings, 1.0 / 60.0);
         }
         assert!((state.current_ev - 1.0).abs() < 1.0e-3);
     }
@@ -224,9 +272,9 @@ mod tests {
             current_ev: 0.5,
             adapted_log_lum: 0.0,
         };
-        let ev = state.update(5.0, 0.0, &settings, f32::NAN);
+        let ev = state.update(even(5.0), 0.0, &settings, f32::NAN);
         assert_eq!(ev, 0.5);
-        let ev = state.update(5.0, 0.0, &settings, -1.0);
+        let ev = state.update(even(5.0), 0.0, &settings, -1.0);
         assert_eq!(ev, 0.5);
     }
 
@@ -239,7 +287,7 @@ mod tests {
         };
         // avg_log_lum = 0, bias = +1 -> target_ev = +1 (over-expose by one stop).
         for _ in 0..200 {
-            state.update(0.0, 1.0, &settings, 1.0 / 60.0);
+            state.update(even(0.0), 1.0, &settings, 1.0 / 60.0);
         }
         assert!((state.current_ev - 1.0).abs() < 1.0e-3);
     }
@@ -255,7 +303,7 @@ mod tests {
                 adapted_log_lum: 0.0,
             };
             for _ in 0..400 {
-                state.update(avg, -4.0, &settings, 1.0 / 60.0);
+                state.update(even(avg), -4.0, &settings, 1.0 / 60.0);
             }
             state.current_ev
         };
@@ -298,8 +346,8 @@ mod tests {
             adapted_log_lum: 0.0,
         };
         for _ in 0..500 {
-            state_sdr.update(0.0, 0.0, &sdr, 1.0 / 60.0);
-            state_hdr.update(0.0, 0.0, &hdr, 1.0 / 60.0);
+            state_sdr.update(even(0.0), 0.0, &sdr, 1.0 / 60.0);
+            state_hdr.update(even(0.0), 0.0, &hdr, 1.0 / 60.0);
         }
         // SDR settles at 0.0; HDR at log2(0.18) ≈ -2.47.
         assert!(state_sdr.current_ev.abs() < 1.0e-3);
@@ -313,7 +361,7 @@ mod tests {
         assert_eq!(adaptation.current_ev(), -1.0);
         let mut exposure = 0.0;
         for _ in 0..500 {
-            exposure = adaptation.step(1.0, 1.0 / 60.0);
+            exposure = adaptation.step(even(1.0), 1.0 / 60.0);
         }
         assert!((adaptation.current_ev() + 1.0).abs() < 1.0e-3);
         assert!((exposure - 0.5).abs() < 1.0e-3, "2^-1, got {exposure}");
@@ -325,8 +373,8 @@ mod tests {
         let mut nan = ExposureAdaptation::new(settings, 0.0);
         let mut floor = nan;
         for measured in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-            let got = nan.step(measured, 1.0);
-            let want = floor.step(LUM_LOG2_MIN, 1.0);
+            let got = nan.step(even(measured), 1.0);
+            let want = floor.step(even(LUM_LOG2_MIN), 1.0);
             assert_eq!(got, want);
             assert!(got.is_finite());
         }
@@ -337,11 +385,11 @@ mod tests {
         let settings = AutoExposureSettings::resolve(-8.0, 8.0, 10.0, false);
         let mut adaptation = ExposureAdaptation::new(settings, 1.0);
         for _ in 0..500 {
-            adaptation.step(0.0, 1.0 / 60.0);
+            adaptation.step(even(0.0), 1.0 / 60.0);
         }
         assert!((adaptation.current_ev() - 1.0).abs() < 1.0e-3);
         adaptation.settings = AutoExposureSettings::resolve(-8.0, 0.5, 10.0, false);
-        adaptation.step(0.0, 1.0 / 60.0);
+        adaptation.step(even(0.0), 1.0 / 60.0);
         assert!(adaptation.current_ev() <= 0.5);
     }
 
@@ -353,13 +401,13 @@ mod tests {
         let settings = AutoExposureSettings::resolve(-8.0, 12.0, 2.0, false).with_night_vision(1.0);
         let mut adaptation = ExposureAdaptation::new(settings, -4.0);
         for _ in 0..600 {
-            adaptation.step(-4.4, 1.0 / 60.0);
+            adaptation.step(even(-4.4), 1.0 / 60.0);
         }
         assert!((adaptation.adapted_log_lum() + 4.4).abs() < 1e-3);
         assert_eq!(adaptation.night_vision(3.2), 0.0);
         let mut last = 0.0;
         for _ in 0..1200 {
-            adaptation.step(-23.6, 1.0 / 60.0);
+            adaptation.step(even(-23.6), 1.0 / 60.0);
             let w = adaptation.night_vision(3.2);
             assert!(w >= last && w - last < 0.1, "{w} after {last}");
             last = w;
@@ -372,6 +420,94 @@ mod tests {
             ..adaptation
         };
         assert_eq!(off.night_vision(3.2), 0.0);
+    }
+
+    // A dark frame with a small bright subject settles where the subject sits
+    // at the headroom over white, not where the mean would put it; a frame
+    // whose highlights already fit is untouched.
+    #[test]
+    fn update_holds_the_highlight_within_the_headroom() {
+        let settings = AutoExposureSettings::resolve(-8.0, 24.0, 10.0, false);
+        let settle = |measured: ExposureMeasurement, bias: f32| {
+            let mut state = AutoExposureState {
+                current_ev: 0.0,
+                adapted_log_lum: 0.0,
+            };
+            for _ in 0..400 {
+                state.update(measured, bias, &settings, 1.0 / 60.0);
+            }
+            state.current_ev
+        };
+        let orbit = ExposureMeasurement {
+            mean_log_lum: -19.0,
+            highlight_log_lum: 1.5,
+        };
+        assert!((settle(orbit, -4.0) - (2.0 - 1.5)).abs() < 1e-3);
+        let day = ExposureMeasurement {
+            mean_log_lum: -1.0,
+            highlight_log_lum: 1.5,
+        };
+        assert!((settle(day, -4.0) - (1.0 - 4.0)).abs() < 1e-3);
+        // The EV clamp still has the last word, and an unmeasured highlight
+        // caps nothing.
+        let blinding = ExposureMeasurement {
+            mean_log_lum: 0.0,
+            highlight_log_lum: 40.0,
+        };
+        assert!((settle(blinding, 0.0) + 8.0).abs() < 1e-3);
+        let unmeasured = ExposureMeasurement {
+            highlight_log_lum: f32::NAN,
+            ..orbit
+        };
+        assert!((settle(unmeasured, -4.0) - 15.0).abs() < 1e-3);
+    }
+
+    // A frame darker than the floor throughout cannot hold the EV under its
+    // clamp: the floor sits at least two stops under what `max_ev` lifts.
+    #[test]
+    fn a_sub_floor_highlight_never_caps() {
+        for max_ev in [8.0, 16.0, 24.0] {
+            let settings = AutoExposureSettings::resolve(-8.0, max_ev, 1.0, false);
+            assert!(settings.highlight_cap(settings.histogram_floor()) > settings.max_ev);
+        }
+    }
+
+    #[test]
+    fn highlight_log_luminance_finds_the_brightest_share() {
+        let step = (LUM_LOG2_MAX - LUM_LOG2_MIN) / HISTOGRAM_BINS as f32;
+        let edge = |bin: usize| LUM_LOG2_MIN + bin as f32 * step;
+        assert_eq!(highlight_log_luminance(&[0; HISTOGRAM_BINS]), LUM_LOG2_MIN);
+
+        // Mostly black, some dim, four times the share bright: the share is
+        // the top quarter of the bright bin, the black pixels counted toward
+        // the total.
+        const TOTAL: u32 = 1_000_000;
+        let share = (HIGHLIGHT_FRACTION * TOTAL as f32).round() as u32;
+        let mut histogram = [0u32; HISTOGRAM_BINS];
+        histogram[0] = 850_000;
+        histogram[220] = 4 * share;
+        histogram[40] = TOTAL - 850_000 - 4 * share;
+        let got = highlight_log_luminance(&histogram);
+        assert!((got - (edge(220) + 0.75 * step)).abs() < 1e-4, "{got}");
+
+        // Twice the share: the top half of that bin.
+        histogram[220] = 2 * share;
+        histogram[40] = TOTAL - 850_000 - 2 * share;
+        let got = highlight_log_luminance(&histogram);
+        assert!((got - (edge(220) + 0.5 * step)).abs() < 1e-4, "{got}");
+
+        // A bright subject under the share leaves the dim pixels as the
+        // highlight.
+        histogram[220] = share / 2;
+        histogram[40] = TOTAL - 850_000 - histogram[220];
+        let got = highlight_log_luminance(&histogram);
+        assert!(got > edge(40) && got < edge(41), "{got}");
+
+        // A frame almost all black reads as the floor.
+        let mut black = [0u32; HISTOGRAM_BINS];
+        black[0] = 100_000_000;
+        black[200] = 1;
+        assert_eq!(highlight_log_luminance(&black), LUM_LOG2_MIN);
     }
 
     #[test]

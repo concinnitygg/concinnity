@@ -1047,7 +1047,7 @@ mod tests {
             let r = p.planet_rows[i];
             dot([r[0], r[1], r[2]], at) + r[3]
         });
-        let want = crate::planet::dvec::to_f32(id.direction(0.5, 0.5));
+        let want = crate::math::dvec3::to_f32(id.direction(0.5, 0.5));
         let got = unit(rel);
         for i in 0..3 {
             assert!((got[i] - want[i]).abs() < 1e-5, "{got:?} {want:?}");
@@ -1162,8 +1162,8 @@ mod tests {
         assert_eq!(p.ground_octaves, 8);
         for i in 0..32 {
             let dir = CubeFace(2).direction(0.001 * i as f64, -0.04 + 0.0007 * i as f64);
-            let want = crate::planet::dvec::to_f32(shape.normal(dir));
-            let got = shader_ground_normal(&p, crate::planet::dvec::to_f32(dir), 0.01);
+            let want = crate::math::dvec3::to_f32(shape.normal(dir));
+            let got = shader_ground_normal(&p, crate::math::dvec3::to_f32(dir), 0.01);
             assert!(dot(got, want) > 1.0 - 1e-6, "{got:?} {want:?}");
         }
     }
@@ -1174,7 +1174,7 @@ mod tests {
     #[test]
     fn octaves_fade_out_as_the_footprint_grows() {
         let p = ground_params();
-        let dir = crate::planet::dvec::to_f32(CubeFace(2).direction(0.013, -0.021));
+        let dir = crate::math::dvec3::to_f32(CubeFace(2).direction(0.013, -0.021));
         let tilt = |footprint: f32| 1.0 - dot(shader_ground_normal(&p, dir, footprint), dir);
         assert!(tilt(p.ground_cell) < 1e-6);
         assert!(tilt(p.ground_cell / 1024.0) > 1e-6);

@@ -253,8 +253,8 @@ mod tests {
         let camera = [0.0, 4.0, -1_000.0];
         let center = [0.0, -50_000.0, 0.0];
         let world = LocalFrame::AUTHORED.to_world(camera);
-        let up = crate::planet::dvec::normalize_or(
-            crate::planet::dvec::sub(world, center),
+        let up = crate::math::dvec3::normalize_or(
+            crate::math::dvec3::sub(world, center),
             [0.0, 1.0, 0.0],
         );
         let (_, rebase) = LocalFrame::AUTHORED.recentered(camera, up);

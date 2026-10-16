@@ -10,7 +10,7 @@
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::auto_exposure::HISTOGRAM_BINS;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::uniforms::AutoExposureParams;
+use concinnity_core::render::uniforms::{AutoExposureParams, ExposureMeasurement};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -66,16 +66,16 @@ pub(super) struct AutoExposureResources {
     // Held only to keep the resource alive; the GVA is read directly through
     // `histogram.GetGPUVirtualAddress()` at encode time.
     histogram: ID3D12Resource,
-    // Single f32 (UNORDERED_ACCESS, DEFAULT heap) the average kernel writes
-    // the weighted-average log-luminance into.
+    // UNORDERED_ACCESS DEFAULT-heap buffer the average kernel writes
+    // the frame's measurement into.
     output_buf: ID3D12Resource,
-    // Per-frame-slot READBACK buffer (4 bytes). Persistently mapped (READBACK
+    // Per-frame-slot READBACK buffer (one measurement). Persistently mapped (READBACK
     // resources allow leaving Map active across submissions). The end of each
     // frame's command list copies `output_buf` into the matching slot; at the
     // top of a later frame (after the fence wait gates this slot's previous
     // use) the CPU reads its pointer for the EMA update.
     readback_bufs: Vec<PooledBuffer>,
-    readback_ptrs: Vec<*const f32>,
+    readback_ptrs: Vec<*const ExposureMeasurement>,
 }
 
 impl AutoExposureResources {
@@ -127,10 +127,10 @@ impl AutoExposureResources {
             D3D12_RESOURCE_STATE_COMMON,
         )?;
 
-        // Output: a single f32 the average kernel writes into.
+        // Output: the measurement the average kernel writes into.
         let output_buf = create_uav_buffer(
             device,
-            std::mem::size_of::<f32>() as u64,
+            std::mem::size_of::<ExposureMeasurement>() as u64,
             D3D12_RESOURCE_STATE_COMMON,
         )?;
 
@@ -138,10 +138,10 @@ impl AutoExposureResources {
         // COPY_DEST and never need a barrier.
         let frames = alloc.frames_in_flight();
         let mut readback_bufs: Vec<PooledBuffer> = Vec::with_capacity(frames);
-        let mut readback_ptrs: Vec<*const f32> = Vec::with_capacity(frames);
+        let mut readback_ptrs: Vec<*const ExposureMeasurement> = Vec::with_capacity(frames);
         for _ in 0..frames {
             let buf = alloc.alloc_buffer(
-                std::mem::size_of::<f32>() as u64,
+                std::mem::size_of::<ExposureMeasurement>() as u64,
                 D3D12_HEAP_TYPE_READBACK,
                 D3D12_RESOURCE_STATE_COPY_DEST,
             )?;
@@ -152,7 +152,7 @@ impl AutoExposureResources {
             // local that receives the mapping.
             unsafe { buf.Map(0, None, Some(&mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "auto-exposure readback map"))?;
-            readback_ptrs.push(ptr as *const f32);
+            readback_ptrs.push(ptr as *const ExposureMeasurement);
             readback_bufs.push(buf);
         }
 
@@ -216,13 +216,13 @@ impl DxContext {
             return;
         };
 
-        // Read the previous frame's average log-luminance for this slot. The
-        // fence wait above this call already gated the GPU work that wrote it,
-        // so the READBACK-heap mapping reflects the committed value.
+        // Read the previous frame's measurement for this slot. The fence wait
+        // above already gated the GPU work that wrote it, so the READBACK-heap
+        // mapping reflects the committed value.
         // SAFETY: `ptr` is this frame slot's persistent mapping of the auto-exposure READBACK
-        // buffer, which holds one `f32`, and the fence wait ahead of this call retired the compute
-        // pass that wrote it.
-        let avg_log_lum = unsafe { ptr.read() };
+        // buffer, which holds one `ExposureMeasurement`, and the fence wait ahead of this call
+        // retired the compute pass that wrote it.
+        let measured = unsafe { ptr.read() };
 
         let dt = (elapsed - self.auto_exposure.last_elapsed).max(0.0);
         self.auto_exposure.last_elapsed = elapsed;
@@ -231,7 +231,7 @@ impl DxContext {
         // prefilter and composite consume; it already folds in the authored
         // exposure_ev when auto-exposure is off, so we only overwrite it here
         // when the GPU path owns the value.
-        self.post_process.exposure = adaptation.step(avg_log_lum, dt);
+        self.post_process.exposure = adaptation.step(measured, dt);
     }
 
     // Resource the histogram_build kernel samples through `hdr_srv_gpu`: the
@@ -339,7 +339,7 @@ impl DxContext {
                     0,
                     &resources.output_buf,
                     0,
-                    std::mem::size_of::<f32>() as u64,
+                    std::mem::size_of::<ExposureMeasurement>() as u64,
                 );
             }
         }

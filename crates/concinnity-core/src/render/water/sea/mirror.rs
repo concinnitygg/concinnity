@@ -88,7 +88,8 @@ pub(super) fn ripple_cell(params: &WaterParams, face: usize, r: usize, s: [f32; 
 mod tests {
     use super::*;
     use crate::components::{Planet, WaterShape, WaterSurface, Wind};
-    use crate::planet::{DVec3, LocalFrame, dvec};
+    use crate::math::dvec3;
+    use crate::planet::{DVec3, LocalFrame};
     use crate::render::water::WaterBody;
     use crate::render::water::frame::WaterMotion;
     use crate::render::water::ocean::OceanQuality;
@@ -121,18 +122,18 @@ mod tests {
     // toward `heading` (radians from +X toward +Z).
     fn on_sea(body: &WaterBody, top: DVec3, heading: f64, meters: f64) -> DVec3 {
         let (center, r) = sphere(body);
-        let up = dvec::normalize_or(dvec::sub(top, center), [0.0, 1.0, 0.0]);
-        let side = dvec::normalize_or(
-            dvec::cross(up, [libm::sin(heading), 0.0, -libm::cos(heading)]),
+        let up = dvec3::normalize_or(dvec3::sub(top, center), [0.0, 1.0, 0.0]);
+        let side = dvec3::normalize_or(
+            dvec3::cross(up, [libm::sin(heading), 0.0, -libm::cos(heading)]),
             [1.0, 0.0, 0.0],
         );
-        let toward = dvec::cross(side, up);
+        let toward = dvec3::cross(side, up);
         let a = meters / r;
-        let dir = dvec::add(
-            dvec::scale(up, libm::cos(a)),
-            dvec::scale(toward, libm::sin(a)),
+        let dir = dvec3::add(
+            dvec3::scale(up, libm::cos(a)),
+            dvec3::scale(toward, libm::sin(a)),
         );
-        dvec::add(center, dvec::scale(dir, r))
+        dvec3::add(center, dvec3::scale(dir, r))
     }
 
     // How far apart two coordinates on a lattice of `period` are, wrapped.
@@ -176,7 +177,7 @@ mod tests {
         let frame = LocalFrame::AUTHORED;
         let camera = [3.0, 30.0, -995.0];
         let (center, _) = sphere(&body);
-        let up = dvec::normalize_or(dvec::sub(frame.to_world(camera), center), [0.0, 1.0, 0.0]);
+        let up = dvec3::normalize_or(dvec3::sub(frame.to_world(camera), center), [0.0, 1.0, 0.0]);
         let (_, rebase) = frame.recentered(camera, up);
         let time = 4_321.5;
         let before = motion.params_at(time, camera);
@@ -185,7 +186,7 @@ mod tests {
         let after = motion.params_at(time, rebase.apply_point(camera));
         let anchor =
             |p: &WaterParams, f: &LocalFrame| f.to_world([p.anchor[0], p.anchor[1], p.anchor[2]]);
-        let drift = dvec::length(dvec::sub(
+        let drift = dvec3::length(dvec3::sub(
             anchor(&before, &frame),
             anchor(&after, &moved_frame),
         ));
@@ -233,8 +234,8 @@ mod tests {
         let edge_angle = core::f64::consts::FRAC_PI_4;
         let start = on_sea(&body, [0.0, 0.0, 0.0], core::f64::consts::FRAC_PI_2, 0.0);
         let at_edge = on_sea(&body, start, core::f64::consts::FRAC_PI_2, edge_angle * r);
-        let up = dvec::normalize_or(dvec::sub(at_edge, center), [0.0, 1.0, 0.0]);
-        let eye = LocalFrame::AUTHORED.to_local(dvec::add(at_edge, dvec::scale(up, 30.0)));
+        let up = dvec3::normalize_or(dvec3::sub(at_edge, center), [0.0, 1.0, 0.0]);
+        let eye = LocalFrame::AUTHORED.to_local(dvec3::add(at_edge, dvec3::scale(up, 30.0)));
         let (_, rebase) = LocalFrame::AUTHORED.recentered(eye, up);
         let frame = LocalFrame::AUTHORED.followed(&rebase);
         let mut motion = WaterMotion::new(&body, false);

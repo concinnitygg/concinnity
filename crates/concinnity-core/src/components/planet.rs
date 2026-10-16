@@ -91,7 +91,7 @@ impl Planet {
     /// The surface this planet's args describe.
     pub fn shape(&self) -> crate::planet::PlanetShape {
         crate::planet::PlanetShape {
-            center: crate::planet::dvec_from_f32(self.center),
+            center: crate::math::dvec3::from_f32(self.center),
             radius: f64::from(self.radius),
             amplitude: f64::from(self.amplitude),
             feature_size: f64::from(self.feature_size),

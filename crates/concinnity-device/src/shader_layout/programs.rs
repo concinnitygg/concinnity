@@ -294,6 +294,11 @@ pub(super) static AUTO_EXPOSURE_BUILD: Program = Program {
     splices: &[],
 };
 
+pub(super) static AUTO_EXPOSURE_AVERAGE: Program = Program {
+    row: &shared::AUTO_EXPOSURE_AVERAGE,
+    splices: &[],
+};
+
 pub(super) static HIZ_INIT_SINGLE: Program = Program {
     row: &metal::HIZ_INIT_SINGLE,
     splices: &[],

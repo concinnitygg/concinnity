@@ -175,6 +175,13 @@ pub mod components {
     pub use concinnity_core::components::stored::*;
 }
 
+/// Math an application lays its own geometry out with.
+pub mod math {
+    /// Double-precision 3-vectors, for positions too far out for f32: on and
+    /// around a [`Planet`](crate::components::Planet), for one.
+    pub use concinnity_core::math::dvec3;
+}
+
 #[cfg(feature = "cook")]
 pub mod cook;
 

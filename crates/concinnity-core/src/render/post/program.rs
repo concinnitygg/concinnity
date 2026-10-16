@@ -221,8 +221,7 @@ impl PostProgram {
     }
 }
 
-/// Bytes of `PostProcessParams` the bloom prefilter declares: all of it, since
-/// the pre-exposure it reads comes last.
+/// Bytes of `PostProcessParams` the bloom prefilter declares: all of it.
 pub const BLOOM_PREFILTER_CONSTANTS: usize =
     core::mem::size_of::<crate::gfx::render_types::PostProcessParams>();
 

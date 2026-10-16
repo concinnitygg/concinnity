@@ -481,7 +481,7 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     },
     DxilAbi {
         program: &shared::AUTO_EXPOSURE_AVERAGE,
-        registers: &[("params", "b0"), ("histogram", "u0"), ("output_avg", "u1")],
+        registers: &[("params", "b0"), ("histogram", "u0"), ("measurement", "u1")],
     },
     DxilAbi {
         program: &shared::PARTICLE_SIMULATE,
@@ -1648,7 +1648,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         program: &shared::AUTO_EXPOSURE_AVERAGE,
         slots: &[&[
             ("histogram", "buffer(0)"),
-            ("output_avg", "buffer(1)"),
+            ("measurement", "buffer(1)"),
             ("params", "buffer(2)"),
         ]],
         argument_ids: &[],
