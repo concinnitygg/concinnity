@@ -120,39 +120,4 @@ mod tests {
 
         assert_default_loop_is_headless(world);
     }
-
-    // With no backend feature there is no renderer to drive: a world that
-    // draws is refused at start with an error naming the opt-out, rather than
-    // run blind, and the same world declaring `AppConfig.headless` runs in
-    // process. Under a backend the refused run would open a window instead,
-    // which is why the assertion is the backend-free `std` build's alone.
-    #[cfg(all(
-        feature = "std",
-        not(any(
-            feature = "native",
-            feature = "metal",
-            feature = "directx",
-            feature = "vulkan"
-        ))
-    ))]
-    #[test]
-    fn content_that_draws_needs_a_backend_or_the_headless_opt_out() {
-        let mut world = World::new();
-        world.add_component(Window::default());
-        let refused = App::from_world(world)
-            .run()
-            .expect_err("no backend to draw with");
-        assert!(
-            refused.to_string().contains("AppConfig.headless"),
-            "{refused}"
-        );
-
-        let mut world = World::new();
-        world.add_component(Window::default());
-        world.add_component(AppConfig {
-            headless: true,
-            ..Default::default()
-        });
-        App::from_world(world).run().expect("the run ends");
-    }
 }

@@ -7,7 +7,7 @@
 //! The whole world is `planet.jsonl`, beside this file. This program only
 //! compiles it into a blob next to the executable and plays that blob.
 //!
-//! Run it with `cargo run --release --features cook --example planet`.
+//! Run it with `cargo run --release --example planet`.
 //!
 //! `--benchmark` lays `bench.jsonl` over the world and flies the camera
 //! instead of handing it to the player's controls: over the meadow, up out of

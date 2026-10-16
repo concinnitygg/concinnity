@@ -1,7 +1,7 @@
 //! Compile authored worlds into runnable [`World`]s, entirely in memory.
 //!
-//! Requires the `cook` feature, which is off by default: the importers this
-//! module needs are build-time weight a shipped application does not carry.
+//! Requires the `cook` feature, which is on by default. An application that only
+//! plays compiled worlds can drop it to shed the importers this module needs.
 //!
 //! An application declares what it wants -- a texture from this file, a room of
 //! that size -- and the runtime plays only the finished result. This module is

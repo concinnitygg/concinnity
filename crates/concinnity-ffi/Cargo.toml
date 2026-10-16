@@ -23,10 +23,6 @@ name = "concinnity_ffi"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
-default = ["native"]
-native = ["concinnity-engine/native"]
-metal = ["concinnity-engine/metal"]
-directx = ["concinnity-engine/directx"]
 vulkan = ["concinnity-engine/vulkan"]
 
 [dependencies]

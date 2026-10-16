@@ -61,7 +61,7 @@ cargo build --release
 
 ```toml
 [dependencies]
-concinnity = "0.19"
+concinnity = "0.20"
 ```
 
 ## Quick Start
@@ -91,16 +91,13 @@ Check out the [Rust Documentation][docs-link] to explore the crate.
 
 ## Feature Flags
 
-| Feature   | Default | Description                                       |
-| --------- | ------- | ------------------------------------------------- |
-| `std`     | ✅      | Standard engine features                          |
-| `native`  | ✅      | The render backend the target builds with         |
-| `player`  | ✅      | The `concinnity-run` player binary                |
-| `metal`   |         | Metal rendering backend (Apple platforms)         |
-| `directx` |         | DirectX 12 rendering backend (Windows)            |
-| `vulkan`  |         | Vulkan rendering backend (cross-platform)         |
-| `cook`    |         | Build worlds into blobs in process                |
-| `editor`  |         | The dev CLI and editor (implies `player`, `cook`) |
+| Feature  | Default | Description                                       |
+| -------- | ------- | ------------------------------------------------- |
+| `std`    | ✅      | The engine and the target's render backend        |
+| `player` | ✅      | The `concinnity-run` player binary                |
+| `cook`   | ✅      | Build worlds into blobs in process                |
+| `vulkan` |         | Vulkan in place of Metal or DirectX 12            |
+| `editor` |         | The dev CLI and editor (implies `player`, `cook`) |
 
 ## CLI Reference
 

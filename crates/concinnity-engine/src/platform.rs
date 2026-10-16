@@ -32,8 +32,7 @@ pub fn current() -> Platform {
     }
 }
 
-// What a target renders with when no backend is compiled in, mirroring how the
-// `native` feature resolves.
+// What a target would render with when no backend is compiled in.
 #[cfg(any(test, not(any(backend_metal, backend_dx, backend_vk))))]
 fn native_platform(target_os: &str) -> Platform {
     match target_os {

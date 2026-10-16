@@ -1,8 +1,8 @@
 //! No test in this workspace may stand up a window.
 //!
-//! Under a backend feature -- and `native` is on by default, so an ordinary
-//! `cargo test` has one -- a world started on the windowed loop takes a GPU and
-//! blocks on an event loop the harness cannot end. That is a hang with no
+//! Every desktop build carries a backend, so under an ordinary `cargo test` a
+//! world started on the windowed loop takes a GPU and blocks on an event loop
+//! the harness cannot end. That is a hang with no
 //! failing assertion to read, on whichever host happens to run it.
 //!
 //! Two things stop that. `concinnity_testing::forbid_windows` arms a runtime

@@ -18,10 +18,6 @@ include = [
 ]
 
 [features]
-default = ["native"]
-native = ["concinnity-engine/native"]
-metal = ["concinnity-engine/metal"]
-directx = ["concinnity-engine/directx"]
 vulkan = ["concinnity-engine/vulkan"]
 
 [dependencies]

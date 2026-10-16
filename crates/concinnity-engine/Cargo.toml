@@ -18,11 +18,7 @@ include = [
 ]
 
 [features]
-default = ["native"]
-native = ["dep:concinnity-device", "concinnity-device/native"]
-metal = ["dep:concinnity-device", "concinnity-device/metal"]
-directx = ["dep:concinnity-device", "concinnity-device/directx"]
-vulkan = ["dep:concinnity-device", "concinnity-device/vulkan"]
+vulkan = ["concinnity-device/vulkan"]
 
 # Per-size-class allocation histograms on top of the counters every binary
 # already gets. The allocator itself is installed by linking this crate (see
@@ -34,7 +30,7 @@ alloc-detail = ["concinnity-core/detail"]
 [dependencies]
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
-concinnity-device = { workspace = true, optional = true }
+concinnity-device = { workspace = true }
 
 ciborium = { workspace = true }
 gilrs = "0.11.2"

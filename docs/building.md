@@ -1,53 +1,43 @@
 # Build Guide
 
-The rendering backend is a Cargo feature. The default build carries `native`,
-which is whatever the target renders with:
+The rendering backend follows the target, with `vulkan` as the one override:
 
-| Platform | `native` resolves to | Notes                                         |
-| -------- | -------------------- | --------------------------------------------- |
-| macOS    | Metal                | Build with `--features vulkan` to use Vulkan. |
-| Windows  | DirectX 12           | Build with `--features vulkan` to use Vulkan. |
-| Linux    | Vulkan               | Only backend available.                       |
+| Platform | Backend    | Notes                                         |
+| -------- | ---------- | --------------------------------------------- |
+| macOS    | Metal      | Build with `--features vulkan` to use Vulkan. |
+| Windows  | DirectX 12 | Build with `--features vulkan` to use Vulkan. |
+| Linux    | Vulkan     | Only backend available.                       |
+| iOS      | none       | No window layer yet; runs headless.           |
+| Android  | none       | No window layer yet; runs headless.           |
 
 ## Cargo features
 
 The `concinnity` crate, which is what an application depends on, has
 these:
 
-| Feature   | Default | What it adds                                                                |
-| --------- | ------- | --------------------------------------------------------------------------- |
-| `cook`    | off     | `concinnity::cook`, which compiles authored assets into a world in process. |
-| `native`  | on      | The backend the target renders with: Metal, DirectX 12, or Vulkan.          |
-| `metal`   | off     | The Metal backend, on macOS.                                                |
-| `directx` | off     | The DirectX 12 backend, on Windows.                                         |
-| `vulkan`  | off     | The Vulkan backend, on any platform that has one.                           |
+| Feature  | Default | What it adds                                                                |
+| -------- | ------- | --------------------------------------------------------------------------- |
+| `std`    | on      | The engine on an operating system, with the target's render backend.        |
+| `player` | on      | The `concinnity-run` binary that plays a compiled world.                    |
+| `cook`   | on      | `concinnity::cook`, which compiles authored assets into a world in process. |
+| `vulkan` | off     | Vulkan in place of Metal or DirectX 12. Linux renders with Vulkan already.  |
+| `editor` | off     | The `concinnity` CLI and editor, along with `player` and `cook`.            |
 
-A default build is the runtime alone. `cook` pulls in the asset importers
-(glTF, FBX, textures, fonts) and 43 further dependencies in total, which is
-build-time weight an application playing an already-compiled world does not
-carry. Authoring through the `cn` CLI needs nothing extra; the feature is for
-declaring a world in Rust, as `examples/bistro` does.
+`cook` pulls in the asset importers (glTF, FBX, textures, fonts) and 43
+further dependencies in total. An application that only plays an
+already-compiled world can drop it:
 
-A backend feature naming one the target does not have is inert, so a build can
-name more than one and get the one that applies; where two do, Vulkan wins.
-Exactly one backend compiles into any binary.
-
-The backend features are mirrored by every crate between the facade and the
-device backends, and by the `cn` CLI, so `--features vulkan` means the same
-thing whichever of them a build targets.
-
-Turning every backend feature off is a supported configuration:
-
-```sh
-cargo build --no-default-features --features std
+```toml
+concinnity = { version = "0.19", default-features = false, features = ["std"] }
 ```
 
-That is the CPU-only runtime. No GPU code is in the dependency graph at all,
-and every world runs on the headless loop -- the simulation systems stepped on
-a fixed virtual timestep with no window and no renderer. It is what a
-simulation-only tool, or a build host with no GPU, wants. Dropping `std` as
-well leaves the `no_std` core, which runs the same loop with no operating
-system underneath.
+`vulkan` is mirrored by every crate between the facade and the device
+backends, and by the `cn` CLI, so `--features vulkan` means the same thing
+whichever of them a build targets. Exactly one backend compiles into any
+binary.
+
+Dropping `std` leaves the `no_std` core: the component vocabulary, a `World`,
+and the headless loop that steps it, with no operating system underneath.
 
 ## Common prerequisites
 
@@ -447,7 +437,7 @@ cargo build --release
 The workspace runs its tests under [nextest](https://nexte.st):
 
 ```sh
-cargo nextest run --workspace --features concinnity/cook,concinnity/editor
+cargo nextest run --workspace --features concinnity/editor
 ```
 
 Doctests are a separate pass, because `--all-targets` skips them:

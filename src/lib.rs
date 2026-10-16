@@ -23,7 +23,7 @@
 //! Worlds are authored and compiled by the `cook` module, which is where to go
 //! next: it declares assets as typed values, resolves the references between
 //! them, and either compiles a [`World`] in memory or writes one out for a
-//! build like the above to play. It sits behind the `cook` feature, off by
+//! build like the above to play. It sits behind the `cook` feature, on by
 //! default.
 #![cfg_attr(feature = "cook", doc = " Start at [`cook`](mod@cook).")]
 //!
@@ -78,30 +78,22 @@
 //!
 //! # Features
 //!
-//! The default build is the runtime alone: the world loop, the renderer, and
-//! the [`components`] vocabulary, which is all the examples above need.
+//! `std` is the runtime: the world loop, the renderer, and the [`components`]
+//! vocabulary, which is all the examples above need. The renderer is the one
+//! the target draws with: Metal on macOS, DirectX on Windows, Vulkan on Linux.
+//! `--features vulkan` swaps in Vulkan wherever the target has it.
 //!
-//! `--features cook` adds the `cook` module described above. It carries the authoring half
-//! of the vocabulary (textures, meshes, prefabs, menus) and pulls in the
-//! importers that read them (glTF, FBX, images, fonts), so an application that
-//! only plays an already-compiled world should leave it off.
+//! `cook` adds the `cook` module described above and is on by default. It
+//! carries the authoring half of the vocabulary (textures, meshes, prefabs,
+//! menus) and pulls in the importers that read them (glTF, FBX, images,
+//! fonts), so an application that only plays an already-compiled world can
+//! drop it with `--no-default-features --features std`.
 //!
-//! `--features metal`, `--features directx` and `--features vulkan` each name
-//! one rendering backend. A backend the target does not have is inert, so a
-//! build can name more than one and get the one that applies; where two do,
-//! Vulkan wins. `native` names all three and is what the default build
-//! carries: Metal on macOS, DirectX on Windows, Vulkan elsewhere.
-//!
-//! `--no-default-features --features std` keeps the operating system and drops
-//! the renderer: no GPU code is in the graph at all, and every world runs on
-//! the headless loop, which is what a simulation-only tool or a build host with
-//! no GPU wants.
-//!
-//! `--features player` builds `concinnity-run`, the standalone binary that plays
-//! a compiled world, and `--features editor` builds both it and the `concinnity`
-//! command-line tool. Both are for working on an application rather than for
-//! linking one: nothing in the library's own API depends on either, and with
-//! neither enabled this crate builds no build dependency at all.
+//! `player`, on by default, builds `concinnity-run`, the standalone binary that
+//! plays a compiled world, and `--features editor` builds both it and the
+//! `concinnity` command-line tool. Both are for working on an application
+//! rather than for linking one: nothing in the library's own API depends on
+//! either.
 //!
 //! `--no-default-features` leaves the core `no_std` runtime: the component
 //! vocabulary, a [`World`] to hold it, and the headless loop that steps it,

@@ -17,13 +17,12 @@
 //!    binaries land, is read off the calling package by `targets` -- a build
 //!    script declares nothing about its own target list.
 //!
-//! Both are one call: [`setup_graphics_backend`] for a package in this
-//! workspace, [`setup_graphics_sdks_for_consumer`] for one outside it that has
-//! no backend features of its own to read. The steps they assemble are private,
-//! so the four build scripts here cannot drift into declaring the cfgs, gating
-//! on a backend and probing the SDKs in three different orders.
+//! Both run behind one call, [`setup_graphics_backend`], for a package in this
+//! workspace and for one outside it alike. The steps it assembles are private,
+//! so the build scripts here cannot drift into declaring the cfgs, gating on a
+//! backend and probing the SDKs in different orders.
 //!
-//! The entry points emit `cargo::` directives on stdout, which Cargo attributes
+//! The entry point emits `cargo::` directives on stdout, which Cargo attributes
 //! to the build script of whichever package called in. That is what lets an
 //! example binary's build script pick up the same NGX link and DLL bundling the
 //! CLI's does, without duplicating any of this logic. It is also what a package
@@ -117,53 +116,22 @@ impl BinaryTargets {
     }
 }
 
-/// The backend features a package was built with. `native` names all three and
-/// resolves to the one the target renders with; the other three name a backend
-/// outright.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct BackendFeatures {
-    /// Whatever backend the target renders with.
-    pub native: bool,
-    /// Metal, which only macOS has.
-    pub metal: bool,
-    /// DirectX 12, which only Windows has.
-    pub directx: bool,
-    /// Vulkan, which Windows and Linux have, and macOS has over MoltenVK.
-    pub vulkan: bool,
+// Whether the calling package's build script runs with its `vulkan` feature on.
+fn vulkan_from_cargo() -> bool {
+    std::env::var("CARGO_FEATURE_VULKAN").is_ok()
 }
 
-impl BackendFeatures {
-    /// Read the four features from the Cargo-provided environment of whichever
-    /// package's build script is running.
-    pub fn from_cargo() -> Self {
-        Self {
-            native: feature_on("NATIVE"),
-            metal: feature_on("METAL"),
-            directx: feature_on("DIRECTX"),
-            vulkan: feature_on("VULKAN"),
-        }
-    }
-}
-
-fn feature_on(name: &str) -> bool {
-    std::env::var(format!("CARGO_FEATURE_{name}")).is_ok()
-}
-
-// Resolve the backend from the target OS and the backend features. A feature
-// naming a backend the target does not have is inert, so `--features directx`
-// on macOS builds no backend rather than failing; that keeps the features
-// additive, which is what lets `native` name all three at once. Vulkan wins
-// where both apply, so `--all-features` resolves rather than conflicts. macOS
-// Vulkan runs over MoltenVK and exists for cross-backend testing, not for
-// shipping.
-pub(crate) fn resolve_backend(target_os: &str, features: BackendFeatures) -> Option<Backend> {
-    if features.vulkan {
-        return Some(Backend::Vk);
-    }
+// Resolve the backend from the target OS: the one each target renders with,
+// or Vulkan when asked for. iOS and Android have no window layer yet, so they
+// build no backend and run headless. macOS Vulkan runs over MoltenVK and exists
+// for cross-backend testing, not for shipping.
+pub(crate) fn resolve_backend(target_os: &str, vulkan: bool) -> Option<Backend> {
     match target_os {
-        "macos" | "ios" => (features.metal || features.native).then_some(Backend::Metal),
-        "windows" => (features.directx || features.native).then_some(Backend::Dx),
-        _ => features.native.then_some(Backend::Vk),
+        "ios" | "android" => None,
+        _ if vulkan => Some(Backend::Vk),
+        "macos" => Some(Backend::Metal),
+        "windows" => Some(Backend::Dx),
+        _ => Some(Backend::Vk),
     }
 }
 
@@ -174,13 +142,11 @@ fn emit_check_cfgs() {
     }
 }
 
-// The whole setup over an already-resolved feature set: declare the cfgs, emit
-// the backend cfg, then set up the SDKs. The two entry points differ only in
-// how they read those features.
-fn setup_for(features: BackendFeatures) -> Option<Backend> {
+// The whole setup: declare the cfgs, emit the backend cfg, then set up the SDKs.
+fn setup_for(vulkan: bool) -> Option<Backend> {
     emit_check_cfgs();
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let backend = resolve_backend(&target_os, features);
+    let backend = resolve_backend(&target_os, vulkan);
     if let Some(backend) = backend {
         println!("{}", sdks::backend_cfg_directive(backend));
     }
@@ -188,7 +154,7 @@ fn setup_for(features: BackendFeatures) -> Option<Backend> {
     backend
 }
 
-/// The whole build-script graphics setup for a package in this workspace:
+/// The whole build-script graphics setup for a package that links the engine:
 /// declares the cfgs the renderer source gates on, resolves the backend from
 /// the calling package's own features and emits its cfg (`backend_metal` /
 /// `backend_dx` / `backend_vk`), then sets up the optional graphics SDKs.
@@ -198,17 +164,20 @@ fn setup_for(features: BackendFeatures) -> Option<Backend> {
 /// package whose final links (bins, examples, tests, benches) pull in the DLSS
 /// code calls this itself. The SDK runtime DLLs are bundled beside each binary
 /// kind the package's manifest declares: bins in `target/<profile>/`, examples in
-/// `target/<profile>/examples/`.
+/// `target/<profile>/examples/`. A package depending on `concinnity` calls this
+/// from its own build script for the same reason, and one that took
+/// `concinnity`'s `vulkan` feature carries a `vulkan` feature of its own, since
+/// a build script only sees the features of the package it belongs to.
 ///
-/// `None` is a build with no backend: a CPU-only runtime with no GPU code in
-/// it. That emits no backend cfg, and the check-cfg list still declares all
-/// three, so the source gating on them compiles.
+/// `None` is a target with no window layer yet (iOS, Android), which builds
+/// no GPU backend. That emits no backend cfg, and the check-cfg list still
+/// declares all three, so the source gating on them compiles.
 ///
 /// ```no_run
 /// concinnity_toolchain::setup_graphics_backend();
 /// ```
 pub fn setup_graphics_backend() -> Option<Backend> {
-    setup_for(BackendFeatures::from_cargo())
+    setup_for(vulkan_from_cargo())
 }
 
 // Set up the optional graphics SDKs for the given backend. On a non-Windows
@@ -231,46 +200,6 @@ fn setup_graphics_sdks(backend: Option<Backend>) {
     };
     for line in sdks::graphics_sdk_directives(backend, &binary_targets_from_cargo(), &env) {
         println!("{line}");
-    }
-}
-
-/// [`setup_graphics_backend`] for a package outside this workspace that links
-/// the engine, resolving the backend as that package sees it.
-///
-/// A package depending on `concinnity` needs this because the NGX link
-/// directive is scoped to the package that emits it. When the runtime is built
-/// with DLSS available its upscaler compiles into the rlib, and the binary
-/// linking that rlib has to resolve the NGX symbols itself; without this its
-/// link fails on `NVSDK_NGX_*`. It is also what puts the SDK runtime DLLs
-/// beside that binary, where `LoadLibrary` finds them.
-///
-/// One call from the consuming package's `build.rs` is the whole setup:
-///
-/// ```no_run
-/// concinnity_toolchain::setup_graphics_sdks_for_consumer();
-/// ```
-///
-/// The backend is resolved as if `native` were on, which is what `concinnity`'s
-/// own defaults give for the target. A build script cannot see the features its
-/// dependencies were built with -- `CARGO_FEATURE_*` names the calling
-/// package's own -- so a package that took `concinnity`'s `vulkan` feature says
-/// so by carrying a `vulkan` feature of its own; that is the one backend which
-/// differs from `native` on a target that has it.
-///
-/// A missing SDK is reported as a `cargo::warning` naming the root it was
-/// looked for under, and costs that upscaler rather than the build.
-pub fn setup_graphics_sdks_for_consumer() -> Option<Backend> {
-    setup_for(consumer_features(BackendFeatures::from_cargo()))
-}
-
-// What a consuming package's backend features mean: `native` on top of whatever
-// it named itself, since a package that names no backend gets `concinnity`'s
-// own default. `native` covers every target, so the backend a name adds over it
-// is Vulkan -- the one a target can have besides the one it renders with.
-pub(crate) fn consumer_features(named: BackendFeatures) -> BackendFeatures {
-    BackendFeatures {
-        native: true,
-        ..named
     }
 }
 
@@ -400,135 +329,25 @@ fn find_ancestor_with(start: &Path, pred: impl Fn(&Path) -> bool) -> Option<Path
 mod tests {
     use super::*;
 
-    fn features(names: &[&str]) -> BackendFeatures {
-        BackendFeatures {
-            native: names.contains(&"native"),
-            metal: names.contains(&"metal"),
-            directx: names.contains(&"directx"),
-            vulkan: names.contains(&"vulkan"),
-        }
+    #[test]
+    fn each_desktop_target_resolves_to_what_it_renders_with() {
+        assert_eq!(resolve_backend("macos", false), Some(Backend::Metal));
+        assert_eq!(resolve_backend("windows", false), Some(Backend::Dx));
+        assert_eq!(resolve_backend("linux", false), Some(Backend::Vk));
     }
 
     #[test]
-    fn native_resolves_to_what_each_target_renders_with() {
-        assert_eq!(
-            resolve_backend("macos", features(&["native"])),
-            Some(Backend::Metal)
-        );
-        assert_eq!(
-            resolve_backend("windows", features(&["native"])),
-            Some(Backend::Dx)
-        );
-        assert_eq!(
-            resolve_backend("linux", features(&["native"])),
-            Some(Backend::Vk)
-        );
-    }
-
-    #[test]
-    fn a_named_backend_selects_it_where_the_target_has_it() {
-        assert_eq!(
-            resolve_backend("macos", features(&["metal"])),
-            Some(Backend::Metal)
-        );
-        assert_eq!(
-            resolve_backend("windows", features(&["directx"])),
-            Some(Backend::Dx)
-        );
-        assert_eq!(
-            resolve_backend("windows", features(&["vulkan"])),
-            Some(Backend::Vk)
-        );
-        assert_eq!(
-            resolve_backend("macos", features(&["vulkan"])),
-            Some(Backend::Vk)
-        );
-        assert_eq!(
-            resolve_backend("linux", features(&["vulkan"])),
-            Some(Backend::Vk)
-        );
-    }
-
-    #[test]
-    fn a_backend_the_target_does_not_have_is_inert() {
-        assert_eq!(resolve_backend("macos", features(&["directx"])), None);
-        assert_eq!(resolve_backend("windows", features(&["metal"])), None);
-        assert_eq!(resolve_backend("linux", features(&["metal"])), None);
-        assert_eq!(resolve_backend("linux", features(&["directx"])), None);
-        assert_eq!(resolve_backend("ios", features(&["directx"])), None);
-    }
-
-    // iOS renders with Metal, not with the Vulkan the catch-all arm hands
-    // every other target.
-    #[test]
-    fn ios_resolves_to_metal() {
-        assert_eq!(
-            resolve_backend("ios", features(&["native"])),
-            Some(Backend::Metal)
-        );
-        assert_eq!(
-            resolve_backend("ios", features(&["metal"])),
-            Some(Backend::Metal)
-        );
-        assert_eq!(resolve_backend("ios", features(&[])), None);
-    }
-
-    // Android has no Metal and no DirectX, so the catch-all arm is the right
-    // answer there.
-    #[test]
-    fn android_resolves_to_vulkan() {
-        assert_eq!(
-            resolve_backend("android", features(&["native"])),
-            Some(Backend::Vk)
-        );
-    }
-
-    #[test]
-    fn no_backend_feature_resolves_to_no_backend() {
-        for target_os in ["macos", "windows", "linux", "ios", "android"] {
-            assert_eq!(resolve_backend(target_os, features(&[])), None);
-        }
-    }
-
-    #[test]
-    fn vulkan_wins_where_more_than_one_backend_applies() {
-        let all = features(&["native", "metal", "directx", "vulkan"]);
+    fn vulkan_overrides_the_desktop_backend() {
         for target_os in ["macos", "windows", "linux"] {
-            assert_eq!(resolve_backend(target_os, all), Some(Backend::Vk));
+            assert_eq!(resolve_backend(target_os, true), Some(Backend::Vk));
         }
     }
 
     #[test]
-    fn a_consumer_naming_no_backend_gets_the_one_its_target_renders_with() {
-        for (target_os, backend) in [
-            ("macos", Backend::Metal),
-            ("windows", Backend::Dx),
-            ("linux", Backend::Vk),
-        ] {
-            assert_eq!(
-                resolve_backend(target_os, consumer_features(features(&[]))),
-                Some(backend)
-            );
-        }
-    }
-
-    #[test]
-    fn a_consumer_naming_vulkan_gets_vulkan() {
-        for target_os in ["macos", "windows", "linux"] {
-            assert_eq!(
-                resolve_backend(target_os, consumer_features(features(&["vulkan"]))),
-                Some(Backend::Vk)
-            );
-        }
-    }
-
-    #[test]
-    fn a_consumer_naming_the_backend_its_target_already_renders_with_changes_nothing() {
-        for (target_os, named) in [("macos", "metal"), ("windows", "directx")] {
-            assert_eq!(
-                resolve_backend(target_os, consumer_features(features(&[named]))),
-                resolve_backend(target_os, consumer_features(features(&[])))
-            );
+    fn targets_without_a_window_layer_build_no_backend() {
+        for target_os in ["ios", "android"] {
+            assert_eq!(resolve_backend(target_os, false), None);
+            assert_eq!(resolve_backend(target_os, true), None);
         }
     }
 
@@ -648,25 +467,13 @@ mod tests {
     }
 
     #[test]
-    fn the_shared_setup_returns_the_backend_it_resolved() {
-        // Both entry points assemble the same three steps over a feature set,
-        // and the one thing a caller reads back is the resolved backend.
-        // CARGO_CFG_TARGET_OS is unset outside a build script, so every arm
-        // here also covers the no-backend case not panicking.
+    fn the_setup_returns_the_backend_it_resolved() {
         let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-        for names in [
-            &[][..],
-            &["native"],
-            &["metal"],
-            &["directx"],
-            &["vulkan"],
-            &["native", "vulkan"],
-        ] {
-            let named = features(names);
+        for vulkan in [false, true] {
             assert_eq!(
-                setup_for(named),
-                resolve_backend(&target_os, named),
-                "{names:?}"
+                setup_for(vulkan),
+                resolve_backend(&target_os, vulkan),
+                "vulkan: {vulkan}"
             );
         }
     }

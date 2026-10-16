@@ -20,10 +20,10 @@ arguments select benchmarks by substring, and every name is prefixed with its
 module.
 
 ```
-cargo bench --features cook,player                      # every benchmark
-cargo bench --features cook,player -- cook/             # one module
-cargo bench --features cook,player -- 10k               # substring filter
-cargo bench --features cook,player -- --json out.json   # machine-readable report
+cargo bench                      # every benchmark
+cargo bench -- cook/             # one module
+cargo bench -- 10k               # substring filter
+cargo bench -- --json out.json   # machine-readable report
 ```
 
 ## Modules

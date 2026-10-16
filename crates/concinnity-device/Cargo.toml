@@ -17,10 +17,6 @@ include = [
 ]
 
 [features]
-default = ["native"]
-native = []
-metal = []
-directx = []
 vulkan = ["dep:ash", "dep:libloading"]
 
 [dependencies]

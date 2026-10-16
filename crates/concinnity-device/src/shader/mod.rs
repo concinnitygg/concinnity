@@ -30,7 +30,9 @@ pub(crate) mod builtin;
 // from.
 #[cfg(any(backend_dx, backend_vk, backend_metal))]
 pub(crate) mod raymarch_source;
+#[cfg(any(backend_dx, backend_vk, backend_metal))]
 pub(crate) mod source;
+#[cfg(any(backend_dx, backend_vk, backend_metal))]
 pub(crate) mod surface_source;
 
 // Disk persistence for driver pipeline blobs (VkPipelineCache, D3D12 pipeline
