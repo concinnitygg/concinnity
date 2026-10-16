@@ -24,10 +24,10 @@ pub struct FrameSample {
     /// Wall-clock microseconds since the previous frame: the frame time a
     /// player would feel.
     pub frame_us: u32,
-    /// Microseconds of run time the frame advanced, against `frame_us`. The
-    /// run's clock moves in whole fixed steps, so a frame can show more or
-    /// less motion than the time it took: steady frame times over uneven
-    /// steps read as judder that `frame_us` alone never shows.
+    /// Microseconds of run time the camera's pose advanced this frame, against
+    /// `frame_us`. A frame can show more or less motion than the time it took,
+    /// and steady frame times over uneven motion read as judder that
+    /// `frame_us` alone never shows.
     pub run_step_us: u32,
     /// Whether the simulated frame moved under the camera this frame.
     pub rebased: bool,

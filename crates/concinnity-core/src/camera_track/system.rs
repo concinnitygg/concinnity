@@ -16,7 +16,10 @@ const FULL_TURN_DEG: f32 = 360.0;
 ///
 /// Runs on the fixed simulation clock rather than the frame delta, so the pose
 /// at a given track time is the same on every machine and two runs of one
-/// track are comparable. Frozen while a world-pausing screen is open.
+/// track are comparable. Each frame poses the camera between the last two
+/// steps by [`SimTiming::alpha`], the way physics blends its bodies, so the
+/// camera moves as far as the frame took rather than by whole steps. Frozen
+/// while a world-pausing screen is open.
 #[derive(Debug)]
 pub struct CameraTrackSystem {
     travel: Vec<Key<3>>,
@@ -45,6 +48,9 @@ pub struct CameraTrackSystem {
     // different frame rates land on exactly the same pose.
     ticks: u64,
     tick_dt: f32,
+    // Track time the camera was last posed at. Legs are anchored against it
+    // rather than the step count, since it is where the camera stands.
+    pose_seconds: f32,
     camera: Option<Entity>,
 }
 
@@ -75,6 +81,7 @@ impl CameraTrackSystem {
             rebases: RebaseCursor::default(),
             ticks: 0,
             tick_dt: SimTiming::TICK_DT,
+            pose_seconds: 0.0,
             camera: None,
         }
     }
@@ -116,12 +123,11 @@ impl CameraTrackSystem {
         }
     }
 
-    // Re-anchor on every leg the clock has finished: each starts where the
+    // Re-anchor on every leg the pose has finished: each starts where the
     // last one ended.
     fn advance(&mut self) {
-        let elapsed = self.elapsed();
         while let Some(key) = self.travel.get(self.leg)
-            && elapsed >= key.end_seconds
+            && self.pose_seconds >= key.end_seconds
         {
             let rest = vec3::sub(key.value, self.anchor_progress);
             self.anchor = vec3::add(self.anchor, quat_rotate(self.frame_turn, rest));
@@ -130,19 +136,19 @@ impl CameraTrackSystem {
         }
     }
 
-    // Where the track puts the camera at this instant.
+    // Where the track puts the camera at the pose time.
     fn position(&self) -> [f32; 3] {
-        let progress = timeline::progress(&self.travel, self.leg, self.elapsed());
+        let progress = timeline::progress(&self.travel, self.leg, self.pose_seconds);
         let traveled = quat_rotate(self.frame_turn, vec3::sub(progress, self.anchor_progress));
         vec3::add(self.anchor, traveled)
     }
 
-    // Write the pose the track holds at this instant onto the camera, and
+    // Write the pose the track holds at the pose time onto the camera, and
     // publish where the track has reached.
     fn apply(&mut self, ctx: &mut PipelineContext) {
         self.advance();
         let elapsed = self.elapsed();
-        let angles = timeline::sample(self.start_angles_deg, &self.turn, elapsed);
+        let angles = timeline::sample(self.start_angles_deg, &self.turn, self.pose_seconds);
         let position = self.position();
         if let Some(camera) = self.camera
             && let Some(cam) = ctx.get_mut::<Camera3D>(camera)
@@ -152,6 +158,7 @@ impl CameraTrackSystem {
         let duration = self.duration();
         ctx.insert_resource(CameraTrackStatus {
             elapsed_seconds: elapsed,
+            pose_seconds: self.pose_seconds,
             duration_seconds: duration,
             segment: timeline::active(&self.travel, elapsed).and_then(|at| self.segments[at]),
             finished: elapsed >= duration,
@@ -182,7 +189,7 @@ impl System for CameraTrackSystem {
             && let Some(cam) = self.camera.and_then(|c| ctx.get::<Camera3D>(c))
         {
             self.anchor = cam.position;
-            self.anchor_progress = timeline::progress(&self.travel, self.leg, self.elapsed());
+            self.anchor_progress = timeline::progress(&self.travel, self.leg, self.pose_seconds);
             self.frame_turn = quat_normalize(quat_mul(rebase.rotation, self.frame_turn));
         }
         let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
@@ -190,15 +197,27 @@ impl System for CameraTrackSystem {
         self.ticks += u64::from(timing.ticks);
         self.tick_dt = timing.tick_dt;
         let now = self.elapsed();
+        let cut = timeline::cut_crossed(&self.travel, before, now)
+            || timeline::cut_crossed(&self.turn, before, now);
+        self.pose_seconds = pose_seconds(now, &timing, self.pose_seconds, cut);
         self.apply(ctx);
-        if self.camera.is_some()
-            && (timeline::cut_crossed(&self.travel, before, now)
-                || timeline::cut_crossed(&self.turn, before, now))
-        {
+        if cut && self.camera.is_some() {
             PendingHistoryReset::raise(ctx, HistoryResetCauses::CAMERA_CUT);
         }
         StepResult::Continue
     }
+}
+
+// The track time a frame poses the camera at: `alpha` of the way from the
+// step before `elapsed` to it. A frame whose steps crossed a cut shows the
+// step itself, so the jump lands on the frame that resets history, and the
+// pose never runs back across it after.
+fn pose_seconds(elapsed: f32, timing: &SimTiming, previous: f32, cut: bool) -> f32 {
+    if cut {
+        return elapsed;
+    }
+    let blended = elapsed - (1.0 - timing.alpha.clamp(0.0, 1.0)) * timing.tick_dt;
+    blended.max(previous)
 }
 
 // How long a turn leg runs: its authored duration, or the one its rate implies
@@ -746,6 +765,171 @@ mod tests {
         system.init(&mut world.context());
         assert_eq!(cut_ticks(&mut world, &mut system, 1.0), [29]);
         assert!((camera_yaw_deg(&world) - 120.0).abs() < 1e-3);
+    }
+
+    // One frame carrying `ticks` steps, with `alpha` of a step left over.
+    fn frame(world: &mut World, system: &mut CameraTrackSystem, ticks: u32, alpha: f32) {
+        world.context().insert_resource(SimTiming {
+            ticks,
+            tick_dt: SimTiming::TICK_DT,
+            alpha,
+        });
+        system.step(&mut world.context());
+    }
+
+    fn assert_near(got: [f32; 3], expected: [f32; 3]) {
+        assert!(
+            (0..3).all(|i| (got[i] - expected[i]).abs() < 1e-4),
+            "{got:?} {expected:?}"
+        );
+    }
+
+    #[test]
+    fn a_frame_poses_the_camera_between_its_last_two_steps() {
+        let (mut world, mut system) = world_with(
+            track(vec![travel([1.0, 0.0, 0.0], 8.0, 2.0)], vec![]),
+            [0.0; 3],
+            0.0,
+            0.0,
+        );
+        system.init(&mut world.context());
+        for _ in 0..60 {
+            frame(&mut world, &mut system, 1, 1.0);
+        }
+        assert_near(camera_position(&world), [2.0, 0.0, 0.0]);
+        frame(&mut world, &mut system, 1, 0.25);
+        let pose = 60.25 / 60.0;
+        assert_near(camera_position(&world), [2.0 * pose, 0.0, 0.0]);
+        // The track's own clock still counts whole steps.
+        let s = status(&world);
+        assert_eq!(s.elapsed_seconds, 61.0 * SimTiming::TICK_DT);
+        assert!((s.pose_seconds - pose).abs() < 1e-6, "{s:?}");
+    }
+
+    // Frames that do not divide the step evenly each carry one or two steps,
+    // yet every one moves the camera as far as the frame took.
+    #[test]
+    fn steady_frames_move_the_camera_evenly() {
+        let (mut world, mut system) = world_with(
+            track(vec![travel([1.0, 0.0, 0.0], 100.0, 2.0)], vec![]),
+            [0.0; 3],
+            0.0,
+            0.0,
+        );
+        system.init(&mut world.context());
+        let frame_dt = 1.0 / 45.0;
+        let mut accumulator = 0.0_f32;
+        let mut last = None;
+        let mut step_counts = Vec::new();
+        for _ in 0..200 {
+            accumulator += frame_dt;
+            let ticks = (accumulator / SimTiming::TICK_DT) as u32;
+            accumulator -= ticks as f32 * SimTiming::TICK_DT;
+            frame(
+                &mut world,
+                &mut system,
+                ticks,
+                accumulator / SimTiming::TICK_DT,
+            );
+            step_counts.push(ticks);
+            let x = camera_position(&world)[0];
+            if let Some(previous) = last.replace(x) {
+                let moved = x - previous;
+                assert!((moved - 2.0 * frame_dt).abs() < 1e-3, "{moved}");
+            }
+        }
+        assert!(step_counts.contains(&1) && step_counts.contains(&2));
+    }
+
+    #[test]
+    fn the_pose_follows_the_steps_through_a_leg_boundary() {
+        let (mut world, mut system) = world_with(
+            track(
+                vec![
+                    travel([1.0, 0.0, 0.0], 2.0, 2.0),
+                    travel([0.0, 0.0, 1.0], 2.0, 2.0),
+                ],
+                vec![],
+            ),
+            [0.0; 3],
+            0.0,
+            0.0,
+        );
+        system.init(&mut world.context());
+        for _ in 0..59 {
+            frame(&mut world, &mut system, 1, 1.0);
+        }
+        // The steps have finished the first leg, the pose not quite.
+        frame(&mut world, &mut system, 1, 0.0);
+        assert_near(camera_position(&world), [2.0 * 59.0 / 60.0, 0.0, 0.0]);
+        frame(&mut world, &mut system, 1, 0.5);
+        assert_near(camera_position(&world), [2.0, 0.0, 2.0 * 0.5 / 60.0]);
+    }
+
+    #[test]
+    fn a_cut_shows_on_the_frame_that_resets_history_and_holds() {
+        let jump = CameraTravel {
+            cut: true,
+            ..travel([0.0, 0.0, 1.0], 12.0, 0.0)
+        };
+        let hold = CameraTravel {
+            seconds: 1.0,
+            ..Default::default()
+        };
+        let (mut world, mut system) = world_with(
+            track(vec![hold.clone(), jump, hold], vec![]),
+            [0.0; 3],
+            0.0,
+            0.0,
+        );
+        system.init(&mut world.context());
+        let mut cut_at = None;
+        for n in 0..90 {
+            frame(&mut world, &mut system, 1, 0.3);
+            let cut = PendingHistoryReset::take(&mut world.context())
+                .contains(HistoryResetCauses::CAMERA_CUT);
+            let z = camera_position(&world)[2];
+            if cut {
+                assert!(cut_at.replace(n).is_none());
+            }
+            assert_eq!(z == 12.0, cut_at.is_some(), "frame {n}: z {z}");
+        }
+        assert_eq!(cut_at, Some(59));
+    }
+
+    #[test]
+    fn a_frame_move_between_steps_carries_the_track_on() {
+        use crate::planet::Rebase;
+        let (mut world, mut system) = world_with(
+            track(vec![travel([1.0, 0.0, 0.0], 20.0, 4.0)], vec![]),
+            [0.0; 3],
+            0.0,
+            0.0,
+        );
+        world.insert_resource(FrameRebases::default());
+        system.init(&mut world.context());
+        for _ in 0..60 {
+            frame(&mut world, &mut system, 1, 0.5);
+        }
+        let rebase = Rebase {
+            rotation: crate::math::quat_from_axis_angle([0.0, 0.0, 1.0], 0.02),
+            translation: [-4.0, 0.1, 0.0],
+        };
+        let mut rebases = FrameRebases::default();
+        rebases.push(rebase);
+        world.insert_resource(rebases);
+        for camera in world.context().query_mut::<Camera3D>() {
+            camera.position = rebase.apply_point(camera.position);
+        }
+        for _ in 0..60 {
+            frame(&mut world, &mut system, 1, 0.5);
+        }
+        let expected = rebase.apply_point([4.0 * 119.5 / 60.0, 0.0, 0.0]);
+        let got = camera_position(&world);
+        assert!(
+            (0..3).all(|i| (got[i] - expected[i]).abs() < 1e-3),
+            "{got:?} {expected:?}"
+        );
     }
 
     #[test]

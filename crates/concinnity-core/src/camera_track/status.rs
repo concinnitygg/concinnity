@@ -10,8 +10,14 @@
 /// allocation on a tick that changes nothing.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct CameraTrackStatus {
-    /// Seconds of simulated time the track has run for.
+    /// Seconds of simulated time the track has run for, counted in whole
+    /// fixed steps.
     pub elapsed_seconds: f32,
+    /// Track time the camera is posed at this frame: up to one fixed step
+    /// behind `elapsed_seconds`, blended by the frame's
+    /// [`SimTiming::alpha`](crate::ecs::SimTiming::alpha) so the camera moves
+    /// as far as the frame took.
+    pub pose_seconds: f32,
     /// Seconds the whole track runs for, the longer of its two lists.
     pub duration_seconds: f32,
     /// Index into the track's `segments`, or `None` while no leg has opened
@@ -30,6 +36,7 @@ mod tests {
     fn a_default_status_reads_as_a_track_that_has_not_started() {
         let s = CameraTrackStatus::default();
         assert_eq!(s.elapsed_seconds, 0.0);
+        assert_eq!(s.pose_seconds, 0.0);
         assert_eq!(s.duration_seconds, 0.0);
         assert_eq!(s.segment, None);
         assert!(!s.finished);

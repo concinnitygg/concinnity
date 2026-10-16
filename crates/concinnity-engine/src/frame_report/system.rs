@@ -53,8 +53,8 @@ pub struct FrameReportSystem {
     // Fallback clock for a world that publishes no run position of its own, so
     // the warm-up discard and the time column still mean something.
     started: Option<Instant>,
-    // The run position and frame-move count the previous step saw.
-    previous_run_seconds: f32,
+    // The camera pose time and frame-move count the previous step saw.
+    previous_pose_seconds: f32,
     previous_rebases: u64,
     captures: CaptureSchedule,
     // Frames still to leave unrecorded behind the latest capture.
@@ -89,7 +89,7 @@ impl FrameReportSystem {
             reported: false,
             previous: None,
             started: None,
-            previous_run_seconds: 0.0,
+            previous_pose_seconds: 0.0,
             previous_rebases: 0,
             captures: CaptureSchedule::new(&report.captures),
             excluded: 0,
@@ -172,10 +172,11 @@ impl System for FrameReportSystem {
         let rebases = ctx
             .resource::<FrameRebases>()
             .map_or(0, FrameRebases::count);
+        let pose_seconds = status.map_or(run_seconds, |s| s.pose_seconds);
         let run_step_us =
-            ((run_seconds - self.previous_run_seconds).max(0.0) * 1_000_000.0).round() as u32;
+            ((pose_seconds - self.previous_pose_seconds).max(0.0) * 1_000_000.0).round() as u32;
         let rebased = rebases != self.previous_rebases;
-        self.previous_run_seconds = run_seconds;
+        self.previous_pose_seconds = pose_seconds;
         self.previous_rebases = rebases;
         let Some(previous) = self.previous.replace(now) else {
             return StepResult::Continue;
