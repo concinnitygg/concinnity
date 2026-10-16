@@ -50,6 +50,13 @@ pub(super) static ACTION: TypeSchema = TypeSchema {
             || FieldType::Reference(&["Screen"]),
         ),
         bare("hide", "Close the top [Screen](#screen)."),
+        keyed(
+            "screenshot",
+            "Save this many consecutive presented frames, starting with the next, as lossless PNG images \
+             in a `screenshots` folder under the working directory. A burst of several frames \
+             follows something that moves from frame to frame.",
+            || FieldType::Integer,
+        ),
         keyed("story", "Drive the story system.", || {
             FieldType::Enum(&STORY_COMMAND)
         }),

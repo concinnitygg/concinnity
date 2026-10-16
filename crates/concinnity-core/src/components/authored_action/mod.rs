@@ -23,6 +23,8 @@ use crate::settings::SettingKey;
 /// - `{"push": "<name>"}`: open the named [Screen](#screen) on top of what is showing
 /// - `{"toggle": "<name>"}`: close the named [Screen](#screen) if it is on top, open it otherwise
 /// - `"hide"`: close the top [Screen](#screen)
+/// - `{"screenshot": <n>}`: save the next `n` presented frames, one after
+///   another, as lossless PNG images
 /// - `{"story": "<verb>"}`: drive the story (`start`, `continue`, `advance`,
 ///   `auto`, `skip`, `log`, `save`, `load`, `pause`, `settings`,
 ///   `settings_back`), or `{"story": {"choose": <i>}}` / `{"story": {"slot": <i>}}`
@@ -54,6 +56,8 @@ pub enum AuthoredAction<C, S> {
     Toggle(S),
     /// Close the top screen.
     Hide,
+    /// Save this many consecutive presented frames, starting with the next, as PNG images.
+    Screenshot(u32),
     /// Drive the story system.
     Story(StoryCommand),
     /// Expand or collapse a settings-screen group by index.

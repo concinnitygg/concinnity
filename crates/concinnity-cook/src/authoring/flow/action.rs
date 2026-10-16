@@ -9,8 +9,9 @@ use serde_json::Value;
 ///
 /// The flow half of [`UiAction`](concinnity_core::components::UiAction): the
 /// variants that change where the world is, carrying the names a world declares
-/// rather than the ids a build interns. Operating a settings row or folding a
-/// settings group changes no place, so neither has a variant here.
+/// rather than the ids a build interns. Operating a settings row, folding a
+/// settings group, or saving a screenshot changes no place, so none has a
+/// variant here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Move {
     /// Change to a scene, dismissing every open screen.
@@ -55,8 +56,8 @@ impl Move {
 }
 
 impl Move {
-    /// The move `action` makes, or `None` when it makes none: a settings row or
-    /// group toggle, which change no place, or a target left empty, which the
+    /// The move `action` makes, or `None` when it makes none: a settings row,
+    /// group toggle, or screenshot, which change no place, or a target left empty, which the
     /// build rejects and which would put a nameless place on a map.
     pub fn of(action: &NamedAction) -> Option<Move> {
         let named = |name: &str| (!name.is_empty()).then(|| name.to_string());
@@ -68,7 +69,9 @@ impl Move {
             AuthoredAction::Toggle(name) => named(name).map(Move::Toggle),
             AuthoredAction::Hide => Some(Move::Back),
             AuthoredAction::Story(_) => Some(Move::Story),
-            AuthoredAction::GroupToggle(_) | AuthoredAction::Setting { .. } => None,
+            AuthoredAction::GroupToggle(_)
+            | AuthoredAction::Setting { .. }
+            | AuthoredAction::Screenshot(_) => None,
         }
     }
 }
@@ -115,9 +118,10 @@ mod tests {
     }
 
     #[test]
-    fn a_settings_row_an_empty_target_or_no_action_makes_no_move() {
+    fn a_settings_row_a_screenshot_an_empty_target_or_no_action_makes_no_move() {
         for value in [
             json!({"group_toggle": 3}),
+            json!({"screenshot": 8}),
             json!({"setting": {"key": "master_volume", "verb": "drag"}}),
             json!({"show": null}),
             json!("teleport"),

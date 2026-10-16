@@ -265,6 +265,7 @@ impl GraphicsSystem {
             .resources
             .remove::<crate::ecs::FrameCaptureRequest>()
             .map(|request| request.0);
+        self.schedule_screenshot(ctx, snap);
 
         // The FPS-cap pacer runs at the runtime level before the world steps (see
         // `app::pacing`), so the frame time here already reflects the capped

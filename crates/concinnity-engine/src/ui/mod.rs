@@ -331,6 +331,7 @@ impl System for UiInputSystem {
                 SettingCommand,
                 SceneCommand,
                 StoryCommand,
+                crate::ecs::ScreenshotRequest,
             ])
     }
 
@@ -1359,6 +1360,9 @@ fn fire_action(
         }
         UiAction::Screen(cmd) => ctx.events_mut::<ScreenCommand>().send(cmd.clone()),
         UiAction::Story(cmd) => ctx.events_mut::<StoryCommand>().send(cmd.clone()),
+        UiAction::Screenshot(frames) => {
+            ctx.insert_resource(crate::ecs::ScreenshotRequest(*frames));
+        }
         UiAction::Setting {
             key,
             verb: verb @ (SettingVerb::Next | SettingVerb::Prev),
@@ -3407,6 +3411,39 @@ mod tests {
         ));
     }
 
+    // P saves one frame and Shift+P a burst, each press asking once.
+    #[test]
+    fn screenshot_bindings_request_their_frame_counts() {
+        let mut world = World::new();
+        world.add_component(KeyBinding {
+            key: "P".to_string(),
+            action: act(serde_json::json!({"screenshot": 1})),
+            ..Default::default()
+        });
+        world.add_component(KeyBinding {
+            key: "P".to_string(),
+            mods: Some(KeyMods::SHIFT),
+            action: act(serde_json::json!({"screenshot": 8})),
+            ..Default::default()
+        });
+        world.start(SYSTEMS).unwrap();
+        let mut press = |mods| {
+            world.add_component(FrameInput {
+                key_events: vec![KeyEvent::Press(KeyPress::new(InputKey::P, mods))],
+                ..Default::default()
+            });
+            world.step();
+            world
+                .remove_resource::<crate::ecs::ScreenshotRequest>()
+                .map(|r| r.0)
+        };
+        assert_eq!(press(KeyMods::NONE), Some(1));
+        assert_eq!(press(KeyMods::SHIFT), Some(8));
+        world.add_component(FrameInput::default());
+        world.step();
+        assert!(world.resource::<crate::ecs::ScreenshotRequest>().is_none());
+    }
+
     // A KeyBinding scoped to a screen fires only while that screen is on top.
     #[test]
     fn scoped_keybinding_fires_only_while_its_screen_is_top() {
@@ -3417,6 +3454,7 @@ mod tests {
             key: "Space".to_string(),
             action: act(serde_json::json!({"show": 111})),
             screen: Some(Ref::new(AssetId(110))),
+            ..Default::default()
         });
         world.start(SYSTEMS).unwrap();
 

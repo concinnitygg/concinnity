@@ -40,6 +40,8 @@ pub enum UiAction {
         /// What the region does to it.
         verb: SettingVerb,
     },
+    /// Save this many consecutive presented frames, starting with the next, as PNG images.
+    Screenshot(u32),
 }
 
 /// What a settings-row region does to its setting.
@@ -97,6 +99,7 @@ enum Encoded {
     GroupToggle(u32),
     Story { verb: u8, index: u32 },
     Setting { key: u8, verb: u8 },
+    Screenshot(u32),
 }
 
 impl Encoded {
@@ -118,6 +121,7 @@ impl Encoded {
                 key: u8::try_from(SettingKey::ALL.iter().position(|k| k == key)?).ok()?,
                 verb: SettingVerb::ALL.iter().position(|v| v == verb)? as u8,
             },
+            UiAction::Screenshot(frames) => Encoded::Screenshot(*frames),
         })
     }
 
@@ -138,6 +142,7 @@ impl Encoded {
                 key: *SettingKey::ALL.get(key as usize)?,
                 verb: *SettingVerb::ALL.get(verb as usize)?,
             },
+            Encoded::Screenshot(frames) => UiAction::Screenshot(frames),
         })
     }
 }
@@ -158,6 +163,7 @@ impl From<Resolved> for UiAction {
             AuthoredAction::Story(cmd) => UiAction::Story(cmd),
             AuthoredAction::GroupToggle(i) => UiAction::GroupToggle(i),
             AuthoredAction::Setting { key, verb } => UiAction::Setting { key, verb },
+            AuthoredAction::Screenshot(frames) => UiAction::Screenshot(frames),
         }
     }
 }
@@ -180,6 +186,7 @@ impl UiAction {
                 key: *key,
                 verb: *verb,
             },
+            UiAction::Screenshot(frames) => AuthoredAction::Screenshot(*frames),
         })
     }
 }
@@ -244,6 +251,7 @@ mod tests {
             UiAction::Screen(ScreenCommand::Toggle(AssetId(6))),
             UiAction::Screen(ScreenCommand::Hide),
             UiAction::GroupToggle(2),
+            UiAction::Screenshot(8),
         ];
         for verb in StoryCommand::VERBS {
             all.push(UiAction::Story(
@@ -295,7 +303,7 @@ mod tests {
 
     #[test]
     fn an_encoded_tag_past_the_last_variant_is_rejected() {
-        assert!(postcard::from_bytes::<UiAction>(&[9]).is_err());
+        assert!(postcard::from_bytes::<UiAction>(&[10]).is_err());
         assert!(postcard::from_bytes::<UiAction>(&[7, 13, 0]).is_err());
     }
 

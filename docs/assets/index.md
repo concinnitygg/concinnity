@@ -126,6 +126,7 @@
 - [InstanceTransform](InstanceTransform.md) - Per-instance transform within an `InstancedProp`.
 - [JointProportion](JointProportion.md) - One joint's proportion change.
 - [Justify](Justify.md) - Horizontal placement of a row's labels within the container's content width (the width of the widest row). Ignored when a row is as wide as the content.
+- [KeyMods](KeyMods.md) - The modifier keys held with a key press.
 - [KeyPolarity](KeyPolarity.md) - Whether a shape key is one target or a `+` / `-` pair.
 - [Keyframe](Keyframe.md) - One keyframe in an animation track: a joint pose sampled at `time` seconds. The pose fields (`translation`, `rotation_deg`, `scale`) are given directly on the keyframe, each defaulting to the identity transform when omitted.
 - [LayoutRow](LayoutRow.md) - One horizontal row of labels inside a `LayoutContainer`.

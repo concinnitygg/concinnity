@@ -2583,6 +2583,47 @@ fn a_frame_report_with_captures_arms_frame_capture() {
     assert!(lock(&state).init.as_ref().unwrap().capture);
 }
 
+// A key bound to a screenshot keeps the presented frame readable, with no
+// launch request asking for it.
+#[test]
+fn a_screenshot_binding_arms_frame_capture() {
+    use concinnity_core::components::{KeyBinding, UiAction};
+
+    let (state, hooks) = recording_hooks();
+    let mut b = scene_builder();
+    b.push(KeyBinding {
+        key: "P".to_string(),
+        action: Some(UiAction::Screenshot(1)),
+        ..Default::default()
+    });
+    let mut world = b.build();
+    init_graphics(&mut world, hooks);
+    assert!(lock(&state).init.as_ref().unwrap().capture);
+}
+
+// KeyBindings alone need no free cursor, so a camera world that only binds
+// keys keeps its first-person capture.
+#[test]
+fn key_bindings_alone_leave_a_camera_world_out_of_menu_mode() {
+    use concinnity_core::components::{KeyBinding, UiAction};
+
+    let (state, hooks) = recording_hooks();
+    let mut b = scene_builder();
+    b.push(KeyBinding {
+        key: "Q".to_string(),
+        action: Some(UiAction::Quit),
+        ..Default::default()
+    });
+    let mut world = b.build();
+    init_graphics(&mut world, hooks);
+    let s = lock(&state);
+    assert!(s.saw(&Call::SetMenuMode(false)));
+    assert!(
+        !s.init.as_ref().unwrap().capture,
+        "no screenshot, no capture"
+    );
+}
+
 // A development session keeps frame capture available without a screenshot.
 #[test]
 fn a_dev_loop_launch_arms_frame_capture() {

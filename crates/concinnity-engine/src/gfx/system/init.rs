@@ -6,6 +6,7 @@ use concinnity_core::bake::texture;
 use concinnity_core::components::DebugHud;
 use concinnity_core::components::KeyBinding;
 use concinnity_core::components::Planet;
+use concinnity_core::components::Screen;
 use concinnity_core::components::ShaderPrograms;
 use concinnity_core::components::SkeletonJoint;
 use concinnity_core::components::SkinnedMesh;
@@ -1023,11 +1024,12 @@ impl GraphicsSystem {
     // only), and the device capability flags that gate the settings rows.
     fn finalize_backend_config(&mut self, ctx: &mut PipelineContext, settings: &mut SettingsState) {
         // A plain first-person world (Camera3D, no UI) captures the cursor at
-        // startup. A Camera3D world that also has UI (a MainMenu's HitRegion /
-        // KeyBinding) is "menu mode": capture is driven per-frame in `run_step`.
-        // A UI-only world (no camera) stays free-cursor.
+        // startup. A Camera3D world that also has UI the cursor is freed for
+        // (a MainMenu's HitRegion or Screen) is "menu mode": capture is driven
+        // per-frame in `run_step`. KeyBindings alone need no free cursor. A
+        // UI-only world (no camera) stays free-cursor.
         let has_ui =
-            ctx.query::<HitRegion>().next().is_some() || ctx.query::<KeyBinding>().next().is_some();
+            ctx.query::<HitRegion>().next().is_some() || ctx.query::<Screen>().next().is_some();
         let has_camera = ctx.query::<Camera3D>().next().is_some();
         self.menu_mode = has_camera && has_ui;
         // A menu / editor driver (a `MenuOverride` is present) owns cursor capture
@@ -1845,9 +1847,17 @@ fn set_setting_row_label(ctx: &mut PipelineContext, key: SettingKey, text: &str)
     }
 }
 
-// Whether the world's frame report saves frames as it goes, which needs the
-// presented frame readable just as an exit screenshot does.
+// Whether the world saves frames as it goes, from its frame report or from a
+// `screenshot` action, which needs the presented frame readable just as an
+// exit screenshot does.
 fn declares_frame_captures(ctx: &PipelineContext) -> bool {
+    let screenshot = |action: Option<&UiAction>| matches!(action, Some(UiAction::Screenshot(_)));
     ctx.query::<concinnity_core::components::FrameReport>()
         .any(|report| !report.captures.is_empty())
+        || ctx
+            .query::<KeyBinding>()
+            .any(|kb| screenshot(kb.action.as_ref()))
+        || ctx
+            .query::<HitRegion>()
+            .any(|r| screenshot(r.action.as_ref()))
 }

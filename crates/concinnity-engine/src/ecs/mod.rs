@@ -157,6 +157,10 @@ pub(crate) struct RenderOpFailures(pub Vec<concinnity_core::render::ops::OpFailu
 // snapshot.
 pub(crate) struct FrameCaptureRequest(pub String);
 
+// A `screenshot` action fired: save this many consecutive frames, starting with
+// the next drawn. Written by UiInputSystem; GraphicsSystem schedules the burst.
+pub(crate) struct ScreenshotRequest(pub u32);
+
 // The pipelined driver's channel pair, published (parked, so the per-step
 // take never re-boxes) before the world moves to the simulation thread.
 // Present exactly when frames are pipelined: GraphicsSystem's step extracts

@@ -78,6 +78,8 @@ pub(crate) struct GraphicsSystem {
     // Seconds of frame time this system has rendered, the shaders' clock.
     render_secs: f64,
     frame_count: u64,
+    // A `screenshot` action's frames still to save.
+    screenshot: Option<screenshot::ScreenshotBurst>,
     // Per-class recovery for failed frames; see `frame_policy`.
     frame_policy: frame_policy::FramePolicy,
     // A togglable menu (a Screen) coexists with a controlled Camera3D. When set,
@@ -238,6 +240,7 @@ impl GraphicsSystem {
             failed: false,
             render_secs: 0.0,
             frame_count: 0,
+            screenshot: None,
             frame_policy: frame_policy::FramePolicy::default(),
             menu_mode: false,
             grows_grass: false,
@@ -350,6 +353,7 @@ pub mod parked;
 mod prop_draws;
 pub(crate) mod scene;
 mod scene_lights;
+mod screenshot;
 pub mod sdf_field_sources;
 #[cfg(test)]
 mod settings_equivalence_tests;

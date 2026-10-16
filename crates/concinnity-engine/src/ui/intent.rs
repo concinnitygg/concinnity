@@ -1,7 +1,7 @@
 // The menu pulses one frame of input carries, derived before any stage runs so
 // every stage reads the same verdict.
 
-use concinnity_core::components::{FrameInput, InputKey, NavDirection};
+use concinnity_core::components::{FrameInput, InputKey, KeyMods, NavDirection};
 
 // How far (Manhattan, window pixels) the cursor must travel between frames to
 // count as a deliberate move that dismisses the focus cursor.
@@ -24,6 +24,8 @@ pub(super) struct UiIntent {
     // The key name KeyBindings and screen toggles match this frame: the
     // frame's last fresh press, so a held key toggles or fires once.
     pub(super) pressed_key: Option<&'static str>,
+    // The modifiers held with `pressed_key`.
+    pub(super) pressed_mods: KeyMods,
 }
 
 // Derive this frame's intent. `has_focus` is whether the focus cursor was set
@@ -55,10 +57,14 @@ pub(super) fn frame_intent(
     let ui_escape = input.escape || (input.back && screen_active);
     // The pad's back pulse rides the Escape name, so it pops toggled screens and
     // fires Escape bindings exactly like the key.
-    let pressed_key = if ui_escape {
-        Some("Escape")
+    let (pressed_key, pressed_mods) = if ui_escape {
+        (Some("Escape"), KeyMods::NONE)
     } else {
-        input.fresh_keys().last().map(InputKey::name)
+        let press = input.key_presses().filter(|p| !p.repeat).last();
+        (
+            press.map(|p| p.key.name()),
+            press.map_or(KeyMods::NONE, |p| p.mods),
+        )
     };
     UiIntent {
         cursor_moved,
@@ -68,6 +74,7 @@ pub(super) fn frame_intent(
         confirm,
         ui_escape,
         pressed_key,
+        pressed_mods,
     }
 }
 
@@ -85,7 +92,7 @@ fn arrow_nav(key: InputKey) -> Option<NavDirection> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{KeyEvent, KeyMods, KeyPress};
+    use concinnity_core::components::{KeyEvent, KeyPress};
 
     fn at(mx: f32, my: f32) -> FrameInput {
         FrameInput {
@@ -181,6 +188,24 @@ mod tests {
         let intent = menu(&input, false);
         assert_eq!(intent.pressed_key, Some("Space"));
         assert_eq!(intent.nav, Some(NavDirection::Down));
+    }
+
+    #[test]
+    fn the_pressed_key_carries_the_modifiers_held_with_it() {
+        let input = FrameInput {
+            key_events: vec![
+                KeyEvent::press(InputKey::Shift),
+                KeyEvent::Press(KeyPress::new(InputKey::P, KeyMods::SHIFT)),
+            ],
+            ..Default::default()
+        };
+        let intent = frame_intent(&input, false, false, false, None);
+        assert_eq!(intent.pressed_key, Some("P"));
+        assert_eq!(intent.pressed_mods, KeyMods::SHIFT);
+        assert_eq!(
+            frame_intent(&key(InputKey::P), false, false, false, None).pressed_mods,
+            KeyMods::NONE
+        );
     }
 
     // A held key's auto-repeat names no key for bindings or toggles and

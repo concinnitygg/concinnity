@@ -29,6 +29,7 @@ fn every_action_round_trips_through_its_authored_form() {
             AuthoredAction::Toggle("pause".into()),
         ),
         (json!("hide"), AuthoredAction::Hide),
+        (json!({"screenshot": 8}), AuthoredAction::Screenshot(8)),
         (
             json!({"story": "advance"}),
             AuthoredAction::Story(StoryCommand::Advance),
@@ -63,6 +64,8 @@ fn malformed_actions_are_rejected() {
         json!({"setting": {"key": "nope", "verb": "next"}}),
         json!({"setting": {"key": "vsync", "verb": "spin"}}),
         json!({"group_toggle": -1}),
+        json!("screenshot"),
+        json!({"screenshot": -1}),
         json!(""),
     ] {
         assert!(

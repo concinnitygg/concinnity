@@ -1,10 +1,21 @@
 use crate::components::InputKey;
 
-/// The modifier keys held at the moment of a [KeyPress](#keypress).
+/// The modifier keys held with a key press.
 ///
 /// `cmd` is the Command key on macOS and is never set on Windows or Linux,
 /// where application shortcuts are built on `ctrl` instead.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+)]
+#[serde(default)]
 pub struct KeyMods {
     /// Shift was held.
     pub shift: bool,

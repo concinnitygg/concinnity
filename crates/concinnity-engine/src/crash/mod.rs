@@ -9,6 +9,7 @@
 mod hook;
 mod memory;
 mod report;
+pub(crate) use report::UtcTime;
 mod ring;
 mod write;
 
