@@ -801,6 +801,10 @@ impl DxContext {
             cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
             cmd.SetGraphicsRootShaderResourceView(8, object_gva);
             cmd.SetGraphicsRootShaderResourceView(
+                crate::directx::draw::MAIN_MESH_VERTICES_PARAM,
+                com::gpu_va(&self.scene.geometry.vertex_buffer),
+            );
+            cmd.SetGraphicsRootShaderResourceView(
                 super::material_params::MATERIAL_PARAMS_ROOT_PARAM,
                 material_params_gva,
             );

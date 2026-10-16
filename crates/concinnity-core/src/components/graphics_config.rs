@@ -4,8 +4,9 @@ use crate::components::{
     AmbientOcclusion, AmbientOcclusionOverrides, AntiAliasing, AntiAliasingOverrides, Background,
     BackgroundOverrides, Bloom, BloomOverrides, Culling, CullingOverrides, Display,
     DisplayOverrides, Exposure, ExposureOverrides, FramePacing, FramePacingOverrides,
-    IndirectLighting, IndirectLightingOverrides, Reflections, ReflectionsOverrides, Shadows,
-    ShadowsOverrides, TextureFiltering, TextureFilteringOverrides, Vignette, VignetteOverrides,
+    IndirectLighting, IndirectLightingOverrides, PlanetDetail, PlanetDetailOverrides, Reflections,
+    ReflectionsOverrides, Shadows, ShadowsOverrides, TextureFiltering, TextureFilteringOverrides,
+    Vignette, VignetteOverrides,
 };
 
 /// The world's graphics settings, one section per feature. One per world; a
@@ -15,7 +16,8 @@ use crate::components::{
 /// graphics quality preset: under `Auto` the detected GPU picks a tier, and the
 /// tier caps the quality-governed fields (shadow resolution and reach, texture
 /// filtering, ambient occlusion, reflections, the screen-space bounce,
-/// anti-aliasing and the upscaler's render scale) below the section defaults.
+/// anti-aliasing, the upscaler's render scale and planet terrain detail) below
+/// the section defaults.
 /// A field set here replaces the default but stays under the same cap on
 /// weaker hardware, and a choice the player makes in the settings menu
 /// replaces both.
@@ -80,6 +82,9 @@ pub struct GraphicsConfig {
     /// Visibility culling.
     #[asset(section)]
     pub culling: CullingOverrides,
+    /// Planet terrain tile detail.
+    #[asset(section)]
+    pub planet_detail: PlanetDetailOverrides,
 }
 
 impl GraphicsConfig {
@@ -100,6 +105,7 @@ impl GraphicsConfig {
             vignette: Vignette::default().into(),
             display: Display::default().into(),
             culling: Culling::default().into(),
+            planet_detail: PlanetDetail::default().into(),
         }
     }
 }
@@ -133,14 +139,15 @@ impl serde::Serialize for GraphicsConfig {
             bloom,
             vignette,
             display,
-            culling
+            culling,
+            planet_detail
         );
         state.end()
     }
 }
 
 /// The type name of every section `GraphicsConfig` holds, with its key.
-pub const GRAPHICS_SECTIONS: [(&str, &str); 13] = [
+pub const GRAPHICS_SECTIONS: [(&str, &str); 14] = [
     ("FramePacing", "frame_pacing"),
     ("Shadows", "shadows"),
     ("TextureFiltering", "texture_filtering"),
@@ -154,6 +161,7 @@ pub const GRAPHICS_SECTIONS: [(&str, &str); 13] = [
     ("Vignette", "vignette"),
     ("Display", "display"),
     ("Culling", "culling"),
+    ("PlanetDetail", "planet_detail"),
 ];
 
 #[cfg(test)]

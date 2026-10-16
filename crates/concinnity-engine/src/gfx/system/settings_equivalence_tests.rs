@@ -94,6 +94,7 @@ impl Declared {
             vignette: self.vignette.clone().into(),
             display: self.display.clone().into(),
             culling: self.culling.clone().into(),
+            planet_detail: Default::default(),
         };
         WorldSettings::new(WorldAssets {
             graphics: Some(&graphics),

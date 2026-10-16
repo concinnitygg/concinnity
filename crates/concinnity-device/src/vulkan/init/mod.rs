@@ -287,6 +287,7 @@ impl VkContext {
                 descriptors: &descriptors,
                 targets: &targets,
                 scene: &scene,
+                geometry: &geometry,
                 shadow: &shadow,
                 spot_slices: spot_shadow.count() as usize,
                 gbuffer: screen.gbuffer.as_ref(),

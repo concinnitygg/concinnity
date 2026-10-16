@@ -38,7 +38,7 @@ use super::context::{HDR_FORMAT, VkContext};
 use super::descriptor_layout::{PoolSizes, global_set};
 use super::draw::ViewUniforms;
 use super::global_set::{GlobalBindings, GlobalSetContents};
-use super::material_params::MATERIAL_PARAMS_BINDING;
+use super::material_params::{MATERIAL_PARAMS_BINDING, MESH_VERTICES_BINDING};
 use super::probe_prefilter::PrefilterGpu;
 use super::resources::alloc_descriptor_sets;
 use super::set_writes::SetWrites;
@@ -137,9 +137,9 @@ impl VkContext {
         }
     }
 
-    // Write the whole live texture pool into a bake face's bindless set
-    // (binding 1). Called right before the face records, so the face samples
-    // the pool as it stands this frame.
+    // Write the whole live texture pool (binding 1) and the shared vertex
+    // stream into a bake face's bindless set. Called right before the face
+    // records, so the face reads both as they stand this frame.
     fn write_probe_face_pool(&self, set: vk::DescriptorSet) {
         // Every slot the layout declares, padded with the last reserved fallback
         // across the unused tail exactly as init fills the frame's own sets.
@@ -159,6 +159,11 @@ impl VkContext {
         }
         SetWrites::new(set)
             .images(1, vk::DescriptorType::SAMPLED_IMAGE, &pool_infos)
+            .storage_buffer(
+                MESH_VERTICES_BINDING,
+                self.geometry.vertex_buffer.buffer(),
+                self.geometry.vertex_buffer_bytes,
+            )
             .apply(&self.hw.device);
     }
 
@@ -1151,11 +1156,12 @@ impl BakeResources {
         let has_hiz = u32::from(ctx.cull.hiz.is_some());
         let faces = CAPTURE_FACES as u32;
         // The six per-face global sets, the four cull SSBOs, the object SSBO,
-        // texture pool and parameter table of each face's bindless set, and a
-        // Hi-Z set (an image and a UBO) when the world runs Hi-Z.
+        // texture pool, parameter table and vertex stream of each face's
+        // bindless set, and a Hi-Z set (an image and a UBO) when the world runs
+        // Hi-Z.
         let pool_sizes = PoolSizes::default()
             .sets(&global_set(), faces)
-            .add(vk::DescriptorType::STORAGE_BUFFER, 4 + 2 * faces)
+            .add(vk::DescriptorType::STORAGE_BUFFER, 4 + 3 * faces)
             .add(
                 vk::DescriptorType::SAMPLED_IMAGE,
                 faces * tex_pool + has_hiz,
@@ -1202,10 +1208,11 @@ impl BakeResources {
             .snapshot(alloc)?;
 
         // Per-face bindless sets (set 1): object SSBO + the shared texture pool
-        // array + the parameter table. Only the SSBOs are written here; each face's pool array is
-        // written from the live pool right before that face records
-        // (`write_face_pool`), so a mid-bake streamed swap needs no rewrite of
-        // a pending set.
+        // array + the parameter table + the vertex stream. Only the first and
+        // the table are written here; each face's pool array and vertex stream
+        // are written live right before that face records
+        // (`write_probe_face_pool`), so a mid-bake streamed swap needs no
+        // rewrite of a pending set.
         let bindless_layouts = vec![
             ctx.cull
                 .bindless_set_layout

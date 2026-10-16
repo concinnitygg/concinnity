@@ -188,6 +188,22 @@ pub trait RenderBackend:
         }
     }
 
+    /// Set the camera a planet's tiles morph by, which their vertices
+    /// morph by, or `None` for a world without one. Re-sent whenever it or
+    /// the simulated frame moves.
+    fn set_tile_morph(&mut self, morph: Option<crate::planet::TileMorphFrame>) {
+        if let Some(scene) = self.scene_mut() {
+            scene.tile_morph = morph;
+        }
+    }
+
+    /// Set where planet tile `draw` meets tiles of other levels.
+    fn set_planet_tile_seams(&mut self, draw: DrawIndex, seams: crate::planet::TileSeams) {
+        if let Some(scene) = self.scene_mut() {
+            scene.set_planet_tile_seams(draw, seams);
+        }
+    }
+
     /// Retire a draw object: hide it from every pass (main, shadow, velocity)
     /// and exclude it from the ray-tracing acceleration structure, so a
     /// despawned entity's slot leaves no ghost. The slot's geometry buffers are

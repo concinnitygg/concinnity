@@ -117,6 +117,9 @@ pub struct QualityCeiling {
     /// a lower tier runs fewer or coarser cascades, leaving more of the sea to
     /// the ripples.
     pub ocean: OceanQuality,
+    /// The smallest a planet's finest terrain cells may be, in meters: the
+    /// effective size is the coarser of the world's and this.
+    pub min_planet_cell_size: u32,
 }
 
 // The engine maxima each cap takes where a tier imposes none.
@@ -149,6 +152,7 @@ impl QualityCeiling {
         planar_reflection_planes: PLANAR_PLANES_MAX,
         planar_reflection_resolution: PassResolution::Full,
         ocean: OceanQuality::FULL,
+        min_planet_cell_size: 0,
     };
 
     /// The integrated / weakest tier.
@@ -177,6 +181,7 @@ impl QualityCeiling {
             size: 128,
             cascades: 2,
         },
+        min_planet_cell_size: 4,
     };
 
     /// The entry discrete tier.
@@ -204,6 +209,7 @@ impl QualityCeiling {
             size: 128,
             cascades: 3,
         },
+        min_planet_cell_size: 2,
     };
 
     /// The mainstream discrete tier.
@@ -228,6 +234,7 @@ impl QualityCeiling {
         planar_reflection_planes: PLANAR_PLANES_MAX,
         planar_reflection_resolution: PassResolution::Full,
         ocean: OceanQuality::FULL,
+        min_planet_cell_size: 1,
     };
 
     /// The enthusiast tier: everything but a second SSGI ray past two.
@@ -252,6 +259,7 @@ impl QualityCeiling {
         planar_reflection_planes: PLANAR_PLANES_MAX,
         planar_reflection_resolution: PassResolution::Full,
         ocean: OceanQuality::FULL,
+        min_planet_cell_size: 1,
     };
 }
 

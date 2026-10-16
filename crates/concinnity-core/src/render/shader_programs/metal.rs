@@ -63,6 +63,15 @@ pub mod prepass_buffers {
     pub const DRAW_ARGS: usize = 18;
 }
 
+/// The Metal buffer slot the main pass and the G-buffer pre-pass read the
+/// shared vertex stream at as floats (`mesh_vertices`), where a planet tile's
+/// morph reads its neighbors.
+pub const MAIN_MESH_VERTICES_BUFFER: usize = 23;
+
+/// The Metal buffer slot the shadow pass reads the shared vertex stream at as
+/// floats (`mesh_vertices`).
+pub const SHADOW_MESH_VERTICES_BUFFER: usize = 2;
+
 // Metal builds the Hi-Z pyramid a mip at a time: an init kernel, chosen by the
 // main pass's sample count, then one downsample dispatch per level.
 /// `hiz_init_msaa` from `hiz_build.hlsl`.

@@ -279,6 +279,102 @@ float4 canopy_band_weights(float share, float3 root, float3 span, float plain, f
     return share * float4(root * plain + span * ramp, plain);
 }
 
+// The planet height noise's hash step: `lcg_hash` in concinnity-core's
+// math::noise.
+uint ground_lcg(uint v)
+{
+    v = v * 1664525u + 1013904223u;
+    return v ^ (v >> 16u);
+}
+
+// The height noise's value at lattice point `c`, in [0, 1].
+float ground_lattice(int3 c, uint salt)
+{
+    uint h = ground_lcg(ground_lcg(ground_lcg(asuint(c.x) ^ salt) + asuint(c.y) * 0x85ebca6bu)
+                        + asuint(c.z) * 0xc2b2ae35u);
+    return float(h & 0xffffu) / 65535.0;
+}
+
+// The gradient of one height octave's trilinear value noise at lattice
+// position `p`, along the lattice axes.
+float3 ground_noise_gradient(float3 p, uint salt)
+{
+    float3 cell = floor(p);
+    float3 t = p - cell;
+    float3 s = t * t * (3.0 - 2.0 * t);
+    float3 ds = 6.0 * t * (1.0 - t);
+    int3 c = int3(cell);
+    float a = ground_lattice(c, salt);
+    float b = ground_lattice(c + int3(1, 0, 0), salt);
+    float d0 = ground_lattice(c + int3(0, 1, 0), salt);
+    float d1 = ground_lattice(c + int3(1, 1, 0), salt);
+    float e = ground_lattice(c + int3(0, 0, 1), salt);
+    float f = ground_lattice(c + int3(1, 0, 1), salt);
+    float g = ground_lattice(c + int3(0, 1, 1), salt);
+    float h = ground_lattice(c + int3(1, 1, 1), salt);
+    float k1 = b - a;
+    float k2 = d0 - a;
+    float k3 = e - a;
+    float k4 = a - b - d0 + d1;
+    float k5 = a - d0 - e + g;
+    float k6 = a - b - e + f;
+    float k7 = -a + b + d0 - d1 + e - f - g + h;
+    return ds * float3(k1 + k4 * s.y + k6 * s.z + k7 * s.y * s.z,
+                       k2 + k5 * s.z + k4 * s.x + k7 * s.z * s.x,
+                       k3 + k6 * s.x + k5 * s.y + k7 * s.x * s.y);
+}
+
+// The planet ground's normal at unit direction `dir`, both in the planet's
+// axes: PlanetShape::normal, with each octave faded out as its cells shrink
+// below two pixels of `footprint` meters, so the detail a pixel cannot hold
+// averages away rather than aliasing, whatever tile the pixel lies on.
+float3 ground_normal_at(float3 dir, float footprint)
+{
+    float3x3 turn = float3x3(CANOPY.ground_turn[0].xyz, CANOPY.ground_turn[1].xyz,
+                             CANOPY.ground_turn[2].xyz);
+    float3x3 to_lattice = turn * CANOPY.ground_frequency;
+    float cell = CANOPY.ground_cell;
+    float weight = 1.0;
+    float3 gradient = (float3)(0.0);
+    uint octaves = min(CANOPY.ground_octaves, 16u);
+    for (uint o = 0u; o < octaves; o++)
+    {
+        float fade = saturate(log2(cell / max(2.0 * footprint, 1e-4)));
+        if (fade <= 0.0)
+        {
+            break;
+        }
+        uint salt = CANOPY.ground_salts[o >> 2u][o & 3u];
+        float3 offset = float3(uint3(salt, salt >> 10u, salt >> 20u) & 0x3ffu) / 1024.0;
+        float3 g = ground_noise_gradient(mul(to_lattice, dir) + offset, salt);
+        gradient += mul(g, to_lattice) * (weight * fade);
+        to_lattice = mul(turn, to_lattice) * 2.0;
+        weight *= 0.5;
+        cell *= 0.5;
+    }
+    gradient *= CANOPY.ground_height_scale;
+    float3 along = gradient - dir * dot(dir, gradient);
+    return normalize(dir - along / CANOPY.planet_radius);
+}
+
+// The normal surface `od` shades with at `pos`, seen from a pixel covering
+// `footprint` meters: on a planet, its ground's own, independent of the tile
+// it lies on; elsewhere the interpolated `normal`.
+float3 canopy_ground_normal(GpuObjectData od, float3 pos, float3 normal, float footprint)
+{
+    bool planet = ((od.far_canopy >> 16u) & 1u) != 0u;
+    if (!planet || CANOPY.planet_radius <= 0.0 || CANOPY.ground_octaves == 0u)
+    {
+        return normal;
+    }
+    float4 p = float4(pos, 1.0);
+    float3 rel = float3(dot(CANOPY.planet_rows[0], p), dot(CANOPY.planet_rows[1], p),
+                        dot(CANOPY.planet_rows[2], p));
+    float3 n = ground_normal_at(normalize(rel), footprint);
+    return normalize(CANOPY.planet_rows[0].xyz * n.x + CANOPY.planet_rows[1].xyz * n.y
+                     + CANOPY.planet_rows[2].xyz * n.z);
+}
+
 // The ground and the canopy at `pos` on surface `od` of albedo `albedo`, the
 // vertex color `color` carrying a terrain's layer densities and `normal` the
 // ground's, seen along `V` from a pixel covering `footprint` meters of ground.

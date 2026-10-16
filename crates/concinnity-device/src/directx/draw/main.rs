@@ -201,6 +201,10 @@ impl DxContext {
                 // [8] root SRV: this frame's StructuredBuffer<GpuObjectData>.
                 cmd.SetGraphicsRootShaderResourceView(8, object_gva);
                 cmd.SetGraphicsRootShaderResourceView(
+                    super::MAIN_MESH_VERTICES_PARAM,
+                    com::gpu_va(&self.scene.geometry.vertex_buffer),
+                );
+                cmd.SetGraphicsRootShaderResourceView(
                     crate::directx::material_params::MATERIAL_PARAMS_ROOT_PARAM,
                     self.material_params_gva(frame_idx),
                 );
@@ -309,6 +313,10 @@ impl DxContext {
                 cmd.set_graphics_sampler_table(6, self.descriptors.shadow_sampler_gpu);
                 cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
                 cmd.SetGraphicsRootShaderResourceView(8, object_gva);
+                cmd.SetGraphicsRootShaderResourceView(
+                    super::MAIN_MESH_VERTICES_PARAM,
+                    com::gpu_va(&self.scene.geometry.vertex_buffer),
+                );
                 cmd.SetGraphicsRootShaderResourceView(
                     crate::directx::material_params::MATERIAL_PARAMS_ROOT_PARAM,
                     self.material_params_gva(frame_idx),
@@ -511,6 +519,10 @@ impl DxContext {
                 cmd.set_graphics_sampler_table(6, self.descriptors.shadow_sampler_gpu);
                 cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
                 cmd.SetGraphicsRootShaderResourceView(8, object_gva);
+                cmd.SetGraphicsRootShaderResourceView(
+                    super::MAIN_MESH_VERTICES_PARAM,
+                    com::gpu_va(&self.scene.geometry.vertex_buffer),
+                );
                 cmd.SetGraphicsRootShaderResourceView(
                     crate::directx::material_params::MATERIAL_PARAMS_ROOT_PARAM,
                     self.material_params_gva(frame_idx),

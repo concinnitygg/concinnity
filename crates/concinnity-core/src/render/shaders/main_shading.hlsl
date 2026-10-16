@@ -300,13 +300,15 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     float far_dist = length(V_far);
     float footprint = max(length(ddx(v.world_pos)), length(ddy(v.world_pos)));
     CanopyShade canopy = (CanopyShade)0;
+    float3 ground_normal = v.normal;
 #if defined(SURFACE_CANOPY) || defined(SURFACE_GRASS_GROUND)
+    ground_normal = canopy_ground_normal(od, v.world_pos, v.normal, footprint);
 #ifdef SURFACE_CANOPY
     float far_w = canopy_band(od, far_dist);
 #else
     const float far_w = 0.0;
 #endif
-    canopy = canopy_at(od, v.world_pos, v.normal, v.color, albedo, V_far / max(far_dist, 1e-4),
+    canopy = canopy_at(od, v.world_pos, ground_normal, v.color, albedo, V_far / max(far_dist, 1e-4),
                        footprint, far_w > 0.0);
     albedo = canopy.ground_albedo;
 #else
@@ -332,7 +334,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     float roughness = roughness_metallic.x;
     float metallic  = roughness_metallic.y;
 
-    float3 N = surface_normal(od, v.uv, v.normal, v.tangent, v.bitangent);
+    float3 N = surface_normal(od, v.uv, ground_normal, v.tangent, v.bitangent);
 
     // Geometric specular antialiasing on the normal map. Minification aliasing
     // is handled by the texture's mip chain (trilinear + anisotropic

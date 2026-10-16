@@ -234,8 +234,12 @@ impl DxContext {
         unsafe {
             cmd.SetPipelineState(pso);
             cmd.SetGraphicsRootSignature(root_sig);
-            // [3] this frame's GpuObjectData.
+            // [3] this frame's GpuObjectData, [4] the shared vertex stream.
             cmd.SetGraphicsRootShaderResourceView(3, object_gva);
+            cmd.SetGraphicsRootShaderResourceView(
+                4,
+                com::gpu_va(&self.scene.geometry.vertex_buffer),
+            );
         }
     }
 

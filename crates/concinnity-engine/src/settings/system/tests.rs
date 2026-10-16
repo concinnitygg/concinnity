@@ -1285,6 +1285,32 @@ fn low_preset_clamps_the_authored_features_off() {
     );
 }
 
+// A preset change coarsens the finest planet terrain cells live, and the
+// streaming system reads the resolved size from the parked state.
+#[test]
+fn a_preset_change_reaches_the_planet_cell_size() {
+    let mut f = Fixture::new();
+    assert_eq!(f.state.resolved.graphics.planet_detail.finest_cell_size, 1);
+    f.apply(vec![SettingCommand {
+        setting: SettingKey::GraphicsQuality,
+        op: SettingOp::SetIndex(concinnity_core::settings::quality::preset_index(
+            QualityPreset::Low,
+        )),
+        value_label: Some(QUALITY_LABEL),
+        persist: true,
+    }]);
+    assert_eq!(f.state.resolved.graphics.planet_detail.finest_cell_size, 4);
+
+    let mut world = World::new();
+    assert_eq!(
+        super::planet_finest_cell_size(world.context().resources),
+        1,
+        "the section default before graphics init"
+    );
+    world.insert_resource(super::SettingsSlot(Some(f.state)));
+    assert_eq!(super::planet_finest_cell_size(world.context().resources), 4);
+}
+
 // One snapshot serves a whole batch: every command's change rides the same
 // write, and the in-memory cache carries it forward so a later change never
 // re-reads a stale value from disk.

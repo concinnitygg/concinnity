@@ -7,7 +7,8 @@
 //! - [`PlanetShape`]: the ground as one function of direction, the single
 //!   source every tile mesh and collider is built from.
 //! - [`TileId`], [`tile_mesh`] and [`TileLod`]: the cube-sphere quadtree, one
-//!   tile's skirted mesh, and which tiles a camera wants and can draw.
+//!   tile's mesh, and which tiles a camera wants and can draw, each
+//!   level reaching as far as its cells look a set size on screen.
 //! - [`LocalFrame`], [`Rebase`] and [`FrameRebases`]: where the simulated
 //!   frame sits in double precision, the rigid move from one frame to the
 //!   next, and the record of those moves every system holding positions
@@ -24,7 +25,9 @@ mod geo;
 mod ground;
 mod horizon;
 mod lod;
+mod morph;
 mod rebase;
+mod seams;
 mod shape;
 mod tile;
 
@@ -33,20 +36,29 @@ pub use frame::LocalFrame;
 pub use geo::{CameraGeo, GeoPose, GeoPosition, geo_axes, geo_direction, geo_lat_lon};
 pub use ground::{GroundPatch, ground_patch};
 pub use horizon::{Horizon, HorizonOccluder};
-pub use lod::{RETAIN_WIDTHS, SPLIT_WIDTHS, TileBoundsCache, TileLod, TileSelection};
+pub use lod::{
+    MAX_RANGE_WIDTHS, MIN_RANGE_WIDTHS, MORPH_START, RANGE_CELL_POINTS, REPLAN_DRIFT, RETAIN_RANGE,
+    TileBoundsCache, TileLod, TileSelection, TileView, points_per_radian,
+};
+pub use morph::{TileMorphFrame, morph_factor, morph_point, packed_seams, parent_span};
 pub use rebase::{FrameRebases, Rebase, RebaseCursor, needs_rebase};
+pub use seams::{DrawnTile, TileSeams};
+pub(crate) use shape::OCTAVE_TURN;
 pub use shape::{CubeFace, MAX_OCTAVES, MIN_OCTAVES, PlanetShape};
-pub use tile::{MAX_TILE_LEVEL, TILE_CELLS, TileBounds, TileId, TileMesh, tile_bounds, tile_mesh};
+pub use tile::{
+    MAX_TILE_LEVEL, TILE_CELLS, TileBounds, TileId, TileMesh, TileSide, tile_bounds, tile_mesh,
+};
 
 /// Smallest radius a planet keeps, in meters.
 pub const MIN_PLANET_RADIUS: f32 = 100.0;
 
 /// Most tiles a planet keeps resident at once, wherever the camera is: the
 /// bound the GPU pools for its meshes are sized from.
-pub const MAX_RESIDENT_TILES: usize = 960;
+pub const MAX_RESIDENT_TILES: usize = 4096;
 
-/// The widest a tile mesh's cells are under the camera, in meters: how deep
-/// the quadtree a planet is drawn with goes.
+/// The finest a tile mesh's cells get under the camera, in meters: the
+/// deepest any planet's quadtree goes, at the finest the planet detail
+/// setting allows.
 pub const FINEST_CELL_SIZE: f64 = 1.0;
 
 /// How far the camera strays from the simulated frame's origin before the

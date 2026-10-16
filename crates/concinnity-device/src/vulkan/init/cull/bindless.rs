@@ -12,7 +12,9 @@ use concinnity_core::render::world_pipelines::{BucketPlan, BucketSource, WorldPi
 use super::CullPlan;
 use crate::vulkan::context::{VkDescriptors, VkSceneAssets, VkTargets};
 use crate::vulkan::init::InitGpu;
-use crate::vulkan::material_params::{MATERIAL_PARAMS_BINDING, VkMaterialParams};
+use crate::vulkan::material_params::{
+    MATERIAL_PARAMS_BINDING, MESH_VERTICES_BINDING, VkMaterialParams,
+};
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout};
 use crate::vulkan::pipeline::*;
 use crate::vulkan::post::gbuffer::{PrepassLayout, build_prepass_layout};
@@ -42,6 +44,8 @@ pub(super) struct BindlessInputs<'a> {
     pub(super) targets: &'a VkTargets,
     pub(super) scene: &'a VkSceneAssets,
     pub(super) material_params: &'a [render_types::GpuMaterialParams],
+    // The shared vertex stream and its size, which a planet tile's morph reads.
+    pub(super) vertices: (vk::Buffer, u64),
     pub(super) swapchain_format: vk::Format,
     // The G-buffer's render pass when the world starts with a G-buffer
     // consumer; the buckets' pre-pass pipelines build against it, and only
@@ -69,6 +73,7 @@ pub(super) fn build_bindless_pass(
         targets,
         scene,
         material_params,
+        vertices,
         swapchain_format,
         gbuffer_render_pass,
     } = inputs;
@@ -81,7 +86,7 @@ pub(super) fn build_bindless_pass(
     } = *plan;
     // Bindless static pass: bindless static main pass resources. A dedicated
     // set layout (set 1: object SSBO + bindless texture pool + material
-    // parameter table), pipeline layout, pipeline, per-frame GpuObjectData
+    // parameter table + vertex stream), pipeline layout, pipeline, per-frame GpuObjectData
     // storage buffers and parameter tables, and one descriptor set per frame.
     // `None`/empty when the bindless pass is inactive.
     let (
@@ -111,6 +116,11 @@ pub(super) fn build_bindless_pass(
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(MESH_VERTICES_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX),
         ];
         // On a budget-constrained device the pool binding is declared
         // update-after-bind so it budgets against the update-after-bind
@@ -120,6 +130,7 @@ pub(super) fn build_bindless_pass(
         let binding_flags = [
             vk::DescriptorBindingFlags::empty(),
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
+            vk::DescriptorBindingFlags::empty(),
             vk::DescriptorBindingFlags::empty(),
         ];
         let mut flags_info =
@@ -191,7 +202,7 @@ pub(super) fn build_bindless_pass(
         // One bindless set per frame: binding 0 = that frame's SSBO,
         // binding 1 = the shared pool ([albedo views..] ++ [normal..]), read
         // through the global set's linear sampler, binding 2 = that frame's
-        // material parameter table.
+        // material parameter table, binding 3 = the shared vertex stream.
         let set_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
         let sets =
             alloc_descriptor_sets(device, descriptors.descriptor_pool.handle(), &set_layouts)?;
@@ -224,6 +235,7 @@ pub(super) fn build_bindless_pass(
                     params_info.buffer,
                     params_info.range,
                 )
+                .storage_buffer(MESH_VERTICES_BINDING, vertices.0, vertices.1)
                 .apply(device);
         }
 

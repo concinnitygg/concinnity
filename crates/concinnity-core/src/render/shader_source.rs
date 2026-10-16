@@ -57,6 +57,9 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{MAIN_TYPES}", "main_types.hlsl"),
     ("{VIEW_UNIFORMS}", "view_uniforms.hlsl"),
     ("{OBJECT_COMMON}", "object_common.hlsl"),
+    // TILE_MORPH_TYPES trails OBJECT_COMMON, which carries its marker; the
+    // grass kernel's tile record carries it too, behind a guard.
+    ("{TILE_MORPH_TYPES}", "tile_morph_types.hlsl"),
     ("{PROBE_TYPES}", "probe_types.hlsl"),
     // TRANSPARENT_PROBES leads PROBE_COMMON because it carries that marker:
     // the transparent producers' environment fallback reads the probe set.
@@ -75,6 +78,10 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // marker: the forward and transparent passes both read the cluster grid.
     ("{CLUSTER_TYPES}", "cluster_types.hlsl"),
     ("{TEXTURE_SIZE}", "texture_size.hlsl"),
+    // TILE_MORPH trails MAIN_RESOURCES, which carries its marker after the
+    // vertex stream's declaration; the shadow pass and the grass kernel carry
+    // it too.
+    ("{TILE_MORPH}", "tile_morph.hlsl"),
     ("{PARTICLE_TYPES}", "particle_types.hlsl"),
     // RAYMARCH_TYPES leads LIGHT_TYPES for the reason MAIN_TYPES leads
     // OBJECT_COMMON: it carries that marker itself, and the main pass's own

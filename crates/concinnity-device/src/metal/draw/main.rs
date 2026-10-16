@@ -690,6 +690,11 @@ impl MtlContext {
         enc.set_vertex_value(view_uniforms, 0);
         enc.set_fragment_value(view_uniforms, 0);
         enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 1);
+        enc.set_vertex_buffer(
+            &self.scene.vertex_buffer,
+            0,
+            concinnity_core::render::shader_programs::metal::MAIN_MESH_VERTICES_BUFFER,
+        );
         enc.set_fragment_value(&self.light_uniforms, 4);
         enc.set_fragment_value(&self.canopy, 21);
         if let Some(tables) = self.canopy_tables.buffer() {

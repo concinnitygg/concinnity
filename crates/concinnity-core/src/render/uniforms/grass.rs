@@ -195,12 +195,12 @@ pub const GRASS_IDENTITY_MAP: [[f32; 4]; 2] = [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 
 /// Most planet tiles one run of the kernel grows grass on: a quarter more
 /// than the most a run within the grass draw distance can reach on any
 /// planet.
-pub const MAX_PLANET_GRASS_TILES: usize = 256;
+pub const MAX_PLANET_GRASS_TILES: usize = 1024;
 
 /// One drawn planet tile as the kernel reads it: where its mesh sits in the
 /// shared vertex buffer and in the simulated frame, which square of the
-/// planet it covers, and the block of its grass tiles this run covers. 96
-/// bytes, every member in its own 16-byte row.
+/// planet it covers, the block of its grass tiles this run covers, and how
+/// its vertices morph. 144 bytes, every member in its own 16-byte row.
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct PlanetGrassTileGpu {
@@ -227,6 +227,9 @@ pub struct PlanetGrassTileGpu {
     pub radial: [f32; 2],
     /// Keeps the record a whole number of rows.
     pub _pad: [f32; 2],
+    /// How the tile's vertices morph toward its parent's mesh, as its draw's
+    /// object record carries it.
+    pub tile_morph: crate::gfx::render_types::GpuTileMorph,
 }
 
 /// One visible blade, as the kernel appends it and the draws read it.
@@ -375,7 +378,7 @@ mod tests {
 
     #[test]
     fn planet_grass_tile_layout_matches_msl() {
-        assert_eq!(size_of::<PlanetGrassTileGpu>(), 96);
+        assert_eq!(size_of::<PlanetGrassTileGpu>(), 144);
         assert_eq!(offset_of!(PlanetGrassTileGpu, model), 0);
         assert_eq!(offset_of!(PlanetGrassTileGpu, vertex_base), 48);
         assert_eq!(offset_of!(PlanetGrassTileGpu, face_level), 52);
@@ -386,6 +389,7 @@ mod tests {
         assert_eq!(offset_of!(PlanetGrassTileGpu, grass_tiles), 76);
         assert_eq!(offset_of!(PlanetGrassTileGpu, radial), 80);
         assert_eq!(offset_of!(PlanetGrassTileGpu, _pad), 88);
+        assert_eq!(offset_of!(PlanetGrassTileGpu, tile_morph), 96);
     }
 
     #[test]

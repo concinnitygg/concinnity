@@ -73,6 +73,7 @@ fn every_rebuild_field_names_a_feature() {
     check::<Vignette>("Vignette");
     check::<Display>("Display");
     check::<Culling>("Culling");
+    check::<crate::components::PlanetDetail>("PlanetDetail");
     check::<FramePacing>("FramePacing");
     check::<TextureFiltering>("TextureFiltering");
     check::<ColorLut>("ColorLut");

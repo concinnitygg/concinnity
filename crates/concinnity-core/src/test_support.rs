@@ -123,6 +123,7 @@ pub(crate) fn draw_object() -> DrawObject {
         vertex_count: 8,
         index_offset: 12,
         index_count: 36,
+        planet_tile: None,
         base_vertex: 4,
         geometry_generation: 0,
         shader_bucket: 0,

@@ -50,7 +50,8 @@ float4 shade(VertexOut v, GpuObjectData od);
 
 [shader("vertex")]
 VertexOut vertex_main_bindless(
-    VertexIn v
+    VertexIn v,
+    uint vertex_id : SV_VertexID
 #ifdef CN_BACKEND_DIRECTX
     // DirectX writes the object id into the b0 root constant ahead of each
     // indirect draw, so no instance-id builtin is read: SV_StartInstanceLocation
@@ -65,7 +66,11 @@ VertexOut vertex_main_bindless(
     uint oid = object_instance_index(instance_id);
 #endif
     surface_params_row = OBJECTS[oid].params_index;
-    VertexOut o = transform(OBJECTS[oid].model, v.pos, v.normal, v.tangent, v.color, v.uv);
+    float4x4 model = OBJECTS[oid].model;
+    GpuTileMorph m = OBJECTS[oid].tile_morph;
+    TileVertex tv = tile_morph_draw(m, model, tile_vertex_in(v.pos, v.normal, v.tangent), vertex_id,
+                                    m.eye_range.xyz);
+    VertexOut o = transform(model, tv.position, tv.normal, tv.tangent, v.color, v.uv);
     o.object_id = oid;
     return o;
 }
@@ -130,7 +135,8 @@ float4x4 prepass_prev_model(uint oid, float4x4 cur_model)
 // into the motion vector.
 [shader("vertex")]
 PrepassVertexOut vertex_prepass_bindless(
-    PrepassVertexIn v
+    PrepassVertexIn v,
+    uint vertex_id : SV_VertexID
 #ifdef CN_BACKEND_DIRECTX
     )
 {
@@ -144,7 +150,13 @@ PrepassVertexOut vertex_prepass_bindless(
     float4x4 model = OBJECTS[oid].model;
     surface_params_row = OBJECTS[oid].params_index;
     surface_view = view_cb;
-    VertexOut cur = transform(model, v.pos, v.normal, v.tangent, v.color, v.uv);
+    // A planet tile morphs for this frame's camera, and last frame for last
+    // frame's, so the morph moves with the motion vectors. Both are measured through this frame's model: a tile
+    // stands still in the world.
+    GpuTileMorph m = OBJECTS[oid].tile_morph;
+    TileVertex tv = tile_morph_draw(m, model, tile_vertex_in(v.pos, v.normal, v.tangent), vertex_id,
+                                    m.eye_range.xyz);
+    VertexOut cur = transform(model, tv.position, tv.normal, tv.tangent, v.color, v.uv);
     float3 prev_world = cur.world_pos;
     if (gb_view.motion != 0u)
     {
@@ -152,8 +164,10 @@ PrepassVertexOut vertex_prepass_bindless(
         surface_view.cam_x = gb_view.prev_cam_x;
         surface_view.cam_y = gb_view.prev_cam_y;
         surface_view.cam_z = gb_view.prev_cam_z;
-        prev_world = transform(prepass_prev_model(oid, model), v.prev_pos, v.normal,
-                               v.tangent, v.color, v.uv).world_pos;
+        TileVertex prev = tile_morph_draw(m, model, tile_vertex_in(v.prev_pos, v.normal, v.tangent),
+                                          vertex_id, m.prev_eye_seams.xyz);
+        prev_world = transform(prepass_prev_model(oid, model), prev.position, prev.normal,
+                               prev.tangent, v.color, v.uv).world_pos;
     }
 
     PrepassVertexOut o;

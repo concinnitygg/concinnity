@@ -83,6 +83,7 @@ impl SceneState {
             vertex_count: source.vertex_count,
             index_offset: source.index_offset,
             index_count: source.index_count,
+            planet_tile: source.planet_tile,
             base_vertex: source.base_vertex,
             geometry_generation: source.geometry_generation,
             model,

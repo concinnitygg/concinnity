@@ -25,8 +25,8 @@ use crate::settings::system::{SettingsSlot, SettingsState};
 
 /// The `GraphicsConfig` sections this module can apply to a running world, each
 /// with the fields it applies live: the shadow cadence the per-frame cascade
-/// math reads, and every look-tuning scalar the settings menu exposes as a
-/// slider. The rest (shadow map resolution, the feature toggles and the
+/// math reads, the planet terrain detail the tile streaming reads, and every
+/// look-tuning scalar the settings menu exposes as a slider. The rest (shadow map resolution, the feature toggles and the
 /// resolution knobs) size or gate a GPU resource built at load and need the
 /// world rebuilt.
 pub const LIVE_SETTINGS_FIELDS: &[(&str, &[&str])] = &[
@@ -50,6 +50,7 @@ pub const LIVE_SETTINGS_FIELDS: &[(&str, &[&str])] = &[
     ),
     ("bloom", &["intensity", "threshold", "knee"]),
     ("vignette", &["strength"]),
+    ("planet_detail", &["finest_cell_size"]),
 ];
 
 /// The fields of `GraphicsConfig` section `section` this module applies live,
@@ -125,6 +126,9 @@ pub fn apply_graphics(world: &mut World, graphics: &GraphicsConfig) -> bool {
         if changed.look {
             push_look(state, ops);
         }
+        if changed.planet_detail {
+            push_planet_detail(state);
+        }
     })
     .is_some()
 }
@@ -133,6 +137,7 @@ pub fn apply_graphics(world: &mut World, graphics: &GraphicsConfig) -> bool {
 struct LiveChanges {
     shadows: bool,
     look: bool,
+    planet_detail: bool,
 }
 
 // Move the authored baseline's live fields to the edited world's, leaving the
@@ -172,7 +177,14 @@ fn adopt_live(world: &mut WorldSettings, edited: &WorldSettings) -> LiveChanges 
     adopt!(bloom.threshold);
     adopt!(bloom.knee);
     adopt!(vignette.strength);
-    LiveChanges { shadows, look }
+    let planet_detail =
+        world.planet_detail.finest_cell_size != edited.planet_detail.finest_cell_size;
+    world.planet_detail = edited.planet_detail.clone();
+    LiveChanges {
+        shadows,
+        look,
+        planet_detail,
+    }
 }
 
 // Re-resolve the cascade schedule and push it when it moved.
@@ -182,6 +194,14 @@ fn push_shadows(state: &mut SettingsState, ops: &mut RenderOps) {
     let before = state.resolved.clone();
     state.resolved.graphics.shadows = resolved.shadows;
     state.record_change(&before, ops);
+}
+
+// Re-resolve the planet terrain detail, which the tile streaming reads from the
+// resolved settings each frame.
+fn push_planet_detail(state: &mut SettingsState) {
+    let user = state.persisted_graphics().clone();
+    let resolved = state.resolve_quality(&user, &state.ceiling());
+    state.resolved.graphics.planet_detail = resolved.planet_detail;
 }
 
 // Re-resolve the look tuning and push the composite params, the per-feature
@@ -402,6 +422,34 @@ mod tests {
         assert_eq!(state.authored.graphics.shadows.distance, 120);
         assert_eq!(state.resolved.graphics.shadows.cascades, 2);
         assert_eq!(state.authored.graphics.shadows.cascades, 2);
+    }
+
+    // An edited finest planet cell size moves the resolved value the tile
+    // streaming reads, under the preset's ceiling, with nothing for the
+    // renderer to do.
+    #[test]
+    fn the_finest_planet_cell_size_applies_under_the_ceiling() {
+        use concinnity_core::components::PlanetDetailOverrides;
+        let mut f = Fixture::new();
+        let shadows = f.state().authored.graphics.shadows.clone();
+        let config = |size| GraphicsConfig {
+            shadows: shadows.clone().into(),
+            planet_detail: PlanetDetailOverrides {
+                finest_cell_size: Some(size),
+            },
+            ..Default::default()
+        };
+        assert!(apply_graphics(&mut f.world, &config(3)));
+        assert!(f.replay().is_empty());
+        let state = f.state();
+        assert_eq!(state.authored.graphics.planet_detail.finest_cell_size, 3);
+        assert_eq!(state.resolved.graphics.planet_detail.finest_cell_size, 3);
+
+        state.quality_preset = concinnity_core::settings::QualityPreset::Medium;
+        assert!(apply_graphics(&mut f.world, &config(1)));
+        let state = f.state();
+        assert_eq!(state.authored.graphics.planet_detail.finest_cell_size, 1);
+        assert_eq!(state.resolved.graphics.planet_detail.finest_cell_size, 2);
     }
 
     // Re-applying the same config records nothing: the seam is edge-triggered,

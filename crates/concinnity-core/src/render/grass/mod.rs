@@ -1267,12 +1267,13 @@ mod tests {
             let cam_world = LocalFrame::AUTHORED.to_world(cam);
             let tiles = lod
                 .select(
-                    cam_world,
+                    &crate::planet::TileView::nearest(cam_world),
                     &|_| true,
                     &mut crate::planet::TileBoundsCache::new(s),
                 )
                 .draw
                 .into_iter()
+                .map(|d| d.id)
                 .map(|id| {
                     let mesh = tile_mesh(&s, id);
                     DrawnPlanetTile {
@@ -1280,6 +1281,8 @@ mod tests {
                         model: LocalFrame::AUTHORED.model_at(mesh.origin),
                         vertex_base: 0,
                         radial: mesh.radial,
+                        morph: Default::default(),
+                        morph_extent: 0.0,
                     }
                 })
                 .collect();
@@ -1337,7 +1340,8 @@ mod tests {
             let f = field();
             let (tiles, cam) = standing();
             let s = shape();
-            let ground = s.height([0.0, 1.0, 0.0]) as f32;
+            let under = crate::planet::dvec::normalize_or([0.5, 50_000.0, 0.5], [0.0; 3]);
+            let ground = s.height(under) as f32;
             let benders = [
                 GrassBender {
                     base: [0.5, ground, 0.5],

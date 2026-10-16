@@ -176,7 +176,9 @@ struct GrassParams
 #define GRASS_GROUND_TERRAIN 0u
 #define GRASS_GROUND_PLANET 1u
 
-// Mirrors `PlanetGrassTileGpu` in render::uniforms::grass (96 B).
+{TILE_MORPH_TYPES}
+
+// Mirrors `PlanetGrassTileGpu` in render::uniforms::grass (144 B).
 struct PlanetGrassTile
 {
     // The model matrix's first three rows: local = dot(row.xyz, v) + row.w.
@@ -195,6 +197,8 @@ struct PlanetGrassTile
     // The lowest and highest the surface lies along the up at the origin.
     float2 radial;
     float2 _pad;
+    // How the tile's vertices morph, as its draw's object record carries it.
+    GpuTileMorph tile_morph;
 };
 
 // Mirrors `GpuGrassBlade` in render::uniforms::grass (48 B).
@@ -425,11 +429,7 @@ float mesh_float(uint i) { return asfloat(mesh_vertices.Load(i * 4u)); }
 float mesh_float(uint i) { return mesh_vertices[i]; }
 #endif
 
-// Floats in one vertex of the shared stream, and the float each attribute the
-// kernel reads starts at. Matches `Vertex` in gfx::mesh_payload.
-static const uint GRASS_VERTEX_FLOATS = 14u;
-static const uint GRASS_VERTEX_POS = 0u;
-static const uint GRASS_VERTEX_NORMAL = 3u;
+{TILE_MORPH}
 
 // Matches GRASS_GROUP_SIZE in render::grass::tiles.
 #define GRASS_GROUP_SIZE 64
@@ -733,21 +733,31 @@ bool grass_terrain_site(GrassLayer L, int2 cell, out GrassSite site)
 
 // ---- A planet's ground ----
 
-// Vertex `i` of the shared stream: its position (xyz) and normal.
-float3 grass_mesh_position(uint i)
+float3 grass_tile_point(PlanetGrassTile T, float3 v)
 {
-    uint f = i * GRASS_VERTEX_FLOATS + GRASS_VERTEX_POS;
-    return float3(mesh_float(f), mesh_float(f + 1u), mesh_float(f + 2u));
+    return float3(dot(T.model[0], float4(v, 1.0)), dot(T.model[1], float4(v, 1.0)),
+                  dot(T.model[2], float4(v, 1.0)));
 }
 
-float3 grass_mesh_normal(uint i)
+float3 grass_tile_vector(PlanetGrassTile T, float3 v)
 {
-    uint f = i * GRASS_VERTEX_FLOATS + GRASS_VERTEX_NORMAL;
-    return float3(mesh_float(f), mesh_float(f + 1u), mesh_float(f + 2u));
+    return float3(dot(T.model[0].xyz, v), dot(T.model[1].xyz, v), dot(T.model[2].xyz, v));
 }
 
-// Matches TILE_CELLS in planet::tile.
-#define GRASS_PLANET_TILE_CELLS 32u
+// Grid corner `c` of planet tile `T`, at `p` on its raw mesh, morphed toward
+// the tile's parent as the tile's draw morphs it, `distance` meters from the
+// camera. The morph is a fraction of a cell's curvature, so the grass takes
+// one distance for the four corners of a cell and leaves their normals as
+// they are.
+float3 grass_tile_corner(PlanetGrassTile T, uint2 c, float3 p, float distance)
+{
+    if (((c.x | c.y) & 1u) == 0u)
+    {
+        return p;
+    }
+    float k = tile_morph_factor(T.tile_morph, c, distance);
+    return k > 0.0 ? lerp(p, tile_parent_position(T.vertex_base, c), k) : p;
+}
 
 // A point of planet tile `T`'s surface: the tile's own triangle under (fs, ft)
 // across it, each in [0, 1], interpolated in the mesh's frame; a little past
@@ -764,16 +774,29 @@ struct GrassMeshPoint
 
 GrassMeshPoint grass_mesh_point(PlanetGrassTile T, float2 f)
 {
-    float n = float(GRASS_PLANET_TILE_CELLS);
+    float n = float(PLANET_TILE_CELLS);
     float2 g = f * n;
     float2 cell = clamp(floor(g), 0.0, n - 1.0);
     float2 r = g - cell;
-    uint side = GRASS_PLANET_TILE_CELLS + 1u;
+    uint side = PLANET_TILE_CELLS + 1u;
     uint i00 = T.vertex_base + uint(cell.y) * side + uint(cell.x);
-    float3 p00 = grass_mesh_position(i00);
-    float3 p10 = grass_mesh_position(i00 + 1u);
-    float3 p01 = grass_mesh_position(i00 + side);
-    float3 p11 = grass_mesh_position(i00 + side + 1u);
+    TileVertex c00 = tile_vertex(i00);
+    TileVertex c10 = tile_vertex(i00 + 1u);
+    TileVertex c01 = tile_vertex(i00 + side);
+    TileVertex c11 = tile_vertex(i00 + side + 1u);
+    float3 p00 = c00.position;
+    float3 p10 = c10.position;
+    float3 p01 = c01.position;
+    float3 p11 = c11.position;
+    if (T.tile_morph.eye_range.w > 0.0)
+    {
+        float d = length(grass_tile_point(T, p00) - T.tile_morph.eye_range.xyz);
+        uint2 c = uint2(cell);
+        p00 = grass_tile_corner(T, c, p00, d);
+        p10 = grass_tile_corner(T, c + uint2(1u, 0u), p10, d);
+        p01 = grass_tile_corner(T, c + uint2(0u, 1u), p01, d);
+        p11 = grass_tile_corner(T, c + uint2(1u, 1u), p11, d);
+    }
     GrassMeshPoint m;
     if (r.x + r.y <= 1.0)
     {
@@ -787,23 +810,8 @@ GrassMeshPoint grass_mesh_point(PlanetGrassTile T, float2 f)
         m.edge_s = p11 - p01;
         m.edge_t = p11 - p10;
     }
-    float3 n00 = grass_mesh_normal(i00);
-    float3 n10 = grass_mesh_normal(i00 + 1u);
-    float3 n01 = grass_mesh_normal(i00 + side);
-    float3 n11 = grass_mesh_normal(i00 + side + 1u);
-    m.normal = lerp(lerp(n00, n10, r.x), lerp(n01, n11, r.x), r.y);
+    m.normal = lerp(lerp(c00.normal, c10.normal, r.x), lerp(c01.normal, c11.normal, r.x), r.y);
     return m;
-}
-
-float3 grass_tile_point(PlanetGrassTile T, float3 v)
-{
-    return float3(dot(T.model[0], float4(v, 1.0)), dot(T.model[1], float4(v, 1.0)),
-                  dot(T.model[2], float4(v, 1.0)));
-}
-
-float3 grass_tile_vector(PlanetGrassTile T, float3 v)
-{
-    return float3(dot(T.model[0].xyz, v), dot(T.model[1].xyz, v), dot(T.model[2].xyz, v));
 }
 
 // Whether any blade rooted in grass tile `g` of planet tile `T` can be seen:
@@ -880,7 +888,7 @@ GrassSite grass_planet_site(GrassLayer L, PlanetGrassTile T, uint2 g, uint2 cell
     }
 
     // The share of a blade's ground this cell holds, then the meadow.
-    float per_mesh_cell = cells / float(GRASS_PLANET_TILE_CELLS);
+    float per_mesh_cell = cells / float(PLANET_TILE_CELLS);
     float area = length(cross(edge_s, edge_t)) / (per_mesh_cell * per_mesh_cell);
     float face_cells = float((T.grass_tiles << level) * k);
     float2 st = (float2(face_cell) + jitter) / face_cells * 2.0 - 1.0;

@@ -209,6 +209,11 @@ impl MtlContext {
         );
         enc.set_vertex_buffer(object_buffer, 0, 9);
         enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 1);
+        enc.set_vertex_buffer(
+            &self.scene.vertex_buffer,
+            0,
+            concinnity_core::render::shader_programs::metal::SHADOW_MESH_VERTICES_BUFFER,
+        );
 
         // This view's command slots live at `[v*stride, v*stride + stride)` in
         // its set's ICB (stride = the live record count, the same value

@@ -121,8 +121,9 @@ fn create_descriptor_pool(
             vk::DescriptorType::SAMPLER,
             n_atlas + n_frames * super::composite::COMPOSITE_SOURCES,
         )
-        // One per cluster per frame (instance matrices) + two per frame for the
-        // bindless set's GpuObjectData buffer and material parameter table +
+        // One per cluster per frame (instance matrices) + three per frame for
+        // the bindless set's GpuObjectData buffer, material parameter table and
+        // vertex stream +
         // four per frame for the GPU-cull set
         // (object + draw-args + indirect-command + cull-status SSBOs) + three
         // per (frame, cascade) for the shadow cull sets + the G-buffer's
@@ -132,7 +133,7 @@ fn create_descriptor_pool(
         .add(
             vk::DescriptorType::STORAGE_BUFFER,
             n_cluster * n_frames
-                + 2 * bindless_sets_count
+                + 3 * bindless_sets_count
                 + 4 * bindless_sets_count
                 + 3 * shadow_cull_set_count
                 + 2 * gbuffer_sets_count

@@ -14,7 +14,7 @@ use core::mem::size_of;
 
 use super::SceneState;
 use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::{DrawIndex, DrawObject};
+use crate::gfx::render_types::{DrawIndex, DrawObject, PlanetTileDraw};
 use crate::render::backend::ChunkMesh;
 use crate::render::draw_slot::{self, SlotAlloc};
 use crate::render::error::{RenderError, RenderResult};
@@ -355,6 +355,10 @@ impl SceneState {
             vertex_count: verts.len(),
             index_offset: i_off / size_of::<u32>(),
             index_count: idxs.len(),
+            planet_tile: planet_tile.map(|t| PlanetTileDraw {
+                level: t.tile.level,
+                seams: crate::planet::TileSeams::default(),
+            }),
             base_vertex: vertex_base(v_off) as i32,
             geometry_generation: 0,
             model,
@@ -876,6 +880,7 @@ mod tests {
             planet_tile: Some(PlanetChunk {
                 tile,
                 radial: [-1.0, 2.0],
+                morph_extent: 0.5,
             }),
             ..chunk(&verts, &[0, 1, 2])
         };
@@ -889,6 +894,14 @@ mod tests {
                 &mut w,
             )
             .expect("room for the chunk");
+        assert_eq!(
+            scene.draw.objects[0].planet_tile,
+            Some(PlanetTileDraw {
+                level: 7,
+                seams: crate::planet::TileSeams::default(),
+            })
+        );
+        assert_eq!(scene.draw.objects[1].planet_tile, None);
         let drawn = scene.drawn_planet_tiles();
         assert_eq!(drawn.len(), 1);
         assert_eq!(drawn[0].id, tile);

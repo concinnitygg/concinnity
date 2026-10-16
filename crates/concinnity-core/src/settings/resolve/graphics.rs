@@ -3,8 +3,8 @@
 
 use crate::components::{
     AaMode, AmbientOcclusion, AntiAliasing, Background, Bloom, Culling, Display, Exposure,
-    FramePacing, GraphicsConfig, IndirectLighting, IndirectTechnique, Reflections, Shadows,
-    TextureFiltering, Vignette, hdr_sample_count,
+    FramePacing, GraphicsConfig, IndirectLighting, IndirectTechnique, PlanetDetail, Reflections,
+    Shadows, TextureFiltering, Vignette, hdr_sample_count,
 };
 use crate::gfx::auto_exposure::AutoExposureSettings;
 use crate::gfx::render_types::PostProcessTunables;
@@ -48,6 +48,8 @@ pub struct ResolvedGraphics {
     pub display: Display,
     /// Culling.
     pub culling: Culling,
+    /// Planet terrain tile detail.
+    pub planet_detail: PlanetDetail,
     /// The `ColorLut` blend; 1.0 without one.
     pub lut_strength: f32,
     /// The DLSS render preset, chosen by the user only.
@@ -70,6 +72,7 @@ impl Default for ResolvedGraphics {
             vignette: Vignette::default(),
             display: Display::default(),
             culling: Culling::default(),
+            planet_detail: PlanetDetail::default(),
             lut_strength: 1.0,
             dlss_preset: DlssPreset::default(),
         }
@@ -98,11 +101,12 @@ impl ResolvedGraphics {
         graphics.vignette.apply_to(&mut self.vignette);
         graphics.display.apply_to(&mut self.display);
         graphics.culling.apply_to(&mut self.culling);
+        graphics.planet_detail.apply_to(&mut self.planet_detail);
     }
 
     /// Take the settings the quality preset governs from `other`: the five
-    /// effect sections, the render scale, the shadow map and schedule, and the
-    /// texture filtering.
+    /// effect sections, the render scale, the shadow map and schedule, the
+    /// texture filtering and the planet terrain detail.
     pub fn adopt_quality(&mut self, other: &Self) {
         self.ambient_occlusion = other.ambient_occlusion.clone();
         self.reflections = other.reflections.clone();
@@ -112,6 +116,7 @@ impl ResolvedGraphics {
         self.exposure = other.exposure.clone();
         self.shadows = other.shadows.clone();
         self.texture_filtering = other.texture_filtering.clone();
+        self.planet_detail = other.planet_detail.clone();
     }
 
     /// Frames in flight, at least one.

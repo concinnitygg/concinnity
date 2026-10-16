@@ -15,7 +15,7 @@ use core::cell::RefCell;
 
 use crate::gfx::render_types::{DrawIndex, DrawObject, clone_reserve, runtime_reserve_full};
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
-use crate::planet::HorizonOccluder;
+use crate::planet::{HorizonOccluder, TileMorphFrame};
 use crate::render::backend::PlanetChunk;
 use crate::render::grass::{CanopyField, DrawnPlanetTile};
 use crate::render::model_history::ModelHistory;
@@ -52,6 +52,9 @@ pub struct SceneState {
     /// A planet world's lowest ground, which hides the draws wholly behind
     /// its horizon.
     pub horizon_occluder: Option<HorizonOccluder>,
+    /// The camera a planet's tiles morph by, which their vertices
+    /// morph by; `None` for a world without one.
+    pub tile_morph: Option<TileMorphFrame>,
 }
 
 impl SceneState {
@@ -66,6 +69,20 @@ impl SceneState {
             gpu_dirty: GpuDirty::default(),
             planet_chunks: BTreeMap::new(),
             horizon_occluder: None,
+            tile_morph: None,
+        }
+    }
+
+    /// Set where planet tile `draw` meets tiles of other levels. A no-op for
+    /// a draw that is not a planet tile.
+    pub fn set_planet_tile_seams(&mut self, draw: DrawIndex, seams: crate::planet::TileSeams) {
+        if let Some(tile) = self
+            .draw
+            .objects
+            .get_mut(draw.index())
+            .and_then(|o| o.planet_tile.as_mut())
+        {
+            tile.seams = seams;
         }
     }
 
@@ -89,6 +106,11 @@ impl SceneState {
                 model: obj.model,
                 vertex_base: obj.base_vertex as u32,
                 radial: chunk.radial,
+                morph_extent: chunk.morph_extent,
+                morph: self
+                    .tile_morph
+                    .map(|m| m.row(obj.planet_tile, obj.base_vertex as u32))
+                    .unwrap_or_default(),
             })
         })
     }

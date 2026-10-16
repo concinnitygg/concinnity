@@ -2,10 +2,10 @@
 
 use crate::gfx::lod;
 use crate::gfx::render_types::{
-    DrawObject, GpuDrawArgs, GpuObjectData, albedo_pool_index, draw_args_bucket_bits,
+    DrawObject, GpuDrawArgs, GpuObjectData, GpuTileMorph, albedo_pool_index, draw_args_bucket_bits,
     draw_args_flags, normal_pool_index, pack_object_record,
 };
-use crate::planet::Horizon;
+use crate::planet::{Horizon, TileMorphFrame};
 use crate::render::model_history::HistoryWindow;
 use crate::render::world_pipelines::GrassTwins;
 
@@ -23,6 +23,19 @@ pub struct PackView {
     /// The buckets the default Shader's far-band draws route to (see
     /// [`crate::render::world_pipelines`]).
     pub grass_twins: GrassTwins,
+    /// The camera a planet's tiles morph by, which their vertices
+    /// morph by.
+    pub tile_morph: Option<TileMorphFrame>,
+}
+
+impl PackView {
+    /// How `obj`'s vertices morph this frame: by the frame's planet tile
+    /// camera when it is a planet tile, not at all otherwise.
+    pub fn tile_morph_row(&self, obj: &DrawObject) -> GpuTileMorph {
+        self.tile_morph
+            .map(|m| m.row(obj.planet_tile, obj.base_vertex as u32))
+            .unwrap_or_default()
+    }
 }
 
 /// The shader bucket `obj` draws under from `cam_pos`: its own, except that a
@@ -144,6 +157,7 @@ impl PackChunk<'_> {
         let first = history.first();
         for (k, ((obj, rec), arg)) in objects.iter().zip(records).zip(args).enumerate() {
             *rec = record(obj);
+            rec.tile_morph = view.tile_morph_row(obj);
             *arg = draw_args(obj, first + k, view, &mut history);
         }
     }
@@ -247,6 +261,7 @@ mod tests {
             mesh_glass_active: true,
             horizon: None,
             grass_twins: GrassTwins::default(),
+            tile_morph: None,
         }
     }
 
@@ -606,5 +621,49 @@ mod tests {
             bytemuck::bytes_of(&records[34]),
             bytemuck::bytes_of(&pool_object_record(&objects[34], TEXTURES))
         );
+    }
+
+    // A planet tile's record carries the frame's morph at its level's range;
+    // every other draw's carries none.
+    #[test]
+    fn a_planet_tile_record_carries_its_morph() {
+        use crate::gfx::render_types::PlanetTileDraw;
+        let morph = TileMorphFrame {
+            eye: [1.0, 2.0, 3.0],
+            prev_eye: [1.5, 2.0, 3.0],
+            level0_range: 4096.0,
+        };
+        let view = PackView {
+            tile_morph: Some(morph),
+            ..view()
+        };
+        let mut objs = objects(2);
+        objs[0].planet_tile = Some(PlanetTileDraw {
+            level: 4,
+            seams: crate::planet::TileSeams {
+                coarser: 1,
+                finer: 2,
+            },
+        });
+        let mut records = zeroed_records(objs.len());
+        let mut args = zeroed_args(objs.len());
+        let mut history = ModelHistory::new();
+        history.begin(HistoryMode::Untracked, objs.len());
+        let pack = StaticPack {
+            objects: &objs,
+            records: &mut records,
+            args: &mut args,
+            history: history.window(),
+        };
+        let mut chunks: [Option<PackChunk<'_>>; MAX_PACK_CHUNKS] = Default::default();
+        pack.split(1, &mut chunks);
+        let chunk = chunks[0].take().expect("one chunk");
+        chunk.pack(&view, &|obj| pool_object_record(obj, TEXTURES));
+        assert_eq!(
+            records[0].tile_morph,
+            morph.row(objs[0].planet_tile, objs[0].base_vertex as u32)
+        );
+        assert_eq!(records[0].tile_morph.range, 256.0);
+        assert_eq!(records[1].tile_morph, GpuTileMorph::default());
     }
 }

@@ -65,6 +65,11 @@ pub(crate) fn mul_transpose_vec(m: &DMat3, v: DVec3) -> DVec3 {
     [dot(m[0], v), dot(m[1], v), dot(m[2], v)]
 }
 
+// `m` with every entry times `s`.
+pub(crate) fn scale_mat(m: &DMat3, s: f64) -> DMat3 {
+    m.map(|c| scale(c, s))
+}
+
 // `a * b`.
 pub(crate) fn mul(a: &DMat3, b: &DMat3) -> DMat3 {
     [mul_vec(a, b[0]), mul_vec(a, b[1]), mul_vec(a, b[2])]

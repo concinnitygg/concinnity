@@ -1309,6 +1309,9 @@ pub struct DrawObject {
     pub index_offset: usize,
     /// Number of indices to draw.
     pub index_count: usize,
+    /// The planet tile the draw is, when it is one: its vertices morph toward
+    /// its parent's mesh.
+    pub planet_tile: Option<PlanetTileDraw>,
     /// Value added to every index before the vertex fetch (the
     /// `drawIndexedPrimitives` `baseVertex` / D3D12 `BaseVertexLocation` /
     /// Vulkan `vertex_offset`). 0 for static and streamed-mesh geometry, whose
@@ -1418,7 +1421,7 @@ impl DrawObject {
 /// cull kernel can read object bounds straight from this buffer without a
 /// layout change.
 ///
-/// Layout (160 bytes) must stay in sync with the shader-side record, declared
+/// Layout (208 bytes) must stay in sync with the shader-side record, declared
 /// once in `shaders/object_common.hlsl` and spliced into every pass that
 /// strides the buffer; `shader_layout` in concinnity-device pins this struct
 /// against the compiled module's layout of it on every target.
@@ -1468,6 +1471,47 @@ pub struct GpuObjectData {
     /// The far-field blend band, for a terrain under grass. Mirrors
     /// `MaterialUniforms::far_field`.
     pub far_field: FarFieldTint,
+    /// How a planet tile's vertices morph toward its parent's mesh; all zero
+    /// for every other draw.
+    pub tile_morph: GpuTileMorph,
+}
+
+/// A planet tile's draw: its quadtree level and the sides it meets tiles of
+/// other levels on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanetTileDraw {
+    /// The tile's quadtree level.
+    pub level: u8,
+    /// Where it meets coarser or finer tiles.
+    pub seams: crate::planet::TileSeams,
+}
+
+/// How a planet tile's vertices morph toward its parent's mesh, as its
+/// object record carries it. 48 bytes, declared in `tile_morph_types.hlsl`
+/// as two `float4`s and a `uint4`.
+///
+/// A vertex `d` meters from `eye` morphs from none at
+/// [`crate::planet::MORPH_START`] of `range` to all of the way at `range`;
+/// the motion vectors measure last frame's morph from `prev_eye`. A `range`
+/// of 0 leaves every vertex where it is.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct GpuTileMorph {
+    /// The camera, in the simulated frame.
+    pub eye: [f32; 3],
+    /// How far from `eye` the tile's level reaches, in meters.
+    pub range: f32,
+    /// The camera last frame, in this frame's
+    /// coordinates.
+    pub prev_eye: [f32; 3],
+    /// The sides beside a coarser tile in the low four bits (by
+    /// [`crate::planet::TileSide::bit`]), beside finer tiles in the next four.
+    pub seams: u32,
+    /// The tile's first vertex in the shared vertex stream, where the morph
+    /// reads its neighbors.
+    pub vertex_base: u32,
+    /// Keeps the row a whole number of `float4`s.
+    pub _pad: [u32; 3],
 }
 
 /// Number of generic floats a `Material` carries for its Shader.
@@ -1546,6 +1590,7 @@ impl GpuObjectData {
             alpha_cutoff: material.alpha_cutoff,
             params_index: material.params_index,
             far_field: material.far_field,
+            tile_morph: GpuTileMorph::default(),
         }
     }
 }
@@ -2244,7 +2289,7 @@ mod tests {
         // `object_common.hlsl` spells each (vec3, scalar)
         // pair as one 16-byte lane; the four indices fill the lane between the
         // material block and the cull bounds.
-        assert_eq!(size_of::<GpuObjectData>(), 160);
+        assert_eq!(size_of::<GpuObjectData>(), 208);
         assert_eq!(offset_of!(GpuObjectData, model), 0);
         assert_eq!(offset_of!(GpuObjectData, tint), 64);
         assert_eq!(offset_of!(GpuObjectData, roughness), 76);
@@ -2264,6 +2309,14 @@ mod tests {
         assert_eq!(offset_of!(FarFieldTint, end), 4);
         assert_eq!(offset_of!(FarFieldTint, canopy), 8);
         assert_eq!(size_of::<FarFieldTint>(), 12);
+        assert_eq!(offset_of!(GpuObjectData, tile_morph), 160);
+        assert_eq!(offset_of!(GpuTileMorph, eye), 0);
+        assert_eq!(offset_of!(GpuTileMorph, range), 12);
+        assert_eq!(offset_of!(GpuTileMorph, prev_eye), 16);
+        assert_eq!(offset_of!(GpuTileMorph, seams), 28);
+        assert_eq!(offset_of!(GpuTileMorph, vertex_base), 32);
+        assert_eq!(offset_of!(GpuTileMorph, _pad), 36);
+        assert_eq!(size_of::<GpuTileMorph>(), 48);
     }
 
     #[test]

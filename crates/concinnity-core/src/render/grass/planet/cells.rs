@@ -193,10 +193,10 @@ mod tests {
     #[test]
     fn grass_tiles_are_about_four_meters_and_nest_in_every_level() {
         let g = PlanetGrassGrid::new(&shape());
-        assert_eq!(g.max_level, 12);
-        assert_eq!(g.finest_tiles, 5);
+        assert_eq!(g.max_level, 13);
+        assert_eq!(g.finest_tiles, 2);
         let size = g.tile_size();
-        assert!(size > 3.5 && size < 4.5, "{size}");
+        assert!(size > 3.0 && size < 5.0, "{size}");
         for level in 0..=g.max_level {
             assert_eq!(
                 u64::from(g.tiles_per_side(level)) << level,

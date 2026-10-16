@@ -58,6 +58,7 @@ pub use super::pass_resolution::PassResolution;
 pub use super::physics_config::PhysicsConfig;
 pub use super::physics_joint::{PhysicsJoint, PhysicsJointKind};
 pub use super::planet::Planet;
+pub use super::planet_detail::{PlanetDetail, PlanetDetailOverrides};
 pub use super::point_light::PointLight;
 pub use super::procedural_mesh::ProceduralMesh;
 pub use super::prop::{Prop, PropCollider, PropColliderShape};

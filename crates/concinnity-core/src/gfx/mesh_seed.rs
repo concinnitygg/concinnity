@@ -299,6 +299,7 @@ mod tests {
             vertex_count: v_count,
             index_offset: i_off,
             index_count: i_count,
+            planet_tile: None,
             shader_bucket: 0,
             base_vertex: 0,
             geometry_generation: 0,

@@ -56,6 +56,7 @@ const MAIN_BINDLESS_REGISTERS: &[(&str, &str)] = &[
     ("material_params_sb", "t20"),
     ("canopy_cb", "b8"),
     ("canopy_tables_sb", "t24"),
+    ("mesh_vertices", "t9"),
     ("tex_pool", "t0, space1"),
     ("shadow_sampler", "s0"),
     ("linear_sampler", "s1"),
@@ -74,6 +75,7 @@ const MAIN_PREPASS_REGISTERS: &[(&str, &str)] = &[
     ("material_params_sb", "t20"),
     ("prev_models", "t21"),
     ("draw_args", "t22"),
+    ("mesh_vertices", "t9"),
     ("tex_pool", "t0, space1"),
     ("linear_sampler", "s1"),
     ("cube_sampler", "s2"),
@@ -267,6 +269,7 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             ("shadow_cb", "b1"),
             ("push", "b2"),
             ("objects", "t0"),
+            ("mesh_vertices", "t1"),
         ],
     },
     DxilAbi {
@@ -1018,6 +1021,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("objects_sb", "buffer(9)"),
             ("prev_models", "buffer(17)"),
             ("draw_args", "buffer(18)"),
+            ("mesh_vertices", "buffer(23)"),
         ]],
         argument_ids: &[],
     },
@@ -1192,6 +1196,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         program: &shared::SHADOW_VERT_BINDLESS,
         slots: &[&[
             ("shadow_cb", "buffer(0)"),
+            ("mesh_vertices", "buffer(2)"),
             ("cascade_cb", "buffer(7)"),
             ("objects", "buffer(9)"),
         ]],
@@ -1221,7 +1226,11 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     },
     MetalAbi {
         program: &shared::MAIN_BINDLESS_VERT,
-        slots: &[&[("view_cb", "buffer(0)"), ("objects_sb", "buffer(9)")]],
+        slots: &[&[
+            ("view_cb", "buffer(0)"),
+            ("objects_sb", "buffer(9)"),
+            ("mesh_vertices", "buffer(23)"),
+        ]],
         argument_ids: &[],
     },
     // The SSR resolve: the probe cube array, its records and the cluster grid

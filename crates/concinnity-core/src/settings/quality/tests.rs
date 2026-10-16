@@ -156,7 +156,30 @@ fn ceilings_are_monotonic_in_tier() {
             lo.ocean.cascades <= hi.ocean.cascades,
             "ocean cascades dropped"
         );
+        assert!(
+            lo.min_planet_cell_size >= hi.min_planet_cell_size,
+            "a higher tier forced coarser planet terrain"
+        );
     }
+}
+
+// Planet terrain cells coarsen tier by tier, and the top tier forces nothing
+// over the section default.
+#[test]
+fn planet_cells_coarsen_down_the_tiers() {
+    let floors = [
+        QualityPreset::Low,
+        QualityPreset::Medium,
+        QualityPreset::High,
+        QualityPreset::Ultra,
+    ]
+    .map(|p| resolve_ceiling(p, &GpuProfile::UNKNOWN).min_planet_cell_size);
+    assert_eq!(floors, [4, 2, 1, 1]);
+    assert_eq!(
+        floors[3],
+        crate::components::PlanetDetail::default().finest_cell_size
+    );
+    assert_eq!(QualityCeiling::NONE.min_planet_cell_size, 0);
 }
 
 // The top tiers run the full simulation; the lowest runs two cascades of

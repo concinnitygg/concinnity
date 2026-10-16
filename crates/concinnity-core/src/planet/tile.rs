@@ -8,7 +8,7 @@ use super::shape::{CubeFace, PlanetShape};
 use crate::gfx::mesh_payload::Vertex;
 
 /// Cells along each side of a tile's mesh, at every level.
-pub const TILE_CELLS: u32 = 32;
+pub const TILE_CELLS: u32 = 16;
 
 /// Deepest quadtree level a tile can sit at.
 pub const MAX_TILE_LEVEL: u8 = 20;
@@ -17,6 +17,33 @@ pub const MAX_TILE_LEVEL: u8 = 20;
 // they stay precise far across a face; a texture repeating at a whole fraction
 // of it tiles seamlessly over every tile.
 const UV_PERIOD_M: f64 = 1024.0;
+
+// Directions along each side of a tile its bounds sample the ground at.
+const BOUND_SAMPLES: usize = 5;
+
+/// One side of a tile, by the face coordinate it lies across.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TileSide {
+    /// The side at the tile's lowest `s`.
+    MinS,
+    /// The side at the tile's highest `s`.
+    MaxS,
+    /// The side at the tile's lowest `t`.
+    MinT,
+    /// The side at the tile's highest `t`.
+    MaxT,
+}
+
+impl TileSide {
+    /// All four sides.
+    pub const ALL: [Self; 4] = [Self::MinS, Self::MaxS, Self::MinT, Self::MaxT];
+
+    /// The side's bit in a mask of sides: `1 << index` in [`Self::ALL`]
+    /// order.
+    pub fn bit(self) -> u8 {
+        1 << self as u8
+    }
+}
 
 /// A tile: face `face`, quadtree `level` (0 is the whole face), and its
 /// column `x` and row `y` among the `2^level` across that level.
@@ -65,6 +92,40 @@ impl TileId {
         })
     }
 
+    /// The tile at the same level across `side`, on this face or, past its
+    /// edge, the next.
+    pub fn neighbor(self, side: TileSide) -> Self {
+        let last = (1u32 << self.level) - 1;
+        let within = match side {
+            TileSide::MinS => self.x.checked_sub(1).map(|x| (x, self.y)),
+            TileSide::MaxS => (self.x < last).then(|| (self.x + 1, self.y)),
+            TileSide::MinT => self.y.checked_sub(1).map(|y| (self.x, y)),
+            TileSide::MaxT => (self.y < last).then(|| (self.x, self.y + 1)),
+        };
+        if let Some((x, y)) = within {
+            return Self { x, y, ..self };
+        }
+        let (s0, t0, span) = self.span();
+        // A point just across the side's middle, so it lands in the
+        // neighbor's own row or column on whichever face it lies.
+        let past = span * (0.5 + 1e-3);
+        let (mut s, mut t) = (s0 + span * 0.5, t0 + span * 0.5);
+        match side {
+            TileSide::MinS => s -= past,
+            TileSide::MaxS => s += past,
+            TileSide::MinT => t -= past,
+            TileSide::MaxT => t += past,
+        }
+        let (face, s, t) = CubeFace::locate(self.face.cube_point(s, t));
+        let index = |c: f64| (libm::floor((c + 1.0) / span).max(0.0) as u32).min(last);
+        Self {
+            face,
+            level: self.level,
+            x: index(s),
+            y: index(t),
+        }
+    }
+
     // The face coordinates the tile spans: (s0, t0, side).
     fn span(self) -> (f64, f64, f64) {
         let side = 2.0 / f64::from(1u32 << self.level);
@@ -95,27 +156,56 @@ pub struct TileBounds {
     pub width: f64,
 }
 
-/// The bounds of `tile` on `shape`, whatever the ground's height inside it.
+/// The bounds of `tile` on `shape`: the ground's height sampled across the
+/// tile, widened by how far it can rise between samples.
 pub fn tile_bounds(shape: &PlanetShape, tile: TileId) -> TileBounds {
-    let mid = shape.radius + shape.amplitude * 0.5;
-    let center = dvec::add(shape.center, dvec::scale(tile.direction(0.5, 0.5), mid));
+    let n = BOUND_SAMPLES - 1;
+    let dirs: [DVec3; BOUND_SAMPLES * BOUND_SAMPLES] = core::array::from_fn(|k| {
+        let (i, j) = (k % BOUND_SAMPLES, k / BOUND_SAMPLES);
+        tile.direction(i as f64 / n as f64, j as f64 / n as f64)
+    });
+    let at = |i: usize, j: usize| dirs[j * BOUND_SAMPLES + i];
+    // The widest step between neighboring samples, along the ground.
+    let arc = |a: DVec3, b: DVec3| shape.radius * libm::acos(dvec::dot(a, b).clamp(-1.0, 1.0));
+    let mut spacing: f64 = 0.0;
+    for j in 0..=n {
+        for i in 0..n {
+            spacing = spacing
+                .max(arc(at(i, j), at(i + 1, j)))
+                .max(arc(at(j, i), at(j, i + 1)));
+        }
+    }
+    // Any point lies within half a sample cell's diagonal of a sample; the
+    // sphere bulges past the chord between samples by the sagitta.
+    let reach = spacing * core::f64::consts::FRAC_1_SQRT_2;
+    let slack = shape.max_slope() * reach;
+    let sagitta = spacing * spacing / (8.0 * shape.radius);
+    let (lo, hi) = dirs
+        .iter()
+        .map(|&d| shape.height(d))
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), h| {
+            (lo.min(h), hi.max(h))
+        });
+    let lo = (lo - slack).max(0.0);
+    let hi = (hi + slack).min(shape.amplitude.max(0.0));
+
+    let center = dvec::add(
+        shape.center,
+        dvec::scale(tile.direction(0.5, 0.5), shape.radius + (lo + hi) * 0.5),
+    );
     let mut radius: f64 = 0.0;
-    for fs in [0.0, 0.5, 1.0] {
-        for ft in [0.0, 0.5, 1.0] {
-            let d = tile.direction(fs, ft);
-            for r in [shape.radius, shape.radius + shape.amplitude] {
-                let p = dvec::add(shape.center, dvec::scale(d, r));
-                radius = radius.max(dvec::length(dvec::sub(p, center)));
-            }
+    for &d in &dirs {
+        for r in [shape.radius + lo, shape.radius + hi] {
+            let p = dvec::add(shape.center, dvec::scale(d, r));
+            radius = radius.max(dvec::length(dvec::sub(p, center)));
         }
     }
     let a = tile.direction(0.0, 0.5);
     let b = tile.direction(1.0, 0.5);
-    let width = shape.radius * libm::acos(dvec::dot(a, b).clamp(-1.0, 1.0));
     TileBounds {
         center,
-        radius,
-        width,
+        radius: radius + sagitta,
+        width: arc(a, b),
     }
 }
 
@@ -124,41 +214,32 @@ pub fn tile_bounds(shape: &PlanetShape, tile: TileId) -> TileBounds {
 pub struct TileMesh {
     /// The point the vertices are relative to, in authored coordinates.
     pub origin: DVec3,
-    /// The surface's `(TILE_CELLS + 1)^2` corners, row-major along `t`, then
-    /// a skirt hanging below every edge corner.
+    /// The surface's `(TILE_CELLS + 1)^2` corners, row-major along `t`.
     pub vertices: Vec<Vertex>,
-    /// Two triangles per cell wound to face outward, then the skirt's.
+    /// Two triangles per cell wound to face outward.
     pub indices: Vec<u16>,
+    /// The farthest any corner moves when the tile morphs all the way into
+    /// its parent's mesh, in meters.
+    pub morph_extent: f32,
     /// The lowest and highest the surface's corners lie along the up at
     /// `origin`, in meters from it: every point of the surface lies between.
     pub radial: [f32; 2],
-    /// The box around every vertex, skirts included, relative to `origin`
-    /// with authored axes.
+    /// The box around every vertex, relative to `origin` with authored axes.
     pub bounds: ([f32; 3], [f32; 3]),
 }
 
 /// The mesh of `tile` on `shape`.
 ///
-/// Normals come from the surface's own slopes, sampled one cell past the
-/// tile's edges, so a tile shades seamlessly into its neighbors at the same
-/// level. A tile next to a coarser one leaves gaps between their edges; the
-/// skirt, a strip hanging toward the center from every edge, fills them.
+/// Normals are the surface's exact ones, from the height's own gradient, so
+/// an edge corner shades the same in every tile that shares it, at any level.
+/// Each cell splits along the same diagonal at every level, so a tile morphed
+/// all the way toward its parent is its parent's mesh, which is how it meets a
+/// coarser neighbor without a gap.
 pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
     let n = TILE_CELLS as usize;
     let side = n + 1;
-    // Corners from -1 to n + 1: the tile's own plus a ring around it.
-    let ring = side + 2;
-    let mut points = Vec::with_capacity(ring * ring);
-    for j in 0..ring {
-        for i in 0..ring {
-            let fs = (i as f64 - 1.0) / n as f64;
-            let ft = (j as f64 - 1.0) / n as f64;
-            points.push(shape.surface(tile.direction(fs, ft)));
-        }
-    }
-    let at = |i: usize, j: usize| points[(j + 1) * ring + (i + 1)];
+    let corner_dir = |i: usize, j: usize| tile.direction(i as f64 / n as f64, j as f64 / n as f64);
     let origin = shape.surface(tile.direction(0.5, 0.5));
-    let bounds = tile_bounds(shape, tile);
     let (s0, t0, span) = tile.span();
     // Meters across the face from its -s/-t corner, less a whole number of
     // periods so the tile's own stay small.
@@ -172,24 +253,17 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
     };
     let u_axis = tile.face.u_axis();
 
-    let mut vertices = Vec::with_capacity(side * side + 4 * n);
+    let mut points = Vec::with_capacity(side * side);
+    let mut vertices = Vec::with_capacity(side * side);
     for j in 0..side {
         for i in 0..side {
-            let p = at(i, j);
-            // Central differences across the ring: s then t, so s x t is out.
-            let ds = dvec::sub(
-                at_ring(&points, ring, i + 2, j + 1),
-                at_ring(&points, ring, i, j + 1),
-            );
-            let dt = dvec::sub(
-                at_ring(&points, ring, i + 1, j + 2),
-                at_ring(&points, ring, i + 1, j),
-            );
-            let normal = dvec::normalize_or(dvec::cross(ds, dt), shape.up_at(p));
+            let dir = corner_dir(i, j);
+            let (p, normal) = shape.surface_and_normal(dir);
             let tangent = dvec::normalize_or(
                 dvec::sub(u_axis, dvec::scale(normal, dvec::dot(normal, u_axis))),
-                ds,
+                dvec::cross(normal, [0.0, 0.0, 1.0]),
             );
+            points.push(p);
             vertices.push(Vertex {
                 pos: dvec::to_f32(dvec::sub(p, origin)),
                 normal: dvec::to_f32(normal),
@@ -199,7 +273,6 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
             });
         }
     }
-
     let up = shape.up_at(origin);
     let radial = vertices
         .iter()
@@ -208,7 +281,7 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
             [lo.min(h), hi.max(h)]
         });
 
-    let mut indices = Vec::with_capacity(n * n * 6 + 4 * n * 6);
+    let mut indices = Vec::with_capacity(n * n * 6);
     let corner = |i: usize, j: usize| (j * side + i) as u16;
     for j in 0..n {
         for i in 0..n {
@@ -222,33 +295,7 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
         }
     }
 
-    // The edge corners once around, counter-clockwise seen from outside.
-    let mut edge: Vec<(usize, usize)> = Vec::with_capacity(4 * n + 1);
-    edge.extend((0..n).map(|i| (i, 0)));
-    edge.extend((0..n).map(|j| (n, j)));
-    edge.extend((0..n).map(|i| (n - i, n)));
-    edge.extend((0..n).map(|j| (0, n - j)));
-    let depth = skirt_depth(bounds.width);
-    let first_skirt = vertices.len() as u16;
-    for &(i, j) in &edge {
-        let top = vertices[j * side + i];
-        let down = shape.up_at(at(i, j));
-        let p = dvec::sub(at(i, j), dvec::scale(down, depth));
-        vertices.push(Vertex {
-            pos: dvec::to_f32(dvec::sub(p, origin)),
-            ..top
-        });
-    }
-    let loop_len = edge.len();
-    for k in 0..loop_len {
-        let next = (k + 1) % loop_len;
-        let (e0, e1) = (
-            corner(edge[k].0, edge[k].1),
-            corner(edge[next].0, edge[next].1),
-        );
-        let (s0, s1) = (first_skirt + k as u16, first_skirt + next as u16);
-        indices.extend_from_slice(&[e0, s0, e1, e1, s0, s1]);
-    }
+    let morph_extent = morph_extent(&points, n);
 
     let bounds = vertices.iter().fold(
         ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]),
@@ -263,19 +310,29 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
         origin,
         vertices,
         indices,
+        morph_extent,
         radial,
         bounds,
     }
 }
 
-fn at_ring(points: &[DVec3], ring: usize, i: usize, j: usize) -> DVec3 {
-    points[j * ring + i]
-}
-
-// How far a tile's skirt hangs: past the largest step between its edge and a
-// coarser neighbor's, which grows with the tile's width.
-fn skirt_depth(width: f64) -> f64 {
-    0.5 + width * 0.02
+// The farthest any corner of an `n`-cell grid of `points` lies from the middle
+// of the two parent corners it morphs toward.
+fn morph_extent(points: &[DVec3], n: usize) -> f32 {
+    let side = n + 1;
+    let mut most: f64 = 0.0;
+    for j in 0..side {
+        for i in 0..side {
+            if let Some([a, b]) = super::morph::parent_span(i, j) {
+                let mid = dvec::scale(
+                    dvec::add(points[a.1 * side + a.0], points[b.1 * side + b.0]),
+                    0.5,
+                );
+                most = most.max(dvec::length(dvec::sub(mid, points[j * side + i])));
+            }
+        }
+    }
+    most as f32
 }
 
 #[cfg(test)]
@@ -320,20 +377,100 @@ mod tests {
         assert!(dvec::length(dvec::sub(c, d)) < 1e-15);
     }
 
+    // Every surface vertex lies inside its tile's bounds, at every level,
+    // across the face, though the bounds pad only by the height's slope.
     #[test]
     fn the_bounds_hold_every_vertex() {
         let s = shape();
-        let t = deep_tile();
-        let b = tile_bounds(&s, t);
-        let mesh = tile_mesh(&s, t);
         let side = TILE_CELLS as usize + 1;
-        for v in &mesh.vertices[..side * side] {
-            let p = dvec::add(mesh.origin, dvec::from_f32(v.pos));
-            assert!(dvec::length(dvec::sub(p, b.center)) <= b.radius + 1e-3);
+        for level in [0u8, 3, 9, 14] {
+            let n = 1u32 << level;
+            for (x, y) in [(0, 0), (n / 2, (n / 2).saturating_sub(1)), (n - 1, n / 3)] {
+                let t = TileId {
+                    face: CubeFace(2),
+                    level,
+                    x,
+                    y,
+                };
+                let b = tile_bounds(&s, t);
+                let mesh = tile_mesh(&s, t);
+                for v in &mesh.vertices[..side * side] {
+                    let p = dvec::add(mesh.origin, dvec::from_f32(v.pos));
+                    let gap = dvec::length(dvec::sub(p, b.center)) - b.radius;
+                    assert!(gap <= 1e-3 * (1.0 + b.radius * 1e-4), "{t:?} {gap}");
+                }
+            }
         }
         // A face is 50 km * (pi / 2) across the middle, its 512 tiles a level
         // narrower near its center, where the spherified cube crowds them.
+        let b = tile_bounds(&s, deep_tile());
         assert!(b.width > 100.0 && b.width < 153.4, "{}", b.width);
+        // A deep tile's bounds hug its own ground, not the planet's whole
+        // relief.
+        assert!(b.radius < b.width, "{} vs {}", b.radius, b.width);
+    }
+
+    // Across a side, the neighbor at the same level shares the side's ends,
+    // on this face or the next, and finds this tile across one of its own.
+    #[test]
+    fn neighbors_share_their_side_on_every_face() {
+        let level = 3;
+        let n = 1u32 << level;
+        for face in CubeFace::ALL {
+            for k in 0..n {
+                for (x, y) in [(0, k), (n - 1, k), (k, 0), (k, n - 1)] {
+                    let t = TileId { face, level, x, y };
+                    for side in TileSide::ALL {
+                        let across = t.neighbor(side);
+                        assert_eq!(across.level, level);
+                        assert!(
+                            TileSide::ALL.iter().any(|&back| across.neighbor(back) == t),
+                            "{t:?} {side:?} -> {across:?}"
+                        );
+                        let ends = side_ends(t, side);
+                        let theirs: Vec<DVec3> = TileSide::ALL
+                            .iter()
+                            .flat_map(|&s| side_ends(across, s))
+                            .collect();
+                        for e in ends {
+                            assert!(
+                                theirs
+                                    .iter()
+                                    .any(|&o| dvec::length(dvec::sub(e, o)) < 1e-12),
+                                "{t:?} {side:?} -> {across:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let inner = TileId {
+            face: CubeFace(4),
+            level,
+            x: 3,
+            y: 4,
+        };
+        assert_eq!(inner.neighbor(TileSide::MinS), TileId { x: 2, ..inner });
+        assert_eq!(inner.neighbor(TileSide::MaxT), TileId { y: 5, ..inner });
+    }
+
+    fn side_ends(t: TileId, side: TileSide) -> [DVec3; 2] {
+        let [a, b] = match side {
+            TileSide::MinS => [(0.0, 0.0), (0.0, 1.0)],
+            TileSide::MaxS => [(1.0, 0.0), (1.0, 1.0)],
+            TileSide::MinT => [(0.0, 0.0), (1.0, 0.0)],
+            TileSide::MaxT => [(0.0, 1.0), (1.0, 1.0)],
+        };
+        [t.direction(a.0, a.1), t.direction(b.0, b.1)]
+    }
+
+    #[test]
+    fn side_bits_are_distinct() {
+        let all = TileSide::ALL.iter().fold(0u8, |m, s| {
+            assert_eq!(m & s.bit(), 0);
+            m | s.bit()
+        });
+        assert_eq!(all, 0b1111);
     }
 
     #[test]
@@ -361,12 +498,6 @@ mod tests {
             let h = dvec::dot(dvec::from_f32(v.pos), up) as f32;
             assert!(h >= lo && h <= hi);
         }
-        // Skirts hang below the surface's range.
-        assert!(
-            mesh.vertices[side * side..]
-                .iter()
-                .any(|v| (dvec::dot(dvec::from_f32(v.pos), up) as f32) < lo)
-        );
     }
 
     // Every surface triangle faces away from the center, and so does its
@@ -388,32 +519,37 @@ mod tests {
         }
     }
 
-    // The skirt hangs below each edge corner, facing away from the tile.
+    // The morph extent bounds how far a fully morphed corner moves.
     #[test]
-    fn the_skirt_hangs_below_the_edges_facing_out() {
+    fn the_morph_extent_bounds_every_corner_s_move() {
         let s = shape();
         let mesh = tile_mesh(&s, deep_tile());
         let n = TILE_CELLS as usize;
         let side = n + 1;
-        assert_eq!(mesh.vertices.len(), side * side + 4 * n);
-        assert_eq!(mesh.indices.len(), n * n * 6 + 4 * n * 6);
-        let up = dvec::to_f32(s.up_at(mesh.origin));
-        let center: [f32; 3] = [0.0; 3];
-        for tri in mesh.indices[n * n * 6..].chunks_exact(3) {
-            let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| mesh.vertices[i as usize].pos);
-            let normal = cross(sub(b, a), sub(c, a));
-            let mid = [
-                (a[0] + b[0] + c[0]) / 3.0,
-                (a[1] + b[1] + c[1]) / 3.0,
-                (a[2] + b[2] + c[2]) / 3.0,
-            ];
-            let outward = sub(mid, center);
-            let flat = sub(outward, crate::math::vec3::scale(up, dot(outward, up)));
-            assert!(dot(normal, flat) > 0.0, "skirt faces out");
+        let grid: Vec<[f32; 3]> = mesh.vertices[..side * side].iter().map(|v| v.pos).collect();
+        let mut most: f32 = 0.0;
+        for j in 0..side {
+            for i in 0..side {
+                let p = grid[j * side + i];
+                let q = super::super::morph::morph_point(&grid, i, j, 1.0);
+                most = most.max(crate::math::vec3::length(sub(q, p)));
+            }
         }
-        for v in &mesh.vertices[side * side..] {
-            assert!(dot(v.pos, up) < 0.0, "below the tile center");
-        }
+        assert!(most > 0.0);
+        assert!(
+            (most - mesh.morph_extent).abs() <= 1e-3 * (1.0 + most),
+            "{most} {}",
+            mesh.morph_extent
+        );
+    }
+
+    // A tile is its grid alone: one vertex a corner, two triangles a cell.
+    #[test]
+    fn the_mesh_is_the_grid() {
+        let mesh = tile_mesh(&shape(), deep_tile());
+        let n = TILE_CELLS as usize;
+        assert_eq!(mesh.vertices.len(), (n + 1) * (n + 1));
+        assert_eq!(mesh.indices.len(), n * n * 6);
     }
 
     // Neighbors at one level share their edge corners exactly: same
@@ -431,7 +567,40 @@ mod tests {
             let pa = dvec::add(ma.origin, dvec::from_f32(va.pos));
             let pb = dvec::add(mb.origin, dvec::from_f32(vb.pos));
             assert!(dvec::length(dvec::sub(pa, pb)) < 0.01, "{pa:?} {pb:?}");
-            assert!(dot(va.normal, vb.normal) > 0.9999);
+            assert!(dot(va.normal, vb.normal) > 1.0 - 1e-6);
+        }
+    }
+
+    // A tile beside a coarser one shades every edge corner they share the
+    // same: the coarse tile's edge corners are every other corner of the
+    // fine one's.
+    #[test]
+    fn edge_normals_match_across_levels() {
+        let s = shape();
+        let coarse = TileId {
+            face: CubeFace(2),
+            level: 8,
+            x: 128,
+            y: 127,
+        };
+        // The fine tile's +s edge runs along the lower half of the coarse
+        // tile's -s edge.
+        let fine = TileId {
+            face: CubeFace(2),
+            level: 9,
+            x: 255,
+            y: 254,
+        };
+        let (mf, mc) = (tile_mesh(&s, fine), tile_mesh(&s, coarse));
+        let n = TILE_CELLS as usize;
+        let side = n + 1;
+        for j in (0..side).step_by(2) {
+            let vf = mf.vertices[j * side + n];
+            let vc = mc.vertices[(j / 2) * side];
+            let pf = dvec::add(mf.origin, dvec::from_f32(vf.pos));
+            let pc = dvec::add(mc.origin, dvec::from_f32(vc.pos));
+            assert!(dvec::length(dvec::sub(pf, pc)) < 0.01, "{pf:?} {pc:?}");
+            assert!(dot(vf.normal, vc.normal) > 1.0 - 1e-6, "corner {j}");
         }
     }
 

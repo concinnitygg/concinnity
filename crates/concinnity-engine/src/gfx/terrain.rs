@@ -136,6 +136,7 @@ pub(crate) fn append_terrain_draws(
             vertex_count: chunk.vertices.len(),
             index_offset,
             index_count: chunk.indices.len(),
+            planet_tile: None,
             base_vertex: 0,
             geometry_generation: 0,
             model,

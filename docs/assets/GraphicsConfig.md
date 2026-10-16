@@ -9,7 +9,8 @@ Every field of every section is optional. A field left unset follows the
 graphics quality preset: under `Auto` the detected GPU picks a tier, and the
 tier caps the quality-governed fields (shadow resolution and reach, texture
 filtering, ambient occlusion, reflections, the screen-space bounce,
-anti-aliasing and the upscaler's render scale) below the section defaults.
+anti-aliasing, the upscaler's render scale and planet terrain detail) below
+the section defaults.
 A field set here replaces the default but stays under the same cap on
 weaker hardware, and a choice the player makes in the settings menu
 replaces both.
@@ -33,3 +34,4 @@ replaces both.
 - `vignette`: A [Vignette](Vignette.md) object. Corner darkening.
 - `display`: A [Display](Display.md) object. HDR and PQ output.
 - `culling`: A [Culling](Culling.md) object. Visibility culling.
+- `planet_detail`: A [PlanetDetail](PlanetDetail.md) object. Planet terrain tile detail.

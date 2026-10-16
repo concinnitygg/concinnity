@@ -31,9 +31,30 @@ fn lattice(c: [i32; 3], salt: u32) -> f32 {
     (h >> 8) as f32 * (1.0 / 16_777_216.0)
 }
 
-/// Trilinear value noise in [0, 1] at lattice position `p`, salted: the
-/// kernel's `grass_value_noise3`.
+// The turn from a position into the noise lattice, by rows, so no lattice
+// plane (where the noise is flat across, a crease) lies along a world axis.
+const LATTICE_TURN: [[f32; 3]; 3] = [
+    [0.811_838_4, 0.534_144_4, -0.235_813_9],
+    [-0.459_433_17, 0.833_629_2, 0.306_567_43],
+    [0.360_332_63, -0.140_542_48, 0.922_175_8],
+];
+
+// Where position `p` lies in the lattice salted by `salt`: turned, then
+// shifted by a salted fraction of a cell, so lattices of different salts and
+// sizes do not all meet at the origin.
+fn lattice_point(p: [f32; 3], salt: u32) -> [f32; 3] {
+    core::array::from_fn(|i| {
+        let row = LATTICE_TURN[i];
+        let shift = ((salt >> (10 * i)) & 0x3ff) as f32 / 1024.0;
+        row[0] * p[0] + row[1] * p[1] + row[2] * p[2] + shift
+    })
+}
+
+/// Trilinear value noise in [0, 1] at position `p` (in lattice cells),
+/// salted: the kernel's `grass_value_noise3`. The lattice is turned off the
+/// axes, so the noise has no creases along them.
 pub fn value_noise(p: [f32; 3], salt: u32) -> f32 {
+    let p = lattice_point(p, salt);
     let cell = p.map(floor);
     let f: [f32; 3] = core::array::from_fn(|i| {
         let t = p[i] - cell[i];
@@ -123,6 +144,48 @@ mod tests {
             let b = meadow_density(e, SCALE, 3);
             assert!((a - b).abs() < 0.05, "{a} {b}");
         }
+    }
+
+    // The turn keeps cells their size and shape.
+    #[test]
+    fn the_lattice_turn_is_a_rotation() {
+        let r = LATTICE_TURN;
+        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        for i in 0..3 {
+            for j in 0..3 {
+                let want = if i == j { 1.0 } else { 0.0 };
+                assert!((dot(r[i], r[j]) - want).abs() < 1e-5, "{i} {j}");
+            }
+        }
+        let det = dot(
+            r[0],
+            [
+                r[1][1] * r[2][2] - r[1][2] * r[2][1],
+                r[1][2] * r[2][0] - r[1][0] * r[2][2],
+                r[1][0] * r[2][1] - r[1][1] * r[2][0],
+            ],
+        );
+        assert!((det - 1.0).abs() < 1e-5, "{det}");
+    }
+
+    // Across the plane x = 0 the noise changes as fast as it does anywhere:
+    // an axis-aligned lattice would be flat across it, a crease along the
+    // axis.
+    #[test]
+    fn the_noise_has_no_crease_along_an_axis_plane() {
+        let h = 1e-3;
+        let slope_across = |x: f32, i: u32| {
+            let y = (i * 7919 % 1000) as f32 * 0.037;
+            let z = (i * 104_729 % 1000) as f32 * 0.041;
+            (value_noise([x + h, y, z], 5) - value_noise([x - h, y, z], 5)).abs() / (2.0 * h)
+        };
+        let n = 2_000;
+        let on_plane: f32 = (0..n).map(|i| slope_across(0.0, i)).sum::<f32>() / n as f32;
+        let anywhere: f32 = (0..n)
+            .map(|i| slope_across((i * 31 % 997) as f32 * 0.013, i))
+            .sum::<f32>()
+            / n as f32;
+        assert!(on_plane > anywhere * 0.5, "{on_plane} vs {anywhere}");
     }
 
     #[test]

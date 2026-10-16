@@ -23,7 +23,7 @@ use super::planet::density::meadow_density;
 use super::planet::tiles::{DrawnPlanetTile, planet_center};
 use super::{GrassBladeLook, GrassTerrain, grown_layers};
 use crate::math::{atan2, cos, exp, powf, sin, sqrt};
-use crate::planet::PlanetShape;
+use crate::planet::{OCTAVE_TURN, PlanetShape};
 use crate::render::uniforms::canopy::{CanopyLayerGpu, CanopyParams, MAX_CANOPY_LAYERS};
 
 /// Most layers one terrain's far field shades: its vertex colors carry one
@@ -457,9 +457,26 @@ impl CanopyField {
             params.planet_radius = planet.shape.radius as f32;
             params.meadow_scale = planet.meadow_scale;
             params.meadow_mean = planet.meadow_mean;
+            set_ground_noise(&mut params, &planet.shape);
         }
         params
     }
+}
+
+// The noise `shape`'s height is summed from, in `params`, for the ground's
+// normals per pixel.
+fn set_ground_noise(params: &mut CanopyParams, shape: &PlanetShape) {
+    params.ground_turn = core::array::from_fn(|r| {
+        core::array::from_fn(|c| if c < 3 { OCTAVE_TURN[c][r] as f32 } else { 0.0 })
+    });
+    let octaves = shape.octave_count();
+    for octave in 0..octaves {
+        params.ground_salts[octave as usize / 4][octave as usize % 4] = shape.octave_salt(octave);
+    }
+    params.ground_frequency = shape.base_frequency() as f32;
+    params.ground_height_scale = shape.noise_scale() as f32;
+    params.ground_cell = (shape.radius / shape.base_frequency()) as f32;
+    params.ground_octaves = octaves;
 }
 
 // The meadow's mean density over the sphere for `seeds`, sampled on a
@@ -1013,6 +1030,8 @@ mod tests {
             model,
             vertex_base: 0,
             radial: [0.0, 1.0],
+            morph: Default::default(),
+            morph_extent: 0.0,
         };
         let p = field.params(Some(&tile));
         assert_eq!(p.planet_radius, 50_000.0);
@@ -1032,6 +1051,144 @@ mod tests {
         let got = unit(rel);
         for i in 0..3 {
             assert!((got[i] - want[i]).abs() < 1e-5, "{got:?} {want:?}");
+        }
+    }
+
+    // The shader's `ground_normal_at`, line for line, over the block's noise.
+    fn shader_ground_normal(p: &CanopyParams, dir: [f32; 3], footprint: f32) -> [f32; 3] {
+        let row = |r: usize| {
+            [
+                p.ground_turn[r][0],
+                p.ground_turn[r][1],
+                p.ground_turn[r][2],
+            ]
+        };
+        let turn = [row(0), row(1), row(2)];
+        let mul_mv = |m: &[[f32; 3]; 3], v: [f32; 3]| m.map(|r| dot(r, v));
+        let mul_mm = |a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]| {
+            core::array::from_fn(|r| {
+                core::array::from_fn(|c| (0..3).map(|k| a[r][k] * b[k][c]).sum())
+            })
+        };
+        let mut to_lattice: [[f32; 3]; 3] = turn.map(|r| r.map(|v| v * p.ground_frequency));
+        let mut cell = p.ground_cell;
+        let mut weight = 1.0;
+        let mut gradient = [0.0f32; 3];
+        for o in 0..p.ground_octaves.min(16) as usize {
+            let fade = ((cell / (2.0 * footprint).max(1e-4)).log2()).clamp(0.0, 1.0);
+            if fade <= 0.0 {
+                break;
+            }
+            let salt = p.ground_salts[o / 4][o % 4];
+            let offset = [salt, salt >> 10, salt >> 20].map(|b| (b & 0x3ff) as f32 / 1024.0);
+            let q = mul_mv(&to_lattice, dir);
+            let g = shader_noise_gradient(core::array::from_fn(|i| q[i] + offset[i]), salt);
+            for c in 0..3 {
+                let back: f32 = (0..3).map(|r| g[r] * to_lattice[r][c]).sum();
+                gradient[c] += back * weight * fade;
+            }
+            to_lattice = mul_mm(&turn, &to_lattice).map(|r: [f32; 3]| r.map(|v| v * 2.0));
+            weight *= 0.5;
+            cell *= 0.5;
+        }
+        let gradient = gradient.map(|g| g * p.ground_height_scale);
+        let d = dot(dir, gradient);
+        unit(core::array::from_fn(|i| {
+            dir[i] - (gradient[i] - dir[i] * d) / p.planet_radius
+        }))
+    }
+
+    // The shader's `ground_noise_gradient`, line for line.
+    fn shader_noise_gradient(p: [f32; 3], salt: u32) -> [f32; 3] {
+        use crate::math::noise::lcg_hash;
+        let lattice = |c: [i32; 3]| {
+            let h = lcg_hash(
+                lcg_hash(
+                    lcg_hash(c[0] as u32 ^ salt)
+                        .wrapping_add((c[1] as u32).wrapping_mul(0x85eb_ca6b)),
+                )
+                .wrapping_add((c[2] as u32).wrapping_mul(0xc2b2_ae35)),
+            );
+            (h & 0xffff) as f32 / 65535.0
+        };
+        let cell = p.map(crate::math::floor);
+        let t: [f32; 3] = core::array::from_fn(|i| p[i] - cell[i]);
+        let s = t.map(|t| t * t * (3.0 - 2.0 * t));
+        let ds = t.map(|t| 6.0 * t * (1.0 - t));
+        let c = cell.map(|v| v as i32);
+        let at = |x: i32, y: i32, z: i32| lattice([c[0] + x, c[1] + y, c[2] + z]);
+        let (a, b, d0, d1) = (at(0, 0, 0), at(1, 0, 0), at(0, 1, 0), at(1, 1, 0));
+        let (e, f, g, h) = (at(0, 0, 1), at(1, 0, 1), at(0, 1, 1), at(1, 1, 1));
+        let k1 = b - a;
+        let k2 = d0 - a;
+        let k3 = e - a;
+        let k4 = a - b - d0 + d1;
+        let k5 = a - d0 - e + g;
+        let k6 = a - b - e + f;
+        let k7 = -a + b + d0 - d1 + e - f - g + h;
+        [
+            ds[0] * (k1 + k4 * s[1] + k6 * s[2] + k7 * s[1] * s[2]),
+            ds[1] * (k2 + k5 * s[2] + k4 * s[0] + k7 * s[2] * s[0]),
+            ds[2] * (k3 + k6 * s[0] + k5 * s[1] + k7 * s[0] * s[1]),
+        ]
+    }
+
+    fn ground_shape() -> PlanetShape {
+        PlanetShape {
+            center: [0.0, -50_000.0, 0.0],
+            radius: 50_000.0,
+            amplitude: 40.0,
+            feature_size: 2_000.0,
+            octaves: 8,
+            seed: 4,
+        }
+    }
+
+    fn ground_params() -> CanopyParams {
+        let mut p = CanopyParams {
+            planet_radius: 50_000.0,
+            ..CanopyParams::default()
+        };
+        set_ground_noise(&mut p, &ground_shape());
+        p
+    }
+
+    // A pixel fine enough to hold every octave shades with the ground's exact
+    // normal, the one its tiles' corners carry.
+    #[test]
+    fn a_fine_pixel_shades_with_the_exact_ground_normal() {
+        let shape = ground_shape();
+        let p = ground_params();
+        assert_eq!(p.ground_octaves, 8);
+        for i in 0..32 {
+            let dir = CubeFace(2).direction(0.001 * i as f64, -0.04 + 0.0007 * i as f64);
+            let want = crate::planet::dvec::to_f32(shape.normal(dir));
+            let got = shader_ground_normal(&p, crate::planet::dvec::to_f32(dir), 0.01);
+            assert!(dot(got, want) > 1.0 - 1e-6, "{got:?} {want:?}");
+        }
+    }
+
+    // As a pixel widens, octaves fade out finest first, by the meters it
+    // covers alone: a pixel wider than half the broadest octave's cells sees
+    // the bare sphere.
+    #[test]
+    fn octaves_fade_out_as_the_footprint_grows() {
+        let p = ground_params();
+        let dir = crate::planet::dvec::to_f32(CubeFace(2).direction(0.013, -0.021));
+        let tilt = |footprint: f32| 1.0 - dot(shader_ground_normal(&p, dir, footprint), dir);
+        assert!(tilt(p.ground_cell) < 1e-6);
+        assert!(tilt(p.ground_cell / 1024.0) > 1e-6);
+        let finest = p.ground_cell / 128.0;
+        // Below the finest octave's half cell, nothing has faded yet.
+        let full = shader_ground_normal(&p, dir, finest / 4.0);
+        assert_eq!(full, shader_ground_normal(&p, dir, finest / 8.0));
+        // Each octave fades over a doubling of the footprint, continuously.
+        let mut last = full;
+        for k in 0..64 {
+            let f = finest / 4.0 * 2f32.powf(k as f32 / 8.0);
+            let n = shader_ground_normal(&p, dir, f);
+            assert!(dot(n, last) > 1.0 - 2e-4, "a step at footprint {f}");
+            last = n;
         }
     }
 }

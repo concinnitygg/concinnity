@@ -12,7 +12,9 @@
 // reflects it against `GpuObjectData` on every target, and its
 // `no_shader_redeclares_the_object_record` scan keeps it that way.
 
-// Mirrors `GpuObjectData` in concinnity-core/src/gfx/render_types.rs (160 B).
+{TILE_MORPH_TYPES}
+
+// Mirrors `GpuObjectData` in concinnity-core/src/gfx/render_types.rs (208 B).
 // Each (vec3, scalar) pair is spelled as one float4: MSL sizes a float3 at 16
 // bytes in a structured buffer as well as in a constant buffer, so a literal
 // transcription pushes every following field four bytes late on Metal alone.
@@ -38,6 +40,8 @@ struct GpuObjectData
     float far_start;
     float far_end;
     uint far_canopy;
+    // How a planet tile's vertices morph (see tile_morph.hlsl).
+    GpuTileMorph tile_morph;
 };
 
 // Mirrors `GpuDrawArgs` in concinnity-core/src/gfx/render_types.rs (16 B): the

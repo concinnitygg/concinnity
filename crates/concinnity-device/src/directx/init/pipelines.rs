@@ -136,6 +136,9 @@ pub(super) fn create_main_bindless_root_signature(
         // t24 (`directx/canopy.rs`).
         .cbv(8, Pixel)
         .srv(24, Pixel)
+        // [25] the shared vertex stream at t9, where a planet tile's morph
+        // reads its neighbors.
+        .srv(9, Vertex)
         .input_layout()
         .build(device, "main bindless root sig")
 }
@@ -145,9 +148,9 @@ pub(super) fn create_main_bindless_root_signature(
 // cull command signature works against it: [0] is the per-command b0 object-id
 // root constant (set by the `ExecuteIndirect` command signature, so it MUST stay
 // at root parameter 0), [1] the shadow UBO CBV (light_vps), [2] a per-cascade b2
-// cascade-index root constant (set once per cascade's `ExecuteIndirect`), and [3]
+// cascade-index root constant (set once per cascade's `ExecuteIndirect`), [3]
 // the per-frame `StructuredBuffer<GpuObjectData>` root SRV the VS reads `model`
-// from. All vertex-stage only (depth-only pass, no pixel shader).
+// from, and [4] the shared vertex stream. All vertex-stage only (depth-only pass, no pixel shader).
 pub(in crate::directx) fn create_shadow_bindless_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
@@ -160,6 +163,9 @@ pub(in crate::directx) fn create_shadow_bindless_root_signature(
         .constant_dwords(2, 1, Visibility::Vertex)
         // [3] t0: per-frame StructuredBuffer<GpuObjectData>.
         .srv(0, Visibility::Vertex)
+        // [4] t1: the shared vertex stream, where a planet tile's morph reads
+        // its neighbors.
+        .srv(1, Visibility::Vertex)
         .input_layout()
         .build(device, "shadow bindless root sig")
 }

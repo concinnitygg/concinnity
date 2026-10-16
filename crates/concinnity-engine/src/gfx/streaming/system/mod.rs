@@ -19,7 +19,7 @@
 //! `crate::gfx::streaming::{texture, mesh, chunk}`; this module only
 //! scores, dispatches, and applies their results each frame.
 
-use concinnity_core::components::Camera3D;
+use concinnity_core::components::{Camera3D, FrameInput};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{PipelineContext, StepResult, System};
 use concinnity_core::gfx::chunk_coord;
@@ -37,6 +37,7 @@ use concinnity_core::render::scene_residency::{
 use crate::ecs::RenderOpFailures;
 use crate::gfx::overlay::OverlayFrame;
 use crate::gfx::render_slots::RenderSlots;
+use crate::gfx::streaming::planet::TileCamera;
 
 pub(crate) mod accounting;
 pub(crate) mod pressure;
@@ -226,11 +227,17 @@ impl System for StreamingSystem {
             .copied();
         // The camera the draw will use (written by the camera controller last
         // tick) is the absolute fallback when no chunk streaming rebases it.
-        let (view_matrix, cam_pos) = ctx
+        let (view_matrix, cam_pos, fov_y_degrees) = ctx
             .query::<Camera3D>()
             .next()
-            .map(|c| (c.view_matrix, c.position))
-            .unwrap_or((IDENTITY4, [0.0; 3]));
+            .map(|c| (c.view_matrix, c.position, c.fov_y_degrees))
+            .unwrap_or((IDENTITY4, [0.0; 3], 0.0));
+        // The viewport the input system sampled last tick: with the field of
+        // view, how large a planet's ground looks.
+        let viewport_height = ctx.resource::<FrameInput>().map_or(0.0, |i| i.viewport[1]);
+        let finest_cell_size = f64::from(crate::settings::system::planet_finest_cell_size(
+            ctx.resources,
+        ));
         // Peek (not take) the overlay's world-hidden flag: OverlaySystem
         // published it first this tick and GraphicsSystem takes it later.
         // Streaming pauses behind an opaque menu (the world is not drawn),
@@ -317,9 +324,17 @@ impl System for StreamingSystem {
         // last published.
         if let (Some(tiles), Some(planet)) = (state.planet_tiles.as_mut(), planet.as_ref()) {
             let retire_frame = state.frame_count + state.frames_in_flight as u64;
+            let camera = TileCamera {
+                position: cam_pos,
+                points_per_radian: concinnity_core::planet::points_per_radian(
+                    fov_y_degrees,
+                    viewport_height,
+                ),
+                finest_cell_size,
+            };
             tiles.step(
                 planet,
-                cam_pos,
+                camera,
                 &mut queues.ops,
                 &mut queues.slots,
                 state.frame_count,

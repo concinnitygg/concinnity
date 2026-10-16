@@ -322,6 +322,10 @@ fn resolve_quality(
             .anisotropy
             .min(ceiling.anisotropy),
     );
+    g.planet_detail.finest_cell_size = authored
+        .planet_detail
+        .finest_cell_size
+        .max(ceiling.min_planet_cell_size);
     g
 }
 

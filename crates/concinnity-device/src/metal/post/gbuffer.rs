@@ -436,6 +436,11 @@ impl MtlContext {
         self.use_bindless_textures(enc);
         enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 1);
         enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 2);
+        enc.set_vertex_buffer(
+            &self.scene.vertex_buffer,
+            0,
+            concinnity_core::render::shader_programs::metal::MAIN_MESH_VERTICES_BUFFER,
+        );
 
         let counts = self.draw_record_counts();
         let mut draw_calls = 0u32;

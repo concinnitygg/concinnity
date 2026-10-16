@@ -59,13 +59,21 @@ ConstantBuffer<CascadePush> push : register(b2);
 #endif
 
 #ifdef SHADOW_BINDLESS
+// The shared vertex stream as floats, where a planet tile's morph reads its
+// neighbors.
 #ifdef CN_BACKEND_DIRECTX
 struct ObjectId { uint value; };
 ConstantBuffer<ObjectId> objid_cb : register(b0);
 StructuredBuffer<GpuObjectData> objects : register(t0);
+ByteAddressBuffer mesh_vertices : register(t1);
+float mesh_float(uint i) { return asfloat(mesh_vertices.Load(i * 4u)); }
 #else
 [[vk::binding(0, 1)]] StructuredBuffer<GpuObjectData> objects : register(t9);
+[[vk::binding(3, 1)]] StructuredBuffer<float> mesh_vertices : register(t2);
+float mesh_float(uint i) { return mesh_vertices[i]; }
 #endif
+
+{TILE_MORPH}
 #endif
 
 // The full static layout is declared so the pipeline's vertex descriptor is
@@ -84,7 +92,8 @@ struct ShadowVertexIn
 
 [shader("vertex")]
 float4 shadow_vertex_bindless(
-    ShadowVertexIn v
+    ShadowVertexIn v,
+    uint vertex_id : SV_VertexID
 #ifdef CN_BACKEND_DIRECTX
     ) : SV_Position
 {
@@ -96,7 +105,12 @@ float4 shadow_vertex_bindless(
     uint oid = object_instance_index(instance_id);
 #endif
     float4x4 model = objects[oid].model;
-    return mul(shadow_cb.light_vps[SHADOW_CASCADE], mul(model, float4(v.pos, 1.0)));
+    // A planet tile casts as the main pass draws it: morphed for the camera,
+    // not for the light.
+    GpuTileMorph m = objects[oid].tile_morph;
+    TileVertex tv = tile_vertex_in(v.pos, v.normal, v.tangent);
+    tv = tile_morph_draw(m, model, tv, vertex_id, m.eye_range.xyz);
+    return mul(shadow_cb.light_vps[SHADOW_CASCADE], mul(model, float4(tv.position, 1.0)));
 }
 
 #endif

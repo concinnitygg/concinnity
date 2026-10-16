@@ -124,6 +124,9 @@ pub(in crate::directx) fn create_prepass_root_signature(
         // the grass draw's vertex stage reads (`directx/grass.rs`).
         .cbv(7, Vertex)
         .srv(23, Vertex)
+        // [11] t9: the shared vertex stream, where a planet tile's morph reads
+        // its neighbors.
+        .srv(9, Vertex)
         .input_layout()
         .build(device, "gbuffer prepass root sig")
 }
@@ -137,6 +140,7 @@ const PREPASS_DRAW_ARGS_PARAM: u32 = 5;
 const PREPASS_MATERIAL_PARAMS_PARAM: u32 = 6;
 const PREPASS_POOL_PARAM: u32 = 7;
 const PREPASS_SAMPLERS_PARAM: u32 = 8;
+const PREPASS_MESH_VERTICES_PARAM: u32 = 11;
 
 // One shader bucket's G-buffer pre-pass PSO over its `vertex_prepass_bindless`
 // / `fragment_prepass_bindless` pair: the three MRT targets over a private
@@ -716,6 +720,10 @@ impl DxContext {
             cmd.SetGraphicsRootShaderResourceView(PREPASS_OBJECTS_PARAM, object_gva);
             cmd.SetGraphicsRootShaderResourceView(PREPASS_PREV_MODELS_PARAM, prev_model_gva);
             cmd.SetGraphicsRootShaderResourceView(PREPASS_DRAW_ARGS_PARAM, draw_args_gva);
+            cmd.SetGraphicsRootShaderResourceView(
+                PREPASS_MESH_VERTICES_PARAM,
+                com::gpu_va(&self.scene.geometry.vertex_buffer),
+            );
             cmd.SetGraphicsRootShaderResourceView(
                 PREPASS_MATERIAL_PARAMS_PARAM,
                 self.material_params_gva(frame_idx),

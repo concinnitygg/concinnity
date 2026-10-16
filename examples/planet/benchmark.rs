@@ -59,8 +59,9 @@ const GRAPHICS: &str = "GraphicsConfig#0";
 // The frames saved with `--capture`: the file name, the segment the frame is
 // taken in, and how far through that segment. The sun sets about a third of
 // the way along the ground and rises again near the end of the cruise.
-const CAPTURES: [(&str, &str, f32); 3] = [
+const CAPTURES: [(&str, &str, f32); 4] = [
     ("ground-day.png", "ground", 0.15),
+    ("aloft-sunrise.png", "aloft", 0.65),
     ("aloft-day.png", "aloft", 0.9),
     ("ground-night.png", "ground", 0.9),
 ];
@@ -390,5 +391,13 @@ mod tests {
         assert!(ground_day > 15.0, "{ground_day} deg");
         assert!(aloft_day > 10.0, "{aloft_day} deg");
         assert!(ground_night < -30.0, "{ground_night} deg");
+    }
+
+    // The sunrise capture catches the sun just over the horizon, where a
+    // grazing light shows any step in the ground's shading.
+    #[test]
+    fn the_sunrise_capture_has_the_sun_low() {
+        let sunrise = sun_elevation_deg(moment("aloft-sunrise.png"));
+        assert!(sunrise > 0.5 && sunrise < 8.0, "{sunrise} deg");
     }
 }

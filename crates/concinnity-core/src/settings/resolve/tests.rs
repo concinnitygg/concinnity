@@ -732,6 +732,49 @@ fn the_diff_groups_changes_by_apply_class() {
     assert_eq!(diff.costliest(), Some(ApplyClass::Restart));
 }
 
+// The planet's finest cell size is the world's, coarsened to the tier's floor
+// and never refined by it, and a change to it applies live.
+#[test]
+fn the_planet_cell_size_resolves_under_the_ceiling() {
+    use crate::components::PlanetDetailOverrides;
+    let none = UserGraphicsSettings::default();
+    let cells = |world: &WorldSettings, ceiling: &QualityCeiling| {
+        resolve_settings(world, &none, ceiling)
+            .graphics
+            .planet_detail
+            .finest_cell_size
+    };
+    let bare = WorldSettings::default();
+    assert_eq!(cells(&bare, &QualityCeiling::NONE), 1);
+    assert_eq!(cells(&bare, &low()), 4);
+    let medium = authored(GraphicsConfig {
+        planet_detail: PlanetDetailOverrides {
+            finest_cell_size: Some(3),
+        },
+        ..Default::default()
+    });
+    assert_eq!(cells(&medium, &QualityCeiling::NONE), 3);
+    assert_eq!(cells(&medium, &QualityCeiling::HIGH), 3);
+    assert_eq!(cells(&medium, &low()), 4);
+    let coarse = authored(GraphicsConfig {
+        planet_detail: PlanetDetailOverrides {
+            finest_cell_size: Some(8),
+        },
+        ..Default::default()
+    });
+    assert_eq!(cells(&coarse, &QualityCeiling::ULTRA), 8);
+
+    let before = resolve_settings(&bare, &none, &QualityCeiling::NONE);
+    let after = resolve_settings(&bare, &none, &low());
+    let live = after.diff(&before);
+    assert!(
+        live.class(ApplyClass::Live)
+            .iter()
+            .any(|c| c.asset == "PlanetDetail" && c.key == "finest_cell_size"),
+        "{live:?}"
+    );
+}
+
 // Every resolved value the diff names is a field that declares its class, so
 // none falls back to the restart default by omission.
 #[test]
@@ -751,6 +794,7 @@ fn every_diffed_field_declares_its_apply_class() {
     declares::<IndirectLighting>(&["ambient_intensity"]);
     declares::<Display>(&["hdr", "pq"]);
     declares::<Culling>(&["two_pass_occlusion"]);
+    declares::<crate::components::PlanetDetail>(&["finest_cell_size"]);
     declares::<Shadows>(&["map_size", "update", "distance", "cascades"]);
     declares::<TextureFiltering>(&["anisotropy"]);
     declares::<FramePacing>(&["vsync", "fps_cap", "frames_in_flight"]);

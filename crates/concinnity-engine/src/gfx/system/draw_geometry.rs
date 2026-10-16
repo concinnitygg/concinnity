@@ -169,6 +169,7 @@ mod tests {
             vertex_count: 0,
             index_offset,
             index_count,
+            planet_tile: None,
             base_vertex,
             geometry_generation: 0,
             shader_bucket: 0,

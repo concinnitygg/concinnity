@@ -118,6 +118,7 @@ pub(super) struct CullInputs<'a> {
     pub(super) descriptors: &'a VkDescriptors,
     pub(super) targets: &'a VkTargets,
     pub(super) scene: &'a VkSceneAssets,
+    pub(super) geometry: &'a crate::vulkan::context::VkGeometry,
     pub(super) shadow: &'a VkShadow,
     // Spot shadow slices the world assigned; each gets a cull set and buffer.
     pub(super) spot_slices: usize,
@@ -139,6 +140,7 @@ pub(super) fn build_cull(
         descriptors,
         targets,
         scene,
+        geometry,
         shadow,
         spot_slices,
         gbuffer,
@@ -153,6 +155,10 @@ pub(super) fn build_cull(
             targets,
             scene,
             material_params: &world.material_params,
+            vertices: (
+                geometry.vertex_buffer.buffer(),
+                geometry.vertex_buffer_bytes,
+            ),
             swapchain_format,
             gbuffer_render_pass: gbuffer.map(|gb| gb.prepass_render_pass.handle()),
         },

@@ -136,6 +136,7 @@
 - [PanelSection](PanelSection.md) - One panel section: a caption over the rows of the listed regions.
 - [PassResolution](PassResolution.md) - Internal resolution a screen-space pass renders at before its result is upsampled to native. `half` (the default) shades a quarter of the pixels; `full` keeps the pass at native resolution; `quarter` is the cheapest.
 - [PhysicsJointKind](PhysicsJointKind.md) - The constraint shape a `PhysicsJoint` declares.
+- [PlanetDetail](PlanetDetail.md) - How finely a planet's terrain tiles are drawn. The `planet_detail` section of [GraphicsConfig](GraphicsConfig.md); a field left unset takes the default below.
 - [PrefabEntry](PrefabEntry.md) - One entry in a [Prefab](Prefab.md)'s `props` list. The fields consulted depend on `kind`: a `prop` uses the render / collision / transform fields, a `point_light` uses the `light_*` fields, and a `prefab` uses `prefab`. The assets named by `model` / `mesh` / `material` / `parent` / `prefab` resolve when the entry expands.
 - [PrefabKind](PrefabKind.md) - Which kind of asset a [PrefabEntry](PrefabEntry.md) expands into.
 - [PropCollider](PropCollider.md) - Collision volume attached to a [Prop](Prop.md).

@@ -75,6 +75,7 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             [bb_max, alpha_cutoff] => ["bb_max_alpha_cutoff"],
             params_index,
             [far_field] => ["far_start", "far_end", "far_canopy"],
+            tile_morph,
         })),
     ];
     cases.extend(light_cull());
@@ -92,6 +93,12 @@ pub(in crate::shader_layout) fn canopy() -> Vec<Case> {
             meadow_mean,
             layer_count,
             layers,
+            ground_turn,
+            ground_salts,
+            ground_frequency,
+            ground_height_scale,
+            ground_cell,
+            ground_octaves,
         })),
         everywhere(mirror!(CanopyLayerGpu => "CanopyLayer" {
             [root_color, color_variation] => ["root_color_variation"],

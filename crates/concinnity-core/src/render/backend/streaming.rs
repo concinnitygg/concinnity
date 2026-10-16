@@ -54,6 +54,9 @@ pub struct PlanetChunk {
     /// The lowest and highest its surface lies along the up at its origin, in
     /// meters from the origin.
     pub radial: [f32; 2],
+    /// The farthest any of its corners moves when it morphs all the way into
+    /// its parent's mesh, in meters.
+    pub morph_extent: f32,
 }
 
 /// Slot residency: the mesh, texture and chunk uploads and evictions a

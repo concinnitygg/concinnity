@@ -125,8 +125,22 @@ float grass_lattice3(int3 c, uint salt)
     return float(h >> 8u) * (1.0 / 16777216.0);
 }
 
+// Where position `p` lies in the noise lattice salted by `salt`: turned off
+// the axes, then shifted by a salted fraction of a cell. Matches lattice_point
+// in render::grass::planet::density.
+float3 grass_lattice_point(float3 p, uint salt)
+{
+    float3 shift = float3(uint3(salt, salt >> 10u, salt >> 20u) & 0x3ffu) * (1.0 / 1024.0);
+    return float3(dot(float3(0.8118384, 0.5341444, -0.2358139), p),
+                  dot(float3(-0.45943317, 0.8336292, 0.30656743), p),
+                  dot(float3(0.36033263, -0.14054248, 0.9221758), p)) + shift;
+}
+
+// Trilinear value noise in [0, 1] at position `p` (in lattice cells), salted,
+// on a lattice turned off the axes so it has no creases along them.
 float grass_value_noise3(float3 p, uint salt)
 {
+    p = grass_lattice_point(p, salt);
     float3 cell = floor(p);
     float3 f = p - cell;
     f = f * f * (3.0 - 2.0 * f);

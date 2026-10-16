@@ -502,6 +502,10 @@ impl LocalLightParams {
     };
 }
 
+// The bindless main root parameter the shared vertex stream binds at (t9),
+// where a planet tile's morph reads its neighbors.
+pub(in crate::directx) const MAIN_MESH_VERTICES_PARAM: u32 = 25;
+
 // Root parameters the bindless main pass binds the reflection-probe set at:
 // the cube array table (t7), the ProbeSet constant buffer (b4) and the records
 // (a root SRV at t8).

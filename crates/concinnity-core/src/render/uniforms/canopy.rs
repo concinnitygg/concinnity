@@ -44,8 +44,8 @@ pub struct CanopyLayerGpu {
     pub clumping: f32,
 }
 
-/// The canopy block: every far field's layers, and the frame a planet's ground
-/// is laid out in. 1344 bytes.
+/// The canopy block: every far field's layers, the frame a planet's ground is
+/// laid out in, and the noise its height is summed from. 1472 bytes.
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct CanopyParams {
@@ -63,6 +63,19 @@ pub struct CanopyParams {
     pub layer_count: u32,
     /// The layers, each far field's a contiguous run.
     pub layers: [CanopyLayerGpu; MAX_CANOPY_LAYERS],
+    /// Rows of the turn from one height octave's lattice to the next, in the
+    /// planet's axes.
+    pub ground_turn: [[f32; 4]; 3],
+    /// Each height octave's hash salt, four to a row.
+    pub ground_salts: [[u32; 4]; 4],
+    /// Lattice cells of the broadest height octave per unit of direction.
+    pub ground_frequency: f32,
+    /// Meters of height per unit of the octaves' weighted sum.
+    pub ground_height_scale: f32,
+    /// Width of the broadest height octave's lattice cells, in meters.
+    pub ground_cell: f32,
+    /// Height octaves summed; 0 off a planet.
+    pub ground_octaves: u32,
 }
 
 impl Default for CanopyParams {
@@ -104,7 +117,13 @@ mod tests {
         assert_eq!(offset_of!(CanopyParams, meadow_mean), 56);
         assert_eq!(offset_of!(CanopyParams, layer_count), 60);
         assert_eq!(offset_of!(CanopyParams, layers), 64);
-        assert_eq!(size_of::<CanopyParams>(), 1344);
+        assert_eq!(offset_of!(CanopyParams, ground_turn), 1344);
+        assert_eq!(offset_of!(CanopyParams, ground_salts), 1392);
+        assert_eq!(offset_of!(CanopyParams, ground_frequency), 1456);
+        assert_eq!(offset_of!(CanopyParams, ground_height_scale), 1460);
+        assert_eq!(offset_of!(CanopyParams, ground_cell), 1464);
+        assert_eq!(offset_of!(CanopyParams, ground_octaves), 1468);
+        assert_eq!(size_of::<CanopyParams>(), 1472);
         // Metal sets the block inline, which caps it at 4 KiB.
         const { assert!(size_of::<CanopyParams>() <= 4096) };
         assert_eq!(CanopyParams::default().layer_count, 0);

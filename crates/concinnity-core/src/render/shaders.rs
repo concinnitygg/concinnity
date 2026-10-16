@@ -78,6 +78,8 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("taa.hlsl", TAA),
     ("text.hlsl", TEXT),
     ("texture_size.hlsl", TEXTURE_SIZE),
+    ("tile_morph.hlsl", TILE_MORPH),
+    ("tile_morph_types.hlsl", TILE_MORPH_TYPES),
     ("transparent_probes.hlsl", TRANSPARENT_PROBES),
     ("transparent_rt.hlsl", TRANSPARENT_RT),
     ("transparent_scene.hlsl", TRANSPARENT_SCENE),
@@ -225,6 +227,10 @@ pub const TAA: &str = include_str!("shaders/taa.hlsl");
 pub const TEXT: &str = include_str!("shaders/text.hlsl");
 /// `texture_size.hlsl`.
 pub const TEXTURE_SIZE: &str = include_str!("shaders/texture_size.hlsl");
+/// `tile_morph.hlsl`.
+pub const TILE_MORPH: &str = include_str!("shaders/tile_morph.hlsl");
+/// `tile_morph_types.hlsl`.
+pub const TILE_MORPH_TYPES: &str = include_str!("shaders/tile_morph_types.hlsl");
 /// `transparent_probes.hlsl`.
 pub const TRANSPARENT_PROBES: &str = include_str!("shaders/transparent_probes.hlsl");
 /// `transparent_rt.hlsl`.

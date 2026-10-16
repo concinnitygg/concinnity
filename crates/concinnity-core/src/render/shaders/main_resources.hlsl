@@ -63,7 +63,8 @@ struct CanopyLayer
 #define CANOPY_MAX_LAYERS 16
 
 // Mirrors `CanopyParams` in concinnity-core/src/render/uniforms/canopy.rs
-// (1344 B): every far field's layers, and the planet's axes in the frame.
+// (1472 B): every far field's layers, the planet's axes in the frame, and the
+// noise its height is summed from.
 struct CanopyParams
 {
     float4 planet_rows[3];
@@ -72,6 +73,12 @@ struct CanopyParams
     float meadow_mean;
     uint layer_count;
     CanopyLayer layers[CANOPY_MAX_LAYERS];
+    float4 ground_turn[3];
+    uint4 ground_salts[4];
+    float ground_frequency;
+    float ground_height_scale;
+    float ground_cell;
+    uint ground_octaves;
 };
 
 // ---- Resource bindings ----
@@ -129,6 +136,10 @@ SamplerState tex_sampler : register(s0, space2);
 // The far field's canopy block, and its layers' view tables.
 [[vk::binding(15, 0)]] ConstantBuffer<CanopyParams> canopy_cb : register(b21);
 [[vk::binding(16, 0)]] StructuredBuffer<float4> canopy_tables_sb : register(t22);
+// The shared vertex stream as floats, where a planet tile's morph reads its
+// neighbors.
+[[vk::binding(17, 0)]] StructuredBuffer<float> mesh_vertices : register(t23);
+float mesh_float(uint i) { return mesh_vertices[i]; }
 
 // The pool's sampler, under the name the other hosts declare it by.
 #define linear_sampler tex_sampler
@@ -137,7 +148,7 @@ SamplerState tex_sampler : register(s0, space2);
 
 // Every register below is pinned to the bindless main root signature in
 // directx/init/pipelines.rs. Root constant at b0, root CBVs at b1-b5, root SRVs
-// at t1/t2/t3/t8/t15/t17, descriptor tables for the rest, and the unbounded
+// at t1/t2/t3/t8/t9/t15/t17, descriptor tables for the rest, and the unbounded
 // texture pool in space1.
 struct ObjectId { uint value; };
 
@@ -174,6 +185,10 @@ StructuredBuffer<GpuMaterialParams> material_params_sb : register(t20);
 // The far field's canopy block, and its layers' view tables.
 ConstantBuffer<CanopyParams> canopy_cb : register(b8);
 StructuredBuffer<float4> canopy_tables_sb : register(t24);
+// The shared vertex stream as a raw view, where a planet tile's morph reads
+// its neighbors.
+ByteAddressBuffer mesh_vertices : register(t9);
+float mesh_float(uint i) { return asfloat(mesh_vertices.Load(i * 4u)); }
 // Bindless texture pool: [albedo textures..] ++ [normal maps..]. Unbounded so
 // the shader never over-declares the host's per-frame descriptor region.
 Texture2D<float4> tex_pool[] : register(t0, space1);
@@ -224,12 +239,20 @@ SamplerState cube_sampler : register(s2);
 [[vk::binding(1, 1)]] Texture2D<float4> tex_pool[] : register(t1, space1);
 // The material parameter table, indexed by GpuObjectData.params_index.
 [[vk::binding(2, 1)]] StructuredBuffer<GpuMaterialParams> material_params_sb : register(t2, space1);
+// The shared vertex stream as floats, where a planet tile's morph reads its
+// neighbors.
+[[vk::binding(3, 1)]] StructuredBuffer<float> mesh_vertices : register(t3, space1);
+float mesh_float(uint i) { return mesh_vertices[i]; }
 // The far field's canopy block, and its layers' view tables.
 [[vk::binding(21, 0)]] ConstantBuffer<CanopyParams> canopy_cb : register(b21);
 [[vk::binding(22, 0)]] StructuredBuffer<float4> canopy_tables_sb : register(t22);
 
 
 #endif // binding model
+
+// The surface's tangent frame follows the morph.
+#define TILE_MORPH_TANGENT
+{TILE_MORPH}
 
 #ifdef SURFACE_PREPASS
 

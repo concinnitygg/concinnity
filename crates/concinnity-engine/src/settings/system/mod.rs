@@ -21,11 +21,12 @@
 //! `PipelineContext` are never borrowed together.
 
 use concinnity_core::components::GamepadMap;
+use concinnity_core::components::PlanetDetail;
 use concinnity_core::components::SceneCommand;
 use concinnity_core::components::Window;
 use concinnity_core::components::WindowMode;
 use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{EventCursor, HudPrefs, PipelineContext, StepResult, System};
+use concinnity_core::ecs::{EventCursor, HudPrefs, PipelineContext, Resources, StepResult, System};
 use concinnity_core::input::keymap;
 use concinnity_core::render::backend;
 use concinnity_core::render::error::RenderError;
@@ -168,6 +169,17 @@ impl System for SettingsSystem {
         Self::park(ctx, state);
         StepResult::Continue
     }
+}
+
+// How wide a planet's finest terrain cells get, in meters: the resolved
+// setting once graphics init has parked the state, else the section default.
+pub(crate) fn planet_finest_cell_size(resources: &Resources) -> u32 {
+    resources
+        .get::<SettingsSlot>()
+        .and_then(|slot| slot.0.as_ref())
+        .map_or(PlanetDetail::default().finest_cell_size, |state| {
+            state.resolved.graphics.planet_detail.finest_cell_size
+        })
 }
 
 // Record `plan` against `graphics` when it reaches the renderer. A failed

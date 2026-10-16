@@ -8,6 +8,7 @@
 use alloc::vec::Vec;
 
 use super::cells::PlanetGrassGrid;
+use crate::gfx::render_types::GpuTileMorph;
 use crate::planet::dvec;
 use crate::planet::{PlanetShape, TileId};
 use crate::render::uniforms::grass::{MAX_PLANET_GRASS_TILES, PlanetGrassTileGpu};
@@ -25,6 +26,11 @@ pub struct DrawnPlanetTile {
     /// The lowest and highest its surface lies along the up at its origin, in
     /// meters from the origin.
     pub radial: [f32; 2],
+    /// How its vertices morph toward its parent's mesh.
+    pub morph: GpuTileMorph,
+    /// The farthest any of its corners moves when it morphs all the way, in
+    /// meters.
+    pub morph_extent: f32,
 }
 
 /// One run's records and the kernel group rows they span.
@@ -59,6 +65,30 @@ pub fn planet_center(shape: &PlanetShape, tile: &DrawnPlanetTile) -> [f32; 3] {
 fn tile_reach(shape: &PlanetShape, grid: &PlanetGrassGrid, level: u8) -> f64 {
     let width = shape.radius * core::f64::consts::FRAC_PI_2 / f64::from(1u32 << level);
     width * libm::sqrt(grid.max_stretch) * 0.8 + shape.amplitude
+}
+
+// How far a blade's root may sit from the ground its tile draws, in meters:
+// a tile whose morph moves no corner farther roots its grass on its raw mesh.
+const GRASS_MORPH_TOLERANCE: f32 = 0.01;
+
+// How far from its origin any point of `tile` can lie, in meters: its width
+// as `tile_reach` takes it, and its own surface's height range.
+fn morph_reach(shape: &PlanetShape, grid: &PlanetGrassGrid, tile: &DrawnPlanetTile) -> f64 {
+    let width = shape.radius * core::f64::consts::FRAC_PI_2 / f64::from(1u32 << tile.id.level);
+    let height = tile.radial[0].abs().max(tile.radial[1].abs());
+    width * libm::sqrt(grid.max_stretch) * 0.8 + f64::from(height)
+}
+
+// Whether no vertex of a tile with morph row `morph`, every point of it
+// within `reach` of `origin`, has begun to morph: it meets no tile of another
+// level, and all of it lies short of where its level's morph starts.
+fn unmorphed(morph: &GpuTileMorph, origin: [f64; 3], reach: f64) -> bool {
+    if morph.range <= 0.0 {
+        return true;
+    }
+    let start = crate::planet::MORPH_START * f64::from(morph.range);
+    let gap = dvec::length(dvec::sub(origin, dvec::from_f32(morph.eye)));
+    morph.seams == 0 && gap + reach < start
 }
 
 /// The drawn tiles within `distance` of `camera` (both in the simulated
@@ -108,7 +138,12 @@ fn records_in_reach(
             if gap > f64::from(distance) + tile_reach(shape, grid, tile.id.level) {
                 return None;
             }
-            let record = block(grid, tile, center, cam, f64::from(distance))?;
+            let mut record = block(grid, tile, center, cam, f64::from(distance))?;
+            if tile.morph_extent < GRASS_MORPH_TOLERANCE
+                || unmorphed(&tile.morph, origin, morph_reach(shape, grid, tile))
+            {
+                record.tile_morph = GpuTileMorph::default();
+            }
             Some((gap, record))
         })
         .collect();
@@ -168,6 +203,7 @@ fn block(
         grass_tiles: n,
         radial: tile.radial,
         _pad: [0.0; 2],
+        tile_morph: tile.morph,
     })
 }
 
@@ -195,6 +231,8 @@ mod tests {
             model: frame.model_at(mesh.origin),
             vertex_base: 0,
             radial: mesh.radial,
+            morph: Default::default(),
+            morph_extent: 0.0,
         }
     }
 
@@ -240,12 +278,12 @@ mod tests {
             [0.0, s.radius + s.height([0.0, 1.0, 0.0]) + 1.7, 0.0],
         );
         let sel = lod.select(
-            cam_world,
+            &crate::planet::TileView::nearest(cam_world),
             &|_| true,
             &mut crate::planet::TileBoundsCache::new(s),
         );
         let tiles: Vec<DrawnPlanetTile> =
-            sel.draw.iter().map(|&id| drawn(&s, &frame, id)).collect();
+            sel.draw.iter().map(|d| drawn(&s, &frame, d.id)).collect();
         let center = frame.to_local(s.center);
         let cam = frame.to_local(cam_world);
         let run = tiles_in_reach(&s, &grid, &tiles, center, cam, 90.0);
@@ -363,7 +401,8 @@ mod tests {
     fn the_cap_holds_every_tile_a_run_can_reach() {
         let mut worst = 0;
         for (level, amplitude) in [(8u8, 40.0), (12, 40.0), (12, 2000.0), (16, 40.0)] {
-            let width = 16.001 * crate::planet::FINEST_CELL_SIZE;
+            let width =
+                0.5001 * f64::from(crate::planet::TILE_CELLS) * crate::planet::FINEST_CELL_SIZE;
             let radius = width * f64::from(1u32 << level) / core::f64::consts::FRAC_PI_2;
             let s = PlanetShape {
                 center: [0.0; 3],
@@ -382,6 +421,8 @@ mod tests {
                 model: frame.model_at(s.surface(id.direction(0.5, 0.5))),
                 vertex_base: 0,
                 radial: [0.0; 2],
+                morph: Default::default(),
+                morph_extent: 0.0,
             };
             let step = 1.0 / f64::from(1u32 << level);
             // The face's middle, part way across a tile, beside an edge, at a
@@ -405,13 +446,16 @@ mod tests {
                     .collect();
                 let selected: Vec<_> = lod
                     .select(
-                        cam_world,
+                        &crate::planet::TileView {
+                            eye: cam_world,
+                            range_widths: crate::planet::MAX_RANGE_WIDTHS,
+                        },
                         &|_| true,
                         &mut crate::planet::TileBoundsCache::new(s),
                     )
                     .draw
                     .iter()
-                    .map(|&id| light(id))
+                    .map(|d| light(d.id))
                     .collect();
                 for drawn in [&finest, &selected] {
                     let n =
@@ -420,7 +464,60 @@ mod tests {
                 }
             }
         }
-        assert!(worst <= 14 * 14, "{worst}");
+        assert!(worst <= 28 * 28, "{worst}");
         assert!(MAX_PLANET_GRASS_TILES >= worst + worst / 4, "{worst}");
+    }
+
+    // A tile wholly short of where its morph starts, beside no tile of
+    // another level, roots its grass on its raw mesh; one reaching into the
+    // morph, or on a seam, keeps its row.
+    #[test]
+    fn only_tiles_reaching_their_morph_keep_it() {
+        let row = |eye: [f32; 3], seams: u32| GpuTileMorph {
+            eye,
+            range: 100.0,
+            seams,
+            ..GpuTileMorph::default()
+        };
+        let origin = [0.0; 3];
+        assert!(unmorphed(&row([10.0, 0.0, 0.0], 0), origin, 20.0));
+        assert!(!unmorphed(&row([70.0, 0.0, 0.0], 0), origin, 20.0));
+        assert!(!unmorphed(&row([10.0, 0.0, 0.0], 1), origin, 20.0));
+        assert!(unmorphed(&GpuTileMorph::default(), origin, 1e9));
+    }
+
+    // A tile whose morph would move its corners less than a blade's root can
+    // show roots its grass on its raw mesh; one moving them more keeps its
+    // morph row.
+    #[test]
+    fn a_tile_whose_morph_cannot_show_drops_it() {
+        let s = shape();
+        let grid = PlanetGrassGrid::new(&s);
+        let frame = LocalFrame::AUTHORED;
+        let lod = TileLod::new(s, crate::planet::FINEST_CELL_SIZE);
+        let id = TileId {
+            face: CubeFace(2),
+            level: lod.max_level,
+            x: 1 << (lod.max_level - 1),
+            y: 1 << (lod.max_level - 1),
+        };
+        let cam = frame.to_local(dvec::add(
+            s.center,
+            [0.0, s.radius + s.height([0.0, 1.0, 0.0]) + 1.7, 0.0],
+        ));
+        let center = frame.to_local(s.center);
+        let morphing = |extent: f32| {
+            let mut tile = drawn(&s, &frame, id);
+            tile.morph = GpuTileMorph {
+                eye: cam,
+                range: 1.0,
+                ..GpuTileMorph::default()
+            };
+            tile.morph_extent = extent;
+            let run = tiles_in_reach(&s, &grid, &[tile], center, cam, 90.0);
+            run.records[0].tile_morph.range > 0.0
+        };
+        assert!(!morphing(GRASS_MORPH_TOLERANCE * 0.5));
+        assert!(morphing(GRASS_MORPH_TOLERANCE * 2.0));
     }
 }

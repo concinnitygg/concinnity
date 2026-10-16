@@ -2506,6 +2506,15 @@ impl super::context::VkContext {
                 (vertex_buffer, self.geometry.vertex_buffer_bytes),
             );
         }
+        for &set in &self.cull.bindless_sets {
+            SetWrites::new(set)
+                .storage_buffer(
+                    super::material_params::MESH_VERTICES_BINDING,
+                    vertex_buffer,
+                    self.geometry.vertex_buffer_bytes,
+                )
+                .apply(&self.hw.device);
+        }
     }
 
     // Build the GPU-driven main-pass skinning resources: the `rt_skin` compute

@@ -14,6 +14,10 @@ use super::context::VkContext;
 // The bindless set's binding the table sits at (`main_bindless.hlsl`).
 pub(in crate::vulkan) const MATERIAL_PARAMS_BINDING: u32 = 2;
 
+/// The bindless set binding the shared vertex stream sits at, as floats,
+/// where a planet tile's morph reads its neighbors.
+pub(in crate::vulkan) const MESH_VERTICES_BINDING: u32 = 3;
+
 pub(in crate::vulkan) struct VkMaterialParams {
     table: MaterialParamTable,
     buffers: Vec<PooledBuffer>,

@@ -65,6 +65,7 @@ mod tests {
             vertex_count: 3,
             index_offset: i * 3,
             index_count: 3,
+            planet_tile: None,
             base_vertex: 0,
             geometry_generation: 0,
             model: [
@@ -112,6 +113,7 @@ mod tests {
             mesh_glass_active: false,
             horizon: None,
             grass_twins: Default::default(),
+            tile_morph: None,
         };
         packer.pack(
             StaticPack {

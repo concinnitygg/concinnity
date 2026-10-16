@@ -155,10 +155,16 @@ impl VkContext {
         // A see-through glass mesh (Layer 2) is disabled in the opaque pass when
         // the RT path is live: it draws in the transparent pass instead.
         let mesh_glass_active = self.mesh_glass_active();
-        let horizon = self
-            .state
-            .horizon_occluder
-            .and_then(|o| o.seen_from(cam_pos));
+        let view = PackView {
+            cam_pos,
+            mesh_glass_active,
+            horizon: self
+                .state
+                .horizon_occluder
+                .and_then(|o| o.seen_from(cam_pos)),
+            grass_twins: self.cull.world_pipelines.grass_twins(),
+            tile_morph: self.state.tile_morph,
+        };
 
         // The static draws, one record each at their own index, packed in
         // place across the job pool once that pays.
@@ -181,12 +187,7 @@ impl VkContext {
                     args: draw_args,
                     history: model_history.window(),
                 },
-                &PackView {
-                    cam_pos,
-                    mesh_glass_active,
-                    horizon,
-                    grass_twins: self.cull.world_pipelines.grass_twins(),
-                },
+                &view,
                 &|obj| pool_object_record(obj, texture_count),
             ),
             _ => {
@@ -209,10 +210,9 @@ impl VkContext {
         let runtime_base = self.runtime_record_base();
         let grass_twins = self.cull.world_pipelines.grass_twins();
         let n_resident_runtime = self.for_each_runtime_record(|k, i, obj| {
-            objects.write_val(
-                (runtime_base + k) * record_stride,
-                &pool_object_record(obj, texture_count),
-            );
+            let mut record = pool_object_record(obj, texture_count);
+            record.tile_morph = view.tile_morph_row(obj);
+            objects.write_val((runtime_base + k) * record_stride, &record);
             // `camera_distance` falls back to the model translation for a
             // non-cullable object, so the LOD pick works off a NaN AABB. Chunks
             // carry no alternates and land on LOD0 either way; a clone inherits

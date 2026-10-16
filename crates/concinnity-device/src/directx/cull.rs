@@ -457,6 +457,16 @@ impl DxContext {
         // A see-through glass mesh (Layer 2) is disabled in the opaque pass when
         // the RT path is live: it draws in the transparent pass instead.
         let mesh_glass_active = self.mesh_glass_active();
+        let view = PackView {
+            cam_pos,
+            mesh_glass_active,
+            horizon: self
+                .state
+                .horizon_occluder
+                .and_then(|o| o.seen_from(cam_pos)),
+            grass_twins: self.cull.world_pipelines.grass_twins(),
+            tile_morph: self.state.tile_morph,
+        };
 
         let n_static = self
             .state
@@ -473,15 +483,7 @@ impl DxContext {
                 args: static_args,
                 history: model_history.window(),
             },
-            &PackView {
-                cam_pos,
-                mesh_glass_active,
-                horizon: self
-                    .state
-                    .horizon_occluder
-                    .and_then(|o| o.seen_from(cam_pos)),
-                grass_twins: self.cull.world_pipelines.grass_twins(),
-            },
+            &view,
             &|obj| pool_object_record(obj, texture_count),
         );
 
@@ -504,6 +506,7 @@ impl DxContext {
                 return;
             };
             *rec = pool_object_record(obj, texture_count);
+            rec.tile_morph = view.tile_morph_row(obj);
             // `camera_distance` falls back to the model translation for a
             // non-cullable object, so the LOD pick works off a NaN AABB. Chunks
             // carry no alternates and land on LOD0 either way; a clone inherits

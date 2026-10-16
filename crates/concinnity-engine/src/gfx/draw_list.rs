@@ -716,6 +716,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                     vertex_count,
                     index_offset,
                     index_count,
+                    planet_tile: None,
                     // Static geometry: indices are absolute into the shared
                     // vertex buffer, so no per-draw base.
                     base_vertex: 0,
@@ -790,6 +791,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 vertex_count,
                 index_offset,
                 index_count,
+                planet_tile: None,
                 base_vertex: 0,
                 geometry_generation: 0,
                 model: model_mat,
@@ -930,6 +932,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             vertex_count: verts.len(),
             index_offset: index_elem_offset,
             index_count: idxs.len(),
+            planet_tile: None,
             base_vertex: 0,
             geometry_generation: 0,
             model: IDENTITY4,

@@ -136,6 +136,7 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
             grass_tiles,
             radial,
             _pad,
+            tile_morph,
         })),
         everywhere(mirror!(GrassLayerGpu => "GrassLayer" {
             rect,
