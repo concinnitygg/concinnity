@@ -96,7 +96,9 @@ impl VkContext {
                     rest: AttachmentRest::Graph,
                 },
             },
-            &ssao.settings.params(fov_y_radians, aspect),
+            &ssao
+                .settings
+                .params(fov_y_radians, aspect, self.targets.render_extent.height),
         )
     }
 }

@@ -75,7 +75,7 @@ impl MtlContext {
         let ssao_params = self
             .ssao
             .settings
-            .map(|settings| settings.params(fov_y_radians, aspect));
+            .map(|settings| settings.params(fov_y_radians, aspect, render_h));
         let ssr_params = self.ssr.settings.map(|settings| {
             let v = self.state.view.matrix;
             let inv_view_rot = [

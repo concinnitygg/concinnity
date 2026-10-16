@@ -15,6 +15,12 @@ const MAX_INTENSITY: f32 = 4.0;
 // search degenerate, so the authored value is floored here.
 const MIN_RADIUS: f32 = 1.0e-3;
 
+// The search radius in pixels at which the occlusion has faded out, and the one
+// at which it is at full strength. A radius under a pixel resolves nothing, and
+// fading over a range keeps the cutoff from showing as a line of constant depth.
+const FADED_RADIUS_PX: f32 = 1.0;
+const FULL_RADIUS_PX: f32 = 2.0;
+
 /// Clamped SSAO tunables resolved from the authored asset fields. Held by the
 /// backend and turned into a per-frame [`SsaoParams`] once the camera is known.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -57,14 +63,29 @@ impl SsaoSettings {
     /// camera. `fov_y_radians` is the vertical field of view and `aspect` the
     /// viewport width / height ratio: together they give the view-ray scale
     /// the kernel needs to rebuild view-space positions from linear depth.
-    pub fn params(&self, fov_y_radians: f32, aspect: f32) -> SsaoParams {
+    /// `height_px` is the render height, which sets how far out the radius
+    /// still spans a pixel.
+    pub fn params(&self, fov_y_radians: f32, aspect: f32, height_px: u32) -> SsaoParams {
         let (tan_half_fov_y, aspect) = view_ray_scale(fov_y_radians, aspect);
+        let reach = self.depth_at_radius_px(tan_half_fov_y, height_px, FADED_RADIUS_PX);
+        let full = self.depth_at_radius_px(tan_half_fov_y, height_px, FULL_RADIUS_PX);
+        let fade_scale = -1.0 / (reach - full);
         SsaoParams {
             radius: self.radius,
             intensity: self.intensity,
             tan_half_fov_y,
             aspect,
+            reach,
+            fade_scale,
+            fade_bias: -reach * fade_scale,
+            _pad: 0.0,
         }
+    }
+
+    // The view depth at which the radius spans `px` pixels of a `height_px`
+    // tall render: the viewport spans `2 * tan_half_fov_y * depth` there.
+    fn depth_at_radius_px(&self, tan_half_fov_y: f32, height_px: u32, px: f32) -> f32 {
+        self.radius * height_px.max(1) as f32 / (2.0 * tan_half_fov_y.max(1.0e-6) * px)
     }
 }
 
@@ -143,11 +164,57 @@ mod tests {
         assert_eq!(s.intensity, 1.0);
     }
 
+    // The occlusion strength the kernel applies at view depth `d`.
+    fn fade(p: &SsaoParams, d: f32) -> f32 {
+        (d * p.fade_scale + p.fade_bias).clamp(0.0, 1.0)
+    }
+
+    #[test]
+    fn the_reach_is_where_the_radius_spans_one_pixel() {
+        // tan(45 deg) == 1, so a 1000 px render spans 2 * depth there: a 0.5 m
+        // radius covers one pixel at 250 m.
+        let p = SsaoSettings::resolve(0.5, 1.0).params(core::f32::consts::FRAC_PI_2, 1.0, 1000);
+        assert!((p.reach - 250.0).abs() < 1.0e-3, "{}", p.reach);
+        let doubled =
+            SsaoSettings::resolve(1.0, 1.0).params(core::f32::consts::FRAC_PI_2, 1.0, 2000);
+        assert!((doubled.reach - 1000.0).abs() < 1.0e-2, "{}", doubled.reach);
+    }
+
+    #[test]
+    fn the_occlusion_fades_out_between_two_pixels_and_one() {
+        let p = SsaoSettings::resolve(0.5, 1.0).params(core::f32::consts::FRAC_PI_2, 1.0, 1000);
+        // Two pixels at 125 m, one at 250 m.
+        assert_eq!(fade(&p, 1.0), 1.0);
+        assert!((fade(&p, 125.0) - 1.0).abs() < 1.0e-5);
+        assert!((fade(&p, 187.5) - 0.5).abs() < 1.0e-5);
+        assert!(fade(&p, 250.0).abs() < 1.0e-5);
+        assert_eq!(fade(&p, 10_000.0), 0.0);
+    }
+
+    #[test]
+    fn the_fade_falls_steadily_with_depth() {
+        let p = SsaoSettings::resolve(0.5, 1.0).params(0.9, 1.7, 1080);
+        let mut last = fade(&p, 0.0);
+        for i in 1..=400 {
+            let f = fade(&p, p.reach * i as f32 / 200.0);
+            assert!(f <= last, "rose at step {i}");
+            assert!(last - f <= 0.02, "jumped at step {i}");
+            last = f;
+        }
+    }
+
+    #[test]
+    fn a_zero_height_render_keeps_the_params_finite() {
+        let p = SsaoSettings::resolve(0.5, 1.0).params(0.9, 1.7, 0);
+        assert!(p.reach.is_finite() && p.reach > 0.0);
+        assert!(p.fade_scale.is_finite() && p.fade_bias.is_finite());
+    }
+
     #[test]
     fn params_compute_tan_half_fov() {
         let s = SsaoSettings::resolve(0.5, 1.0);
         // A 90-degree vertical FOV has tan(45 deg) == 1.
-        let p = s.params(core::f32::consts::FRAC_PI_2, 1.6);
+        let p = s.params(core::f32::consts::FRAC_PI_2, 1.6, 1080);
         assert!((p.tan_half_fov_y - 1.0).abs() < 1.0e-5);
         assert_eq!(p.aspect, 1.6);
         assert_eq!(p.radius, 0.5);
@@ -157,7 +224,7 @@ mod tests {
     #[test]
     fn params_floor_a_degenerate_aspect() {
         let s = SsaoSettings::resolve(0.5, 1.0);
-        let p = s.params(core::f32::consts::FRAC_PI_2, 0.0);
+        let p = s.params(core::f32::consts::FRAC_PI_2, 0.0, 1080);
         assert!(p.aspect >= MIN_RADIUS);
     }
 }

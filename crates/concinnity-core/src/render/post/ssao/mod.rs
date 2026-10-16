@@ -1,11 +1,12 @@
 //! Screen-space ambient occlusion (GTAO), written once for every backend.
 //!
 //! Three draws at the render resolution over the G-buffer's view normal and
-//! linear depth: a copy of that depth alone in one half-precision channel, so
-//! the many depth taps that follow fetch a quarter of the bytes; the kernel,
+//! linear depth: a copy of that depth alone in one evenly spaced 16-bit channel,
+//! so the many depth taps that follow fetch a quarter of the bytes; the kernel,
 //! which integrates each pixel's visible horizon arc into a raw, noisy
-//! occlusion; and a depth-aware blur that smooths it into the occlusion the lit
-//! forward pass multiplies its ambient term by.
+//! occlusion, faded out where its radius shrinks below a pixel; and a
+//! depth-aware blur that smooths it into the occlusion the lit forward pass
+//! multiplies its ambient term by.
 //!
 //! The blurred occlusion is the render graph's `ao_output` transient, which the
 //! pool owns and the forward pass reads, so the caller supplies it. The depth
@@ -143,7 +144,7 @@ impl<Pipeline, Target> SsaoPass<Pipeline, Target> {
                 timing: PostTiming::Whole(PassId::SsaoDepth),
                 pipeline: &self.pipelines.depth,
                 binds: &[linear::<D>(inputs.normal_depth)],
-                constants: &[],
+                constants: bytemuck::bytes_of(params),
                 label: "SSAO depth",
             },
         )?;
@@ -208,7 +209,7 @@ mod tests {
     const OUTPUT: MockTexture = MockTexture::External(2);
 
     fn params() -> SsaoParams {
-        SsaoSettings::resolve(0.6, 1.1).params(1.0, 1.6)
+        SsaoSettings::resolve(0.6, 1.1).params(1.0, 1.6, 720)
     }
 
     fn encode_frame(device: &MockDevice, pass: &SsaoPass<MockPipeline, usize>) -> Vec<MockDraw> {
@@ -253,7 +254,8 @@ mod tests {
         assert_eq!(depth.program, PostProgram::SsaoDepth);
         assert_eq!(depth.target, MockTexture::Target(DEPTH));
         assert_eq!(sources(depth), [NORMAL_DEPTH]);
-        assert!(depth.constants.is_empty());
+        // The copy stores depth as a fraction of the reach the params carry.
+        assert_eq!(depth.constants, bytemuck::bytes_of(&params()));
 
         // The kernel reads the normal from the G-buffer and every step's depth
         // from the copy.
@@ -261,7 +263,7 @@ mod tests {
         assert_eq!(kernel.target, MockTexture::Target(RAW));
         assert_eq!(sources(kernel), [NORMAL_DEPTH, MockTexture::Target(DEPTH)]);
         assert_eq!(kernel.constants, bytemuck::bytes_of(&params()));
-        assert_eq!(kernel.constants.len(), 16);
+        assert_eq!(kernel.constants.len(), 32);
 
         assert_eq!(blur.program, PostProgram::SsaoBlur);
         assert_eq!(blur.target, OUTPUT);
@@ -293,7 +295,7 @@ mod tests {
     fn the_copy_writes_depth_and_the_kernel_and_blur_occlusion() {
         let device = MockDevice::new();
         let p = build_pipelines(&device).expect("pipelines");
-        assert_eq!(p.depth.format, PixelFormat::R16Float);
+        assert_eq!(p.depth.format, PixelFormat::R16Unorm);
         assert_eq!(p.kernel.format, PixelFormat::R8Unorm);
         assert_eq!(p.blur.format, PixelFormat::R8Unorm);
         for pipeline in [p.depth, p.kernel, p.blur] {

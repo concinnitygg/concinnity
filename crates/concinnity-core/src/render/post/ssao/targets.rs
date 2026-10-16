@@ -8,9 +8,12 @@ use crate::render::render_graph::{
 /// unoccluded.
 pub const OCCLUSION_FORMAT: PixelFormat = PixelFormat::R8Unorm;
 
-/// The depth copy's format: the G-buffer's linear view depth, which is already
-/// half precision there, alone in one channel.
-pub const DEPTH_FORMAT: PixelFormat = PixelFormat::R16Float;
+/// The depth copy's format: the linear view depth as a fraction of the reach,
+/// in even steps a few percent of the search radius apart. A floating-point
+/// copy's steps double at each power of two and past a few hundred meters
+/// reach the radius itself, which the kernel reads as occlusion that jumps
+/// along rows of constant depth.
+pub const DEPTH_FORMAT: PixelFormat = PixelFormat::R16Unorm;
 
 // A single-level target at the render resolution, rendered to and sampled.
 fn full_resolution(format: PixelFormat) -> TextureDesc {
@@ -59,9 +62,9 @@ mod tests {
     }
 
     #[test]
-    fn the_depth_copy_is_half_precision_depth_at_the_render_resolution() {
+    fn the_depth_copy_is_evenly_spaced_depth_at_the_render_resolution() {
         let d = depth_desc();
-        assert_eq!(d.format, PixelFormat::R16Float);
+        assert_eq!(d.format, PixelFormat::R16Unorm);
         assert_eq!(d.mip_levels, 1);
         assert_eq!(resolve_extent(&d, EXTENT), EXTENT);
         assert!(d.usage.contains(TextureUsage::RENDER_TARGET));

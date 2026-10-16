@@ -1455,7 +1455,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     // compiled out.
     MetalAbi {
         program: &shared::SSAO_DEPTH,
-        slots: &[&[("gbuffer", "texture(0)")]],
+        slots: &[&[("params", "buffer(0)"), ("gbuffer", "texture(0)")]],
         argument_ids: &[],
     },
     MetalAbi {

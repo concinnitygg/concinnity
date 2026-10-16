@@ -117,7 +117,9 @@ impl DxContext {
                 normal_depth: gbuffer.normal_depth_srv_gpu,
                 output: ssao.output.attachment(),
             },
-            &ssao.settings.params(fov_y_radians, aspect),
+            &ssao
+                .settings
+                .params(fov_y_radians, aspect, self.targets.extent.render_height),
         )
     }
 }

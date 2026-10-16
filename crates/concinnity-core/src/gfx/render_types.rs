@@ -846,11 +846,11 @@ impl CompositeParams {
     }
 }
 
-/// Per-frame uniform for the SSAO (GTAO) horizon-search kernel. Carries the
-/// clamped authored tunables plus the view-ray scale the kernel needs to
-/// rebuild a view-space position from linear depth. Pushed verbatim to the
-/// SSAO kernel fragment shader, so the layout must stay in sync with the
-/// `SsaoParams` struct there. 16 bytes.
+/// Per-frame uniform for the SSAO (GTAO) passes. Carries the clamped authored
+/// tunables, the view-ray scale the kernel needs to rebuild a view-space
+/// position from linear depth, and the depth range the occlusion reaches.
+/// Pushed verbatim to the SSAO depth copy and kernel fragment shaders, so the
+/// layout must stay in sync with the `SsaoParams` struct there. 32 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct SsaoParams {
@@ -862,6 +862,18 @@ pub struct SsaoParams {
     pub tan_half_fov_y: f32,
     /// Viewport aspect ratio (width / height).
     pub aspect: f32,
+    /// View depth past which the search radius spans less than a pixel and
+    /// the pass contributes nothing. The depth copy stores depth as a fraction
+    /// of it.
+    pub reach: f32,
+    /// Occlusion strength at view depth `d` is `saturate(d * fade_scale +
+    /// fade_bias)`: full where the radius spans two pixels or more, none at
+    /// `reach`.
+    pub fade_scale: f32,
+    /// See `fade_scale`.
+    pub fade_bias: f32,
+    /// Padding to a 16-byte multiple; the shader declares no field here.
+    pub _pad: f32,
 }
 
 /// Per-frame uniform for the screen-space reflection (SSR) ray-march. Carries
@@ -2240,11 +2252,15 @@ mod tests {
 
     #[test]
     fn ssao_params_layout_matches_shaders() {
-        assert_eq!(size_of::<SsaoParams>(), 16);
+        assert_eq!(size_of::<SsaoParams>(), 32);
         assert_eq!(offset_of!(SsaoParams, radius), 0);
         assert_eq!(offset_of!(SsaoParams, intensity), 4);
         assert_eq!(offset_of!(SsaoParams, tan_half_fov_y), 8);
         assert_eq!(offset_of!(SsaoParams, aspect), 12);
+        assert_eq!(offset_of!(SsaoParams, reach), 16);
+        assert_eq!(offset_of!(SsaoParams, fade_scale), 20);
+        assert_eq!(offset_of!(SsaoParams, fade_bias), 24);
+        assert_eq!(offset_of!(SsaoParams, _pad), 28);
     }
 
     #[test]

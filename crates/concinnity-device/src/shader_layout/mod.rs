@@ -425,6 +425,7 @@ fn composite_layouts_match_the_shader() {
 
 #[test]
 fn ssao_layouts_match_the_shader() {
+    check(&programs::SSAO_DEPTH, &mirrors::post::ssao());
     check(&programs::SSAO_KERNEL, &mirrors::post::ssao());
 }
 

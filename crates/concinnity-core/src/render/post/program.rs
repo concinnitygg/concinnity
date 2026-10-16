@@ -205,8 +205,11 @@ impl PostProgram {
             PostProgram::ReflectionBlur => sources(2, 0),
             // reflection, scene, normal+depth, roughness, blur.
             PostProgram::ReflectionComposite => sources(5, 0),
-            // The G-buffer; no constants.
-            PostProgram::SsaoDepth => sources(1, 0),
+            // The G-buffer; `SsaoParams`.
+            PostProgram::SsaoDepth => sources(
+                1,
+                core::mem::size_of::<crate::gfx::render_types::SsaoParams>(),
+            ),
             // G-buffer, depth copy; `SsaoParams`.
             PostProgram::SsaoKernel => sources(
                 2,
@@ -502,7 +505,7 @@ mod tests {
             (PostProgram::BloomUpsample, 0),
             (PostProgram::ReflectionBlur, 0),
             (PostProgram::ReflectionComposite, 0),
-            (PostProgram::SsaoDepth, 0),
+            (PostProgram::SsaoDepth, size_of::<SsaoParams>()),
             (PostProgram::SsaoKernel, size_of::<SsaoParams>()),
             (PostProgram::SsaoBlur, 0),
         ];

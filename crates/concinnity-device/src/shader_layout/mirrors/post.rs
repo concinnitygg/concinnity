@@ -92,6 +92,10 @@ pub(in crate::shader_layout) fn ssao() -> Vec<Case> {
         intensity,
         tan_half_fov_y,
         aspect,
+        reach,
+        fade_scale,
+        fade_bias,
+        [_pad] => [],
     }))]
 }
 

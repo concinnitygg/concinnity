@@ -244,6 +244,11 @@ pub(super) static COMPOSITE_FRAG: Program = Program {
     splices: &[],
 };
 
+pub(super) static SSAO_DEPTH: Program = Program {
+    row: &shared::SSAO_DEPTH,
+    splices: &[],
+};
+
 pub(super) static SSAO_KERNEL: Program = Program {
     row: &shared::SSAO_KERNEL,
     splices: &[],

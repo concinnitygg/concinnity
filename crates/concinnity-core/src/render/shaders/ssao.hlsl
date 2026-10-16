@@ -3,14 +3,15 @@
 // One fragment per compile, selected by a define so each variant declares
 // exactly the resources it binds:
 //
-//   SSAO_DEPTH  - the G-buffer's linear depth alone in a half-precision
-//                 channel, so each of the kernel's and blur's many depth taps
-//                 fetches two bytes instead of eight.
+//   SSAO_DEPTH  - the G-buffer's linear depth alone in one 16-bit unorm
+//                 channel, as a fraction of the reach, so each of the kernel's
+//                 and blur's many depth taps fetches two bytes instead of
+//                 eight, in steps evenly spaced at every depth.
 //   SSAO_KERNEL - horizon search over that depth -> raw occlusion.
 //   SSAO_BLUR   - depth-aware 5x5 box blur of that raw occlusion.
 //
 // The G-buffer pre-pass holds rgb = unit view normal, a = linear view depth,
-// with 0 for background; the copy keeps the same convention. Pairs with
+// with 0 for background; the copy keeps 0 for background. Pairs with
 // `fullscreen_vertex` in fullscreen.hlsl; each fragment takes the vertex UV
 // first, since D3D links a pixel shader only to a prefix of the vertex outputs.
 //
@@ -21,29 +22,44 @@
 
 {TEXTURE_SIZE}
 
-#if defined(SSAO_DEPTH)
+#if defined(SSAO_DEPTH) || defined(SSAO_KERNEL)
 
-[[vk::binding(0, 0)]] Texture2D<float4> gbuffer : register(t0);
-[[vk::binding(1, 0)]] SamplerState gbuffer_samp : register(s0);
-
-[shader("pixel")]
-float ssao_depth_fragment(
-    [[vk::location(0)]] float2 uv : TEXCOORD0,
-    float4 pixel : SV_Position) : SV_Target
-{
-    return gbuffer.Load(int3(int2(pixel.xy), 0)).a;
-}
-
-#elif defined(SSAO_KERNEL)
-
-// Layout matches `SsaoParams` in render_types.rs (16 B).
+// Layout matches `SsaoParams` in render_types.rs (32 B, the tail padding
+// undeclared).
 struct SsaoParams
 {
     float radius;
     float intensity;
     float tan_half_fov_y;
     float aspect;
+    float reach;
+    float fade_scale;
+    float fade_bias;
 };
+
+// The smallest stored fraction, so a surface nearer than one step still reads
+// as a surface rather than as background.
+static const float SSAO_DEPTH_MIN_FRACTION = 1.0 / 65535.0;
+
+#endif
+
+#if defined(SSAO_DEPTH)
+
+[[vk::binding(0, 0)]] Texture2D<float4> gbuffer : register(t0);
+[[vk::binding(1, 0)]] SamplerState gbuffer_samp : register(s0);
+
+[[vk::push_constant]] ConstantBuffer<SsaoParams> params : register(b0);
+
+[shader("pixel")]
+float ssao_depth_fragment(
+    [[vk::location(0)]] float2 uv : TEXCOORD0,
+    float4 pixel : SV_Position) : SV_Target
+{
+    float d = gbuffer.Load(int3(int2(pixel.xy), 0)).a;
+    return d > 0.0 ? max(d / params.reach, SSAO_DEPTH_MIN_FRACTION) : 0.0;
+}
+
+#elif defined(SSAO_KERNEL)
 
 [[vk::binding(0, 0)]] Texture2D<float4> gbuffer : register(t0);
 [[vk::binding(2, 0)]] SamplerState gbuffer_samp : register(s0);
@@ -100,7 +116,7 @@ float3 ssao_view_pos(SsaoProjection proj, float2 uv, float d)
 float ssao_horizon(float cos_h, SsaoProjection proj, float2 uv, float3 p, float3 v,
                    float falloff)
 {
-    float d = depth.SampleLevel(depth_samp, uv, 0.0).r;
+    float d = depth.SampleLevel(depth_samp, uv, 0.0).r * params.reach;
     float3 s = ssao_view_pos(proj, uv, d) - p;
     float len_sq = dot(s, s);
     float inv_len = rsqrt(max(len_sq, 1e-10));
@@ -114,12 +130,15 @@ float ssao_kernel_fragment(
     [[vk::location(0)]] float2 uv : TEXCOORD0,
     float4 pixel : SV_Position) : SV_Target
 {
-    float4 c = gbuffer.SampleLevel(gbuffer_samp, uv, 0.0);
-    float d = c.a;
-    if (d <= 0.0)
+    // The center's depth comes from the copy too, so it and its taps share
+    // one quantization.
+    float d = depth.SampleLevel(depth_samp, uv, 0.0).r * params.reach;
+    float fade = saturate(d * params.fade_scale + params.fade_bias);
+    if (d <= 0.0 || fade <= 0.0)
     {
-        return 1.0;                        // background - no geometry, fully lit
+        return 1.0;                        // background, or past the reach
     }
+    float4 c = gbuffer.SampleLevel(gbuffer_samp, uv, 0.0);
 
     SsaoProjection proj = ssao_projection();
     float3 n_vec = normalize(c.xyz);
@@ -188,7 +207,7 @@ float ssao_kernel_fragment(
     // The arc integral's 1/4, folded with the slice average.
     visibility = saturate(visibility * (0.25 / float(SSAO_SLICES)));
     // `intensity` sharpens the contact darkening; 1.0 is the integrated amount.
-    return pow(visibility, max(params.intensity, 0.0));
+    return lerp(1.0, pow(visibility, max(params.intensity, 0.0)), fade);
 }
 
 #elif defined(SSAO_BLUR)
@@ -208,6 +227,8 @@ float ssao_kernel_fragment(
 [shader("pixel")]
 float ssao_blur_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
 {
+    // The copy's depths are fractions of one reach; the weights depend only on
+    // their ratios, so they are read unscaled.
     float center_depth = depth.SampleLevel(depth_samp, uv, 0.0).r;
     if (center_depth <= 0.0)
     {

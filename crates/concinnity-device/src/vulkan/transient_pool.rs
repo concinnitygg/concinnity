@@ -392,6 +392,7 @@ pub(in crate::vulkan) fn image_format(format: PixelFormat) -> vk::Format {
         PixelFormat::Rg16Float => vk::Format::R16G16_SFLOAT,
         PixelFormat::R8Unorm => vk::Format::R8_UNORM,
         PixelFormat::R16Float => vk::Format::R16_SFLOAT,
+        PixelFormat::R16Unorm => vk::Format::R16_UNORM,
         PixelFormat::R32Float => vk::Format::R32_SFLOAT,
         PixelFormat::Rg32Float => vk::Format::R32G32_SFLOAT,
         PixelFormat::Depth32Float => vk::Format::D32_SFLOAT,
