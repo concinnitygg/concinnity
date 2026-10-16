@@ -73,6 +73,7 @@ fn camera_track(world: &World) -> Option<Box<dyn System>> {
 /// The simulation systems a world runs with no host beyond this crate, in run
 /// order. What [`App`](crate::App) starts a headless world against.
 pub const HEADLESS_SYSTEMS: &SystemTable = &SystemTable {
+    init_first: &[],
     entries: &[
         SystemEntry {
             name: "SkyRotationSystem",

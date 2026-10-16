@@ -81,6 +81,7 @@ const fn entry(name: &'static str, gate: fn(&World) -> Option<Box<dyn System>>) 
 }
 
 const TABLE: SystemTable = SystemTable {
+    init_first: &[],
     entries: &[entry("Marker", gate)],
     complete_world: None,
     before_init: Some(before_init),
@@ -88,6 +89,7 @@ const TABLE: SystemTable = SystemTable {
 };
 
 const FINISHING: SystemTable = SystemTable {
+    init_first: &[],
     entries: &[entry("Marker", finishing_gate)],
     complete_world: None,
     before_init: None,

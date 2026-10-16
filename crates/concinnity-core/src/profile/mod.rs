@@ -25,6 +25,27 @@ pub const MAX_PASS_TIMINGS: usize = 48;
 /// Empty-string entries are unused slots, not real passes.
 pub type PassTiming = (&'static str, u32);
 
+/// When a frame's GPU work ended, on the host's process-wide monotonic clock,
+/// named by the time the input it shows was sampled on that same clock. Two of
+/// them give the interval between completed frames; one gives how stale the
+/// frame's input was by the time its GPU work ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GpuDone {
+    /// When the frame's input was sampled, in microseconds.
+    pub input_sampled_us: u64,
+    /// When the frame's GPU work ended, in microseconds.
+    pub done_us: u64,
+}
+
+impl GpuDone {
+    /// Microseconds from the input sample to the end of the GPU work.
+    pub fn latency_us(self) -> u32 {
+        self.done_us
+            .saturating_sub(self.input_sampled_us)
+            .min(u64::from(u32::MAX)) as u32
+    }
+}
+
 /// Per-frame render-backend statistics.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RenderStats {
@@ -59,9 +80,16 @@ pub struct RenderStats {
     /// full, so they add up to `gpu_frame_us` plus this. Zero on a backend that
     /// does not split the span.
     pub gpu_overlap_us: u32,
-    /// Microseconds the CPU spent blocked on the GPU inside the backend's
-    /// per-frame draw call: the frames-in-flight fence or semaphore that paces
-    /// the CPU against GPU retirement, plus the swapchain / drawable acquire.
+    /// When the most recently completed frame's GPU work ended on the host
+    /// clock, beside the input sample time that names that frame. Reported as
+    /// late as `gpu_frame_us`; `None` on a backend that cannot place its GPU
+    /// completion on the host clock, or for a frame whose input time is
+    /// unknown.
+    pub gpu_done: Option<GpuDone>,
+    /// Microseconds the CPU spent blocked on the GPU for this frame: the
+    /// frames-in-flight fence or semaphore that paces the CPU against GPU
+    /// retirement (inside the backend's per-frame draw call, or ahead of it in
+    /// `prepare_frame`), plus the swapchain / drawable acquire.
     /// Backend-agnostic, and part of whatever CPU frame cost the caller timed
     /// around `draw_frame` -- a GPU-bound frame otherwise reports as CPU-bound,
     /// because the wait is wall time inside the draw call. `render_cpu_us` is
@@ -142,6 +170,7 @@ impl Default for RenderStats {
             skinned_pool_free: 0,
             gpu_frame_us: 0,
             gpu_overlap_us: 0,
+            gpu_done: None,
             gpu_wait_us: 0,
             render_cpu_us: 0,
             replay_us: 0,
@@ -299,6 +328,24 @@ impl FrameProfile {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn gpu_done_latency_runs_from_the_input_sample_to_the_end_of_the_gpu_work() {
+        let done = super::GpuDone {
+            input_sampled_us: 1_000,
+            done_us: 46_000,
+        };
+        assert_eq!(done.latency_us(), 45_000);
+    }
+
+    #[test]
+    fn gpu_done_before_its_sample_reads_as_no_latency() {
+        let done = super::GpuDone {
+            input_sampled_us: 2_000,
+            done_us: 1_000,
+        };
+        assert_eq!(done.latency_us(), 0);
+    }
+
     use super::*;
 
     #[test]

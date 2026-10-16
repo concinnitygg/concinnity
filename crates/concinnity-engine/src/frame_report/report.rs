@@ -47,6 +47,7 @@ pub fn to_text(report: &Report) -> String {
         report.overall.objects_mean,
     );
     write_pacing(&mut out, report);
+    write_input_latency(&mut out, report);
     write_slowest(&mut out, &report.slowest);
 
     // The pass block is medians, like the table above it, because a backend
@@ -153,7 +154,7 @@ fn write_pacing(out: &mut String, report: &Report) {
     let _ = writeln!(out);
     let _ = writeln!(
         out,
-        "camera pacing, run time shown per frame over frame time (1.00x is even):"
+        "camera pacing, run time shown per finished frame over GPU frame interval (1.00x is even):"
     );
     let _ = writeln!(
         out,
@@ -166,6 +167,37 @@ fn write_pacing(out: &mut String, report: &Report) {
             out,
             "  {:<16} {:>6.2}x {:>6.2}x {:>6.2}x {:>7} {:>8}",
             segment.name, p.p5, p.p50, p.p95, p.still_frames, segment.rebases,
+        );
+    }
+}
+
+// How stale each stretch's input was by the time its frames' GPU work ended.
+// One line when the backend measured none.
+fn write_input_latency(out: &mut String, report: &Report) {
+    let _ = writeln!(out);
+    if report.overall.input_latency.frames == 0 {
+        let _ = writeln!(
+            out,
+            "input latency: not measured (the backend cannot place its GPU work on the host clock)"
+        );
+        return;
+    }
+    let _ = writeln!(out, "input latency, input sample to GPU work done:");
+    let _ = writeln!(
+        out,
+        "  {:<16} {:>9} {:>9} {:>7}",
+        "segment", "p50 ms", "p95 ms", "frames",
+    );
+    let ms = |us: u32| us as f32 / MICROS_PER_MILLI;
+    for segment in core::iter::once(&report.overall).chain(&report.segments) {
+        let l = &segment.input_latency;
+        let _ = writeln!(
+            out,
+            "  {:<16} {:>9.2} {:>9.2} {:>7}",
+            segment.name,
+            ms(l.p50_us),
+            ms(l.p95_us),
+            l.frames,
         );
     }
 }
@@ -264,8 +296,11 @@ mod tests {
             frame_us,
             run_step_us: frame_us,
             rebased: false,
+            shown_step_us: frame_us,
+            shown_us: frame_us,
             gpu_frame_us: frame_us / 2,
             gpu_overlap_us: 0,
+            input_latency_us: 0,
             gpu_wait_us: 250,
             render_cpu_us: 0,
             replay_us: 0,
@@ -391,6 +426,39 @@ mod tests {
         let text = to_text(&report_of(run));
         assert!(
             text.contains("  overlap with previous frame  -1.500 ms  -30.0% of the GPU frame"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn unmeasured_input_latency_says_so() {
+        let text = rendered();
+        assert!(text.contains("input latency: not measured"), "{text}");
+    }
+
+    #[test]
+    fn input_latency_is_listed_per_segment() {
+        let frames: Vec<FrameSample> = (0..10)
+            .map(|n| {
+                let mut f = sample(n as f32, Some(0), 16_000);
+                f.input_latency_us = 45_000;
+                f
+            })
+            .collect();
+        let run = FrameRun {
+            samples: frames.into(),
+            segments: vec!["approach".to_string()],
+            pass_names: Vec::new(),
+            system_names: Vec::new(),
+            completed: true,
+        };
+        let text = to_text(&report_of(run));
+        assert!(
+            text.contains("input latency, input sample to GPU work done:"),
+            "{text}"
+        );
+        assert!(
+            text.contains("\n  all                  45.00     45.00      10\n"),
             "{text}"
         );
     }

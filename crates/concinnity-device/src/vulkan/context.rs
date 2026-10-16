@@ -992,6 +992,9 @@ pub(super) struct VkHardware {
     pub(super) timestamp_query_pool: Option<vk::QueryPool>,
     // `timestamp_period` from the physical device, in nanoseconds per tick.
     pub(super) timestamp_period_ns: f32,
+    // Reads the GPU's timestamp counter now, to place a frame's timestamps on
+    // the host clock. `None` without `VK_EXT_calibrated_timestamps`.
+    pub(super) timestamp_calibration: Option<ash::ext::calibrated_timestamps::Device>,
     // `VK_EXT_memory_budget` device-local heap indices summed for the
     // VRAM-residency chip. Empty when the extension is unavailable; the chip
     // then reports 0.
@@ -1069,6 +1072,7 @@ impl VkHardware {
             alloc: self.alloc.clone(),
             timestamp_query_pool: self.timestamp_query_pool.take(),
             timestamp_period_ns: self.timestamp_period_ns,
+            timestamp_calibration: self.timestamp_calibration.clone(),
             device_local_heaps: self.device_local_heaps.clone(),
             memory_budget_supported: self.memory_budget_supported,
             rt_capable: self.rt_capable,
@@ -1294,6 +1298,9 @@ pub(crate) struct VkContext {
     // Per-frame-in-flight synchronization primitives. See `VkFrameSync`.
     pub(super) frame_sync: VkFrameSync,
     pub(super) current_frame: usize,
+    // When the input each frame slot's last frame showed was sampled, on the
+    // host clock, read back beside that frame's timestamps.
+    pub(super) frame_input_sampled_us: Vec<Option<u64>>,
     pub(super) frames_in_flight: usize,
 
     // Per-frame command pools + buffers (start / per-pass / end tiers + the
@@ -1412,6 +1419,7 @@ impl VkContext {
             grass_benders,
             atmosphere,
             sunlight,
+            input_sampled_us,
         } = params;
         let elapsed = elapsed_f64 as f32;
         if let Some(atmo) = self.atmosphere.as_mut() {
@@ -1456,7 +1464,9 @@ impl VkContext {
         self.flush_geometry_uploads()?;
         self.service_background_work(elapsed, frame);
         let timings = self.read_gpu_timings(frame);
-        self.begin_frame_stats(&gpu_wait, timings);
+        let gpu_done = self.read_gpu_done(frame);
+        self.frame_input_sampled_us[frame] = input_sampled_us;
+        self.begin_frame_stats(&gpu_wait, timings, gpu_done);
         let Some(image_index) = self.acquire_frame(frame, &mut gpu_wait)? else {
             return Ok(());
         };

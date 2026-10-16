@@ -49,6 +49,7 @@ const ENTRIES: &[SystemEntry] = &[SystemEntry {
 }];
 
 static COUNTING: SystemTable = SystemTable {
+    init_first: &[],
     entries: ENTRIES,
     complete_world: None,
     before_init: None,
@@ -56,6 +57,7 @@ static COUNTING: SystemTable = SystemTable {
 };
 
 static REFUSING: SystemTable = SystemTable {
+    init_first: &[],
     entries: &[],
     complete_world: Some(refuse),
     before_init: None,

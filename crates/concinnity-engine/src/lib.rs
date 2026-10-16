@@ -95,7 +95,7 @@ pub(crate) mod behavior;
 /// inserts into the world, mirroring the shipped-runtime loader.
 pub mod resource;
 // Runtime entity churn (Lifetime/Spawner ticks + spawn/despawn/reparent
-// drains), scheduled immediately before GraphicsSystem.
+// drains), scheduled before GraphicsSystem.
 pub(crate) mod spawn;
 pub(crate) mod story;
 pub(crate) mod ui;

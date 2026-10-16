@@ -53,6 +53,9 @@ pub struct FrameScalars {
     pub atmosphere: Option<crate::render::atmosphere::AtmosphereFrame>,
     /// The authored intensity of the world's sun.
     pub sunlight: f32,
+    /// When the input this frame's tick consumed was sampled, in microseconds
+    /// on the host's process-wide monotonic clock, or `None` when unknown.
+    pub input_sampled_us: Option<u64>,
 }
 
 impl Default for FrameScalars {
@@ -74,6 +77,7 @@ impl Default for FrameScalars {
             rebase: None,
             atmosphere: None,
             sunlight: crate::gfx::render_types::LightUniforms::DEFAULT.directional[0].intensity,
+            input_sampled_us: None,
         }
     }
 }

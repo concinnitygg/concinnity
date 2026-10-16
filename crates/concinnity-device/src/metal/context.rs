@@ -393,6 +393,9 @@ pub(super) struct Diagnostics {
     // it, in microseconds, and the latest span end seen, in GPU nanoseconds,
     // which the next frame's span is clipped against.
     pub gpu_overlap_us: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    // When that frame's GPU work ended on the host clock, beside its input
+    // sample time; `None` when its input time was unknown.
+    pub gpu_done: std::sync::Arc<std::sync::Mutex<Option<profile::GpuDone>>>,
     pub gpu_span_end_ns: std::sync::Arc<std::sync::atomic::AtomicU64>,
     // Atomic accumulator the parallel-dispatched workers fetch_add their draw
     // counts into. Drained into `diagnostics.frame_stats.draw_calls` at the end of
@@ -752,6 +755,9 @@ pub(crate) struct MtlContext {
     // GPU retires the frame, bounding how far the CPU may queue ahead of the
     // GPU (and thus how many sets of per-frame transient buffers can pile up).
     pub(super) frame_pacing: super::frame_pacing::FrameInFlight,
+    // A slot `prepare_frame` reserved ahead of the draw, which the next
+    // `draw_frame` takes instead of waiting itself.
+    pub(super) prepared_slot: Option<super::frame_pacing::FrameSlot>,
     // Ring depth for the per-frame transient buffers below: equal to the
     // frames-in-flight count (≥1). The fence guarantees frame `R − depth` has
     // retired before frame `R` reuses ring slot `R % depth`, so overwriting
@@ -1224,6 +1230,7 @@ impl MtlContext {
             .diagnostics
             .gpu_overlap_us
             .load(std::sync::atomic::Ordering::Relaxed);
+        stats.gpu_done = self.diagnostics.gpu_done.lock().ok().and_then(|done| *done);
         stats.async_pass_mask = self
             .diagnostics
             .pass_async_mask

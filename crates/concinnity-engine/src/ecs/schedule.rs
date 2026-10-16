@@ -76,9 +76,9 @@ pub(crate) fn behavior(world: &World) -> Option<concinnity_core::behavior::Behav
 }
 
 // SpawnSystem: paired with GraphicsSystem (same gate) -- its churn retires and
-// clones the GPU draw slots graphics owns. Scheduled immediately before it so
-// a despawn is applied before the transform push and a spawn reuses slots
-// freed this same frame.
+// clones the GPU draw slots graphics owns. Scheduled before it so a despawn is
+// applied before the transform push and a spawn reuses slots freed this same
+// frame.
 pub(crate) fn spawn(world: &World) -> Option<crate::spawn::SpawnSystem> {
     rendered(world).then(crate::spawn::SpawnSystem::new)
 }
@@ -93,8 +93,9 @@ pub(crate) fn settings(world: &World) -> Option<crate::settings::system::Setting
 
 // StreamingSystem: paired with GraphicsSystem (same gate) -- it drives the
 // streaming pools and publishes the camera-relative screen graphics draws.
-// Scheduled immediately before GraphicsSystem so a chunk world's screen rebase is
-// ready for this frame's submit and any texture/mesh upload lands before it.
+// Scheduled after the cameras and before GraphicsSystem so the screen it
+// publishes is this tick's pose, a chunk world's screen rebase is ready for
+// this frame's submit, and any texture/mesh upload lands before it.
 pub(crate) fn streaming(world: &World) -> Option<crate::gfx::streaming::system::StreamingSystem> {
     rendered(world).then(crate::gfx::streaming::system::StreamingSystem::new)
 }
@@ -104,10 +105,9 @@ pub(crate) fn graphics(world: &World) -> Option<crate::gfx::system::GraphicsSyst
     rendered(world).then(|| crate::gfx::system::GraphicsSystem::new(crate::ecs::state_tree(world)))
 }
 
-// InputSystem: paired with GraphicsSystem (same gate) -- it samples the window
-// backend graphics drives. Scheduled immediately after it so the snapshot is
-// taken right after the draw (the OS event pump on Metal runs inside
-// draw_frame) and is fresh for every consumer below.
+// InputSystem: paired with GraphicsSystem (same gate) -- it publishes the input
+// sampled from the window backend graphics drives. Scheduled at the top of the
+// tick so the snapshot is fresh for every consumer below.
 pub(crate) fn input(world: &World) -> Option<crate::input::system::InputSystem> {
     rendered(world).then(crate::input::system::InputSystem::new)
 }
@@ -190,8 +190,8 @@ pub(crate) fn physics(world: &World) -> Option<concinnity_core::physics::Physics
 }
 
 // PlanetSystem: present whenever the world declares a `Planet`. Scheduled
-// after the frame is drawn and before physics and the camera controllers, so
-// a move of the simulated frame lands between two ticks.
+// before the world's logic, spawns, physics and the camera controllers, so a
+// move of the simulated frame lands between two ticks.
 pub(crate) fn planet(world: &World) -> Option<crate::planet::PlanetSystem> {
     world
         .query::<Planet>()
@@ -328,7 +328,7 @@ pub(crate) fn ui_input(world: &World) -> Option<crate::ui::UiInputSystem> {
 
 // TextInputSystem: present whenever the world declares any `TextInput`. It
 // edits the focused field in place from the frame's typed character and
-// caret keys, so it runs after GraphicsSystem deposits `FrameInput`.
+// caret keys, so it runs after InputSystem publishes `FrameInput`.
 pub(crate) fn text_input(world: &World) -> Option<crate::input::text_system::TextInputSystem> {
     world
         .query::<TextInput>()

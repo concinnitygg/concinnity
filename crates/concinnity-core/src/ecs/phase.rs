@@ -14,48 +14,57 @@
 /// names a phase rather than a neighboring system, and runs after every engine
 /// system in that phase.
 ///
-/// The engine submits its frame partway through the tick, so the phases are not
-/// symmetric around it:
+/// The tick simulates first and submits its frame last, so the frame shows
+/// everything the tick resolved:
 ///
 /// | Phase | Runs after | Runs before |
 /// | --- | --- | --- |
-/// | [`Early`](Phase::Early) | the previous tick, in full | this tick's world logic |
-/// | [`Logic`](Phase::Logic) | the world's behavior bodies | the requests they emit drain |
+/// | [`Early`](Phase::Early) | the menu gate, this tick's input and a planet world's frame move | this tick's world logic |
+/// | [`Logic`](Phase::Logic) | the world's behavior bodies | the simulation |
+/// | [`Late`](Phase::Late) | this tick's physics, cameras, animation, story and audio | spawns, settings and streaming |
 /// | [`PreRender`](Phase::PreRender) | spawns, settings and streaming | this frame is submitted |
-/// | [`Late`](Phase::Late) | the frame, this tick's input, physics, cameras, animation | the next tick |
+/// | [`PostRender`](Phase::PostRender) | this frame's submit | the next tick |
 ///
-/// Input is sampled after the frame is submitted, so movement belongs in
-/// [`Early`](Phase::Early): a system there reads the input sampled at the end of
-/// the previous tick and writes the intent this tick's physics consumes. That is
-/// the same one-tick lag the engine's own camera controllers run at.
+/// Input is sampled before the tick, so movement belongs in
+/// [`Early`](Phase::Early): a system there reads this tick's input and writes
+/// the intent this tick's physics consumes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Phase {
-    /// Before the world's logic: the previous tick has fully resolved and
-    /// nothing has been simulated yet. Where movement intent belongs.
+    /// Before the world's logic: this tick's input is in and nothing has been
+    /// simulated yet. Where movement intent belongs.
     Early,
     /// Beside the world's logic. Spawn, despawn and scene requests made here
     /// still drain this tick.
     Logic,
+    /// After this tick's physics, cameras and animation have all resolved.
+    /// The default, and where most work belongs.
+    #[default]
+    Late,
     /// After the tick's spawns, settings and streaming, before the frame is
     /// submitted. The last place a transform reaches this frame's draw.
     PreRender,
-    /// After the frame: this tick's input, physics, cameras and animation have
-    /// all resolved. The default, and where most work belongs.
-    #[default]
-    Late,
+    /// After the frame is submitted: sees the frame that just went.
+    PostRender,
 }
 
 impl Phase {
     /// Every phase, in run order.
-    pub const ALL: [Phase; 4] = [Phase::Early, Phase::Logic, Phase::PreRender, Phase::Late];
+    pub const ALL: [Phase; 5] = [
+        Phase::Early,
+        Phase::Logic,
+        Phase::Late,
+        Phase::PreRender,
+        Phase::PostRender,
+    ];
 
     /// The phase name, for schedule reporting.
     pub fn as_str(self) -> &'static str {
         match self {
             Phase::Early => "Early",
             Phase::Logic => "Logic",
-            Phase::PreRender => "PreRender",
             Phase::Late => "Late",
+            Phase::PreRender => "PreRender",
+            Phase::PostRender => "PostRender",
         }
     }
 }
@@ -73,10 +82,10 @@ mod tests {
         sorted.sort();
         assert_eq!(sorted, Phase::ALL);
         assert_eq!(Phase::ALL.first(), Some(&Phase::Early));
-        assert_eq!(Phase::ALL.last(), Some(&Phase::Late));
+        assert_eq!(Phase::ALL.last(), Some(&Phase::PostRender));
     }
 
-    // The default is the end of the tick, where everything has resolved.
+    // The default is after the simulation, where everything has resolved.
     #[test]
     fn the_default_phase_is_late() {
         assert_eq!(Phase::default(), Phase::Late);

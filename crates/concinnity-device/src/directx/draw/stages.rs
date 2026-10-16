@@ -74,20 +74,41 @@ impl DxContext {
         }
     }
 
-    // Blocks on this frame slot's previous submission, then runs the ticks it gates.
-    pub(in crate::directx) fn wait_frame_slot(&mut self, frame: usize) -> RenderResult<GpuWait> {
-        // Wait for this frame slot's previous work to finish before reusing it.
-        // Measured, with the `Present` in `submit_and_present`, into the frame's `gpu_wait_us`:
-        // both block the CPU on the GPU inside `draw_frame`, which the engine
-        // times its graphics system around.
+    // Block on the next frame slot ahead of the draw: DXGI's frame-latency
+    // waitable, then the slot's fence. The draw's own wait then returns at once.
+    pub(crate) fn prepare_frame(&mut self) {
+        if self.window_minimized() {
+            return;
+        }
         let mut gpu_wait = crate::gpu_wait::GpuWait::none();
+        if self
+            .block_on_frame_slot(self.current_frame, &mut gpu_wait)
+            .is_ok()
+        {
+            self.frame_latency_reserved = true;
+        }
+    }
+
+    // Pump the window's messages outside the draw. The closed flag is sticky,
+    // so the frame's own poll still reports a close.
+    pub(crate) fn pump_events(&mut self) {
+        self.window_closed();
+    }
+
+    // Wait until DXGI may queue another present, unless `prepare_frame` already
+    // did, then until `frame`'s previous submission has finished.
+    fn block_on_frame_slot(&mut self, frame: usize, gpu_wait: &mut GpuWait) -> RenderResult<()> {
         // Start the frame only once DXGI may queue its present. Bounded, so a
         // display that stops consuming presents cannot wedge the loop.
-        gpu_wait.measure(|| {
-            // SAFETY: the handle came from this context's swapchain and lives as long as the
-            // context, and the wait borrows nothing else.
-            unsafe { WaitForSingleObject(self.swapchain.frame_latency, FRAME_LATENCY_TIMEOUT_MS) }
-        });
+        if !std::mem::take(&mut self.frame_latency_reserved) {
+            gpu_wait.measure(|| {
+                // SAFETY: the handle came from this context's swapchain and lives as long as the
+                // context, and the wait borrows nothing else.
+                unsafe {
+                    WaitForSingleObject(self.swapchain.frame_latency, FRAME_LATENCY_TIMEOUT_MS)
+                }
+            });
+        }
         // SAFETY: the fence and the event were created from this device and are live for the call.
         let completed = unsafe { self.frame_sync.fence.GetCompletedValue() };
         if self.frame_sync.fence_values[frame] > completed {
@@ -106,6 +127,17 @@ impl DxContext {
                 unsafe { WaitForSingleObject(self.frame_sync.fence_event, u32::MAX) }
             });
         }
+        Ok(())
+    }
+
+    // Blocks on this frame slot's previous submission, then runs the ticks it gates.
+    pub(in crate::directx) fn wait_frame_slot(&mut self, frame: usize) -> RenderResult<GpuWait> {
+        // Wait for this frame slot's previous work to finish before reusing it.
+        // Measured, with the `Present` in `submit_and_present`, into the frame's `gpu_wait_us`:
+        // both block the CPU on the GPU inside `draw_frame`, which the engine
+        // times its graphics system around.
+        let mut gpu_wait = crate::gpu_wait::GpuWait::none();
+        self.block_on_frame_slot(frame, &mut gpu_wait)?;
 
         // Streamed texture swaps: re-point this frame's flat-pool SRV copy at
         // the swapped-in resources (legal now -- the fence wait retired
@@ -193,11 +225,52 @@ impl DxContext {
         }
     }
 
+    // When the slot's last frame's GPU work ended on the host clock: its
+    // whole-frame end timestamp, placed through a fresh queue clock
+    // calibration. `None` when the frame's input time is unknown, its timestamp
+    // is not in yet, or the queue cannot calibrate.
+    pub(in crate::directx) fn read_gpu_done(&self, frame: usize) -> Option<profile::GpuDone> {
+        let input_sampled_us = self.timestamps.input_sampled_us[frame]?;
+        if self.timestamps.readback_ptr.is_null() || self.timestamps.frequency == 0 {
+            return None;
+        }
+        let (_, end_slot) = pass_timing::whole_frame_pair(frame);
+        // SAFETY: `readback_ptr` is the persistently-mapped base of a READBACK buffer holding
+        // every frame slot's block, `end_slot` lies inside this frame's block, and the
+        // `wait_frame_slot` fence wait retired the write.
+        let end_tick = unsafe { self.timestamps.readback_ptr.add(end_slot as usize).read() };
+        if end_tick == 0 {
+            return None;
+        }
+        let (mut gpu_now, mut cpu_now) = (0u64, 0u64);
+        // SAFETY: a clock query on the live command queue; it writes only the two out-params.
+        if unsafe {
+            self.hw
+                .alloc
+                .queue()
+                .GetClockCalibration(&mut gpu_now, &mut cpu_now)
+        }
+        .is_err()
+        {
+            return None;
+        }
+        Some(profile::GpuDone {
+            input_sampled_us,
+            done_us: pass_timing::gpu_end_on_host(
+                end_tick,
+                gpu_now,
+                1e9 / self.timestamps.frequency as f64,
+                concinnity_host::clock::monotonic_micros(),
+            ),
+        })
+    }
+
     // Publishes this frame's stats before recording; draw calls fill in after.
     pub(in crate::directx) fn begin_frame_stats(
         &self,
         gpu_wait: &GpuWait,
         (gpu_frame_us, pass_times_us): (u32, [PassTiming; profile::MAX_PASS_TIMINGS]),
+        gpu_done: Option<profile::GpuDone>,
     ) {
         // Reset this frame's render stats. `record_frame` accumulates
         // `draw_calls` through `inc_draw_calls` (an interior-mutability path
@@ -221,6 +294,7 @@ impl DxContext {
             objects: counts.objects,
             skinned_visible: counts.skinned_visible,
             gpu_frame_us,
+            gpu_done,
             // The fence wait alone so far; `submit_and_present` adds the `Present`.
             gpu_wait_us: gpu_wait.micros(),
             vram_bytes: self.query_vram_bytes(),

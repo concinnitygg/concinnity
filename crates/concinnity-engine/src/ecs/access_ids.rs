@@ -92,6 +92,7 @@ define_access_ids! {
         crate::ecs::DisabledSettingRows,
         crate::ecs::DisplayModes,
         crate::ecs::InputMailbox,
+        crate::ecs::InputSampledAt,
         ScheduleMode,
         crate::ecs::ActiveSceneFlow,
         crate::ecs::SceneResidencyStatus,

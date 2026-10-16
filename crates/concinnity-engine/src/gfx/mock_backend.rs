@@ -94,6 +94,7 @@ pub(crate) enum Call {
     // of building a fresh one -- the `cn editor` hot-swap path.
     ReloadWorld,
     TakeInput,
+    PumpEvents,
     DrawFrame {
         world_hidden: bool,
         text_calls: usize,
@@ -426,6 +427,10 @@ impl RenderBackend for MockBackend {
 
     fn request_cursor_capture(&mut self) {
         self.record(Call::RequestCursorCapture);
+    }
+
+    fn pump_events(&mut self) {
+        self.record(Call::PumpEvents);
     }
 
     fn take_input(&mut self) -> InputSnapshot {

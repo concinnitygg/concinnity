@@ -906,8 +906,9 @@ Gates construct their system, so every constructor stays cheap and free of side
 effects: `cn list` constructs and discards each gated system to report what a
 world would build. Device acquisition and payload reads belong in system init.
 
-The phases are `Early`, `Logic`, `PreRender`, and `Late`, and the table's
-entries are in phase order. A system written outside the engine is registered on
+The phases are `Early`, `Logic`, `Late`, `PreRender`, and `PostRender`, and the
+table's entries are in phase order. The tick simulates first and submits its
+frame last, so the frame shows everything the tick resolved. A system written outside the engine is registered on
 the world naming a phase; within a phase every table entry runs before every
 registered system, so a registration never reorders the engine's own tick. A
 registered name that repeats a table entry's is refused at start.
@@ -1002,38 +1003,49 @@ with the build host.
 
 Two drivers exist.
 
-**Pipelined (default for a rendering world).** Simulation of frame N+1 overlaps
-rendering of frame N.
+**Pipelined (default for a rendering world).** Simulation and rendering run on
+separate threads, and each step simulates just before its frame is recorded.
 
 ```mermaid
 sequenceDiagram
     participant M as Main thread (render half)
-    participant C as Rendezvous channel
+    participant C as Channels
     participant S as Sim thread
 
+    M->>M: reserve the frame's GPU slot, pump events
+    M->>M: sample input
+    M->>C: go-ahead (input)
+    C->>S: go-ahead
     S->>S: pace, advance clock, step world
-    S->>C: send render snapshot (blocks)
+    S->>C: send render snapshot
     C->>M: render snapshot
     M->>M: replay ops, submit, draw frame
-    M->>M: sample input
-    M->>S: feedback (input, stats, recycled snapshot)
-    S->>S: next step consumes feedback
+    M->>S: feedback (stats, recycled snapshot)
 ```
 
 The main thread keeps everything the OS and GPU pin to it: the event pumps, the
 backend, frame submission, and swapchain recreation. The sim thread owns the
 frame pacer, the fixed-tick clock, and the world step, and produces snapshots.
 
+The step waits for the render half's **go-ahead** before its clock reads the
+time. While frames wait on the GPU, the render half reserves the next frame's
+GPU slot first (the frames-in-flight wait), samples input, and only then lets
+the step go, so the tick reads input taken just before its frame is recorded
+rather than input that waited out the GPU. GPU and vsync backpressure land in
+the wait for the go-ahead, where the fixed-tick accumulator counts it as
+ordinary frame time. While frames do not wait on the GPU there is no wait to
+move: the go-ahead comes as soon as a snapshot arrives, and the next step
+overlaps that frame's submission. The loop switches after a few frames on the
+other side of a 1 ms wait, so one frame across the bound does not flip it.
+
 The snapshot channel is a **rendezvous** (capacity zero). This is load-bearing:
 
 - Exactly one frame is in flight between the halves.
 - Every snapshot is consumed exactly once, in order, which the model-push dedupe
   and slot-allocation ops depend on.
-- Vsync backpressure propagates into the sim's blocked send, where the fixed-tick
-  accumulator counts it as ordinary frame time.
 
-The feedback channel returns sampled input, render stats, op-replay results, and
-the consumed snapshot for buffer reuse. A crash on the sim thread is re-raised on
+The feedback channel returns render stats, op-replay results, and the consumed
+snapshot for buffer reuse. A crash on the sim thread is re-raised on
 the main thread after the render half drains.
 
 **Serial.** Both halves step on the main thread. This is the editor's mode, the
@@ -1133,7 +1145,7 @@ the same tick. The important ones:
 | Sim timing, frame time  | The app clock, before the step           | Physics, behavior, animation, presentation.    |
 | Frame-rate cap          | Graphics                                 | The app-level frame pacer.                      |
 | Camera-relative view    | Streaming                                | Graphics, for the draw.                         |
-| Input mailbox           | Graphics (or the render half's feedback) | Input, later the same tick.                     |
+| Input mailbox           | The render half's go-ahead (or Graphics) | Input, first in the next tick.                  |
 | GPU memory pressure     | Graphics, streaming                      | The streaming back-off valve.                   |
 | Render queues           | Graphics init                            | Every op-recording system.                      |
 | Pending history reset   | Cameras, scenes, settings, behaviors     | Graphics, to reset temporal history (12.13).    |
@@ -1149,30 +1161,31 @@ commands).
 Table order is run order. The rationale for each ordering edge is part of the
 registry.
 
-| #   | System               | Phase     | Present when                                                                                                             |
-| --- | -------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------ |
-| 1   | Overlay              | Early     | The world runs with a window.                                                                                            |
-| 2   | Sky rotation         | Early     | The world declares a `SkyRotation`.                                                                                      |
-| 3   | Behavior             | Logic     | The world declares any `Behavior`.                                                                                       |
-| 4   | Spawn                | PreRender | The world runs with a window.                                                                                            |
-| 5   | Settings             | PreRender | The world runs with a window.                                                                                            |
-| 6   | Streaming            | PreRender | The world runs with a window.                                                                                            |
-| 7   | Graphics             | Late      | The world runs with a window.                                                                                            |
-| 8   | Input                | Late      | The world runs with a window.                                                                                            |
-| 9   | Stat HUD             | Late      | The world declares a `StatHud`.                                                                                          |
-| 10  | Debug HUD            | Late      | The world declares a `DebugHud` and the binary is a debug build or a dev session.                                        |
-| 11  | Loading overlay      | Late      | The world declares a `LoadingOverlay`.                                                                                   |
-| 12  | Physics              | Late      | The world declares a `PhysicsConfig`, `RigidBody`, `PropBody`, or `TriggerVolume`, or a skinned mesh bakes a capsule.     |
-| 13  | First-person camera  | Late      | The first controlled `Camera3D` has no follow block.                                                                     |
-| 14  | Third-person camera  | Late      | The first controlled `Camera3D` has a follow block.                                                                      |
-| 15  | Camera track         | Late      | The world declares a `CameraTrack` and the `Camera3D` it drives.                                                         |
-| 16  | FPS counter          | Late      | The world declares an `FpsCounter`.                                                                                      |
-| 17  | Animation            | Late      | The world declares any `Animation` or `AnimationGraph`.                                                                  |
-| 18  | Story                | Late      | The world declares a `Story`.                                                                                            |
-| 19  | Audio                | Late      | The world declares any `AudioEmitter`, `AudioCue`, story audio, or a `Behavior` with a sound node.                       |
-| 20  | UI input             | Late      | The world declares any `HitRegion`, `Screen`, or `KeyBinding`.                                                           |
-| 21  | Text input           | Late      | The world declares any `TextInput`.                                                                                      |
-| 22  | Frame report         | Late      | The world declares a `FrameReport`.                                                                                      |
+| #   | System              | Phase      | Present when                                                                                                          |
+| --- | ------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------- |
+| 1   | Overlay             | Early      | The world runs with a window.                                                                                         |
+| 2   | Input               | Early      | The world runs with a window.                                                                                         |
+| 3   | Sky rotation        | Early      | The world declares a `SkyRotation`.                                                                                   |
+| 4   | Planet              | Early      | The world declares a `Planet`.                                                                                        |
+| 5   | Behavior            | Logic      | The world declares any `Behavior`.                                                                                    |
+| 6   | Physics             | Late       | The world declares a `PhysicsConfig`, `RigidBody`, `PropBody`, or `TriggerVolume`, or a skinned mesh bakes a capsule. |
+| 7   | First-person camera | Late       | The first controlled `Camera3D` has no follow block.                                                                  |
+| 8   | Third-person camera | Late       | The first controlled `Camera3D` has a follow block.                                                                   |
+| 9   | Camera track        | Late       | The world declares a `CameraTrack` and the `Camera3D` it drives.                                                      |
+| 10  | Animation           | Late       | The world declares any `Animation` or `AnimationGraph`.                                                               |
+| 11  | Story               | Late       | The world declares a `Story`.                                                                                         |
+| 12  | Audio               | Late       | The world declares any `AudioEmitter`, `AudioCue`, story audio, or a `Behavior` with a sound node.                    |
+| 13  | Text input          | Late       | The world declares any `TextInput`.                                                                                   |
+| 14  | Stat HUD            | Late       | The world declares a `StatHud`.                                                                                       |
+| 15  | Debug HUD           | Late       | The world declares a `DebugHud` and the binary is a debug build or a dev session.                                     |
+| 16  | FPS counter         | Late       | The world declares an `FpsCounter`.                                                                                   |
+| 17  | Spawn               | PreRender  | The world runs with a window.                                                                                         |
+| 18  | Settings            | PreRender  | The world runs with a window.                                                                                         |
+| 19  | Streaming           | PreRender  | The world runs with a window.                                                                                         |
+| 20  | Loading overlay     | PreRender  | The world declares a `LoadingOverlay`.                                                                                |
+| 21  | UI input            | PreRender  | The world declares any `HitRegion`, `Screen`, or `KeyBinding`.                                                        |
+| 22  | Graphics            | PostRender | The world runs with a window.                                                                                         |
+| 23  | Frame report        | PostRender | The world declares a `FrameReport`.                                                                                   |
 
 Key ordering constraints:
 
@@ -1185,8 +1198,15 @@ Key ordering constraints:
 - **Spawn, settings, and streaming before graphics.** A despawn is applied
   before the transform push, a setting change lands for this frame's submit, and
   a chunk world's camera rebase is ready for the draw.
-- **Input after graphics.** On Metal the OS event pump runs inside the draw, so
-  sampling right after it sees the freshest events.
+- **Input first, graphics last.** The tick consumes the input sampled before it
+  began, and the frame it submits at its end shows that input, the simulation
+  and the cameras. Graphics initializes early all the same: its init builds the
+  window, the backend and the indexes later inits read.
+- **Planet before behavior, spawn, physics, and the cameras.** A move of a
+  planet world's simulated frame lands before anything the tick places or
+  moves, so a spawn request and its drain share one frame.
+- **Streaming after the cameras.** The camera-relative view it publishes is the
+  pose this tick's frame draws.
 - **Loading overlay after streaming, before UI input.** It reads the residency
   status published this tick, and its screen commands apply the same tick.
 - **Physics before the camera controllers.** Physics consumes the camera's

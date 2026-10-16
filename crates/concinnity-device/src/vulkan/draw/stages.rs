@@ -41,6 +41,29 @@ impl VkContext {
         Ok(())
     }
 
+    // Block on the next frame slot's fence ahead of the draw. The fence stays
+    // signaled until the draw resets it, so the draw's own wait returns at
+    // once, and a failure surfaces there.
+    pub(crate) fn prepare_frame(&mut self) {
+        if self.frame_is_parked() {
+            return;
+        }
+        let fence = self.frame_sync.in_flight[self.current_frame];
+        // SAFETY: the fence belongs to the next frame slot and was created from this device; the
+        // slice borrows it for the call.
+        let _ = unsafe {
+            self.hw
+                .device
+                .wait_for_fences(std::slice::from_ref(&fence), true, u64::MAX)
+        };
+    }
+
+    // Pump the window's pending events outside the draw. The closed flag is
+    // sticky, so the frame's own poll still reports a close.
+    pub(crate) fn pump_events(&mut self) {
+        self.window_closed();
+    }
+
     // Blocks on this frame slot's previous submission, then runs the ticks it gates.
     pub(in crate::vulkan) fn wait_frame_slot(&mut self, frame: usize) -> RenderResult<GpuWait> {
         // Wait for this frame's slot to finish. Measured, with the swapchain
@@ -111,6 +134,45 @@ impl VkContext {
     }
 
     // Whole-frame and per-pass GPU times this slot's last submission resolved.
+    // When the slot's last frame's GPU work ended on the host clock: its
+    // whole-frame end timestamp, placed through a fresh calibrated read of the
+    // GPU counter. `None` when the frame's input time is unknown, its timestamp
+    // is not in, or the device cannot calibrate.
+    pub(in crate::vulkan) fn read_gpu_done(&self, frame: usize) -> Option<profile::GpuDone> {
+        let input_sampled_us = self.frame_input_sampled_us[frame]?;
+        let pool = self.hw.timestamp_query_pool?;
+        let calibration = self.hw.timestamp_calibration.as_ref()?;
+        let (_, end_slot) = pass_timing::whole_frame_pair(frame);
+        let mut end = [[0u64; 2]; 1];
+        // SAFETY: a result query on a live pool for one slot inside this frame's block; the
+        // `wait_frame_slot` fence wait retired the write, and nothing waits on availability.
+        let read = unsafe {
+            self.hw.device.get_query_pool_results(
+                pool,
+                end_slot,
+                &mut end,
+                vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WITH_AVAILABILITY,
+            )
+        };
+        let [end_tick, available] = end[0];
+        if !matches!(read, Ok(()) | Err(vk::Result::NOT_READY)) || available == 0 {
+            return None;
+        }
+        let info =
+            [vk::CalibratedTimestampInfoEXT::default().time_domain(vk::TimeDomainEXT::DEVICE)];
+        // SAFETY: a clock query on the live device for the one domain named; it only reads.
+        let (now, _) = unsafe { calibration.get_calibrated_timestamps(&info) }.ok()?;
+        Some(profile::GpuDone {
+            input_sampled_us,
+            done_us: pass_timing::gpu_end_on_host(
+                end_tick,
+                now[0],
+                f64::from(self.hw.timestamp_period_ns),
+                concinnity_host::clock::monotonic_micros(),
+            ),
+        })
+    }
+
     pub(in crate::vulkan) fn read_gpu_timings(
         &self,
         frame: usize,
@@ -167,6 +229,7 @@ impl VkContext {
         &self,
         gpu_wait: &GpuWait,
         (gpu_frame_us, pass_times_us): (u32, [PassTiming; profile::MAX_PASS_TIMINGS]),
+        gpu_done: Option<profile::GpuDone>,
     ) {
         // Reset this frame's render stats. `record_frame` accumulates
         // `draw_calls` through `inc_draw_calls` (interior-mutability since
@@ -189,6 +252,7 @@ impl VkContext {
             objects: counts.objects,
             skinned_visible: counts.skinned_visible,
             gpu_frame_us,
+            gpu_done,
             // The fence wait alone so far; `acquire_frame` adds to it.
             gpu_wait_us: gpu_wait.micros(),
             vram_bytes,

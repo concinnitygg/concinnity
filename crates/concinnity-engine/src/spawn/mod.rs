@@ -10,7 +10,7 @@
 //! carries and when one is due is the world's, and the draw slot it lands in is
 //! this crate's, handed over through the seams that module's builders take.
 //!
-//! Scheduled immediately before GraphicsSystem so a despawned entity is
+//! Scheduled before GraphicsSystem so a despawned entity is
 //! already gone from the GlobalTransform x RenderHandle join when transforms
 //! are pushed (it contributes nothing to any pass this same frame), and so a
 //! spawn reuses slots freed this same frame before the backend grows its draw

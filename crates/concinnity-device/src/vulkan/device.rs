@@ -116,6 +116,9 @@ pub(super) struct LogicalDevice {
     pub device: Device,
     // `VK_EXT_memory_budget` was enabled, for the VRAM-residency chip.
     pub memory_budget: bool,
+    // `VK_EXT_calibrated_timestamps` was enabled, so a frame's GPU timestamps
+    // can be placed on the host clock.
+    pub calibrated_timestamps: bool,
     // The hardware ray-query path is CAPABLE (the device exposes
     // `VK_KHR_acceleration_structure` + `VK_KHR_ray_query` +
     // `VK_KHR_deferred_host_operations` + the matching features AND XeSS does
@@ -176,6 +179,12 @@ pub(super) fn create_logical_device(
         // not outlive the properties entry it points into.
         let name = unsafe { CStr::from_ptr(e.extension_name.as_ptr()) };
         name.to_bytes() == b"VK_EXT_memory_budget"
+    });
+    let has_calibrated_timestamps = exts.iter().any(|e| {
+        // SAFETY: Vulkan fills `extension_name` with a NUL-terminated string, and the borrow does
+        // not outlive the properties entry it points into.
+        let name = unsafe { CStr::from_ptr(e.extension_name.as_ptr()) };
+        name.to_bytes() == b"VK_EXT_calibrated_timestamps"
     });
 
     // FidelityFX FSR (the Vulkan temporal upscaler, `vulkan/post/upscale.rs`)
@@ -257,6 +266,9 @@ pub(super) fn create_logical_device(
     let mut enabled: Vec<CString> = vec![CString::new("VK_KHR_swapchain").unwrap()];
     if has_memory_budget {
         enabled.push(CString::new("VK_EXT_memory_budget").unwrap());
+    }
+    if has_calibrated_timestamps {
+        enabled.push(CString::new("VK_EXT_calibrated_timestamps").unwrap());
     }
     if want_f16 {
         enabled.push(CString::new("VK_KHR_shader_float16_int8").unwrap());
@@ -497,6 +509,7 @@ pub(super) fn create_logical_device(
         return Ok(LogicalDevice {
             device,
             memory_budget: has_memory_budget,
+            calibrated_timestamps: has_calibrated_timestamps,
             rt_capable: false,
             caps,
             update_after_bind: false,
@@ -538,6 +551,7 @@ pub(super) fn create_logical_device(
     Ok(LogicalDevice {
         device,
         memory_budget: has_memory_budget,
+        calibrated_timestamps: has_calibrated_timestamps,
         rt_capable,
         caps,
         update_after_bind: want_update_after_bind,

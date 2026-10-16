@@ -131,5 +131,6 @@ pub(super) fn build_timestamps(gpu: &InitGpu<'_>) -> TimestampState {
         readback,
         readback_ptr,
         frequency,
+        input_sampled_us: vec![None; gpu.hw.frames()],
     }
 }

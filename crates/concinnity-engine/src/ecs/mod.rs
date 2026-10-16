@@ -67,22 +67,43 @@ pub use world_queries::{
 /// system that publishes it.
 pub struct RenderInitFailure(pub concinnity_core::render::error::RenderError);
 
-// The frame's sampled window input, deposited beside the backend right after
-// the draw (whose event pump produced it) and taken by InputSystem later the
-// same tick. The pipelined driver deposits it from the render half's feedback
-// instead; a missed consume merges into the next deposit so no edge is lost.
+// The sampled window input and when it was sampled on the host clock, taken
+// by the next tick's InputSystem. Serial execution deposits it beside the
+// backend right after the draw (whose event pump produced it); the pipelined
+// driver deposits the input the render half's go-ahead carried. A missed
+// consume merges into the next deposit so no edge is lost.
 #[derive(Default)]
-pub(crate) struct InputMailbox(pub Option<concinnity_core::input::snapshot::InputPacket>);
+pub(crate) struct InputMailbox {
+    packet: Option<concinnity_core::input::snapshot::InputPacket>,
+    sampled_us: u64,
+}
 
 impl InputMailbox {
-    // Deposit a fresh packet, merging onto an unconsumed one.
-    pub(crate) fn deposit(&mut self, packet: concinnity_core::input::snapshot::InputPacket) {
-        match &mut self.0 {
+    // Deposit a packet sampled at `sampled_us`, merging onto an unconsumed one.
+    // The merged input is as fresh as its latest sample.
+    pub(crate) fn deposit(
+        &mut self,
+        packet: concinnity_core::input::snapshot::InputPacket,
+        sampled_us: u64,
+    ) {
+        match &mut self.packet {
             Some(pending) => pending.merge_from(packet),
-            None => self.0 = Some(packet),
+            None => self.packet = Some(packet),
         }
+        self.sampled_us = sampled_us;
+    }
+
+    // Take the pending packet and its sample time, if one was deposited.
+    pub(crate) fn take(&mut self) -> Option<(concinnity_core::input::snapshot::InputPacket, u64)> {
+        self.packet.take().map(|packet| (packet, self.sampled_us))
     }
 }
+
+// When the input this tick consumed was sampled, in microseconds on the host
+// clock. Published by InputSystem; it names the tick's frame, which carries it
+// to the backend and which the frame report pairs with its GPU completion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InputSampledAt(pub u64);
 
 // The frame's recording surfaces, taken and re-parked together by each
 // recording system (the same handoff `ActiveRenderBackend` uses, so a step
@@ -277,6 +298,7 @@ macro_rules! define_systems {
     ( complete_world: $complete_world:path,
       before_init: $before_init:path,
       prepare_events: $prepare_events:path,
+      init_first: [ $( $init_first:ident ),* $(,)? ],
       $( $name:ident => $behavior:path {
             gate: $gate:path,
             present_when: $present_when:literal,
@@ -311,6 +333,7 @@ macro_rules! define_systems {
                     before: &[ $( stringify!($before) ),* ],
                 }, )*
             ],
+            init_first: &[ $( stringify!($init_first) ),* ],
             complete_world: Some($complete_world),
             before_init: Some($before_init),
             prepare_events: Some($prepare_events),

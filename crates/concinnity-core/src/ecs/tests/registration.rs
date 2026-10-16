@@ -42,11 +42,13 @@ const fn entry(name: &'static str, phase: Phase) -> SystemEntry {
 
 // One entry per phase, in phase order, like a real table.
 const TABLE: SystemTable = SystemTable {
+    init_first: &[],
     entries: &[
         entry("TableEarly", Phase::Early),
         entry("TableLogic", Phase::Logic),
-        entry("TablePreRender", Phase::PreRender),
         entry("TableLate", Phase::Late),
+        entry("TablePreRender", Phase::PreRender),
+        entry("TablePostRender", Phase::PostRender),
     ],
     complete_world: None,
     before_init: None,
@@ -82,8 +84,9 @@ fn a_registration_runs_after_the_table_entries_of_its_phase() {
             "MyEarly",
             "TableLogic",
             "MyLogic",
-            "TablePreRender",
             "TableLate",
+            "TablePreRender",
+            "TablePostRender",
         ]
     );
 }
@@ -98,18 +101,25 @@ fn registrations_in_one_phase_keep_their_order() {
     world.start(&TABLE).unwrap();
 
     let built = names(&world);
-    let tail = &built[built.len() - 3..];
-    assert_eq!(tail, ["First", "Second", "Third"]);
+    let late = built.iter().position(|n| *n == "TableLate").unwrap();
+    assert_eq!(
+        &built[late + 1..late + 4],
+        ["First", "Second", "Third"],
+        "{built:?}"
+    );
 }
 
-// The default phase is the end of the tick, after every table entry.
+// The default phase follows the simulation and comes before the frame.
 #[test]
-fn the_default_phase_runs_last() {
+fn the_default_phase_runs_before_the_frame() {
     let mut world = seeded();
     world.add_system(Phase::default(), "Mine", Inert);
     world.start(&TABLE).unwrap();
 
-    assert_eq!(names(&world).last(), Some(&"Mine"));
+    assert_eq!(
+        &names(&world)[2..],
+        ["TableLate", "Mine", "TablePreRender", "TablePostRender"]
+    );
 }
 
 // A registration into a phase no table entry occupies still lands in it, in
@@ -117,6 +127,7 @@ fn the_default_phase_runs_last() {
 #[test]
 fn a_registration_lands_in_an_empty_phase() {
     const SPARSE: SystemTable = SystemTable {
+        init_first: &[],
         entries: &[entry("TableLate", Phase::Late)],
         complete_world: None,
         before_init: None,

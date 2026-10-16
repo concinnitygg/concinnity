@@ -498,6 +498,7 @@ impl DxContext {
             commands,
             frame_sync,
             current_frame: 0,
+            frame_latency_reserved: false,
             stream: StreamState::new(hw.frames()),
             state: SceneState::new(
                 DrawList::with_runtime_reserve(

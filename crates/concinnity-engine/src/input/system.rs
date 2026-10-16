@@ -1,11 +1,9 @@
-//! Consumes the frame's `InputMailbox` packet (sampled beside the backend
-//! right after the draw, whose event pump produced it), merges the active
-//! gamepad's state, and publishes the `FrameInput` snapshot (as a resource and
-//! as the component column) plus the `CursorState` resource. Runs immediately
-//! after GraphicsSystem in the schedule, so the packet it takes is the one
-//! that system just deposited -- the same freshness the sample had when this
-//! system polled the backend itself. Every input consumer (camera controllers,
-//! UI, text input) runs later in the same tick.
+//! Consumes the tick's `InputMailbox` packet (sampled beside the backend before
+//! the tick began), merges the active gamepad's state, and publishes the
+//! `FrameInput` snapshot (as a resource and as the component column) plus the
+//! `CursorState` resource. Runs at the top of the tick, right after the menu
+//! gate, so every input consumer (behaviors, camera controllers, UI, text
+//! input) runs later in the same tick and the frame it ends with shows them.
 //!
 //! The gamepad is polled here, not per render backend, so all backends share
 //! one implementation. Digital buttons merge into the existing boolean fields
@@ -134,6 +132,7 @@ impl System for InputSystem {
             ])
             .writes_resources(crate::resource_mask![
                 crate::ecs::InputMailbox,
+                crate::ecs::InputSampledAt,
                 CursorState,
                 WindowMinimized,
                 FrameInput,
@@ -162,12 +161,13 @@ impl System for InputSystem {
         // No deposited packet (graphics failed, the editor transplanted the
         // backend away, or the frame stopped before sampling): nothing to
         // consume; consumers keep the last snapshot.
-        let Some(packet) = ctx
+        let Some((packet, sampled_us)) = ctx
             .resource_mut::<InputMailbox>()
-            .and_then(|mailbox| mailbox.0.take())
+            .and_then(InputMailbox::take)
         else {
             return StepResult::Continue;
         };
+        ctx.insert_resource(crate::ecs::InputSampledAt(sampled_us));
         let raw = packet.raw;
         let cursor_outside = packet.cursor_outside_window;
         // Live viewport for UiInputSystem's overlay hit-testing, so a scaled

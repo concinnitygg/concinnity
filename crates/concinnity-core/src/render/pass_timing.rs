@@ -94,9 +94,41 @@ impl FrameSpan {
     }
 }
 
+/// When a frame's GPU work ended on the host clock, in microseconds: its end
+/// timestamp `end_tick` read against a calibration taken at `host_now_us`,
+/// when the GPU's timestamp counter read `gpu_now_tick`. `ns_per_tick` is the
+/// counter's period. An end tick past the calibration reads as `host_now_us`.
+pub fn gpu_end_on_host(
+    end_tick: u64,
+    gpu_now_tick: u64,
+    ns_per_tick: f64,
+    host_now_us: u64,
+) -> u64 {
+    let ago_us = gpu_now_tick.saturating_sub(end_tick) as f64 * ns_per_tick / 1_000.0;
+    host_now_us.saturating_sub(ago_us as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gpu_end_lands_as_long_before_the_calibration_as_the_gpu_counted() {
+        // 1 ms of 10 ns ticks before a calibration at host 50 ms.
+        assert_eq!(gpu_end_on_host(900_000, 1_000_000, 10.0, 50_000), 49_000);
+    }
+
+    #[test]
+    fn a_gpu_end_after_the_calibration_reads_as_the_calibration() {
+        assert_eq!(gpu_end_on_host(2_000, 1_000, 1.0, 7), 7);
+    }
+
+    // A non-integer period (a 19.2 MHz counter) keeps its fraction.
+    #[test]
+    fn a_fractional_period_is_honored() {
+        let ns_per_tick = 1e9 / 19_200_000.0;
+        assert_eq!(gpu_end_on_host(0, 19_200, ns_per_tick, 10_000), 9_000);
+    }
 
     #[test]
     fn a_frame_after_the_previous_one_keeps_its_whole_span() {

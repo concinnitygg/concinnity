@@ -10,9 +10,9 @@
 //! physics collides with centered on the camera, and keeps the camera's up
 //! pointing away from the planet's center.
 //!
-//! Scheduled after the frame is drawn and before physics, so a move lands
-//! between two ticks: physics, the controllers and the next frame's draw all
-//! see the world already in its new frame.
+//! Scheduled before the world's logic, so a move lands between two ticks:
+//! behaviors, spawns, physics, the controllers and this tick's frame all see
+//! the world already in its new frame.
 
 mod carry;
 mod ground;

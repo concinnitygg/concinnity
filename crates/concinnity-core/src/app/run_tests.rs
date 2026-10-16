@@ -70,6 +70,7 @@ const fn entry(name: &'static str, gate: fn(&World) -> Option<Box<dyn System>>) 
 const fn table(entries: &'static [SystemEntry]) -> SystemTable {
     SystemTable {
         entries,
+        init_first: &[],
         complete_world: None,
         before_init: None,
         prepare_events: None,

@@ -38,6 +38,9 @@ pub struct Runtime {
     // Fixed-timestep accumulator; publishes the frame's `SimTiming` and
     // `FrameTime` resources before each world step (see `app::clock`).
     clock: crate::app::clock::SimClock,
+    // The pipelined render half's go-ahead, waited on before each step so the
+    // tick starts no earlier than its frame can be recorded. `None` when serial.
+    frame_gate: Option<crate::app::frame_gate::FrameGate>,
     // What the launch asked the engine to arm; published at every `start`, so a
     // world loaded later inherits it.
     launch: LaunchRequest,
@@ -64,6 +67,7 @@ impl Runtime {
             shutdown: ShutdownToken::new(),
             pacer: Default::default(),
             clock: Default::default(),
+            frame_gate: None,
             launch: LaunchRequest::default(),
             render_mode: None,
         }
@@ -222,7 +226,7 @@ impl Runtime {
         // The world times each system against this; without it the profile's
         // per-system micros read zero.
         self.world
-            .insert_resource(Clock(crate::app::clock::monotonic_micros));
+            .insert_resource(Clock(concinnity_host::clock::monotonic_micros));
         self.world.insert_resource(self.launch);
         if let Some(view) = self.launch.view_overrides() {
             self.world.insert_resource(view);
@@ -390,12 +394,28 @@ impl Runtime {
     /// loop: the run loop that interleaves platform event pumps, and a host
     /// application whose OS owns the loop and calls this per display refresh.
     ///
-    /// The FPS-cap pacer holds the step's start to its target interval first,
-    /// then the simulation clock publishes the frame's fixed-tick budget and
-    /// real frame time. The menu state read is the previous frame's, the same
-    /// one-frame lag the pacer's clamp accepts.
+    /// The FPS-cap pacer holds the step's start to its target interval first.
+    /// A pipelined runtime then waits for the render half's go-ahead, which
+    /// carries the input sampled when it went (once the GPU had a slot for
+    /// this step's frame, while frames wait on it). Only then does the
+    /// simulation clock publish the frame's fixed-tick budget and real frame
+    /// time. The menu state read is the previous frame's, the same one-frame
+    /// lag the pacer's clamp accepts.
     pub fn world_step(&mut self) -> StepResult {
         self.pacer.pace(&self.world);
+        if let Some(gate) = &self.frame_gate {
+            let Some((input, sampled_us)) = gate.wait() else {
+                return StepResult::Stop;
+            };
+            match self.world.resource_mut::<crate::ecs::InputMailbox>() {
+                Some(mailbox) => mailbox.deposit(input, sampled_us),
+                None => {
+                    let mut mailbox = crate::ecs::InputMailbox::default();
+                    mailbox.deposit(input, sampled_us);
+                    self.world.insert_resource(mailbox);
+                }
+            }
+        }
         let paused = self.world.resource::<MenuActive>().is_some_and(|m| m.0);
         let (timing, frame) = match self.launch.fixed_frame_rate {
             Some(rate) => self.clock.advance_fixed(rate, paused),
@@ -404,6 +424,11 @@ impl Runtime {
         self.world.insert_resource(timing);
         self.world.insert_resource(frame);
         self.world.step()
+    }
+
+    // Step only on the pipelined render half's go-ahead from here on.
+    pub(crate) fn gate_steps_on(&mut self, gate: crate::app::frame_gate::FrameGate) {
+        self.frame_gate = Some(gate);
     }
 
     /// Run this on the run loop with default options, consuming it.

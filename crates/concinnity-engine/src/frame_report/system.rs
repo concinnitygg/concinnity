@@ -4,7 +4,7 @@
 use concinnity_core::camera_track::CameraTrackStatus;
 use concinnity_core::components::FrameCapture;
 use concinnity_core::components::{CameraTrack, FrameReport};
-use concinnity_core::ecs::{PipelineContext, StepResult, System, WindowMinimized};
+use concinnity_core::ecs::{FrameTime, PipelineContext, StepResult, System, WindowMinimized};
 use concinnity_core::planet::FrameRebases;
 use concinnity_core::profile::RenderStats;
 use std::time::Instant;
@@ -15,22 +15,23 @@ use crate::frame_report::hidden::HiddenFrames;
 use crate::frame_report::reduce::{ReduceOptions, Report};
 use crate::frame_report::report::to_text;
 use crate::frame_report::sample::{FrameRun, FrameSample, FrameTiming};
+use crate::frame_report::shown::ShownFrames;
 
 const MICROS_PER_MILLI: f32 = 1_000.0;
 
 /// Records one [`FrameSample`] per frame and prints what the run cost when it
 /// ends.
 ///
-/// Runs in the `Late` phase after every engine system, so the render stats it
-/// reads were published this step. The system timings are not: the profile
-/// rotates them in at the start of the next step, so each frame is held for
-/// one step and recorded with its own timings then. The report goes out on the
+/// Runs in the `PostRender` phase after every engine system, so the render
+/// stats it reads were published this step. The system timings are not: the
+/// profile rotates them in at the start of the next step, so each frame is
+/// held for one step and recorded with its own timings then. The report goes out on the
 /// frame the world reports the measurement complete, which leaves that last
 /// frame unrecorded; a run cut short before that reports on the way out
 /// instead, and says so.
 ///
 /// A declared capture is requested on the step the run reaches its moment, so
-/// the next frame drawn shows the pose that step left. That frame and the few
+/// the next frame drawn, one step on, is the one saved. That frame and the few
 /// after it are not recorded.
 ///
 /// A frame run while the window is minimized or hidden draws nothing, so it
@@ -56,6 +57,8 @@ pub struct FrameReportSystem {
     // The camera pose time and frame-move count the previous step saw.
     previous_pose_seconds: f32,
     previous_rebases: u64,
+    // Each tick's pose, paired with its frame's GPU completion once it lands.
+    shown: ShownFrames,
     captures: CaptureSchedule,
     // Frames still to leave unrecorded behind the latest capture.
     excluded: u32,
@@ -91,6 +94,7 @@ impl FrameReportSystem {
             started: None,
             previous_pose_seconds: 0.0,
             previous_rebases: 0,
+            shown: ShownFrames::default(),
             captures: CaptureSchedule::new(&report.captures),
             excluded: 0,
             captured: 0,
@@ -178,13 +182,28 @@ impl System for FrameReportSystem {
         let rebased = rebases != self.previous_rebases;
         self.previous_pose_seconds = pose_seconds;
         self.previous_rebases = rebases;
+        if let Some(sampled) = ctx.resource::<crate::ecs::InputSampledAt>() {
+            self.shown.posed(sampled.0, pose_seconds);
+        }
+        let shown = ctx
+            .profile
+            .render
+            .gpu_done
+            .and_then(|done| self.shown.completed(done))
+            .unwrap_or_default();
         let Some(previous) = self.previous.replace(now) else {
             return StepResult::Continue;
         };
-        let frame_us = now
-            .duration_since(previous)
-            .as_micros()
-            .min(u32::MAX.into()) as u32;
+        // The step clock's interval, which is what the frame advanced the
+        // world by; a world without one falls back to this system's own.
+        let frame_us = ctx.resource::<FrameTime>().map_or_else(
+            || {
+                now.duration_since(previous)
+                    .as_micros()
+                    .min(u32::MAX.into()) as u32
+            },
+            |time| (f64::from(time.dt) * 1e6).round().min(f64::from(u32::MAX)) as u32,
+        );
 
         let render = ctx.profile.render;
         self.run.capture_pass_names(&render);
@@ -195,6 +214,7 @@ impl System for FrameReportSystem {
                 frame_us,
                 run_step_us,
                 rebased,
+                shown,
             },
             render,
         };
@@ -375,6 +395,67 @@ mod tests {
         assert_eq!(samples.get(0).unwrap().system_us[0], 400);
         assert_eq!(samples.get(1).unwrap().gpu_wait_us, 100);
         assert_eq!(samples.get(1).unwrap().system_us[0], 400);
+        forget_report(system);
+    }
+
+    // The frame time is the step clock's interval, not this system's own.
+    #[test]
+    fn the_frame_time_is_the_step_clocks() {
+        let mut world = World::new();
+        let mut system = FrameReportSystem::new(&FrameReport::default());
+        system.init(&mut world.context());
+        for _ in 0..3 {
+            world.insert_resource(FrameTime {
+                dt: 0.025,
+                elapsed: 0.0,
+            });
+            profiled_step(&mut world, &mut system, (500, 0), 0);
+        }
+        assert_eq!(system.run().samples.get(0).unwrap().frame_us, 25_000);
+        forget_report(system);
+    }
+
+    // A completed frame is paired with the pose its tick left, and the next
+    // completion paces against it.
+    #[test]
+    fn a_completed_frame_paces_against_the_one_before() {
+        use concinnity_core::profile::GpuDone;
+        let mut world = World::new();
+        let mut system = FrameReportSystem::new(&FrameReport::default());
+        system.init(&mut world.context());
+        let ticks = [
+            (100, 1.0),
+            (22_100, 1.022),
+            (44_100, 1.044),
+            (66_100, 1.066),
+            (88_100, 1.088),
+        ];
+        for (n, (sampled, pose)) in ticks.into_iter().enumerate() {
+            world.insert_resource(crate::ecs::InputSampledAt(sampled));
+            world.insert_resource(CameraTrackStatus {
+                pose_seconds: pose,
+                ..Default::default()
+            });
+            let mut ctx = world.context();
+            ctx.profile.begin_frame();
+            // Each step reports the frame two ticks back as finished.
+            ctx.profile.render.gpu_done = n.checked_sub(2).map(|back| GpuDone {
+                input_sampled_us: ticks[back].0,
+                done_us: ticks[back].0 + 45_000 + back as u64 * 3_000,
+            });
+            system.step(&mut ctx);
+        }
+        // Samples are recorded a step late: the last one is the fourth tick's,
+        // which saw the second completion.
+        let samples = &system.run().samples;
+        let last = samples.get(samples.len() - 1).unwrap();
+        assert_eq!(last.input_latency_us, 48_000);
+        assert_eq!(last.shown_us, 25_000);
+        assert!(
+            (last.shown_step_us as i64 - 22_000).abs() <= 1,
+            "{}",
+            last.shown_step_us
+        );
         forget_report(system);
     }
 

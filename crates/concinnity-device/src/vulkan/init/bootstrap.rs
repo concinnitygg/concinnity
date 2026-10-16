@@ -246,6 +246,7 @@ pub(super) fn acquire_hardware(
     let crate::vulkan::device::LogicalDevice {
         device,
         memory_budget: memory_budget_supported,
+        calibrated_timestamps,
         rt_capable,
         caps,
         update_after_bind,
@@ -391,6 +392,9 @@ pub(super) fn acquire_hardware(
     let alloc =
         crate::vulkan::allocator::DeviceAllocator::new(&instance, physical_device, &device, frames);
 
+    let timestamp_calibration = (calibrated_timestamps && timestamp_query_pool.is_some())
+        .then(|| ash::ext::calibrated_timestamps::Device::new(&instance, &device));
+
     Ok((
         VkHardware {
             instance,
@@ -404,6 +408,7 @@ pub(super) fn acquire_hardware(
             alloc,
             timestamp_query_pool,
             timestamp_period_ns: timestamp_period,
+            timestamp_calibration,
             device_local_heaps,
             memory_budget_supported,
             rt_capable,

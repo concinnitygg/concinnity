@@ -41,6 +41,16 @@ impl RenderBackend for MtlContext {
         fn wait_idle(&self);
     }
 
+    fn prepare_frame(&mut self) {
+        debug_assert_main_thread("prepare_frame");
+        MtlContext::prepare_frame(self);
+    }
+
+    fn pump_events(&mut self) {
+        debug_assert_main_thread("pump_events");
+        MtlContext::pump_events(self);
+    }
+
     fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()> {
         // Not in the guarded `forward!` block: draw_frame needs the
         // MainThreadMarker as a *value* (it threads it into NSEvent pumping and

@@ -146,12 +146,29 @@ impl MtlContext {
         true
     }
 
+    // Reserve the next frame's slot ahead of its draw: blocks until the GPU
+    // retires an older frame. A minimized window draws nothing, so it reserves
+    // nothing; a slot already reserved is kept.
+    pub(crate) fn prepare_frame(&mut self) {
+        if self.prepared_slot.is_none() && !self.window().appkit.window_minimized() {
+            self.prepared_slot = Some(self.frame_pacing.acquire());
+        }
+    }
+
+    // Pump the window's pending events outside the draw.
+    pub(crate) fn pump_events(&mut self) {
+        if let Some(mtm) = objc2::MainThreadMarker::new() {
+            self.pump_window_events(mtm);
+        }
+    }
+
     // None when no drawable is ready, which skips the frame.
     pub(super) fn acquire_frame(&mut self, world_hidden: bool) -> Option<AcquiredFrame> {
         // Frames-in-flight gate: block until the GPU has retired an older frame
         // so the CPU never queues more than `frames_in_flight` frames ahead,
         // bounding how many sets of per-frame transient buffers pile up. Taken
-        // here, before drawable prep and all per-frame buffer building. The slot
+        // here, before drawable prep and all per-frame buffer building, unless
+        // `prepare_frame` already reserved it (that wait is the caller's). The slot
         // is handed to the frame command buffer's completion handler below
         // (released on GPU retirement); if this frame is abandoned before commit
         // (the drawable isn't ready, or a `?` fails mid-encode) `frame_slot`
@@ -162,7 +179,10 @@ impl MtlContext {
         // engine times its graphics system around, so a GPU-bound frame is
         // only distinguishable from a CPU-bound one with this reading.
         let mut gpu_wait = crate::gpu_wait::GpuWait::none();
-        let frame_slot = gpu_wait.measure(|| self.frame_pacing.acquire());
+        let frame_slot = match self.prepared_slot.take() {
+            Some(slot) => slot,
+            None => gpu_wait.measure(|| self.frame_pacing.acquire()),
+        };
 
         // Asynchronous reflection-probe bake, prefiltering half: convolve one mip of
         // a finished capture or install its cube, ahead of the argument buffers

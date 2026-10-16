@@ -81,6 +81,7 @@ impl MtlContext {
             grass_benders,
             atmosphere,
             sunlight,
+            input_sampled_us,
         } = params;
         let elapsed = elapsed_f64 as f32;
         let mtm = objc2::MainThreadMarker::new().ok_or_else(|| {
@@ -360,6 +361,7 @@ impl MtlContext {
         let pass_times = std::sync::Arc::clone(&self.diagnostics.pass_times_us);
         let pass_async = std::sync::Arc::clone(&self.diagnostics.pass_async_mask);
         let gpu_overlap = std::sync::Arc::clone(&self.diagnostics.gpu_overlap_us);
+        let gpu_done = std::sync::Arc::clone(&self.diagnostics.gpu_done);
         let span_end = std::sync::Arc::clone(&self.diagnostics.gpu_span_end_ns);
         let async_mask = graph.async_pass_mask();
         // The composite command buffer's own GPU span, published by its handler
@@ -409,6 +411,15 @@ impl MtlContext {
                 }
                 gpu_time.store(frame_us, AtomicOrdering::Relaxed);
                 gpu_overlap.store(overlap_us, AtomicOrdering::Relaxed);
+                // The last part of the frame just retired, so this is when its
+                // GPU work ended on the host clock.
+                if let (Some(input_sampled_us), Ok(mut slot)) = (input_sampled_us, gpu_done.lock())
+                {
+                    *slot = Some(concinnity_core::profile::GpuDone {
+                        input_sampled_us,
+                        done_us: concinnity_host::clock::monotonic_micros(),
+                    });
+                }
             })
         });
 

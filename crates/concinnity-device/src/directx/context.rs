@@ -153,6 +153,9 @@ pub(super) struct TimestampState {
     // Ticks per second from `ID3D12CommandQueue::GetTimestampFrequency`; zero
     // when timestamps are unsupported.
     pub frequency: u64,
+    // When the input each frame slot's last frame showed was sampled, on the
+    // host clock, read back beside that frame's timestamps.
+    pub input_sampled_us: Vec<Option<u64>>,
 }
 
 // Off-screen HDR scene target. The main + instanced passes render linear-light
@@ -879,6 +882,9 @@ pub(crate) struct DxContext {
     // See `DxFrameSync`.
     pub(super) frame_sync: DxFrameSync,
     pub(super) current_frame: usize,
+    // `prepare_frame` already took the next frame's turn on the swapchain's
+    // frame-latency waitable, which counts, so the draw must not wait on it again.
+    pub(super) frame_latency_reserved: bool,
 
     pub(super) stream: StreamState,
 
@@ -982,6 +988,7 @@ impl DxContext {
             grass_benders,
             atmosphere,
             sunlight,
+            input_sampled_us,
         } = params;
         let elapsed = elapsed_f64 as f32;
         if let Some(atmo) = self.atmosphere.as_mut() {
@@ -1023,7 +1030,9 @@ impl DxContext {
         self.flush_geometry_uploads()?;
         self.service_background_work(elapsed, frame);
         let timings = self.read_gpu_timings(frame);
-        self.begin_frame_stats(&gpu_wait, timings);
+        let gpu_done = self.read_gpu_done(frame);
+        self.timestamps.input_sampled_us[frame] = input_sampled_us;
+        self.begin_frame_stats(&gpu_wait, timings, gpu_done);
 
         // Flush any D3D12 validation messages from the previous frame.
         self.flush_validation();

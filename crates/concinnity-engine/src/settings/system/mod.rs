@@ -14,7 +14,7 @@
 //! Scheduled after SpawnSystem and before GraphicsSystem, so a change's
 //! recorded op lands on the backend before this frame's draw (visible the same
 //! frame, as it was when the drain called the backend directly) and the
-//! HUD-preference resources are fresh for StatHud / UiInput later this tick.
+//! HUD-preference resources are fresh for UiInput later this tick.
 //! The state is resolved by GraphicsSystem's init (world config + persisted
 //! overrides + backend capabilities) and parked here as the `SettingsState`
 //! resource; each step takes it and puts it back, so the state and the

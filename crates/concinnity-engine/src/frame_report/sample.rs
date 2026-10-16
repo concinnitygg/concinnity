@@ -21,8 +21,8 @@ pub struct FrameSample {
     pub run_seconds: f32,
     /// Index into [`FrameRun::segments`], or `None` outside every segment.
     pub segment: Option<u32>,
-    /// Wall-clock microseconds since the previous frame: the frame time a
-    /// player would feel.
+    /// Microseconds since the previous frame on the step clock, the interval
+    /// the simulation advanced by: the frame time a player would feel.
     pub frame_us: u32,
     /// Microseconds of run time the camera's pose advanced this frame, against
     /// `frame_us`. A frame can show more or less motion than the time it took,
@@ -31,11 +31,23 @@ pub struct FrameSample {
     pub run_step_us: u32,
     /// Whether the simulated frame moved under the camera this frame.
     pub rebased: bool,
+    /// For a frame step on which the GPU finished a new frame: run time the
+    /// camera's pose advanced between that frame and the one finished before
+    /// it. A frame can show more or less motion than the time between
+    /// completions, which reads as judder on screen.
+    pub shown_step_us: u32,
+    /// Microseconds between those two GPU completions; zero on a step that
+    /// saw no new completion.
+    pub shown_us: u32,
     /// GPU microseconds for the most recently completed frame: its span after
     /// the previous frame's ended.
     pub gpu_frame_us: u32,
     /// Microseconds of that frame's span it shared with the frame before it.
     pub gpu_overlap_us: u32,
+    /// Microseconds from the newly finished frame's input sample to the end of
+    /// its GPU work, or zero when no new completion could be placed on the host
+    /// clock.
+    pub input_latency_us: u32,
     /// Microseconds the CPU spent blocked on the GPU.
     pub gpu_wait_us: u32,
     /// Microseconds of CPU work the render side spent submitting the frame,
@@ -112,8 +124,11 @@ impl FrameSample {
             frame_us: timing.frame_us,
             run_step_us: timing.run_step_us,
             rebased: timing.rebased,
+            shown_step_us: timing.shown.step_us,
+            shown_us: timing.shown.interval_us,
             gpu_frame_us: render.gpu_frame_us,
             gpu_overlap_us: render.gpu_overlap_us,
+            input_latency_us: timing.shown.latency_us,
             gpu_wait_us: render.gpu_wait_us,
             render_cpu_us: render.render_cpu_us,
             replay_us: render.replay_us,
@@ -146,6 +161,10 @@ pub struct FrameTiming {
     pub run_step_us: u32,
     /// See [`FrameSample::rebased`].
     pub rebased: bool,
+    /// The frame the GPU newly finished this step, if any: see
+    /// [`FrameSample::shown_step_us`], [`FrameSample::shown_us`] and
+    /// [`FrameSample::input_latency_us`].
+    pub(crate) shown: crate::frame_report::shown::Shown,
 }
 
 /// Everything one run recorded: the frames, the names for the two index
@@ -248,6 +267,11 @@ mod tests {
                 frame_us: 16_000,
                 run_step_us: 16_667,
                 rebased: true,
+                shown: crate::frame_report::shown::Shown {
+                    step_us: 22_000,
+                    interval_us: 25_000,
+                    latency_us: 45_000,
+                },
             },
             &render,
             &[("GraphicsSystem", 700)],
@@ -258,6 +282,8 @@ mod tests {
         assert_eq!(s.segment, Some(2));
         assert_eq!(s.frame_us, 16_000);
         assert_eq!((s.run_step_us, s.rebased), (16_667, true));
+        assert_eq!((s.shown_step_us, s.shown_us), (22_000, 25_000));
+        assert_eq!(s.input_latency_us, 45_000);
         assert_eq!(s.async_pass_mask, 0b10);
         assert_eq!(s.gpu_overlap_us, 900);
         assert_eq!((s.gpu_frame_us, s.gpu_wait_us), (8_000, 500));

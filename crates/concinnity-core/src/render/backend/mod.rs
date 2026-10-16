@@ -129,6 +129,11 @@ pub struct FrameParams<'a> {
     /// light), which stands for full sunlight when the scene's luminance is
     /// read in absolute units.
     pub sunlight: f32,
+    /// When the input this frame shows was sampled, in microseconds on the
+    /// host's process-wide monotonic clock, or `None` when unknown. A backend
+    /// that can tell when the frame's GPU work finished on that clock reports
+    /// both as `RenderStats::gpu_done`.
+    pub input_sampled_us: Option<u64>,
 }
 
 /// The per-frame drive: what every graphics backend must implement for a world
@@ -159,6 +164,16 @@ pub trait RenderBackend:
     /// Block until the GPU has drained every submitted frame.
     fn wait_idle(&self);
 
+    /// Block until the GPU has retired enough frames for the next one to be
+    /// recorded, and reserve that frame's slot. A caller that samples input
+    /// and simulates after this, right before `draw_frame`, keeps both out of
+    /// the frames-in-flight wait. `draw_frame` takes the reserved slot instead
+    /// of waiting itself; without a call it waits as before.
+    fn prepare_frame(&mut self) {}
+    /// Pump the window's pending events, so input taken next includes them.
+    /// `draw_frame` pumps on its own; this is for a caller that samples input
+    /// away from the draw.
+    fn pump_events(&mut self) {}
     /// Per-frame drive. See [`FrameParams`] for the inputs.
     fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()>;
     /// Push the camera's view matrix, column-major.

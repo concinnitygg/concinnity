@@ -242,6 +242,8 @@ pub struct SegmentReport {
     pub vram_peak_bytes: u64,
     /// How evenly the run's clock advanced against the frames that showed it.
     pub pacing: Pacing,
+    /// How stale the input was by the time each frame's GPU work ended.
+    pub input_latency: InputLatency,
     /// Frames on which the simulated frame moved under the camera.
     pub rebases: usize,
     /// The passes that owned the GPU frame, largest first.
@@ -257,13 +259,16 @@ pub struct SegmentReport {
     pub fan_outs: Vec<FanOutCost>,
 }
 
-/// How much run time each frame showed against how long it took, as a ratio:
-/// 1.0 is a frame whose motion matched its own frame time.
+/// How much run time each finished frame showed against the time since the
+/// frame finished before it, as a ratio: 1.0 is a frame whose motion matched
+/// the cadence frames reached the end of the GPU at.
 ///
 /// A clock that moves in whole fixed steps under frames that do not divide
-/// them evenly shows two or three different amounts of motion at one steady
-/// frame time. That reads as judder on screen and never as a frame-time hitch,
-/// so it is measured here rather than inferred from the frame times.
+/// them evenly, or one sampled at a different moment than frames finish,
+/// shows uneven motion at one steady frame time. That reads as judder on
+/// screen and never as a frame-time hitch, so it is measured here rather than
+/// inferred from the frame times. Frames the backend could not place on the
+/// host clock are left out.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
 pub struct Pacing {
     /// 5th percentile of the ratio.
@@ -272,8 +277,7 @@ pub struct Pacing {
     pub p50: f32,
     /// 95th percentile of the ratio.
     pub p95: f32,
-    /// Frames that advanced the run's clock not at all, and so showed the
-    /// same pose as the frame before.
+    /// Finished frames that showed the same pose as the frame before.
     pub still_frames: usize,
 }
 
@@ -281,10 +285,10 @@ impl Pacing {
     fn of(frames: &[&FrameSample]) -> Self {
         // Thousandths, so the nearest-rank percentiles stay on frames that
         // happened.
-        let mut ratios: Vec<u32> = frames
+        let shown: Vec<&&FrameSample> = frames.iter().filter(|s| s.shown_us > 0).collect();
+        let mut ratios: Vec<u32> = shown
             .iter()
-            .filter(|s| s.frame_us > 0)
-            .map(|s| (u64::from(s.run_step_us) * 1_000 / u64::from(s.frame_us)) as u32)
+            .map(|s| (u64::from(s.shown_step_us) * 1_000 / u64::from(s.shown_us)) as u32)
             .collect();
         if ratios.is_empty() {
             return Self::default();
@@ -295,7 +299,39 @@ impl Pacing {
             p5: at(0.05),
             p50: at(0.50),
             p95: at(0.95),
-            still_frames: frames.iter().filter(|s| s.run_step_us == 0).count(),
+            still_frames: shown.iter().filter(|s| s.shown_step_us == 0).count(),
+        }
+    }
+}
+
+/// How long after a frame's input was sampled its GPU work ended: how stale
+/// what reached the screen was. Frames the backend could not place on the
+/// host clock are left out, so a backend that measures none reports none.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
+pub struct InputLatency {
+    /// Median microseconds.
+    pub p50_us: u32,
+    /// 95th percentile microseconds.
+    pub p95_us: u32,
+    /// Frames that measured it.
+    pub frames: usize,
+}
+
+impl InputLatency {
+    fn of(frames: &[&FrameSample]) -> Self {
+        let mut latencies: Vec<u32> = frames
+            .iter()
+            .map(|s| s.input_latency_us)
+            .filter(|&us| us > 0)
+            .collect();
+        if latencies.is_empty() {
+            return Self::default();
+        }
+        latencies.sort_unstable();
+        Self {
+            p50_us: nearest_rank(&latencies, 0.50),
+            p95_us: nearest_rank(&latencies, 0.95),
+            frames: latencies.len(),
         }
     }
 }
@@ -524,6 +560,7 @@ fn summarize(
         objects_mean: mean_u32(frames.iter().map(|s| s.objects)),
         vram_peak_bytes: frames.iter().map(|s| s.vram_bytes).max().unwrap_or(0),
         pacing: Pacing::of(frames),
+        input_latency: InputLatency::of(frames),
         rebases: frames.iter().filter(|s| s.rebased).count(),
         passes: pass_shares(frames, run, gpu.p50_us, options.budget_us),
         systems: system_costs(frames, run),
@@ -751,8 +788,11 @@ mod tests {
             frame_us,
             run_step_us: frame_us,
             rebased: false,
+            shown_step_us: frame_us,
+            shown_us: frame_us,
             gpu_frame_us: frame_us / 2,
             gpu_overlap_us: 0,
+            input_latency_us: 0,
             gpu_wait_us: 100,
             render_cpu_us: 0,
             replay_us: 0,
@@ -1026,17 +1066,18 @@ mod tests {
         assert_eq!(frame.run_step_us, 33_333);
     }
 
-    // Frames at a steady 22 ms over a 60 Hz clock show one step, then two:
-    // even frame times, uneven motion.
+    // Frames finishing a steady 22 ms apart over a 60 Hz clock show one step,
+    // then two: even frame times, uneven motion.
     #[test]
-    fn pacing_measures_motion_against_frame_time() {
+    fn pacing_measures_motion_against_the_gpu_frame_interval() {
         let mut frames = Vec::new();
         for n in 0..20 {
             let mut f = sample(n as f32, Some(0), 22_000);
-            f.run_step_us = if n % 3 == 2 { 33_333 } else { 16_667 };
+            f.shown_us = 22_000;
+            f.shown_step_us = if n % 3 == 2 { 33_333 } else { 16_667 };
             frames.push(f);
         }
-        frames[5].run_step_us = 0;
+        frames[5].shown_step_us = 0;
         frames[7].rebased = true;
         let report = Report::of(&run_of(frames), no_warmup()).expect("measured frames");
         let pacing = report.overall.pacing;
@@ -1045,6 +1086,56 @@ mod tests {
         assert!((pacing.p95 - 1.515).abs() < 1e-3, "{pacing:?}");
         assert_eq!(pacing.still_frames, 1);
         assert_eq!(report.overall.rebases, 1);
+    }
+
+    // Frames the backend could not place on the host clock stay out of the
+    // percentiles rather than reading as no latency at all.
+    #[test]
+    fn input_latency_leaves_out_unmeasured_frames() {
+        let frames = (0..20)
+            .map(|n| {
+                let mut f = sample(n as f32, Some(0), 16_000);
+                f.input_latency_us = if n % 2 == 0 { 0 } else { 40_000 + n * 100 };
+                f
+            })
+            .collect();
+        let latency = Report::of(&run_of(frames), no_warmup())
+            .expect("measured frames")
+            .overall
+            .input_latency;
+        assert_eq!(latency.frames, 10);
+        assert_eq!(latency.p50_us, 40_900);
+        assert_eq!(latency.p95_us, 41_900);
+    }
+
+    #[test]
+    fn a_run_with_no_latency_readings_reports_none() {
+        let run = run_of((0..10).map(|n| sample(n as f32, Some(0), 16_000)).collect());
+        let latency = Report::of(&run, no_warmup())
+            .expect("measured frames")
+            .overall
+            .input_latency;
+        assert_eq!(latency, InputLatency::default());
+    }
+
+    // A step on which the GPU finished nothing new has no interval to pace.
+    #[test]
+    fn steps_without_a_new_completion_are_left_out_of_pacing() {
+        let frames = (0..10)
+            .map(|n| {
+                let mut f = sample(n as f32, Some(0), 16_000);
+                if n % 2 == 0 {
+                    (f.shown_step_us, f.shown_us) = (0, 0);
+                }
+                f
+            })
+            .collect();
+        let pacing = Report::of(&run_of(frames), no_warmup())
+            .expect("measured frames")
+            .overall
+            .pacing;
+        assert_eq!((pacing.p5, pacing.p50, pacing.p95), (1.0, 1.0, 1.0));
+        assert_eq!(pacing.still_frames, 0);
     }
 
     #[test]

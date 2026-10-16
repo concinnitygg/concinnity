@@ -23,6 +23,7 @@ mod reduce;
 mod report;
 mod sample;
 mod sample_log;
+mod shown;
 mod stats;
 mod system;
 

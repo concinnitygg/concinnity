@@ -32,6 +32,8 @@ impl RenderBackend for DxContext {
         fn request_cursor_capture(&mut self);
         fn take_input(&mut self) -> InputSnapshot;
         fn wait_idle(&self);
+        fn prepare_frame(&mut self);
+        fn pump_events(&mut self);
         fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()>;
     }
 }

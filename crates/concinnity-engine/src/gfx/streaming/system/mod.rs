@@ -7,9 +7,10 @@
 //! upload, or chunk add the backend refuses comes back one tick later as a
 //! `RenderOpFailures` entry and is rolled back at the top of the next step.
 //!
-//! Scheduled immediately before GraphicsSystem, so a chunk world's view rebase
-//! (see `CameraRelativeView`) is ready for this same frame's submit, and any
-//! recorded texture / mesh upload lands before the draw. GraphicsSystem's init
+//! Scheduled after the cameras and before GraphicsSystem, so the view is this
+//! tick's pose, a chunk world's view rebase (see `CameraRelativeView`) is ready
+//! for this same frame's submit, and any recorded texture / mesh upload lands
+//! before the draw. GraphicsSystem's init
 //! builds the streamers (world content + backend support) and parks them here
 //! as the `StreamingState` resource; each step takes it and puts it back, so
 //! the state and the `PipelineContext` are never borrowed together (the same

@@ -14,6 +14,7 @@
 //! internal and their order stays the table's own business.
 
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 
 use crate::ecs::{Access, EventStore, Phase, PipelineContext, System, World};
 use crate::error::WorldError;
@@ -55,6 +56,10 @@ pub type CompleteWorld = fn(&mut PipelineContext) -> Result<(), WorldError>;
 pub struct SystemTable {
     /// One entry per system, in run order.
     pub entries: &'static [SystemEntry],
+    /// Entries (by name) whose `init` runs ahead of the rest, in this order;
+    /// the rest init in run order. For a system that runs late in the tick but
+    /// whose `init` builds what other inits read.
+    pub init_first: &'static [&'static str],
     /// Runs over the world before the gates read it, so a component the pass
     /// injects can still bring its system into the schedule. Absent leaves the
     /// world exactly as it was loaded.
@@ -73,8 +78,51 @@ impl SystemTable {
     /// its host contributes none.
     pub const EMPTY: Self = Self {
         entries: &[],
+        init_first: &[],
         complete_world: None,
         before_init: None,
         prepare_events: None,
     };
+
+    /// The order the built systems named `built` (in run order) init in: the
+    /// table's `init_first` entries that are present, in that order, then the
+    /// rest in run order. Indices into `built`.
+    pub fn init_order(&self, built: &[&str]) -> Vec<usize> {
+        let first = self
+            .init_first
+            .iter()
+            .filter_map(|name| built.iter().position(|b| b == name));
+        let rest = (0..built.len()).filter(|&i| !self.init_first.contains(&built[i]));
+        first.chain(rest).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn table(init_first: &'static [&'static str]) -> SystemTable {
+        SystemTable {
+            init_first,
+            ..SystemTable::EMPTY
+        }
+    }
+
+    #[test]
+    fn without_init_first_systems_init_in_run_order() {
+        assert_eq!(table(&[]).init_order(&["A", "B", "C"]), [0, 1, 2]);
+    }
+
+    #[test]
+    fn init_first_entries_lead_in_their_own_order() {
+        let order = table(&["C", "A"]).init_order(&["A", "B", "C", "D"]);
+        assert_eq!(order, [2, 0, 1, 3]);
+    }
+
+    // A gate that left an `init_first` entry out leaves no hole in the order.
+    #[test]
+    fn an_absent_init_first_entry_is_skipped() {
+        let order = table(&["Gone", "C"]).init_order(&["A", "C"]);
+        assert_eq!(order, [1, 0]);
+    }
 }

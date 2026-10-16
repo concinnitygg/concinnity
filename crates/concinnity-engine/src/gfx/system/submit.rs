@@ -107,8 +107,8 @@ pub(crate) fn submit(
 
     // On Metal, pump_ns_events runs inside draw_frame, so update_view is
     // called first so any key/mouse events that arrived since the last tick
-    // are in InputState before InputSystem's take_input() (scheduled right
-    // after this system) snapshots and clears it.
+    // are in InputState before the input sample taken after the draw
+    // snapshots and clears it.
     backend.update_view(snap.frame.view);
     let mut skipped = false;
     match backend.draw_frame(FrameParams {
@@ -128,6 +128,7 @@ pub(crate) fn submit(
         grass_benders: &snap.grass_benders,
         atmosphere: snap.frame.atmosphere,
         sunlight: snap.frame.sunlight,
+        input_sampled_us: snap.frame.input_sampled_us,
     }) {
         Ok(()) => {
             policy.frame_succeeded();

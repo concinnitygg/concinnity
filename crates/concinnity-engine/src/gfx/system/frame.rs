@@ -32,14 +32,15 @@ use crate::settings::system::rows::{DISABLED_ROW_COLOR, expand_dim_set};
 // point and nothing rasterizes (shadow passes included).
 const HIDDEN_MODEL: [[f32; 4]; 4] = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, 0.0, 0.0, 1.0]];
 
-// Deposit a sampled input packet for InputSystem (scheduled right after
-// GraphicsSystem), merging onto an unconsumed one so no edge is lost.
+// Deposit a sampled input packet for the next tick's InputSystem, merging onto
+// an unconsumed one so no edge is lost.
 fn deposit_input(ctx: &mut PipelineContext, packet: InputPacket) {
+    let sampled_us = concinnity_host::clock::monotonic_micros();
     match ctx.resource_mut::<crate::ecs::InputMailbox>() {
-        Some(mailbox) => mailbox.deposit(packet),
+        Some(mailbox) => mailbox.deposit(packet, sampled_us),
         None => {
             let mut mailbox = crate::ecs::InputMailbox::default();
-            mailbox.deposit(packet);
+            mailbox.deposit(packet, sampled_us);
             ctx.insert_resource(mailbox);
         }
     }
@@ -172,9 +173,8 @@ impl GraphicsSystem {
         }
 
         // Sample the window input the draw's event pump just produced and
-        // deposit it for InputSystem (scheduled right after this system), so
-        // sampling keeps the freshness it had when InputSystem polled the
-        // backend itself.
+        // deposit it for the next tick's InputSystem, which runs before
+        // anything else reads input.
         if result == StepResult::Continue {
             deposit_input(ctx, InputPacket::sample(backend.as_mut()));
         }
@@ -219,7 +219,6 @@ impl GraphicsSystem {
                 self.history_reset
                     .reissue(skipped_causes(&feedback.recycled.frame));
             }
-            deposit_input(ctx, feedback.input);
             apply_frame_outcome(
                 ctx,
                 self.frame_count,
@@ -624,6 +623,7 @@ impl GraphicsSystem {
             rebase,
             atmosphere,
             sunlight: super::scene_lights::sunlight(ctx),
+            input_sampled_us: ctx.resource::<crate::ecs::InputSampledAt>().map(|at| at.0),
         };
         // Adopt the overlay draw list wholesale and hand the spent one back to
         // OverlaySystem, which recycles its buffers into the next build.
@@ -1116,8 +1116,8 @@ mod tests {
     }
 
     // The pipelined step: the extracted snapshot crosses the channel, the
-    // render half's feedback is applied (input mailbox, stats, recycled
-    // buffer), and a feedback-flagged stop propagates as StepResult::Stop.
+    // render half's feedback is applied (stats, recycled buffer), and a
+    // feedback-flagged stop propagates as StepResult::Stop.
     #[test]
     fn pipelined_step_sends_the_snapshot_and_applies_feedback() {
         let mut world = World::new();
@@ -1145,15 +1145,12 @@ mod tests {
         let consumer = std::thread::spawn(move || {
             for stop in [false, true] {
                 let snapshot = snapshot_rx.recv().expect("a snapshot arrives");
-                let mut input = InputPacket::default();
-                input.raw.jump = true;
                 let render_stats = profile::RenderStats {
                     draw_calls: 7,
                     ..Default::default()
                 };
                 feedback_tx
                     .send(feedback::FrameFeedback {
-                        input,
                         render_stats,
                         replay: Default::default(),
                         recycled: snapshot,
@@ -1177,13 +1174,7 @@ mod tests {
         assert_eq!(result, StepResult::Stop, "the feedback stop propagates");
         consumer.join().expect("the stand-in render half exits");
 
-        let mut ctx = world.context();
-        assert!(
-            ctx.resource_mut::<crate::ecs::InputMailbox>()
-                .and_then(|m| m.0.take())
-                .is_some_and(|p| p.raw.jump),
-            "the feedback's input packet reached the mailbox"
-        );
+        let ctx = world.context();
         assert_eq!(
             ctx.profile.render.draw_calls, 7,
             "the feedback's render stats reached the profile"

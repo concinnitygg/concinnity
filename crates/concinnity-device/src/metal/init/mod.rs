@@ -373,6 +373,7 @@ impl MtlContext {
             skinned: SkinnedState::new(),
             diagnostics,
             frame_pacing: FrameInFlight::new(frames_in_flight),
+            prepared_slot: None,
             frames_in_flight: frames_in_flight.max(1),
             frame_ring_index: 0,
             rings,

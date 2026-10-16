@@ -1,18 +1,14 @@
-//! The render half's per-frame report back to the simulation: the sampled
-//! window input, the frame's render stats, what the snapshot's op replay
-//! produced, and the consumed snapshot returned for buffer reuse. The
-//! counterpart of `RenderSnapshot` on the pipelined driver's return channel.
+//! The render half's per-frame report back to the simulation: the frame's
+//! render stats, what the snapshot's op replay produced, and the consumed
+//! snapshot returned for buffer reuse. The counterpart of `RenderSnapshot` on
+//! the pipelined driver's return channel.
 
-use crate::input::snapshot::InputPacket;
 use crate::profile::RenderStats;
 use crate::render::ops::ReplayOutcome;
 use crate::render::snapshot::RenderSnapshot;
 
 /// One frame's results crossing from the render half to the simulation.
 pub struct FrameFeedback {
-    /// Window input sampled right after the draw (whose event pump produced
-    /// it), destined for the simulation's input mailbox.
-    pub input: InputPacket,
     /// The drawn frame's backend stats, for the profiler surfaces.
     pub render_stats: RenderStats,
     /// What the frame's op replay produced (failures to roll back, memory

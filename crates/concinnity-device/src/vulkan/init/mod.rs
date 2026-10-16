@@ -464,6 +464,7 @@ impl VkContext {
             uniforms,
             frame_sync,
             current_frame: 0,
+            frame_input_sampled_us: vec![None; frames],
             frames_in_flight: frames,
             commands,
             state: SceneState::new(

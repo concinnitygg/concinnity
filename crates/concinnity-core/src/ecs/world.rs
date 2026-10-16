@@ -560,8 +560,9 @@ impl World {
         if let Some(before_init) = table.before_init {
             before_init(&mut ctx);
         }
-        for system in systems.iter_mut() {
-            system.init(&mut ctx);
+        let names: Vec<&str> = systems.iter().map(BuiltSystem::name).collect();
+        for i in table.init_order(&names) {
+            systems[i].init(&mut ctx);
         }
         // Every system has inited and cached the payloads it keeps; nothing
         // reads compiled payloads at runtime. Free every blob section still

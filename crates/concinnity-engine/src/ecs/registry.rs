@@ -9,42 +9,49 @@
 //! `phase` is the only thing this table owes the world outside it. Entries are
 //! in phase order, and a system registered with `World::add_system` runs after
 //! every entry sharing its phase, so an outside registration anchors to a phase
-//! and never to an entry. The four bands:
-//!   * Early     -- the menu gate and the sky, before any logic runs.
-//!   * Logic     -- the world's behaviors, whose requests drain later this tick.
-//!   * PreRender -- the request drains and the streaming, before the frame goes.
-//!   * Late      -- the frame itself and everything downstream of it (input,
-//!     physics, cameras, animation, story, audio, UI).
+//! and never to an entry. The tick simulates first and submits its frame last,
+//! so the frame shows everything the tick resolved. The five bands:
+//!   * Early      -- the menu gate, this tick's input, the sky and a planet
+//!     world's frame move.
+//!   * Logic      -- the world's behaviors, whose requests drain later this tick.
+//!   * Late       -- the simulation: physics, cameras, animation, story, audio.
+//!   * PreRender  -- the request drains, streaming and the UI that reads them.
+//!   * PostRender -- the frame itself, and the report that records it.
 //!
 //! `after`/`before` are the cross-system ordering constraints, validated
 //! against table order when the world's schedule is built.
 //! Each edge's rationale:
 //!   * Overlay first: publishes the menu state (`MenuActive`) that gates
 //!     simulation, input, and the draw this same tick.
+//!   * Input right after the overlay: the tick consumes the input sampled
+//!     before it began, so everything downstream sees this tick's input.
 //!   * SkyRotation before Graphics: the orientation it publishes is what the
 //!     frame's transform propagation, directional-light push and cubemap
 //!     samples are taken at.
 //!   * Behavior before Spawn/Settings/Story/Audio: the requests its firing
 //!     rules emit (spawn/despawn, scene, story, audio) drain the same tick.
-//!   * Spawn/Settings/Streaming before Graphics: despawns leave the transform
-//!     push, setting and streaming ops land before this frame's submit, and
-//!     `CameraRelativeView` is ready for the draw.
-//!   * Input after Graphics: on Metal the OS event pump runs inside
-//!     draw_frame, so sampling right after the draw snapshots the freshest
-//!     events (the mailbox deposit happens in Graphics' step).
-//!   * LoadingOverlay after Streaming (reads the residency status published
-//!     this tick) and before UiInput (its screen commands apply same tick).
-//!   * Planet after Graphics, before Physics and the camera controllers: a
-//!     move of a planet world's simulated frame lands between a drawn frame
-//!     and the next tick, so everything after it works in the new frame.
+//!   * Planet before the world's logic, Spawn, Physics and the camera
+//!     controllers: a move of a planet world's simulated frame lands before
+//!     anything this tick places or moves, so a behavior's spawn request and
+//!     its drain share one frame, and everything after it, the frame
+//!     included, works in the new frame.
 //!   * Physics before the camera controllers: physics consumes the camera's
 //!     previous-frame `desired_move` (a one-frame-lagged resolution).
 //!   * CameraTrack after Physics, before Audio: it sits where the input
 //!     controllers sit, and replaces them when a world declares a track.
-//!   * FrameReport last: it records the frame that just went, so everything
-//!     it reads has to have run.
 //!   * Cameras and Story before Audio: the listener reads the camera, and a
 //!     `PlayCue` page audio is heard the same tick.
+//!   * Streaming after the cameras: the camera-relative view it publishes is
+//!     the pose this tick's frame draws.
+//!   * Spawn/Settings/Streaming before Graphics: despawns leave the transform
+//!     push, setting and streaming ops land before this frame's submit, and
+//!     `CameraRelativeView` is ready for the draw.
+//!   * LoadingOverlay after Streaming (reads the residency status published
+//!     this tick) and before UiInput (its screen commands apply same tick).
+//!   * Graphics last but for the report: the frame it submits shows the tick's
+//!     input, simulation and cameras.
+//!   * FrameReport last: it records the frame that just went, so everything
+//!     it reads has to have run.
 //!
 //! Event-carried couplings (RootMotionEvent, GroundProbes, SettingCommand) are
 //! order-robust thanks to the event store's two-frame retention.
@@ -69,6 +76,18 @@ crate::define_systems! {
     complete_world: concinnity_core::defaults::run,
     before_init: before_init,
     prepare_events: access_ids::ensure_event_queues,
+    // Graphics runs at the tail of the tick, but its init builds the window,
+    // the backend and the payload indexes later inits read: it inits right
+    // after the entries its own init reads.
+    init_first: [
+        OverlaySystem,
+        SkyRotationSystem,
+        BehaviorSystem,
+        SpawnSystem,
+        SettingsSystem,
+        StreamingSystem,
+        GraphicsSystem,
+    ],
 
     OverlaySystem => crate::gfx::overlay::OverlaySystem {
         gate: schedule::overlay,
@@ -77,6 +96,13 @@ crate::define_systems! {
         after: [],
         before: [BehaviorSystem, SpawnSystem, GraphicsSystem, InputSystem, PhysicsSystem, AnimationSystem],
     },
+    InputSystem => crate::input::system::InputSystem {
+        gate: schedule::input,
+        present_when: "the world runs with a window",
+        phase: Early,
+        after: [OverlaySystem],
+        before: [BehaviorSystem],
+    },
     SkyRotationSystem => concinnity_core::sky::SkyRotationSystem {
         gate: schedule::sky_rotation,
         present_when: "the world declares a SkyRotation",
@@ -84,75 +110,26 @@ crate::define_systems! {
         after: [OverlaySystem],
         before: [GraphicsSystem],
     },
+    PlanetSystem => crate::planet::PlanetSystem {
+        gate: schedule::planet,
+        present_when: "the world declares a Planet",
+        phase: Early,
+        after: [],
+        before: [
+            BehaviorSystem,
+            SpawnSystem,
+            PhysicsSystem,
+            Camera3DSystem,
+            ThirdPersonSystem,
+            CameraTrackSystem,
+        ],
+    },
     BehaviorSystem => concinnity_core::behavior::BehaviorSystem {
         gate: schedule::behavior,
         present_when: "the world declares any Behavior",
         phase: Logic,
         after: [OverlaySystem],
         before: [SpawnSystem, SettingsSystem, StorySystem, AudioSystem],
-    },
-    SpawnSystem => crate::spawn::SpawnSystem {
-        gate: schedule::spawn,
-        present_when: "the world runs with a window",
-        phase: PreRender,
-        after: [BehaviorSystem],
-        before: [GraphicsSystem],
-    },
-    SettingsSystem => crate::settings::system::SettingsSystem {
-        gate: schedule::settings,
-        present_when: "the world runs with a window",
-        phase: PreRender,
-        after: [],
-        before: [GraphicsSystem],
-    },
-    StreamingSystem => crate::gfx::streaming::system::StreamingSystem {
-        gate: schedule::streaming,
-        present_when: "the world runs with a window",
-        phase: PreRender,
-        after: [],
-        before: [GraphicsSystem],
-    },
-    GraphicsSystem => crate::gfx::system::GraphicsSystem {
-        gate: schedule::graphics,
-        present_when: "the world runs with a window",
-        phase: Late,
-        after: [SpawnSystem, SettingsSystem, StreamingSystem],
-        before: [InputSystem],
-    },
-    InputSystem => crate::input::system::InputSystem {
-        gate: schedule::input,
-        present_when: "the world runs with a window",
-        phase: Late,
-        after: [GraphicsSystem],
-        before: [],
-    },
-    StatHud => crate::hud::stat_hud::StatHudSystem {
-        gate: schedule::stat_hud,
-        present_when: "the world declares a StatHud",
-        phase: Late,
-        after: [],
-        before: [],
-    },
-    DebugHud => crate::hud::debug_hud::DebugHudSystem {
-        gate: schedule::debug_hud,
-        present_when: "the world declares a DebugHud AND the binary is a debug build or a `cn debug` session",
-        phase: Late,
-        after: [],
-        before: [],
-    },
-    LoadingOverlaySystem => crate::hud::loading_overlay::LoadingOverlaySystem {
-        gate: schedule::loading_overlay,
-        present_when: "the world declares a LoadingOverlay",
-        phase: Late,
-        after: [StreamingSystem],
-        before: [UiInputSystem],
-    },
-    PlanetSystem => crate::planet::PlanetSystem {
-        gate: schedule::planet,
-        present_when: "the world declares a Planet",
-        phase: Late,
-        after: [GraphicsSystem],
-        before: [PhysicsSystem, Camera3DSystem, ThirdPersonSystem, CameraTrackSystem],
     },
     PhysicsSystem => concinnity_core::physics::PhysicsSystem {
         gate: schedule::physics,
@@ -182,13 +159,6 @@ crate::define_systems! {
         after: [PhysicsSystem],
         before: [AudioSystem],
     },
-    FpsCounter => crate::hud::fps_counter::FpsCounterSystem {
-        gate: schedule::fps_counter,
-        present_when: "the world declares an FpsCounter",
-        phase: Late,
-        after: [],
-        before: [],
-    },
     AnimationSystem => crate::animation::AnimationSystem {
         gate: schedule::animation,
         present_when: "the world declares any Animation or AnimationGraph",
@@ -210,13 +180,6 @@ crate::define_systems! {
         after: [BehaviorSystem, Camera3DSystem, ThirdPersonSystem, StorySystem],
         before: [],
     },
-    UiInputSystem => crate::ui::UiInputSystem {
-        gate: schedule::ui_input,
-        present_when: "the world declares any HitRegion, Screen, or KeyBinding",
-        phase: Late,
-        after: [LoadingOverlaySystem],
-        before: [],
-    },
     TextInputSystem => crate::input::text_system::TextInputSystem {
         gate: schedule::text_input,
         present_when: "the world declares any TextInput",
@@ -224,10 +187,73 @@ crate::define_systems! {
         after: [],
         before: [],
     },
+    StatHud => crate::hud::stat_hud::StatHudSystem {
+        gate: schedule::stat_hud,
+        present_when: "the world declares a StatHud",
+        phase: Late,
+        after: [],
+        before: [],
+    },
+    DebugHud => crate::hud::debug_hud::DebugHudSystem {
+        gate: schedule::debug_hud,
+        present_when: "the world declares a DebugHud AND the binary is a debug build or a `cn debug` session",
+        phase: Late,
+        after: [],
+        before: [],
+    },
+    FpsCounter => crate::hud::fps_counter::FpsCounterSystem {
+        gate: schedule::fps_counter,
+        present_when: "the world declares an FpsCounter",
+        phase: Late,
+        after: [],
+        before: [],
+    },
+    SpawnSystem => crate::spawn::SpawnSystem {
+        gate: schedule::spawn,
+        present_when: "the world runs with a window",
+        phase: PreRender,
+        after: [BehaviorSystem],
+        before: [GraphicsSystem],
+    },
+    SettingsSystem => crate::settings::system::SettingsSystem {
+        gate: schedule::settings,
+        present_when: "the world runs with a window",
+        phase: PreRender,
+        after: [],
+        before: [GraphicsSystem],
+    },
+    StreamingSystem => crate::gfx::streaming::system::StreamingSystem {
+        gate: schedule::streaming,
+        present_when: "the world runs with a window",
+        phase: PreRender,
+        after: [Camera3DSystem, ThirdPersonSystem, CameraTrackSystem],
+        before: [GraphicsSystem],
+    },
+    LoadingOverlaySystem => crate::hud::loading_overlay::LoadingOverlaySystem {
+        gate: schedule::loading_overlay,
+        present_when: "the world declares a LoadingOverlay",
+        phase: PreRender,
+        after: [StreamingSystem],
+        before: [UiInputSystem],
+    },
+    UiInputSystem => crate::ui::UiInputSystem {
+        gate: schedule::ui_input,
+        present_when: "the world declares any HitRegion, Screen, or KeyBinding",
+        phase: PreRender,
+        after: [LoadingOverlaySystem],
+        before: [],
+    },
+    GraphicsSystem => crate::gfx::system::GraphicsSystem {
+        gate: schedule::graphics,
+        present_when: "the world runs with a window",
+        phase: PostRender,
+        after: [SpawnSystem, SettingsSystem, StreamingSystem],
+        before: [],
+    },
     FrameReportSystem => crate::frame_report::FrameReportSystem {
         gate: schedule::frame_report,
         present_when: "the world declares a FrameReport",
-        phase: Late,
+        phase: PostRender,
         after: [GraphicsSystem, CameraTrackSystem],
         before: [],
     },
@@ -345,28 +371,61 @@ mod tests {
         }
     }
 
-    // A windowed run gates the whole render band, and StreamingSystem runs
-    // immediately before GraphicsSystem so its `CameraRelativeView` is ready
-    // for that frame's submit. (Manifest-only: gating never builds a GPU,
-    // unlike `start()`.)
+    // A planet world's frame moves before anything the tick places or moves:
+    // a behavior's spawn request carries a world-space transform that its
+    // drain must read in the frame it was made in.
     #[test]
-    fn streaming_runs_immediately_before_graphics() {
-        let mut world = World::new();
-        world.insert_resource(crate::ecs::render_mode::RenderMode::Rendered);
-        let manifest = world.system_manifest(SYSTEMS);
-        let s = manifest
-            .iter()
-            .position(|n| *n == "StreamingSystem")
-            .expect("StreamingSystem present for a windowed run");
-        let g = manifest
-            .iter()
-            .position(|n| *n == "GraphicsSystem")
-            .expect("GraphicsSystem present for a windowed run");
-        assert_eq!(
-            g,
-            s + 1,
-            "StreamingSystem is directly before GraphicsSystem: {manifest:?}"
-        );
+    fn the_planet_frame_moves_before_the_worlds_logic() {
+        let position = |name: &str| {
+            ENTRIES
+                .iter()
+                .position(|e| e.name == name)
+                .unwrap_or_else(|| panic!("{name} is a table entry"))
+        };
+        let planet = position("PlanetSystem");
+        for later in [
+            "BehaviorSystem",
+            "SpawnSystem",
+            "PhysicsSystem",
+            "CameraTrackSystem",
+        ] {
+            assert!(planet < position(later), "PlanetSystem runs before {later}");
+        }
+    }
+
+    // Every entry the table inits ahead of the rest is one of its own.
+    #[test]
+    fn init_first_names_exist() {
+        for name in SYSTEMS.init_first {
+            assert!(
+                ENTRIES.iter().any(|e| e.name == *name),
+                "{name} is a table entry"
+            );
+        }
+    }
+
+    // The frame is submitted after everything that moves what it draws: every
+    // simulation entry runs before StreamingSystem, whose `CameraRelativeView`
+    // is the pose the draw takes, and only the report follows GraphicsSystem.
+    #[test]
+    fn the_frame_follows_the_simulation() {
+        use concinnity_core::ecs::Phase;
+        let position = |name: &str| {
+            ENTRIES
+                .iter()
+                .position(|e| e.name == name)
+                .unwrap_or_else(|| panic!("{name} is a table entry"))
+        };
+        let streaming = position("StreamingSystem");
+        let graphics = position("GraphicsSystem");
+        for (i, entry) in ENTRIES.iter().enumerate() {
+            if entry.phase <= Phase::Late {
+                assert!(i < streaming, "{} runs before streaming", entry.name);
+            }
+        }
+        assert!(streaming < graphics);
+        let after: Vec<&str> = ENTRIES[graphics + 1..].iter().map(|e| e.name).collect();
+        assert_eq!(after, ["FrameReportSystem"]);
     }
 
     // The two camera-controller entries are mutually exclusive: the first
