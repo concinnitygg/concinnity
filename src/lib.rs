@@ -167,6 +167,13 @@ pub mod components {
     pub use concinnity_core::components::stored::*;
 }
 
+/// What a launch asks of the run, and the flags it is read from.
+pub mod launch {
+    pub use concinnity_core::launch::{
+        LAUNCH_FLAGS, LaunchArgs, LaunchArgsError, LaunchFlag, QUALITY_PRESET_VALUES, usage,
+    };
+}
+
 /// Math an application lays its own geometry out with.
 pub mod math {
     /// Double-precision 3-vectors, for positions too far out for f32: on and

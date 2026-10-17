@@ -44,6 +44,7 @@ use concinnity_core::ecs::{ComponentSlot, PayloadLocator, StepResult, TextureHan
 use concinnity_core::gfx::chunk_coord;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
+use concinnity_core::launch::LaunchArgs;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::{GpuProfile, GpuTier, GpuVendor};
 use concinnity_core::render::backend_init::SwapchainConfig;
@@ -691,6 +692,25 @@ fn ui_only_world_trims_scene_features() {
     );
     // No camera: the cursor is never captured.
     assert!(!s.saw(&Call::RequestCursorCapture));
+}
+
+// `--vsync` wins over the player's saved choice and the world's.
+#[test]
+fn launch_vsync_overrides_persisted_and_authored_config() {
+    let mut settings = crate::config::Settings::default();
+    settings.graphics.vsync = Some(false);
+    let (state, hooks) = recording_hooks_with(settings, GpuProfile::UNKNOWN);
+    let mut world = scene_builder().build();
+    world.insert_resource(LaunchRequest {
+        args: LaunchArgs {
+            vsync: true,
+            ..LaunchArgs::NONE
+        },
+        ..Default::default()
+    });
+    init_graphics(&mut world, hooks);
+    assert!(settings_state(&world).resolved.graphics.frame_pacing.vsync);
+    assert!(lock(&state).init.as_ref().unwrap().vsync);
 }
 
 #[test]
@@ -1427,7 +1447,10 @@ fn max_frames_stops_the_run() {
     b.push_textured_quad(MESH, TEX, MAT, PROP);
     let mut world = b.build();
     world.insert_resource(LaunchRequest {
-        max_frames: Some(2),
+        args: LaunchArgs {
+            frames: Some(2),
+            ..LaunchArgs::NONE
+        },
         ..Default::default()
     });
     let mut gs = init_graphics(&mut world, hooks);
@@ -1453,7 +1476,10 @@ fn pipelined_max_frames_counts_frames_sent() {
     b.push_textured_quad(MESH, TEX, MAT, PROP);
     let mut world = b.build();
     world.insert_resource(LaunchRequest {
-        max_frames: Some(3),
+        args: LaunchArgs {
+            frames: Some(3),
+            ..LaunchArgs::NONE
+        },
         ..Default::default()
     });
     let mut gs = init_graphics(&mut world, hooks);
@@ -2397,7 +2423,10 @@ fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
     let (forced, hooks) = recording_hooks_with(settings, profile_at(GpuTier::MidDiscrete));
     let mut world = effects_scene(authored).build();
     world.insert_resource(LaunchRequest {
-        quality_preset: Some(QualityPreset::Ultra),
+        args: LaunchArgs {
+            quality_preset: Some(QualityPreset::Ultra),
+            ..LaunchArgs::NONE
+        },
         ..Default::default()
     });
     init_graphics(&mut world, hooks);

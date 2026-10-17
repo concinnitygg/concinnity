@@ -2,9 +2,11 @@
 //! steps, so no system pays the sleep inside its own step time and the cap
 //! applies whichever systems the world built. The cap value comes from the
 //! `FrameRateCap` resource (published by GraphicsSystem from FramePacing +
-//! the live settings row), or a benchmarked run's own cap, lowered to a background rate while the
+//! the live settings row), under a benchmarked run's own cap and `--fps-cap`
+//! over both, lowered to a background rate while the
 //! `WindowMinimized` resource says nothing drawn can be seen.
 
+use crate::app::run::LaunchRequest;
 use concinnity_core::benchmark::BenchmarkRun;
 use concinnity_core::ecs::{FrameRateCap, SimTiming, WindowMinimized, World};
 use std::time::{Duration, Instant};
@@ -88,8 +90,13 @@ impl FramePacer {
     // No-op (and deadline cleared) while no cap is in force.
     pub(crate) fn pace(&mut self, world: &World) {
         let cap = world
-            .resource::<BenchmarkRun>()
-            .map(|run| run.config.fps_cap)
+            .resource::<LaunchRequest>()
+            .and_then(|launch| launch.args.fps_cap)
+            .or_else(|| {
+                world
+                    .resource::<BenchmarkRun>()
+                    .map(|run| run.config.fps_cap)
+            })
             .or_else(|| world.resource::<FrameRateCap>().map(|c| c.0))
             .unwrap_or(0);
         let minimized = world.resource::<WindowMinimized>().is_some_and(|m| m.0);
@@ -206,6 +213,26 @@ mod tests {
         pacer.pace(&world);
         assert_eq!(pacer.last_cap, 0);
         assert!(pacer.deadline.is_none());
+    }
+
+    // `--fps-cap` holds over a benchmark's cap and the published one.
+    #[test]
+    fn the_launchs_cap_holds_over_a_benchmarks() {
+        use concinnity_core::components::BenchmarkConfig;
+        use concinnity_core::launch::LaunchArgs;
+        let mut world = World::new();
+        world.insert_resource(FrameRateCap(60));
+        world.insert_resource(BenchmarkRun::new(BenchmarkConfig::default()));
+        world.insert_resource(LaunchRequest {
+            args: LaunchArgs {
+                fps_cap: Some(1000),
+                ..LaunchArgs::NONE
+            },
+            ..Default::default()
+        });
+        let mut pacer = FramePacer::default();
+        pacer.pace(&world);
+        assert_eq!(pacer.last_cap, 1000);
     }
 
     // A world with no published cap (headless, or graphics failed) never

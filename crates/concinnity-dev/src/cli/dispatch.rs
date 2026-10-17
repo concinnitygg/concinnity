@@ -74,11 +74,7 @@ fn run_world(args: &RunArgs, tree: &StateTree) -> std::io::Result<()> {
                 concinnity_core::ecs::ScheduleMode::Parallel
             },
             screenshot: args.screenshot.clone(),
-            launch: concinnity_engine::app::run::LaunchRequest {
-                max_frames: args.frames,
-                benchmark: args.benchmark,
-                ..args.render.launch(args.validation, false)
-            },
+            launch: args.render.launch(args.validation, false),
         },
     )
 }

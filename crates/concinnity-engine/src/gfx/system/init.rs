@@ -407,7 +407,7 @@ impl GraphicsSystem {
             });
         }
 
-        self.max_frames = launch.max_frames;
+        self.max_frames = launch.args.frames;
         let mut streaming_config = ctx.drain::<StreamingConfig>().into_iter().next();
         let graphics = ctx.drain::<GraphicsConfig>().into_iter().next();
         settings.authored = WorldSettings::new(WorldAssets {
@@ -416,8 +416,8 @@ impl GraphicsSystem {
             streaming: streaming_config.as_ref(),
         });
         self.clear_color = settings.authored.graphics.background.color;
-        // `--dlss-preset` wins for this launch, shown on the row and never
-        // persisted unless the row itself changes.
+        // `--vsync`, `--fps-cap` and `--dlss-preset` win for this launch, shown
+        // on the row and never persisted unless the row itself changes.
         settings.session = launch.session_overrides();
         settings.resolved = settings.resolve(user_graphics, &quality.ceiling);
         if let Some(sc) = streaming_config.as_mut() {

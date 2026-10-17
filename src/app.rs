@@ -97,21 +97,23 @@ impl App {
         self
     }
 
-    /// The same app, benchmarked: the world's
-    /// [`BenchmarkConfig`](crate::components::BenchmarkConfig), or the default
-    /// one, takes the camera, and the run prints what its frames cost and ends
-    /// when its last phase does. Without one the camera holds the pose the world
-    /// starts it at for ten seconds after a two-second warm-up.
+    /// The same app, run as `args` ask: benchmarked, with vsync, under a
+    /// frame-rate cap or a quality preset, or for a fixed number of frames.
+    /// Parse them from the command line with
+    /// [`LaunchArgs::parse`](crate::launch::LaunchArgs::parse).
     ///
     /// ```no_run
-    /// # use concinnity::{App, Error};
-    /// # fn main() -> Result<(), Error> {
-    /// App::from_blob("data/0")?.benchmark().run()
+    /// # use concinnity::App;
+    /// # use concinnity::launch::LaunchArgs;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let args = LaunchArgs::parse(std::env::args().skip(1))?;
+    /// App::from_blob("data/0")?.with_args(args).run()?;
+    /// # Ok(())
     /// # }
     /// ```
     #[must_use]
-    pub fn benchmark(mut self) -> Self {
-        concinnity_core::benchmark::arm(self.driver.world_mut());
+    pub fn with_args(mut self, args: crate::launch::LaunchArgs) -> Self {
+        self.driver.world_mut().insert_resource(args);
         self
     }
 

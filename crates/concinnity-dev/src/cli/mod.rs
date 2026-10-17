@@ -5,6 +5,7 @@
 
 mod commands;
 mod dispatch;
+mod launch_args;
 mod reexec;
 mod value_enums;
 
@@ -73,7 +74,7 @@ static DEFAULT_COMMAND: Commands = Commands::Editor(EditorArgs {
     validation: None,
     render: RenderArgs {
         graphics_api: None,
-        quality_preset: None,
+        launch: launch_args::LaunchArgsArg::NONE,
         rt_dynamic: None,
         rt_skinned_geometry: None,
         dlss_preset: None,
@@ -114,7 +115,7 @@ mod tests {
         assert!(a.file.is_none());
         assert!(a.debug_port.is_none());
         assert!(a.validation.is_none());
-        assert!(a.render.quality_preset.is_none());
+        assert_eq!(a.render.launch, launch_args::LaunchArgsArg::NONE);
         assert!(a.render.rt_dynamic.is_none());
         assert!(a.render.rt_skinned_geometry.is_none());
         assert!(a.render.dlss_preset.is_none());

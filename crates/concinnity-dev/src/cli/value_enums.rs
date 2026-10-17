@@ -4,33 +4,8 @@ use concinnity_core::gfx::view_modes::ShowFlags;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::dlss::DlssPreset;
 use concinnity_core::render::rt_geom::RtDynamicMode;
-use concinnity_core::settings::QualityPreset;
 
 use crate::export::BundleFormat;
-
-// The argv face of the engine's `QualityPreset`.
-#[derive(Clone, Copy, Debug, clap::ValueEnum)]
-pub(crate) enum QualityPresetArg {
-    Auto,
-    Low,
-    Medium,
-    High,
-    Ultra,
-    Custom,
-}
-
-impl From<QualityPresetArg> for QualityPreset {
-    fn from(p: QualityPresetArg) -> Self {
-        match p {
-            QualityPresetArg::Auto => QualityPreset::Auto,
-            QualityPresetArg::Low => QualityPreset::Low,
-            QualityPresetArg::Medium => QualityPreset::Medium,
-            QualityPresetArg::High => QualityPreset::High,
-            QualityPresetArg::Ultra => QualityPreset::Ultra,
-            QualityPresetArg::Custom => QualityPreset::Custom,
-        }
-    }
-}
 
 // The argv face of the graphics API a launch renders with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -148,12 +123,6 @@ mod tests {
     #[test]
     fn the_render_value_enums_map_onto_the_engine_types() {
         use clap::ValueEnum;
-
-        let presets: Vec<QualityPreset> = QualityPresetArg::value_variants()
-            .iter()
-            .map(|&a| a.into())
-            .collect();
-        assert_eq!(presets, QualityPreset::ALL.to_vec());
 
         let apis: Vec<Platform> = GraphicsApiArg::value_variants()
             .iter()

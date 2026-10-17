@@ -2639,7 +2639,8 @@ fluctuation is not reported as a leak.
 ### 25.3 Benchmarks
 
 Any world can be benchmarked by launching it with `--benchmark` (`cn run
---benchmark`, or `App::benchmark` in code). A `BenchmarkConfig` asset customizes
+--benchmark`, or an app passing `LaunchArgs` with `benchmark` set to
+`App::with_args`). A `BenchmarkConfig` asset customizes
 the run: the camera's start pose, the travel and turn legs it follows after the
 warm-up, the named phases the run is measured in, the frame budget, the frame-rate
 cap, and frames to save as images. A world without one holds its starting camera

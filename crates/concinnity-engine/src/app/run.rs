@@ -25,6 +25,7 @@ use tracing_subscriber::EnvFilter;
 use crate::app::runloop;
 use crate::app::runtime::Runtime;
 use crate::app::startup_error::StartupError;
+use concinnity_core::launch::LaunchArgs;
 use concinnity_core::settings::{QualityPreset, UserGraphicsSettings};
 
 // Default tracing filter applied when RUST_LOG is unset: info for debug
@@ -98,17 +99,13 @@ pub struct LaunchRequest {
     /// Run as a development session: capture hot-reload sources, load shaders
     /// disk-first, keep frame capture available, and show the debug HUD.
     pub dev_loop: bool,
-    /// Render this many frames, then stop the run. `None` runs until the
-    /// window is closed.
-    pub max_frames: Option<u64>,
-    /// Benchmark the world: arm its `BenchmarkConfig`, or the default one, and
-    /// report what the frames cost when its last phase ends.
-    pub benchmark: bool,
+    /// What the launch's flags ask of the run: a benchmark, vsync, a frame-rate
+    /// cap, a quality preset or a frame count. An app's own
+    /// [`LaunchArgs`] resource, published before start, replaces these.
+    pub args: LaunchArgs,
     /// Force the DirectX / Vulkan debug layers on or off. `None` follows the
     /// build profile. Metal's layer is set by the process environment instead.
     pub validation: Option<bool>,
-    /// Force the master quality preset over the persisted choice, unpersisted.
-    pub quality_preset: Option<QualityPreset>,
     /// Force how the ray-tracing acceleration structure tracks moving props.
     /// `None` is [`RtDynamicMode::Auto`].
     pub rt_dynamic: Option<RtDynamicMode>,
@@ -146,7 +143,7 @@ impl LaunchRequest {
         &self,
         persisted: Option<QualityPreset>,
     ) -> Option<QualityPreset> {
-        self.quality_preset.or(persisted)
+        self.args.quality_preset.or(persisted)
     }
 
     /// How the acceleration structure tracks moving props: the request, else `Auto`.
@@ -155,9 +152,12 @@ impl LaunchRequest {
     }
 
     /// The settings this launch overrides for its own run, layered over the
-    /// user's persisted choices and never persisted: the requested DLSS preset.
+    /// user's persisted choices and never persisted: vsync, the frame-rate cap
+    /// and the DLSS preset.
     pub fn session_overrides(&self) -> UserGraphicsSettings {
         UserGraphicsSettings {
+            vsync: self.args.vsync.then_some(true),
+            fps_cap: self.args.fps_cap,
             dlss_preset: self.dlss_preset,
             ..UserGraphicsSettings::default()
         }
@@ -412,7 +412,10 @@ mod tests {
         );
 
         let forced = LaunchRequest {
-            quality_preset: Some(QualityPreset::Ultra),
+            args: LaunchArgs {
+                quality_preset: Some(QualityPreset::Ultra),
+                ..LaunchArgs::NONE
+            },
             ..Default::default()
         };
         assert_eq!(
@@ -446,7 +449,27 @@ mod tests {
     }
 
     #[test]
-    fn a_requested_dlss_preset_is_the_only_session_override() {
+    fn vsync_and_a_frame_rate_cap_are_session_overrides() {
+        let forced = LaunchRequest {
+            args: LaunchArgs {
+                vsync: true,
+                fps_cap: Some(30),
+                ..LaunchArgs::NONE
+            },
+            ..Default::default()
+        };
+        let user = UserGraphicsSettings {
+            vsync: Some(false),
+            fps_cap: Some(144),
+            ..Default::default()
+        };
+        let merged = user.overlaid_by(&forced.session_overrides());
+        assert_eq!(merged.vsync, Some(true));
+        assert_eq!(merged.fps_cap, Some(30));
+    }
+
+    #[test]
+    fn a_requested_dlss_preset_is_a_session_override() {
         assert_eq!(
             LaunchRequest::default().session_overrides(),
             UserGraphicsSettings::default()

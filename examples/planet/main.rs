@@ -14,53 +14,47 @@
 //! controls, over the meadow, up out of the air to see the planet from orbit,
 //! and back down to skim the ground. The run times every frame and closes when
 //! the flight ends, printing what the frames cost, phase by phase.
+//!
+//! It takes the engine's launch flags (`--help` lists them), `--vsync` among
+//! them.
 
 mod benchmark;
 
 use std::path::PathBuf;
 
+use concinnity::launch::{LaunchArgs, LaunchArgsError};
 use concinnity::{App, cook};
 
 const WORLD: &str = include_str!("planet.jsonl");
 
 fn main() {
-    if let Err(error) = run() {
+    let args = match LaunchArgs::parse(std::env::args().skip(1)) {
+        Ok(args) => args,
+        Err(LaunchArgsError::Help) => {
+            print!("{}", LaunchArgsError::Help);
+            return;
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
+    if let Err(error) = run(args) {
         eprintln!("{error}");
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<(), String> {
-    let args = parse_args(std::env::args().skip(1))?;
+fn run(args: LaunchArgs) -> Result<(), String> {
     let mut world = cook::world();
     world.add_jsonl(WORLD);
     benchmark::declare(&mut world, WORLD)?;
     let blob = blob_path();
     world.write_blob(&blob).map_err(|e| e.to_string())?;
-    let app = App::from_blob(&blob).map_err(|e| e.to_string())?;
-    let app = if args.benchmark { app.benchmark() } else { app };
-    app.run().map_err(|e| e.to_string())
-}
-
-// What the command line asked for.
-#[derive(Debug, Default, PartialEq)]
-struct Args {
-    benchmark: bool,
-}
-
-fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
-    let mut parsed = Args::default();
-    for arg in args {
-        match arg.as_str() {
-            "--benchmark" => parsed.benchmark = true,
-            _ => {
-                return Err(format!(
-                    "unknown argument {arg:?}; the option is --benchmark"
-                ));
-            }
-        }
-    }
-    Ok(parsed)
+    App::from_blob(&blob)
+        .map(|app| app.with_args(args))
+        .and_then(App::run)
+        .map_err(|e| e.to_string())
 }
 
 // The blob lands beside the executable, inside the build's target dir.

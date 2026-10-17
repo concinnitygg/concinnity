@@ -6,8 +6,9 @@ use std::num::NonZeroU32;
 
 use concinnity_core::gfx::view_modes::ShowFlags;
 
+use super::launch_args::LaunchArgsArg;
 use super::value_enums::{
-    BundleFormatArg, DlssPresetArg, GraphicsApiArg, QualityPresetArg, RtDynamicArg, ShowFlagArg,
+    BundleFormatArg, DlssPresetArg, GraphicsApiArg, RtDynamicArg, ShowFlagArg,
 };
 
 #[derive(clap::Subcommand, Debug)]
@@ -125,12 +126,13 @@ pub(crate) struct RenderArgs {
     #[arg(long, value_enum)]
     pub(crate) graphics_api: Option<GraphicsApiArg>,
 
-    /// Force the master graphics-quality preset for this launch, unpersisted
-    // Outranks the settings-menu choice in .concinnity/settings. Only the
-    // `ultra` ceiling permits ray-traced reflections, so an RT probe that omits
-    // this measures a frame with RT clamped off and no log line saying so.
-    #[arg(long, value_enum)]
-    pub(crate) quality_preset: Option<QualityPresetArg>,
+    // The flags an app's own command line also takes (`--benchmark`,
+    // `--vsync`, `--fps-cap`, `--quality-preset`, `--frames`), described in
+    // the engine's table. `--quality-preset` outranks the settings-menu choice;
+    // only the `ultra` ceiling permits ray-traced reflections, so an RT probe
+    // that omits it measures a frame with RT clamped off.
+    #[command(flatten)]
+    pub(crate) launch: LaunchArgsArg,
 
     /// How the ray-tracing acceleration structure tracks moving props
     // Omitted = `auto`, the dirty-gated TLAS rebuild a shipped run uses.
@@ -184,10 +186,8 @@ impl RenderArgs {
         LaunchRequest {
             capture: false,
             dev_loop,
-            max_frames: None,
-            benchmark: false,
+            args: self.launch.0,
             validation,
-            quality_preset: self.quality_preset.map(Into::into),
             rt_dynamic: self.rt_dynamic.map(Into::into),
             rt_skinned_geometry: self.rt_skinned_geometry,
             dlss_preset: self.dlss_preset.map(Into::into),
@@ -287,16 +287,6 @@ pub(crate) struct RunArgs {
     /// Capture the last presented frame to this PNG when the run stops
     #[arg(long)]
     pub(crate) screenshot: Option<String>,
-
-    /// Stop after this many frames
-    #[arg(long)]
-    pub(crate) frames: Option<u64>,
-
-    /// Benchmark the world and print what its frames cost when the run ends
-    // Arms the world's BenchmarkConfig, or the default one: a still camera for
-    // ten seconds after a two-second warm-up.
-    #[arg(long)]
-    pub(crate) benchmark: bool,
 
     #[command(flatten)]
     pub(crate) render: RenderArgs,
@@ -442,7 +432,7 @@ mod tests {
                 _ => panic!("expected a launch command for {argv:?}"),
             };
             assert!(render.graphics_api.is_none(), "{argv:?}");
-            assert!(render.quality_preset.is_none(), "{argv:?}");
+            assert_eq!(render.launch, LaunchArgsArg::NONE, "{argv:?}");
             assert!(render.rt_dynamic.is_none(), "{argv:?}");
             assert!(render.rt_skinned_geometry.is_none(), "{argv:?}");
             assert!(render.dlss_preset.is_none(), "{argv:?}");
@@ -482,10 +472,11 @@ mod tests {
             LaunchRequest {
                 capture: false,
                 dev_loop: true,
-                max_frames: None,
-                benchmark: false,
+                args: concinnity_core::launch::LaunchArgs {
+                    quality_preset: Some(QualityPreset::Ultra),
+                    ..concinnity_core::launch::LaunchArgs::NONE
+                },
                 validation: Some(true),
-                quality_preset: Some(QualityPreset::Ultra),
                 rt_dynamic: Some(RtDynamicMode::Rebuild),
                 rt_skinned_geometry: Some(false),
                 dlss_preset: Some(DlssPreset::M),
@@ -539,8 +530,9 @@ mod tests {
                 Some(GraphicsApiArg::Vulkan),
                 "{command}"
             );
-            assert!(
-                matches!(render.quality_preset, Some(QualityPresetArg::Ultra)),
+            assert_eq!(
+                render.launch.0.quality_preset,
+                Some(QualityPreset::Ultra),
                 "{command}"
             );
             assert!(
@@ -756,7 +748,7 @@ mod tests {
             let Commands::Run(a) = cli.resolved_command() else {
                 panic!("expected run");
             };
-            a.benchmark
+            a.render.launch.0.benchmark
         };
         assert!(!benchmark(&["concinnity", "run"]));
         assert!(benchmark(&["concinnity", "run", "--benchmark"]));

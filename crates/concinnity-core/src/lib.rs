@@ -74,6 +74,7 @@ pub mod error;
 pub mod geometry;
 pub mod gfx;
 pub mod input;
+pub mod launch;
 pub mod math;
 pub mod memory;
 pub mod physics;

@@ -14,6 +14,7 @@ use crate::blob;
 use crate::ecs::render_mode::{self, RenderMode, Resolution};
 use crate::ecs::{RenderInitFailure, SYSTEMS};
 use crate::shutdown::ShutdownToken;
+use concinnity_core::launch::LaunchArgs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeStatus {
@@ -227,8 +228,11 @@ impl Runtime {
         // per-system micros read zero.
         self.world
             .insert_resource(Clock(concinnity_host::clock::monotonic_micros));
+        if let Some(args) = self.world.remove_resource::<LaunchArgs>() {
+            self.launch.args = args;
+        }
         self.world.insert_resource(self.launch);
-        if self.launch.benchmark {
+        if self.launch.args.benchmark {
             concinnity_core::benchmark::arm(&mut self.world);
         }
         if let Some(view) = self.launch.view_overrides() {
@@ -605,6 +609,7 @@ mod tests {
     fn only_a_benchmark_launch_arms_the_world() {
         use concinnity_core::benchmark::BenchmarkRun;
         use concinnity_core::components::BenchmarkConfig;
+        use concinnity_core::launch::LaunchArgs;
 
         let declared = || {
             let mut world = World::new();
@@ -619,12 +624,43 @@ mod tests {
         assert!(plain.world().resource::<BenchmarkRun>().is_none());
 
         let mut benchmarked = Runtime::from_world(declared()).with_launch(LaunchRequest {
-            benchmark: true,
+            args: LaunchArgs {
+                benchmark: true,
+                ..LaunchArgs::NONE
+            },
             ..Default::default()
         });
         benchmarked.start().unwrap();
         let run = benchmarked.world().resource::<BenchmarkRun>();
         assert_eq!(run.map(|r| r.config.warmup_seconds), Some(1.0));
+    }
+
+    // An app's own args, published on the world before start, replace the
+    // launch's and are what the run publishes.
+    #[test]
+    fn an_apps_args_replace_the_launchs() {
+        use concinnity_core::benchmark::BenchmarkRun;
+        use concinnity_core::launch::LaunchArgs;
+
+        let mut world = World::new();
+        let args = LaunchArgs {
+            benchmark: true,
+            frames: Some(9),
+            ..LaunchArgs::NONE
+        };
+        world.insert_resource(args);
+        let mut runtime = Runtime::from_world(world).with_launch(LaunchRequest {
+            args: LaunchArgs {
+                frames: Some(1),
+                ..LaunchArgs::NONE
+            },
+            ..Default::default()
+        });
+        runtime.start().unwrap();
+        let launch = runtime.world().resource::<LaunchRequest>().copied();
+        assert_eq!(launch.map(|l| l.args), Some(args));
+        assert!(runtime.world().resource::<LaunchArgs>().is_none());
+        assert!(runtime.world().resource::<BenchmarkRun>().is_some());
     }
 
     // from_world hands the runtime a world that is already populated, in the
