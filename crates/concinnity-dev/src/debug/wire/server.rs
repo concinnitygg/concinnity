@@ -103,6 +103,7 @@ impl DebugServer {
     // The asset / shader / world.jsonl reload passes live on `self.reload`,
     // driven separately by `tick`.
     fn drive_jobs(&mut self, world: &mut World) {
+        self.queue.set_frame(self.frame);
         let jobs = self.queue.take();
         // Backend jobs wait in the queue until a backend is parked; world jobs
         // never wait on one.

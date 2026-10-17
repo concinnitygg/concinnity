@@ -1,10 +1,11 @@
 // Carry the world's own positions into a new simulated frame: every root
-// entity's transform, the camera, and the character rigs. Children ride their
-// parents; the sky's pivot is the sky's, which turns by its own reckoning.
+// entity's transform, the camera, the character rigs, and the sky this tick
+// already turned. Children ride their parents; the sky's pivot only turns.
 
 use concinnity_core::components::{Camera3D, CharacterRig, Parent, SkyRotation, Transform};
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::planet::{PlanetFrame, Rebase};
+use concinnity_core::sky::SkyOrientation;
 
 // Carry everything the world positions itself into the frame `rebase` moves
 // it to, `frame` being the frame after the move.
@@ -28,6 +29,19 @@ pub(super) fn carry(ctx: &mut PipelineContext, rebase: &Rebase, frame: &PlanetFr
     }
     for rig in ctx.query_mut::<CharacterRig>() {
         rig.position = rebase.apply_point(rig.position);
+    }
+    if let Some(sky) = ctx.resource::<SkyOrientation>().copied() {
+        let sky = rebase.apply_sky(sky);
+        let pivots: Vec<_> = ctx
+            .query_with_entity::<SkyRotation>()
+            .map(|(entity, _)| entity)
+            .collect();
+        for pivot in pivots {
+            if let Some(t) = ctx.get_mut::<Transform>(pivot) {
+                t.rotation_deg = sky.euler_deg();
+            }
+        }
+        ctx.insert_resource(sky);
     }
 }
 
@@ -112,6 +126,33 @@ mod tests {
             (cam.yaw, cam.pitch),
             (0.4, -0.1),
             "the heading carries across"
+        );
+    }
+
+    // The sky turned before the move is carried with it, so the sun lights the
+    // carried world from where it lit the old one on the very tick of the move.
+    #[test]
+    fn the_sky_published_before_the_move_is_carried_with_it() {
+        let mut world = World::new();
+        let pivot = world.push(SkyRotation::default());
+        world.insert(pivot, Transform::default());
+        let sky = SkyOrientation::new([0.0, 0.0, -1.0], 286.5);
+        world.insert_resource(sky);
+        let (rebase, frame) = moved();
+        carry(&mut world.context(), &rebase, &frame);
+
+        let ctx = world.context();
+        let carried = *ctx.resource::<SkyOrientation>().unwrap();
+        let sun = [1.0, 0.0, 0.35];
+        let want = rebase.apply_vector(sky.rotate(sun));
+        assert!(
+            close(carried.rotate(sun), want, 1e-5),
+            "{:?}",
+            carried.rotate(sun)
+        );
+        assert_eq!(
+            ctx.get::<Transform>(pivot).unwrap().rotation_deg,
+            carried.euler_deg()
         );
     }
 

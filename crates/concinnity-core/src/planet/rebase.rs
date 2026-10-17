@@ -4,7 +4,8 @@
 use crate::math::{
     Quat, euler_yxz_deg_from_quat, quat_from_euler_yxz_deg, quat_mul, quat_normalize, quat_rotate,
 };
-use crate::transform::{Mat4, mat4_mul};
+use crate::sky::SkyOrientation;
+use crate::transform::{Mat4, mat4_mul, quat_to_mat3};
 
 /// A rigid move from one simulated frame into the next: `p' = R p + t`.
 ///
@@ -44,6 +45,12 @@ impl Rebase {
     /// An orientation carried into the new frame.
     pub fn apply_rotation(&self, q: Quat) -> Quat {
         quat_normalize(quat_mul(self.rotation, q))
+    }
+
+    /// A sky orientation carried into the new frame: its bodies keep pointing
+    /// where they did.
+    pub fn apply_sky(&self, sky: SkyOrientation) -> SkyOrientation {
+        sky.in_frame(&quat_to_mat3(self.rotation))
     }
 
     /// Engine Euler degrees carried into the new frame.
@@ -216,6 +223,18 @@ mod tests {
         assert!(close([m[0], m[1], m[2]], r.apply_point(p), 1e-3));
         let back = r.inverse().apply_point(r.apply_point(p));
         assert!(close(back, p, 1e-3), "{back:?}");
+    }
+
+    #[test]
+    fn a_carried_sky_points_its_bodies_along_the_carried_directions() {
+        let r = turn();
+        let sky = SkyOrientation::new([0.0, 0.0, -1.0], 286.5);
+        let sun = [1.0, 0.0, 0.35];
+        let carried = r.apply_sky(sky).rotate(sun);
+        assert!(
+            close(carried, r.apply_vector(sky.rotate(sun)), 1e-5),
+            "{carried:?}"
+        );
     }
 
     // A view-projection reprojected into the new frame sees a carried point

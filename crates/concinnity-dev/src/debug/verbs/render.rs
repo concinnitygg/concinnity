@@ -1,6 +1,6 @@
 //! The verbs applied against the render backend: runtime decals and particle
-//! emitters, a screenshot of the last presented frame, and the GPU cull's
-//! status readback. Each runs once a backend is parked, so one sent before
+//! emitters, a screenshot of the last presented frame or a burst of
+//! consecutive ones, and the GPU cull's status readback. Each runs once a backend is parked, so one sent before
 //! the render loop starts waits for it.
 //!
 //! `decal-add` and `emitter-add` answer with the stable slot index the matching
@@ -143,6 +143,29 @@ pub(in crate::debug) const VERBS: &[Verb] = &[
         run: screenshot,
     },
     Verb {
+        name: "screenshot-burst",
+        description: "Capture consecutive presented frames, one per frame with none skipped, to numbered PNG files and return each file with its frame index.",
+        access: Access::Mutating,
+        params: &[
+            required(
+                "dir",
+                Kind::Name,
+                "Directory the PNGs are written to, created if absent.",
+            ),
+            optional(
+                "count",
+                Kind::Count,
+                "Frames to capture, 1 to 64. Defaults to 16, two TAA jitter cycles.",
+            ),
+            optional(
+                "prefix",
+                Kind::Name,
+                "File basename; frame i is <prefix>_<i>.png. Defaults to 'frame'.",
+            ),
+        ],
+        run: screenshot_burst,
+    },
+    Verb {
         name: "cull-status",
         description: "Read the GPU cull's per-object status buffer back and report how many objects were drawn, frustum-culled, Hi-Z-rejected, or redrawn by the disocclusion pass.",
         access: Access::ReadOnly,
@@ -191,6 +214,25 @@ struct Slot {
 #[derive(serde::Deserialize)]
 struct Screenshot {
     path: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ScreenshotBurst {
+    dir: String,
+    #[serde(default = "default_burst_count")]
+    count: usize,
+    #[serde(default = "default_burst_prefix")]
+    prefix: String,
+}
+
+const MAX_BURST: usize = 64;
+
+fn default_burst_count() -> usize {
+    16
+}
+
+fn default_burst_prefix() -> String {
+    "frame".to_string()
 }
 
 fn decal_add(call: &Call, args: Args) -> Reply {
@@ -246,6 +288,44 @@ fn screenshot(call: &Call, args: Args) -> Reply {
         backend.screenshot(&path).map_err(|e| e.to_string())
     })?;
     Ok(json!({ "path": saved }))
+}
+
+// One capture per frame, each re-queued for the next frame by the one before,
+// so the files cover every jitter phase in order. The frame index is the
+// counter `state` reports.
+fn screenshot_burst(call: &Call, args: Args) -> Reply {
+    let burst: ScreenshotBurst = args.parse()?;
+    let paths = burst_paths(&burst)?;
+    std::fs::create_dir_all(burst.dir.trim())
+        .map_err(|e| format!("screenshot-burst: {}: {e}", burst.dir.trim()))?;
+    let shots = call.on_backend_frames(paths.len(), READBACK_TIMEOUT, move |backend, index| {
+        backend.screenshot(&paths[index]).map_err(|e| e.to_string())
+    })?;
+    let frames: Vec<Value> = shots
+        .into_iter()
+        .map(|(frame, path)| json!({ "frame": frame, "path": path }))
+        .collect();
+    Ok(json!({ "frames": frames }))
+}
+
+fn burst_paths(burst: &ScreenshotBurst) -> Result<Vec<String>, String> {
+    if !(1..=MAX_BURST).contains(&burst.count) {
+        return Err(format!(
+            "screenshot-burst: 'count' must be 1 to {MAX_BURST}"
+        ));
+    }
+    let prefix = burst.prefix.trim();
+    if prefix.contains(['/', '\\']) {
+        return Err("screenshot-burst: 'prefix' must be a file name".to_string());
+    }
+    let dir = std::path::Path::new(burst.dir.trim());
+    Ok((0..burst.count)
+        .map(|i| {
+            dir.join(format!("{prefix}_{i:02}.png"))
+                .display()
+                .to_string()
+        })
+        .collect())
 }
 
 fn cull_status(call: &Call, _: Args) -> Reply {
@@ -352,6 +432,11 @@ mod tests {
                 json!({ "path": "shot.png" }),
                 "screenshot: not supported",
             ),
+            (
+                "screenshot-burst",
+                json!({ "dir": std::env::temp_dir().display().to_string(), "count": 2 }),
+                "screenshot: not supported",
+            ),
             ("cull-status", json!({}), "read_cull_status: not supported"),
         ];
         for (verb, args, needle) in cases {
@@ -387,6 +472,40 @@ mod tests {
                 "{path}"
             );
         }
+    }
+
+    #[test]
+    fn a_burst_names_one_numbered_png_per_frame() {
+        let burst = ScreenshotBurst {
+            dir: " out/burst ".to_string(),
+            count: 3,
+            prefix: "orbit".to_string(),
+        };
+        let expected: Vec<String> = ["orbit_00.png", "orbit_01.png", "orbit_02.png"]
+            .iter()
+            .map(|name| {
+                std::path::Path::new("out/burst")
+                    .join(name)
+                    .display()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(burst_paths(&burst), Ok(expected));
+    }
+
+    #[test]
+    fn a_burst_refuses_a_bad_count_or_prefix() {
+        let mut engine = Engine::new(World::new());
+        for count in [0, MAX_BURST + 1] {
+            let error = engine
+                .call("screenshot-burst", json!({ "dir": "out", "count": count }))
+                .unwrap_err();
+            assert!(error.contains("'count' must be"), "{count}: {error}");
+        }
+        let error = engine
+            .call("screenshot-burst", json!({ "dir": "out", "prefix": "a/b" }))
+            .unwrap_err();
+        assert!(error.contains("'prefix' must be a file name"), "{error}");
     }
 
     // An empty readback is a clean all-zero histogram, so a probe can tell "no

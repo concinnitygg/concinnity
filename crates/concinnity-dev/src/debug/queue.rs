@@ -10,6 +10,7 @@
 use concinnity_core::ecs::World;
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_engine::live_edit::parked::TextureNameSlots;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::verbs::camera::CameraMotion;
@@ -32,11 +33,26 @@ pub(super) struct Jobs {
 
 /// The debug server's job queue. Handlers push onto a clone; the per-frame
 /// drive takes everything queued. A poisoned mutex is recovered and used
-/// regardless, so an unrelated panic in another thread cannot drop jobs.
+/// regardless, so an unrelated panic in another thread cannot drop jobs. The
+/// drive also stamps the frame it is running, so a job can say which frame it
+/// ran on.
 #[derive(Clone, Default)]
-pub(super) struct RuntimeQueue(Arc<Mutex<Jobs>>);
+pub(super) struct RuntimeQueue {
+    jobs: Arc<Mutex<Jobs>>,
+    frame: Arc<AtomicU64>,
+}
 
 impl RuntimeQueue {
+    /// Record the frame the drive is about to run jobs for.
+    pub(super) fn set_frame(&self, frame: u64) {
+        self.frame.store(frame, Ordering::Relaxed);
+    }
+
+    /// The frame the drive last stamped, the one a running job runs on.
+    pub(super) fn frame(&self) -> u64 {
+        self.frame.load(Ordering::Relaxed)
+    }
+
     pub(super) fn push_world(&self, job: WorldJob) {
         self.jobs().world.push(job);
     }
@@ -57,7 +73,7 @@ impl RuntimeQueue {
     }
 
     fn jobs(&self) -> MutexGuard<'_, Jobs> {
-        self.0
+        self.jobs
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -124,11 +140,11 @@ mod tests {
         let queue = RuntimeQueue::default();
         let poisoner = queue.clone();
         let _ = std::thread::spawn(move || {
-            let _held = poisoner.0.lock().unwrap();
+            let _held = poisoner.jobs.lock().unwrap();
             panic!("poison");
         })
         .join();
-        assert!(queue.0.is_poisoned());
+        assert!(queue.jobs.is_poisoned());
 
         let (tx, _rx) = mpsc::channel();
         queue.push_world(world_job(&tx, "w"));

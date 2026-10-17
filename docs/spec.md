@@ -2696,7 +2696,7 @@ from that snapshot, so inspection never stalls the frame.
 | Content     | `assets`, `names`, `streaming`, `memory`, `budget`                             |
 | Performance | `profile`, `cull-status`                                                       |
 | Camera      | `camera-get`, `camera-set`, `camera-move`, `camera-stop`                       |
-| Rendering   | `screenshot`, `quality-set`, `view-set`, `show-set`, `reload-shaders`          |
+| Rendering   | `screenshot`, `screenshot-burst`, `quality-set`, `view-set`, `show-set`, `reload-shaders` |
 | World edits | `spawn`, `despawn`, `reparent`, `decal-add`, `decal-remove`, `emitter-add`, `emitter-remove`, `reload-assets` |
 | Animation   | `anim-crossfade`, `anim-param`, `anim-state`                                   |
 | Other       | `rebind`, `story`                                                              |
