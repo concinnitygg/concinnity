@@ -4,7 +4,7 @@
 // kilometers. `render::atmosphere` mirrors the sizes, and its tests lock the
 // constants below to the Rust ones.
 //
-// AtmosphereParams (928 B) mirrors `render::atmosphere::AtmosphereParams`;
+// AtmosphereParams (992 B) mirrors `render::atmosphere::AtmosphereParams`;
 // every member is a float4 lane so the three targets lay it out alike.
 
 {HDR_STORE}
@@ -58,6 +58,9 @@ struct AtmosphereParams
     float4 moon_up;
     // Two lanes per galaxy, NIGHT_MAX_GALAXIES of them.
     float4 galaxies[32];
+    // Inverse of the view-projection the scene's depth was drawn with,
+    // temporal jitter included: turns a depth sample back into its world point.
+    float4x4 depth_inv_vp;
 };
 
 static const uint NIGHT_MAX_GALAXIES = 16u;

@@ -268,11 +268,13 @@ impl DxContext {
             vp_mat,
         } = self.frame_projection(fov_y_radians, aspect, near, width, height);
         // The haze volume is laid along the un-jittered view rays, like the fog
-        // volume, so it holds still under the temporal jitter.
+        // volume, so it holds still under the temporal jitter; depth is read
+        // back through the jittered inverse it was drawn with.
         self.prepare_atmosphere(
             frame_idx,
             concinnity_core::render::atmosphere::AtmosphereView {
                 inv_vp: concinnity_core::transform::mat4_inverse(cur_vp),
+                depth_inv_vp: concinnity_core::transform::mat4_inverse(vp_mat),
                 cam_pos,
                 viewport: [width as f32, height as f32],
                 sky_rot: self.state.view.sky_rot,

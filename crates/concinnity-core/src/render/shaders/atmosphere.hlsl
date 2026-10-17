@@ -490,7 +490,7 @@ float4 aerial_perspective_fragment(
     float2 ndc_xy = float2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
     float3 world;
     // The sky already holds the air along its rays.
-    if (!depth_reconstruct(ATMO.inv_vp, ndc_xy, depth, world))
+    if (!depth_reconstruct(ATMO.depth_inv_vp, ndc_xy, depth, world))
     {
         discard;
     }

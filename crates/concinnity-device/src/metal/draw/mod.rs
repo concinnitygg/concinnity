@@ -209,11 +209,13 @@ impl MtlContext {
         })?;
 
         // The haze volume is laid along the un-jittered view rays, like the fog
-        // volume, so it holds still under the temporal jitter.
+        // volume, so it holds still under the temporal jitter; depth is read
+        // back through the jittered inverse it was drawn with.
         self.prepare_atmosphere(
             atmosphere,
             AtmosphereView {
                 inv_vp: mat4_inverse(mat4_mul(proj, self.state.view.matrix)),
+                depth_inv_vp: inv_vp,
                 cam_pos,
                 viewport: [render_w as f32, render_h as f32],
                 sky_rot,

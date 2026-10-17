@@ -39,6 +39,12 @@ pub const HDR_MIDDLE_GRAY_LOG2: f32 = -2.473;
 /// measurement takes as the frame's brightest.
 pub const HIGHLIGHT_FRACTION: f32 = 0.001;
 
+/// How many stops under the highlight the measured mean still counts a
+/// pixel: about what a scene lit by one source spans, so the black of space
+/// around a lit planet is left out of the mean rather than metered as the
+/// scene, while a frame's own shadows stay in.
+pub const METERED_RANGE_EV: f32 = 10.0;
+
 /// Default for how many stops over white the brightest
 /// [`HIGHLIGHT_FRACTION`] of a frame may sit after exposure: under the ACES
 /// tonemap 2 stops (4x white) shows near white without clipping hard.

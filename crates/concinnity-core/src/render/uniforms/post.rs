@@ -70,7 +70,9 @@ impl AutoExposureParams {
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ExposureMeasurement {
-    /// Mean log2 luminance of the pixels above the histogram floor.
+    /// Mean log2 luminance of the pixels above the histogram floor and within
+    /// [`METERED_RANGE_EV`](crate::gfx::auto_exposure::METERED_RANGE_EV) of
+    /// the highlight.
     pub mean_log_lum: f32,
     /// Log2 luminance the brightest
     /// [`HIGHLIGHT_FRACTION`](crate::gfx::auto_exposure::HIGHLIGHT_FRACTION)

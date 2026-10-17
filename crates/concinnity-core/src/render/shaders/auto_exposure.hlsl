@@ -11,9 +11,10 @@
 //                The local stage absorbs most of the contention, so the
 //                per-frame global atomics scale to large resolves cheaply.
 //   AE_AVERAGE - histogram_average: one threadgroup of 256 threads reduces the
-//                histogram to the count-weighted average log-luminance and the
-//                log-luminance the brightest HIGHLIGHT_FRACTION of the frame
-//                starts at, then clears it for the next frame.
+//                histogram to the log-luminance the brightest
+//                HIGHLIGHT_FRACTION of the frame starts at and the
+//                count-weighted average log-luminance of the bins no more than
+//                METERED_RANGE_EV under it, then clears it for the next frame.
 //
 // The HDR resolve is only ever fetched by integer coordinate, on every backend,
 // so it is declared as a plain texture and no backend binds a sampler for this
@@ -23,11 +24,13 @@
 // concinnity-shader's `metal_bindings`), which is what puts the histogram on
 // buffer(0) and the output measurement on buffer(1) without a table.
 //
-// HISTOGRAM_BINS and HIGHLIGHT_FRACTION mirror gfx::auto_exposure;
-// AutoExposureParams and ExposureMeasurement mirror render::uniforms.
+// HISTOGRAM_BINS, HIGHLIGHT_FRACTION and METERED_RANGE_EV mirror
+// gfx::auto_exposure; AutoExposureParams and ExposureMeasurement mirror
+// render::uniforms.
 
 static const uint HISTOGRAM_BINS = 256u;
 static const float HIGHLIGHT_FRACTION = 0.001;
+static const float METERED_RANGE_EV = 10.0;
 
 struct AutoExposureParams
 {
@@ -111,7 +114,9 @@ void histogram_build(uint3 gid : SV_DispatchThreadID, uint tid : SV_GroupIndex)
 
 struct ExposureMeasurement
 {
-    // Count-weighted mean log2 luminance, the sub-floor bin left out.
+    // Count-weighted mean log2 luminance of the bins whose centers sit no
+    // more than METERED_RANGE_EV under the highlight, the sub-floor bin left
+    // out.
     float mean_log_lum;
     // Log2 luminance the brightest HIGHLIGHT_FRACTION of all pixels starts at,
     // the sub-floor bin counted in.
@@ -125,6 +130,7 @@ groupshared uint reduce_counts[HISTOGRAM_BINS];
 groupshared float reduce_weighted[HISTOGRAM_BINS];
 // Inclusive suffix sums: at[i] is the count of bins i and above.
 groupshared uint counts_at_or_above[HISTOGRAM_BINS];
+groupshared float highlight;
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
@@ -132,17 +138,48 @@ void histogram_average(uint tid : SV_GroupIndex)
 {
     uint count = histogram[tid];
     // Clear for the next frame's build pass. Safe here because every thread has
-    // already read its bin and the reduction below runs on the groupshared
+    // already read its bin and the reductions below run on the groupshared
     // copies.
     histogram[tid] = 0u;
 
-    // Drop the sub-floor bin so a mostly-black frame does not peg the average.
-    uint effective_count = (tid == 0u) ? 0u : count;
     float step = params.lum_log2_range / float(HISTOGRAM_BINS);
     float center = params.lum_log2_min + (float(tid) + 0.5) * step;
+    counts_at_or_above[tid] = count;
+    if (tid == 0u)
+    {
+        highlight = params.lum_log2_min;
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    for (uint offset = 1u; offset < HISTOGRAM_BINS; offset <<= 1u)
+    {
+        uint above = (tid + offset < HISTOGRAM_BINS) ? counts_at_or_above[tid + offset] : 0u;
+        GroupMemoryBarrierWithGroupSync();
+        counts_at_or_above[tid] += above;
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    // The one bin the brightest pixels' count crosses into writes the
+    // highlight, placed within the bin as if its pixels spread evenly. An
+    // empty frame, or a crossing in the sub-floor bin, keeps the floor.
+    uint total = counts_at_or_above[0];
+    float wanted = HIGHLIGHT_FRACTION * float(total);
+    uint at = counts_at_or_above[tid];
+    uint above = (tid + 1u < HISTOGRAM_BINS) ? counts_at_or_above[tid + 1u] : 0u;
+    if (tid > 0u && total > 0u && float(at) >= wanted && float(above) < wanted)
+    {
+        float inside = (wanted - float(above)) / float(max(count, 1u));
+        highlight = params.lum_log2_min + (float(tid) + 1.0 - inside) * step;
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    // The mean meters what the highlight lights: the sub-floor bin and
+    // everything more than METERED_RANGE_EV under the highlight (black space
+    // around a lit planet) are left out, so a mostly-dark frame does not peg it.
+    bool metered = tid > 0u && center >= highlight - METERED_RANGE_EV;
+    uint effective_count = metered ? count : 0u;
     reduce_counts[tid] = effective_count;
     reduce_weighted[tid] = center * float(effective_count);
-    counts_at_or_above[tid] = count;
     GroupMemoryBarrierWithGroupSync();
 
     for (uint stride = HISTOGRAM_BINS / 2u; stride > 0u; stride >>= 1u)
@@ -155,37 +192,9 @@ void histogram_average(uint tid : SV_GroupIndex)
         GroupMemoryBarrierWithGroupSync();
     }
 
-    for (uint offset = 1u; offset < HISTOGRAM_BINS; offset <<= 1u)
-    {
-        uint above = (tid + offset < HISTOGRAM_BINS) ? counts_at_or_above[tid + offset] : 0u;
-        GroupMemoryBarrierWithGroupSync();
-        counts_at_or_above[tid] += above;
-        GroupMemoryBarrierWithGroupSync();
-    }
-
-    // The one bin the brightest pixels' count crosses into writes the
-    // highlight, placed within the bin as if its pixels spread evenly.
-    uint total = counts_at_or_above[0];
-    float wanted = HIGHLIGHT_FRACTION * float(total);
-    uint at = counts_at_or_above[tid];
-    uint above = (tid + 1u < HISTOGRAM_BINS) ? counts_at_or_above[tid + 1u] : 0u;
-    if (total == 0u)
-    {
-        if (tid == 0u)
-        {
-            measurement[0].highlight_log_lum = params.lum_log2_min;
-        }
-    }
-    else if (float(at) >= wanted && float(above) < wanted)
-    {
-        float inside = (wanted - float(above)) / float(max(count, 1u));
-        measurement[0].highlight_log_lum = (tid == 0u)
-            ? params.lum_log2_min
-            : params.lum_log2_min + (float(tid) + 1.0 - inside) * step;
-    }
-
     if (tid == 0u)
     {
+        measurement[0].highlight_log_lum = highlight;
         measurement[0].mean_log_lum = (reduce_counts[0] > 0u)
             ? (reduce_weighted[0] / float(reduce_counts[0]))
             : params.lum_log2_min;

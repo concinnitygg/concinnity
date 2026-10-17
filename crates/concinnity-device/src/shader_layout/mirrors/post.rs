@@ -36,6 +36,7 @@ pub(in crate::shader_layout) fn atmosphere() -> Vec<Case> {
         moon_face,
         moon_up,
         galaxies,
+        depth_inv_vp,
     }))]
 }
 

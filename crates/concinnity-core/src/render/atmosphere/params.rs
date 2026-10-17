@@ -12,8 +12,8 @@ use crate::render::night_sky::{MAX_GALAXIES, NightLanes};
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct AtmosphereParams {
-    /// Inverse of the un-jittered view-projection: turns a screen position
-    /// and depth back into a world point, and a froxel into its view ray.
+    /// Inverse of the un-jittered view-projection: turns a froxel into its
+    /// view ray.
     pub inv_vp: [[f32; 4]; 4],
     /// xyz = Rayleigh scattering per km, w = -1 / its scale height.
     pub rayleigh: [f32; 4],
@@ -68,6 +68,10 @@ pub struct AtmosphereParams {
     /// Two lanes per galaxy: direction and brightness, then long axis and
     /// shape.
     pub galaxies: [[f32; 4]; 2 * MAX_GALAXIES],
+    /// Inverse of the view-projection the scene's depth was drawn with,
+    /// temporal jitter included: turns a screen position and depth back into
+    /// a world point.
+    pub depth_inv_vp: [[f32; 4]; 4],
 }
 
 /// The view the atmosphere is drawn for.
@@ -75,6 +79,9 @@ pub struct AtmosphereParams {
 pub struct AtmosphereView {
     /// Inverse of the un-jittered view-projection.
     pub inv_vp: [[f32; 4]; 4],
+    /// Inverse of the view-projection the scene was drawn with, temporal
+    /// jitter included.
+    pub depth_inv_vp: [[f32; 4]; 4],
     /// The camera's world position.
     pub cam_pos: [f32; 3],
     /// The HDR target's size in pixels.
@@ -135,6 +142,7 @@ impl AtmosphereParams {
             moon_face: night.moon_face,
             moon_up: night.moon_up,
             galaxies: night.galaxies,
+            depth_inv_vp: view.depth_inv_vp,
         }
     }
 }
@@ -149,7 +157,7 @@ mod tests {
     // member a float4 lane, so MSL, SPIR-V and DXIL agree.
     #[test]
     fn atmosphere_params_layout_matches_the_shader() {
-        assert_eq!(size_of::<AtmosphereParams>(), 928);
+        assert_eq!(size_of::<AtmosphereParams>(), 992);
         assert_eq!(offset_of!(AtmosphereParams, inv_vp), 0);
         assert_eq!(offset_of!(AtmosphereParams, rayleigh), 64);
         assert_eq!(offset_of!(AtmosphereParams, mie_scattering), 80);
@@ -172,6 +180,7 @@ mod tests {
         assert_eq!(offset_of!(AtmosphereParams, moon_face), 384);
         assert_eq!(offset_of!(AtmosphereParams, moon_up), 400);
         assert_eq!(offset_of!(AtmosphereParams, galaxies), 416);
+        assert_eq!(offset_of!(AtmosphereParams, depth_inv_vp), 928);
     }
 
     #[test]
@@ -188,6 +197,7 @@ mod tests {
             &frame,
             &AtmosphereView {
                 inv_vp: crate::transform::IDENTITY,
+                depth_inv_vp: crate::transform::IDENTITY,
                 cam_pos: [1.0, 2.0, 3.0],
                 viewport: [1600.0, 900.0],
                 sky_rot: crate::sky::SkyOrientation::IDENTITY_ROWS,
@@ -230,6 +240,7 @@ mod tests {
             &frame,
             &AtmosphereView {
                 inv_vp: crate::transform::IDENTITY,
+                depth_inv_vp: crate::transform::IDENTITY,
                 cam_pos: [0.0; 3],
                 viewport: [1.0, 1.0],
                 sky_rot: crate::sky::SkyOrientation::IDENTITY_ROWS,

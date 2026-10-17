@@ -357,11 +357,13 @@ impl VkContext {
         let cur_vp = mat4_mul(proj, self.state.view.matrix);
         let vp_mat = mat4_mul(render_proj, self.state.view.matrix);
         // The haze volume is laid along the un-jittered view rays, like the fog
-        // volume, so it holds still under the temporal jitter.
+        // volume, so it holds still under the temporal jitter; depth is read
+        // back through the jittered inverse it was drawn with.
         self.prepare_atmosphere(
             frame_idx,
             concinnity_core::render::atmosphere::AtmosphereView {
                 inv_vp: concinnity_core::transform::mat4_inverse(cur_vp),
+                depth_inv_vp: concinnity_core::transform::mat4_inverse(vp_mat),
                 cam_pos,
                 viewport: [extent.width as f32, extent.height as f32],
                 sky_rot: self.state.view.sky_rot,

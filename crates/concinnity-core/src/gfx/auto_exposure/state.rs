@@ -156,18 +156,20 @@ impl ExposureAdaptation {
 // kept in pure Rust so the math is unit-testable without a device. Bins are
 // weighted by their center log-luminance: bin `i` covers
 // `[LUM_LOG2_MIN + i*step, LUM_LOG2_MIN + (i+1)*step)`. Bin 0 is treated as
-// "below sensor floor" and weighted-in only when every other bin is empty,
-// so a mostly-black frame still produces a finite EV.
+// "below sensor floor", and so is every bin whose center sits more than
+// `METERED_RANGE_EV` under the frame's highlight; a frame with nothing left
+// reads as the floor, so a mostly-black frame still produces a finite EV.
 #[cfg(test)]
 pub(crate) fn average_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
     let step = (LUM_LOG2_MAX - LUM_LOG2_MIN) / HISTOGRAM_BINS as f32;
+    let metered_from = highlight_log_luminance(histogram) - super::METERED_RANGE_EV;
     let mut weighted_sum = 0.0f64;
     let mut count = 0u64;
     for (i, &n) in histogram.iter().enumerate().skip(1) {
-        if n == 0 {
+        let center = LUM_LOG2_MIN + (i as f32 + 0.5) * step;
+        if n == 0 || center < metered_from {
             continue;
         }
-        let center = LUM_LOG2_MIN + (i as f32 + 0.5) * step;
         weighted_sum += center as f64 * n as f64;
         count += n as u64;
     }
@@ -209,7 +211,7 @@ pub(crate) fn highlight_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::auto_exposure::{HDR_MIDDLE_GRAY_LOG2, HIGHLIGHT_FRACTION};
+    use crate::gfx::auto_exposure::{HDR_MIDDLE_GRAY_LOG2, HIGHLIGHT_FRACTION, METERED_RANGE_EV};
 
     // A frame of one luminance throughout: its highlights are its mean.
     fn even(log_lum: f32) -> ExposureMeasurement {
@@ -229,6 +231,10 @@ mod tests {
         assert_eq!(
             crate::render::shader_consts::float(src, "HIGHLIGHT_FRACTION"),
             HIGHLIGHT_FRACTION
+        );
+        assert_eq!(
+            crate::render::shader_consts::float(src, "METERED_RANGE_EV"),
+            METERED_RANGE_EV
         );
     }
 
@@ -508,6 +514,30 @@ mod tests {
         black[0] = 100_000_000;
         black[200] = 1;
         assert_eq!(highlight_log_luminance(&black), LUM_LOG2_MIN);
+    }
+
+    // A lit planet over black space: the space pixels sit far under the
+    // planet's highlight and drop out, so the mean is the planet's own. A
+    // frame whose shadows sit within the range keeps them.
+    #[test]
+    fn average_log_luminance_leaves_out_what_sits_far_under_the_highlight() {
+        let step = (LUM_LOG2_MAX - LUM_LOG2_MIN) / HISTOGRAM_BINS as f32;
+        let center = |bin: usize| LUM_LOG2_MIN + (bin as f32 + 0.5) * step;
+        let bin_at = |log_lum: f32| ((log_lum - LUM_LOG2_MIN) / step) as usize;
+        let lit = bin_at(5.0);
+        let space = bin_at(5.0 - METERED_RANGE_EV - 1.0);
+        let mut histogram = [0u32; HISTOGRAM_BINS];
+        histogram[lit] = 200_000;
+        histogram[space] = 800_000;
+        let avg = average_log_luminance(&histogram);
+        assert!((avg - center(lit)).abs() < 1.0e-3, "{avg}");
+
+        let shadow = bin_at(5.0 - METERED_RANGE_EV + 1.0);
+        histogram[space] = 0;
+        histogram[shadow] = 200_000;
+        let avg = average_log_luminance(&histogram);
+        let want = 0.5 * (center(lit) + center(shadow));
+        assert!((avg - want).abs() < 1.0e-3, "{avg}");
     }
 
     #[test]
