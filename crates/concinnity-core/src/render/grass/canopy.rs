@@ -21,7 +21,7 @@ use super::canopy_table::canopy_table;
 use super::planet::PlanetGrass;
 use super::planet::density::meadow_density;
 use super::planet::tiles::{DrawnPlanetTile, planet_center};
-use super::{GrassBladeLook, GrassTerrain, grown_layers};
+use super::{GrassBladeLook, GrassLodView, GrassTerrain, grown_layers};
 use crate::math::{atan2, cos, exp, powf, sin, sqrt};
 use crate::planet::{OCTAVE_TURN, PlanetShape};
 use crate::render::uniforms::canopy::{CanopyLayerGpu, CanopyParams, MAX_CANOPY_LAYERS};
@@ -437,11 +437,18 @@ impl CanopyField {
         &self.tables
     }
 
-    /// This frame's block. On a planet, `tile` is any tile drawn this frame,
-    /// whose model places the planet's axes in the simulated frame.
-    pub fn params(&self, tile: Option<&DrawnPlanetTile>) -> CanopyParams {
+    /// This frame's block, the blades handing the field over as `lod` has
+    /// them, at hand-off phase `phase`. On a planet, `tile` is any tile drawn
+    /// this frame, whose model places the planet's axes in the simulated
+    /// frame.
+    pub fn params(
+        &self,
+        (lod, phase): (&GrassLodView, f32),
+        tile: Option<&DrawnPlanetTile>,
+    ) -> CanopyParams {
         let mut params = CanopyParams {
             layer_count: self.layers.len() as u32,
+            band: [lod.fade_start(), lod.extent, phase, 0.0],
             ..CanopyParams::default()
         };
         params.layers[..self.layers.len()].copy_from_slice(&self.layers);
@@ -969,9 +976,12 @@ mod tests {
         assert_eq!(field.layers[1].seed, grass.layers[1].seed);
         assert_eq!(field.layers[2].seed, grass.layers[2].seed);
         assert_eq!(grass.canopy, field);
-        let p = field.params(None);
+        let lod = grass.lod_view(1000.0);
+        let p = field.params((&lod, 5.0), None);
         assert_eq!(p.layer_count, 5);
         assert_eq!(p.planet_rows, [[0.0; 4]; 3]);
+        // The band is the blades' hand-off, at the frame's phase.
+        assert_eq!(p.band, [lod.fade_start(), lod.extent, 5.0, 0.0]);
         // One view table per layer, in layer order.
         use super::super::canopy_table::{CANOPY_TABLE_LEN, canopy_table};
         assert_eq!(field.tables().len(), 5 * CANOPY_TABLE_LEN);
@@ -1033,7 +1043,7 @@ mod tests {
             morph: Default::default(),
             morph_extent: 0.0,
         };
-        let p = field.params(Some(&tile));
+        let p = field.params((&GrassLodView::new(1000.0, 0.5), 0.0), Some(&tile));
         assert_eq!(p.planet_radius, 50_000.0);
         assert!(
             p.meadow_mean > 0.5 && p.meadow_mean < 1.0,

@@ -45,7 +45,8 @@ pub struct CanopyLayerGpu {
 }
 
 /// The canopy block: every far field's layers, the frame a planet's ground is
-/// laid out in, and the noise its height is summed from. 1472 bytes.
+/// laid out in, the noise its height is summed from, and where the blades hand
+/// the field to it. 1488 bytes.
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct CanopyParams {
@@ -76,6 +77,12 @@ pub struct CanopyParams {
     pub ground_cell: f32,
     /// Height octaves summed; 0 off a planet.
     pub ground_octaves: u32,
+    /// This frame's hand-off from the blades
+    /// ([`GrassLodView`](crate::render::grass::GrassLodView)): where it
+    /// starts, where the blades end, and its phase
+    /// ([`GrassHistory::crossfade_phase`](crate::render::grass::GrassHistory::crossfade_phase));
+    /// `w` unused.
+    pub band: [f32; 4],
 }
 
 impl Default for CanopyParams {
@@ -123,7 +130,8 @@ mod tests {
         assert_eq!(offset_of!(CanopyParams, ground_height_scale), 1460);
         assert_eq!(offset_of!(CanopyParams, ground_cell), 1464);
         assert_eq!(offset_of!(CanopyParams, ground_octaves), 1468);
-        assert_eq!(size_of::<CanopyParams>(), 1472);
+        assert_eq!(offset_of!(CanopyParams, band), 1472);
+        assert_eq!(size_of::<CanopyParams>(), 1488);
         // Metal sets the block inline, which caps it at 4 KiB.
         const { assert!(size_of::<CanopyParams>() <= 4096) };
         assert_eq!(CanopyParams::default().layer_count, 0);

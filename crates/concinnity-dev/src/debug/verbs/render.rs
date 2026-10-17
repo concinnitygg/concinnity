@@ -434,7 +434,7 @@ mod tests {
             ),
             (
                 "screenshot-burst",
-                json!({ "dir": std::env::temp_dir().display().to_string(), "count": 2 }),
+                json!({ "dir": "shots", "count": 2 }),
                 "screenshot: not supported",
             ),
             ("cull-status", json!({}), "read_cull_status: not supported"),

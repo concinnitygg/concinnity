@@ -140,6 +140,9 @@ struct CanopyShade
     float3 up;
     float3 along;
     float leaf_area;
+    // 1 where this pixel shows the canopy rather than the blades (see
+    // canopy_handed), 0 where it shows the ground between them.
+    float handed;
     // The layer whose table a light's way through is read from: the one
     // growing the most leaf.
     uint table;
@@ -165,6 +168,16 @@ struct CanopyShade
     // The light gathered so far.
     float3 light;
 };
+
+// Where the blades hand the field to the canopy, whether pixel `pixel`
+// `dist` meters from the camera shows the canopy rather than the blades: the
+// same choice the blades' draws make there (grass_crossfade_keeps), so each
+// pixel shows exactly one of them. 0 before the hand-off, 1 past the blades.
+float canopy_handed(float2 pixel, float dist)
+{
+    float blades = saturate((CANOPY.band.y - dist) / max(CANOPY.band.y - CANOPY.band.x, 1e-3));
+    return grass_crossfade_shows_blades(pixel, CANOPY.band.z, blades) ? 0.0 : 1.0;
+}
 
 // Matches render::grass::canopy_table: each layer's view, tabulated over the
 // view's angle and the optical depth it crosses.
@@ -381,9 +394,11 @@ float3 canopy_ground_normal(GpuObjectData od, float3 pos, float3 normal, float f
 // Every pixel of a surface growing grass takes its ground from here: litter
 // strewn by each layer's density share, broken up by patches of earth and
 // dry litter, and how much of the sky the leaf above lets reach it. Only a
-// pixel past where the blades start to fade (`far`) goes on to the canopy.
+// pixel past where the blades start handing the field over (`far`), `dist`
+// meters from the camera at screen pixel `pixel`, goes on to the canopy, and
+// only where that pixel shows the canopy rather than the blades.
 CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color, float3 albedo,
-                      float3 V, float footprint, bool far)
+                      float3 V, float footprint, float2 pixel, float dist, bool far)
 {
     // A block not filled this frame (no grass resolved, or no planet tile
     // drawn) holds no layers and no planet, and the canopy is bare ground.
@@ -501,6 +516,8 @@ CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color,
     // Matches SKY_MU in render::grass::canopy.
     const float sky_mu = 2.0 / 3.0;
     c.ground_sky = exp(-sky_projection * c.leaf_area / sky_mu);
+    c.handed = far ? canopy_handed(pixel, dist) : 0.0;
+    float handed_area = c.handed * c.leaf_area;
 
     // The ground: the surface's own albedo as bare earth, darker in patches,
     // under litter where the layers grow, lighter and yellower where it lies
@@ -522,7 +539,8 @@ CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color,
     bend /= weight;
 
     // Where the view stops, each layer's table read at the field's whole leaf
-    // area and blended by the layer's share of it.
+    // area where the pixel shows the canopy (none where it shows the ground
+    // between kept blades) and blended by the layer's share of it.
     float mu = max(dot(V, c.up), CANOPY_MIN_MU);
     float x = canopy_angle_coord(mu);
     float viewed = max(weights.x + weights.y + weights.z + weights.w, 1e-6);
@@ -530,7 +548,7 @@ CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color,
     view.ground = count == 0u ? 1.0 : 0.0;
     for (uint k = 0u; k < min(count, 4u); k++)
     {
-        canopy_add_view(view, first + k, x, mu, c.leaf_area, weights[k] / viewed);
+        canopy_add_view(view, first + k, x, mu, handed_area, weights[k] / viewed);
     }
     CanopyBand upper = canopy_band_mean(view.upper);
     CanopyBand lower = canopy_band_mean(view.lower);
@@ -649,13 +667,14 @@ float3 canopy_albedo_seen(CanopyShade c, float3 ground)
     return c.seen + c.ground * ground;
 }
 
-// How far into its far-field band a surface `dist` from the camera is: 0
-// before it (and for any surface without one), 1 past it.
+// How far into this frame's band a surface `dist` from the camera is: 0
+// before the blades start thinning out (and for any surface growing no
+// grass), 1 past where they end.
 float canopy_band(GpuObjectData od, float dist)
 {
-    if (od.far_end <= 0.0)
+    if (od.far_canopy == 0u)
     {
         return 0.0;
     }
-    return saturate((dist - od.far_start) / max(od.far_end - od.far_start, 1e-3));
+    return saturate((dist - CANOPY.band.x) / max(CANOPY.band.y - CANOPY.band.x, 1e-3));
 }

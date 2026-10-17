@@ -21,8 +21,8 @@
 //! same track times and simply samples fewer of them.
 //!
 //! The run is declared as the world's `BenchmarkConfig`: the camera's start,
-//! its legs and the phases the report is cut into. It changes nothing until the
-//! app is benchmarked. The world's own sky turns as it always does, through the
+//! its legs, the phases the report is cut into and the frames it saves under
+//! `screenshots/benchmark/`. It changes nothing until the app is benchmarked. The world's own sky turns as it always does, through the
 //! warm-up too; the camera's start and its track come from the planet's shape
 //! and where that sky carries the sun.
 
@@ -30,7 +30,8 @@ mod flight;
 mod path;
 
 use concinnity::components::{
-    BenchmarkConfig, BenchmarkPhase, CameraPose, DirectionalLight, Planet, SkyRotation,
+    BenchmarkConfig, BenchmarkPhase, CameraPose, DirectionalLight, FrameCapture, Planet,
+    SkyRotation,
 };
 use concinnity::cook::WorldBuilder;
 use concinnity::math::dvec3::{self, DVec3};
@@ -40,6 +41,23 @@ use path::Path;
 
 // Long enough for the meadow's tiles and grass to settle at the start.
 const WARMUP_SECONDS: f32 = 2.5;
+
+// The frames the run saves: the file name and the moment, in seconds of the
+// run as the HUD's `TRACK` chip counts them (the warm-up included). Day over
+// the meadow and climbing out of it, the planet from high up and from orbit,
+// then the night skimmed low and back on the ground.
+const CAPTURES: [(&str, f32); 7] = [
+    ("ground-day", 13.3),
+    ("climb-6m", 31.93),
+    ("climb-30m", 34.65),
+    ("climb-600m", 38.5),
+    ("orbit", 55.0),
+    ("low-night", 95.0),
+    ("ground-night", 132.0),
+];
+
+// Where the captures are written, from the directory the run starts in.
+const CAPTURE_DIR: &str = "screenshots/benchmark";
 
 // What the world declares that the run reads: the planet its path rides, and
 // the sky and light it aims by.
@@ -80,6 +98,13 @@ pub(crate) fn declare(builder: &mut WorldBuilder, world: &str) -> Result<(), Str
                 .map(|phase| BenchmarkPhase {
                     name: phase.name.to_string(),
                     seconds: phase.seconds as f32,
+                })
+                .collect(),
+            captures: CAPTURES
+                .iter()
+                .map(|&(name, track_seconds)| FrameCapture {
+                    seconds: track_seconds - WARMUP_SECONDS,
+                    path: format!("{CAPTURE_DIR}/{name}.png"),
                 })
                 .collect(),
             ..Default::default()

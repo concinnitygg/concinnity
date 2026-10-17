@@ -870,6 +870,9 @@ pub(crate) struct DxContext {
     // The grass field, when the world grows one and the GPU-driven main pass
     // exists to draw it in. See [`super::grass`].
     pub(super) grass: Option<super::grass::GrassResources>,
+    // How this frame's view resolves the grass: where it coarsens, thins and
+    // hands over to the canopy. `None` without grass.
+    pub(super) grass_lod: std::cell::Cell<Option<concinnity_core::render::grass::GrassLodView>>,
     // The far field's canopy block, one copy per frame in flight. See
     // [`super::canopy`].
     pub(super) canopy: super::canopy::DxCanopy,
@@ -1027,6 +1030,7 @@ impl DxContext {
         if self.window_minimized() {
             return Ok(());
         }
+        self.size_grass()?;
 
         let frame = self.current_frame;
 

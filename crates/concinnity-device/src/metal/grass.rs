@@ -5,25 +5,25 @@
 //! the tail of the G-buffer pre-pass and the main pass, plus the cascade's
 //! depth-only draw. The view's draws ride the encoder their pass already has
 //! open, after the surfaces bound the pass's view blocks, lights and argument
-//! buffers, so grass adds only its own block and blade buffer. On a planet the
-//! kernel also reads the frame's drawn tiles, from a shared buffer per frame in
-//! flight, and their meshes, from the shared vertex buffer.
+//! buffers, so grass adds only its own block and blade buffer. The kernel reads
+//! the frame's tile records, and on a planet its drawn tiles, from shared
+//! buffers per frame in flight, and the planet's meshes from the shared vertex
+//! buffer.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::planet::Rebase;
 use concinnity_core::render::error::{RenderError, RenderResult};
-pub(in crate::metal) use concinnity_core::render::grass::GrassFrame;
 use concinnity_core::render::grass::bend::GRASS_BEND_WORDS;
-use concinnity_core::render::grass::lod::GRASS_LOD_COUNT;
+use concinnity_core::render::grass::lod::{GRASS_BAND_REGION, GRASS_LOD_COUNT, GRASS_REGION_COUNT};
 use concinnity_core::render::grass::{
-    DrawnPlanetTile, GrassBender, GrassCamera, GrassField, GrassFrameInputs, GrassHistory,
-    GrassHiz, GrassPass, GrassShadowView,
+    DrawnPlanetTile, GrassBendPass, GrassBender, GrassCamera, GrassField, GrassFrameInputs,
+    GrassHistory, GrassHiz, GrassPass, GrassShadowView,
 };
 use concinnity_core::render::shader_programs::metal::prepass_buffers;
 use concinnity_core::render::shadow_bias;
 use concinnity_core::render::uniforms::grass::{
-    GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, MAX_PLANET_GRASS_TILES, PlanetGrassTileGpu,
-    grass_args_offset,
+    GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassTileGpu, MAX_GRASS_TILE_RECORDS,
+    MAX_PLANET_GRASS_TILES, PlanetGrassTileGpu, grass_args_offset,
 };
 use concinnity_core::render::uniforms::{GBufferView, ViewUniforms};
 use objc2::rc::Retained;
@@ -37,14 +37,16 @@ use objc2_metal::{
 };
 
 use super::builtin_shaders::{
-    self, GRASS_BEND, GRASS_FRAG, GRASS_GENERATE, GRASS_PREPASS_FRAG, GRASS_PREPASS_VERT,
-    GRASS_SHADOW_VERT, GRASS_VERT,
+    self, GRASS_BEND, GRASS_CROSSFADE_FRAG, GRASS_FRAG, GRASS_GENERATE,
+    GRASS_PREPASS_CROSSFADE_FRAG, GRASS_PREPASS_FRAG, GRASS_PREPASS_VERT, GRASS_SHADOW_VERT,
+    GRASS_VERT,
 };
 use super::context::MtlContext;
 use super::encode::{ComputeEncode, RenderEncode};
 use super::error::allocation_failed;
 use super::pass_timing::PassId;
 use super::scoped_encoder::ScopedEncoder;
+use concinnity_core::render::shader_programs::ShaderProgram;
 
 // Where the grass draws read their block and blades (`grass.hlsl`), clear of
 // every main-pass and pre-pass slot.
@@ -61,9 +63,12 @@ const KERNEL_HIZ_TEXTURE_INDEX: usize = 5;
 const KERNEL_BEND_INDEX: usize = 6;
 const KERNEL_PLANET_TILES_INDEX: usize = 7;
 const KERNEL_VERTICES_INDEX: usize = 8;
+const KERNEL_TILES_INDEX: usize = 9;
 
-// Planet tile records one frame holds: the view's run and the cascade's.
+// Planet tile and tile records one frame holds: the view's run and the
+// cascade's.
 const PLANET_TILE_RECORDS: usize = 2 * MAX_PLANET_GRASS_TILES;
+const TILE_RECORDS: usize = 2 * MAX_GRASS_TILE_RECORDS;
 
 // The bend pass's slots, and the cascade draw's.
 const BEND_PARAMS_INDEX: usize = 0;
@@ -74,9 +79,16 @@ const SHADOW_BLADES_INDEX: usize = 1;
 pub(super) struct GrassPipelines {
     generate: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     bend: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
-    prepass: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
-    main: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    prepass: GrassDrawPipelines,
+    main: GrassDrawPipelines,
     shadow: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+}
+
+// One pass's blade draws: every detail level's, and the band's, whose blades
+// hand the field to the canopy pixel by pixel and so discard.
+pub(super) struct GrassDrawPipelines {
+    levels: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    band: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
 }
 
 impl GrassPipelines {
@@ -88,11 +100,25 @@ impl GrassPipelines {
         Ok(Self {
             generate: builtin_shaders::compute_pipeline(device, &GRASS_GENERATE, hot_reload)?,
             bend: builtin_shaders::compute_pipeline(device, &GRASS_BEND, hot_reload)?,
-            prepass: build_prepass_pipeline(device, hot_reload)?,
-            main: build_main_pipeline(device, sample_count, hot_reload)?,
+            prepass: GrassDrawPipelines {
+                levels: build_prepass_pipeline(device, &GRASS_PREPASS_FRAG, hot_reload)?,
+                band: build_prepass_pipeline(device, &GRASS_PREPASS_CROSSFADE_FRAG, hot_reload)?,
+            },
+            main: GrassDrawPipelines {
+                levels: build_main_pipeline(device, &GRASS_FRAG, sample_count, hot_reload)?,
+                band: build_main_pipeline(device, &GRASS_CROSSFADE_FRAG, sample_count, hot_reload)?,
+            },
             shadow: build_shadow_pipeline(device, hot_reload)?,
         })
     }
+}
+
+// One frame's grass runs, as the frame's passes read them.
+pub(in crate::metal) struct GrassFrame {
+    view: GrassPass,
+    // The cascade's run, when the grass casts this frame.
+    shadow: Option<GrassPass>,
+    bend: GrassBendPass,
 }
 
 // The grass field and what draws it: built once at init when the world grows
@@ -100,13 +126,13 @@ impl GrassPipelines {
 pub(super) struct GrassState {
     pub(super) field: GrassField,
     pub(super) pipelines: GrassPipelines,
-    // The visible blades the kernel appends, `field.capacity` of them, each
-    // detail level's region after the last. Written and read only on the GPU.
+    // The visible blades the kernel appends, `field.capacity()` of them, each
+    // span after the last. Written and read only on the GPU.
     blades: Retained<ProtocolObject<dyn MTLBuffer>>,
     // Two slots of non-indexed draw arguments, one per detail level; see
     // `GRASS_ARGS_SLOTS`.
     args: Retained<ProtocolObject<dyn MTLBuffer>>,
-    // The nearest shadow cascade's blades, `field.shadow_capacity` of them, and
+    // The nearest shadow cascade's blades, `field.shadow_capacity()` of them, and
     // their draw arguments, laid out like the view's.
     shadow_blades: Retained<ProtocolObject<dyn MTLBuffer>>,
     shadow_args: Retained<ProtocolObject<dyn MTLBuffer>>,
@@ -116,10 +142,11 @@ pub(super) struct GrassState {
     // reads to root and thin the blades.
     heights: Retained<ProtocolObject<dyn MTLBuffer>>,
     masks: Retained<ProtocolObject<dyn MTLBuffer>>,
-    // One buffer of planet tile records per frame in flight, and the one this
-    // frame wrote.
+    // One buffer of planet tile records and one of tile records per frame in
+    // flight, and the slot this frame wrote.
     planet_tiles: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    planet_slot: usize,
+    tiles: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    slot: usize,
     // What the field's frames carry from one to the next.
     history: GrassHistory,
 }
@@ -141,13 +168,13 @@ fn zeroed_args(
     Ok(args)
 }
 
-// A private buffer of `count` blades.
+// A private buffer of `count` blades, at least one.
 fn blade_buffer(
     device: &ProtocolObject<dyn MTLDevice>,
     count: u32,
     label: &str,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
-    let bytes = count as usize * size_of::<GpuGrassBlade>();
+    let bytes = count.max(1) as usize * size_of::<GpuGrassBlade>();
     device
         .newBufferWithLength_options(bytes, MTLResourceOptions::StorageModePrivate)
         .ok_or_else(|| allocation_failed(label))
@@ -175,6 +202,36 @@ fn buffer_with<T: bytemuck::NoUninit>(
 }
 
 impl GrassState {
+    // Size the visible-blade buffers for render targets `size` pixels across
+    // and down, making them again when the blades they hold changed. The
+    // field takes its new sizing only once both are made. A command buffer
+    // still in flight keeps the old ones alive.
+    pub(super) fn resize(
+        &mut self,
+        device: &ProtocolObject<dyn MTLDevice>,
+        size: [u32; 2],
+    ) -> RenderResult<()> {
+        let Some(resize) = self.field.resize_for(size) else {
+            return Ok(());
+        };
+        if resize.rebuild {
+            let sizing = &resize.sizing;
+            let blades = blade_buffer(device, sizing.capacity.total(), "grass blade buffer")?;
+            let shadow_blades =
+                blade_buffer(device, sizing.shadow_capacity, "grass shadow blade buffer")?;
+            self.blades = blades;
+            self.shadow_blades = shadow_blades;
+        }
+        self.field.apply(resize);
+        Ok(())
+    }
+
+    // The phase of the next frame's per-pixel hand-off to the canopy, which
+    // the canopy block carries beside the blades' own block.
+    pub(in crate::metal) fn crossfade_phase(&self) -> f32 {
+        self.history.crossfade_phase()
+    }
+
     pub(super) fn build(
         device: &ProtocolObject<dyn MTLDevice>,
         field: GrassField,
@@ -182,14 +239,18 @@ impl GrassState {
         frames_in_flight: usize,
         hot_reload: bool,
     ) -> RenderResult<Self> {
-        let blades = blade_buffer(device, field.capacity.total(), "grass blade buffer")?;
+        let blades = blade_buffer(device, field.capacity().total(), "grass blade buffer")?;
         let records = [PlanetGrassTileGpu::default(); PLANET_TILE_RECORDS];
         let planet_tiles = (0..frames_in_flight.max(1))
             .map(|_| buffer_with(device, &records, "grass planet tiles"))
             .collect::<RenderResult<Vec<_>>>()?;
+        let records = vec![GrassTileGpu::default(); TILE_RECORDS];
+        let tiles = (0..frames_in_flight.max(1))
+            .map(|_| buffer_with(device, &records, "grass tiles"))
+            .collect::<RenderResult<Vec<_>>>()?;
         let args = zeroed_args(device, "grass args buffer")?;
         let shadow_blades =
-            blade_buffer(device, field.shadow_capacity, "grass shadow blade buffer")?;
+            blade_buffer(device, field.shadow_capacity(), "grass shadow blade buffer")?;
         let shadow_args = zeroed_args(device, "grass shadow args buffer")?;
         // Each half is written whole before it is read, so it starts empty.
         let bend_field = device
@@ -215,7 +276,8 @@ impl GrassState {
             heights,
             masks,
             planet_tiles,
-            planet_slot: 0,
+            tiles,
+            slot: 0,
             history: GrassHistory::default(),
         })
     }
@@ -223,10 +285,11 @@ impl GrassState {
 
 fn build_prepass_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
+    fragment: &ShaderProgram,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let vert = builtin_shaders::entry_function(device, &GRASS_PREPASS_VERT, hot_reload)?;
-    let frag = builtin_shaders::entry_function(device, &GRASS_PREPASS_FRAG, hot_reload)?;
+    let frag = builtin_shaders::entry_function(device, fragment, hot_reload)?;
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexFunction(Some(&vert));
     desc.setFragmentFunction(Some(&frag));
@@ -247,11 +310,12 @@ fn build_prepass_pipeline(
 
 fn build_main_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
+    fragment: &ShaderProgram,
     sample_count: u32,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let vert = builtin_shaders::entry_function(device, &GRASS_VERT, hot_reload)?;
-    let frag = builtin_shaders::entry_function(device, &GRASS_FRAG, hot_reload)?;
+    let frag = builtin_shaders::entry_function(device, fragment, hot_reload)?;
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexFunction(Some(&vert));
     desc.setFragmentFunction(Some(&frag));
@@ -312,8 +376,8 @@ impl MtlContext {
     }
 
     // This frame's grass work for `request`, advancing the field's history, with
-    // its planet tile records written into the ring slot's buffer. `None` when
-    // the world grows no grass.
+    // its tile and planet tile records written into the ring slot's buffers.
+    // `None` when the world grows no grass.
     pub(in crate::metal) fn prepare_grass_frame(
         &mut self,
         request: GrassRequest<'_>,
@@ -351,6 +415,7 @@ impl MtlContext {
         let camera = GrassCamera {
             position: cam_pos,
             vp,
+            focal: self.grass_lod.map_or(1.0, |l| l.focal),
             hiz,
         };
         let inputs = GrassFrameInputs {
@@ -361,9 +426,9 @@ impl MtlContext {
             planet_tiles: &planet_tiles,
         };
         let frame = grass.field.frame(&inputs, &mut grass.history);
-        grass.planet_slot = ring_slot % grass.planet_tiles.len();
+        grass.slot = ring_slot % grass.planet_tiles.len();
         let records = &frame.planet_tiles[..frame.planet_tiles.len().min(PLANET_TILE_RECORDS)];
-        let dst = &grass.planet_tiles[grass.planet_slot];
+        let dst = &grass.planet_tiles[grass.slot];
         // SAFETY: the buffer is shared storage of PLANET_TILE_RECORDS records,
         // `records` holds at most that many, and the GPU no longer reads this
         // slot's buffer: the frame that last used it has passed its fence.
@@ -374,7 +439,22 @@ impl MtlContext {
                 records.len(),
             );
         }
-        Some(frame)
+        let tiles = &frame.tiles[..frame.tiles.len().min(TILE_RECORDS)];
+        let dst = &grass.tiles[grass.slot];
+        // SAFETY: as above, for TILE_RECORDS tile records.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                tiles.as_ptr(),
+                dst.contents().as_ptr().cast::<GrassTileGpu>(),
+                tiles.len(),
+            );
+        }
+        crate::grass_report::report_grass_limit(frame.limit);
+        Some(GrassFrame {
+            view: frame.view,
+            shadow: frame.shadow,
+            bend: frame.bend,
+        })
     }
 
     // A compute encoder timed as `pass`.
@@ -469,10 +549,11 @@ impl MtlContext {
         enc.set_buffer(&grass.masks, 0, KERNEL_MASKS_INDEX);
         enc.set_buffer(&grass.bend_field, 0, KERNEL_BEND_INDEX);
         enc.set_buffer(
-            &grass.planet_tiles[grass.planet_slot],
+            &grass.planet_tiles[grass.slot],
             0,
             KERNEL_PLANET_TILES_INDEX,
         );
+        enc.set_buffer(&grass.tiles[grass.slot], 0, KERNEL_TILES_INDEX);
         enc.set_buffer(&self.scene.vertex_buffer, 0, KERNEL_VERTICES_INDEX);
         // Bound whenever it exists so the kernel's texture always resolves; the
         // block's `hiz_enabled` gates the reads.
@@ -533,14 +614,13 @@ impl MtlContext {
             return 0;
         };
         enc.pushDebugGroup(ns_string!("grass"));
-        enc.set_pipeline(&grass.pipelines.prepass);
         enc.set_depth_stencil(&self.targets.depth_state);
         enc.set_vertex_value(main, 0);
         enc.set_vertex_value(gbuffer, prepass_buffers::VIEW);
         enc.set_fragment_value(gbuffer, prepass_buffers::VIEW);
-        self.draw_grass(enc, grass, frame);
+        self.draw_grass(enc, grass, &grass.pipelines.prepass, frame);
         enc.popDebugGroup();
-        GRASS_LOD_COUNT as u32
+        GRASS_REGION_COUNT as u32
     }
 
     // Draw the lit blades into the main pass `enc` has open. The fragment reads
@@ -556,36 +636,41 @@ impl MtlContext {
             return 0;
         };
         enc.pushDebugGroup(ns_string!("grass"));
-        enc.set_pipeline(&grass.pipelines.main);
         enc.set_depth_stencil(&self.targets.depth_state);
         enc.set_vertex_value(view, 0);
-        self.draw_grass(enc, grass, frame);
+        self.draw_grass(enc, grass, &grass.pipelines.main, frame);
         enc.popDebugGroup();
-        GRASS_LOD_COUNT as u32
+        GRASS_REGION_COUNT as u32
     }
 
-    // The draws both passes issue, one per detail level: a strip per visible
-    // blade, two-sided.
+    // The draws both passes issue, one per region: a strip per visible blade,
+    // two-sided, the band's under the pipeline that discards the pixels the
+    // canopy shows.
     fn draw_grass(
         &self,
         enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
         grass: &GrassState,
+        pipelines: &GrassDrawPipelines,
         frame: &GrassFrame,
     ) {
+        enc.set_pipeline(&pipelines.levels);
         enc.setCullMode(MTLCullMode::None);
         enc.set_vertex_value(&frame.view.params, PARAMS_INDEX);
         enc.set_vertex_buffer(&grass.blades, 0, BLADES_INDEX);
         let slot = grass_args_offset(frame.view.params.args_slot);
-        for lod in 0..GRASS_LOD_COUNT {
+        for region in 0..GRASS_REGION_COUNT {
+            if region == GRASS_BAND_REGION {
+                enc.set_pipeline(&pipelines.band);
+            }
             // SAFETY: the args buffer holds GRASS_ARGS_SLOTS whole slots of
-            // GRASS_LOD_COUNT draw-argument records and the offset names one of
-            // them; the kernel that filled it was committed ahead of this pass,
-            // and hazard tracking orders the read.
+            // GRASS_REGION_COUNT draw-argument records and the offset names one
+            // of them; the kernel that filled it was committed ahead of this
+            // pass, and hazard tracking orders the read.
             unsafe {
                 enc.drawPrimitives_indirectBuffer_indirectBufferOffset(
                     MTLPrimitiveType::TriangleStrip,
                     &grass.args,
-                    slot + lod * GRASS_ARGS_STRIDE,
+                    slot + region * GRASS_ARGS_STRIDE,
                 );
             }
         }

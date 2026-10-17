@@ -74,7 +74,7 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             [bb_min, cull_distance] => ["bb_min_cull_distance"],
             [bb_max, alpha_cutoff] => ["bb_max_alpha_cutoff"],
             params_index,
-            [far_field] => ["far_start", "far_end", "far_canopy"],
+            [far_field] => ["far_canopy", "_far_pad0", "_far_pad1"],
             tile_morph,
         })),
     ];
@@ -99,6 +99,7 @@ pub(in crate::shader_layout) fn canopy() -> Vec<Case> {
             ground_height_scale,
             ground_cell,
             ground_octaves,
+            band,
         })),
         everywhere(mirror!(CanopyLayerGpu => "CanopyLayer" {
             [root_color, color_variation] => ["root_color_variation"],

@@ -159,29 +159,40 @@ pub struct MaterialUniforms {
     pub far_field: FarFieldTint,
 }
 
-/// The distance band over which a surface under grass blends from its
-/// material toward the canopy its grass makes from afar, and which of the
-/// canopy block's layers that is. A terrain with a band carries each layer's
-/// density in its vertex color, rather than a multiplier on its albedo.
+/// Which of the canopy block's layers a surface under grass shades with: the
+/// ground under its blades, and past where they end, the canopy they make.
+/// Where the blades hand over is the frame's (`CanopyParams::band`). A
+/// terrain with a far field carries each layer's density in its vertex color,
+/// rather than a multiplier on its albedo.
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct FarFieldTint {
-    /// Distance from the camera, in meters, where the blend starts.
-    pub start: f32,
-    /// Distance where the surface shows the canopy alone; 0 for no band.
-    pub end: f32,
     /// The canopy block's layers the surface shades with, packed by
-    /// `CanopyRange::packed`.
+    /// `CanopyRange::packed`; 0 for a surface growing no grass.
     pub canopy: u32,
+    /// Keeps the record's later members where the shaders read them.
+    pub _pad: [u32; 2],
 }
 
 impl FarFieldTint {
-    /// No band: the vertex color multiplies the albedo.
+    /// No far field: the vertex color multiplies the albedo.
     pub const NONE: Self = Self {
-        start: 0.0,
-        end: 0.0,
         canopy: 0,
+        _pad: [0; 2],
     };
+
+    /// The far field shading with the canopy layers `canopy` packs.
+    pub fn of(canopy: u32) -> Self {
+        Self {
+            canopy,
+            _pad: [0; 2],
+        }
+    }
+
+    /// Whether the surface grows grass, and so has a far field.
+    pub fn grows(&self) -> bool {
+        self.canopy != 0
+    }
 }
 
 /// Runtime-clone cap: how many spawned clones the GPU-driven cull records
@@ -2315,9 +2326,8 @@ mod tests {
         assert_eq!(offset_of!(GpuObjectData, alpha_cutoff), 140);
         assert_eq!(offset_of!(GpuObjectData, params_index), 144);
         assert_eq!(offset_of!(GpuObjectData, far_field), 148);
-        assert_eq!(offset_of!(FarFieldTint, start), 0);
-        assert_eq!(offset_of!(FarFieldTint, end), 4);
-        assert_eq!(offset_of!(FarFieldTint, canopy), 8);
+        assert_eq!(offset_of!(FarFieldTint, canopy), 0);
+        assert_eq!(offset_of!(FarFieldTint, _pad), 4);
         assert_eq!(size_of::<FarFieldTint>(), 12);
         assert_eq!(offset_of!(GpuObjectData, tile_morph), 160);
         assert_eq!(offset_of!(GpuTileMorph, eye), 0);
@@ -2557,11 +2567,7 @@ mod tests {
     #[test]
     fn a_terrain_material_carries_its_band_into_the_record() {
         let mut obj = draw_object();
-        obj.material.far_field = FarFieldTint {
-            start: 45.0,
-            end: 60.0,
-            canopy: 0x0001_0201,
-        };
+        obj.material.far_field = FarFieldTint::of(0x0001_0201);
         assert_eq!(
             pack_object_record(&obj, 0, 1).far_field,
             obj.material.far_field

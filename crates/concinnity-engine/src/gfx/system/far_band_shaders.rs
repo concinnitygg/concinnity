@@ -16,7 +16,7 @@ pub(super) fn far_band_shaders(
         *default = true;
     }
     for (bucket, band) in draws {
-        if band.end > 0.0
+        if band.grows()
             && let Some(flag) = far.get_mut(bucket as usize)
         {
             *flag = true;
@@ -31,11 +31,7 @@ mod tests {
 
     fn draw(bucket: u32, far: bool) -> (u32, FarFieldTint) {
         let band = match far {
-            true => FarFieldTint {
-                start: 60.0,
-                end: 120.0,
-                canopy: 1,
-            },
+            true => FarFieldTint::of(1 << 8),
             false => FarFieldTint::NONE,
         };
         (bucket, band)

@@ -62,6 +62,15 @@ pub(super) struct RecordFrameView<'a> {
 }
 
 impl VkContext {
+    // Where this frame's draws growing grass route: the grass twins, and where
+    // the blades start handing the field to the canopy.
+    fn grass_route(&self) -> concinnity_core::render::record_pack::GrassRoute {
+        concinnity_core::render::record_pack::GrassRoute {
+            twins: self.cull.world_pipelines.grass_twins(),
+            far_start: self.grass_lod.map_or(0.0, |l| l.fade_start()),
+        }
+    }
+
     // Pack this frame's bindless cull records into frame `frame_idx`'s
     // `GpuObjectData` and `GpuDrawArgs` storage buffers, indexed by object id,
     // and bring its material parameter table up to date. Returns the static
@@ -162,7 +171,7 @@ impl VkContext {
                 .state
                 .horizon_occluder
                 .and_then(|o| o.seen_from(cam_pos)),
-            grass_twins: self.cull.world_pipelines.grass_twins(),
+            grass_route: self.grass_route(),
             tile_morph: self.state.tile_morph,
         };
 
@@ -208,7 +217,7 @@ impl VkContext {
         // one draws unconditionally; a freed slot's `resident` clear disables
         // it, and the cull kernel skips a disabled record's stale object.
         let runtime_base = self.runtime_record_base();
-        let grass_twins = self.cull.world_pipelines.grass_twins();
+        let grass_route = self.grass_route();
         let n_resident_runtime = self.for_each_runtime_record(|k, i, obj| {
             let mut record = pool_object_record(obj, texture_count);
             record.tile_morph = view.tile_morph_row(obj);
@@ -228,7 +237,7 @@ impl VkContext {
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | draw_args_bucket_bits(draw_bucket(obj, cam_pos, grass_twins))
+                    | draw_args_bucket_bits(draw_bucket(obj, cam_pos, grass_route))
                     | model_history.draw_flags(runtime_base + k, i),
             };
             args.write_val((runtime_base + k) * args_stride, &rec);
@@ -310,6 +319,14 @@ impl VkContext {
         // upscaling). Cascade / projection aspect, the HDR graph dims, and the
         // sub-pixel jitter all derive from this, not the display extent.
         let extent = self.targets.render_extent;
+        self.size_grass([extent.width, extent.height], frame_idx)?;
+        self.grass_lod = self.grass.as_ref().map(|g| {
+            g.field
+                .lod_view(concinnity_core::render::grass::lod::focal_length(
+                    extent.height,
+                    fov_y_radians,
+                ))
+        });
 
         let start_cmd = self.record_frame_start(frame_idx)?;
 
@@ -436,9 +453,11 @@ impl VkContext {
                 &self.uniforms.light_uniforms,
             );
         }
-        self.uniforms.canopy = match &self.grass {
-            Some(grass) => self.state.canopy_params(&grass.field.canopy),
-            None => Default::default(),
+        self.uniforms.canopy = match (&self.grass, &self.grass_lod) {
+            (Some(grass), Some(lod)) => self
+                .state
+                .canopy_params(&grass.field.canopy, (lod, grass.crossfade_phase())),
+            _ => Default::default(),
         };
         self.uniforms.canopy_buffers[frame_idx].write_val(0, &self.uniforms.canopy);
         self.uniforms.canopy_tables.update(

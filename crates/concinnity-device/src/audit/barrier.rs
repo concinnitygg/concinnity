@@ -354,6 +354,9 @@ const AUDITS: &[BackendAudit] = &[
             // between the prefilter and the last upsample, so the node borrows it.
             ("post/bloom.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
             ("allocator.rs", ".ResourceBarrier(", 1, Reason::Upload),
+            // A new visible-blade buffer, moved to its UNORDERED_ACCESS resting
+            // state on a one-shot list ahead of the first frame that binds it.
+            ("grass.rs", ".ResourceBarrier(", 1, Reason::Upload),
             // The staged geometry copies' submit brackets the shared buffers in
             // COPY_DEST; its test reads a destination back through the same pair.
             ("geometry_upload.rs", ".ResourceBarrier(", 4, Reason::Upload),

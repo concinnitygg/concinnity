@@ -205,6 +205,7 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             ("grass_bend_field", "t6"),
             ("planet_tiles", "t7"),
             ("mesh_vertices", "t8"),
+            ("grass_tiles", "t9"),
         ],
     },
     // The bend pass and the cascade's depth-only draw, each under its own root
@@ -229,6 +230,10 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     },
     DxilAbi {
         program: &shared::GRASS_FRAG,
+        registers: MAIN_BINDLESS_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::GRASS_CROSSFADE_FRAG,
         registers: MAIN_BINDLESS_REGISTERS,
     },
     DxilAbi {
@@ -1038,8 +1043,8 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     // The grass kernel, from `metal/grass.rs`: its block, the blades it
     // appends, the draw arguments, and the terrain heights and mask texels it
     // reads, at buffer(0..4) by register, last frame's depth pyramid at
-    // texture(5), the bend field, the planet tiles and the shared vertex
-    // stream at buffer(6..8).
+    // texture(5), the bend field, the planet tiles, the shared vertex stream
+    // and the tile records at buffer(6..9).
     MetalAbi {
         program: &shared::GRASS_GENERATE,
         slots: &[&[
@@ -1052,6 +1057,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("grass_bend_field", "buffer(6)"),
             ("planet_tiles", "buffer(7)"),
             ("mesh_vertices", "buffer(8)"),
+            ("grass_tiles", "buffer(9)"),
         ]],
         argument_ids: &[],
     },
@@ -1130,6 +1136,11 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         argument_ids: &[],
     },
     MetalAbi {
+        program: &shared::GRASS_PREPASS_CROSSFADE_FRAG,
+        slots: &[&[("gb_view", "buffer(3)")]],
+        argument_ids: &[],
+    },
+    MetalAbi {
         program: &shared::GRASS_VERT,
         slots: &[&[
             ("view_cb", "buffer(0)"),
@@ -1143,6 +1154,30 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     // buffers.
     MetalAbi {
         program: &shared::GRASS_FRAG,
+        slots: &[&[
+            ("view_cb", "buffer(0)"),
+            ("lights_cb", "buffer(4)"),
+            ("shadow_cb", "buffer(5)"),
+            ("spvDescriptorSet1", "buffer(7)"),
+            ("local_lights_sb", "buffer(8)"),
+            ("spvDescriptorSet2", "buffer(10)"),
+            ("cluster_cb", "buffer(11)"),
+            ("cluster_list_sb", "buffer(12)"),
+            ("spot_shadows_sb", "buffer(13)"),
+        ]],
+        argument_ids: &[
+            ("shadow_map", bindless_textures::SHADOW_MAP),
+            ("irradiance_cube", bindless_textures::IRRADIANCE_CUBE),
+            ("screen_indirect", bindless_textures::SCREEN_INDIRECT),
+            ("spot_shadow_map", bindless_textures::SPOT_SHADOW_MAP),
+            ("tex_pool", bindless_textures::pool(0)),
+            ("tex_sampler", 0),
+            ("shadow_sampler", 1),
+            ("cube_sampler", 2),
+        ],
+    },
+    MetalAbi {
+        program: &shared::GRASS_CROSSFADE_FRAG,
         slots: &[&[
             ("view_cb", "buffer(0)"),
             ("lights_cb", "buffer(4)"),

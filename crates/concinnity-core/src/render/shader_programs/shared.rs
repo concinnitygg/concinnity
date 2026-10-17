@@ -792,6 +792,15 @@ pub static GRASS_PREPASS_FRAG: ShaderProgram = ShaderProgram {
     gates: &[super::surface::PREPASS_GATE],
     msaa: false,
 };
+/// `grass_prepass_fragment` from `grass.hlsl` for the blades handing the field
+/// to the canopy: it discards the pixels that show the canopy instead.
+pub static GRASS_PREPASS_CROSSFADE_FRAG: ShaderProgram = ShaderProgram {
+    file: "grass.hlsl",
+    entry: "grass_prepass_fragment",
+    label: "grass_prepass_crossfade_frag.hlsl",
+    gates: &[super::surface::PREPASS_GATE, "GRASS_CROSSFADE"],
+    msaa: false,
+};
 /// `grass_vertex` from `grass.hlsl`.
 pub static GRASS_VERT: ShaderProgram = ShaderProgram {
     file: "grass.hlsl",
@@ -806,6 +815,15 @@ pub static GRASS_FRAG: ShaderProgram = ShaderProgram {
     entry: "grass_fragment",
     label: "grass_frag.hlsl",
     gates: &[],
+    msaa: false,
+};
+/// `grass_fragment` from `grass.hlsl` for the blades handing the field to the
+/// canopy: it discards the pixels that show the canopy instead.
+pub static GRASS_CROSSFADE_FRAG: ShaderProgram = ShaderProgram {
+    file: "grass.hlsl",
+    entry: "grass_fragment",
+    label: "grass_crossfade_frag.hlsl",
+    gates: &["GRASS_CROSSFADE"],
     msaa: false,
 };
 
@@ -900,8 +918,10 @@ pub static ALL: &[&ShaderProgram] = &[
     &GRASS_SHADOW_VERT,
     &GRASS_PREPASS_VERT,
     &GRASS_PREPASS_FRAG,
+    &GRASS_PREPASS_CROSSFADE_FRAG,
     &GRASS_VERT,
     &GRASS_FRAG,
+    &GRASS_CROSSFADE_FRAG,
 ];
 
 #[cfg(test)]

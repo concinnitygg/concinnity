@@ -287,7 +287,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     surface_cutout(od, albedo_samp.a);
     // A surface under grass carries its layers' densities in its vertex color
     // rather than a multiplier on its albedo.
-    float3 albedo = albedo_samp.rgb * tint * (od.far_end > 0.0 ? (float3)(1.0) : v.color);
+    float3 albedo = albedo_samp.rgb * tint * (od.far_canopy != 0u ? (float3)(1.0) : v.color);
 
     // A surface growing grass has litter on its ground and the leaf above
     // shading it, and past where the blades end it is shaded as the canopy
@@ -309,7 +309,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     const float far_w = 0.0;
 #endif
     canopy = canopy_at(od, v.world_pos, ground_normal, v.color, albedo, V_far / max(far_dist, 1e-4),
-                       footprint, far_w > 0.0);
+                       footprint, v.position.xy, far_dist, far_w > 0.0);
     albedo = canopy.ground_albedo;
 #else
     const float far_w = 0.0;
@@ -319,8 +319,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // Unlit view mode: the surface's base color, no lighting.
     if (VIEW.shade_mode > 0.5)
     {
-        return float4(far_w > 0.0 ? lerp(albedo, canopy_albedo_seen(canopy, albedo), far_w) : albedo,
-                      1.0);
+        return float4(far_w > 0.0 ? canopy_albedo_seen(canopy, albedo) : albedo, 1.0);
     }
 
     // Per-material emissive texture carries the color (the scalar factor is a
@@ -584,12 +583,15 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     float3 color = ambient + Lo + emissive;
     if (far_w > 0.0)
     {
-        // The blades see the sky their facing toward the viewer sees, as the
+        // Where this pixel shows the canopy rather than the blades, the canopy
+        // over the ground, which takes the direct light the canopy lets
+        // through; elsewhere the ground between the blades, as nearer in. The
+        // blades see the sky their facing toward the viewer sees, as the
         // grass draws do.
         float3 sky = ibl_enabled ? irradiance_sample(canopy.along) / PI : (float3)(0.03);
         sky = (sky * indirect.visibility + indirect.bounce) * LIGHTS.ambient_intensity;
-        float3 ground = ambient + Lo_under + emissive;
-        color = lerp(color, canopy_radiance(canopy, sky, ground), far_w);
+        float3 ground = ambient + lerp(Lo, Lo_under, canopy.handed) + emissive;
+        color = canopy_radiance(canopy, sky, ground);
     }
 
     return float4(color, albedo_samp.a);

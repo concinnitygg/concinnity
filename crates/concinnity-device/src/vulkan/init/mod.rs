@@ -449,6 +449,7 @@ impl VkContext {
             planar_reflection: world_fx.planar_reflection,
             particle: Default::default(),
             grass,
+            grass_lod: None,
             auto_exposure: world_fx.auto_exposure,
             hot_reload: HotReloadState::new(hot_reload),
             pipeline_gate: Default::default(),

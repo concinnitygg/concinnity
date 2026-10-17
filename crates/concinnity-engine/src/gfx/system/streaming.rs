@@ -24,7 +24,6 @@ use concinnity_core::components::Planet;
 use concinnity_core::gfx::render_types::FarFieldTint;
 use concinnity_core::planet::{LocalFrame, MAX_RESIDENT_TILES, PlanetFrame};
 use concinnity_core::render::grass::CanopyRange;
-use concinnity_core::render::grass::tint::far_field_band;
 
 // Default fractions of the GPU's reported memory each streaming pool may hold
 // resident when a world sets no explicit byte budget. The remainder is left for
@@ -725,12 +724,7 @@ impl GraphicsSystem {
         };
         let mut material = material;
         if let Some(far) = &far_field {
-            let [start, end] = far_field_band();
-            material.material.far_field = FarFieldTint {
-                start,
-                end,
-                canopy: far.packed(),
-            };
+            material.material.far_field = FarFieldTint::of(far.packed());
         }
         let (vertices, indices) = tile_mesh_size();
         let tiles = MAX_RESIDENT_TILES as u64;

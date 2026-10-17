@@ -63,8 +63,8 @@ struct CanopyLayer
 #define CANOPY_MAX_LAYERS 16
 
 // Mirrors `CanopyParams` in concinnity-core/src/render/uniforms/canopy.rs
-// (1472 B): every far field's layers, the planet's axes in the frame, and the
-// noise its height is summed from.
+// (1488 B): every far field's layers, the planet's axes in the frame, the
+// noise its height is summed from, and where the blades hand the field to it.
 struct CanopyParams
 {
     float4 planet_rows[3];
@@ -79,6 +79,9 @@ struct CanopyParams
     float ground_height_scale;
     float ground_cell;
     uint ground_octaves;
+    // x = where the blades start handing the field over, y = where they end,
+    // z = the hand-off's phase (see grass_crossfade_shows_blades); w unused.
+    float4 band;
 };
 
 // ---- Resource bindings ----

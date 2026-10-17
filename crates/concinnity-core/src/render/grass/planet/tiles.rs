@@ -11,6 +11,8 @@ use super::cells::PlanetGrassGrid;
 use crate::gfx::render_types::GpuTileMorph;
 use crate::math::dvec3;
 use crate::planet::{PlanetShape, TileId};
+use crate::render::grass::nest::GRASS_NEST_LEVELS;
+use crate::render::grass::tiles::{GrassBox, NestView, NestedTiles, nested_tiles};
 use crate::render::uniforms::grass::{MAX_PLANET_GRASS_TILES, PlanetGrassTileGpu};
 use crate::transform::Mat4;
 
@@ -33,13 +35,24 @@ pub struct DrawnPlanetTile {
     pub morph_extent: f32,
 }
 
-/// One run's records and the kernel group rows they span.
+/// The farthest a planet's blades reach, in meters: [`MAX_PLANET_GRASS_TILES`]
+/// holds every drawn tile a run this far can reach.
+pub const MAX_PLANET_GRASS_REACH: f32 = 707.0;
+
+/// The drawn tiles one run grows grass on, each with the square of its grass
+/// tiles of level 0 the reach covers, and the working space finding them
+/// reuses from one run to the next.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PlanetGrassTiles {
     /// The tiles, nearest the camera first.
     pub records: Vec<PlanetGrassTileGpu>,
-    /// Kernel group rows (dispatch `y`) the records span together.
-    pub groups: u32,
+    /// For each record, the drawn tile it was made from and its block: the
+    /// first grass tile of level 0 and how many across and down.
+    pub blocks: Vec<(usize, [u32; 2], [u32; 2])>,
+    /// Whether more tiles were in reach than [`MAX_PLANET_GRASS_TILES`], the
+    /// farthest of them dropped.
+    pub clipped: bool,
+    near: Vec<InReach>,
 }
 
 // The rotation part of `model` applied to `v`.
@@ -91,68 +104,132 @@ fn unmorphed(morph: &GpuTileMorph, origin: [f64; 3], reach: f64) -> bool {
     morph.seams == 0 && gap + reach < start
 }
 
-/// The drawn tiles within `distance` of `camera` (both in the simulated
-/// frame, around the planet's `center` there), nearest first and at most
-/// [`MAX_PLANET_GRASS_TILES`], each with the block of grass tiles the reach
-/// covers. A block is a square around the camera in the tile's own face
-/// coordinates, a grass tile wider than the reach on every side; the kernel
-/// culls what lies outside the reach itself.
-pub fn tiles_in_reach(
-    shape: &PlanetShape,
-    grid: &PlanetGrassGrid,
-    drawn: &[DrawnPlanetTile],
-    center: [f32; 3],
-    camera: [f32; 3],
-    distance: f32,
-) -> PlanetGrassTiles {
-    let near = records_in_reach(shape, grid, drawn, center, camera, distance);
-    let mut groups = 0u32;
-    let records = near
-        .into_iter()
-        .take(MAX_PLANET_GRASS_TILES)
-        .map(|(_, mut r)| {
-            r.first_group = groups;
-            groups += (r.block_count & 0xffff) * (r.block_count >> 16);
-            r
-        })
-        .collect();
-    PlanetGrassTiles { records, groups }
+impl PlanetGrassTiles {
+    /// Become the drawn tiles within `distance` of `camera` (both in the
+    /// simulated frame, around the planet's `center` there), nearest first
+    /// and at most [`MAX_PLANET_GRASS_TILES`], each with the block of grass
+    /// tiles the reach covers. A block is a square around the camera in the
+    /// tile's own face coordinates, a grass tile wider than the reach on every
+    /// side; the nested tiles within it are culled against the reach itself
+    /// (see [`nested_planet_tiles`]).
+    pub fn gather(
+        &mut self,
+        (shape, grid): (&PlanetShape, &PlanetGrassGrid),
+        drawn: &[DrawnPlanetTile],
+        center: [f32; 3],
+        camera: [f32; 3],
+        distance: f32,
+    ) {
+        records_in_reach(
+            (shape, grid),
+            drawn,
+            [center, camera],
+            distance,
+            &mut self.near,
+        );
+        self.records.clear();
+        self.blocks.clear();
+        self.clipped = self.near.len() > MAX_PLANET_GRASS_TILES;
+        for &(_, index, record, block) in self.near.iter().take(MAX_PLANET_GRASS_TILES) {
+            self.records.push(record);
+            self.blocks.push((index, block[0], block[1]));
+        }
+    }
 }
 
-// Every record within reach with its distance, nearest first.
+/// The nested grass tiles of planet tile `tile`, record `record` of its run,
+/// that a layer of blades `width` meters wide reaching `reach` meters from
+/// their cells visits, within `block` (its first grass tile of level 0 and
+/// how many across and down), appended to `out.tiles`. A grass tile never crosses
+/// its drawn tile, so the drawn tile caps the levels at the ones that divide
+/// its grass tiles evenly.
+pub fn nested_planet_tiles(
+    view: &NestView<'_>,
+    (shape, grid, center): (&PlanetShape, &PlanetGrassGrid, [f32; 3]),
+    tile: &DrawnPlanetTile,
+    (origin, count): ([u32; 2], [u32; 2]),
+    [reach, width]: [f32; 2],
+    out: &mut NestedTiles,
+) {
+    let n = grid.tiles_per_side(tile.id.level);
+    let top = n.trailing_zeros().min(GRASS_NEST_LEVELS);
+    let first = origin.map(|o| o >> top);
+    let last: [u32; 2] = core::array::from_fn(|i| (origin[i] + count[i] - 1) >> top);
+    let mut roots =
+        (first[1]..=last[1]).flat_map(|y| (first[0]..=last[0]).map(move |x| [x as i32, y as i32]));
+    let model = &tile.model;
+    let o = translation(model);
+    let rho = dvec3::length(dvec3::sub(o, dvec3::from_f32(center)));
+    let bounds = |level: u32, t: [i32; 2]| -> Option<GrassBox> {
+        let per = n >> level;
+        if t[0] < 0 || t[1] < 0 || t[0] as u32 >= per || t[1] as u32 >= per {
+            return None;
+        }
+        let f = |c: i32| f64::from(c) / f64::from(per);
+        let edge = shape.radius * core::f64::consts::FRAC_PI_2
+            / f64::from(1u32 << tile.id.level)
+            / f64::from(per);
+        // The patch bulges past the box of its corners by the sagitta of its
+        // diagonal; the drawn mesh's own heights lie within its radial range.
+        let slack = edge * edge * grid.max_stretch / (4.0 * shape.radius) + 0.5;
+        let mut lo = [f64::MAX; 3];
+        let mut hi = [f64::MIN; 3];
+        for (fs, ft) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            let dir = rotate(model, tile.id.direction(f(t[0] + fs), f(t[1] + ft)));
+            for r in [
+                rho + f64::from(tile.radial[0]) - slack,
+                rho + f64::from(tile.radial[1]) + slack,
+            ] {
+                let p = dvec3::add(dvec3::from_f32(center), dvec3::scale(dir, r));
+                for i in 0..3 {
+                    lo[i] = lo[i].min(p[i]);
+                    hi[i] = hi[i].max(p[i]);
+                }
+            }
+        }
+        let grow = f64::from(reach) + slack;
+        Some((
+            core::array::from_fn(|i| (lo[i] - grow) as f32),
+            core::array::from_fn(|i| (hi[i] + grow) as f32),
+        ))
+    };
+    nested_tiles(view, width, (top, &mut roots), &bounds, out);
+}
+
+// A record within reach: its distance, its drawn tile, the record and its
+// block of grass tiles.
+type InReach = (f64, usize, PlanetGrassTileGpu, [[u32; 2]; 2]);
+
+// Every record within reach, nearest first, into `near`.
 fn records_in_reach(
-    shape: &PlanetShape,
-    grid: &PlanetGrassGrid,
+    (shape, grid): (&PlanetShape, &PlanetGrassGrid),
     drawn: &[DrawnPlanetTile],
-    center: [f32; 3],
-    camera: [f32; 3],
+    [center, camera]: [[f32; 3]; 2],
     distance: f32,
-) -> Vec<(f64, PlanetGrassTileGpu)> {
+    near: &mut Vec<InReach>,
+) {
     let cam = dvec3::from_f32(camera);
     let center = dvec3::from_f32(center);
-    let mut near: Vec<(f64, PlanetGrassTileGpu)> = drawn
-        .iter()
-        .filter_map(|tile| {
-            let origin = translation(&tile.model);
-            let gap = dvec3::length(dvec3::sub(origin, cam));
-            if gap > f64::from(distance) + tile_reach(shape, grid, tile.id.level) {
-                return None;
-            }
-            let mut record = block(grid, tile, center, cam, f64::from(distance))?;
-            if tile.morph_extent < GRASS_MORPH_TOLERANCE
-                || unmorphed(&tile.morph, origin, morph_reach(shape, grid, tile))
-            {
-                record.tile_morph = GpuTileMorph::default();
-            }
-            Some((gap, record))
-        })
-        .collect();
-    near.sort_by(|a, b| a.0.total_cmp(&b.0));
-    near
+    near.clear();
+    near.extend(drawn.iter().enumerate().filter_map(|(index, tile)| {
+        let origin = translation(&tile.model);
+        let gap = dvec3::length(dvec3::sub(origin, cam));
+        if gap > f64::from(distance) + tile_reach(shape, grid, tile.id.level) {
+            return None;
+        }
+        let (mut record, block) = block(grid, tile, center, cam, f64::from(distance))?;
+        if tile.morph_extent < GRASS_MORPH_TOLERANCE
+            || unmorphed(&tile.morph, origin, morph_reach(shape, grid, tile))
+        {
+            record.tile_morph = GpuTileMorph::default();
+        }
+        Some((gap, index, record, block))
+    }));
+    near.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
 }
 
-// `tile`'s record with the block of grass tiles within `distance` of `cam`,
-// `None` when the block is empty. The tile is taken as the parallelogram its
+// `tile`'s record and the block of its grass tiles within `distance` of
+// `cam` (first and count), `None` when the block is empty. The tile is taken as the parallelogram its
 // corners span on the sphere through its origin, which is close enough to
 // find the block: the block is grown a grass tile on every side.
 fn block(
@@ -161,7 +238,7 @@ fn block(
     center: [f64; 3],
     cam: [f64; 3],
     distance: f64,
-) -> Option<PlanetGrassTileGpu> {
+) -> Option<(PlanetGrassTileGpu, [[u32; 2]; 2])> {
     let origin = translation(&tile.model);
     let rho = dvec3::length(dvec3::sub(origin, center));
     let corner = |fs: f64, ft: f64| {
@@ -192,26 +269,36 @@ fn block(
     let (x0, xn) = span(u, libm::sqrt(ss))?;
     let (y0, yn) = span(v, libm::sqrt(tt))?;
     let m = &tile.model;
-    Some(PlanetGrassTileGpu {
+    let record = PlanetGrassTileGpu {
         model: core::array::from_fn(|r| [m[0][r], m[1][r], m[2][r], m[3][r]]),
         vertex_base: tile.vertex_base,
         face_level: u32::from(tile.id.face.0) | (u32::from(tile.id.level) << 8),
         tile: [tile.id.x, tile.id.y],
-        first_group: 0,
-        block_origin: x0 | (y0 << 16),
-        block_count: xn | (yn << 16),
         grass_tiles: n,
+        _pad: 0,
         radial: tile.radial,
-        _pad: [0.0; 2],
         tile_morph: tile.morph,
-    })
+    };
+    Some((record, [[x0, y0], [xn, yn]]))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::planet::{CubeFace, LocalFrame, TileLod, tile_mesh};
-    use crate::render::grass::tiles::GRASS_DRAW_DISTANCE;
+
+    fn tiles_in_reach(
+        shape: &PlanetShape,
+        grid: &PlanetGrassGrid,
+        drawn: &[DrawnPlanetTile],
+        center: [f32; 3],
+        camera: [f32; 3],
+        distance: f32,
+    ) -> PlanetGrassTiles {
+        let mut run = PlanetGrassTiles::default();
+        run.gather((shape, grid), drawn, center, camera, distance);
+        run
+    }
 
     fn shape() -> PlanetShape {
         PlanetShape {
@@ -293,21 +380,16 @@ mod tests {
             "{}",
             run.records.len()
         );
-        let mut groups = 0;
-        for r in &run.records {
-            assert_eq!(r.first_group, groups);
-            let (x0, y0) = (r.block_origin & 0xffff, r.block_origin >> 16);
-            let (xn, yn) = (r.block_count & 0xffff, r.block_count >> 16);
-            assert!(xn > 0 && yn > 0);
-            assert!(x0 + xn <= r.grass_tiles && y0 + yn <= r.grass_tiles);
-            groups += xn * yn;
+        for (r, &(_, origin, count)) in run.records.iter().zip(&run.blocks) {
+            assert!(count[0] > 0 && count[1] > 0);
+            assert!(origin[0] + count[0] <= r.grass_tiles && origin[1] + count[1] <= r.grass_tiles);
         }
-        assert_eq!(run.groups, groups);
-        // About the reach's square of four-meter grass tiles, not the tiles'
-        // whole area.
-        let square = (2.0 * 90.0 / grid.tile_size()) as u32;
-        assert!(run.groups > square * square / 2, "{}", run.groups);
-        assert!(run.groups < square * square * 3, "{}", run.groups);
+        // The nested tiles cover about the reach's disc of four-meter grass
+        // tiles, each once.
+        let spanned = spanned_tiles(&s, &grid, &tiles, &run, cam, 90.0);
+        let disc = core::f64::consts::PI * 90.0 * 90.0 / (grid.tile_size() * grid.tile_size());
+        let n = spanned as f64;
+        assert!(n > 0.8 * disc && n < 2.0 * disc, "{n} vs {disc}");
         // A tile far beyond the reach grows nothing.
         let far = drawn(
             &s,
@@ -331,6 +413,102 @@ mod tests {
                 .records
                 .is_empty()
         );
+    }
+
+    // Planes every point is inside.
+    const OPEN: [[f32; 4]; 6] = [[0.0, 0.0, 0.0, 1.0]; 6];
+
+    // The level-0 grass tiles `run`'s nested tiles span for the meadow seen
+    // from a 1800 pixel tall view, asserting none is spanned twice.
+    fn spanned_tiles(
+        s: &PlanetShape,
+        grid: &PlanetGrassGrid,
+        drawn: &[DrawnPlanetTile],
+        run: &PlanetGrassTiles,
+        cam: [f32; 3],
+        distance: f32,
+    ) -> usize {
+        let center = planet_center(s, &drawn[run.blocks[0].0]);
+        let view = NestView {
+            camera: cam,
+            distance,
+            planes: &OPEN,
+            keep_scale: 1285.0 / 4.0,
+        };
+        let mut seen = hashbrown::HashSet::new();
+        for &(index, origin, count) in &run.blocks {
+            let tile = &drawn[index];
+            let mut out = NestedTiles::default();
+            nested_planet_tiles(
+                &view,
+                (s, grid, center),
+                tile,
+                (origin, count),
+                [0.7, 0.03],
+                &mut out,
+            );
+            for t in out.tiles {
+                let k = 1i32 << t.level;
+                for y in 0..k {
+                    for x in 0..k {
+                        let fine = [t.tile[0] * k + x, t.tile[1] * k + y];
+                        assert!(seen.insert((tile.id, fine)), "{:?} {fine:?}", tile.id);
+                    }
+                }
+            }
+        }
+        seen.len()
+    }
+
+    // Seen from a view whose blades reach hundreds of meters, the far grass
+    // tiles grow coarser, so the visited tiles stay a small share of the
+    // grass tiles they span.
+    #[test]
+    fn far_grass_tiles_nest_coarser() {
+        let s = shape();
+        let grid = PlanetGrassGrid::new(&s);
+        let frame = LocalFrame::AUTHORED;
+        let lod = TileLod::new(s, crate::planet::FINEST_CELL_SIZE);
+        let cam_world = dvec3::add(
+            s.center,
+            [0.0, s.radius + s.height([0.0, 1.0, 0.0]) + 2.5, 0.0],
+        );
+        let sel = lod.select(
+            &crate::planet::TileView::nearest(cam_world),
+            &|_| true,
+            &mut crate::planet::TileBoundsCache::new(s),
+        );
+        let tiles: Vec<DrawnPlanetTile> =
+            sel.draw.iter().map(|d| drawn(&s, &frame, d.id)).collect();
+        let center = frame.to_local(s.center);
+        let cam = frame.to_local(cam_world);
+        let run = tiles_in_reach(&s, &grid, &tiles, center, cam, 471.0);
+        let view = NestView {
+            camera: cam,
+            distance: 471.0,
+            planes: &OPEN,
+            keep_scale: 1285.0 / 4.0,
+        };
+        let mut visited = NestedTiles::default();
+        for &(index, origin, count) in &run.blocks {
+            nested_planet_tiles(
+                &view,
+                (&s, &grid, center),
+                &tiles[index],
+                (origin, count),
+                [0.7, 0.03],
+                &mut visited,
+            );
+        }
+        let visited = visited.tiles;
+        let spanned = spanned_tiles(&s, &grid, &tiles, &run, cam, 471.0);
+        assert!(visited.iter().any(|t| t.level >= 2));
+        assert!(
+            visited.len() * 8 < spanned,
+            "{} of {spanned}",
+            visited.len()
+        );
+        assert!(visited.len() < 8192, "{}", visited.len());
     }
 
     // The same tiles in a moved frame cover the same grass tiles: what the
@@ -363,7 +541,8 @@ mod tests {
             let mut v: Vec<_> = r
                 .records
                 .iter()
-                .map(|t| (t.tile, t.block_origin, t.block_count))
+                .zip(&r.blocks)
+                .map(|(t, b)| (t.tile, b.1, b.2))
                 .collect();
             v.sort();
             v
@@ -371,34 +550,12 @@ mod tests {
         assert_eq!(blocks(&ra), blocks(&rb));
     }
 
-    // Every tile at the finest level whose bounds come within `reach` of
-    // `camera`, across faces.
-    fn finest_around(s: &PlanetShape, max_level: u8, camera: [f64; 3], reach: f64) -> Vec<TileId> {
-        let mut out = Vec::new();
-        let mut stack: Vec<TileId> = (0..6).map(|f| TileId::root(CubeFace(f))).collect();
-        while let Some(t) = stack.pop() {
-            let b = crate::planet::tile_bounds(s, t);
-            if dvec3::length(dvec3::sub(camera, b.center)) - b.radius > reach {
-                continue;
-            }
-            if t.level >= max_level {
-                out.push(t);
-            } else {
-                stack.extend(t.children());
-            }
-        }
-        out
-    }
-
-    // The cap holds every tile a run can reach, whatever the planet. A tile
-    // at the deepest level is over 16 m wide (its cells are over half the
-    // finest cell size), and a run covers a square about 196 m across in each
-    // tile's face coordinates, so at most 14 tiles lie across it each way.
-    // The worst planet's deepest tiles are just over 16 m wide; tall hills
-    // split every tile near the camera to the deepest level, and every tile
-    // drawn there is the bound for any mix of levels.
+    // The cap holds every tile a run reaching the farthest a planet's blades
+    // do can reach, whatever the planet: the drawn tiles grow with distance,
+    // so each level adds a ring of about as many tiles.
     #[test]
     fn the_cap_holds_every_tile_a_run_can_reach() {
+        const REACH: f32 = MAX_PLANET_GRASS_REACH;
         let mut worst = 0;
         for (level, amplitude) in [(8u8, 40.0), (12, 40.0), (12, 2000.0), (16, 40.0)] {
             let width =
@@ -440,10 +597,6 @@ mod tests {
                 let cam_world = dvec3::add(s.surface(dir), dvec3::scale(dir, 1.7));
                 let center = frame.to_local(s.center);
                 let cam = frame.to_local(cam_world);
-                let finest: Vec<_> = finest_around(&s, level, cam_world, 200.0)
-                    .into_iter()
-                    .map(light)
-                    .collect();
                 let selected: Vec<_> = lod
                     .select(
                         &crate::planet::TileView {
@@ -457,14 +610,11 @@ mod tests {
                     .iter()
                     .map(|d| light(d.id))
                     .collect();
-                for drawn in [&finest, &selected] {
-                    let n =
-                        records_in_reach(&s, &grid, drawn, center, cam, GRASS_DRAW_DISTANCE).len();
-                    worst = worst.max(n);
-                }
+                let mut near = Vec::new();
+                records_in_reach((&s, &grid), &selected, [center, cam], REACH, &mut near);
+                worst = worst.max(near.len());
             }
         }
-        assert!(worst <= 28 * 28, "{worst}");
         assert!(MAX_PLANET_GRASS_TILES >= worst + worst / 4, "{worst}");
     }
 
@@ -484,6 +634,40 @@ mod tests {
         assert!(!unmorphed(&row([70.0, 0.0, 0.0], 0), origin, 20.0));
         assert!(!unmorphed(&row([10.0, 0.0, 0.0], 1), origin, 20.0));
         assert!(unmorphed(&GpuTileMorph::default(), origin, 1e9));
+    }
+
+    // More drawn tiles in reach than a run holds keeps the nearest and says
+    // so; a run within the cap says nothing.
+    #[test]
+    fn a_run_past_the_cap_keeps_the_nearest_and_says_so() {
+        let s = shape();
+        let grid = PlanetGrassGrid::new(&s);
+        let frame = LocalFrame::AUTHORED;
+        let lod = TileLod::new(s, crate::planet::FINEST_CELL_SIZE);
+        let at = |x: u32| TileId {
+            face: CubeFace(2),
+            level: lod.max_level,
+            x,
+            y: 1 << (lod.max_level - 1),
+        };
+        let mid = 1u32 << (lod.max_level - 1);
+        let cam = frame.to_local(dvec3::add(
+            s.center,
+            [0.0, s.radius + s.height([0.0, 1.0, 0.0]) + 1.7, 0.0],
+        ));
+        let center = frame.to_local(s.center);
+        let near = drawn(&s, &frame, at(mid));
+        let far = drawn(&s, &frame, at(mid + 1));
+        let mut tiles = alloc::vec![far; MAX_PLANET_GRASS_TILES];
+        tiles.push(near);
+        let mut run = PlanetGrassTiles::default();
+        run.gather((&s, &grid), &tiles, center, cam, 90.0);
+        assert!(run.clipped);
+        assert_eq!(run.records.len(), MAX_PLANET_GRASS_TILES);
+        assert_eq!(run.blocks[0].0, MAX_PLANET_GRASS_TILES);
+        run.gather((&s, &grid), &tiles[1..], center, cam, 90.0);
+        assert!(!run.clipped);
+        assert_eq!(run.records.len(), MAX_PLANET_GRASS_TILES);
     }
 
     // A tile whose morph would move its corners less than a blade's root can

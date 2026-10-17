@@ -436,7 +436,7 @@ impl MtlContext {
         history: HistoryMode,
     ) -> RenderResult<Option<RecordBuffers>> {
         use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData, draw_args_flags};
-        use concinnity_core::render::record_pack::{PackView, StaticPack};
+        use concinnity_core::render::record_pack::{GrassRoute, PackView, StaticPack};
         let n_cull = self.cull_count();
         if n_cull == 0 {
             return Ok(None);
@@ -450,7 +450,10 @@ impl MtlContext {
                 .state
                 .horizon_occluder
                 .and_then(|o| o.seen_from(cam_pos)),
-            grass_twins: self.cull.world_pipelines.grass_twins(),
+            grass_route: GrassRoute {
+                twins: self.cull.world_pipelines.grass_twins(),
+                far_start: self.grass_lod.map_or(0.0, |l| l.fade_start()),
+            },
             tile_morph: self.state.tile_morph,
         };
         let texture_count = self.scene.textures.len();

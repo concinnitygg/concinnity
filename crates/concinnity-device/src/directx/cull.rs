@@ -285,6 +285,15 @@ struct RegionCullPass<'a> {
 // Per-frame buffer fill + encoder
 
 impl DxContext {
+    // Where this frame's draws growing grass route: the grass twins, and where
+    // the blades start handing the field to the canopy.
+    fn grass_route(&self) -> concinnity_core::render::record_pack::GrassRoute {
+        concinnity_core::render::record_pack::GrassRoute {
+            twins: self.cull.world_pipelines.grass_twins(),
+            far_start: self.grass_lod.get().map_or(0.0, |l| l.fade_start()),
+        }
+    }
+
     // Total records the GPU-driven cull + bindless main pass processes: the
     // build-time static objects, the instanced-cluster instances folded in after
     // them, the runtime reserve (streamed chunks and spawned clones), then the
@@ -464,7 +473,7 @@ impl DxContext {
                 .state
                 .horizon_occluder
                 .and_then(|o| o.seen_from(cam_pos)),
-            grass_twins: self.cull.world_pipelines.grass_twins(),
+            grass_route: self.grass_route(),
             tile_morph: self.state.tile_morph,
         };
 
@@ -497,7 +506,7 @@ impl DxContext {
         // `resident` clear disables it, and the cull kernel never reads a disabled
         // record's stale object.
         let runtime_base = self.runtime_record_base();
-        let grass_twins = self.cull.world_pipelines.grass_twins();
+        let grass_route = self.grass_route();
         let n_resident_runtime = self.for_each_runtime_record(|k, i, obj| {
             let Some((rec, arg)) = records
                 .get_mut(runtime_base + k)
@@ -522,7 +531,7 @@ impl DxContext {
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | draw_args_bucket_bits(draw_bucket(obj, cam_pos, grass_twins))
+                    | draw_args_bucket_bits(draw_bucket(obj, cam_pos, grass_route))
                     | model_history.draw_flags(runtime_base + k, i),
             };
         });

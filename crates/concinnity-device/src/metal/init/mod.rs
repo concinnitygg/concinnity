@@ -344,6 +344,7 @@ impl MtlContext {
             scene,
             light_uniforms,
             canopy: Default::default(),
+            grass_lod: None,
             canopy_tables: Default::default(),
             shadow,
             spot_shadow,

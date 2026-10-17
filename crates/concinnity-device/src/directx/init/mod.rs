@@ -494,6 +494,7 @@ impl DxContext {
             fog,
             particle,
             grass,
+            grass_lod: Default::default(),
             commands,
             frame_sync,
             frame_capture: crate::frame_capture::FrameCaptures::new(capture),

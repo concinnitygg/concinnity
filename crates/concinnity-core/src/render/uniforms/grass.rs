@@ -5,7 +5,9 @@
 //! / `GrassBlade` / `GrassBendParams` / `PlanetGrassTile` in
 //! `shaders/grass.hlsl`.
 
-use crate::render::grass::lod::{GRASS_LOD_COUNT, GRASS_LOD_VERTEX_STRIDE, GRASS_LOD_VERTICES};
+use crate::render::grass::lod::{
+    GRASS_LOD_VERTEX_STRIDE, GRASS_LOD_VERTICES, GRASS_REGION_COUNT, region_level,
+};
 
 /// Draw-argument slots the args buffer holds. The kernel fills one each frame
 /// and resets the other for the next, so no separate clear runs.
@@ -16,8 +18,11 @@ pub const GRASS_ARGS_SLOTS: usize = 2;
 /// instance.
 pub const GRASS_ARGS_STRIDE: usize = 16;
 
-/// Bytes in one slot: one draw per detail level, coarsening in order.
-pub const GRASS_ARGS_SLOT_BYTES: usize = GRASS_LOD_COUNT * GRASS_ARGS_STRIDE;
+/// Bytes in one slot: one draw per region, the detail levels coarsening in
+/// order, then the band, then one record whose first word counts the blades
+/// the coarsest level and the band reserved together in the span they share
+/// (see [`GRASS_SPAN_COUNT`](crate::render::grass::lod::GRASS_SPAN_COUNT)).
+pub const GRASS_ARGS_SLOT_BYTES: usize = (GRASS_REGION_COUNT + 1) * GRASS_ARGS_STRIDE;
 
 /// Bytes in the whole args buffer.
 pub const GRASS_ARGS_BYTES: usize = GRASS_ARGS_SLOTS * GRASS_ARGS_SLOT_BYTES;
@@ -27,17 +32,13 @@ pub const GRASS_ARGS_BYTES: usize = GRASS_ARGS_SLOTS * GRASS_ARGS_SLOT_BYTES;
 pub const MAX_GRASS_LAYERS: usize = 16;
 
 /// One grass layer as a frame's kernel and draws read it: the terrain it roots
-/// in, the block of tiles this frame covers on it, and the look of its blades.
-/// 144 bytes, every member in its own 16-byte row.
+/// in and the look of its blades. 128 bytes, every member in its own 16-byte
+/// row.
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct GrassLayerGpu {
     /// The terrain's ground rectangle: min x, min z, max x, max z.
     pub rect: [f32; 4],
-    /// Tile coordinates of the first tile this frame covers.
-    pub tile_origin: [i32; 2],
-    /// Tiles covered along x and z.
-    pub tile_count: [u32; 2],
     /// World height of the terrain's base.
     pub base_y: f32,
     /// Lowest ground on the terrain, world height.
@@ -86,8 +87,10 @@ pub struct GrassLayerGpu {
     /// along a direct light follows
     /// ([`projection_axes`](crate::render::grass::canopy::projection_axes)).
     pub light_projection: [f32; 2],
-    /// Keeps the record a whole number of rows.
-    pub _pad: f32,
+    /// The blade layers a view ray straight down crosses
+    /// ([`blade_depth`](crate::render::grass::lod::blade_depth)), which the
+    /// depth limit thins grazing rays by.
+    pub depth: f32,
 }
 
 /// Per-frame grass parameters: the camera, the wind, the occlusion test, the
@@ -99,7 +102,7 @@ pub struct GrassLayerGpu {
 pub struct GrassParams {
     /// Camera position the kernel measures distance from.
     pub cam_pos: [f32; 3],
-    /// Distance past which no blade is kept.
+    /// Where the blades end: distance past which no blade is kept.
     pub draw_distance: f32,
     /// The camera's world-space frustum planes, `(normal, d)` with
     /// `dot(normal, p) + d >= 0` inside.
@@ -118,21 +121,32 @@ pub struct GrassParams {
     /// 1 when the pyramid holds last frame's depth and tiles are tested
     /// against it.
     pub hiz_enabled: u32,
-    /// The first blade of each detail level's region; `w` unused.
+    /// The first blade of each region: the detail levels', then the band's
+    /// (`w`).
     pub lod_base: [u32; 4],
-    /// Blades each level's region holds; `w` unused.
+    /// Blades each region holds, in the same order.
     pub lod_capacity: [u32; 4],
     /// Where the second and third levels start, the morph fraction, and the
-    /// distance thinning starts at.
+    /// phase of the hand-off's per-pixel choice
+    /// ([`GrassHistory::crossfade_phase`](crate::render::grass::GrassHistory::crossfade_phase)).
     pub lod_distances: [f32; 4],
-    /// The fewest blades thinning keeps, the shrink band, where the fade
-    /// starts, and the widest a blade grows.
+    /// Thinning's scale (a layer keeps `width * x / distance` of its blades,
+    /// at most all), the shrink band, where the blades start handing the
+    /// field to the canopy, and where the depth limit takes full effect
+    /// ([`GrassLodView::keep`](crate::render::grass::GrassLodView::keep)).
     pub thinning: [f32; 4],
+    /// The first of this run's records in the tile buffer.
+    pub tile_base: u32,
+    /// Records this run reads from the tile buffer, one kernel group row
+    /// (dispatch `y`) each.
+    pub tile_count: u32,
+    /// Keeps the next member on a 16-byte row.
+    pub _pad: [u32; 2],
     /// Entries of `layers` in use.
     pub layer_count: u32,
     /// The draw-argument slot this frame fills; the other one is reset.
     pub args_slot: u32,
-    /// Edge of one tile, in meters.
+    /// Edge of one tile of level 0, in meters.
     pub tile_size: f32,
     /// Distance from the camera past which the kernel places no blade: the
     /// draw distance for the view, nearer for the shadow cascade.
@@ -193,14 +207,47 @@ pub const GRASS_GROUND_PLANET: u32 = 1;
 pub const GRASS_IDENTITY_MAP: [[f32; 4]; 2] = [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
 
 /// Most planet tiles one run of the kernel grows grass on: a quarter more
-/// than the most a run within the grass draw distance can reach on any
+/// than the most a run reaching as far as any view's blades can reach on any
 /// planet.
-pub const MAX_PLANET_GRASS_TILES: usize = 1024;
+pub const MAX_PLANET_GRASS_TILES: usize = 2048;
+
+/// Most tiles one run of the kernel visits, over every layer: the nearest are
+/// kept.
+pub const MAX_GRASS_TILE_RECORDS: usize = 16384;
+
+/// One tile a run of the kernel visits, one group row (dispatch `y`) each:
+/// which square of ground, at which level of the cell grid, for which layer,
+/// and on a planet, which drawn tile it lies in.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct GrassTileGpu {
+    /// The tile's column and row among the tiles of its level: on terrain
+    /// counted from the world origin, on a planet within its drawn tile.
+    pub tile: [i32; 2],
+    /// The tile's level in the low 8 bits (see
+    /// [`nest`](crate::render::grass::nest)), the layer's slot in the next 8.
+    pub level_layer: u32,
+    /// On a planet, the drawn tile's index among the run's planet tile
+    /// records; 0 on terrain.
+    pub planet_tile: u32,
+}
+
+impl GrassTileGpu {
+    /// The record of tile `tile` of level `level` for layer slot `layer`, in
+    /// planet tile record `planet_tile`.
+    pub fn new(tile: [i32; 2], level: u32, layer: u32, planet_tile: u32) -> Self {
+        Self {
+            tile,
+            level_layer: (level & 0xff) | ((layer & 0xff) << 8),
+            planet_tile,
+        }
+    }
+}
 
 /// One drawn planet tile as the kernel reads it: where its mesh sits in the
 /// shared vertex buffer and in the simulated frame, which square of the
-/// planet it covers, the block of its grass tiles this run covers, and how
-/// its vertices morph. 144 bytes, every member in its own 16-byte row.
+/// planet it covers, and how its vertices morph. 128 bytes, every member in
+/// its own 16-byte row.
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct PlanetGrassTileGpu {
@@ -213,20 +260,13 @@ pub struct PlanetGrassTileGpu {
     pub face_level: u32,
     /// The tile's column and row on its face, at its level.
     pub tile: [u32; 2],
-    /// The run's first kernel group row (dispatch `y`) on this tile.
-    pub first_group: u32,
-    /// The first grass tile of the block, column in the low 16 bits, row in
-    /// the high 16.
-    pub block_origin: u32,
-    /// Grass tiles in the block, across in the low 16 bits, down in the high.
-    pub block_count: u32,
-    /// Grass tiles along each side of the whole tile.
+    /// Grass tiles of level 0 along each side of the whole tile.
     pub grass_tiles: u32,
+    /// Keeps `radial` in the row's second half.
+    pub _pad: u32,
     /// The lowest and highest the tile's surface lies along the up at its
     /// origin, in meters from the origin.
     pub radial: [f32; 2],
-    /// Keeps the record a whole number of rows.
-    pub _pad: [f32; 2],
     /// How the tile's vertices morph toward its parent's mesh, as its draw's
     /// object record carries it.
     pub tile_morph: crate::gfx::render_types::GpuTileMorph,
@@ -282,18 +322,21 @@ pub struct GrassBendParams {
 }
 
 /// The initial contents of the args buffer: every record a draw of its
-/// level's strip with no instances, starting at the level's vertex ids.
+/// region's strip with no instances, starting at the region's vertex ids, and
+/// nothing reserved in the shared span.
 pub fn initial_grass_args() -> [u32; GRASS_ARGS_BYTES / 4] {
     let mut args = [0u32; GRASS_ARGS_BYTES / 4];
     for (i, record) in args.chunks_exact_mut(4).enumerate() {
-        let lod = i % GRASS_LOD_COUNT;
-        record[0] = GRASS_LOD_VERTICES[lod];
-        record[2] = lod as u32 * GRASS_LOD_VERTEX_STRIDE;
+        let region = i % (GRASS_REGION_COUNT + 1);
+        if region < GRASS_REGION_COUNT {
+            record[0] = GRASS_LOD_VERTICES[region_level(region)];
+            record[2] = region as u32 * GRASS_LOD_VERTEX_STRIDE;
+        }
     }
     args
 }
 
-/// Byte offset of draw-argument slot `slot`: its levels' records follow it,
+/// Byte offset of draw-argument slot `slot`: its regions' records follow it,
 /// [`GRASS_ARGS_STRIDE`] apart.
 pub fn grass_args_offset(slot: u32) -> usize {
     (slot as usize % GRASS_ARGS_SLOTS) * GRASS_ARGS_SLOT_BYTES
@@ -306,7 +349,7 @@ mod tests {
 
     #[test]
     fn grass_params_layout_matches_msl() {
-        assert_eq!(size_of::<GrassParams>(), 576 + 144 * MAX_GRASS_LAYERS);
+        assert_eq!(size_of::<GrassParams>(), 592 + 128 * MAX_GRASS_LAYERS);
         assert_eq!(offset_of!(GrassParams, cam_pos), 0);
         assert_eq!(offset_of!(GrassParams, draw_distance), 12);
         assert_eq!(offset_of!(GrassParams, frustum), 16);
@@ -320,76 +363,85 @@ mod tests {
         assert_eq!(offset_of!(GrassParams, lod_capacity), 240);
         assert_eq!(offset_of!(GrassParams, lod_distances), 256);
         assert_eq!(offset_of!(GrassParams, thinning), 272);
-        assert_eq!(offset_of!(GrassParams, layer_count), 288);
-        assert_eq!(offset_of!(GrassParams, args_slot), 292);
-        assert_eq!(offset_of!(GrassParams, tile_size), 296);
-        assert_eq!(offset_of!(GrassParams, cull_distance), 300);
-        assert_eq!(offset_of!(GrassParams, bend_window), 304);
-        assert_eq!(offset_of!(GrassParams, bend_cell_size), 320);
-        assert_eq!(offset_of!(GrassParams, bend_resolution), 324);
-        assert_eq!(offset_of!(GrassParams, bend_half), 328);
-        assert_eq!(offset_of!(GrassParams, bend_prev_valid), 332);
-        assert_eq!(offset_of!(GrassParams, shadow_vp), 336);
-        assert_eq!(offset_of!(GrassParams, shadow_light), 400);
-        assert_eq!(offset_of!(GrassParams, planet_center), 416);
-        assert_eq!(offset_of!(GrassParams, planet_density_scale), 428);
-        assert_eq!(offset_of!(GrassParams, ground), 432);
-        assert_eq!(offset_of!(GrassParams, planet_tile_base), 436);
-        assert_eq!(offset_of!(GrassParams, planet_tile_count), 440);
-        assert_eq!(offset_of!(GrassParams, planet_radius), 444);
-        assert_eq!(offset_of!(GrassParams, wind_map), 448);
-        assert_eq!(offset_of!(GrassParams, bend_prev_map), 480);
-        assert_eq!(offset_of!(GrassParams, planet_density), 512);
-        assert_eq!(offset_of!(GrassParams, layers), 576);
+        assert_eq!(offset_of!(GrassParams, tile_base), 288);
+        assert_eq!(offset_of!(GrassParams, tile_count), 292);
+        assert_eq!(offset_of!(GrassParams, _pad), 296);
+        assert_eq!(offset_of!(GrassParams, layer_count), 304);
+        assert_eq!(offset_of!(GrassParams, args_slot), 308);
+        assert_eq!(offset_of!(GrassParams, tile_size), 312);
+        assert_eq!(offset_of!(GrassParams, cull_distance), 316);
+        assert_eq!(offset_of!(GrassParams, bend_window), 320);
+        assert_eq!(offset_of!(GrassParams, bend_cell_size), 336);
+        assert_eq!(offset_of!(GrassParams, bend_resolution), 340);
+        assert_eq!(offset_of!(GrassParams, bend_half), 344);
+        assert_eq!(offset_of!(GrassParams, bend_prev_valid), 348);
+        assert_eq!(offset_of!(GrassParams, shadow_vp), 352);
+        assert_eq!(offset_of!(GrassParams, shadow_light), 416);
+        assert_eq!(offset_of!(GrassParams, planet_center), 432);
+        assert_eq!(offset_of!(GrassParams, planet_density_scale), 444);
+        assert_eq!(offset_of!(GrassParams, ground), 448);
+        assert_eq!(offset_of!(GrassParams, planet_tile_base), 452);
+        assert_eq!(offset_of!(GrassParams, planet_tile_count), 456);
+        assert_eq!(offset_of!(GrassParams, planet_radius), 460);
+        assert_eq!(offset_of!(GrassParams, wind_map), 464);
+        assert_eq!(offset_of!(GrassParams, bend_prev_map), 496);
+        assert_eq!(offset_of!(GrassParams, planet_density), 528);
+        assert_eq!(offset_of!(GrassParams, layers), 592);
         // Metal sets the block inline, which caps it at 4 KiB.
         assert!(size_of::<GrassParams>() <= 4096);
     }
 
     #[test]
     fn grass_layer_layout_matches_msl() {
-        assert_eq!(size_of::<GrassLayerGpu>(), 144);
+        assert_eq!(size_of::<GrassLayerGpu>(), 128);
         assert_eq!(offset_of!(GrassLayerGpu, rect), 0);
-        assert_eq!(offset_of!(GrassLayerGpu, tile_origin), 16);
-        assert_eq!(offset_of!(GrassLayerGpu, tile_count), 24);
-        assert_eq!(offset_of!(GrassLayerGpu, base_y), 32);
-        assert_eq!(offset_of!(GrassLayerGpu, min_y), 36);
-        assert_eq!(offset_of!(GrassLayerGpu, max_y), 40);
-        assert_eq!(offset_of!(GrassLayerGpu, grid_resolution), 44);
-        assert_eq!(offset_of!(GrassLayerGpu, heights_offset), 48);
-        assert_eq!(offset_of!(GrassLayerGpu, mask_offset), 52);
-        assert_eq!(offset_of!(GrassLayerGpu, mask_size), 56);
-        assert_eq!(offset_of!(GrassLayerGpu, seed), 60);
-        assert_eq!(offset_of!(GrassLayerGpu, height), 64);
-        assert_eq!(offset_of!(GrassLayerGpu, height_variance), 68);
-        assert_eq!(offset_of!(GrassLayerGpu, width), 72);
-        assert_eq!(offset_of!(GrassLayerGpu, clump_size), 76);
-        assert_eq!(offset_of!(GrassLayerGpu, stiffness), 80);
-        assert_eq!(offset_of!(GrassLayerGpu, color_variation), 84);
-        assert_eq!(offset_of!(GrassLayerGpu, cell_size), 88);
-        assert_eq!(offset_of!(GrassLayerGpu, cells_per_side), 92);
-        assert_eq!(offset_of!(GrassLayerGpu, root_color), 96);
-        assert_eq!(offset_of!(GrassLayerGpu, reach), 108);
-        assert_eq!(offset_of!(GrassLayerGpu, tip_color), 112);
-        assert_eq!(offset_of!(GrassLayerGpu, macro_variation), 124);
-        assert_eq!(offset_of!(GrassLayerGpu, clumping), 128);
-        assert_eq!(offset_of!(GrassLayerGpu, light_projection), 132);
-        assert_eq!(offset_of!(GrassLayerGpu, _pad), 140);
+        assert_eq!(offset_of!(GrassLayerGpu, base_y), 16);
+        assert_eq!(offset_of!(GrassLayerGpu, min_y), 20);
+        assert_eq!(offset_of!(GrassLayerGpu, max_y), 24);
+        assert_eq!(offset_of!(GrassLayerGpu, grid_resolution), 28);
+        assert_eq!(offset_of!(GrassLayerGpu, heights_offset), 32);
+        assert_eq!(offset_of!(GrassLayerGpu, mask_offset), 36);
+        assert_eq!(offset_of!(GrassLayerGpu, mask_size), 40);
+        assert_eq!(offset_of!(GrassLayerGpu, seed), 44);
+        assert_eq!(offset_of!(GrassLayerGpu, height), 48);
+        assert_eq!(offset_of!(GrassLayerGpu, height_variance), 52);
+        assert_eq!(offset_of!(GrassLayerGpu, width), 56);
+        assert_eq!(offset_of!(GrassLayerGpu, clump_size), 60);
+        assert_eq!(offset_of!(GrassLayerGpu, stiffness), 64);
+        assert_eq!(offset_of!(GrassLayerGpu, color_variation), 68);
+        assert_eq!(offset_of!(GrassLayerGpu, cell_size), 72);
+        assert_eq!(offset_of!(GrassLayerGpu, cells_per_side), 76);
+        assert_eq!(offset_of!(GrassLayerGpu, root_color), 80);
+        assert_eq!(offset_of!(GrassLayerGpu, reach), 92);
+        assert_eq!(offset_of!(GrassLayerGpu, tip_color), 96);
+        assert_eq!(offset_of!(GrassLayerGpu, macro_variation), 108);
+        assert_eq!(offset_of!(GrassLayerGpu, clumping), 112);
+        assert_eq!(offset_of!(GrassLayerGpu, light_projection), 116);
+        assert_eq!(offset_of!(GrassLayerGpu, depth), 124);
     }
 
     #[test]
     fn planet_grass_tile_layout_matches_msl() {
-        assert_eq!(size_of::<PlanetGrassTileGpu>(), 144);
+        assert_eq!(size_of::<PlanetGrassTileGpu>(), 128);
         assert_eq!(offset_of!(PlanetGrassTileGpu, model), 0);
         assert_eq!(offset_of!(PlanetGrassTileGpu, vertex_base), 48);
         assert_eq!(offset_of!(PlanetGrassTileGpu, face_level), 52);
         assert_eq!(offset_of!(PlanetGrassTileGpu, tile), 56);
-        assert_eq!(offset_of!(PlanetGrassTileGpu, first_group), 64);
-        assert_eq!(offset_of!(PlanetGrassTileGpu, block_origin), 68);
-        assert_eq!(offset_of!(PlanetGrassTileGpu, block_count), 72);
-        assert_eq!(offset_of!(PlanetGrassTileGpu, grass_tiles), 76);
-        assert_eq!(offset_of!(PlanetGrassTileGpu, radial), 80);
-        assert_eq!(offset_of!(PlanetGrassTileGpu, _pad), 88);
-        assert_eq!(offset_of!(PlanetGrassTileGpu, tile_morph), 96);
+        assert_eq!(offset_of!(PlanetGrassTileGpu, grass_tiles), 64);
+        assert_eq!(offset_of!(PlanetGrassTileGpu, _pad), 68);
+        assert_eq!(offset_of!(PlanetGrassTileGpu, radial), 72);
+        assert_eq!(offset_of!(PlanetGrassTileGpu, tile_morph), 80);
+    }
+
+    #[test]
+    fn grass_tile_layout_matches_msl() {
+        assert_eq!(size_of::<GrassTileGpu>(), 16);
+        assert_eq!(offset_of!(GrassTileGpu, tile), 0);
+        assert_eq!(offset_of!(GrassTileGpu, level_layer), 8);
+        assert_eq!(offset_of!(GrassTileGpu, planet_tile), 12);
+        let t = GrassTileGpu::new([-3, 7], 2, 5, 9);
+        assert_eq!(t.level_layer & 0xff, 2);
+        assert_eq!(t.level_layer >> 8, 5);
     }
 
     #[test]
@@ -417,18 +469,21 @@ mod tests {
     }
 
     #[test]
-    fn every_args_record_starts_as_an_empty_draw_of_its_level() {
+    fn every_args_record_starts_as_an_empty_draw_of_its_region() {
         let args = initial_grass_args();
-        let slot = [15, 0, 0, 0, 9, 0, 16, 0, 5, 0, 32, 0];
-        assert_eq!(args[..12], slot);
-        assert_eq!(args[12..], slot);
+        // The band draws the coarsest strip from its own vertex ids.
+        let slot = [
+            15, 0, 0, 0, 9, 0, 16, 0, 5, 0, 32, 0, 5, 0, 48, 0, 0, 0, 0, 0,
+        ];
+        assert_eq!(args[..20], slot);
+        assert_eq!(args[20..], slot);
         assert_eq!(core::mem::size_of_val(&args), GRASS_ARGS_BYTES);
     }
 
     #[test]
     fn the_args_offset_alternates_between_the_two_slots() {
         assert_eq!(grass_args_offset(0), 0);
-        assert_eq!(grass_args_offset(1), 48);
+        assert_eq!(grass_args_offset(1), 80);
         assert_eq!(grass_args_offset(2), 0);
     }
 }

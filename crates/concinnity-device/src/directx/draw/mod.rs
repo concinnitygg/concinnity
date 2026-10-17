@@ -227,6 +227,13 @@ impl DxContext {
                 &self.uniforms.light_uniforms,
             );
         }
+        self.grass_lod.set(self.grass.as_ref().map(|g| {
+            g.field
+                .lod_view(concinnity_core::render::grass::lod::focal_length(
+                    height,
+                    fov_y_radians,
+                ))
+        }));
         self.upload_canopy(frame_idx);
 
         // Push this frame's skinning matrices into the per-frame joint buffers

@@ -1248,6 +1248,9 @@ pub(crate) struct VkContext {
     // The grass field, when the world grows one and the GPU-driven main pass
     // exists to draw it in. See [`super::grass`].
     pub(super) grass: Option<super::grass::GrassResources>,
+    // How this frame's view resolves the grass: where it coarsens, thins and
+    // hands over to the canopy. `None` without grass.
+    pub(super) grass_lod: Option<concinnity_core::render::grass::GrassLodView>,
 
     // Auto-exposure (EV adaptation). See [`AutoExposureState`].
     pub(super) auto_exposure: AutoExposureState,

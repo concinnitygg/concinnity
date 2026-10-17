@@ -1,6 +1,8 @@
 //! The far field: past where the blades end, a terrain's ground is shaded as
-//! the canopy its grass makes (see [`super::canopy`]), blended in over the
-//! same band the blades fade out across, so the field's edge cannot be seen.
+//! the canopy its grass makes (see [`super::canopy`]). Across the band where
+//! the blades hand the field over, each pixel shows either the blades or the
+//! canopy (see [`GrassLodView::fade`](super::GrassLodView::fade)), so the
+//! field's edge cannot be seen.
 //!
 //! Every corner of the terrain's grid carries, per channel, how densely one of
 //! the far field's layers grows there (its mask, or 1 without one), so bare
@@ -10,8 +12,6 @@ use alloc::vec::Vec;
 
 use super::GrassTerrain;
 use super::canopy::{CanopyField, CanopyRange};
-use crate::render::grass::lod;
-use crate::render::grass::tiles::GRASS_DRAW_DISTANCE;
 
 /// A terrain's far field: the density each of its far-field layers grows at
 /// each grid corner, and the run of the canopy block's layers it shades with.
@@ -23,12 +23,6 @@ pub struct FarField {
     pub shares: Vec<[f32; 3]>,
     /// The canopy block's layers the far field shades with.
     pub canopy: CanopyRange,
-}
-
-/// The distances the far field blends over: where the blades start to fade
-/// out, and where they end.
-pub fn far_field_band() -> [f32; 2] {
-    [lod::fade_start(GRASS_DRAW_DISTANCE), GRASS_DRAW_DISTANCE]
 }
 
 /// Every terrain's far field, in order; `None` for a terrain growing no
@@ -125,14 +119,5 @@ mod tests {
         assert_eq!(f[1], None);
         let third = f[2].as_ref().unwrap();
         assert_eq!((third.canopy.first, third.canopy.count), (1, 2));
-    }
-
-    // The canopy takes over exactly as the blades fade out.
-    #[test]
-    fn the_band_is_the_blade_fade() {
-        let [start, end] = far_field_band();
-        assert_eq!(lod::fade(start, GRASS_DRAW_DISTANCE), 1.0);
-        assert_eq!(lod::fade(end, GRASS_DRAW_DISTANCE), 0.0);
-        assert!(start < end);
     }
 }

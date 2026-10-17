@@ -23,6 +23,7 @@ mod stages;
 use concinnity_core::render::atmosphere::AtmosphereView;
 use concinnity_core::render::backend::FrameParams;
 use concinnity_core::render::error;
+use concinnity_core::render::grass::lod as grass_lod;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::radiance_storage::with_sky_cube_scale;
 use concinnity_core::render::reactive_mask::ReactiveMaskPlan;
@@ -148,6 +149,13 @@ impl MtlContext {
         let aspect = self.update_shadow_schedule(cam_pos, fov_y_radians, near, view_distance);
 
         let (render_w, render_h) = self.resize_frame_targets()?;
+        if let Some(grass) = self.grass.as_mut() {
+            grass.resize(&self.hw.device, [render_w, render_h])?;
+        }
+        self.grass_lod = self.grass.as_ref().map(|g| {
+            g.field
+                .lod_view(grass_lod::focal_length(render_h, fov_y_radians))
+        });
 
         let FrameProjection {
             proj,
@@ -261,9 +269,11 @@ impl MtlContext {
             _ => render_graph::build_frame_graph(&graph_inputs)
                 .map_err(|e| error::RenderError::Other(format!("frame graph: {e}")))?,
         };
-        self.canopy = match &self.grass {
-            Some(grass) => self.state.canopy_params(&grass.field.canopy),
-            None => Default::default(),
+        self.canopy = match (&self.grass, &self.grass_lod) {
+            (Some(grass), Some(lod)) => self
+                .state
+                .canopy_params(&grass.field.canopy, (lod, grass.crossfade_phase())),
+            _ => Default::default(),
         };
         self.canopy_tables.update(
             &self.hw.device,

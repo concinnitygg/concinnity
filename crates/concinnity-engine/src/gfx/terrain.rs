@@ -12,7 +12,7 @@ use concinnity_core::gfx::frustum;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{DrawObject, FarFieldTint};
 use concinnity_core::render::grass::GrassTerrain;
-use concinnity_core::render::grass::tint::{FarField, far_field_band, far_fields};
+use concinnity_core::render::grass::tint::{FarField, far_fields};
 use concinnity_core::terrain::payload::TerrainPayload;
 use concinnity_core::terrain::{terrain_chunks, terrain_chunks_colored};
 use concinnity_core::transform::trs_matrix;
@@ -114,12 +114,7 @@ pub(crate) fn append_terrain_draws(
     let grid = &terrain.payload.grid;
     let chunks = match &terrain.far_field {
         Some(far) => {
-            let [start, end] = far_field_band();
-            material.uniforms.far_field = FarFieldTint {
-                start,
-                end,
-                canopy: far.canopy.packed(),
-            };
+            material.uniforms.far_field = FarFieldTint::of(far.canopy.packed());
             terrain_chunks_colored(grid, &far.shares)
         }
         None => terrain_chunks(grid),
@@ -256,16 +251,9 @@ mod tests {
             &mut indices,
             &mut draws,
         );
-        let [start, end] = far_field_band();
         for d in &draws {
-            assert_eq!(
-                d.material.far_field,
-                FarFieldTint {
-                    start,
-                    end,
-                    canopy: canopy.packed(),
-                }
-            );
+            assert_eq!(d.material.far_field, FarFieldTint::of(canopy.packed()));
+            assert!(d.material.far_field.grows());
         }
         assert_eq!(vertices.len(), colors.len());
         for (v, c) in vertices.iter().zip(&colors) {

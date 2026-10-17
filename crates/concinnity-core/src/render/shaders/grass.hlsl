@@ -1,8 +1,14 @@
 // Procedural grass: single source for every backend.
 //
 // GRASS_GENERATE compiles the kernel. One dispatch grows every layer in reach:
-// the group's z picks the layer, its y a tile of that layer's block, and its x
-// a run of 64 of the tile's cells. The group's first thread decides whether
+// the group's y picks one of the run's tile records (a tile of some layer at
+// some level of the nested cell grid, render::grass::nest), and its x a run of
+// 64 of the tile's cells of that level. Each such cell stands for the one
+// blade it represents, found by walking down the cells' picks to a cell of
+// level 0, and distance thinning compares the blade's nested hash, which is
+// below 4^-level exactly for those representatives, so a far tile visits a
+// fraction of its blades and keeps the same ones a finer level would. The
+// group's first thread decides whether
 // the tile can show a blade at all: its box, grown by how far a blade reaches,
 // must meet the view frustum and the draw distance, and must not have been
 // hidden behind last frame's depth (the Hi-Z pyramid, read through last
@@ -12,16 +18,19 @@
 // shares with its clump), roots it on the terrain's own triangles, and drops it
 // where the layer's mask thins it out, past the terrain's edge, or out of view.
 // With distance the field thins: a blade survives while the keep fraction
-// there exceeds its hash, shrinks into the ground over a band before it is
-// dropped, and the survivors widen to keep the field's coverage. Survivors
-// append to their detail level's region of the visible-blade buffer. The same
-// dispatch fills this frame's draw-argument slot and resets the other one for
-// the next frame.
+// there exceeds its hash, narrows away over a band before it is dropped, and
+// the survivors widen to keep the field's coverage; where a grazing view ray
+// would cross more blade layers than it can see, the deepest go too (see
+// grass_keep). Survivors
+// append to their detail level's region of the visible-blade buffer; the
+// coarsest level's region and the band share a span, filled from either end.
+// The same dispatch fills this frame's draw-argument slot and resets the other
+// one for the next frame.
 //
-// On a planet (grass.ground == GRASS_GROUND_PLANET) the group's y walks the
-// grass tiles of the drawn planet tiles in reach instead: each record names a
-// tile's mesh in the shared vertex buffer, its model matrix in the simulated
-// frame, and the block of its grass tiles this run covers. A blade's cell is
+// On a planet (grass.ground == GRASS_GROUND_PLANET) the tile records nest in
+// the drawn planet tiles in reach instead: each drawn tile's record names its
+// mesh in the shared vertex buffer and its model matrix in the simulated
+// frame. A blade's cell is
 // counted across its cube face, so its hash is the planet's, never the
 // frame's; it roots on the tile's own triangles, stands along the radial up,
 // and is thinned by the area its cell covers and by the meadow noise laid
@@ -69,13 +78,11 @@
 
 {WIND}
 
-// Mirrors `GrassLayerGpu` in render::uniforms::grass (144 B).
+// Mirrors `GrassLayerGpu` in render::uniforms::grass (128 B).
 struct GrassLayer
 {
     // The terrain's min x, min z, max x, max z.
     float4 rect;
-    int2 tile_origin;
-    uint2 tile_count;
     float base_y;
     float min_y;
     float max_y;
@@ -101,15 +108,27 @@ struct GrassLayer
     // The side-on and top-down axes of the ellipse a blade's projection along
     // a light follows (see grass_light_through).
     float2 light_projection;
-    float _pad0;
+    // The blade layers a view ray straight down crosses: width x density x
+    // height (see grass_keep).
+    float depth;
 };
 
 // Matches MAX_GRASS_LAYERS in render::uniforms::grass.
 #define GRASS_MAX_LAYERS 16
 
-// Matches GRASS_LOD_COUNT and GRASS_LOD_VERTEX_STRIDE in render::grass::lod.
+// Matches GRASS_LOD_COUNT, GRASS_LOD_VERTEX_STRIDE, GRASS_REGION_COUNT,
+// GRASS_BAND_REGION and GRASS_SPAN_COUNT in render::grass::lod.
 #define GRASS_LOD_COUNT 3
 #define GRASS_LOD_VERTEX_STRIDE 16
+#define GRASS_REGION_COUNT 4
+#define GRASS_BAND_REGION 3
+#define GRASS_SPAN_COUNT 3
+
+// Matches GRASS_DEPTH_LIMIT in render::grass::lod.
+#define GRASS_DEPTH_LIMIT 16.0
+
+// Matches GRASS_NEST_LEVELS in render::grass::nest.
+#define GRASS_NEST_LEVELS 5
 
 // Mirrors `GrassParams` in render::uniforms::grass.
 struct GrassParams
@@ -126,16 +145,24 @@ struct GrassParams
     float2 hiz_size;
     uint hiz_mip_count;
     uint hiz_enabled;
-    // Each detail level's first blade and blade count in the visible-blade
-    // buffer; w unused.
+    // Each region's first blade and blade count in the visible-blade buffer:
+    // the detail levels', then the band's (w). The coarsest level's region and
+    // the band share one span: the band's first blade is the span's last, and
+    // it fills down from there; both counts are the span's.
     uint4 lod_base;
     uint4 lod_capacity;
     // x, y = where the second and third levels start, z = the share of a
-    // level's reach its vertices fold over, w = where thinning starts.
+    // level's reach its vertices fold over, w = the hand-off's phase (see
+    // grass_crossfade_shows_blades).
     float4 lod_distances;
-    // x = the fewest blades thinning keeps, y = the shrink band, z = where the
-    // fade starts, w = the widest a blade grows.
+    // x = thinning's scale (a layer keeps width * x / distance of its blades),
+    // y = the shrink band, z = where the blades start handing the field to the
+    // canopy, w = where the depth limit takes full effect (see grass_keep).
     float4 thinning;
+    // This run's tile records (see GrassTile): the first and how many.
+    uint tile_base;
+    uint tile_count;
+    uint2 _pad_tiles;
     uint layer_count;
     uint args_slot;
     float tile_size;
@@ -178,7 +205,7 @@ struct GrassParams
 
 {TILE_MORPH_TYPES}
 
-// Mirrors `PlanetGrassTileGpu` in render::uniforms::grass (144 B).
+// Mirrors `PlanetGrassTileGpu` in render::uniforms::grass (128 B).
 struct PlanetGrassTile
 {
     // The model matrix's first three rows: local = dot(row.xyz, v) + row.w.
@@ -187,18 +214,26 @@ struct PlanetGrassTile
     // Face in the low 8 bits, quadtree level in the next 8.
     uint face_level;
     uint2 tile;
-    // The run's first group row on this tile.
-    uint first_group;
-    // The block of grass tiles: origin and count, x low 16 bits, y high.
-    uint block_origin;
-    uint block_count;
-    // Grass tiles along each side of the whole tile.
+    // Grass tiles of level 0 along each side of the whole tile.
     uint grass_tiles;
+    uint _pad;
     // The lowest and highest the surface lies along the up at the origin.
     float2 radial;
-    float2 _pad;
     // How the tile's vertices morph, as its draw's object record carries it.
     GpuTileMorph tile_morph;
+};
+
+// Mirrors `GrassTileGpu` in render::uniforms::grass (16 B): one tile a run
+// visits, at its level of the nested cell grid.
+struct GrassTile
+{
+    // The tile's column and row among its level's tiles: on terrain from the
+    // world origin, on a planet within its drawn tile.
+    int2 tile;
+    // Level in the low 8 bits, the layer's slot in the next 8.
+    uint level_layer;
+    // On a planet, the drawn tile's record within the run's.
+    uint planet_tile;
 };
 
 // Mirrors `GpuGrassBlade` in render::uniforms::grass (48 B).
@@ -234,10 +269,25 @@ uint grass_lod_vertices(uint lod)
 }
 
 // The detail level of a blade `dist` meters from the camera. Mirrors
-// render::grass::lod::lod_at.
+// render::grass::lod::GrassLodView::lod_at.
 uint grass_lod_at(GrassParams p, float dist)
 {
     return dist < p.lod_distances.x ? 0u : (dist < p.lod_distances.y ? 1u : 2u);
+}
+
+// The region a blade `dist` meters from the camera lands in: its level's, or
+// the band past where the blades start handing over. Mirrors
+// render::grass::lod::GrassLodView::region_at.
+uint grass_region_at(GrassParams p, float dist)
+{
+    return dist >= p.thinning.z ? GRASS_BAND_REGION : grass_lod_at(p, dist);
+}
+
+// The strip level region `region` draws with. Mirrors
+// render::grass::lod::region_level.
+uint grass_region_level(uint region)
+{
+    return min(region, GRASS_LOD_COUNT - 1u);
 }
 
 // The leaf area a blade's bits resolve, in square meters of blade per square
@@ -419,6 +469,8 @@ void grass_bend(uint3 tid : SV_DispatchThreadID)
 [[vk::binding(5, 0)]] StructuredBuffer<uint> grass_bend_field : register(t6);
 // The drawn planet tiles this frame's runs read (see PlanetGrassTile).
 [[vk::binding(6, 0)]] StructuredBuffer<PlanetGrassTile> planet_tiles : register(t7);
+// This frame's tile records, both runs' (see GrassTile).
+[[vk::binding(8, 0)]] StructuredBuffer<GrassTile> grass_tiles : register(t9);
 // The shared vertex stream every mesh draws from: 14 floats a vertex,
 // position first, then normal. DirectX binds it as a raw view.
 #ifdef CN_BACKEND_DIRECTX
@@ -434,19 +486,20 @@ float mesh_float(uint i) { return mesh_vertices[i]; }
 // Matches GRASS_GROUP_SIZE in render::grass::tiles.
 #define GRASS_GROUP_SIZE 64
 
-// Words in one slot of the draw arguments: four per detail level.
-#define GRASS_ARGS_SLOT_WORDS (4u * GRASS_LOD_COUNT)
+// Words in one slot of the draw arguments: four per region, then four whose
+// first counts the blades reserved in the span the coarsest level and the
+// band share.
+#define GRASS_ARGS_SLOT_WORDS (4u * GRASS_REGION_COUNT + 4u)
+#define GRASS_ARGS_SHARED_WORD (4u * GRASS_REGION_COUNT)
 
 // How far a blade leans downhill per unit of the ground normal's tilt.
 static const float GRASS_SLOPE_LEAN = 0.6;
 
-groupshared uint gs_count[GRASS_LOD_COUNT];
-groupshared uint gs_base[GRASS_LOD_COUNT];
+groupshared uint gs_count[GRASS_REGION_COUNT];
+groupshared uint gs_base[GRASS_REGION_COUNT];
+// How many of each region's blades this group writes.
+groupshared uint gs_room[GRASS_REGION_COUNT];
 groupshared uint gs_tile_visible;
-// On a planet: the record of the drawn tile this group grows on, and the
-// grass tile within it.
-groupshared uint gs_planet_tile;
-groupshared uint2 gs_grass_tile;
 
 float hiz_load(int3 texel_mip)
 {
@@ -531,14 +584,15 @@ bool grass_box_visible(float3 bmin, float3 bmax)
     return !grass_tile_occluded(bmin, bmax);
 }
 
-// Whether any blade rooted in `tile` can be seen: its box, spanning the
-// terrain's heights and grown by how far a blade reaches, is visible. Mirrors
-// render::grass::tile_bounds.
-bool grass_tile_visible(GrassLayer L, int2 tile)
+// Whether any blade rooted in `tile` of level `level` can be seen: its box,
+// spanning the terrain's heights and grown by how far a blade reaches, is
+// visible. Mirrors render::grass::tile_bounds.
+bool grass_tile_visible(GrassLayer L, int2 tile, uint level)
 {
     float reach = L.root_color_reach.w;
-    float2 lo = float2(tile) * grass.tile_size - reach;
-    float2 hi = float2(tile + 1) * grass.tile_size + reach;
+    float size = grass.tile_size * float(1u << level);
+    float2 lo = float2(tile) * size - reach;
+    float2 hi = float2(tile + 1) * size + reach;
     return grass_box_visible(float3(lo.x, L.min_y - reach, lo.y),
                              float3(hi.x, L.max_y + reach, hi.y));
 }
@@ -563,6 +617,8 @@ struct GrassSite
     float3 ground_point;
     float density;
     float leaf_area;
+    // The hash distance thinning compares (see grass_nested_hash).
+    float thin;
 };
 
 // The ground under world `xz` on layer `L`'s terrain: the unit normal (xyz)
@@ -667,20 +723,32 @@ float2 grass_field_bend(uint half_index, int2 origin, float2 xz)
     return lerp(lerp(b00, b10, f.x), lerp(b01, b11, f.x), f.y);
 }
 
-// The fraction of the field distance thinning keeps at `dist`. Mirrors
-// render::grass::lod::thinning.
-float grass_thinning(float dist)
+// The fraction of layer `L`'s blades distance thinning keeps at `dist`: as
+// many as stand GRASS_BLADE_PIXELS wide on screen once widened. Mirrors
+// render::grass::lod::GrassLodView::thinning.
+float grass_thinning(GrassLayer L, float dist)
 {
-    float full = grass.lod_distances.w;
-    return dist <= full ? 1.0 : clamp(full / dist, grass.thinning.x, 1.0);
+    return min(L.width * grass.thinning.x / max(dist, 1e-6), 1.0);
 }
 
-// How much of the field is left at `dist` as it fades out toward the draw
-// distance. Mirrors render::grass::lod::fade.
-float grass_fade(float dist)
+// The fraction of layer `L`'s blades kept at `dist` where the view ray meets
+// the ground at an angle whose sine is `facing`: thinning's, lowered where the
+// ray would cross more than GRASS_DEPTH_LIMIT blade layers, a limit that grows
+// with the square of the shortfall nearer than its onset. Mirrors
+// render::grass::lod::GrassLodView::keep.
+float grass_keep(GrassLayer L, float dist, float facing)
 {
-    float far = grass.cam_pos_distance.w;
-    return saturate((far - dist) / max(far - grass.thinning.z, 1e-3));
+    float onset = grass.thinning.w / max(dist, 1e-6);
+    float limit = GRASS_DEPTH_LIMIT * max(onset * onset, 1.0);
+    float layers = L.depth / max(abs(facing), 1e-4);
+    return grass_thinning(L, dist) * min(limit / max(layers, 1e-6), 1.0);
+}
+
+// The sine of the angle the ray from the camera to `root` meets ground of
+// normal `normal` at, `dist` meters away.
+float grass_facing(float3 root, float3 normal, float dist)
+{
+    return dot(grass.cam_pos_distance.xyz - root, normal) / max(dist, 1e-6);
 }
 
 // The ramp's antiderivative render::grass::lod::coverage integrates with.
@@ -689,7 +757,7 @@ float grass_shrink_ramp(float t, float band)
     return t <= 0.0 ? 0.0 : (t <= band ? t * t / (2.0 * band) : t - 0.5 * band);
 }
 
-// The mean blade height scale over every candidate at keep fraction `keep`.
+// The mean blade width scale over every candidate at keep fraction `keep`.
 // Mirrors render::grass::lod::coverage.
 float grass_coverage(float keep)
 {
@@ -702,12 +770,66 @@ float grass_coverage(float keep)
     return (grass_shrink_ramp(keep, band) - grass_shrink_ramp(keep - span, band)) / span;
 }
 
-// The site of world cell `cell` on layer `L`'s terrain. False when it falls
-// off the terrain.
-bool grass_terrain_site(GrassLayer L, int2 cell, out GrassSite site)
+// The child, x in bit 0 and y in bit 1, that cell `cell` of level `level`
+// picks, for hashes salted by `salt`. Mirrors render::grass::nest.
+uint grass_nest_pick(int2 cell, uint level, uint salt)
+{
+    return grass_hash(grass_hash2(cell) ^ salt ^ grass_hash(level + 0x6a09e667u)) & 3u;
+}
+
+// The level-0 cell of the blade cell `cell` of level `level` represents.
+// Mirrors render::grass::nest::representative.
+int2 grass_nest_representative(int2 cell, uint level, uint salt)
+{
+    int2 c = cell;
+    for (uint l = level; l > 0u; l--)
+    {
+        uint b = grass_nest_pick(c, l, salt);
+        c = c * 2 + int2(int(b & 1u), int(b >> 1u));
+    }
+    return c;
+}
+
+// The rank of the blade cell `cell` of level `level` represents: the coarsest
+// level, at most GRASS_NEST_LEVELS, whose cell over it it represents. Mirrors
+// render::grass::nest::rank.
+uint grass_nest_rank(int2 cell, uint level, uint salt)
+{
+    int2 c = cell;
+    uint rank = level;
+    while (rank < GRASS_NEST_LEVELS)
+    {
+        int2 parent = c >> 1;
+        uint b = grass_nest_pick(parent, rank + 1u, salt);
+        if (any((c & 1) != int2(int(b & 1u), int(b >> 1u))))
+        {
+            break;
+        }
+        c = parent;
+        rank++;
+    }
+    return rank;
+}
+
+// The hash a blade of rank `rank` thins by, from its own unit hash `u`:
+// within [4^-(rank + 1), 4^-rank), or [0, 4^-rank) at the coarsest rank.
+// Mirrors render::grass::nest::nested_hash.
+float grass_nested_hash(uint rank, float u)
+{
+    if (rank >= GRASS_NEST_LEVELS)
+    {
+        return u / float(1u << (2u * GRASS_NEST_LEVELS));
+    }
+    return (1.0 + 3.0 * u) / float(1u << (2u * (rank + 1u)));
+}
+
+// The site of world cell `cell` on layer `L`'s terrain, whose blade ranks
+// `rank` (see grass_nest_rank). False when it falls off the terrain.
+bool grass_terrain_site(GrassLayer L, int2 cell, uint rank, out GrassSite site)
 {
     site = (GrassSite)0;
     uint h = grass_hash(grass_hash2(cell) ^ L.seed);
+    site.thin = grass_nested_hash(rank, grass_unit(h, 5u));
     float2 placed = (float2(cell) + float2(grass_unit(h, 3u), grass_unit(h, 4u))) * L.cell_size;
     float2 xz;
     float crowding;
@@ -814,10 +936,11 @@ GrassMeshPoint grass_mesh_point(PlanetGrassTile T, float2 f)
     return m;
 }
 
-// Whether any blade rooted in grass tile `g` of planet tile `T` can be seen:
-// the box over the grass tile's corners on the surface, spanning the whole
-// tile's height range along its origin's up, grown by how far a blade reaches.
-bool grass_planet_tile_visible(PlanetGrassTile T, uint2 g, float reach)
+// Whether any blade rooted in grass tile `g` of level `level` of planet tile
+// `T` can be seen: the box over the grass tile's corners on the surface,
+// spanning the whole tile's height range along its origin's up, grown by how
+// far a blade reaches.
+bool grass_planet_tile_visible(PlanetGrassTile T, uint2 g, uint level, float reach)
 {
     float3 origin = float3(T.model[0].w, T.model[1].w, T.model[2].w);
     float3 up = normalize(origin - grass.planet_center_scale.xyz);
@@ -826,7 +949,8 @@ bool grass_planet_tile_visible(PlanetGrassTile T, uint2 g, float reach)
     [unroll]
     for (uint i = 0u; i < 4u; i++)
     {
-        float2 f = (float2(g) + float2(i & 1u, i >> 1u)) / float(T.grass_tiles);
+        float2 f = (float2(g) + float2(i & 1u, i >> 1u)) * float(1u << level)
+                 / float(T.grass_tiles);
         float3 c = grass_tile_point(T, grass_mesh_point(T, f).position);
         float h = dot(c - origin, up);
         float3 lo = c + up * (T.radial.x - h);
@@ -838,9 +962,11 @@ bool grass_planet_tile_visible(PlanetGrassTile T, uint2 g, float reach)
 }
 
 // The site of cell `cell` of grass tile `g` of planet tile `T` for layer `L`,
-// the layer's density on the planet being `density`. Mirrors
-// PlanetGrassGrid::face_cell for the cell's place on its face.
-GrassSite grass_planet_site(GrassLayer L, PlanetGrassTile T, uint2 g, uint2 cell, float density)
+// the layer's density on the planet being `density`, its blade ranking `rank`
+// (see grass_nest_rank). Mirrors PlanetGrassGrid::face_cell for the cell's
+// place on its face.
+GrassSite grass_planet_site(GrassLayer L, PlanetGrassTile T, uint2 g, uint2 cell, float density,
+                            uint rank)
 {
     GrassSite site = (GrassSite)0;
     uint k = L.cells_per_side;
@@ -861,14 +987,15 @@ GrassSite grass_planet_site(GrassLayer L, PlanetGrassTile T, uint2 g, uint2 cell
     site.plane_u = normalize(edge_s);
     site.plane_v = normalize(edge_t);
     site.hash = h;
+    site.thin = grass_nested_hash(rank, grass_unit(h, 5u));
 
     // Most far candidates fall to distance thinning, so that is tested before
     // the clump lattice and the meadow noise: a dropped candidate keeps
     // density 0 and never pays for them. grass_grow tests again at the root
     // the blade is drawn to.
     float dist = distance(site.root, grass.cam_pos_distance.xyz);
-    float keep = grass_thinning(dist) * grass_fade(dist);
-    if (dist > grass.cull_distance || grass_unit(h, 5u) * (1.0 - grass.thinning.y) >= keep)
+    float keep = grass_keep(L, dist, grass_facing(site.root, site.normal, dist));
+    if (dist > grass.cull_distance || site.thin * (1.0 - grass.thinning.y) >= keep)
     {
         return site;
     }
@@ -919,11 +1046,14 @@ bool grass_grow(GrassLayer L, uint slot, GrassSite site, out GrassBlade blade, o
         return false;
     }
     // A blade survives while the keep fraction at its distance exceeds its
-    // hash, and sinks into the ground over the shrink band before it goes.
-    float thin = grass_thinning(dist);
-    float keep = thin * grass_fade(dist);
+    // hash, and narrows away over the shrink band before it goes. Its height
+    // is left whole, so the heights the field shows (which the far canopy
+    // models) do not change with thinning. The depth limit drops blades
+    // without widening the rest, which keep thinning's width.
+    float thin = grass_thinning(L, dist);
+    float keep = grass_keep(L, dist, grass_facing(root, site.normal, dist));
     float band = grass.thinning.y;
-    float threshold = grass_unit(h, 5u) * (1.0 - band);
+    float threshold = site.thin * (1.0 - band);
     if (threshold >= keep)
     {
         return false;
@@ -935,10 +1065,10 @@ bool grass_grow(GrassLayer L, uint slot, GrassSite site, out GrassBlade blade, o
     float clump_r = grass_unit(ch, 6u);
     float height = L.height
                  * (1.0 + L.height_variance * ((clump_r - 0.5) * 1.2 + (grass_unit(h, 7u) - 0.5) * 0.8));
-    height = max(height, L.height * 0.1) * shrink;
+    height = max(height, L.height * 0.1);
     // The survivors widen by the coverage thinning took, so the field's
     // coverage and color hold steady with distance.
-    float width = L.width * (0.75 + 0.5 * grass_unit(h, 13u)) / grass_coverage(thin);
+    float width = L.width * (0.75 + 0.5 * grass_unit(h, 13u)) * shrink / grass_coverage(thin);
     if (grass_outside(root + site.up * (0.5 * height), height + width))
     {
         return false;
@@ -981,7 +1111,7 @@ bool grass_grow(GrassLayer L, uint slot, GrassSite site, out GrassBlade blade, o
     float2 drift = grass_macro(site.ground_point, L.seed, slope, L.tip_color_macro.w, 1.0);
     blade.bend = uint4(grass_pack_half2(bend_now), grass_pack_half2(bend_prev),
                        grass_pack_half2(site.up.xz), grass_pack_half2(drift));
-    lod = grass_lod_at(grass, dist);
+    lod = grass_region_at(grass, dist);
     return true;
 }
 
@@ -997,9 +1127,9 @@ void grass_generate(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
 {
     uint slot = (grass.args_slot & 1u) * GRASS_ARGS_SLOT_WORDS;
     uint next = GRASS_ARGS_SLOT_WORDS - slot;
-    if (gi < GRASS_LOD_COUNT && all(gid == 0u))
+    if (gi < GRASS_REGION_COUNT && all(gid == 0u))
     {
-        uint vertices = grass_lod_vertices(gi);
+        uint vertices = grass_lod_vertices(grass_region_level(gi));
         uint first = gi * GRASS_LOD_VERTEX_STRIDE;
         uint here = slot + 4u * gi;
         uint there = next + 4u * gi;
@@ -1012,57 +1142,33 @@ void grass_generate(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
         draw_args[here + 3u] = 0u;
     }
 
-    uint layer_slot = gid.z;
-    bool in_layer = layer_slot < grass.layer_count;
+    if (gi == GRASS_REGION_COUNT && all(gid == 0u))
+    {
+        draw_args[next + GRASS_ARGS_SHARED_WORD] = 0u;
+    }
+
+    bool in_run = gid.y < grass.tile_count;
+    GrassTile R = grass_tiles[grass.tile_base + min(gid.y, max(grass.tile_count, 1u) - 1u)];
+    uint level = R.level_layer & 0xffu;
+    uint layer_slot = (R.level_layer >> 8u) & 0xffu;
     GrassLayer L = grass.layers[min(layer_slot, GRASS_MAX_LAYERS - 1u)];
     bool planet = grass.ground == GRASS_GROUND_PLANET;
-    uint tiles_x = max(L.tile_count.x, 1u);
-    int2 tile = L.tile_origin + int2(gid.y % tiles_x, gid.y / tiles_x);
-    if (gi < GRASS_LOD_COUNT)
+    uint record = grass.planet_tile_base + R.planet_tile;
+    if (gi < GRASS_REGION_COUNT)
     {
         gs_count[gi] = 0u;
     }
     if (gi == 0u)
     {
-        if (planet)
+        bool visible = false;
+        if (in_run && layer_slot < grass.layer_count)
         {
-            // The record whose block holds this group row: the last whose
-            // first row is not past it.
-            uint lo = 0u;
-            uint hi = grass.planet_tile_count;
-            while (hi - lo > 1u)
-            {
-                uint mid = (lo + hi) / 2u;
-                if (planet_tiles[grass.planet_tile_base + mid].first_group <= gid.y)
-                {
-                    lo = mid;
-                }
-                else
-                {
-                    hi = mid;
-                }
-            }
-            uint record = grass.planet_tile_base + lo;
-            gs_planet_tile = record;
-            bool visible = false;
-            if (in_layer && grass.planet_tile_count > 0u)
-            {
-                PlanetGrassTile T = planet_tiles[record];
-                uint row = gid.y - T.first_group;
-                uint2 count = uint2(T.block_count & 0xffffu, T.block_count >> 16u);
-                uint2 origin = uint2(T.block_origin & 0xffffu, T.block_origin >> 16u);
-                uint2 g = origin + uint2(row % max(count.x, 1u), row / max(count.x, 1u));
-                gs_grass_tile = g;
-                visible = row < count.x * count.y
-                       && grass_planet_tile_visible(T, g, L.root_color_reach.w);
-            }
-            gs_tile_visible = visible ? 1u : 0u;
+            visible = planet
+                    ? grass_planet_tile_visible(planet_tiles[record], uint2(R.tile), level,
+                                                L.root_color_reach.w)
+                    : grass_tile_visible(L, R.tile, level);
         }
-        else
-        {
-            bool in_block = in_layer && gid.y < L.tile_count.x * L.tile_count.y;
-            gs_tile_visible = in_block && grass_tile_visible(L, tile) ? 1u : 0u;
-        }
+        gs_tile_visible = visible ? 1u : 0u;
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -1073,58 +1179,104 @@ void grass_generate(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     uint index = gid.x * GRASS_GROUP_SIZE + gi;
     if (gs_tile_visible != 0u && index < n * n)
     {
-        uint2 at = uint2(index % n, index / n);
+        // The thread's cell of the tile's level, and the blade it stands for.
+        int2 cell = R.tile * int(n) + int2(index % n, index / n);
         GrassSite site;
         bool grows;
         if (planet)
         {
-            site = grass_planet_site(L, planet_tiles[gs_planet_tile], gs_grass_tile, at,
-                                     grass_planet_density(layer_slot));
+            PlanetGrassTile T = planet_tiles[record];
+            int2 face_cell = int2(T.tile * (T.grass_tiles >> level)) * int(n) + cell;
+            uint salt = grass_face_salt(T.face_level & 0xffu) ^ L.seed;
+            int2 fine = grass_nest_representative(face_cell, level, salt);
+            uint2 local = uint2(fine - int2(T.tile * T.grass_tiles) * int(n));
+            site = grass_planet_site(L, T, local / n, local % n, grass_planet_density(layer_slot),
+                                     grass_nest_rank(face_cell, level, salt));
             grows = true;
         }
         else
         {
-            grows = grass_terrain_site(L, tile * int(n) + int2(at), site);
+            int2 fine = grass_nest_representative(cell, level, L.seed);
+            grows = grass_terrain_site(L, fine, grass_nest_rank(cell, level, L.seed), site);
         }
         keep = grows && grass_grow(L, layer_slot, site, blade, lod);
     }
 
-    uint local = 0u;
+    uint local_index = 0u;
     if (keep)
     {
-        InterlockedAdd(gs_count[lod], 1u, local);
+        InterlockedAdd(gs_count[lod], 1u, local_index);
     }
     GroupMemoryBarrierWithGroupSync();
 
-    // One reservation per level per group. A group that overflows a level's
-    // region keeps what fits and hands the rest of its reservation back; the
-    // count never drops below the region's capacity once it has reached it,
-    // so every later group finds the region full and the final count is
-    // exactly what was written.
-    if (gi < GRASS_LOD_COUNT && gs_count[gi] > 0u)
+    // One reservation per region per group. A group that overflows a finer
+    // level's region keeps what fits and hands the rest of its reservation
+    // back; the count never drops below the region's capacity once it has
+    // reached it, so every later group finds the region full and the final
+    // count is exactly what was written.
+    if (gi + 1u < GRASS_SPAN_COUNT)
     {
-        uint capacity = grass.lod_capacity[gi];
         uint count = gs_count[gi];
-        uint base;
-        InterlockedAdd(draw_args[slot + 4u * gi + 1u], count, base);
-        uint room = base < capacity ? capacity - base : 0u;
-        uint over = count - min(room, count);
-        if (over > 0u)
+        uint room = 0u;
+        if (count > 0u)
         {
-            uint ignored;
-            InterlockedAdd(draw_args[slot + 4u * gi + 1u], 0u - over, ignored);
+            uint capacity = grass.lod_capacity[gi];
+            uint base;
+            InterlockedAdd(draw_args[slot + 4u * gi + 1u], count, base);
+            room = min(base < capacity ? capacity - base : 0u, count);
+            if (room < count)
+            {
+                uint ignored;
+                InterlockedAdd(draw_args[slot + 4u * gi + 1u], 0u - (count - room), ignored);
+            }
+            gs_base[gi] = base;
+        }
+        gs_room[gi] = room;
+    }
+    // The coarsest level and the band reserve together in the span they
+    // share, then each in its own count, so the two never meet.
+    if (gi + 1u == GRASS_SPAN_COUNT)
+    {
+        uint coarse = gs_count[gi];
+        uint total = coarse + gs_count[GRASS_BAND_REGION];
+        uint fit = 0u;
+        if (total > 0u)
+        {
+            uint capacity = grass.lod_capacity[gi];
+            uint used;
+            InterlockedAdd(draw_args[slot + GRASS_ARGS_SHARED_WORD], total, used);
+            fit = min(used < capacity ? capacity - used : 0u, total);
+            if (fit < total)
+            {
+                uint ignored;
+                InterlockedAdd(draw_args[slot + GRASS_ARGS_SHARED_WORD], 0u - (total - fit),
+                               ignored);
+            }
+        }
+        uint fit_coarse = min(coarse, fit);
+        uint fit_band = fit - fit_coarse;
+        uint base = 0u;
+        if (fit_coarse > 0u)
+        {
+            InterlockedAdd(draw_args[slot + 4u * gi + 1u], fit_coarse, base);
         }
         gs_base[gi] = base;
+        gs_room[gi] = fit_coarse;
+        base = 0u;
+        if (fit_band > 0u)
+        {
+            InterlockedAdd(draw_args[slot + 4u * GRASS_BAND_REGION + 1u], fit_band, base);
+        }
+        gs_base[GRASS_BAND_REGION] = base;
+        gs_room[GRASS_BAND_REGION] = fit_band;
     }
     GroupMemoryBarrierWithGroupSync();
 
-    if (keep)
+    if (keep && local_index < gs_room[lod])
     {
-        uint i = gs_base[lod] + local;
-        if (i < grass.lod_capacity[lod])
-        {
-            blades_out[grass.lod_base[lod] + i] = blade;
-        }
+        uint i = gs_base[lod] + local_index;
+        blades_out[lod == GRASS_BAND_REGION ? grass.lod_base[lod] - i : grass.lod_base[lod] + i] =
+            blade;
     }
 }
 
@@ -1291,12 +1443,13 @@ uint grass_draw_vertex(uint vid)
 }
 #endif
 
-// Vertex `vid` of a detail-level draw: the level its id range names, the pair
-// of the full-detail strip it stands for (7 for the tip) and its side.
+// Vertex `vid` of a region's draw: the strip level of the region its id range
+// names, the pair of the full-detail strip it stands for (7 for the tip) and
+// its side.
 void grass_lod_vertex(uint vid, out uint lod, out uint q, out float u)
 {
-    lod = min(vid / GRASS_LOD_VERTEX_STRIDE, GRASS_LOD_COUNT - 1u);
-    uint local = vid - lod * GRASS_LOD_VERTEX_STRIDE;
+    uint local = vid & (GRASS_LOD_VERTEX_STRIDE - 1u);
+    lod = grass_region_level(vid / GRASS_LOD_VERTEX_STRIDE);
     bool tip = local >= 2u * grass_lod_pairs(lod);
     q = tip ? 7u : ((local >> 1u) << lod);
     u = tip ? 0.0 : ((local & 1u) != 0u ? 1.0 : -1.0);
@@ -1349,11 +1502,29 @@ float2 grass_trample_prev(GrassBlade blade)
 }
 
 // The blade drawn by instance `iid` of the draw vertex `vid` belongs to: the
-// instance indexes that draw's detail level's region.
+// instance indexes that draw's region, the band's down from its first blade.
 GrassBlade grass_drawn_blade(uint vid, uint iid)
 {
-    uint lod = min(vid / GRASS_LOD_VERTEX_STRIDE, GRASS_LOD_COUNT - 1u);
-    return grass_blades[grass.lod_base[lod] + iid];
+    uint region = min(vid / GRASS_LOD_VERTEX_STRIDE, GRASS_REGION_COUNT - 1u);
+    uint base = grass.lod_base[region];
+    return grass_blades[region == GRASS_BAND_REGION ? base - iid : base + iid];
+}
+
+// What the fragments of the blade drawn by vertex `vid` need to hand the
+// field to the canopy: the share of pixels at the blade's distance that show
+// the blades, 1 outside the band and falling evenly from the hand-off's start
+// to the blades' end (mirrors render::grass::lod::GrassLodView::fade), and the
+// frame's phase.
+float2 grass_crossfade(uint vid, GrassBlade blade, float3 cam)
+{
+    float blades = 1.0;
+    if (vid / GRASS_LOD_VERTEX_STRIDE == GRASS_BAND_REGION)
+    {
+        float end = grass.cam_pos_distance.w;
+        float dist = distance(blade.root_facing.xyz, cam);
+        blades = saturate((end - dist) / max(end - grass.thinning.z, 1e-3));
+    }
+    return float2(blades, grass.lod_distances.w);
 }
 
 // The blade's colors at its root and its tip: its layer's, with hue and
@@ -1414,6 +1585,8 @@ struct GrassVertexOut
     // The leaf above the point that a direct light crosses (see
     // grass_light_through).
     [[vk::location(7)]] float4 light_depth : TEXCOORD7;
+    // The hand-off to the canopy (see grass_crossfade).
+    [[vk::location(8)]] nointerpolation float2 crossfade : TEXCOORD8;
 };
 
 // The leaf a direct light crosses down to height `t` along `blade`: the leaf
@@ -1443,6 +1616,7 @@ GrassVertexOut grass_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID)
     o.normal = v.normal;
     o.side = v.side;
     o.to_camera = cam - v.world_pos;
+    o.crossfade = grass_crossfade(vid, blade, cam);
     grass_colors(blade.shape.w, grass_unpack_half2(blade.bend.w), o.root_color, o.tip_color);
     o.t_u_depth = float3(v.t, v.u, -mul(VIEW.view_mat, float4(v.world_pos, 1.0)).z);
     o.light_depth = grass_light_depth(blade, v.t);
@@ -1533,6 +1707,12 @@ float4 grass_radiance(GrassVertexOut p)
 [shader("pixel")]
 float4 grass_fragment(GrassVertexOut p) : SV_Target
 {
+#ifdef GRASS_CROSSFADE
+    if (!grass_crossfade_shows_blades(p.position.xy, p.crossfade.y, p.crossfade.x))
+    {
+        discard;
+    }
+#endif
     float4 color = grass_radiance(p);
     return float4(hdr_store_cap(color.rgb * VIEW.pre_exposure), color.a);
 }
@@ -1549,6 +1729,8 @@ struct GrassPrepassOut
     [[vk::location(3)]] float2 u_depth : TEXCOORD3;
     [[vk::location(4)]] float4 cur_clip : TEXCOORD4;
     [[vk::location(5)]] float4 prev_clip : TEXCOORD5;
+    // The hand-off to the canopy (see grass_crossfade).
+    [[vk::location(6)]] nointerpolation float2 crossfade : TEXCOORD6;
 };
 
 // The blade rasterized through the main pass's jittered view, and bent again
@@ -1576,6 +1758,7 @@ GrassPrepassOut grass_prepass_vertex(uint vid : SV_VertexID, uint iid : SV_Insta
     o.side = v.side;
     o.to_camera = cam - v.world_pos;
     o.u_depth = float2(v.u, -mul(view_cb.view_mat, float4(v.world_pos, 1.0)).z);
+    o.crossfade = grass_crossfade(vid, blade, cam);
     o.cur_clip = mul(gb_view.cur_vp, float4(v.world_pos, 1.0));
     o.prev_clip = mul(gb_view.prev_vp, float4(prev_world, 1.0));
     return o;
@@ -1587,6 +1770,12 @@ static const float GRASS_ROUGHNESS = 0.6;
 [shader("pixel")]
 GbFragmentOut grass_prepass_fragment(GrassPrepassOut p)
 {
+#ifdef GRASS_CROSSFADE
+    if (!grass_crossfade_shows_blades(p.position.xy, p.crossfade.y, p.crossfade.x))
+    {
+        discard;
+    }
+#endif
     float3 V = normalize(p.to_camera);
     float3 N = grass_shading_normal(normalize(p.normal), normalize(p.side), p.u_depth.x, V);
     GbFragmentOut o;

@@ -26,6 +26,19 @@ float grass_unit(uint h, uint salt)
     return float(grass_hash(h ^ salt) >> 8u) * (1.0 / 16777216.0);
 }
 
+// Where the blades hand the field to the canopy, whether pixel `pixel` shows
+// the blades this frame when a share `blades` of the pixels at its distance
+// should: interleaved gradient noise (Jimenez 2014), stepped by the frame's
+// `phase` so the temporal antialiasing resolves the mix. The blades' draws and
+// the canopy's ground ask the same question of the same pixel, so each pixel
+// shows exactly one of them.
+bool grass_crossfade_shows_blades(float2 pixel, float phase, float blades)
+{
+    float2 p = floor(pixel) + 5.588238 * phase;
+    float n = frac(52.9829189 * frac(dot(p, float2(0.06711056, 0.00583715))));
+    return n < blades;
+}
+
 // The clump `p` (meters on the ground's plane) belongs to, for clumps
 // `clump_size` across salted by `seed` and `salt`: the nearest center of a
 // jittered lattice of clump-sized cells. Returns its hash and writes its

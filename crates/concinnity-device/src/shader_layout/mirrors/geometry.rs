@@ -11,7 +11,7 @@ use concinnity_core::gfx::render_types::{
 };
 use concinnity_core::render::uniforms::directx::CullParams as DxCullParams;
 use concinnity_core::render::uniforms::grass::{
-    GpuGrassBlade, GrassBendParams, GrassLayerGpu, GrassParams, PlanetGrassTileGpu,
+    GpuGrassBlade, GrassBendParams, GrassLayerGpu, GrassParams, GrassTileGpu, PlanetGrassTileGpu,
 };
 use concinnity_core::render::uniforms::metal::CullUniforms as MetalCullParams;
 use concinnity_core::render::uniforms::ocean::OceanFftParams;
@@ -104,6 +104,9 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
             lod_capacity,
             lod_distances,
             thinning,
+            tile_base,
+            tile_count,
+            [_pad] => ["_pad_tiles"],
             layer_count,
             args_slot,
             tile_size,
@@ -130,18 +133,18 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
             vertex_base,
             face_level,
             tile,
-            first_group,
-            block_origin,
-            block_count,
             grass_tiles,
-            radial,
             _pad,
+            radial,
             tile_morph,
+        })),
+        everywhere(mirror!(GrassTileGpu => "GrassTile" {
+            tile,
+            level_layer,
+            planet_tile,
         })),
         everywhere(mirror!(GrassLayerGpu => "GrassLayer" {
             rect,
-            tile_origin,
-            tile_count,
             base_y,
             min_y,
             max_y,
@@ -162,7 +165,7 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
             [tip_color, macro_variation] => ["tip_color_macro"],
             clumping,
             light_projection,
-            [_pad] => ["_pad0"],
+            depth,
         })),
         everywhere(mirror!(GpuGrassBlade => "GrassBlade" {
             root_facing,

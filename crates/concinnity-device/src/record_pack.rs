@@ -112,7 +112,7 @@ mod tests {
             cam_pos: [0.0; 3],
             mesh_glass_active: false,
             horizon: None,
-            grass_twins: Default::default(),
+            grass_route: Default::default(),
             tile_morph: None,
         };
         packer.pack(

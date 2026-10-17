@@ -35,11 +35,11 @@ struct GpuObjectData
     float4 bb_max_alpha_cutoff;
     // Row of the material parameter table the main pass binds.
     uint params_index;
-    // The far-field band of a surface under grass and the canopy layers it
-    // shades with (see `canopy_far_field`); far_end 0 for every other surface.
-    float far_start;
-    float far_end;
+    // The canopy layers a surface under grass shades with (see
+    // `canopy_far_field`); 0 for every other surface.
     uint far_canopy;
+    uint _far_pad0;
+    uint _far_pad1;
     // How a planet tile's vertices morph (see tile_morph.hlsl).
     GpuTileMorph tile_morph;
 };

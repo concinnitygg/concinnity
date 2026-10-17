@@ -130,10 +130,14 @@ impl DxContext {
     // Refresh this frame's canopy block from the world's grass and the planet
     // tiles drawn this frame, into ring slot `slot`.
     pub(super) fn upload_canopy(&self, slot: usize) {
-        self.canopy.params.set(match &self.grass {
-            Some(grass) => self.state.canopy_params(&grass.field.canopy),
-            None => CanopyParams::default(),
-        });
+        self.canopy
+            .params
+            .set(match (&self.grass, &self.grass_lod.get()) {
+                (Some(grass), Some(lod)) => self
+                    .state
+                    .canopy_params(&grass.field.canopy, (lod, grass.crossfade_phase())),
+                _ => CanopyParams::default(),
+            });
         self.canopy
             .set_tables(self.grass.as_ref().map_or(&[], |g| g.field.canopy.tables()));
         self.canopy.write(slot);

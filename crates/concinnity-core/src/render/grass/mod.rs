@@ -5,16 +5,18 @@
 //! [`GrassBendParams`] the bend pass reads. Pure CPU; the backend owns the
 //! buffers and pipelines.
 //!
-//! One dispatch covers every layer within reach of the camera: its `z` picks
-//! the layer, its `y` the tile within that layer's block, its `x` the run of
-//! cells within the tile. A tile off every terrain is never dispatched. The
-//! nearest shadow cascade gets a second, smaller dispatch of its own (see
-//! [`shadow`]), and the bend field one ahead of both (see [`bend`]).
+//! One dispatch covers every layer within reach of the camera: its `y` picks
+//! one of the frame's tile records, a tile of some layer at some level of the
+//! nested cell grid (see [`nest`]), larger the farther it lies, and its `x`
+//! the run of cells within the tile. A tile off every terrain, out of the
+//! frustum or past the reach is never dispatched. The nearest shadow cascade
+//! gets a second, smaller dispatch of its own (see [`shadow`]), and the bend
+//! field one ahead of both (see [`bend`]).
 //!
 //! On a planet the layers grow over the planet's drawn tiles instead (see
-//! [`planet`]): the dispatch's `y` walks the grass tiles of the tiles in
-//! reach, and the field's frames carry the wind's and the bend field's
-//! coordinates through every move of the simulated frame.
+//! [`planet`]): the tile records nest within the drawn tiles in reach, and the
+//! field's frames carry the wind's and the bend field's coordinates through
+//! every move of the simulated frame.
 
 pub mod bend;
 pub mod canopy;
@@ -23,6 +25,7 @@ pub mod clumping;
 mod ground;
 pub mod litter;
 pub mod lod;
+pub mod nest;
 pub mod planet;
 pub mod shadow;
 pub mod tiles;
@@ -32,7 +35,11 @@ pub mod variation;
 pub use bend::{BendHistory, GrassBender};
 pub use canopy::{CanopyField, CanopyRange};
 pub use ground::{GrassGround, GrassGroundBuffers, GrassMask, GroundSample};
-pub use lod::GrassCapacity;
+pub use lod::{GrassCapacity, GrassLodView, GrassSizing};
+
+/// Frames the hand-off's per-pixel choice between the blades and the canopy
+/// cycles through before it repeats.
+pub const GRASS_CROSSFADE_PHASES: u32 = 64;
 pub use planet::PlanetGrass;
 pub use planet::tiles::DrawnPlanetTile;
 pub use shadow::GrassShadowView;
@@ -45,20 +52,20 @@ use crate::math::noise::lcg_hash;
 use crate::planet::Rebase;
 use crate::render::uniforms::grass::{
     GRASS_ARGS_SLOTS, GRASS_GROUND_PLANET, GRASS_GROUND_TERRAIN, GRASS_IDENTITY_MAP,
-    GrassBendParams, GrassLayerGpu, GrassParams, MAX_GRASS_LAYERS, MAX_GRASS_STAMPS,
-    PlanetGrassTileGpu,
+    GrassBendParams, GrassLayerGpu, GrassParams, GrassTileGpu, MAX_GRASS_LAYERS, MAX_GRASS_STAMPS,
+    MAX_GRASS_TILE_RECORDS, PlanetGrassTileGpu,
 };
 use crate::render::wind::WindField;
 use crate::terrain::{DensityMask, TerrainGrid};
 use crate::transform::Mat4;
 use bend::{BendStep, GRASS_BEND_CELL_SIZE, GRASS_BEND_RESOLUTION};
 use lod::{
-    GRASS_FULL_DENSITY_DISTANCE, GRASS_LOD_COUNT, GRASS_LOD_DISTANCES, GRASS_MIN_KEEP,
-    GRASS_MORPH_FRACTION, GRASS_SHRINK_BAND,
+    CapacityBounds, CapacityField, CapacityViews, GRASS_LOD_COUNT, GRASS_MORPH_FRACTION,
+    GRASS_SHRINK_BAND,
 };
-use planet::tiles::{PlanetGrassTiles, planet_center, tiles_in_reach};
+use planet::tiles::{MAX_PLANET_GRASS_REACH, PlanetGrassTiles, nested_planet_tiles, planet_center};
 use shadow::GRASS_SHADOW_DISTANCE;
-use tiles::{GRASS_DRAW_DISTANCE, GRASS_GROUP_SIZE, GRASS_TILE_SIZE, GrassGrid, TileRange};
+use tiles::{GRASS_GROUP_SIZE, GRASS_TILE_SIZE, GrassGrid, NestView, NestedTile, NestedTiles};
 
 /// What every blade of a layer looks like, wherever it grows.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -141,6 +148,10 @@ pub struct GrassCamera {
     pub position: [f32; 3],
     /// This frame's unjittered view-projection, column-major.
     pub vp: [[f32; 4]; 4],
+    /// The view's vertical focal length, in pixels (see
+    /// [`lod::focal_length`]): how large the blades stand on screen, which
+    /// their detail, thinning and reach follow.
+    pub focal: f32,
     /// The depth pyramid tiles are occlusion-tested against, when it holds
     /// the previous frame's depth.
     pub hiz: Option<GrassHiz>,
@@ -174,8 +185,9 @@ pub struct GrassFrameInputs<'a> {
     pub planet_tiles: &'a [DrawnPlanetTile],
 }
 
-/// What a field's frames carry from one to the next.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// What a field's frames carry from one to the next, and the working space
+/// they place their tiles in.
+#[derive(Debug, Clone)]
 pub struct GrassHistory {
     // Frames placed so far, which picks the draw-argument slot each fills.
     runs: u32,
@@ -184,6 +196,9 @@ pub struct GrassHistory {
     wind_map: [[f32; 4]; 2],
     // This frame's points in last frame's, since the last frame placed.
     prev_map: [[f32; 4]; 2],
+    // Whether a frame has reported reaching a placement limit.
+    limit_reported: bool,
+    scratch: GrassScratch,
 }
 
 impl Default for GrassHistory {
@@ -193,11 +208,35 @@ impl Default for GrassHistory {
             bend: BendHistory::default(),
             wind_map: GRASS_IDENTITY_MAP,
             prev_map: GRASS_IDENTITY_MAP,
+            limit_reported: false,
+            scratch: GrassScratch::default(),
         }
     }
 }
 
+// The space a frame's runs place their tiles in, kept from frame to frame so
+// placing allocates nothing once it has grown to the largest frame.
+#[derive(Debug, Clone, Default)]
+struct GrassScratch {
+    // The frame's tile records and the planet tiles they lie in, the view's
+    // run first.
+    tiles: Vec<GrassTileGpu>,
+    planet_tiles: Vec<PlanetGrassTileGpu>,
+    // One run's tiles with their distances and the order they were found in.
+    found: Vec<(f32, u32, GrassTileGpu)>,
+    visited: NestedTiles,
+    reach: PlanetGrassTiles,
+}
+
 impl GrassHistory {
+    /// The phase of the next frame's per-pixel hand-off between the blades
+    /// and the canopy: the blades' draws and the canopy's ground both read it,
+    /// so a pixel shows one or the other, and it steps every frame so the
+    /// temporal antialiasing resolves the mix.
+    pub fn crossfade_phase(&self) -> f32 {
+        (self.runs % GRASS_CROSSFADE_PHASES) as f32
+    }
+
     /// Carry the field into the frame the world moved to: the wind keeps its
     /// gusts where they were on the ground, and the next frame reads the bend
     /// field it inherits where the blades were.
@@ -245,18 +284,45 @@ pub struct GrassBendPass {
     pub dispatch: [u32; 3],
 }
 
+/// A limit on what one run places, past which the tiles farthest from the
+/// camera are dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrassLimit {
+    /// The tile records a run holds, [`MAX_GRASS_TILE_RECORDS`].
+    TileRecords,
+    /// The drawn planet tiles a run holds,
+    /// [`MAX_PLANET_GRASS_TILES`](crate::render::uniforms::grass::MAX_PLANET_GRASS_TILES).
+    PlanetTiles,
+}
+
 /// A frame's grass work: the bend field's step, the blades placed for the
 /// view, and those placed for the nearest shadow cascade.
 #[derive(Debug, Clone, PartialEq)]
-pub struct GrassFrame {
+pub struct GrassFrame<'a> {
     /// The blades the view draws.
     pub view: GrassPass,
     /// The blades the nearest cascade draws, when the grass casts this frame.
     pub shadow: Option<GrassPass>,
     /// The bend field's step.
     pub bend: GrassBendPass,
+    /// The tiles both runs visit, the view's first.
+    pub tiles: &'a [GrassTileGpu],
     /// The planet tiles both runs read, the view's first; empty on terrain.
-    pub planet_tiles: Vec<PlanetGrassTileGpu>,
+    pub planet_tiles: &'a [PlanetGrassTileGpu],
+    /// The limit this frame's runs reached, on the first frame of the history
+    /// that reached one; `None` on every other frame.
+    pub limit: Option<GrassLimit>,
+}
+
+/// What the visible-blade buffers become for a new render-target size, from
+/// [`GrassField::resize_for`]: nothing changes until [`GrassField::apply`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GrassResize {
+    /// The new sizing.
+    pub sizing: GrassSizing,
+    /// Whether it holds other blades than the current one, so its buffers
+    /// must be made before it is applied.
+    pub rebuild: bool,
 }
 
 /// One terrain layer that grows blades: where it sits among the terrains, its
@@ -305,13 +371,15 @@ pub struct GrassField {
     pub buffers: GrassGroundBuffers,
     /// The wind the blades sway in.
     pub wind: WindField,
-    /// Blades each detail level's region of the visible-blade buffer holds.
-    pub capacity: GrassCapacity,
-    /// Blades the shadow cascade's buffer holds.
-    pub shadow_capacity: u32,
+    /// What the visible-blade buffers are sized for, once a render target's
+    /// size is known (see [`Self::resize_for`]).
+    pub sizing: Option<GrassSizing>,
     /// The tallest blade of any layer, in meters: how high above the ground a
     /// bender still presses the grass.
     pub blade_height: f32,
+    /// The mean blade height of the tallest layer, in meters: the blade whose
+    /// size on screen sets where the field coarsens, thins and ends.
+    pub lod_height: f32,
     /// The planet the layers grow on instead of terrains.
     pub planet: Option<PlanetGrass>,
     /// What the far fields past the blades are shaded with.
@@ -333,11 +401,14 @@ impl GrassField {
     pub fn resolve(terrains: &[GrassTerrain], wind: Option<&Wind>) -> Option<Self> {
         let mut buffers = GrassGroundBuffers::default();
         let mut layers = Vec::new();
-        let mut capacities = Vec::new();
-        let mut shadow_capacity = 0u32;
         let mut heights_offset = None;
         let mut last_terrain = None;
-        for grown in grown_layers(terrains) {
+        let grown_all = grown_layers(terrains);
+        let lod_height = grown_all
+            .iter()
+            .map(|g| g.grass.height)
+            .fold(0.0f32, f32::max);
+        for grown in grown_all {
             let terrain = &terrains[grown.terrain];
             if last_terrain != Some(grown.terrain) {
                 last_terrain = Some(grown.terrain);
@@ -345,17 +416,6 @@ impl GrassField {
             }
             let offset = *heights_offset.get_or_insert_with(|| buffers.push_heights(&terrain.grid));
             let ground = GrassGround::new(terrain.center, &terrain.grid, offset);
-            capacities.push(lod::lod_capacities(
-                &ground.rect,
-                &grown.grid,
-                GRASS_DRAW_DISTANCE,
-            ));
-            shadow_capacity = shadow_capacity.saturating_add(lod::shadow_capacity(
-                &ground.rect,
-                &grown.grid,
-                GRASS_SHADOW_DISTANCE,
-                GRASS_DRAW_DISTANCE,
-            ));
             let mask = &terrain.layers[grown.layer].1;
             layers.push(GrassLayer {
                 ground,
@@ -377,9 +437,9 @@ impl GrassField {
             layers,
             buffers,
             wind: wind_field,
-            capacity: GrassCapacity::sum(capacities),
-            shadow_capacity: shadow_capacity.clamp(1, tiles::MAX_GRASS_BLADES),
+            sizing: None,
             blade_height,
+            lod_height,
             planet: None,
             canopy: CanopyField::for_terrains(terrains, wind_field.strength).0,
         })
@@ -388,30 +448,11 @@ impl GrassField {
     /// The grass `planet` grows, swaying in `wind`.
     pub fn resolve_planet(planet: PlanetGrass, wind: Option<&Wind>) -> Self {
         let wind_field = WindField::new(wind);
-        // A planet's ground is unbounded; its blades stand at most at the
-        // layer's density, with a margin for slopes holding more ground than
-        // their footprint.
-        let ground = tiles::GroundRect::centered([0.0, 0.0], [1.0e7, 1.0e7]);
-        let grid_of = |l: &planet::PlanetGrassLayer| GrassGrid::for_density(l.density * 1.15);
-        let capacity = GrassCapacity::sum(planet.layers.iter().filter_map(|l| {
-            Some(lod::lod_capacities(
-                &ground,
-                &grid_of(l)?,
-                GRASS_DRAW_DISTANCE,
-            ))
-        }));
-        let shadow_capacity = planet
+        let lod_height = planet
             .layers
             .iter()
-            .filter_map(|l| {
-                Some(lod::shadow_capacity(
-                    &ground,
-                    &grid_of(l)?,
-                    GRASS_SHADOW_DISTANCE,
-                    GRASS_DRAW_DISTANCE,
-                ))
-            })
-            .fold(0u32, u32::saturating_add);
+            .map(|l| l.look.height)
+            .fold(0.0f32, f32::max);
         let blade_height = planet
             .layers
             .iter()
@@ -421,73 +462,187 @@ impl GrassField {
             layers: Vec::new(),
             buffers: GrassGroundBuffers::default(),
             wind: wind_field,
-            capacity,
-            shadow_capacity: shadow_capacity.clamp(1, tiles::MAX_GRASS_BLADES),
+            sizing: None,
             blade_height,
+            lod_height,
             canopy: CanopyField::for_planet(&planet, wind_field.strength).0,
             planet: Some(planet),
         }
     }
 
-    /// The tiles of each layer within `distance` of a camera at `position`,
-    /// for the layers in reach: at most [`MAX_GRASS_LAYERS`], in declaration
-    /// order.
-    pub fn layers_in_reach(
-        &self,
-        position: [f32; 3],
-        distance: f32,
-    ) -> Vec<(&GrassLayer, TileRange)> {
-        self.layers
-            .iter()
-            .map(|layer| {
-                let tiles =
-                    tiles::tiles_in_reach(&layer.ground.rect, [position[0], position[2]], distance);
-                (layer, tiles)
-            })
-            .filter(|(_, tiles)| !tiles.is_empty())
-            .take(MAX_GRASS_LAYERS)
-            .collect()
+    /// How a view of vertical focal length `focal` pixels resolves the field:
+    /// where its strips coarsen, how it thins and where its blades end. A
+    /// focal length longer than the buffers are sized for thins as that one.
+    pub fn lod_view(&self, focal: f32) -> GrassLodView {
+        let sized = self.sizing.map_or(focal, |s| s.views.focal);
+        GrassLodView::new(focal.min(sized), self.lod_height)
     }
 
-    /// This frame's grass work for `inputs`, advancing `history`.
-    pub fn frame(&self, inputs: &GrassFrameInputs<'_>, history: &mut GrassHistory) -> GrassFrame {
+    /// The sizing of the visible-blade buffers for render targets `size`
+    /// pixels across and down, `None` when the field is already sized for
+    /// them. The field keeps its sizing until the change is applied.
+    pub fn resize_for(&self, size: [u32; 2]) -> Option<GrassResize> {
+        if self.sizing.is_some_and(|s| s.views.size == size) {
+            return None;
+        }
+        let sizing = GrassSizing::new(size, &|views| self.capacity_bounds(views));
+        let rebuild = self.sizing.is_none_or(|s| {
+            s.capacity != sizing.capacity || s.shadow_capacity != sizing.shadow_capacity
+        });
+        Some(GrassResize { sizing, rebuild })
+    }
+
+    /// Size the field as `resize` does, once the buffers it needs are made.
+    pub fn apply(&mut self, resize: GrassResize) {
+        self.sizing = Some(resize.sizing);
+    }
+
+    /// Blades each region of the visible-blade buffer holds: none before the
+    /// field is sized.
+    pub fn capacity(&self) -> GrassCapacity {
+        self.sizing
+            .map_or_else(GrassCapacity::default, |s| s.capacity)
+    }
+
+    /// Blades the shadow cascade's buffer holds: none before the field is
+    /// sized, or when no layer keeps a blade near the camera.
+    pub fn shadow_capacity(&self) -> u32 {
+        self.sizing.map_or(0, |s| s.shadow_capacity)
+    }
+
+    // Each layer's region bounds, the cascade's, the view's tiles and how far
+    // the blades may reach, from `views`.
+    fn capacity_bounds(&self, views: &CapacityViews) -> CapacityBounds {
+        let mut regions = Vec::new();
+        let mut shadow = 0u32;
+        let mut tiles = Vec::new();
+        let mut add = |field: &CapacityField<'_>, tile: [f32; 2]| {
+            regions.push(lod::region_capacities(field, views));
+            shadow =
+                shadow.saturating_add(lod::shadow_capacity(field, views, GRASS_SHADOW_DISTANCE));
+            tiles.push(lod::tile_capacity(field, views, tile));
+        };
+        let wind = self.wind.strength;
+        let limit = match &self.planet {
+            Some(planet) => {
+                // A planet's ground is unbounded, and its grass tiles are
+                // narrowest where the face is stretched least.
+                let ground = tiles::GroundRect::centered([0.0, 0.0], [1.0e7, 1.0e7]);
+                let tile = (planet.grid.tile_size() / libm::sqrt(planet.grid.max_stretch)) as f32;
+                for layer in &planet.layers {
+                    // Its blades stand at most at the layer's density, with a
+                    // margin for slopes holding more ground than their
+                    // footprint.
+                    if let Some(grid) = GrassGrid::for_density(layer.density * 1.15) {
+                        let reach = planet_layer_gpu(layer, wind, self.lod_height).reach;
+                        add(
+                            &CapacityField {
+                                ground: &ground,
+                                grid: &grid,
+                                width: layer.look.width,
+                                blade_height: self.lod_height,
+                            },
+                            [tile, reach],
+                        );
+                    }
+                }
+                MAX_PLANET_GRASS_REACH
+            }
+            None => {
+                for layer in &self.layers {
+                    add(
+                        &CapacityField {
+                            ground: &layer.ground.rect,
+                            grid: &layer.grid,
+                            width: layer.look.width,
+                            blade_height: self.lod_height,
+                        },
+                        [GRASS_TILE_SIZE, blade_reach(&layer.look, self.lod_height)],
+                    );
+                }
+                f32::INFINITY
+            }
+        };
+        // A run holds the tiles of at most so many layers, whichever are in
+        // reach.
+        tiles.sort_unstable_by(|a, b| b.cmp(a));
+        let tiles = tiles
+            .iter()
+            .take(MAX_GRASS_LAYERS)
+            .fold(0u32, |sum, &n| sum.saturating_add(n));
+        CapacityBounds {
+            layers: regions,
+            shadow,
+            tiles,
+            reach: [
+                GrassLodView::new(views.focal, self.lod_height).extent,
+                limit,
+            ],
+        }
+    }
+
+    /// This frame's grass work for `inputs`, advancing `history`, whose space
+    /// the frame's records live in.
+    pub fn frame<'h>(
+        &self,
+        inputs: &GrassFrameInputs<'_>,
+        history: &'h mut GrassHistory,
+    ) -> GrassFrame<'h> {
         let camera = &inputs.camera;
+        let phase = history.crossfade_phase();
         let args_slot = history.runs % GRASS_ARGS_SLOTS as u32;
         history.runs = history.runs.wrapping_add(1);
         let step = history.bend.advance(camera.position, inputs.elapsed);
         let prev_map = core::mem::replace(&mut history.prev_map, GRASS_IDENTITY_MAP);
         let maps = [history.wind_map, prev_map];
         let planet = self.planet_view(inputs.planet_tiles);
-        let params = self.view_params(camera, &step, args_slot, maps, planet.as_ref());
-        let mut planet_tiles = Vec::new();
+        let lod = self.lod_view(camera.focal);
+        let params = self.view_params(
+            camera,
+            (&lod, phase),
+            &step,
+            args_slot,
+            maps,
+            planet.as_ref(),
+        );
+        let scratch = &mut history.scratch;
+        scratch.tiles.clear();
+        scratch.planet_tiles.clear();
+        let mut limit = None;
         let view = self.place(
             planet.as_ref(),
             camera.position,
-            GRASS_DRAW_DISTANCE,
             params,
-            &mut planet_tiles,
+            (scratch, &mut limit),
         );
-        let shadow = inputs.shadow.map(|light| {
-            let params = self.shadow_params(&light, inputs.elapsed, params);
-            self.place(
-                planet.as_ref(),
-                camera.position,
-                GRASS_SHADOW_DISTANCE,
-                params,
-                &mut planet_tiles,
-            )
-        });
+        let shadow = inputs
+            .shadow
+            .filter(|_| self.shadow_capacity() > 0)
+            .map(|light| {
+                let params = self.shadow_params(&light, inputs.elapsed, params);
+                self.place(
+                    planet.as_ref(),
+                    camera.position,
+                    params,
+                    (scratch, &mut limit),
+                )
+            });
+        let bend = self.bend_pass(
+            &step,
+            camera.position,
+            inputs.benders,
+            prev_map,
+            planet.as_ref(),
+        );
+        let limit = limit.filter(|_| !core::mem::replace(&mut history.limit_reported, true));
+        let scratch = &history.scratch;
         GrassFrame {
             view,
             shadow,
-            bend: self.bend_pass(
-                &step,
-                camera.position,
-                inputs.benders,
-                prev_map,
-                planet.as_ref(),
-            ),
-            planet_tiles,
+            bend,
+            tiles: &scratch.tiles,
+            planet_tiles: &scratch.planet_tiles,
+            limit,
         }
     }
 
@@ -509,20 +664,22 @@ impl GrassField {
     fn view_params(
         &self,
         camera: &GrassCamera,
+        (lod, phase): (&GrassLodView, f32),
         step: &BendStep,
         args_slot: u32,
         [wind_map, bend_prev_map]: [[[f32; 4]; 2]; 2],
         planet: Option<&PlanetView<'_>>,
     ) -> GrassParams {
-        let frustum = Frustum::from_camera(camera.vp, Some(GRASS_DRAW_DISTANCE));
+        let frustum = Frustum::from_camera(camera.vp, Some(lod.extent));
         let [wind, wind_gust] = self.wind.gpu_rows();
         let hiz = camera.hiz;
-        let lod_base = self.capacity.bases();
-        let lod_capacity = self.capacity.lods;
+        let capacity = self.capacity();
+        let lod_base = capacity.region_bases();
+        let lod_capacity = capacity.region_capacities();
         let prev = step.prev.unwrap_or(step.window);
         GrassParams {
             cam_pos: camera.position,
-            draw_distance: GRASS_DRAW_DISTANCE,
+            draw_distance: lod.extent,
             frustum: planes(&frustum),
             wind,
             wind_gust,
@@ -530,24 +687,27 @@ impl GrassField {
             hiz_size: hiz.map_or([1.0, 1.0], |h| h.size),
             hiz_mip_count: hiz.map_or(1, |h| h.mip_count),
             hiz_enabled: u32::from(hiz.is_some()),
-            lod_base: [lod_base[0], lod_base[1], lod_base[2], 0],
-            lod_capacity: [lod_capacity[0], lod_capacity[1], lod_capacity[2], 0],
+            lod_base,
+            lod_capacity,
             lod_distances: [
-                GRASS_LOD_DISTANCES[0],
-                GRASS_LOD_DISTANCES[1],
+                lod.lod_distances[0],
+                lod.lod_distances[1],
                 GRASS_MORPH_FRACTION,
-                GRASS_FULL_DENSITY_DISTANCE,
+                phase,
             ],
             thinning: [
-                GRASS_MIN_KEEP,
+                lod.keep_scale(),
                 GRASS_SHRINK_BAND,
-                lod::fade_start(GRASS_DRAW_DISTANCE),
-                lod::max_width_scale(),
+                lod.fade_start(),
+                lod.depth_onset(),
             ],
+            tile_base: 0,
+            tile_count: 0,
+            _pad: [0; 2],
             layer_count: 0,
             args_slot,
             tile_size: GRASS_TILE_SIZE,
-            cull_distance: GRASS_DRAW_DISTANCE,
+            cull_distance: lod.extent,
             bend_window: [
                 step.window.origin[0],
                 step.window.origin[1],
@@ -578,8 +738,8 @@ impl GrassField {
     }
 
     // The cascade's block: the view's culled against the light's frustum and
-    // the cast distance instead, with no occlusion test, every blade appended
-    // to the coarsest level's region of its own buffer.
+    // the cast distance instead, with no occlusion test and no hand-off, every
+    // blade appended to the coarsest level's region of its own buffer.
     fn shadow_params(
         &self,
         light: &GrassShadowView,
@@ -587,14 +747,23 @@ impl GrassField {
         view: GrassParams,
     ) -> GrassParams {
         let coarsest = GRASS_LOD_COUNT - 1;
+        let cap = self.shadow_capacity();
         let mut lod_capacity = [0; 4];
-        lod_capacity[coarsest] = self.shadow_capacity;
+        lod_capacity[coarsest] = cap;
+        let mut lod_base = [0; 4];
+        lod_base[lod::GRASS_BAND_REGION] = cap - 1;
         GrassParams {
             frustum: planes(&light.frustum()),
             hiz_enabled: 0,
-            lod_base: [0; 4],
+            lod_base,
             lod_capacity,
             lod_distances: [0.0, 0.0, view.lod_distances[2], view.lod_distances[3]],
+            thinning: [
+                view.thinning[0],
+                view.thinning[1],
+                f32::MAX,
+                view.thinning[3],
+            ],
             cull_distance: GRASS_SHADOW_DISTANCE,
             shadow_vp: light.vp,
             shadow_light: [
@@ -607,51 +776,103 @@ impl GrassField {
         }
     }
 
-    // `params` with the layers within `distance` of `position` and the
-    // dispatch that covers their tiles; on a planet, the tiles in reach are
-    // appended to `planet_tiles`.
+    // `params` with the layers in reach of `position` and the dispatch that
+    // covers the tiles they visit, whose records are appended to the
+    // scratch's, nearest first, as many as a run holds; a limit reached is
+    // noted in `limit`.
     fn place(
         &self,
         planet: Option<&PlanetView<'_>>,
         position: [f32; 3],
-        distance: f32,
-        params: GrassParams,
-        planet_tiles: &mut Vec<PlanetGrassTileGpu>,
+        mut params: GrassParams,
+        (scratch, limit): (&mut GrassScratch, &mut Option<GrassLimit>),
     ) -> GrassPass {
-        match &self.planet {
-            Some(grass) => {
-                let tiles = planet.map_or_else(PlanetGrassTiles::default, |p| {
-                    tiles_in_reach(
-                        &grass.shape,
-                        &grass.grid,
-                        p.tiles,
-                        p.center,
-                        position,
-                        distance,
-                    )
-                });
-                place_planet(grass, &tiles, self.wind.strength, params, planet_tiles)
+        let planes = params.frustum;
+        let view = NestView {
+            camera: position,
+            distance: params.cull_distance,
+            planes: &planes,
+            keep_scale: params.thinning[0],
+        };
+        scratch.found.clear();
+        let groups = match (&self.planet, planet) {
+            (Some(grass), Some(p)) => {
+                scratch.reach.gather(
+                    (&grass.shape, &grass.grid),
+                    p.tiles,
+                    p.center,
+                    position,
+                    params.cull_distance,
+                );
+                if scratch.reach.clipped {
+                    limit.get_or_insert(GrassLimit::PlanetTiles);
+                }
+                params.planet_tile_base = scratch.planet_tiles.len() as u32;
+                params.planet_tile_count = scratch.reach.records.len() as u32;
+                let groups = place_planet(
+                    (grass, p),
+                    &view,
+                    [self.wind.strength, self.lod_height],
+                    &mut params,
+                    scratch,
+                );
+                scratch
+                    .planet_tiles
+                    .extend_from_slice(&scratch.reach.records);
+                groups
             }
-            None => self.place_terrain(position, distance, params),
+            (Some(_), None) => 1,
+            (None, _) => self.place_terrain(&view, &mut params, scratch),
+        };
+        let found = &mut scratch.found;
+        found.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        if found.len() > MAX_GRASS_TILE_RECORDS {
+            limit.get_or_insert(GrassLimit::TileRecords);
+            found.truncate(MAX_GRASS_TILE_RECORDS);
+        }
+        params.tile_base = scratch.tiles.len() as u32;
+        params.tile_count = found.len() as u32;
+        scratch.tiles.extend(found.iter().map(|&(_, _, t)| t));
+        GrassPass {
+            params,
+            dispatch: [groups, params.tile_count.max(1), 1],
         }
     }
 
+    // The terrain layers' tiles in reach of `view`, each with its distance,
+    // into the scratch's found tiles, the layers into `params`; returns the
+    // kernel groups across the largest tile.
     fn place_terrain(
         &self,
-        position: [f32; 3],
-        distance: f32,
-        mut params: GrassParams,
-    ) -> GrassPass {
-        let reach = self.layers_in_reach(position, distance);
-        let mut dispatch = [1u32; 3];
-        for (slot, (layer, tiles)) in reach.iter().enumerate() {
-            params.layers[slot] = layer_gpu(layer, tiles, self.wind.strength);
-            dispatch[0] = dispatch[0].max(layer.grid.groups_per_tile());
-            dispatch[1] = dispatch[1].max(tiles.len());
+        view: &NestView<'_>,
+        params: &mut GrassParams,
+        scratch: &mut GrassScratch,
+    ) -> u32 {
+        let GrassScratch { found, visited, .. } = scratch;
+        let mut groups = 1u32;
+        let mut slot = 0usize;
+        for layer in &self.layers {
+            if slot == MAX_GRASS_LAYERS {
+                break;
+            }
+            let gpu = layer_gpu(layer, self.wind.strength, self.lod_height);
+            visited.clear();
+            tiles::terrain_tiles(
+                view,
+                &layer.ground.rect,
+                [[gpu.min_y, gpu.max_y], [gpu.reach, gpu.width]],
+                visited,
+            );
+            if visited.tiles.is_empty() {
+                continue;
+            }
+            params.layers[slot] = gpu;
+            groups = groups.max(layer.grid.groups_per_tile());
+            add_found(found, &visited.tiles, slot, 0);
+            slot += 1;
         }
-        params.layer_count = reach.len() as u32;
-        dispatch[2] = (reach.len() as u32).max(1);
-        GrassPass { params, dispatch }
+        params.layer_count = slot as u32;
+        groups
     }
 
     // The bend pass's run for `step`: the footprints of `benders` near the
@@ -728,37 +949,72 @@ fn planet_ground_under(planet: &PlanetView<'_>, base: [f32; 3]) -> f32 {
     base[1] - gap as f32
 }
 
-// `params` with `planet`'s layers and `tiles`, whose records are appended to
-// `planet_tiles`.
+// `tiles`' records for layer slot `slot`, in planet tile record
+// `planet_tile`, each with its distance and the order it was found in, onto
+// `found`.
+fn add_found(
+    found: &mut Vec<(f32, u32, GrassTileGpu)>,
+    tiles: &[NestedTile],
+    slot: usize,
+    planet_tile: u32,
+) {
+    let first = found.len() as u32;
+    found.extend(tiles.iter().zip(first..).map(|(t, order)| {
+        let record = GrassTileGpu::new(t.tile, t.level, slot as u32, planet_tile);
+        (t.near, order, record)
+    }));
+}
+
+// `planet`'s layers into `params` and the tiles they visit over the
+// scratch's drawn tiles in reach into its found tiles; returns the kernel
+// groups across the largest tile.
 fn place_planet(
-    planet: &PlanetGrass,
-    tiles: &PlanetGrassTiles,
-    wind_speed: f32,
-    mut params: GrassParams,
-    planet_tiles: &mut Vec<PlanetGrassTileGpu>,
-) -> GrassPass {
-    let mut dispatch = [1u32; 3];
-    let layers = if tiles.groups == 0 {
+    (planet, frame): (&PlanetGrass, &PlanetView<'_>),
+    view: &NestView<'_>,
+    [wind_speed, lod_height]: [f32; 2],
+    params: &mut GrassParams,
+    scratch: &mut GrassScratch,
+) -> u32 {
+    let GrassScratch {
+        found,
+        visited,
+        reach: run,
+        ..
+    } = scratch;
+    let mut groups = 1u32;
+    let layers = if run.records.is_empty() {
         0
     } else {
         planet.layers.len().min(MAX_GRASS_LAYERS)
     };
     for (slot, layer) in planet.layers.iter().take(layers).enumerate() {
-        params.layers[slot] = planet_layer_gpu(layer, wind_speed);
+        let gpu = planet_layer_gpu(layer, wind_speed, lod_height);
+        params.layers[slot] = gpu;
         params.planet_density[slot] = layer.density;
-        dispatch[0] = dispatch[0].max((layer.cells * layer.cells).div_ceil(GRASS_GROUP_SIZE));
+        groups = groups.max((layer.cells * layer.cells).div_ceil(GRASS_GROUP_SIZE));
+        for (record, &(index, origin, count)) in run.blocks.iter().enumerate() {
+            visited.clear();
+            nested_planet_tiles(
+                view,
+                (&planet.shape, &planet.grid, frame.center),
+                &frame.tiles[index],
+                (origin, count),
+                [gpu.reach, gpu.width],
+                visited,
+            );
+            add_found(found, &visited.tiles, slot, record as u32);
+        }
     }
     params.layer_count = layers as u32;
     params.tile_size = planet.grid.tile_size() as f32;
-    params.planet_tile_base = planet_tiles.len() as u32;
-    params.planet_tile_count = tiles.records.len() as u32;
-    planet_tiles.extend_from_slice(&tiles.records);
-    dispatch[1] = tiles.groups.max(1);
-    dispatch[2] = (layers as u32).max(1);
-    GrassPass { params, dispatch }
+    groups
 }
 
-fn planet_layer_gpu(layer: &planet::PlanetGrassLayer, wind_speed: f32) -> GrassLayerGpu {
+fn planet_layer_gpu(
+    layer: &planet::PlanetGrassLayer,
+    wind_speed: f32,
+    lod_height: f32,
+) -> GrassLayerGpu {
     let look = &layer.look;
     GrassLayerGpu {
         seed: layer.seed,
@@ -771,11 +1027,12 @@ fn planet_layer_gpu(layer: &planet::PlanetGrassLayer, wind_speed: f32) -> GrassL
         cell_size: layer.cell_size,
         cells_per_side: layer.cells,
         root_color: look.root_color,
-        reach: blade_reach(look),
+        reach: blade_reach(look, lod_height),
         tip_color: look.tip_color,
         macro_variation: look.macro_variation,
         clumping: look.clumping,
         light_projection: light_projection(look, wind_speed),
+        depth: lod::blade_depth(look.width, layer.density, look.height),
         ..GrassLayerGpu::default()
     }
 }
@@ -794,13 +1051,13 @@ fn planes(frustum: &Frustum) -> [[f32; 4]; 6] {
 }
 
 /// How far a blade of `look` can reach from where its cell places it, in any
-/// direction: its tallest height, since a bent blade keeps its length, plus
-/// half its widest width, distance widening and edge-on widening included,
-/// plus the farthest clumping moves it. Mirrors the kernel's height and width
-/// draws.
-pub fn blade_reach(look: &GrassBladeLook) -> f32 {
+/// direction, in a field whose tallest layer stands `lod_height` meters tall:
+/// its tallest height, since a bent blade keeps its length, plus half its
+/// widest width, distance widening and edge-on widening included, plus the
+/// farthest clumping moves it. Mirrors the kernel's height and width draws.
+pub fn blade_reach(look: &GrassBladeLook, lod_height: f32) -> f32 {
     let tallest = look.height * (1.0 + look.height_variance);
-    let widest = look.width * 1.25 * lod::max_width_scale() * 1.3;
+    let widest = look.width * 1.25 * lod::max_width_scale(look.width, lod_height) * 1.3;
     tallest + 0.5 * widest + clumping::max_gather_offset(look.clump_size, look.clumping)
 }
 
@@ -823,7 +1080,7 @@ pub fn tile_bounds(layer: &GrassLayerGpu, tile_size: f32, tile: [i32; 2]) -> ([f
     )
 }
 
-fn layer_gpu(layer: &GrassLayer, tiles: &TileRange, wind_speed: f32) -> GrassLayerGpu {
+fn layer_gpu(layer: &GrassLayer, wind_speed: f32, lod_height: f32) -> GrassLayerGpu {
     let ground = &layer.ground;
     let look = &layer.look;
     let mask = layer.mask.as_ref();
@@ -834,8 +1091,6 @@ fn layer_gpu(layer: &GrassLayer, tiles: &TileRange, wind_speed: f32) -> GrassLay
             ground.rect.max[0],
             ground.rect.max[1],
         ],
-        tile_origin: tiles.origin,
-        tile_count: tiles.count,
         base_y: ground.base_y,
         min_y: ground.y_range[0],
         max_y: ground.y_range[1],
@@ -853,12 +1108,12 @@ fn layer_gpu(layer: &GrassLayer, tiles: &TileRange, wind_speed: f32) -> GrassLay
         cell_size: layer.grid.cell_size(),
         cells_per_side: layer.grid.cells_per_side,
         root_color: look.root_color,
-        reach: blade_reach(look),
+        reach: blade_reach(look, lod_height),
         tip_color: look.tip_color,
         macro_variation: look.macro_variation,
         clumping: look.clumping,
         light_projection: light_projection(look, wind_speed),
-        _pad: 0.0,
+        depth: lod::blade_depth(look.width, layer.grid.density(), look.height),
     }
 }
 
@@ -876,10 +1131,21 @@ mod tests {
         ]
     }
 
+    // A view-projection every point is inside.
+    fn open() -> [[f32; 4]; 4] {
+        let mut vp = [[0.0; 4]; 4];
+        vp[3][3] = 1.0;
+        vp
+    }
+
+    // A 1800 pixel tall view with a 70 degree vertical field of view.
+    const FOCAL: f32 = 1285.0;
+
     fn camera(position: [f32; 3]) -> GrassCamera {
         GrassCamera {
             position,
-            vp: identity(),
+            vp: open(),
+            focal: FOCAL,
             hiz: None,
         }
     }
@@ -946,12 +1212,174 @@ mod tests {
         assert_eq!(f.layers[2].ground.heights_offset, 25);
         assert_eq!(f.layers[2].ground.base_y, 3.0);
         assert_ne!(f.layers[0].seed, f.layers[1].seed);
-        let expected = GrassCapacity::sum(
-            f.layers
-                .iter()
-                .map(|l| lod::lod_capacities(&l.ground.rect, &l.grid, GRASS_DRAW_DISTANCE)),
+        assert_eq!(f.lod_height, Grass::default().height);
+    }
+
+    // Size `f` for `size` as a backend does, once the buffers are made: true
+    // when they had to be.
+    fn resize(f: &mut GrassField, size: [u32; 2]) -> bool {
+        let Some(resize) = f.resize_for(size) else {
+            return false;
+        };
+        f.apply(resize);
+        resize.rebuild
+    }
+
+    // The buffers are sized once the render target's size is known, again
+    // only when it changes, and the view thins no finer than they hold.
+    #[test]
+    fn the_field_is_sized_for_the_render_target() {
+        let a = terrain([0.0; 3], [100.0, 100.0], vec![grass(100.0), grass(20.0)]);
+        let mut f = GrassField::resolve(&[a], None).unwrap();
+        assert_eq!(f.sizing, None);
+        assert_eq!(f.capacity(), GrassCapacity::default());
+        assert_eq!(f.shadow_capacity(), 0);
+        // Nothing changes until the resize is applied, so a failed rebuild
+        // leaves the field sized for the buffers it has.
+        let pending = f.resize_for([1600, 900]).unwrap();
+        assert!(pending.rebuild);
+        assert_eq!(f.sizing, None);
+        assert_eq!(f.resize_for([1600, 900]), Some(pending));
+        assert!(resize(&mut f, [1600, 900]));
+        assert!(!resize(&mut f, [1600, 900]));
+        let views = f.sizing.unwrap().views;
+        assert_eq!(views.size, [1600, 900]);
+        let expected = GrassCapacity::sum(f.layers.iter().map(|l| {
+            lod::region_capacities(
+                &CapacityField {
+                    ground: &l.ground.rect,
+                    grid: &l.grid,
+                    width: l.look.width,
+                    blade_height: f.lod_height,
+                },
+                &views,
+            )
+        }));
+        assert_eq!(f.capacity(), expected);
+        assert_eq!(f.lod_view(10.0 * views.focal), f.lod_view(views.focal));
+        assert!(f.lod_view(0.5 * views.focal).focal < views.focal);
+        let sized = f.sizing;
+        let smaller = f.resize_for([800, 450]).unwrap();
+        assert_eq!(f.sizing, sized);
+        f.apply(smaller);
+        assert!(smaller.rebuild);
+        assert!(f.capacity().total() < expected.total());
+    }
+
+    // A field sized for no blade in the cascade, or not yet sized, places no
+    // cascade run, even when the cascade asks for one.
+    #[test]
+    fn a_cascade_with_no_blades_places_no_run() {
+        let t = terrain([0.0; 3], [200.0, 200.0], vec![grass(100.0)]);
+        let mut f = GrassField::resolve(&[t], None).unwrap();
+        let cast = GrassFrameInputs {
+            shadow: Some(light()),
+            ..inputs([0.0; 3])
+        };
+        let mut history = GrassHistory::default();
+        assert_eq!(f.frame(&cast, &mut history).shadow, None);
+        resize(&mut f, [1600, 900]);
+        let mut empty = f.sizing.unwrap();
+        empty.shadow_capacity = 0;
+        f.sizing = Some(empty);
+        let frame = f.frame(&cast, &mut history);
+        assert_eq!(frame.shadow, None);
+        assert!(frame.view.params.tile_count > 0);
+    }
+
+    // Frames reuse the history's space: once it has grown to a frame, the
+    // next places its records without growing it.
+    #[test]
+    fn frames_place_in_the_historys_space() {
+        let t = terrain([0.0; 3], [400.0, 400.0], vec![grass(100.0), grass(30.0)]);
+        let mut f = GrassField::resolve(&[t], None).unwrap();
+        resize(&mut f, [1600, 900]);
+        let cast = GrassFrameInputs {
+            shadow: Some(light()),
+            ..inputs([0.0, 2.0, 0.0])
+        };
+        let mut history = GrassHistory::default();
+        let first = f.frame(&cast, &mut history).tiles.to_vec();
+        let space = |h: &GrassHistory| {
+            let s = &h.scratch;
+            (
+                s.tiles.capacity(),
+                s.found.capacity(),
+                s.visited.tiles.capacity(),
+            )
+        };
+        let grown = space(&history);
+        let again = f.frame(&cast, &mut history).tiles.to_vec();
+        assert_eq!(first, again);
+        assert_eq!(space(&history), grown);
+    }
+
+    // A run holding more tiles than its records keeps the nearest and
+    // reports the limit on the first frame that reaches it only.
+    #[test]
+    fn a_run_past_its_records_keeps_the_nearest_and_reports_once() {
+        let many = terrain(
+            [0.0; 3],
+            [2000.0, 2000.0],
+            vec![grass(100.0); MAX_GRASS_LAYERS],
         );
-        assert_eq!(f.capacity, expected);
+        let f = GrassField::resolve(&[many], None).unwrap();
+        let mut history = GrassHistory::default();
+        let frame = f.frame(&inputs([0.0, 1.0, 0.0]), &mut history);
+        let view = frame.view.params;
+        assert_eq!(view.tile_count as usize, MAX_GRASS_TILE_RECORDS);
+        assert_eq!(frame.limit, Some(GrassLimit::TileRecords));
+        // The nearest tiles, the full-density ones under the camera, of
+        // every layer are kept.
+        let under: hashbrown::HashSet<u32> = frame
+            .tiles
+            .iter()
+            .filter(|t| t.level_layer & 0xff == 0 && t.tile == [0, 0])
+            .map(|t| t.level_layer >> 8)
+            .collect();
+        assert_eq!(under.len(), MAX_GRASS_LAYERS);
+        let next = f.frame(&inputs([0.0, 1.0, 0.0]), &mut history);
+        assert_eq!(next.view.params.tile_count, view.tile_count);
+        assert_eq!(next.limit, None);
+    }
+
+    // Sizing keeps a run's tiles within its records: a field whose tiles
+    // would outgrow them is sized for a shorter view, which then fits.
+    #[test]
+    fn the_sizing_keeps_a_run_within_its_records() {
+        let wide = Grass {
+            width: 0.3,
+            ..grass(100.0)
+        };
+        let many = terrain([0.0; 3], [4000.0, 4000.0], vec![wide; MAX_GRASS_LAYERS]);
+        let mut f = GrassField::resolve(&[many], None).unwrap();
+        resize(&mut f, [3200, 1800]);
+        let sized = f.sizing.unwrap().views.focal;
+        assert!(sized < lod::focal_length(1800, lod::GRASS_SIZING_FOV));
+        let mut history = GrassHistory::default();
+        let frame = f.frame(&inputs([0.0, 1.0, 0.0]), &mut history);
+        assert_eq!(frame.limit, None);
+        assert!(frame.view.params.tile_count as usize <= MAX_GRASS_TILE_RECORDS);
+    }
+
+    // Every level-0 tile a run's records span, asserting none twice.
+    fn spanned(tiles: &[GrassTileGpu]) -> hashbrown::HashSet<(u32, [i32; 2])> {
+        let mut seen = hashbrown::HashSet::new();
+        for t in tiles {
+            let n = 1i32 << (t.level_layer & 0xff);
+            for z in 0..n {
+                for x in 0..n {
+                    let fine = [t.tile[0] * n + x, t.tile[1] * n + z];
+                    assert!(seen.insert((t.level_layer >> 8, fine)), "{fine:?}");
+                }
+            }
+        }
+        seen
+    }
+
+    fn run_tiles<'a>(frame: &'a GrassFrame, pass: &GrassPass) -> &'a [GrassTileGpu] {
+        let p = &pass.params;
+        &frame.tiles[p.tile_base as usize..(p.tile_base + p.tile_count) as usize]
     }
 
     #[test]
@@ -976,25 +1404,42 @@ mod tests {
         let near = terrain([10.0, 2.0, -4.0], [20.0, 8.0], vec![grass(100.0)]);
         let far = terrain([500.0, 0.0, 0.0], [10.0, 10.0], vec![grass(400.0)]);
         let f = GrassField::resolve(&[far, near], None).unwrap();
-        let frame = view(&f, [10.0, 3.0, -4.0]);
+        let mut history = GrassHistory::default();
+        let whole = f.frame(&inputs([10.0, 3.0, -4.0]), &mut history);
+        let frame = whole.view;
         let p = &frame.params;
         assert_eq!(p.layer_count, 1);
         let l = &p.layers[0];
         assert_eq!(l.rect, [-10.0, -12.0, 30.0, 4.0]);
         assert_eq!(l.base_y, 2.0);
-        // x in [-10, 30) is tiles -3..=7; z in [-12, 4) is tiles -3..=0.
-        assert_eq!(l.tile_origin, [-3, -3]);
-        assert_eq!(l.tile_count, [11, 4]);
         assert_eq!(l.cells_per_side, 40);
         assert_eq!(l.cell_size, 0.1);
-        assert_eq!(frame.dispatch, [25, 44, 1]);
+        // x in [-10, 30) is tiles -3..=7; z in [-12, 4) is tiles -3..=0, each
+        // visited once.
+        let tiles = run_tiles(&whole, &frame);
+        let on_ground: Vec<_> = spanned(tiles)
+            .into_iter()
+            .filter(|(_, t)| (-3..=7).contains(&t[0]) && (-3..=0).contains(&t[1]))
+            .collect();
+        assert_eq!(on_ground.len(), 44);
+        assert!(tiles.iter().all(|t| t.level_layer >> 8 == 0));
+        assert_eq!(p.tile_base, 0);
+        assert!(p.tile_count > 0 && p.tile_count <= 44);
+        assert_eq!(frame.dispatch, [25, p.tile_count, 1]);
         assert_eq!(p.cam_pos, [10.0, 3.0, -4.0]);
-        assert_eq!(p.draw_distance, GRASS_DRAW_DISTANCE);
-        assert_eq!(p.lod_capacity[..3], f.capacity.lods);
-        assert_eq!(p.lod_base[..3], f.capacity.bases());
+        let lod = f.lod_view(FOCAL);
+        assert_eq!(p.draw_distance, lod.extent);
+        assert_eq!(p.lod_capacity, f.capacity().region_capacities());
+        assert_eq!(p.lod_base, f.capacity().region_bases());
         assert_eq!(p.args_slot, 0);
         assert_eq!(p.hiz_enabled, 0);
-        assert_eq!(p.cull_distance, GRASS_DRAW_DISTANCE);
+        assert_eq!(p.cull_distance, lod.extent);
+        assert_eq!(p.lod_distances[..2], lod.lod_distances);
+        assert_eq!(p.thinning[0], lod.keep_scale());
+        assert_eq!(p.thinning[2], lod.fade_start());
+        assert_eq!(p.thinning[3], lod.depth_onset());
+        let look = GrassBladeLook::of(&grass(100.0));
+        assert_eq!(l.depth, lod::blade_depth(look.width, 100.0, look.height));
         assert_eq!(p.tile_size, GRASS_TILE_SIZE);
         assert_eq!(p.layers[1], GrassLayerGpu::default());
     }
@@ -1007,7 +1452,7 @@ mod tests {
         let frame = view(&f, [0.0; 3]);
         assert_eq!(frame.params.layer_count, 2);
         // Layer a: 2x2 tiles, 25 groups each; layer b: 6x2 tiles, 100 groups.
-        assert_eq!(frame.dispatch, [100, 12, 2]);
+        assert_eq!(frame.dispatch, [100, 16, 1]);
     }
 
     #[test]
@@ -1028,9 +1473,12 @@ mod tests {
         );
         let f = GrassField::resolve(&[many], None).unwrap();
         assert_eq!(f.layers.len(), MAX_GRASS_LAYERS + 3);
-        let frame = view(&f, [0.0; 3]);
-        assert_eq!(frame.params.layer_count as usize, MAX_GRASS_LAYERS);
-        assert_eq!(frame.dispatch[2] as usize, MAX_GRASS_LAYERS);
+        let mut history = GrassHistory::default();
+        let whole = f.frame(&inputs([0.0; 3]), &mut history);
+        assert_eq!(whole.view.params.layer_count as usize, MAX_GRASS_LAYERS);
+        let slots: hashbrown::HashSet<u32> =
+            whole.tiles.iter().map(|t| t.level_layer >> 8).collect();
+        assert_eq!(slots.len(), MAX_GRASS_LAYERS);
     }
 
     #[test]
@@ -1068,8 +1516,9 @@ mod tests {
     #[test]
     fn the_frustum_planes_are_the_cameras() {
         let t = terrain([0.0; 3], [10.0, 10.0], vec![grass(10.0)]);
-        let p = view(&GrassField::resolve(&[t], None).unwrap(), [0.0; 3]).params;
-        let expected = Frustum::from_camera(identity(), Some(GRASS_DRAW_DISTANCE));
+        let f = GrassField::resolve(&[t], None).unwrap();
+        let p = view(&f, [0.0; 3]).params;
+        let expected = Frustum::from_camera(open(), Some(f.lod_view(FOCAL).extent));
         for (row, plane) in p.frustum.iter().zip(expected.planes.iter()) {
             assert_eq!(&row[..3], &plane.normal[..]);
             assert_eq!(row[3], plane.d);
@@ -1091,24 +1540,33 @@ mod tests {
     #[test]
     fn the_cascade_places_its_own_blades_near_the_camera() {
         let t = terrain([0.0; 3], [200.0, 200.0], vec![grass(100.0)]);
-        let f = GrassField::resolve(&[t], None).unwrap();
+        let mut f = GrassField::resolve(&[t], None).unwrap();
+        resize(&mut f, [1600, 900]);
+        assert!(f.shadow_capacity() < f.capacity().total());
+        let mut history = GrassHistory::default();
         let frame = f.frame(
             &GrassFrameInputs {
                 elapsed: 3.5,
                 shadow: Some(light()),
                 ..inputs([0.0; 3])
             },
-            &mut GrassHistory::default(),
+            &mut history,
         );
         let view = frame.view.params;
         let cast = frame.shadow.expect("the grass casts").params;
         assert_eq!(cast.cull_distance, GRASS_SHADOW_DISTANCE);
         assert_eq!(cast.hiz_enabled, 0);
-        assert_eq!(cast.lod_base, [0; 4]);
-        assert_eq!(cast.lod_capacity, [0, 0, f.shadow_capacity, 0]);
+        let cap = f.shadow_capacity();
+        assert_eq!(cast.lod_base, [0, 0, 0, cap - 1]);
+        assert_eq!(cast.lod_capacity, [0, 0, cap, 0]);
         assert_eq!(&cast.lod_distances[..2], &[0.0, 0.0]);
         assert_eq!(cast.lod_distances[3], view.lod_distances[3]);
-        assert_eq!(cast.thinning, view.thinning);
+        // The same thinning, and no hand-off: every blade it keeps casts.
+        assert_eq!(cast.thinning[..2], view.thinning[..2]);
+        assert_eq!(cast.thinning[2], f32::MAX);
+        // The depth limit's onset is the view's, so the cascade keeps the
+        // blades the view keeps.
+        assert_eq!(cast.thinning[3], view.thinning[3]);
         assert_eq!(cast.cam_pos, view.cam_pos);
         assert_eq!(cast.draw_distance, view.draw_distance);
         assert_eq!(cast.args_slot, view.args_slot);
@@ -1119,13 +1577,17 @@ mod tests {
         for (row, plane) in cast.frustum.iter().zip(expected.planes.iter()) {
             assert_eq!(&row[..3], &plane.normal[..]);
         }
-        // 24 m of 4 m tiles either side of the camera, against 90 m.
-        assert_eq!(cast.layers[0].tile_count, [12, 12]);
-        assert_eq!(view.layers[0].tile_count, [46, 46]);
-        assert!(frame.shadow.unwrap().dispatch[1] < frame.view.dispatch[1]);
-        assert!(f.shadow_capacity < f.capacity.total());
+        // 24 m around the camera, after the view's tiles.
+        let cast_pass = frame.shadow.as_ref().unwrap();
+        assert_eq!(cast.tile_base, view.tile_count);
+        for t in spanned(run_tiles(&frame, cast_pass)) {
+            let fine = t.1.map(|v| (v as f32 + 0.5) * GRASS_TILE_SIZE);
+            assert!(fine[0].abs() < 40.0 && fine[1].abs() < 40.0, "{t:?}");
+        }
+        assert!(cast_pass.dispatch[1] < frame.view.dispatch[1]);
         // No cascade, no cast.
-        let none = f.frame(&inputs([0.0; 3]), &mut GrassHistory::default());
+        let mut history = GrassHistory::default();
+        let none = f.frame(&inputs([0.0; 3]), &mut history);
         assert_eq!(none.shadow, None);
     }
 
@@ -1214,29 +1676,30 @@ mod tests {
         let f = GrassField::resolve(&[t], None).unwrap();
         let mut history = GrassHistory::default();
         let p = [3.0, 1.0, -998.0];
-        let before = f.frame(&inputs([0.0, 2.0, -990.0]), &mut history);
-        assert_eq!(before.view.params.wind_map, GRASS_IDENTITY_MAP);
-        assert_eq!(before.view.params.bend_prev_map, GRASS_IDENTITY_MAP);
-        let wind_before = apply_rows(before.view.params.wind_map, p);
+        let before = f.frame(&inputs([0.0, 2.0, -990.0]), &mut history).view;
+        assert_eq!(before.params.wind_map, GRASS_IDENTITY_MAP);
+        assert_eq!(before.params.bend_prev_map, GRASS_IDENTITY_MAP);
+        let wind_before = apply_rows(before.params.wind_map, p);
         let r = turn();
         history.rebase(&r);
         let q = r.apply_point(p);
         let after = f.frame(&inputs(r.apply_point([0.0, 2.0, -990.0])), &mut history);
-        let wind_after = apply_rows(after.view.params.wind_map, q);
-        let prev = apply_rows(after.view.params.bend_prev_map, q);
+        let (after_view, after_bend) = (after.view, after.bend);
+        let wind_after = apply_rows(after_view.params.wind_map, q);
+        let prev = apply_rows(after_view.params.bend_prev_map, q);
         for i in 0..2 {
             assert!((wind_before[i] - wind_after[i]).abs() < 2e-3);
         }
         assert!((prev[0] - p[0]).abs() < 2e-3 && (prev[1] - p[2]).abs() < 2e-3);
         // The bend pass reads at the camera's height through the same map.
         let cam_y = r.apply_point([0.0, 2.0, -990.0])[1];
-        let rows = after.bend.params.prev_map;
+        let rows = after_bend.params.prev_map;
         let at = rows.map(|row| row[0] * q[0] + row[1] * q[2] + row[2]);
-        let expected = apply_rows(after.view.params.bend_prev_map, [q[0], cam_y, q[2]]);
+        let expected = apply_rows(after_view.params.bend_prev_map, [q[0], cam_y, q[2]]);
         assert!((at[0] - expected[0]).abs() < 1e-3 && (at[1] - expected[1]).abs() < 1e-3);
         let next = f.frame(&inputs(r.apply_point([0.0, 2.0, -990.0])), &mut history);
         assert_eq!(next.view.params.bend_prev_map, GRASS_IDENTITY_MAP);
-        assert_eq!(next.view.params.wind_map, after.view.params.wind_map);
+        assert_eq!(next.view.params.wind_map, after_view.params.wind_map);
     }
 
     mod on_a_planet {
@@ -1292,22 +1755,34 @@ mod tests {
 
         #[test]
         fn the_frame_grows_every_layer_over_the_tiles_in_reach() {
-            let f = field();
-            assert!(f.capacity.total() > 0 && f.shadow_capacity > 0);
+            let mut f = field();
+            resize(&mut f, [1600, 900]);
+            assert!(f.capacity().total() > 0 && f.shadow_capacity() > 1);
             let (tiles, cam) = standing();
+            let mut history = GrassHistory::default();
             let frame = f.frame(
                 &GrassFrameInputs {
                     shadow: Some(light()),
                     planet_tiles: &tiles,
                     ..inputs(cam)
                 },
-                &mut GrassHistory::default(),
+                &mut history,
             );
             let view = &frame.view;
             let cast = frame.shadow.as_ref().unwrap();
             assert_eq!(view.params.ground, GRASS_GROUND_PLANET);
             assert_eq!(view.params.layer_count, 2);
-            assert_eq!(view.dispatch[2], 2);
+            assert_eq!(view.dispatch[2], 1);
+            let slots: hashbrown::HashSet<u32> = run_tiles(&frame, view)
+                .iter()
+                .map(|t| t.level_layer >> 8)
+                .collect();
+            assert_eq!(slots.len(), 2);
+            assert!(
+                run_tiles(&frame, view)
+                    .iter()
+                    .all(|t| t.planet_tile < view.params.planet_tile_count)
+            );
             assert_eq!(view.params.planet_tile_base, 0);
             assert_eq!(cast.params.planet_tile_base, view.params.planet_tile_count);
             assert_eq!(
@@ -1328,10 +1803,11 @@ mod tests {
         // Before any tile is drawn, nothing grows, but the frame still runs.
         #[test]
         fn a_planet_with_no_drawn_tiles_grows_nothing() {
-            let frame = field().frame(&inputs([0.0, 42.0, 0.0]), &mut GrassHistory::default());
+            let mut history = GrassHistory::default();
+            let frame = field().frame(&inputs([0.0, 42.0, 0.0]), &mut history);
             assert_eq!(frame.view.params.layer_count, 0);
             assert_eq!(frame.view.dispatch, [1, 1, 1]);
-            assert!(frame.planet_tiles.is_empty());
+            assert!(frame.planet_tiles.is_empty() && frame.tiles.is_empty());
         }
 
         // A bender standing on the planet presses fully; one well above the
@@ -1355,13 +1831,14 @@ mod tests {
                     height: 1.7,
                 },
             ];
+            let mut history = GrassHistory::default();
             let frame = f.frame(
                 &GrassFrameInputs {
                     benders: &benders,
                     planet_tiles: &tiles,
                     ..inputs(cam)
                 },
-                &mut GrassHistory::default(),
+                &mut history,
             );
             let b = frame.bend.params;
             assert_eq!(b.stamp_count, 1);

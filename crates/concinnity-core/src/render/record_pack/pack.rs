@@ -20,9 +20,8 @@ pub struct PackView {
     /// A planet's horizon seen from the eye: a bounded draw wholly behind it
     /// is disabled in every pass.
     pub horizon: Option<Horizon>,
-    /// The buckets the default Shader's far-band draws route to (see
-    /// [`crate::render::world_pipelines`]).
-    pub grass_twins: GrassTwins,
+    /// Where the default Shader's draws growing grass route this frame.
+    pub grass_route: GrassRoute,
     /// The camera a planet's tiles morph by, which their vertices
     /// morph by.
     pub tile_morph: Option<TileMorphFrame>,
@@ -38,30 +37,44 @@ impl PackView {
     }
 }
 
+/// Where a frame's draws growing grass route: the default Shader's grass twins
+/// (see [`crate::render::world_pipelines`]) and where the blades start handing
+/// the field to the canopy this frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GrassRoute {
+    /// The buckets the grass twins take.
+    pub twins: GrassTwins,
+    /// Distance from the eye, in meters, where the blades start thinning out
+    /// and the ground's canopy starts to show
+    /// ([`GrassLodView::fade_start`](crate::render::grass::GrassLodView::fade_start));
+    /// 0 routes every draw growing grass to the canopy twin.
+    pub far_start: f32,
+}
+
 /// The shader bucket `obj` draws under from `cam_pos`: its own, except that a
-/// default-Shader draw with a far band (a surface growing grass) goes to a
-/// grass twin. One whose bounds reach past where its band starts goes to the
-/// canopy twin, which shades the ground and the canopy past the blades; one
-/// wholly nearer, where no pixel can be in the band, goes to the ground twin.
-/// An unbounded draw counts as reaching its band.
-pub fn draw_bucket(obj: &DrawObject, cam_pos: [f32; 3], twins: GrassTwins) -> u32 {
-    if obj.shader_bucket != 0 || obj.material.far_field.end <= 0.0 {
+/// default-Shader draw growing grass goes to a grass twin. One whose bounds
+/// reach past where the frame's band starts goes to the canopy twin, which
+/// shades the ground and the canopy; one wholly nearer, where no pixel can be
+/// in the band, goes to the ground twin. An unbounded draw counts as reaching
+/// the band.
+pub fn draw_bucket(obj: &DrawObject, cam_pos: [f32; 3], route: GrassRoute) -> u32 {
+    if obj.shader_bucket != 0 || !obj.material.far_field.grows() {
         return obj.shader_bucket;
     }
-    let twin = match reaches_far_band(obj, cam_pos) {
+    let twins = route.twins;
+    let twin = match reaches_far_band(obj, cam_pos, route.far_start) {
         true => twins.canopy,
         false => twins.ground.or(twins.canopy),
     };
     twin.unwrap_or(obj.shader_bucket)
 }
 
-// Whether the farthest corner of `obj`'s bounds lies past where its far band
-// starts, seen from `cam_pos`.
-fn reaches_far_band(obj: &DrawObject, cam_pos: [f32; 3]) -> bool {
+// Whether the farthest corner of `obj`'s bounds lies past `start`, seen from
+// `cam_pos`.
+fn reaches_far_band(obj: &DrawObject, cam_pos: [f32; 3], start: f32) -> bool {
     if !obj.cullable() {
         return true;
     }
-    let start = obj.material.far_field.start;
     let farthest_sq: f32 = (0..3)
         .map(|i| {
             let d = (cam_pos[i] - obj.bb_min[i])
@@ -186,7 +199,7 @@ fn draw_args(
         // The shader bucket rides the upper flag bits so the cull kernel can
         // route the record's command into that bucket's region.
         flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-            | draw_args_bucket_bits(draw_bucket(obj, view.cam_pos, view.grass_twins))
+            | draw_args_bucket_bits(draw_bucket(obj, view.cam_pos, view.grass_route))
             | history.draw_flags(index, index),
     }
 }
@@ -260,7 +273,7 @@ mod tests {
             cam_pos: [0.0, 0.0, 0.0],
             mesh_glass_active: true,
             horizon: None,
-            grass_twins: GrassTwins::default(),
+            grass_route: GrassRoute::default(),
             tile_morph: None,
         }
     }
@@ -337,24 +350,26 @@ mod tests {
         assert_eq!(enabled, vec![false, true, true]);
     }
 
-    // A ground draw 100 m wide whose far band starts at 60 m.
+    // A ground draw 100 m wide growing grass.
     fn far_banded(center_z: f32) -> DrawObject {
         use crate::gfx::render_types::FarFieldTint;
         let mut obj = objects(1).remove(0);
         obj.shader_bucket = 0;
         obj.bb_min = [-50.0, 0.0, center_z - 50.0];
         obj.bb_max = [50.0, 1.0, center_z + 50.0];
-        obj.material.far_field = FarFieldTint {
-            start: 60.0,
-            end: 120.0,
-            canopy: 1,
-        };
+        obj.material.far_field = FarFieldTint::of(1 << 8);
         obj
     }
 
     const TWINS: GrassTwins = GrassTwins {
         canopy: Some(3),
         ground: Some(4),
+    };
+
+    // The blades start handing over at 60 m.
+    const ROUTE: GrassRoute = GrassRoute {
+        twins: TWINS,
+        far_start: 60.0,
     };
 
     fn tile(half: f32) -> DrawObject {
@@ -370,14 +385,38 @@ mod tests {
     fn a_far_band_in_reach_routes_to_the_canopy_twin() {
         let eye = [0.0, 2.0, 0.0];
         // Its far corner is ~71 m away: past the band's start.
-        assert_eq!(draw_bucket(&far_banded(0.0), eye, TWINS), 3);
-        assert_eq!(draw_bucket(&far_banded(5_000.0), eye, TWINS), 3);
+        assert_eq!(draw_bucket(&far_banded(0.0), eye, ROUTE), 3);
+        assert_eq!(draw_bucket(&far_banded(5_000.0), eye, ROUTE), 3);
         // Wholly within 60 m of the eye: no pixel can reach the band.
-        assert_eq!(draw_bucket(&tile(20.0), eye, TWINS), 4);
+        assert_eq!(draw_bucket(&tile(20.0), eye, ROUTE), 4);
         // Unbounded: counts as reaching it.
         let mut unbounded = tile(20.0);
         unbounded.bb_min = [f32::NAN; 3];
-        assert_eq!(draw_bucket(&unbounded, eye, TWINS), 3);
+        assert_eq!(draw_bucket(&unbounded, eye, ROUTE), 3);
+    }
+
+    // The band follows the frame: the same draw takes the ground twin while
+    // the blades hand over past its far corner, the canopy twin once they
+    // hand over within it.
+    #[test]
+    fn routing_follows_the_frames_band() {
+        let eye = [0.0, 2.0, 0.0];
+        let far = GrassRoute {
+            far_start: 120.0,
+            ..ROUTE
+        };
+        let near = GrassRoute {
+            far_start: 20.0,
+            ..ROUTE
+        };
+        assert_eq!(draw_bucket(&tile(40.0), eye, far), 4);
+        assert_eq!(draw_bucket(&tile(40.0), eye, near), 3);
+        // No band yet: every draw growing grass takes the canopy twin.
+        let unset = GrassRoute {
+            far_start: 0.0,
+            ..ROUTE
+        };
+        assert_eq!(draw_bucket(&tile(1.0), eye, unset), 3);
     }
 
     // Without a ground twin every far band takes the canopy twin; without
@@ -388,8 +427,9 @@ mod tests {
             canopy: Some(3),
             ground: None,
         };
-        assert_eq!(draw_bucket(&tile(20.0), [0.0; 3], canopy_only), 3);
-        let none = GrassTwins::default();
+        let route = |twins| GrassRoute { twins, ..ROUTE };
+        assert_eq!(draw_bucket(&tile(20.0), [0.0; 3], route(canopy_only)), 3);
+        let none = route(GrassTwins::default());
         assert_eq!(draw_bucket(&tile(20.0), [0.0; 3], none), 0);
         assert_eq!(draw_bucket(&far_banded(0.0), [0.0; 3], none), 0);
     }
@@ -401,10 +441,10 @@ mod tests {
         let eye = [0.0, 2.0, 0.0];
         let mut plain = far_banded(500.0);
         plain.material.far_field = FarFieldTint::NONE;
-        assert_eq!(draw_bucket(&plain, eye, TWINS), 0);
+        assert_eq!(draw_bucket(&plain, eye, ROUTE), 0);
         let mut shaded = far_banded(500.0);
         shaded.shader_bucket = 2;
-        assert_eq!(draw_bucket(&shaded, eye, TWINS), 2);
+        assert_eq!(draw_bucket(&shaded, eye, ROUTE), 2);
     }
 
     // Points over `obj`'s bounds, corners included.
@@ -437,13 +477,13 @@ mod tests {
     #[test]
     fn routing_follows_the_eye_across_the_band_without_a_seam() {
         let tile = tile(20.0);
-        let start = tile.material.far_field.start;
+        let start = ROUTE.far_start;
         let points = box_points(&tile);
         let walk: Vec<f32> = (0..=120).chain((0..120).rev()).map(|x| x as f32).collect();
         let mut routes = Vec::new();
         for x in walk {
             let eye = [x, 1.7, 0.0];
-            let bucket = draw_bucket(&tile, eye, TWINS);
+            let bucket = draw_bucket(&tile, eye, ROUTE);
             let farthest = points
                 .iter()
                 .map(|p| distance(eye, *p))
@@ -471,7 +511,7 @@ mod tests {
         use crate::gfx::render_types::DrawArgsFlags;
         let view = PackView {
             cam_pos: [0.0, 2.0, 0.0],
-            grass_twins: TWINS,
+            grass_route: ROUTE,
             ..view()
         };
         let mut tracker = ModelHistory::new();

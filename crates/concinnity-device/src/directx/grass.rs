@@ -15,12 +15,14 @@
 //! flight, and their meshes, from the shared vertex buffer, which rests in
 //! GENERIC_READ.
 
-use std::cell::Cell;
+use std::cell::RefCell;
 
 use concinnity_core::planet::Rebase;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::grass::bend::GRASS_BEND_WORDS;
-use concinnity_core::render::grass::lod::{GRASS_LOD_COUNT, GRASS_LOD_VERTEX_STRIDE};
+use concinnity_core::render::grass::lod::{
+    GRASS_BAND_REGION, GRASS_LOD_COUNT, GRASS_LOD_VERTEX_STRIDE, GRASS_REGION_COUNT,
+};
 use concinnity_core::render::grass::{
     DrawnPlanetTile, GrassBender, GrassCamera, GrassField, GrassFrameInputs, GrassHistory,
     GrassHiz, GrassPass, GrassShadowView,
@@ -29,8 +31,8 @@ use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph::PassId;
 use concinnity_core::render::shadow_bias;
 use concinnity_core::render::uniforms::grass::{
-    GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassBendParams, GrassParams,
-    MAX_PLANET_GRASS_TILES, PlanetGrassTileGpu, grass_args_offset,
+    GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassBendParams, GrassParams, GrassTileGpu,
+    MAX_GRASS_TILE_RECORDS, MAX_PLANET_GRASS_TILES, PlanetGrassTileGpu, grass_args_offset,
 };
 use windows::Win32::Graphics::Direct3D::{
     D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
@@ -47,7 +49,9 @@ use super::error::map_hresult;
 use super::pso::{Blend, Depth, DepthBias, GraphicsPso, Raster, compute_pso};
 use super::root_constants::RootConstants;
 use super::root_sig::{RootSig, Visibility};
-use super::texture::{HDR_FORMAT, create_uav_buffer, upload_buffer};
+use super::texture::{
+    HDR_FORMAT, create_uav_buffer, one_shot_submit_nowait, transition_barrier, upload_buffer,
+};
 
 /// Where the main pass's root signature carries the grass block (b7) and the
 /// visible blades (t23).
@@ -63,8 +67,8 @@ pub(in crate::directx) const PREPASS_GRASS_BLADES_PARAM: u32 = 10;
 // The kernel's root signature: the block at b0, the blades it appends at u1,
 // the draw arguments at u2, the terrain heights and mask texels it reads at t3
 // and t4, last frame's depth pyramid at t5, the bend field at t6, the planet
-// tiles at t7 and the shared vertex stream at t8, as `grass.hlsl` declares
-// them.
+// tiles at t7, the shared vertex stream at t8 and the tile records at t9, as
+// `grass.hlsl` declares them.
 fn create_generate_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     RootSig::new()
         .cbv(0, Visibility::All)
@@ -76,18 +80,22 @@ fn create_generate_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12R
         .srv(6, Visibility::All)
         .srv(7, Visibility::All)
         .srv(8, Visibility::All)
+        .srv(9, Visibility::All)
         .build(device, "grass generate root sig")
 }
 
 // The kernel's root parameters holding the pyramid's descriptor table, the
-// bend field, the planet tiles and the shared vertex stream.
+// bend field, the planet tiles, the shared vertex stream and the tile records.
 const KERNEL_HIZ_PARAM: u32 = 5;
 const KERNEL_BEND_PARAM: u32 = 6;
 const KERNEL_PLANET_TILES_PARAM: u32 = 7;
 const KERNEL_VERTICES_PARAM: u32 = 8;
+const KERNEL_TILES_PARAM: u32 = 9;
 
-// Planet tile records one frame holds: the view's run and the cascade's.
+// Planet tile and tile records one frame holds: the view's run and the
+// cascade's.
 const PLANET_TILE_RECORDS: usize = 2 * MAX_PLANET_GRASS_TILES;
+const TILE_RECORDS: usize = 2 * MAX_GRASS_TILE_RECORDS;
 
 // The bend pass's root signature: its block at b0 and the field at u1.
 fn create_bend_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
@@ -142,10 +150,17 @@ pub(in crate::directx) struct GrassPipelines {
     generate: ID3D12PipelineState,
     bend_root_sig: ID3D12RootSignature,
     bend: ID3D12PipelineState,
-    prepass: ID3D12PipelineState,
-    main: ID3D12PipelineState,
+    prepass: GrassDrawPipelines,
+    main: GrassDrawPipelines,
     shadow_root_sig: ID3D12RootSignature,
     shadow: ID3D12PipelineState,
+}
+
+// One pass's blade draws: every detail level's, and the band's, whose blades
+// hand the field to the canopy pixel by pixel and so discard.
+pub(in crate::directx) struct GrassDrawPipelines {
+    levels: ID3D12PipelineState,
+    band: ID3D12PipelineState,
 }
 
 impl GrassPipelines {
@@ -176,19 +191,37 @@ impl GrassPipelines {
             .build(device, "grass shadow")?;
 
         let vs = builtin_shaders::GRASS_PREPASS_VERT.compile(hot_reload)?;
-        let ps = builtin_shaders::GRASS_PREPASS_FRAG.compile(hot_reload)?;
-        let prepass =
-            super::post::gbuffer::gbuffer_targets(GraphicsPso::new(roots.prepass, &vs, &ps))
+        let prepass_pso = |ps: &[u8], label: &str| {
+            super::post::gbuffer::gbuffer_targets(GraphicsPso::new(roots.prepass, &vs, ps))
                 .depth(DXGI_FORMAT_D32_FLOAT, Depth::write())
-                .build(device, "grass prepass")?;
+                .build(device, label)
+        };
+        let prepass = GrassDrawPipelines {
+            levels: prepass_pso(
+                &builtin_shaders::GRASS_PREPASS_FRAG.compile(hot_reload)?,
+                "grass prepass",
+            )?,
+            band: prepass_pso(
+                &builtin_shaders::GRASS_PREPASS_CROSSFADE_FRAG.compile(hot_reload)?,
+                "grass band prepass",
+            )?,
+        };
 
         let vs = builtin_shaders::GRASS_VERT.compile(hot_reload)?;
-        let ps = builtin_shaders::GRASS_FRAG.compile(hot_reload)?;
-        let main = GraphicsPso::new(roots.main, &vs, &ps)
-            .target(HDR_FORMAT, Blend::Opaque)
-            .depth(DXGI_FORMAT_D32_FLOAT, Depth::write())
-            .samples(msaa_samples)
-            .build(device, "grass")?;
+        let main_pso = |ps: &[u8], label: &str| {
+            GraphicsPso::new(roots.main, &vs, ps)
+                .target(HDR_FORMAT, Blend::Opaque)
+                .depth(DXGI_FORMAT_D32_FLOAT, Depth::write())
+                .samples(msaa_samples)
+                .build(device, label)
+        };
+        let main = GrassDrawPipelines {
+            levels: main_pso(&builtin_shaders::GRASS_FRAG.compile(hot_reload)?, "grass")?,
+            band: main_pso(
+                &builtin_shaders::GRASS_CROSSFADE_FRAG.compile(hot_reload)?,
+                "grass band",
+            )?,
+        };
         Ok(Self {
             generate_root_sig,
             generate,
@@ -208,8 +241,8 @@ pub(in crate::directx) struct GrassResources {
     pub(in crate::directx) field: GrassField,
     pub(in crate::directx) pipelines: GrassPipelines,
     draw_signature: ID3D12CommandSignature,
-    // The visible blades the kernel appends, `field.capacity` of them, each
-    // detail level's region after the last.
+    // The visible blades the kernel appends, `field.capacity()` of them, each
+    // span after the last.
     pub(in crate::directx) blades: ID3D12Resource,
     // Two slots of one draw per detail level; see `GRASS_ARGS_SLOTS`.
     pub(in crate::directx) args: ID3D12Resource,
@@ -228,12 +261,13 @@ pub(in crate::directx) struct GrassResources {
     params: MappedBlocks,
     shadow_params: MappedBlocks,
     bend_params: MappedBlocks,
-    // Per frame in flight, persistently mapped: the planet tile records both
-    // runs read.
+    // Per frame in flight, persistently mapped: the planet tile records and
+    // the tile records both runs read.
     planet_tiles: MappedBlocks,
+    tiles: MappedBlocks,
     // What the field's frames carry from one to the next. Advanced from
     // `&self` on the render thread before the fan-out.
-    history: Cell<GrassHistory>,
+    history: RefCell<GrassHistory>,
 }
 
 // One persistently mapped upload-heap block per frame in flight.
@@ -290,7 +324,35 @@ impl MappedBlocks {
     }
 }
 
+// A buffer of `count` blades, at least one, resting in UNORDERED_ACCESS
+// once a list the queue runs ahead of every later submission moves it there.
+// The kernel writes every blade a draw reads, so it starts unset.
+fn blade_buffer(alloc: &DeviceAllocator, count: u32) -> RenderResult<ID3D12Resource> {
+    let bytes = u64::from(count.max(1)) * std::mem::size_of::<GpuGrassBlade>() as u64;
+    let buffer = create_uav_buffer(alloc.device(), bytes, D3D12_RESOURCE_STATE_COMMON)?;
+    let to_uav = transition_barrier(
+        &buffer,
+        D3D12_RESOURCE_STATE_COMMON,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+    );
+    let (list_alloc, list) = one_shot_submit_nowait(alloc.device(), alloc.queue(), |cmd| {
+        // SAFETY: the command list is in the recording state, and the buffer the barrier names
+        // is live for the call.
+        unsafe { cmd.ResourceBarrier(&[to_uav]) }
+    })?;
+    // The allocator holds the list until the GPU has retired it.
+    alloc.retire(list_alloc);
+    alloc.retire(list);
+    Ok(buffer)
+}
+
 impl GrassResources {
+    // The phase of the next frame's per-pixel hand-off to the canopy, which
+    // the canopy block carries beside the blades' own block.
+    pub(in crate::directx) fn crossfade_phase(&self) -> f32 {
+        self.history.borrow().crossfade_phase()
+    }
+
     pub(in crate::directx) fn build(
         alloc: &DeviceAllocator,
         field: GrassField,
@@ -301,16 +363,10 @@ impl GrassResources {
         let device = alloc.device();
         let pipelines = GrassPipelines::build(device, roots, msaa_samples, hot_reload)?;
         let draw_signature = create_draw_signature(device)?;
-        let blade_bytes =
-            u64::from(field.capacity.total()) * std::mem::size_of::<GpuGrassBlade>() as u64;
-        let blades = create_uav_buffer(device, blade_bytes, D3D12_RESOURCE_STATE_COMMON)?;
-        super::particle::zero_default_buffer(alloc, &blades, blade_bytes)?;
+        let blades = blade_buffer(alloc, field.capacity().total())?;
         let args = create_uav_buffer(device, GRASS_ARGS_BYTES as u64, D3D12_RESOURCE_STATE_COMMON)?;
         super::particle::zero_default_buffer(alloc, &args, GRASS_ARGS_BYTES as u64)?;
-        let shadow_bytes =
-            u64::from(field.shadow_capacity) * std::mem::size_of::<GpuGrassBlade>() as u64;
-        let shadow_blades = create_uav_buffer(device, shadow_bytes, D3D12_RESOURCE_STATE_COMMON)?;
-        super::particle::zero_default_buffer(alloc, &shadow_blades, shadow_bytes)?;
+        let shadow_blades = blade_buffer(alloc, field.shadow_capacity())?;
         let shadow_args =
             create_uav_buffer(device, GRASS_ARGS_BYTES as u64, D3D12_RESOURCE_STATE_COMMON)?;
         super::particle::zero_default_buffer(alloc, &shadow_args, GRASS_ARGS_BYTES as u64)?;
@@ -353,7 +409,12 @@ impl GrassResources {
                 PLANET_TILE_RECORDS * std::mem::size_of::<PlanetGrassTileGpu>(),
                 "map grass planet tiles",
             )?,
-            history: Cell::new(GrassHistory::default()),
+            tiles: MappedBlocks::new(
+                alloc,
+                TILE_RECORDS * std::mem::size_of::<GrassTileGpu>(),
+                "map grass tiles",
+            )?,
+            history: RefCell::new(GrassHistory::default()),
         })
     }
 }
@@ -385,6 +446,7 @@ pub(in crate::directx) struct GrassFrame {
     bend_gva: u64,
     bend_dispatch: [u32; 3],
     planet_tiles_gva: u64,
+    tiles_gva: u64,
 }
 
 // What a frame's grass is prepared from.
@@ -400,12 +462,37 @@ pub(in crate::directx) struct GrassRequest<'a> {
 }
 
 impl DxContext {
+    // Size the grass's visible-blade buffers for this frame's render targets,
+    // making them again when the blades they hold changed. The field takes
+    // its new sizing only once both are made; the old buffers are retired
+    // through the allocator, which holds them until no list in flight can
+    // name them.
+    pub(in crate::directx) fn size_grass(&mut self) -> RenderResult<()> {
+        let size = [
+            self.targets.extent.render_width.max(1),
+            self.targets.extent.render_height.max(1),
+        ];
+        let Some(grass) = self.grass.as_mut() else {
+            return Ok(());
+        };
+        let Some(resize) = grass.field.resize_for(size) else {
+            return Ok(());
+        };
+        if resize.rebuild {
+            let alloc = &self.hw.alloc;
+            let blades = blade_buffer(alloc, resize.sizing.capacity.total())?;
+            let shadow_blades = blade_buffer(alloc, resize.sizing.shadow_capacity)?;
+            alloc.retire(std::mem::replace(&mut grass.blades, blades));
+            alloc.retire(std::mem::replace(&mut grass.shadow_blades, shadow_blades));
+        }
+        grass.field.apply(resize);
+        Ok(())
+    }
+
     // Carry the grass into the frame the world moved to.
     pub(in crate::directx) fn rebase_grass(&self, rebase: &Rebase) {
         if let Some(grass) = &self.grass {
-            let mut history = grass.history.get();
-            history.rebase(rebase);
-            grass.history.set(history);
+            grass.history.borrow_mut().rebase(rebase);
         }
     }
 
@@ -451,6 +538,7 @@ impl DxContext {
             camera: GrassCamera {
                 position: cam_pos,
                 vp,
+                focal: self.grass_lod.get().map_or(1.0, |l| l.focal),
                 hiz,
             },
             elapsed,
@@ -461,9 +549,9 @@ impl DxContext {
             benders,
             planet_tiles: &planet_tiles,
         };
-        let mut history = grass.history.get();
+        let mut history = grass.history.borrow_mut();
         let frame = grass.field.frame(&inputs, &mut history);
-        grass.history.set(history);
+        crate::grass_report::report_grass_limit(frame.limit);
         let view_gva = grass.params.write(frame_idx, &frame.view.params);
         let shadow = frame.shadow.map(|pass| {
             GrassPlacement::of(grass.shadow_params.write(frame_idx, &pass.params), &pass)
@@ -477,6 +565,10 @@ impl DxContext {
             planet_tiles_gva: grass
                 .planet_tiles
                 .write_bytes(frame_idx, bytemuck::cast_slice(records)),
+            tiles_gva: grass.tiles.write_bytes(
+                frame_idx,
+                bytemuck::cast_slice(&frame.tiles[..frame.tiles.len().min(TILE_RECORDS)]),
+            ),
         })
     }
 
@@ -515,7 +607,7 @@ impl DxContext {
         self.place_blades(
             cmd,
             grass,
-            (shadow, frame.planet_tiles_gva),
+            (shadow, [frame.planet_tiles_gva, frame.tiles_gva]),
             (&grass.shadow_blades, &grass.shadow_args),
         );
     }
@@ -571,18 +663,19 @@ impl DxContext {
         self.place_blades(
             cmd,
             grass,
-            (&frame.view, frame.planet_tiles_gva),
+            (&frame.view, [frame.planet_tiles_gva, frame.tiles_gva]),
             (&grass.blades, &grass.args),
         );
     }
 
     // One run of the blade kernel for `placement`, reading the planet tile
-    // records at `planet_tiles_gva`, appending to `blades` and filling `args`.
+    // and tile records at `planet_tiles_gva` and `tiles_gva`, appending to
+    // `blades` and filling `args`.
     fn place_blades(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         grass: &GrassResources,
-        (placement, planet_tiles_gva): (&GrassPlacement, u64),
+        (placement, [planet_tiles_gva, tiles_gva]): (&GrassPlacement, [u64; 2]),
         (blades, args): (&ID3D12Resource, &ID3D12Resource),
     ) {
         let [x, y, z] = placement.dispatch;
@@ -598,6 +691,7 @@ impl DxContext {
             cmd.SetComputeRootShaderResourceView(4, com::gpu_va(&grass.masks));
             cmd.SetComputeRootShaderResourceView(KERNEL_BEND_PARAM, com::gpu_va(&grass.bend_field));
             cmd.SetComputeRootShaderResourceView(KERNEL_PLANET_TILES_PARAM, planet_tiles_gva);
+            cmd.SetComputeRootShaderResourceView(KERNEL_TILES_PARAM, tiles_gva);
             cmd.SetComputeRootShaderResourceView(
                 KERNEL_VERTICES_PARAM,
                 com::gpu_va(&self.scene.geometry.vertex_buffer),
@@ -633,7 +727,6 @@ impl DxContext {
             // commands name is live for the call; the root signature declares each parameter set.
             unsafe {
                 cmd.SetGraphicsRootSignature(root_sig);
-                cmd.SetPipelineState(&grass.pipelines.prepass);
                 cmd.SetGraphicsRootConstantBufferView(1, main_view_gva);
                 cmd.SetGraphicsRootConstantBufferView(2, gb_view_gva);
                 cmd.SetGraphicsRootConstantBufferView(
@@ -645,7 +738,7 @@ impl DxContext {
                     com::gpu_va(&grass.blades),
                 );
             }
-            self.draw_grass(cmd, grass, frame);
+            self.draw_grass(cmd, grass, &grass.pipelines.prepass, frame);
         });
     }
 
@@ -665,7 +758,6 @@ impl DxContext {
             // commands name is live for the call; the bound root signature declares both
             // parameters.
             unsafe {
-                cmd.SetPipelineState(&grass.pipelines.main);
                 cmd.SetGraphicsRootConstantBufferView(
                     MAIN_GRASS_PARAMS_PARAM,
                     frame.view.params_gva,
@@ -675,40 +767,46 @@ impl DxContext {
                     com::gpu_va(&grass.blades),
                 );
             }
-            self.draw_grass(cmd, grass, frame);
+            self.draw_grass(cmd, grass, &grass.pipelines.main, frame);
         });
     }
 
-    // The draws both passes issue, one per detail level: a strip per visible
-    // blade. Each level's first vertex rides the b0 root constant, which the
-    // pass's surfaces set per command, so it is free here. The pass's list
-    // topology is put back for whatever draws after it.
+    // The draws both passes issue, one per region: a strip per visible blade,
+    // the band's under the pipeline that discards the pixels the canopy shows.
+    // Each region's first vertex rides the b0 root constant, which the pass's
+    // surfaces set per command, so it is free here. The pass's list topology is
+    // put back for whatever draws after it.
     fn draw_grass(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         grass: &GrassResources,
+        pipelines: &GrassDrawPipelines,
         frame: &GrassFrame,
     ) {
         // SAFETY: the command list is in the recording state under a root signature whose
         // parameter 0 is one root-constant DWORD; the args buffer is in INDIRECT_ARGUMENT for this
         // pass and each offset names one whole record of it.
         unsafe {
+            cmd.SetPipelineState(&pipelines.levels);
             cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-            for lod in 0..GRASS_LOD_COUNT {
-                let first_vertex = lod as u32 * GRASS_LOD_VERTEX_STRIDE;
+            for region in 0..GRASS_REGION_COUNT {
+                if region == GRASS_BAND_REGION {
+                    cmd.SetPipelineState(&pipelines.band);
+                }
+                let first_vertex = region as u32 * GRASS_LOD_VERTEX_STRIDE;
                 cmd.set_graphics_root_constants(FIRST_VERTEX_PARAM, &first_vertex);
                 cmd.ExecuteIndirect(
                     &grass.draw_signature,
                     1,
                     &grass.args,
-                    frame.view.args_offset + (lod * GRASS_ARGS_STRIDE) as u64,
+                    frame.view.args_offset + (region * GRASS_ARGS_STRIDE) as u64,
                     None::<&ID3D12Resource>,
                     0,
                 );
             }
             cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         }
-        self.inc_draw_calls(GRASS_LOD_COUNT as u32);
+        self.inc_draw_calls(GRASS_REGION_COUNT as u32);
     }
 
     // `record` bracketed by `pass`'s timestamps inside the enclosing pass's

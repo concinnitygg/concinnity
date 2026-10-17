@@ -22,6 +22,10 @@ pub(crate) mod frame_capture;
 // `RenderStats::gpu_wait_us` means the same thing on each.
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod gpu_wait;
+// How a grass frame reaching a placement limit is logged, the same on every
+// backend.
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
+pub(crate) mod grass_report;
 #[cfg(backend_metal)]
 pub mod metal;
 // The `objects` / `skinned_visible` render stats, shared so they mean the same

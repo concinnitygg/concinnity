@@ -17,7 +17,7 @@ use crate::gfx::render_types::{DrawIndex, DrawObject, clone_reserve, runtime_res
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
 use crate::planet::{HorizonOccluder, TileMorphFrame};
 use crate::render::backend::PlanetChunk;
-use crate::render::grass::{CanopyField, DrawnPlanetTile};
+use crate::render::grass::{CanopyField, DrawnPlanetTile, GrassLodView};
 use crate::render::model_history::ModelHistory;
 use crate::render::skinned_slots::SkinnedSlots;
 use crate::render::uniforms::canopy::CanopyParams;
@@ -94,8 +94,12 @@ impl SceneState {
 
     /// This frame's canopy block for `canopy`, laid out in the frame the
     /// planet's tiles are drawn in this frame.
-    pub fn canopy_params(&self, canopy: &CanopyField) -> CanopyParams {
-        canopy.params(self.drawn_planet_tiles_iter().next().as_ref())
+    pub fn canopy_params(
+        &self,
+        canopy: &CanopyField,
+        hand_off: (&GrassLodView, f32),
+    ) -> CanopyParams {
+        canopy.params(hand_off, self.drawn_planet_tiles_iter().next().as_ref())
     }
 
     fn drawn_planet_tiles_iter(&self) -> impl Iterator<Item = DrawnPlanetTile> + '_ {

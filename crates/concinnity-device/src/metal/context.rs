@@ -649,6 +649,9 @@ pub(crate) struct MtlContext {
     // The far field's canopy block, refreshed each frame and pushed to the
     // fragment shader at buffer(21).
     pub(super) canopy: concinnity_core::render::uniforms::canopy::CanopyParams,
+    // How this frame's view resolves the grass: where it coarsens, thins and
+    // hands over to the canopy. `None` without grass.
+    pub(super) grass_lod: Option<concinnity_core::render::grass::GrassLodView>,
     // Its layers' view tables, at buffer(22).
     pub(super) canopy_tables: super::canopy::CanopyTables,
     // Cascaded shadow map + its schedule. See [`ShadowState`].
