@@ -147,6 +147,7 @@ impl DxContext {
         reuse: Option<(DxHardware, bootstrap::DxgiSwapchain)>,
     ) -> RenderResult<Self> {
         let BackendInit {
+            platform: _,
             window,
             validation,
             graphics,

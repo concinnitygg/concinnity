@@ -37,7 +37,7 @@ macro_rules! setting_keys {
 
         impl SettingKey {
             /// Every setting: the cycle rows, the sliders, then the rebinds.
-            pub const ALL: [SettingKey; 67] = [
+            pub const ALL: [SettingKey; 68] = [
                 $(SettingKey::$cycle,)*
                 $(SettingKey::$slider,)*
                 SettingKey::KeyRebind(Bindable::Forward),
@@ -77,6 +77,8 @@ macro_rules! setting_keys {
 
 setting_keys! {
     cycle {
+        /// The graphics API a launch renders with.
+        GraphicsApi => "graphics_api",
         /// The master graphics-quality preset.
         GraphicsQuality => "graphics_quality",
         /// Vertical sync.
@@ -293,7 +295,7 @@ mod tests {
     #[test]
     fn kind_classifies_sliders_rebinds_and_cycles() {
         let count = |kind| SettingKey::ALL.iter().filter(|k| k.kind() == kind).count();
-        assert_eq!(count(SettingKind::Cycle), 37);
+        assert_eq!(count(SettingKind::Cycle), 38);
         assert_eq!(count(SettingKind::Slider), 20);
         assert_eq!(count(SettingKind::KeyRebind), Bindable::ALL.len());
         assert_eq!(count(SettingKind::PadRebind), GamepadAction::ALL.len());

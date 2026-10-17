@@ -1,6 +1,8 @@
 use concinnity_core::components::SdfVolume;
 use concinnity_core::components::sdf_programs::SdfPrograms;
+#[cfg(test)]
 use concinnity_core::platform::Platform;
+use concinnity_core::platform::PlatformSet;
 use concinnity_core::render::shader_source::SourceFile;
 
 use crate::asset::BuildCtx;
@@ -19,13 +21,19 @@ pub(super) fn resolve_source_path(raw: &str, ctx: &BuildCtx<'_>) -> Option<Strin
 fn field_programs(
     name: &str,
     field: SourceFile<'_>,
-    platform: Platform,
+    targets: PlatformSet,
     flags: (bool, bool),
     have_compiler: bool,
 ) -> std::io::Result<SdfPrograms> {
-    crate::compile::program::require_compiler(&format!("SdfVolume '{name}'"), have_compiler)?;
+    let owner = format!("SdfVolume '{name}'");
+    crate::compile::program::require_compiler(&owner, have_compiler)?;
     let (volumetric, cast_shadows) = flags;
-    Ok(compile_sdf_field(name, field, platform, volumetric, cast_shadows)?.programs)
+    crate::compile::program::for_each_target(
+        &owner,
+        targets,
+        |platform| Ok(compile_sdf_field(name, field, platform, volumetric, cast_shadows)?.programs),
+        |field: &mut SdfPrograms| &mut field.programs,
+    )
 }
 
 impl crate::asset::BuildAsset for SdfVolume {
@@ -70,7 +78,7 @@ impl crate::asset::BuildAsset for SdfVolume {
                 path: &raw,
                 text: &field,
             },
-            ctx.platform,
+            ctx.targets,
             (volumetric, cast_shadows),
             concinnity_shader::dxc_available(),
         )?;
@@ -115,7 +123,7 @@ mod tests {
     fn ctx(assets_dir: Option<&std::path::Path>) -> BuildCtx<'_> {
         BuildCtx {
             name: "blob",
-            platform: Platform::Metal,
+            targets: PlatformSet::single(Platform::Metal),
             assets_dir,
             all_assets: &[],
         }
@@ -144,7 +152,7 @@ SdfSurface shade(float3 p, float3 n, SdfParams params, float time, float2 uv) {
             path: "shaders/blob.hlsl",
             text: "float map(float3 p) { return length(p) - 1.0; }",
         };
-        let err = field_programs("blob", field, Platform::Metal, (false, true), false)
+        let err = field_programs("blob", field, Platform::Metal.into(), (false, true), false)
             .expect_err("no compiler is an error");
 
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);

@@ -83,7 +83,7 @@ pub(crate) fn benches(bench: &mut Bench) {
             let result = build_pipeline_from_str(
                 &content,
                 Some(&assets_dir),
-                concinnity_engine::platform::current(),
+                concinnity_engine::platform::current().into(),
             )
             .expect("bench world compiles");
             result.defs.len()
@@ -98,7 +98,7 @@ pub(crate) fn benches(bench: &mut Bench) {
         let result = build_pipeline_from_str(
             &content,
             Some(&assets_dir),
-            concinnity_engine::platform::current(),
+            concinnity_engine::platform::current().into(),
         )
         .expect("bench world compiles");
         let meta = BlobMeta {

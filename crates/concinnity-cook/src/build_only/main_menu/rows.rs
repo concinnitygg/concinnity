@@ -46,7 +46,8 @@ const VIDEO_ROWS: [(SettingKey, &str); 7] = [
 // world that renders no 3D scene (nothing to configure quality for). No
 // graphics-quality preset, no performance-stats toggles, no Quality / Advanced
 // groups.
-const VIDEO_MINIMAL_ROWS: [(SettingKey, &str); 4] = [
+const VIDEO_MINIMAL_ROWS: [(SettingKey, &str); 5] = [
+    (SettingKey::GraphicsApi, "Graphics API"),
     (SettingKey::WindowMode, "Window Mode"),
     (SettingKey::Resolution, "Resolution"),
     (SettingKey::Vsync, "Vsync"),
@@ -279,14 +280,15 @@ pub(super) fn settings_body_rows(
         // vec below (and a row's group tag references that same gid). Quality is
         // declared first, so it is gid 0; Advanced second, so gid 1.
         _ => {
-            // The master "Graphics Quality" preset leads the tab (ungrouped, so it
-            // is always visible); the runtime cycles Auto/Low/Medium/High/Ultra/
-            // Custom and re-derives the toggles + render scale under its ceiling.
-            let mut rows: Vec<BodyRow> = vec![BodyRow::Option(
-                SettingKey::GraphicsQuality,
-                "Graphics Quality",
-                -1,
-            )];
+            // The graphics API leads the tab, then the master "Graphics Quality"
+            // preset (both ungrouped, so always visible). The runtime lists the
+            // APIs the build compiled in, grays the row when there is only one,
+            // and cycles the preset's Auto/Low/Medium/High/Ultra/Custom,
+            // re-deriving the toggles + render scale under its ceiling.
+            let mut rows: Vec<BodyRow> = vec![
+                BodyRow::Option(SettingKey::GraphicsApi, "Graphics API", -1),
+                BodyRow::Option(SettingKey::GraphicsQuality, "Graphics Quality", -1),
+            ];
             rows.extend(VIDEO_ROWS.iter().map(|&(s, l)| BodyRow::Option(s, l, -1)));
             rows.push(BodyRow::GroupHeader(0, "Quality"));
             for &(s, l) in &VIDEO_QUALITY_ROWS {

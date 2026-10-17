@@ -345,7 +345,7 @@ pub(in crate::vulkan) fn availability() -> UpscalerAvailability {
     UpscalerAvailability {
         dlss: cfg!(ngx_sdk_bundled),
         xess: cfg!(xess_sdk_bundled),
-        fsr: cfg!(ffx_sdk_bundled),
+        fsr: cfg!(ffx_vk_sdk_bundled),
     }
 }
 

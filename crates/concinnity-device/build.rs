@@ -1,7 +1,7 @@
 //! The device-backend crate (rlib). The first two jobs run behind one
-//! `setup_graphics_backend` call into the shared concinnity-toolchain helper:
+//! `setup_graphics_backends` call into the shared concinnity-toolchain helper:
 //!
-//! 1. Resolve the rendering backend once and expose it as a single cfg the crate
+//! 1. Resolve the rendering backends and expose one cfg per backend the crate
 //!    gates on (backend_metal / backend_dx / backend_vk).
 //!
 //! 2. Detect the optional upscaler SDKs and emit the cfgs the backends gate on.
@@ -9,7 +9,7 @@
 //!    binaries, so it does NOT bundle runtime DLLs next to a binary (that belongs
 //!    to whichever package owns the final artifact).
 //!
-//! 3. Precompile the resolved backend's engine programs (metallibs, DXIL or
+//! 3. Precompile every resolved backend's engine programs (metallibs, DXIL,
 //!    SPIR-V) so the binary embeds them.
 //!
 //! 4. Check the Metal and DirectX bindings the shared sources declare against
@@ -26,7 +26,7 @@ use concinnity_shader::HlslTarget;
 use concinnity_toolchain::{
     Backend, EmittedMsl, ShaderArtifact, hash_sources, msl_binds, msl_binds_a_resource,
     msl_entry_params, msl_param_name, parallel_map, precompile_metal_shaders,
-    setup_graphics_backend,
+    setup_graphics_backends,
 };
 use std::path::PathBuf;
 
@@ -799,8 +799,8 @@ fn artifacts(
 }
 
 fn main() {
-    let backend = setup_graphics_backend();
-    if backend == Some(Backend::Metal) {
+    let backends = setup_graphics_backends();
+    if backends.contains(&Backend::Metal) {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let shaders_dir = manifest.join("src/metal/shaders");
         // A cross build with no Metal toolchain has already warned that it
@@ -809,11 +809,11 @@ fn main() {
             assert_metal_abi(&msl);
         }
     }
-    if backend == Some(Backend::Dx) {
+    if backends.contains(&Backend::Dx) {
         assert_dxil_abi();
         precompile_dxil();
     }
-    if backend == Some(Backend::Vk) {
+    if backends.contains(&Backend::Vk) {
         precompile_spirv();
     }
     emit_shader_compile_source_hash();

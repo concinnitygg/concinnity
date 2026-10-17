@@ -56,7 +56,7 @@ pub(crate) fn show(title: &str, message: &str) -> bool {
     #[cfg(target_os = "macos")]
     crate::app::runloop::activate_app_macos();
 
-    let init = BackendInit::minimal(&window, atlases);
+    let init = BackendInit::minimal(crate::platform::current(), &window, atlases);
     let mut backend = match crate::device::init_backend(init) {
         Ok(backend) => backend,
         Err(e) => {

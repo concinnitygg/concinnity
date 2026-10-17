@@ -86,9 +86,9 @@ pub(crate) fn payload_key(
             .filter_map(|p| file_content_hash(p).map(|h| (p.clone(), h)))
             .collect(),
     };
-    let target = inputs.target_dependent.then(|| ctx.platform.key());
+    let target = inputs.target_dependent.then(|| ctx.targets.key());
     if inputs.dependencies.is_empty() {
-        return key_from_parts(discriminant, args, &files, target);
+        return key_from_parts(discriminant, args, &files, target.as_deref());
     }
     // Another asset the compile reads counts as one more argument, and the
     // files it names as more inputs.
@@ -96,7 +96,7 @@ pub(crate) fn payload_key(
         files.extend(referenced_files(dependency, ctx));
     }
     let args = serde_json::json!({"args": args, "dependencies": inputs.dependencies});
-    key_from_parts(discriminant, &args, &files, target)
+    key_from_parts(discriminant, &args, &files, target.as_deref())
 }
 
 // Cache key for a SceneImport expansion. The generated asset-entry list is a
@@ -234,13 +234,13 @@ fn resolve_source(s: &str, ctx: &BuildCtx<'_>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::platform::Platform;
+    use concinnity_core::platform::{Platform, PlatformSet};
     use serde_json::json;
 
     fn ctx() -> BuildCtx<'static> {
         BuildCtx {
             name: "test",
-            platform: Platform::Metal,
+            targets: PlatformSet::single(Platform::Metal),
             assets_dir: None,
             all_assets: &[],
         }
@@ -545,7 +545,7 @@ mod tests {
         );
         // A cook for another backend keys the same asset separately.
         let dx_ctx = BuildCtx {
-            platform: Platform::DirectX,
+            targets: PlatformSet::single(Platform::DirectX),
             ..ctx()
         };
         assert_ne!(
@@ -588,7 +588,7 @@ mod tests {
         std::fs::write(nested.join("sky.hdr"), b"radiance").expect("write source");
         let assets_ctx = BuildCtx {
             name: "test",
-            platform: Platform::Metal,
+            targets: PlatformSet::single(Platform::Metal),
             assets_dir: Some(dir.path()),
             all_assets: &[],
         };
@@ -614,7 +614,7 @@ mod tests {
         std::fs::write(dir.path().join("chrome"), b"x").unwrap();
         let assets_ctx = BuildCtx {
             name: "test",
-            platform: Platform::Metal,
+            targets: PlatformSet::single(Platform::Metal),
             assets_dir: Some(dir.path()),
             all_assets: &[],
         };

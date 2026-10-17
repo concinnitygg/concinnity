@@ -66,7 +66,7 @@ impl FsrUpscaler {
         extent: UpscaleExtent,
     ) -> RenderResult<Option<Self>> {
         let Some(library) = open_library(LIBRARY) else {
-            if cfg!(ffx_sdk_bundled) {
+            if cfg!(ffx_vk_sdk_bundled) {
                 tracing::warn!(
                     "{LABEL}: {LIBRARY} was bundled at build time but failed to load at runtime; \
                      trying the next backend"

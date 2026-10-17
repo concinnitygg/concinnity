@@ -89,7 +89,9 @@ mod tests {
 
     fn ctx() -> crate::asset::BuildCtx<'static> {
         crate::asset::BuildCtx {
-            platform: concinnity_core::platform::Platform::Metal,
+            targets: concinnity_core::platform::PlatformSet::single(
+                concinnity_core::platform::Platform::Metal,
+            ),
             name: "test",
             assets_dir: None,
             all_assets: &[],
@@ -398,7 +400,9 @@ mod tests {
             ),
         ];
         let vctx = crate::asset::BuildCtx {
-            platform: concinnity_core::platform::Platform::Metal,
+            targets: concinnity_core::platform::PlatformSet::single(
+                concinnity_core::platform::Platform::Metal,
+            ),
             name: "chunk",
             assets_dir: None,
             all_assets: &blocks,

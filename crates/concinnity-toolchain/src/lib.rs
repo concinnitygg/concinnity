@@ -5,8 +5,9 @@
 //! responsibilities every build script that links the runtime needs, including
 //! the example binaries':
 //!
-//! 1. Resolve the rendering backend once and emit it as a single cfg
-//!    (`backend_metal` / `backend_dx` / `backend_vk`) the source gates on.
+//! 1. Resolve the rendering backends the build compiles in and emit one cfg
+//!    per backend (`backend_metal` / `backend_dx` / `backend_vk`) the source
+//!    gates on.
 //!
 //! 2. Detect the optional graphics SDKs and emit the cfgs the renderer gates on
 //!    (`agility_sdk_configured`, `ffx_sdk_bundled`, `xess_sdk_bundled`,
@@ -17,7 +18,7 @@
 //!    binaries land, is read off the calling package by `targets` -- a build
 //!    script declares nothing about its own target list.
 //!
-//! Both run behind one call, [`setup_graphics_backend`], for a package in this
+//! Both run behind one call, [`setup_graphics_backends`], for a package in this
 //! workspace and for one outside it alike. The steps it assembles are private,
 //! so the build scripts here cannot drift into declaring the cfgs, gating on a
 //! backend and probing the SDKs in different orders.
@@ -66,6 +67,16 @@ pub enum Backend {
 }
 
 impl Backend {
+    /// The shader platform this backend consumes.
+    pub fn platform(self) -> concinnity_core::platform::Platform {
+        use concinnity_core::platform::Platform;
+        match self {
+            Backend::Metal => Platform::Metal,
+            Backend::Dx => Platform::DirectX,
+            Backend::Vk => Platform::Vulkan,
+        }
+    }
+
     pub(crate) fn cfg_name(self) -> &'static str {
         match self {
             Backend::Metal => "backend_metal",
@@ -121,18 +132,20 @@ fn vulkan_from_cargo() -> bool {
     std::env::var("CARGO_FEATURE_VULKAN").is_ok()
 }
 
-// Resolve the backend from the target OS: the one each target renders with,
-// or Vulkan when asked for. iOS and Android have no window layer yet, so they
-// build no backend and run headless. macOS Vulkan runs over MoltenVK and exists
-// for cross-backend testing, not for shipping.
-pub(crate) fn resolve_backend(target_os: &str, vulkan: bool) -> Option<Backend> {
-    match target_os {
-        "ios" | "android" => None,
-        _ if vulkan => Some(Backend::Vk),
+// Resolve the backends from the target OS: the one each target renders with,
+// native first, plus Vulkan beside it when asked for. Linux renders with Vulkan
+// alone. iOS and Android have no window layer yet, so they build no backend and
+// run headless. macOS Vulkan runs over MoltenVK and exists for cross-backend
+// testing, not for shipping.
+pub(crate) fn resolve_backends(target_os: &str, vulkan: bool) -> Vec<Backend> {
+    let native = match target_os {
+        "ios" | "android" => return Vec::new(),
         "macos" => Some(Backend::Metal),
         "windows" => Some(Backend::Dx),
-        _ => Some(Backend::Vk),
-    }
+        _ => None,
+    };
+    let vulkan = (vulkan || native.is_none()).then_some(Backend::Vk);
+    native.into_iter().chain(vulkan).collect()
 }
 
 // Declare every cfg the renderer source gates on so `--check-cfg` does not warn.
@@ -142,23 +155,25 @@ fn emit_check_cfgs() {
     }
 }
 
-// The whole setup: declare the cfgs, emit the backend cfg, then set up the SDKs.
-fn setup_for(vulkan: bool) -> Option<Backend> {
+// The whole setup: declare the cfgs, emit the backend cfgs, then set up the SDKs.
+fn setup_for(vulkan: bool) -> Vec<Backend> {
     emit_check_cfgs();
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let backend = resolve_backend(&target_os, vulkan);
-    if let Some(backend) = backend {
+    let backends = resolve_backends(&target_os, vulkan);
+    for &backend in &backends {
         println!("{}", sdks::backend_cfg_directive(backend));
     }
-    setup_graphics_sdks(backend);
-    backend
+    setup_graphics_sdks(&backends);
+    backends
 }
 
 /// The whole build-script graphics setup for a package that links the engine:
-/// declares the cfgs the renderer source gates on, resolves the backend from
-/// the calling package's own features and emits its cfg (`backend_metal` /
-/// `backend_dx` / `backend_vk`), then sets up the optional graphics SDKs.
-/// Returns the backend so a build script with steps of its own can branch.
+/// declares the cfgs the renderer source gates on, resolves the backends from
+/// the calling package's own features and emits a cfg for each
+/// (`backend_metal` / `backend_dx` / `backend_vk`), then sets up the optional
+/// graphics SDKs. The target's native backend is always built; the `vulkan`
+/// feature adds Vulkan beside it. Returns the backends, native first, so a
+/// build script with steps of its own can branch.
 ///
 /// The NGX link directive is scoped to the package that emits it, so every
 /// package whose final links (bins, examples, tests, benches) pull in the DLSS
@@ -169,36 +184,36 @@ fn setup_for(vulkan: bool) -> Option<Backend> {
 /// `concinnity`'s `vulkan` feature carries a `vulkan` feature of its own, since
 /// a build script only sees the features of the package it belongs to.
 ///
-/// `None` is a target with no window layer yet (iOS, Android), which builds
-/// no GPU backend. That emits no backend cfg, and the check-cfg list still
-/// declares all three, so the source gating on them compiles.
+/// An empty list is a target with no window layer yet (iOS, Android), which
+/// builds no GPU backend. That emits no backend cfg, and the check-cfg list
+/// still declares all three, so the source gating on them compiles.
 ///
 /// ```no_run
-/// concinnity_toolchain::setup_graphics_backend();
+/// concinnity_toolchain::setup_graphics_backends();
 /// ```
-pub fn setup_graphics_backend() -> Option<Backend> {
+pub fn setup_graphics_backends() -> Vec<Backend> {
     setup_for(vulkan_from_cargo())
 }
 
-// Set up the optional graphics SDKs for the given backend. On a non-Windows
-// target (or the Metal backend) this is a no-op: none of these SDKs apply.
+// Set up the optional graphics SDKs for the given backends. On a non-Windows
+// target (or Metal alone) this is a no-op: none of these SDKs apply.
 //
 // Which kinds of final binary the calling package builds is read from that
 // package, not passed in: a package can build both bins and examples, and each
 // kind takes its own linker-argument key and its own directory for the bundled
 // DLLs, so the setup runs once per kind. A directive both kinds produce --
 // every cfg, every warning -- is emitted once.
-fn setup_graphics_sdks(backend: Option<Backend>) {
+fn setup_graphics_sdks(backends: &[Backend]) {
     let env = sdk_env_from_cargo();
     if let Some(dir) = manifest_dir() {
         for path in targets::watched_inputs(&dir) {
             println!("cargo::rerun-if-changed={}", path.display());
         }
     }
-    let Some(backend) = backend else {
+    if backends.is_empty() {
         return;
-    };
-    for line in sdks::graphics_sdk_directives(backend, &binary_targets_from_cargo(), &env) {
+    }
+    for line in sdks::graphics_sdk_directives(backends, &binary_targets_from_cargo(), &env) {
         println!("{line}");
     }
 }
@@ -331,24 +346,38 @@ mod tests {
 
     #[test]
     fn each_desktop_target_resolves_to_what_it_renders_with() {
-        assert_eq!(resolve_backend("macos", false), Some(Backend::Metal));
-        assert_eq!(resolve_backend("windows", false), Some(Backend::Dx));
-        assert_eq!(resolve_backend("linux", false), Some(Backend::Vk));
+        assert_eq!(resolve_backends("macos", false), [Backend::Metal]);
+        assert_eq!(resolve_backends("windows", false), [Backend::Dx]);
+        assert_eq!(resolve_backends("linux", false), [Backend::Vk]);
     }
 
     #[test]
-    fn vulkan_overrides_the_desktop_backend() {
-        for target_os in ["macos", "windows", "linux"] {
-            assert_eq!(resolve_backend(target_os, true), Some(Backend::Vk));
-        }
+    fn vulkan_joins_the_native_backend_after_it() {
+        assert_eq!(
+            resolve_backends("macos", true),
+            [Backend::Metal, Backend::Vk]
+        );
+        assert_eq!(
+            resolve_backends("windows", true),
+            [Backend::Dx, Backend::Vk]
+        );
+        assert_eq!(resolve_backends("linux", true), [Backend::Vk]);
     }
 
     #[test]
     fn targets_without_a_window_layer_build_no_backend() {
         for target_os in ["ios", "android"] {
-            assert_eq!(resolve_backend(target_os, false), None);
-            assert_eq!(resolve_backend(target_os, true), None);
+            assert!(resolve_backends(target_os, false).is_empty());
+            assert!(resolve_backends(target_os, true).is_empty());
         }
+    }
+
+    #[test]
+    fn each_backend_consumes_its_own_platform() {
+        use concinnity_core::platform::Platform;
+        assert_eq!(Backend::Metal.platform(), Platform::Metal);
+        assert_eq!(Backend::Dx.platform(), Platform::DirectX);
+        assert_eq!(Backend::Vk.platform(), Platform::Vulkan);
     }
 
     #[test]
@@ -454,25 +483,29 @@ mod tests {
             &[BinaryTargets::Examples],
             &[BinaryTargets::Bins, BinaryTargets::Examples],
         ] {
-            for backend in [Backend::Metal, Backend::Vk] {
-                assert!(sdks::graphics_sdk_directives(backend, targets, &env).is_empty());
+            for backends in [
+                &[Backend::Metal][..],
+                &[Backend::Vk],
+                &[Backend::Metal, Backend::Vk],
+            ] {
+                assert!(sdks::graphics_sdk_directives(backends, targets, &env).is_empty());
             }
         }
-        setup_graphics_sdks(Some(Backend::Metal));
-        setup_graphics_sdks(Some(Backend::Vk));
+        setup_graphics_sdks(&[Backend::Metal]);
+        setup_graphics_sdks(&[Backend::Metal, Backend::Vk]);
         // A build with no backend has no SDK setup to do at all.
-        setup_graphics_sdks(None);
+        setup_graphics_sdks(&[]);
         // The check-cfg list is emitted unconditionally and must not panic.
         emit_check_cfgs();
     }
 
     #[test]
-    fn the_setup_returns_the_backend_it_resolved() {
+    fn the_setup_returns_the_backends_it_resolved() {
         let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
         for vulkan in [false, true] {
             assert_eq!(
                 setup_for(vulkan),
-                resolve_backend(&target_os, vulkan),
+                resolve_backends(&target_os, vulkan),
                 "vulkan: {vulkan}"
             );
         }

@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use concinnity_cook::build_only::LoadedWorld;
 use concinnity_cook::{BuildProgress, BuildReport, BuildStage};
-use concinnity_core::platform::Platform;
+use concinnity_core::platform::PlatformSet;
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 
 use board::{Board, NoteLevel, Outcome, RowState, Step};
@@ -72,13 +72,14 @@ pub(crate) struct BuildStatus {
 }
 
 impl BuildStatus {
-    /// Show the build of `world` for `platform`, starting with its load.
-    pub(crate) fn start(world: &str, platform: Platform, verbosity: Verbosity) -> Self {
+    /// Show the build of `world` for `targets`, starting with its load.
+    pub(crate) fn start(world: &str, targets: PlatformSet, verbosity: Verbosity) -> Self {
         let now = Instant::now();
         let mut board = Board::new(now);
         board.begin(Step::Load, 0, now);
         let surface = Surface::for_stderr();
-        let header = render::header(&shown_path(Path::new(world)), &format!("{platform:?}"));
+        let targets: Vec<String> = targets.iter().map(|p| format!("{p:?}")).collect();
+        let header = render::header(&shown_path(Path::new(world)), &targets.join(" + "));
         eprintln!("{}", header.paint(surface.colored()));
 
         let live = matches!(surface, Surface::Live { .. });

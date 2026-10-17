@@ -120,13 +120,14 @@ fn install_ngx_dll(dir: &Path) {
 #[test]
 fn check_cfg_directives_declare_every_gated_cfg() {
     let lines = check_cfg_directives();
-    assert_eq!(lines.len(), 7);
+    assert_eq!(lines.len(), 8);
     for cfg in [
         "backend_metal",
         "backend_dx",
         "backend_vk",
         "agility_sdk_configured",
-        "ffx_sdk_bundled",
+        "ffx_dx_sdk_bundled",
+        "ffx_vk_sdk_bundled",
         "xess_sdk_bundled",
         "ngx_sdk_bundled",
     ] {
@@ -273,7 +274,7 @@ fn ffx_dx_bundles_dll_next_to_exe() {
             .join("amd_fidelityfx_dx12.dll")
             .is_file()
     );
-    assert!(out.contains(&"cargo::rustc-cfg=ffx_sdk_bundled".to_string()));
+    assert!(out.contains(&"cargo::rustc-cfg=ffx_dx_sdk_bundled".to_string()));
     assert!(has(&out, "cargo::rerun-if-changed"));
     assert!(warnings(&out).is_empty());
 }
@@ -287,7 +288,7 @@ fn ffx_dx_present_without_bundling_emits_cfg_without_copy() {
     let mut out = Vec::new();
     fidelityfx_dx_directives(&env, BinaryTargets::None, &mut out);
 
-    assert!(out.contains(&"cargo::rustc-cfg=ffx_sdk_bundled".to_string()));
+    assert!(out.contains(&"cargo::rustc-cfg=ffx_dx_sdk_bundled".to_string()));
     assert!(!profile(tmp.path()).join("amd_fidelityfx_dx12.dll").exists());
 }
 
@@ -299,7 +300,7 @@ fn ffx_dx_missing_or_opted_out_emits_no_cfg() {
     let mut missing = Vec::new();
     fidelityfx_dx_directives(&env, BinaryTargets::Bins, &mut missing);
     assert!(has(&missing, "FidelityFX SDK not found at"));
-    assert!(!has(&missing, "ffx_sdk_bundled"));
+    assert!(!has(&missing, "ffx_dx_sdk_bundled"));
 
     let disabled_env = SdkEnv {
         ffx_enabled: false,
@@ -308,7 +309,7 @@ fn ffx_dx_missing_or_opted_out_emits_no_cfg() {
     let mut disabled = Vec::new();
     fidelityfx_dx_directives(&disabled_env, BinaryTargets::Bins, &mut disabled);
     assert!(has(&disabled, "CN_ENABLE_FFX_FSR3=0"));
-    assert!(!has(&disabled, "ffx_sdk_bundled"));
+    assert!(!has(&disabled, "ffx_dx_sdk_bundled"));
     assert!(!has(&disabled, "CN_FIDELITYFX_SDK"));
 }
 
@@ -326,7 +327,7 @@ fn ffx_vk_prefers_the_rebuilt_dll() {
 
     let dst = profile(tmp.path()).join("amd_fidelityfx_vk.dll");
     assert_eq!(fs::read(&dst).unwrap(), b"rebuilt");
-    assert!(out.contains(&"cargo::rustc-cfg=ffx_sdk_bundled".to_string()));
+    assert!(out.contains(&"cargo::rustc-cfg=ffx_vk_sdk_bundled".to_string()));
     // The rerun-if-changed directive must name the source it copied.
     assert!(has(
         &out,
@@ -353,7 +354,7 @@ fn ffx_vk_falls_back_to_the_sdk_root() {
 
     let dst = profile(tmp.path()).join("amd_fidelityfx_vk.dll");
     assert_eq!(fs::read(&dst).unwrap(), b"stock sdk");
-    assert!(out.contains(&"cargo::rustc-cfg=ffx_sdk_bundled".to_string()));
+    assert!(out.contains(&"cargo::rustc-cfg=ffx_vk_sdk_bundled".to_string()));
 }
 
 #[test]
@@ -364,7 +365,7 @@ fn ffx_vk_missing_everywhere_warns_when_bundling() {
     let mut out = Vec::new();
     fidelityfx_vk_directives(&env, BinaryTargets::Bins, &mut out);
     assert!(has(&out, "FidelityFX VK runtime not found"));
-    assert!(!has(&out, "ffx_sdk_bundled"));
+    assert!(!has(&out, "ffx_vk_sdk_bundled"));
 
     let mut quiet = Vec::new();
     fidelityfx_vk_directives(&env, BinaryTargets::None, &mut quiet);
@@ -766,8 +767,13 @@ fn metal_and_non_windows_vulkan_are_noops() {
         &[BinaryTargets::Examples],
         &[BinaryTargets::Bins, BinaryTargets::Examples],
     ] {
-        assert!(graphics_sdk_directives(Backend::Metal, targets, &env).is_empty());
-        assert!(graphics_sdk_directives(Backend::Vk, targets, &env).is_empty());
+        for backends in [
+            &[Backend::Metal][..],
+            &[Backend::Vk],
+            &[Backend::Metal, Backend::Vk],
+        ] {
+            assert!(graphics_sdk_directives(backends, targets, &env).is_empty());
+        }
     }
 }
 
@@ -780,13 +786,42 @@ fn windows_vulkan_sets_up_the_vulkan_sdks() {
     install_xess(tmp.path());
     let env = env_in(tmp.path());
 
-    let out = graphics_sdk_directives(Backend::Vk, &[BinaryTargets::Bins], &env);
+    let out = graphics_sdk_directives(&[Backend::Vk], &[BinaryTargets::Bins], &env);
 
-    assert!(out.contains(&"cargo::rustc-cfg=ffx_sdk_bundled".to_string()));
+    assert!(out.contains(&"cargo::rustc-cfg=ffx_vk_sdk_bundled".to_string()));
     assert!(out.contains(&"cargo::rustc-cfg=ngx_sdk_bundled".to_string()));
     assert!(out.contains(&"cargo::rustc-cfg=xess_sdk_bundled".to_string()));
     // No DirectX-only setup on the Vulkan path.
     assert!(!has(&out, "CN_ENABLE_AGILITY_SDK"));
+}
+
+// Both Windows backends in one build: each FidelityFX runtime is set up for its
+// own API, and the SDKs the two share are bundled once.
+#[test]
+fn directx_and_vulkan_together_set_up_both_apis() {
+    let tmp = TempDir::new().unwrap();
+    install_ffx_dx(tmp.path());
+    install_ffx_vk_sdk(tmp.path(), b"stock sdk");
+    install_ngx_lib(tmp.path());
+    install_ngx_dll(tmp.path());
+    install_xess(tmp.path());
+    let env = env_in(tmp.path());
+
+    let out = graphics_sdk_directives(&[Backend::Dx, Backend::Vk], &[BinaryTargets::Bins], &env);
+
+    for cfg in [
+        "ffx_dx_sdk_bundled",
+        "ffx_vk_sdk_bundled",
+        "xess_sdk_bundled",
+        "ngx_sdk_bundled",
+    ] {
+        let line = format!("cargo::rustc-cfg={cfg}");
+        assert_eq!(out.iter().filter(|l| **l == line).count(), 1, "{cfg}");
+    }
+    let prof = profile(tmp.path());
+    for file in ["amd_fidelityfx_dx12.dll", "amd_fidelityfx_vk.dll"] {
+        assert!(prof.join(file).is_file(), "{file}");
+    }
 }
 
 #[test]
@@ -799,11 +834,11 @@ fn directx_bundling_runs_every_sdk() {
     install_ngx_dll(tmp.path());
     let env = env_in(tmp.path());
 
-    let out = graphics_sdk_directives(Backend::Dx, &[BinaryTargets::Bins], &env);
+    let out = graphics_sdk_directives(&[Backend::Dx], &[BinaryTargets::Bins], &env);
 
     for cfg in [
         "agility_sdk_configured",
-        "ffx_sdk_bundled",
+        "ffx_dx_sdk_bundled",
         "xess_sdk_bundled",
         "ngx_sdk_bundled",
     ] {
@@ -828,7 +863,7 @@ fn directx_without_final_binaries_warns_about_no_absent_sdk() {
     let tmp = TempDir::new().unwrap();
     let env = env_in(tmp.path());
 
-    let out = graphics_sdk_directives(Backend::Dx, &[BinaryTargets::None], &env);
+    let out = graphics_sdk_directives(&[Backend::Dx], &[BinaryTargets::None], &env);
 
     assert!(warnings(&out).is_empty(), "{:?}", warnings(&out));
 }
@@ -846,7 +881,7 @@ fn examples_take_their_dlls_and_exports_to_the_examples_directory() {
     // script runs before Cargo lays it out, and the copies have to survive that.
     assert!(!examples(tmp.path()).exists());
 
-    let out = graphics_sdk_directives(Backend::Dx, &[BinaryTargets::Examples], &env);
+    let out = graphics_sdk_directives(&[Backend::Dx], &[BinaryTargets::Examples], &env);
     assert!(warnings(&out).is_empty(), "{:?}", warnings(&out));
 
     // Every bundled file lands beside the example binaries, and `D3D12/` with
@@ -916,7 +951,7 @@ fn a_package_building_both_kinds_bundles_for_each_and_states_every_cfg_once() {
     let env = env_in(tmp.path());
 
     let out = graphics_sdk_directives(
-        Backend::Dx,
+        &[Backend::Dx],
         &[BinaryTargets::Bins, BinaryTargets::Examples],
         &env,
     );

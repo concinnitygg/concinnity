@@ -24,32 +24,22 @@ concinnity_core::install_global_allocator!();
 
 // Backend stamp read back by `cn export`.
 //
-// A shipped player consumes shaders in exactly one format, fixed by the backend
-// it was compiled for: Metal `.metallib`, DirectX DXBC, or Vulkan SPIR-V. `cn`
-// and this runtime compile independently, so a DX-built `cn` could sit beside a
-// Vulkan-built runtime and export a player that fails to load every shader at
-// launch. To catch that, the runtime bakes a fixed marker plus its shader
-// platform key into its binary; `cn export` scans these bytes and refuses a
-// mismatch. The token after the `cn-runtime-platform:` prefix is the
-// shader-platform key (`metal` / `directx` / `vulkan`), matching
-// `concinnity_core::platform::Platform::key`. `main` takes the static's
-// address through a `black_box` so no linker dead-strips it.
-// A build with no backend consumes no shaders, so it carries no stamp and the
-// export treats it the way it treats any unstamped runtime.
-#[cfg(backend_metal)]
+// A shipped player consumes shaders in the formats of the backends it carries:
+// Metal `.metallib`, DirectX DXIL, Vulkan SPIR-V. `cn` and this runtime compile
+// independently, so the runtime bakes a fixed marker plus the shader-platform
+// keys of every backend it can render with (`metal` / `directx` / `vulkan`,
+// comma-separated, matching `concinnity_core::platform::Platform::key`); `cn
+// export` scans these bytes, refuses a player it cannot cook for, and cooks the
+// blobs for exactly those platforms. `main` takes the static's address through
+// a `black_box` so no linker dead-strips it. A build with no backend stamps an
+// empty list, which the export treats as an unstamped runtime.
 #[used]
-static CN_RUNTIME_PLATFORM: [u8; 26] = *b"cn-runtime-platform:metal\0";
-#[cfg(backend_dx)]
-#[used]
-static CN_RUNTIME_PLATFORM: [u8; 28] = *b"cn-runtime-platform:directx\0";
-#[cfg(backend_vk)]
-#[used]
-static CN_RUNTIME_PLATFORM: [u8; 27] = *b"cn-runtime-platform:vulkan\0";
+static CN_RUNTIME_PLATFORM: &[u8] =
+    concat!("cn-runtime-platform:", env!("CN_RUNTIME_PLATFORMS"), "\0").as_bytes();
 
 fn main() -> std::io::Result<()> {
     // Keep the backend stamp in the linked binary (its bytes are what `cn
     // export` scans); taking its address defeats any linker dead-stripping.
-    #[cfg(any(backend_metal, backend_dx, backend_vk))]
     std::hint::black_box(&CN_RUNTIME_PLATFORM);
 
     let exe = std::env::current_exe()?;

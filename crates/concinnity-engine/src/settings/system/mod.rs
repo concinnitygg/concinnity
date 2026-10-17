@@ -112,6 +112,9 @@ pub(crate) struct SettingsState {
     // resources (rebuilding the disabled-rows set) when the inputs actually
     // change rather than every frame. `None` until the first publish.
     pub(crate) published_hud_prefs: Option<HudPrefs>,
+    // Steps run since graphics init parked this state, so a newly chosen
+    // graphics API is confirmed only once a frame has drawn on it.
+    pub(crate) steps_since_init: u32,
     pub(crate) published_disabled_inputs: Option<(bool, bool)>,
 }
 
@@ -166,6 +169,7 @@ impl System for SettingsSystem {
         state.apply_setting_commands(ctx, &mut queues.ops);
         crate::ecs::ActiveRenderQueues::put(ctx.resources, queues);
         state.publish_hud_state(ctx);
+        state.confirm_graphics_api(ctx);
         Self::park(ctx, state);
         StepResult::Continue
     }
@@ -229,6 +233,7 @@ impl SettingsState {
             setting_cmd_cursor: EventCursor::default(),
             published_hud_prefs: None,
             published_disabled_inputs: None,
+            steps_since_init: 0,
         }
     }
 
@@ -415,5 +420,34 @@ impl SettingsState {
             ctx.insert_resource(crate::ecs::DisabledSettingRows(disabled_rows));
             self.published_disabled_inputs = Some(inputs);
         }
+    }
+}
+
+// The steps after graphics init before a newly chosen graphics API counts as
+// working: the first runs before this launch has drawn anything.
+const GRAPHICS_API_CONFIRM_STEPS: u32 = 2;
+
+impl SettingsState {
+    // Clear the persisted trial on a newly chosen graphics API once a frame has
+    // drawn on it, so the next launch keeps the choice.
+    fn confirm_graphics_api(&mut self, ctx: &PipelineContext) {
+        self.steps_since_init = self.steps_since_init.saturating_add(1);
+        if self.steps_since_init < GRAPHICS_API_CONFIRM_STEPS
+            || !crate::platform::take_confirmation()
+        {
+            return;
+        }
+        let tree = ctx
+            .resource::<concinnity_host::store::paths::StateTree>()
+            .cloned();
+        let mut cfg = self
+            .settings_cache
+            .take()
+            .unwrap_or_else(|| crate::config::Settings::load(tree.as_ref()));
+        cfg.graphics.graphics_api_trial = None;
+        self.settings_writer
+            .get_or_insert_with(|| writer::SettingsWriter::spawn(tree))
+            .save(cfg.clone());
+        self.settings_cache = Some(cfg);
     }
 }

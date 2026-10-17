@@ -144,6 +144,7 @@ impl MtlContext {
     // buffers, textures, and targets are built from `init` either way.
     fn build(init: BackendInit<'_>, reuse: Option<MtlHardware>) -> RenderResult<Self> {
         let BackendInit {
+            platform: _,
             window,
             // The Metal validation layer is enabled by the CLI re-execing with
             // MTL_DEBUG_LAYER, not through this flag.

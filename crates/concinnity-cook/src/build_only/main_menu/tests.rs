@@ -213,6 +213,7 @@ fn video_tab_emits_a_row_per_setting() {
     let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
     expand_main_menus(&mut assets).unwrap();
     for (setting, label) in [
+        ("graphics_api", "Graphics API"),
         ("vsync", "Vsync"),
         ("fps_cap", "Frame Rate"),
         ("window_mode", "Window Mode"),
@@ -225,6 +226,26 @@ fn video_tab_emits_a_row_per_setting() {
         assert_eq!(opt["type"], "OptionSelect");
         assert_eq!(opt["args"]["setting"], setting);
         assert_eq!(opt["args"]["label"], label);
+    }
+}
+
+// Every Video tab, Full or Minimal, opens on the graphics API row: it is the
+// first OptionSelect the tab emits.
+#[test]
+fn video_tab_leads_with_the_graphics_api_row() {
+    for profile in ["full", "minimal"] {
+        let mut assets = vec![serde_json::json!({
+            "type": "MainMenu", "args": { "$id": "m", "settings_profile": profile }
+        })];
+        expand_main_menus(&mut assets).unwrap();
+        let first = assets
+            .iter()
+            .find(|v| {
+                v["type"] == "OptionSelect" && asset_name(v).starts_with("m_settings_video_opt_")
+            })
+            .expect("a video row");
+        assert_eq!(first["args"]["setting"], "graphics_api", "{profile}");
+        assert_eq!(first["args"]["label"], "Graphics API", "{profile}");
     }
 }
 
@@ -972,8 +993,8 @@ fn minimal_profile_emits_only_video_and_audio_tabs() {
     );
 }
 
-// The Minimal Video tab is trimmed to the window / output basics: window
-// mode, resolution, vsync, frame rate. No graphics-quality preset, no
+// The Minimal Video tab is trimmed to the window / output basics: graphics
+// API, window mode, resolution, vsync, frame rate. No graphics-quality preset, no
 // performance-stats toggles, and no Quality / Advanced groups.
 #[test]
 fn minimal_video_tab_is_trimmed_to_output_basics() {
@@ -982,7 +1003,13 @@ fn minimal_video_tab_is_trimmed_to_output_basics() {
     })];
     expand_main_menus(&mut assets).unwrap();
 
-    for setting in ["window_mode", "resolution", "vsync", "fps_cap"] {
+    for setting in [
+        "graphics_api",
+        "window_mode",
+        "resolution",
+        "vsync",
+        "fps_cap",
+    ] {
         let opt = by_name(&assets, &format!("m_settings_video_opt_{setting}"));
         assert_eq!(opt["type"], "OptionSelect");
         assert_eq!(opt["args"]["setting"], setting);

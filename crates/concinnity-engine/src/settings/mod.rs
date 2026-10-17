@@ -20,6 +20,9 @@ use concinnity_core::render::backend;
 use concinnity_core::render::backend::GpuVendor;
 use concinnity_core::render::dlss::DlssPreset;
 
+use concinnity_core::platform::Platform;
+use concinnity_core::settings::GraphicsApiTrial;
+
 use crate::config::Settings;
 // This module presents one settings vocabulary. The option-label registry half
 // (labels + classification) lives in core so the cook and the client agree on
@@ -60,8 +63,46 @@ pub(crate) fn setting_available(
         SettingKey::DlssPreset => {
             caps.selectable_upscaler && upscale_backend_available(UpscalerBackend::Dlss, vendor)
         }
+        // Shown on every build, but only a build with more than one graphics
+        // API has a choice to make.
+        SettingKey::GraphicsApi => crate::platform::compiled().len() > 1,
         _ => true,
     }
+}
+
+// The Graphics API row's value at init: the API this launch renders with, and
+// the one it gave up on when the last launch on that never drew a frame.
+pub(crate) fn graphics_api_label(running: Platform, reverted: Option<Platform>) -> String {
+    match reverted {
+        Some(failed) => format!("{} ({} failed)", running.label(), failed.label()),
+        None => running.label().to_string(),
+    }
+}
+
+// A Graphics API row change: the API to persist, and the trial it starts on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GraphicsApiChoice {
+    pub(crate) platform: Platform,
+    pub(crate) trial: Option<GraphicsApiTrial>,
+}
+
+// Where `op` moves the Graphics API row from `chosen` among `compiled` (native
+// first). `None` when there is nothing to choose between or the choice stands.
+// Switching to a non-native API puts it on trial; the native API needs none.
+pub(crate) fn graphics_api_choice(
+    compiled: &[Platform],
+    chosen: Platform,
+    op: SettingOp,
+) -> Option<GraphicsApiChoice> {
+    if compiled.len() < 2 {
+        return None;
+    }
+    let cur = compiled.iter().position(|p| *p == chosen).unwrap_or(0);
+    let platform = compiled[cycle(cur, compiled.len(), op)];
+    (platform != chosen).then(|| GraphicsApiChoice {
+        platform,
+        trial: (platform != compiled[0]).then_some(GraphicsApiTrial::Untried),
+    })
 }
 
 // InputKey-rebind settings (Controls tab) are a third setting category alongside
@@ -803,6 +844,58 @@ mod tests {
     fn cycle_prev_wraps() {
         assert_eq!(cycle(0, 2, SettingOp::Prev), 1);
         assert_eq!(cycle(1, 2, SettingOp::Prev), 0);
+    }
+
+    #[test]
+    fn graphics_api_choice_moves_among_compiled_apis() {
+        let dx_vk = [Platform::DirectX, Platform::Vulkan];
+        assert_eq!(
+            graphics_api_choice(&dx_vk, Platform::DirectX, SettingOp::Next),
+            Some(GraphicsApiChoice {
+                platform: Platform::Vulkan,
+                trial: Some(GraphicsApiTrial::Untried),
+            })
+        );
+        // Back to native needs no trial.
+        assert_eq!(
+            graphics_api_choice(&dx_vk, Platform::Vulkan, SettingOp::SetIndex(0)),
+            Some(GraphicsApiChoice {
+                platform: Platform::DirectX,
+                trial: None,
+            })
+        );
+        // Picking what is already chosen changes nothing.
+        assert_eq!(
+            graphics_api_choice(&dx_vk, Platform::Vulkan, SettingOp::SetIndex(1)),
+            None
+        );
+    }
+
+    #[test]
+    fn the_graphics_api_label_names_a_failed_switch() {
+        assert_eq!(graphics_api_label(Platform::Metal, None), "Metal");
+        assert_eq!(
+            graphics_api_label(Platform::DirectX, Some(Platform::Vulkan)),
+            "DirectX 12 (Vulkan failed)"
+        );
+    }
+
+    #[test]
+    fn a_single_api_build_has_no_graphics_api_choice() {
+        assert_eq!(
+            graphics_api_choice(&[Platform::Vulkan], Platform::Vulkan, SettingOp::Next),
+            None
+        );
+    }
+
+    #[test]
+    fn the_graphics_api_row_is_live_only_with_a_choice() {
+        let available = setting_available(
+            SettingKey::GraphicsApi,
+            &backend::DeviceCapabilities::ALL,
+            GpuVendor::Other,
+        );
+        assert_eq!(available, crate::platform::compiled().len() > 1);
     }
 
     #[test]

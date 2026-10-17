@@ -96,7 +96,7 @@ Check out the [Rust Documentation][docs-link] to explore the crate.
 | `std`    | ✅      | The engine and the target's render backend        |
 | `player` | ✅      | The `concinnity-run` player binary                |
 | `cook`   | ✅      | Build worlds into blobs in process                |
-| `vulkan` |         | Vulkan in place of Metal or DirectX 12            |
+| `vulkan` |         | Vulkan beside Metal or DirectX 12                 |
 | `editor` |         | The dev CLI and editor (implies `player`, `cook`) |
 
 ## CLI Reference

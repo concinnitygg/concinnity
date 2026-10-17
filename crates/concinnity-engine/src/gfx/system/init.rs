@@ -319,6 +319,14 @@ fn sync_menu_labels(
     // tier ("Auto (High)"), which the static option table cannot express.
     let preset_label = preset_label(settings.quality_preset, &settings.gpu_profile);
     set_setting_row_label(ctx, SettingKey::GraphicsQuality, &preset_label);
+    set_setting_row_label(
+        ctx,
+        SettingKey::GraphicsApi,
+        &crate::settings::graphics_api_label(
+            crate::platform::current(),
+            crate::platform::reverted(),
+        ),
+    );
     settings.init_sliders(ctx, persisted);
     settings.init_rebind_rows(ctx);
     settings.init_cycle_value_labels(ctx);
@@ -1633,11 +1641,12 @@ impl GraphicsSystem {
         // Assemble the backend construction inputs, derive the world's render
         // requirements from them (a world with no 3D content drops every
         // scene-scoped feature before any backend resource is sized), and
-        // hand the result to the compile-time-selected backend.
+        // hand the result to the backend this process renders with.
         use concinnity_core::render::backend_init::{
             BackendInit, MediaPayloads, PlanarBudget, SceneData, WorldShader,
         };
         let mut backend_init = BackendInit {
+            platform: crate::platform::current(),
             window: &settings.window_args,
             validation,
             graphics: settings.resolved.graphics.clone(),

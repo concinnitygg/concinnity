@@ -41,16 +41,22 @@ fn declared_path(args: &serde_json::Value, stage: ShaderStage) -> Option<String>
 fn world_shader_programs(
     name: &str,
     sources: &Sources<'_>,
-    platform: concinnity_core::platform::Platform,
+    targets: concinnity_core::platform::PlatformSet,
     have_compiler: bool,
 ) -> std::io::Result<ShaderPrograms> {
-    crate::compile::program::require_compiler(&format!("Shader '{name}'"), have_compiler)?;
-    Ok(compile_world_shader(name, sources, platform)?.programs)
+    let owner = format!("Shader '{name}'");
+    crate::compile::program::require_compiler(&owner, have_compiler)?;
+    crate::compile::program::for_each_target(
+        &owner,
+        targets,
+        |platform| Ok(compile_world_shader(name, sources, platform)?.programs),
+        |shader: &mut ShaderPrograms| &mut shader.programs,
+    )
 }
 
 impl crate::asset::BuildAsset for Shader {
-    // Read the declared files and compile every program this backend consumes
-    // into one container: a Shader is one asset with one payload, so its
+    // Read the declared files and compile every program each target backend
+    // consumes into one container: a Shader is one asset with one payload, so its
     // programs load and unload together.
     fn compile_payload(
         args: &serde_json::Value,
@@ -86,7 +92,7 @@ impl crate::asset::BuildAsset for Shader {
         let programs = world_shader_programs(
             ctx.name,
             &sources,
-            ctx.platform,
+            ctx.targets,
             concinnity_shader::dxc_available(),
         )?;
         programs.encode().map_err(|e| {
@@ -132,7 +138,9 @@ mod tests {
     fn with_assets(assets_dir: Option<&std::path::Path>) -> BuildCtx<'_> {
         BuildCtx {
             name: "s",
-            platform: concinnity_core::platform::Platform::Metal,
+            targets: concinnity_core::platform::PlatformSet::single(
+                concinnity_core::platform::Platform::Metal,
+            ),
             assets_dir,
             all_assets: &[],
         }
@@ -160,7 +168,7 @@ mod tests {
         let err = world_shader_programs(
             "wall",
             &sources,
-            concinnity_core::platform::Platform::Metal,
+            concinnity_core::platform::Platform::Metal.into(),
             false,
         )
         .expect_err("no compiler is an error");
@@ -172,6 +180,40 @@ mod tests {
             message.contains("compiled payload") || message.contains("dxc"),
             "{message}"
         );
+    }
+
+    // One payload carries every target's programs, each found under the digest
+    // that target's renderer computes, so a blob plays on whichever backend a
+    // launch selects.
+    #[test]
+    fn a_shader_cooked_for_several_targets_carries_each_targets_programs() {
+        use concinnity_core::platform::{Platform, PlatformSet};
+        use concinnity_core::render::shader_programs::surface;
+        use concinnity_core::render::shader_source::source_digest;
+
+        concinnity_shader::require_dxc!();
+        let sources = Sources {
+            vertex: None,
+            fragment: SourceFile {
+                path: "f.hlsl",
+                text: "float4 shade(VertexOut v, GpuObjectData od) { return 1.0; }\n",
+            },
+        };
+        let targets: PlatformSet = [Platform::Metal, Platform::Vulkan].into_iter().collect();
+        let programs = world_shader_programs("both", &sources, targets, true).unwrap();
+        assert_eq!(programs.programs.len(), 2 * surface::ALL.len());
+        for platform in targets.iter() {
+            for program in surface::ALL {
+                let source = surface::source(program, platform, &programs.sources());
+                assert!(
+                    programs
+                        .artifact(program.entry, source_digest(&source))
+                        .is_some(),
+                    "{platform:?}: no artifact for {}",
+                    program.entry
+                );
+            }
+        }
     }
 
     #[test]

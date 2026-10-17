@@ -1,6 +1,7 @@
 // The argv mirrors of engine types. The value-enum derives live here so no
 // layer below the command line carries a clap dependency.
 use concinnity_core::gfx::view_modes::ShowFlags;
+use concinnity_core::platform::Platform;
 use concinnity_core::render::dlss::DlssPreset;
 use concinnity_core::render::rt_geom::RtDynamicMode;
 use concinnity_core::settings::QualityPreset;
@@ -27,6 +28,24 @@ impl From<QualityPresetArg> for QualityPreset {
             QualityPresetArg::High => QualityPreset::High,
             QualityPresetArg::Ultra => QualityPreset::Ultra,
             QualityPresetArg::Custom => QualityPreset::Custom,
+        }
+    }
+}
+
+// The argv face of the graphics API a launch renders with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum GraphicsApiArg {
+    Metal,
+    Directx,
+    Vulkan,
+}
+
+impl From<GraphicsApiArg> for Platform {
+    fn from(api: GraphicsApiArg) -> Self {
+        match api {
+            GraphicsApiArg::Metal => Platform::Metal,
+            GraphicsApiArg::Directx => Platform::DirectX,
+            GraphicsApiArg::Vulkan => Platform::Vulkan,
         }
     }
 }
@@ -135,6 +154,12 @@ mod tests {
             .map(|&a| a.into())
             .collect();
         assert_eq!(presets, QualityPreset::ALL.to_vec());
+
+        let apis: Vec<Platform> = GraphicsApiArg::value_variants()
+            .iter()
+            .map(|&a| a.into())
+            .collect();
+        assert_eq!(apis, Platform::ALL.to_vec());
 
         let modes: Vec<RtDynamicMode> = RtDynamicArg::value_variants()
             .iter()

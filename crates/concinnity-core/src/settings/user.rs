@@ -13,6 +13,7 @@ use core::fmt;
 use crate::components::{
     AaMode, PassResolution, ShadowUpdate, UpscaleQuality, UpscalerBackend, WindowMode,
 };
+use crate::platform::Platform;
 use crate::render::dlss::DlssPreset;
 use crate::settings::quality::QualityPreset;
 
@@ -59,6 +60,16 @@ pub struct UserGraphicsSettings {
     /// window itself defines the size); applied live while fullscreen.
     #[serde(default)]
     pub resolution: Option<[u32; 3]>,
+    /// The graphics API to render with. `None` uses the build's native one.
+    /// Applied at next launch (one backend is built per process); a choice the
+    /// running build did not compile in falls back to the native API.
+    #[serde(default, deserialize_with = "lenient")]
+    pub graphics_api: Option<Platform>,
+    /// Where a switch to `graphics_api` stands, so a launch that never reaches
+    /// its first frame on it is not repeated. `None` once a launch has drawn
+    /// on the choice (or nothing is on trial).
+    #[serde(default, deserialize_with = "lenient")]
+    pub graphics_api_trial: Option<GraphicsApiTrial>,
     /// Render-scale preset (upscaling quality). `None` uses the world's
     /// `AntiAliasing.upscale_quality`. Applied at next launch (the upscaler
     /// and render targets are sized once at init).
@@ -254,6 +265,17 @@ pub struct UserGraphicsSettings {
     pub texture_budget: Option<u32>,
 }
 
+/// How far a launch has gotten on a newly chosen graphics API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphicsApiTrial {
+    /// Chosen in the settings menu; no launch has tried it yet.
+    Untried,
+    /// A launch is rendering with it and has not drawn a frame yet. A launch
+    /// that finds this left over starts on the native API instead.
+    Trying,
+}
+
 impl UserGraphicsSettings {
     /// These overrides with each one `top` sets in place of this one's: how a
     /// session override layers over the user's persisted choices.
@@ -267,6 +289,8 @@ impl UserGraphicsSettings {
             show_vram,
             window_mode,
             resolution,
+            graphics_api,
+            graphics_api_trial,
             render_scale,
             upscale_backend,
             dlss_preset,
@@ -320,6 +344,8 @@ impl UserGraphicsSettings {
             show_vram: show_vram.or(self.show_vram),
             window_mode: window_mode.or(self.window_mode),
             resolution: resolution.or(self.resolution),
+            graphics_api: graphics_api.or(self.graphics_api),
+            graphics_api_trial: graphics_api_trial.or(self.graphics_api_trial),
             render_scale: render_scale.or(self.render_scale),
             upscale_backend: upscale_backend.or(self.upscale_backend),
             dlss_preset: dlss_preset.or(self.dlss_preset),

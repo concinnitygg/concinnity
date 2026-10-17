@@ -46,7 +46,7 @@ pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result
     let result = concinnity_cook::build_compiled(
         assets,
         crate::project::assets_dir().as_deref(),
-        crate::cook_platform(),
+        crate::cook_platform().into(),
     )
     .map_err(|e| e.to_string())?;
     let bytes = result

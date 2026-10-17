@@ -8,7 +8,7 @@
 use std::path::Path;
 
 fn main() {
-    concinnity_toolchain::setup_graphics_backend();
+    concinnity_toolchain::setup_graphics_backends();
     generate_header();
 }
 

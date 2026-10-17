@@ -1,8 +1,8 @@
 //! Grouped construction inputs for the render backends, plus the requirements
 //! derivation that trims scene-scoped features when a world has no 3D content.
 //! GraphicsSystem init assembles a `BackendInit` from the drained world assets,
-//! calls `resolve_requirements()`, and hands it to the backend constructor
-//! selected at compile time (Metal / DirectX / Vulkan). Every backend receives
+//! calls `resolve_requirements()`, and hands it to the constructor of the
+//! backend `platform` names (Metal / DirectX / Vulkan). Every backend receives
 //! the same struct; each reads the fields its feature set consumes.
 
 use crate::components::{
@@ -13,6 +13,7 @@ use crate::gfx::render_types::{
     AreaLightData, DrawObject, GpuLight, GpuMaterialParams, InstancedCluster, LightUniforms,
     SpotShadowData,
 };
+use crate::platform::Platform;
 use crate::render::decal::DecalRecord;
 use crate::render::particles::ParticleEmitterRecord;
 use crate::render::rt_geom::RtDynamicMode;
@@ -192,6 +193,9 @@ unsafe impl Send for EmbeddedSurface {}
 /// Everything a backend constructor needs, assembled once by GraphicsSystem
 /// init after the world's assets have been drained and settings resolved.
 pub struct BackendInit<'a> {
+    /// The graphics API the run renders with, one of the backends the build
+    /// compiled in.
+    pub platform: Platform,
     /// The window the backend opens.
     pub window: &'a Window,
     /// Debug-layer toggle for the DirectX / Vulkan validation layers.
@@ -334,8 +338,13 @@ impl<'a> BackendInit<'a> {
     /// This is the startup error screen's path, which has to stand up a window
     /// with no compiled world data at all. Keeping it here means the field
     /// defaulting is maintained beside the struct it fills.
-    pub fn minimal(window: &'a Window, text_atlases: Vec<(u32, u32, Vec<u8>)>) -> Self {
+    pub fn minimal(
+        platform: Platform,
+        window: &'a Window,
+        text_atlases: Vec<(u32, u32, Vec<u8>)>,
+    ) -> Self {
         let mut init = Self {
+            platform,
             window,
             validation: false,
             graphics: minimal_graphics(),
@@ -480,7 +489,7 @@ mod tests {
     fn only_a_shown_environment_resolves_to_a_scene() {
         let window = Window::default();
         let ibl = [0u8; 4];
-        let mut init = BackendInit::minimal(&window, Vec::new());
+        let mut init = BackendInit::minimal(Platform::Metal, &window, Vec::new());
         init.media.env_map_bytes = Some(&ibl);
         init.media.env_map_background = false;
         init.resolve_requirements();
@@ -494,7 +503,7 @@ mod tests {
     fn minimal_carries_only_a_window_and_its_atlases() {
         let window = Window::default();
         let atlas = vec![(2u32, 2u32, vec![255u8; 2 * 2 * 4])];
-        let init = BackendInit::minimal(&window, atlas);
+        let init = BackendInit::minimal(Platform::Metal, &window, atlas);
 
         // The text pipeline is the one thing it keeps: backends gate that pass
         // on a non-empty atlas list.
@@ -516,7 +525,7 @@ mod tests {
     #[test]
     fn minimal_opens_its_own_window() {
         let window = Window::default();
-        let init = BackendInit::minimal(&window, Vec::new());
+        let init = BackendInit::minimal(Platform::Metal, &window, Vec::new());
         assert!(init.embedded_surface.is_none());
     }
 
@@ -557,7 +566,7 @@ mod tests {
     #[test]
     fn sceneless_world_trims_scene_features() {
         let window = Window::default();
-        let mut init = BackendInit::minimal(&window, Vec::new());
+        let mut init = BackendInit::minimal(Platform::Metal, &window, Vec::new());
         let mut graphics = ResolvedGraphics::default();
         graphics.anti_aliasing.upscaling = true;
         graphics.exposure.auto = true;

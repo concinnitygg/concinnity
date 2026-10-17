@@ -699,9 +699,13 @@ impl UiInputSystem {
         req: OpenRequest,
         ctx: &mut PipelineContext,
     ) -> Option<OpenDropdownState> {
-        let options: Vec<String> = if concinnity_core::settings::is_dynamic_dropdown(req.setting) {
-            // Today the only dynamic dropdown is `resolution`, whose modes
-            // GraphicsSystem publishes at init.
+        let options: Vec<String> = if req.setting == SettingKey::GraphicsApi {
+            crate::platform::compiled()
+                .iter()
+                .map(|p| p.label().to_string())
+                .collect()
+        } else if concinnity_core::settings::is_dynamic_dropdown(req.setting) {
+            // `resolution`'s modes, which GraphicsSystem publishes at init.
             let modes = ctx.resource::<crate::ecs::DisplayModes>()?;
             if modes.0.is_empty() {
                 return None;

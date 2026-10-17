@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use concinnity_core::ecs::{ComponentAsset, ResourceRecord, World};
-use concinnity_core::platform::Platform;
+use concinnity_core::platform::PlatformSet;
 use concinnity_host::store::blob::BlobData;
 
 use crate::authoring::registry::{Authored, RegisteredType, asset_entry, set_reference};
@@ -29,7 +29,7 @@ use error::from_io;
 pub struct WorldBuilder {
     // The backend shaders are compiled for. Named by the caller, since nothing
     // here resolves a backend of its own.
-    platform: Platform,
+    targets: PlatformSet,
     // The declared entries, built as each asset is added.
     entries: Vec<serde_json::Value>,
     // The search root a bare `source` filename resolves under, when the
@@ -44,10 +44,10 @@ pub struct WorldBuilder {
     error: Option<(std::io::ErrorKind, String)>,
 }
 
-/// Start an empty world, cooked for `platform`.
-pub fn world(platform: Platform) -> WorldBuilder {
+/// Start an empty world, cooked for every platform in `targets`.
+pub fn world(targets: impl Into<PlatformSet>) -> WorldBuilder {
     WorldBuilder {
-        platform,
+        targets: targets.into(),
         entries: Vec::new(),
         assets_dir: None,
         declared: Vec::new(),
@@ -273,7 +273,7 @@ impl WorldBuilder {
         let text = write_world_jsonl(&self.entries).map_err(from_io)?;
         let loaded: LoadedWorld =
             prepare_world(&text, assets_dir.as_deref()).map_err(WorldBuildError::Validation)?;
-        build_compiled(loaded.assets, assets_dir.as_deref(), self.platform).map_err(from_io)
+        build_compiled(loaded.assets, assets_dir.as_deref(), self.targets).map_err(from_io)
     }
 }
 
@@ -305,7 +305,7 @@ mod tests {
     // a backend the compile never reaches; Metal is what the rest of this
     // crate's tests name.
     fn builder() -> WorldBuilder {
-        world(Platform::Metal)
+        world(concinnity_core::platform::Platform::Metal)
     }
 
     // The typed path: authored structs instead of string-keyed specs, across

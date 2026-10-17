@@ -7,7 +7,7 @@ use std::num::NonZeroU32;
 use concinnity_core::gfx::view_modes::ShowFlags;
 
 use super::value_enums::{
-    BundleFormatArg, DlssPresetArg, QualityPresetArg, RtDynamicArg, ShowFlagArg,
+    BundleFormatArg, DlssPresetArg, GraphicsApiArg, QualityPresetArg, RtDynamicArg, ShowFlagArg,
 };
 
 #[derive(clap::Subcommand, Debug)]
@@ -116,6 +116,15 @@ pub(crate) enum Commands {
 // into every command that launches a world (`run` / `debug` / `editor`).
 #[derive(Debug, Default, clap::Args)]
 pub(crate) struct RenderArgs {
+    /// Render with this graphics API instead of the native one
+    // Outranks the settings-menu choice, unpersisted. One the build did not
+    // compile in (Vulkan needs `--features vulkan` on macOS and Windows), or
+    // one with no usable device, falls back to the native API with a warning.
+    // Chosen before the world cooks, so its shaders are built for the API that
+    // draws them.
+    #[arg(long, value_enum)]
+    pub(crate) graphics_api: Option<GraphicsApiArg>,
+
     /// Force the master graphics-quality preset for this launch, unpersisted
     // Outranks the settings-menu choice in .concinnity/settings. Only the
     // `ultra` ceiling permits ray-traced reflections, so an RT probe that omits
@@ -155,6 +164,20 @@ pub(crate) struct RenderArgs {
 }
 
 impl RenderArgs {
+    // Fix the graphics API this process renders with: the flag, else the
+    // player's settings-menu choice in `tree`. Runs before anything cooks or
+    // probes the device.
+    pub(crate) fn select_graphics_api(&self, tree: &concinnity_engine::StateTree) {
+        match self.graphics_api {
+            Some(api) => {
+                concinnity_engine::platform::select(Some(api.into()));
+            }
+            None => {
+                concinnity_engine::platform::select_persisted(Some(tree));
+            }
+        }
+    }
+
     // The launch request these flags make, with the command's own validation
     // flag and whether it runs a development session.
     pub(crate) fn launch(&self, validation: Option<bool>, dev_loop: bool) -> LaunchRequest {
@@ -411,6 +434,7 @@ mod tests {
                 Commands::Editor(a) => &a.render,
                 _ => panic!("expected a launch command for {argv:?}"),
             };
+            assert!(render.graphics_api.is_none(), "{argv:?}");
             assert!(render.quality_preset.is_none(), "{argv:?}");
             assert!(render.rt_dynamic.is_none(), "{argv:?}");
             assert!(render.rt_skinned_geometry.is_none(), "{argv:?}");
@@ -478,6 +502,8 @@ mod tests {
             let cli = Cli::try_parse_from([
                 "concinnity",
                 command,
+                "--graphics-api",
+                "vulkan",
                 "--quality-preset",
                 "ultra",
                 "--rt-dynamic",
@@ -500,6 +526,11 @@ mod tests {
                 Commands::Editor(a) => &a.render,
                 _ => panic!("expected a launch command for {command}"),
             };
+            assert_eq!(
+                render.graphics_api,
+                Some(GraphicsApiArg::Vulkan),
+                "{command}"
+            );
             assert!(
                 matches!(render.quality_preset, Some(QualityPresetArg::Ultra)),
                 "{command}"

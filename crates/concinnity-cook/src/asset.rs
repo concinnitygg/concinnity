@@ -11,7 +11,7 @@
 //! runtime.
 
 use concinnity_core::ecs::Component;
-use concinnity_core::platform::Platform;
+use concinnity_core::platform::PlatformSet;
 use std::path::Path;
 
 use crate::authoring::world::WorldJsonlAsset;
@@ -41,9 +41,9 @@ pub(crate) struct BuildCtx<'a> {
     // The asset's declared name (used in error messages and as a key for
     // build-time intermediates such as compiled shader filenames).
     pub name: &'a str,
-    // The shader platform this build cooks for: which per-backend source a
-    // shader-backed asset selects, and which bytecode it compiles to.
-    pub(crate) platform: Platform,
+    // The shader platforms this build cooks for: a shader-backed asset compiles
+    // its programs for each, side by side in one payload.
+    pub(crate) targets: PlatformSet,
     // The build's asset search root: the tree a bare `source` filename is
     // searched under. `None` leaves bare filenames unresolved.
     pub(crate) assets_dir: Option<&'a Path>,

@@ -1,68 +1,105 @@
-//! The backend factory: route the assembled inputs to the backend selected at
-//! compile time. The three backend_* cfgs are mutually exclusive, so at most one
-//! arm compiles; a build with no backend feature compiles none and reports
-//! `Unsupported`. This is the single construction choke point - the client holds
-//! only a `Box<dyn RenderBackend>` and never names a concrete backend context.
+//! The backend factory: route the assembled inputs to the backend the run
+//! renders with. A build compiles in the target's native backend and, with the
+//! `vulkan` feature, Vulkan beside it; a platform the build did not compile in,
+//! and every platform on a build with no backend, reports `Unsupported`. This is the single construction choke point - the
+//! client holds only a `Box<dyn RenderBackend>` and never names a concrete
+//! backend context.
 
+use concinnity_core::platform::Platform;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend_init;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 
-/// Probe a cheap throwaway device handle to classify the GPU and read what it
-/// can run, so the quality ceiling and the capability clamp can shape the render
-/// targets and effect pipelines the backend sizes at init. Each backend creates
+/// The graphics APIs this build can render with, the target's native one
+/// first. Empty on a target with no window layer.
+pub const COMPILED_PLATFORMS: &[Platform] = &[
+    #[cfg(backend_metal)]
+    Platform::Metal,
+    #[cfg(backend_dx)]
+    Platform::DirectX,
+    #[cfg(backend_vk)]
+    Platform::Vulkan,
+];
+
+/// Probe a cheap throwaway `platform` device handle to classify the GPU and
+/// read what it can run, so the quality ceiling and the capability clamp can
+/// shape the render targets and effect pipelines the backend sizes at init. Each backend creates
 /// only the handle it needs: Metal the default-device handle, DirectX the
 /// adapter it would select (with the device that selection makes), Vulkan a
 /// surface-free instance (destroyed immediately).
 ///
-/// `None` means the machine exposes no usable GPU at all. That is a different
-/// answer from a GPU this code cannot classify (`GpuProfile::UNKNOWN`): the
-/// first can only run headless, the second renders at an unclamped quality.
-pub fn probe_device() -> Option<backend::DeviceProbe> {
-    #[cfg(backend_dx)]
-    {
-        crate::directx::probe_device()
-    }
-    #[cfg(backend_vk)]
-    {
-        crate::vulkan::probe_device()
-    }
-    #[cfg(backend_metal)]
-    {
-        crate::metal::probe_device()
-    }
-    #[cfg(not(any(backend_dx, backend_vk, backend_metal)))]
-    {
-        None
+/// `None` means the machine exposes no GPU `platform` can use, including a
+/// platform this build did not compile in. That is a different answer from a
+/// GPU this code cannot classify (`GpuProfile::UNKNOWN`): the first can only
+/// run headless, the second renders at an unclamped quality.
+pub fn probe_device(platform: Platform) -> Option<backend::DeviceProbe> {
+    match platform {
+        #[cfg(backend_dx)]
+        Platform::DirectX => crate::directx::probe_device(),
+        #[cfg(backend_vk)]
+        Platform::Vulkan => crate::vulkan::probe_device(),
+        #[cfg(backend_metal)]
+        Platform::Metal => crate::metal::probe_device(),
+        _ => None,
     }
 }
 
-/// Route the assembled `BackendInit` to the backend selected at compile time.
+/// Route the assembled `BackendInit` to the backend its `platform` names.
 /// Construction inputs are documented on `BackendInit` itself.
 pub fn init_backend(
     init: backend_init::BackendInit<'_>,
 ) -> RenderResult<Box<dyn backend::RenderBackend>> {
-    #[cfg(backend_dx)]
-    {
-        crate::directx::DxContext::new(init)
-            .map(|dx| Box::new(dx) as Box<dyn backend::RenderBackend>)
+    match init.platform {
+        #[cfg(backend_dx)]
+        Platform::DirectX => crate::directx::DxContext::new(init)
+            .map(|dx| Box::new(dx) as Box<dyn backend::RenderBackend>),
+        #[cfg(backend_vk)]
+        Platform::Vulkan => crate::vulkan::VkContext::new(init)
+            .map(|vk| Box::new(vk) as Box<dyn backend::RenderBackend>),
+        #[cfg(backend_metal)]
+        Platform::Metal => crate::metal::MtlContext::new(init)
+            .map(|mtl| Box::new(mtl) as Box<dyn backend::RenderBackend>),
+        _ => Err(RenderError::Unsupported { op: "init_backend" }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_native_backend_is_listed_first() {
+        let native = if cfg!(target_os = "macos") {
+            Platform::Metal
+        } else if cfg!(target_os = "windows") {
+            Platform::DirectX
+        } else {
+            Platform::Vulkan
+        };
+        assert_eq!(COMPILED_PLATFORMS.first(), Some(&native));
     }
 
-    #[cfg(backend_vk)]
-    {
-        crate::vulkan::VkContext::new(init)
-            .map(|vk| Box::new(vk) as Box<dyn backend::RenderBackend>)
+    #[test]
+    fn a_platform_the_build_left_out_probes_no_device() {
+        for platform in Platform::ALL {
+            if !COMPILED_PLATFORMS.contains(&platform) {
+                assert!(probe_device(platform).is_none(), "{platform:?}");
+            }
+        }
     }
 
-    #[cfg(backend_metal)]
-    {
-        crate::metal::MtlContext::new(init)
-            .map(|mtl| Box::new(mtl) as Box<dyn backend::RenderBackend>)
-    }
-
-    #[cfg(not(any(backend_dx, backend_vk, backend_metal)))]
-    {
-        let _ = init;
-        Err(concinnity_core::render::error::RenderError::Unsupported { op: "init_backend" })
+    #[test]
+    fn every_compiled_platform_is_listed_once() {
+        for platform in Platform::ALL {
+            let listed = COMPILED_PLATFORMS
+                .iter()
+                .filter(|p| **p == platform)
+                .count();
+            assert!(listed <= 1, "{platform:?}");
+        }
+        assert_eq!(
+            COMPILED_PLATFORMS.contains(&Platform::Vulkan),
+            cfg!(backend_vk)
+        );
     }
 }

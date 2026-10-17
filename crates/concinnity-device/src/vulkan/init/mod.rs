@@ -139,6 +139,7 @@ impl VkContext {
         reuse: Option<(VkHardware, SwapchainState)>,
     ) -> RenderResult<Self> {
         let BackendInit {
+            platform: _,
             window,
             validation,
             graphics,

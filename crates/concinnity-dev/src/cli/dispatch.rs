@@ -3,6 +3,7 @@
 // belongs on the other side of it, where `tests/cli.rs` and this crate's own
 // tests can reach it.
 
+use super::commands::RunArgs;
 use super::{Cli, Commands};
 use crate::command;
 use crate::export::ExportOptions;
@@ -20,31 +21,17 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
                 command::Verbosity::Normal
             },
         ),
-        Commands::Run(args) => concinnity_engine::app::run(
-            tree,
-            concinnity_engine::app::run::RunOptions {
-                mode: if args.serial {
-                    concinnity_engine::app::run::PipelineMode::Serial
-                } else {
-                    concinnity_engine::app::run::PipelineMode::Pipelined
-                },
-                schedule: if args.serial_schedule {
-                    concinnity_core::ecs::ScheduleMode::Serial
-                } else {
-                    concinnity_core::ecs::ScheduleMode::Parallel
-                },
-                screenshot: args.screenshot.clone(),
-                launch: concinnity_engine::app::run::LaunchRequest {
-                    max_frames: args.frames,
-                    ..args.render.launch(args.validation, false)
-                },
-            },
-        ),
+        Commands::Run(args) => {
+            args.render.select_graphics_api(tree);
+            run_world(args, tree)
+        }
         Commands::Debug(args) => {
+            args.render.select_graphics_api(tree);
             let launch = args.render.launch(args.validation, true);
             crate::run_debug(launch, args.world.file(), args.debug_port)
         }
         Commands::Editor(args) => {
+            args.render.select_graphics_api(tree);
             // Every editor session hot-reloads, with or without a debug port.
             let launch = args.render.launch(args.validation, true);
             crate::run_editor(launch, args.file.as_deref(), args.debug_port)
@@ -69,4 +56,28 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
         Commands::Mcp(args) => crate::run_mcp(args.debug_port),
         Commands::Version => command::version(),
     }
+}
+
+// `cn run`: the built world in `tree`'s `data/`, with this command's options.
+fn run_world(args: &RunArgs, tree: &StateTree) -> std::io::Result<()> {
+    concinnity_engine::app::run(
+        tree,
+        concinnity_engine::app::run::RunOptions {
+            mode: if args.serial {
+                concinnity_engine::app::run::PipelineMode::Serial
+            } else {
+                concinnity_engine::app::run::PipelineMode::Pipelined
+            },
+            schedule: if args.serial_schedule {
+                concinnity_core::ecs::ScheduleMode::Serial
+            } else {
+                concinnity_core::ecs::ScheduleMode::Parallel
+            },
+            screenshot: args.screenshot.clone(),
+            launch: concinnity_engine::app::run::LaunchRequest {
+                max_frames: args.frames,
+                ..args.render.launch(args.validation, false)
+            },
+        },
+    )
 }

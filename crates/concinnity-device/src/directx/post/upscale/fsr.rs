@@ -49,7 +49,7 @@ impl FsrUpscaler {
     // is missing, or the context could not be created.
     pub(super) fn try_new(target: UpscalerTarget<'_>) -> RenderResult<Option<Self>> {
         let Some(library) = Dll::open(LIBRARY) else {
-            if cfg!(ffx_sdk_bundled) {
+            if cfg!(ffx_dx_sdk_bundled) {
                 tracing::warn!(
                     "{LABEL}: amd_fidelityfx_dx12.dll was bundled at build time but failed to \
                      load at runtime; trying the next backend"

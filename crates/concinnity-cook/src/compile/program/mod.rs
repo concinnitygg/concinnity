@@ -22,7 +22,7 @@
 use std::path::Path;
 
 use concinnity_core::components::compiled_programs::CompiledProgram;
-use concinnity_core::platform::Platform;
+use concinnity_core::platform::{Platform, PlatformSet};
 use concinnity_core::render::shader_source;
 use concinnity_shader::diagnostics;
 
@@ -62,6 +62,32 @@ pub(crate) fn require_compiler(owner: &str, have_compiler: bool) -> std::io::Res
                 .unwrap_or("no shader compiler found and this asset has no compiled payload")
         ),
     ))
+}
+
+/// `compile` run for each of `targets`: the first target's container, holding
+/// every target's programs. The platforms never collide in one list: a program
+/// is found by its entry and source digest, and the digest covers the backend
+/// the source was assembled for.
+pub(crate) fn for_each_target<T>(
+    owner: &str,
+    targets: PlatformSet,
+    mut compile: impl FnMut(Platform) -> std::io::Result<T>,
+    programs: impl Fn(&mut T) -> &mut Vec<CompiledProgram>,
+) -> std::io::Result<T> {
+    let mut platforms = targets.iter();
+    let first = platforms.next().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{owner}: the build cooks for no shader platform"),
+        )
+    })?;
+    let mut gathered = compile(first)?;
+    for platform in platforms {
+        let mut more = compile(platform)?;
+        let more = std::mem::take(programs(&mut more));
+        programs(&mut gathered).extend(more);
+    }
+    Ok(gathered)
 }
 
 /// Whether `output` reports a call to any of `hooks` that no file defined,
@@ -183,6 +209,47 @@ mod tests {
             entry: "main_ps",
             source,
         }
+    }
+
+    fn program(platform: Platform) -> CompiledProgram {
+        CompiledProgram {
+            entry: "main_ps".to_string(),
+            source_digest: platform as u64,
+            artifact: platform.key().as_bytes().to_vec(),
+        }
+    }
+
+    #[test]
+    fn every_target_lands_in_the_first_targets_container() {
+        let targets: PlatformSet = [Platform::DirectX, Platform::Vulkan].into_iter().collect();
+        let mut compiled = Vec::new();
+        let gathered = for_each_target(
+            "x",
+            targets,
+            |platform| {
+                compiled.push(platform);
+                Ok(vec![program(platform)])
+            },
+            |programs: &mut Vec<CompiledProgram>| programs,
+        )
+        .unwrap();
+        assert_eq!(compiled, [Platform::DirectX, Platform::Vulkan]);
+        assert_eq!(
+            gathered,
+            [program(Platform::DirectX), program(Platform::Vulkan)]
+        );
+    }
+
+    #[test]
+    fn a_build_with_no_target_refuses_to_compile() {
+        let err = for_each_target(
+            "Shader 's'",
+            PlatformSet::default(),
+            |_| -> std::io::Result<Vec<CompiledProgram>> { panic!("nothing compiles") },
+            |programs| programs,
+        )
+        .unwrap_err();
+        assert!(err.to_string().starts_with("Shader 's'"), "{err}");
     }
 
     // Every host cooks every target, so a world cooked on Windows or Linux

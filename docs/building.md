@@ -1,14 +1,20 @@
 # Build Guide
 
-The rendering backend follows the target, with `vulkan` as the one override:
+The native rendering backend follows the target, and the `vulkan` feature adds
+Vulkan beside it:
 
-| Platform | Backend    | Notes                                         |
-| -------- | ---------- | --------------------------------------------- |
-| macOS    | Metal      | Build with `--features vulkan` to use Vulkan. |
-| Windows  | DirectX 12 | Build with `--features vulkan` to use Vulkan. |
-| Linux    | Vulkan     | Only backend available.                       |
-| iOS      | none       | No window layer yet; runs headless.           |
-| Android  | none       | No window layer yet; runs headless.           |
+| Platform | Backend    | Notes                                                |
+| -------- | ---------- | ---------------------------------------------------- |
+| macOS    | Metal      | `--features vulkan` adds Vulkan as a second choice.  |
+| Windows  | DirectX 12 | `--features vulkan` adds Vulkan as a second choice.  |
+| Linux    | Vulkan     | Only backend available.                              |
+| iOS      | none       | No window layer yet; runs headless.                  |
+| Android  | none       | No window layer yet; runs headless.                  |
+
+A build with two backends renders with the native one unless told otherwise:
+the Graphics API row of the settings menu chooses for the next launch, and
+`--graphics-api vulkan` on `cn run` / `cn debug` / `cn editor` chooses for one
+launch. A build with one backend shows the row grayed out.
 
 ## Cargo features
 
@@ -20,7 +26,7 @@ these:
 | `std`    | on      | The engine on an operating system, with the target's render backend.        |
 | `player` | on      | The `concinnity-run` binary that plays a compiled world.                    |
 | `cook`   | on      | `concinnity::cook`, which compiles authored assets into a world in process. |
-| `vulkan` | off     | Vulkan in place of Metal or DirectX 12. Linux renders with Vulkan already.  |
+| `vulkan` | off     | Vulkan beside Metal or DirectX 12. Linux renders with Vulkan already.       |
 | `editor` | off     | The `concinnity` CLI and editor, along with `player` and `cook`.            |
 
 `cook` pulls in the asset importers (glTF, FBX, textures, fonts) and 43
@@ -33,8 +39,8 @@ concinnity = { version = "0.19", default-features = false, features = ["std"] }
 
 `vulkan` is mirrored by every crate between the facade and the device
 backends, and by the `cn` CLI, so `--features vulkan` means the same thing
-whichever of them a build targets. Exactly one backend compiles into any
-binary.
+whichever of them a build targets. A blob a two-backend build writes carries
+shaders for both, so one world plays on either.
 
 Dropping `std` leaves the `no_std` core: the component vocabulary, a `World`,
 and the headless loop that steps it, with no operating system underneath.
@@ -184,8 +190,8 @@ cargo build --release
 
 ## macOS (Vulkan)
 
-Metal is the default on macOS; the `vulkan` feature selects a Vulkan build
-instead, which runs over the MoltenVK portability driver. This is a **testing
+Metal is the default on macOS; the `vulkan` feature adds Vulkan beside it,
+which runs over the MoltenVK portability driver. This is a **testing
 backend, not a shipping one**: it exists so Vulkan-backend changes can be
 exercised on a Mac without a Linux or Windows host.
 
@@ -320,8 +326,8 @@ So:
 
 ## Windows (Vulkan)
 
-Since DirectX is the default on Windows, the `vulkan` feature selects a Vulkan
-build instead.
+Since DirectX is the default on Windows, the `vulkan` feature adds Vulkan beside
+it.
 
 ### Prerequisites
 

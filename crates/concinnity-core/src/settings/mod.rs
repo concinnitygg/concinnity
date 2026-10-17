@@ -26,7 +26,7 @@ pub use resolve::{
     ResolvedGraphics, ResolvedSettings, SceneOverride, SettingsDiff, SettingsLayers, WorldAssets,
     WorldSettings,
 };
-pub use user::UserGraphicsSettings;
+pub use user::{GraphicsApiTrial, UserGraphicsSettings};
 
 // Ordered option labels for `vsync`: index 0 is off, index 1 is on.
 pub(crate) const VSYNC_OPTIONS: [&str; 2] = ["Off", "On"];
@@ -90,9 +90,10 @@ pub(crate) const VOLUME_OPTIONS: [&str; 5] = ["Off", "25%", "50%", "75%", "100%"
 
 /// Whether `key`'s options are enumerated at runtime (a dropdown row with no
 /// static label table; `options` returns `None` for it). `resolution` lists the
-/// display modes the current display supports.
+/// display modes the current display supports, and `graphics_api` the graphics
+/// APIs the running build compiled in.
 pub fn is_dynamic_dropdown(key: SettingKey) -> bool {
-    key == SettingKey::Resolution
+    matches!(key, SettingKey::Resolution | SettingKey::GraphicsApi)
 }
 
 /// The option labels for a cycle setting, or `None` for a slider, a rebind, or
@@ -134,6 +135,7 @@ pub fn options(key: SettingKey) -> Option<&'static [&'static str]> {
         | K::Ssgi
         | K::AutoExposure => Some(&OFF_ON_OPTIONS),
         K::Resolution
+        | K::GraphicsApi
         | K::Exposure
         | K::BloomIntensity
         | K::BloomThreshold

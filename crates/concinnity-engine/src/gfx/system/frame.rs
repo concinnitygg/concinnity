@@ -668,6 +668,9 @@ impl GraphicsSystem {
         // label, so this is the row's anchor into the scroll element list).
         let mut gated_value_labels: std::collections::HashSet<AssetId> =
             std::collections::HashSet::new();
+        // A single-API build's Graphics API row names the API it renders with,
+        // which the device does support: it is grayed without the suffix.
+        let mut unsuffixed: std::collections::HashSet<AssetId> = std::collections::HashSet::new();
         for r in ctx.query_mut::<HitRegion>() {
             let Some(UiAction::Setting { key, .. }) = r.action else {
                 continue;
@@ -678,6 +681,9 @@ impl GraphicsSystem {
             r.disabled = true;
             if let Some(label) = r.label {
                 gated_value_labels.insert(label.id());
+                if key == concinnity_core::settings::SettingKey::GraphicsApi {
+                    unsuffixed.insert(label.id());
+                }
             }
         }
         if gated_value_labels.is_empty() {
@@ -694,7 +700,7 @@ impl GraphicsSystem {
                     .map(|r| r.elements.iter().map(|e| e.id()).collect())
             })
             .collect();
-        for &id in &gated_value_labels {
+        for &id in gated_value_labels.difference(&unsuffixed) {
             crate::ecs::by_asset_id::update::<TextLabel>(ctx, Some(id), |l| {
                 l.content = settings::unsupported_label(&l.content);
             });

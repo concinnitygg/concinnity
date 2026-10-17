@@ -44,7 +44,8 @@ pub(crate) fn check_cfg_directives() -> Vec<String> {
         "backend_dx",
         "backend_vk",
         "agility_sdk_configured",
-        "ffx_sdk_bundled",
+        "ffx_dx_sdk_bundled",
+        "ffx_vk_sdk_bundled",
         "xess_sdk_bundled",
         "ngx_sdk_bundled",
     ]
@@ -57,19 +58,19 @@ pub(crate) fn backend_cfg_directive(backend: Backend) -> String {
     rustc_cfg(backend.cfg_name())
 }
 
-// The full SDK setup for one backend across every kind of final binary the
-// calling package builds. Each kind takes its own linker-argument key and its
+// The full SDK setup for the build's backends across every kind of final
+// binary the calling package builds. Each kind takes its own linker-argument key and its
 // own directory for the bundled DLLs, so the setup runs once per kind; the
 // directives both kinds produce -- every cfg, every warning, the unscoped NGX
 // link -- are emitted once.
 pub(crate) fn graphics_sdk_directives(
-    backend: Backend,
+    backends: &[Backend],
     targets: &[BinaryTargets],
     env: &SdkEnv,
 ) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for &target in targets {
-        for line in directives_for_kind(backend, target, env) {
+        for line in directives_for_kind(backends, target, env) {
             if !out.contains(&line) {
                 out.push(line);
             }
@@ -78,27 +79,24 @@ pub(crate) fn graphics_sdk_directives(
     out
 }
 
-// On a non-Windows target (or the Metal backend) this returns nothing: none of
-// these SDKs apply.
-fn directives_for_kind(backend: Backend, targets: BinaryTargets, env: &SdkEnv) -> Vec<String> {
+// On a non-Windows target (or Metal alone) this returns nothing: none of these
+// SDKs apply. DLSS (NGX) and XeSS expose their DirectX and Vulkan entry points
+// from the same binaries, so they are set up once for either backend; FidelityFX
+// ships one runtime per API.
+fn directives_for_kind(backends: &[Backend], targets: BinaryTargets, env: &SdkEnv) -> Vec<String> {
+    let dx = backends.contains(&Backend::Dx);
+    let vk = backends.contains(&Backend::Vk) && env.target_os == "windows";
     let mut out = Vec::new();
-    match backend {
-        Backend::Dx => {
-            agility_directives(env, targets, &mut out);
-            fidelityfx_dx_directives(env, targets, &mut out);
-            xess_directives(env, targets, &mut out);
-            dlss_directives(env, targets, &mut out);
-        }
-        Backend::Vk if env.target_os == "windows" => {
-            // DLSS (NGX) and XeSS expose Vulkan entry points from the same
-            // binaries the DirectX backend uses, so the setup helpers are
-            // backend-agnostic and reused here. Windowing comes from the
-            // shared native Win32 layer (no GLFW DLL to bundle).
-            fidelityfx_vk_directives(env, targets, &mut out);
-            dlss_directives(env, targets, &mut out);
-            xess_directives(env, targets, &mut out);
-        }
-        _ => {}
+    if dx {
+        agility_directives(env, targets, &mut out);
+        fidelityfx_dx_directives(env, targets, &mut out);
+    }
+    if vk {
+        fidelityfx_vk_directives(env, targets, &mut out);
+    }
+    if dx || vk {
+        xess_directives(env, targets, &mut out);
+        dlss_directives(env, targets, &mut out);
     }
     out
 }
@@ -212,7 +210,7 @@ fn agility_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String
 
 // AMD FidelityFX DX12 upscaler runtime. The renderer loads the DLL with
 // `LoadLibrary` at runtime, so bundling only copies it next to the .exe; the
-// `ffx_sdk_bundled` cfg is emitted when the SDK is present regardless.
+// `ffx_dx_sdk_bundled` cfg is emitted when the SDK is present regardless.
 fn fidelityfx_dx_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) {
     out.push(rerun_env("CN_ENABLE_FFX_FSR3"));
     if !env.ffx_enabled {
@@ -249,7 +247,7 @@ fn fidelityfx_dx_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<
     {
         return;
     }
-    out.push(rustc_cfg("ffx_sdk_bundled"));
+    out.push(rustc_cfg("ffx_dx_sdk_bundled"));
 }
 
 // AMD FidelityFX Vulkan upscaler runtime. Prefers the rebuilt DLL under
@@ -297,7 +295,7 @@ fn fidelityfx_vk_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<
     {
         return;
     }
-    out.push(rustc_cfg("ffx_sdk_bundled"));
+    out.push(rustc_cfg("ffx_vk_sdk_bundled"));
 }
 
 // Intel XeSS upscaler runtime. Pure `LoadLibrary` at runtime, so bundling only

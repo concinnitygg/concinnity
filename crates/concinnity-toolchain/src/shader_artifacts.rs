@@ -16,6 +16,13 @@ use std::path::{Path, PathBuf};
 // The directory under `OUT_DIR` the compiled artifacts land in.
 const ARTIFACT_DIR: &str = "shader_artifacts";
 
+// Where one lookup's artifacts land. Each lookup has a directory of its own,
+// since a build embedding DXIL and SPIR-V compiles the same program names for
+// both.
+fn artifact_dir(out_dir: &Path, lookup: &str) -> PathBuf {
+    out_dir.join(ARTIFACT_DIR).join(lookup)
+}
+
 /// One program to precompile: the name the renderer looks it up by, the
 /// assembled source text, the entry point, and what to emit.
 pub struct ShaderArtifact<'a> {
@@ -60,7 +67,7 @@ pub fn precompile_shader_artifacts(
 
     crate::embedded_shaders::require_dxc();
 
-    let art_dir = out_dir.join(ARTIFACT_DIR);
+    let art_dir = artifact_dir(&out_dir, lookup);
     std::fs::create_dir_all(&art_dir).expect("create shader artifact dir");
     embed(
         artifacts,
@@ -242,6 +249,15 @@ mod tests {
             },
             &tree.join("lookup.rs"),
             "f",
+        );
+    }
+
+    #[test]
+    fn each_lookup_embeds_from_its_own_directory() {
+        let out = Path::new("/out");
+        assert_ne!(
+            artifact_dir(out, "embedded_dxil"),
+            artifact_dir(out, "embedded_spirv")
         );
     }
 

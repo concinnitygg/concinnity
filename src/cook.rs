@@ -118,10 +118,11 @@ pub struct WorldBuilder(concinnity_cook::WorldBuilder);
 
 /// Start an empty world.
 pub fn world() -> WorldBuilder {
-    // Shaders are cooked for the backend the runtime linked in beside this
-    // module consumes, so a world compiled in memory runs in the same process.
+    // Shaders are cooked for every backend the runtime linked in beside this
+    // module can render with, so a world compiled in memory runs in the same
+    // process and a blob it writes plays on whichever one a launch selects.
     WorldBuilder(concinnity_cook::world(
-        concinnity_engine::platform::current(),
+        concinnity_engine::platform::compiled_set(),
     ))
 }
 

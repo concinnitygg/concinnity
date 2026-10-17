@@ -314,7 +314,9 @@ mod tests {
         let rt = crate::authoring::registry::RegisteredType::EnvironmentMap;
         let ctx = crate::asset::BuildCtx {
             name: "env",
-            platform: concinnity_core::platform::Platform::Metal,
+            targets: concinnity_core::platform::PlatformSet::single(
+                concinnity_core::platform::Platform::Metal,
+            ),
             assets_dir: None,
             all_assets: &[],
         };

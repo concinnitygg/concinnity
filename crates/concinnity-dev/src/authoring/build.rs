@@ -104,7 +104,7 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     let mut result = build_compiled(
         loaded.assets,
         crate::project::assets_dir().as_deref(),
-        crate::cook_platform(),
+        crate::cook_platform().into(),
     )?;
 
     // The material name catalog, read before the result is taken apart below.
@@ -218,10 +218,27 @@ pub(crate) fn build_world_file_as(
     shown: &str,
     verbosity: Verbosity,
 ) -> std::io::Result<()> {
+    build_world(json_path, shown, verbosity, crate::cook_targets())
+}
+
+// `build_world_file` for only `targets`, for an export whose player carries
+// fewer backends than this `cn`.
+pub(crate) fn build_world_file_for(
+    json_path: &str,
+    targets: concinnity_core::platform::PlatformSet,
+) -> std::io::Result<()> {
+    build_world(json_path, json_path, Verbosity::Normal, targets)
+}
+
+fn build_world(
+    json_path: &str,
+    shown: &str,
+    verbosity: Verbosity,
+    targets: concinnity_core::platform::PlatformSet,
+) -> std::io::Result<()> {
     let tree = crate::project::require()?;
     let content = std::fs::read_to_string(json_path)?;
-    let platform = crate::cook_platform();
-    let status = BuildStatus::start(shown, platform, verbosity);
+    let status = BuildStatus::start(shown, targets, verbosity);
     let source = WorldSource::file(&content, Path::new(json_path));
     let loaded = match concinnity_cook::prepare_world(source, Some(&tree.assets_dir())) {
         Ok(loaded) => loaded,
@@ -232,7 +249,7 @@ pub(crate) fn build_world_file_as(
     };
     status.loaded(&loaded);
     let report = |p: concinnity_cook::BuildProgress<'_>| status.progress(p);
-    match concinnity_cook::build_loaded(&tree, loaded, platform, Some(&report)) {
+    match concinnity_cook::build_loaded(&tree, loaded, targets, Some(&report)) {
         Ok(built) => {
             status.finish(&built);
             Ok(())
@@ -256,7 +273,7 @@ pub(crate) fn build_world_str_to_disk(
     let result = concinnity_cook::build_compiled_with_progress(
         loaded.assets,
         crate::project::assets_dir().as_deref(),
-        crate::cook_platform(),
+        crate::cook_targets(),
         progress,
     )?;
     concinnity_cook::write_build_outputs(

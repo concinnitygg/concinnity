@@ -264,6 +264,12 @@ impl Runtime {
     /// this build or machine cannot draw, which [`start`](Runtime::start)
     /// refuses. Cached with [`render_mode`](Runtime::render_mode).
     pub fn render_resolution(&mut self) -> Resolution {
+        if self.render_mode.is_none() {
+            // Before the first probe, which runs on the graphics API this
+            // process renders with: the player's choice, from the settings the
+            // world's home holds.
+            crate::platform::select_persisted(self.writable_tree().as_ref());
+        }
         *self
             .render_mode
             .get_or_insert_with(|| render_mode::resolve_and_report(&self.world))
@@ -276,6 +282,19 @@ impl Runtime {
     // empty `home` leaves the tree the host built, which is what keeps the
     // writability redirect a shipped player performs for itself in force.
     fn install_home(&mut self) {
+        match self.home_dir() {
+            Ok(None) => {}
+            Ok(Some(dir)) => {
+                tracing::info!("Writable state: {}", dir.display());
+                self.state = self.state.take().map(|tree| tree.with_writable(dir));
+            }
+            Err(why) => tracing::warn!("{why}"),
+        }
+    }
+
+    // The directory the world's `AppConfig.home` names, resolved against the
+    // state tree: `None` for no home, an error saying why one cannot be used.
+    fn home_dir(&self) -> Result<Option<std::path::PathBuf>, String> {
         let Some(home) = self
             .world
             .query::<AppConfig>()
@@ -283,24 +302,31 @@ impl Runtime {
             .map(|c| c.home.clone())
             .filter(|h| !h.is_empty())
         else {
-            return;
+            return Ok(None);
         };
         let Some(tree) = self.state.as_ref() else {
-            tracing::warn!(
+            return Err(format!(
                 "AppConfig home '{home}' has no state tree to resolve against; \
                  the runtime writes nowhere"
-            );
-            return;
+            ));
         };
-        let Some(dir) = resolve_home(&home, tree.content_root()) else {
-            tracing::warn!(
-                "AppConfig home '{home}' is relative but the state tree has no root; \
+        resolve_home(&home, tree.content_root())
+            .map(Some)
+            .ok_or_else(|| {
+                format!(
+                    "AppConfig home '{home}' is relative but the state tree has no root; \
                  leaving writable state where it is"
-            );
-            return;
-        };
-        tracing::info!("Writable state: {}", dir.display());
-        self.state = Some(tree.clone().with_writable(dir));
+                )
+            })
+    }
+
+    // The state tree as `install_home` will leave it, for a read of the
+    // writable state before the runtime starts.
+    fn writable_tree(&self) -> Option<StateTree> {
+        match self.home_dir() {
+            Ok(Some(dir)) => self.state.clone().map(|tree| tree.with_writable(dir)),
+            _ => self.state.clone(),
+        }
     }
 
     // Hand the state tree to the world, and to the process-wide caches that

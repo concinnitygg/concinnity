@@ -1,8 +1,8 @@
 //! The device backends. The proprietary, hardware-facing renderers - Metal
 //! (macOS), DirectX 12 (Windows), Vulkan (Windows/Linux) - plus the shared native
-//! Win32 window/input layer. At most one backend compiles per build, resolved by
-//! build.rs from the backend features into a single backend_* cfg; a build that
-//! names none compiles no GPU code at all. Depends on concinnity-core, whose
+//! Win32 window/input layer. build.rs resolves the backends a build compiles in
+//! (the target's native one, plus Vulkan with the `vulkan` feature) into one
+//! backend_* cfg each; a target with none compiles no GPU code at all. Depends on concinnity-core, whose
 //! `render` module holds the RenderBackend/SceneControl trait seam these
 //! implement plus the render-prep feeding it; owns no gameplay, ECS-runtime,
 //! audio, or physics. The client drives these through a
@@ -77,4 +77,4 @@ pub(crate) mod rt_report;
 pub(crate) mod suballoc;
 
 mod factory;
-pub use factory::{init_backend, probe_device};
+pub use factory::{COMPILED_PLATFORMS, init_backend, probe_device};

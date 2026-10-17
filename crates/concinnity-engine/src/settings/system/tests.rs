@@ -165,6 +165,7 @@ impl Fixture {
             setting_cmd_cursor: Default::default(),
             published_hud_prefs: None,
             published_disabled_inputs: None,
+            steps_since_init: 0,
         };
 
         let mut fixture = Fixture {

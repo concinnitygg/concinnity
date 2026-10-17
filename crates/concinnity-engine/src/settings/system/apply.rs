@@ -251,6 +251,7 @@ impl SettingsState {
             _ if !stepper => return misrouted(cmd),
             K::GraphicsQuality => return self.apply_quality_preset(ctx, cfg, cmd),
             K::Resolution => return self.apply_resolution(ctx, ops, cfg, cmd),
+            K::GraphicsApi => return self.apply_graphics_api(ctx, cfg, cmd),
             key @ (K::Vsync
             | K::PerfStats
             | K::ShowFps
@@ -372,6 +373,32 @@ impl SettingsState {
         cfg.graphics.resolution = Some([mode.width, mode.height, mode.refresh_hz]);
         if let Some(label_id) = cmd.value_label {
             set_label_content(ctx, label_id, &mode.label());
+        }
+        true
+    }
+
+    // The Graphics API row cycles the APIs this build compiled in.
+    // Restart-required: the choice is persisted and tried on the next launch,
+    // while this one keeps the backend it built.
+    fn apply_graphics_api(
+        &mut self,
+        ctx: &mut PipelineContext,
+        cfg: &mut Settings,
+        cmd: &SettingCommand,
+    ) -> bool {
+        let chosen = cfg
+            .graphics
+            .graphics_api
+            .unwrap_or_else(crate::platform::current);
+        let Some(choice) =
+            settings::graphics_api_choice(crate::platform::compiled(), chosen, cmd.op)
+        else {
+            return false;
+        };
+        cfg.graphics.graphics_api = Some(choice.platform);
+        cfg.graphics.graphics_api_trial = choice.trial;
+        if let Some(label_id) = cmd.value_label {
+            set_label_content(ctx, label_id, choice.platform.label());
         }
         true
     }
