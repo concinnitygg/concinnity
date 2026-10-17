@@ -1,7 +1,6 @@
 // Scripted camera path schema: the authored legs and the keys they bake into.
 
 use crate::components::Vocabulary;
-use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::math::vec3;
@@ -72,10 +71,6 @@ pub struct CameraTravel {
     /// the jump, as at a shot change. A leg that takes no time anyway is a cut
     /// as soon as it moves the camera.
     pub cut: bool,
-    /// Names the segment of the path this leg opens, for whatever reads where
-    /// the track has reached. An empty label continues whichever segment the
-    /// previous leg was in.
-    pub segment: String,
 }
 
 /// One turn on a [CameraTrack](#cameratrack)'s turn track.
@@ -145,7 +140,6 @@ pub struct CameraTurn {
 ///         distance: 20.0,
 ///         speed: 4.0,
 ///         ease: Ease::InOut,
-///         segment: "approach".into(),
 ///         ..Default::default()
 ///     }],
 ///     turn: vec![CameraTurn {
@@ -193,9 +187,6 @@ pub struct CameraTravelKey {
     /// The camera jumps here rather than running: the key takes no time and
     /// the frame that reaches it starts afresh.
     pub cut: bool,
-    /// Index into [`CameraTrack::segments`], or `None` while no leg has yet
-    /// opened one.
-    pub segment: Option<u32>,
 }
 
 /// A heading the turn track reaches, baked from a [CameraTurn](#cameraturn)
@@ -252,32 +243,17 @@ pub struct CameraTrack {
     pub travel: Vec<CameraTravelKey>,
     /// The turn track, as absolute headings.
     pub turn: Vec<CameraTurnKey>,
-    /// The path's segment names, in the order the travel legs open them. A
-    /// key's `segment` indexes this list.
-    pub segments: Vec<String>,
 }
 
 impl CameraTrack {
     /// Translate the authored legs into the runtime keys: resolve each travel
-    /// leg's duration and displacement, gather the segment names, and
-    /// carry the turn legs through for the world start to time.
+    /// leg's duration and displacement, and carry the turn legs through for the
+    /// world start to time.
     pub fn bake(args: CameraTrackArgs) -> Self {
         let args = crate::components::validate::camera_track(args);
         let mut travel = Vec::with_capacity(args.travel.len());
-        let mut segments: Vec<String> = Vec::new();
         let mut end_seconds = 0.0_f32;
-        let mut segment = None;
         for leg in &args.travel {
-            if !leg.segment.is_empty() {
-                let at = segments.iter().position(|s| *s == leg.segment);
-                segment = Some(match at {
-                    Some(i) => i as u32,
-                    None => {
-                        segments.push(leg.segment.clone());
-                        (segments.len() - 1) as u32
-                    }
-                });
-            }
             let seconds = travel_seconds(leg);
             end_seconds += seconds;
             travel.push(CameraTravelKey {
@@ -285,7 +261,6 @@ impl CameraTrack {
                 end_seconds,
                 ease: leg.ease,
                 cut: leg.cut || (seconds == 0.0 && leg.distance > 0.0),
-                segment,
             });
         }
         let turn = args
@@ -300,11 +275,7 @@ impl CameraTrack {
                 cut: leg.cut,
             })
             .collect();
-        Self {
-            travel,
-            turn,
-            segments,
-        }
+        Self { travel, turn }
     }
 }
 
@@ -325,7 +296,6 @@ pub(crate) fn travel_seconds(leg: &CameraTravel) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::string::ToString;
     use alloc::vec;
 
     fn travel(direction: [f32; 3], distance: f32, speed: f32) -> CameraTravel {
@@ -377,7 +347,6 @@ mod tests {
         let t = baked(vec![], vec![]);
         assert!(t.travel.is_empty());
         assert!(t.turn.is_empty());
-        assert!(t.segments.is_empty());
     }
 
     #[test]
@@ -456,37 +425,6 @@ mod tests {
         );
         assert!(t.travel[0].cut);
         assert!(!t.travel[1].cut);
-    }
-
-    #[test]
-    fn segments_collect_in_first_appearance_order() {
-        let named = |name: &str| CameraTravel {
-            segment: name.to_string(),
-            ..travel([1.0, 0.0, 0.0], 1.0, 1.0)
-        };
-        let t = baked(
-            vec![
-                named("shadows"),
-                travel([1.0, 0.0, 0.0], 1.0, 1.0),
-                named("rays"),
-                named("shadows"),
-            ],
-            vec![],
-        );
-        assert_eq!(t.segments, ["shadows", "rays"]);
-        assert_eq!(t.travel[0].segment, Some(0));
-        // An unlabeled leg stays in the segment the one before it opened.
-        assert_eq!(t.travel[1].segment, Some(0));
-        assert_eq!(t.travel[2].segment, Some(1));
-        // A repeated label re-enters its segment rather than declaring another.
-        assert_eq!(t.travel[3].segment, Some(0));
-    }
-
-    #[test]
-    fn legs_before_the_first_label_are_in_no_segment() {
-        let t = baked(vec![travel([1.0, 0.0, 0.0], 1.0, 1.0)], vec![]);
-        assert_eq!(t.travel[0].segment, None);
-        assert!(t.segments.is_empty());
     }
 
     #[test]

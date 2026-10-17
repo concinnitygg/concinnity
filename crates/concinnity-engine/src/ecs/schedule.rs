@@ -19,7 +19,6 @@ use concinnity_core::components::CameraController;
 use concinnity_core::components::CameraTrack;
 use concinnity_core::components::DebugHud;
 use concinnity_core::components::FpsCounter;
-use concinnity_core::components::FrameReport;
 use concinnity_core::components::HitRegion;
 use concinnity_core::components::KeyBinding;
 use concinnity_core::components::LoadingOverlay;
@@ -242,14 +241,12 @@ pub(crate) fn camera_track(
     Some(concinnity_core::camera_track::CameraTrackSystem::new(track))
 }
 
-// FrameReportSystem: present whenever the world declares a `FrameReport`;
-// built from that component (the discard, the budget, and whether the end of
-// the camera track ends the run). Last in the Late band, so the frame it
-// records is complete before it reads it.
+// FrameReportSystem: present whenever the run was armed as a benchmark; built
+// from that run (the discard, the budget, the phases and the captures). Last in
+// the Late band, so the frame it records is complete before it reads it.
 pub(crate) fn frame_report(world: &World) -> Option<crate::frame_report::FrameReportSystem> {
     world
-        .query::<FrameReport>()
-        .next()
+        .resource::<concinnity_core::benchmark::BenchmarkRun>()
         .map(crate::frame_report::FrameReportSystem::new)
 }
 

@@ -1185,7 +1185,7 @@ registry.
 | 20  | Loading overlay     | PreRender  | The world declares a `LoadingOverlay`.                                                                                |
 | 21  | UI input            | PreRender  | The world declares any `HitRegion`, `Screen`, or `KeyBinding`.                                                        |
 | 22  | Graphics            | PostRender | The world runs with a window.                                                                                         |
-| 23  | Frame report        | PostRender | The world declares a `FrameReport`.                                                                                   |
+| 23  | Frame report        | PostRender | The run is benchmarked (`--benchmark`).                                                                               |
 
 Key ordering constraints:
 
@@ -2638,12 +2638,19 @@ fluctuation is not reported as a leak.
 
 ### 25.3 Benchmarks
 
-A `FrameReport` asset turns any world into a benchmark. It records one fixed-size
-row per frame (wall, CPU, GPU, per-pass, and per-system times) after a warm-up,
-reduces each column to count, mean, percentiles (50, 95, 99), maximum, and
-over-budget count, and reports per camera-track segment as well as the whole run,
-including the slowest frames. Paired with a camera track and a fixed frame rate,
-it is reproducible across hosts.
+Any world can be benchmarked by launching it with `--benchmark` (`cn run
+--benchmark`, or `App::benchmark` in code). A `BenchmarkConfig` asset customizes
+the run: the camera's start pose, the travel and turn legs it follows after the
+warm-up, the named phases the run is measured in, the frame budget, the frame-rate
+cap, and frames to save as images. A world without one holds its starting camera
+for ten seconds after a two-second warm-up; declaring one changes nothing on an
+ordinary launch.
+
+The run records one fixed-size row per frame (wall, CPU, GPU, per-pass, and
+per-system times), reduces each column to count, mean, percentiles (50, 95, 99),
+maximum, and over-budget count, and reports per phase as well as the whole run,
+including the slowest frames. The camera and the phases run on the fixed
+simulation clock, so the run is reproducible across hosts.
 
 ---
 

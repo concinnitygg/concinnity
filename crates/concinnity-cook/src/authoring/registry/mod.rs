@@ -1317,7 +1317,7 @@ mod tests {
                 "CameraTrack",
                 "StreamingConfig",
                 "PhysicsConfig",
-                "FrameReport",
+                "BenchmarkConfig",
                 "AppConfig",
                 "Variables",
                 "LoadingOverlay",

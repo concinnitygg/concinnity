@@ -106,7 +106,7 @@ macro_rules! for_each_component {
                 LayoutContainer   => $crate::components::LayoutContainer { gen, external, renders, live },
                 PhysicsConfig     => $crate::components::PhysicsConfig { gen, external, singleton },
                 FpsCounter        => $crate::components::FpsCounter { gen, external, useful_blank },
-                FrameReport       => $crate::components::FrameReport { gen, external, singleton },
+                BenchmarkConfig   => $crate::components::BenchmarkConfig { gen, external, singleton },
                 StatHud           => $crate::components::StatHud { gen, external, renders },
                 ScrollPanel       => $crate::components::ScrollPanel { gen, external, consumed },
                 ReflectionProbe   => $crate::components::ReflectionProbe { gen, external, useful_blank, validate: reflection_probe },

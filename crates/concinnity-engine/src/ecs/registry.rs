@@ -252,7 +252,7 @@ crate::define_systems! {
     },
     FrameReportSystem => crate::frame_report::FrameReportSystem {
         gate: schedule::frame_report,
-        present_when: "the world declares a FrameReport",
+        present_when: "the run is benchmarked",
         phase: PostRender,
         after: [GraphicsSystem, CameraTrackSystem],
         before: [],

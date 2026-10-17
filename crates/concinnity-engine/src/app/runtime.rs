@@ -228,6 +228,9 @@ impl Runtime {
         self.world
             .insert_resource(Clock(concinnity_host::clock::monotonic_micros));
         self.world.insert_resource(self.launch);
+        if self.launch.benchmark {
+            concinnity_core::benchmark::arm(&mut self.world);
+        }
         if let Some(view) = self.launch.view_overrides() {
             self.world.insert_resource(view);
         }
@@ -594,6 +597,34 @@ mod tests {
         assert_eq!(runtime.world().resource::<LaunchRequest>(), None);
         runtime.start().unwrap();
         assert_eq!(runtime.world().resource::<LaunchRequest>(), Some(&launch));
+    }
+
+    // A benchmark launch arms the world before its systems are built, so the
+    // report is scheduled; an ordinary one leaves a declared config inert.
+    #[test]
+    fn only_a_benchmark_launch_arms_the_world() {
+        use concinnity_core::benchmark::BenchmarkRun;
+        use concinnity_core::components::BenchmarkConfig;
+
+        let declared = || {
+            let mut world = World::new();
+            world.add_component(BenchmarkConfig {
+                warmup_seconds: 1.0,
+                ..Default::default()
+            });
+            world
+        };
+        let mut plain = Runtime::from_world(declared());
+        plain.start().unwrap();
+        assert!(plain.world().resource::<BenchmarkRun>().is_none());
+
+        let mut benchmarked = Runtime::from_world(declared()).with_launch(LaunchRequest {
+            benchmark: true,
+            ..Default::default()
+        });
+        benchmarked.start().unwrap();
+        let run = benchmarked.world().resource::<BenchmarkRun>();
+        assert_eq!(run.map(|r| r.config.warmup_seconds), Some(1.0));
     }
 
     // from_world hands the runtime a world that is already populated, in the

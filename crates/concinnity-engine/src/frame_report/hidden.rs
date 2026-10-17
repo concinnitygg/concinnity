@@ -6,23 +6,23 @@ pub(crate) const RESTORE_DROPPED_FRAMES: u32 = 4;
 
 /// Which frames ran while the window was minimized or hidden, when the backend
 /// draws nothing and the wall time is only the background pacing, and how
-/// many of them fell where the run is measured, by segment.
+/// many of them fell where the run is measured, by phase.
 #[derive(Debug, Default)]
 pub(crate) struct HiddenFrames {
     // Frames still to leave out behind the latest hidden one.
     settling: u32,
-    // Frames left out past the warm-up, by segment, in the order first seen.
+    // Frames left out past the warm-up, by phase, in the order first seen.
     counts: Vec<(Option<u32>, u32)>,
 }
 
 impl HiddenFrames {
-    /// Whether a frame drawn in `segment` is left out, given whether the
+    /// Whether a frame drawn in `phase` is left out, given whether the
     /// window was `hidden` for it. Only frames `past_warmup` are tallied,
     /// since the warm-up is dropped anyway.
     pub(crate) fn leaves_out(
         &mut self,
         hidden: bool,
-        segment: Option<u32>,
+        phase: Option<u32>,
         past_warmup: bool,
     ) -> bool {
         if hidden {
@@ -33,9 +33,9 @@ impl HiddenFrames {
             return false;
         }
         if past_warmup {
-            match self.counts.iter_mut().find(|(s, _)| *s == segment) {
+            match self.counts.iter_mut().find(|(s, _)| *s == phase) {
                 Some((_, count)) => *count += 1,
-                None => self.counts.push((segment, 1)),
+                None => self.counts.push((phase, 1)),
             }
         }
         true
@@ -46,8 +46,8 @@ impl HiddenFrames {
         self.counts.iter().map(|(_, count)| count).sum()
     }
 
-    /// Frames left out past the warm-up, by segment, in the order first seen.
-    pub(crate) fn by_segment(&self) -> impl Iterator<Item = (Option<u32>, u32)> + '_ {
+    /// Frames left out past the warm-up, by phase, in the order first seen.
+    pub(crate) fn by_phase(&self) -> impl Iterator<Item = (Option<u32>, u32)> + '_ {
         self.counts.iter().copied()
     }
 }
@@ -91,12 +91,12 @@ mod tests {
     }
 
     #[test]
-    fn frames_are_tallied_by_segment_in_the_order_first_seen() {
+    fn frames_are_tallied_by_phase_in_the_order_first_seen() {
         let mut hidden = HiddenFrames::default();
         hidden.leaves_out(true, Some(2), true);
         hidden.leaves_out(true, Some(0), true);
         hidden.leaves_out(true, Some(2), true);
-        let tally: Vec<_> = hidden.by_segment().collect();
+        let tally: Vec<_> = hidden.by_phase().collect();
         assert_eq!(tally, [(Some(2), 2), (Some(0), 1)]);
     }
 

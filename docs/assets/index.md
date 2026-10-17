@@ -10,6 +10,7 @@
 - [AudioCue](AudioCue.md) - Plays audio when a [Screen](Screen.md) is shown.
 - [AudioEmitter](AudioEmitter.md) - A point source of sound in the world.
 - [Behavior](Behavior.md) - A unit of world logic: an event source, the entities it runs against, its state, the world it reads, and the nodes it runs.
+- [BenchmarkConfig](BenchmarkConfig.md) - Customizes how a world is benchmarked.
 - [BlockType](BlockType.md) - Describes one entry in a [VoxelChunk](VoxelChunk.md) palette.
 - [Camera3D](Camera3D.md) - Declares the 3D camera. One per scene.
 - [CameraShot](CameraShot.md) - A reusable [Camera3D](Camera3D.md) preset: reference it from a [Scene](Scene.md)'s `camera_shot`, or use it standalone.
@@ -27,7 +28,6 @@
 - [File](File.md) - References a source file by path.
 - [Font](Font.md) - Rasterizes a TrueType font into a glyph atlas at build time.
 - [FpsCounter](FpsCounter.md) - Requests a frames-per-second counter; optionally writes it to a [TextLabel](TextLabel.md).
-- [FrameReport](FrameReport.md) - Times every frame of a run and prints what they cost when it ends.
 - [GlassPanel](GlassPanel.md) - A flat translucent panel of colored glass. A fixed-orientation rectangular quad that refracts and tints the scene behind it and brightens the grazing-angle rim with a Fresnel highlight.
 - [GraphicsConfig](GraphicsConfig.md) - The world's graphics settings, one section per feature. One per world; a world that draws gets an empty one when it declares none.
 - [Grass](Grass.md) - The look of a grass cover: individual blades, grown on the GPU each frame and swayed by the world's [Wind](Wind.md).
@@ -104,8 +104,10 @@
 - [Background](Background.md) - What the frame shows where no surface is drawn and no [EnvironmentMap](EnvironmentMap.md) serves as the backdrop. The `background` section of [GraphicsConfig](GraphicsConfig.md); left unset, the default below applies.
 - [BehaviorLocal](BehaviorLocal.md) - A per-entity state slot declared by a [Behavior](Behavior.md). The declared value fixes both the slot's type and its starting value.
 - [BehaviorQuery](BehaviorQuery.md) - A world read declared by a [Behavior](Behavior.md), resolved once per tick into the entities carrying every named component.
+- [BenchmarkPhase](BenchmarkPhase.md) - One named stretch of a [BenchmarkConfig](BenchmarkConfig.md)'s run.
 - [Bloom](Bloom.md) - Bloom: light from the brightest parts of the image spilling softly into their surroundings. The `bloom` section of [GraphicsConfig](GraphicsConfig.md); a field left unset takes the default below.
 - [CameraController](CameraController.md) - First-person / fly-through controller settings carried on a `Camera3D`.
+- [CameraPose](CameraPose.md) - Where a [BenchmarkConfig](BenchmarkConfig.md) starts the camera.
 - [CameraTravel](CameraTravel.md) - One straight run on a [CameraTrack](CameraTrack.md)'s travel track.
 - [CameraTurn](CameraTurn.md) - One turn on a [CameraTrack](CameraTrack.md)'s turn track.
 - [CharacterCapsule](CharacterCapsule.md) - A kinematic character capsule for a [SkinnedMesh](SkinnedMesh.md), in world units (after the mesh's `scale`).
@@ -118,7 +120,7 @@
 - [FileKind](FileKind.md) - The category of file content, inferred from the extension when not supplied.
 - [FollowController](FollowController.md) - Third-person follow settings carried on a [CameraController](CameraController.md).
 - [FollowDrive](FollowDrive.md) - How a followed character converts movement input into displacement.
-- [FrameCapture](FrameCapture.md) - One frame a [FrameReport](FrameReport.md) saves as an image.
+- [FrameCapture](FrameCapture.md) - One frame a [BenchmarkConfig](BenchmarkConfig.md) saves as an image.
 - [FramePacing](FramePacing.md) - How the render loop paces its frames: how many may be in flight, whether presentation waits for the display refresh, and the frame-rate cap. The `frame_pacing` section of [GraphicsConfig](GraphicsConfig.md); a field left unset takes the default below.
 - [FramePriority](FramePriority.md) - Whether the threads every frame waits on run above normal priority, ahead of the other applications on the machine.
 - [IndirectLighting](IndirectLighting.md) - Indirect (ambient) lighting: how strong the environment's ambient term is, and whether a screen-space bounce lets nearby lit surfaces bleed color onto one another. The `indirect_lighting` section of [GraphicsConfig](GraphicsConfig.md); a field left unset takes the default below.

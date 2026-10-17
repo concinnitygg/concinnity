@@ -395,7 +395,7 @@ mod tests {
         let mut spec = builder();
         spec.add_jsonl(BASE).overlay_jsonl(
             "[\"Camera3D\",{\"$id\":\"cam\",\"controller\":null}]\n\
-             [\"FrameReport\",{\"warmup_seconds\":2.5}]",
+             [\"BenchmarkConfig\",{\"warmup_seconds\":2.5}]",
         );
         let cam = spec.declared_args("cam").expect("declared");
         assert_eq!(cam["controller"], serde_json::Value::Null);
@@ -403,7 +403,7 @@ mod tests {
         assert_eq!(spec.declared_args("other").expect("declared")["pitch"], 0.5);
         assert_eq!(
             spec.declared().last(),
-            Some(("FrameReport#0", "FrameReport"))
+            Some(("BenchmarkConfig#0", "BenchmarkConfig"))
         );
         spec.compile().expect("the overlaid world compiles");
     }

@@ -1,9 +1,9 @@
-// The system a declared FrameReport gates in: records one row per frame, and
+// The system a benchmarked run gates in: records one row per frame, and
 // reports what the run cost when it ends.
 
+use concinnity_core::benchmark::BenchmarkRun;
 use concinnity_core::camera_track::CameraTrackStatus;
 use concinnity_core::components::FrameCapture;
-use concinnity_core::components::{CameraTrack, FrameReport};
 use concinnity_core::ecs::{FrameTime, PipelineContext, StepResult, System, WindowMinimized};
 use concinnity_core::planet::FrameRebases;
 use concinnity_core::profile::RenderStats;
@@ -26,9 +26,8 @@ const MICROS_PER_MILLI: f32 = 1_000.0;
 /// stats it reads were published this step. The system timings are not: the
 /// profile rotates them in at the start of the next step, so each frame is
 /// held for one step and recorded with its own timings then. The report goes out on the
-/// frame the world reports the measurement complete, which leaves that last
-/// frame unrecorded; a run cut short before that reports on the way out
-/// instead, and says so.
+/// frame the run's last phase ends, which leaves that last frame unrecorded; a
+/// run cut short before that reports on the way out instead, and says so.
 ///
 /// A declared capture is requested on the step the run reaches its moment, so
 /// the next frame drawn, one step on, is the one saved. That frame and the few
@@ -44,7 +43,7 @@ pub struct FrameReportSystem {
     // The frame the previous step measured, waiting for its system timings.
     pending: Option<PendingFrame>,
     options: ReduceOptions,
-    stop_when_complete: bool,
+    benchmark: BenchmarkRun,
     // Set once the report has gone out, so the teardown path does not repeat
     // it.
     reported: bool,
@@ -74,23 +73,24 @@ struct PendingFrame {
 }
 
 impl FrameReportSystem {
-    /// The system for a world's declared report.
-    pub fn new(report: &FrameReport) -> Self {
+    /// The system that measures `benchmark`.
+    pub fn new(benchmark: &BenchmarkRun) -> Self {
+        let config = &benchmark.config;
         Self {
             run: FrameRun::default(),
             pending: None,
             options: ReduceOptions {
-                warmup_seconds: report.warmup_seconds,
-                budget_us: (report.budget_ms * MICROS_PER_MILLI) as u32,
+                warmup_seconds: config.warmup_seconds,
+                budget_us: (config.budget_ms * MICROS_PER_MILLI) as u32,
             },
-            stop_when_complete: report.stop_when_complete,
+            benchmark: benchmark.clone(),
             reported: false,
             previous: None,
             started: None,
             previous_pose_seconds: 0.0,
             previous_rebases: 0,
             shown: ShownFrames::default(),
-            captures: CaptureSchedule::new(&report.captures),
+            captures: CaptureSchedule::new(&config.captures),
             hidden: HiddenFrames::default(),
             hidden_captures: Vec::new(),
         }
@@ -116,26 +116,26 @@ impl FrameReportSystem {
             ),
         }
         if self.hidden.total() > 0 {
-            let segments: Vec<String> = self
+            let phases: Vec<String> = self
                 .hidden
-                .by_segment()
-                .map(|(segment, count)| format!("{} {count}", self.run.segment_name(segment)))
+                .by_phase()
+                .map(|(phase, count)| format!("{} {count}", self.run.phase_name(phase)))
                 .collect();
             println!(
                 "frame report: the window was hidden, so {} frame(s) past the warm-up ({}) were left out of the measurement",
                 self.hidden.total(),
-                segments.join(", "),
+                phases.join(", "),
             );
         }
         for skipped in &self.hidden_captures {
             println!(
-                "frame report: the window was hidden at {:.1}s, so {} was not captured",
+                "frame report: the window was hidden {:.1}s after the warm-up, so {} was not captured",
                 skipped.seconds, skipped.path,
             );
         }
         for missed in self.captures.missed() {
             println!(
-                "frame report: the run ended before {:.1}s, so {} was not captured",
+                "frame report: the run ended before {:.1}s after the warm-up, so {} was not captured",
                 missed.seconds, missed.path,
             );
         }
@@ -143,12 +143,8 @@ impl FrameReportSystem {
 }
 
 impl System for FrameReportSystem {
-    fn init(&mut self, ctx: &mut PipelineContext) {
-        self.run.segments = ctx
-            .query::<CameraTrack>()
-            .next()
-            .map(|track| track.segments.clone())
-            .unwrap_or_default();
+    fn init(&mut self, _ctx: &mut PipelineContext) {
+        self.run.phases = self.benchmark.phase_names().to_vec();
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
@@ -196,7 +192,7 @@ impl System for FrameReportSystem {
         let this_frame = PendingFrame {
             timing: FrameTiming {
                 run_seconds,
-                segment: status.and_then(|s| s.segment),
+                phase: self.benchmark.phase_at(run_seconds),
                 frame_us,
                 run_step_us,
                 rebased,
@@ -208,7 +204,7 @@ impl System for FrameReportSystem {
         let past_warmup = run_seconds >= self.options.warmup_seconds;
         let unseen = self
             .hidden
-            .leaves_out(hidden, this_frame.timing.segment, past_warmup);
+            .leaves_out(hidden, this_frame.timing.phase, past_warmup);
         let recorded = (!unseen).then_some(this_frame);
         if let Some(frame) = std::mem::replace(&mut self.pending, recorded) {
             let systems = ctx.profile.system_timings();
@@ -224,7 +220,8 @@ impl System for FrameReportSystem {
 
         // A capture costs its frame nothing it shows, so the frames around it
         // are measured like any other.
-        if let Some(capture) = self.captures.due(run_seconds) {
+        let measured_seconds = run_seconds - self.benchmark.config.warmup_seconds;
+        if let Some(capture) = self.captures.due(measured_seconds) {
             if unseen {
                 self.hidden_captures.push(capture);
             } else {
@@ -232,7 +229,7 @@ impl System for FrameReportSystem {
             }
         }
 
-        if status.is_some_and(|s| s.finished) && self.stop_when_complete {
+        if run_seconds >= self.benchmark.end_seconds() {
             self.run.completed = true;
             self.emit();
             return StepResult::Stop;
@@ -242,7 +239,7 @@ impl System for FrameReportSystem {
 }
 
 impl Drop for FrameReportSystem {
-    // A run that closed before its track finished still has something to say,
+    // A run that closed before its last phase ended still has something to say,
     // and the report it prints is marked incomplete rather than passed off as
     // a whole one.
     fn drop(&mut self) {
@@ -257,7 +254,9 @@ mod tests {
     use concinnity_core::components::cook::{
         Camera3D as Camera3DArgs, CameraTrack as CameraTrackArgs,
     };
-    use concinnity_core::components::{Camera3D, CameraTravel};
+    use concinnity_core::components::{
+        BenchmarkConfig, BenchmarkPhase, Camera3D, CameraTrack, CameraTravel,
+    };
     use concinnity_core::ecs::World;
 
     fn track(travel: Vec<CameraTravel>) -> CameraTrack {
@@ -267,20 +266,41 @@ mod tests {
         })
     }
 
-    fn leg(distance: f32, speed: f32, segment: &str) -> CameraTravel {
+    fn leg(distance: f32, speed: f32) -> CameraTravel {
         CameraTravel {
             direction: [1.0, 0.0, 0.0],
             distance,
             speed,
-            segment: segment.to_string(),
             ..Default::default()
         }
+    }
+
+    // A run with no warm-up over `phases`, each `(name, seconds)`.
+    fn benchmark(phases: &[(&str, f32)]) -> BenchmarkRun {
+        configured(BenchmarkConfig {
+            warmup_seconds: 0.0,
+            phases: phases
+                .iter()
+                .map(|&(name, seconds)| BenchmarkPhase {
+                    name: name.to_string(),
+                    seconds,
+                })
+                .collect(),
+            ..Default::default()
+        })
+    }
+
+    fn configured(config: BenchmarkConfig) -> BenchmarkRun {
+        BenchmarkRun::new(config)
     }
 
     // A world running its camera track beside a report system, stepped by hand.
     // The report is never emitted here: every test drops the system through
     // `forget_report`, which marks it reported first.
-    fn world_with(track: CameraTrack) -> (World, CameraTrackSystem, FrameReportSystem) {
+    fn world_with(
+        track: CameraTrack,
+        run: &BenchmarkRun,
+    ) -> (World, CameraTrackSystem, FrameReportSystem) {
         let camera = CameraTrackSystem::new(&track);
         let mut world = World::new();
         world.add_component(Camera3D::bake(Camera3DArgs {
@@ -288,11 +308,7 @@ mod tests {
             ..Default::default()
         }));
         world.add_component(track);
-        let system = FrameReportSystem::new(&FrameReport {
-            warmup_seconds: 0.0,
-            ..Default::default()
-        });
-        (world, camera, system)
+        (world, camera, FrameReportSystem::new(run))
     }
 
     // Suppress the teardown report, which would otherwise print over the test
@@ -308,15 +324,13 @@ mod tests {
 
     #[test]
     fn the_declared_budget_and_discard_reach_the_reduction() {
-        let system = FrameReportSystem::new(&FrameReport {
+        let system = FrameReportSystem::new(&configured(BenchmarkConfig {
             warmup_seconds: 4.5,
             budget_ms: 8.0,
-            stop_when_complete: false,
             ..Default::default()
-        });
+        }));
         assert_eq!(system.options.warmup_seconds, 4.5);
         assert_eq!(system.options.budget_us, 8_000);
-        assert!(!system.stop_when_complete);
         forget_report(system);
     }
 
@@ -324,7 +338,8 @@ mod tests {
     fn a_frame_is_recorded_one_step_late_and_the_first_not_at_all() {
         // The first frame has nothing to be timed against; the second waits a
         // step for the timings the profile rotates in after it.
-        let (mut world, mut camera, mut system) = world_with(track(vec![]));
+        let (mut world, mut camera, mut system) =
+            world_with(track(vec![]), &benchmark(&[("a", 60.0)]));
         system.init(&mut world.context());
         step(&mut world, &mut camera, &mut system);
         step(&mut world, &mut camera, &mut system);
@@ -360,7 +375,7 @@ mod tests {
         // the third did neither. Paired a step apart, the wait would read as 30
         // ms of graphics CPU work in the frame after it.
         let mut world = World::new();
-        let mut system = FrameReportSystem::new(&FrameReport::default());
+        let mut system = FrameReportSystem::new(&configured(BenchmarkConfig::default()));
         system.init(&mut world.context());
         profiled_step(&mut world, &mut system, (500, 0), 0);
         profiled_step(&mut world, &mut system, (30_400, 30_000), 29_800);
@@ -380,7 +395,7 @@ mod tests {
     #[test]
     fn the_frame_time_is_the_step_clocks() {
         let mut world = World::new();
-        let mut system = FrameReportSystem::new(&FrameReport::default());
+        let mut system = FrameReportSystem::new(&configured(BenchmarkConfig::default()));
         system.init(&mut world.context());
         for _ in 0..3 {
             world.insert_resource(FrameTime {
@@ -399,7 +414,7 @@ mod tests {
     fn a_completed_frame_paces_against_the_one_before() {
         use concinnity_core::profile::GpuDone;
         let mut world = World::new();
-        let mut system = FrameReportSystem::new(&FrameReport::default());
+        let mut system = FrameReportSystem::new(&configured(BenchmarkConfig::default()));
         system.init(&mut world.context());
         let ticks = [
             (100, 1.0),
@@ -438,42 +453,42 @@ mod tests {
     }
 
     #[test]
-    fn the_tracks_segment_names_are_captured_at_init() {
-        let (mut world, _, mut system) = world_with(track(vec![
-            leg(4.0, 2.0, "approach"),
-            leg(4.0, 2.0, "rays"),
-        ]));
+    fn the_runs_phase_names_are_captured_at_init() {
+        let mut world = World::new();
+        let mut system = FrameReportSystem::new(&benchmark(&[("approach", 2.0), ("rays", 2.0)]));
         system.init(&mut world.context());
-        assert_eq!(system.run().segments, ["approach", "rays"]);
+        assert_eq!(system.run().phases, ["approach", "rays"]);
         forget_report(system);
     }
 
     #[test]
     fn a_world_with_no_track_still_samples_against_its_own_clock() {
         let mut world = World::new();
-        let mut system = FrameReportSystem::new(&FrameReport::default());
+        let mut system = FrameReportSystem::new(&configured(BenchmarkConfig::default()));
         system.init(&mut world.context());
         for _ in 0..3 {
             system.step(&mut world.context());
         }
         assert_eq!(system.run().samples.len(), 1);
-        assert!(system.run().segments.is_empty());
-        assert_eq!(system.run().samples.get(0).unwrap().segment, None);
+        // Inside the default warm-up, so in no phase yet.
+        assert_eq!(system.run().samples.get(0).unwrap().phase, None);
         assert!(!system.run().completed);
         forget_report(system);
     }
 
     #[test]
-    fn samples_carry_the_segment_the_frame_was_drawn_in() {
-        let (mut world, mut camera, mut system) =
-            world_with(track(vec![leg(60.0, 1.0, "approach")]));
+    fn samples_carry_the_phase_the_frame_was_drawn_in() {
+        let (mut world, mut camera, mut system) = world_with(
+            track(vec![leg(60.0, 1.0)]),
+            &benchmark(&[("approach", 60.0)]),
+        );
         camera.init(&mut world.context());
         system.init(&mut world.context());
         for _ in 0..4 {
             step(&mut world, &mut camera, &mut system);
         }
         let run = system.run();
-        assert!(run.samples.iter().all(|s| s.segment == Some(0)));
+        assert!(run.samples.iter().all(|s| s.phase == Some(0)));
         // Track time advances on the fixed step, so successive samples differ.
         assert!(run.samples.get(1).unwrap().run_seconds > run.samples.get(0).unwrap().run_seconds);
         forget_report(system);
@@ -484,8 +499,10 @@ mod tests {
         use concinnity_core::ecs::SimTiming;
         use concinnity_core::planet::Rebase;
 
-        let (mut world, mut camera, mut system) =
-            world_with(track(vec![leg(60.0, 1.0, "approach")]));
+        let (mut world, mut camera, mut system) = world_with(
+            track(vec![leg(60.0, 1.0)]),
+            &benchmark(&[("approach", 60.0)]),
+        );
         world.insert_resource(FrameRebases::default());
         camera.init(&mut world.context());
         system.init(&mut world.context());
@@ -515,9 +532,10 @@ mod tests {
     }
 
     #[test]
-    fn reaching_the_end_of_the_track_stops_the_world_and_marks_the_run_complete() {
-        // One tick of track, so a later frame is already past its end.
-        let (mut world, mut camera, mut system) = world_with(track(vec![leg(1.0, 60.0, "brief")]));
+    fn the_end_of_the_last_phase_stops_the_world_and_marks_the_run_complete() {
+        // One tick of run, so a later frame is already past its end.
+        let (mut world, mut camera, mut system) =
+            world_with(track(vec![]), &benchmark(&[("brief", 1.0 / 60.0)]));
         camera.init(&mut world.context());
         system.init(&mut world.context());
         camera.step(&mut world.context());
@@ -531,29 +549,16 @@ mod tests {
     }
 
     #[test]
-    fn a_world_that_declines_to_stop_keeps_running_past_the_end_of_its_track() {
-        let mut system = FrameReportSystem::new(&FrameReport {
-            warmup_seconds: 0.0,
-            stop_when_complete: false,
-            ..Default::default()
-        });
-        let t = track(vec![leg(1.0, 60.0, "brief")]);
-        let mut camera = CameraTrackSystem::new(&t);
-        let mut world = World::new();
-        world.add_component(Camera3D::bake(Camera3DArgs {
-            controller: None,
-            ..Default::default()
-        }));
-        world.add_component(t);
+    fn the_run_outlasts_a_shorter_track_until_its_last_phase_ends() {
+        let (mut world, mut camera, mut system) =
+            world_with(track(vec![leg(1.0, 60.0)]), &benchmark(&[("long", 60.0)]));
         camera.init(&mut world.context());
         system.init(&mut world.context());
         for _ in 0..4 {
             camera.step(&mut world.context());
             assert_eq!(system.step(&mut world.context()), StepResult::Continue);
         }
-        // Still measuring, and the run is not claimed to be a whole one.
         assert!(!system.run().completed);
-        assert!(system.run().samples.len() >= 2);
         forget_report(system);
     }
 
@@ -562,14 +567,14 @@ mod tests {
         use concinnity_core::components::FrameCapture;
 
         let mut world = World::new();
-        let mut system = FrameReportSystem::new(&FrameReport {
+        let mut system = FrameReportSystem::new(&configured(BenchmarkConfig {
             warmup_seconds: 0.0,
             captures: vec![FrameCapture {
                 seconds: 0.0,
                 path: "a.png".to_string(),
             }],
             ..Default::default()
-        });
+        }));
         system.init(&mut world.context());
         // The first step only starts the clock; the second is the first frame
         // measured, and the capture is due on it.
@@ -588,22 +593,22 @@ mod tests {
     }
 
     #[test]
-    fn a_capture_waits_for_the_track_to_reach_its_moment() {
+    fn a_capture_waits_for_its_moment_after_the_warm_up() {
         use concinnity_core::components::FrameCapture;
 
-        let (mut world, mut camera, _) = world_with(track(vec![leg(60.0, 1.0, "approach")]));
-        let mut system = FrameReportSystem::new(&FrameReport {
-            warmup_seconds: 0.0,
+        let run = configured(BenchmarkConfig {
+            warmup_seconds: 0.05,
             captures: vec![FrameCapture {
                 seconds: 0.05,
                 path: "a.png".to_string(),
             }],
             ..Default::default()
         });
+        let (mut world, mut camera, mut system) = world_with(track(vec![leg(60.0, 1.0)]), &run);
         camera.init(&mut world.context());
         system.init(&mut world.context());
         let mut requested_at = None;
-        for _ in 0..10 {
+        for _ in 0..12 {
             step(&mut world, &mut camera, &mut system);
             if world.remove_resource::<FrameCaptureRequest>().is_some() {
                 assert!(requested_at.is_none(), "requested twice");
@@ -612,8 +617,8 @@ mod tests {
                     .map(|s| s.elapsed_seconds);
             }
         }
-        let at = requested_at.expect("the track passed the capture's moment");
-        assert!(at >= 0.05, "requested at {at}s");
+        let at = requested_at.expect("the run passed the capture's moment");
+        assert!(at >= 0.1, "requested at {at}s");
         forget_report(system);
     }
 
@@ -622,10 +627,7 @@ mod tests {
         use crate::frame_report::hidden::RESTORE_DROPPED_FRAMES;
 
         let mut world = World::new();
-        let mut system = FrameReportSystem::new(&FrameReport {
-            warmup_seconds: 0.0,
-            ..Default::default()
-        });
+        let mut system = FrameReportSystem::new(&benchmark(&[("a", 60.0)]));
         system.init(&mut world.context());
         system.step(&mut world.context());
         system.step(&mut world.context());
@@ -651,14 +653,14 @@ mod tests {
         use concinnity_core::components::FrameCapture;
 
         let mut world = World::new();
-        let mut system = FrameReportSystem::new(&FrameReport {
+        let mut system = FrameReportSystem::new(&configured(BenchmarkConfig {
             warmup_seconds: 0.0,
             captures: vec![FrameCapture {
                 seconds: 0.0,
                 path: "a.png".to_string(),
             }],
             ..Default::default()
-        });
+        }));
         system.init(&mut world.context());
         system.step(&mut world.context());
         world.insert_resource(WindowMinimized(true));
@@ -671,7 +673,7 @@ mod tests {
 
     #[test]
     fn the_report_goes_out_once_however_many_times_it_is_asked_for() {
-        let mut system = FrameReportSystem::new(&FrameReport::default());
+        let mut system = FrameReportSystem::new(&configured(BenchmarkConfig::default()));
         system.emit();
         assert!(system.reported);
         // A second call is the teardown path meeting a run that already

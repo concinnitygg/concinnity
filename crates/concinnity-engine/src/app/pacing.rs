@@ -2,9 +2,10 @@
 //! steps, so no system pays the sleep inside its own step time and the cap
 //! applies whichever systems the world built. The cap value comes from the
 //! `FrameRateCap` resource (published by GraphicsSystem from FramePacing +
-//! the live settings row), lowered to a background rate while the
+//! the live settings row), or a benchmarked run's own cap, lowered to a background rate while the
 //! `WindowMinimized` resource says nothing drawn can be seen.
 
+use concinnity_core::benchmark::BenchmarkRun;
 use concinnity_core::ecs::{FrameRateCap, SimTiming, WindowMinimized, World};
 use std::time::{Duration, Instant};
 
@@ -86,7 +87,11 @@ impl FramePacer {
     // Pace the upcoming world step from the world's published pacing state.
     // No-op (and deadline cleared) while no cap is in force.
     pub(crate) fn pace(&mut self, world: &World) {
-        let cap = world.resource::<FrameRateCap>().map(|c| c.0).unwrap_or(0);
+        let cap = world
+            .resource::<BenchmarkRun>()
+            .map(|run| run.config.fps_cap)
+            .or_else(|| world.resource::<FrameRateCap>().map(|c| c.0))
+            .unwrap_or(0);
         let minimized = world.resource::<WindowMinimized>().is_some_and(|m| m.0);
         let cap = effective_cap(cap, minimized);
         if cap != self.last_cap {
@@ -188,6 +193,19 @@ mod tests {
         world.insert_resource(FrameRateCap(0));
         pacer.pace(&world);
         assert!(pacer.deadline.is_none(), "cap 0 clears the schedule");
+    }
+
+    // A benchmarked run holds its own cap over the published one.
+    #[test]
+    fn a_benchmarked_run_holds_its_own_cap() {
+        use concinnity_core::components::BenchmarkConfig;
+        let mut world = World::new();
+        world.insert_resource(FrameRateCap(60));
+        world.insert_resource(BenchmarkRun::new(BenchmarkConfig::default()));
+        let mut pacer = FramePacer::default();
+        pacer.pace(&world);
+        assert_eq!(pacer.last_cap, 0);
+        assert!(pacer.deadline.is_none());
     }
 
     // A world with no published cap (headless, or graphics failed) never

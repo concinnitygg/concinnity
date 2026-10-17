@@ -23,8 +23,6 @@ const FULL_TURN_DEG: f32 = 360.0;
 #[derive(Debug)]
 pub struct CameraTrackSystem {
     travel: Vec<Key<3>>,
-    // Parallel to `travel`: the segment each key runs inside.
-    segments: Vec<Option<u32>>,
     // Held until `init`, which is the first point the heading the first leg
     // turns away from is known.
     turn_legs: Vec<CameraTurnKey>,
@@ -69,7 +67,6 @@ impl CameraTrackSystem {
                     cut: key.cut,
                 })
                 .collect(),
-            segments: track.travel.iter().map(|key| key.segment).collect(),
             turn_legs: track.turn.clone(),
             turn: Vec::new(),
             start_position: [0.0; 3],
@@ -160,7 +157,6 @@ impl CameraTrackSystem {
             elapsed_seconds: elapsed,
             pose_seconds: self.pose_seconds,
             duration_seconds: duration,
-            segment: timeline::active(&self.travel, elapsed).and_then(|at| self.segments[at]),
             finished: elapsed >= duration,
         });
     }
@@ -245,7 +241,6 @@ mod tests {
     use crate::components::cook::Camera3D as Camera3DArgs;
     use crate::components::{CameraTravel, CameraTurn, Ease};
     use crate::ecs::World;
-    use alloc::string::ToString;
     use alloc::vec;
 
     const TICKS_PER_SECOND: usize = 60;
@@ -638,29 +633,6 @@ mod tests {
         assert!((camera_position(&world)[0] - 2.0).abs() < 1e-3);
         run(&mut world, &mut system, 3.0);
         assert!(status(&world).finished);
-    }
-
-    #[test]
-    fn the_published_segment_follows_the_travel_legs() {
-        let named = |name: &str, distance: f32| CameraTravel {
-            segment: name.to_string(),
-            ..travel([1.0, 0.0, 0.0], distance, 1.0)
-        };
-        let (mut world, mut system) = world_with(
-            track(vec![named("shadows", 2.0), named("rays", 3.0)], vec![]),
-            [0.0; 3],
-            0.0,
-            0.0,
-        );
-        system.init(&mut world.context());
-        assert_eq!(status(&world).segment, Some(0));
-        run(&mut world, &mut system, 3.0);
-        assert_eq!(status(&world).segment, Some(1));
-        // The tail segment keeps answering once the track has run out, so a
-        // reader never loses the name of what it was looking at.
-        run(&mut world, &mut system, 10.0);
-        assert!(status(&world).finished);
-        assert_eq!(status(&world).segment, Some(1));
     }
 
     #[test]

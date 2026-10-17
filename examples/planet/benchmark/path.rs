@@ -84,17 +84,11 @@ impl Path {
             let (from, to) = (fixes[i - 1], fixes[i]);
             let seconds = (to.seconds - from.seconds) as f32;
             let step = sub(points[i], points[i - 1]);
-            let opens = i == 1 || from.phase != to.phase;
             travel.push(CameraTravel {
                 direction: step.map(|c| c as f32),
                 distance: length(step) as f32,
                 seconds,
                 ease: Ease::Linear,
-                segment: if opens {
-                    PHASES[to.phase].segment.to_string()
-                } else {
-                    String::new()
-                },
                 ..Default::default()
             });
             let [yaw, pitch] = views[i];

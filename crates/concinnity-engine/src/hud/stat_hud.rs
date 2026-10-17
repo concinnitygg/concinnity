@@ -7,9 +7,10 @@
 //! resource); the exposure and HDR chips show whenever their feature is active.
 //! Developer readouts (passes / cursor / camera) live on `DebugHud`.
 
+use concinnity_core::benchmark::BenchmarkRun;
 use concinnity_core::camera_track::CameraTrackStatus;
+use concinnity_core::components::StatHud;
 use concinnity_core::components::TextLabel;
-use concinnity_core::components::{CameraTrack, StatHud};
 use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Access, FrameTime, HudPrefs, PipelineContext, StepResult, System};
@@ -43,10 +44,10 @@ fn gpu_wait_text(micros: u32) -> String {
 }
 
 // Build the camera-track chip text from the track's own clock, the one a
-// FrameReport times its frames on, with the segment the track is in when it
+// frame report times its frames on, with the benchmark phase the run is in when
 // names one.
-fn track_text(elapsed_secs: f32, segment: Option<&str>) -> String {
-    match segment {
+fn track_text(elapsed_secs: f32, phase: Option<&str>) -> String {
+    match phase {
         Some(name) if !name.is_empty() => format!("TRACK {elapsed_secs:.1} s {name}"),
         _ => format!("TRACK {elapsed_secs:.1} s"),
     }
@@ -111,7 +112,7 @@ fn edr_text(max_edr: Option<f32>) -> String {
 // is the bottleneck. Averaged over the frame-rate window, the way the frame
 // report's mean is. Rides the same "Display performance stats" toggle as `FPS`.
 //
-// `TRACK` is a `CameraTrack`'s elapsed time and segment, rewritten every frame
+// `TRACK` is a `CameraTrack`'s elapsed time and benchmark phase, rewritten every frame
 // its tenth of a second changes, on the clock the frame report times frames
 // on. Blank in a world without a track.
 //
@@ -157,9 +158,9 @@ pub(crate) struct StatHudSystem {
     // window, so the chip averages over the same frames as the frame rate.
     gpu_wait_sum_us: u64,
     gpu_wait_frames: u32,
-    // The track's segment names, read once at init; a track does not change
-    // under a running world.
-    track_segments: Vec<String>,
+    // The benchmark the run was armed with, read once at init, which names
+    // the phase the track chip shows.
+    benchmark: Option<BenchmarkRun>,
     // The track chip's current text, rewritten only when it changes.
     track_text: String,
     // Most recent GPU-memory sample, bytes.
@@ -190,7 +191,7 @@ impl StatHudSystem {
             window: RateWindow::default(),
             gpu_wait_sum_us: 0,
             gpu_wait_frames: 0,
-            track_segments: Vec::new(),
+            benchmark: None,
             track_text: String::new(),
             vram_bytes: 0,
             ram_bytes: None,
@@ -219,11 +220,7 @@ impl System for StatHudSystem {
     }
 
     fn init(&mut self, ctx: &mut PipelineContext) {
-        self.track_segments = ctx
-            .query::<CameraTrack>()
-            .next()
-            .map(|track| track.segments.clone())
-            .unwrap_or_default();
+        self.benchmark = ctx.resource::<BenchmarkRun>().cloned();
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
@@ -244,11 +241,11 @@ impl System for StatHudSystem {
         // Every frame rather than on the emit tick: a moment called out on
         // screen should match the report to the tenth of a second.
         if let Some(status) = ctx.resource::<CameraTrackStatus>().copied() {
-            let segment = status
-                .segment
-                .and_then(|i| self.track_segments.get(i as usize))
-                .map(String::as_str);
-            let text = track_text(status.elapsed_seconds, segment);
+            let phase = self.benchmark.as_ref().and_then(|run| {
+                let at = run.phase_at(status.elapsed_seconds)?;
+                run.phase_names().get(at as usize).map(String::as_str)
+            });
+            let text = track_text(status.elapsed_seconds, phase);
             if text != self.track_text {
                 self.track_text.clone_from(&text);
                 Self::write_chip(ctx, self.track_label, text);
@@ -544,17 +541,18 @@ mod tests {
     }
 
     #[test]
-    fn track_text_names_the_time_and_segment() {
+    fn track_text_names_the_time_and_phase() {
         assert_eq!(track_text(47.26, Some("ground")), "TRACK 47.3 s ground");
         assert_eq!(track_text(3.0, None), "TRACK 3.0 s");
         assert_eq!(track_text(3.0, Some("")), "TRACK 3.0 s");
     }
 
     // The track chip reads the track's own clock every frame, with the
-    // segment named from the track, and stays blank without a track.
+    // benchmark phase named from the run, and stays blank without a track.
     #[test]
     fn the_track_chip_follows_the_track_clock() {
         use concinnity_core::components::cook::CameraTrack as CameraTrackArgs;
+        use concinnity_core::components::{BenchmarkConfig, BenchmarkPhase, CameraTrack};
 
         let mut world = World::new();
         world.add_component(StatHud {
@@ -563,15 +561,19 @@ mod tests {
         });
         world.push_identified(AssetId(5), TextLabel::default());
         world.add_component(CameraTrack::bake(CameraTrackArgs::default()));
-        if let Some(track) = world.query_mut::<CameraTrack>().next() {
-            track.segments = vec!["settle".to_string(), "ground".to_string()];
-        }
+        let phase = |name: &str, seconds| BenchmarkPhase {
+            name: name.to_string(),
+            seconds,
+        };
+        world.insert_resource(BenchmarkRun::new(BenchmarkConfig {
+            phases: vec![phase("settle", 4.0), phase("ground", 60.0)],
+            ..Default::default()
+        }));
         world.start(SYSTEMS).unwrap();
         world.step();
         assert_eq!(chip(&world, 5), "", "no track status yet");
         world.insert_resource(CameraTrackStatus {
             elapsed_seconds: 47.04,
-            segment: Some(1),
             ..Default::default()
         });
         world.step();

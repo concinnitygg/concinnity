@@ -101,6 +101,9 @@ pub struct LaunchRequest {
     /// Render this many frames, then stop the run. `None` runs until the
     /// window is closed.
     pub max_frames: Option<u64>,
+    /// Benchmark the world: arm its `BenchmarkConfig`, or the default one, and
+    /// report what the frames cost when its last phase ends.
+    pub benchmark: bool,
     /// Force the DirectX / Vulkan debug layers on or off. `None` follows the
     /// build profile. Metal's layer is set by the process environment instead.
     pub validation: Option<bool>,

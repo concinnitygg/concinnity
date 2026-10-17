@@ -21,6 +21,7 @@ pub use super::behavior::{
     Behavior, BehaviorExpr, BehaviorLiteral, BehaviorLocal, BehaviorNode, BehaviorQuery,
     BehaviorSource,
 };
+pub use super::benchmark_config::{BenchmarkConfig, BenchmarkPhase, CameraPose, FrameCapture};
 pub use super::block_type::BlockType;
 pub use super::bloom::{Bloom, BloomOverrides};
 pub use super::camera_track::{
@@ -38,7 +39,6 @@ pub use super::exposure::{Exposure, ExposureOverrides};
 pub use super::file::FileKind;
 pub use super::fps_counter::FpsCounter;
 pub use super::frame_pacing::{FramePacing, FramePacingOverrides};
-pub use super::frame_report::{FrameCapture, FrameReport};
 pub use super::glass_panel::GlassPanel;
 pub use super::graphics_config::GraphicsConfig;
 pub use super::grass::Grass;

@@ -1856,13 +1856,13 @@ fn set_setting_row_label(ctx: &mut PipelineContext, key: SettingKey, text: &str)
     }
 }
 
-// Whether the world saves frames as it goes, from its frame report or from a
+// Whether the world saves frames as it goes, from its benchmark or from a
 // `screenshot` action, which needs the presented frame readable just as an
 // exit screenshot does.
 fn declares_frame_captures(ctx: &PipelineContext) -> bool {
     let screenshot = |action: Option<&UiAction>| matches!(action, Some(UiAction::Screenshot(_)));
-    ctx.query::<concinnity_core::components::FrameReport>()
-        .any(|report| !report.captures.is_empty())
+    ctx.resource::<concinnity_core::benchmark::BenchmarkRun>()
+        .is_some_and(|run| !run.config.captures.is_empty())
         || ctx
             .query::<KeyBinding>()
             .any(|kb| screenshot(kb.action.as_ref()))

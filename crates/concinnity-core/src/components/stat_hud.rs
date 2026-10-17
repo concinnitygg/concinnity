@@ -12,8 +12,9 @@ use crate::ecs::Ref;
 /// the GPU, `vram_label` the GPU-memory use, `ram_label` the host process
 /// memory (resident set size, against the memory budget when known), `ev_label`
 /// the auto-exposure value, `edr_label` the HDR headroom multiplier, and
-/// `track_label` how far a [CameraTrack](#cameratrack) has run and the segment
-/// it is in. Chips whose stat is unavailable stay blank. The frame-rate,
+/// `track_label` how far a [CameraTrack](#cameratrack) has run and, in a
+/// benchmarked run, the [BenchmarkConfig](#benchmarkconfig) phase it is in.
+/// Chips whose stat is unavailable stay blank. The frame-rate,
 /// blocked-on-GPU, and GPU-memory chips are shown or hidden from the in-game
 /// video settings ("Display performance stats"); the host-memory, exposure,
 /// HDR, and track chips show whenever their reading is available.
@@ -23,9 +24,9 @@ use crate::ecs::Ref;
 /// the same window as the frame rate. It reads near the frame time on a
 /// GPU-bound scene and near zero on a CPU-bound one.
 ///
-/// `TRACK` reads the track's own clock, the one a
-/// [FrameReport](#framereport) times its frames on, so a moment seen on screen
-/// (`TRACK 47.3 s ground`) can be found in the report by its time.
+/// `TRACK` reads the track's own clock, the one a benchmarked run times its
+/// frames on, so a moment seen on screen (`TRACK 47.3 s ground`) can be found
+/// in the report by its time.
 ///
 /// The chips are packed into a tight strip anchored at the top-left of the
 /// window, left to right in the order fps, gpu wait, vram, ram, ev, edr, track; a blank chip

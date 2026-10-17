@@ -97,6 +97,24 @@ impl App {
         self
     }
 
+    /// The same app, benchmarked: the world's
+    /// [`BenchmarkConfig`](crate::components::BenchmarkConfig), or the default
+    /// one, takes the camera, and the run prints what its frames cost and ends
+    /// when its last phase does. Without one the camera holds the pose the world
+    /// starts it at for ten seconds after a two-second warm-up.
+    ///
+    /// ```no_run
+    /// # use concinnity::{App, Error};
+    /// # fn main() -> Result<(), Error> {
+    /// App::from_blob("data/0")?.benchmark().run()
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn benchmark(mut self) -> Self {
+        concinnity_core::benchmark::arm(self.driver.world_mut());
+        self
+    }
+
     /// The same app on the headless loop: the simulation systems stepped on a
     /// fixed virtual timestep, with no window and no renderer. A world
     /// authored to be seen keeps everything it holds and draws none of it,

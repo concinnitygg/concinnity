@@ -62,18 +62,6 @@ pub(super) fn progress<const N: usize>(keys: &[Key<N>], leg: usize, seconds: f32
     lerp([0.0; N], key.value, key.ease.eval(t))
 }
 
-/// Which key covers `seconds`, or `None` for an empty track. Past the last key
-/// the last one still answers, so a finished track keeps reporting the segment
-/// it ended in.
-pub(super) fn active<const N: usize>(keys: &[Key<N>], seconds: f32) -> Option<usize> {
-    let last = keys.len().checked_sub(1)?;
-    Some(
-        keys.iter()
-            .position(|key| seconds < key.end_seconds)
-            .unwrap_or(last),
-    )
-}
-
 /// Whether the clock moving from `from` to `to` seconds reaches a cut key. A
 /// key at the start of the track is where the camera already stands, so it is
 /// never crossed.
@@ -133,7 +121,6 @@ mod tests {
         let keys: [Key<3>; 0] = [];
         assert_eq!(sample([1.0, 2.0, 3.0], &keys, 5.0), [1.0, 2.0, 3.0]);
         assert_eq!(duration(&keys), 0.0);
-        assert_eq!(active(&keys, 0.0), None);
     }
 
     #[test]
@@ -195,16 +182,6 @@ mod tests {
         // Symmetric about the midpoint, and slower than linear at the start.
         assert_eq!(sample([0.0], &eased, 1.0), [5.0]);
         assert!(sample([0.0], &eased, 0.5)[0] < 2.5);
-    }
-
-    #[test]
-    fn the_active_key_tracks_the_clock_and_sticks_at_the_end() {
-        let keys = keys();
-        assert_eq!(active(&keys, 0.0), Some(0));
-        assert_eq!(active(&keys, 1.9), Some(0));
-        assert_eq!(active(&keys, 2.0), Some(1));
-        assert_eq!(active(&keys, 5.9), Some(1));
-        assert_eq!(active(&keys, 600.0), Some(1));
     }
 
     #[test]

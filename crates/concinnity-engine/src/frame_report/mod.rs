@@ -1,5 +1,5 @@
-//! Whole-frame measurement: what a world's
-//! [`FrameReport`](concinnity_core::components::FrameReport) gates in.
+//! Whole-frame measurement: what a benchmarked run, armed from a world's
+//! [`BenchmarkConfig`](concinnity_core::components::BenchmarkConfig), gates in.
 //!
 //! One row is recorded per frame, holding its wall time beside the render
 //! stats and system timings for it. When the run ends the rows reduce to a
@@ -8,9 +8,8 @@
 //! also named one by one, since a hitch shows in a distribution only as its
 //! maximum.
 //!
-//! The rows carry the segment the frame was drawn in, where the run names one,
-//! so the same reduction runs over each stretch of the run as well as over the
-//! whole of it.
+//! The rows carry the phase the frame was drawn in, so the same reduction runs
+//! over each stretch of the run as well as over the whole of it.
 //!
 //! A report that saves frames as images asks the render side for each one as
 //! the run reaches its moment. Frames run while the window is minimized or
@@ -26,9 +25,7 @@ mod shown;
 mod stats;
 mod system;
 
-pub use reduce::{
-    FrameCost, PassShare, ReduceOptions, Report, SegmentReport, SlowFrame, SystemCost,
-};
+pub use reduce::{FrameCost, PassShare, PhaseReport, ReduceOptions, Report, SlowFrame, SystemCost};
 pub use report::to_text;
 pub use sample::{FrameRun, FrameSample, MAX_SYSTEM_TIMINGS};
 pub use sample_log::SampleLog;

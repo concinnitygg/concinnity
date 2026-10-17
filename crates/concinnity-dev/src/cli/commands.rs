@@ -185,6 +185,7 @@ impl RenderArgs {
             capture: false,
             dev_loop,
             max_frames: None,
+            benchmark: false,
             validation,
             quality_preset: self.quality_preset.map(Into::into),
             rt_dynamic: self.rt_dynamic.map(Into::into),
@@ -290,6 +291,12 @@ pub(crate) struct RunArgs {
     /// Stop after this many frames
     #[arg(long)]
     pub(crate) frames: Option<u64>,
+
+    /// Benchmark the world and print what its frames cost when the run ends
+    // Arms the world's BenchmarkConfig, or the default one: a still camera for
+    // ten seconds after a two-second warm-up.
+    #[arg(long)]
+    pub(crate) benchmark: bool,
 
     #[command(flatten)]
     pub(crate) render: RenderArgs,
@@ -476,6 +483,7 @@ mod tests {
                 capture: false,
                 dev_loop: true,
                 max_frames: None,
+                benchmark: false,
                 validation: Some(true),
                 quality_preset: Some(QualityPreset::Ultra),
                 rt_dynamic: Some(RtDynamicMode::Rebuild),
@@ -739,6 +747,19 @@ mod tests {
             };
             assert_eq!(a.validation, Some(expected));
         }
+    }
+
+    #[test]
+    fn run_benchmarks_only_when_asked() {
+        let benchmark = |args: &[&str]| {
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Commands::Run(a) = cli.resolved_command() else {
+                panic!("expected run");
+            };
+            a.benchmark
+        };
+        assert!(!benchmark(&["concinnity", "run"]));
+        assert!(benchmark(&["concinnity", "run", "--benchmark"]));
     }
 
     #[test]

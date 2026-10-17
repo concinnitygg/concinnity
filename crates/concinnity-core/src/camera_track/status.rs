@@ -5,9 +5,7 @@
 /// this tick, published by
 /// [`CameraTrackSystem`](super::CameraTrackSystem).
 ///
-/// A world with no track never publishes one. The segment is an index into the
-/// track's own `segments` list rather than a name, so publishing it costs no
-/// allocation on a tick that changes nothing.
+/// A world with no track never publishes one.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct CameraTrackStatus {
     /// Seconds of simulated time the track has run for, counted in whole
@@ -20,9 +18,6 @@ pub struct CameraTrackStatus {
     pub pose_seconds: f32,
     /// Seconds the whole track runs for, the longer of its two lists.
     pub duration_seconds: f32,
-    /// Index into the track's `segments`, or `None` while no leg has opened
-    /// one.
-    pub segment: Option<u32>,
     /// Whether both lists have run out and the camera is holding its last
     /// pose.
     pub finished: bool,
@@ -38,7 +33,6 @@ mod tests {
         assert_eq!(s.elapsed_seconds, 0.0);
         assert_eq!(s.pose_seconds, 0.0);
         assert_eq!(s.duration_seconds, 0.0);
-        assert_eq!(s.segment, None);
         assert!(!s.finished);
     }
 }

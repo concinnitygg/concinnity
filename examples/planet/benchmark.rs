@@ -20,25 +20,26 @@
 //! the fixed simulation clock, so a slower host visits the same poses at the
 //! same track times and simply samples fewer of them.
 //!
-//! What the run changes in the world is `bench.jsonl`, laid over it: the frame
-//! report, the camera without the player's controls, and a frame rate left
-//! uncapped (a capped GPU idles between frames and lowers its clocks). The
-//! world's own sky turns as it always does; the camera's start and its track
-//! come from the planet's shape and where that sky carries the sun.
+//! The run is declared as the world's `BenchmarkConfig`: the camera's start,
+//! its legs and the phases the report is cut into. It changes nothing until the
+//! app is benchmarked. The world's own sky turns as it always does, through the
+//! warm-up too; the camera's start and its track come from the planet's shape
+//! and where that sky carries the sun.
 
 mod flight;
 mod path;
 
-use concinnity::components::{DirectionalLight, Planet, SkyRotation};
-use concinnity::cook::{CameraTrack, WorldBuilder};
+use concinnity::components::{
+    BenchmarkConfig, BenchmarkPhase, CameraPose, DirectionalLight, Planet, SkyRotation,
+};
+use concinnity::cook::WorldBuilder;
 use concinnity::math::dvec3::{self, DVec3};
 
+use flight::PHASES;
 use path::Path;
 
-const BENCH: &str = include_str!("bench.jsonl");
-
-// The camera the track drives.
-const CAMERA: &str = "cam";
+// Long enough for the meadow's tiles and grass to settle at the start.
+const WARMUP_SECONDS: f32 = 2.5;
 
 // What the world declares that the run reads: the planet its path rides, and
 // the sky and light it aims by.
@@ -48,11 +49,10 @@ struct Declared {
     sun: DirectionalLight,
 }
 
-/// Lay `bench.jsonl` over `world`, already declared in `builder`, start the
-/// camera where its path does, and add the track that flies it. The overlay
-/// leaves the planet, the sky and the light as `world` declares them.
+/// Declare the benchmark over `world`, already declared in `builder`: the
+/// camera starts where its path does and flies it, one phase per stretch of
+/// the flight.
 pub(crate) fn declare(builder: &mut WorldBuilder, world: &str) -> Result<(), String> {
-    builder.overlay_jsonl(BENCH);
     let declared = Declared {
         // The planet's references are names, which its shape does not need.
         planet: serde_json::from_value(read(world, "Planet", &["material", "layers"])?)
@@ -61,21 +61,28 @@ pub(crate) fn declare(builder: &mut WorldBuilder, world: &str) -> Result<(), Str
         sun: serde_json::from_value(read(world, "DirectionalLight", &[])?)
             .map_err(|e| e.to_string())?,
     };
-    let path = Path::new(&declared.planet, |seconds| sun(&declared, seconds));
-    let start = serde_json::json!([
-        "Camera3D",
-        {
-            "$id": CAMERA,
-            "position": path.start,
-            "yaw": path.yaw_deg.to_radians(),
-            "pitch": path.pitch_deg.to_radians(),
-        }
-    ]);
-    builder.overlay_jsonl(&start.to_string()).add(
-        "track",
-        CameraTrack {
+    // The path starts when the warm-up ends, by which time the sky has turned.
+    let warmup = f64::from(WARMUP_SECONDS);
+    let path = Path::new(&declared.planet, |seconds| sun(&declared, warmup + seconds));
+    builder.add(
+        "benchmark",
+        BenchmarkConfig {
+            warmup_seconds: WARMUP_SECONDS,
+            start: Some(CameraPose {
+                position: path.start,
+                yaw_deg: path.yaw_deg,
+                pitch_deg: path.pitch_deg,
+            }),
             travel: path.travel,
             turn: path.turn,
+            phases: PHASES
+                .iter()
+                .map(|phase| BenchmarkPhase {
+                    name: phase.name.to_string(),
+                    seconds: phase.seconds as f32,
+                })
+                .collect(),
+            ..Default::default()
         },
     );
     Ok(())

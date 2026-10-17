@@ -9,11 +9,11 @@
 //!
 //! Run it with `cargo run --release --example planet`.
 //!
-//! `--benchmark` lays `bench.jsonl` over the world and flies the camera
-//! instead of handing it to the player's controls: over the meadow, up out of
-//! the air to see the planet from orbit, and back down to skim the ground. It
-//! times every frame and closes when the path ends, printing what the frames
-//! cost, cut by stretch of the path (see `benchmark.rs`).
+//! The world also declares a benchmark (see `benchmark.rs`), which
+//! `--benchmark` runs: the camera flies instead of answering the player's
+//! controls, over the meadow, up out of the air to see the planet from orbit,
+//! and back down to skim the ground. The run times every frame and closes when
+//! the flight ends, printing what the frames cost, phase by phase.
 
 mod benchmark;
 
@@ -34,14 +34,12 @@ fn run() -> Result<(), String> {
     let args = parse_args(std::env::args().skip(1))?;
     let mut world = cook::world();
     world.add_jsonl(WORLD);
-    if args.benchmark {
-        benchmark::declare(&mut world, WORLD)?;
-    }
+    benchmark::declare(&mut world, WORLD)?;
     let blob = blob_path();
     world.write_blob(&blob).map_err(|e| e.to_string())?;
-    App::from_blob(&blob)
-        .and_then(App::run)
-        .map_err(|e| e.to_string())
+    let app = App::from_blob(&blob).map_err(|e| e.to_string())?;
+    let app = if args.benchmark { app.benchmark() } else { app };
+    app.run().map_err(|e| e.to_string())
 }
 
 // What the command line asked for.

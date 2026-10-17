@@ -2564,21 +2564,22 @@ fn a_capture_launch_request_reaches_the_backend() {
     assert!(lock(&state).init.as_ref().unwrap().capture);
 }
 
-// A frame report that saves frames along the way keeps the presented frame
+// A benchmark that saves frames along the way keeps the presented frame
 // readable, with no launch request asking for it.
 #[test]
-fn a_frame_report_with_captures_arms_frame_capture() {
-    use concinnity_core::components::{FrameCapture, FrameReport};
+fn a_benchmark_with_captures_arms_frame_capture() {
+    use concinnity_core::benchmark::BenchmarkRun;
+    use concinnity_core::components::{BenchmarkConfig, FrameCapture};
 
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
-    world.add_component(FrameReport {
+    world.insert_resource(BenchmarkRun::new(BenchmarkConfig {
         captures: vec![FrameCapture {
             seconds: 1.0,
             path: "shot.png".to_string(),
         }],
         ..Default::default()
-    });
+    }));
     init_graphics(&mut world, hooks);
     assert!(lock(&state).init.as_ref().unwrap().capture);
 }

@@ -1,9 +1,9 @@
 // The run's timetable: how high over the ground and how fast the camera goes
 // at each moment, and how far around the planet that carries it.
 
-/// One stretch of the flight, named as a segment of the report.
+/// One stretch of the flight, named as a phase of the report.
 pub(super) struct Phase {
-    pub(super) segment: &'static str,
+    pub(super) name: &'static str,
     pub(super) seconds: f64,
     /// Height over the ground the phase reaches, in meters.
     pub(super) height: f64,
@@ -27,7 +27,7 @@ const LOW_HEIGHT: f64 = 100.0;
 // fastest, the way a lift-off or a landing feels even.
 pub(super) const PHASES: [Phase; 7] = [
     Phase {
-        segment: "settle",
+        name: "settle",
         seconds: 4.0,
         height: GROUND_HEIGHT,
         speed: 0.0,
@@ -35,7 +35,7 @@ pub(super) const PHASES: [Phase; 7] = [
         watches_sun: false,
     },
     Phase {
-        segment: "ground",
+        name: "ground",
         seconds: 22.0,
         height: GROUND_HEIGHT,
         speed: 30.0,
@@ -43,7 +43,7 @@ pub(super) const PHASES: [Phase; 7] = [
         watches_sun: false,
     },
     Phase {
-        segment: "climb",
+        name: "climb",
         seconds: 20.0,
         height: ORBIT_HEIGHT,
         speed: 6_000.0,
@@ -51,7 +51,7 @@ pub(super) const PHASES: [Phase; 7] = [
         watches_sun: true,
     },
     Phase {
-        segment: "orbit",
+        name: "orbit",
         seconds: 14.0,
         height: ORBIT_HEIGHT,
         speed: 6_000.0,
@@ -59,7 +59,7 @@ pub(super) const PHASES: [Phase; 7] = [
         watches_sun: true,
     },
     Phase {
-        segment: "descent",
+        name: "descent",
         seconds: 14.0,
         height: LOW_HEIGHT,
         speed: 600.0,
@@ -67,7 +67,7 @@ pub(super) const PHASES: [Phase; 7] = [
         watches_sun: true,
     },
     Phase {
-        segment: "low",
+        name: "low",
         seconds: 38.0,
         height: LOW_HEIGHT,
         speed: 600.0,
@@ -75,7 +75,7 @@ pub(super) const PHASES: [Phase; 7] = [
         watches_sun: true,
     },
     Phase {
-        segment: "dawn",
+        name: "dawn",
         seconds: 30.0,
         height: GROUND_HEIGHT,
         speed: 30.0,

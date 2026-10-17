@@ -7,11 +7,11 @@ use serde::Serialize;
 use crate::frame_report::sample::{FrameRun, FrameSample};
 use crate::frame_report::stats::{Distribution, mean_u32, nearest_rank};
 
-/// How many passes a segment lists. The tail is noise next to the handful that
+/// How many passes a phase lists. The tail is noise next to the handful that
 /// own the frame.
 const PASSES_REPORTED: usize = 8;
 
-/// How many systems a segment lists, on the same reasoning.
+/// How many systems a phase lists, on the same reasoning.
 const SYSTEMS_REPORTED: usize = 6;
 
 /// The row for the graphics-queue passes that fell below the cut, as the
@@ -75,7 +75,7 @@ impl Default for ReduceOptions {
     }
 }
 
-/// One pass's contribution to a segment's GPU frame.
+/// One pass's contribution to a phase's GPU frame.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PassShare {
     /// The backend's name for the pass.
@@ -83,11 +83,11 @@ pub struct PassShare {
     /// Median GPU microseconds the pass took.
     ///
     /// A median rather than a mean because a backend that mistimes one frame
-    /// mistimes it by orders of magnitude, and a handful of those in a segment
-    /// of a few hundred frames moves a mean past the slowest frame the segment
+    /// mistimes it by orders of magnitude, and a handful of those in a phase
+    /// of a few hundred frames moves a mean past the slowest frame the phase
     /// actually drew.
     pub median_us: u32,
-    /// That median as a share of the segment's median GPU frame, in `0..=1`,
+    /// That median as a share of the phase's median GPU frame, in `0..=1`,
     /// or negative for the overlap row, which is taken away from the rest.
     ///
     /// Reported alongside the microseconds because per-pass timings co-vary
@@ -107,7 +107,7 @@ pub struct PassShare {
     pub async_queue: bool,
 }
 
-/// One system's CPU contribution to a segment's frame, or the render side's
+/// One system's CPU contribution to a phase's frame, or the render side's
 /// under the `render submit` row.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SystemCost {
@@ -115,13 +115,13 @@ pub struct SystemCost {
     pub name: String,
     /// Mean CPU microseconds the system's step took.
     pub mean_us: u32,
-    /// That mean as a share of the segment's mean CPU work, in `0..=1`.
+    /// That mean as a share of the phase's mean CPU work, in `0..=1`.
     pub share: f32,
 }
 
 /// A parallel fan-out's wait against its work: the render side's pass
 /// recording, or a system that fanned its own work out. Microseconds, either
-/// within one frame or as means over the frames of a segment it ran in.
+/// within one frame or as means over the frames of a phase it ran in.
 ///
 /// A wall time well above the longest job is a fan-out not limited by its
 /// work; `first_job_us` and `tail_us` say whether the gap is the workers
@@ -172,11 +172,11 @@ pub struct FrameCost {
 pub struct SlowFrame {
     /// How far into the run the frame was drawn, in seconds.
     pub run_seconds: f32,
-    /// The segment it was drawn in.
-    pub segment: String,
+    /// The phase it was drawn in.
+    pub phase: String,
     /// Its wall-clock frame time.
     pub frame_us: u32,
-    /// The CPU work in it, summed the way the segment table's column is.
+    /// The CPU work in it, summed the way the phase table's column is.
     pub cpu_us: u32,
     /// Microseconds the render side spent blocked on the GPU and the display.
     pub gpu_wait_us: u32,
@@ -213,10 +213,10 @@ pub struct SlowFrame {
 
 /// What one stretch of the run measured.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct SegmentReport {
-    /// The segment's authored name, or a placeholder.
+pub struct PhaseReport {
+    /// The phase's authored name, or a placeholder.
     pub name: String,
-    /// Seconds of track time the segment covered.
+    /// Seconds of track time the phase covered.
     pub seconds: f32,
     /// Wall-clock frame time, the number a player feels.
     pub frame: Distribution,
@@ -346,11 +346,11 @@ pub struct Report {
     /// The budget every distribution was counted against.
     pub budget_us: u32,
     /// Every measured frame, as one summary.
-    pub overall: SegmentReport,
+    pub overall: PhaseReport,
     /// The same, cut into the stretches the run named. A cost that shows
     /// only here belongs to one of them; one that shows only in `overall` is
     /// spread across all of them.
-    pub segments: Vec<SegmentReport>,
+    pub phases: Vec<PhaseReport>,
     /// The slowest measured frames, slowest first: a hitch the distributions
     /// can only show as a maximum, named with what it spent.
     pub slowest: Vec<SlowFrame>,
@@ -369,21 +369,21 @@ impl Report {
         if measured.is_empty() {
             return None;
         }
-        let mut segments = Vec::new();
-        for (index, name) in segment_order(&measured, run) {
+        let mut phases = Vec::new();
+        for (index, name) in phase_order(&measured, run) {
             let frames: Vec<&FrameSample> = measured
                 .iter()
                 .copied()
-                .filter(|s| s.segment == index)
+                .filter(|s| s.phase == index)
                 .collect();
-            segments.push(summarize(name, &frames, run, options));
+            phases.push(summarize(name, &frames, run, options));
         }
         Some(Self {
             completed: run.completed,
             warmup_dropped: run.samples.len() - measured.len(),
             budget_us: options.budget_us,
             overall: summarize("all".to_string(), &measured, run, options),
-            segments,
+            phases,
             slowest: slowest_frames(&measured, run),
         })
     }
@@ -398,7 +398,7 @@ fn slowest_frames(measured: &[&FrameSample], run: &FrameRun) -> Vec<SlowFrame> {
         .into_iter()
         .map(|sample| SlowFrame {
             run_seconds: sample.run_seconds,
-            segment: run.segment_name(sample.segment).to_string(),
+            phase: run.phase_name(sample.phase).to_string(),
             frame_us: sample.frame_us,
             cpu_us: stepped_us(sample, run),
             gpu_wait_us: sample.gpu_wait_us,
@@ -524,13 +524,13 @@ fn named_slots(names: &[String]) -> impl Iterator<Item = (usize, &str)> {
         .map(|(slot, name)| (slot, name.as_str()))
 }
 
-// The segments the measured frames fall in, in the order they were first
+// The phases the measured frames fall in, in the order they were first
 // entered, so the report reads along the path rather than alphabetically.
-fn segment_order(measured: &[&FrameSample], run: &FrameRun) -> Vec<(Option<u32>, String)> {
+fn phase_order(measured: &[&FrameSample], run: &FrameRun) -> Vec<(Option<u32>, String)> {
     let mut seen: Vec<(Option<u32>, String)> = Vec::new();
     for sample in measured {
-        if !seen.iter().any(|(index, _)| *index == sample.segment) {
-            seen.push((sample.segment, run.segment_name(sample.segment).to_string()));
+        if !seen.iter().any(|(index, _)| *index == sample.phase) {
+            seen.push((sample.phase, run.phase_name(sample.phase).to_string()));
         }
     }
     seen
@@ -542,14 +542,14 @@ fn summarize(
     frames: &[&FrameSample],
     run: &FrameRun,
     options: ReduceOptions,
-) -> SegmentReport {
+) -> PhaseReport {
     let mut frame_us: Vec<u32> = frames.iter().map(|s| s.frame_us).collect();
     let mut cpu_us: Vec<u32> = frames.iter().map(|s| stepped_us(s, run)).collect();
     let mut gpu_us: Vec<u32> = frames.iter().map(|s| s.gpu_frame_us).collect();
     let gpu = Distribution::of(&mut gpu_us, options.budget_us);
     let cpu = Distribution::of(&mut cpu_us, options.budget_us);
     let frame = Distribution::of(&mut frame_us, options.budget_us);
-    SegmentReport {
+    PhaseReport {
         name,
         seconds: span_seconds(frames),
         frame,
@@ -755,7 +755,7 @@ fn gap_us(sample: &FrameSample, run: &FrameRun) -> u32 {
     (sample.gpu_frame_us + sample.gpu_overlap_us).saturating_sub(passes)
 }
 
-// Cut a cost-ordered pass list to the passes a segment reports, each followed
+// Cut a cost-ordered pass list to the passes a phase reports, each followed
 // by the passes timed inside it (see `counted_in`).
 fn nest(shares: Vec<PassShare>) -> Vec<PassShare> {
     let ran: Vec<String> = shares.iter().map(|p| p.name.clone()).collect();
@@ -781,10 +781,10 @@ mod tests {
     use concinnity_core::profile::MAX_PASS_TIMINGS;
 
     // A sample with the fields a test cares about and zeroes elsewhere.
-    fn sample(run_seconds: f32, segment: Option<u32>, frame_us: u32) -> FrameSample {
+    fn sample(run_seconds: f32, phase: Option<u32>, frame_us: u32) -> FrameSample {
         FrameSample {
             run_seconds,
-            segment,
+            phase,
             frame_us,
             run_step_us: frame_us,
             rebased: false,
@@ -813,7 +813,7 @@ mod tests {
     fn run_of(samples: Vec<FrameSample>) -> FrameRun {
         FrameRun {
             samples: samples.into(),
-            segments: vec!["shadows".to_string(), "rays".to_string()],
+            phases: vec!["shadows".to_string(), "rays".to_string()],
             pass_names: Vec::new(),
             system_names: Vec::new(),
             completed: true,
@@ -859,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    fn segments_come_out_in_the_order_the_path_entered_them() {
+    fn phases_come_out_in_the_order_the_path_entered_them() {
         // Declaration order would put shadows first either way, so the track
         // visits them the other way round to tell the two apart.
         let run = run_of(vec![
@@ -868,12 +868,12 @@ mod tests {
             sample(2.0, Some(1), 11_000),
         ]);
         let report = Report::of(&run, no_warmup()).expect("measured frames");
-        let names: Vec<&str> = report.segments.iter().map(|s| s.name.as_str()).collect();
+        let names: Vec<&str> = report.phases.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["rays", "shadows"]);
     }
 
     #[test]
-    fn a_segment_summarizes_only_its_own_frames() {
+    fn a_phase_summarizes_only_its_own_frames() {
         // A cost in one stretch has to be visible there rather than averaged
         // into the run.
         let run = run_of(vec![
@@ -883,8 +883,8 @@ mod tests {
             sample(3.0, Some(1), 40_000),
         ]);
         let report = Report::of(&run, no_warmup()).expect("measured frames");
-        let shadows = &report.segments[0];
-        let rays = &report.segments[1];
+        let shadows = &report.phases[0];
+        let rays = &report.phases[1];
         assert_eq!(shadows.frame.mean_us, 10_000);
         assert_eq!(rays.frame.mean_us, 40_000);
         assert_eq!((shadows.frame.count, rays.frame.count), (2, 2));
@@ -894,23 +894,23 @@ mod tests {
     }
 
     #[test]
-    fn a_segments_span_is_its_own_track_time() {
+    fn a_phases_span_is_its_own_track_time() {
         let run = run_of(vec![
             sample(0.0, Some(0), 10_000),
             sample(4.0, Some(0), 10_000),
             sample(5.0, Some(1), 10_000),
         ]);
         let report = Report::of(&run, no_warmup()).expect("measured frames");
-        assert_eq!(report.segments[0].seconds, 4.0);
+        assert_eq!(report.phases[0].seconds, 4.0);
         // One frame spans no time, which is honest rather than an error.
-        assert_eq!(report.segments[1].seconds, 0.0);
+        assert_eq!(report.phases[1].seconds, 0.0);
     }
 
     #[test]
-    fn frames_in_no_segment_are_reported_under_a_placeholder() {
+    fn frames_in_no_phase_are_reported_under_a_placeholder() {
         let run = run_of(vec![sample(0.0, None, 10_000)]);
         let report = Report::of(&run, no_warmup()).expect("measured frames");
-        assert_eq!(report.segments[0].name, "(unnamed)");
+        assert_eq!(report.phases[0].name, "(unnamed)");
     }
 
     #[test]
@@ -1001,8 +1001,8 @@ mod tests {
         let mut run = run_of(frames);
         run.pass_names = (0..=passes).map(|i| format!("pass{i}")).collect();
         let report = Report::of(&run, no_warmup()).expect("measured frames");
-        let segment = &report.overall;
-        let frame: Vec<&PassShare> = segment.passes.iter().filter(|p| !p.async_queue).collect();
+        let phase = &report.overall;
+        let frame: Vec<&PassShare> = phase.passes.iter().filter(|p| !p.async_queue).collect();
         assert_eq!(frame.len(), PASSES_REPORTED + 3);
         let other = frame[PASSES_REPORTED];
         assert_eq!(other.name, OTHER_PASSES);
@@ -1015,10 +1015,10 @@ mod tests {
             .iter()
             .map(|p| i64::from(p.median_us) * if p.share < 0.0 { -1 } else { 1 })
             .sum();
-        assert_eq!(total, i64::from(segment.gpu.p50_us));
+        assert_eq!(total, i64::from(phase.gpu.p50_us));
         let shares: f32 = frame.iter().map(|p| p.share).sum();
         assert!((shares - 1.0).abs() < 1e-4, "{shares}");
-        assert!(segment.passes.last().is_some_and(|p| p.async_queue));
+        assert!(phase.passes.last().is_some_and(|p| p.async_queue));
     }
 
     // A pass that moves between queues as features toggle is classed by
@@ -1211,7 +1211,7 @@ mod tests {
         assert_eq!(passes[1].median_us, 6_000);
     }
 
-    // The slow-frame list follows the segment list's rule: a nested pass whose
+    // The slow-frame list follows the phase list's rule: a nested pass whose
     // enclosing pass did not run that frame is listed on its own.
     #[test]
     fn a_slow_frame_lists_a_nested_pass_whose_enclosing_pass_did_not_run() {
@@ -1227,14 +1227,14 @@ mod tests {
             .map(|p| p.name.as_str())
             .collect();
         assert_eq!(names, ["shadow", "sky"]);
-        let segment: Vec<&str> = report
+        let phase: Vec<&str> = report
             .overall
             .passes
             .iter()
             .filter(|p| p.within.is_none())
             .map(|p| p.name.as_str())
             .collect();
-        assert_eq!(segment, ["shadow", "sky", GAPS]);
+        assert_eq!(phase, ["shadow", "sky", GAPS]);
     }
 
     #[test]
@@ -1395,7 +1395,7 @@ mod tests {
     }
 
     #[test]
-    fn a_segment_reports_each_fan_outs_means_with_the_recording_first() {
+    fn a_phase_reports_each_fan_outs_means_with_the_recording_first() {
         let mut a = sample(0.0, Some(0), 10_000);
         a.recording_fan_out = fan_out(2_000);
         a.system_fan_out[1] = fan_out(800);
@@ -1407,7 +1407,7 @@ mod tests {
         let report = Report::of(&run, no_warmup()).expect("measured frames");
         // PhysicsSystem fanned nothing out, so it gets no row.
         assert_eq!(
-            report.segments[0].fan_outs,
+            report.phases[0].fan_outs,
             [
                 FanOutCost::of("render recording", fan_out(3_000)),
                 FanOutCost::of("BehaviorSystem", fan_out(600)),
@@ -1528,7 +1528,7 @@ mod tests {
         let slowest: Vec<(u32, f32, &str)> = report
             .slowest
             .iter()
-            .map(|f| (f.frame_us, f.run_seconds, f.segment.as_str()))
+            .map(|f| (f.frame_us, f.run_seconds, f.phase.as_str()))
             .collect();
         // Equal frames keep the order they were drawn in.
         assert_eq!(

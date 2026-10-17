@@ -35,6 +35,7 @@ mod audio_occlusion_probe;
 pub mod authored_action;
 mod background;
 mod behavior;
+mod benchmark_config;
 mod block_type;
 mod bloom;
 mod camera3d;
@@ -62,7 +63,6 @@ mod font;
 mod fps_counter;
 mod frame_input;
 mod frame_pacing;
-mod frame_report;
 mod gamepad_button;
 mod gamepad_map;
 mod geometry;
@@ -384,10 +384,11 @@ pub use render_handle::RenderHandle;
 pub use scene_member::SceneMember;
 pub use transform::Transform;
 
+pub use benchmark_config::{BenchmarkConfig, BenchmarkPhase, CameraPose, FrameCapture};
+
 // HUD-overlay request components; their behavior lives in the client crate.
 pub use debug_hud::DebugHud;
 pub use fps_counter::FpsCounter;
-pub use frame_report::{FrameCapture, FrameReport};
 pub use stat_hud::StatHud;
 
 // The file-name extension of a path (the chars after the last `.` of its final

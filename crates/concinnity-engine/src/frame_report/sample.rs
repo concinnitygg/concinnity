@@ -19,8 +19,8 @@ pub struct FrameSample {
     /// run's own clock where it has one, and from the wall clock since the
     /// first sample otherwise.
     pub run_seconds: f32,
-    /// Index into [`FrameRun::segments`], or `None` outside every segment.
-    pub segment: Option<u32>,
+    /// Index into [`FrameRun::phases`], or `None` outside every phase.
+    pub phase: Option<u32>,
     /// Microseconds since the previous frame on the step clock, the interval
     /// the simulation advanced by: the frame time a player would feel.
     pub frame_us: u32,
@@ -120,7 +120,7 @@ impl FrameSample {
         }
         Self {
             run_seconds: timing.run_seconds,
-            segment: timing.segment,
+            phase: timing.phase,
             frame_us: timing.frame_us,
             run_step_us: timing.run_step_us,
             rebased: timing.rebased,
@@ -153,8 +153,8 @@ impl FrameSample {
 pub struct FrameTiming {
     /// See [`FrameSample::run_seconds`].
     pub run_seconds: f32,
-    /// See [`FrameSample::segment`].
-    pub segment: Option<u32>,
+    /// See [`FrameSample::phase`].
+    pub phase: Option<u32>,
     /// See [`FrameSample::frame_us`].
     pub frame_us: u32,
     /// See [`FrameSample::run_step_us`].
@@ -174,9 +174,9 @@ pub struct FrameTiming {
 pub struct FrameRun {
     /// The frames, in the order they were drawn.
     pub samples: SampleLog,
-    /// The names of the stretches the run is cut into. A sample's `segment`
+    /// The names of the stretches the run is cut into. A sample's `phase`
     /// indexes this.
-    pub segments: Vec<String>,
+    pub phases: Vec<String>,
     /// Pass names in the backend's slot order, captured from the first frame
     /// that reported any. Empty slots stay empty.
     pub pass_names: Vec<String>,
@@ -190,10 +190,10 @@ pub struct FrameRun {
 }
 
 impl FrameRun {
-    /// The name of segment `index`, or a placeholder when the world named
+    /// The name of phase `index`, or a placeholder when the world named
     /// none.
-    pub fn segment_name(&self, index: Option<u32>) -> &str {
-        match index.and_then(|i| self.segments.get(i as usize)) {
+    pub fn phase_name(&self, index: Option<u32>) -> &str {
+        match index.and_then(|i| self.phases.get(i as usize)) {
             Some(name) => name,
             None => "(unnamed)",
         }
@@ -263,7 +263,7 @@ mod tests {
         let s = FrameSample::new(
             FrameTiming {
                 run_seconds: 1.5,
-                segment: Some(2),
+                phase: Some(2),
                 frame_us: 16_000,
                 run_step_us: 16_667,
                 rebased: true,
@@ -279,7 +279,7 @@ mod tests {
             &[],
         );
         assert_eq!(s.run_seconds, 1.5);
-        assert_eq!(s.segment, Some(2));
+        assert_eq!(s.phase, Some(2));
         assert_eq!(s.frame_us, 16_000);
         assert_eq!((s.run_step_us, s.rebased), (16_667, true));
         assert_eq!((s.shown_step_us, s.shown_us), (22_000, 25_000));
@@ -379,14 +379,14 @@ mod tests {
     }
 
     #[test]
-    fn a_segment_with_no_name_reads_as_a_placeholder_rather_than_panicking() {
+    fn a_phase_with_no_name_reads_as_a_placeholder_rather_than_panicking() {
         let run = FrameRun {
-            segments: vec!["approach".to_string()],
+            phases: vec!["approach".to_string()],
             ..Default::default()
         };
-        assert_eq!(run.segment_name(Some(0)), "approach");
-        assert_eq!(run.segment_name(None), "(unnamed)");
+        assert_eq!(run.phase_name(Some(0)), "approach");
+        assert_eq!(run.phase_name(None), "(unnamed)");
         // An index past the end is a world that changed under a stale sample.
-        assert_eq!(run.segment_name(Some(7)), "(unnamed)");
+        assert_eq!(run.phase_name(Some(7)), "(unnamed)");
     }
 }

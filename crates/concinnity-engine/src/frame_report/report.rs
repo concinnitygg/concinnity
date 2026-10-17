@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use crate::frame_report::reduce::{FanOutCost, FrameCost, Report, SegmentReport, SlowFrame};
+use crate::frame_report::reduce::{FanOutCost, FrameCost, PhaseReport, Report, SlowFrame};
 
 const MICROS_PER_MILLI: f32 = 1_000.0;
 const BYTES_PER_MIB: f32 = (1 << 20) as f32;
@@ -23,18 +23,18 @@ pub fn to_text(report: &Report) -> String {
     if !report.completed {
         let _ = writeln!(
             out,
-            "  NOTE: the camera track did not finish, so this covers part of the path only",
+            "  NOTE: the run ended before its last phase did, so this covers part of it only",
         );
     }
     let _ = writeln!(out);
     let _ = writeln!(
         out,
         "{:<16} {:>7} {:>8} {:>8} {:>8} {:>8} {:>9} {:>8} {:>8}",
-        "segment", "frames", "p50 ms", "p95 ms", "p99 ms", "max ms", "over bgt", "cpu ms", "gpu ms",
+        "phase", "frames", "p50 ms", "p95 ms", "p99 ms", "max ms", "over bgt", "cpu ms", "gpu ms",
     );
     write_row(&mut out, &report.overall);
-    for segment in &report.segments {
-        write_row(&mut out, segment);
+    for phase in &report.phases {
+        write_row(&mut out, phase);
     }
 
     let _ = writeln!(out);
@@ -54,16 +54,16 @@ pub fn to_text(report: &Report) -> String {
     // that mistimes one frame does it by orders of magnitude. The system block
     // is means, so that its shares add up to the work the systems did. Each
     // heading carries the total its shares are taken against.
-    for segment in &report.segments {
+    for phase in &report.phases {
         write_block(
             &mut out,
             &format!(
                 "{} GPU passes, median {:.2} ms",
-                segment.name,
-                segment.gpu.p50_us as f32 / MICROS_PER_MILLI,
+                phase.name,
+                phase.gpu.p50_us as f32 / MICROS_PER_MILLI,
             ),
             "of the GPU frame",
-            segment.passes.iter().map(|p| {
+            phase.passes.iter().map(|p| {
                 // A pass timed inside the one above it is indented under it,
                 // and one beside the frame on the async queue is marked.
                 let name = match (&p.within, p.async_queue) {
@@ -78,29 +78,29 @@ pub fn to_text(report: &Report) -> String {
             &mut out,
             &format!(
                 "{} CPU work, mean {:.2} ms",
-                segment.name,
-                segment.cpu.mean_us as f32 / MICROS_PER_MILLI,
+                phase.name,
+                phase.cpu.mean_us as f32 / MICROS_PER_MILLI,
             ),
             "of the CPU work",
-            segment
+            phase
                 .systems
                 .iter()
                 .map(|s| (s.name.clone(), s.mean_us, s.share)),
         );
-        write_fan_outs(&mut out, &segment.name, &segment.fan_outs);
+        write_fan_outs(&mut out, &phase.name, &phase.fan_outs);
     }
     out
 }
 
-// A segment's fan-outs: how long each held the thread waiting on it, against
+// A phase's fan-outs: how long each held the thread waiting on it, against
 // the work its jobs contained. Nothing when none ran.
-fn write_fan_outs(out: &mut String, segment: &str, fan_outs: &[FanOutCost]) {
+fn write_fan_outs(out: &mut String, phase: &str, fan_outs: &[FanOutCost]) {
     if fan_outs.is_empty() {
         return;
     }
     let ms = |us: u32| us as f32 / MICROS_PER_MILLI;
     let _ = writeln!(out);
-    let _ = writeln!(out, "{segment} fan-outs, mean ms waited against work:");
+    let _ = writeln!(out, "{phase} fan-outs, mean ms waited against work:");
     let _ = writeln!(
         out,
         "  {:<20} {:>8} {:>9} {:>8} {:>8} {:>8}",
@@ -159,14 +159,14 @@ fn write_pacing(out: &mut String, report: &Report) {
     let _ = writeln!(
         out,
         "  {:<16} {:>7} {:>7} {:>7} {:>7} {:>8}",
-        "segment", "p5", "p50", "p95", "still", "rebases",
+        "phase", "p5", "p50", "p95", "still", "rebases",
     );
-    for segment in core::iter::once(&report.overall).chain(&report.segments) {
-        let p = &segment.pacing;
+    for phase in core::iter::once(&report.overall).chain(&report.phases) {
+        let p = &phase.pacing;
         let _ = writeln!(
             out,
             "  {:<16} {:>6.2}x {:>6.2}x {:>6.2}x {:>7} {:>8}",
-            segment.name, p.p5, p.p50, p.p95, p.still_frames, segment.rebases,
+            phase.name, p.p5, p.p50, p.p95, p.still_frames, phase.rebases,
         );
     }
 }
@@ -186,15 +186,15 @@ fn write_input_latency(out: &mut String, report: &Report) {
     let _ = writeln!(
         out,
         "  {:<16} {:>9} {:>9} {:>7}",
-        "segment", "p50 ms", "p95 ms", "frames",
+        "phase", "p50 ms", "p95 ms", "frames",
     );
     let ms = |us: u32| us as f32 / MICROS_PER_MILLI;
-    for segment in core::iter::once(&report.overall).chain(&report.segments) {
-        let l = &segment.input_latency;
+    for phase in core::iter::once(&report.overall).chain(&report.phases) {
+        let l = &phase.input_latency;
         let _ = writeln!(
             out,
             "  {:<16} {:>9.2} {:>9.2} {:>7}",
-            segment.name,
+            phase.name,
             ms(l.p50_us),
             ms(l.p95_us),
             l.frames,
@@ -216,7 +216,7 @@ fn write_slowest(out: &mut String, frames: &[SlowFrame]) {
             "  {:.2} ms at {:.2} s in {}: cpu {:.2} ms, blocked on GPU {:.2} ms, gpu {:.2} ms (gaps {:.2}, overlap {:.2}), run step {:.2} ms{}",
             ms(frame.frame_us),
             frame.run_seconds,
-            frame.segment,
+            frame.phase,
             ms(frame.cpu_us),
             ms(frame.gpu_wait_us),
             ms(frame.gpu_frame_us),
@@ -263,20 +263,20 @@ fn write_costs(out: &mut String, label: &str, costs: &[FrameCost]) {
 }
 
 // One line of the summary table.
-fn write_row(out: &mut String, segment: &SegmentReport) {
+fn write_row(out: &mut String, phase: &PhaseReport) {
     let ms = |us: u32| us as f32 / MICROS_PER_MILLI;
     let _ = writeln!(
         out,
         "{:<16} {:>7} {:>8.2} {:>8.2} {:>8.2} {:>8.2} {:>8.1}% {:>8.2} {:>8.2}",
-        segment.name,
-        segment.frame.count,
-        ms(segment.frame.p50_us),
-        ms(segment.frame.p95_us),
-        ms(segment.frame.p99_us),
-        ms(segment.frame.max_us),
-        segment.frame.over_budget_share() * 100.0,
-        ms(segment.cpu.p50_us),
-        ms(segment.gpu.p50_us),
+        phase.name,
+        phase.frame.count,
+        ms(phase.frame.p50_us),
+        ms(phase.frame.p95_us),
+        ms(phase.frame.p99_us),
+        ms(phase.frame.max_us),
+        phase.frame.over_budget_share() * 100.0,
+        ms(phase.cpu.p50_us),
+        ms(phase.gpu.p50_us),
     );
 }
 
@@ -289,10 +289,10 @@ mod tests {
     use concinnity_core::profile::{FanOutTiming, MAX_PASS_TIMINGS};
     use concinnity_core::render::render_graph::PassId;
 
-    fn sample(run_seconds: f32, segment: Option<u32>, frame_us: u32) -> FrameSample {
+    fn sample(run_seconds: f32, phase: Option<u32>, frame_us: u32) -> FrameSample {
         FrameSample {
             run_seconds,
-            segment,
+            phase,
             frame_us,
             run_step_us: frame_us,
             rebased: false,
@@ -334,7 +334,7 @@ mod tests {
         first.pass_us[0] = 3_000;
         let run = FrameRun {
             samples: vec![first, sample(1.0, Some(1), 40_000)].into(),
-            segments: vec!["approach".to_string(), "rays".to_string()],
+            phases: vec!["approach".to_string(), "rays".to_string()],
             pass_names: vec!["main".to_string()],
             system_names: Vec::new(),
             completed: true,
@@ -351,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn every_segment_gets_a_row_under_the_overall_one() {
+    fn every_phase_gets_a_row_under_the_overall_one() {
         let text = rendered();
         assert!(text.contains("\nall "), "{text}");
         assert!(text.contains("approach"), "{text}");
@@ -382,7 +382,7 @@ mod tests {
         first.pass_us[1] = 500;
         let run = FrameRun {
             samples: vec![first].into(),
-            segments: vec!["approach".to_string()],
+            phases: vec!["approach".to_string()],
             pass_names: vec!["main".to_string(), "sky".to_string()],
             system_names: Vec::new(),
             completed: true,
@@ -401,7 +401,7 @@ mod tests {
         first.async_pass_mask = 0b10;
         let run = FrameRun {
             samples: vec![first].into(),
-            segments: vec!["approach".to_string()],
+            phases: vec!["approach".to_string()],
             pass_names: vec!["main".to_string(), "light_cull".to_string()],
             system_names: Vec::new(),
             completed: true,
@@ -418,7 +418,7 @@ mod tests {
         first.gpu_overlap_us = 1_500;
         let run = FrameRun {
             samples: vec![first].into(),
-            segments: vec!["approach".to_string()],
+            phases: vec!["approach".to_string()],
             pass_names: vec!["main".to_string()],
             system_names: Vec::new(),
             completed: true,
@@ -437,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn input_latency_is_listed_per_segment() {
+    fn input_latency_is_listed_per_phase() {
         let frames: Vec<FrameSample> = (0..10)
             .map(|n| {
                 let mut f = sample(n as f32, Some(0), 16_000);
@@ -447,7 +447,7 @@ mod tests {
             .collect();
         let run = FrameRun {
             samples: frames.into(),
-            segments: vec!["approach".to_string()],
+            phases: vec!["approach".to_string()],
             pass_names: Vec::new(),
             system_names: Vec::new(),
             completed: true,
@@ -464,7 +464,7 @@ mod tests {
     }
 
     #[test]
-    fn pacing_is_listed_per_segment() {
+    fn pacing_is_listed_per_phase() {
         let text = rendered();
         assert!(text.contains("camera pacing"), "{text}");
         assert!(
@@ -486,14 +486,14 @@ mod tests {
     fn a_run_that_did_not_finish_is_flagged_before_its_numbers() {
         let run = FrameRun {
             samples: vec![sample(0.0, Some(0), 10_000)].into(),
-            segments: vec!["approach".to_string()],
+            phases: vec!["approach".to_string()],
             pass_names: Vec::new(),
             system_names: Vec::new(),
             completed: false,
         };
         let text = to_text(&report_of(run));
-        let note = text.find("did not finish").expect("the note");
-        assert!(note < text.find("segment").expect("the table"), "{text}");
+        let note = text.find("ended before its last phase").expect("the note");
+        assert!(note < text.find("\nphase ").expect("the table"), "{text}");
     }
 
     #[test]
@@ -508,7 +508,7 @@ mod tests {
         hitch.submit_present_us = 300;
         let run = FrameRun {
             samples: vec![sample(0.0, Some(0), 10_000), hitch].into(),
-            segments: vec!["approach".to_string(), "rays".to_string()],
+            phases: vec!["approach".to_string(), "rays".to_string()],
             pass_names: vec!["main".to_string()],
             system_names: vec!["PhysicsSystem".to_string()],
             completed: true,
@@ -541,7 +541,7 @@ mod tests {
         only.render_cpu_us = 400;
         let run = FrameRun {
             samples: vec![only].into(),
-            segments: vec!["approach".to_string()],
+            phases: vec!["approach".to_string()],
             pass_names: Vec::new(),
             system_names: vec!["PhysicsSystem".to_string()],
             completed: true,
@@ -552,7 +552,7 @@ mod tests {
     }
 
     #[test]
-    fn fan_outs_are_listed_per_segment_and_per_slow_frame() {
+    fn fan_outs_are_listed_per_phase_and_per_slow_frame() {
         let recording = FanOutTiming {
             wall_us: 2_400,
             first_job_us: 1_200,
@@ -568,7 +568,7 @@ mod tests {
         };
         let run = FrameRun {
             samples: vec![only].into(),
-            segments: vec!["approach".to_string()],
+            phases: vec!["approach".to_string()],
             pass_names: Vec::new(),
             system_names: vec!["BehaviorSystem".to_string()],
             completed: true,
@@ -602,12 +602,12 @@ mod tests {
     }
 
     #[test]
-    fn a_segment_with_no_pass_timings_lists_no_pass_block() {
+    fn a_phase_with_no_pass_timings_lists_no_pass_block() {
         // A backend without timestamp support still gets a table, just no
         // per-pass breakdown under it.
         let run = FrameRun {
             samples: vec![sample(0.0, Some(0), 10_000)].into(),
-            segments: vec!["approach".to_string()],
+            phases: vec!["approach".to_string()],
             pass_names: Vec::new(),
             system_names: Vec::new(),
             completed: true,
