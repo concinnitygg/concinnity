@@ -8,11 +8,6 @@ use super::*;
 /// A `RenderBackend` that accepts every call and draws nothing.
 pub struct NullBackend;
 
-impl SceneControl for NullBackend {
-    fn update_visibility(&mut self, _draw_idx: DrawIndex, _visible: bool) {}
-    fn set_fade(&mut self, _fade: f32) {}
-}
-
 impl SceneHost for NullBackend {
     fn scene(&self) -> Option<&crate::render::scene_state::SceneState> {
         None

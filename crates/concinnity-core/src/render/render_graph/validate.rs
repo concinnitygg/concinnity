@@ -22,7 +22,7 @@
 //! inside each backend executor, where they cover the graphs a test sweep never
 //! builds.
 
-use super::compile::CompiledGraph;
+use super::compile::{CompiledGraph, CompiledPass};
 use super::passes::PassId;
 use super::reach::Reachability;
 use super::schedule::{PassQueue, realized_reachability};
@@ -93,18 +93,13 @@ pub fn barrier_coverage_gaps_for_driven(graph: &CompiledGraph, driven: &[bool]) 
     gaps_over(graph, &|i| driven.get(i).copied().unwrap_or(false))
 }
 
-/// The access each resource is left in once the graph's last barrier for it has
-/// run, indexed by resource id: the state plus the stage union that barrier
-/// carried, since a `Read`'s native state can depend on its consuming stages.
-/// `(Undefined, empty)` for a resource no barrier touches.
-///
-/// A backend pairs this with its own state translation to check the cross-frame
-/// contract: a resource whose first-use transition names a resting state must
-/// actually end the frame in it, or the next frame's producer barrier declares a
-/// source state the resource is not in.
-pub fn final_states(graph: &CompiledGraph) -> Vec<(ResourceState, ReadStages)> {
-    let mut state = vec![(ResourceState::Undefined, ReadStages::empty()); graph.resources.len()];
-    for pass in &graph.passes {
+// Each resource's access once the last barrier over `passes` has run.
+pub(super) fn final_states_of(
+    passes: &[CompiledPass],
+    resource_count: usize,
+) -> Vec<(ResourceState, ReadStages)> {
+    let mut state = vec![(ResourceState::Undefined, ReadStages::empty()); resource_count];
+    for pass in passes {
         for op in pass
             .barriers_before
             .iter()
@@ -1076,7 +1071,7 @@ mod tests {
             .presents();
         let g = g.compile().expect("compiles");
 
-        let states = final_states(&g);
+        let states = g.final_states();
         assert_eq!(states.len(), g.resources.len());
         let (state, stages) = states[t.resource.index()];
         assert_eq!(

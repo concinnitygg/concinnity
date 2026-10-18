@@ -6,8 +6,8 @@
 //!
 //! **Per-pass command lists.** Each non-composite pass records into its
 //! own `ID3D12GraphicsCommandList` (drawn from the `pass_cmd_lists` pool
-//! on `DxContext`). The fan-out runs on `jobs::pool()` via `rayon::scope`
-//! so workers encode in parallel; each worker resets its assigned
+//! on `DxContext`). The fan-out runs on `jobs::pool()` through the shared
+//! `execute_passes`, so workers encode in parallel; each worker resets its assigned
 //! allocator + cmd list, brackets the encode with start/end TIMESTAMP
 //! queries, encodes the pass, and closes the cmd list. The main thread
 //! then submits every closed cmd list in topological pass order via
@@ -44,19 +44,21 @@
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{ClusterParams, TextDrawCall};
-use concinnity_core::profile::MAX_PASS_TIMINGS;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::frame_plan::{EffectBlocks, FogBlocks};
+use concinnity_core::render::particles::ParticleFrame;
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{
-    BarrierOp, CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
+    AliasRows, BarrierOp, BarrierTable, CompiledGraph, CompiledPass, GraphResourceClass, PassId,
+    PassRecorder, PassScratch, execute_passes,
 };
+use concinnity_core::render::uniforms::GBufferView;
 use concinnity_core::render::uniforms::PassCamera;
 use concinnity_core::transform::mat4_inverse;
 use concinnity_host::thread::jobs;
-use std::sync::Mutex;
-use std::sync::atomic::AtomicU32;
+use std::mem::ManuallyDrop;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::barrier_translate::{DxBarrier, d3d12_barrier, d3d12_restore};
@@ -66,16 +68,32 @@ use super::texture::{aliasing_barrier, transition_barrier, uav_barrier};
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::line::LineUpload;
 
+// A D3D12 resource named without a reference count of its own, so the barrier
+// tables can persist across frames with no `AddRef` / `Release` traffic. Every
+// table holding one is cleared and refilled from live `DxContext` state before a
+// frame reads it, so a pointer left from an earlier frame is never dereferenced.
+struct ResourceRef(ManuallyDrop<ID3D12Resource>);
+
+impl ResourceRef {
+    fn new(resource: &ID3D12Resource) -> Self {
+        // SAFETY: an interface is one non-null COM pointer, so this copies the
+        // pointer with no refcount change, and `ManuallyDrop` never releases it.
+        Self(unsafe { std::mem::transmute_copy(resource) })
+    }
+}
+
+impl std::ops::Deref for ResourceRef {
+    type Target = ID3D12Resource;
+
+    fn deref(&self) -> &ID3D12Resource {
+        &self.0
+    }
+}
+
 // One resolved barrier target: the D3D12 resource a graph resource backs, its
-// class, and its resting state (created / cross-frame-restored). Built once per
-// frame by `build_barrier_registry`.
-//
-// The resource is borrowed from `DxContext`, not refcount-cloned: the registry is
-// a frame-path local that every worker joins before it drops, so a borrow both
-// keeps the per-frame path free of `AddRef` / `Release` traffic and makes it
-// impossible for a target to outlive the field it was resolved from.
-struct DxBarrierTarget<'a> {
-    object: DxTargetObject<'a>,
+// class, and its resting state (created / cross-frame-restored).
+struct DxBarrierTarget {
+    object: DxTargetObject,
     class: GraphResourceClass,
     resting: D3D12_RESOURCE_STATES,
 }
@@ -84,75 +102,122 @@ struct DxBarrierTarget<'a> {
 // label as a range into the registry's resource arena. `particle_pool` is the
 // second case: the graph declares one resource for the emitter set because the
 // frame builder has no emitter count, and the executor resolves it to however
-// many pools are live this frame. Each gets its own barrier; the arena keeps the
-// set from costing an allocation of its own.
-enum DxTargetObject<'a> {
-    One(&'a ID3D12Resource),
+// many pools are live this frame. Each gets its own barrier.
+enum DxTargetObject {
+    One(ResourceRef),
     Set { first: usize, count: usize },
 }
 
 // `ResourceId`-indexed table of barrier targets for the graph-driven resources
-// (`None` for every resource the executor doesn't graph-drive). A resource is
-// graph-driven iff it has a `Some` entry, so this table is the single source of
-// truth. Built on the main thread by `build_barrier_registry`, where the only
-// field-naming of the graph-driven resources lives; the parallel emit path stays
-// field-agnostic.
-struct DxBarrierRegistry<'a> {
-    targets: Vec<Option<DxBarrierTarget<'a>>>,
-    // Backing store for the `DxTargetObject::Set` ranges.
-    resources: Vec<&'a ID3D12Resource>,
-}
+// (`None` for every resource the executor doesn't graph-drive). Refilled on the
+// main thread by `refill_graph_tables`, where the only field-naming of the
+// graph-driven resources lives; the parallel emit path stays field-agnostic.
+type DxBarrierRegistry = BarrierTable<DxBarrierTarget, ResourceRef>;
 
-impl<'a> DxBarrierRegistry<'a> {
-    fn target(&self, resource_index: usize) -> Option<&DxBarrierTarget<'a>> {
-        self.targets.get(resource_index)?.as_ref()
-    }
-
-    // The resources one target names: a single object, or the whole set.
-    fn objects<'r>(&'r self, target: &'r DxBarrierTarget<'a>) -> &'r [&'a ID3D12Resource] {
-        match target.object {
-            DxTargetObject::One(ref r) => std::slice::from_ref(r),
-            DxTargetObject::Set { first, count } => &self.resources[first..first + count],
-        }
+// The resources one target names: a single object, or the whole set.
+fn target_objects<'r>(
+    registry: &'r DxBarrierRegistry,
+    target: &'r DxBarrierTarget,
+) -> &'r [ResourceRef] {
+    match &target.object {
+        DxTargetObject::One(r) => std::slice::from_ref(r),
+        DxTargetObject::Set { first, count } => registry.set(*first, *count),
     }
 }
-
-// SAFETY: same read-only contract as `ParallelCtxRef` / `SendableCmdList` (see
-// `parallel_encoder.rs`). The registry holds borrows of D3D12 resource handles
-// that workers only read, to record `ResourceBarrier` calls into their own
-// command lists; every worker joins before the borrow that built the registry
-// ends. D3D12 device-derived objects are thread-safe for shared read per
-// Microsoft's free-threading rules.
-unsafe impl Sync for DxBarrierRegistry<'_> {}
 
 // One pooled transient a pass reclaims a shared heap region for, resolved once
-// per frame on the main thread.
-struct DxAliasBarrier<'a> {
-    // Topological position of the pass that first-writes it, i.e. where the
-    // aliasing barrier and the re-initializing discard belong.
-    pass: usize,
+// per frame on the main thread and filed under the pass that first-writes it.
+struct DxAliasBarrier {
     // Its `ResourceId`, so the prologue can recognize the pass's own transition
     // for it and open that from the discard state instead of from rest.
     resource_index: usize,
-    resource: &'a ID3D12Resource,
+    resource: ResourceRef,
     // Where it sits between frames: the state the discard opens from, and the
     // one it is put back in when the graph drives it no further.
     resting: D3D12_RESOURCE_STATES,
 }
 
-// Every aliasing barrier the frame owes, sorted by pass so a pass's own are one
-// subslice. Flat rather than a `Vec` per pass: at most a handful of transients
-// alias in a frame, and the whole table is one allocation.
-struct DxAliasBarriers<'a>(Vec<DxAliasBarrier<'a>>);
+// The per-frame tables the executor builds, kept across frames on `DxContext`
+// so their backing allocations are reused.
+#[derive(Default)]
+pub(in crate::directx) struct DxGraphScratch {
+    registry: DxBarrierRegistry,
+    alias: AliasRows<DxAliasBarrier>,
+    passes: PassScratch<SendableCmdList>,
+}
 
-// SAFETY: same read-only contract as `DxBarrierRegistry` above.
-unsafe impl Sync for DxAliasBarriers<'_> {}
+// Records one graph pass into its own per-`(frame, pass)` command list on a
+// job-pool worker.
+struct DxPassRecorder<'a, 'p> {
+    ctx: ParallelCtxRef<'a>,
+    params: &'a GraphFrameParams<'p>,
+    particle: Option<&'a ParticleFrame>,
+    grass: Option<&'a super::grass::GrassFrame>,
+    registry: &'a DxBarrierRegistry,
+    alias: &'a AliasRows<DxAliasBarrier>,
+}
 
-impl<'a> DxAliasBarriers<'a> {
-    fn for_pass(&self, pass: usize) -> &[DxAliasBarrier<'a>] {
-        let start = self.0.partition_point(|a| a.pass < pass);
-        let end = self.0.partition_point(|a| a.pass <= pass);
-        &self.0[start..end]
+impl PassRecorder for DxPassRecorder<'_, '_> {
+    type Recorded = SendableCmdList;
+
+    fn record(&self, index: usize, pass: &CompiledPass) -> RenderResult<SendableCmdList> {
+        let ctx = self.ctx.as_ctx();
+        let frame_idx = self.params.frame_idx;
+        let pass_id = pass.id;
+        let pool_idx = pool_index(frame_idx, pass_id);
+        let alloc = &ctx.commands.pass_allocators[pool_idx];
+        let cmd = &ctx.commands.pass_cmd_lists[pool_idx];
+        // Reset this pass's allocator + cmd list so we can record fresh into it.
+        // The previous frame's submission for this same (frame, pass) slot has
+        // already retired by the time we get here (the frames-in-flight-deep
+        // fence wait at the top of `draw_frame` gates the entire slot).
+        // SAFETY: the fence for this frame slot was already waited on, so no submission still
+        // references what is being reset.
+        unsafe { alloc.Reset() }.map_err(|e| {
+            super::error::map_hresult(
+                e.code(),
+                &format!("per-pass allocator reset ({})", pass_id.name()),
+            )
+        })?;
+        // SAFETY: the fence for this frame slot was already waited on, so no submission still
+        // references what is being reset.
+        unsafe { cmd.Reset(alloc, None) }.map_err(|e| {
+            super::error::map_hresult(
+                e.code(),
+                &format!("per-pass cmd list reset ({})", pass_id.name()),
+            )
+        })?;
+        // Per-pass GPU timing: bracket the encoder with start + end TIMESTAMP
+        // `EndQuery` calls into pre-allocated heap slots. The frame's whole block
+        // is resolved by the "end" outer cmd list at the end of the frame and read
+        // back at the top of the next frame. See [`pass_timing`] for the slot
+        // layout.
+        if let Some(heap) = ctx.timestamps.query_heap.as_ref() {
+            let (start_slot, _) = pass_timing::pass_pair(frame_idx, pass_id);
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
+            unsafe { cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, start_slot) };
+        }
+        emit_pass_prologue(cmd, self.registry, self.alias.for_pass(index), pass);
+        let encoded = ctx.encode_pass_into(pass_id, cmd, self.params, self.particle, self.grass);
+        if encoded.is_ok() {
+            emit_pass_epilogue(cmd, self.registry, pass);
+        }
+        if let Some(heap) = ctx.timestamps.query_heap.as_ref() {
+            let (_, end_slot) = pass_timing::pass_pair(frame_idx, pass_id);
+            // SAFETY: the command list is in the recording state, and every resource, descriptor
+            // and slice these commands name is live for the call.
+            unsafe { cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, end_slot) };
+        }
+        // SAFETY: the command list is live and in the recording state, which is what `Close`
+        // requires.
+        unsafe { cmd.Close() }.map_err(|e| {
+            super::error::map_hresult(
+                e.code(),
+                &format!("per-pass cmd list close ({})", pass_id.name()),
+            )
+        })?;
+        encoded.map(|()| SendableCmdList(cmd.clone()))
     }
 }
 
@@ -231,7 +296,7 @@ fn stage_graph_barrier(
     ) else {
         return;
     };
-    for resource in registry.objects(target) {
+    for resource in target_objects(registry, target) {
         batch.push(match barrier {
             DxBarrier::Transition(before, after) => transition_barrier(resource, before, after),
             DxBarrier::Uav => uav_barrier(resource),
@@ -284,16 +349,14 @@ fn graph_takes_over(
 fn emit_pass_prologue(
     cmd: &ID3D12GraphicsCommandList,
     registry: &DxBarrierRegistry,
-    alias: &DxAliasBarriers,
-    idx: usize,
+    aliased: &[DxAliasBarrier],
     pass: &CompiledPass,
 ) {
-    let aliased = alias.for_pass(idx);
     let mut batch = BarrierBatch::new(cmd);
     for a in aliased {
-        batch.push(aliasing_barrier(a.resource));
+        batch.push(aliasing_barrier(&a.resource));
         if a.resting != DISCARD_STATE {
-            batch.push(transition_barrier(a.resource, a.resting, DISCARD_STATE));
+            batch.push(transition_barrier(&a.resource, a.resting, DISCARD_STATE));
         }
     }
     for op in &pass.barriers_before {
@@ -314,7 +377,7 @@ fn emit_pass_prologue(
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.DiscardResource(a.resource, None);
+            cmd.DiscardResource(&*a.resource, None);
         }
     }
     for op in &pass.barriers_before {
@@ -337,7 +400,7 @@ fn emit_pass_prologue(
     // discard state, which is not where the next frame expects to find it.
     for a in aliased {
         if a.resting != DISCARD_STATE && !graph_takes_over(registry, pass, a.resource_index) {
-            batch.push(transition_barrier(a.resource, DISCARD_STATE, a.resting));
+            batch.push(transition_barrier(&a.resource, DISCARD_STATE, a.resting));
         }
     }
     batch.flush();
@@ -376,7 +439,7 @@ fn emit_graph_restores(
     graph: &CompiledGraph,
 ) {
     let mut batch = BarrierBatch::new(cmd);
-    for (idx, (state, stages)) in final_states(graph).into_iter().enumerate() {
+    for (idx, &(state, stages)) in graph.final_states().iter().enumerate() {
         let Some(target) = registry.target(idx) else {
             continue;
         };
@@ -384,7 +447,7 @@ fn emit_graph_restores(
         else {
             continue;
         };
-        for resource in registry.objects(target) {
+        for resource in target_objects(registry, target) {
             batch.push(transition_barrier(resource, before, after));
         }
     }
@@ -412,7 +475,7 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &DxBarrierRegistry
     use super::barrier_translate::d3d12_state;
     use concinnity_core::render::render_graph::{ResourceState, barrier_coverage_gaps_for_driven};
 
-    let driven: Vec<bool> = registry.targets.iter().map(|t| t.is_some()).collect();
+    let driven: Vec<bool> = registry.driven().collect();
     let gaps = barrier_coverage_gaps_for_driven(graph, &driven);
     assert!(
         gaps.is_empty(),
@@ -451,7 +514,7 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &DxBarrierRegistry
         }
     }
 
-    for (idx, (state, stages)) in final_states(graph).into_iter().enumerate() {
+    for (idx, &(state, stages)) in graph.final_states().iter().enumerate() {
         let Some(target) = registry.target(idx) else {
             continue;
         };
@@ -571,13 +634,9 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // Camera frustum derived from `vp_mat`. Consumed by Main's
     // per-cluster culling and the bundled SSAO pre-pass.
     pub frustum: &'a Frustum,
-    // Vertical FOV in radians. Consumed by Main's SSAO pre-pass
-    // (depth-reconstruction geometry) and SsrResolve's ray-march
-    // projection.
+    // Vertical FOV in radians, which the temporal upscaler linearizes depth
+    // with.
     pub fov_y_radians: f32,
-    // Camera aspect ratio (width / height). Consumed by SsrResolve
-    // for the ray-march projection.
-    pub aspect: f32,
     // Seconds since the engine started. Consumed by ParticlesDraw's
     // bundled compute sim (delta-time computed against the last
     // per-emitter elapsed snapshot stored on `DxContext`).
@@ -598,11 +657,20 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // The main camera's cluster params, which each mirror render re-aims
     // through its reflected view.
     pub cluster_params: ClusterParams,
+    // The fog's blocks, when fog contributes.
+    pub fog: Option<FogBlocks>,
+    // The G-buffer pre-pass's view block.
+    pub gbuffer_view: GBufferView,
+    // The screen-space effects' blocks.
+    pub effects: EffectBlocks,
     // How the particle and transparent passes treat the reactive mask, and
     // whether TAA, the upscaler or the reactive view reads it.
     pub reactive: concinnity_core::render::reactive_mask::ReactiveMaskPlan,
     // What may be trampling the grass this frame.
     pub grass_benders: &'a [concinnity_core::render::grass::GrassBender],
+    // This frame's particle clock, advanced before recording; `None` when the
+    // particle passes are inert.
+    pub particle: Option<concinnity_core::render::particles::ParticleFrame>,
 }
 
 impl DxContext {
@@ -625,51 +693,42 @@ impl DxContext {
         &self,
         graph: &CompiledGraph,
         params: &GraphFrameParams<'_>,
-    ) -> RenderResult<Vec<ID3D12GraphicsCommandList>> {
+        pass_lists: &mut Vec<ID3D12GraphicsCommandList>,
+    ) -> RenderResult<()> {
         // Particle per-frame state (dt / frame index / per-emitter spawn runs
         // and their params-ring slots) is advanced here, once, before any pass
         // encodes, so the sim and draw halves record on separate workers against
         // one consistent frame. `None` when the pass is inert. Mirrors Vulkan's
         // and Metal's `prepare_particle_pass` hoist.
-        let particle_frame = self.prepare_particle_pass(params.frame_idx, params.elapsed as f32);
-        let particle_ref = particle_frame.as_ref();
+        let particle_ref = params.particle.as_ref();
+        if let Some(frame) = particle_ref {
+            self.write_particle_params(params.frame_idx, frame);
+        }
         // The grass block for the kernel and both draws, written once here and
         // only on a frame whose graph runs the kernel, so the draw-argument
         // slot it fills alternates frame to frame.
         let grass_frame = graph
-            .passes
-            .iter()
-            .any(|p| p.id == PassId::Grass)
+            .pass(PassId::Grass)
+            .is_some()
             .then(|| {
                 self.prepare_grass_frame(super::grass::GrassRequest {
                     frame_idx: params.frame_idx,
                     cam_pos: params.cam_pos,
                     vp: params.cur_vp,
                     elapsed: params.elapsed as f32,
-                    cast: graph.passes.iter().any(|p| p.id == PassId::GrassShadow),
+                    cast: graph.pass(PassId::GrassShadow).is_some(),
                     benders: params.grass_benders,
                 })
             })
             .flatten();
-        let grass_ref = grass_frame.as_ref();
 
-        // Find Composite's slot (if any) so we can skip it in the
-        // worker fan-out and run it inline on the main thread instead.
-        let composite_idx = graph.passes.iter().position(|p| p.id == PassId::Composite);
-
-        // Slot per graph pass: each worker stashes its closed cmd list
-        // here on success, indexed by topological position. Main thread
-        // collects them into the return Vec in order after the join.
-        let worker_slots: Mutex<Vec<Option<SendableCmdList>>> =
-            Mutex::new((0..graph.passes.len()).map(|_| None).collect());
-        let first_error: Mutex<Option<RenderError>> = Mutex::new(None);
-
-        let ctx_ref = ParallelCtxRef::new(self);
-        // Resolve every graph-driven resource's barrier target once, on the main
-        // thread, then share the table read-only into the parallel pass workers.
-        let registry = self.build_barrier_registry(graph, params.frame_idx);
+        // Resolve every graph-driven resource's barrier target and every pass's
+        // aliasing barriers once, on the main thread, then share the tables
+        // read-only into the parallel pass workers.
+        let mut scratch = self.graph_scratch.take().unwrap_or_default();
+        self.refill_graph_tables(&mut scratch, graph, params.frame_idx);
         #[cfg(debug_assertions)]
-        debug_assert_graph_drives(graph, &registry);
+        debug_assert_graph_drives(graph, &scratch.registry);
         #[cfg(debug_assertions)]
         render_graph::assert_slot_aliasing_sound(
             graph,
@@ -687,146 +746,35 @@ impl DxContext {
         // which is what this asserts.
         #[cfg(debug_assertions)]
         render_graph::assert_serial_order_honors_schedule(graph, "directx");
-        let registry_ref = &registry;
-        // Likewise resolve the per-pass aliasing barriers (which pooled transients
-        // reclaim a shared heap region) once, shared read-only into the workers.
-        let alias_barriers = self.build_alias_barriers(graph, &registry);
-        let alias_barriers_ref = &alias_barriers;
-        let frame_idx = params.frame_idx;
-        let timer = jobs::fan_out_timer();
-        let timer_ref = &timer;
-        let record_us: [AtomicU32; MAX_PASS_TIMINGS] =
-            [const { AtomicU32::new(0) }; MAX_PASS_TIMINGS];
-        let record_us_ref = &record_us;
 
-        jobs::pool().install(|| {
-            rayon::scope(|scope| {
-                for (idx, pass) in graph.passes.iter().enumerate() {
-                    if Some(idx) == composite_idx {
-                        continue;
-                    }
-                    let pass_id = pass.id;
-                    let first_error_ref = &first_error;
-                    let worker_slots_ref = &worker_slots;
-                    scope.spawn(move |_| {
-                        timer_ref.job_into(&record_us_ref[pass_id as usize], || {
-                            let ctx = ctx_ref.as_ctx();
-                            let pool_idx = pool_index(frame_idx, pass_id);
-                            let alloc = &ctx.commands.pass_allocators[pool_idx];
-                            let cmd = &ctx.commands.pass_cmd_lists[pool_idx];
-
-                            // Reset this pass's allocator + cmd list so we
-                            // can record fresh into it. The previous frame's
-                            // submission for this same (frame, pass) slot
-                            // has already retired by the time we get here
-                            // (the frames-in-flight-deep fence wait at the top of
-                            // `draw_frame` gates the entire slot).
-                            // SAFETY: the fence for this frame slot was already waited on, so no
-                            // submission still references what is being reset.
-                            if let Err(e) = unsafe { alloc.Reset() } {
-                                let mut lock = first_error_ref.lock().unwrap();
-                                if lock.is_none() {
-                                    *lock = Some(super::error::map_hresult(
-                                        e.code(),
-                                        &format!("per-pass allocator reset ({})", pass_id.name()),
-                                    ));
-                                }
-                                return;
-                            }
-                            // SAFETY: the fence for this frame slot was already waited on, so no
-                            // submission still references what is being reset.
-                            if let Err(e) = unsafe { cmd.Reset(alloc, None) } {
-                                let mut lock = first_error_ref.lock().unwrap();
-                                if lock.is_none() {
-                                    *lock = Some(super::error::map_hresult(
-                                        e.code(),
-                                        &format!("per-pass cmd list reset ({})", pass_id.name()),
-                                    ));
-                                }
-                                return;
-                            }
-
-                            // Per-pass GPU timing: bracket the encoder with
-                            // start + end TIMESTAMP `EndQuery` calls into
-                            // pre-allocated heap slots. The frame's whole
-                            // block is resolved by the "end" outer cmd list
-                            // at the end of the frame and read back at the
-                            // top of the next frame. See
-                            // [`pass_timing`] for the slot layout.
-                            if let Some(heap) = ctx.timestamps.query_heap.as_ref() {
-                                let (start_slot, _) = pass_timing::pass_pair(frame_idx, pass_id);
-                                // SAFETY: the command list is in the recording state, and every
-                                // resource, descriptor and slice these commands name is live for the
-                                // call.
-                                unsafe {
-                                    cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, start_slot);
-                                }
-                            }
-
-                            emit_pass_prologue(cmd, registry_ref, alias_barriers_ref, idx, pass);
-
-                            let encode_result =
-                                ctx.encode_pass_into(pass_id, cmd, params, particle_ref, grass_ref);
-
-                            if encode_result.is_ok() {
-                                emit_pass_epilogue(cmd, registry_ref, pass);
-                            }
-
-                            if let Some(heap) = ctx.timestamps.query_heap.as_ref() {
-                                let (_, end_slot) = pass_timing::pass_pair(frame_idx, pass_id);
-                                // SAFETY: the command list is in the recording state, and every
-                                // resource, descriptor and slice these commands name is live for the
-                                // call.
-                                unsafe {
-                                    cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, end_slot);
-                                }
-                            }
-
-                            // SAFETY: the command list is live and in the recording state, which is
-                            // what `Close` requires.
-                            if let Err(e) = unsafe { cmd.Close() } {
-                                let mut lock = first_error_ref.lock().unwrap();
-                                if lock.is_none() {
-                                    *lock = Some(super::error::map_hresult(
-                                        e.code(),
-                                        &format!("per-pass cmd list close ({})", pass_id.name()),
-                                    ));
-                                }
-                                return;
-                            }
-
-                            match encode_result {
-                                Ok(()) => {
-                                    let mut lock = worker_slots_ref.lock().unwrap();
-                                    lock[idx] = Some(SendableCmdList(cmd.clone()));
-                                }
-                                Err(e) => {
-                                    let mut lock = first_error_ref.lock().unwrap();
-                                    if lock.is_none() {
-                                        *lock = Some(e);
-                                    }
-                                }
-                            }
-                        })
-                    });
-                }
-            });
-        });
+        let DxGraphScratch {
+            registry,
+            alias,
+            passes,
+        } = &mut scratch;
+        let recorder = DxPassRecorder {
+            ctx: ParallelCtxRef::new(self),
+            params,
+            particle: particle_ref,
+            grass: grass_frame.as_ref(),
+            registry,
+            alias,
+        };
+        let mut executed = execute_passes(graph, &recorder, jobs::pool(), passes)?;
         let mut stats = self.diagnostics.frame_stats.get();
-        stats.recording_fan_out = timer.finish();
-        stats.pass_record_us = record_us.map(AtomicU32::into_inner);
+        stats.recording_fan_out = executed.timing;
+        stats.pass_record_us = executed.record_us;
         self.diagnostics.frame_stats.set(stats);
-
-        if let Some(err) = first_error.into_inner().unwrap_or(None) {
-            return Err(err);
-        }
+        // Every worker-encoded cmd list, in topological pass order.
+        pass_lists.extend(executed.take().map(|(_, list)| list.0));
 
         // Composite stays on the outer "end" cmd list (`params.cmd`) the
         // caller supplied. The final timestamp `EndQuery` +
         // `ResolveQueryData` are appended onto the same cmd list by
         // `draw_frame` after this returns, so composite + post-resolve
         // ride one submission.
-        if let Some(idx) = composite_idx {
+        let frame_idx = params.frame_idx;
+        if let Some(idx) = executed.presenter {
             if let Some(heap) = self.timestamps.query_heap.as_ref() {
                 let (start_slot, _) = pass_timing::pass_pair(frame_idx, PassId::Composite);
                 // SAFETY: the command list is in the recording state, and every resource,
@@ -839,9 +787,8 @@ impl DxContext {
             }
             emit_pass_prologue(
                 params.cmd,
-                &registry,
-                &alias_barriers,
-                idx,
+                registry,
+                alias.for_pass(idx),
                 &graph.passes[idx],
             );
             self.encode_composite_and_text(
@@ -866,7 +813,7 @@ impl DxContext {
                     height: params.output_height,
                 },
             )?;
-            emit_pass_epilogue(params.cmd, &registry, &graph.passes[idx]);
+            emit_pass_epilogue(params.cmd, registry, &graph.passes[idx]);
             if let Some(heap) = self.timestamps.query_heap.as_ref() {
                 let (_, end_slot) = pass_timing::pass_pair(frame_idx, PassId::Composite);
                 // SAFETY: the command list is in the recording state, and every resource,
@@ -882,97 +829,55 @@ impl DxContext {
         // Return every driven resource the frame left off its resting state.
         // Recorded last into the outer "end" list, which executes after every
         // pass list.
-        emit_graph_restores(params.cmd, &registry, graph);
-
-        // Collect every worker-encoded cmd list in topological pass
-        // order. The empty slots (composite, plus any skipped no-op
-        // pass that returned without stashing) drop out; workers only
-        // stash on success.
-        let slots = worker_slots.into_inner().map_err(|_| {
-            RenderError::Other("graph executor (directx): worker slot mutex poisoned".into())
-        })?;
-        let mut ordered = Vec::with_capacity(graph.passes.len());
-        for cb in slots.into_iter().flatten() {
-            ordered.push(cb.0);
-        }
-        Ok(ordered)
+        emit_graph_restores(params.cmd, registry, graph);
+        // Hand the tables' allocations back for the next frame to refill. An
+        // error path above skips this and the next frame allocates fresh.
+        self.graph_scratch.set(Some(scratch));
+        Ok(())
     }
 
     // Resolve every graph-driven resource to its barrier target, indexed by
-    // `ResourceId` (its position in `graph.resources`), so the parallel emit path
-    // can look a target up by `BarrierOp::resource_index()`. This is the single
-    // place that names the graph-driven resources' backing `DxContext` fields;
-    // field-grouping re-cuts here, not in the executor. A resource the owning
-    // feature disabled gets `None`, and the graph carries no barrier for it either.
-    fn build_barrier_registry(
-        &self,
-        graph: &CompiledGraph,
-        frame_idx: usize,
-    ) -> DxBarrierRegistry<'_> {
-        let mut registry = DxBarrierRegistry {
-            targets: Vec::with_capacity(graph.resources.len()),
-            resources: Vec::new(),
-        };
-        // A plain loop rather than a `collect`: a label resolving to a set of
-        // resources appends them to the arena while the table is being filled.
-        for res in &graph.resources {
-            let target = res.class().and_then(|class| {
-                let (object, resting) =
-                    self.barrier_objects_for_label(res.label, frame_idx, &mut registry.resources)?;
-                Some(DxBarrierTarget {
-                    object,
-                    class,
-                    resting,
-                })
-            });
-            registry.targets.push(target);
-        }
-        registry
-    }
-
-    // Resolve, per pass, the pooled transients that reclaim a shared heap region
-    // when this pass first-writes them. A resource is aliased iff the pool gives
-    // it a slot predecessor; its aliasing barrier lands before the pass at its
-    // `lifetime.first`. Empty for every resource the pool does not alias, so the
-    // table is empty whenever no slot is shared this frame (e.g. bloom off leaves
-    // `ao_output` aliased but `bloom_top` absent from the graph; ssao off leaves
-    // `bloom_top` un-aliased). Mirrors the Vulkan executor's `build_alias_barriers`.
+    // `ResourceId`, and every pooled transient that reclaims a shared heap
+    // region to the pass that first writes it. This is the single place that
+    // names the graph-driven resources' backing `DxContext` fields. A resource
+    // the owning feature disabled gets `None`, and the graph carries no barrier
+    // for it either.
     //
-    // The resting state comes from the registry when the graph drives the
-    // resource, so the discard opens it from where it really sits rather than
+    // An aliased resource's resting state comes from the registry when the graph
+    // drives it, so the discard opens it from where it really sits rather than
     // from an assumed sampled state; a pooled member the graph does not drive
     // falls back to sampled, which is where the pool creates a color target.
-    fn build_alias_barriers<'a>(
-        &'a self,
+    fn refill_graph_tables(
+        &self,
+        scratch: &mut DxGraphScratch,
         graph: &CompiledGraph,
-        registry: &DxBarrierRegistry<'a>,
-    ) -> DxAliasBarriers<'a> {
-        let mut table = Vec::new();
-        for (idx, res) in graph.resources.iter().enumerate() {
-            if self
-                .targets
-                .transient_pool
-                .alias_predecessor(res.label)
-                .is_none()
-            {
-                continue;
-            }
-            if let Some(r) = self.targets.transient_pool.resource_for(res.label)
-                && res.lifetime.first < graph.passes.len()
-            {
-                table.push(DxAliasBarrier {
-                    pass: res.lifetime.first,
-                    resource_index: idx,
-                    resource: r,
-                    resting: match registry.target(idx) {
-                        Some(target) => target.resting,
-                        None => D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                    },
-                });
-            }
-        }
-        table.sort_by_key(|a| a.pass);
-        DxAliasBarriers(table)
+        frame_idx: usize,
+    ) {
+        let DxGraphScratch {
+            registry, alias, ..
+        } = scratch;
+        registry.refill(graph, |res, arena| {
+            let class = res.class()?;
+            let (object, resting) = self.barrier_objects_for_label(res.label, frame_idx, arena)?;
+            Some(DxBarrierTarget {
+                object,
+                class,
+                resting,
+            })
+        });
+        let pool = &self.targets.transient_pool;
+        alias.refill(graph, |index, res| {
+            pool.alias_predecessor(res.label)?;
+            let resource = pool.resource_for(res.label)?;
+            Some(DxAliasBarrier {
+                resource_index: index,
+                resource: ResourceRef::new(resource),
+                resting: match registry.target(index) {
+                    Some(target) => target.resting,
+                    None => D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                },
+            })
+        });
     }
 
     // Map one graph resource label to the D3D12 resource backing it and its
@@ -987,12 +892,12 @@ impl DxContext {
     // and the graph carries no node for it either.
     //
     // The resource is borrowed rather than cloned; see `DxBarrierTarget`.
-    fn barrier_objects_for_label<'a>(
-        &'a self,
+    fn barrier_objects_for_label(
+        &self,
         label: &str,
         frame_idx: usize,
-        arena: &mut Vec<&'a ID3D12Resource>,
-    ) -> Option<(DxTargetObject<'a>, D3D12_RESOURCE_STATES)> {
+        arena: &mut Vec<ResourceRef>,
+    ) -> Option<(DxTargetObject, D3D12_RESOURCE_STATES)> {
         const SAMPLED: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         // Every live emitter's particle pool: `ParticlesSim` integrates them and
         // `ParticlesDraw` reads them in its vertex stage. One graph resource
@@ -1016,7 +921,7 @@ impl DxContext {
             };
             if let Some(resource) = resource {
                 return Some((
-                    DxTargetObject::One(resource),
+                    DxTargetObject::One(ResourceRef::new(resource)),
                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                 ));
             }
@@ -1025,10 +930,9 @@ impl DxContext {
             let first = arena.len();
             arena.extend(
                 self.particle
-                    .emitter_state
-                    .iter()
-                    .flatten()
-                    .map(|gpu| &gpu.pool),
+                    .system
+                    .gpu_states()
+                    .map(|gpu| ResourceRef::new(&gpu.pool)),
             );
             let count = arena.len() - first;
             return (count > 0).then_some((
@@ -1036,8 +940,8 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
             ));
         }
-        let one = |r: Option<(&'a ID3D12Resource, D3D12_RESOURCE_STATES)>| {
-            r.map(|(resource, resting)| (DxTargetObject::One(resource), resting))
+        let one = |r: Option<(&ID3D12Resource, D3D12_RESOURCE_STATES)>| {
+            r.map(|(resource, resting)| (DxTargetObject::One(ResourceRef::new(resource)), resting))
         };
         one(match label {
             // Indirect commands the cull kernel writes (UAV) and the main pass
@@ -1197,7 +1101,7 @@ impl DxContext {
     ) -> super::transparent::TransparentView {
         super::transparent::TransparentView::new(
             &self.pass_camera(params, params.vp_mat),
-            &self.uniforms.light_uniforms,
+            self.uniforms.lights.uniforms(),
         )
     }
 
@@ -1228,7 +1132,7 @@ impl DxContext {
         pass_id: PassId,
         cmd: &ID3D12GraphicsCommandList,
         params: &GraphFrameParams<'_>,
-        particle_frame: Option<&super::particle::ParticleFrame>,
+        particle_frame: Option<&concinnity_core::render::particles::ParticleFrame>,
         grass_frame: Option<&super::grass::GrassFrame>,
     ) -> RenderResult<()> {
         match pass_id {
@@ -1240,7 +1144,7 @@ impl DxContext {
                 self.encode_skin(cmd, params.frame_idx);
             }
             PassId::SsaoBlur => {
-                self.encode_ssao(cmd, params.frame_idx, params.fov_y_radians, params.aspect)?;
+                self.encode_ssao(cmd, params.frame_idx, params.effects.ssao.as_ref())?;
             }
             PassId::SsaoDepth | PassId::SsaoKernel => {
                 return Err(RenderError::Other(format!(
@@ -1353,7 +1257,7 @@ impl DxContext {
                 self.encode_lines(cmd, params.frame_idx, params.vp_mat, params.lines);
             }
             PassId::Fog => {
-                self.encode_fog(cmd, params.frame_idx, params.vp_mat, params.cam_pos);
+                self.encode_fog(cmd, params.frame_idx);
             }
             PassId::Atmosphere => self.encode_atmosphere(cmd, params.frame_idx),
             PassId::WaterSim => self.encode_water_sim(cmd, params.elapsed),
@@ -1365,7 +1269,7 @@ impl DxContext {
                 // still records it in the compiled order. The per-frame particle
                 // state was advanced once before the fan-out by `prepare_particle_pass`.
                 if let Some(frame) = particle_frame {
-                    self.encode_particles_sim(cmd, frame);
+                    self.encode_particles_sim(cmd, params.frame_idx, frame);
                 }
             }
             PassId::ParticlesDraw => {
@@ -1384,13 +1288,7 @@ impl DxContext {
                 }
             }
             PassId::SsrResolve => {
-                self.encode_ssr_resolve(
-                    cmd,
-                    params.frame_idx,
-                    params.fov_y_radians,
-                    params.aspect,
-                    params.cam_pos,
-                );
+                self.encode_ssr_resolve(cmd, params.frame_idx, params.effects.ssr.as_ref());
             }
             PassId::TaaResolve => {
                 self.encode_taa(cmd, params.frame_idx, params.reactive.readable);
@@ -1412,17 +1310,15 @@ impl DxContext {
             }
             PassId::Raymarch => {
                 let view = self.build_raymarch_view(params);
-                self.encode_raymarch(cmd, params.frame_idx, &view)?;
+                self.encode_raymarch(cmd, params.frame_idx, &view, params.frustum)?;
             }
             PassId::FogFroxel => {
-                self.encode_fog_froxel(
-                    cmd,
-                    params.frame_idx,
-                    params.near,
-                    params.vp_mat,
-                    params.cam_pos,
-                    params.shadow_ubo_gva,
-                );
+                let blocks = params.fog.as_ref().ok_or_else(|| {
+                    RenderError::Other(
+                        "graph executor (directx): FogFroxel without fog blocks".into(),
+                    )
+                })?;
+                self.encode_fog_froxel(cmd, params.frame_idx, blocks, params.shadow_ubo_gva);
             }
             PassId::Upscale => {
                 // FSR3 temporal upscaler. Driven by the shared graph
@@ -1456,8 +1352,7 @@ impl DxContext {
                     cmd,
                     params.frame_idx,
                     &view,
-                    params.fov_y_radians,
-                    params.aspect,
+                    params.effects.rt.as_ref(),
                     params.reactive.transparent,
                 )?;
             }
@@ -1487,15 +1382,10 @@ impl DxContext {
                 );
             }
             PassId::Ssgi => {
-                self.encode_ssgi(cmd, params.frame_idx, params.fov_y_radians, params.aspect);
+                self.encode_ssgi(cmd, params.frame_idx, params.effects.ssgi.as_ref());
             }
             PassId::SsgiResolve => {
-                self.encode_ssgi_resolve(
-                    cmd,
-                    params.frame_idx,
-                    params.fov_y_radians,
-                    params.aspect,
-                );
+                self.encode_ssgi_resolve(cmd, params.frame_idx, params.effects.ssgi.as_ref());
             }
             PassId::RtReflections => {
                 // Hardware ray-traced reflections (DXR inline `RayQuery`). Traces
@@ -1505,13 +1395,7 @@ impl DxContext {
                 // by `FrameGraphInputs::rt_reflections_enabled`
                 // (`DxContext::rt_reflections_active`). The per-frame TLAS update
                 // already ran on the outer "start" cmd list before this trace.
-                self.encode_rt_reflections(
-                    cmd,
-                    params.frame_idx,
-                    params.fov_y_radians,
-                    params.aspect,
-                    params.cam_pos,
-                );
+                self.encode_rt_reflections(cmd, params.frame_idx, params.effects.rt.as_ref());
             }
             PassId::GBufferPrepass => {
                 // Unified geometry pre-pass: one jittered traversal writes
@@ -1527,12 +1411,12 @@ impl DxContext {
                     params.frame_idx,
                     crate::directx::post::gbuffer::GbufferPrepassView {
                         jittered_vp: params.vp_mat,
-                        cur_vp: params.cur_vp,
                         elapsed: params.elapsed as f32,
                         cam_pos: params.cam_pos,
+                        frustum: params.frustum,
                     },
                     crate::directx::post::gbuffer::GbufferPrepassFrame {
-                        velocity_active: self.reads_motion(),
+                        block: &params.gbuffer_view,
                         prime_history: params.prime_model_history,
                         grass: grass_frame,
                     },

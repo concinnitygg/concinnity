@@ -134,7 +134,7 @@ pub(crate) struct ProceduralMeshReloadResult {
 pub(super) fn reload_procedural_meshes(
     path: &str,
     procedural_meshes: &mut ProceduralMeshSourceMap,
-    backend: &mut dyn backend::RenderBackend,
+    backend: &mut dyn backend::LiveEdit,
 ) -> ProceduralMeshReloadResult {
     let mut result = ProceduralMeshReloadResult::default();
     if procedural_meshes.is_empty() {

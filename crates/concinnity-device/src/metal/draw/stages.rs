@@ -1,22 +1,15 @@
 //! The stages `MtlContext::draw_frame` runs in order around its render-graph
 //! dispatch.
 
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::jitter;
-use concinnity_core::gfx::render_types::{self, LineVertex};
-use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
-use concinnity_core::planet::Rebase;
+use concinnity_core::gfx::render_types::LineVertex;
 use concinnity_core::profile;
-use concinnity_core::render::depth::camera_projection;
 use concinnity_core::render::error;
+use concinnity_core::render::frame_plan::{
+    CameraInputs, EffectInputs, FramePlan, PlanInputs, SurfaceInputs,
+};
 use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::reactive_mask::ReactiveReader;
-use concinnity_core::render::render_graph::{self, FrameFacts, FrameGraphInputs};
-use concinnity_core::render::shadow_schedule::{CascadeCamera, CascadeLight};
-use concinnity_core::render::view_history::ViewFrame;
-use concinnity_core::render::volumetric_fog::FogSettings;
-use concinnity_core::transform::mat4_inverse;
-use concinnity_core::transform::mat4_mul;
+use concinnity_core::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLDevice as _};
@@ -33,24 +26,13 @@ pub(super) struct AcquiredFrame {
     pub(super) ring_slot: usize,
 }
 
-// The camera projection, its jittered view-projection, and what derives from it.
-pub(super) struct FrameProjection {
-    pub(super) proj: [[f32; 4]; 4],
-    pub(super) vp: [[f32; 4]; 4],
-    pub(super) inv_vp: [[f32; 4]; 4],
-    pub(super) frustum: Frustum,
-}
-
-// The per-frame locals `frame_graph_inputs` gates passes on.
-pub(super) struct GraphInputArgs<'a> {
-    // This frame's cull record buffers were built.
-    pub(super) cull_ready: bool,
-    pub(super) fog_settings: Option<&'a FogSettings>,
+// The per-frame inputs `plan_frame` plans from.
+pub(super) struct PlanArgs<'a> {
+    pub(super) camera: CameraInputs,
+    pub(super) elapsed: f32,
+    pub(super) render_size: [u32; 2],
     pub(super) lines: &'a [LineVertex],
     pub(super) world_hidden: bool,
-    pub(super) clustered: bool,
-    pub(super) view_mode: ViewMode,
-    pub(super) show: ShowFlags,
 }
 
 // The recorded frame's presenting command buffer and its completion join.
@@ -70,6 +52,8 @@ pub(super) struct SceneBufferArgs<'a> {
     pub(super) cam_pos: [f32; 3],
     pub(super) elapsed: f32,
     pub(super) world_hidden: bool,
+    // The cull records the plan packs this frame, and their history mode.
+    pub(super) records: Option<HistoryMode>,
     pub(super) skinned_joint_bufs: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
     // This frame's `bindless_texture_signature`.
     pub(super) texture_signature: u64,
@@ -97,7 +81,7 @@ impl MtlContext {
         // Reset this frame's render stats; the draw counters below accumulate
         // into `diagnostics.frame_stats`, and `render_stats()` reports them (plus the GPU
         // frame time) to the profiler overlay.
-        let counts = crate::object_counts::object_counts(
+        let counts = concinnity_core::render::object_counts::object_counts(
             self.state.draw.objects.len(),
             self.instanced.clusters.iter().map(|c| c.instances.len()),
             self.state.skinned.draw_objects.iter().map(|o| o.visible),
@@ -236,8 +220,8 @@ impl MtlContext {
         // doesn't loop, and the previous pipelines stay live so the session
         // keeps rendering; only a device failure propagates. In-flight command
         // buffers retain the pipelines they encoded, so no GPU drain is needed.
-        if self.shader_reload_requested() {
-            self.clear_shader_reload_flag();
+        if self.hot_reload.requested() {
+            self.hot_reload.clear();
             match self.reload_shaders() {
                 Ok(()) => tracing::info!("hot-reload: shader pipelines rebuilt"),
                 Err(e) if e.is_device_failure() => return Err(e),
@@ -257,173 +241,117 @@ impl MtlContext {
         self.pre_exposure.advance(self.post_process.exposure);
     }
 
-    // Picks this frame's shadow cascades and spot slices; returns the cascade aspect.
-    pub(super) fn update_shadow_schedule(
-        &mut self,
-        cam_pos: [f32; 3],
-        fov_y_radians: f32,
-        near: f32,
-        view_distance: Option<f32>,
-    ) -> f32 {
-        // Compute per-frame cascade VPs + splits from current camera + light.
-        // The aspect/near are taken from the same params used by the main
-        // perspective below so cascades match the visible camera frustum.
-        let cascade_aspect = {
-            let s = self.window().view.drawableSize();
-            if s.height == 0.0 {
-                1.0
-            } else {
-                (s.width / s.height) as f32
-            }
-        };
-        if self.shadow.enabled {
-            let camera = CascadeCamera {
-                view: self.state.view.matrix,
-                position: cam_pos,
-                fov_y_rad: fov_y_radians,
-                aspect: cascade_aspect,
-                near,
-                view_distance,
-            };
-            let shadow = &mut self.shadow;
-            let light = CascadeLight {
-                dir_to_source: shadow.light_dir,
-                map_size: shadow.map_size,
-            };
-            // Cascades skipped this frame keep the VP their slice was rendered
-            // with, so the Main pass samples each slice consistently.
-            shadow.render_mask =
-                shadow
-                    .scheduler
-                    .refresh(&mut shadow.uniforms, &shadow.cadence, light, camera);
-        }
-
-        // Spot shadow slices refresh on their own prime-then-round-robin clock;
-        // their projections are static, so only the depth contents redraw.
-        self.spot_shadow.render_mask = self.next_spot_shadow_mask();
-        cascade_aspect
-    }
-
-    pub(super) fn frame_projection(
-        &mut self,
-        fov_y_radians: f32,
-        aspect: f32,
-        near: f32,
-        view_distance: Option<f32>,
-        render_w: u32,
-        render_h: u32,
-    ) -> FrameProjection {
-        // View-projection + GPU-driven cull.
-        // The projection / jitter / VP are resolved here, ahead of the main
-        // render encoder, because the cull compute pass needs the frustum
-        // before the render pass begins.
-        let proj = camera_projection(fov_y_radians, aspect, near);
-        // This frame's un-jittered VP, captured before the graph runs so the
-        // two-pass phase-2 cull (`encode_cull_phase2`, dispatched inside
-        // `execute_graph`) can project AABBs through it against the pyramid the
-        // mid-frame `HizBuild` rebuilds from this frame's depth. The same value
-        // becomes `cull_prev_view_proj` at end-of-frame for next frame's phase 1.
-        self.cull.cur_view_proj = mat4_mul(proj, self.state.view.matrix);
-        // When TAA or the MetalFX upscaler is on, offset the projection by
-        // a sub-pixel Halton jitter so the temporal accumulator has fresh
-        // sample positions each frame. The jitter is a pure NDC x/y shift,
-        // so depth is unaffected. `proj[2][0/1]` are the z-coefficients of
-        // clip x/y; subtracting the jitter there shifts post-divide NDC by
-        // exactly the jitter amount (clip.w == -view_z). Pixel-space
-        // jitter (`±0.5` per axis) is stashed for MetalFX, which expects
-        // its input in pixel coords; TAA reads NDC directly.
-        let needs_jitter = self.taa.enabled || self.upscale.scaler.is_some();
-        let proj_render = if needs_jitter {
-            let [jx_pix, jy_pix] = jitter::offset_in_cycle(self.taa.frame, jitter::TAA_CYCLE);
-            let jx = jx_pix * 2.0 / render_w as f32;
-            let jy = jy_pix * 2.0 / render_h as f32;
-            if self.upscale.scaler.is_some() {
-                self.upscale
-                    .jitter
-                    .store(jx_pix, jy_pix, std::sync::atomic::Ordering::Release);
-            }
-            let mut p = proj;
-            p[2][0] -= jx;
-            p[2][1] -= jy;
-            p
-        } else {
-            proj
-        };
-        let vp = mat4_mul(proj_render, self.state.view.matrix);
-        // Inverse of the (jittered) view-projection, computed once here and
-        // threaded through `GraphFrameParams` to every pass that reconstructs a
-        // world-space position from depth (fog, decals, raymarch, transparent),
-        // instead of each pass re-inverting `vp` independently.
-        let inv_vp = mat4_inverse(vp);
-        let frustum = Frustum::from_camera(vp, view_distance);
-        FrameProjection {
-            proj,
-            vp,
-            inv_vp,
-            frustum,
-        }
-    }
-
-    // This frame's graph inputs: the shared gates over the live settings and
-    // what this frame holds, masked by the viewport's view mode and show flags.
-    pub(super) fn frame_graph_inputs(&self, args: GraphInputArgs<'_>) -> FrameGraphInputs {
-        let GraphInputArgs {
-            cull_ready,
-            fog_settings,
-            lines,
-            world_hidden,
-            clustered,
-            view_mode,
-            show,
-        } = args;
-        let particles = &self.particle;
-        let facts = FrameFacts {
+    // What this backend has built, for the frame's graph gates.
+    pub(super) fn resident_features(&self) -> ResidentFeatures {
+        ResidentFeatures {
             hdr_width: self.targets.hdr.width,
             hdr_height: self.targets.hdr.height,
             hdr_sample_count: self.targets.hdr.sample_count,
             shadow: self.shadow.enabled,
             shadow_map_size: self.shadow.map_size,
-            shadowed_spot_count: self.spot_shadow.count,
-            spot_shadow_slice_size: render_types::spot_shadow_slice_size(self.shadow.map_size),
-            world_hidden,
-            cull_ready,
-            cull_records: self.cull_count(),
-            two_pass_ready: self.cull.two_pass_occlusion,
+            cull: self.cull.bindless,
+            two_pass: self.cull.two_pass_occlusion,
             hiz: self.cull.hiz.is_some(),
             bloom_chain: self.bloom.is_some(),
+            upscaler: self.upscale.scaler.as_ref().map(|s| ResidentUpscaler {
+                reads_reactive: ReactiveReader::MetalFx.reads() && s.reactive,
+            }),
+            particles: self.particle.pipelines.is_some(),
+            fog: self.fog.pipeline.is_some(),
+            decals: self.decal.pipeline.is_some(),
+            lines: self.lines.pipeline.is_some(),
+            atmosphere: self.atmosphere.is_some(),
+            rt_transparent: self.transparent_rt_pipelines_ready(),
+            taa: self.taa.enabled,
+            model_history: self.gbuffer.targets.is_some() && self.cull.main_pipeline.is_some(),
+            reflection_composite: self.ssr.composite.is_some(),
+        }
+    }
+
+    // What the world puts on screen this frame, for the frame's graph gates.
+    pub(super) fn frame_content(&self, world_hidden: bool, lines: &[LineVertex]) -> FrameContent {
+        FrameContent {
+            world_hidden,
+            cull_records: self.cull_count(),
+            shadowed_spot_count: self.spot_shadow.count,
             bloom_intensity: self.post_process.bloom_intensity,
-            upscaler: self.upscale.scaler.is_some(),
-            upscaler_reads_reactive: ReactiveReader::MetalFx.reads()
-                && self.upscale.scaler.as_ref().is_some_and(|s| s.reactive),
             bvh_live: self.rt.accel.is_some(),
-            particles: particles.pipelines.is_some()
-                && !particles.records.is_empty()
-                && !particles.emitter_state.is_empty(),
-            fog: self.fog.pipeline.is_some() && fog_settings.is_some(),
-            decals: self.decal.pipeline.is_some() && !self.decal.set.is_empty(),
+            emitters: !self.particle.system.is_empty(),
+            fog: self.fog.settings.is_some_and(|s| s.contributes()),
+            decals: !self.decal.set.is_empty(),
             visible_surfaces: (self.water.pipeline.is_some()
                 && self.water.surfaces.iter().any(|s| s.visible))
                 || (self.glass.pipeline.is_some() && self.glass.panels.iter().any(|p| p.visible)),
             visible_see_through: self.see_through_mesh_visible(),
-            rt_transparent_ready: self.transparent_rt_pipelines_ready(),
             planar_targets: self
                 .planar_reflection
                 .as_ref()
                 .is_some_and(|s| !s.targets.is_empty()),
             water_planar_slot: self.water_planar_slot_live(),
-            lines: !lines.is_empty() && self.lines.pipeline.is_some(),
+            lines: !lines.is_empty(),
             visible_volumes: self.raymarch.volumes.iter().any(|v| v.visible),
             atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.params.is_some()),
             water_sim: self.water_sim_live(),
             grass: self.grass.is_some(),
-            grass_casts: self.grass_casts(),
-            clustered,
+            ssgi_motion: self.ssgi.pass.is_some()
+                && self.ssgi.settings.is_some_and(|s| s.contributes()),
+        }
+    }
+
+    // Plan this frame in core over what this backend holds, then put what the
+    // encoders read from `&self` in place: the spot slices, the cull's view and
+    // the cluster grid, and the jitter MetalFX is dispatched with.
+    pub(super) fn plan_frame(&mut self, args: PlanArgs<'_>) -> error::RenderResult<FramePlan> {
+        let PlanArgs {
+            camera,
+            elapsed,
+            render_size,
+            lines,
+            world_hidden,
+        } = args;
+        let resident = self.resident_features();
+        let content = self.frame_content(world_hidden, lines);
+        let surface = SurfaceInputs {
+            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
+            irradiance: self.irradiance_lane(),
+            screen_bounce: self.screen_bounce(),
         };
-        let graph_inputs = render_graph::frame_graph_inputs(&self.gates, &facts);
-        // The viewport's view mode + show flags mask the seeded inputs (the
-        // per-frame counterpart of the init-time trims); Lit with every flag
-        // set is the identity, so a shipped runtime is unaffected.
-        render_graph::apply_view(&graph_inputs, view_mode, show)
+        let inputs = PlanInputs {
+            camera,
+            elapsed,
+            render_size,
+            resident,
+            content,
+            upscaler_jitter: None,
+            lights: &self.lights,
+            probes: self.probe.book.records(),
+            fog: self.fog.settings,
+            pre_exposure: self.pre_exposure.value(),
+            surface,
+            effects: EffectInputs {
+                ssao: self.ssao.settings,
+                ssr: self.ssr.settings,
+                ssgi: self
+                    .ssgi
+                    .settings
+                    .zip(self.ssgi.pass.as_ref().map(|pass| pass.frame())),
+                rt: self.rt.settings,
+                history_scale: self.pre_exposure.history_scale(),
+            },
+        };
+        let plan = self.state.planner.plan(&self.state.view, &inputs)?;
+        self.spot_shadow.render_mask = self.state.planner.shadow.spot_mask;
+        self.cull.cur_view_proj = plan.camera.cur_vp;
+        self.cluster_params = plan.cluster;
+        // MetalFX expects the jitter in render pixels; TAA reads it from the
+        // projection itself.
+        if self.upscale.scaler.is_some() {
+            let [x, y] = plan.camera.jitter_px;
+            self.upscale
+                .jitter
+                .store(x, y, std::sync::atomic::Ordering::Release);
+        }
+        Ok(plan)
     }
 
     pub(super) fn submit_and_present(&mut self, frame: PresentFrame) {
@@ -516,66 +444,6 @@ impl MtlContext {
         drop(submission_token);
     }
 
-    // Drop every accumulated temporal history for a frame that does not
-    // continue the last: the TAA and SSGI rings, the camera half of the motion
-    // history, the Hi-Z pyramid the occlusion test would reproject the old view
-    // through, and MetalFX's history on its next encode.
-    pub(super) fn reset_temporal_history(&mut self) {
-        self.cull.hiz_valid = false;
-        if let Some(taa) = self.taa.pass.as_mut() {
-            taa.reset_history();
-        }
-        if let Some(ssgi) = self.ssgi.pass.as_mut() {
-            ssgi.reset_history();
-        }
-        self.view_history.reset();
-        self.upscale.reset.request();
-    }
-
-    // Carry the temporal history into the frame the world moved to: the
-    // camera half of the motion history, the view-projection the occlusion
-    // test reprojects last frame's pyramid through, and the per-object
-    // transforms, which are distrusted for one frame.
-    pub(super) fn rebase_temporal_history(&mut self, rebase: &Rebase) {
-        self.view_history.rebase(rebase);
-        self.cull.prev_view_proj = rebase.reproject(self.cull.prev_view_proj);
-        self.state.model_history.get_mut().forget();
-    }
-
-    pub(super) fn advance_temporal_state(&mut self, velocity_active: bool, cur: ViewFrame) {
-        // The Hi-Z reduction that feeds next frame's cull is the graph's terminal
-        // `HizFinal` pass, so it has already been encoded. Advance the temporal
-        // state it depends on: the pyramid is now valid for next frame's cull, and
-        // the un-jittered VP captured at the top of the frame becomes the
-        // projection that cull tests through (distinct from the velocity
-        // pre-pass's `view_history`, which only advances when velocity runs).
-        if self.cull.hiz.is_some() {
-            self.cull.hiz_valid = true;
-            self.cull.prev_view_proj = self.cull.cur_view_proj;
-        }
-
-        // Advance temporal state for the next frame whenever the velocity
-        // pre-pass runs: TAA, the MetalFX upscaler or SSGI. The un-jittered VP,
-        // clock and camera position become the previous frame the pre-pass
-        // reprojects to; the per-object transforms were snapshotted on the GPU
-        // by the pre-pass's own history dispatch. A frame without it drops the
-        // camera history, so motion restarts from its own view. TAA-specific
-        // bookkeeping (history-target ping-pong) only runs when TAA itself is on.
-        if velocity_active {
-            self.view_history.advance(cur);
-            self.taa.frame = self.taa.frame.wrapping_add(1);
-            if let Some(taa) = self.taa.pass.as_mut() {
-                taa.advance();
-            }
-        } else {
-            self.view_history.reset();
-        }
-        // What the SSGI accumulation wrote this frame is next frame's history.
-        if let Some(ssgi) = self.ssgi.pass.as_mut() {
-            ssgi.advance();
-        }
-    }
-
     // Resizes the off-screen targets to this frame's drawable and returns the
     // render resolution the scene and post passes draw at.
     pub(super) fn resize_frame_targets(&mut self) -> error::RenderResult<(u32, u32)> {
@@ -637,6 +505,7 @@ impl MtlContext {
             cam_pos,
             elapsed,
             world_hidden,
+            records,
             skinned_joint_bufs,
             texture_signature,
         } = args;
@@ -646,14 +515,6 @@ impl MtlContext {
         // -- so it runs as a bare clear that the opaque overlay then covers. The
         // masked graph drops every other world pass, so none of this work would
         // be consumed anyway.
-        // The GPU-driven G-buffer pre-pass both fills and reads the model-history
-        // ring. With no consumer of motion, or with the pre-pass not running,
-        // the ring goes stale, so the draw-args build marks every record
-        // `NO_HISTORY` and the tracker re-primes when the pre-pass returns.
-        let history_live = !world_hidden
-            && self.reads_motion()
-            && self.gbuffer.targets.is_some()
-            && self.cull.main_pipeline.is_some();
         let (object_buffer, material_params, cull_draw_args, bindless_tex_args) = if world_hidden {
             (None, None, None, None)
         } else {
@@ -663,15 +524,9 @@ impl MtlContext {
             // compute pass consume. They must outlive the command buffer,
             // hence the bindings handed back to the caller, which holds them
             // through to `cmd_buf.commit()`.
-            let history = if history_live {
-                HistoryMode::Track
-            } else {
-                HistoryMode::Stale
-            };
-            let records = if self.cull.bindless {
-                self.build_record_buffers(ring_slot, cam_pos, history)?
-            } else {
-                None
+            let records = match records {
+                Some(history) => self.build_record_buffers(ring_slot, cam_pos, history)?,
+                None => None,
             };
             let (object_buffer, draw_args) = match records {
                 Some(records) => {

@@ -7,7 +7,6 @@
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
-use std::cell::Cell;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::context::DxContext;
@@ -16,13 +15,9 @@ use crate::directx::post::post_device::{DxPostDevice, PostPipeline, PostTarget};
 // The shared temporal resolve, holding D3D12's own pipeline and target types.
 pub(in crate::directx) type DxTaaPass = TaaPass<PostPipeline, PostTarget>;
 
-// Temporal-anti-aliasing resources: the shared resolve plus the frame counter
-// driving the Halton jitter sequence. The counter is here rather than in the
-// resolve because it also drives the temporal upscalers, which run in the
-// resolve's place; `Cell` because `record_frame` reads it through `&self`.
+// Temporal-anti-aliasing resources: the shared resolve.
 pub(in crate::directx) struct TaaResources {
     pub(in crate::directx) pass: DxTaaPass,
-    pub(in crate::directx) frame: Cell<u32>,
 }
 
 impl TaaResources {
@@ -34,7 +29,6 @@ impl TaaResources {
     ) -> RenderResult<Self> {
         Ok(Self {
             pass: TaaPass::new(device, TaaRing::ping_pong(), PostExtent { width, height })?,
-            frame: Cell::new(0),
         })
     }
 
@@ -61,7 +55,6 @@ impl TaaResources {
         height: u32,
     ) -> RenderResult<()> {
         self.pass.resize(device, PostExtent { width, height })?;
-        self.frame.set(0);
         Ok(())
     }
 }

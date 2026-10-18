@@ -10,35 +10,9 @@
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shader_programs::surface::GrassShading;
 use concinnity_core::render::world_pipelines::{BucketSource, check_rebuild, replace_bucket};
-use std::sync::atomic::Ordering;
 
 use super::context::DxContext;
 use super::init::pipelines::{BucketPipelineTargets, BucketPsos, build_bucket_pipeline};
-
-// Shader hot-reload state. `enabled` is true only under `cn debug`: it routes
-// every built-in shader source resolve through the disk-first path (false
-// under `cn run`, where the embedded source is the only one). `reload_pending`
-// is the atomic flag the debug `reload-shaders` command sets, polled at the top
-// of `draw_frame` to trigger a PSO rebuild; `Some` only when `enabled`, and the
-// debug server reads its `Arc` clone via `GraphicsSystem`.
-pub(in crate::directx) struct HotReloadState {
-    pub enabled: bool,
-    pub reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    // Bumped by every engine-template reload, so a world Shader pipeline a
-    // worker built from the templates before it is never installed after it.
-    pub generation: u64,
-}
-
-impl HotReloadState {
-    pub(super) fn new(enabled: bool) -> Self {
-        Self {
-            enabled,
-            reload_pending: enabled
-                .then(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
-            generation: 0,
-        }
-    }
-}
 
 // Rebuild a feature's PSO(s) into a temporary only when `$cond` says the
 // feature is live, propagating any compile/create error out of the enclosing
@@ -53,25 +27,6 @@ macro_rules! rebuild_if_live {
 }
 
 impl DxContext {
-    // True when the shared shader-reload flag is set. Cheap atomic load;
-    // called at the top of `draw_frame`. Returns false when hot-reload is
-    // off so the production path never enters the reload branch.
-    pub(super) fn shader_reload_requested(&self) -> bool {
-        self.hot_reload
-            .reload_pending
-            .as_ref()
-            .map(|f| f.load(Ordering::SeqCst))
-            .unwrap_or(false)
-    }
-
-    // Clear the pending-reload flag. Called after `reload_shaders`
-    // regardless of outcome so a failed rebuild does not loop forever.
-    pub(super) fn clear_shader_reload_flag(&self) {
-        if let Some(flag) = &self.hot_reload.reload_pending {
-            flag.store(false, Ordering::SeqCst);
-        }
-    }
-
     // Rebuild every built-in D3D12 PSO from disk-resident source. Each PSO
     // is constructed into a temporary first; only when every rebuild
     // succeeds does the context atomically swap them in. Any HLSL compile

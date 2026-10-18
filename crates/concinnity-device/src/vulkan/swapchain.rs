@@ -578,7 +578,7 @@ impl VkContext {
                 },
             )?;
             self.cull.hiz = Some(hiz);
-            self.cull.hiz_valid = false;
+            self.state.planner.invalidate_occlusion();
         }
 
         // Re-point the planar reflected-frustum cull's Hi-Z set at the freshly

@@ -1,8 +1,10 @@
 use super::build::ShaderInstall;
 use super::*;
-use crate::gfx::mock_backend::{Call, MockBackend, MockPipeline, MockState, recording_backend};
 use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::components::{ShaderPrograms, ShaderSource, compiled_programs};
+use concinnity_core::render::backend::recording::{
+    Call, RecordingBackend, RecordingPipeline, SharedRecording, recording_backend,
+};
 use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
@@ -45,7 +47,7 @@ fn deferred(bucket: u32, source: ShaderPayloadSource) -> DeferredBucket {
     DeferredBucket { bucket, source }
 }
 
-// Prepares a `MockPipeline` named after the programs. A gated builder waits
+// Prepares a `RecordingPipeline` named after the programs. A gated builder waits
 // for one release per build; a rejecting one fails every build.
 #[derive(Default)]
 struct TestBuilder {
@@ -76,7 +78,9 @@ impl PipelineBuilder for TestBuilder {
         if self.reject {
             return Err(RenderError::ShaderCompile("pipeline state failed".into()));
         }
-        Ok(PreparedPipelines::new(MockPipeline(programs.name.clone())))
+        Ok(PreparedPipelines::new(RecordingPipeline(
+            programs.name.clone(),
+        )))
     }
 
     fn sdf_volume(
@@ -93,8 +97,8 @@ impl PipelineBuilder for TestBuilder {
 // residency change it reported.
 struct Harness {
     warmup: ShaderWarmup,
-    backend: MockBackend,
-    state: Arc<Mutex<MockState>>,
+    backend: RecordingBackend,
+    state: SharedRecording,
     changes: Vec<(u32, bool)>,
 }
 
@@ -116,7 +120,7 @@ impl Harness {
         builder: Option<Arc<TestBuilder>>,
     ) -> Self {
         let (state, backend) = recording_backend();
-        state.lock().unwrap().pipeline_builder = builder.map(|b| b as Arc<dyn PipelineBuilder>);
+        state.lock().pipeline_builder = builder.map(|b| b as Arc<dyn PipelineBuilder>);
         Self {
             warmup: ShaderWarmup::new(deferred, overrides),
             backend,
@@ -163,7 +167,6 @@ impl Harness {
     fn installs(&self) -> Vec<Call> {
         self.state
             .lock()
-            .unwrap()
             .calls
             .iter()
             .filter(|c| matches!(c, Call::InstallWorldShader { .. }))
@@ -313,7 +316,7 @@ fn unpinning_a_resident_bucket_evicts_it() {
     h.warmup.set_blocked(1, true);
     h.step();
     assert_eq!(h.changes, [(1, true), (1, false)]);
-    assert!(h.state.lock().unwrap().saw(&Call::EvictWorldShader(1)));
+    assert!(h.state.lock().saw(&Call::EvictWorldShader(1)));
     h.step();
     assert_eq!(h.changes.len(), 2, "an evicted bucket stays evicted");
 }

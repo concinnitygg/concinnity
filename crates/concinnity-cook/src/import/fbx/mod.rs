@@ -22,7 +22,9 @@ mod skin;
 pub(crate) use anim::fbx_animation_names;
 pub use anim::import_fbx_animation;
 use concinnity_core::components::VertexData;
-use concinnity_core::transform::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul};
+use concinnity_core::transform::{
+    IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul, mat4_transform_point,
+};
 use fbxcel::low::v7400::AttributeValue;
 use fbxcel::tree::any::AnyTree;
 use fbxcel::tree::v7400::NodeHandle;
@@ -586,15 +588,6 @@ pub(crate) fn parse_fbx(path: &str) -> Result<FbxScene, String> {
     })
 }
 
-// Transform a point by a column-major matrix.
-fn transform_point(m: Mat4, p: [f32; 3]) -> [f32; 3] {
-    [
-        m[0][0] * p[0] + m[1][0] * p[1] + m[2][0] * p[2] + m[3][0],
-        m[0][1] * p[0] + m[1][1] * p[1] + m[2][1] * p[2] + m[3][1],
-        m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2],
-    ]
-}
-
 // Expand `aabb` to include a primitive's vertices after `world` transform. The
 // primitive's local min/max is transformed at all eight corners so any rotation
 // or non-uniform scale is captured.
@@ -621,7 +614,7 @@ fn expand_aabb(aabb: &mut Option<([f32; 3], [f32; 3])>, vertices: &[VertexData],
         [hi[0], hi[1], hi[2]],
     ];
     for c in corners {
-        let w = transform_point(world, c);
+        let w = mat4_transform_point(&world, c);
         match aabb {
             None => *aabb = Some((w, w)),
             Some((min, max)) => {
@@ -832,7 +825,7 @@ mod tests {
     #[test]
     fn rot_y_90_maps_z_to_x() {
         assert_vec3_eq(
-            transform_point(rot_y(90.0), [0.0, 0.0, 1.0]),
+            mat4_transform_point(&rot_y(90.0), [0.0, 0.0, 1.0]),
             [1.0, 0.0, 0.0],
         );
     }
@@ -840,15 +833,9 @@ mod tests {
     #[test]
     fn rot_z_90_maps_x_to_y() {
         assert_vec3_eq(
-            transform_point(rot_z(90.0), [1.0, 0.0, 0.0]),
+            mat4_transform_point(&rot_z(90.0), [1.0, 0.0, 0.0]),
             [0.0, 1.0, 0.0],
         );
-    }
-
-    #[test]
-    fn transform_point_applies_translation_last() {
-        let m = translate([1.0, 2.0, 3.0]);
-        assert_vec3_eq(transform_point(m, [1.0, 1.0, 1.0]), [2.0, 3.0, 4.0]);
     }
 
     // TRS order: scale first, then rotate, then translate.
@@ -857,7 +844,7 @@ mod tests {
         let m = trs_matrix([1.0, 0.0, 0.0], [0.0, 0.0, 90.0], [2.0, 2.0, 2.0]);
         // (1,0,0) scales to (2,0,0), rotates about Z to (0,2,0), then
         // translates to (1,2,0).
-        assert_vec3_eq(transform_point(m, [1.0, 0.0, 0.0]), [1.0, 2.0, 0.0]);
+        assert_vec3_eq(mat4_transform_point(&m, [1.0, 0.0, 0.0]), [1.0, 2.0, 0.0]);
     }
 
     #[test]
@@ -869,10 +856,10 @@ mod tests {
         parents.insert(1, 0); // scene root
         parents.insert(2, 1);
         let w = world_matrix(2, &locals, &parents);
-        assert_vec3_eq(transform_point(w, [0.0, 0.0, 0.0]), [3.0, 0.0, 0.0]);
+        assert_vec3_eq(mat4_transform_point(&w, [0.0, 0.0, 0.0]), [3.0, 0.0, 0.0]);
         // A root-parented node keeps its local transform.
         let w = world_matrix(1, &locals, &parents);
-        assert_vec3_eq(transform_point(w, [0.0, 0.0, 0.0]), [1.0, 0.0, 0.0]);
+        assert_vec3_eq(mat4_transform_point(&w, [0.0, 0.0, 0.0]), [1.0, 0.0, 0.0]);
     }
 
     #[test]
@@ -880,7 +867,7 @@ mod tests {
         let locals = HashMap::new();
         let parents = HashMap::new();
         let w = world_matrix(42, &locals, &parents);
-        assert_vec3_eq(transform_point(w, [5.0, 6.0, 7.0]), [5.0, 6.0, 7.0]);
+        assert_vec3_eq(mat4_transform_point(&w, [5.0, 6.0, 7.0]), [5.0, 6.0, 7.0]);
     }
 
     #[test]
@@ -1111,7 +1098,7 @@ mod tests {
             (6, [3.0, 2.0, -1.0]),
         ];
         for (order, expected) in cases {
-            let got = transform_point(rot_ordered(r, order), [1.0, 2.0, 3.0]);
+            let got = mat4_transform_point(&rot_ordered(r, order), [1.0, 2.0, 3.0]);
             assert_vec3_eq(got, expected);
         }
     }
@@ -1130,7 +1117,7 @@ mod tests {
         let model = tree.root().first_child_by_name("Model").expect("Model");
         // (1,0,0) scales to (2,0,0), rotates about Z to (0,2,0), translates up.
         assert_vec3_eq(
-            transform_point(node_scene_local(&model), [1.0, 0.0, 0.0]),
+            mat4_transform_point(&node_scene_local(&model), [1.0, 0.0, 0.0]),
             [0.0, 3.0, 0.0],
         );
     }
@@ -1146,7 +1133,7 @@ mod tests {
         let model = tree.root().first_child_by_name("Model").expect("Model");
         // Rz90 takes +X to +Y, then the PreRotation Rx90 takes +Y to +Z.
         assert_vec3_eq(
-            transform_point(node_scene_local(&model), [1.0, 0.0, 0.0]),
+            mat4_transform_point(&node_scene_local(&model), [1.0, 0.0, 0.0]),
             [0.0, 0.0, 1.0],
         );
     }
@@ -1162,7 +1149,7 @@ mod tests {
         let model = tree.root().first_child_by_name("Model").expect("Model");
         // ZYX applies Z first: +X to +Y, then Rx90 to +Z. XYZ would end at +Y.
         assert_vec3_eq(
-            transform_point(node_scene_local(&model), [1.0, 0.0, 0.0]),
+            mat4_transform_point(&node_scene_local(&model), [1.0, 0.0, 0.0]),
             [0.0, 0.0, 1.0],
         );
     }
@@ -1186,9 +1173,15 @@ mod tests {
         ]);
         let mut models = tree.root().children_by_name("Model");
         let (local, geometric) = local_matrices(&models.next().expect("first Model"));
-        assert_vec3_eq(transform_point(local, [0.0, 0.0, 0.0]), [5.0, 0.0, 0.0]);
+        assert_vec3_eq(
+            mat4_transform_point(&local, [0.0, 0.0, 0.0]),
+            [5.0, 0.0, 0.0],
+        );
         // The geometric offset is a transform of its own, not folded into the node.
-        assert_vec3_eq(transform_point(geometric, [1.0, 0.0, 0.0]), [2.0, 0.0, 2.0]);
+        assert_vec3_eq(
+            mat4_transform_point(&geometric, [1.0, 0.0, 0.0]),
+            [2.0, 0.0, 2.0],
+        );
 
         let (local, geometric) = local_matrices(&models.next().expect("second Model"));
         assert_eq!(local, IDENTITY);

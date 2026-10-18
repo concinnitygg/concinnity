@@ -11,7 +11,6 @@ use ash::vk;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shader_programs::surface::GrassShading;
 use concinnity_core::render::world_pipelines::{BucketSource, check_rebuild, replace_bucket};
-use std::sync::atomic::Ordering;
 
 use super::context::VkContext;
 use super::pipeline::{
@@ -34,25 +33,6 @@ macro_rules! rebuild_if_live {
 }
 
 impl VkContext {
-    // True when the shared shader-reload flag is set. Cheap atomic load;
-    // called at the top of `draw_frame`. Returns false when hot-reload is
-    // off so the production path never enters the reload branch.
-    pub(in crate::vulkan) fn shader_reload_requested(&self) -> bool {
-        self.hot_reload
-            .reload_pending
-            .as_ref()
-            .map(|f| f.load(Ordering::SeqCst))
-            .unwrap_or(false)
-    }
-
-    // Clear the pending-reload flag. Called after `reload_shaders`
-    // regardless of outcome so a failed rebuild does not loop forever.
-    pub(in crate::vulkan) fn clear_shader_reload_flag(&self) {
-        if let Some(flag) = &self.hot_reload.reload_pending {
-            flag.store(false, Ordering::SeqCst);
-        }
-    }
-
     // Rebuild every built-in Vulkan pipeline from disk-resident source.
     // Each pipeline is constructed into a temporary first; only when every
     // rebuild succeeds does the context swap them in (after destroying

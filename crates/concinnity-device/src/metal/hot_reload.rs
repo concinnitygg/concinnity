@@ -12,7 +12,6 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::shader_programs::surface::GrassShading;
 use objc2::rc::Retained;
 use objc2_metal::{MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction};
-use std::sync::atomic::Ordering;
 
 use super::auto_exposure::build_auto_exposure_pipelines;
 use super::context::MtlContext;
@@ -87,25 +86,6 @@ fn static_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
 }
 
 impl MtlContext {
-    // True when the shared shader-reload flag is set. Cheap atomic load; called
-    // at the top of `draw_frame`. Returns false when hot-reload is off so
-    // the production path never enters the reload branch.
-    pub(super) fn shader_reload_requested(&self) -> bool {
-        self.hot_reload
-            .reload_pending
-            .as_ref()
-            .map(|f| f.load(Ordering::SeqCst))
-            .unwrap_or(false)
-    }
-
-    // Clear the pending-reload flag. Called after `reload_shaders` regardless
-    // of outcome so a failed rebuild does not loop forever.
-    pub(super) fn clear_shader_reload_flag(&self) {
-        if let Some(flag) = &self.hot_reload.reload_pending {
-            flag.store(false, Ordering::SeqCst);
-        }
-    }
-
     // Rebuild every built-in Metal renderer pipeline from disk-resident source.
     // Each pipeline is constructed into a temporary first; only when every
     // rebuild succeeds does the context atomically swap them in. Any compile

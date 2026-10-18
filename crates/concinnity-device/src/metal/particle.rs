@@ -19,9 +19,7 @@
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::particles::{
-    ParticleEmitterRecord, ParticleSpawnState, ParticleSpawns, spawn_seed,
-};
+use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleFrame, ParticleSystem};
 use concinnity_core::render::reactive_mask::ReactiveWrite;
 use concinnity_core::render::uniforms::ParticleView;
 use objc2::rc::Retained;
@@ -44,14 +42,10 @@ use super::encode::{ComputeEncode, RenderEncode};
 use super::error::allocation_failed;
 use super::scoped_encoder::ScopedEncoder;
 
-// Per-emitter persistent GPU state. The pool buffer lives in shared storage
-// so the CPU can zero-init it once.
+// Per-emitter persistent GPU state: the particle pool, `record.max_particles`
+// slots of `GpuParticle` in shared storage so the CPU can zero-init it once.
 pub(super) struct ParticleEmitterGpuState {
-    // Particle pool: `record.max_particles` slots of `GpuParticle`.
     pub pool: Retained<ProtocolObject<dyn MTLBuffer>>,
-    // Carry-over spawn fraction and ring cursor, which turn `dt` and the
-    // emitter's `spawn_rate` into each dispatch's spawn run.
-    pub spawn_state: ParticleSpawnState,
 }
 
 // Pair of pipelines driving the particle system: the compute kernel that
@@ -64,76 +58,24 @@ pub(super) struct ParticlePipelines {
     pub sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
 }
 
-// All particle-system state grouped into one feature unit: the per-emitter
-// records (with their tombstone free-list), the parallel per-emitter GPU
-// pools, the shared compute + render pipelines, and the per-frame timing
-// bookkeeping. `records` and `emitter_state` are parallel: the dispatch
-// loop walks both in lockstep, skipping `None` pairs. `pipelines` is built
-// lazily at init (≥1 declared emitter) or on the first runtime
-// [`MtlContext::add_emitter`].
+// The emitter table with each emitter's GPU pool, and the shared compute +
+// render pipelines, built lazily at init (>= 1 declared emitter) or on the
+// first runtime [`MtlContext::add_emitter`].
 pub(crate) struct ParticleState {
-    // One slot per emitter; `None` slots are tombstones from
-    // [`MtlContext::remove_emitter`], reused by the next add via `free_slots`.
-    pub records: Vec<Option<ParticleEmitterRecord>>,
-    // Per-emitter persistent GPU state, parallel to `records`; `None` matches
-    // a tombstoned record.
-    pub emitter_state: Vec<Option<ParticleEmitterGpuState>>,
-    pub free_slots: Vec<usize>,
+    pub system: ParticleSystem<ParticleEmitterGpuState>,
     pub pipelines: Option<ParticlePipelines>,
-    // Last frame's `elapsed`; the diff drives spawn budgets + integration.
-    pub last_elapsed: f32,
-    // Frame counter mixed into the compute kernel's per-spawn RNG seed.
-    pub frame_index: u32,
-}
-
-// The per-frame particle inputs `prepare_particle_pass` derives on `&mut self`
-// for the read-only encode halves to consume.
-pub(in crate::metal) struct ParticleFrame {
-    // Seconds since the previous prepared frame; drives ageing + integration.
-    pub dt: f32,
-    // Monotonic frame counter, mixed into the kernel's per-spawn RNG seed.
-    pub frame_index: u32,
-    // Spawn run per emitter slot, parallel to `records`.
-    pub spawns: Vec<ParticleSpawns>,
 }
 
 impl MtlContext {
-    // Mutate the per-frame particle state (dt against
-    // `particle.last_elapsed`, monotonic `particle.frame_index`,
-    // per-emitter spawn runs). Returns the [`ParticleFrame`] the read-only
-    // `encode_particles_sim` and `encode_particles_draw` then consume. Split out
-    // so both halves take `&self` and run on parallel-recording workers; the
-    // mutating prelude stays on the frame's main `&mut self` path inside
-    // `execute_graph`, which runs it exactly once per paced frame.
+    // Advance the particle clock and every emitter's spawn run, once per paced
+    // frame on the main `&mut self` path, so the `&self` sim and draw halves can
+    // record on parallel workers against one frame.
     pub(in crate::metal) fn prepare_particle_pass(
         &mut self,
         elapsed: f32,
     ) -> Option<ParticleFrame> {
         self.particle.pipelines.as_ref()?;
-        if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
-            return None;
-        }
-        let dt = (elapsed - self.particle.last_elapsed).max(0.0);
-        self.particle.last_elapsed = elapsed;
-        self.particle.frame_index = self.particle.frame_index.wrapping_add(1);
-        let frame_index = self.particle.frame_index;
-        let spawns = self
-            .particle
-            .records
-            .iter()
-            .zip(self.particle.emitter_state.iter_mut())
-            .map(
-                |(rec_slot, gpu_slot)| match (rec_slot.as_ref(), gpu_slot.as_mut()) {
-                    (Some(rec), Some(gpu)) => gpu.spawn_state.take_spawns(dt, rec),
-                    _ => ParticleSpawns::default(),
-                },
-            )
-            .collect();
-        Some(ParticleFrame {
-            dt,
-            frame_index,
-            spawns,
-        })
+        self.particle.system.prepare(elapsed)
     }
 
     // Encode the `ParticlesSim` node: age + integrate + respawn every live
@@ -154,7 +96,7 @@ impl MtlContext {
         let Some(pipelines) = self.particle.pipelines.as_ref() else {
             return Ok(());
         };
-        if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
+        if self.particle.system.is_empty() {
             return Ok(());
         }
         let sim_desc = MTLComputePassDescriptor::new();
@@ -174,19 +116,8 @@ impl MtlContext {
         // in a realistic mid-life state for when the camera turns back. The cost
         // is per-slot work in a single threadgroup, so leaving it un-culled is
         // cheap.
-        for (i, (rec_slot, gpu_slot)) in self
-            .particle
-            .records
-            .iter()
-            .zip(self.particle.emitter_state.iter())
-            .enumerate()
-        {
-            let (rec, gpu) = match (rec_slot.as_ref(), gpu_slot.as_ref()) {
-                (Some(r), Some(g)) => (r, g),
-                _ => continue,
-            };
-            let spawns = frame.spawns.get(i).copied().unwrap_or_default();
-            let params = rec.params(frame.dt, spawns, spawn_seed(frame.frame_index, i));
+        for emitter in self.particle.system.emitters(frame) {
+            let (rec, gpu, params) = (emitter.record, emitter.gpu, emitter.params);
             enc.set_buffer(gpu.pool.as_ref(), 0, 0);
             enc.set_value(&params, 2);
             let grid = MTLSize {
@@ -221,26 +152,11 @@ impl MtlContext {
         let Some(pipelines) = self.particle.pipelines.as_ref() else {
             return Ok(0);
         };
-        if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
-            return Ok(0);
-        }
-        let frame_index = frame.frame_index;
         let last_tex = self.scene.textures.len().saturating_sub(1);
 
         // Visibility-cull per emitter, for the draw alone: the simulation above
-        // ticked every pool. Tombstoned (None) slots are always invisible.
-        let visible: Vec<bool> = self
-            .particle
-            .records
-            .iter()
-            .map(|slot| match slot {
-                Some(r) => {
-                    let (mn, mx) = r.aabb();
-                    frustum.intersects_aabb(mn, mx)
-                }
-                None => false,
-            })
-            .collect();
+        // ticked every pool.
+        let mut visible = self.particle.system.visible(frame, frustum).peekable();
 
         // Camera basis for camera-facing billboards: rows 0 and 1 of the view
         // matrix's 3×3 are the world-space right and up vectors (the view
@@ -259,7 +175,7 @@ impl MtlContext {
         // A fresh Load/Store pass: the prior render pass ended with its own
         // command buffer. When every emitter culls out we skip the encoder
         // entirely.
-        if !visible.iter().any(|v| *v) {
+        if visible.peek().is_none() {
             return Ok(0);
         }
         let pass_desc = MTLRenderPassDescriptor::new();
@@ -291,25 +207,9 @@ impl MtlContext {
         enc.set_fragment_texture(self.targets.hdr.depth_resolve.as_ref(), 2);
 
         let mut draw_calls: u32 = 0;
-        for (i, (rec_slot, gpu_slot)) in self
-            .particle
-            .records
-            .iter()
-            .zip(self.particle.emitter_state.iter())
-            .enumerate()
-        {
-            if !visible[i] {
-                continue;
-            }
-            let (rec, gpu) = match (rec_slot.as_ref(), gpu_slot.as_ref()) {
-                (Some(r), Some(g)) => (r, g),
-                _ => continue,
-            };
-            // The spawn run and frame seed only matter to the compute kernel,
-            // but we share the uniform layout so the render path passes its
-            // own copy with no spawns. `dt` is irrelevant to the vertex shader
-            // (it reads `age` / `lifetime` straight from the pool).
-            let params = rec.params(0.0, ParticleSpawns::default(), frame_index);
+        for emitter in visible {
+            let (rec, gpu) = (emitter.record, emitter.gpu);
+            let params = emitter.params;
             let slot = rec.texture_slot.min(last_tex);
             enc.set_vertex_buffer(gpu.pool.as_ref(), 0, 0);
             enc.set_vertex_value(&params, 2);
@@ -417,8 +317,5 @@ pub(super) fn build_emitter_gpu_state(
         std::ptr::write_bytes(dst, 0, pool_bytes);
     }
 
-    Ok(ParticleEmitterGpuState {
-        pool,
-        spawn_state: ParticleSpawnState::default(),
-    })
+    Ok(ParticleEmitterGpuState { pool })
 }

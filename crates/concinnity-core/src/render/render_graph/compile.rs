@@ -201,6 +201,8 @@ pub struct CompiledGraph {
     // queries below stay the only way to ask, since a raw relation is easy to
     // read in the wrong direction.
     schedule: Schedule,
+    // Each resource's access once the frame's last barrier for it has run.
+    final_states: Vec<(ResourceState, ReadStages)>,
 }
 
 impl CompiledGraph {
@@ -212,6 +214,19 @@ impl CompiledGraph {
     /// The compiled pass `id` names, or `None` when the graph omits it.
     pub fn pass(&self, id: PassId) -> Option<&CompiledPass> {
         self.passes.iter().find(|p| p.id == id)
+    }
+
+    /// The access each resource is left in once the graph's last barrier for it
+    /// has run, indexed by resource id: the state plus the stage union that
+    /// barrier carried, since a `Read`'s native state can depend on its consuming
+    /// stages. `(Undefined, empty)` for a resource no barrier touches.
+    ///
+    /// A backend pairs this with its own state translation to check the
+    /// cross-frame contract: a resource whose first-use transition names a
+    /// resting state must actually end the frame in it, or the next frame's
+    /// producer barrier declares a source state the resource is not in.
+    pub fn final_states(&self) -> &[(ResourceState, ReadStages)] {
+        &self.final_states
     }
 
     /// One bit per [`PassId`] the schedule put on the async compute queue,
@@ -516,10 +531,13 @@ impl GraphBuilder {
             })
             .collect();
 
+        let final_states =
+            super::validate::final_states_of(&compiled_passes, compiled_resources.len());
         Ok(CompiledGraph {
             passes: compiled_passes,
             resources: compiled_resources,
             schedule,
+            final_states,
         })
     }
 }

@@ -1,7 +1,7 @@
 //! The user's persisted settings-menu choices, the user layer of settings
 //! resolution. Every field is an override: `None` leaves the world's value (or
 //! the engine default) in place, so an unchanged setting never overrides what
-//! the world authors. Reading and writing them to disk is the engine's.
+//! the world authors. Reading and writing them to disk is the host's.
 
 use serde::de::value::StrDeserializer;
 use serde::de::{DeserializeOwned, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};

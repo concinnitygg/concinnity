@@ -185,6 +185,63 @@ pub struct GrassFrameInputs<'a> {
     pub planet_tiles: &'a [DrawnPlanetTile],
 }
 
+/// Tile records one frame's runs can hold together: the view's and the
+/// shadow's, each up to [`MAX_GRASS_TILE_RECORDS`]. A backend sizes its
+/// per-frame tile buffer to it.
+pub const FRAME_TILE_RECORDS: usize = 2 * MAX_GRASS_TILE_RECORDS;
+
+/// Planet tile records one frame's runs can hold together, sized like
+/// [`FRAME_TILE_RECORDS`].
+pub const FRAME_PLANET_TILE_RECORDS: usize =
+    2 * crate::render::uniforms::grass::MAX_PLANET_GRASS_TILES;
+
+/// What a frame's grass is placed, cast and bent for, beyond the planet tiles
+/// the scene draws.
+#[derive(Debug, Clone, Copy)]
+pub struct GrassView<'a> {
+    /// The camera the blades are placed and culled for.
+    pub camera: GrassCamera,
+    /// Seconds since the world started.
+    pub elapsed: f32,
+    /// The nearest shadow cascade, when the grass casts into it this frame.
+    pub shadow: Option<GrassShadowView>,
+    /// Everything that may be trampling the grass.
+    pub benders: &'a [GrassBender],
+}
+
+/// A field's history and the drawn planet tiles each frame gathers, kept so a
+/// frame allocates nothing once both have grown.
+#[derive(Debug, Clone, Default)]
+pub struct GrassFrameState {
+    /// What the field's frames carry from one to the next.
+    pub history: GrassHistory,
+    drawn: Vec<DrawnPlanetTile>,
+}
+
+impl GrassFrameState {
+    /// `field`'s grass work for `view` over `scene`'s drawn planet tiles,
+    /// advancing the history.
+    pub fn frame<'h>(
+        &'h mut self,
+        field: &GrassField,
+        scene: &crate::render::scene_state::SceneState,
+        view: &GrassView<'_>,
+    ) -> GrassFrame<'h> {
+        self.drawn.clear();
+        if field.planet.is_some() {
+            scene.drawn_planet_tiles_into(&mut self.drawn);
+        }
+        let inputs = GrassFrameInputs {
+            camera: view.camera,
+            elapsed: view.elapsed,
+            shadow: view.shadow,
+            benders: view.benders,
+            planet_tiles: &self.drawn,
+        };
+        field.frame(&inputs, &mut self.history)
+    }
+}
+
 /// What a field's frames carry from one to the next, and the working space
 /// they place their tiles in.
 #[derive(Debug, Clone)]
@@ -295,6 +352,19 @@ pub enum GrassLimit {
     PlanetTiles,
 }
 
+// Log the limit a frame's runs reached; the history passes it only once.
+fn report_limit(limit: Option<GrassLimit>) {
+    match limit {
+        Some(GrassLimit::TileRecords) => tracing::warn!(
+            "grass: more grass tiles in reach than a run's records hold; the farthest are dropped"
+        ),
+        Some(GrassLimit::PlanetTiles) => tracing::warn!(
+            "grass: more planet tiles in reach than a grass run holds; the farthest are dropped"
+        ),
+        None => {}
+    }
+}
+
 /// A frame's grass work: the bend field's step, the blades placed for the
 /// view, and those placed for the nearest shadow cascade.
 #[derive(Debug, Clone, PartialEq)]
@@ -310,8 +380,20 @@ pub struct GrassFrame<'a> {
     /// The planet tiles both runs read, the view's first; empty on terrain.
     pub planet_tiles: &'a [PlanetGrassTileGpu],
     /// The limit this frame's runs reached, on the first frame of the history
-    /// that reached one; `None` on every other frame.
+    /// that reached one (and logged then); `None` on every other frame.
     pub limit: Option<GrassLimit>,
+}
+
+impl GrassFrame<'_> {
+    /// The tile records, at most [`FRAME_TILE_RECORDS`].
+    pub fn tile_records(&self) -> &[GrassTileGpu] {
+        &self.tiles[..self.tiles.len().min(FRAME_TILE_RECORDS)]
+    }
+
+    /// The planet tile records, at most [`FRAME_PLANET_TILE_RECORDS`].
+    pub fn planet_tile_records(&self) -> &[PlanetGrassTileGpu] {
+        &self.planet_tiles[..self.planet_tiles.len().min(FRAME_PLANET_TILE_RECORDS)]
+    }
 }
 
 /// What the visible-blade buffers become for a new render-target size, from
@@ -635,6 +717,7 @@ impl GrassField {
             planet.as_ref(),
         );
         let limit = limit.filter(|_| !core::mem::replace(&mut history.limit_reported, true));
+        report_limit(limit);
         let scratch = &history.scratch;
         GrassFrame {
             view,
@@ -680,7 +763,7 @@ impl GrassField {
         GrassParams {
             cam_pos: camera.position,
             draw_distance: lod.extent,
-            frustum: planes(&frustum),
+            frustum: frustum.packed_planes(),
             wind,
             wind_gust,
             prev_vp: hiz.map_or(camera.vp, |h| h.prev_vp),
@@ -753,7 +836,7 @@ impl GrassField {
         let mut lod_base = [0; 4];
         lod_base[lod::GRASS_BAND_REGION] = cap - 1;
         GrassParams {
-            frustum: planes(&light.frustum()),
+            frustum: light.frustum().packed_planes(),
             hiz_enabled: 0,
             lod_base,
             lod_capacity,
@@ -1043,13 +1126,6 @@ fn light_projection(look: &GrassBladeLook, wind_speed: f32) -> [f32; 2] {
     canopy::projection_axes(canopy::canopy_bend(wind_speed, look.stiffness))
 }
 
-// A frustum's planes as the block's `(normal, d)` rows.
-fn planes(frustum: &Frustum) -> [[f32; 4]; 6] {
-    frustum
-        .planes
-        .map(|p| [p.normal[0], p.normal[1], p.normal[2], p.d])
-}
-
 /// How far a blade of `look` can reach from where its cell places it, in any
 /// direction, in a field whose tallest layer stands `lod_height` meters tall:
 /// its tallest height, since a bent blade keeps its length, plus half its
@@ -1312,6 +1388,38 @@ mod tests {
         let again = f.frame(&cast, &mut history).tiles.to_vec();
         assert_eq!(first, again);
         assert_eq!(space(&history), grown);
+    }
+
+    // The frame state gathers no planet tiles for a terrain field and runs the
+    // same frame the field does from the same inputs.
+    #[test]
+    fn the_frame_state_runs_the_fields_frame() {
+        use crate::render::scene_state::DrawList;
+        use crate::render::scene_state::SceneState;
+        let t = terrain([0.0; 3], [400.0, 400.0], vec![grass(100.0)]);
+        let mut f = GrassField::resolve(&[t], None).unwrap();
+        resize(&mut f, [1600, 900]);
+        let scene = SceneState::new(DrawList::unreserved(Vec::new(), 0), [0.0; 4]);
+        let mut state = GrassFrameState::default();
+        let view = GrassView {
+            camera: camera([0.0, 2.0, 0.0]),
+            elapsed: 0.0,
+            shadow: Some(light()),
+            benders: &[],
+        };
+        let ours = state.frame(&f, &scene, &view);
+        let tiles = ours.tile_records().to_vec();
+        assert!(ours.planet_tile_records().is_empty());
+        let mut history = GrassHistory::default();
+        let expected = f.frame(
+            &GrassFrameInputs {
+                shadow: Some(light()),
+                ..inputs([0.0, 2.0, 0.0])
+            },
+            &mut history,
+        );
+        assert_eq!(tiles, expected.tile_records());
+        assert!(tiles.len() <= FRAME_TILE_RECORDS);
     }
 
     // A run holding more tiles than its records keeps the nearest and

@@ -11,13 +11,13 @@
 use concinnity_core::components::{SkeletonJoint, SkinnedVertexData, VertexData};
 use concinnity_core::transform::{
     IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_affine_inverse, mat4_mul,
+    mat4_transform_point,
 };
 use fbxcel::tree::v7400::NodeHandle;
 use std::collections::{HashMap, HashSet};
 
 use super::{
     arr_f64, arr_i32, attr_i64, attr_str, local_matrices, node_scene_local, object_id, object_name,
-    transform_point,
 };
 use crate::import::glb::ImportedSkinnedMesh;
 
@@ -346,7 +346,7 @@ pub(crate) fn import_skinned_fbx(
     let mut vertices: Vec<SkinnedVertexData> = Vec::with_capacity(verts.len());
     for (v, cp) in verts.iter().zip(&control_points) {
         let (joints, weights) = top4_weights(skin.weights.get(cp));
-        let world = transform_point(skin.mesh_bind, v.pos);
+        let world = mat4_transform_point(&skin.mesh_bind, v.pos);
         vertices.push(SkinnedVertexData {
             pos: [
                 world[0] * skin.unit_scale,
@@ -530,7 +530,7 @@ mod tests {
         flat[13] = -2.0;
         flat[14] = 7.0;
         let m = mat4_from_flat(&flat).expect("16 elements");
-        let p = transform_point(m, [0.0, 0.0, 0.0]);
+        let p = mat4_transform_point(&m, [0.0, 0.0, 0.0]);
         assert!((p[0] - 3.0).abs() < 1e-6);
         assert!((p[1] + 2.0).abs() < 1e-6);
         assert!((p[2] - 7.0).abs() < 1e-6);

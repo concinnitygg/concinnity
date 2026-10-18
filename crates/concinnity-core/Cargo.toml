@@ -24,7 +24,7 @@ include = [
 detail = []
 # The authored schema's static description, rustdoc included, for authoring tools.
 schema = ["dep:erased-serde"]
-# A do-nothing `RenderBackend` for other crates' tests.
+# A do-nothing and a recording `RenderBackend` for other crates' tests.
 test-support = []
 
 [dependencies]
@@ -33,13 +33,14 @@ bytemuck = { workspace = true, features = ["derive"] }
 concinnity-derive = { workspace = true }
 erased-serde = { version = "0.4", default-features = false, features = ["alloc"], optional = true }
 fontdue = { version = "0.9", default-features = false, features = ["hashbrown", "simd"] }
-hashbrown = "0.17.1"
+hashbrown = { workspace = true }
 libm = "0.2"
 postcard = { workspace = true, features = ["alloc"] }
 serde = { workspace = true, features = ["alloc", "derive"] }
 serde_bytes = { version = "0.11", default-features = false, features = ["alloc"] }
 spin = { version = "0.12.3", default-features = false, features = ["once", "spin_mutex"] }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 ciborium = { workspace = true }

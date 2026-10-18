@@ -110,13 +110,6 @@ impl DxContext {
         if draw_objects.is_empty() || vertices.is_empty() || indices.is_empty() {
             return Ok(());
         }
-        if draw_objects.len() > MAX_SKINNED_OBJECTS {
-            return Err(RenderError::Other(format!(
-                "skinned: {} skinned meshes exceeds MAX_SKINNED_OBJECTS ({})",
-                draw_objects.len(),
-                MAX_SKINNED_OBJECTS
-            )));
-        }
         self.wait_idle();
 
         // Shared skinned vertex/index buffers (DEFAULT heap, GPU-copied once).
@@ -212,7 +205,7 @@ impl DxContext {
         self.state.skinned.draw_objects = draw_objects;
         // A whole new skinned set: nothing in the model-history ring was written
         // for these records.
-        let n_cull = self.cull_count();
+        let n_cull = self.state.draw.record_count();
         self.state.model_history.get_mut().reset(n_cull);
 
         // Morph targets are attached by a later `upload_skinned_morphs`; until

@@ -12,14 +12,13 @@
 //! (waited before a slot is reused) guarantees the GPU has finished reading a
 //! slot's buffer before the CPU overwrites or replaces it.
 //!
-//! Mirrors `directx/upload_ring.rs`; `metal/text_upload.rs` does the same job
-//! against one `StorageModeShared` buffer per slot.
+//! The ring itself is `concinnity_core::render::upload_ring`; this binds it to
+//! pooled host-visible buffers. `metal/text_upload.rs` does the same job against
+//! one `StorageModeShared` buffer per slot.
 
 use ash::vk;
-use concinnity_core::render::buffer_growth::grow_capacity;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::fullscreen::align_up;
-use std::cell::RefCell;
+use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::upload_ring::{self, UploadBuffer};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 
@@ -33,120 +32,64 @@ pub(in crate::vulkan) const UPLOAD_ALIGN: u64 = 256;
 // kilobytes, so this avoids any growth in practice while staying tiny.
 const UPLOAD_MIN_CAPACITY: u64 = 64 * 1024;
 
-// One frame slot's persistently mapped upload buffer. `buffer` is null until the
-// slot's first reservation.
-struct Slot {
-    buffer: PooledBuffer,
-    capacity: u64,
-    cursor: u64,
-}
-
-impl Slot {
-    fn empty() -> Self {
-        Slot {
-            buffer: PooledBuffer::null(),
-            capacity: 0,
-            cursor: 0,
-        }
+impl UploadBuffer for PooledBuffer {
+    fn write(&self, offset: u64, bytes: &[u8]) {
+        self.write_bytes(offset as usize, bytes);
     }
 }
 
-// A persistently mapped upload buffer per frame-in-flight slot for transient
-// geometry. Interior-mutable because the pass encoders run through `&self`; only
-// the composite pass touches it, and that pass stays on the main thread (see
-// `vulkan/parallel_encoder.rs`).
+// One persistently mapped vertex + index upload buffer per frame slot.
 pub(in crate::vulkan) struct UploadRing {
-    slots: Vec<RefCell<Slot>>,
+    ring: upload_ring::UploadRing<PooledBuffer>,
 }
 
 impl UploadRing {
     pub(in crate::vulkan) fn new(frames: usize) -> Self {
-        UploadRing {
-            slots: (0..frames.max(1))
-                .map(|_| RefCell::new(Slot::empty()))
-                .collect(),
+        Self {
+            ring: upload_ring::UploadRing::new(frames, UPLOAD_ALIGN, UPLOAD_MIN_CAPACITY),
         }
     }
 
-    // Begin a frame for `frame`'s slot: reset the write cursor and ensure the
-    // buffer holds at least `needed` bytes, reallocating it if not. The caller
-    // must invoke this once per frame before any `push`, after the frame fence
-    // has confirmed the GPU is done with this slot.
+    // Start `frame`'s slot over with room for `needed` bytes, growing its buffer
+    // when it is too small. The frame fence for `frame` has been waited.
     pub(in crate::vulkan) fn reserve(
         &self,
         alloc: &DeviceAllocator,
         frame: usize,
         needed: u64,
     ) -> RenderResult<()> {
-        let mut slot = self.slots[frame % self.slots.len()].borrow_mut();
-        slot.cursor = 0;
-        let Some(new_cap) = grow_capacity(slot.capacity, needed, UPLOAD_MIN_CAPACITY) else {
-            return Ok(());
-        };
-        let buffer = alloc.create_buffer(
-            new_cap,
-            vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::INDEX_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
-        if buffer.mapped_ptr().is_null() {
-            return Err(concinnity_core::render::error::RenderError::Other(
-                "text upload buffer is not host-mapped".to_string(),
-            ));
-        }
-        // Replacing `buffer` retires the old one through the allocator, which
-        // withholds its range until every in-flight frame has passed.
-        slot.buffer = buffer;
-        slot.capacity = new_cap;
-        Ok(())
+        self.ring.reserve(frame, needed, |capacity| {
+            let buffer = alloc.create_buffer(
+                capacity,
+                vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::INDEX_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )?;
+            if buffer.mapped_ptr().is_null() {
+                return Err(RenderError::Other(
+                    "text upload buffer is not host-mapped".to_string(),
+                ));
+            }
+            Ok(buffer)
+        })
     }
 
-    // Append `bytes` at the slot's next aligned offset and return the buffer to
-    // bind plus the offset of the copy. Errors if the running total would exceed
-    // the reserved capacity, which cannot happen when `reserve` was called with
-    // the aligned-block sum of the same blocks.
+    // Copy `bytes` into `frame`'s slot, returning the buffer and offset to bind.
     pub(in crate::vulkan) fn push(
         &self,
         frame: usize,
         bytes: &[u8],
     ) -> RenderResult<(vk::Buffer, vk::DeviceSize)> {
-        let mut slot = self.slots[frame % self.slots.len()].borrow_mut();
-        let offset = align_up(slot.cursor, UPLOAD_ALIGN);
-        let end = offset + bytes.len() as u64;
-        if end > slot.capacity {
-            return Err(concinnity_core::render::error::RenderError::Other(format!(
-                "text upload ring overflow: need {end} bytes, reserved {}",
-                slot.capacity
-            )));
-        }
-        slot.buffer.write_bytes(offset as usize, bytes);
-        slot.cursor = end;
-        Ok((slot.buffer.buffer(), offset))
+        self.ring
+            .push(frame, bytes, |buffer, offset| (buffer.buffer(), offset))
+            .map_err(|o| {
+                RenderError::Other(format!(
+                    "text upload ring overflow: need {} bytes, reserved {}",
+                    o.need, o.reserved
+                ))
+            })
     }
 
-    // Release every slot's buffer. Called from the context teardown while the
-    // allocator is still alive, so each buffer's range returns to its block.
     pub(in crate::vulkan) fn destroy(&self) {
-        for slot in &self.slots {
-            *slot.borrow_mut() = Slot::empty();
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // The composite pass reserves `text_upload_bytes` for the frame and then
-    // appends each block at the ring's alignment: the reservation has to bound
-    // the cursor for every block sequence, or a push could overflow mid-frame.
-    #[test]
-    fn reserved_bytes_bound_the_ring_cursor() {
-        let blocks: [u64; 5] = [128, 12, 4096, 1, 255];
-        let total: u64 = blocks.iter().map(|&n| align_up(n, UPLOAD_ALIGN)).sum();
-        let mut cursor = 0u64;
-        for &n in &blocks {
-            cursor = align_up(cursor, UPLOAD_ALIGN) + n;
-            assert!(cursor <= total, "cursor {cursor} exceeded reserved {total}");
-        }
+        self.ring.clear();
     }
 }

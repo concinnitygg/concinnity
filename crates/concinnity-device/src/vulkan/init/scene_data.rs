@@ -5,7 +5,6 @@ use ash::vk;
 use concinnity_core::gfx::render_types::{self, AreaLightData, GpuLight, LightUniforms};
 use concinnity_core::render::backend_init::SceneData;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::frame_dirty::FrameDirty;
 use concinnity_core::render::ltc;
 
 use super::InitGpu;
@@ -192,10 +191,12 @@ pub(super) fn build_scene_resources(
             view_ubo_buffers,
             probe_set_ubo_buffers,
             light_ubo_buffers,
-            light_dirty: FrameDirty::new(frames),
             local_light_buffer,
-            cluster_reach: concinnity_core::render::cluster_range::ClusterReach::new(local_lights),
-            light_uniforms,
+            lights: concinnity_core::render::light_state::LightState::new(
+                light_uniforms,
+                local_lights,
+                frames,
+            ),
             canopy_buffers,
             canopy,
             canopy_tables,

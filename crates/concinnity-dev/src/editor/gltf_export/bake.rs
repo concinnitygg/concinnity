@@ -7,19 +7,9 @@
 use concinnity_core::animation::proportions::ProportionLayer;
 use concinnity_core::components::{CharacterShape, SkeletonJoint, build_skeleton_from_joint_defs};
 use concinnity_core::math::vec3;
-use concinnity_core::transform::{Mat4, decompose, euler_yxz_from_quat};
+use concinnity_core::transform::{Mat4, decompose, euler_yxz_from_quat, mat4_transform_point};
 
 use super::ExportMesh;
-
-fn transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
-    let mut out = [m[3][0], m[3][1], m[3][2]];
-    for (c, col) in m.iter().enumerate().take(3) {
-        out[0] += col[0] * p[c];
-        out[1] += col[1] * p[c];
-        out[2] += col[2] * p[c];
-    }
-    out
-}
 
 fn transform_direction(m: &Mat4, d: [f32; 3]) -> [f32; 3] {
     let mut out = [0.0; 3];
@@ -83,7 +73,7 @@ pub(crate) fn bake_shape(mesh: &mut ExportMesh, shape: &CharacterShape) {
             };
             vec3::vec3_add(
                 &mut pos,
-                vec3::scale(transform_point(m, mesh.positions[v]), w),
+                vec3::scale(mat4_transform_point(m, mesh.positions[v]), w),
             );
             if let Some(base) = mesh.normals.get(v) {
                 vec3::vec3_add(&mut nrm, vec3::scale(transform_direction(m, *base), w));

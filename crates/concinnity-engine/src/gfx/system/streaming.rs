@@ -18,12 +18,12 @@ use concinnity_core::render::scene_residency;
 
 use super::stream_sources::{block_type_to_chunk, build_texture_payload_source};
 use super::*;
-use crate::gfx::material_entry::MaterialEntry;
 use crate::gfx::streaming::planet::{PlanetTiles, TileMaterial, tile_mesh_size};
 use concinnity_core::components::Planet;
 use concinnity_core::gfx::render_types::FarFieldTint;
 use concinnity_core::planet::{LocalFrame, MAX_RESIDENT_TILES, PlanetFrame};
 use concinnity_core::render::grass::CanopyRange;
+use concinnity_core::render::material_entry::MaterialEntry;
 
 // Default fractions of the GPU's reported memory each streaming pool may hold
 // resident when a world sets no explicit byte budget. The remainder is left for
@@ -76,8 +76,8 @@ pub(super) fn deferred_texture_slots(
     ctx: &PipelineContext,
     streaming: bool,
     slot_count: usize,
-) -> std::collections::HashSet<usize> {
-    let mut deferred = std::collections::HashSet::new();
+) -> hashbrown::HashSet<usize> {
+    let mut deferred = hashbrown::HashSet::new();
     if !streaming {
         return deferred;
     }
@@ -114,8 +114,8 @@ fn start_scene(ctx: &PipelineContext) -> Option<AssetId> {
 pub(super) fn deferred_mesh_sources(
     ctx: &PipelineContext,
     streaming: bool,
-) -> crate::gfx::draw_list::DeferredMeshSources {
-    let mut out = crate::gfx::draw_list::DeferredMeshSources::default();
+) -> concinnity_core::render::draw_list::DeferredMeshSources {
+    let mut out = concinnity_core::render::draw_list::DeferredMeshSources::default();
     if !streaming {
         return out;
     }
@@ -197,7 +197,7 @@ pub(super) struct MeshStreamSetup {
     pub(crate) disk_backed: bool,
     pub(crate) seed_region: Option<mesh_seed::MeshSeedRegion>,
     pub(crate) deferred_payloads:
-        std::collections::HashMap<usize, crate::gfx::streaming::mesh::DeferredMeshPayload>,
+        hashbrown::HashMap<usize, crate::gfx::streaming::mesh::DeferredMeshPayload>,
 }
 
 impl GraphicsSystem {
@@ -227,7 +227,7 @@ impl GraphicsSystem {
         if self.texture_streamer.is_none() && self.mesh_streamer.is_none() && no_shaders {
             return None;
         }
-        let scene_idx: std::collections::HashMap<AssetId, usize> =
+        let scene_idx: hashbrown::HashMap<AssetId, usize> =
             scenes.iter().enumerate().map(|(i, &s)| (s, i)).collect();
         let mut members: Vec<Vec<(u8, u32)>> = vec![Vec::new(); scenes.len()];
 
@@ -248,7 +248,7 @@ impl GraphicsSystem {
         }
 
         if self.mesh_streamer.is_some() {
-            let mut scene_of_draw = std::collections::HashMap::new();
+            let mut scene_of_draw = hashbrown::HashMap::new();
             for (_, member, handle) in ctx.join2::<SceneMember, RenderHandle>() {
                 for &slot in &handle.draws {
                     scene_of_draw.insert(slot, member.0);
@@ -539,8 +539,8 @@ impl GraphicsSystem {
     pub(super) fn setup_voxel_world_streaming(
         &mut self,
         voxel_world: Option<VoxelWorld>,
-        block_types: &std::collections::HashMap<AssetId, BlockType>,
-        material_map: &std::collections::HashMap<MaterialHandle, MaterialEntry>,
+        block_types: &hashbrown::HashMap<AssetId, BlockType>,
+        material_map: &hashbrown::HashMap<MaterialHandle, MaterialEntry>,
     ) {
         let Some(vw) = voxel_world else { return };
 
@@ -705,7 +705,7 @@ impl GraphicsSystem {
         &mut self,
         planet: &Planet,
         far_field: Option<CanopyRange>,
-        material_map: &std::collections::HashMap<MaterialHandle, MaterialEntry>,
+        material_map: &hashbrown::HashMap<MaterialHandle, MaterialEntry>,
     ) {
         let entry = planet
             .material
@@ -757,15 +757,14 @@ impl GraphicsSystem {
 #[cfg(test)]
 mod tests {
     use concinnity_core::ecs::Ref;
-    use std::sync::{Arc, Mutex};
 
     use super::*;
     use crate::ecs::{BlobMeshBounds, BlobSceneGroups};
-    use crate::gfx::mock_backend::{Call, MockState, recording_backend};
     use concinnity_core::ecs::MeshBoundsRecord;
     use concinnity_core::ecs::SceneGroup;
     use concinnity_core::ecs::World;
     use concinnity_core::gfx::render_types::{MaterialUniforms, NO_NORMAL_MAP_SLOT};
+    use concinnity_core::render::backend::recording::{Call, SharedRecording, recording_backend};
 
     const MIB: u64 = 1024 * 1024;
 
@@ -825,7 +824,7 @@ mod tests {
             ),
         ]));
         let deferred = deferred_texture_slots(&world.context(), true, 8);
-        assert_eq!(deferred, std::collections::HashSet::from([1, 2]));
+        assert_eq!(deferred, hashbrown::HashSet::from([1, 2]));
     }
 
     // A group entry that is not a Texture, or whose handle is past the streamed
@@ -839,7 +838,7 @@ mod tests {
             Vec::new(),
         )]));
         let deferred = deferred_texture_slots(&world.context(), true, 3);
-        assert_eq!(deferred, std::collections::HashSet::from([1]));
+        assert_eq!(deferred, hashbrown::HashSet::from([1]));
     }
 
     // The streamer is the runtime load path that brings a deferred payload in,
@@ -884,10 +883,10 @@ mod tests {
         ]));
 
         let sources = deferred_mesh_sources(&world.context(), true);
-        assert_eq!(sources.by_handle, std::collections::HashSet::from([1]));
+        assert_eq!(sources.by_handle, hashbrown::HashSet::from([1]));
         assert_eq!(
             sources.by_def,
-            std::collections::HashSet::from([later_def]),
+            hashbrown::HashSet::from([later_def]),
             "only the later scene's defs defer"
         );
         // Draw records for a deferred mesh are built from these, so both the
@@ -975,7 +974,7 @@ mod tests {
     // setup routines wire the pools onto it. The mock reports the UNKNOWN GPU
     // profile (0 bytes of memory), so a pool with no explicit override lands on
     // its count-only policy.
-    fn system_with_backend() -> (Arc<Mutex<MockState>>, GraphicsSystem) {
+    fn system_with_backend() -> (SharedRecording, GraphicsSystem) {
         let (recorded, backend) = recording_backend();
         let mut gs = GraphicsSystem::new(None);
         gs.backend = Some(Box::new(backend));
@@ -1015,7 +1014,7 @@ mod tests {
         );
 
         assert_eq!(gs.texture_streamer.as_ref().map(|s| s.len()), Some(2));
-        let s = recorded.lock().unwrap();
+        let s = recorded.lock();
         assert!(s.saw(&Call::EvictTextureSlot(0)));
         assert!(s.saw(&Call::EvictTextureSlot(1)));
     }
@@ -1036,7 +1035,7 @@ mod tests {
             Vec::new(),
         );
         assert!(gs.texture_streamer.is_none(), "no slot to stream");
-        assert!(recorded.lock().unwrap().calls.is_empty());
+        assert!(recorded.lock().calls.is_empty());
 
         let mut headless = GraphicsSystem::new(None);
         headless.setup_texture_streaming(
@@ -1110,7 +1109,7 @@ mod tests {
             centers(2),
         );
 
-        let s = recorded.lock().unwrap();
+        let s = recorded.lock();
         assert!(s.saw(&Call::EvictTextureSlot(0)));
         assert!(s.saw(&Call::EvictTextureSlot(1)));
     }
@@ -1138,7 +1137,7 @@ mod tests {
             },
         );
 
-        let s = recorded.lock().unwrap();
+        let s = recorded.lock();
         assert!(s.saw(&Call::SeedMeshStreaming));
         assert!(
             !s.calls.iter().any(|c| matches!(c, Call::EvictMesh(_))),
@@ -1168,7 +1167,7 @@ mod tests {
             gs.mesh_stream_draw_indices,
             vec![DrawIndex(4), DrawIndex(7)]
         );
-        let s = recorded.lock().unwrap();
+        let s = recorded.lock();
         assert!(s.saw(&Call::EvictMesh(DrawIndex(4))));
         assert!(s.saw(&Call::EvictMesh(DrawIndex(7))));
         assert!(!s.saw(&Call::SeedMeshStreaming));
@@ -1202,7 +1201,7 @@ mod tests {
             },
         );
         assert!(gs.mesh_streamer.is_none(), "no mesh to stream");
-        assert!(recorded.lock().unwrap().calls.is_empty());
+        assert!(recorded.lock().calls.is_empty());
 
         let mut headless = GraphicsSystem::new(None);
         headless.setup_mesh_streaming(
@@ -1262,7 +1261,7 @@ mod tests {
         let mut material = MaterialUniforms::DEFAULT;
         material.roughness = 0.25;
 
-        let block_types = std::collections::HashMap::from([
+        let block_types = hashbrown::HashMap::from([
             (
                 air,
                 BlockType {
@@ -1272,9 +1271,9 @@ mod tests {
             ),
             (ground, solid_block()),
         ]);
-        let material_map = std::collections::HashMap::from([(
+        let material_map = hashbrown::HashMap::from([(
             handle,
-            crate::gfx::material_entry::MaterialEntry {
+            concinnity_core::render::material_entry::MaterialEntry {
                 albedo_slot: 5,
                 normal_map_slot: 6,
                 uniforms: material,
@@ -1301,7 +1300,7 @@ mod tests {
         assert_eq!(cs.material.roughness, 0.25);
         // 8 blocks of 2 world units on each of X / Z.
         assert_eq!((cs.chunk_w, cs.chunk_d), (16.0, 16.0));
-        assert!(recorded.lock().unwrap().saw(&Call::SetupChunkStreaming));
+        assert!(recorded.lock().saw(&Call::SetupChunkStreaming));
     }
 
     // A VoxelWorld naming no material renders its chunks with the engine
@@ -1314,8 +1313,8 @@ mod tests {
                 view_radius: 1,
                 ..Default::default()
             }),
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
+            &hashbrown::HashMap::new(),
+            &hashbrown::HashMap::new(),
         );
 
         let cs = gs.chunk_stream.as_ref().expect("chunk pool built");
@@ -1336,8 +1335,8 @@ mod tests {
                 palette: vec![Ref::new(AssetId(99)), Ref::new(known)],
                 ..Default::default()
             }),
-            &std::collections::HashMap::from([(known, solid_block())]),
-            &std::collections::HashMap::new(),
+            &hashbrown::HashMap::from([(known, solid_block())]),
+            &hashbrown::HashMap::new(),
         );
         assert!(gs.chunk_stream.is_some(), "the world still streams");
     }
@@ -1347,17 +1346,17 @@ mod tests {
         let (recorded, mut gs) = system_with_backend();
         gs.setup_voxel_world_streaming(
             None,
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
+            &hashbrown::HashMap::new(),
+            &hashbrown::HashMap::new(),
         );
         assert!(gs.chunk_stream.is_none(), "no VoxelWorld declared");
-        assert!(recorded.lock().unwrap().calls.is_empty());
+        assert!(recorded.lock().calls.is_empty());
 
         let mut headless = GraphicsSystem::new(None);
         headless.setup_voxel_world_streaming(
             Some(VoxelWorld::default()),
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
+            &hashbrown::HashMap::new(),
+            &hashbrown::HashMap::new(),
         );
         assert!(headless.chunk_stream.is_none(), "no backend");
     }
@@ -1372,8 +1371,8 @@ mod tests {
                 view_radius: 1,
                 ..Default::default()
             }),
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
+            &hashbrown::HashMap::new(),
+            &hashbrown::HashMap::new(),
         );
         assert_eq!(
             gs.chunk_stream.as_ref().unwrap().streamer.byte_budget(),

@@ -29,8 +29,6 @@ pub(crate) struct TaaState {
     // The resolve. `Some` only when TAA is on (and not bypassed by the
     // upscaler).
     pub pass: Option<MtlTaaPass>,
-    // Frame counter driving the Halton projection-jitter sequence.
-    pub frame: u32,
 }
 
 impl TaaState {

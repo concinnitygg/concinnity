@@ -16,10 +16,14 @@
 
 mod alias;
 mod barrier_place;
+mod barrier_table;
 mod builder;
 mod compile;
+mod execute;
+mod facts;
 mod frame;
 mod gates;
+mod graph_cache;
 mod passes;
 mod reach;
 mod schedule;
@@ -28,12 +32,19 @@ mod types;
 mod validate;
 mod view_mask;
 
+pub use barrier_table::{AliasRows, BarrierTable};
 pub(crate) use builder::GraphBuilder;
 pub(crate) use compile::GraphError;
 pub use compile::{CompiledGraph, CompiledPass, CompiledResource};
+pub use execute::{
+    ExecutedPasses, NoClock, PassFanOut, PassJob, PassRecorder, PassScratch, SerialFanOut,
+    execute_passes, presenter_index,
+};
+pub use facts::{FrameContent, PlannedFacts, ResidentFeatures, ResidentUpscaler};
 pub(crate) use frame::bloom_top_desc;
 pub use frame::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z, FrameGraphInputs, build_frame_graph};
 pub use gates::{BackendTraits, BuildStatus, FeatureGates, FrameFacts, frame_graph_inputs};
+pub use graph_cache::GraphCache;
 pub use passes::{PASS_COUNT, PASS_NAMES, PassId};
 pub use schedule::{CrossQueueWait, PassQueue};
 pub use transient::{
@@ -46,6 +57,6 @@ pub use types::{
 pub(crate) use types::{BufferDesc, TextureSize, full_mip_levels};
 pub use validate::{
     SyncGap, SyncGapKind, assert_serial_order_honors_schedule, barrier_coverage_gaps_for_driven,
-    final_states, sync_point_gaps,
+    sync_point_gaps,
 };
 pub use view_mask::apply_view;

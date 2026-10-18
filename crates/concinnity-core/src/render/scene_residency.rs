@@ -193,6 +193,15 @@ fn derive_progress(set: &SceneSet) -> f32 {
     resident as f32 / set.members.len() as f32
 }
 
+/// Per-scene streamed-content load status, republished by the streaming system
+/// whenever it changes: `(scene, state, fraction of members resident)` in
+/// declaration order. Consumers (menus, loading screens) read, never write.
+#[derive(Debug, Clone, Default)]
+pub struct SceneResidencyStatus {
+    /// Each scene's state and resident fraction.
+    pub scenes: Vec<(AssetId, SceneLoadState, f32)>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

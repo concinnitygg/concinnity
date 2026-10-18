@@ -10,7 +10,7 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
 
 use super::super::MtlContext;
-use super::super::pipeline_builder::volume_for;
+use super::super::pipeline_builder::{VolumeBuild, volume_for};
 use super::{VolumePipelines, build_volume_pipelines};
 use crate::shader::raymarch_source;
 
@@ -38,7 +38,14 @@ impl MtlContext {
             front_pipeline,
             shadow_pipeline,
             prepass_pipelines,
-        } = match volume_for(prepared, flags, hot_reload) {
+        } = match volume_for(
+            prepared,
+            flags,
+            VolumeBuild {
+                hot_reload,
+                template_generation: self.hot_reload.generation,
+            },
+        ) {
             Some(pipelines) => pipelines,
             None => {
                 build_volume_pipelines(&self.hw.device, programs, flags, hot_reload, &record.label)?

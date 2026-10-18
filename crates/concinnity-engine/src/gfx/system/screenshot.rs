@@ -7,7 +7,7 @@ use concinnity_core::render::snapshot::RenderSnapshot;
 
 use super::GraphicsSystem;
 use crate::crash::UtcTime;
-use crate::ecs::ScreenshotRequest;
+use concinnity_core::ecs::ScreenshotRequest;
 
 // Where screenshots land, relative to the working directory.
 const SCREENSHOT_DIR: &str = "screenshots";

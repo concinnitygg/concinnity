@@ -7,7 +7,7 @@
 use concinnity_core::gfx::render_types::SsgiParams;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::post::ssgi::settings::SsgiSettings;
+use concinnity_core::render::post::ssgi::settings::{SsgiFrame, SsgiSettings};
 use concinnity_core::render::post::ssgi::{
     SsgiPass, SsgiPipelines, SsgiResolveInputs, SsgiTraceInputs,
 };
@@ -93,14 +93,9 @@ impl DxContext {
             .map(|ssgi| ssgi.pass.indirect().resource())
     }
 
-    // This frame's SSGI uniform.
-    fn ssgi_params(&self, ssgi: &SsgiResources, fov_y_radians: f32, aspect: f32) -> SsgiParams {
-        ssgi.settings.params(
-            fov_y_radians,
-            aspect,
-            ssgi.pass.frame(),
-            self.pre_exposure.history_scale(),
-        )
+    // Where the accumulation stands this frame.
+    pub(in crate::directx) fn ssgi_frame(&self) -> Option<SsgiFrame> {
+        self.ssgi.as_ref().map(|s| s.pass.frame())
     }
 
     // Encode the resolve ahead of the main pass: last frame's accumulation
@@ -110,13 +105,11 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        fov_y_radians: f32,
-        aspect: f32,
+        params: Option<&SsgiParams>,
     ) {
-        let (Some(ssgi), Some(gbuffer)) = (&self.ssgi, &self.gbuffer) else {
+        let (Some(ssgi), Some(gbuffer), Some(params)) = (&self.ssgi, &self.gbuffer, params) else {
             return;
         };
-        let params = self.ssgi_params(ssgi, fov_y_radians, aspect);
         if let Err(e) = ssgi.pass.encode_resolve(
             &self.post_device(frame_idx),
             cmd,
@@ -125,7 +118,7 @@ impl DxContext {
                 velocity: gbuffer.velocity_srv_gpu,
                 occlusion: self.ssao_ao_srv_gpu(),
             },
-            &params,
+            params,
         ) {
             tracing::error!("SSGI resolve: {e}");
         }
@@ -138,15 +131,13 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        fov_y_radians: f32,
-        aspect: f32,
+        params: Option<&SsgiParams>,
     ) {
         // With no G-buffer there is nothing to trace against, so skip rather
         // than read a stale descriptor.
-        let (Some(ssgi), Some(gbuffer)) = (&self.ssgi, &self.gbuffer) else {
+        let (Some(ssgi), Some(gbuffer), Some(params)) = (&self.ssgi, &self.gbuffer, params) else {
             return;
         };
-        let params = self.ssgi_params(ssgi, fov_y_radians, aspect);
         if let Err(e) = ssgi.pass.encode(
             &self.post_device(frame_idx),
             cmd,
@@ -155,7 +146,7 @@ impl DxContext {
                 normal_depth: gbuffer.normal_depth_srv_gpu,
                 velocity: gbuffer.velocity_srv_gpu,
             },
-            &params,
+            params,
         ) {
             tracing::error!("SSGI: {e}");
         }

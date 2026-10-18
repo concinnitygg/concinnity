@@ -144,7 +144,6 @@ pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResu
             .iter()
             .map(spot_shadow::slice_frustum)
             .collect(),
-        scheduler: Default::default(),
         render_mask: 0,
     })
 }
@@ -178,7 +177,6 @@ impl VkSpotShadow {
             .iter()
             .map(spot_shadow::slice_frustum)
             .collect();
-        self.scheduler = Default::default();
     }
 }
 

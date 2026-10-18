@@ -99,6 +99,53 @@ pub struct ViewUniforms {
     pub _pad: f32,
 }
 
+/// The camera of a view rendered from another viewpoint than the main camera:
+/// a reflection-probe face or a planar mirror.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct FaceCamera {
+    /// View-projection of the face, column-major.
+    pub vp: [[f32; 4]; 4],
+    /// View matrix of the face, column-major.
+    pub view: [[f32; 4]; 4],
+    /// World-space eye position.
+    pub cam_pos: [f32; 3],
+    /// Elapsed seconds the face's shaders animate at.
+    pub elapsed: f32,
+    /// Mip count of the bound IBL prefilter cube; 0 when none is bound.
+    pub prefilter_mip_count: f32,
+    /// Rows of the rotation taking a world direction into the environment
+    /// cubemaps' baked frame.
+    pub sky_rot: [[f32; 4]; 3],
+    /// 1 when the irradiance cube holds diffuse light, else 0.
+    pub irradiance: f32,
+    /// The scale the face's color target is written at.
+    pub pre_exposure: f32,
+}
+
+impl ViewUniforms {
+    /// The block for a probe face or a planar mirror. Such a view is always
+    /// lit whatever the viewport shows, and no reflection resolve, occlusion
+    /// or screen-space bounce describes it, so the forward probe specular is
+    /// its only reflection source.
+    pub fn face(face: FaceCamera) -> Self {
+        Self {
+            vp: face.vp,
+            view: face.view,
+            elapsed: face.elapsed,
+            reflections_enabled: 0.0,
+            cam_pos: face.cam_pos,
+            prefilter_mip_count: face.prefilter_mip_count,
+            shade_mode: 0.0,
+            ambient_occlusion: 0.0,
+            sky_rot: face.sky_rot,
+            irradiance: face.irradiance,
+            pre_exposure: face.pre_exposure,
+            screen_bounce: 0.0,
+            _pad: 0.0,
+        }
+    }
+}
+
 /// Per-frame view inputs to the unified G-buffer pre-pass. The jittered current
 /// VP drives the sky's rasterized position (the surfaces take theirs from the
 /// main pass's view block); `view` takes the normal into view space (where
@@ -176,6 +223,40 @@ pub(super) fn test_camera() -> PassCamera {
 mod tests {
     use super::*;
     use core::mem::{offset_of, size_of};
+
+    // A face carries its own camera and lighting inputs and none of the main
+    // view's screen-space terms.
+    #[test]
+    fn a_face_view_is_lit_and_has_no_screen_space_terms() {
+        let u = ViewUniforms::face(FaceCamera {
+            vp: [[2.0; 4]; 4],
+            view: [[3.0; 4]; 4],
+            cam_pos: [1.0, 2.0, 3.0],
+            elapsed: 4.0,
+            prefilter_mip_count: 5.0,
+            sky_rot: [[6.0; 4]; 3],
+            irradiance: 1.0,
+            pre_exposure: 0.5,
+        });
+        assert_eq!(
+            (u.vp, u.view, u.cam_pos),
+            ([[2.0; 4]; 4], [[3.0; 4]; 4], [1.0, 2.0, 3.0])
+        );
+        assert_eq!(
+            (u.elapsed, u.prefilter_mip_count, u.sky_rot),
+            (4.0, 5.0, [[6.0; 4]; 3])
+        );
+        assert_eq!((u.irradiance, u.pre_exposure), (1.0, 0.5));
+        assert_eq!(
+            (
+                u.reflections_enabled,
+                u.shade_mode,
+                u.ambient_occlusion,
+                u.screen_bounce
+            ),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+    }
 
     // Every offset here is a byte position the main pass reads through.
     // `sky_rot` lands past the block's own end padding, so nothing before it

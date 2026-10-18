@@ -27,6 +27,14 @@ use super::context::{VkContext, debug_assert_main_thread};
 use crate::forward::forward;
 
 impl RenderBackend for VkContext {
+    fn live_edit(&mut self) -> Option<&mut dyn LiveEdit> {
+        Some(self)
+    }
+
+    fn live_edit_ref(&self) -> Option<&dyn LiveEdit> {
+        Some(self)
+    }
+
     forward! { assert = debug_assert_main_thread;
         fn window_closed(&mut self) -> bool;
         fn request_cursor_capture(&mut self);
@@ -119,7 +127,7 @@ impl LiveEdit for VkContext {
     }
 
     fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
-        self.shader_reload_pending()
+        self.hot_reload.flag()
     }
 
     // The swapchain config this live backend can hot-swap a world onto. A live

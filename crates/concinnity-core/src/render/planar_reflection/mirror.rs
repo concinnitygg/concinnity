@@ -94,6 +94,7 @@ pub fn orient_plane_toward(plane: Vec4, point: [f32; 3]) -> Vec4 {
 }
 
 /// The matrices a planar reflection pass needs for one mirror plane.
+#[derive(Clone, Copy, Debug)]
 pub struct PlanarMatrices {
     /// Reflected view matrix (world -> mirrored view).
     pub view: Mat4,

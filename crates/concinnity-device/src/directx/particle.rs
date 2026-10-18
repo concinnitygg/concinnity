@@ -21,7 +21,7 @@
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::ParticleParams;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleSpawnState, spawn_seed};
+use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleFrame, ParticleSystem};
 use concinnity_core::render::reactive_mask::ReactiveWrite;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -42,24 +42,15 @@ use crate::directx::texture::{
 };
 
 // GPU-compute particle system. `resources` (compute + render PSOs + per-frame
-// uniform rings) is built lazily either at init (when
-// the world declared >= 1 emitter) or on the first runtime `add_emitter`; it
-// stays `None` when no emitter has ever existed. `records` and `emitter_state`
-// are parallel `Vec<Option<...>>`s walked in lockstep by the per-frame dispatch,
-// skipping `None` pairs; `free_slots` recycles vacated slots. `srv_base_slot` is
-// the SRV-heap slot where emitter `i`'s albedo SRV lives (written by
-// `add_emitter`). `last_elapsed` is the previous frame's `elapsed` (the diff is
-// the frame `dt`); `frame_index` is mixed into the compute kernel's per-thread
-// RNG seed. Both are interior-mutable because `record_frame` is `&self` and they
-// are only touched on the render thread.
+// uniform rings) is built lazily either at init (when the world declared >= 1
+// emitter) or on the first runtime `add_emitter`; it stays `None` when no
+// emitter has ever existed. `system` holds the emitters, each with its pool.
+// `srv_base_slot` is the SRV-heap slot where emitter `i`'s albedo SRV lives
+// (written by `add_emitter`).
 pub(in crate::directx) struct ParticleState {
     pub resources: Option<ParticleResources>,
-    pub records: Vec<Option<ParticleEmitterRecord>>,
-    pub emitter_state: Vec<Option<ParticleEmitterGpuState>>,
-    pub free_slots: Vec<usize>,
+    pub system: ParticleSystem<ParticleEmitterGpuState>,
     pub srv_base_slot: usize,
-    pub last_elapsed: std::cell::Cell<f32>,
-    pub frame_index: std::cell::Cell<u32>,
 }
 
 // The SRV heap reserves a fixed block of `MAX_EMITTERS` per-emitter albedo
@@ -91,19 +82,13 @@ pub(in crate::directx) fn compile_particle_shaders(
     Ok((cs, vs, ps))
 }
 
-// Per-emitter persistent GPU state: the particle pool and the CPU-side spawn
-// state. Dropping releases the underlying COM resources; the D3D12 driver keeps
+// Per-emitter persistent GPU state: the particle pool. Dropping releases the underlying COM resources; the D3D12 driver keeps
 // them alive until any in-flight command list referencing them completes.
 pub(in crate::directx) struct ParticleEmitterGpuState {
     // Particle pool: `record.max_particles` slots of `GpuParticle`, used as a
     // UAV by the compute kernel and as a structured-buffer SRV by the vertex
     // stage. Resting state: UNORDERED_ACCESS.
     pub pool: ID3D12Resource,
-    // Turns `dt` and the emitter's `spawn_rate` into each dispatch's spawn
-    // run. Interior-mutable because `record_frame` (which calls into
-    // `prepare_particle_pass`) holds `&self`; the field is only touched on the
-    // render thread.
-    pub spawn_state: std::cell::RefCell<ParticleSpawnState>,
 }
 
 // Compute root signature for `particle_simulate`:
@@ -289,10 +274,7 @@ pub(in crate::directx) fn build_emitter_gpu_state(
     let pool = create_uav_buffer(device, pool_bytes, D3D12_RESOURCE_STATE_COMMON)?;
     zero_default_buffer(alloc, &pool, pool_bytes)?;
 
-    Ok(ParticleEmitterGpuState {
-        pool,
-        spawn_state: std::cell::RefCell::new(ParticleSpawnState::default()),
-    })
+    Ok(ParticleEmitterGpuState { pool })
 }
 
 // Zero-initialize a freshly-created (COMMON) default-heap buffer by uploading
@@ -391,25 +373,6 @@ pub(in crate::directx) fn zero_default_buffer(
     Ok(())
 }
 
-// One live emitter's GPU addresses for this frame: its slot of the per-frame
-// `ParticleParams` ring and its persistent pool. Resolved
-// once in `prepare_particle_pass` so neither encode half re-borrows the emitter
-// state to find them.
-struct EmitterFrameData {
-    params_gva: u64,
-    pool_gva: u64,
-}
-
-// The per-frame particle inputs `prepare_particle_pass` derives for the two
-// read-only encode halves to consume.
-pub(in crate::directx) struct ParticleFrame {
-    // Per-emitter addresses, parallel to `records`; `None` for a tombstone. The
-    // frame's `dt`, RNG seed and spawn run are already in the
-    // `ParticleParams` slot each entry points at, so neither half recomputes
-    // them.
-    emitters: Vec<Option<EmitterFrameData>>,
-}
-
 impl DxContext {
     // GPU descriptor handle for emitter `i`'s albedo SRV.
     pub(in crate::directx) fn emitter_albedo_srv_gpu(&self, i: usize) -> SrvSlot {
@@ -426,75 +389,48 @@ impl DxContext {
         )
     }
 
-    // Mutating prelude for the particle pass, run once on the main thread
-    // before the render-graph fan-out: advance the frame `dt` (against
-    // `particle.last_elapsed`), the monotonic `particle.frame_index`, and each
-    // emitter's spawn state, and fill this frame's slot of the `ParticleParams`
-    // upload ring. Returns the
-    // [`ParticleFrame`] both encode halves consume, or `None` when the pass is
-    // inert (no pipeline built, or every slot tombstoned).
-    //
-    // Splitting it out is what lets the sim and the draw record into separate
-    // per-pass command lists on workers: each frame's accumulator advance has to
-    // happen exactly once, and the two halves have to see the same spawn runs.
-    // `&self` because every DirectX encoder is; the per-frame mutable state is
-    // in `Cell`s. Mirrors `vulkan::VkContext::prepare_particle_pass`.
+    // Advance the particle clock and every emitter's spawn run. Run once per
+    // frame on `&mut self` before `record_frame`, so the sim and draw halves
+    // record on separate workers against one frame. `None` when the pass is
+    // inert (no pipeline built, or no emitter ever added).
     pub(in crate::directx) fn prepare_particle_pass(
-        &self,
-        frame_idx: usize,
+        &mut self,
         elapsed: f32,
     ) -> Option<ParticleFrame> {
-        let resources = self.particle.resources.as_ref()?;
-        if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
-            return None;
-        }
+        self.particle.resources.as_ref()?;
+        self.particle.system.prepare(elapsed)
+    }
 
-        let dt = (elapsed - self.particle.last_elapsed.get()).max(0.0);
-        self.particle.last_elapsed.set(elapsed);
-        let frame_index = self.particle.frame_index.get().wrapping_add(1);
-        self.particle.frame_index.set(frame_index);
-
-        let params_base_gva = com::gpu_va(&resources.params_ubo_resources[frame_idx]);
-        let mut emitters: Vec<Option<EmitterFrameData>> =
-            Vec::with_capacity(self.particle.records.len());
-
-        for (i, (rec_slot, gpu_slot)) in self
-            .particle
-            .records
-            .iter()
-            .zip(self.particle.emitter_state.iter())
-            .enumerate()
-        {
-            let (rec, gpu) = match (rec_slot.as_ref(), gpu_slot.as_ref()) {
-                (Some(r), Some(g)) => (r, g),
-                _ => {
-                    emitters.push(None);
-                    continue;
-                }
-            };
-            let spawns = gpu.spawn_state.borrow_mut().take_spawns(dt, rec);
-
-            // Write this frame's ParticleParams into the per-emitter params slot.
-            let params = rec.params(dt, spawns, spawn_seed(frame_index, i));
+    // Fill this frame's slot of the `ParticleParams` upload ring for every live
+    // emitter, on the main thread before the fan-out.
+    pub(in crate::directx) fn write_particle_params(
+        &self,
+        frame_idx: usize,
+        frame: &ParticleFrame,
+    ) {
+        let Some(resources) = self.particle.resources.as_ref() else {
+            return;
+        };
+        for emitter in self.particle.system.emitters(frame) {
             // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer
-            // that init sized for this payload, and the source is a separate live value, so the
-            // ranges cannot overlap.
+            // that init sized for `MAX_EMITTERS` slots of this payload, and the source is a
+            // separate live value, so the ranges cannot overlap.
             unsafe {
                 let dst = resources.params_ubo_ptrs[frame_idx]
-                    .add((i as u64 * resources.params_stride) as usize);
+                    .add((emitter.id as u64 * resources.params_stride) as usize);
                 std::ptr::copy_nonoverlapping(
-                    &params as *const ParticleParams as *const u8,
+                    &emitter.params as *const ParticleParams as *const u8,
                     dst,
                     std::mem::size_of::<ParticleParams>(),
                 );
             }
-
-            emitters.push(Some(EmitterFrameData {
-                params_gva: params_base_gva + i as u64 * resources.params_stride,
-                pool_gva: com::gpu_va(&gpu.pool),
-            }));
         }
-        Some(ParticleFrame { emitters })
+    }
+
+    // GPU address of emitter `id`'s `ParticleParams` slot in frame `frame_idx`'s ring.
+    fn particle_params_gva(resources: &ParticleResources, frame_idx: usize, id: usize) -> u64 {
+        com::gpu_va(&resources.params_ubo_resources[frame_idx])
+            + id as u64 * resources.params_stride
     }
 
     // Encode the `ParticlesSim` node: dispatch the simulation kernel over each
@@ -505,12 +441,12 @@ impl DxContext {
     pub(in crate::directx) fn encode_particles_sim(
         &self,
         cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
         frame: &ParticleFrame,
     ) {
         let Some(resources) = self.particle.resources.as_ref() else {
             return;
         };
-        let frame_data = frame.emitters.as_slice();
 
         // The pool is in UNORDERED_ACCESS already; the kernel reads + writes
         // through its root UAV. Each
@@ -522,19 +458,14 @@ impl DxContext {
             cmd.SetComputeRootSignature(&resources.simulate_root_sig);
             cmd.SetPipelineState(&resources.simulate_pso);
         }
-        for (i, data) in frame_data.iter().enumerate() {
-            let Some(data) = data else {
-                continue;
-            };
-            let Some(rec) = self.particle.records[i].as_ref() else {
-                continue;
-            };
+        for emitter in self.particle.system.emitters(frame) {
+            let params_gva = Self::particle_params_gva(resources, frame_idx, emitter.id);
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
-                cmd.SetComputeRootConstantBufferView(0, data.params_gva);
-                cmd.SetComputeRootUnorderedAccessView(1, data.pool_gva);
-                let groups = rec.max_particles.div_ceil(64);
+                cmd.SetComputeRootConstantBufferView(0, params_gva);
+                cmd.SetComputeRootUnorderedAccessView(1, com::gpu_va(&emitter.gpu.pool));
+                let groups = emitter.record.max_particles.div_ceil(64);
                 cmd.Dispatch(groups, 1, 1);
             }
         }
@@ -559,25 +490,13 @@ impl DxContext {
         let Some(resources) = self.particle.resources.as_ref() else {
             return;
         };
-        let frame_data = frame.emitters.as_slice();
 
         // Visibility-cull per emitter, for the draw alone: the simulation ticked
         // every live pool so off-screen emitters stay in a realistic mid-life
         // state for when the camera turns back. Tombstoned (None) slots are
         // always invisible.
-        let visible: Vec<bool> = self
-            .particle
-            .records
-            .iter()
-            .map(|slot| match slot {
-                Some(r) => {
-                    let (mn, mx) = r.aabb();
-                    frustum.intersects_aabb(mn, mx)
-                }
-                None => false,
-            })
-            .collect();
-        let any_visible = visible.iter().any(|v| *v);
+        let mut visible = self.particle.system.visible(frame, frustum).peekable();
+        let any_visible = visible.peek().is_some();
 
         // Camera basis for camera-facing billboards: rows 0 and 1 of the view
         // matrix's 3×3 are the world-space right and up vectors (the view
@@ -644,24 +563,16 @@ impl DxContext {
                 cmd.set_graphics_srv_table(4, resources.depth_srv_gpu);
             }
 
-            for (i, data) in frame_data.iter().enumerate() {
-                if !visible[i] {
-                    continue;
-                }
-                let Some(data) = data else {
-                    continue;
-                };
-                let Some(rec) = self.particle.records[i].as_ref() else {
-                    continue;
-                };
-                let albedo_srv_gpu = self.emitter_albedo_srv_gpu(i);
+            for emitter in visible {
+                let params_gva = Self::particle_params_gva(resources, frame_idx, emitter.id);
+                let albedo_srv_gpu = self.emitter_albedo_srv_gpu(emitter.id);
                 // SAFETY: the command list is in the recording state, and every resource,
                 // descriptor and slice these commands name is live for the call.
                 unsafe {
-                    cmd.SetGraphicsRootConstantBufferView(1, data.params_gva);
-                    cmd.SetGraphicsRootShaderResourceView(2, data.pool_gva);
+                    cmd.SetGraphicsRootConstantBufferView(1, params_gva);
+                    cmd.SetGraphicsRootShaderResourceView(2, com::gpu_va(&emitter.gpu.pool));
                     cmd.set_graphics_srv_table(3, albedo_srv_gpu);
-                    cmd.DrawInstanced(4, rec.max_particles, 0, 0);
+                    cmd.DrawInstanced(4, emitter.record.max_particles, 0, 0);
                 }
                 self.inc_draw_calls(1);
             }
@@ -705,21 +616,15 @@ impl DxContext {
         let last_tex = self.scene.textures.len().saturating_sub(1);
         let tex_idx = record.texture_slot.min(last_tex);
 
-        // Reuse a tombstoned slot if available; otherwise grow the vec.
-        let id = if let Some(slot) = self.particle.free_slots.pop() {
-            self.particle.records[slot] = Some(record);
-            self.particle.emitter_state[slot] = Some(gpu_state);
-            slot
-        } else {
-            if self.particle.records.len() >= MAX_EMITTERS {
-                return Err(RenderError::Other(format!(
+        let id = self
+            .particle
+            .system
+            .insert(record, gpu_state)
+            .map_err(|_| {
+                RenderError::Other(format!(
                     "add_emitter: MAX_EMITTERS ({MAX_EMITTERS}) exceeded"
-                )));
-            }
-            self.particle.records.push(Some(record));
-            self.particle.emitter_state.push(Some(gpu_state));
-            self.particle.records.len() - 1
-        };
+                ))
+            })?;
 
         let srv_cpu = D3D12_CPU_DESCRIPTOR_HANDLE {
             // SAFETY: a property query on a live descriptor heap; it only reads.
@@ -739,19 +644,10 @@ impl DxContext {
     // driver keeps it alive until any in-flight command list that referenced it
     // completes, so this is safe to call mid-frame between encode passes.
     pub(crate) fn remove_emitter(&mut self, emitter_id: usize) -> RenderResult<()> {
-        let rec_slot = self.particle.records.get_mut(emitter_id).ok_or_else(|| {
-            RenderError::Other(format!("remove_emitter: id {emitter_id} out of range"))
-        })?;
-        if rec_slot.is_none() {
-            return Err(RenderError::Other(format!(
-                "remove_emitter: id {emitter_id} already removed"
-            )));
-        }
-        *rec_slot = None;
-        if let Some(gpu_slot) = self.particle.emitter_state.get_mut(emitter_id) {
-            *gpu_slot = None;
-        }
-        self.particle.free_slots.push(emitter_id);
+        self.particle
+            .system
+            .remove(emitter_id)
+            .map_err(|e| RenderError::Other(format!("remove_emitter: id {emitter_id} {e}")))?;
         Ok(())
     }
 }

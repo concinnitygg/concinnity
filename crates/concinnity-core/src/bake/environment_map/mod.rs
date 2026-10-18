@@ -85,6 +85,18 @@ pub fn check_sizes(map: &crate::components::EnvironmentMap) -> Result<(), String
     Ok(())
 }
 
+/// Bytes mip `mip` of an RGBA32F cube with `face_size`-texel faces holds across
+/// its six faces, or an error when the mip would have no texels.
+pub fn cube_mip_byte_len(face_size: u32, mip: usize) -> Result<usize, String> {
+    let face = face_size.checked_shr(mip as u32).unwrap_or(0) as usize;
+    if face == 0 {
+        return Err(format!(
+            "cube mip {mip} has no texels (face size {face_size})"
+        ));
+    }
+    crate::decode::checked_product("cube mip", &[6, face, face, 16])
+}
+
 /// Number of mip levels for a square cube face of `face_size` pixels. The
 /// smallest mip is clamped to 4×4 to keep the prefilter convolution sensible
 /// at high roughness.
@@ -199,6 +211,14 @@ pub fn deserialize(bytes: &[u8]) -> Result<EnvMapView<'_>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cube_mips_halve_and_a_vanished_mip_is_an_error() {
+        assert_eq!(cube_mip_byte_len(4, 0), Ok(6 * 4 * 4 * 16));
+        assert_eq!(cube_mip_byte_len(4, 2), Ok(6 * 16));
+        assert!(cube_mip_byte_len(4, 3).is_err());
+        assert!(cube_mip_byte_len(4, 40).is_err());
+    }
 
     fn solid_cube(face_size: u32, color: [f32; 3]) -> [Vec<f32>; 6] {
         let f = face_size as usize;

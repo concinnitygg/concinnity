@@ -16,24 +16,19 @@ use concinnity_core::render::backend::FrameParams;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::decal;
 use concinnity_core::render::error;
+use concinnity_core::render::frame_plan::drive_frame;
 use concinnity_core::render::hdr_output;
-use concinnity_core::render::lights;
 use concinnity_core::render::lights::LightData;
-use concinnity_core::render::particles;
 use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::radiance_storage::with_sky_cube_scale;
-use concinnity_core::render::render_graph;
 use concinnity_core::render::retire_pool::RetirePool;
-use concinnity_core::render::scene_flow;
 use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::shadow_schedule;
+use concinnity_core::render::shader_reload::ShaderReload;
 use concinnity_core::render::slot_rewrites;
 use concinnity_core::render::spot_shadow;
 use concinnity_core::render::volumetric_fog;
 use concinnity_core::window::display_mode;
 
 use super::allocator::PooledBuffer;
-use super::draw::*;
 use super::geometry_upload::{CopySubmit, GeometryDest, GeometryUploads};
 use super::post::*;
 use super::texture::*;
@@ -65,23 +60,6 @@ pub(super) struct VkShadow {
     // memory an in-flight frame is still sampling, which under `Hybrid` pairs a
     // freshly-jumped far-cascade VP with depth rasterized from the old one.
     pub(super) ubos: Vec<PooledBuffer>,
-    // Carried CSM uniforms: skipped cascades keep the VP their slice was last
-    // rendered with. Splits refresh every frame; per-cascade light VPs only when
-    // `render_mask` includes that cascade. Written to this frame's `ubos` slot
-    // each frame.
-    pub(super) uniforms: ShadowUniforms,
-    // World-space direction toward the first directional light, cached at init.
-    // Per-frame CSM updates use this; refresh it when lights change for a moving
-    // sun.
-    pub(super) light_dir: [f32; 3],
-    pub(super) cadence: backend_init::ShadowCadence,
-    // Round-robin clock + primed-set for the cascade schedule; advanced once per
-    // frame in draw_frame.
-    pub(super) scheduler: shadow_schedule::ShadowCascadeScheduler,
-    // Cascades re-rendered this frame (bit `i` = cascade `i`). Set in draw_frame
-    // and read by encode_shadow_pass so the two agree on which slices to refresh
-    // and which to leave intact.
-    pub(super) render_mask: u32,
 }
 
 impl VkShadow {
@@ -126,9 +104,8 @@ pub(super) struct VkSpotShadow {
     pub(super) _descriptor_pool: OwnedDescriptorPool,
     // Each slice's light frustum, which its GPU cull keeps casters inside.
     pub(super) frusta: Vec<Frustum>,
-    // Round-robin clock + primed set, advanced once per frame in draw_frame.
-    pub(super) scheduler: spot_shadow::SpotShadowScheduler,
-    // Slices re-rendered this frame (bit `i` = slice `i`).
+    // Slices re-rendered this frame (bit `i` = slice `i`), as the frame's plan
+    // scheduled them.
     pub(super) render_mask: u32,
 }
 
@@ -137,13 +114,6 @@ impl VkSpotShadow {
     // data buffer all carry exactly this many entries.
     pub(super) fn count(&self) -> u32 {
         self.framebuffers.len() as u32
-    }
-
-    // Advance the round-robin clock and record which slices re-render this
-    // frame. A no-op (mask stays 0) when the world has no shadowed spot.
-    pub(super) fn advance(&mut self, every_frame: bool) {
-        let count = self.framebuffers.len();
-        self.render_mask = self.scheduler.next_mask(every_frame, count);
     }
 
     // Slices that re-render this frame.
@@ -437,13 +407,6 @@ pub(super) struct VkCull {
     // kernel falls back to frustum + distance only until a pyramid at the
     // current resolution exists. Set true at the end of `record_frame` once a
     // build has run.
-    pub(super) hiz_valid: bool,
-    // Previous frame's un-jittered camera view-projection, fed to the Hi-Z cull
-    // test. Updated every frame (independent of TAA, which keeps its own
-    // `prev_view_proj`). The pyramid is reduced from depth rendered with the
-    // jittered VP; the sub-pixel discrepancy is conservative, matching DirectX
-    // / Metal which also project through the previous un-jittered VP.
-    pub(super) hiz_prev_view_proj: [[f32; 4]; 4],
     // GPU-driven shadow views. `shadow_cull_pipeline` is a frustum-only cull
     // kernel (`SHADOW_CULL`, no Hi-Z / status) over a lean 3-SSBO set (objects +
     // draw-args + this view's indirect-command buffer); one dispatch per
@@ -629,17 +592,11 @@ pub(super) struct VkUniforms {
     // planar mirror sets, and the raymarch view sets are all built per frame
     // against the same ring.
     pub(super) light_ubo_buffers: Vec<PooledBuffer>,
-    // Which slots of `light_ubo_buffers` still need this frame's values.
-    pub(super) light_dirty: concinnity_core::render::frame_dirty::FrameDirty,
-    // Single per-scene local-light storage buffer (SSBO), uploaded once at init
-    // and bound at global set 0 binding 9. Static (never rewritten per-frame).
     pub(super) local_light_buffer: PooledBuffer,
-    // The local lights' reach, which places the far end of the cluster grid.
-    pub(super) cluster_reach: concinnity_core::render::cluster_range::ClusterReach,
-    // The values the ring carries. A live Ambient-slider or directional-light
-    // change mutates this and re-arms `light_dirty`; `record_frame` writes the
-    // frame's own slot, so no in-flight read is ever raced.
-    pub(super) light_uniforms: render_types::LightUniforms,
+    // The values the ring carries, which slots of it are stale, and the local
+    // lights' reach. `record_frame` writes the frame's own slot, so no
+    // in-flight read is ever raced.
+    pub(super) lights: concinnity_core::render::light_state::LightState,
     // Per-frame-in-flight canopy block (global set 0 binding 21), persistently
     // mapped and rewritten each frame, and the block last written, which a
     // probe capture snapshots.
@@ -675,15 +632,11 @@ pub(super) struct DecalState {
 // Volumetric fog. `resources` is `Some` only when the world declared a
 // `VolumetricFog` asset; with none it and `settings` both stay `None` and the
 // fog pass is skipped entirely. The settings are cached so the per-frame
-// encoder can build its `FogParams` without re-resolving the asset. `sun_dir` /
-// `sun_color` mirror the first directional light, cached on the CPU so the
-// per-frame fog encoder never reads back the light UBO; `update_directional_lights`
-// re-derives both.
+// encoder can build its `FogParams` without re-resolving the asset. The sun it
+// lights with is the light state's.
 pub(super) struct FogState {
     pub resources: Option<crate::vulkan::fog::FogResources>,
     pub settings: Option<volumetric_fog::FogSettings>,
-    pub sun_dir: [f32; 3],
-    pub sun_color: [f32; 3],
 }
 
 // Auto-exposure (EV adaptation). `resources` is `Some` only when
@@ -696,49 +649,6 @@ pub(super) struct AutoExposureState {
     pub resources: Option<crate::vulkan::auto_exposure::AutoExposureResources>,
     pub adaptation: Option<auto_exposure::ExposureAdaptation>,
     pub last_elapsed: f32,
-}
-
-// Built-in shader hot reload. `enabled` is true only under `cn debug`: it
-// routes every built-in shader source resolve through the disk-first path.
-// Under `cn run` the embedded source is the only one the binary sees.
-// `reload_pending` is the atomic flag the `reload-shaders` debug tool call
-// sets, polled at the top of `draw_frame` to trigger a pipeline rebuild;
-// `Some` only when `enabled`.
-pub(super) struct HotReloadState {
-    pub enabled: bool,
-    pub reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    // Bumped by every engine-template reload, so a world Shader pipeline a
-    // worker built from the templates before it is never installed after it.
-    pub generation: u64,
-}
-
-impl HotReloadState {
-    pub(super) fn new(enabled: bool) -> Self {
-        Self {
-            enabled,
-            reload_pending: enabled
-                .then(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
-            generation: 0,
-        }
-    }
-}
-
-// GPU-compute particle system. `resources` (pipelines + per-frame view UBO +
-// descriptor pool + framebuffers) is built only when the world declared at
-// least one `ParticleEmitter` (or when runtime `add_particle_emitter` fires);
-// the encoder is a no-op otherwise. `records` and `emitter_state` mirror Metal /
-// DirectX's parallel-vec freelist pattern so id reuse stays bounded.
-// `last_elapsed` + `frame_index` live in `Cell`s because `encode_particles` is
-// reached through `&self` from the graph executor (per-frame mutable state has
-// to be interior-mut).
-#[derive(Default)]
-pub(super) struct ParticleState {
-    pub resources: Option<crate::vulkan::particle::ParticleResources>,
-    pub records: Vec<Option<particles::ParticleEmitterRecord>>,
-    pub emitter_state: Vec<Option<crate::vulkan::particle::ParticleEmitterGpuState>>,
-    pub free_slots: Vec<usize>,
-    pub last_elapsed: std::cell::Cell<f32>,
-    pub frame_index: std::cell::Cell<u32>,
 }
 
 // Composite (post-process) pass: tonemaps the HDR resolve image onto the
@@ -1244,7 +1154,7 @@ pub(crate) struct VkContext {
     pub(super) planar_reflection: Option<crate::vulkan::planar::PlanarReflectionSet>,
 
     // GPU-compute particle system. See [`ParticleState`].
-    pub(super) particle: ParticleState,
+    pub(super) particle: crate::vulkan::particle::ParticleState,
     // The grass field, when the world grows one and the GPU-driven main pass
     // exists to draw it in. See [`super::grass`].
     pub(super) grass: Option<super::grass::GrassResources>,
@@ -1255,8 +1165,8 @@ pub(crate) struct VkContext {
     // Auto-exposure (EV adaptation). See [`AutoExposureState`].
     pub(super) auto_exposure: AutoExposureState,
 
-    // Built-in shader hot reload. See [`HotReloadState`].
-    pub(super) hot_reload: HotReloadState,
+    // Built-in shader hot reload. See [`ShaderReload`].
+    pub(super) hot_reload: ShaderReload,
     // Closed before teardown, so no pipeline builder handed out by this
     // context builds against a handle it has destroyed.
     pub(super) pipeline_gate: crate::vulkan::pipeline_builder::PipelineGate,
@@ -1316,23 +1226,16 @@ pub(crate) struct VkContext {
     // The CPU-side scene: draw list, view, skinned slots, model history and
     // streamed-geometry placement. See [`SceneState`].
     pub(super) state: SceneState,
-    // The last compiled frame graph, keyed by the `FrameGraphInputs` it was
-    // built from. `build_frame_graph` is a pure function of those inputs (which
-    // change only when a feature toggles or a target resizes), so a frame whose
-    // inputs match the cached key reuses the compiled graph instead of
-    // rebuilding it. Taken out during `execute_graph` (which needs `&mut self`)
-    // and put back after, so a steady scene compiles the graph once.
-    pub(super) graph_cache: Option<(render_graph::FrameGraphInputs, render_graph::CompiledGraph)>,
-    // The runtime-switched passes the resolved settings and the last apply
-    // built leave on.
-    pub(super) gates: render_graph::FeatureGates,
     // Scratch the graph executor refills each frame: the per-resource barrier
-    // targets and the per-pass aliasing barriers. Their contents are derived from
+    // targets, the per-pass aliasing barriers and the per-pass recording slots. Their contents are derived from
     // live state every frame (so no handle can go stale here); only the
     // allocations are carried over, which is what the per-frame `Vec` builds were
     // actually costing. Taken during `execute_graph` and put back after, like
     // `graph_cache` above.
-    pub(super) barrier_scratch: Option<super::graph_exec::VkBarrierScratch>,
+    pub(super) graph_scratch: Option<super::graph_exec::VkGraphScratch>,
+    // The frame's submit list, `[start, ...pass buffers, end]`, kept across
+    // frames so building it allocates nothing.
+    pub(super) submit_scratch: Vec<vk::CommandBuffer>,
     // Lazily-built wireframe twins of the main-pass pipelines; empty until the
     // first Wireframe frame. See [`super::wireframe`].
     pub(super) wireframe: super::wireframe::VkWireframe,
@@ -1408,159 +1311,7 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 
 impl VkContext {
     pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
-        let FrameParams {
-            elapsed: elapsed_f64,
-            fov_y_radians,
-            near,
-            view_distance,
-            cam_pos,
-            text_calls,
-            lines,
-            world_hidden,
-            view_mode,
-            show,
-            sky_rot,
-            history_reset,
-            rebase,
-            grass_benders,
-            atmosphere,
-            sunlight,
-            input_sampled_us,
-            capture,
-        } = params;
-        self.frame_capture.arm(capture);
-        let elapsed = elapsed_f64 as f32;
-        if let Some(atmo) = self.atmosphere.as_mut() {
-            atmo.frame = atmosphere;
-        }
-        // Snapped for the passes recorded below (the wireframe pipeline
-        // variant, the unlit shade flag, the composite's channel visualization
-        // + depth normalization) and for the graph-input mask in record_frame.
-        self.state.view.mode = view_mode;
-        self.state.view.show = show;
-        self.state.view.near = near;
-        self.state.view.view_distance = view_distance;
-        self.state.view.sky_rot = with_sky_cube_scale(sky_rot, self.atmosphere.is_some());
-        self.state.view.sunlight = sunlight;
-        self.apply_pending_rebuilds()?;
-        // A moved world's decals and grass move with it whatever happens to
-        // history.
-        if let Some(rebase) = &rebase {
-            self.decal.set.rebase(rebase);
-            self.rebase_grass(rebase);
-            self.rebase_transparent_water(rebase);
-        }
-        if history_reset {
-            self.reset_temporal_history();
-        } else if let Some(rebase) = rebase {
-            self.rebase_temporal_history(&rebase);
-        }
-
-        // Minimized window: the client area is 0x0. Vulkan rejects every
-        // zero-extent operation (swapchain, render area, viewport, image copy),
-        // so park the whole frame (no acquire / record / submit / present) until
-        // the window is restored. `window_closed` keeps pumping the message loop
-        // each tick, so the restore is picked up. Mirrors the DirectX backend,
-        // which skips its resize + present while minimized.
-        if self.frame_is_parked() {
-            return Ok(());
-        }
-
-        let frame = self.current_frame;
-        let mut gpu_wait = self.wait_frame_slot(frame)?;
-        self.retire_frame_captures(frame);
-        self.reserve_frame_capture();
-        // Staged geometry writes go ahead of everything this frame submits.
-        self.flush_geometry_uploads()?;
-        self.service_background_work(elapsed, frame);
-        let timings = self.read_gpu_timings(frame);
-        let gpu_done = self.read_gpu_done(frame);
-        self.frame_input_sampled_us[frame] = input_sampled_us;
-        self.begin_frame_stats(&gpu_wait, timings, gpu_done);
-        let Some(image_index) = self.acquire_frame(frame, &mut gpu_wait)? else {
-            return Ok(());
-        };
-        // Only a frame that renders moves the history's pre-exposure on.
-        self.pre_exposure.advance(self.post_process.exposure);
-
-        // Cheap-cloneable handle (ash::Device is Arc-like). Holding a local
-        // copy avoids tying the rest of the function to `&self.hw.device` while
-        // record_frame takes `&mut self`.
-        let device = self.hw.device.clone();
-        let device = &device;
-
-        // Record the frame. `record_frame` records the leading timestamp into
-        // the `start` buffer, fans each non-composite pass onto its own
-        // per-pass command buffer, and records Composite + the post-graph work
-        // into `cmd` (the outer "end" buffer begun here). It returns the
-        // ordered `[start, ...pass buffers]` to submit before `end`.
-        let cmd = self.commands.command_buffers[frame];
-        // SAFETY: `cmd` belongs to this frame slot, whose fence was already waited on, so it is not
-        // in flight; reset then begin puts it in the recording state, which is what the subsequent
-        // recording requires.
-        unsafe {
-            device
-                .reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty())
-                .map_err(|e| super::error::map_vk_result(e, "reset cmd buf"))?;
-            device
-                .begin_command_buffer(
-                    cmd,
-                    &vk::CommandBufferBeginInfo::default()
-                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-                )
-                .map_err(|e| super::error::map_vk_result(e, "begin cmd buf"))?;
-        }
-
-        let mut submit_bufs = self.record_frame(
-            RecordFrameTargets {
-                cmd,
-                image_index,
-                frame_idx: frame,
-            },
-            RecordFrameView {
-                elapsed: elapsed_f64,
-                fov_y_radians,
-                near,
-                view_distance,
-                cam_pos,
-                text_calls,
-                lines,
-                grass_benders,
-            },
-            world_hidden,
-        )?;
-
-        let capture = self.record_frame_capture(cmd, image_index);
-
-        // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
-        unsafe { device.end_command_buffer(cmd) }
-            .map_err(|e| super::error::map_vk_result(e, "end cmd buf"))?;
-        // The outer "end" buffer (Composite + post-graph work + trailing
-        // timestamp) submits last, after every per-pass buffer.
-        submit_bufs.push(cmd);
-
-        let started = std::time::Instant::now();
-        let submitted = self.submit_and_present(frame, image_index, &submit_bufs);
-        let mut stats = self.frame_stats.get();
-        stats.submit_present_us = started.elapsed().as_micros().min(u32::MAX.into()) as u32;
-        self.frame_stats.set(stats);
-        // A submitted frame's capture waits for its slot's fence; a failed one
-        // is reported as a dropped frame by the caller.
-        if let Some(capture) = capture
-            && submitted.is_ok()
-        {
-            self.frame_capture.park(frame, capture);
-        }
-        submitted
-    }
-
-    // The frame's unlit flag for ViewUniforms, from the viewport view mode.
-    pub(super) fn shade_mode(&self) -> f32 {
-        if self.state.view.mode == concinnity_core::gfx::view_modes::ViewMode::Unlit {
-            1.0
-        } else {
-            0.0
-        }
+        drive_frame(self, params)
     }
 
     // The live platform window. Present for every constructed context; `None`
@@ -1781,11 +1532,7 @@ impl VkContext {
     // the frame's own slot. Edge-triggered: a no-op when the value is unchanged
     // (e.g. an init push with no persisted override).
     pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
-        if self.uniforms.light_uniforms.ambient_intensity == value {
-            return;
-        }
-        self.uniforms.light_uniforms.ambient_intensity = value;
-        self.uniforms.light_dirty.mark_all();
+        self.uniforms.lights.set_ambient(value);
     }
 
     // Replace the live directional lights. The cascade shadow direction and the
@@ -1793,17 +1540,7 @@ impl VkContext {
     // re-derived here. Edge-triggered: an unchanged set touches nothing, and a
     // changed one only re-arms the light UBO ring.
     pub(crate) fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]) {
-        let (directional, num_directional) = lights::directional_light_data(lights);
-        let uniforms = &mut self.uniforms.light_uniforms;
-        if uniforms.directional == directional && uniforms.num_directional == num_directional {
-            return;
-        }
-        uniforms.directional = directional;
-        uniforms.num_directional = num_directional;
-        self.shadow.light_dir = lights::sun_direction(&self.uniforms.light_uniforms);
-        self.fog.sun_dir = self.shadow.light_dir;
-        self.fog.sun_color = lights::sun_color(&self.uniforms.light_uniforms);
-        self.uniforms.light_dirty.mark_all();
+        self.uniforms.lights.set_directional(lights);
     }
 
     // Move the local lights in place. The light SSBO, the area table and the
@@ -1816,7 +1553,7 @@ impl VkContext {
         data: &LightData,
         uniforms: &LightUniforms,
     ) -> error::RenderResult<()> {
-        if data.lights.len() as i32 != self.uniforms.light_uniforms.num_local_lights
+        if !self.uniforms.lights.same_local_count(&data.lights)
             || data.spot_shadows.len() != self.spot_shadow.count() as usize
         {
             return Err(error::RenderError::Other(
@@ -1827,16 +1564,13 @@ impl VkContext {
         super::draw::upload_static_records(&self.uniforms.local_light_buffer, &data.lights);
         super::draw::upload_static_records(&self.area_light.buffer, &data.area_lights);
         self.spot_shadow.rewrite(&data.spot_shadows);
-        self.uniforms.cluster_reach =
-            concinnity_core::render::cluster_range::ClusterReach::new(&data.lights);
-        self.uniforms.light_uniforms.point = uniforms.point;
-        self.uniforms.light_uniforms.num_point = uniforms.num_point;
-        self.uniforms.light_dirty.mark_all();
+        self.state.planner.shadow.reset_spots();
+        self.uniforms.lights.move_local(&data.lights, uniforms);
         Ok(())
     }
 
     pub(crate) fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {
-        self.shadow.cadence = cadence;
+        self.state.planner.shadow.cadence = cadence;
     }
 
     // Update the live scalar sub-tunables of the SSAO / SSR / SSGI / auto-exposure
@@ -1874,15 +1608,6 @@ impl VkContext {
     // Public accessor for the shared shader-reload flag. Cloning the `Arc`
     // lets the debug server flip it from a non-render thread.
     // `None` outside `cn debug`. Mirrors `DxContext::shader_reload_pending`.
-    pub(crate) fn shader_reload_pending(
-        &self,
-    ) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
-        self.hot_reload
-            .reload_pending
-            .as_ref()
-            .map(std::sync::Arc::clone)
-    }
-
     pub(crate) fn take_input(&mut self) -> InputSnapshot {
         // Both platform windows snapshot straight into the shared InputSnapshot.
         self.window_mut().take_input()
@@ -1925,60 +1650,7 @@ impl VkContext {
     // and the summed DEVICE_LOCAL heap size as the VRAM budget (the true heap
     // size, unlike the residency chip which sums live usage).
     pub(crate) fn gpu_profile(&self) -> backend::GpuProfile {
-        use concinnity_core::render::backend::{
-            GpuClassInput, GpuProfile, GpuVendor, apple_family_from_device_name, classify_tier,
-        };
-        // SAFETY: a property query on a live handle; it only reads.
-        let props = unsafe {
-            self.hw
-                .instance
-                .get_physical_device_properties(self.hw.physical_device)
-        };
-        let vendor = match props.vendor_id {
-            0x10DE => GpuVendor::Nvidia,
-            0x1002 => GpuVendor::Amd,
-            0x8086 => GpuVendor::Intel,
-            0x106B => GpuVendor::Apple, // Apple / MoltenVK
-            _ => GpuVendor::Other,
-        };
-        let discrete = props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU;
-        let unified = props.device_type == vk::PhysicalDeviceType::INTEGRATED_GPU;
-        // SAFETY: a property query on a live handle; it only reads.
-        let mem = unsafe {
-            self.hw
-                .instance
-                .get_physical_device_memory_properties(self.hw.physical_device)
-        };
-        let budget: u64 = (0..mem.memory_heap_count as usize)
-            .filter(|&i| {
-                mem.memory_heaps[i]
-                    .flags
-                    .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
-            })
-            .map(|i| mem.memory_heaps[i].size)
-            .sum();
-        let tier = classify_tier(&GpuClassInput {
-            vendor,
-            memory_budget_bytes: budget,
-            discrete,
-            apple_family: apple_family_from_device_name(&super::gpu_profile::device_name(&props)),
-        });
-        GpuProfile {
-            vendor,
-            tier,
-            memory_budget_bytes: budget,
-            unified_memory: unified,
-            discrete,
-        }
-    }
-}
-
-impl scene_flow::SceneControl for VkContext {
-    fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool) {
-        self.state.update_visibility(draw_idx, visible);
-    }
-    fn set_fade(&mut self, fade: f32) {
-        self.state.set_fade(fade);
+        super::gpu_profile::device_profile(&self.hw.instance, self.hw.physical_device)
     }
 }
 

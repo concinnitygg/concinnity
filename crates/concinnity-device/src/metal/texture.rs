@@ -2,6 +2,7 @@
 
 use super::error::allocation_failed;
 use concinnity_core::bake::texture::{TextureFormat, TextureImage};
+use concinnity_core::render::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
 use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
@@ -50,10 +51,8 @@ pub(super) fn upload_texture_image(
         TextureFormat::Bc5 => MTLPixelFormat::BC5_RGUnorm,
         TextureFormat::Bc7 => MTLPixelFormat::BC7_RGBAUnorm,
     };
-    let base = image
-        .mips
-        .first()
-        .ok_or_else(|| RenderError::Other("texture image has no mip level".to_string()))?;
+    image.validate().map_err(RenderError::Other)?;
+    let base = &image.mips[0];
 
     let desc = TextureDesc {
         format: pixel_format,
@@ -71,22 +70,7 @@ pub(super) fn upload_texture_image(
             Some(block) => level.width.div_ceil(4) as usize * block,
             None => level.width as usize * 4,
         };
-        let needed = image
-            .format
-            .mip_byte_len(level.width, level.height)
-            .map_err(RenderError::Other)?;
-        if level.data.len() < needed {
-            return Err(RenderError::Other(format!(
-                "texture mip {} ({}x{} {:?}) is {} bytes, need {}",
-                mip,
-                level.width,
-                level.height,
-                image.format,
-                level.data.len(),
-                needed
-            )));
-        }
-        // SAFETY: `region` covers exactly mip `mip` of `texture`, and the length check above proved
+        // SAFETY: `region` covers exactly mip `mip` of `texture`, and `validate` proved
         // `level.data` holds the whole level at `bytes_per_row`.
         unsafe {
             use objc2_metal::MTLRegion;
@@ -170,8 +154,9 @@ pub(super) fn upload_cubemap(
     face_size: u32,
     bytes: &[u8],
 ) -> RenderResult<PooledTexture> {
-    let face_bytes = (face_size as usize) * (face_size as usize) * 4 * 4;
-    let needed = 6 * face_bytes;
+    let needed = concinnity_core::bake::environment_map::cube_mip_byte_len(face_size, 0)
+        .map_err(RenderError::Other)?;
+    let face_bytes = needed / 6;
     if bytes.len() < needed {
         return Err(RenderError::Other(format!(
             "cubemap data too short for face_size {}: {} bytes, need {}",
@@ -338,20 +323,10 @@ pub(super) fn upload_color_lut(
     Ok(texture)
 }
 
-// Build a 2x2x2 identity color LUT: the eight corners of the unit RGB cube.
-// Trilinear interpolation across the corners reproduces the input exactly, so
-// the composite pass becomes a no-op when no `ColorLut` asset is declared.
-// The 3D LUT binding must still resolve to a valid texture regardless.
+// Upload the identity color LUT, so the 3D LUT binding resolves to a valid
+// texture when no `ColorLut` asset is declared.
 pub(super) fn create_fallback_color_lut(alloc: &DeviceAllocator) -> RenderResult<PooledTexture> {
-    let mut data = Vec::with_capacity(2 * 2 * 2 * 4);
-    for b in 0..2u8 {
-        for g in 0..2u8 {
-            for r in 0..2u8 {
-                data.extend_from_slice(&[r * 255, g * 255, b * 255, 255]);
-            }
-        }
-    }
-    upload_color_lut(alloc, 2, &data)
+    upload_color_lut(alloc, IDENTITY_LUT_SIZE, &IDENTITY_LUT)
 }
 
 // Upload an EnvironmentMap payload into two cube textures: a single-mip
@@ -406,14 +381,9 @@ fn upload_prefilter_cube(
     let texture = alloc.alloc_texture(&desc)?;
     for (mip, bytes) in mip_bytes.iter().enumerate() {
         let mip_face_size = face_size >> mip;
-        if mip_face_size == 0 {
-            return Err(RenderError::Other(format!(
-                "prefilter mip {} would have zero face size (face_size {} too small)",
-                mip, face_size
-            )));
-        }
-        let face_bytes = (mip_face_size as usize) * (mip_face_size as usize) * 4 * 4;
-        let needed = 6 * face_bytes;
+        let needed = concinnity_core::bake::environment_map::cube_mip_byte_len(face_size, mip)
+            .map_err(RenderError::Other)?;
+        let face_bytes = needed / 6;
         if bytes.len() < needed {
             return Err(RenderError::Other(format!(
                 "prefilter mip {} too short: {} bytes, need {}",

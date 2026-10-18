@@ -18,11 +18,13 @@
 //! pixel rectangles have a top-left origin, matching the fragment's screen UV.
 
 mod mirror;
+mod mirror_view;
 mod reflectors;
 mod slots;
 mod visibility;
 
 pub use mirror::{PlanarMatrices, orient_plane_toward, planar_matrices};
+pub use mirror_view::{MirrorFrame, MirrorShading, MirrorView};
 pub use reflectors::{PlanarReflectors, pane_plane, water_plane};
 pub use slots::{PlanarAssignment, assign_planar_slots, planar_pass_needed};
 pub use visibility::{

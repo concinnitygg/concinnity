@@ -902,7 +902,8 @@ mod tests {
             })
         );
         assert_eq!(scene.draw.objects[1].planet_tile, None);
-        let drawn = scene.drawn_planet_tiles();
+        let mut drawn = Vec::new();
+        scene.drawn_planet_tiles_into(&mut drawn);
         assert_eq!(drawn.len(), 1);
         assert_eq!(drawn[0].id, tile);
         assert_eq!(drawn[0].radial, [-1.0, 2.0]);
@@ -911,13 +912,15 @@ mod tests {
             scene.draw.objects[0].base_vertex as u32
         );
         scene.update_visibility(DrawIndex(0), false);
-        assert!(scene.drawn_planet_tiles().is_empty());
+        scene.drawn_planet_tiles_into(&mut drawn);
+        assert!(drawn.is_empty());
         scene.update_visibility(DrawIndex(0), true);
         scene
             .remove_chunk_mesh(DrawIndex(0), 1, &mut w)
             .expect("a placed chunk");
         assert!(scene.planet_chunks.is_empty());
-        assert!(scene.drawn_planet_tiles().is_empty());
+        scene.drawn_planet_tiles_into(&mut drawn);
+        assert!(drawn.is_empty());
     }
 
     #[test]

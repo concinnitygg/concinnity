@@ -4,8 +4,9 @@
 //! The SceneControl trait decouples this module from any specific backend;
 //! callers supply a concrete backend that implements the two mutation methods.
 
-use crate::components::SceneTransition;
+use crate::components::{Hidden, RenderHandle, SceneMember, SceneTransition};
 use crate::ecs::asset_id::AssetId;
+use crate::ecs::{Entity, PipelineContext};
 use crate::gfx::render_types::DrawIndex;
 use alloc::vec::Vec;
 
@@ -196,9 +197,153 @@ pub fn jump_to_scene<B: SceneControl + ?Sized>(
     Ok(())
 }
 
+/// The world's active scene flow, shared between the settings drain (which
+/// applies imperative scene jumps from `SceneCommand`) and the graphics system
+/// (which ticks the timed advance and fades and submits the visibility
+/// changes). `flow` is `None` when the world declares no `Scene` assets, so
+/// both no-op. Both read the flow's clock through [`elapsed`](Self::elapsed),
+/// so fade timing is shared.
+pub struct ActiveSceneFlow {
+    /// The flow, when the world declares scenes.
+    pub flow: Option<SceneFlow>,
+    // `FrameTime::elapsed` at the flow's first read.
+    epoch: Option<f32>,
+}
+
+impl ActiveSceneFlow {
+    /// A flow whose clock starts at its first read.
+    pub fn new(flow: Option<SceneFlow>) -> Self {
+        Self { flow, epoch: None }
+    }
+
+    /// Seconds on the flow's clock at runtime time `now` (`FrameTime::elapsed`).
+    /// The first read anchors the clock at zero, so a world started partway
+    /// through a runtime's life times its fades from its own first frame.
+    pub fn elapsed(&mut self, now: f32) -> f32 {
+        (now - *self.epoch.get_or_insert(now)).max(0.0)
+    }
+}
+
+/// The per-entity scene-visibility snapshot plus the scratch its refresh
+/// needs, both reused across frames: a fade refreshes this every frame it runs,
+/// so nothing here allocates in steady state.
+#[derive(Default)]
+pub struct SceneVisibilityScratch {
+    /// The (draw slots, scene) pairs.
+    pub visibility: SceneVisibility,
+    scene_of: hashbrown::HashMap<Entity, AssetId>,
+}
+
+/// Rebuild the (draw slots, scene) visibility pairs from the per-entity
+/// components: every entity with a RenderHandle contributes its GPU draw
+/// slots, tagged with the SceneMember scene it belongs to (None = always
+/// visible). A Hidden entity contributes no slots: its draws were switched off
+/// by a hide request, and a scene switch must not relight them.
+pub fn refresh_visibility_snapshot(ctx: &PipelineContext, scratch: &mut SceneVisibilityScratch) {
+    scratch.scene_of.clear();
+    scratch.scene_of.extend(
+        ctx.join2::<SceneMember, RenderHandle>()
+            .map(|(entity, member, _)| (entity, member.0)),
+    );
+    scratch.visibility.clear();
+    for (entity, handle) in ctx.query_with_entity::<RenderHandle>() {
+        scratch
+            .visibility
+            .begin_prop(scratch.scene_of.get(&entity).copied());
+        if ctx.get::<Hidden>(entity).is_none() {
+            for &slot in handle.draws.iter() {
+                scratch.visibility.push_draw(slot);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use crate::ecs::World;
+    use alloc::vec;
+
+    fn snapshot_pairs(ctx: &PipelineContext) -> (Vec<Vec<DrawIndex>>, Vec<Option<AssetId>>) {
+        let mut scratch = SceneVisibilityScratch::default();
+        refresh_visibility_snapshot(ctx, &mut scratch);
+        let mut draws = Vec::new();
+        let mut scenes = Vec::new();
+        for (d, s) in scratch.visibility.props() {
+            draws.push(d.to_vec());
+            scenes.push(s);
+        }
+        (draws, scenes)
+    }
+
+    // The snapshot pairs each entity's draw slots with its scene; scene-less
+    // entities are always visible.
+    #[test]
+    fn snapshot_pairs_each_entity_draws_with_its_scene() {
+        let mut world = World::new();
+        let mut ctx = world.context();
+        let a = ctx.components.spawn();
+        ctx.insert(
+            a,
+            RenderHandle {
+                draws: [DrawIndex(10), DrawIndex(11)].into(),
+            },
+        );
+        ctx.insert(a, SceneMember(AssetId(7)));
+        let b = ctx.components.spawn();
+        ctx.insert(
+            b,
+            RenderHandle {
+                draws: [DrawIndex(20)].into(),
+            },
+        );
+        let (draws, scenes) = snapshot_pairs(&ctx);
+        assert_eq!(
+            draws,
+            vec![vec![DrawIndex(10), DrawIndex(11)], vec![DrawIndex(20)]]
+        );
+        assert_eq!(scenes, vec![Some(AssetId(7)), None]);
+    }
+
+    // A Hidden entity contributes an empty slot list, and an entity carrying
+    // SceneMember but no RenderHandle is not in the snapshot.
+    #[test]
+    fn snapshot_blanks_hidden_entities_and_skips_unrendered_members() {
+        let mut world = World::new();
+        let mut ctx = world.context();
+        let a = ctx.components.spawn();
+        ctx.insert(
+            a,
+            RenderHandle {
+                draws: [DrawIndex(10)].into(),
+            },
+        );
+        ctx.insert(a, Hidden);
+        let only_scene = ctx.components.spawn();
+        ctx.insert(only_scene, SceneMember(AssetId(7)));
+        let (draws, scenes) = snapshot_pairs(&ctx);
+        assert_eq!(draws, vec![Vec::<DrawIndex>::new()]);
+        assert_eq!(scenes, vec![None]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_first_read_anchors_the_clock_at_zero() {
+        let mut flow = ActiveSceneFlow::new(None);
+        assert_eq!(flow.elapsed(100.0), 0.0);
+        assert_eq!(flow.elapsed(101.5), 1.5);
+    }
+
+    #[test]
+    fn the_clock_never_reads_negative() {
+        let mut flow = ActiveSceneFlow::new(None);
+        flow.elapsed(10.0);
+        assert_eq!(flow.elapsed(4.0), 0.0);
+    }
 
     use alloc::vec;
     // Minimal SceneControl implementation that records every call.

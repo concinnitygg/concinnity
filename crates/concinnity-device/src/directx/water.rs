@@ -21,7 +21,7 @@ use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::dump_on_err;
 use crate::directx::transparent::{
-    RecordUpload, ShapePsos, TransparentProducer, TransparentRecord, create_transparent_pso,
+    RecordUpload, ShapePsos, TransparentProducer, create_transparent_pso, upload_record,
 };
 use concinnity_core::render::shader_programs::ShaderProgram;
 
@@ -143,7 +143,7 @@ pub(in crate::directx) fn build_water_producer(
         let planar_slot = planar_slots.get(i).copied().flatten();
         let (vertices, indices) = body.mesh().map_err(RenderError::Other)?;
         let motion = WaterMotion::new(body, planar_slot.is_some());
-        records.push(TransparentRecord::upload(
+        records.push(upload_record(
             alloc,
             RecordUpload {
                 vertices: &vertices,
@@ -158,11 +158,9 @@ pub(in crate::directx) fn build_water_producer(
     }
 
     Ok(TransparentProducer {
-        pso: rectangle.pso,
-        flat_rt_pso: rectangle.flat_rt_pso,
-        textured_rt_pso: rectangle.textured_rt_pso,
-        reflection_flat_pso: None,
-        reflection_textured_pso: None,
+        shape: rectangle,
+        reflection_flat: None,
+        reflection_textured: None,
         sea,
         records,
         water,
@@ -193,9 +191,9 @@ impl WaterBuild<'_> {
             None => (None, None),
         };
         Ok(ShapePsos {
-            pso,
-            flat_rt_pso,
-            textured_rt_pso,
+            base: pso,
+            flat_rt: flat_rt_pso,
+            textured_rt: textured_rt_pso,
         })
     }
 

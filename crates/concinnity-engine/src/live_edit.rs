@@ -1,7 +1,6 @@
-//! Live editing of a running world: the previews that apply an authoring edit
-//! without a rebuild, the source catalogs and parked state a hot reload works
-//! from, and the render backend handoff that carries a window and device into a
-//! rebuilt world.
+//! Live editing of a running world: the source catalogs and parked state a hot
+//! reload works from, and the render backend handoff that carries a window and
+//! device into a rebuilt world.
 //!
 //! Every entry point here assumes one ordering, which the engine's own systems
 //! rely on:
@@ -13,9 +12,6 @@
 //! - A host calls in only on the main thread, between world steps, before the
 //!   next step runs. The backend is parked there, so [`render_handoff`] and
 //!   [`shader_reload_flag`] reach it; from inside a step it is taken.
-//! - A preview records its backend calls into the frame's render op queue,
-//!   which submission replays before the next draw, and keeps the matching ECS
-//!   state in step so the running world agrees with what is drawn.
 //! - A [`PendingBackend`] inserted into a freshly built world is consumed by
 //!   that world's graphics init, which reloads the world into it instead of
 //!   building a new backend.
@@ -33,7 +29,6 @@ use crate::gfx::system::parked::{PushedFogSettings, TextureNameSlots};
 pub use crate::animation::AnimationReloadEntry;
 pub use crate::ecs::take_render_backend;
 pub use crate::gfx::system::{hot_reload_sources, parked, sdf_field_sources, shader_sources};
-pub use crate::gfx::{draw_preview, lighting_preview, material_preview, shape_preview};
 
 /// A render backend transplanted out of a previous world, inserted into a
 /// freshly built world so its graphics init reuses the live GPU device and
@@ -78,7 +73,7 @@ pub fn shader_reload_flag(world: &World) -> Option<Arc<AtomicBool>> {
     world
         .resource::<ActiveRenderBackend>()
         .and_then(|slot| slot.0.as_ref())
-        .and_then(|backend| backend.shader_reload_flag())
+        .and_then(|backend| backend.live_edit_ref()?.shader_reload_flag())
 }
 
 #[cfg(test)]

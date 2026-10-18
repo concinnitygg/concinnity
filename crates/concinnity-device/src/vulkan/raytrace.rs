@@ -61,8 +61,8 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::fullscreen::align_up;
 use concinnity_core::render::retire_pool::RetirePool;
 use concinnity_core::render::rt_accel::{
-    AccelBook, EmptyHead, FrameRing, HeadRefresh, InstanceBlas, RefreshMode, RtStep, RtUpdate,
-    ScratchRing, SeedSet, StaticRing, empty_head,
+    AccelBook, EmptyHead, FrameRing, HeadRefresh, InstanceBlas, RefreshMode, RefreshStep,
+    RtAccelSteps, RtDriveInputs, RtUpdate, ScratchRing, SeedSet, StaticRing, drive_update,
 };
 use concinnity_core::render::rt_geom::{RtDynamicMode, pack_row_major_3x4};
 use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedRefit};
@@ -1468,59 +1468,26 @@ impl RtAccelData {
             r.destroy(&self.as_loader);
         }
 
-        let Some(plan) = self
-            .book
-            .plan(mode, topology_dirty, skinned.as_ref().map(|s| s.objects))
-        else {
-            return Ok(RtUpdate::Done);
+        let skinned_objects = skinned.as_ref().map(|s| s.objects);
+        let mut steps = VkRtSteps {
+            accel: self,
+            ctx,
+            cmd,
+            draw_objects,
+            frame_idx,
+            shared,
+            exclude_seethrough,
+            skinned,
         };
-
-        // Fold any added/removed/cloned draw geometry into the BLAS head + rebuild
-        // the static TLAS FIRST. On the skinned path `rebuild_skinned` below then
-        // overlays the skinned BLAS on top.
-        let mut refreshed = Ok(());
-        if let Some(mode) = plan.refresh {
-            let req = TopologyRefresh {
-                shared,
-                exclude_seethrough,
+        drive_update(
+            &mut steps,
+            RtDriveInputs {
                 mode,
-                frame_idx,
-            };
-            let if_empty = empty_head(plan.skinned, skinned.is_some());
-            refreshed = self.refresh_topology(ctx, cmd, draw_objects, req, if_empty);
-            if refreshed.is_err() {
-                self.book.owe_refresh();
-            }
-        }
-
-        let stepped = match self.book.next_step(mode, &plan, draw_objects) {
-            RtStep::Keep => RtUpdate::Done,
-            // Nothing static is left and no skinned geometry can rejoin: stop
-            // publishing the skinned tail, which leaves the BVH spent for the
-            // caller to drop.
-            RtStep::Tlas if self.book.is_empty() && skinned.is_none() => {
-                self.book.release_skinned();
-                RtUpdate::Done
-            }
-            // An empty head still gets a (zero-instance) TLAS, so the trace stops
-            // reaching what left.
-            RtStep::Tlas => {
-                self.rebuild_tlas(ctx, cmd, draw_objects, frame_idx)?;
-                RtUpdate::Done
-            }
-            RtStep::Skinned => match skinned {
-                Some(skinned) => self.rebuild_skinned(SkinnedRebuild {
-                    ctx,
-                    cmd,
-                    draw_objects,
-                    skinned,
-                    frame_idx,
-                    full_build: plan.full_skinned_build,
-                })?,
-                None => RtUpdate::Done,
+                topology_dirty,
+                draw_objects,
+                skinned: skinned_objects,
             },
-        };
-        refreshed.map(|()| stepped)
+        )
     }
 
     // Whether the BVH has nothing left to trace and nothing that could rejoin
@@ -2359,6 +2326,68 @@ pub(super) fn create_main_deformed_buffer(
         address: 0,
         size,
     })
+}
+
+// One frame's update of the live accel, recorded onto the frame's start
+// command buffer: the steps `drive_update` schedules, over this frame's device
+// context and geometry.
+struct VkRtSteps<'a> {
+    accel: &'a mut RtAccelData,
+    ctx: RtDeviceCtx<'a>,
+    cmd: vk::CommandBuffer,
+    draw_objects: &'a [DrawObject],
+    frame_idx: usize,
+    shared: SharedGeometry,
+    exclude_seethrough: bool,
+    skinned: Option<SkinnedRtInputs<'a>>,
+}
+
+impl RtAccelSteps for VkRtSteps<'_> {
+    type Blas = AccelBuffer;
+    type Instance = vk::AccelerationStructureInstanceKHR;
+
+    fn book(&mut self) -> &mut AccelBook<AccelBuffer, vk::AccelerationStructureInstanceKHR> {
+        &mut self.accel.book
+    }
+
+    fn refresh_topology(&mut self, refresh: RefreshStep) -> RenderResult<()> {
+        let req = TopologyRefresh {
+            shared: self.shared,
+            exclude_seethrough: self.exclude_seethrough,
+            mode: refresh.mode,
+            frame_idx: self.frame_idx,
+        };
+        self.accel.refresh_topology(
+            self.ctx,
+            self.cmd,
+            self.draw_objects,
+            req,
+            refresh.if_empty(),
+        )
+    }
+
+    fn rebuild_tlas(&mut self) -> RenderResult<()> {
+        self.accel
+            .rebuild_tlas(self.ctx, self.cmd, self.draw_objects, self.frame_idx)
+    }
+
+    fn release_skinned(&mut self) {
+        self.accel.book.release_skinned();
+    }
+
+    fn rebuild_skinned(&mut self, full_build: bool) -> RenderResult<RtUpdate> {
+        let Some(skinned) = self.skinned.take() else {
+            return Ok(RtUpdate::Done);
+        };
+        self.accel.rebuild_skinned(SkinnedRebuild {
+            ctx: self.ctx,
+            cmd: self.cmd,
+            draw_objects: self.draw_objects,
+            skinned,
+            frame_idx: self.frame_idx,
+            full_build,
+        })
+    }
 }
 
 impl super::context::VkRayTracing {

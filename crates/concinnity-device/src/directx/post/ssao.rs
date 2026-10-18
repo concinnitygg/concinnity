@@ -6,6 +6,7 @@
 //! `DxPostDevice`. The view normal + linear depth they read come from the
 //! unified G-buffer pre-pass.
 
+use concinnity_core::gfx::render_types::SsaoParams;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::ssao::settings::SsaoSettings;
@@ -104,10 +105,11 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        fov_y_radians: f32,
-        aspect: f32,
+        params: Option<&SsaoParams>,
     ) -> RenderResult<()> {
-        let (Some(ssao), Some(gbuffer)) = (&self.ssao.resources, &self.gbuffer) else {
+        let (Some(ssao), Some(gbuffer), Some(params)) =
+            (&self.ssao.resources, &self.gbuffer, params)
+        else {
             return Ok(());
         };
         ssao.pass.encode(
@@ -117,9 +119,7 @@ impl DxContext {
                 normal_depth: gbuffer.normal_depth_srv_gpu,
                 output: ssao.output.attachment(),
             },
-            &ssao
-                .settings
-                .params(fov_y_radians, aspect, self.targets.extent.render_height),
+            params,
         )
     }
 }

@@ -176,11 +176,7 @@ pub(in crate::metal) fn build_taa(
     } else {
         None
     };
-    Ok(TaaState {
-        enabled,
-        pass,
-        frame: 0,
-    })
+    Ok(TaaState { enabled, pass })
 }
 
 // SSAO (GTAO): the shared depth copy, kernel + blur and their targets, built

@@ -9,6 +9,7 @@
 //! are reflected and tracked by the temporal history just like the rest of
 //! the scene. Mirrors src/metal/decal.rs.
 
+use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::render::decal::{DecalRecord, DecalSet};
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -72,20 +73,8 @@ pub(in crate::directx) fn rebuild_decal_pso(
 // descriptors at init.
 pub(in crate::directx) const MAX_DECALS: usize = concinnity_core::render::decal::MAX_DECALS;
 
-// Eight unit-cube corners in `[-0.5, 0.5]^3`. Matches the Metal vertex list.
-const CUBE_VERTS: [f32; 24] = [
-    -0.5, -0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, -0.5, -0.5, 0.5, -0.5, -0.5, -0.5, 0.5, 0.5, -0.5,
-    0.5, 0.5, 0.5, 0.5, -0.5, 0.5, 0.5,
-];
-
-// 36 indices forming 12 triangles wound CCW outward. Matches the Metal
-// index list so the rasterized cube exactly mirrors the reference.
-const CUBE_INDICES: [u16; 36] = [
-    // -Z face                +Z face
-    0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, // -Y                     +Y
-    0, 1, 5, 0, 5, 4, 3, 6, 2, 3, 7, 6, // -X                     +X
-    0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5,
-];
+// The unit cube in `[-0.5, 0.5]^3`, the local space a decal's `inv_model` maps into.
+const CUBE_VERTS: [[f32; 3]; 8] = cube_corners(0.5);
 
 // `DecalView` (per-frame) and `DecalParams` (per-decal) are GPU-free layout
 // structs that live in `core::render`; re-export them so

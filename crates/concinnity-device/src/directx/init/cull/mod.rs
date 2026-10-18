@@ -5,7 +5,6 @@
 use concinnity_core::gfx::render_types::clone_reserve;
 use concinnity_core::render::backend_init::{SceneData, WorldShader};
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::transform::IDENTITY;
 
 use super::InitGpu;
 use crate::directx::context::{DxDescriptors, DxTargets};
@@ -150,8 +149,6 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         model_history_pso: gbuffer_pass.model_history_pso,
         occlusion_two_pass,
         hiz: compute.hiz,
-        prev_view_proj: std::cell::Cell::new(IDENTITY),
-        hiz_valid: std::cell::Cell::new(false),
     })
 }
 

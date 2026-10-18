@@ -110,15 +110,7 @@ pub fn camera_relative_view(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // Column-major 4x4 transform of a point: m * [p, 1].
-    fn apply(m: [[f32; 4]; 4], p: [f32; 3]) -> [f32; 3] {
-        [
-            m[0][0] * p[0] + m[1][0] * p[1] + m[2][0] * p[2] + m[3][0],
-            m[0][1] * p[0] + m[1][1] * p[1] + m[2][1] * p[2] + m[3][1],
-            m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2],
-        ]
-    }
+    use crate::transform::mat4_transform_point;
 
     #[test]
     fn from_world_maps_positive_positions_to_chunks() {
@@ -210,7 +202,7 @@ mod tests {
         ];
         let cam = [1000.0, 12.0, -500.0];
         // A correct view matrix carries translation -rotation * cam_pos.
-        let t = apply(rot, [-cam[0], -cam[1], -cam[2]]);
+        let t = mat4_transform_point(&rot, [-cam[0], -cam[1], -cam[2]]);
         let view = [rot[0], rot[1], rot[2], [t[0], t[1], t[2], 1.0]];
 
         // Render origin at a chunk corner near the camera.
@@ -220,9 +212,9 @@ mod tests {
         // The rebased view transforms an origin-relative point exactly as the
         // absolute view transforms the same point in world space.
         let p = [1005.0, 3.0, -495.0];
-        let abs = apply(view, p);
-        let rel = apply(
-            rebased,
+        let abs = mat4_transform_point(&view, p);
+        let rel = mat4_transform_point(
+            &rebased,
             [p[0] - origin[0], p[1] - origin[1], p[2] - origin[2]],
         );
         for i in 0..3 {

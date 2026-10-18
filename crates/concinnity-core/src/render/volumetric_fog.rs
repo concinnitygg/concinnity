@@ -2,7 +2,8 @@
 //! clamped settings struct plus the per-frame `FogParams` uniform the Metal
 //! fog fragment shader consumes. Pure CPU; unit-testable without a GPU.
 
-use crate::gfx::render_types::FogParams;
+use crate::gfx::render_types::{FogFroxelParams, FogParams};
+use crate::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 
 // Upper bound on the volumetric density. The integral
 // `1 - exp(-density * step)` saturates near 1.0 well before this cap, so
@@ -24,6 +25,9 @@ const MIN_DISTANCE: f32 = 1.0;
 // Floor on the viewport short edge so a zero-sized swapchain (initial layout)
 // cannot poison the reciprocal the shader uses to convert screen to NDC.
 const MIN_VIEWPORT: f32 = 1.0;
+
+// Floor on the froxel volume's near plane, so its linear-Z mapping stays finite.
+const MIN_FROXEL_NEAR: f32 = 1e-3;
 
 /// Resolved and clamped fog tunables, threaded into the backend at init.
 /// `None` from `FogSettings::resolve_optional` means the world declared no
@@ -127,6 +131,20 @@ impl FogSettings {
             _pad3: [0.0; 2],
         }
     }
+
+    /// Build the per-frame froxel-volume uniform: the world-to-view `view`
+    /// matrix and the volume's linear-Z span from the camera `near` plane
+    /// (floored so the mapping stays finite) to the fog's `max_distance`.
+    pub fn froxel_params(&self, view: [[f32; 4]; 4], near: f32) -> FogFroxelParams {
+        FogFroxelParams {
+            view,
+            froxel_dims: [FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z],
+            _pad_align: 0,
+            z_near: near.max(MIN_FROXEL_NEAR),
+            z_far: self.max_distance,
+            _pad: [0.0; 2],
+        }
+    }
 }
 
 /// Resolve an authored `VolumetricFog` into clamped [`FogSettings`], or `None`
@@ -168,6 +186,19 @@ mod tests {
             density,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn froxel_params_span_the_near_plane_to_the_fog_distance() {
+        let fog = resolve_asset(&authored(true, 0.02)).expect("enabled");
+        let froxels = fog.froxel_params([[1.0; 4]; 4], 0.0);
+        assert_eq!(froxels.view, [[1.0; 4]; 4]);
+        assert_eq!(
+            froxels.froxel_dims,
+            [FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z]
+        );
+        assert_eq!(froxels.z_near, MIN_FROXEL_NEAR);
+        assert_eq!(froxels.z_far, fog.max_distance);
     }
 
     #[test]

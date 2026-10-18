@@ -57,10 +57,10 @@ pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
     runtime.gate_steps_on(gate);
     runtime
         .world_mut()
-        .insert_resource(PipelinedFrames(Some(crate::ecs::PipelineChannels {
+        .insert_resource(PipelinedFrames::new(crate::ecs::PipelineChannels {
             snapshot_tx,
             feedback_rx,
-        })));
+        }));
 
     let sim_shutdown = shutdown.clone();
     let sim = std::thread::Builder::new()
@@ -235,7 +235,7 @@ fn wait_for_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::mock_backend::{Call, recording_backend};
+    use concinnity_core::render::backend::recording::{Call, recording_backend};
 
     // The input a go-ahead carries is sampled after the window's events are
     // pumped, so it never misses events that arrived since the last draw.
@@ -245,7 +245,7 @@ mod tests {
         let (go, gate) = crate::app::frame_gate::frame_gate();
         assert!(let_step_go(&go, &mut backend));
         assert!(gate.wait().is_some());
-        let calls = &state.lock().unwrap().calls;
+        let calls = &state.lock().calls;
         let pumped = calls.iter().position(|c| matches!(c, Call::PumpEvents));
         let sampled = calls.iter().position(|c| matches!(c, Call::TakeInput));
         assert!(

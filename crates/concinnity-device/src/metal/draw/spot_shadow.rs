@@ -5,12 +5,11 @@
 //! shadow pipeline (`draw_shadow_view`) with a one-matrix `ShadowUniforms`.
 //!
 //! Local lights are static, so the matrices are built once at init and only the
-//! depth contents refresh here. `spot_shadow.render_mask` (from
-//! `SpotShadowScheduler`) picks which slices redraw; a skipped slice keeps the
+//! depth contents refresh here. `spot_shadow.render_mask` (from the frame's
+//! plan) picks which slices redraw; a skipped slice keeps the
 //! depth it last rendered.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components;
 use concinnity_core::gfx::render_types::{ShadowUniforms, SpotShadowData};
 use concinnity_core::render::csm;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -27,19 +26,6 @@ use crate::metal::depth::CLEAR_DEPTH;
 use crate::metal::scoped_encoder::ScopedEncoder;
 
 impl MtlContext {
-    // Choose which spot shadow slices to re-render this frame and advance the
-    // round-robin clock. Called once per frame from draw_frame; the result is
-    // stashed in `spot_shadow.render_mask` for the cull and the pass.
-    pub(in crate::metal) fn next_spot_shadow_mask(&mut self) -> u32 {
-        let every_frame = matches!(
-            self.shadow.cadence.update,
-            components::ShadowUpdate::EveryFrame
-        );
-        self.spot_shadow
-            .scheduler
-            .next_mask(every_frame, self.spot_shadow.count as usize)
-    }
-
     // pub(in crate::metal) so the render-graph executor can dispatch this pass.
     pub(in crate::metal) fn encode_spot_shadow_pass(
         &self,

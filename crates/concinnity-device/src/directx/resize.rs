@@ -409,7 +409,7 @@ impl DxContext {
         if let Some(hiz) = self.cull.hiz.as_mut() {
             hiz.resize_to(&self.hw.device, render_w, render_h)?;
         }
-        self.cull.hiz_valid.set(false);
+        self.state.planner.invalidate_occlusion();
 
         // 7c) The transparent pass: recreate the scene snapshot at the new dims
         //     and rewrite its SRV in place. The depth SRV the pass also binds is

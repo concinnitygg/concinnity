@@ -33,6 +33,16 @@ pub fn mat4_mul(a: Mat4, b: Mat4) -> Mat4 {
     out
 }
 
+/// The point `p` transformed by the column-major `m`: `m * [p, 1]`.
+#[inline]
+pub fn mat4_transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
+    [
+        m[0][0] * p[0] + m[1][0] * p[1] + m[2][0] * p[2] + m[3][0],
+        m[0][1] * p[0] + m[1][1] * p[1] + m[2][1] * p[2] + m[3][1],
+        m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2],
+    ]
+}
+
 /// Inverse of an affine matrix whose bottom row is `[0, 0, 0, 1]`. The upper
 /// 3x3 is inverted via the adjugate; the translation is mapped through it.
 /// A near-singular upper 3x3 (degenerate scale) falls back to identity rather
@@ -333,6 +343,16 @@ mod tests {
 
     fn approx(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4
+    }
+
+    #[test]
+    fn transform_point_applies_the_linear_part_then_the_translation() {
+        let m = trs_matrix([1.0, 2.0, 3.0], [0.0, 90.0, 0.0], [2.0, 2.0, 2.0]);
+        let p = mat4_transform_point(&m, [1.0, 0.0, 0.0]);
+        assert!(
+            approx(p[0], 1.0) && approx(p[1], 2.0) && approx(p[2], 1.0),
+            "{p:?}"
+        );
     }
 
     #[test]

@@ -328,16 +328,16 @@ impl StorySystem {
 impl System for StorySystem {
     fn access(&self) -> Access {
         Access::new()
-            .reads_components(crate::component_mask![FrameInput])
-            .writes_components(crate::component_mask![TextLabel, Sprite])
-            .reads_resources(crate::resource_mask![
+            .reads_components(concinnity_core::component_mask![FrameInput])
+            .writes_components(concinnity_core::component_mask![TextLabel, Sprite])
+            .reads_resources(concinnity_core::resource_mask![
                 concinnity_core::ecs::EntityById,
                 StoryReload,
                 ScreenShown,
                 StoryCommand,
                 FrameTime,
             ])
-            .writes_resources(crate::resource_mask![PlayCue, ScreenCommand])
+            .writes_resources(concinnity_core::resource_mask![PlayCue, ScreenCommand])
     }
 
     fn init(&mut self, ctx: &mut PipelineContext) {
@@ -532,11 +532,11 @@ impl StorySystem {
 // Mutate the stage component with the given asset id; an unset reference or a
 // component the world never declared is a silent no-op.
 fn set_label(ctx: &mut PipelineContext, id: Option<AssetId>, apply: impl FnOnce(&mut TextLabel)) {
-    crate::ecs::by_asset_id::update(ctx, id, apply);
+    concinnity_core::ecs::by_asset_id::update(ctx, id, apply);
 }
 
 fn set_sprite(ctx: &mut PipelineContext, id: Option<AssetId>, apply: impl FnOnce(&mut Sprite)) {
-    crate::ecs::by_asset_id::update(ctx, id, apply);
+    concinnity_core::ecs::by_asset_id::update(ctx, id, apply);
 }
 
 // Apply a page's stage dressing: the backdrop keeps its dark fill when the

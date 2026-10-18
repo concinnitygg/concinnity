@@ -127,6 +127,17 @@ pub fn mul_add(x: f32, y: f32, z: f32) -> f32 {
     libm::fmaf(x, y, z)
 }
 
+/// The fraction of a gap left after `dt` when it halves every `half_life`
+/// (same time unit): `2^(-dt / half_life)`.
+pub fn half_life_decay(dt: f32, half_life: f32) -> f32 {
+    exp2(-dt / half_life)
+}
+
+/// [`round`] for an `f64`.
+pub fn round_f64(x: f64) -> f64 {
+    libm::round(x)
+}
+
 /// Least nonnegative remainder of `x (mod rhs)`.
 pub fn rem_euclid(x: f32, rhs: f32) -> f32 {
     let r = libm::fmodf(x, rhs);
@@ -198,7 +209,15 @@ mod tests {
             approx(round(x), f32::round(x));
             approx(trunc(x), f32::trunc(x));
             approx(fract(x), f32::fract(x));
+            assert_eq!(round_f64(f64::from(x)), f64::round(f64::from(x)));
         }
+    }
+
+    #[test]
+    fn half_life_decay_halves_per_half_life() {
+        approx(half_life_decay(0.0, 0.3), 1.0);
+        approx(half_life_decay(0.3, 0.3), 0.5);
+        approx(half_life_decay(0.9, 0.3), 0.125);
     }
 
     // powi has no libm counterpart, so the squaring loop is ours: it must agree

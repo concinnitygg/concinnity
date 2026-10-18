@@ -18,9 +18,9 @@ use concinnity_core::render::uniforms::GlassParams;
 
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::transparent::{
-    GlassMeshProducer, ProducerCtx, RecordUpload, TracedGlassPipelines, TransparentProducer,
-    TransparentRecord, TransparentVertexInput, create_glass_reflection_pipeline,
-    create_transparent_pipeline,
+    GlassMeshProducer, ProducerCtx, RecordUpload, ShapePipelines, TracedGlassPipelines,
+    TransparentProducer, TransparentRecord, TransparentVertexInput,
+    create_glass_reflection_pipeline, create_transparent_pipeline, upload_record,
 };
 
 // Compile the glass vertex + fragment shaders, the fragment at the main
@@ -111,7 +111,7 @@ fn build_panel_record(
         .collect();
 
     let params = GlassParams::from_panel(panel, planar_slot.is_some());
-    TransparentRecord::upload(
+    upload_record(
         &ctx.gpu(),
         ctx.record_descriptors(planar_slot),
         RecordUpload {
@@ -177,11 +177,13 @@ pub(in crate::vulkan) fn build_glass_producer(
     }
 
     Ok(TransparentProducer {
-        pipeline,
-        flat_rt_pso,
-        textured_rt_pso,
-        reflection_flat_pso,
-        reflection_textured_pso,
+        shape: ShapePipelines {
+            base: pipeline,
+            flat_rt: flat_rt_pso,
+            textured_rt: textured_rt_pso,
+        },
+        reflection_flat: reflection_flat_pso,
+        reflection_textured: reflection_textured_pso,
         sea: None,
         records,
         water: Vec::new(),

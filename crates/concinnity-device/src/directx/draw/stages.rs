@@ -1,19 +1,15 @@
 //! The stages `DxContext::draw_frame` runs in order around `record_frame`, and
 //! the per-frame inputs `record_frame` derives before its graph dispatch.
 
-use concinnity_core::components;
-use concinnity_core::gfx::jitter;
 use concinnity_core::gfx::render_types::LineVertex;
-use concinnity_core::planet::Rebase;
 use concinnity_core::profile;
 use concinnity_core::profile::PassTiming;
-use concinnity_core::render::depth::camera_projection;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::frame_plan::{
+    CameraInputs, EffectInputs, FramePlan, PlanInputs, SurfaceInputs,
+};
 use concinnity_core::render::pass_timing;
-use concinnity_core::render::render_graph::{self, FrameFacts, FrameGraphInputs};
-use concinnity_core::render::shadow_schedule::{CascadeCamera, CascadeLight};
-use concinnity_core::render::view_history::ViewFrame;
-use concinnity_core::transform::mat4_mul;
+use concinnity_core::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::Threading::WaitForSingleObject;
@@ -26,13 +22,13 @@ const FRAME_LATENCY_TIMEOUT_MS: u32 = 1000;
 use crate::directx::error::{self, map_hresult};
 use crate::gpu_wait::GpuWait;
 
-// The camera projection and the view-projections derived from it.
-pub(super) struct FrameProjection {
-    pub(super) proj: [[f32; 4]; 4],
-    // Un-jittered view-projection, for motion vectors and next frame's cull.
-    pub(super) cur_vp: [[f32; 4]; 4],
-    // Jittered view-projection the scene passes rasterize with.
-    pub(super) vp_mat: [[f32; 4]; 4],
+// The per-frame inputs `plan_frame` plans from.
+pub(in crate::directx) struct PlanArgs<'a> {
+    pub(in crate::directx) camera: CameraInputs,
+    pub(in crate::directx) elapsed: f32,
+    pub(in crate::directx) render_size: [u32; 2],
+    pub(in crate::directx) lines: &'a [LineVertex],
+    pub(in crate::directx) world_hidden: bool,
 }
 
 impl DxContext {
@@ -48,8 +44,8 @@ impl DxContext {
         // loop, and the previous pipelines stay live so the session keeps rendering; only a device
         // failure propagates. Wait for the GPU to drain first so swapping PSOs out from under
         // in-flight command lists is safe.
-        if self.shader_reload_requested() {
-            self.clear_shader_reload_flag();
+        if self.hot_reload.requested() {
+            self.hot_reload.clear();
             self.wait_idle();
             match self.reload_shaders() {
                 Ok(()) => tracing::info!("hot-reload: shader pipelines rebuilt"),
@@ -166,7 +162,7 @@ impl DxContext {
         // fence wait (so any in-flight capture resources are safe to recycle) and
         // before the frame's passes record. Non-fatal: a failure is logged and the
         // frame proceeds with whatever probes have baked.
-        self.bake_pending_probes();
+        self.bake_pending_probes(elapsed);
 
         // Auto-exposure EMA step. The `wait_frame_slot` fence wait ensured the GPU work
         // that wrote this slot's readback buffer has completed, so the read
@@ -276,7 +272,7 @@ impl DxContext {
         // `draw_calls` through `inc_draw_calls` (an interior-mutability path
         // because the encoders run through `&self`); the rest is filled here
         // from context state.
-        let counts = crate::object_counts::object_counts(
+        let counts = concinnity_core::render::object_counts::object_counts(
             self.state.draw.objects.len(),
             self.instanced.clusters.iter().map(|c| c.instances.len()),
             self.state.skinned.draw_objects.iter().map(|o| o.visible),
@@ -314,51 +310,6 @@ impl DxContext {
             max_edr: self.hw.max_edr(),
             ..profile::RenderStats::default()
         });
-    }
-
-    pub(in crate::directx) fn update_shadow_schedule(
-        &mut self,
-        cam_pos: [f32; 3],
-        fov_y_radians: f32,
-        near: f32,
-        view_distance: Option<f32>,
-    ) {
-        // Cascaded-shadow update policy. Advance the round-robin schedule, then
-        // refresh only this frame's cascades' light VPs (splits always refresh).
-        // Skipped cascades keep the VP + depth their slice was last rendered
-        // with, so the Main pass samples each cascade consistently. record_frame
-        // uploads the merged `self.shadow.uniforms` to this frame's shadow UBO,
-        // and encode_shadow_pass re-rasterizes only the masked slices. Mirrors
-        // Metal; no-op (mask stays 0, uniforms stay empty) when shadows are off.
-        if !self.shadow.dsvs.is_empty() {
-            let camera = CascadeCamera {
-                view: self.state.view.matrix,
-                position: cam_pos,
-                fov_y_rad: fov_y_radians,
-                aspect: self.targets.extent.render_width.max(1) as f32
-                    / self.targets.extent.render_height.max(1) as f32,
-                near,
-                view_distance,
-            };
-            let shadow = &mut self.shadow;
-            let light = CascadeLight {
-                dir_to_source: shadow.light_dir,
-                map_size: shadow.map_size,
-            };
-            shadow.render_mask =
-                shadow
-                    .scheduler
-                    .refresh(&mut shadow.uniforms, &shadow.cadence, light, camera);
-        }
-
-        // Spot shadow refresh schedule. Prime-then-round-robin over the slices,
-        // so N shadowed spots cost one extra depth render per frame rather than
-        // N. No uniform refresh: the projections are static and were baked at
-        // init. A no-op (mask stays 0) when the world has no shadowed spot.
-        self.spot_shadow.advance(matches!(
-            self.shadow.cadence.update,
-            components::ShadowUpdate::EveryFrame
-        ));
     }
 
     pub(in crate::directx) fn finish_frame_stats(&self) {
@@ -414,13 +365,13 @@ impl DxContext {
         frame: usize,
         mut gpu_wait: GpuWait,
     ) -> RenderResult<()> {
-        let end_cmd = &self.commands.end_command_lists[frame];
         // 5. Submit everything in topological order: [start, per-pass...,
         //    end]. Single ExecuteCommandLists call → the GPU executes
         //    them in submission order; the queue is serial on a single
         //    DIRECT command queue, so this guarantees pass ordering.
-        let mut submission: Vec<Option<ID3D12CommandList>> =
-            Vec::with_capacity(2 + pass_cmd_lists.len());
+        let mut submission = std::mem::take(&mut self.submission);
+        submission.clear();
+        let end_cmd = &self.commands.end_command_lists[frame];
         let start_handle: ID3D12CommandList = start_cmd
             .cast()
             .map_err(|e| map_hresult(e.code(), "start cmd cast"))?;
@@ -438,6 +389,8 @@ impl DxContext {
         // SAFETY: every command list in the submission is live and closed, and the slice outlives
         // the call.
         unsafe { self.hw.command_queue.ExecuteCommandLists(&submission) };
+        submission.clear();
+        self.submission = submission;
 
         // Present. Sync interval 1 locks to the display refresh (vsync); 0 runs
         // uncapped. The tearing present flag is required (and only valid) at
@@ -504,201 +457,128 @@ impl DxContext {
         Ok(())
     }
 
-    // This frame's graph inputs: the shared gates over the live settings and
-    // what this frame holds, masked by the viewport's view mode and show flags.
-    pub(super) fn frame_graph_inputs(
-        &self,
-        width: u32,
-        height: u32,
-        clustered: bool,
-        lines: &[LineVertex],
-        world_hidden: bool,
-    ) -> FrameGraphInputs {
-        let facts = FrameFacts {
-            hdr_width: width,
-            hdr_height: height,
+    // What this backend has built, for the frame's graph gates.
+    fn resident_features(&self, render_size: [u32; 2]) -> ResidentFeatures {
+        ResidentFeatures {
+            hdr_width: render_size[0],
+            hdr_height: render_size[1],
             hdr_sample_count: self.targets.hdr.msaa_samples,
             shadow: !self.shadow.dsvs.is_empty(),
             shadow_map_size: self.shadow.map_size,
-            shadowed_spot_count: self.spot_shadow.count(),
-            spot_shadow_slice_size: self.spot_shadow.slice_size,
-            world_hidden,
-            cull_ready: self.cull.main_bindless_pso.is_some(),
-            cull_records: self.cull_count(),
-            two_pass_ready: self.two_pass_occlusion_built(),
+            cull: self.cull.main_bindless_pso.is_some(),
+            two_pass: self.two_pass_occlusion_built(),
             hiz: self.cull.hiz.is_some(),
             bloom_chain: self.bloom.is_some(),
-            bloom_intensity: self.post_process.bloom_intensity,
-            upscaler: self.upscale.backend.is_some(),
-            upscaler_reads_reactive: self
-                .upscale
-                .backend
-                .as_ref()
-                .is_some_and(|u| u.reactive_reader().reads()),
-            bvh_live: self.rt.accel.is_some(),
-            particles: self.particle.resources.is_some()
-                && self.particle.records.iter().any(|p| p.is_some()),
-            fog: self.fog.resources.is_some() && self.fog.settings.is_some_and(|s| s.contributes()),
+            upscaler: self.upscale.backend.as_ref().map(|u| ResidentUpscaler {
+                reads_reactive: u.reactive_reader().reads(),
+            }),
+            particles: self.particle.resources.is_some(),
+            fog: self.fog.resources.is_some(),
             // `DecalState` is built at init unconditionally so a runtime
             // `add_decal` works from a world that declared none.
-            decals: self.decal.state.is_some() && !self.decal.set.is_empty(),
-            visible_surfaces: self.transparent.as_ref().is_some_and(|t| t.any_visible()),
-            visible_see_through: self.see_through_mesh_visible(),
-            rt_transparent_ready: self
+            decals: self.decal.state.is_some(),
+            lines: self.lines.resources.is_some(),
+            atmosphere: self.atmosphere.is_some(),
+            rt_transparent: self
                 .transparent
                 .as_ref()
                 .is_some_and(|t| t.rt_pipelines_ready()),
-            planar_targets: self.planar_reflection.is_some(),
+            taa: self.taa.is_some(),
+            model_history: self.gbuffer.is_some() && self.cull.model_history_pso.is_some(),
+            reflection_composite: self.reflection_composite.is_some(),
+        }
+    }
+
+    // What the world puts on screen this frame, for the frame's graph gates.
+    fn frame_content(&self, lines: &[LineVertex], world_hidden: bool) -> FrameContent {
+        FrameContent {
+            world_hidden,
+            cull_records: self.state.draw.record_count(),
+            shadowed_spot_count: self.spot_shadow.count(),
+            bloom_intensity: self.post_process.bloom_intensity,
+            bvh_live: self.rt.accel.is_some(),
+            emitters: !self.particle.system.is_empty(),
+            fog: self.fog.settings.is_some_and(|s| s.contributes()),
+            decals: !self.decal.set.is_empty(),
+            visible_surfaces: self.transparent.as_ref().is_some_and(|t| t.any_visible()),
+            visible_see_through: self.see_through_mesh_visible(),
+            planar_targets: self
+                .planar_reflection
+                .as_ref()
+                .is_some_and(|s| s.has_targets()),
             water_planar_slot: self
                 .transparent
                 .as_ref()
                 .is_some_and(|t| t.water_planar_slot_live()),
-            lines: !lines.is_empty() && self.lines.resources.is_some(),
+            lines: !lines.is_empty(),
             visible_volumes: self.raymarch_enabled(),
             atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
             water_sim: self.water_sim_live(),
             grass: self.grass.is_some(),
-            grass_casts: self.grass_casts(),
-            clustered,
+            ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
+        }
+    }
+
+    // Plan this frame in core over what this backend holds, then put what the
+    // encoders read from `&self` in place: the spot slices and the jitter the
+    // upscaler is dispatched with.
+    pub(in crate::directx) fn plan_frame(&mut self, args: PlanArgs<'_>) -> RenderResult<FramePlan> {
+        let PlanArgs {
+            camera,
+            elapsed,
+            render_size,
+            lines,
+            world_hidden,
+        } = args;
+        let resident = self.resident_features(render_size);
+        let content = self.frame_content(lines, world_hidden);
+        // The upscaler prescribes its jitter sequence (FSR queries its FFX-tuned
+        // offsets; DLSS / XeSS use the shared Halton-2/3) at the plan's phase.
+        // FFX returns it in input-pixel coordinates, the Halton path's units.
+        let phase = self.state.planner.jitter_phase();
+        let upscaler_jitter = self
+            .upscale
+            .backend
+            .as_ref()
+            .map(|up| up.jitter_offset(phase));
+        let surface = SurfaceInputs {
+            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
+            irradiance: self.irradiance_lane(),
+            screen_bounce: self.screen_bounce(),
         };
-        let seed_inputs = render_graph::frame_graph_inputs(&self.gates, &facts);
-        // The viewport's view mode + show flags mask the seeded inputs (the
-        // per-frame counterpart of the init-time trims); Lit with every flag
-        // set is the identity, so a shipped runtime is unaffected.
-        render_graph::apply_view(&seed_inputs, self.state.view.mode, self.state.view.show)
-    }
-
-    // Camera projection, jittered for TAA or the upscaler's phase sequence.
-    pub(super) fn frame_projection(
-        &self,
-        fov_y_radians: f32,
-        aspect: f32,
-        near: f32,
-        width: u32,
-        height: u32,
-    ) -> FrameProjection {
-        // Compute the camera VPs the main + velocity passes consume.
-        let proj = camera_projection(fov_y_radians, aspect, near);
-        // Un-jittered camera VP, fed to the velocity pre-pass so the stored
-        // motion vector is free of the sub-pixel projection jitter.
-        let cur_vp = mat4_mul(proj, self.state.view.matrix);
-        // When TAA is on, offset the projection by a sub-pixel Halton jitter so
-        // the accumulation has fresh sample positions each frame. The jitter is
-        // applied to the z-coefficients of clip x/y, so subtracting it shifts
-        // post-divide NDC by exactly the jitter amount (clip.w == -view_z) and
-        // leaves depth untouched. Mirrors the jitter in vulkan/draw.rs.
-        //
-        // When FSR3 upscale is on instead, the sub-pixel offset comes
-        // from FFX's prescribed phase sequence (tuned to FSR's temporal
-        // kernel), not Halton-2/3; Halton phases would mis-align with
-        // FSR's accumulation and produce blur or ghosting. The offset
-        // is queried from the upscaler once per frame and stashed in
-        // `upscale_jitter` so the Upscale arm of the executor sees the
-        // same value the projection was jittered with.
-        let render_proj = match (&self.upscale.backend, &self.taa) {
-            (Some(up), _) => {
-                // FFX returns jitter in input-pixel coordinates
-                // (each axis roughly [-0.5, 0.5]). The projection
-                // offset is `(2 * jitter / extent)` in NDC, same
-                // conversion as the Halton path below.
-                let frame_idx = self.taa.as_ref().map(|t| t.frame.get()).unwrap_or(0);
-                let [jx_px, jy_px] = up.jitter_offset(frame_idx);
-                self.upscale.jitter.set([jx_px, jy_px]);
-                let jx = jx_px * 2.0 / width.max(1) as f32;
-                let jy = jy_px * 2.0 / height.max(1) as f32;
-                let mut p = proj;
-                p[2][0] -= jx;
-                p[2][1] -= jy;
-                p
-            }
-            (None, Some(taa)) => {
-                let [jx_px, jy_px] = jitter::offset_in_cycle(taa.frame.get(), jitter::TAA_CYCLE);
-                let jx = jx_px * 2.0 / width.max(1) as f32;
-                let jy = jy_px * 2.0 / height.max(1) as f32;
-                let mut p = proj;
-                p[2][0] -= jx;
-                p[2][1] -= jy;
-                p
-            }
-            (None, None) => proj,
+        let inputs = PlanInputs {
+            camera,
+            elapsed,
+            render_size,
+            resident,
+            content,
+            upscaler_jitter,
+            lights: &self.uniforms.lights,
+            probes: self.probe.book.records(),
+            fog: self.fog.settings,
+            pre_exposure: self.pre_exposure.value(),
+            surface,
+            effects: EffectInputs {
+                ssao: self.ssao.resources.as_ref().map(|s| s.settings),
+                ssr: self
+                    .ssr
+                    .as_ref()
+                    .and_then(|s| s.resolve.as_ref())
+                    .map(|r| r.settings),
+                ssgi: self
+                    .ssgi
+                    .as_ref()
+                    .map(|s| s.settings)
+                    .zip(self.ssgi_frame()),
+                rt: self.rt_reflections.as_ref().map(|r| r.settings),
+                history_scale: self.pre_exposure.history_scale(),
+            },
         };
-        let vp_mat = mat4_mul(render_proj, self.state.view.matrix);
-        FrameProjection {
-            proj,
-            cur_vp,
-            vp_mat,
+        let plan = self.state.planner.plan(&self.state.view, &inputs)?;
+        self.spot_shadow.render_mask = self.state.planner.shadow.spot_mask;
+        if self.upscale.backend.is_some() {
+            self.upscale.jitter.set(plan.camera.jitter_px);
         }
-    }
-
-    // Drop every accumulated temporal history for a frame that does not
-    // continue the last: the TAA and SSGI rings, the camera half of the motion
-    // history, the Hi-Z pyramid the occlusion test would reproject the old view
-    // through, and the upscaler's history on its next dispatch.
-    pub(in crate::directx) fn reset_temporal_history(&mut self) {
-        self.cull.hiz_valid.set(false);
-        if let Some(taa) = self.taa.as_mut() {
-            taa.pass.reset_history();
-        }
-        if let Some(ssgi) = self.ssgi.as_mut() {
-            ssgi.reset_history();
-        }
-        if let Some(gb) = &self.gbuffer {
-            gb.view_history.borrow_mut().reset();
-        }
-        if let Some(upscaler) = &self.upscale.backend {
-            upscaler.request_history_reset();
-        }
-    }
-
-    // Carry the temporal history into the frame the world moved to: the
-    // camera half of the motion history, the view-projection the occlusion
-    // test reprojects last frame's pyramid through, and the per-object
-    // transforms, which are distrusted for one frame.
-    pub(in crate::directx) fn rebase_temporal_history(&mut self, rebase: &Rebase) {
-        if let Some(gb) = &self.gbuffer {
-            gb.view_history.borrow_mut().rebase(rebase);
-        }
-        self.cull
-            .prev_view_proj
-            .set(rebase.reproject(self.cull.prev_view_proj.get()));
-        self.state.model_history.get_mut().forget();
-    }
-
-    // History the next frame reads: Hi-Z validity, cull VP, TAA jitter, G-buffer VP.
-    pub(super) fn advance_temporal_state(&self, cur: ViewFrame) {
-        // The Hi-Z reduction that feeds next frame's cull is the graph's
-        // terminal `HizFinal` pass, so it has already been recorded; `hiz_valid`
-        // only tracks whether a pyramid at the current resolution now exists.
-        if self.cull.hiz.is_some() {
-            self.cull.hiz_valid.set(true);
-        }
-        // Capture the un-jittered view-projection for the next frame's cull
-        // dispatch. Stored regardless of whether Hi-Z is on so the matrix
-        // is always current when it later gets switched on by a hot-reload
-        // or a re-init.
-        self.cull.prev_view_proj.set(cur.vp);
-
-        // The HDR targets are graph resources: `emit_graph_restores` already
-        // returned each to its resting state on the "end" cmd list, which is
-        // where the MSAA-off spine's PIXEL_SHADER_RESOURCE -> RENDER_TARGET
-        // reset now comes from.
-
-        // The shadow map rests sampled between frames; next frame's Shadow
-        // producer barrier (graph-driven) performs the PIXEL_SHADER_RESOURCE ->
-        // DEPTH_WRITE reset, so no inline end-of-frame restore is needed.
-
-        // Advance the TAA jitter sequence (which also validates history for the
-        // next frame). TAA-specific, so gated on `self.taa`.
-        if let Some(taa) = &self.taa {
-            taa.frame.set(taa.frame.get().wrapping_add(1));
-        }
-        // Snapshot this frame's un-jittered VP, clock and camera position so
-        // next frame's G-buffer pre-pass can derive motion vectors. The per-draw
-        // half of the same history was snapshotted on the GPU by the pre-pass's
-        // own dispatch. Owned by the G-buffer (decoupled from TAA, so
-        // FSR-without-engine-TAA also gets correct motion).
-        if let Some(gb) = &self.gbuffer {
-            gb.view_history.borrow_mut().advance(cur);
-        }
+        Ok(plan)
     }
 }

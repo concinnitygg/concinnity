@@ -13,8 +13,8 @@ impl ComponentId {
     pub const MAX: u8 = 127;
 
     /// The id for a raw discriminant. Panics in debug past [`ComponentId::MAX`].
-    pub fn new(id: u8) -> ComponentId {
-        debug_assert!(id <= Self::MAX, "component id {id} exceeds {}", Self::MAX);
+    pub const fn new(id: u8) -> ComponentId {
+        debug_assert!(id <= Self::MAX, "component id exceeds ComponentId::MAX");
         ComponentId(id)
     }
 
@@ -33,14 +33,14 @@ impl ComponentMask {
     pub const EMPTY: ComponentMask = ComponentMask(0);
 
     /// The set holding just `id`.
-    pub fn with(id: ComponentId) -> ComponentMask {
+    pub const fn with(id: ComponentId) -> ComponentMask {
         let mut mask = ComponentMask::EMPTY;
         mask.insert(id);
         mask
     }
 
     /// Add `id` to the set.
-    pub fn insert(&mut self, id: ComponentId) {
+    pub const fn insert(&mut self, id: ComponentId) {
         self.0 |= 1u128 << id.0;
     }
 

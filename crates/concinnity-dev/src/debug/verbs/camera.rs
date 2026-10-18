@@ -6,9 +6,9 @@
 
 use concinnity_core::behavior::camera_driver;
 use concinnity_core::components::Camera3D;
+use concinnity_core::controller::camera::Camera3DSystem;
 use concinnity_core::ecs::World;
 use concinnity_core::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
-use concinnity_engine::controller::camera::Camera3DSystem;
 use serde_json::json;
 
 use crate::debug::call::Call;
@@ -194,9 +194,8 @@ fn advance_pose(
     pitch: f32,
     motion: &CameraMotion,
 ) -> ([f32; 3], f32, f32) {
-    let cp = pitch.cos();
-    let fwd = [-yaw.sin() * cp, pitch.sin(), -yaw.cos() * cp];
-    let right = [yaw.cos(), 0.0, -yaw.sin()];
+    let fwd = concinnity_core::math::forward(yaw, pitch);
+    let right = concinnity_core::math::flat_right(yaw);
     let new_pos = [
         position[0] + fwd[0] * motion.forward + right[0] * motion.right,
         position[1] + fwd[1] * motion.forward + motion.up,

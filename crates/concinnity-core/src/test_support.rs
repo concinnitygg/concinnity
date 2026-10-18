@@ -227,6 +227,20 @@ pub(crate) fn from_json<T: serde::de::DeserializeOwned>(json: &str) -> T {
     serde_json::from_str(json).expect("the test JSON deserializes")
 }
 
+// Start `world` on the headless table with `system` registered in `phase`, so
+// a test runs the system beside the simulation it shares a world with.
+pub(crate) fn start_with<S: crate::ecs::System>(
+    world: &mut crate::ecs::World,
+    phase: crate::ecs::Phase,
+    name: &'static str,
+    system: S,
+) {
+    world.add_system(phase, name, system);
+    world
+        .start(crate::ecs::HEADLESS_SYSTEMS)
+        .expect("the test world starts");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -27,7 +27,7 @@
 // Decals and particle emitters, added and removed while the world runs.
 mod effects;
 // Rewriting a built world's GPU content: the hot-reload rebuilders and the
-// editor's live previews.
+// editor's live previews, reached through `RenderBackend::live_edit`.
 mod live_edit;
 #[cfg(any(test, feature = "test-support"))]
 mod null;
@@ -36,6 +36,9 @@ mod pipeline_builder;
 // What the backend reports about itself: capabilities, GPU class, counters,
 // and the CPU-side readbacks.
 mod probe;
+/// A backend that records every call made on it, for tests.
+#[cfg(any(test, feature = "test-support"))]
+pub mod recording;
 // The scene a backend lends to the defaults that only edit it.
 mod scene_host;
 // The skinned draw path, from one upload to each frame's joint palette.
@@ -61,7 +64,7 @@ pub use probe::{
     apple_family_from_device_name, classify_tier,
 };
 pub use scene_host::{GeometryEdit, SceneHost};
-pub use skinned::SkinnedDraws;
+pub use skinned::{SkinnedDraws, SkinnedFrame};
 pub use streaming::{ChunkMesh, DrawStreaming, PlanetChunk};
 pub use tuning::RenderTuning;
 pub use window::WindowControl;
@@ -150,11 +153,9 @@ pub struct FrameParams<'a> {
 /// defaulted over [`SceneHost`]. The optional operation families are the
 /// supertraits, each grouped by domain in its own module.
 pub trait RenderBackend:
-    SceneControl
-    + SceneHost
+    SceneHost
     + BackendProbe
     + DrawStreaming
-    + LiveEdit
     + RenderTuning
     + SceneEffects
     + SkinnedDraws
@@ -163,6 +164,15 @@ pub trait RenderBackend:
 {
     /// Whether the window has been asked to close, polled once a frame.
     fn window_closed(&mut self) -> bool;
+    /// The paths an asset hot-reload and the editor's live previews rewrite a
+    /// built world through, or `None` for a backend without them.
+    fn live_edit(&mut self) -> Option<&mut dyn LiveEdit> {
+        None
+    }
+    /// [`Self::live_edit`], for its queries.
+    fn live_edit_ref(&self) -> Option<&dyn LiveEdit> {
+        None
+    }
     /// Ask the window to capture the cursor; a backend may defer until the first content click.
     fn request_cursor_capture(&mut self);
     /// Take the input sampled since the last call.
@@ -228,6 +238,20 @@ pub trait RenderBackend:
         }
     }
 
+    /// Show or hide one draw slot.
+    fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool) {
+        if let Some(scene) = self.scene_mut() {
+            scene.update_visibility(draw_idx, visible);
+        }
+    }
+
+    /// Fade the composited image to black by `fade` in `[0, 1]`.
+    fn set_fade(&mut self, fade: f32) {
+        if let Some(scene) = self.scene_mut() {
+            scene.set_fade(fade);
+        }
+    }
+
     /// Retire a draw object: hide it from every pass (main, shadow, velocity)
     /// and exclude it from the ray-tracing acceleration structure, so a
     /// despawned entity's slot leaves no ghost. The slot's geometry buffers are
@@ -238,6 +262,17 @@ pub trait RenderBackend:
         if let Some(scene) = self.scene_mut() {
             scene.retire_draw_object(draw_idx);
         }
+    }
+}
+
+// Scene flow drives a live backend through the trait object.
+impl SceneControl for dyn RenderBackend + '_ {
+    fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool) {
+        RenderBackend::update_visibility(self, draw_idx, visible);
+    }
+
+    fn set_fade(&mut self, fade: f32) {
+        RenderBackend::set_fade(self, fade);
     }
 }
 
@@ -296,11 +331,17 @@ mod tests {
         backend.update_view(IDENTITY);
         backend.update_models(&[(DrawIndex(0), IDENTITY)]);
         backend.retire_draw_object(DrawIndex(0));
-        backend.update_skinned_pose(SkinnedIndex(0), &[IDENTITY]);
-        backend.update_morph_weights(SkinnedIndex(0), &[1.0]);
+        let mut poses = crate::render::snapshot::SpanBuffer::default();
+        poses.push(SkinnedIndex(0), &[IDENTITY]);
+        let mut morphs = crate::render::snapshot::SpanBuffer::default();
+        morphs.push(SkinnedIndex(0), &[1.0]);
+        backend.update_skinned(SkinnedFrame {
+            poses: &poses,
+            morphs: &morphs,
+            models: &[(SkinnedIndex(0), IDENTITY)],
+        });
         backend.reveal_skinned_instance(SkinnedIndex(0), IDENTITY);
         backend.retire_skinned_draw_object(SkinnedIndex(0));
-        backend.update_skinned_models(&[(SkinnedIndex(0), IDENTITY)]);
         // No morph deformation path: nothing to attach.
         assert!(backend.upload_skinned_morphs(vec![]).is_ok());
 

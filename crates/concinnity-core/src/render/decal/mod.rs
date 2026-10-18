@@ -13,4 +13,4 @@ mod set;
 pub const MAX_DECALS: usize = 256;
 
 pub use record::{DecalRecord, build_decal_records, decal_model_matrix, invert_decal_model};
-pub use set::{AtCapacity, DecalSet, RemoveError, VisibleDecal};
+pub use set::{DecalSet, VisibleDecal};

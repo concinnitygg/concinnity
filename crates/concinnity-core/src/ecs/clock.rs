@@ -11,11 +11,13 @@
 /// `World::step` reads it once per tick and brackets each system with it. Only
 /// differences are used, so the epoch is the host's to choose; it must be
 /// monotonic within a process.
+#[derive(Debug, Clone, Copy)]
 pub struct Clock(pub fn() -> u64);
 
-impl core::fmt::Debug for Clock {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Clock").finish_non_exhaustive()
+impl Clock {
+    /// The host's monotonic time now, in microseconds.
+    pub fn read(&self) -> u64 {
+        (self.0)()
     }
 }
 
@@ -35,6 +37,6 @@ mod tests {
         let mut world = World::new();
         assert!(world.resource::<Clock>().is_none());
         world.insert_resource(Clock(ticking));
-        assert_eq!((world.resource::<Clock>().expect("installed").0)(), 7);
+        assert_eq!(world.resource::<Clock>().expect("installed").read(), 7);
     }
 }

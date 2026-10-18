@@ -17,6 +17,7 @@ mod extrude;
 pub mod glass_quad;
 mod grid;
 mod primitives;
+pub mod proxy_cube;
 mod room;
 mod voxel;
 pub mod water_grid;

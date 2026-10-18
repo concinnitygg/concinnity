@@ -48,8 +48,8 @@ fn rendered(world: &World) -> bool {
 // OverlaySystem: paired with GraphicsSystem (same gate) -- it shapes the
 // overlay draw list graphics submits. Scheduled first so the menu state it
 // publishes gates every later system this same tick.
-pub(crate) fn overlay(world: &World) -> Option<crate::gfx::overlay::OverlaySystem> {
-    rendered(world).then(crate::gfx::overlay::OverlaySystem::new)
+pub(crate) fn overlay(world: &World) -> Option<concinnity_core::render::overlay::OverlaySystem> {
+    rendered(world).then(concinnity_core::render::overlay::OverlaySystem::new)
 }
 
 // SkyRotationSystem: present whenever the world declares a `SkyRotation`.
@@ -78,16 +78,22 @@ pub(crate) fn behavior(world: &World) -> Option<concinnity_core::behavior::Behav
 // clones the GPU draw slots graphics owns. Scheduled before it so a despawn is
 // applied before the transform push and a spawn reuses slots freed this same
 // frame.
-pub(crate) fn spawn(world: &World) -> Option<crate::spawn::SpawnSystem> {
-    rendered(world).then(crate::spawn::SpawnSystem::new)
+pub(crate) fn spawn(world: &World) -> Option<concinnity_core::spawn::SpawnSystem> {
+    rendered(world).then(concinnity_core::spawn::SpawnSystem::new)
 }
 
-// SettingsSystem: paired with GraphicsSystem (same gate) -- it applies the
+// SettingsSystem: paired with GraphicsSystem (same gate). It applies the
 // settings/scene command batches against the backend graphics owns and holds
-// the settings snapshot GraphicsSystem's init resolves. Scheduled just before
+// the settings state GraphicsSystem's init resolves. Scheduled just before
 // GraphicsSystem so a change lands for this frame's submit.
-pub(crate) fn settings(world: &World) -> Option<crate::settings::system::SettingsSystem> {
-    rendered(world).then(crate::settings::system::SettingsSystem::new)
+pub(crate) fn settings(world: &World) -> Option<concinnity_core::settings::system::SettingsSystem> {
+    rendered(world).then(concinnity_core::settings::system::SettingsSystem::new)
+}
+
+// SettingsWriterSystem: present wherever SettingsSystem is, writing the store
+// back to disk when a change moves its revision.
+pub(crate) fn settings_writer(world: &World) -> Option<crate::settings::SettingsWriterSystem> {
+    rendered(world).then(crate::settings::SettingsWriterSystem::new)
 }
 
 // StreamingSystem: paired with GraphicsSystem (same gate) -- it drives the
@@ -113,12 +119,12 @@ pub(crate) fn input(world: &World) -> Option<crate::input::system::InputSystem> 
 
 // StatHud: present whenever the world declares a `StatHud`; built from that
 // component (the HUD's TextLabel refs).
-pub(crate) fn stat_hud(world: &World) -> Option<crate::hud::stat_hud::StatHudSystem> {
+pub(crate) fn stat_hud(world: &World) -> Option<concinnity_core::hud::stat_hud::StatHudSystem> {
     world
         .query::<StatHud>()
         .next()
         .cloned()
-        .map(crate::hud::stat_hud::StatHudSystem::new)
+        .map(concinnity_core::hud::stat_hud::StatHudSystem::new)
 }
 
 // DebugHud: present whenever the world declares a `DebugHud`, but only in
@@ -126,7 +132,7 @@ pub(crate) fn stat_hud(world: &World) -> Option<crate::hud::stat_hud::StatHudSys
 // DebugHud into every rendering world), so the running binary is the one
 // place its own profile is knowable: a debug build or a `cn debug` session
 // activates the HUD, a release `cn run` leaves it inert.
-pub(crate) fn debug_hud(world: &World) -> Option<crate::hud::debug_hud::DebugHudSystem> {
+pub(crate) fn debug_hud(world: &World) -> Option<concinnity_core::hud::debug_hud::DebugHudSystem> {
     let dev_loop = world
         .resource::<crate::app::run::LaunchRequest>()
         .is_some_and(|launch| launch.dev_loop);
@@ -137,19 +143,19 @@ pub(crate) fn debug_hud(world: &World) -> Option<crate::hud::debug_hud::DebugHud
         .query::<DebugHud>()
         .next()
         .cloned()
-        .map(crate::hud::debug_hud::DebugHudSystem::new)
+        .map(concinnity_core::hud::debug_hud::DebugHudSystem::new)
 }
 
 // LoadingOverlaySystem: present whenever the world declares a `LoadingOverlay`;
 // built from that component (its screen + element refs).
 pub(crate) fn loading_overlay(
     world: &World,
-) -> Option<crate::hud::loading_overlay::LoadingOverlaySystem> {
+) -> Option<concinnity_core::hud::loading_overlay::LoadingOverlaySystem> {
     world
         .query::<LoadingOverlay>()
         .next()
         .cloned()
-        .map(crate::hud::loading_overlay::LoadingOverlaySystem::new)
+        .map(concinnity_core::hud::loading_overlay::LoadingOverlaySystem::new)
 }
 
 // PhysicsSystem: present whenever the world has physics content, namely a
@@ -203,22 +209,24 @@ pub(crate) fn planet(world: &World) -> Option<crate::planet::PlanetSystem> {
 // block selects this first-person / fly controller, a `follow` block selects
 // the adjacent ThirdPersonSystem entry instead (a camera never gets both). A
 // `controller: null` camera opts out entirely (cutscene cameras).
-pub(crate) fn camera3d(world: &World) -> Option<crate::controller::camera::Camera3DSystem> {
+pub(crate) fn camera3d(
+    world: &World,
+) -> Option<concinnity_core::controller::camera::Camera3DSystem> {
     let ctrl = controlled_camera(world)?;
     ctrl.follow
         .is_none()
-        .then(|| crate::controller::camera::Camera3DSystem::new(ctrl))
+        .then(|| concinnity_core::controller::camera::Camera3DSystem::new(ctrl))
 }
 
 // Counterpart of `camera3d`: the first controlled camera declares a `follow`
 // block, so the third-person controller drives it.
 pub(crate) fn third_person(
     world: &World,
-) -> Option<crate::controller::third_person::ThirdPersonSystem> {
+) -> Option<concinnity_core::controller::third_person::ThirdPersonSystem> {
     let ctrl = controlled_camera(world)?;
     ctrl.follow
         .is_some()
-        .then(|| crate::controller::third_person::ThirdPersonSystem::new(&ctrl))
+        .then(|| concinnity_core::controller::third_person::ThirdPersonSystem::new(&ctrl))
 }
 
 // A declared CameraTrack owns the camera, so neither input controller is
@@ -244,20 +252,26 @@ pub(crate) fn camera_track(
 // FrameReportSystem: present whenever the run was armed as a benchmark; built
 // from that run (the discard, the budget, the phases and the captures). Last in
 // the Late band, so the frame it records is complete before it reads it.
-pub(crate) fn frame_report(world: &World) -> Option<crate::frame_report::FrameReportSystem> {
+pub(crate) fn frame_report(
+    world: &World,
+) -> Option<concinnity_core::frame_report::FrameReportSystem> {
     world
         .resource::<concinnity_core::benchmark::BenchmarkRun>()
-        .map(crate::frame_report::FrameReportSystem::new)
+        .map(|run| {
+            concinnity_core::frame_report::FrameReportSystem::new(run, |text| print!("{text}"))
+        })
 }
 
 // FpsCounter: present whenever the world declares an `FpsCounter`; built from
 // that component (its optional TextLabel ref).
-pub(crate) fn fps_counter(world: &World) -> Option<crate::hud::fps_counter::FpsCounterSystem> {
+pub(crate) fn fps_counter(
+    world: &World,
+) -> Option<concinnity_core::hud::fps_counter::FpsCounterSystem> {
     world
         .query::<FpsCounter>()
         .next()
         .cloned()
-        .map(crate::hud::fps_counter::FpsCounterSystem::new)
+        .map(concinnity_core::hud::fps_counter::FpsCounterSystem::new)
 }
 
 // AnimationSystem: present whenever the world declares any `Animation` or
@@ -299,28 +313,16 @@ pub(crate) fn audio(world: &World) -> Option<crate::audio::AudioSystem> {
             })
         })
         || world.query::<Behavior>().any(Behavior::plays_sound);
-    if !needs {
-        return None;
-    }
-    // The persisted volumes live in the engine's settings store; resolve them
-    // here and hand them to the system so the audio crate stays free of the
-    // engine's `Settings` type.
-    let audio = crate::config::Settings::load(crate::ecs::state_tree(world)).audio;
-    Some(crate::audio::AudioSystem::new(crate::audio::AudioVolumes {
-        master: audio.master_volume,
-        music: audio.music_volume,
-        sfx: audio.sfx_volume,
-        voice: audio.voice_volume,
-    }))
+    needs.then(crate::audio::AudioSystem::new)
 }
 
 // UiInputSystem: present whenever the world declares any `HitRegion`, `Screen`,
 // or `KeyBinding`. It drains all three at init.
-pub(crate) fn ui_input(world: &World) -> Option<crate::ui::UiInputSystem> {
+pub(crate) fn ui_input(world: &World) -> Option<concinnity_core::ui::UiInputSystem> {
     let needs = world.query::<HitRegion>().next().is_some()
         || world.query::<Screen>().next().is_some()
         || world.query::<KeyBinding>().next().is_some();
-    needs.then(crate::ui::UiInputSystem::new)
+    needs.then(concinnity_core::ui::UiInputSystem::new)
 }
 
 // TextInputSystem: present whenever the world declares any `TextInput`. It

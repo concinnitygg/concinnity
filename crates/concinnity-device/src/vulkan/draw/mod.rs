@@ -11,20 +11,18 @@ pub(in crate::vulkan) mod spot_shadow;
 mod stages;
 
 use ash::vk;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::jitter;
 use concinnity_core::gfx::lod;
-use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::render_types::{LightUniforms, LineVertex, ShadowUniforms, TextDrawCall};
+use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_core::profile::FanOutTiming;
-use concinnity_core::render::depth::camera_projection;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::lights;
+use concinnity_core::render::backend::FrameParams;
+use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::frame_plan::{
+    CameraInputs, EffectInputs, FrameDevice, FramePlan, PlanInputs, SurfaceInputs, camera_inputs,
+};
 use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::pass_timing;
-use concinnity_core::render::render_graph;
-use concinnity_core::render::render_graph::{FrameFacts, FrameGraphInputs, build_frame_graph};
-use concinnity_core::transform::mat4_mul;
+use concinnity_core::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
+use concinnity_core::render::scene_state::SceneState;
 // `ViewUniforms` (the std140 main-pass `ViewBlock` UBO) is a GPU-free layout
 // struct that lives in `core::render`; re-export it so
 // `crate::vulkan::draw::ViewUniforms` is unchanged for the passes that fill it.
@@ -32,34 +30,6 @@ pub(in crate::vulkan) use concinnity_core::render::uniforms::ViewUniforms;
 
 use super::context::VkContext;
 use super::graph_exec::GraphFrameParams;
-
-// Where `record_frame` records this frame's GPU work: the outer "end" command
-// buffer, the acquired swapchain image, and the frame-in-flight slot the
-// per-frame resources (query pool block, view UBO, cull buffers) index into.
-#[derive(Clone, Copy)]
-pub(super) struct RecordFrameTargets {
-    pub cmd: vk::CommandBuffer,
-    pub image_index: u32,
-    pub frame_idx: usize,
-}
-
-// Per-frame camera / view state plus the overlay text drawn with it. Drives the
-// projection, cascade selection, sub-pixel jitter, and view UBO for this frame.
-pub(super) struct RecordFrameView<'a> {
-    // Seconds since the world started, narrowed to f32 where a pass needs no
-    // more; the water's motion takes it whole.
-    pub elapsed: f64,
-    pub fov_y_radians: f32,
-    pub near: f32,
-    pub view_distance: Option<f32>,
-    pub cam_pos: [f32; 3],
-    pub text_calls: &'a [TextDrawCall],
-    // This frame's expanded line ribbons. Empty whenever nothing published
-    // lines, which also drops the pass from the graph.
-    pub lines: &'a [LineVertex],
-    // What may be trampling the grass this frame.
-    pub grass_benders: &'a [concinnity_core::render::grass::GrassBender],
-}
 
 impl VkContext {
     // Where this frame's draws growing grass route: the grass twins, and where
@@ -153,7 +123,7 @@ impl VkContext {
         let record_stride = std::mem::size_of::<GpuObjectData>();
         let args_stride = std::mem::size_of::<GpuDrawArgs>();
         let mut model_history = self.state.model_history.borrow_mut();
-        model_history.begin(history, self.cull_count());
+        model_history.begin(history, self.state.draw.record_count());
         // Hand the dispatch the rebuild's prime request here, on the one thread
         // that owns the tracker; the encode runs on a worker.
         if model_history.take_prime()
@@ -216,9 +186,9 @@ impl VkContext {
         // because the init-time BVH cannot refit to admit them), so a resident
         // one draws unconditionally; a freed slot's `resident` clear disables
         // it, and the cull kernel skips a disabled record's stale object.
-        let runtime_base = self.runtime_record_base();
+        let runtime_base = self.state.draw.runtime_record_base();
         let grass_route = self.grass_route();
-        let n_resident_runtime = self.for_each_runtime_record(|k, i, obj| {
+        let n_resident_runtime = self.state.draw.for_each_runtime_record(|k, i, obj| {
             let mut record = pool_object_record(obj, texture_count);
             record.tile_morph = view.tile_morph_row(obj);
             objects.write_val((runtime_base + k) * record_stride, &record);
@@ -255,7 +225,7 @@ impl VkContext {
         }
 
         // Skinned objects: one record each in the reserved tail at
-        // `[skinned_record_base(), cull_count())`. `model = obj.model` (applied
+        // `[skinned_record_base(), record_count())`. `model = obj.model` (applied
         // after the per-frame skin deform), flat-pool texture indices like a
         // static object, and a padded bind-pose AABB so the cull kernel can
         // frustum/Hi-Z test them, so they are cullable + resident. The main
@@ -263,7 +233,7 @@ impl VkContext {
         // IB, so `base_vertex = 0` (the deformed buffer mirrors global skinned
         // indexing) and the active-LOD slice is the element offset into the
         // skinned IB. `take(n_skinned)` no-ops when the fold is inactive.
-        let skinned_base = self.skinned_record_base();
+        let skinned_base = self.state.draw.skinned_record_base();
         for (k, obj) in self
             .state
             .skinned
@@ -292,314 +262,13 @@ impl VkContext {
         packing
     }
 
-    pub(super) fn record_frame(
-        &mut self,
-        targets: RecordFrameTargets,
-        view: RecordFrameView<'_>,
-        world_hidden: bool,
-    ) -> RenderResult<Vec<vk::CommandBuffer>> {
-        let RecordFrameTargets {
-            cmd,
-            image_index,
-            frame_idx,
-        } = targets;
-        let RecordFrameView {
-            elapsed,
-            fov_y_radians,
-            near,
-            view_distance,
-            cam_pos,
-            text_calls,
-            lines,
-            grass_benders,
-        } = view;
-        let device = self.hw.device.clone();
-        let device = &device;
-        // The scene rasterizes at render resolution (== swapchain extent unless
-        // upscaling). Cascade / projection aspect, the HDR graph dims, and the
-        // sub-pixel jitter all derive from this, not the display extent.
-        let extent = self.targets.render_extent;
-        self.size_grass([extent.width, extent.height], frame_idx)?;
-        self.grass_lod = self.grass.as_ref().map(|g| {
-            g.field
-                .lod_view(concinnity_core::render::grass::lod::focal_length(
-                    extent.height,
-                    fov_y_radians,
-                ))
-        });
-
-        let start_cmd = self.record_frame_start(frame_idx)?;
-
-        self.update_shadow_schedule(
-            extent,
-            cam_pos,
-            fov_y_radians,
-            near,
-            view_distance,
-            frame_idx,
-        );
-
-        // Push this frame's skinning matrices into the per-frame joint buffers
-        // before the skin fold reads them. No-op when no SkinnedMesh is
-        // declared.
-        self.upload_joint_matrices(frame_idx);
-        // Push this frame's morph weights into the per-frame weight buffers the
-        // skin fold reads. No-op when no SkinnedMesh carries morph targets.
-        self.upload_morph_weights(frame_idx);
-
-        // Line resources: built on the first frame that publishes lines (and
-        // this slot's vertex buffer grown to fit them), so the graph gate below
-        // can see them live this same frame and a world that never draws a line
-        // never compiles them. Safe here: the `wait_frame_slot` fence in
-        // `draw_frame` retired everything that read this slot last trip.
-        self.ensure_line_pipeline(frame_idx, lines);
-
-        // Clustered binning runs while a local light or a baked probe is live,
-        // the same test `ClusterParams::for_camera` sets `use_clusters` by, so
-        // no reader sees a list the skipped `LightCull` node did not write.
-        let clustered = lights::clustering_active(
-            self.uniforms.light_uniforms.num_local_lights,
-            self.probe.book.count(),
-        );
-
-        let seed_inputs =
-            self.frame_graph_inputs(extent, clustered, !lines.is_empty(), world_hidden);
-
-        //  Camera projection + per-frame view state. Computed before the main
-        //  render pass begins so the GPU-cull compute dispatch (which Vulkan
-        //  forbids inside a render pass) can read this frame's frustum.
-        let (aspect, proj, render_proj) = self.frame_projection(extent, fov_y_radians, near);
-        // Un-jittered camera VP, fed to the velocity pre-pass so the stored
-        // motion vector is free of the sub-pixel projection jitter.
-        let cur_vp = mat4_mul(proj, self.state.view.matrix);
-        let vp_mat = mat4_mul(render_proj, self.state.view.matrix);
-        // The haze volume is laid along the un-jittered view rays, like the fog
-        // volume, so it holds still under the temporal jitter; depth is read
-        // back through the jittered inverse it was drawn with.
-        self.prepare_atmosphere(
-            frame_idx,
-            concinnity_core::render::atmosphere::AtmosphereView {
-                inv_vp: concinnity_core::transform::mat4_inverse(cur_vp),
-                depth_inv_vp: concinnity_core::transform::mat4_inverse(vp_mat),
-                cam_pos,
-                viewport: [extent.width as f32, extent.height as f32],
-                sky_rot: self.state.view.sky_rot,
-                pre_exposure: self.pre_exposure.value(),
-            },
-        );
-
-        // Clustered light-binning params (main camera). The compute pass reads
-        // these to build each cluster's world-space AABB (un-jittered inverse VP
-        // + camera forward, matching the fog froxel convention) and the forward
-        // pass reads the grid dims / depth range / screen size to place a
-        // fragment. `use_clusters` is set only while a local light or a baked
-        // probe is live; otherwise every reader iterates them all (zero
-        // iterations) rather than reading a list the skipped binning pass never
-        // wrote. The planar / probe global sets bind the static
-        // `use_clusters = 0` copy instead.
-        let cluster_params = render_types::ClusterParams::for_camera(
-            &render_types::ClusterCamera {
-                view: self.state.view.matrix,
-                proj,
-                position: cam_pos,
-                near,
-                range: self.uniforms.cluster_reach.range(
-                    cam_pos,
-                    near,
-                    self.probe.book.records(),
-                    view_distance,
-                ),
-                width: extent.width,
-                height: extent.height,
-            },
-            self.uniforms.light_uniforms.num_local_lights,
-            self.probe.book.count() as u32,
-        );
-        self.write_cluster_params(frame_idx, &cluster_params);
-
-        // Update view UBO for this frame.
-        let view_uni = ViewUniforms {
-            vp: vp_mat,
-            view: self.state.view.matrix,
-            elapsed: elapsed as f32,
-            // Hand glossy dielectric specular to the SSR / RT resolve when its
-            // composite owns the scene image and a resolve writes reflections
-            // into it this frame, else the forward shader keeps it all.
-            reflections_enabled: if self.reflection_composite.is_some()
-                && self.reflection_path().resolves()
-            {
-                1.0
-            } else {
-                0.0
-            },
-            cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2]],
-            prefilter_mip_count: self.scene.prefilter_mip_count as f32,
-            shade_mode: self.shade_mode(),
-            ambient_occlusion: 1.0,
-            sky_rot: self.state.view.sky_rot,
-            irradiance: self.irradiance_lane(),
-            pre_exposure: self.pre_exposure.value(),
-            screen_bounce: if self.screen_bounce() { 1.0 } else { 0.0 },
-            _pad: 0.0,
-        };
-        self.uniforms.view_ubo_buffers[frame_idx].write_val(0, &view_uni);
-
-        // Light uniforms for this frame. Written only into slots a live edit
-        // (directional set / ambient scale) has re-armed, so a steady world
-        // writes nothing after the ring has caught up.
-        if self.uniforms.light_dirty.take(frame_idx) {
-            upload_light_uniforms(
-                &self.uniforms.light_ubo_buffers[frame_idx],
-                &self.uniforms.light_uniforms,
-            );
-        }
-        self.uniforms.canopy = match (&self.grass, &self.grass_lod) {
-            (Some(grass), Some(lod)) => self
-                .state
-                .canopy_params(&grass.field.canopy, (lod, grass.crossfade_phase())),
-            _ => Default::default(),
-        };
-        self.uniforms.canopy_buffers[frame_idx].write_val(0, &self.uniforms.canopy);
-        self.uniforms.canopy_tables.update(
-            self.grass.as_ref().map_or(&[], |g| g.field.canopy.tables()),
-            frame_idx,
-        );
-
-        // Reflection-probe count + records (global set 0 bindings 7 + 17): count
-        // 0 (sky reflection) until a probe bakes, so the forward shader keeps the
-        // sky path. Uploaded every frame so a later install is picked up
-        // immediately.
-        self.upload_probe_set(frame_idx)?;
-
-        let frustum = Frustum::from_camera(vp_mat, view_distance);
-
-        // Compute-cull host-side prep: rebuild this frame's
-        // `GpuObjectData` + `GpuDrawArgs` storage buffers with the
-        // latest per-object state. These are mapped-memory writes and
-        // run unconditionally on the CPU side so the cull compute pass
-        // (dispatched by the graph executor below) sees fresh data.
-        // The compute dispatch itself runs through the graph as
-        // `PassId::Cull`; the toposort orders Cull → Main via the
-        // `draw_args` buffer RAW edge declared on Main.
-        // Skipped while the world is hidden behind an opaque menu: the masked
-        // graph drops the Cull pass and Main runs as a bare clear, so this
-        // per-object buffer prep would feed nothing.
-        if !world_hidden && seed_inputs.bindless_cull_enabled {
-            // The GPU-driven pre-pass both fills and reads the model-history
-            // ring. With no consumer of motion, or with the pre-pass not built,
-            // the ring goes stale, so every record is marked `NO_HISTORY` and
-            // the tracker re-primes when the pre-pass returns.
-            let history = match self.gbuffer_targets().is_some()
-                && self.cull.model_history.is_some()
-                && self.reads_motion()
-            {
-                true => HistoryMode::Track,
-                false => HistoryMode::Stale,
-            };
-            let packing = self.build_record_buffers(frame_idx, cam_pos, history);
-            let mut stats = self.frame_stats.get();
-            stats.packing_fan_out = packing;
-            self.frame_stats.set(stats);
-        }
-
-        //  Single merged frame graph dispatched in one
-        //  `execute_graph` call. The toposort orders Cull → Main via
-        //  the `draw_args` buffer RAW edge, SsaoBlur / Shadow → Main
-        //  via their texture RAW edges, and the post-stack chain
-        //  (SsrResolve → TaaResolve → Bloom → Composite) via the
-        //  scene_color version chain. Velocity pins before TaaResolve
-        //  via the `velocity` texture read. Shadow's encoder owns
-        //  its DEPTH → SHADER_READ post-loop transition; Cull's owns
-        //  its SHADER_WRITE → INDIRECT_COMMAND_READ memory barrier;
-        //  each render-pass attachment pins the per-pass layouts.
-        //  Deriving `vkCmdPipelineBarrier` from `pass.barriers_before`
-        //  (so encoders can shed their inline barriers) is a
-        //  follow-up. The pre-graph dispatch site sits at the natural
-        //  Main location: after the per-frame view/projection +
-        //  visible-set compute (Vulkan forbids compute inside a
-        //  render pass, so Cull must come before any render-pass
-        //  dispatch from the executor).
-        // Reuse the cached compiled graph when this frame's inputs match the ones
-        // it was built from (the common case: graph topology changes only when a
-        // feature toggles or a target resizes). Taken out of the cache so the later
-        // `&mut self` execute_graph does not conflict with a borrow of it; put back
-        // after execution. A mismatch (or a cold cache) rebuilds.
-        let graph = match self.graph_cache.take() {
-            Some((cached_inputs, cached_graph)) if cached_inputs == seed_inputs => cached_graph,
-            _ => build_frame_graph(&seed_inputs)
-                .map_err(|e| RenderError::Other(format!("frame graph: {e}")))?,
-        };
-        let params = GraphFrameParams {
-            cmd,
-            image_index,
-            frame_idx,
-            text_calls,
-            lines,
-            world_hidden,
-            frustum: &frustum,
-            cam_pos,
-            vp_mat,
-            cur_vp,
-            fov_y_radians,
-            aspect,
-            elapsed,
-            near,
-            grass_benders,
-            planar: self
-                .planar_reflection
-                .as_ref()
-                .map(|set| set.frame_plan(vp_mat))
-                .unwrap_or_default(),
-            cluster_params,
-            reactive: concinnity_core::render::reactive_mask::ReactiveMaskPlan::of(&seed_inputs),
-        };
-        // Each non-composite pass is recorded into its own command buffer
-        // (returned here in graph order); Composite + the post-graph work below
-        // record into `cmd` (the outer "end" buffer). The whole frame is
-        // submitted as `[start, ...pass_bufs, end]` by `draw_frame`.
-        let pass_bufs = self.execute_graph(&graph, &params)?;
-        // Cache the compiled graph under this frame's inputs so the next frame with
-        // matching inputs skips the rebuild.
-        self.graph_cache = Some((seed_inputs, graph));
-
-        self.advance_temporal_state(concinnity_core::render::view_history::ViewFrame {
-            vp: cur_vp,
-            elapsed: elapsed as f32,
-            cam_pos,
-        });
-
-        self.finish_frame_stats();
-
-        // End-of-frame timestamp for the profiler overlay. Pairs with the
-        // TOP_OF_PIPE write near the top of the function (the block's first pair).
-        if let Some(pool) = self.hw.timestamp_query_pool {
-            let (_, wf_end) = pass_timing::whole_frame_pair(frame_idx);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_write_timestamp(
-                    cmd,
-                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                    pool,
-                    wf_end,
-                );
-            }
-        }
-
-        // The per-frame submission order, excluding the outer "end" buffer
-        // (`cmd`) the caller appends: the `start` buffer (leading timestamp)
-        // followed by the per-pass buffers in graph order. Submission order is
-        // GPU order on the single graphics queue, so every encoder's inline
-        // barrier synchronizes against the prior pass across buffer boundaries.
-        let mut submit = Vec::with_capacity(pass_bufs.len() + 1);
-        submit.push(start_cmd);
-        submit.extend(pass_bufs);
-        Ok(submit)
-    }
-
     // Record the frame's leading "start" command buffer: the timestamp block
     // reset and whole-frame start tick, then the TLAS refresh for moved props.
-    fn record_frame_start(&mut self, frame_idx: usize) -> RenderResult<vk::CommandBuffer> {
+    fn record_frame_start(
+        &mut self,
+        frame_idx: usize,
+        world_hidden: bool,
+    ) -> RenderResult<vk::CommandBuffer> {
         let device = self.hw.device.clone();
         let device = &device;
         // Profiler-overlay timestamp pair. The pool slot for this frame is
@@ -661,7 +330,11 @@ impl VkContext {
         // descriptor set at the live TLAS + geometry table. A no-op when RT is
         // off. Recorded here (not on a per-pass worker) because it needs
         // `&mut self`; the start buffer carries it within the frame's submit batch.
-        self.rt_dynamic_update(start_cmd, frame_idx);
+        // Skipped while the world is hidden, which traces nothing; a topology
+        // change stays owed to the next frame that draws it.
+        if !world_hidden {
+            self.rt_dynamic_update(start_cmd, frame_idx);
+        }
         // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
         unsafe {
             device
@@ -671,112 +344,458 @@ impl VkContext {
         Ok(start_cmd)
     }
 
-    // This frame's graph inputs: the shared gates over the live settings and
-    // what this frame holds, masked by the viewport's view mode and show flags.
-    fn frame_graph_inputs(
-        &self,
-        extent: vk::Extent2D,
-        clustered: bool,
-        lines_published: bool,
-        world_hidden: bool,
-    ) -> FrameGraphInputs {
-        let facts = FrameFacts {
-            hdr_width: extent.width,
-            hdr_height: extent.height,
+    // What this backend has built, for the frame's graph gates.
+    fn resident_features(&self, render_size: [u32; 2]) -> ResidentFeatures {
+        ResidentFeatures {
+            hdr_width: render_size[0],
+            hdr_height: render_size[1],
             hdr_sample_count: self.targets.msaa_samples.as_raw(),
             shadow: self.shadow.enabled(),
             shadow_map_size: self.shadow.map_size,
-            shadowed_spot_count: self.spot_shadow.count(),
-            spot_shadow_slice_size: self.spot_shadow.slice_size,
-            world_hidden,
-            cull_ready: self.cull.cull_kernels.is_some(),
-            cull_records: self.cull_count(),
-            two_pass_ready: self.two_pass_occlusion_built(),
+            cull: self.cull.cull_kernels.is_some(),
+            two_pass: self.two_pass_occlusion_built(),
             hiz: self.cull.hiz.is_some(),
             bloom_chain: self.bloom.is_some(),
-            bloom_intensity: self.post_process.bloom_intensity,
-            upscaler: self.upscale.is_some(),
-            upscaler_reads_reactive: self
-                .upscale
-                .as_ref()
-                .is_some_and(|u| u.reactive_reader().reads()),
-            bvh_live: self.rt.accel.is_some(),
-            particles: self.particle.resources.is_some()
-                && self.particle.records.iter().any(|p| p.is_some()),
-            fog: self.fog.resources.is_some() && self.fog.settings.is_some_and(|s| s.contributes()),
-            decals: self.decal.resources.is_some() && !self.decal.set.is_empty(),
-            visible_surfaces: self.transparent.as_ref().is_some_and(|t| t.any_visible()),
-            visible_see_through: self.see_through_mesh_visible(),
-            rt_transparent_ready: self
+            upscaler: self.upscale.as_ref().map(|u| ResidentUpscaler {
+                reads_reactive: u.reactive_reader().reads(),
+            }),
+            particles: self.particle.resources.is_some(),
+            fog: self.fog.resources.is_some(),
+            decals: self.decal.resources.is_some(),
+            lines: self.lines.resources.is_some(),
+            atmosphere: self.atmosphere.is_some(),
+            rt_transparent: self
                 .transparent
                 .as_ref()
                 .is_some_and(|t| t.rt_pipelines_ready()),
-            planar_targets: self.planar_reflection.is_some(),
+            taa: self.taa.is_some(),
+            model_history: self.gbuffer_targets().is_some() && self.cull.model_history.is_some(),
+            reflection_composite: self.reflection_composite.is_some(),
+        }
+    }
+
+    // What the world puts on screen this frame, for the frame's graph gates.
+    fn frame_content(&self, lines_published: bool, world_hidden: bool) -> FrameContent {
+        FrameContent {
+            world_hidden,
+            cull_records: self.state.draw.record_count(),
+            shadowed_spot_count: self.spot_shadow.count(),
+            bloom_intensity: self.post_process.bloom_intensity,
+            bvh_live: self.rt.accel.is_some(),
+            emitters: !self.particle.system.is_empty(),
+            fog: self.fog.settings.is_some_and(|s| s.contributes()),
+            decals: !self.decal.set.is_empty(),
+            visible_surfaces: self.transparent.as_ref().is_some_and(|t| t.any_visible()),
+            visible_see_through: self.see_through_mesh_visible(),
+            planar_targets: self
+                .planar_reflection
+                .as_ref()
+                .is_some_and(|s| s.has_targets()),
             water_planar_slot: self
                 .transparent
                 .as_ref()
                 .is_some_and(|t| t.water_planar_slot_live()),
-            lines: lines_published && self.lines.resources.is_some(),
+            lines: lines_published,
             visible_volumes: self.raymarch.as_ref().is_some_and(|r| r.any_visible()),
             atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
             water_sim: self.water_sim_live(),
             grass: self.grass.is_some(),
-            grass_casts: self.grass_casts(),
-            clustered,
-        };
-        let seed_inputs = render_graph::frame_graph_inputs(&self.gates, &facts);
-        // The viewport's view mode + show flags mask the seeded inputs (the
-        // per-frame counterpart of the init-time trims); Lit with every flag
-        // set is the identity, so a shipped runtime is unaffected.
-        render_graph::apply_view(&seed_inputs, self.state.view.mode, self.state.view.show)
+            ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
+        }
     }
 
-    // The camera projection at render resolution and the same projection offset
-    // by this frame's sub-pixel jitter when TAA or an upscaler accumulates.
-    // Returns (aspect, projection, jittered projection).
-    fn frame_projection(
-        &self,
-        extent: vk::Extent2D,
-        fov_y_radians: f32,
-        near: f32,
-    ) -> (f32, [[f32; 4]; 4], [[f32; 4]; 4]) {
-        let aspect = if extent.height == 0 {
-            1.0
-        } else {
-            extent.width as f32 / extent.height as f32
+    // Plan this frame in core over what this backend holds, then put what the
+    // encoders read from `&self` in place: the spot slices and the jitter the
+    // upscaler is dispatched with.
+    fn plan_frame(&mut self, args: PlanArgs) -> RenderResult<FramePlan> {
+        let PlanArgs {
+            camera,
+            elapsed,
+            render_size,
+            lines_published,
+            world_hidden,
+        } = args;
+        let resident = self.resident_features(render_size);
+        let content = self.frame_content(lines_published, world_hidden);
+        // The upscaler prescribes its jitter sequence (FSR queries its FFX-tuned
+        // offsets; DLSS / XeSS use the shared Halton-2/3) at the plan's phase.
+        let phase = self.state.planner.jitter_phase();
+        let upscaler_jitter = self.upscale.as_ref().map(|up| up.jitter_offset(phase));
+        let surface = SurfaceInputs {
+            prefilter_mip_count: self.scene.prefilter_mip_count as f32,
+            irradiance: self.irradiance_lane(),
+            screen_bounce: self.screen_bounce(),
         };
-        let proj = camera_projection(fov_y_radians, aspect, near);
-        // When TAA is on, offset the projection by a sub-pixel Halton jitter so
-        // the accumulation has fresh sample positions each frame. The jitter is
-        // a pure NDC x/y shift (depth is unaffected): `proj[2][0/1]` are the
-        // z-coefficients of clip x/y, so subtracting the jitter there shifts
-        // post-divide NDC by exactly the jitter amount (clip.w == -view_z).
-        // Mirrors the jitter in metal/draw.rs.
-        let render_proj = if let Some(up) = self.upscale.as_ref() {
-            // The active backend prescribes the jitter sequence (render-pixel
-            // units): FSR queries its FFX-tuned offsets, DLSS / XeSS use the
-            // shared Halton-2/3. The same offset feeds the dispatch via
-            // its `jitter` cell. Phase index = the TAA frame counter, which advances
-            // every frame here (TAA resources are forced built under upscaling).
-            let phase = self.taa.as_ref().map(|t| t.taa_frame).unwrap_or(0);
-            let [jx_px, jy_px] = up.jitter_offset(phase);
-            up.jitter().set([jx_px, jy_px]);
-            let mut p = proj;
-            p[2][0] -= jx_px * 2.0 / extent.width.max(1) as f32;
-            p[2][1] -= jy_px * 2.0 / extent.height.max(1) as f32;
-            p
-        } else if let Some(taa_frame) = self.taa.as_ref().map(|t| t.taa_frame) {
-            let [jx_px, jy_px] = jitter::offset_in_cycle(taa_frame, jitter::TAA_CYCLE);
-            let jx = jx_px * 2.0 / extent.width.max(1) as f32;
-            let jy = jy_px * 2.0 / extent.height.max(1) as f32;
-            let mut p = proj;
-            p[2][0] -= jx;
-            p[2][1] -= jy;
-            p
-        } else {
-            proj
+        let inputs = PlanInputs {
+            camera,
+            elapsed,
+            render_size,
+            resident,
+            content,
+            upscaler_jitter,
+            lights: &self.uniforms.lights,
+            probes: self.probe.book.records(),
+            fog: self.fog.settings,
+            pre_exposure: self.pre_exposure.value(),
+            surface,
+            effects: EffectInputs {
+                ssao: self.ssao.as_ref().map(|s| s.settings),
+                ssr: self.ssr.as_ref().and_then(|s| s.settings),
+                ssgi: self.ssgi.as_ref().map(|s| (s.settings, s.frame())),
+                rt: self.rt_reflections.as_ref().map(|r| r.settings),
+                history_scale: self.pre_exposure.history_scale(),
+            },
         };
-        (aspect, proj, render_proj)
+        let plan = self.state.planner.plan(&self.state.view, &inputs)?;
+        self.spot_shadow.render_mask = self.state.planner.shadow.spot_mask;
+        if let Some(up) = self.upscale.as_ref() {
+            up.jitter().set(plan.camera.jitter_px);
+        }
+        Ok(plan)
+    }
+}
+
+// The per-frame inputs `plan_frame` plans from.
+struct PlanArgs {
+    camera: CameraInputs,
+    elapsed: f32,
+    render_size: [u32; 2],
+    lines_published: bool,
+    world_hidden: bool,
+}
+
+// What `begin` acquired for a frame: its in-flight slot, the swapchain image,
+// the outer "start" and "end" command buffers (both recording), and the
+// render extent.
+pub(crate) struct VkFrame {
+    frame_idx: usize,
+    image_index: u32,
+    start_cmd: vk::CommandBuffer,
+    cmd: vk::CommandBuffer,
+    extent: vk::Extent2D,
+}
+
+impl FrameDevice for VkContext {
+    type Frame = VkFrame;
+
+    fn frame_scene(&mut self) -> &mut SceneState {
+        &mut self.state
+    }
+
+    fn draws_atmosphere(&self) -> bool {
+        self.atmosphere.is_some()
+    }
+
+    fn prepare(&mut self, params: &FrameParams<'_>) -> RenderResult<()> {
+        self.frame_capture.arm(params.capture);
+        if let Some(atmo) = self.atmosphere.as_mut() {
+            atmo.frame = params.atmosphere;
+        }
+        self.apply_pending_rebuilds()?;
+        // A moved world's decals and grass move with it whatever happens to
+        // history.
+        if let Some(rebase) = &params.rebase {
+            self.decal.set.rebase(rebase);
+            self.rebase_grass(rebase);
+            self.rebase_transparent_water(rebase);
+        }
+        Ok(())
+    }
+
+    // The TAA and SSGI rings, and the upscaler's history on its next dispatch.
+    fn reset_history(&mut self) {
+        if let Some(taa) = &mut self.taa {
+            taa.pass.reset_history();
+        }
+        if let Some(ssgi) = &mut self.ssgi {
+            ssgi.reset_history();
+        }
+        if let Some(upscaler) = &self.upscale {
+            upscaler.request_history_reset();
+        }
+    }
+
+    fn begin(&mut self, params: &FrameParams<'_>) -> RenderResult<Option<VkFrame>> {
+        // Minimized window: the client area is 0x0. Vulkan rejects every
+        // zero-extent operation (swapchain, render area, viewport, image copy),
+        // so park the whole frame (no acquire / record / submit / present) until
+        // the window is restored. `window_closed` keeps pumping the message loop
+        // each tick, so the restore is picked up.
+        if self.frame_is_parked() {
+            return Ok(None);
+        }
+
+        let frame_idx = self.current_frame;
+        let mut gpu_wait = self.wait_frame_slot(frame_idx)?;
+        self.retire_frame_captures(frame_idx);
+        self.reserve_frame_capture();
+        // Staged geometry writes go ahead of everything this frame submits.
+        self.flush_geometry_uploads()?;
+        self.service_background_work(params.elapsed as f32, frame_idx);
+        let timings = self.read_gpu_timings(frame_idx);
+        let gpu_done = self.read_gpu_done(frame_idx);
+        self.frame_input_sampled_us[frame_idx] = params.input_sampled_us;
+        self.begin_frame_stats(&gpu_wait, timings, gpu_done);
+        let Some(image_index) = self.acquire_frame(frame_idx, &mut gpu_wait)? else {
+            return Ok(None);
+        };
+        // Only a frame that renders moves the history's pre-exposure on.
+        self.pre_exposure.advance(self.post_process.exposure);
+
+        // The outer "end" buffer: Composite + the post-graph work, submitted
+        // after the "start" buffer and every per-pass buffer.
+        let cmd = self.commands.command_buffers[frame_idx];
+        // SAFETY: `cmd` belongs to this frame slot, whose fence was already waited on, so it is not
+        // in flight; reset then begin puts it in the recording state, which is what the subsequent
+        // recording requires.
+        unsafe {
+            self.hw
+                .device
+                .reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty())
+                .map_err(|e| crate::vulkan::error::map_vk_result(e, "reset cmd buf"))?;
+            self.hw
+                .device
+                .begin_command_buffer(
+                    cmd,
+                    &vk::CommandBufferBeginInfo::default()
+                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+                )
+                .map_err(|e| crate::vulkan::error::map_vk_result(e, "begin cmd buf"))?;
+        }
+
+        // The scene rasterizes at render resolution (== swapchain extent unless
+        // upscaling). Cascade / projection aspect, the HDR graph dims, and the
+        // sub-pixel jitter all derive from this, not the display extent.
+        let extent = self.targets.render_extent;
+        self.size_grass([extent.width, extent.height], frame_idx)?;
+        self.grass_lod = self.grass.as_ref().map(|g| {
+            g.field
+                .lod_view(concinnity_core::render::grass::lod::focal_length(
+                    extent.height,
+                    params.fov_y_radians,
+                ))
+        });
+
+        let start_cmd = self.record_frame_start(frame_idx, params.world_hidden)?;
+
+        // Push this frame's skinning matrices into the per-frame joint buffers
+        // before the skin fold reads them. No-op when no SkinnedMesh is
+        // declared.
+        self.upload_joint_matrices(frame_idx);
+        // Push this frame's morph weights into the per-frame weight buffers the
+        // skin fold reads. No-op when no SkinnedMesh carries morph targets.
+        self.upload_morph_weights(frame_idx);
+
+        // Line resources: built on the first frame that publishes lines (and
+        // this slot's vertex buffer grown to fit them), so the plan's graph gate
+        // can see them live this same frame and a world that never draws a line
+        // never compiles them. Safe here: the `wait_frame_slot` fence retired
+        // everything that read this slot last trip.
+        self.ensure_line_pipeline(frame_idx, params.lines);
+
+        Ok(Some(VkFrame {
+            frame_idx,
+            image_index,
+            start_cmd,
+            cmd,
+            extent,
+        }))
+    }
+
+    fn plan(&mut self, frame: &VkFrame, params: &FrameParams<'_>) -> RenderResult<FramePlan> {
+        self.plan_frame(PlanArgs {
+            camera: camera_inputs(&self.state, params),
+            elapsed: params.elapsed as f32,
+            render_size: [frame.extent.width, frame.extent.height],
+            lines_published: !params.lines.is_empty(),
+            world_hidden: params.world_hidden,
+        })
+    }
+
+    fn execute(
+        &mut self,
+        frame: VkFrame,
+        plan: &FramePlan,
+        frame_params: &FrameParams<'_>,
+    ) -> RenderResult<()> {
+        let FrameParams {
+            elapsed,
+            fov_y_radians,
+            near,
+            cam_pos,
+            text_calls,
+            lines,
+            world_hidden,
+            grass_benders,
+            ..
+        } = *frame_params;
+        let VkFrame {
+            frame_idx,
+            image_index,
+            start_cmd,
+            cmd,
+            ..
+        } = frame;
+        let device = self.hw.device.clone();
+        let device = &device;
+
+        // The plan's blocks into this frame's ring slots.
+        if self.shadow.enabled() {
+            upload_shadow_uniforms(
+                &self.shadow.ubos[frame_idx],
+                &self.state.planner.shadow.uniforms,
+            );
+        }
+        self.prepare_atmosphere(frame_idx, plan.atmosphere);
+        self.write_cluster_params(frame_idx, &plan.cluster);
+        self.uniforms.view_ubo_buffers[frame_idx].write_val(0, &plan.view);
+
+        // Light uniforms for this frame. Written only into slots a live edit
+        // (directional set / ambient scale) has re-armed, so a steady world
+        // writes nothing after the ring has caught up.
+        if self.uniforms.lights.take_dirty(frame_idx) {
+            upload_light_uniforms(
+                &self.uniforms.light_ubo_buffers[frame_idx],
+                self.uniforms.lights.uniforms(),
+            );
+        }
+        self.uniforms.canopy = match (&self.grass, &self.grass_lod) {
+            (Some(grass), Some(lod)) => self
+                .state
+                .canopy_params(&grass.field.canopy, (lod, grass.crossfade_phase())),
+            _ => Default::default(),
+        };
+        self.uniforms.canopy_buffers[frame_idx].write_val(0, &self.uniforms.canopy);
+        self.uniforms.canopy_tables.update(
+            self.grass.as_ref().map_or(&[], |g| g.field.canopy.tables()),
+            frame_idx,
+        );
+
+        // Reflection-probe count + records (global set 0 bindings 7 + 17): count
+        // 0 (sky reflection) until a probe bakes, so the forward shader keeps the
+        // sky path. Uploaded every frame so a later install is picked up
+        // immediately.
+        self.upload_probe_set(frame_idx)?;
+
+        // Compute-cull host-side prep: rebuild this frame's `GpuObjectData` +
+        // `GpuDrawArgs` storage buffers with the latest per-object state, on a
+        // frame whose plan runs the cull, so the `PassId::Cull` dispatch the
+        // graph executor records below sees fresh data.
+        if let Some(history) = plan.records {
+            let packing = self.build_record_buffers(frame_idx, cam_pos, history);
+            let mut stats = self.frame_stats.get();
+            stats.packing_fan_out = packing;
+            self.frame_stats.set(stats);
+        }
+
+        let params = GraphFrameParams {
+            cmd,
+            image_index,
+            frame_idx,
+            text_calls,
+            lines,
+            world_hidden,
+            frustum: &plan.camera.frustum,
+            cam_pos,
+            vp_mat: plan.camera.vp,
+            cur_vp: plan.camera.cur_vp,
+            fov_y_radians,
+            elapsed,
+            near,
+            grass_benders,
+            planar: self
+                .planar_reflection
+                .as_ref()
+                .map(|set| set.frame_plan(plan.camera.vp))
+                .unwrap_or_default(),
+            cluster_params: plan.cluster,
+            fog: plan.fog,
+            gbuffer_view: plan.gbuffer_view,
+            effects: plan.effects,
+            reactive: plan.reactive,
+        };
+        // The per-frame submission order, excluding the outer "end" buffer
+        // (`cmd`) the caller appends: the `start` buffer (leading timestamp)
+        // followed by the per-pass buffers in graph order. Submission order is
+        // GPU order on the single graphics queue, so every encoder's inline
+        // barrier synchronizes against the prior pass across buffer boundaries.
+        // Composite + the post-graph work below record into `cmd`.
+        let mut submit = std::mem::take(&mut self.submit_scratch);
+        submit.clear();
+        submit.push(start_cmd);
+        self.execute_graph(&plan.graph, &params, &mut submit)?;
+
+        self.finish_frame_stats();
+
+        // End-of-frame timestamp for the profiler overlay. Pairs with the
+        // TOP_OF_PIPE write near the top of the function (the block's first pair).
+        if let Some(pool) = self.hw.timestamp_query_pool {
+            let (_, wf_end) = pass_timing::whole_frame_pair(frame_idx);
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
+            unsafe {
+                device.cmd_write_timestamp(
+                    cmd,
+                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                    pool,
+                    wf_end,
+                );
+            }
+        }
+
+        self.finish_frame_stats();
+
+        // End-of-frame timestamp for the profiler overlay. Pairs with the
+        // TOP_OF_PIPE write in the start buffer (the block's first pair).
+        if let Some(pool) = self.hw.timestamp_query_pool {
+            let (_, wf_end) = pass_timing::whole_frame_pair(frame_idx);
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
+            unsafe {
+                device.cmd_write_timestamp(
+                    cmd,
+                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                    pool,
+                    wf_end,
+                );
+            }
+        }
+
+        let capture = self.record_frame_capture(cmd, image_index);
+
+        // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
+        unsafe { device.end_command_buffer(cmd) }
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "end cmd buf"))?;
+        // The outer "end" buffer (Composite + post-graph work + trailing
+        // timestamp) submits last, after every per-pass buffer.
+        submit.push(cmd);
+
+        let started = std::time::Instant::now();
+        let submitted = self.submit_and_present(frame_idx, image_index, &submit);
+        self.submit_scratch = submit;
+        let mut stats = self.frame_stats.get();
+        stats.submit_present_us = started.elapsed().as_micros().min(u32::MAX.into()) as u32;
+        self.frame_stats.set(stats);
+        // A submitted frame's capture waits for its slot's fence; a failed one
+        // is reported as a dropped frame by the caller.
+        if let Some(capture) = capture
+            && submitted.is_ok()
+        {
+            self.frame_capture.park(frame_idx, capture);
+        }
+        submitted
+    }
+
+    // What the TAA and SSGI accumulations wrote is next frame's history.
+    fn finish(&mut self, plan: &FramePlan) {
+        if plan.motion_read
+            && let Some(taa) = &mut self.taa
+        {
+            taa.pass.advance();
+        }
+        if let Some(ssgi) = &mut self.ssgi {
+            ssgi.advance();
+        }
     }
 }
 

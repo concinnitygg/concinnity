@@ -119,7 +119,7 @@ fn renderer_eligible(instance: &ash::Instance, pd: vk::PhysicalDevice) -> bool {
 }
 
 // The device's reported name. Apple silicon's GPU generation is only reachable
-// through it under MoltenVK, so `VkContext::gpu_profile` shares this helper.
+// through it under MoltenVK.
 pub(super) fn device_name(props: &vk::PhysicalDeviceProperties) -> String {
     // SAFETY: Vulkan fills `extension_name` with a NUL-terminated string, and the borrow does not
     // outlive the properties entry it points into.
@@ -128,17 +128,12 @@ pub(super) fn device_name(props: &vk::PhysicalDeviceProperties) -> String {
         .into_owned()
 }
 
-// Classify a chosen physical device, mirroring `VkContext::gpu_profile`.
-fn device_profile(instance: &ash::Instance, pd: vk::PhysicalDevice) -> GpuProfile {
+// Classify a physical device: the vendor, the discrete / integrated device
+// type, and the summed DEVICE_LOCAL heap size as the VRAM budget.
+pub(super) fn device_profile(instance: &ash::Instance, pd: vk::PhysicalDevice) -> GpuProfile {
     // SAFETY: a property query on a live handle; it only reads.
     let props = unsafe { instance.get_physical_device_properties(pd) };
-    let vendor = match props.vendor_id {
-        0x10DE => GpuVendor::Nvidia,
-        0x1002 => GpuVendor::Amd,
-        0x8086 => GpuVendor::Intel,
-        0x106B => GpuVendor::Apple, // Apple / MoltenVK
-        _ => GpuVendor::Other,
-    };
+    let vendor = GpuVendor::from_pci_id(props.vendor_id);
     let discrete = props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU;
     let unified = props.device_type == vk::PhysicalDeviceType::INTEGRATED_GPU;
     // SAFETY: a property query on a live handle; it only reads.

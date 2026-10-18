@@ -1,7 +1,8 @@
 // Asset streaming across the backend build: the inputs captured from the draw
 // list before it moves into the backend, and the pool wiring that consumes them.
 
-use std::collections::{BTreeSet, HashMap};
+use hashbrown::HashMap;
+use std::collections::BTreeSet;
 
 use concinnity_core::components::{BlockType, Planet, StreamingConfig, VoxelWorld};
 use concinnity_core::ecs::asset_id::AssetId;
@@ -21,8 +22,8 @@ use super::mesh_stream_inputs::{
 };
 use super::stream_sources::{deferred_mesh_payloads, disk_mesh_payload};
 use super::streaming::MeshStreamSetup;
-use crate::gfx::draw_list::DeferredMeshSeed;
-use crate::gfx::material_entry::MaterialEntry;
+use concinnity_core::render::draw_list::DeferredMeshSeed;
+use concinnity_core::render::material_entry::MaterialEntry;
 
 // The built draw list and the deferral state the streaming plan reads.
 pub(super) struct StreamGeometry<'a> {

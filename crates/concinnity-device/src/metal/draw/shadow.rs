@@ -79,10 +79,10 @@ impl MtlContext {
         // it was last rendered, so the Main pass still samples it consistently.
         // Defensive fallback to all cascades if no mask was set this frame.
         let all = (1u32 << NUM_SHADOW_CASCADES) - 1;
-        let mask = if self.shadow.render_mask == 0 {
+        let mask = if self.state.planner.shadow.cascade_mask == 0 {
             all
         } else {
-            self.shadow.render_mask
+            self.state.planner.shadow.cascade_mask
         };
         let rendered: Vec<usize> = (0..NUM_SHADOW_CASCADES)
             .filter(|i| mask & (1u32 << i) != 0)
@@ -134,7 +134,7 @@ impl MtlContext {
                 total_draws += self.draw_shadow_view(
                     &shadow_enc,
                     ShadowView {
-                        uniforms: &self.shadow.uniforms,
+                        uniforms: &self.state.planner.shadow.uniforms,
                         vp_index: cascade_idx as u32,
                         set: &self.cull.shadow_views,
                         region: cascade_idx,

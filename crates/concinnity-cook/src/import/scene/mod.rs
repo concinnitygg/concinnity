@@ -36,7 +36,9 @@ mod gltf_material;
 mod rig;
 
 use crate::authoring::world::args_with_id;
-use concinnity_core::transform::{IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul};
+use concinnity_core::transform::{
+    IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul, mat4_transform_point,
+};
 use rig::{SkinnedPart, rig_entries};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -687,7 +689,7 @@ impl SceneWalk<'_> {
                     let local_bbox = prim.bounding_box();
                     let corners = aabb_corners(local_bbox.min, local_bbox.max);
                     for c in corners {
-                        let w = transform_point(world, c);
+                        let w = mat4_transform_point(&world, c);
                         expand_aabb(self.aabb, w);
                     }
                 }
@@ -710,14 +712,6 @@ fn aabb_corners(min: [f32; 3], max: [f32; 3]) -> [[f32; 3]; 8] {
         [max[0], min[1], max[2]],
         [min[0], max[1], max[2]],
         [max[0], max[1], max[2]],
-    ]
-}
-
-fn transform_point(m: Mat4, p: [f32; 3]) -> [f32; 3] {
-    [
-        m[0][0] * p[0] + m[1][0] * p[1] + m[2][0] * p[2] + m[3][0],
-        m[0][1] * p[0] + m[1][1] * p[1] + m[2][1] * p[2] + m[3][1],
-        m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2],
     ]
 }
 
@@ -860,19 +854,6 @@ mod tests {
         assert!(near > 0.0);
         // The framing camera sees the whole scene however far it reaches.
         assert!(args.get("view_distance").is_none());
-    }
-
-    #[test]
-    fn transform_point_applies_rotation_scale_and_translation() {
-        // Column-major affine: columns scale x by 2 and translate by (10, 20, 30).
-        let m: Mat4 = [
-            [2.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [10.0, 20.0, 30.0, 1.0],
-        ];
-        assert_eq!(transform_point(m, [1.0, 2.0, 3.0]), [12.0, 22.0, 33.0]);
-        assert_eq!(transform_point(IDENTITY, [4.0, 5.0, 6.0]), [4.0, 5.0, 6.0]);
     }
 
     #[test]

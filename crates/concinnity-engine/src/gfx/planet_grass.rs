@@ -2,7 +2,7 @@
 //! layers looked up to its `Grass`. The field the backend grows and the far
 //! field the planet's tiles are tinted with both come from it.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use concinnity_core::components::{Grass, Planet};
 use concinnity_core::ecs::asset_id::AssetId;

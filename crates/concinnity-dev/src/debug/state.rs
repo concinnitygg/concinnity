@@ -78,7 +78,7 @@ pub(crate) struct DebugState {
 }
 
 // A read-only snapshot of the process thread + memory budgets (see
-// `concinnity_engine::app::budget`), served by the `budget` query. `rss_mib` is
+// `concinnity_core::budget`), served by the `budget` query. `rss_mib` is
 // the live resident set size sampled each tick; the rest are fixed at start.
 #[derive(Clone, Default, serde::Serialize)]
 pub(crate) struct BudgetSnapshot {

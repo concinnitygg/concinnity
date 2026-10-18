@@ -1,9 +1,9 @@
 //! What a placement draws with. A Prop's `material` and `cull_distance` are
 //! consumed at load, one level further out than the placement fields beside
 //! them: the draw list bakes them into the GPU draw object and the entity keeps
-//! only the handle, so there is no live column to write. The engine's
-//! `live_edit::draw_preview` seam is what reaches the draw slots; this module decides
-//! whether an edit can go through it.
+//! only the handle, so there is no live column to write. Core's
+//! `live_preview::draw` module is what reaches the draw slots; this module
+//! decides whether an edit can go through it.
 //!
 //! A material the running world never loaded is left to the build, the way a
 //! changed asset reference is on every other type: resolving one is the cook's
@@ -11,7 +11,7 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::ecs::{Entity, World};
-use concinnity_engine::live_edit::draw_preview::{self, DrawMaterial};
+use concinnity_core::render::live_preview::draw::{self as draw_preview, DrawMaterial};
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 

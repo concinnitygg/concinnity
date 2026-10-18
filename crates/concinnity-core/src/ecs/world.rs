@@ -639,13 +639,13 @@ impl World {
         self.reset_scratch();
         // The host's monotonic clock, read once per tick. A world running
         // without one records zero micros per system.
-        let clock = self.resources.get::<Clock>().map(|c| c.0);
+        let clock = self.resources.get::<Clock>().copied();
         let (systems, mut ctx) = self.systems_and_context();
         let mut i = 0;
         let mut removed_any = false;
         while i < systems.len() {
             let name = systems[i].name();
-            let started = clock.map_or(0, |now| now());
+            let started = clock.map_or(0, |c| c.read());
             #[cfg(debug_assertions)]
             let alloc_start = crate::memory::alloc_count();
             #[cfg(debug_assertions)]
@@ -653,8 +653,8 @@ impl World {
             let result = systems[i].step(&mut ctx);
             #[cfg(debug_assertions)]
             crate::ecs::access_check::set_active(None);
-            let micros = clock.map_or(0, |now| {
-                now().saturating_sub(started).min(u32::MAX as u64) as u32
+            let micros = clock.map_or(0, |c| {
+                c.read().saturating_sub(started).min(u32::MAX as u64) as u32
             });
             ctx.profile.record_system(name, micros);
             #[cfg(debug_assertions)]

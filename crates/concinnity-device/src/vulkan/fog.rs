@@ -20,9 +20,9 @@
 use ash::vk;
 use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::frame_plan::FogBlocks;
 use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use concinnity_core::render::volumetric_fog;
-use concinnity_core::transform::mat4_inverse;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::context::VkContext;
@@ -697,47 +697,14 @@ impl VkContext {
         &self,
         rec: &Recorder<'_>,
         frame_idx: usize,
-        near: f32,
-        vp: [[f32; 4]; 4],
-        cam_pos: [f32; 3],
+        blocks: &FogBlocks,
     ) {
-        let fog_settings = match &self.fog.settings {
-            Some(s) => *s,
-            None => return,
-        };
         let fog = match &self.fog.resources {
             Some(f) => f,
             None => return,
         };
-
-        // Per-frame FogParams (drives the volume integration + the fragment's
-        // viewport / reconstruction). Uploaded here so `encode_fog` only reads.
-        let inv_vp = mat4_inverse(vp);
-        let viewport_pix = [
-            self.targets.render_extent.width as f32,
-            self.targets.render_extent.height as f32,
-        ];
-        let params = fog_settings.params(
-            inv_vp,
-            cam_pos,
-            self.fog.sun_dir,
-            self.fog.sun_color,
-            viewport_pix,
-            self.pre_exposure.value(),
-        );
-        // Per-frame FogFroxelParams: world->view matrix + the volume's discrete
-        // dimensions + the linear-Z `[near, max_distance]` mapping. `near` is
-        // clamped to >= 1e-3 so the linear-Z reconstruction stays finite.
-        let froxel_params = FogFroxelParams {
-            view: self.state.view.matrix,
-            froxel_dims: [FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z],
-            _pad_align: 0,
-            z_near: near.max(1e-3),
-            z_far: fog_settings.max_distance,
-            _pad: [0.0; 2],
-        };
-        fog.params_ubos[frame_idx].write_val(0, &params);
-        fog.froxel_ubos[frame_idx].write_val(0, &froxel_params);
+        fog.params_ubos[frame_idx].write_val(0, &blocks.params);
+        fog.froxel_ubos[frame_idx].write_val(0, &blocks.froxel);
 
         // Both of this pass's transitions are graph-driven. The froxel volume's
         // SHADER_READ_ONLY -> GENERAL open comes from the FogFroxel producer
@@ -773,16 +740,7 @@ impl VkContext {
     // in SHADER_READ_ONLY_OPTIMAL. Alpha-blends `(scattered, 1 - T)` over the
     // resolved HDR target. `FogParams` / `FogFroxelParams` were uploaded by
     // `encode_fog_froxel` for this frame's slot, so this pass only binds.
-    pub(in crate::vulkan) fn encode_fog(
-        &self,
-        rec: &Recorder<'_>,
-        frame_idx: usize,
-        _vp: [[f32; 4]; 4],
-        _cam_pos: [f32; 3],
-    ) {
-        if self.fog.settings.is_none() {
-            return;
-        }
+    pub(in crate::vulkan) fn encode_fog(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let fog = match &self.fog.resources {
             Some(f) => f,
             None => return,

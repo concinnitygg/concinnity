@@ -105,7 +105,7 @@ pub struct AnimationSystem {
     targets: BTreeMap<SkinnedMeshHandle, TargetState>,
     // Interned-name -> handle index snapshotted at init, so the animation
     // debug tool calls (which address a mesh by name) can find the bucket.
-    name_index: crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex,
+    name_index: concinnity_core::animation::skinned_mesh_map::SkinnedMeshNameIndex,
     // Clip time `t` in seconds: the frame time of every unpaused step, so
     // playback freezes on its pose behind a menu and resumes from it.
     clip_secs: f32,
@@ -190,14 +190,14 @@ impl AnimationSystem {
 impl System for AnimationSystem {
     fn access(&self) -> Access {
         Access::new()
-            .reads_components(crate::component_mask![CharacterRig])
-            .writes_components(crate::component_mask![
+            .reads_components(concinnity_core::component_mask![CharacterRig])
+            .writes_components(concinnity_core::component_mask![
                 SkeletonPose,
                 AnimationParams,
                 GroundProbes,
             ])
-            .reads_resources(crate::resource_mask![MenuActive, FrameTime])
-            .writes_resources(crate::resource_mask![RootMotionEvent])
+            .reads_resources(concinnity_core::resource_mask![MenuActive, FrameTime])
+            .writes_resources(concinnity_core::resource_mask![RootMotionEvent])
     }
 
     fn init(&mut self, ctx: &mut PipelineContext) {
@@ -212,11 +212,11 @@ impl System for AnimationSystem {
         // animation debug tool calls. The correlation web itself is keyed by
         // the authored `target` handles directly.
         self.name_index = ctx
-            .resource::<crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex>()
+            .resource::<concinnity_core::animation::skinned_mesh_map::SkinnedMeshNameIndex>()
             .cloned()
             .unwrap_or_default();
         let skin_index = ctx
-            .resource::<crate::gfx::skinned_mesh_map::SkinnedMeshSkinIndex>()
+            .resource::<concinnity_core::animation::skinned_mesh_map::SkinnedMeshSkinIndex>()
             .cloned()
             .unwrap_or_default();
         // Animation asset id -> (target bucket, clip slot), for resolving

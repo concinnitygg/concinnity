@@ -28,12 +28,11 @@ use concinnity_core::render::dlss::DlssPreset;
 
 use concinnity_core::settings::quality::{more_aggressive_upscale, resolve_ceiling};
 use concinnity_core::settings::{
-    QualityPreset, ResolvedGraphics, ResolvedSettings, UserGraphicsSettings, WorldAssets,
-    WorldSettings,
+    QualityPreset, ResolvedGraphics, ResolvedSettings, SettingsLayers, UserGraphicsSettings,
+    WorldAssets, WorldSettings,
 };
 
 use crate::app::run::LaunchRequest;
-use crate::settings::system::SettingsState;
 
 fn ceilings() -> Vec<(String, QualityPreset, GpuTier)> {
     let mut out = Vec::new();
@@ -553,14 +552,16 @@ fn case_text(
         ..LaunchRequest::default()
     };
     // The settings state as init leaves it, then a preset change.
-    let mut state = SettingsState::new();
-    state.authored = world.clone();
-    state.session = launch.session_overrides();
-    let resolved = state.resolve(user, &ceiling);
+    let session = launch.session_overrides();
+    let layers = |user| SettingsLayers {
+        session: Some(&session),
+        ..SettingsLayers::new(world, &ceiling, user)
+    };
+    let resolved = layers(user).resolve();
 
     let cleared = preset_cleared(user);
     let mut after_preset = resolved.clone();
-    after_preset.set_quality(state.resolve_quality(&cleared, &ceiling));
+    after_preset.set_quality(layers(&cleared).resolve_quality());
     let (bare, two_pass, after_two_pass) = if world_name == "bare" {
         let render_scale = user.render_scale.unwrap_or_else(|| {
             more_aggressive_upscale(UpscaleQuality::default(), ceiling.min_upscale)
@@ -812,9 +813,9 @@ fn a_bare_world_resolves_to_the_section_defaults() {
                 ..GpuProfile::UNKNOWN
             };
             let ceiling = resolve_ceiling(preset, &profile);
-            let mut state = SettingsState::new();
-            state.authored = bare.clone();
-            let graphics = state.resolve(&user, &ceiling).graphics;
+            let graphics = SettingsLayers::new(&bare, &ceiling, &user)
+                .resolve()
+                .graphics;
             let (scale, two_pass) = expected(user_name, &ceiling_name);
             let case = format!("{user_name}/{ceiling_name}");
             assert_eq!(graphics.upscale_scale(), scale, "{case}");
@@ -851,10 +852,9 @@ fn user_overrides_reach_the_exposure_bias_and_metering() {
     use concinnity_core::gfx::auto_exposure::EV_LIMIT;
     for (world_name, world) in worlds() {
         for (user_name, user) in users() {
-            let mut state = SettingsState::new();
-            state.authored = world.clone();
-            let g = state
-                .resolve(&user, &concinnity_core::settings::QualityCeiling::NONE)
+            let ceiling = concinnity_core::settings::QualityCeiling::NONE;
+            let g = SettingsLayers::new(&world, &ceiling, &user)
+                .resolve()
                 .graphics;
             let w = &world.graphics;
             let case = format!("{world_name}/{user_name}");

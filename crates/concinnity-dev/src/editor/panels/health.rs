@@ -30,6 +30,7 @@
 //! sums every resident item. The per-frame system timings are the one thing
 //! accumulated every tick, because a rate needs the whole window.
 
+use concinnity_core::budget::{MemoryBudget, ThreadBudget};
 use concinnity_core::ecs::World;
 use concinnity_core::memory::{LedgerSnapshot, MemStats, MemTag, Realm, SizeClass};
 use concinnity_engine::app::mem_drift::MemoryDrift;
@@ -352,7 +353,9 @@ impl HealthState {
         self.snapshot = HealthSnapshot {
             heap: concinnity_core::memory::stats(),
             rss: sysmem::process_resident_bytes(),
-            total_ram: concinnity_engine::ecs::memory_budget(world).and_then(|b| b.total_ram_bytes),
+            total_ram: world
+                .resource::<MemoryBudget>()
+                .and_then(|b| b.total_ram_bytes),
             pool_bytes: pool_bytes(world),
             // A backend that cannot report its allocation reports zero; that is
             // "unknown", not "nothing allocated".
@@ -363,7 +366,7 @@ impl HealthState {
             systems_cores,
             // A failed read holds the last known rate rather than blanking the row.
             process_cores: self.cpu.sample().or(self.snapshot.process_cores),
-            total_cores: concinnity_engine::ecs::thread_budget(world).map(|b| b.total_cores),
+            total_cores: world.resource::<ThreadBudget>().map(|b| b.total_cores),
             tags: concinnity_core::memory::ledger().snapshot(),
             hot_class: concinnity_core::memory::size_classes().and_then(|c| c.busiest()),
             drift: concinnity_engine::ecs::memory_drift(world),

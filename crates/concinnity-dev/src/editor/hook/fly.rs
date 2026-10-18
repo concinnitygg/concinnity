@@ -34,9 +34,8 @@ pub(super) fn fly_step(
     );
     // Free-fly basis: forward follows the pitch, right stays horizontal
     // (matching the engine's free-fly controller).
-    let cp = pitch.cos();
-    let fwd = [-yaw.sin() * cp, pitch.sin(), -yaw.cos() * cp];
-    let right = [yaw.cos(), 0.0_f32, -yaw.sin()];
+    let fwd = concinnity_core::math::forward(yaw, pitch);
+    let right = concinnity_core::math::flat_right(yaw);
     let mut dir = [0.0_f32; 3];
     let mut add = |v: [f32; 3], sign: f32| {
         dir[0] += v[0] * sign;

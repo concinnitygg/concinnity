@@ -23,7 +23,7 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PixelRect;
 use concinnity_core::render::post::reflection_path::ReflectionPath;
 use concinnity_core::render::radiance_storage::FaceStorage;
-use concinnity_core::render::uniforms::ViewUniforms;
+use concinnity_core::render::uniforms::{FaceCamera, ViewUniforms};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -128,7 +128,7 @@ impl FacePass<'_> {
 impl MtlContext {
     // 1.0 when a reflection-resolve pass (SSR resolve or RT reflections) will
     // composite over this frame's HDR target, else 0.0. Mirrors the
-    // `scene_input` gate in draw/pass_uniforms.rs (both resolves feed the
+    // `scene_input` gate in draw/scene_textures.rs (both resolves feed the
     // reflection composite's output and the graph picks RT over SSR). The forward shader reads it from
     // `ViewUniforms.reflections_enabled` to hand glossy specular to that resolve.
     fn reflection_resolve_active(&self) -> f32 {
@@ -375,25 +375,16 @@ impl MtlContext {
             });
         }
 
-        let view_uniforms = ViewUniforms {
+        let view_uniforms = ViewUniforms::face(FaceCamera {
             vp,
             view,
-            elapsed,
-            // Probe-face bake: no reflection resolve runs over the probe cube, so
-            // the forward probe specular is the only reflection source here. Keep
-            // it (0.0) so captured glossy surfaces are not flattened.
-            reflections_enabled: 0.0,
             cam_pos,
+            elapsed,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
-            // A probe capture is always lit, whatever the viewport shows.
-            shade_mode: 0.0,
-            ambient_occlusion: 0.0,
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
             pre_exposure: pass.storage.scale(),
-            screen_bounce: 0.0,
-            _pad: 0.0,
-        };
+        });
 
         self.bind_clusters(&encoder, pass.clusters);
         let draw_calls =
@@ -695,7 +686,7 @@ impl MtlContext {
             0,
             concinnity_core::render::shader_programs::metal::MAIN_MESH_VERTICES_BUFFER,
         );
-        enc.set_fragment_value(&self.light_uniforms, 4);
+        enc.set_fragment_value(self.lights.uniforms(), 4);
         enc.set_fragment_value(&self.canopy, 21);
         if let Some(tables) = self.canopy_tables.buffer() {
             enc.set_fragment_buffer(tables, 0, crate::metal::canopy::CANOPY_TABLES_BUFFER_INDEX);
@@ -715,7 +706,7 @@ impl MtlContext {
         // GpuLight.data_index. Inherited by the ICB draws like the buffers
         // above, so this one bind covers every main-pass variant.
         enc.set_fragment_buffer(&self.scene.area_light_buffer, 0, 14);
-        enc.set_fragment_value(&self.shadow.uniforms, 5);
+        enc.set_fragment_value(&self.state.planner.shadow.uniforms, 5);
         // Reflection-probe count at fragment buffer(6) and one parallax record
         // per baked probe at buffer(15); the cube array rides the texture
         // argument buffer. The shader weights every box covering the surface.

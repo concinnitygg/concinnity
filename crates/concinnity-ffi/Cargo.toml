@@ -30,7 +30,7 @@ concinnity-core = { workspace = true }
 concinnity-engine = { workspace = true }
 concinnity-host = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
+tracing = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 concinnity-testing = { workspace = true }

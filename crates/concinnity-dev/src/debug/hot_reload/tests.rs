@@ -15,7 +15,6 @@ use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::render::backend;
 use concinnity_core::render::draw_slot;
 use concinnity_core::render::error;
-use concinnity_core::render::scene_flow;
 use concinnity_core::render::scene_state;
 use concinnity_core::render::volumetric_fog;
 use concinnity_engine::live_edit;
@@ -723,11 +722,6 @@ struct RecordingBackend {
     fail_env_updates: bool,
 }
 
-impl scene_flow::SceneControl for RecordingBackend {
-    fn update_visibility(&mut self, _: DrawIndex, _: bool) {}
-    fn set_fade(&mut self, _: f32) {}
-}
-
 impl backend::SceneHost for RecordingBackend {
     fn scene(&self) -> Option<&scene_state::SceneState> {
         None
@@ -741,6 +735,14 @@ impl backend::SceneHost for RecordingBackend {
 }
 
 impl backend::RenderBackend for RecordingBackend {
+    fn live_edit(&mut self) -> Option<&mut dyn backend::LiveEdit> {
+        Some(self)
+    }
+
+    fn live_edit_ref(&self) -> Option<&dyn backend::LiveEdit> {
+        Some(self)
+    }
+
     fn window_closed(&mut self) -> bool {
         false
     }
@@ -766,7 +768,6 @@ impl backend::SkinnedDraws for RecordingBackend {
     ) -> error::RenderResult<()> {
         Ok(())
     }
-    fn update_skinned_pose(&mut self, _: SkinnedIndex, _: &[[[f32; 4]; 4]]) {}
 }
 
 impl backend::DrawStreaming for RecordingBackend {

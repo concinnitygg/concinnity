@@ -17,6 +17,7 @@ use crate::gfx::render_types::{DrawIndex, DrawObject, clone_reserve, runtime_res
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
 use crate::planet::{HorizonOccluder, TileMorphFrame};
 use crate::render::backend::PlanetChunk;
+use crate::render::frame_plan::FramePlanner;
 use crate::render::grass::{CanopyField, DrawnPlanetTile, GrassLodView};
 use crate::render::model_history::ModelHistory;
 use crate::render::skinned_slots::SkinnedSlots;
@@ -55,6 +56,8 @@ pub struct SceneState {
     /// The camera a planet's tiles morph by, which their vertices
     /// morph by; `None` for a world without one.
     pub tile_morph: Option<TileMorphFrame>,
+    /// Plans each frame the backend executes.
+    pub planner: FramePlanner,
 }
 
 impl SceneState {
@@ -70,6 +73,7 @@ impl SceneState {
             planet_chunks: BTreeMap::new(),
             horizon_occluder: None,
             tile_morph: None,
+            planner: FramePlanner::default(),
         }
     }
 
@@ -86,10 +90,12 @@ impl SceneState {
         }
     }
 
-    /// The planet tiles drawn this frame: every planet chunk shown and
-    /// resident, with the model and first vertex its draw renders with.
-    pub fn drawn_planet_tiles(&self) -> Vec<DrawnPlanetTile> {
-        self.drawn_planet_tiles_iter().collect()
+    /// The planet tiles drawn this frame into `out`, replacing what it held:
+    /// every planet chunk shown and resident, with the model and first vertex
+    /// its draw renders with.
+    pub fn drawn_planet_tiles_into(&self, out: &mut Vec<DrawnPlanetTile>) {
+        out.clear();
+        out.extend(self.drawn_planet_tiles_iter());
     }
 
     /// This frame's canopy block for `canopy`, laid out in the frame the
@@ -181,6 +187,47 @@ impl DrawList {
     pub fn runtime_reserve_full(&self) -> bool {
         self.runtime_capped && runtime_reserve_full(&self.objects, self.n_objects, self.n_runtime)
     }
+
+    /// Cull records across the build-time objects, the instances, the runtime
+    /// reserve and the skinned tail.
+    pub fn record_count(&self) -> usize {
+        self.n_objects + self.n_instances + self.n_runtime + self.n_skinned
+    }
+
+    /// Record index of the runtime reserve's first slot, past the build-time
+    /// objects and the instances.
+    pub fn runtime_record_base(&self) -> usize {
+        self.n_objects + self.n_instances
+    }
+
+    /// Record index of the first skinned record, past the runtime reserve. The
+    /// records before it share one indirect draw, the skinned tail another.
+    pub fn skinned_record_base(&self) -> usize {
+        self.runtime_record_base() + self.n_runtime
+    }
+
+    /// Call `emit` with each resident runtime object's reserve slot, its draw
+    /// index and the object, packing them into the front of the reserve.
+    /// Returns how many were emitted, so the caller can disable the rest.
+    ///
+    /// A retired chunk or clone leaves a gap in the objects past `n_objects`;
+    /// skipping gaps keeps a live object from being pushed past the reserve.
+    pub fn for_each_runtime_record<F>(&self, mut emit: F) -> usize
+    where
+        F: FnMut(usize, usize, &DrawObject),
+    {
+        let mut slot = 0;
+        for (index, object) in self.objects.iter().enumerate().skip(self.n_objects) {
+            if slot >= self.n_runtime {
+                break;
+            }
+            if object.resident {
+                emit(slot, index, object);
+                slot += 1;
+            }
+        }
+        slot
+    }
 }
 
 /// The camera and presentation state a frame is drawn with.
@@ -239,6 +286,7 @@ mod tests {
     use super::*;
     use crate::test_support::draw_object;
     use alloc::vec;
+    use alloc::vec::Vec;
 
     #[test]
     fn a_reserved_list_partitions_its_records() {
@@ -247,6 +295,39 @@ mod tests {
         assert_eq!(draw.n_instances, 3);
         assert_eq!(draw.n_runtime, 5 + clone_reserve(2));
         assert_eq!(draw.n_skinned, 0);
+    }
+
+    #[test]
+    fn records_lay_out_objects_instances_reserve_then_skinned() {
+        let mut draw = DrawList::with_runtime_reserve(vec![draw_object(), draw_object()], 3, 5);
+        draw.n_skinned = 4;
+        let reserve = draw.n_runtime;
+        assert_eq!(draw.runtime_record_base(), 5);
+        assert_eq!(draw.skinned_record_base(), 5 + reserve);
+        assert_eq!(draw.record_count(), 5 + reserve + 4);
+    }
+
+    #[test]
+    fn runtime_records_pack_residents_past_gaps() {
+        let mut draw = DrawList::with_runtime_reserve(vec![draw_object()], 0, 2);
+        for resident in [true, false, true] {
+            let mut object = draw_object();
+            object.resident = resident;
+            draw.objects.push(object);
+        }
+        let mut seen = Vec::new();
+        let emitted = draw.for_each_runtime_record(|slot, index, _| seen.push((slot, index)));
+        assert_eq!(emitted, 2);
+        assert_eq!(seen, vec![(0, 1), (1, 3)]);
+    }
+
+    #[test]
+    fn an_unreserved_list_has_no_runtime_records() {
+        let mut draw = DrawList::unreserved(vec![draw_object()], 0);
+        let mut object = draw_object();
+        object.resident = true;
+        draw.objects.push(object);
+        assert_eq!(draw.for_each_runtime_record(|_, _, _| {}), 0);
     }
 
     #[test]

@@ -6,6 +6,7 @@ use concinnity_core::ecs::PipelineContext;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::reflection_probe::{self, ProbePlacement};
+use concinnity_core::transform::mat4_transform_point;
 
 // World-space position used to score a draw object for texture streaming:
 // the AABB center when bounds are finite, otherwise the model-matrix
@@ -57,15 +58,6 @@ pub(super) fn gather_auto_seed_triangles(
         return None;
     }
 
-    // Column-major model-to-world transform of a model-space point.
-    let xf = |m: &[[f32; 4]; 4], p: [f32; 3]| {
-        [
-            m[0][0] * p[0] + m[1][0] * p[1] + m[2][0] * p[2] + m[3][0],
-            m[0][1] * p[0] + m[1][1] * p[1] + m[2][1] * p[2] + m[3][1],
-            m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2],
-        ]
-    };
-
     let mut tris = Vec::with_capacity(total_tris);
     for o in draw_objects.iter().filter(|o| eligible(o)) {
         let iend = o.index_offset + o.index_count;
@@ -79,9 +71,9 @@ pub(super) fn gather_auto_seed_triangles(
                 continue;
             }
             tris.push([
-                xf(&o.model, all_vertices[a].pos),
-                xf(&o.model, all_vertices[b].pos),
-                xf(&o.model, all_vertices[c].pos),
+                mat4_transform_point(&o.model, all_vertices[a].pos),
+                mat4_transform_point(&o.model, all_vertices[b].pos),
+                mat4_transform_point(&o.model, all_vertices[c].pos),
             ]);
         }
     }

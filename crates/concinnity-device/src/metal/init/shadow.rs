@@ -1,13 +1,9 @@
 //! Cascade and spot shadow states: the shadow maps, the compare sampler, and
 //! the static spot projections.
 
-use concinnity_core::gfx::render_types::{
-    self, LightUniforms, NUM_SHADOW_CASCADES, SpotShadowData,
-};
+use concinnity_core::gfx::render_types::{self, NUM_SHADOW_CASCADES, SpotShadowData};
 use concinnity_core::render::backend_init::ShadowParams;
-use concinnity_core::render::csm;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::lights;
 use concinnity_core::render::spot_shadow;
 use objc2_metal::{
     MTLDevice as _, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor,
@@ -19,11 +15,7 @@ use crate::metal::context::{ShadowState, SpotShadowState, bytes_of_slice};
 use crate::metal::depth::SHADOW_SAMPLE_COMPARE;
 use crate::metal::texture::{create_shadow_map_array, create_shadow_map_fallback};
 
-pub(super) fn build_shadow(
-    gpu: &InitGpu<'_>,
-    shadows: &ShadowParams,
-    light_uniforms: &LightUniforms,
-) -> RenderResult<ShadowState> {
+pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderResult<ShadowState> {
     let device = &*gpu.hw.device;
 
     // The cascade array map exists only when the map size is > 0. The fallback
@@ -40,8 +32,6 @@ pub(super) fn build_shadow(
         // reference passes against: fully lit.
         (create_shadow_map_fallback(device)?, 1)
     };
-    let uniforms = csm::empty_shadow_uniforms();
-
     // compare sampler for PCF: always created so texture(2) / sampler(1) are
     // always bound; returns 1.0 (lit) where the reference is no farther from
     // the light than the stored depth.
@@ -59,20 +49,11 @@ pub(super) fn build_shadow(
             .ok_or_else(|| RenderError::Other("failed to create shadow sampler state".into()))?
     };
 
-    // Cache the first directional light's direction; per-frame CSM updates
-    // use it. `update_directional_lights` re-caches it when the sun changes.
-    let light_dir = lights::sun_direction(light_uniforms);
-
     Ok(ShadowState {
         enabled,
         map,
         map_size,
-        cadence: shadows.cadence,
-        scheduler: Default::default(),
-        render_mask: 0,
         sampler,
-        uniforms,
-        light_dir,
     })
 }
 
@@ -117,7 +98,6 @@ pub(super) fn build_spot_shadow(
             .iter()
             .map(spot_shadow::slice_frustum)
             .collect(),
-        scheduler: Default::default(),
         render_mask: 0,
     })
 }

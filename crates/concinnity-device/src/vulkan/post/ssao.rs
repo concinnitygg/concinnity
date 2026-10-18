@@ -11,6 +11,7 @@
 //! pass-through 1.0.
 
 use ash::vk;
+use concinnity_core::gfx::render_types::SsaoParams;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::ssao::settings::SsaoSettings;
 use concinnity_core::render::post::ssao::{OCCLUSION_FORMAT, SsaoInputs, SsaoPass};
@@ -68,10 +69,9 @@ impl VkContext {
         &self,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
-        fov_y_radians: f32,
-        aspect: f32,
+        params: Option<&SsaoParams>,
     ) -> RenderResult<()> {
-        let Some(ssao) = &self.ssao else {
+        let (Some(ssao), Some(params)) = (&self.ssao, params) else {
             return Ok(());
         };
         let Some(gbuffer) = self.gbuffer_targets().and_then(|gb| gb.frame(frame_idx)) else {
@@ -96,9 +96,7 @@ impl VkContext {
                     rest: AttachmentRest::Graph,
                 },
             },
-            &ssao
-                .settings
-                .params(fov_y_radians, aspect, self.targets.render_extent.height),
+            params,
         )
     }
 }

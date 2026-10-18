@@ -4,8 +4,8 @@
 //!
 //! What a copy's draw slot is comes from a host, through the `clone_slot` /
 //! `acquire_slot` seams: a slot index is a renderer's to allocate, and it is
-//! the one thing here that is. Everything else -- which components a copy
-//! carries, when a Spawner is due, when a Lifetime is up -- is the world's, so
+//! the one thing here that is. Everything else (which components a copy
+//! carries, when a Spawner is due, when a Lifetime is up) is the world's, so
 //! it lives with the world.
 
 use crate::gfx::render_types::{DrawIndex, SkinnedIndex};

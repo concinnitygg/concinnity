@@ -2,15 +2,15 @@
 // backend: texture scoring centers, per-streamed-mesh geometry copies, and the
 // draw-to-mesh-handle mapping.
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::{HashMap, HashSet};
 
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::DrawIndex;
 
 use super::draw_geometry::draw_object_position;
-use crate::gfx::draw_list::DeferredMeshSeed;
 use crate::gfx::streaming::mesh::DecodedMesh;
+use concinnity_core::render::draw_list::DeferredMeshSeed;
 
 // Per-streamed-mesh data from `mesh_stream_data`: the draw-object index of each
 // streamed mesh, its scoring center, and its decoded per-mesh geometry copy.

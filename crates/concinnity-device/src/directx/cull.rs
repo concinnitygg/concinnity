@@ -16,7 +16,7 @@
 
 use concinnity_core::gfx::frustum::{Frustum, Plane};
 use concinnity_core::gfx::lod;
-use concinnity_core::gfx::render_types::{self, MAX_SHADOWED_SPOTS};
+use concinnity_core::gfx::render_types::MAX_SHADOWED_SPOTS;
 use concinnity_core::profile::FanOutTiming;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::model_history::HistoryMode;
@@ -110,7 +110,7 @@ pub(in crate::directx) struct CullState {
     // reads `model` from `GpuObjectData[object_id]` (root SRV) and projects
     // through `light_vps[cascade_idx]`; `shadow_bindless_cmd_sig` is the shared
     // cull command signature rebuilt against its root sig. `shadow_indirect_buffers`
-    // is one buffer per frame-in-flight sized `NUM_SHADOW_CASCADES * cull_count()`
+    // is one buffer per frame-in-flight sized `NUM_SHADOW_CASCADES * record_count()`
     // commands -- cascade `c`'s region is `[c*cull_count, (c+1)*cull_count)`,
     // written by binding the cull output UAV at a per-cascade GPU-address offset.
     // `shadow_cull_status_buffers` is a per-frame scratch the shadow cull writes
@@ -143,12 +143,6 @@ pub(in crate::directx) struct CullState {
     // Built each frame after `execute_graph`; consumed by the *next* frame's
     // cull dispatch through `prev_view_proj`.
     pub hiz: Option<super::hiz::HiZResources>,
-    // Snapshot of the previous frame's un-jittered view-projection matrix the
-    // next frame's cull kernel reprojects AABBs through.
-    pub prev_view_proj: std::cell::Cell<[[f32; 4]; 4]>,
-    // `false` on the first frame and after a resize; while false the cull
-    // kernel skips the Hi-Z test.
-    pub hiz_valid: std::cell::Cell<bool>,
 }
 
 // Byte stride of one `IndirectCommand` in the cull kernel's output buffer: a
@@ -294,85 +288,6 @@ impl DxContext {
         }
     }
 
-    // Total records the GPU-driven cull + bindless main pass processes: the
-    // build-time static objects, the instanced-cluster instances folded in after
-    // them, the runtime reserve (streamed chunks and spawned clones), then the
-    // skinned objects. The
-    // cull dispatch + the `GpuObjectData` / `GpuDrawArgs` / indirect buffers all
-    // count this; the main pass then draws the static+instance prefix and the
-    // skinned tail with two `ExecuteIndirect` calls. With no instanced props /
-    // skinned meshes (or a non-bindless world) the extra terms are 0, leaving it
-    // equal to the static `draw.n_objects`.
-    pub(in crate::directx) fn cull_count(&self) -> usize {
-        self.state.draw.n_objects
-            + self.state.draw.n_instances
-            + self.state.draw.n_runtime
-            + self.state.draw.n_skinned
-    }
-
-    // Buffer index of the first runtime record. The runtime reserve is
-    // `[runtime_record_base(), skinned_record_base())`, and holds both kinds of
-    // object that appear after init: streamed `VoxelWorld` chunks and spawned
-    // clones. Resident ones are packed into the front of it each frame and the
-    // unused tail is disabled. Both ride the static + instance prefix
-    // `ExecuteIndirect` (their geometry already lives in the shared VB/IB), so
-    // this is just the instance tail.
-    pub(in crate::directx) fn runtime_record_base(&self) -> usize {
-        self.state.draw.n_objects + self.state.draw.n_instances
-    }
-
-    // Buffer index of the first skinned record. The static + instance + runtime
-    // prefix the first `ExecuteIndirect` draws ends here; the skinned tail
-    // `[skinned_record_base(), cull_count())` is the second `ExecuteIndirect` (over
-    // the per-frame deformed VB). The runtime reserve sits inside the prefix, so
-    // the skinned base is past it.
-    pub(in crate::directx) fn skinned_record_base(&self) -> usize {
-        self.state.draw.n_objects + self.state.draw.n_instances + self.state.draw.n_runtime
-    }
-
-    // Walk every resident runtime draw object -- the tail past `draw.n_objects`,
-    // which is streamed `VoxelWorld` chunks and runtime clones alike -- invoking
-    // `emit` with the record's reserve index `k` (0-based, into
-    // `[runtime_record_base() + k]`), the object's draw index, and the
-    // `DrawObject`. Both kinds already
-    // have their geometry in the shared VB/IB (a clone reuses its template's
-    // slice), so both fold into the static + instance prefix indirect draw as
-    // plain records carrying their own `base_vertex` and pool indices.
-    //
-    // Non-resident slots are skipped: chunks and clones share the draw-slot free
-    // list, so a retired one leaves a gap in this tail, and counting gaps toward
-    // `k` could push a live record past `draw.n_runtime` and silently drop it.
-    // Only resident objects consume a reserve index, bounded by the streaming
-    // window plus the clone cap (<= `draw.n_runtime`). Returns the number
-    // emitted, so the caller can disable the unused reserve tail.
-    pub(in crate::directx) fn for_each_runtime_record<F>(&self, mut emit: F) -> usize
-    where
-        F: FnMut(usize, usize, &render_types::DrawObject),
-    {
-        if self.state.draw.n_runtime == 0 {
-            return 0;
-        }
-        let mut k = 0;
-        for (i, obj) in self
-            .state
-            .draw
-            .objects
-            .iter()
-            .enumerate()
-            .skip(self.state.draw.n_objects)
-        {
-            if !obj.resident {
-                continue;
-            }
-            if k >= self.state.draw.n_runtime {
-                break;
-            }
-            emit(k, i, obj);
-            k += 1;
-        }
-        k
-    }
-
     // Shader-bucket regions the cull kernel routes between: the world default
     // program plus one per material-referenced world shader. 1 when the world
     // declares no extra shaders, which collapses the indirect buffer to the
@@ -399,18 +314,6 @@ impl DxContext {
     // Byte offset of shader bucket `b`'s command region in an indirect buffer.
     pub(in crate::directx) fn bucket_region_offset(&self, bucket: usize) -> u64 {
         (bucket * self.cull.bucket_stride) as u64 * INDIRECT_COMMAND_STRIDE as u64
-    }
-
-    // How this frame's draw-args build treats the model-history ring. The
-    // GPU-driven pre-pass both fills and reads it; with no consumer of motion,
-    // or with the pre-pass not built, the ring goes stale, so every record is
-    // marked `NO_HISTORY` and the tracker re-primes when the pre-pass returns.
-    pub(in crate::directx) fn model_history_mode(&self) -> HistoryMode {
-        match self.gbuffer.is_some() && self.cull.model_history_pso.is_some() && self.reads_motion()
-        {
-            true => HistoryMode::Track,
-            false => HistoryMode::Stale,
-        }
     }
 
     // Pack ring slot `slot`'s `StructuredBuffer<GpuObjectData>` and
@@ -442,8 +345,8 @@ impl DxContext {
         ) else {
             return FanOutTiming::default();
         };
-        let n_cull = self.cull_count();
-        // SAFETY: both buffers were mapped at init with room for `cull_count()`
+        let n_cull = self.state.draw.record_count();
+        // SAFETY: both buffers were mapped at init with room for `draw.record_count()`
         // records, which never changes; slot `slot` is this frame's (its fence has
         // signaled) or the probe bake's reserved slot before its capture is
         // submitted, so the GPU reads neither, and these are the only views of
@@ -505,9 +408,9 @@ impl DxContext {
         // them), so a resident one draws unconditionally; a freed slot's
         // `resident` clear disables it, and the cull kernel never reads a disabled
         // record's stale object.
-        let runtime_base = self.runtime_record_base();
+        let runtime_base = self.state.draw.runtime_record_base();
         let grass_route = self.grass_route();
-        let n_resident_runtime = self.for_each_runtime_record(|k, i, obj| {
+        let n_resident_runtime = self.state.draw.for_each_runtime_record(|k, i, obj| {
             let Some((rec, arg)) = records
                 .get_mut(runtime_base + k)
                 .zip(draw_args.get_mut(runtime_base + k))
@@ -553,7 +456,7 @@ impl DxContext {
         }
 
         // Skinned objects: one record each in the reserved tail at
-        // `[skinned_record_base(), cull_count())`. `model = obj.model` (applied
+        // `[skinned_record_base(), record_count())`. `model = obj.model` (applied
         // after the per-frame skin deform), flat-pool texture indices like a
         // static object, and a padded bind-pose AABB so the cull kernel can
         // frustum/Hi-Z test them, so they are cullable + resident. The main
@@ -561,7 +464,7 @@ impl DxContext {
         // deformed-vertex buffer with the skinned index buffer bound, so
         // `base_vertex = 0` and the active-LOD slice is the element offset into
         // the skinned IB.
-        let skinned_base = self.skinned_record_base();
+        let skinned_base = self.state.draw.skinned_record_base();
         let skinned = self
             .state
             .skinned
@@ -648,7 +551,7 @@ impl DxContext {
         // pyramid has been built) and on whether a `HiZResources` was built
         // at init (`self.cull.hiz.is_some()`).
         let (hiz_size, hiz_mip_count, hiz_srv, hiz_enabled) = match self.cull.hiz.as_ref() {
-            Some(h) if self.cull.hiz_valid.get() => (
+            Some(h) if self.state.planner.temporal().occlusion().valid() => (
                 [h.width as f32, h.height as f32],
                 h.mip_count,
                 Some(h.srv_gpu),
@@ -665,8 +568,8 @@ impl DxContext {
         let mut cull_params = CullParams {
             planes: [[0.0; 4]; 6],
             cam_pos,
-            object_count: self.cull_count() as u32,
-            prev_view_proj: self.cull.prev_view_proj.get(),
+            object_count: self.state.draw.record_count() as u32,
+            prev_view_proj: self.state.planner.temporal().occlusion().prev_view_proj(),
             hiz_size,
             hiz_mip_count,
             hiz_enabled,
@@ -674,9 +577,7 @@ impl DxContext {
             bucket_stride: self.cull.bucket_stride as u32,
             _pad: [0; 2],
         };
-        for (i, p) in frustum.planes.iter().enumerate() {
-            cull_params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
-        }
+        cull_params.planes = frustum.packed_planes();
 
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
@@ -698,7 +599,7 @@ impl DxContext {
             cmd.SetComputeRootUnorderedAccessView(4, com::gpu_va(indirect));
             cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva);
             // One thread per build-time object, 64-wide threadgroups.
-            cmd.Dispatch((self.cull_count() as u32).div_ceil(64), 1, 1);
+            cmd.Dispatch((self.state.draw.record_count() as u32).div_ceil(64), 1, 1);
         }
     }
 
@@ -710,7 +611,7 @@ impl DxContext {
     // builds object + draw-args into the reserved slot once at capture start (they
     // are frustum-independent) and re-culls per face here. `frustum` is the face's
     // view frustum and `cam_pos` the probe capture point. The object count is the
-    // same `cull_count()` the frame uses; the bake renders only the static + instance
+    // same `draw.record_count()` the frame uses; the bake renders only the static + instance
     // prefix, so culled skinned records are written but never executed.
     pub(in crate::directx) fn encode_probe_cull(
         &self,
@@ -736,8 +637,8 @@ impl DxContext {
         let mut cull_params = CullParams {
             planes: [[0.0; 4]; 6],
             cam_pos,
-            object_count: self.cull_count() as u32,
-            prev_view_proj: self.cull.prev_view_proj.get(),
+            object_count: self.state.draw.record_count() as u32,
+            prev_view_proj: self.state.planner.temporal().occlusion().prev_view_proj(),
             hiz_size: [1.0, 1.0],
             hiz_mip_count: 1,
             hiz_enabled: 0,
@@ -748,9 +649,7 @@ impl DxContext {
             bucket_stride: self.cull.bucket_stride as u32,
             _pad: [0; 2],
         };
-        for (i, p) in frustum.planes.iter().enumerate() {
-            cull_params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
-        }
+        cull_params.planes = frustum.packed_planes();
 
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
@@ -771,7 +670,7 @@ impl DxContext {
             }
             cmd.SetComputeRootUnorderedAccessView(4, com::gpu_va(indirect));
             cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva);
-            cmd.Dispatch((self.cull_count() as u32).div_ceil(64), 1, 1);
+            cmd.Dispatch((self.state.draw.record_count() as u32).div_ceil(64), 1, 1);
             cmd.ResourceBarrier(&[transition_barrier(
                 indirect,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -789,7 +688,7 @@ impl DxContext {
     // this frame's shadow indirect buffer. Skipped cascades (not in
     // `render_mask`) keep their prior region untouched, as their depth slice is
     // not re-rendered. A no-op when the GPU-driven shadow resources are absent
-    // or `cull_count() == 0`.
+    // or `draw.record_count() == 0`.
     pub(in crate::directx) fn encode_shadow_culls(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -807,7 +706,15 @@ impl DxContext {
         };
         let mut regions = [RegionCull::EMPTY; NUM_SHADOW_CASCADES];
         let mut kept = 0;
-        for (c, light_vp) in self.shadow.uniforms.light_vps.iter().enumerate() {
+        for (c, light_vp) in self
+            .state
+            .planner
+            .shadow
+            .uniforms
+            .light_vps
+            .iter()
+            .enumerate()
+        {
             if render_mask & (1u32 << c) == 0 {
                 continue;
             }
@@ -825,8 +732,8 @@ impl DxContext {
                 pso,
                 indirect,
                 status_gva: com::gpu_va(status),
-                // The cascade pass reads each region at `c * cull_count()`.
-                region_stride: self.cull_count(),
+                // The cascade pass reads each region at `c * record_count()`.
+                region_stride: self.state.draw.record_count(),
             },
             &regions[..kept],
         );
@@ -893,7 +800,7 @@ impl DxContext {
         // Per-plane region stride, in commands: the FIXED build-time record capacity
         // the indirect buffer was sized with (`PlanarReflectionSet::n_cull`) and that
         // the face render's `region_offset` reads with. MUST single-source with the
-        // reader -- NOT the live `cull_count()`, which can be smaller than the
+        // reader -- NOT the live `draw.record_count()`, which can be smaller than the
         // capacity (e.g. the skinned tail goes inactive when the RT-skin pipeline
         // fails to build), shifting plane >= 1's read offset off the written region.
         region_count: usize,
@@ -934,7 +841,7 @@ impl DxContext {
         let Some(cull_root) = self.cull.cull_kernels.as_ref().map(|k| &k.root_sig) else {
             return;
         };
-        let n_cull = self.cull_count();
+        let n_cull = self.state.draw.record_count();
         if n_cull == 0 || regions.is_empty() {
             return;
         }
@@ -989,9 +896,7 @@ impl DxContext {
                     bucket_stride: pass.region_stride as u32,
                     _pad: [0; 2],
                 };
-                for (i, p) in r.frustum.planes.iter().enumerate() {
-                    cull_params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
-                }
+                cull_params.planes = r.frustum.packed_planes();
                 cmd.set_compute_root_constants(0, &cull_params);
                 // Root UAV GPU addresses only need element alignment (the stride is
                 // a multiple of 4), like the instanced path's per-bucket root-SRV bumps.
@@ -1039,7 +944,7 @@ impl DxContext {
             return;
         };
         let cull_root = &kernels.root_sig;
-        if self.cull_count() == 0 {
+        if self.state.draw.record_count() == 0 {
             return;
         }
 
@@ -1056,7 +961,7 @@ impl DxContext {
         let mut cull_params = CullParams {
             planes: [[0.0; 4]; 6],
             cam_pos: [0.0; 3],
-            object_count: self.cull_count() as u32,
+            object_count: self.state.draw.record_count() as u32,
             prev_view_proj: cur_vp,
             hiz_size: [hiz.width as f32, hiz.height as f32],
             hiz_mip_count: hiz.mip_count,
@@ -1065,9 +970,7 @@ impl DxContext {
             bucket_stride: self.cull.bucket_stride as u32,
             _pad: [0; 2],
         };
-        for (i, p) in frustum.planes.iter().enumerate() {
-            cull_params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
-        }
+        cull_params.planes = frustum.packed_planes();
 
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
@@ -1083,7 +986,7 @@ impl DxContext {
             cmd.set_compute_srv_table(3, hiz.srv_gpu);
             cmd.SetComputeRootUnorderedAccessView(4, com::gpu_va(indirect));
             cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva);
-            cmd.Dispatch((self.cull_count() as u32).div_ceil(64), 1, 1);
+            cmd.Dispatch((self.state.draw.record_count() as u32).div_ceil(64), 1, 1);
         }
     }
 
@@ -1095,7 +998,7 @@ impl DxContext {
     // the executor's phase-2 arms all gate on it identically. Mirrors Metal's
     // `CullState.two_pass_occlusion` gate.
     pub(in crate::directx) fn two_pass_occlusion_active(&self) -> bool {
-        self.two_pass_occlusion_built() && self.cull_count() > 0
+        self.two_pass_occlusion_built() && self.state.draw.record_count() > 0
     }
 
     // Whether launch built two-pass occlusion: requested, with the phase-two

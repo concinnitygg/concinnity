@@ -45,6 +45,7 @@ use super::set_writes::SetWrites;
 use super::texture::{GpuImage, ImageSpec, create_image, create_image_view};
 use crate::vulkan::depth;
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, VkDevice};
+use concinnity_core::render::uniforms::FaceCamera;
 use concinnity_core::render::uniforms::vulkan::CullParams;
 
 // What a runtime capture bakes: face size, mip count, GGX sample count and firefly
@@ -74,9 +75,7 @@ fn capture_cull_params(frustum: &Frustum, cam_pos: [f32; 3], n_cull: u32) -> Cul
         // names the region capacity the caller sized its buffer with.
         bucket_stride: n_cull,
     };
-    for (i, p) in frustum.planes.iter().enumerate().take(6) {
-        params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
-    }
+    params.planes = frustum.packed_planes();
     params
 }
 
@@ -110,8 +109,8 @@ impl VkContext {
     // disabled in the bake cull buffers (the kernel skips them). They still
     // RECEIVE probe reflections. Lighting is cold, so shadows may be unpopulated
     // on the first frames, like the DX / Metal first-frame bake.
-    pub(super) fn bake_pending_probes(&mut self) {
-        let report = self.with_probe_bake(|bake, ctx| bake.advance(ctx, &()));
+    pub(super) fn bake_pending_probes(&mut self, elapsed: f32) {
+        let report = self.with_probe_bake(|bake, ctx| bake.advance(ctx, &elapsed));
         crate::probe_report::report_probe_bake(report);
     }
 
@@ -481,7 +480,7 @@ impl VkContext {
         };
         let (pipeline, layout) = (&kernels.pipeline, &kernels.pipeline_layout);
         let device = &self.hw.device;
-        let params = capture_cull_params(frustum, cam_pos, self.cull_count() as u32);
+        let params = capture_cull_params(frustum, cam_pos, self.state.draw.record_count() as u32);
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
@@ -511,7 +510,12 @@ impl VkContext {
                 vk::ShaderStageFlags::COMPUTE,
                 &params,
             );
-            device.cmd_dispatch(cmd, (self.cull_count() as u32).div_ceil(64), 1, 1);
+            device.cmd_dispatch(
+                cmd,
+                (self.state.draw.record_count() as u32).div_ceil(64),
+                1,
+                1,
+            );
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
                 .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
@@ -612,7 +616,7 @@ impl VkContext {
                 cmd,
                 indirect,
                 0,
-                self.skinned_record_base() as u32,
+                self.state.draw.skinned_record_base() as u32,
                 std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
             );
         }
@@ -629,7 +633,9 @@ impl VkContext {
 impl ProbeBakeDevice for VkContext {
     type Capture = RenderingBake;
     type Prefilter = PrefilteringBake;
-    type Frame<'f> = ();
+    // The frame's elapsed seconds, which a capture starting this frame
+    // animates its faces at.
+    type Frame<'f> = f32;
 
     fn book(&mut self) -> &mut ProbeBook {
         &mut self.probe.book
@@ -647,7 +653,7 @@ impl ProbeBakeDevice for VkContext {
     // atmosphere's sky and ambient light come from tables the frame writes, so
     // a capture also waits for the first of them.
     fn capture_ready(&self, _prefilter_in_flight: bool) -> bool {
-        self.cull_count() > 0 && self.atmosphere_tables_ready()
+        self.state.draw.record_count() > 0 && self.atmosphere_tables_ready()
     }
 
     fn reserve_cubes(&mut self, count: usize) -> RenderResult<()> {
@@ -660,7 +666,7 @@ impl ProbeBakeDevice for VkContext {
     // its own frustum).
     fn start_capture(
         &mut self,
-        _frame: &(),
+        elapsed: &f32,
         index: usize,
         placement: ProbePlacement,
     ) -> RenderResult<RenderingBake> {
@@ -670,8 +676,10 @@ impl ProbeBakeDevice for VkContext {
         // Bake-owned cull buffers, zeroed first so the untouched instance tail reads
         // as disabled (a probe omits instanced geometry), then filled with this
         // probe's static + chunk + skinned records (LOD by probe eye).
-        let object_size = self.cull_count() * std::mem::size_of::<render_types::GpuObjectData>();
-        let args_size = self.cull_count() * std::mem::size_of::<render_types::GpuDrawArgs>();
+        let object_size =
+            self.state.draw.record_count() * std::mem::size_of::<render_types::GpuObjectData>();
+        let args_size =
+            self.state.draw.record_count() * std::mem::size_of::<render_types::GpuDrawArgs>();
         bake.object_buf.zero_bytes(0, object_size);
         bake.draw_args_buf.zero_bytes(0, args_size);
         self.build_records_into(
@@ -706,6 +714,7 @@ impl ProbeBakeDevice for VkContext {
 
         let rendering = RenderingBake {
             eye,
+            elapsed: *elapsed,
             capture_distance: placement.capture_distance,
             bake,
             prefilter,
@@ -722,7 +731,7 @@ impl ProbeBakeDevice for VkContext {
 
     fn render_face(
         &mut self,
-        _frame: &(),
+        _frame: &f32,
         capture: &mut RenderingBake,
         face: usize,
     ) -> RenderResult<()> {
@@ -845,6 +854,8 @@ impl FaceArea {
 // last face's fence retiring guarantees the GPU is done with all of them.
 pub(crate) struct RenderingBake {
     eye: [f32; 3],
+    // The frame time the capture started at, which every face animates at.
+    elapsed: f32,
     capture_distance: Option<f32>,
     bake: BakeResources,
     // The capture cube each face copies into, and the probe cube the convolution
@@ -863,22 +874,16 @@ impl RenderingBake {
     fn write_face_views(&self, prefilter_mip_count: u32, irradiance: f32, sky_rot: [[f32; 4]; 3]) {
         let eye = self.eye;
         for (face, buf) in self.bake.view_bufs.iter().enumerate() {
-            let view = ViewUniforms {
+            let view = ViewUniforms::face(FaceCamera {
                 vp: reflection_probe::face_view_projection(eye, face),
                 view: reflection_probe::face_view_matrix(eye, face),
-                elapsed: 0.0,
-                reflections_enabled: 0.0,
                 cam_pos: eye,
+                elapsed: self.elapsed,
                 prefilter_mip_count: prefilter_mip_count as f32,
-                // A probe capture is always lit, whatever the viewport shows.
-                shade_mode: 0.0,
-                ambient_occlusion: 0.0,
                 sky_rot,
                 irradiance,
                 pre_exposure: FaceStorage::PROBE.scale(),
-                screen_bounce: 0.0,
-                _pad: 0.0,
-            };
+            });
             buf.write_val(0, &view);
         }
     }
@@ -1107,7 +1112,7 @@ impl BakeResources {
             .map_err(|e| super::error::map_vk_result(e, "probe framebuffer"))?;
 
         // Bake-owned cull ring, sized like the per-frame rings.
-        let n = ctx.cull_count();
+        let n = ctx.state.draw.record_count();
         let object_size = (n * std::mem::size_of::<GpuObjectData>()) as u64;
         let args_size = (n * std::mem::size_of::<GpuDrawArgs>()) as u64;
         let indirect_size = (n * std::mem::size_of::<vk::DrawIndexedIndirectCommand>()) as u64;
@@ -1129,8 +1134,11 @@ impl BakeResources {
         )?;
 
         // Snapshot lighting (so all faces share one set) and six per-face view UBOs.
-        let light = make_ubo_bytes(alloc, bytemuck::bytes_of(&ctx.uniforms.light_uniforms))?;
-        let shadow = make_ubo_bytes(alloc, bytemuck::bytes_of(&ctx.shadow.uniforms))?;
+        let light = make_ubo_bytes(alloc, bytemuck::bytes_of(ctx.uniforms.lights.uniforms()))?;
+        let shadow = make_ubo_bytes(
+            alloc,
+            bytemuck::bytes_of(&ctx.state.planner.shadow.uniforms),
+        )?;
         let canopy = make_ubo_bytes(alloc, bytemuck::bytes_of(&ctx.uniforms.canopy))?;
         let canopy_tables = make_host_buffer(
             alloc,

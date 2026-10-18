@@ -60,7 +60,8 @@ impl VkContext {
     // sets of the decal and particle passes, and a world with nothing to
     // GPU-drive, which draws nothing.
     fn streamed_slot_needs_drain(&self, slot: usize) -> bool {
-        let bindless_active = self.cull.bindless_pipeline.is_some() && self.cull_count() > 0;
+        let bindless_active =
+            self.cull.bindless_pipeline.is_some() && self.state.draw.record_count() > 0;
         if !bindless_active {
             return true;
         }

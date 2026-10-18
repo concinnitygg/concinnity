@@ -15,7 +15,7 @@ use concinnity_host::store::paths::StateTree;
 
 mod trial;
 
-pub(crate) use trial::{reverted, take_confirmation};
+pub(crate) use trial::{confirm_pending, reverted};
 
 static SELECTED: OnceLock<Platform> = OnceLock::new();
 
@@ -95,14 +95,15 @@ pub fn select_persisted(tree: Option<&StateTree>) -> Platform {
 // The API the settings in `tree` ask this launch for, after moving the choice's
 // trial along (and saving it) the way the launch plan says.
 fn persisted_request(tree: Option<&StateTree>) -> Option<Platform> {
-    let mut settings = crate::config::Settings::load(tree);
+    let mut settings = crate::settings::store::load(tree);
     let launch = trial::plan(
         settings.graphics.graphics_api,
         settings.graphics.graphics_api_trial,
     );
     if let Some(step) = launch.step {
         trial::apply(step, &mut settings.graphics);
-        if let Err(e) = settings.save(tree) {
+        trial::record(step);
+        if let Err(e) = crate::settings::store::save(&settings, tree) {
             tracing::warn!("graphics API choice: could not save settings: {e}");
         }
     }
@@ -238,17 +239,17 @@ mod tests {
 
         let dir = concinnity_testing::TempTree::new();
         let tree = StateTree::at(dir.path());
-        let mut settings = crate::config::Settings::default();
+        let mut settings = concinnity_core::settings::StoredSettings::default();
         settings.graphics.graphics_api = Some(Platform::Vulkan);
         settings.graphics.graphics_api_trial = Some(GraphicsApiTrial::Untried);
-        settings.save(Some(&tree)).unwrap();
+        crate::settings::store::save(&settings, Some(&tree)).unwrap();
 
         assert_eq!(persisted_request(Some(&tree)), Some(Platform::Vulkan));
-        let stored = crate::config::Settings::load(Some(&tree)).graphics;
+        let stored = crate::settings::store::load(Some(&tree)).graphics;
         assert_eq!(stored.graphics_api_trial, Some(GraphicsApiTrial::Trying));
 
         assert_eq!(persisted_request(Some(&tree)), None);
-        let stored = crate::config::Settings::load(Some(&tree)).graphics;
+        let stored = crate::settings::store::load(Some(&tree)).graphics;
         assert_eq!(stored.graphics_api, None);
         assert_eq!(stored.graphics_api_trial, None);
     }
@@ -257,9 +258,9 @@ mod tests {
     fn a_confirmed_choice_is_requested_without_a_write() {
         let dir = concinnity_testing::TempTree::new();
         let tree = StateTree::at(dir.path());
-        let mut settings = crate::config::Settings::default();
+        let mut settings = concinnity_core::settings::StoredSettings::default();
         settings.graphics.graphics_api = Some(Platform::Vulkan);
-        settings.save(Some(&tree)).unwrap();
+        crate::settings::store::save(&settings, Some(&tree)).unwrap();
         let before = std::fs::read(tree.settings_path()).unwrap();
 
         assert_eq!(persisted_request(Some(&tree)), Some(Platform::Vulkan));

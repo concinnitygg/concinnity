@@ -161,7 +161,8 @@ impl VkContext {
         // are fetched from the per-frame GpuObjectData SSBO + the bindless
         // texture pool. Instances, streamed chunks and runtime clones are
         // records of their own in the same buffer.
-        let use_bindless = self.cull.bindless_pipeline.is_some() && self.cull_count() > 0;
+        let use_bindless =
+            self.cull.bindless_pipeline.is_some() && self.state.draw.record_count() > 0;
         if use_bindless {
             let pipeline = self.wireframe_or(
                 self.cull
@@ -204,7 +205,7 @@ impl VkContext {
                     cmd,
                     self.cull.indirect_buffers[frame_idx].buffer(),
                     0,
-                    self.skinned_record_base() as u32,
+                    self.state.draw.skinned_record_base() as u32,
                     std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
                 );
             }
@@ -215,7 +216,7 @@ impl VkContext {
             self.inc_draw_calls(self.draw_bucket_regions(
                 cmd,
                 self.cull.indirect_buffers[frame_idx].buffer(),
-                self.skinned_record_base() as u32,
+                self.state.draw.skinned_record_base() as u32,
             ));
             // Restore the default bindless pipeline for the sub-paths below.
             if self.shader_bucket_count() > 1 {
@@ -280,13 +281,13 @@ impl VkContext {
                     vk::IndexType::UINT32,
                 );
                 // Indirect draw #2: the skinned tail
-                // `[skinned_record_base(), cull_count())`, byte-offset into the
+                // `[skinned_record_base(), record_count())`, byte-offset into the
                 // same indirect command buffer.
                 let cmd_stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>();
                 device.cmd_draw_indexed_indirect(
                     cmd,
                     self.cull.indirect_buffers[frame_idx].buffer(),
-                    (self.skinned_record_base() * cmd_stride) as u64,
+                    (self.state.draw.skinned_record_base() * cmd_stride) as u64,
                     self.state.draw.n_skinned as u32,
                     cmd_stride as u32,
                 );
@@ -435,7 +436,7 @@ impl VkContext {
                 cmd,
                 self.cull.indirect_buffers2[frame_idx].buffer(),
                 0,
-                self.skinned_record_base() as u32,
+                self.state.draw.skinned_record_base() as u32,
                 std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
             );
         }
@@ -443,7 +444,7 @@ impl VkContext {
         self.inc_draw_calls(self.draw_bucket_regions(
             cmd,
             self.cull.indirect_buffers2[frame_idx].buffer(),
-            self.skinned_record_base() as u32,
+            self.state.draw.skinned_record_base() as u32,
         ));
 
         // Indirect draw #2: the skinned tail against the deformed VB + skinned IB.
@@ -473,7 +474,7 @@ impl VkContext {
                 device.cmd_draw_indexed_indirect(
                     cmd,
                     self.cull.indirect_buffers2[frame_idx].buffer(),
-                    (self.skinned_record_base() * cmd_stride) as u64,
+                    (self.state.draw.skinned_record_base() * cmd_stride) as u64,
                     self.state.draw.n_skinned as u32,
                     cmd_stride as u32,
                 );

@@ -143,7 +143,8 @@ impl DxContext {
         // constant, with model/material/textures fetched from the per-frame
         // GpuObjectData buffer + the bindless texture pool. Instances, streamed
         // chunks and runtime clones are records of their own in the same buffer.
-        let use_bindless = self.cull.main_bindless_pso.is_some() && self.cull_count() > 0;
+        let use_bindless =
+            self.cull.main_bindless_pso.is_some() && self.state.draw.record_count() > 0;
         if use_bindless {
             // The per-frame per-object SRV-pool record buffer
             // (`build_object_buffer`) and the cull compute dispatch
@@ -237,7 +238,7 @@ impl DxContext {
                 // double-draw.
                 cmd.ExecuteIndirect(
                     cull_sig,
-                    self.skinned_record_base() as u32,
+                    self.state.draw.skinned_record_base() as u32,
                     indirect,
                     0,
                     None::<&ID3D12Resource>,
@@ -252,7 +253,7 @@ impl DxContext {
                 cmd,
                 cull_sig,
                 indirect,
-                self.skinned_record_base() as u32,
+                self.state.draw.skinned_record_base() as u32,
             ));
             // Restore the default bindless pipeline for the sub-paths below.
             if self.shader_bucket_count() > 1 {
@@ -333,13 +334,13 @@ impl DxContext {
                 let probes = self.probe_bindings(frame_idx);
                 self.bind_main_probe_set(cmd, probes.set_cbv, probes.records);
                 // ExecuteIndirect #2: skinned tail
-                // `[skinned_record_base(), cull_count())`, byte-offset into the
+                // `[skinned_record_base(), record_count())`, byte-offset into the
                 // same indirect command buffer.
                 cmd.ExecuteIndirect(
                     cull_sig,
                     self.state.draw.n_skinned as u32,
                     indirect,
-                    (self.skinned_record_base()
+                    (self.state.draw.skinned_record_base()
                         * crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize)
                         as u64,
                     None::<&ID3D12Resource>,
@@ -495,7 +496,7 @@ impl DxContext {
             self.cull.main_bindless_root_sig.as_ref(),
             self.cull.cull_command_signature.as_ref(),
             self.cull.indirect_cmd_buffers_2.get(frame_idx),
-        ) && self.cull_count() > 0
+        ) && self.state.draw.record_count() > 0
         {
             let bindless_pso = self.wireframe_or(bindless_pso, self.wireframe.bindless.as_ref());
             let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
@@ -542,7 +543,7 @@ impl DxContext {
                 // VB/IB (bound above), once per shader bucket.
                 cmd.ExecuteIndirect(
                     cull_sig,
-                    self.skinned_record_base() as u32,
+                    self.state.draw.skinned_record_base() as u32,
                     indirect,
                     0,
                     None::<&ID3D12Resource>,
@@ -554,7 +555,7 @@ impl DxContext {
                 cmd,
                 cull_sig,
                 indirect,
-                self.skinned_record_base() as u32,
+                self.state.draw.skinned_record_base() as u32,
             ));
 
             // ExecuteIndirect #2: skinned tail against the deformed VB + skinned
@@ -574,7 +575,7 @@ impl DxContext {
                         cull_sig,
                         self.state.draw.n_skinned as u32,
                         indirect,
-                        (self.skinned_record_base()
+                        (self.state.draw.skinned_record_base()
                             * crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize)
                             as u64,
                         None::<&ID3D12Resource>,

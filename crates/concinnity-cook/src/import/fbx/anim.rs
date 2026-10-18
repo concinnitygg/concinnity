@@ -546,8 +546,8 @@ mod tests {
     // pose origin so the joint's bind translation drops out.
     fn rotated_x_axis(key: &ImportedKeyframe) -> [f32; 3] {
         let m = key.pose.to_matrix();
-        let origin = crate::import::fbx::transform_point(m, [0.0, 0.0, 0.0]);
-        let tip = crate::import::fbx::transform_point(m, [1.0, 0.0, 0.0]);
+        let origin = concinnity_core::transform::mat4_transform_point(&m, [0.0, 0.0, 0.0]);
+        let tip = concinnity_core::transform::mat4_transform_point(&m, [1.0, 0.0, 0.0]);
         [tip[0] - origin[0], tip[1] - origin[1], tip[2] - origin[2]]
     }
 

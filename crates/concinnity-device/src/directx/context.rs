@@ -2,6 +2,7 @@
 // state. Mirrors the public API of VkContext / MtlContext so GraphicsSystem can
 // drive all three backends identically.
 
+use crate::gpu_wait::GpuWait;
 use concinnity_core::components;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::*;
@@ -13,19 +14,18 @@ use concinnity_core::render::backend::FrameParams;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::frame_plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::lights;
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::post::reflection_path::ReflectionPath;
 use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::radiance_storage::with_sky_cube_scale;
-use concinnity_core::render::render_graph;
 use concinnity_core::render::retire_pool::RetirePool;
-use concinnity_core::render::scene_flow;
 use concinnity_core::render::scene_state::SceneState;
+use concinnity_core::render::shader_reload::ShaderReload;
 use concinnity_core::render::slot_rewrites;
 use concinnity_core::window::display_mode;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -40,7 +40,6 @@ use super::draw::shadow::ShadowState;
 use super::draw::spot_shadow::SpotShadowState;
 use super::fog::*;
 use super::geometry_upload::{GeometryDest, GeometryUploads};
-use super::hot_reload::HotReloadState;
 use super::particle::ParticleState;
 use super::post::bloom::BloomResources;
 use super::post::gbuffer::GbufferResources;
@@ -60,14 +59,6 @@ use crate::win32::window::{WindowState, frame_tick, take_input_snapshot};
 pub(super) const BACK_BUFFERS: usize = 3;
 // Constant buffer alignment required by D3D12.
 pub(super) const CB_ALIGN: u64 = 256;
-
-// Upper bound on the number of `SkinnedMesh` draws. The SRV heap is sized once
-// at init, so a fixed block of `MAX_SKINNED_OBJECTS * 2` descriptors is
-// reserved for skinned (albedo, normal) pairs even when no skinned mesh is
-// declared (the reservation costs only descriptor-heap slots, mirroring the
-// chunk-streaming SRV reservation). `upload_skinned` rejects worlds exceeding
-// this count.
-pub(super) const MAX_SKINNED_OBJECTS: usize = 64;
 
 pub(super) fn align256(n: u64) -> u64 {
     (n + CB_ALIGN - 1) & !(CB_ALIGN - 1)
@@ -208,18 +199,14 @@ pub(super) struct DxUniforms {
     // GPU address, so a live light change never has to drain the queue.
     pub light_ubo_resources: Vec<PooledBuffer>,
     pub light_ubo_ptrs: Vec<*mut u8>,
-    // Which slots of the light ring still need this frame's values.
-    pub light_dirty: std::cell::Cell<concinnity_core::render::frame_dirty::FrameDirty>,
     // Per-scene local-light storage buffer bound as a root SRV by the main
     // pass. Static: filled once at init from `BackendInit.local_lights` and
     // never rewritten (not persistently mapped, so it stays out of `unmap`).
     pub local_light_buffer: PooledBuffer,
-    // The local lights' reach, which places the far end of the cluster grid.
-    pub cluster_reach: concinnity_core::render::cluster_range::ClusterReach,
-    // The values the light ring carries. A live Ambient-slider or
-    // directional-light change mutates this and re-arms `light_dirty`;
-    // `record_frame` writes the frame's own slot, so no in-flight read is raced.
-    pub light_uniforms: render_types::LightUniforms,
+    // The values the light ring carries, which slots of it are stale, and the
+    // local lights' reach. `record_frame` writes the frame's own slot, so no
+    // in-flight read is raced.
+    pub lights: concinnity_core::render::light_state::LightState,
     pub shadow_ubo_resources: Vec<PooledBuffer>,
     pub shadow_ubo_ptrs: Vec<*mut u8>,
     // Per-frame CBVs holding the live probe count, bound at root param [11] by
@@ -234,21 +221,6 @@ pub(super) struct DxUniforms {
 }
 
 impl DxUniforms {
-    // Re-arm every light-ring slot after a change to `light_uniforms`.
-    pub(super) fn mark_lights_dirty(&self) {
-        let mut dirty = self.light_dirty.get();
-        dirty.mark_all();
-        self.light_dirty.set(dirty);
-    }
-
-    // Whether `frame`'s light CBV still needs this frame's values, clearing it.
-    pub(super) fn take_light_dirty(&self, frame: usize) -> bool {
-        let mut dirty = self.light_dirty.get();
-        let pending = dirty.take(frame);
-        self.light_dirty.set(dirty);
-        pending
-    }
-
     // Unmap the persistent view + light + shadow CBV mappings. Called from
     // `DxContext::drop`; the COM resources themselves auto-release.
     pub(super) fn unmap(&self) {
@@ -720,18 +692,15 @@ pub(crate) struct DxContext {
     // The CPU-side scene: draw list, view, skinned slots, model history and
     // streamed-geometry placement. See [`SceneState`].
     pub(super) state: SceneState,
-    // The last compiled frame graph, keyed by the `FrameGraphInputs` it was built
-    // from. `build_frame_graph` is a pure function of those inputs (which change
-    // only when a feature toggles or a target resizes), so a frame whose inputs
-    // match the cached key reuses the compiled graph instead of rebuilding it.
-    // `RefCell` because `record_frame` is &self; taken out before
-    // `execute_graph` and put back after so a steady scene compiles the graph
-    // once and reuses it thereafter.
-    pub(super) graph_cache:
-        RefCell<Option<(render_graph::FrameGraphInputs, render_graph::CompiledGraph)>>,
-    // The runtime-switched passes the resolved settings and the last apply
-    // built leave on.
-    pub(super) gates: render_graph::FeatureGates,
+    // Scratch the graph executor refills each frame: the per-resource barrier
+    // targets, the per-pass aliasing barriers and the per-pass recording slots.
+    // Only the allocations carry over; taken during `execute_graph` and put back
+    // after.
+    pub(super) graph_scratch: Cell<Option<super::graph_exec::DxGraphScratch>>,
+    // The frame's per-pass command lists in submission order, and the list the
+    // submit call takes, kept across frames so building them allocates nothing.
+    pub(super) pass_lists: Cell<Vec<ID3D12GraphicsCommandList>>,
+    pub(super) submission: Vec<Option<ID3D12CommandList>>,
 
     // Geometry writes staged for the next copy submit. See [`GeometryUploads`].
     pub(super) geometry_uploads: RefCell<GeometryUploads>,
@@ -907,8 +876,8 @@ pub(crate) struct DxContext {
     // the matching fence wait so the CPU sees a fully committed block.
     pub(super) timestamps: TimestampState,
 
-    // Shader hot-reload state. See [`HotReloadState`].
-    pub(super) hot_reload: HotReloadState,
+    // Shader hot-reload state. See [`ShaderReload`].
+    pub(super) hot_reload: ShaderReload,
     // The world default Shader's compiled programs, `None` for the engine's
     // own. Kept past init so the built-in shader reload rebuilds bucket 0 from
     // the world's pair rather than the engine's.
@@ -977,203 +946,7 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 
 impl DxContext {
     pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
-        let FrameParams {
-            elapsed: elapsed_f64,
-            fov_y_radians,
-            near,
-            view_distance,
-            cam_pos,
-            text_calls,
-            lines,
-            world_hidden,
-            view_mode,
-            show,
-            sky_rot,
-            history_reset,
-            rebase,
-            grass_benders,
-            atmosphere,
-            sunlight,
-            input_sampled_us,
-            capture,
-        } = params;
-        self.frame_capture.arm(capture);
-        let elapsed = elapsed_f64 as f32;
-        if let Some(atmo) = self.atmosphere.as_mut() {
-            atmo.frame = atmosphere;
-        }
-        // Snapped for the passes recorded below (the wireframe pipeline
-        // variant, the unlit shade flag, the composite's channel visualization
-        // + depth normalization) and for the graph-input mask in record_frame.
-        self.state.view.mode = view_mode;
-        self.state.view.show = show;
-        self.state.view.near = near;
-        self.state.view.view_distance = view_distance;
-        self.state.view.sky_rot = with_sky_cube_scale(sky_rot, self.atmosphere.is_some());
-        self.state.view.sunlight = sunlight;
-        self.apply_pending_rebuilds()?;
-        // A moved world's decals and grass move with it whatever happens to
-        // history.
-        if let Some(rebase) = &rebase {
-            self.decal.set.rebase(rebase);
-            self.rebase_grass(rebase);
-            self.rebase_transparent_water(rebase);
-        }
-        if history_reset {
-            self.reset_temporal_history();
-        } else if let Some(rebase) = rebase {
-            self.rebase_temporal_history(&rebase);
-        }
-
-        // Nothing a minimized window draws can be seen; park the frame until
-        // it is restored. `window_closed` keeps pumping messages meanwhile.
-        if self.window_minimized() {
-            return Ok(());
-        }
-        self.size_grass()?;
-
-        let frame = self.current_frame;
-
-        let gpu_wait = self.wait_frame_slot(frame)?;
-        self.retire_frame_captures();
-        self.reserve_frame_capture();
-        // Staged geometry writes go ahead of everything this frame submits.
-        self.flush_geometry_uploads()?;
-        self.service_background_work(elapsed, frame);
-        let timings = self.read_gpu_timings(frame);
-        let gpu_done = self.read_gpu_done(frame);
-        self.timestamps.input_sampled_us[frame] = input_sampled_us;
-        self.begin_frame_stats(&gpu_wait, timings, gpu_done);
-
-        // Flush any D3D12 validation messages from the previous frame.
-        self.flush_validation();
-
-        // Frame command-list pipeline (parallel encoding):
-        //
-        //   start_cmd  : pre-init timestamps only (closed up-front)
-        //   per-pass   : one cmd list per non-composite pass, recorded
-        //                in parallel by rayon workers inside execute_graph
-        //   end_cmd    : Composite + final timestamp + ResolveQueryData
-        //                 + per-frame restore barriers (composed by
-        //                 execute_graph's main-thread composite arm + the
-        //                 tail of record_frame)
-        //
-        // ExecuteCommandLists is called once with the whole topological
-        // sequence so the GPU sees them in submission order.
-        let start_cmd = self.record_frame_start(frame)?;
-
-        // Line resources: built on the first frame that publishes lines, so
-        // the graph gate inside `record_frame` can see them live this same
-        // frame and a world that never draws a line never compiles them.
-        self.ensure_line_pipeline(!lines.is_empty());
-
-        self.update_shadow_schedule(cam_pos, fov_y_radians, near, view_distance);
-        // Reflection-probe count + records into this frame's ring CBV and records
-        // buffer, which every probe-reading pass binds. A ring (one of each per
-        // frame) so this write never races a prior frame's in-flight GPU read.
-        self.upload_probe_set(frame)?;
-        // The material parameter table's copy for this frame, after a change.
-        if let Some(params) = self.cull.material_params.as_mut() {
-            params.upload(frame);
-        }
-
-        // 2. Open the END cmd list (Composite + final timestamp +
-        //    ResolveQueryData + per-frame restore barriers). The
-        //    executor's main-thread Composite arm encodes onto this
-        //    cmd list; `close_end_list` appends the final timestamp +
-        //    resolve after `record_frame` returns.
-        // SAFETY: the fence for this frame slot was already waited on, so no submission still
-        // references what is being reset.
-        unsafe { self.commands.end_command_allocators[frame].Reset() }
-            .map_err(|e| super::error::map_hresult(e.code(), "end allocator reset"))?;
-        let end_cmd = &self.commands.end_command_lists[frame];
-        // SAFETY: the fence for this frame slot was already waited on, so no submission still
-        // references what is being reset.
-        unsafe { end_cmd.Reset(&self.commands.end_command_allocators[frame], None) }
-            .map_err(|e| super::error::map_hresult(e.code(), "end cmd reset"))?;
-
-        // SAFETY: a property query on a live COM object; it only reads.
-        let back_idx = unsafe { self.swapchain.handle.GetCurrentBackBufferIndex() } as usize;
-        let back_buffer = self.swapchain.back_buffers[back_idx].clone();
-        // SAFETY: a property query on a live descriptor heap; it only reads.
-        let rtv_base = unsafe { self.swapchain.rtv_heap.GetCPUDescriptorHandleForHeapStart() };
-        let back_buffer_rtv = D3D12_CPU_DESCRIPTOR_HANDLE {
-            ptr: rtv_base.ptr + back_idx * self.swapchain.rtv_descriptor_size,
-        };
-
-        // 3. record_frame fans non-composite passes onto rayon workers
-        //    (each records into its own cmd list from the per-pass pool)
-        //    and dispatches Composite + per-frame restore barriers onto
-        //    `end_cmd`. Returns the per-pass cmd lists in topological
-        //    pass order.
-        let recorded = self.record_frame(
-            crate::directx::draw::RecordFrameTargets {
-                cmd: end_cmd,
-                back_buffer: &back_buffer,
-                back_buffer_rtv,
-                frame_idx: frame,
-            },
-            crate::directx::draw::RecordFrameView {
-                elapsed: elapsed_f64,
-                fov_y_radians,
-                near,
-                view_distance,
-                cam_pos,
-                text_calls,
-                lines,
-                grass_benders,
-            },
-            crate::directx::draw::RecordFrameResolution {
-                width: self.targets.extent.render_width.max(1),
-                height: self.targets.extent.render_height.max(1),
-                output_width: self.targets.extent.output_width.max(1),
-                output_height: self.targets.extent.output_height.max(1),
-            },
-            world_hidden,
-        )?;
-
-        // Step the TAA accumulation ring: what this frame wrote is next frame's
-        // history. After `record_frame` rather than inside it, so the write slot
-        // is stable across the whole graph, and here rather than beside the
-        // jitter tick because stepping the ring needs `&mut self`.
-        if let Some(taa) = self.taa.as_mut() {
-            taa.pass.advance();
-        }
-        if let Some(ssgi) = self.ssgi.as_mut() {
-            ssgi.advance();
-        }
-
-        let end_cmd = self.commands.end_command_lists[frame].clone();
-        let capture = self.record_frame_capture(&end_cmd, &back_buffer);
-
-        self.finish_frame_stats();
-        let started = std::time::Instant::now();
-        let submitted = self.close_end_list(frame).and_then(|()| {
-            self.submit_and_present(
-                start_cmd,
-                &recorded.pass_cmd_lists,
-                back_idx,
-                frame,
-                gpu_wait,
-            )
-        });
-        let mut stats = self.diagnostics.frame_stats.get();
-        stats.submit_present_us = started.elapsed().as_micros().min(u32::MAX.into()) as u32;
-        self.diagnostics.frame_stats.set(stats);
-        // A submitted frame's capture waits for the fence value it signaled; a
-        // failed one is reported as a dropped frame by the caller.
-        if let Some(capture) = capture
-            && submitted.is_ok()
-        {
-            self.frame_capture
-                .park(self.frame_sync.fence_values[frame], capture);
-        }
-        // A frame that took the history prime but never reached the GPU leaves
-        // the ring unwritten, so the next frame primes instead.
-        if submitted.is_err() && recorded.primed_model_history {
-            self.state.model_history.get_mut().request_prime();
-        }
-        submitted
+        drive_frame(self, params)
     }
 
     // Drain any queued D3D12 validation messages and emit them via tracing.
@@ -1218,15 +991,6 @@ impl DxContext {
     // context was built without hot-reload. Surfaced through the
     // `RenderBackend` trait so the debug server's
     // `reload-shaders` command can flip it from a non-render thread.
-    pub(crate) fn shader_reload_pending(
-        &self,
-    ) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
-        self.hot_reload
-            .reload_pending
-            .as_ref()
-            .map(std::sync::Arc::clone)
-    }
-
     // True when the render graph should include `PassId::Raymarch`. Wraps
     // the `raymarch.any_visible()` check so callers don't have to know
     // the resource is `Option`. Drives `FrameGraphInputs::raymarch_enabled`
@@ -1289,15 +1053,6 @@ impl DxContext {
         match self.targets.hdr.resolve_rtv {
             Some(rtv) => rtv,
             None => self.targets.hdr.color_rtv,
-        }
-    }
-
-    // The frame's unlit flag for ViewUniforms, from the viewport view mode.
-    pub(super) fn shade_mode(&self) -> f32 {
-        if self.state.view.mode == concinnity_core::gfx::view_modes::ViewMode::Unlit {
-            1.0
-        } else {
-            0.0
         }
     }
 
@@ -1557,11 +1312,7 @@ impl DxContext {
     // the frame's own slot. Edge-triggered: a no-op when the value is unchanged
     // (e.g. an init push with no persisted override).
     pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
-        if self.uniforms.light_uniforms.ambient_intensity == value {
-            return;
-        }
-        self.uniforms.light_uniforms.ambient_intensity = value;
-        self.uniforms.mark_lights_dirty();
+        self.uniforms.lights.set_ambient(value);
     }
 
     // Move the local lights in place. The light, area and spot tables and the
@@ -1574,7 +1325,7 @@ impl DxContext {
         data: &lights::LightData,
         uniforms: &LightUniforms,
     ) -> error::RenderResult<()> {
-        if data.lights.len() as i32 != self.uniforms.light_uniforms.num_local_lights
+        if !self.uniforms.lights.same_local_count(&data.lights)
             || data.spot_shadows.len() != self.spot_shadow.count() as usize
         {
             return Err(error::RenderError::Other(
@@ -1613,12 +1364,8 @@ impl DxContext {
             .iter()
             .map(concinnity_core::render::spot_shadow::slice_frustum)
             .collect();
-        self.spot_shadow.scheduler = Default::default();
-        self.uniforms.cluster_reach =
-            concinnity_core::render::cluster_range::ClusterReach::new(&data.lights);
-        self.uniforms.light_uniforms.point = uniforms.point;
-        self.uniforms.light_uniforms.num_point = uniforms.num_point;
-        self.uniforms.mark_lights_dirty();
+        self.state.planner.shadow.reset_spots();
+        self.uniforms.lights.move_local(&data.lights, uniforms);
         Ok(())
     }
 
@@ -1627,21 +1374,11 @@ impl DxContext {
     // re-derived here. Edge-triggered: an unchanged set touches nothing, and a
     // changed one only re-arms the light CBV ring.
     pub(crate) fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]) {
-        let (directional, num_directional) = lights::directional_light_data(lights);
-        let uniforms = &mut self.uniforms.light_uniforms;
-        if uniforms.directional == directional && uniforms.num_directional == num_directional {
-            return;
-        }
-        uniforms.directional = directional;
-        uniforms.num_directional = num_directional;
-        self.shadow.light_dir = lights::sun_direction(&self.uniforms.light_uniforms);
-        self.fog.sun_dir = self.shadow.light_dir;
-        self.fog.sun_color = lights::sun_color(&self.uniforms.light_uniforms);
-        self.uniforms.mark_lights_dirty();
+        self.uniforms.lights.set_directional(lights);
     }
 
     pub(crate) fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {
-        self.shadow.cadence = cadence;
+        self.state.planner.shadow.cadence = cadence;
     }
 
     // Update the live scalar sub-tunables of the SSAO / SSR / SSGI / auto-exposure
@@ -1709,50 +1446,260 @@ impl DxContext {
     // from the adapter description (vendor id + dedicated VRAM). `UNKNOWN` when
     // the adapter does not expose the v3 interface or the desc query fails.
     pub(crate) fn gpu_profile(&self) -> backend::GpuProfile {
-        use concinnity_core::render::backend::{
-            GpuClassInput, GpuProfile, GpuVendor, classify_tier,
-        };
         let Some(adapter) = self.hw.adapter.as_ref() else {
-            return GpuProfile::UNKNOWN;
+            return backend::GpuProfile::UNKNOWN;
         };
         // SAFETY: a property query on a live COM object; it only reads.
-        let desc = match unsafe { adapter.GetDesc1() } {
-            Ok(d) => d,
-            Err(_) => return GpuProfile::UNKNOWN,
-        };
-        let vendor = match desc.VendorId {
-            0x10DE => GpuVendor::Nvidia,
-            0x1002 => GpuVendor::Amd,
-            0x8086 => GpuVendor::Intel,
-            _ => GpuVendor::Other,
-        };
-        let dedicated = desc.DedicatedVideoMemory as u64;
-        // A discrete GPU has dedicated VRAM; an integrated part reports little or
-        // none (and large shared system memory). A small floor keeps a few MB of
-        // carve-out from reading as discrete.
-        let discrete = dedicated >= (256u64 << 20);
-        let tier = classify_tier(&GpuClassInput {
-            vendor,
-            memory_budget_bytes: dedicated,
-            discrete,
-            apple_family: 0,
-        });
-        GpuProfile {
-            vendor,
-            tier,
-            memory_budget_bytes: dedicated,
-            unified_memory: !discrete,
-            discrete,
+        match unsafe { adapter.GetDesc1() } {
+            Ok(desc) => super::gpu_profile::adapter_profile(&desc),
+            Err(_) => backend::GpuProfile::UNKNOWN,
         }
     }
 }
 
-impl scene_flow::SceneControl for DxContext {
-    fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool) {
-        self.state.update_visibility(draw_idx, visible);
+// What `begin` acquired for a frame: its in-flight slot, how long it waited
+// for it, and the "start" command list it closed.
+pub(crate) struct DxFrame {
+    frame: usize,
+    gpu_wait: GpuWait,
+    start_cmd: ID3D12GraphicsCommandList,
+}
+
+impl FrameDevice for DxContext {
+    type Frame = DxFrame;
+
+    fn frame_scene(&mut self) -> &mut SceneState {
+        &mut self.state
     }
-    fn set_fade(&mut self, fade: f32) {
-        self.state.set_fade(fade);
+
+    fn draws_atmosphere(&self) -> bool {
+        self.atmosphere.is_some()
+    }
+
+    fn prepare(&mut self, params: &FrameParams<'_>) -> error::RenderResult<()> {
+        self.frame_capture.arm(params.capture);
+        if let Some(atmo) = self.atmosphere.as_mut() {
+            atmo.frame = params.atmosphere;
+        }
+        self.apply_pending_rebuilds()?;
+        // A moved world's decals and grass move with it whatever happens to
+        // history.
+        if let Some(rebase) = &params.rebase {
+            self.decal.set.rebase(rebase);
+            self.rebase_grass(rebase);
+            self.rebase_transparent_water(rebase);
+        }
+        Ok(())
+    }
+
+    // The TAA and SSGI rings, and the upscaler's history on its next dispatch.
+    fn reset_history(&mut self) {
+        if let Some(taa) = self.taa.as_mut() {
+            taa.pass.reset_history();
+        }
+        if let Some(ssgi) = self.ssgi.as_mut() {
+            ssgi.reset_history();
+        }
+        if let Some(upscaler) = &self.upscale.backend {
+            upscaler.request_history_reset();
+        }
+    }
+
+    fn begin(&mut self, params: &FrameParams<'_>) -> error::RenderResult<Option<DxFrame>> {
+        // Nothing a minimized window draws can be seen; park the frame until
+        // it is restored. `window_closed` keeps pumping messages meanwhile.
+        if self.window_minimized() {
+            return Ok(None);
+        }
+        self.size_grass()?;
+
+        let frame = self.current_frame;
+
+        let gpu_wait = self.wait_frame_slot(frame)?;
+        self.retire_frame_captures();
+        self.reserve_frame_capture();
+        // Staged geometry writes go ahead of everything this frame submits.
+        self.flush_geometry_uploads()?;
+        self.service_background_work(params.elapsed as f32, frame);
+        let timings = self.read_gpu_timings(frame);
+        let gpu_done = self.read_gpu_done(frame);
+        self.timestamps.input_sampled_us[frame] = params.input_sampled_us;
+        self.begin_frame_stats(&gpu_wait, timings, gpu_done);
+
+        // Flush any D3D12 validation messages from the previous frame.
+        self.flush_validation();
+
+        // Frame command-list pipeline (parallel encoding):
+        //
+        //   start_cmd  : pre-init timestamps only (closed up-front)
+        //   per-pass   : one cmd list per non-composite pass, recorded
+        //                in parallel by rayon workers inside execute_graph
+        //   end_cmd    : Composite + final timestamp + ResolveQueryData
+        //                 + per-frame restore barriers (composed by
+        //                 execute_graph's main-thread composite arm + the
+        //                 tail of record_frame)
+        //
+        // ExecuteCommandLists is called once with the whole topological
+        // sequence so the GPU sees them in submission order.
+        let start_cmd = self.record_frame_start(frame, params.world_hidden)?;
+
+        // Line resources: built on the first frame that publishes lines, so
+        // the plan's graph gate can see them live this same frame and a world
+        // that never draws a line never compiles them.
+        self.ensure_line_pipeline(!params.lines.is_empty());
+
+        Ok(Some(DxFrame {
+            frame,
+            gpu_wait,
+            start_cmd,
+        }))
+    }
+
+    fn plan(&mut self, _: &DxFrame, params: &FrameParams<'_>) -> error::RenderResult<FramePlan> {
+        self.plan_frame(crate::directx::draw::PlanArgs {
+            camera: camera_inputs(&self.state, params),
+            elapsed: params.elapsed as f32,
+            render_size: [
+                self.targets.extent.render_width.max(1),
+                self.targets.extent.render_height.max(1),
+            ],
+            lines: params.lines,
+            world_hidden: params.world_hidden,
+        })
+    }
+
+    fn execute(
+        &mut self,
+        frame: DxFrame,
+        plan: &FramePlan,
+        frame_params: &FrameParams<'_>,
+    ) -> error::RenderResult<()> {
+        let FrameParams {
+            elapsed: elapsed_f64,
+            fov_y_radians,
+            near,
+            cam_pos,
+            text_calls,
+            lines,
+            world_hidden,
+            grass_benders,
+            ..
+        } = *frame_params;
+        let DxFrame {
+            frame,
+            gpu_wait,
+            start_cmd,
+        } = frame;
+        // Reflection-probe count + records into this frame's ring CBV and records
+        // buffer, which every probe-reading pass binds. A ring (one of each per
+        // frame) so this write never races a prior frame's in-flight GPU read.
+        self.upload_probe_set(frame)?;
+        // The material parameter table's copy for this frame, after a change.
+        if let Some(params) = self.cull.material_params.as_mut() {
+            params.upload(frame);
+        }
+
+        let particle = self.prepare_particle_pass(elapsed_f64 as f32);
+
+        // 2. Open the END cmd list (Composite + final timestamp +
+        //    ResolveQueryData + per-frame restore barriers). The
+        //    executor's main-thread Composite arm encodes onto this
+        //    cmd list; `close_end_list` appends the final timestamp +
+        //    resolve after `record_frame` returns.
+        // SAFETY: the fence for this frame slot was already waited on, so no submission still
+        // references what is being reset.
+        unsafe { self.commands.end_command_allocators[frame].Reset() }
+            .map_err(|e| super::error::map_hresult(e.code(), "end allocator reset"))?;
+        let end_cmd = &self.commands.end_command_lists[frame];
+        // SAFETY: the fence for this frame slot was already waited on, so no submission still
+        // references what is being reset.
+        unsafe { end_cmd.Reset(&self.commands.end_command_allocators[frame], None) }
+            .map_err(|e| super::error::map_hresult(e.code(), "end cmd reset"))?;
+
+        // SAFETY: a property query on a live COM object; it only reads.
+        let back_idx = unsafe { self.swapchain.handle.GetCurrentBackBufferIndex() } as usize;
+        let back_buffer = self.swapchain.back_buffers[back_idx].clone();
+        // SAFETY: a property query on a live descriptor heap; it only reads.
+        let rtv_base = unsafe { self.swapchain.rtv_heap.GetCPUDescriptorHandleForHeapStart() };
+        let back_buffer_rtv = D3D12_CPU_DESCRIPTOR_HANDLE {
+            ptr: rtv_base.ptr + back_idx * self.swapchain.rtv_descriptor_size,
+        };
+
+        // 3. record_frame fans non-composite passes onto rayon workers
+        //    (each records into its own cmd list from the per-pass pool)
+        //    and dispatches Composite + per-frame restore barriers onto
+        //    `end_cmd`. Returns the per-pass cmd lists in topological
+        //    pass order.
+        let recorded = self.record_frame(
+            crate::directx::draw::RecordFrameTargets {
+                cmd: end_cmd,
+                back_buffer: &back_buffer,
+                back_buffer_rtv,
+                frame_idx: frame,
+            },
+            crate::directx::draw::RecordFrameView {
+                elapsed: elapsed_f64,
+                fov_y_radians,
+                near,
+                cam_pos,
+                text_calls,
+                lines,
+                grass_benders,
+                particle,
+            },
+            crate::directx::draw::RecordFrameResolution {
+                width: self.targets.extent.render_width.max(1),
+                height: self.targets.extent.render_height.max(1),
+                output_width: self.targets.extent.output_width.max(1),
+                output_height: self.targets.extent.output_height.max(1),
+            },
+            plan,
+            world_hidden,
+        )?;
+
+        let end_cmd = self.commands.end_command_lists[frame].clone();
+        let capture = self.record_frame_capture(&end_cmd, &back_buffer);
+
+        self.finish_frame_stats();
+        let started = std::time::Instant::now();
+        let mut pass_lists = recorded.pass_cmd_lists;
+        let submitted = self.close_end_list(frame).and_then(|()| {
+            self.submit_and_present(start_cmd, &pass_lists, back_idx, frame, gpu_wait)
+        });
+        // The lists stay alive in their pool; only this frame's references drop.
+        pass_lists.clear();
+        self.pass_lists.set(pass_lists);
+        let mut stats = self.diagnostics.frame_stats.get();
+        stats.submit_present_us = started.elapsed().as_micros().min(u32::MAX.into()) as u32;
+        self.diagnostics.frame_stats.set(stats);
+        // A submitted frame's capture waits for the fence value it signaled; a
+        // failed one is reported as a dropped frame by the caller.
+        if let Some(capture) = capture
+            && submitted.is_ok()
+        {
+            self.frame_capture
+                .park(self.frame_sync.fence_values[frame], capture);
+        }
+        // A frame that took the history prime but never reached the GPU leaves
+        // the ring unwritten, so the next frame primes instead.
+        if submitted.is_err() && recorded.primed_model_history {
+            self.state.model_history.get_mut().request_prime();
+        }
+        submitted
+    }
+
+    // What the TAA and SSGI accumulations wrote is next frame's history. After
+    // `record_frame` rather than inside it, so the TAA write slot is stable
+    // across the whole graph.
+    fn finish(&mut self, plan: &FramePlan) {
+        if plan.motion_read
+            && let Some(taa) = self.taa.as_mut()
+        {
+            taa.pass.advance();
+        }
+        if let Some(ssgi) = self.ssgi.as_mut() {
+            ssgi.advance();
+        }
     }
 }
 

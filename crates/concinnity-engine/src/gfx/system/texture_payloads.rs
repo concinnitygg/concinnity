@@ -1,7 +1,8 @@
 // Texture pool decode: one image per texture slot, plus the raw payloads the
 // streamer re-decodes after init.
 
-use std::collections::{BTreeSet, HashSet};
+use hashbrown::HashSet;
+use std::collections::BTreeSet;
 
 use concinnity_core::bake::texture::{self, TextureImage};
 use concinnity_core::ecs::{PayloadLocator, PipelineContext};

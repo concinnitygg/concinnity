@@ -25,7 +25,7 @@
 use ash::vk;
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::rt_reflections::{RtParamsInputs, RtReflectionSettings};
+use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
 use concinnity_core::render::rt_accel::seed_wanted;
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
@@ -849,9 +849,7 @@ impl VkContext {
         &self,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
-        fov_y_radians: f32,
-        aspect: f32,
-        cam_pos: [f32; 3],
+        params: Option<&RtParams>,
     ) {
         let rt = match &self.rt_reflections {
             Some(r) => r,
@@ -885,28 +883,10 @@ impl VkContext {
             return;
         }
 
-        // The view->world rotation is the transpose of the view matrix's
-        // orthonormal 3x3; `params` fills in the camera-position translation
-        // column to complete the camera-to-world transform.
-        let v = self.state.view.matrix;
-        let inv_view_rot = [
-            [v[0][0], v[1][0], v[2][0], 0.0],
-            [v[0][1], v[1][1], v[2][1], 0.0],
-            [v[0][2], v[1][2], v[2][2], 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ];
-        let params = rt.settings.params(RtParamsInputs {
-            fov_y_radians,
-            aspect,
-            inv_view_rot,
-            cam_pos,
-            sun_dir: self.fog.sun_dir,
-            sun_color: self.fog.sun_color,
-            prefilter_mip_count: self.scene.prefilter_mip_count as f32,
-            sky_rot: self.state.view.sky_rot,
-            pre_exposure: self.pre_exposure.value(),
-        });
-        rt.params_buffers[frame_idx].write_val(0, &params);
+        let Some(params) = params else {
+            return;
+        };
+        rt.params_buffers[frame_idx].write_val(0, params);
 
         // Textured hit shading needs the bindless albedo/normal pool, which only
         // the bindless static path populates; otherwise fall back to the

@@ -121,8 +121,8 @@ impl TextInputSystem {
 impl System for TextInputSystem {
     fn access(&self) -> Access {
         Access::new()
-            .reads_components(crate::component_mask![FrameInput])
-            .writes_components(crate::component_mask![TextInput])
+            .reads_components(concinnity_core::component_mask![FrameInput])
+            .writes_components(concinnity_core::component_mask![TextInput])
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {

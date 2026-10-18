@@ -48,7 +48,7 @@ pub(crate) struct InputSystem {
 impl InputSystem {
     pub(crate) fn new() -> Self {
         Self {
-            deadzone: crate::settings::DEFAULT_GAMEPAD_DEADZONE,
+            deadzone: concinnity_core::settings::registry::DEFAULT_GAMEPAD_DEADZONE,
             ..Self::default()
         }
     }
@@ -122,17 +122,17 @@ fn compose_frame_input(
 impl System for InputSystem {
     fn access(&self) -> Access {
         Access::new()
-            .writes_components(crate::component_mask![FrameInput])
-            .reads_resources(crate::resource_mask![
+            .writes_components(concinnity_core::component_mask![FrameInput])
+            .reads_resources(concinnity_core::resource_mask![
                 MenuActive,
                 ScreenStack,
                 FlyCam,
                 ControlsCommand,
                 FrameTime,
             ])
-            .writes_resources(crate::resource_mask![
+            .writes_resources(concinnity_core::resource_mask![
                 crate::ecs::InputMailbox,
-                crate::ecs::InputSampledAt,
+                concinnity_core::ecs::InputSampledAt,
                 CursorState,
                 WindowMinimized,
                 FrameInput,
@@ -140,13 +140,13 @@ impl System for InputSystem {
     }
 
     fn init(&mut self, ctx: &mut PipelineContext) {
-        // Persisted settings-menu choices override the engine defaults.
-        let settings = crate::config::Settings::load(
-            ctx.resource::<concinnity_host::store::paths::StateTree>(),
-        );
-        self.map = settings.controls.gamepad_map.unwrap_or_default();
-        if let Some(dz) = settings.controls.gamepad_deadzone {
-            self.deadzone = dz;
+        // Stored settings-menu choices override the engine defaults.
+        if let Some(stored) = ctx.resource::<concinnity_core::settings::StoredSettings>() {
+            let controls = stored.controls_command();
+            self.map = controls.gamepad_map.unwrap_or_default();
+            if let Some(dz) = controls.gamepad_deadzone {
+                self.deadzone = dz;
+            }
         }
         // Seed the one FrameInput row here so `step` only ever overwrites it
         // in place: minting the row is a structural change, which the step's
@@ -167,7 +167,7 @@ impl System for InputSystem {
         else {
             return StepResult::Continue;
         };
-        ctx.insert_resource(crate::ecs::InputSampledAt(sampled_us));
+        ctx.insert_resource(concinnity_core::ecs::InputSampledAt(sampled_us));
         let raw = packet.raw;
         let cursor_outside = packet.cursor_outside_window;
         // Live viewport for UiInputSystem's overlay hit-testing, so a scaled
@@ -285,11 +285,10 @@ mod tests {
     // leaves it at zero (which is every platform but macOS).
     #[test]
     fn a_sampled_packet_carries_the_backends_top_content_inset() {
-        use std::sync::{Arc, Mutex};
-        let state = Arc::new(Mutex::new(crate::gfx::mock_backend::MockState::default()));
-        let mut backend = crate::gfx::mock_backend::MockBackend::transplant(state.clone(), None);
+        use concinnity_core::render::backend::recording::recording_backend;
+        let (state, mut backend) = recording_backend();
         assert_eq!(InputPacket::sample(&mut backend).top_inset, 0.0);
-        state.lock().unwrap().top_inset = 28.0;
+        state.lock().top_inset = 28.0;
         assert_eq!(InputPacket::sample(&mut backend).top_inset, 28.0);
     }
 

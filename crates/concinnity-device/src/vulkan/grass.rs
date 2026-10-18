@@ -23,15 +23,15 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::grass::bend::GRASS_BEND_WORDS;
 use concinnity_core::render::grass::lod::{GRASS_BAND_REGION, GRASS_LOD_COUNT, GRASS_REGION_COUNT};
 use concinnity_core::render::grass::{
-    DrawnPlanetTile, GrassBender, GrassCamera, GrassField, GrassFrameInputs, GrassHistory,
-    GrassHiz, GrassPass, GrassShadowView,
+    FRAME_PLANET_TILE_RECORDS, FRAME_TILE_RECORDS, GrassBender, GrassCamera, GrassField,
+    GrassFrameState, GrassPass, GrassShadowView, GrassView,
 };
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph::PassId;
 use concinnity_core::render::shadow_bias;
 use concinnity_core::render::uniforms::grass::{
     GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassBendParams, GrassParams, GrassTileGpu,
-    MAX_GRASS_TILE_RECORDS, MAX_PLANET_GRASS_TILES, PlanetGrassTileGpu, grass_args_offset,
+    PlanetGrassTileGpu, grass_args_offset,
 };
 
 use super::allocator::PooledBuffer;
@@ -85,8 +85,6 @@ const KERNEL_TILES_BINDING: u32 = 8;
 
 // Planet tile and tile records one frame holds: the view's run and the
 // cascade's.
-const PLANET_TILE_RECORDS: usize = 2 * MAX_PLANET_GRASS_TILES;
-const TILE_RECORDS: usize = 2 * MAX_GRASS_TILE_RECORDS;
 
 // The bend pass's block and the field it reads and writes.
 fn bend_set_bindings() -> [Binding; 2] {
@@ -301,7 +299,7 @@ pub(in crate::vulkan) struct GrassResources {
     _pool: OwnedDescriptorPool,
     // What the field's frames carry from one to the next. Advanced from
     // `&self` on the render thread before the fan-out.
-    history: std::cell::RefCell<GrassHistory>,
+    state: std::cell::RefCell<GrassFrameState>,
 }
 
 // Bytes of a buffer of `count` blades, at least one.
@@ -363,7 +361,7 @@ impl GrassResources {
     // The phase of the next frame's per-pixel hand-off to the canopy, which
     // the canopy block carries beside the blades' own block.
     pub(in crate::vulkan) fn crossfade_phase(&self) -> f32 {
-        self.history.borrow().crossfade_phase()
+        self.state.borrow().history.crossfade_phase()
     }
 
     pub(in crate::vulkan) fn build(
@@ -449,7 +447,8 @@ impl GrassResources {
         let params = uniform_blocks(alloc, params_bytes, frames)?;
         let shadow_params = uniform_blocks(alloc, params_bytes, frames)?;
         let bend_params = uniform_blocks(alloc, bend_params_bytes, frames)?;
-        let planet_bytes = (PLANET_TILE_RECORDS * std::mem::size_of::<PlanetGrassTileGpu>()) as u64;
+        let planet_bytes =
+            (FRAME_PLANET_TILE_RECORDS * std::mem::size_of::<PlanetGrassTileGpu>()) as u64;
         let planet_tiles = (0..frames)
             .map(|_| {
                 alloc.create_buffer(
@@ -459,7 +458,7 @@ impl GrassResources {
                 )
             })
             .collect::<RenderResult<Vec<_>>>()?;
-        let tile_bytes = (TILE_RECORDS * std::mem::size_of::<GrassTileGpu>()) as u64;
+        let tile_bytes = (FRAME_TILE_RECORDS * std::mem::size_of::<GrassTileGpu>()) as u64;
         let tiles = (0..frames)
             .map(|_| {
                 alloc.create_buffer(
@@ -562,7 +561,7 @@ impl GrassResources {
             bend_sets,
             stale_blades: vec![false; frames],
             _pool: pool,
-            history: std::cell::RefCell::new(GrassHistory::default()),
+            state: std::cell::RefCell::new(GrassFrameState::default()),
         })
     }
 
@@ -728,7 +727,7 @@ impl VkContext {
     // Carry the grass into the frame the world moved to.
     pub(in crate::vulkan) fn rebase_grass(&self, rebase: &Rebase) {
         if let Some(grass) = &self.grass {
-            grass.history.borrow_mut().rebase(rebase);
+            grass.state.borrow_mut().history.rebase(rebase);
         }
     }
 
@@ -758,12 +757,6 @@ impl VkContext {
         }
     }
 
-    // Whether this frame's grass casts into the nearest cascade: shadows are on
-    // and that cascade re-renders.
-    pub(in crate::vulkan) fn grass_casts(&self) -> bool {
-        self.grass.is_some() && self.shadow.enabled() && self.shadow.render_mask & 1 != 0
-    }
-
     // Write this frame's grass blocks for `request`, advancing the field's
     // history. `None` when the world grows no grass.
     pub(in crate::vulkan) fn prepare_grass_frame(
@@ -779,25 +772,17 @@ impl VkContext {
             cast,
             benders,
         } = request;
-        let planet_tiles: Vec<DrawnPlanetTile> = if grass.field.planet.is_some() {
-            self.state.drawn_planet_tiles()
-        } else {
-            Vec::new()
-        };
         // The pyramid holds last frame's depth once a pyramid at this
         // resolution has been built, tested through the view-projection the
         // draw cull tests through.
-        let hiz = self
-            .cull
-            .hiz
-            .as_ref()
-            .filter(|_| self.cull.hiz_valid)
-            .map(|h| GrassHiz {
-                prev_vp: self.cull.hiz_prev_view_proj,
-                size: [h.width as f32, h.height as f32],
-                mip_count: h.mip_count,
-            });
-        let inputs = GrassFrameInputs {
+        let hiz = self.cull.hiz.as_ref().and_then(|h| {
+            self.state
+                .planner
+                .temporal()
+                .occlusion()
+                .grass_hiz([h.width as f32, h.height as f32], h.mip_count)
+        });
+        let view = GrassView {
             camera: GrassCamera {
                 position: cam_pos,
                 vp,
@@ -806,21 +791,17 @@ impl VkContext {
             },
             elapsed,
             shadow: cast.then(|| GrassShadowView {
-                vp: self.shadow.uniforms.light_vps[0],
-                to_light: self.shadow.light_dir,
+                vp: self.state.planner.shadow.uniforms.light_vps[0],
+                to_light: self.uniforms.lights.sun().direction,
             }),
             benders,
-            planet_tiles: &planet_tiles,
         };
-        let mut history = grass.history.borrow_mut();
-        let frame = grass.field.frame(&inputs, &mut history);
-        crate::grass_report::report_grass_limit(frame.limit);
+        let mut state = grass.state.borrow_mut();
+        let frame = state.frame(&grass.field, &self.state, &view);
         grass.params[frame_idx].write_val(0, &frame.view.params);
         grass.bend_params[frame_idx].write_val(0, &frame.bend.params);
-        let records = &frame.planet_tiles[..frame.planet_tiles.len().min(PLANET_TILE_RECORDS)];
-        grass.planet_tiles[frame_idx].write_slice(0, records);
-        let tiles = &frame.tiles[..frame.tiles.len().min(TILE_RECORDS)];
-        grass.tiles[frame_idx].write_slice(0, tiles);
+        grass.planet_tiles[frame_idx].write_slice(0, frame.planet_tile_records());
+        grass.tiles[frame_idx].write_slice(0, frame.tile_records());
         let shadow = frame.shadow.map(|pass| {
             grass.shadow_params[frame_idx].write_val(0, &pass.params);
             GrassPlacement::of(&pass)

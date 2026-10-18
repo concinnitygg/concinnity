@@ -5,7 +5,7 @@ use concinnity_core::ecs::PipelineContext;
 use concinnity_core::gfx::render_types::SkinnedIndex;
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_core::render::backend_init::BackendInit;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::volumetric_fog::FogSettings;
 
 use super::GraphicsSystem;
@@ -40,7 +40,12 @@ impl GraphicsSystem {
             .remove::<crate::live_edit::PendingBackend>()
             .map(|p| p.0)
         {
-            Some(backend) if backend.hot_swap_config() == Some(backend_init.swapchain_config()) => {
+            Some(backend)
+                if backend
+                    .live_edit_ref()
+                    .and_then(|edit| edit.hot_swap_config())
+                    == Some(backend_init.swapchain_config()) =>
+            {
                 Some(backend)
             }
             Some(backend) => {
@@ -50,7 +55,10 @@ impl GraphicsSystem {
             None => None,
         };
         if let Some(mut backend) = reuse_backend {
-            backend.reload_world(backend_init)?;
+            backend
+                .live_edit()
+                .ok_or(RenderError::Unsupported { op: "reload_world" })?
+                .reload_world(backend_init)?;
             tracing::info!(
                 "GraphicsSystem: reused live backend (world reloaded in place, window kept)"
             );
@@ -90,7 +98,7 @@ impl GraphicsSystem {
             .map(|b| b.logical_size())
             .unwrap_or((0.0, 0.0));
         // OverlaySystem shapes the overlay draw list from these each frame.
-        ctx.insert_resource(crate::gfx::overlay::OverlayAssets {
+        ctx.insert_resource(concinnity_core::render::overlay::OverlayAssets {
             fonts: std::mem::take(&mut self.loaded_fonts),
             sprite_texture_slots: std::mem::take(&mut self.sprite_texture_slots),
             debug_hud_chips: std::mem::take(&mut self.debug_hud_chips),
@@ -104,18 +112,18 @@ impl GraphicsSystem {
         // The op queue backend effects accumulate into, and the slot-allocation
         // authority: the draw-slot free list seeded with the build-time draw
         // count, and the skinned instance pool with the pre-reserved copies.
-        ctx.insert_resource(crate::ecs::ActiveRenderQueues(Some(
-            crate::ecs::RenderQueues {
+        ctx.insert_resource(concinnity_core::render::queues::ActiveRenderQueues::new(
+            concinnity_core::render::queues::RenderQueues {
                 ops: Default::default(),
-                slots: crate::gfx::render_slots::RenderSlots::new(
+                slots: concinnity_core::render::render_slots::RenderSlots::new(
                     handoff.draw_object_count,
                     self.caps.reuses_build_slots,
                     handoff.skinned_pool_reservations,
                 ),
             },
-        )));
+        ));
 
-        ctx.insert_resource(crate::ecs::ActiveRenderBackend(self.backend.take()));
+        ctx.insert_resource(concinnity_core::ecs::Parked(self.backend.take()));
         // Beside it, the state tooling edits the running world through: the fog
         // a reload dedupes against, and under hot-reload capture the
         // texture-name map and the source catalogs.
@@ -128,6 +136,8 @@ impl GraphicsSystem {
         }
 
         // SettingsSystem jumps the scene flow and this system ticks it.
-        ctx.insert_resource(crate::ecs::ActiveSceneFlow::new(self.scene_flow.take()));
+        ctx.insert_resource(concinnity_core::render::scene_flow::ActiveSceneFlow::new(
+            self.scene_flow.take(),
+        ));
     }
 }

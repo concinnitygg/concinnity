@@ -25,7 +25,6 @@ use concinnity_core::components::{
     VoxelWorld, Window,
 };
 use concinnity_core::ecs::FontHandle;
-use concinnity_core::ecs::FrameRateCap;
 use concinnity_core::ecs::MaterialHandle;
 use concinnity_core::ecs::MenuOverride;
 use concinnity_core::ecs::OverlayImages;
@@ -45,8 +44,6 @@ use concinnity_core::resource::FontTable;
 use concinnity_core::resource::MaterialTable;
 use concinnity_core::resource::SkinnedMeshTable;
 use concinnity_core::resource::TextureTable;
-use concinnity_core::settings::SettingKey;
-use concinnity_core::window::display_mode;
 use concinnity_host::store::blob::blob_path;
 use concinnity_host::store::blob::payload_section_start;
 
@@ -65,11 +62,10 @@ use super::texture_payloads::{TexturePayloads, TextureSlotSkips, decode_texture_
 use super::world_fx::drain_world_fx;
 use super::*;
 use crate::app::run::LaunchRequest;
-use crate::gfx::draw_list;
-use crate::gfx::material_entry::MaterialEntry;
-use crate::settings::system::{SettingsSlot, SettingsState};
-use concinnity_core::settings::quality::{preset_label, resolve_ceiling};
-use concinnity_core::settings::rows::{quality_cycle, quality_toggle};
+use concinnity_core::render::draw_list;
+use concinnity_core::render::material_entry::MaterialEntry;
+use concinnity_core::settings::quality::resolve_ceiling;
+use concinnity_core::settings::system::{DisplayReport, SettingsInit, SettingsSlot, SettingsState};
 use concinnity_core::settings::{QualityCeiling, QualityPreset, WorldAssets, WorldSettings};
 
 // The resolved render config `init_render_settings` returns beside the live
@@ -123,7 +119,7 @@ struct SkinnedMeshAssembly {
 struct TextureTableDecode {
     locators: Vec<PayloadLocator>,
     source_map: super::hot_reload_sources::TextureSourceMap,
-    name_to_slot: std::collections::HashMap<AssetId, usize>,
+    name_to_slot: hashbrown::HashMap<AssetId, usize>,
     count: usize,
     // Slots only the cook reads, which stay placeholders on the GPU.
     cook_only: std::collections::BTreeSet<usize>,
@@ -132,7 +128,7 @@ struct TextureTableDecode {
 // The MaterialTable decoded by `build_material_map`: each material's draw entry
 // by handle, and the material parameter table's rows.
 struct DecodedMaterials {
-    map: std::collections::HashMap<MaterialHandle, MaterialEntry>,
+    map: hashbrown::HashMap<MaterialHandle, MaterialEntry>,
     params: Vec<concinnity_core::gfx::render_types::GpuMaterialParams>,
 }
 
@@ -253,87 +249,6 @@ fn color_lut_strength(ctx: &mut PipelineContext) -> Option<f32> {
     concinnity_core::bake::color_lut::strength(bytes).ok()
 }
 
-// Set every settings-menu row to its live value before the first render, so a
-// persisted or authored choice shows instead of the build's placeholder. Must
-// run before UiInputSystem.init drains the HitRegions and ScrollPanels.
-fn sync_menu_labels(
-    ctx: &mut PipelineContext,
-    settings: &mut SettingsState,
-    persisted: &crate::config::Settings,
-) {
-    let volume_of = |stored: Option<f32>| stored.unwrap_or(crate::settings::DEFAULT_VOLUME);
-    let master_volume = volume_of(persisted.audio.master_volume);
-    let music_volume = volume_of(persisted.audio.music_volume);
-    let sfx_volume = volume_of(persisted.audio.sfx_volume);
-    let voice_volume = volume_of(persisted.audio.voice_volume);
-    let r = &settings.resolved;
-    let g = &r.graphics;
-    sync_setting_value_labels(ctx, |key| match key {
-        SettingKey::Vsync => Some(g.frame_pacing.vsync as usize),
-        SettingKey::FpsCap => Some(crate::settings::fps_cap_index(g.frame_pacing.fps_cap)),
-        SettingKey::WindowMode => Some(crate::settings::window_mode_index(
-            settings.window_args.mode,
-        )),
-        // Resolution is a dynamic dropdown, labeled once the backend has
-        // enumerated the display modes.
-        SettingKey::RenderScale => Some(crate::settings::render_scale_index(
-            g.anti_aliasing.upscale_quality,
-        )),
-        SettingKey::UpscaleBackend => Some(crate::settings::upscale_backend_index(
-            g.anti_aliasing.upscaler,
-        )),
-        SettingKey::DlssPreset => Some(crate::settings::dlss_preset_index(g.dlss_preset)),
-        SettingKey::MasterVolume => Some(crate::settings::volume_index(master_volume)),
-        SettingKey::MusicVolume => Some(crate::settings::volume_index(music_volume)),
-        SettingKey::SfxVolume => Some(crate::settings::volume_index(sfx_volume)),
-        SettingKey::VoiceVolume => Some(crate::settings::volume_index(voice_volume)),
-        SettingKey::TemporalUpscaling => Some(g.anti_aliasing.upscaling as usize),
-        SettingKey::HdrDisplay => Some(g.display.hdr as usize),
-        SettingKey::HdrPq => Some(g.display.pq as usize),
-        SettingKey::PerfStats => Some(r.perf_stats as usize),
-        SettingKey::ShowFps => Some(r.show_fps as usize),
-        SettingKey::ShowVram => Some(r.show_vram as usize),
-        SettingKey::ShadowMapSize => {
-            Some(crate::settings::shadow_resolution_index(g.shadows.map_size))
-        }
-        SettingKey::ShadowUpdate => Some(crate::settings::shadow_update_index(g.shadows.update)),
-        SettingKey::ShadowDistance => {
-            Some(crate::settings::shadow_distance_index(g.shadows.distance))
-        }
-        SettingKey::ShadowCascades => {
-            Some(crate::settings::shadow_cascades_index(g.shadows.cascades))
-        }
-        SettingKey::Anisotropy => Some(crate::settings::anisotropy_index(
-            g.texture_filtering.anisotropy,
-        )),
-        SettingKey::FramesInFlight => Some(crate::settings::frames_in_flight_index(
-            g.frame_pacing.frames_in_flight,
-        )),
-        SettingKey::OcclusionTwoPass => Some(g.culling.two_pass_occlusion as usize),
-        SettingKey::TextureQuality => Some(crate::settings::texture_quality_index(r.texture_cap)),
-        key => quality_toggle(key)
-            .map(|row| (row.get)(g) as usize)
-            .or_else(|| quality_cycle(key).map(|row| (row.index)(g))),
-    });
-    // After the generic sync: under Auto the master row names the resolved
-    // tier ("Auto (High)"), which the static option table cannot express.
-    let preset_label = preset_label(settings.quality_preset, &settings.gpu_profile);
-    set_setting_row_label(ctx, SettingKey::GraphicsQuality, &preset_label);
-    set_setting_row_label(
-        ctx,
-        SettingKey::GraphicsApi,
-        &crate::settings::graphics_api_label(
-            crate::platform::current(),
-            crate::platform::reverted(),
-        ),
-    );
-    settings.init_sliders(ctx, persisted);
-    settings.init_rebind_rows(ctx);
-    settings.init_cycle_value_labels(ctx);
-    settings.capture_perf_sub_rows(ctx);
-    settings.capture_resolution_row(ctx);
-}
-
 impl GraphicsSystem {
     // Detect the GPU and resolve the quality preset and its ceiling. Runs
     // before the backend is built, since the ceiling sizes its render targets
@@ -342,7 +257,7 @@ impl GraphicsSystem {
         &self,
         ctx: &mut PipelineContext,
         launch: &LaunchRequest,
-        persisted: &crate::config::Settings,
+        persisted: &concinnity_core::settings::StoredSettings,
     ) -> DetectedQuality {
         let backend::DeviceProbe {
             profile: gpu_profile,
@@ -358,7 +273,9 @@ impl GraphicsSystem {
         let preset = launch
             .resolve_quality_preset(persisted.graphics.quality_preset)
             .unwrap_or_else(|| {
-                self.seed_first_launch_preset(persisted);
+                let mut seeded = persisted.clone();
+                seeded.graphics.quality_preset = Some(QualityPreset::Auto);
+                seeded.store_changed(ctx.resources);
                 QualityPreset::Auto
             });
         let ceiling = resolve_ceiling(preset, &gpu_profile);
@@ -382,52 +299,37 @@ impl GraphicsSystem {
         &mut self,
         ctx: &mut PipelineContext,
         launch: &LaunchRequest,
-        persisted: &crate::config::Settings,
+        persisted: &concinnity_core::settings::StoredSettings,
         quality: DetectedQuality,
     ) -> (ResolvedRenderConfig, SettingsState) {
-        let user_graphics = &persisted.graphics;
-        let mut settings = SettingsState::new();
-        settings.persisted_graphics = user_graphics.clone();
-        settings.gpu_profile = quality.gpu_profile;
-        settings.capabilities = quality.capabilities;
-        settings.quality_preset = quality.preset;
-
-        if let Some(w) = ctx.drain::<Window>().into_iter().next() {
-            settings.window_args = w;
-        }
-        if let Some(m) = user_graphics.window_mode {
-            settings.window_args.mode = m;
-        }
-        // Fullscreen-only: the windowed size stays the world's authored value.
-        if let Some([w, h, hz]) = user_graphics.resolution {
-            settings.resolution = Some(display_mode::DisplayMode {
-                width: w,
-                height: h,
-                refresh_hz: hz,
-            });
-        }
-
+        let window = ctx.drain::<Window>().into_iter().next();
         self.max_frames = launch.args.frames;
         let mut streaming_config = ctx.drain::<StreamingConfig>().into_iter().next();
         let graphics = ctx.drain::<GraphicsConfig>().into_iter().next();
-        settings.authored = WorldSettings::new(WorldAssets {
+        let authored = WorldSettings::new(WorldAssets {
             graphics: graphics.as_ref(),
             lut_strength: color_lut_strength(ctx),
             streaming: streaming_config.as_ref(),
         });
-        self.clear_color = settings.authored.graphics.background.color;
-        // `--vsync`, `--fps-cap` and `--dlss-preset` win for this launch, shown
-        // on the row and never persisted unless the row itself changes.
-        settings.session = launch.session_overrides();
-        settings.resolved = settings.resolve(user_graphics, &quality.ceiling);
+        self.clear_color = authored.graphics.background.color;
+        let mut settings = SettingsState::from_init(SettingsInit {
+            stored: persisted,
+            gpu_profile: quality.gpu_profile,
+            capabilities: quality.capabilities,
+            preset: quality.preset,
+            ceiling: &quality.ceiling,
+            window,
+            authored,
+            // `--vsync`, `--fps-cap` and `--dlss-preset` win for this launch,
+            // shown on the row and never persisted unless the row itself changes.
+            session: launch.session_overrides(),
+        });
         if let Some(sc) = streaming_config.as_mut() {
-            sc.texture_cap = settings.resolved.texture_cap;
-            sc.texture_budget = settings.resolved.texture_budget;
+            sc.texture_cap = settings.resolved().texture_cap;
+            sc.texture_budget = settings.resolved().texture_budget;
         }
-        settings.keymap = persisted.controls.keymap.unwrap_or_default();
-        settings.gamepad_map = persisted.controls.gamepad_map.unwrap_or_default();
 
-        sync_menu_labels(ctx, &mut settings, persisted);
+        settings.sync_menu_labels(ctx, persisted);
         self.init_clip_rects(ctx);
 
         (
@@ -438,7 +340,7 @@ impl GraphicsSystem {
                 },
                 quality_ceiling: quality.ceiling,
                 streaming_config,
-                world_ambient_intensity: settings.authored.world_ambient(),
+                world_ambient_intensity: settings.authored().world_ambient(),
             },
             settings,
         )
@@ -468,8 +370,8 @@ impl GraphicsSystem {
         let mut skinned_blob_indices: Vec<u32> = Vec::new();
         // Interned name -> handle, published for the animation debug tool
         // calls, which address a mesh by its typed name.
-        let mut skinned_name_index: std::collections::HashMap<AssetId, SkinnedMeshHandle> =
-            std::collections::HashMap::new();
+        let mut skinned_name_index: hashbrown::HashMap<AssetId, SkinnedMeshHandle> =
+            hashbrown::HashMap::new();
         for (handle, entry) in skinned_table.0.iter().enumerate() {
             let handle = SkinnedMeshHandle::new(handle as u32);
             let (name_id, sm): (u32, SkinnedMesh) = match postcard::from_bytes(&entry.data_bytes) {
@@ -531,18 +433,22 @@ impl GraphicsSystem {
         // GraphicsSystem) so animation debug tool calls can resolve a typed
         // mesh name to the handle keying the correlation web. The skin
         // selectors ride along for the animation reload catalog.
-        ctx.insert_resource(crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex(
-            skinned_name_index,
-        ));
-        ctx.insert_resource(crate::gfx::skinned_mesh_map::SkinnedMeshSkinIndex(
-            skinned_geometry.iter().map(|g| g.mesh.skin_index).collect(),
-        ));
-        ctx.insert_resource(crate::gfx::shape_preview::SkinnedMeshMorphNames(
-            skinned_geometry
-                .iter()
-                .map(|g| g.morphs.names.clone())
-                .collect(),
-        ));
+        ctx.insert_resource(
+            concinnity_core::animation::skinned_mesh_map::SkinnedMeshNameIndex(skinned_name_index),
+        );
+        ctx.insert_resource(
+            concinnity_core::animation::skinned_mesh_map::SkinnedMeshSkinIndex(
+                skinned_geometry.iter().map(|g| g.mesh.skin_index).collect(),
+            ),
+        );
+        ctx.insert_resource(
+            concinnity_core::animation::skinned_mesh_map::SkinnedMeshMorphNames(
+                skinned_geometry
+                    .iter()
+                    .map(|g| g.morphs.names.clone())
+                    .collect(),
+            ),
+        );
         Some((skinned_geometry, skinned_blob_indices))
     }
 
@@ -554,7 +460,7 @@ impl GraphicsSystem {
     fn assemble_skinned_meshes(
         &self,
         skinned_geometry: &[SkinnedGeometry],
-        material_map: &std::collections::HashMap<MaterialHandle, MaterialEntry>,
+        material_map: &hashbrown::HashMap<MaterialHandle, MaterialEntry>,
         capture_sources: bool,
     ) -> Option<SkinnedMeshAssembly> {
         let mut skinned_vertices: Vec<mesh_payload::SkinnedVertex> = Vec::new();
@@ -587,19 +493,20 @@ impl GraphicsSystem {
             lod_alternates: lod_alts,
         } in skinned_geometry
         {
-            let mat_entry =
-                match crate::gfx::material_entry::resolve_material_slots(sm.material, material_map)
-                {
-                    Ok(entry) => entry,
-                    Err(mat_id) => {
-                        tracing::error!(
-                            "GraphicsSystem: SkinnedMesh '{}' references unknown material {}",
-                            name_id,
-                            mat_id.index()
-                        );
-                        return None;
-                    }
-                };
+            let mat_entry = match concinnity_core::render::material_entry::resolve_material_slots(
+                sm.material,
+                material_map,
+            ) {
+                Ok(entry) => entry,
+                Err(mat_id) => {
+                    tracing::error!(
+                        "GraphicsSystem: SkinnedMesh '{}' references unknown material {}",
+                        name_id,
+                        mat_id.index()
+                    );
+                    return None;
+                }
+            };
             let (texture_slot, normal_map_slot, material) = (
                 mat_entry.albedo_slot,
                 mat_entry.normal_map_slot,
@@ -616,8 +523,11 @@ impl GraphicsSystem {
             // are rebased onto the same `base` as LOD0, identical to how
             // the shadow / velocity / SSAO / SSR pre-passes already consume
             // the IB.
-            let lod_slices =
-                crate::gfx::draw_list::append_lod_slices(&mut skinned_indices, lod_alts, base);
+            let lod_slices = concinnity_core::render::draw_list::append_lod_slices(
+                &mut skinned_indices,
+                lod_alts,
+                base,
+            );
 
             let skeleton = build_skeleton_from_joint_defs(joint_defs);
             let joint_count = skeleton.len().min(render_types::MAX_JOINTS);
@@ -681,7 +591,7 @@ impl GraphicsSystem {
                 let copy_index_offset = skinned_indices.len();
                 skinned_vertices.extend_from_slice(verts);
                 skinned_indices.extend(idxs.iter().map(|i| u32::from(*i) + copy_base));
-                let copy_lods = crate::gfx::draw_list::append_lod_slices(
+                let copy_lods = concinnity_core::render::draw_list::append_lod_slices(
                     &mut skinned_indices,
                     lod_alts,
                     copy_base,
@@ -753,13 +663,15 @@ impl GraphicsSystem {
         let texture_table = ctx.resource::<TextureTable>().cloned().unwrap_or_default();
         // Dev-only source catalog (present under `cn debug`) so the hot-reload
         // watcher can map a texture handle back to the file that backs it.
-        let texture_sources = ctx.resource::<crate::resource::TextureSources>().cloned();
+        let texture_sources = ctx
+            .resource::<concinnity_core::resource::TextureSources>()
+            .cloned();
         let mut texture_locators = Vec::with_capacity(texture_table.len());
         let mut asset_source_map = super::hot_reload_sources::TextureSourceMap::new();
         // Name -> pool slot, built only under `cn debug` for the runtime
         // spawn-by-name path (`TextureNameSlots`).
-        let mut texture_name_to_slot: std::collections::HashMap<AssetId, usize> =
-            std::collections::HashMap::new();
+        let mut texture_name_to_slot: hashbrown::HashMap<AssetId, usize> =
+            hashbrown::HashMap::new();
         for (slot, entry) in texture_table.0.iter().enumerate() {
             match &entry.payload {
                 Some(l) => {
@@ -813,8 +725,8 @@ impl GraphicsSystem {
         texture_count: usize,
     ) -> Option<DecodedMaterials> {
         let material_table = ctx.resource::<MaterialTable>().cloned().unwrap_or_default();
-        let mut material_map: std::collections::HashMap<MaterialHandle, MaterialEntry> =
-            std::collections::HashMap::with_capacity(material_table.len());
+        let mut material_map: hashbrown::HashMap<MaterialHandle, MaterialEntry> =
+            hashbrown::HashMap::with_capacity(material_table.len());
         let mut params = Vec::with_capacity(material_table.len());
         for (material_handle, entry) in material_table.0.iter().enumerate() {
             let mat: Material = match postcard::from_bytes(&entry.data_bytes) {
@@ -830,7 +742,7 @@ impl GraphicsSystem {
             };
             let handle = MaterialHandle::new(material_handle as u32);
             params.push(mat.params);
-            match crate::gfx::material_entry::of(handle, &mat, texture_count) {
+            match concinnity_core::render::material_entry::of(handle, &mat, texture_count) {
                 Ok(entry) => {
                     material_map.insert(handle, entry);
                 }
@@ -890,7 +802,7 @@ impl GraphicsSystem {
                 .into_iter()
                 .map(|(bucket, scene)| (bucket as u32, scene))
                 .collect();
-        let deferred_buckets: std::collections::HashSet<u32> = self
+        let deferred_buckets: hashbrown::HashSet<u32> = self
             .deferred_shader_scenes
             .iter()
             .map(|&(bucket, _)| bucket)
@@ -997,34 +909,24 @@ impl GraphicsSystem {
     // display-mode choice to the backend, and seed the frame-rate-cap resource +
     // the Resolution row's dynamic value label. Runs after the backend is built.
     fn finalize_display_modes(&mut self, ctx: &mut PipelineContext, settings: &mut SettingsState) {
-        if let Some(backend) = self.backend.as_deref_mut() {
+        let reported = self.backend.as_deref_mut().map(|backend| {
             // The window is always created as a standard titled window, so a
             // persisted or authored Borderless / Fullscreen mode is applied here.
             // No-op in embedded mode (the backend owns no window there).
-            if settings.window_args.mode != WindowMode::Windowed {
-                backend.set_window_mode(settings.window_args.mode);
+            let mode = settings.window().mode;
+            if mode != WindowMode::Windowed {
+                backend.set_window_mode(mode);
             }
-            let raw = backend.display_modes();
-            settings.display_modes = if raw.is_empty() {
-                display_mode::fallback_modes()
-            } else {
-                display_mode::normalize(raw)
+            let report = DisplayReport {
+                modes: backend.display_modes(),
+                current: backend.current_display_mode(),
             };
-            settings.current_mode = backend.current_display_mode();
-            if let Some(mode) = settings.resolution {
-                backend.set_display_mode(mode);
+            if let Some(resolution) = settings.resolution() {
+                backend.set_display_mode(resolution);
             }
-        }
-        ctx.insert_resource(crate::ecs::DisplayModes(settings.display_modes.clone()));
-        // The resolved frame-rate cap (world value or persisted override) for
-        // the runtime-level pacer; the settings row's live change republishes it.
-        ctx.insert_resource(FrameRateCap(
-            settings.resolved.graphics.frame_pacing.fps_cap,
-        ));
-        let idx = display_mode::index_of(&settings.display_modes, settings.effective_resolution());
-        if let Some(m) = settings.display_modes.get(idx) {
-            set_setting_row_label(ctx, SettingKey::Resolution, &m.label());
-        }
+            report
+        });
+        settings.adopt_display(ctx, reported);
     }
 
     // Decide cursor handling and push the post-build backend config: menu mode,
@@ -1071,13 +973,13 @@ impl GraphicsSystem {
                     ..Default::default()
                 },
             );
-            if let Err(e) = backend.apply_settings(&settings.resolved.graphics, &ambient) {
+            if let Err(e) = backend.apply_settings(&settings.resolved().graphics, &ambient) {
                 tracing::error!("GraphicsSystem: ambient push failed: {e}");
             }
             // Push the movement key map (the persisted rebinds, or the default).
             // The backend decodes physical keys through it; idempotent with its
             // own default seed when there is no override.
-            backend.set_keymap(&settings.keymap);
+            backend.set_keymap(settings.keymap());
             if has_camera && !has_ui && !menu_driven {
                 backend.request_cursor_capture();
             }
@@ -1085,11 +987,13 @@ impl GraphicsSystem {
         self.caps = device_caps;
         // The built backend is the authority on what it can run from here on
         // (Vulkan settles ray tracing beside the upscaler it actually built).
-        settings.capabilities = device_caps;
+        settings.set_capabilities(device_caps);
         // Publish the flags for the systems that cannot reach the backend
         // themselves (the editor's live draw seam asks whether a rewritten draw
         // slot would land).
-        ctx.insert_resource(crate::ecs::ActiveDeviceCaps(device_caps));
+        ctx.insert_resource(concinnity_core::render::queues::ActiveDeviceCaps(
+            device_caps,
+        ));
         // Gray out + disable settings rows whose feature the device cannot
         // provide (e.g. ray-traced reflections on a GPU without hardware ray
         // tracing). Runs while the menu HitRegions / TextLabels / ScrollPanels
@@ -1146,7 +1050,7 @@ impl GraphicsSystem {
         }
         if capture_sources
             && let Some(info) = ctx
-                .resource::<crate::resource::EnvironmentMapSources>()
+                .resource::<concinnity_core::resource::EnvironmentMapSources>()
                 .and_then(|s| s.0.clone())
         {
             environment_map_source = Some(super::hot_reload_sources::EnvironmentMapSource {
@@ -1197,7 +1101,7 @@ impl GraphicsSystem {
         }
         if capture_sources
             && let Some(src) = ctx
-                .resource::<crate::resource::ColorLutSources>()
+                .resource::<concinnity_core::resource::ColorLutSources>()
                 .and_then(|c| c.0.clone())
         {
             color_lut_source = Some(super::hot_reload_sources::ColorLutSource {
@@ -1389,7 +1293,10 @@ impl GraphicsSystem {
 
     fn try_init(&mut self, ctx: &mut PipelineContext) -> Option<()> {
         let launch = ctx.resource::<LaunchRequest>().copied().unwrap_or_default();
-        let persisted = self.persisted_settings();
+        let persisted = ctx
+            .resource::<concinnity_core::settings::StoredSettings>()
+            .cloned()
+            .unwrap_or_default();
         let quality = self.detect_quality(ctx, &launch, &persisted);
         (self.debug_hud_chips, self.stat_hud_chips) = capture_hud_chips(ctx);
         let (
@@ -1408,7 +1315,7 @@ impl GraphicsSystem {
         // A planet's terrain streams through the same chunk pool, so a world
         // declares one or the other.
         let planet = ctx.query::<Planet>().next().cloned();
-        let block_types: std::collections::HashMap<AssetId, BlockType> = ctx
+        let block_types: hashbrown::HashMap<AssetId, BlockType> = ctx
             .drain_with_ids::<BlockType>()
             .into_iter()
             .filter_map(|(id, bt)| Some((id?, bt)))
@@ -1426,7 +1333,7 @@ impl GraphicsSystem {
         let proc_mesh_args_snapshot = if capture_sources {
             procedural_mesh_snapshot(ctx)
         } else {
-            std::collections::HashMap::new()
+            hashbrown::HashMap::new()
         };
 
         // Mesh sources owned by a scene other than the start scene skip their
@@ -1439,12 +1346,20 @@ impl GraphicsSystem {
             sources: mesh_sources,
             component_handles: component_mesh_handles,
             deferred_seeds: deferred_mesh_seeds,
-        } = draw_list::load_mesh_geometry(ctx, &deferred_mesh_sources, blob_disk_backed)?;
+        } = draw_list::load_mesh_geometry(
+            ctx,
+            &deferred_mesh_sources,
+            blob_disk_backed,
+            // The hot-reload watcher maps a mesh handle back to the file that
+            // backs it only in a development loop.
+            ctx.resource::<LaunchRequest>()
+                .is_some_and(|launch| launch.dev_loop),
+        )?;
 
         let (skinned_geometry, skinned_blob_indices) = self.decode_skinned_geometry(ctx)?;
 
         // drain Model components into a name-keyed map for Prop lookup
-        let model_map: std::collections::HashMap<AssetId, Vec<SubMeshRef>> = ctx
+        let model_map: hashbrown::HashMap<AssetId, Vec<SubMeshRef>> = ctx
             .drain_with_ids::<Model>()
             .into_iter()
             .filter_map(|(id, m)| Some((id?, m.meshes)))
@@ -1453,7 +1368,8 @@ impl GraphicsSystem {
         // decode Room payloads before shaders/textures are read; all payloads
         // live in the same blob and must be consumed before it is released
         let (room_geometry, room_blob_indices) = draw_list::load_room_geometry(ctx)?;
-        let (terrains, terrain_blob_indices) = crate::gfx::terrain::load_terrains(ctx)?;
+        let (terrains, terrain_blob_indices) =
+            concinnity_core::render::terrain::load_terrains(ctx)?;
 
         let DecodedShaders {
             locators: shader_locators,
@@ -1586,7 +1502,10 @@ impl GraphicsSystem {
         let total_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
 
         let planet_grass = planet.as_ref().and_then(|p| {
-            crate::gfx::planet_grass::resolve(p, &crate::gfx::terrain::grass_by_id(ctx))
+            crate::gfx::planet_grass::resolve(
+                p,
+                &concinnity_core::render::terrain::grass_by_id(ctx),
+            )
         });
         let planet_far_field = planet_grass.as_ref().map(|g| g.far_field());
         let fx = drain_world_fx(
@@ -1610,7 +1529,7 @@ impl GraphicsSystem {
         let decal_count = fx.decals.len();
         let particle_count = fx.particles.len();
         let fog_settings = fx.fog;
-        settings.fog_built = fog_settings.is_some();
+        settings.set_fog_built(fog_settings.is_some());
 
         // Metal is unaffected by `validation`: its layer is enabled by the CLI
         // re-execing with `MTL_DEBUG_LAYER`.
@@ -1647,12 +1566,12 @@ impl GraphicsSystem {
         };
         let mut backend_init = BackendInit {
             platform: crate::platform::current(),
-            window: &settings.window_args,
+            window: settings.window(),
             validation,
-            graphics: settings.resolved.graphics.clone(),
+            graphics: settings.resolved().graphics.clone(),
             // Restart-class: the main-pass pipelines, render targets and planar /
             // probe faces all bake the count, so a live AA toggle keeps it.
-            hdr_samples: settings.resolved.graphics.hdr_samples(),
+            hdr_samples: settings.resolved().graphics.hdr_samples(),
             launch: render_launch,
             hot_reload,
             capture,
@@ -1791,7 +1710,7 @@ impl GraphicsSystem {
             ctx,
             RuntimeHandoff {
                 draw_object_count,
-                frames_in_flight: settings.resolved.graphics.frames_in_flight(),
+                frames_in_flight: settings.resolved().graphics.frames_in_flight(),
                 skinned_pool_reservations: &skinned_pool_reservations,
                 fog: fog_settings,
                 texture_name_slots,
@@ -1800,10 +1719,10 @@ impl GraphicsSystem {
         );
         tracing::info!(
             "GraphicsSystem: ready ({}x{} \"{}\", {} frames in flight, {} draw objects, {} instanced clusters ({} instances total), {} decals, {} particle emitter(s), fog={})",
-            settings.window_args.width,
-            settings.window_args.height,
-            settings.window_args.title,
-            settings.resolved.graphics.frame_pacing.frames_in_flight,
+            settings.window().width,
+            settings.window().height,
+            settings.window().title,
+            settings.resolved().graphics.frame_pacing.frames_in_flight,
             draw_object_count,
             cluster_count,
             total_instances,
@@ -1811,48 +1730,8 @@ impl GraphicsSystem {
             particle_count,
             if fog_settings.is_some() { "on" } else { "off" },
         );
-        ctx.insert_resource(SettingsSlot(Some(settings)));
+        ctx.insert_resource(SettingsSlot::new(settings));
         Some(())
-    }
-}
-
-// Set the value TextLabel of every settings-row HitRegion to the live value
-// of that setting. `current_index` maps a setting key to the index of its
-// active option (None for an unknown key). Runs once at init, before any
-// system drains the HitRegions.
-fn sync_setting_value_labels(
-    ctx: &mut PipelineContext,
-    current_index: impl Fn(SettingKey) -> Option<usize>,
-) {
-    // (setting, value-label id) for each settings row.
-    let rows: Vec<(SettingKey, AssetId)> = ctx
-        .query::<HitRegion>()
-        .filter_map(|r| match r.action {
-            Some(UiAction::Setting { key, .. }) => Some((key, r.label?.id())),
-            _ => None,
-        })
-        .collect();
-
-    for (key, label_id) in rows {
-        let (Some(opts), Some(idx)) = (crate::settings::options(key), current_index(key)) else {
-            continue;
-        };
-        if let Some(text) = opts.get(idx).copied() {
-            crate::ecs::by_asset_id::set_text(ctx, label_id, text);
-        }
-    }
-}
-
-// Set the value label of the settings row bound to `key` to `text` directly,
-// for a label that is not one of the row's static `options` (the master preset
-// row's "Auto (High)", or the live "Custom" flip when a quality row changes).
-fn set_setting_row_label(ctx: &mut PipelineContext, key: SettingKey, text: &str) {
-    let label_id = ctx.query::<HitRegion>().find_map(|r| match r.action {
-        Some(UiAction::Setting { key: row_key, .. }) if row_key == key => r.label,
-        _ => None,
-    });
-    if let Some(id) = label_id {
-        crate::ecs::by_asset_id::set_text(ctx, id.id(), text);
     }
 }
 

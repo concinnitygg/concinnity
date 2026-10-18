@@ -18,7 +18,7 @@ use concinnity_core::render::uniforms::ocean::{
 };
 use concinnity_core::render::water::ocean::foam::FoamClock;
 use concinnity_core::render::water::ocean::initial::initial_spectrum;
-use concinnity_core::render::water::ocean::{OceanPlan, OceanQuality};
+use concinnity_core::render::water::ocean::{MAX_OCEAN_CASCADES, OceanPlan, OceanQuality};
 use std::cell::Cell;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -347,21 +347,27 @@ impl DxContext {
         let mut clock = k.foam_clock.get();
         let keep = clock.advance(time);
         k.foam_clock.set(clock);
-        // Mip `level` of `cascades` layers from `first`, written, made readable.
-        let written = |level: u32, first: u32, cascades: u32| -> Vec<D3D12_RESOURCE_BARRIER> {
-            arrays
-                .iter()
-                .flat_map(|a| {
-                    (first..first + cascades).map(move |layer| {
-                        subresource_transition_barrier(
-                            a,
-                            level + layer * k.mips,
-                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                            RESTING,
-                        )
-                    })
+        // Mip `level` of `cascades` layers from `first`, written, made readable:
+        // the barriers and how many of them are filled.
+        let written = |level: u32, first: u32, cascades: u32| {
+            let transitions = arrays.iter().flat_map(|a| {
+                (first..first + cascades).map(move |layer| {
+                    subresource_transition_barrier(
+                        a,
+                        level + layer * k.mips,
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                        RESTING,
+                    )
                 })
-                .collect()
+            });
+            let mut barriers: [D3D12_RESOURCE_BARRIER; 2 * MAX_OCEAN_CASCADES] =
+                std::array::from_fn(|_| D3D12_RESOURCE_BARRIER::default());
+            let mut filled = 0;
+            for (slot, barrier) in barriers.iter_mut().zip(transitions) {
+                *slot = barrier;
+                filled += 1;
+            }
+            (barriers, filled)
         };
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call; each barrier's before-state is the state
@@ -393,14 +399,16 @@ impl DxContext {
                 cmd.Dispatch(size, cascades, 1);
                 cmd.SetPipelineState(&k.mip);
                 for level in 1..k.mips {
-                    cmd.ResourceBarrier(&written(level - 1, first, cascades));
+                    let (barriers, filled) = written(level - 1, first, cascades);
+                    cmd.ResourceBarrier(&barriers[..filled]);
                     let reduce = params.reduce(level);
                     let groups = ocean_mip_groups(reduce.mip_size);
                     cmd.set_compute_root_constants(PARAMS_ROOT, &reduce);
                     cmd.set_compute_srv_table(MIPS_ROOT, k.mip_tables[level as usize]);
                     cmd.Dispatch(groups, groups, cascades);
                 }
-                cmd.ResourceBarrier(&written(k.mips - 1, first, cascades));
+                let (barriers, filled) = written(k.mips - 1, first, cascades);
+                cmd.ResourceBarrier(&barriers[..filled]);
                 uav_barrier(cmd, &k.row_data);
             }
             uav_barrier(cmd, &k.foam);

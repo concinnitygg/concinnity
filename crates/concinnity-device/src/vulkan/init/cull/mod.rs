@@ -7,7 +7,6 @@ use concinnity_core::bake::texture::TextureImage;
 use concinnity_core::gfx::render_types::clone_reserve;
 use concinnity_core::render::backend_init::{SceneData, WorldShader};
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::transform::IDENTITY;
 
 use super::InitGpu;
 use crate::vulkan::context::{
@@ -239,8 +238,6 @@ pub(super) fn build_cull(
         main_render_pass_phase1: two_pass.main_render_pass_phase1,
         main_render_pass_phase2: two_pass.main_render_pass_phase2,
         hiz: compute.hiz,
-        hiz_valid: false,
-        hiz_prev_view_proj: IDENTITY,
         shadow_cull_pipeline: shadow_cull.cull_pipeline,
         shadow_cull_pipeline_layout: shadow_cull.cull_pipeline_layout,
         _shadow_cull_set_layout: shadow_cull.set_layout,

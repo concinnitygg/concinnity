@@ -177,6 +177,27 @@ impl TextureImage {
         self.mips.first().map(|m| m.height).unwrap_or(0)
     }
 
+    /// Check the image is uploadable: at least one level, and every level holds
+    /// the bytes its dimensions need in the image's format.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.mips.is_empty() {
+            return Err("texture image has no mip level".into());
+        }
+        for (mip, level) in self.mips.iter().enumerate() {
+            let needed = self.format.mip_byte_len(level.width, level.height)?;
+            if level.data.len() < needed {
+                return Err(format!(
+                    "texture mip {mip} ({}x{} {:?}) is {} bytes, need {needed}",
+                    level.width,
+                    level.height,
+                    self.format,
+                    level.data.len()
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Total resident bytes across every mip level (streaming budget accounting).
     pub fn byte_len(&self) -> usize {
         self.mips.iter().map(|m| m.data.len()).sum()
@@ -313,6 +334,16 @@ pub fn downscale_rgba(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_rejects_a_short_or_missing_level() {
+        let mut image = TextureImage::rgba8(2, 2, vec![0; 16]);
+        assert!(image.validate().is_ok());
+        image.mips[0].data.truncate(15);
+        assert!(image.validate().is_err());
+        image.mips.clear();
+        assert!(image.validate().is_err());
+    }
 
     fn round_trip(image: &TextureImage) -> TextureImage {
         let bytes = serialize(image);

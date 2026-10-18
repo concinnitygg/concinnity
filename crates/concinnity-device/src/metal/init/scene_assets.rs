@@ -7,7 +7,6 @@ use concinnity_core::bake;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{AreaLightData, GpuLight};
 use concinnity_core::render::backend_init::{MediaPayloads, SceneData};
-use concinnity_core::render::cluster_range::ClusterReach;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::ltc;
 use objc2_metal::{
@@ -243,7 +242,6 @@ pub(super) fn build_scene_assets(
         textures,
         fallback_textures,
         local_light_buffer,
-        cluster_reach: ClusterReach::new(local_lights),
         area_light_buffer,
         ltc_matrix_texture,
         ltc_magnitude_texture,

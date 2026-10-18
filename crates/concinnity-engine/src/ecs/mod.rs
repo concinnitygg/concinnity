@@ -25,15 +25,15 @@
 
 pub(crate) mod access_ids;
 #[cfg(test)]
-mod active_scene_flow_tests;
-pub(crate) mod by_asset_id;
-#[cfg(test)]
 mod consumed_columns_tests;
+#[cfg(test)]
+mod controller_schedule_tests;
 pub(crate) mod decompose;
 #[cfg(test)]
 mod determinism_tests;
 #[cfg(test)]
 mod headless_drift_tests;
+mod host_resources;
 mod registry;
 /// How a world runs -- windowed or headless -- resolved once before it starts.
 pub mod render_mode;
@@ -41,13 +41,9 @@ pub mod schedule;
 mod world_queries;
 
 use concinnity_core::ecs::MeshBoundsRecord;
-use concinnity_core::ecs::Resources;
+use concinnity_core::ecs::Parked;
 use concinnity_core::ecs::SceneGroup;
-use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::render::backend;
-use concinnity_core::render::scene_flow;
-use concinnity_core::render::scene_residency;
-use concinnity_core::window::display_mode;
 // The `SYSTEMS` table is written client-side, since its gates name the client's
 // own system types (see `registry`); a gate builds one `BuiltSystem` per
 // present entry. Everything that runs it is in concinnity-core.
@@ -55,8 +51,8 @@ pub use registry::SYSTEMS;
 // What stays client-side is the content only a renderer-bearing runtime has:
 // the resources below, and the queries over them in `world_queries`.
 pub use world_queries::{
-    animation_system_mut, gpu_profile, memory_budget, memory_drift, renders, state_tree,
-    streaming_pressure, streaming_stats, take_render_backend, thread_budget,
+    animation_system_mut, gpu_profile, memory_drift, renders, state_tree, streaming_pressure,
+    streaming_stats, take_render_backend,
 };
 
 /// Why the renderer could not be built, left by GraphicsSystem's init for
@@ -99,52 +95,6 @@ impl InputMailbox {
     }
 }
 
-// When the input this tick consumed was sampled, in microseconds on the host
-// clock. Published by InputSystem; it names the tick's frame, which carries it
-// to the backend and which the frame report pairs with its GPU completion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct InputSampledAt(pub u64);
-
-// The frame's recording surfaces, taken and re-parked together by each
-// recording system (the same handoff `ActiveRenderBackend` uses, so a step
-// never re-boxes them into the resource map): the op queue the tick's backend
-// effects accumulate into (drained into the frame snapshot by GraphicsSystem's
-// extract, replayed in record order before the draw) and the slot-allocation
-// authority ops name destinations from. Published by graphics init; absent in
-// a world with no graphics, so recording systems no-op.
-pub(crate) struct RenderQueues {
-    pub ops: concinnity_core::render::ops::RenderOps,
-    pub slots: crate::gfx::render_slots::RenderSlots,
-}
-
-// The active backend's capability flags, published by graphics init. The
-// backend itself is parked (and on a pipelined frame, owned by the render
-// thread), so a system that only needs to know what it supports reads this
-// instead of reaching for it. Absent in a world with no graphics.
-#[derive(Clone, Copy)]
-pub(crate) struct ActiveDeviceCaps(pub concinnity_core::render::backend::DeviceCapabilities);
-
-// The world's parked `RenderQueues` slot. `None` only while a step has it
-// taken.
-pub(crate) struct ActiveRenderQueues(pub Option<RenderQueues>);
-
-impl ActiveRenderQueues {
-    // Take the parked queues for the duration of one system step.
-    pub(crate) fn take(resources: &mut Resources) -> Option<RenderQueues> {
-        resources.get_mut::<Self>()?.0.take()
-    }
-
-    // Park the queues again at the end of the step that took them.
-    pub(crate) fn put(resources: &mut Resources, queues: RenderQueues) {
-        match resources.get_mut::<Self>() {
-            Some(slot) => slot.0 = Some(queues),
-            None => {
-                resources.insert(Self(Some(queues)));
-            }
-        }
-    }
-}
-
 // Recorded backend effects that failed at replay and need a simulation-side
 // rollback (a streamed-mesh upload refused by a full region, a chunk add).
 // Written by GraphicsSystem after submission; StreamingSystem drains it at the
@@ -152,22 +102,13 @@ impl ActiveRenderQueues {
 #[derive(Default)]
 pub(crate) struct RenderOpFailures(pub Vec<concinnity_core::render::ops::OpFailure>);
 
-// A frame the report wants saved: the PNG path for the next frame drawn.
-// Written by FrameReportSystem; GraphicsSystem moves it onto that frame's
-// snapshot.
-pub(crate) struct FrameCaptureRequest(pub String);
-
-// A `screenshot` action fired: save this many consecutive frames, starting with
-// the next drawn. Written by UiInputSystem; GraphicsSystem schedules the burst.
-pub(crate) struct ScreenshotRequest(pub u32);
-
 // The pipelined driver's channel pair, published (parked, so the per-step
 // take never re-boxes) before the world moves to the simulation thread.
 // Present exactly when frames are pipelined: GraphicsSystem's step extracts
 // and sends the snapshot through it instead of submitting against a parked
 // backend (which the render half owns), and applies the render half's
 // feedback. Absent in serial execution.
-pub(crate) struct PipelinedFrames(pub Option<PipelineChannels>);
+pub(crate) type PipelinedFrames = Parked<PipelineChannels>;
 
 pub(crate) struct PipelineChannels {
     pub(crate) snapshot_tx:
@@ -176,72 +117,12 @@ pub(crate) struct PipelineChannels {
         std::sync::mpsc::Receiver<concinnity_core::render::feedback::FrameFeedback>,
 }
 
-impl PipelinedFrames {
-    // Take the parked channels for the duration of one step.
-    pub(crate) fn take(resources: &mut Resources) -> Option<PipelineChannels> {
-        resources.get_mut::<Self>()?.0.take()
-    }
-
-    // Park the channels again at the end of the step that took them.
-    pub(crate) fn put(resources: &mut Resources, channels: PipelineChannels) {
-        match resources.get_mut::<Self>() {
-            Some(slot) => slot.0 = Some(channels),
-            None => {
-                resources.insert(Self(Some(channels)));
-            }
-        }
-    }
-}
-
 // The world's live render backend, parked here between system steps.
 // GraphicsSystem's init builds it and parks it; each system that drives the
 // GPU (GraphicsSystem's frame encode, InputSystem's poll) takes it out at the
-// top of its step and puts it back before returning, so the backend and the
-// `PipelineContext` are never borrowed together. `None` while a step has it
-// taken, or once a live edit transplanted it out.
-pub(crate) struct ActiveRenderBackend(pub Option<Box<dyn backend::RenderBackend>>);
-
-impl ActiveRenderBackend {
-    // Take the parked backend for the duration of one system step.
-    pub(crate) fn take(resources: &mut Resources) -> Option<Box<dyn backend::RenderBackend>> {
-        resources.get_mut::<Self>()?.0.take()
-    }
-
-    // Park the backend again at the end of the step that took it.
-    pub(crate) fn put(resources: &mut Resources, backend: Box<dyn backend::RenderBackend>) {
-        match resources.get_mut::<Self>() {
-            Some(slot) => slot.0 = Some(backend),
-            None => {
-                resources.insert(Self(Some(backend)));
-            }
-        }
-    }
-}
-
-// The active scene-flow bookkeeping, shared between SettingsSystem (which
-// applies imperative scene jumps from `SceneCommand`) and GraphicsSystem
-// (which ticks the timed advance + fades and submits the visibility changes).
-// Published by GraphicsSystem's init when the world declares `Scene` assets;
-// `flow` is `None` when it declared none, so both systems no-op. Both read the
-// flow's clock through `elapsed`, so fade timing is shared.
-pub(crate) struct ActiveSceneFlow {
-    pub flow: Option<scene_flow::SceneFlow>,
-    // `FrameTime::elapsed` at the flow's first read.
-    epoch: Option<f32>,
-}
-
-impl ActiveSceneFlow {
-    pub(crate) fn new(flow: Option<scene_flow::SceneFlow>) -> Self {
-        Self { flow, epoch: None }
-    }
-
-    // Seconds on the flow's clock at runtime time `now` (`FrameTime::elapsed`).
-    // The first read anchors the clock at zero, so a world started partway
-    // through a runtime's life times its fades from its own first frame.
-    pub(crate) fn elapsed(&mut self, now: f32) -> f32 {
-        (now - *self.epoch.get_or_insert(now)).max(0.0)
-    }
-}
+// top of its step and puts it back before returning. `None` while a step has
+// it taken, or once a live edit transplanted it out.
+pub(crate) type ActiveRenderBackend = Parked<Box<dyn backend::RenderBackend>>;
 
 /// The blob's baked per-scene exclusive content groups, published at blob load
 /// for the streaming/residency wiring to consume at graphics init.
@@ -251,31 +132,6 @@ pub struct BlobSceneGroups(pub Vec<SceneGroup>);
 /// handle), published at blob load so graphics init can build draw records for
 /// deferred scene-owned meshes without decoding their payloads.
 pub struct BlobMeshBounds(pub Vec<MeshBoundsRecord>);
-
-// Per-scene streamed-content load status, republished by StreamingSystem
-// whenever it changes: `(scene, state, fraction of members resident)` in
-// declaration order. Consumers (menus, loading screens) read, never write.
-pub(crate) struct SceneResidencyStatus {
-    pub scenes: Vec<(AssetId, scene_residency::SceneLoadState, f32)>,
-}
-
-// Setting rows the engine has disabled at runtime (their keys, e.g. `show_fps`
-// while "Display performance stats" is off). Published each frame by
-// GraphicsSystem and read by `UiInputSystem`, which makes a matching row inert
-// (no hover, no click) while its labels are grayed independently. Distinct from
-// the init-time capability gating (which marks `HitRegion.disabled` before the
-// regions are drained); this drives the same effect after they are drained.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct DisabledSettingRows(
-    pub std::collections::HashSet<concinnity_core::settings::SettingKey>,
-);
-
-// The display modes offered by the "Resolution" settings row, published once by
-// GraphicsSystem at init (enumerated from the backend's display, or the static
-// fallback when it cannot enumerate) and read by `UiInputSystem` to seed the
-// row's dropdown list. Ordered as displayed; a pick's `SetIndex` indexes it.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct DisplayModes(pub Vec<display_mode::DisplayMode>);
 
 /// The system table. Generates the `SYSTEMS` table a world starts from; table
 /// order is run order.

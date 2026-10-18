@@ -26,14 +26,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use super::error::allocation_failed;
-use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::planar_reflection::{
-    self, PLANAR_CLIP_BIAS, PLANAR_CROP_MARGIN, PlanarReflectors,
+    self, MirrorFrame, MirrorView, PLANAR_CROP_MARGIN, PlanarReflectors,
 };
 use concinnity_core::render::radiance_storage::FaceStorage;
-use concinnity_core::transform::mat4_inverse;
-use concinnity_core::transform::mat4_mul;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -242,20 +239,19 @@ impl MtlContext {
         // Recover the (jittered) projection from this frame's view-projection so
         // the mirror render shares the main camera's projection + jitter, keeping
         // the reflection aligned with the reflective fragment's screen-space sample.
-        let proj = mat4_mul(params.vp, mat4_inverse(self.state.view.matrix));
+        let frame = MirrorFrame::new(
+            self.state.view.matrix,
+            params.vp,
+            params.cam_pos,
+            self.state.view.view_distance,
+            (set.width, set.height),
+        );
         // The span opens and closes on the face renders, which always encode; a
         // mirror cull is skipped on a frame with no records, and a span opened
         // on one would drop the whole pass from the frame's timings.
         for (i, &(slot, crop)) in crops.iter().enumerate() {
-            let plane = set.layout.planes()[slot];
-            let oriented = planar_reflection::orient_plane_toward(plane, params.cam_pos);
-            let m = planar_reflection::planar_matrices(
-                self.state.view.matrix,
-                proj,
-                params.cam_pos,
-                oriented,
-                PLANAR_CLIP_BIAS,
-            );
+            let mirror = MirrorView::new(&frame, set.layout.planes()[slot], crop);
+            let m = mirror.matrices;
 
             // Re-cull against this plane's reflected-camera frustum, narrowed to
             // the crop, so geometry visible only in the reflection (behind or
@@ -264,10 +260,6 @@ impl MtlContext {
             // near-plane clip, so the frustum also rejects geometry behind the
             // reflector. A frame with no cull records has no mirror to fill, and
             // the face render then draws nothing.
-            let mirror_frustum = Frustum::from_camera(
-                crop.crop_view_projection(m.view_proj, set.width, set.height),
-                self.state.view.view_distance,
-            );
             let icb_override = match (params.object_buffer, params.draw_args_buffer) {
                 (Some(object_buffer), Some(draw_args_buffer)) => {
                     self.encode_mirror_cull(
@@ -275,7 +267,7 @@ impl MtlContext {
                         MirrorCull {
                             object_buffer,
                             draw_args_buffer,
-                            frustum: &mirror_frustum,
+                            frustum: &mirror.frustum,
                             eye: m.eye,
                             slot,
                             timer: PassTimer::None,
@@ -288,17 +280,12 @@ impl MtlContext {
 
             // Bin the frame's lights and probes over this plane's reflected
             // view, as `LightCull` does for the main camera's.
-            let cluster_params = self.cluster_params.with_camera(&m.cluster_camera(
-                self.cluster_params.z_near,
-                self.scene.cluster_reach.range(
-                    m.eye,
-                    self.cluster_params.z_near,
-                    self.probe.book.records(),
-                    self.state.view.view_distance,
-                ),
-                set.width,
-                set.height,
-            ));
+            let cluster_params = mirror.cluster_params(
+                &frame,
+                &self.cluster_params,
+                self.lights.cluster_reach(),
+                self.probe.book.records(),
+            );
             let clusters = (cluster_params.use_clusters != 0).then(|| ClusterGrid {
                 params: &cluster_params,
                 lists: &set.clusters[slot],

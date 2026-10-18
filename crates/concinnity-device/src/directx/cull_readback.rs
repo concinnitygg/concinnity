@@ -34,7 +34,7 @@ impl DxContext {
                 "cull-status: no frame has been submitted yet".into(),
             ));
         }
-        let count = self.cull_count();
+        let count = self.state.draw.record_count();
         if count == 0 {
             return Ok(Vec::new());
         }

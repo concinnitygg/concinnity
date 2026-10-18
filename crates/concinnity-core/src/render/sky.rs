@@ -35,8 +35,8 @@ pub fn irradiance_lane(environment_loaded: bool, atmosphere: bool) -> f32 {
 #[cfg(test)]
 mod tests {
     use crate::gfx::projection::{look_at, view_from_basis};
+    use crate::math::sqrt;
     use crate::math::vec3::{cross, dot, scale, sub};
-    use crate::math::{cos, sin, sqrt};
     use crate::render::depth::{camera_oblique_projection, camera_projection};
     use crate::transform::{Mat4, mat4_inverse, mat4_mul};
 
@@ -118,7 +118,7 @@ mod tests {
     // A camera at `EYE` looking `yaw` radians left of -z.
     fn yawed(yaw: f32) -> Mat4 {
         let proj = camera_projection(1.2, 16.0 / 9.0, 0.1);
-        let dir = [-sin(yaw), 0.0, -cos(yaw)];
+        let dir = crate::math::flat_forward(yaw);
         mat4_mul(
             proj,
             look_at(EYE, [EYE[0] + dir[0], EYE[1], EYE[2] + dir[2]], UP),
@@ -292,7 +292,7 @@ mod tests {
     fn a_turning_camera_moves_the_sky_by_its_rotation() {
         let proj = camera_projection(1.2, 16.0 / 9.0, 0.1);
         let yaw = 0.05f32;
-        let turned = [-sin(yaw), 0.0, -cos(yaw)];
+        let turned = crate::math::flat_forward(yaw);
         let prev = mat4_mul(proj, look_at(EYE, [EYE[0], EYE[1], EYE[2] - 1.0], UP));
         let cur = mat4_mul(
             proj,

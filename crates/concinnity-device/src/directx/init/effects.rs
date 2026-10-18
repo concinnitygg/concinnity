@@ -5,12 +5,11 @@
 
 use concinnity_core::components::GlassPanel;
 use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::render_types::{DrawObject, LightUniforms};
+use concinnity_core::gfx::render_types::DrawObject;
 use concinnity_core::render::backend_init::{PlanarBudget, SdfVolumeSource, WorldFx};
 use concinnity_core::render::decal::{self, DecalRecord};
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::lights;
-use concinnity_core::render::particles::{self, ParticleEmitterRecord};
+use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleSystem};
 use concinnity_core::render::planar_reflection::PlanarReflectors;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::ssao::settings::SsaoSettings;
@@ -374,7 +373,6 @@ pub(super) fn build_fog(
     targets: &DxTargets,
     shadow: &ShadowState,
     settings: Option<FogSettings>,
-    light_uniforms: &LightUniforms,
 ) -> RenderResult<FogState> {
     let hw = gpu.hw;
     let layout = &descriptors.layout;
@@ -400,14 +398,9 @@ pub(super) fn build_fog(
     } else {
         None
     };
-    // The first directional light's direction and color * intensity, cached
-    // for the volumetric-fog encoder since `LightUniforms` is uploaded rather
-    // than pushed each frame. `update_directional_lights` re-derives both.
     Ok(FogState {
         resources: fog_resources,
         settings,
-        sun_dir: shadow.light_dir,
-        sun_color: lights::sun_color(light_uniforms),
     })
 }
 
@@ -432,43 +425,37 @@ pub(super) fn build_particles(
             crate::directx::particle::MAX_EMITTERS
         )));
     }
-    let (particle_resources, particle_records, particle_emitter_states) = if !particles.is_empty() {
-        let resources = crate::directx::particle::ParticleResources::new(
+    let mut system = ParticleSystem::new();
+    let resources = if particles.is_empty() {
+        None
+    } else {
+        Some(crate::directx::particle::ParticleResources::new(
             &hw.alloc,
             particle_srv_base_slot,
             targets.hdr.msaa_samples,
             targets.main_depth_srv_gpu,
             hw.info_queue.as_ref(),
             gpu.hot_reload,
-        )?;
-        let mut states: Vec<Option<crate::directx::particle::ParticleEmitterGpuState>> =
-            Vec::with_capacity(particles.len());
-        let last_tex = scene.textures.len().saturating_sub(1);
-        for (i, rec) in particles.iter().enumerate() {
-            let state = crate::directx::particle::build_emitter_gpu_state(&hw.alloc, rec)?;
-            states.push(Some(state));
-            // Write the per-emitter albedo SRV into its reserved heap slot.
-            let tex_idx = rec.texture_slot.min(last_tex);
-            write_texture_srv(
-                &hw.device,
-                &scene.textures[tex_idx],
-                descriptors.slot_cpu(particle_srv_base_slot + i),
-            );
-        }
-        let recs: Vec<Option<particles::ParticleEmitterRecord>> =
-            particles.into_iter().map(Some).collect();
-        (Some(resources), recs, states)
-    } else {
-        (None, Vec::new(), Vec::new())
+        )?)
     };
+    let last_tex = scene.textures.len().saturating_sub(1);
+    for rec in particles {
+        let state = crate::directx::particle::build_emitter_gpu_state(&hw.alloc, &rec)?;
+        let tex_idx = rec.texture_slot.min(last_tex);
+        let id = system
+            .insert(rec, state)
+            .map_err(|_| RenderError::Other("particles: no free emitter slot".into()))?;
+        // Write the per-emitter albedo SRV into its reserved heap slot.
+        write_texture_srv(
+            &hw.device,
+            &scene.textures[tex_idx],
+            descriptors.slot_cpu(particle_srv_base_slot + id),
+        );
+    }
     Ok(ParticleState {
-        resources: particle_resources,
-        records: particle_records,
-        emitter_state: particle_emitter_states,
-        free_slots: Vec::new(),
+        resources,
+        system,
         srv_base_slot: particle_srv_base_slot,
-        last_elapsed: std::cell::Cell::new(0.0),
-        frame_index: std::cell::Cell::new(0),
     })
 }
 

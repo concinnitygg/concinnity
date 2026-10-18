@@ -3,11 +3,10 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{
-    self, LightUniforms, NUM_SHADOW_CASCADES, ShadowUniforms, SpotShadowData,
+    self, NUM_SHADOW_CASCADES, ShadowUniforms, SpotShadowData,
 };
 use concinnity_core::render::backend_init::ShadowParams;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::lights;
 
 use super::InitGpu;
 use crate::vulkan::context::{VkShadow, VkSpotShadow};
@@ -20,11 +19,7 @@ use crate::vulkan::texture::{create_sampler_shadow, create_shadow_map_array};
 // Build the cascade shadow state. CSM is gated on `Shadows.map_size` (0
 // disables shadows); the casters draw through the GPU-driven
 // shadow pipeline the cull builds.
-pub(super) fn build_shadow(
-    gpu: &InitGpu<'_>,
-    shadows: &ShadowParams,
-    light_uniforms: &LightUniforms,
-) -> RenderResult<VkShadow> {
+pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderResult<VkShadow> {
     let InitGpu { hw, frames, .. } = *gpu;
     let device = &hw.device;
     // Shadow map: a 4-layer D32_SFLOAT array image, one slice per cascade.
@@ -61,8 +56,7 @@ pub(super) fn build_shadow(
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?);
     }
-    // Per-frame cascade computation lives in `gfx::csm::compute_shadow_uniforms`
-    // and runs from `draw.rs` each frame; the shadow state starts from
+    // The frame's plan refreshes the cascades each frame; the ring starts from
     // `empty_shadow_uniforms()` so the descriptor write at startup has a valid
     // (fully-lit) buffer.
     let uniforms = concinnity_core::render::csm::empty_shadow_uniforms();
@@ -77,14 +71,6 @@ pub(super) fn build_shadow(
         global_set_layout,
         sampler,
         ubos,
-        uniforms,
-        // Per-frame CSM updates use the first directional light's direction;
-        // cached at init so subsequent frames don't have to look it up.
-        // Matches the Metal/DirectX pattern.
-        light_dir: lights::sun_direction(light_uniforms),
-        cadence: shadows.cadence,
-        scheduler: Default::default(),
-        render_mask: 0,
     })
 }
 

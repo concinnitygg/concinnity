@@ -1,6 +1,5 @@
 // The world's one-shot effect content, drained from its components at init.
 
-use crate::gfx::terrain::{LoadedTerrain, grass_terrains};
 use concinnity_core::components::{
     Atmosphere, Decal, GlassPanel, Grass, NightSky, ParticleEmitter, Planet, SdfVolume,
     VolumetricFog, WaterShape, WaterSurface, Wind,
@@ -11,6 +10,7 @@ use concinnity_core::render::atmosphere::AtmosphereSettings;
 use concinnity_core::render::backend_init::{SdfVolumeSource, WorldFx};
 use concinnity_core::render::grass::{GrassField, PlanetGrass};
 use concinnity_core::render::night_sky::NightSkySettings;
+use concinnity_core::render::terrain::{LoadedTerrain, grass_terrains};
 use concinnity_core::render::water::WaterBody;
 use concinnity_core::render::water::ocean::OceanQuality;
 use concinnity_core::render::wind::WindField;
@@ -56,7 +56,7 @@ pub(super) fn drain_world_fx(
     }
     let (water_surfaces, ocean) =
         WaterBody::resolve_all(&surfaces, &wind_field, ocean_quality, planet_shape.as_ref());
-    let grass: std::collections::HashMap<AssetId, Grass> = ctx
+    let grass: hashbrown::HashMap<AssetId, Grass> = ctx
         .drain_with_ids::<Grass>()
         .into_iter()
         .filter_map(|(id, g)| Some((id?, g)))

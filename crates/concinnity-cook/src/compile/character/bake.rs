@@ -10,7 +10,7 @@ use concinnity_core::components::{
     build_skeleton_from_joint_defs,
 };
 use concinnity_core::math::vec3;
-use concinnity_core::transform::{self, Mat4};
+use concinnity_core::transform::{self, Mat4, mat4_transform_point};
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
@@ -77,16 +77,6 @@ pub(crate) fn morphed_positions(mesh: &SkinnedMesh, weights: &[f32]) -> Vec<[f32
         for (p, d) in out.iter_mut().zip(block) {
             vec3::vec3_add(p, vec3::scale(d.position, *w));
         }
-    }
-    out
-}
-
-fn transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
-    let mut out = [m[3][0], m[3][1], m[3][2]];
-    for (c, col) in m.iter().enumerate().take(3) {
-        out[0] += col[0] * p[c];
-        out[1] += col[1] * p[c];
-        out[2] += col[2] * p[c];
     }
     out
 }
@@ -161,7 +151,7 @@ pub(crate) fn bake(
                 let Some(m) = bind.skin.get(v.joints[k] as usize) else {
                     continue;
                 };
-                vec3::vec3_add(&mut out, vec3::scale(transform_point(m, p), w));
+                vec3::vec3_add(&mut out, vec3::scale(mat4_transform_point(m, p), w));
             }
             out
         };

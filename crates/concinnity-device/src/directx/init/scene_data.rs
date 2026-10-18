@@ -181,11 +181,11 @@ pub(super) fn build_uniforms(
         light_ubo_resources,
         light_ubo_ptrs,
         local_light_buffer,
-        cluster_reach: concinnity_core::render::cluster_range::ClusterReach::new(local_lights),
-        light_uniforms,
-        light_dirty: std::cell::Cell::new(concinnity_core::render::frame_dirty::FrameDirty::new(
+        lights: concinnity_core::render::light_state::LightState::new(
+            light_uniforms,
+            local_lights,
             frames,
-        )),
+        ),
         shadow_ubo_resources,
         shadow_ubo_ptrs,
         probe_set_cbvs,

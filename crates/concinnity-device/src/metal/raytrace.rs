@@ -45,8 +45,8 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
 use concinnity_core::render::retire_pool::RetirePool;
 use concinnity_core::render::rt_accel::{
-    AccelBook, EmptyHead, FailureStreak, InstanceBlas, RefreshMode, RtUpdate, SeedSet,
-    SlotLiveness, StaticRing, empty_head,
+    AccelBook, EmptyHead, FailureStreak, InstanceBlas, RefreshMode, RefreshStep, RtAccelSteps,
+    RtUpdate, SeedSet, SlotLiveness, StaticRing, empty_head,
 };
 use concinnity_core::render::rt_geom::RtDynamicMode;
 use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedShape};
@@ -1083,6 +1083,73 @@ fn slot_scratch_bytes(blas_scratch: usize, tlas_scratch: usize) -> usize {
     blas_scratch.max(tlas_scratch).max(1)
 }
 
+// One frame's update of the live accel: the steps `drive_update` schedules,
+// over this frame's device, geometry and skinned inputs. `skinned` is `None`
+// when a skinned resource is missing, which skips the skinned step.
+pub(crate) struct MtlRtSteps<'a> {
+    pub accel: &'a mut RtAccelData,
+    pub gpu: RtGpu<'a>,
+    pub geometry: RtStaticGeometry<'a>,
+    pub draw_objects: &'a [DrawObject],
+    pub exclude_seethrough: bool,
+    pub frame: RtFrame,
+    pub joint_buffers: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
+    pub skinned: Option<SkinnedRtInputs<'a>>,
+}
+
+impl RtAccelSteps for MtlRtSteps<'_> {
+    type Blas = Structure;
+    type Instance = MTLAccelerationStructureInstanceDescriptor;
+
+    fn book(&mut self) -> &mut AccelBook<Structure, MTLAccelerationStructureInstanceDescriptor> {
+        &mut self.accel.book
+    }
+
+    fn refresh_topology(&mut self, refresh: RefreshStep) -> RenderResult<()> {
+        self.accel.refresh_static_topology(
+            self.gpu,
+            self.geometry,
+            self.draw_objects,
+            RtTopologyRefreshOptions {
+                exclude_seethrough: self.exclude_seethrough,
+                mode: refresh.mode,
+                shape: RefreshShape {
+                    skinned_follows: refresh.skinned_follows,
+                    skinned_present: refresh.skinned_present,
+                },
+                frame_id: self.frame.id,
+            },
+        )
+    }
+
+    fn rebuild_tlas(&mut self) -> RenderResult<()> {
+        self.accel.rebuild_tlas(
+            self.gpu.device,
+            self.gpu.command_queue,
+            self.draw_objects,
+            self.frame.id,
+        )
+    }
+
+    fn release_skinned(&mut self) {
+        self.accel.release_skinned_tail(self.frame.id);
+    }
+
+    fn rebuild_skinned(&mut self, full_build: bool) -> RenderResult<RtUpdate> {
+        let Some(skinned) = self.skinned.take() else {
+            return Ok(RtUpdate::Skipped);
+        };
+        self.accel.rebuild_skinned(
+            self.gpu,
+            self.draw_objects,
+            skinned,
+            self.joint_buffers,
+            self.frame,
+            full_build,
+        )
+    }
+}
+
 impl RtAccelData {
     // Keep the static BLAS; rebuild the TLAS + geometry table from the
     // transforms the book's `next_step` collected, into the next static ring
@@ -1176,11 +1243,6 @@ impl RtAccelData {
         Ok((tlas, geom_table))
     }
 
-    // Whether the BVH has no draw-object and no cluster geometry left.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.book.is_empty()
-    }
-
     // Whether the BVH has nothing left to trace and nothing that could rejoin it.
     pub(crate) fn is_spent(&self, skinned_present: bool) -> bool {
         self.book.is_spent(skinned_present)
@@ -1208,13 +1270,6 @@ impl RtAccelData {
     // Follow a change to the shared texture pool's real-texture count.
     pub(crate) fn set_albedo_count(&mut self, albedo_count: usize) {
         self.book.set_albedo_count(albedo_count as u32);
-    }
-
-    // The update policy: what this frame's update plans and runs.
-    pub(crate) fn book_mut(
-        &mut self,
-    ) -> &mut AccelBook<Structure, MTLAccelerationStructureInstanceDescriptor> {
-        &mut self.book
     }
 
     // Bring the draw-object BLAS head in line with the current participating draw

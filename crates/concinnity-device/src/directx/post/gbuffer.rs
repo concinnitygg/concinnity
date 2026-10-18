@@ -13,11 +13,10 @@
 //! un-jittered current / previous VPs in-shader so projection jitter never
 //! contaminates motion. Mirrors src/metal/post/gbuffer.rs.
 
+use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::uniforms::ModelHistoryParams;
-use concinnity_core::render::view_history::{ViewFrame, ViewHistory};
-use std::cell::RefCell;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -241,11 +240,6 @@ pub(in crate::directx) struct GbufferResources {
     pub(in crate::directx) view_ubo_resources: Vec<PooledBuffer>,
     pub(in crate::directx) view_ubo_ptrs: Vec<*mut u8>,
 
-    // Last frame's un-jittered VP, owned here so the velocity channel works for
-    // any consumer (TAA or FSR) independent of whether engine-TAA is on. The
-    // per-object half of the same history is the GPU-filled model-history ring.
-    pub(in crate::directx) view_history: RefCell<ViewHistory>,
-
     // The sky's motion behind the geometry.
     pub(in crate::directx) sky: GbufferSky,
 }
@@ -377,7 +371,6 @@ impl GbufferResources {
             depth_dsv: slots.depth_dsv,
             view_ubo_resources,
             view_ubo_ptrs,
-            view_history: RefCell::new(ViewHistory::default()),
             sky,
         })
     }
@@ -430,22 +423,23 @@ impl GbufferResources {
 
 // Camera + view-projection inputs for the G-buffer pre-pass. The two VPs drive
 // rasterization (jittered) and motion vectors (un-jittered current vs previous).
-pub(in crate::directx) struct GbufferPrepassView {
+pub(in crate::directx) struct GbufferPrepassView<'a> {
     // Jittered view-projection (the sky's rasterization target).
     pub jittered_vp: [[f32; 4]; 4],
-    // Un-jittered current view-projection (motion vectors).
-    pub cur_vp: [[f32; 4]; 4],
     // The main pass's clock and camera position, which a vertex hook reads.
     pub elapsed: f32,
     pub cam_pos: [f32; 3],
+    // The camera frustum the raymarched surfaces are culled against.
+    pub frustum: &'a Frustum,
 }
 
 // Per-frame decisions the G-buffer pre-pass takes as data, made on the main
 // thread before the encode fan-out.
 pub(in crate::directx) struct GbufferPrepassFrame<'a> {
-    // A consumer (TAA, FSR or SSGI) reads motion; when false, cur == prev so the
-    // motion channel is a harmless zero.
-    pub velocity_active: bool,
+    // The frame's planned view block. When no consumer (TAA, FSR or SSGI) reads
+    // motion its previous frame is this one, so the motion channel is a harmless
+    // zero.
+    pub block: &'a GBufferView,
     // The model-history snapshot fills every ring slot rather than only this
     // frame's, because a rebuild left the ring unwritten.
     pub prime_history: bool,
@@ -454,14 +448,6 @@ pub(in crate::directx) struct GbufferPrepassFrame<'a> {
 }
 
 impl DxContext {
-    // Whether anything reprojects through the pre-pass's motion channel this
-    // frame: TAA, the FSR upscaler, or the SSGI accumulation.
-    pub(in crate::directx) fn reads_motion(&self) -> bool {
-        self.taa.is_some()
-            || self.upscale.backend.is_some()
-            || self.ssgi.as_ref().is_some_and(|s| s.settings.contributes())
-    }
-
     // Give the G-buffer whatever its pre-pass still lacks to draw with: the
     // model-history ring and its snapshot kernel, which init builds only for a
     // world that starts with a G-buffer consumer, and each shader bucket's
@@ -499,40 +485,21 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        view: GbufferPrepassView,
+        view: GbufferPrepassView<'_>,
         frame: GbufferPrepassFrame<'_>,
     ) {
-        let GbufferPrepassView {
-            jittered_vp,
-            cur_vp,
-            elapsed,
-            cam_pos,
-        } = view;
         let GbufferPrepassFrame {
-            velocity_active,
+            block,
             prime_history,
             grass,
         } = frame;
+        let velocity_active = block.motion != 0;
         let gb = match &self.gbuffer {
             Some(g) => g,
             None => return,
         };
 
-        // Upload this frame's view UBO. When velocity is inactive the previous
-        // camera and clock equal the current ones, so instanced + sky motion
-        // is zero and the surfaces skip reprojecting.
-        let cur = ViewFrame {
-            vp: cur_vp,
-            elapsed,
-            cam_pos,
-        };
-        let view_uni = GBufferView::new(
-            jittered_vp,
-            self.state.view.matrix,
-            cur,
-            gb.view_history.borrow().prev_or(cur),
-            velocity_active,
-        );
+        let view_uni = *block;
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges
         // cannot overlap.
@@ -619,7 +586,7 @@ impl DxContext {
         ) else {
             return;
         };
-        let records = self.cull_count();
+        let records = self.state.draw.record_count();
         if records == 0 {
             return;
         }
@@ -660,7 +627,7 @@ impl DxContext {
     // skinned_record_base())` once per shader bucket, each under that bucket's
     // pre-pass PSO, over the static VB (bound to BOTH vertex streams, so prev_pos
     // == cur_pos and the motion is the per-object model delta plus camera), then
-    // the skinned tail `[skinned_record_base(), cull_count())` under bucket 0's
+    // the skinned tail `[skinned_record_base(), record_count())` under bucket 0's
     // over the current deformed VB (slot 0) + the previous-frame deformed VB
     // (slot 1), so per-vertex skin deformation produces a correct motion vector.
     // The vertex hook reads the main pass's view block and parameter table; the
@@ -685,7 +652,7 @@ impl DxContext {
         };
         let indirect = &self.cull.indirect_cmd_buffers[frame_idx];
         let stride = crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize;
-        let prefix = self.skinned_record_base();
+        let prefix = self.state.draw.skinned_record_base();
         let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
         let main_view_gva = com::gpu_va(&self.uniforms.view_ubo_resources[frame_idx]);
 
@@ -766,7 +733,7 @@ impl DxContext {
 
         // Skinned tail: bind the current deformed VB (slot 0) + the previous-frame
         // deformed VB (slot 1) + the skinned IB, then one `ExecuteIndirect`
-        // over `[skinned_record_base(), cull_count())`. The records carry
+        // over `[skinned_record_base(), record_count())`. The records carry
         // base_vertex = 0 (global skinned indexing). When velocity is inactive the
         // previous deformed VB is the current one, so prev_pos == cur_pos and the
         // motion channel stays zero (GbView prev_vp also equals cur_vp).

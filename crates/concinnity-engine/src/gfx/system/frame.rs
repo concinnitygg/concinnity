@@ -4,10 +4,9 @@
 // rebase run in StreamingSystem, scheduled just before this system.
 
 use concinnity_core::components::{
-    Camera3D, CharacterRig, DirectionalLight, FrameInput, GlobalTransform, HitRegion, RenderHandle,
-    ScrollPanel, SkeletonPose, TextLabel, Transform, UiAction,
+    Camera3D, CharacterRig, DirectionalLight, FrameInput, GlobalTransform, RenderHandle,
+    ScrollPanel, SkeletonPose, Transform,
 };
-use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
     FlyCam, FrameTime, HiddenAssets, MenuOverride, PickEntry, PickIndex, PipelineContext,
     SimTiming, StepResult, ViewOverrides,
@@ -24,8 +23,6 @@ use concinnity_core::render::snapshot::{FrameScalars, RenderSnapshot, SceneOpRec
 use concinnity_core::transform::propagation;
 
 use super::*;
-use crate::settings;
-use crate::settings::system::rows::{DISABLED_ROW_COLOR, expand_dim_set};
 
 // The model matrix pushed for an editor-hidden object's draw slots: zero
 // linear part and translation, so every vertex collapses to a degenerate
@@ -60,7 +57,7 @@ fn skipped_causes(frame: &concinnity_core::render::snapshot::FrameScalars) -> Hi
 }
 
 fn skinned_pool_free(ctx: &PipelineContext) -> u32 {
-    ctx.resource::<crate::ecs::ActiveRenderQueues>()
+    ctx.resource::<concinnity_core::render::queues::ActiveRenderQueues>()
         .and_then(|slot| slot.0.as_ref())
         .map(|queues| queues.slots.skinned_free() as u32)
         .unwrap_or(0)
@@ -256,14 +253,14 @@ impl GraphicsSystem {
         // snapshot; submission replays them in record order before the draw.
         if let Some(queues) = ctx
             .resources
-            .get_mut::<crate::ecs::ActiveRenderQueues>()
+            .get_mut::<concinnity_core::render::queues::ActiveRenderQueues>()
             .and_then(|slot| slot.0.as_mut())
         {
             queues.ops.drain_into(&mut snap.ops);
         }
         snap.capture = ctx
             .resources
-            .remove::<crate::ecs::FrameCaptureRequest>()
+            .remove::<concinnity_core::ecs::FrameCaptureRequest>()
             .map(|request| request.0);
         self.schedule_screenshot(ctx, snap);
 
@@ -310,7 +307,7 @@ impl GraphicsSystem {
         // earlier this tick, taken so a stale build is never redrawn.
         let overlay = ctx
             .resources
-            .take::<crate::gfx::overlay::OverlayFrame>()
+            .take::<concinnity_core::render::overlay::OverlayFrame>()
             .unwrap_or_default();
         let menu_active = overlay.menu_active;
         // The editor's menu-state override also drives the backend's menu mode
@@ -477,12 +474,15 @@ impl GraphicsSystem {
         // `ActiveSceneFlow` resource SettingsSystem also jumps, whose clock
         // times the fades for both.
         let fading = ctx
-            .resource::<crate::ecs::ActiveSceneFlow>()
+            .resource::<scene_flow::ActiveSceneFlow>()
             .and_then(|f| f.flow.as_ref())
             .is_some_and(|f| !matches!(f.fade, scene_flow::FadePhase::None));
         if fading {
-            super::scene::refresh_visibility_snapshot(ctx, &mut self.scene_visibility);
-            if let Some(slot) = ctx.resources.get_mut::<crate::ecs::ActiveSceneFlow>() {
+            concinnity_core::render::scene_flow::refresh_visibility_snapshot(
+                ctx,
+                &mut self.scene_visibility,
+            );
+            if let Some(slot) = ctx.resources.get_mut::<scene_flow::ActiveSceneFlow>() {
                 let flow_elapsed = slot.elapsed(frame_time.elapsed);
                 let mut recorder = SceneOpRecorder(&mut snap.scene_ops);
                 scene_flow::tick_transitions(
@@ -586,7 +586,7 @@ impl GraphicsSystem {
         // not a cut.
         self.history_reset.request(PendingHistoryReset::take(ctx));
         let scene = ctx
-            .resource::<crate::ecs::ActiveSceneFlow>()
+            .resource::<scene_flow::ActiveSceneFlow>()
             .and_then(|f| f.flow.as_ref())
             .map(|f| f.current);
         let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
@@ -624,12 +624,14 @@ impl GraphicsSystem {
             rebase,
             atmosphere,
             sunlight: super::scene_lights::sunlight(ctx),
-            input_sampled_us: ctx.resource::<crate::ecs::InputSampledAt>().map(|at| at.0),
+            input_sampled_us: ctx
+                .resource::<concinnity_core::ecs::InputSampledAt>()
+                .map(|at| at.0),
         };
         // Adopt the overlay draw list wholesale and hand the spent one back to
         // OverlaySystem, which recycles its buffers into the next build.
         let spent = std::mem::replace(&mut snap.text_calls, overlay.calls);
-        ctx.insert_resource(crate::gfx::overlay::OverlayRecycle(spent));
+        ctx.insert_resource(concinnity_core::render::overlay::OverlayRecycle(spent));
     }
 
     // Capture each ScrollPanel's per-element clip band (reference space) so the
@@ -652,65 +654,13 @@ impl GraphicsSystem {
     }
 
     // Gray out and disable every settings row whose feature the device cannot
-    // provide (e.g. ray-traced reflections on a GPU without hardware ray
-    // tracing). Runs once at init after the backend reports `self.caps`, while
-    // the HitRegions / TextLabels / ScrollPanels are still present (before
-    // UiInputSystem drains them). A disabled HitRegion is dropped by
-    // UiInputSystem so it never hovers or fires; the row's labels are recolored
-    // to a muted gray so it reads as unavailable.
+    // provide. Runs once at init after the backend reports `self.caps`, while
+    // the HitRegions / TextLabels / ScrollPanels are still present.
     pub(super) fn apply_capability_gating(&mut self, ctx: &mut PipelineContext) {
-        let caps = self.caps;
         let vendor = ctx
             .resource::<backend::GpuProfile>()
             .map_or(backend::GpuVendor::Other, |g| g.vendor);
-        // Mark each unavailable setting's region(s) disabled and collect their
-        // value-label ids (both stepper regions of a row reference its value
-        // label, so this is the row's anchor into the scroll element list).
-        let mut gated_value_labels: std::collections::HashSet<AssetId> =
-            std::collections::HashSet::new();
-        // A single-API build's Graphics API row names the API it renders with,
-        // which the device does support: it is grayed without the suffix.
-        let mut unsuffixed: std::collections::HashSet<AssetId> = std::collections::HashSet::new();
-        for r in ctx.query_mut::<HitRegion>() {
-            let Some(UiAction::Setting { key, .. }) = r.action else {
-                continue;
-            };
-            if settings::setting_available(key, &caps, vendor) {
-                continue;
-            }
-            r.disabled = true;
-            if let Some(label) = r.label {
-                gated_value_labels.insert(label.id());
-                if key == concinnity_core::settings::SettingKey::GraphicsApi {
-                    unsuffixed.insert(label.id());
-                }
-            }
-        }
-        if gated_value_labels.is_empty() {
-            return;
-        }
-        // Snapshot each scroll row's element id list (owned, so the ScrollPanel
-        // borrow ends before the TextLabel write below), then expand the gated
-        // value labels to every element of the rows that contain them.
-        let rows: Vec<Vec<AssetId>> = ctx
-            .query::<ScrollPanel>()
-            .flat_map(|p| {
-                p.rows
-                    .iter()
-                    .map(|r| r.elements.iter().map(|e| e.id()).collect())
-            })
-            .collect();
-        for &id in gated_value_labels.difference(&unsuffixed) {
-            crate::ecs::by_asset_id::update::<TextLabel>(ctx, Some(id), |l| {
-                l.content = settings::unsupported_label(&l.content);
-            });
-        }
-        let dim = expand_dim_set(&gated_value_labels, &rows);
-        for id in dim {
-            crate::ecs::by_asset_id::update::<TextLabel>(ctx, Some(id), |l| {
-                l.color = DISABLED_ROW_COLOR;
-            });
-        }
+        concinnity_core::settings::system::gate_unavailable_rows(ctx, &self.caps, vendor);
     }
 }
 
@@ -719,11 +669,10 @@ mod tests {
     use super::*;
     use concinnity_core::animation::skeleton;
     use concinnity_core::render::feedback;
-    use std::collections::HashSet;
 
-    use crate::gfx::overlay::OverlayFrame;
     use concinnity_core::components::{GlobalTransform, RenderHandle, SkeletonPose};
     use concinnity_core::ecs::{SkinnedMeshHandle, World};
+    use concinnity_core::render::overlay::OverlayFrame;
     use concinnity_core::render::snapshot::SceneOp;
 
     fn extract_once(gs: &mut GraphicsSystem, world: &mut World) -> RenderSnapshot {
@@ -736,7 +685,9 @@ mod tests {
     #[test]
     fn a_capture_request_rides_the_next_frame_only() {
         let mut world = World::new();
-        world.insert_resource(crate::ecs::FrameCaptureRequest("shot.png".to_string()));
+        world.insert_resource(concinnity_core::ecs::FrameCaptureRequest(
+            "shot.png".to_string(),
+        ));
         let mut gs = GraphicsSystem::new(None);
         assert_eq!(
             extract_once(&mut gs, &mut world).capture.as_deref(),
@@ -744,7 +695,7 @@ mod tests {
         );
         assert!(
             world
-                .resource::<crate::ecs::FrameCaptureRequest>()
+                .resource::<concinnity_core::ecs::FrameCaptureRequest>()
                 .is_none()
         );
         assert_eq!(extract_once(&mut gs, &mut world).capture, None);
@@ -1024,7 +975,7 @@ mod tests {
         let mut world = World::new();
         {
             let mut ctx = world.context();
-            ctx.insert_resource(crate::ecs::ActiveSceneFlow::new(Some(
+            ctx.insert_resource(scene_flow::ActiveSceneFlow::new(Some(
                 scene_flow::SceneFlow {
                     scenes: vec![AssetId(1), AssetId(2)],
                     current: AssetId(1),
@@ -1043,7 +994,7 @@ mod tests {
         );
 
         // Clear the fade: nothing is recorded on an idle flow.
-        if let Some(slot) = world.resource_mut::<crate::ecs::ActiveSceneFlow>() {
+        if let Some(slot) = world.resource_mut::<scene_flow::ActiveSceneFlow>() {
             slot.flow.as_mut().unwrap().fade = scene_flow::FadePhase::None;
         }
         let snap = extract_once(&mut gs, &mut world);
@@ -1141,12 +1092,12 @@ mod tests {
         }
         let (snapshot_tx, snapshot_rx) = std::sync::mpsc::sync_channel(0);
         let (feedback_tx, feedback_rx) = std::sync::mpsc::channel();
-        world.insert_resource(crate::ecs::PipelinedFrames(Some(
+        world.insert_resource(crate::ecs::PipelinedFrames::new(
             crate::ecs::PipelineChannels {
                 snapshot_tx,
                 feedback_rx,
             },
-        )));
+        ));
         // Stand-in render half: consume each snapshot and reply with a
         // feedback whose second frame flags a stop.
         let consumer = std::thread::spawn(move || {
@@ -1195,12 +1146,12 @@ mod tests {
         let mut world = World::new();
         let (snapshot_tx, snapshot_rx) = std::sync::mpsc::sync_channel(0);
         let (_feedback_tx, feedback_rx) = std::sync::mpsc::channel();
-        world.insert_resource(crate::ecs::PipelinedFrames(Some(
+        world.insert_resource(crate::ecs::PipelinedFrames::new(
             crate::ecs::PipelineChannels {
                 snapshot_tx,
                 feedback_rx,
             },
-        )));
+        ));
         // A render thread still busy with the frame before for 4 ms.
         let consumer = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(4));
@@ -1225,43 +1176,14 @@ mod tests {
         let mut world = World::new();
         let (snapshot_tx, snapshot_rx) = std::sync::mpsc::sync_channel(0);
         let (_feedback_tx, feedback_rx) = std::sync::mpsc::channel();
-        world.insert_resource(crate::ecs::PipelinedFrames(Some(
+        world.insert_resource(crate::ecs::PipelinedFrames::new(
             crate::ecs::PipelineChannels {
                 snapshot_tx,
                 feedback_rx,
             },
-        )));
+        ));
         drop(snapshot_rx);
         let mut gs = GraphicsSystem::new(None);
         assert_eq!(gs.run_step(&mut world.context()), StepResult::Stop);
-    }
-
-    // A gated value label pulls in every element of the scroll row that holds
-    // it (the row's background, name, value, and stepper glyphs), so the whole
-    // row grays out; unrelated rows are untouched.
-    #[test]
-    fn dim_set_expands_a_gated_value_label_to_its_whole_row() {
-        let value = AssetId(3);
-        let gated: HashSet<AssetId> = [value].into_iter().collect();
-        let rows = vec![
-            // Row A: bg, name, prev_glyph, value, next_glyph (value is gated).
-            vec![AssetId(1), AssetId(2), value, AssetId(4), AssetId(5)],
-            // Row B: an unrelated row.
-            vec![AssetId(10), AssetId(11)],
-        ];
-        let dim = expand_dim_set(&gated, &rows);
-        for id in [1, 2, 3, 4, 5] {
-            assert!(dim.contains(&AssetId(id)), "row A element {id} should dim");
-        }
-        assert!(!dim.contains(&AssetId(10)), "an unrelated row stays lit");
-        assert!(!dim.contains(&AssetId(11)), "an unrelated row stays lit");
-    }
-
-    // With no scroll rows (a hand-authored menu outside a panel), only the gated
-    // value label itself dims -- a graceful fallback, not a panic.
-    #[test]
-    fn dim_set_without_rows_falls_back_to_the_value_label() {
-        let gated: HashSet<AssetId> = [AssetId(7)].into_iter().collect();
-        assert_eq!(expand_dim_set(&gated, &[]), gated);
     }
 }

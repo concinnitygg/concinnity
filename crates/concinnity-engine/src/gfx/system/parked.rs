@@ -4,7 +4,7 @@
 use concinnity_core::components::ShaderPrograms;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::render::volumetric_fog::FogSettings;
-use std::collections::HashMap;
+use hashbrown::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// Texture asset name -> live pool slot, so a runtime decal or emitter spawn can

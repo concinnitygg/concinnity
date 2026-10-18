@@ -59,18 +59,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
-use crate::suballoc::block_alloc::{BlockAllocator, Placement};
+use concinnity_core::render::block_alloc::Placement;
+use concinnity_core::render::block_pool::{BlockGrowth, BlockPool, ReserveError};
 
-// Largest block the pool asks for. Big enough that a heavy world holds its
-// persistent set in a handful of blocks, small enough that one block is not an
-// absurd commitment. A resource too large for one gets a dedicated block sized
-// to itself.
-const MAX_BLOCK_BYTES: u64 = 64 * 1024 * 1024;
-
-// Size of a pool's first block. Blocks double from here to `MAX_BLOCK_BYTES` as
-// a pool fills, so a small world commits megabytes rather than a full-size
-// block per pool for a handful of resources.
-const FIRST_BLOCK_BYTES: u64 = 4 * 1024 * 1024;
+const GROWTH: BlockGrowth = BlockGrowth::STANDARD;
 
 // Whether a resource is laid out linearly (buffers, LINEAR-tiled images) or in
 // an implementation-defined tiling (OPTIMAL images). Kept apart so
@@ -90,6 +82,7 @@ struct PoolKey {
 }
 
 // One block: the device allocation plus its persistent mapping, if any.
+#[derive(Clone, Copy)]
 struct Block {
     memory: vk::DeviceMemory,
     size: u64,
@@ -98,35 +91,8 @@ struct Block {
     mapped: *mut u8,
 }
 
-// The blocks of one pool, indexed the way `BlockAllocator` names them.
-struct Pool {
-    placement: BlockAllocator,
-    blocks: Vec<Option<Block>>,
-}
-
-impl Pool {
-    fn new() -> Self {
-        Self {
-            placement: BlockAllocator::new(MAX_BLOCK_BYTES),
-            blocks: Vec::new(),
-        }
-    }
-
-    // How large the next block should be to host `size` bytes at `align`. The
-    // standard size doubles with the pool's live block count up to
-    // `MAX_BLOCK_BYTES`, and any request too large for that gets a block of its
-    // own size (which `BlockAllocator::add_block` then marks dedicated). Keyed
-    // off the live count, so a pool that empties out restarts the ladder: a
-    // teardown that drops a large world recommits small for its successor
-    // rather than at the old high-water block size.
-    fn next_block_bytes(&self, size: u64, align: u64) -> u64 {
-        let grown = FIRST_BLOCK_BYTES
-            .saturating_mul(1 << self.placement.block_count().min(4))
-            .min(MAX_BLOCK_BYTES);
-        size.saturating_add(align.max(1).saturating_sub(1))
-            .max(grown)
-    }
-}
+// The blocks of one pool, by the index its placement names them.
+type Pool = BlockPool<Block>;
 
 // The Vulkan object a lease owns, destroyed when the lease retires.
 enum PooledHandle {
@@ -165,9 +131,9 @@ impl Inner {
             self.frame + self.retire_depth
         };
         if let Some(pool) = self.pools.get_mut(&lease.key) {
-            pool.placement.free(lease.placement, lease.size, retire);
+            pool.free(lease.placement, lease.size, retire);
             if idle {
-                pool.placement.reclaim(self.frame);
+                pool.reclaim(self.frame);
             }
         }
         self.retired.push(
@@ -636,25 +602,23 @@ impl DeviceAllocator {
             self.destroy_retired(retired);
         }
         for pool in inner.pools.values_mut() {
-            pool.placement.reclaim(frame);
+            pool.reclaim(frame);
         }
     }
 
     fn release_empty_blocks(&self) {
         let mut inner = self.inner.borrow_mut();
         for pool in inner.pools.values_mut() {
-            for block_index in pool.placement.take_empty_blocks() {
-                if let Some(block) = pool.blocks.get_mut(block_index).and_then(Option::take) {
-                    tracing::debug!(
-                        "allocator: released empty {} KiB block {block_index}",
-                        block.size / 1024,
-                    );
-                    // SAFETY: the handle was created from this device and is destroyed exactly
-                    // once; the caller has already waited for the device to go idle, so no
-                    // submission still references it.
-                    unsafe { self.device.free_memory(block.memory, None) };
-                }
-            }
+            pool.release_empty(|block_index, block| {
+                tracing::debug!(
+                    "allocator: released empty {} KiB block {block_index}",
+                    block.size / 1024,
+                );
+                // SAFETY: the handle was created from this device and is destroyed exactly
+                // once; the caller has already waited for the device to go idle, so no
+                // submission still references it.
+                unsafe { self.device.free_memory(block.memory, None) };
+            });
         }
     }
 
@@ -662,9 +626,9 @@ impl DeviceAllocator {
         let inner = self.inner.borrow();
         let mut stats = AllocatorStats::default();
         for pool in inner.pools.values() {
-            stats.reserved_bytes += pool.placement.reserved_bytes();
-            stats.in_use_bytes += pool.placement.in_use_bytes();
-            stats.block_count += pool.placement.block_count();
+            stats.reserved_bytes += pool.reserved_bytes();
+            stats.in_use_bytes += pool.in_use_bytes();
+            stats.block_count += pool.block_count();
         }
         stats
     }
@@ -684,7 +648,7 @@ impl DeviceAllocator {
             self.destroy_retired(retired);
         }
         for pool in inner.pools.values_mut() {
-            for block in pool.blocks.iter_mut().filter_map(Option::take) {
+            for block in pool.drain() {
                 // SAFETY: the handle was created from this device and is destroyed exactly once;
                 // the caller has already waited for the device to go idle, so no submission still
                 // references it.
@@ -725,54 +689,36 @@ impl DeviceAllocator {
         };
         let align = reqs.alignment.max(1);
         let mut inner = self.inner.borrow_mut();
-        let pool = inner.pools.entry(key).or_insert_with(Pool::new);
-
-        // An existing block first; only open a new one when none can host it.
-        if let Some(placement) = pool.placement.alloc(reqs.size, align) {
-            let block = pool.blocks[placement.block].as_ref().ok_or_else(|| {
-                error::RenderError::Other("allocator: placement named a released block".into())
-            })?;
-            return Ok(Reservation {
-                memory: block.memory,
-                mapped: block.mapped,
-                key,
-                placement,
-                size: reqs.size,
-            });
-        }
-
-        let block_bytes = pool.next_block_bytes(reqs.size, align);
-        let (memory, mapped) = Self::create_block(
-            &self.device,
-            &self.memory_props,
-            memory_type,
-            block_bytes,
-            device_address,
-        )?;
-        let index = pool.placement.add_block(block_bytes);
-        let block = Block {
-            memory,
-            size: block_bytes,
-            mapped,
-        };
-        if index == pool.blocks.len() {
-            pool.blocks.push(Some(block));
-        } else {
-            pool.blocks[index] = Some(block);
-        }
-        let placement = pool
-            .placement
-            .alloc_in(index, reqs.size, align)
-            .ok_or_else(|| {
-                error::RenderError::Other(
+        let pool = inner.pools.entry(key).or_insert_with(|| Pool::new(GROWTH));
+        let reserved = pool
+            .reserve(reqs.size, align, |bytes| {
+                let (memory, mapped) = Self::create_block(
+                    &self.device,
+                    &self.memory_props,
+                    memory_type,
+                    bytes,
+                    device_address,
+                )?;
+                Ok(Block {
+                    memory,
+                    size: bytes,
+                    mapped,
+                })
+            })
+            .map_err(|e| match e {
+                ReserveError::Open(e) => e,
+                ReserveError::Released => {
+                    error::RenderError::Other("allocator: placement named a released block".into())
+                }
+                ReserveError::Unhosted => error::RenderError::Other(
                     "allocator: a block sized for a request failed to host it".into(),
-                )
+                ),
             })?;
         Ok(Reservation {
-            memory,
-            mapped,
+            memory: reserved.block.memory,
+            mapped: reserved.block.mapped,
             key,
-            placement,
+            placement: reserved.placement,
             size: reqs.size,
         })
     }
@@ -784,8 +730,7 @@ impl DeviceAllocator {
         let mut inner = self.inner.borrow_mut();
         let retire = inner.frame + inner.retire_depth;
         if let Some(pool) = inner.pools.get_mut(&reservation.key) {
-            pool.placement
-                .free(reservation.placement, reservation.size, retire);
+            pool.free(reservation.placement, reservation.size, retire);
         }
     }
 
@@ -908,27 +853,29 @@ mod tests {
     use super::*;
     use crate::vulkan::test_gpu::{TestGpu, test_gpu, test_gpu_with_device_address};
 
+    const FIRST_BLOCK_BYTES: u64 = GROWTH.first;
+    const MAX_BLOCK_BYTES: u64 = GROWTH.max;
+
+    // A block standing in for a device allocation, for policy-level tests.
+    fn fake_block(size: u64) -> Block {
+        Block {
+            memory: vk::DeviceMemory::null(),
+            size,
+            mapped: std::ptr::null_mut(),
+        }
+    }
+
     #[test]
     fn blocks_double_from_first_to_max() {
-        let mut pool = Pool::new();
+        let mut pool = Pool::new(GROWTH);
         let mut expected = FIRST_BLOCK_BYTES;
         for _ in 0..6 {
             let bytes = pool.next_block_bytes(1024, 256);
             assert_eq!(bytes, expected);
-            pool.placement.add_block(bytes);
+            pool.add_block(bytes, fake_block(bytes));
             expected = (expected * 2).min(MAX_BLOCK_BYTES);
         }
         assert_eq!(pool.next_block_bytes(1024, 256), MAX_BLOCK_BYTES);
-    }
-
-    #[test]
-    fn an_oversized_request_sizes_its_own_block() {
-        let pool = Pool::new();
-        let size = MAX_BLOCK_BYTES * 2;
-        assert_eq!(pool.next_block_bytes(size, 1), size);
-        // Alignment slack is included so the block can place the request at
-        // whatever offset it lands on.
-        assert_eq!(pool.next_block_bytes(size, 4096), size + 4095);
     }
 
     #[test]
@@ -1299,20 +1246,22 @@ mod tests {
         // the next block is back at `FIRST_BLOCK_BYTES`. Deliberate (see
         // `next_block_bytes`): an emptied pool recommits small rather than at
         // its high-water block size.
-        let mut pool = Pool::new();
+        let mut pool = Pool::new(GROWTH);
         let b1 = pool.next_block_bytes(1024, 1);
         assert_eq!(b1, FIRST_BLOCK_BYTES);
-        let i1 = pool.placement.add_block(b1);
-        let p1 = pool.placement.alloc_in(i1, 1024, 1).unwrap();
+        let i1 = pool.add_block(b1, fake_block(b1));
+        let p1 = pool.alloc_in(i1, 1024, 1).unwrap();
         let b2 = pool.next_block_bytes(1024, 1);
         assert_eq!(b2, FIRST_BLOCK_BYTES * 2);
-        let i2 = pool.placement.add_block(b2);
-        let p2 = pool.placement.alloc_in(i2, 1024, 1).unwrap();
+        let i2 = pool.add_block(b2, fake_block(b2));
+        let p2 = pool.alloc_in(i2, 1024, 1).unwrap();
 
-        pool.placement.free(p1, 1024, 0);
-        pool.placement.free(p2, 1024, 0);
-        pool.placement.reclaim(1);
-        assert_eq!(pool.placement.take_empty_blocks().len(), 2);
+        pool.free(p1, 1024, 0);
+        pool.free(p2, 1024, 0);
+        pool.reclaim(1);
+        let mut released = 0;
+        pool.release_empty(|_, _| released += 1);
+        assert_eq!(released, 2);
         assert_eq!(pool.next_block_bytes(1024, 1), FIRST_BLOCK_BYTES);
     }
 
@@ -1324,9 +1273,9 @@ mod tests {
             kind: ResourceKind::Linear,
             device_address: false,
         };
-        let mut pool = Pool::new();
-        let block = pool.placement.add_block(FIRST_BLOCK_BYTES);
-        let placement = pool.placement.alloc_in(block, size, 1).unwrap();
+        let mut pool = Pool::new(GROWTH);
+        let block = pool.add_block(FIRST_BLOCK_BYTES, fake_block(FIRST_BLOCK_BYTES));
+        let placement = pool.alloc_in(block, size, 1).unwrap();
         let inner = Rc::new(RefCell::new(Inner {
             pools: HashMap::from([(key, pool)]),
             retired: RetirePool::new(),
@@ -1348,7 +1297,7 @@ mod tests {
     fn placeable(inner: &Rc<RefCell<Inner>>, size: u64) -> bool {
         let mut inner = inner.borrow_mut();
         let pool = inner.pools.values_mut().next().unwrap();
-        pool.placement.alloc(size, 1).is_some()
+        pool.alloc(size, 1).is_some()
     }
 
     #[test]

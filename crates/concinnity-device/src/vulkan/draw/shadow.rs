@@ -75,10 +75,10 @@ impl VkContext {
         // graph-driven producer/consumer barriers still round-trip every layer,
         // preserving the contents). The 0 sentinel falls back to all cascades.
         let all_cascades = (1u32 << render_types::NUM_SHADOW_CASCADES) - 1;
-        let render_mask = if self.shadow.render_mask == 0 {
+        let render_mask = if self.state.planner.shadow.cascade_mask == 0 {
             all_cascades
         } else {
-            self.shadow.render_mask
+            self.state.planner.shadow.cascade_mask
         };
 
         // Nothing to cull means nothing to draw: the render passes below still
@@ -145,7 +145,7 @@ impl VkContext {
 
     // Whether the GPU-driven shadow path has a pipeline and records to draw.
     pub(in crate::vulkan) fn shadow_views_drawable(&self) -> bool {
-        self.cull.shadow_bindless_pipeline.is_some() && self.cull_count() > 0
+        self.cull.shadow_bindless_pipeline.is_some() && self.state.draw.record_count() > 0
     }
 
     // Open the depth-only shadow render pass on one square `size` slice, which
@@ -206,7 +206,7 @@ impl VkContext {
             return;
         };
         let stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32;
-        let prefix = self.skinned_record_base() as u32;
+        let prefix = self.state.draw.skinned_record_base() as u32;
 
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
@@ -260,7 +260,7 @@ impl VkContext {
                 device.cmd_draw_indexed_indirect(
                     cmd,
                     view.indirect,
-                    (self.skinned_record_base() * stride as usize) as u64,
+                    (self.state.draw.skinned_record_base() * stride as usize) as u64,
                     self.state.draw.n_skinned as u32,
                     stride,
                 );

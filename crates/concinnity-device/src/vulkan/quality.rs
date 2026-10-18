@@ -27,6 +27,7 @@ use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::feature_plan::{BackendFacts, FeatureChange, FeaturePlan};
 use concinnity_core::render::post::rt_reflections;
 use concinnity_core::render::render_graph::{
     BackendTraits, BuildStatus, FeatureGates, PoolGates, plan_pool_slots,
@@ -48,35 +49,19 @@ impl VkContext {
         self.wait_idle();
         let _idle = self.hw.alloc.idle_scope();
 
-        // Desired enabled state per feature, from the resolved graphics settings.
-        // RT is additionally gated on the device being RT-capable: a non-capable
-        // device (or XeSS) did not enable the ray-query extensions at creation,
-        // so it cannot build the acceleration structure. The resolved settings
-        // never ask for it there; a request that does is reported and refused.
-        let rt_settings = g.rt_reflections().filter(|_| self.hw.rt_capable);
-        let desired_rt = rt_settings.is_some();
-        if g.rt_reflections().is_some() && !self.hw.rt_capable {
-            tracing::error!(
-                "the resolved settings asked for ray-traced reflections the device cannot run; \
-                 the capability probe and the backend disagree"
-            );
-        }
-        let desired_ssr = g.ssr().is_some();
-        let desired_ssgi = g.ssgi().is_some();
-        let desired_ssao = g.ssao().is_some();
-        // TAA resources are forced present while temporal upscaling is active
-        // (the upscaler consumes the velocity pre-pass); the TAA resolve is then
-        // dropped from the graph. Mirrors the init `taa_enabled` derivation.
-        let upscale_on = self.upscale.is_some();
-        let desired_taa = g.taa() || upscale_on;
-
-        // The SSR pre-pass resources (`SsrResources`) exist whenever SSR, SSGI,
-        // or RT is on (SSGI and RT reuse the SSR resolve's plumbing); mirrors the
-        // init `ssr_opt` gate. The unified G-buffer pre-pass is needed by any
-        // screen-space consumer of the merged buffer (RT reads its per-frame
-        // normal+depth and roughness).
-        let ssr_needed = desired_ssr || desired_ssgi || desired_rt;
-        let gbuffer_needed = ssr_needed || desired_ssao || desired_taa;
+        // A non-capable device (or XeSS) did not enable the ray-query extensions
+        // at creation, so it cannot build the acceleration structure. TAA
+        // resources stay present while the built upscaler consumes the velocity
+        // pre-pass; the TAA resolve is then dropped from the graph.
+        let plan = FeaturePlan::resolve(
+            g,
+            BackendFacts {
+                rt_capable: self.hw.rt_capable,
+                upscaling: self.upscale.is_some(),
+            },
+        );
+        let rt_settings = plan.rt;
+        let gbuffer_needed = plan.gbuffer;
 
         let hdr_views: Vec<vk::ImageView> = self
             .targets
@@ -146,37 +131,47 @@ impl VkContext {
         }
 
         // TAA.
-        if desired_taa && self.taa.is_none() {
-            let taa = super::post::taa::TaaResources::new(
-                &self.post_device(0),
-                self.frames_in_flight,
-                self.targets.render_extent,
-            )?;
-            self.taa = Some(taa);
-        } else if !desired_taa && self.taa.is_some() {
-            // The cached framebuffers name the accumulation images' views, so
-            // they go before the images do.
-            self.post.cache.forget_views();
-            self.taa = None;
+        match FeatureChange::of(plan.temporal, self.taa.is_some()) {
+            FeatureChange::Build => {
+                let taa = super::post::taa::TaaResources::new(
+                    &self.post_device(0),
+                    self.frames_in_flight,
+                    self.targets.render_extent,
+                )?;
+                self.taa = Some(taa);
+            }
+            FeatureChange::Drop => {
+                // The cached framebuffers name the accumulation images' views, so
+                // they go before the images do.
+                self.post.cache.forget_views();
+                self.taa = None;
+            }
+            FeatureChange::Update | FeatureChange::Absent => {}
         }
 
         // SSR resolve + reflection target. Built whenever SSR / SSGI / RT is on;
         // its settings carry whether SSR itself is authored, so a build kept alive
         // for SSGI or RT takes an SSR toggle through them alone.
-        if ssr_needed && self.ssr.is_none() {
-            let ssr = super::post::ssr::SsrResources::new(
-                &self.post_device(0),
-                g.ssr(),
-                self.targets.render_extent,
-            )?;
-            self.ssr = Some(ssr);
-        } else if !ssr_needed && self.ssr.is_some() {
-            // The cached framebuffers name the reflection target's view, so they
-            // go before it does.
-            self.post.cache.forget_views();
-            self.ssr = None;
-        } else if let Some(ssr) = self.ssr.as_mut() {
-            ssr.settings = g.ssr();
+        match FeatureChange::of(plan.ssr_resources, self.ssr.is_some()) {
+            FeatureChange::Build => {
+                let ssr = super::post::ssr::SsrResources::new(
+                    &self.post_device(0),
+                    g.ssr(),
+                    self.targets.render_extent,
+                )?;
+                self.ssr = Some(ssr);
+            }
+            FeatureChange::Drop => {
+                // The cached framebuffers name the reflection target's view, so
+                // they go before it does.
+                self.post.cache.forget_views();
+                self.ssr = None;
+            }
+            FeatureChange::Update | FeatureChange::Absent => {
+                if let Some(ssr) = self.ssr.as_mut() {
+                    ssr.settings = g.ssr();
+                }
+            }
         }
 
         // SSGI (samples the unified G-buffer's per-frame normal+depth views). A
@@ -199,7 +194,7 @@ impl VkContext {
                 self.targets.render_extent,
             )?;
             self.ssgi = Some(ssgi);
-        } else if !desired_ssgi && self.ssgi.is_some() {
+        } else if !plan.ssgi && self.ssgi.is_some() {
             self.post.cache.forget_views();
             self.ssgi = None;
         } else if let (Some(settings), Some(ssgi)) = (g.ssgi(), self.ssgi.as_mut()) {
@@ -295,7 +290,7 @@ impl VkContext {
             reactive_mask: self.hw.device.writer_targets().carries_mask(),
             composite_scene_fixed: true,
         };
-        self.gates = FeatureGates::new(graphics, &self.build_status(), traits);
+        self.state.planner.gates = FeatureGates::new(graphics, &self.build_status(), traits);
     }
 
     fn build_status(&self) -> BuildStatus {

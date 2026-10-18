@@ -63,8 +63,9 @@ pub(super) struct PassSync {
     pub(super) signals: Vec<u64>,
 }
 
-// Every event operation a frame's submission encodes.
-#[derive(Clone, Debug)]
+// Every event operation a frame's submission encodes. Refilled each frame into
+// storage kept across frames.
+#[derive(Clone, Debug, Default)]
 pub(super) struct FramePlan {
     passes: Vec<PassSync>,
     terminals: [Option<u64>; PassQueue::COUNT],
@@ -89,71 +90,88 @@ impl FramePlan {
     }
 }
 
-// Lay the frame's event operations over `graph`. `previous[q]` is the last
-// terminal value queue `q` actually signaled, which is what this frame's other
-// queues wait for at frame start.
-//
-// The frame-start wait is the cross-frame half of the schedule that in-graph
-// edges cannot express: a resource that persists across frames and is touched
-// from both queues (the particle pools, the fog froxel volume, the Hi-Z
-// pyramid, and every pool-aliased transient) would otherwise let frame N+1's
-// work on one queue race frame N's on the other. Making each queue's first pass
-// wait on every other queue's previous terminal gives up cross-frame overlap
-// and keeps the intra-frame overlap, which is the win the second queue buys.
+// A fresh plan for one frame, as `FramePlan::refill` lays it.
+#[cfg(test)]
 pub(super) fn plan_frame(
     graph: &CompiledGraph,
     events: FrameEvents,
     previous: [Option<u64>; PassQueue::COUNT],
 ) -> FramePlan {
-    let n = graph.passes.len();
-    let mut passes = vec![PassSync::default(); n];
+    let mut plan = FramePlan::default();
+    plan.refill(graph, events, previous);
+    plan
+}
 
-    let mut first = [None; PassQueue::COUNT];
-    let mut last = [None; PassQueue::COUNT];
-    for (i, pass) in graph.passes.iter().enumerate() {
-        let q = pass.queue.index();
-        first[q].get_or_insert(i);
-        last[q] = Some(i);
-    }
+impl FramePlan {
+    // Lay the frame's event operations over `graph`. `previous[q]` is the last
+    // terminal value queue `q` actually signaled, which is what this frame's other
+    // queues wait for at frame start.
+    //
+    // The frame-start wait is the cross-frame half of the schedule that in-graph
+    // edges cannot express: a resource that persists across frames and is touched
+    // from both queues (the particle pools, the fog froxel volume, the Hi-Z
+    // pyramid, and every pool-aliased transient) would otherwise let frame N+1's
+    // work on one queue race frame N's on the other. Making each queue's first pass
+    // wait on every other queue's previous terminal gives up cross-frame overlap
+    // and keeps the intra-frame overlap, which is the win the second queue buys.
+    pub(super) fn refill(
+        &mut self,
+        graph: &CompiledGraph,
+        events: FrameEvents,
+        previous: [Option<u64>; PassQueue::COUNT],
+    ) {
+        let n = graph.passes.len();
+        let passes = &mut self.passes;
+        passes.truncate(n);
+        for sync in passes.iter_mut() {
+            sync.waits.clear();
+            sync.signals.clear();
+        }
+        passes.resize_with(n, PassSync::default);
 
-    for queue in PassQueue::ALL {
-        let Some(i) = first[queue.index()] else {
-            continue;
-        };
-        for other in PassQueue::ALL {
-            if other == queue {
+        let mut first = [None; PassQueue::COUNT];
+        let mut last = [None; PassQueue::COUNT];
+        for (i, pass) in graph.passes.iter().enumerate() {
+            let q = pass.queue.index();
+            first[q].get_or_insert(i);
+            last[q] = Some(i);
+        }
+
+        for queue in PassQueue::ALL {
+            let Some(i) = first[queue.index()] else {
                 continue;
+            };
+            for other in PassQueue::ALL {
+                if other == queue {
+                    continue;
+                }
+                if let Some(value) = previous[other.index()] {
+                    passes[i].waits.push((other, value));
+                }
             }
-            if let Some(value) = previous[other.index()] {
-                passes[i].waits.push((other, value));
+        }
+
+        for (i, pass) in graph.passes.iter().enumerate() {
+            for wait in &pass.waits_before {
+                passes[i]
+                    .waits
+                    .push((wait.producer_queue(), events.pass_value(wait.producer())));
+            }
+            if !pass.signals_after.is_empty() {
+                passes[i].signals.push(events.pass_value(i));
             }
         }
-    }
 
-    for (i, pass) in graph.passes.iter().enumerate() {
-        for wait in &pass.waits_before {
-            passes[i]
-                .waits
-                .push((wait.producer_queue(), events.pass_value(wait.producer())));
+        let mut terminals = [None; PassQueue::COUNT];
+        for queue in PassQueue::ALL {
+            if let Some(i) = last[queue.index()] {
+                let value = events.terminal(queue);
+                passes[i].signals.push(value);
+                terminals[queue.index()] = Some(value);
+            }
         }
-        if !pass.signals_after.is_empty() {
-            passes[i].signals.push(events.pass_value(i));
-        }
-    }
-
-    let mut terminals = [None; PassQueue::COUNT];
-    for queue in PassQueue::ALL {
-        if let Some(i) = last[queue.index()] {
-            let value = events.terminal(queue);
-            passes[i].signals.push(value);
-            terminals[queue.index()] = Some(value);
-        }
-    }
-
-    FramePlan {
-        passes,
-        terminals,
-        next_base: events.next_base(),
+        self.terminals = terminals;
+        self.next_base = events.next_base();
     }
 }
 
@@ -374,5 +392,19 @@ mod tests {
             PassQueue::ALL.map(|q| first.terminal(q)),
         );
         assert!(second.pass(0).waits.is_empty());
+    }
+
+    // A plan refilled over last frame's storage matches a fresh one, whatever
+    // the earlier graph held.
+    #[test]
+    fn a_refilled_plan_matches_a_fresh_one() {
+        let graph = loaded_graph();
+        let mut reused = plan_frame(&graph, FrameEvents::new(0, graph.passes.len()), [None; 2]);
+        let previous = [Some(5), Some(9)];
+        reused.refill(&graph, FrameEvents::new(64, graph.passes.len()), previous);
+        let fresh = plan_frame(&graph, FrameEvents::new(64, graph.passes.len()), previous);
+        assert_eq!(reused.passes, fresh.passes);
+        assert_eq!(reused.terminals, fresh.terminals);
+        assert_eq!(reused.next_base, fresh.next_base);
     }
 }

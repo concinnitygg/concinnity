@@ -84,19 +84,22 @@ use concinnity_core::gfx::render_types::{
     ClusterParams, FogFroxelParams, FogParams, RtParams, SsaoParams, SsgiParams, SsrParams,
     TextDrawCall,
 };
-use concinnity_core::profile::MAX_PASS_TIMINGS;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::particles::ParticleFrame;
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
 use concinnity_core::render::reactive_mask::ReactiveMaskPlan;
 #[cfg(debug_assertions)]
 use concinnity_core::render::render_graph;
-use concinnity_core::render::render_graph::{CompiledGraph, PassId, PassQueue};
+use concinnity_core::render::render_graph::{
+    CompiledGraph, CompiledPass, PassId, PassQueue, PassRecorder, PassScratch, execute_passes,
+    presenter_index,
+};
 use concinnity_core::render::uniforms::{GBufferView, PassCamera};
 use concinnity_host::thread::jobs;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLCommandQueue as _, MTLTexture};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::Ordering;
 
 use super::context::MtlContext;
 use super::draw::main::ClusterGrid;
@@ -261,6 +264,60 @@ fn encode_signals(
     }
 }
 
+// The per-frame tables the executor builds, kept across frames on
+// `MtlContext` so their allocations are reused.
+#[derive(Default)]
+pub(in crate::metal) struct MtlGraphScratch {
+    events: graph_events::FramePlan,
+    passes: PassScratch<SendableCmdBuf>,
+}
+
+// Records one graph pass into a freshly-minted command buffer on its own queue,
+// on a job-pool worker.
+struct MtlPassRecorder<'a, 'p> {
+    ctx: ParallelCtxRef<'a>,
+    params: &'a GraphFrameParams<'p>,
+    particle: Option<&'a ParticleFrame>,
+    // This frame's event operations, `None` on the single-queue fallback.
+    events: Option<&'a graph_events::FramePlan>,
+}
+
+impl PassRecorder for MtlPassRecorder<'_, '_> {
+    type Recorded = SendableCmdBuf;
+
+    fn record(&self, index: usize, pass: &CompiledPass) -> RenderResult<SendableCmdBuf> {
+        // A rayon worker drains no autorelease pool of its own, so without this
+        // one every autoreleased object the pass encode creates (the command
+        // buffer and its encoders among them) would be retained for the life of
+        // the process.
+        objc2::rc::autoreleasepool(|_| {
+            let ctx = self.ctx.as_ctx();
+            let queue = match ctx.hw.graph_queues.as_ref() {
+                Some(queues) => queues.queue(pass.queue, &ctx.hw.command_queue),
+                None => &ctx.hw.command_queue,
+            };
+            let cmd_buf = queue.commandBuffer().ok_or_else(|| {
+                RenderError::Other("graph executor: failed to mint per-pass cmd buf".into())
+            })?;
+            // Waits before the pass's own encoders, signals after them: Metal
+            // accepts an event command only while the command buffer has no open
+            // encoder.
+            let sync = ctx.hw.graph_queues.as_ref().zip(self.events);
+            if let Some((queues, plan)) = sync {
+                encode_waits(&cmd_buf, queues, plan.pass(index));
+            }
+            let count = ctx.encode_pass_into(pass.id, &cmd_buf, self.params, self.particle)?;
+            if let Some((queues, plan)) = sync {
+                encode_signals(&cmd_buf, queues, plan.pass(index), pass.queue);
+            }
+            ctx.diagnostics
+                .draw_calls_accum
+                .fetch_add(count, Ordering::Relaxed);
+            Ok(SendableCmdBuf(cmd_buf))
+        })
+    }
+}
+
 impl MtlContext {
     // Walk a compiled render graph and dispatch each pass to its
     // existing per-backend encoder. `params` carries the per-frame state
@@ -301,10 +358,7 @@ impl MtlContext {
             .draw_calls_accum
             .store(0, Ordering::Relaxed);
 
-        let composite_idx = graph
-            .passes
-            .iter()
-            .position(|p| matches!(p.id, PassId::Composite));
+        let composite_idx = presenter_index(graph);
         // The graphics queue's terminal signal rides whichever pass the plan put
         // it on. That is the composite pass in every graph that presents, and
         // its command buffer is committed by `draw_frame` rather than here, so
@@ -315,160 +369,75 @@ impl MtlContext {
         let deferred_terminal = (composite_idx.is_some() && composite_idx == last_graphics)
             .then_some(PassQueue::Graphics);
 
+        let mut scratch = self.graph_scratch.take().unwrap_or_default();
         // This frame's event values. `None` when the second queue could not be
         // created: the fallback records every pass onto the graphics queue in
         // compiled order and encodes no events at all.
-        let plan = self.hw.graph_queues.as_ref().map(|queues| {
-            let (events, previous) = queues.begin_frame(graph.passes.len());
-            graph_events::plan_frame(graph, events, previous)
-        });
+        let events = match self.hw.graph_queues.as_ref() {
+            Some(queues) => {
+                let (events, previous) = queues.begin_frame(graph.passes.len());
+                scratch.events.refill(graph, events, previous);
+                Some(&scratch.events)
+            }
+            None => None,
+        };
 
-        // Pre-allocate per-pass slots. Workers encode into their own
-        // freshly-minted `MTLCommandBuffer` in parallel and hand the
-        // encoded-but-uncommitted buffer back through the matching slot.
-        // The main thread then commits each slot onto its own queue in
-        // compiled order, so each queue's commit order is that queue's graph
-        // order, which is that queue's GPU execution order.
-        let worker_slots: std::sync::Mutex<Vec<Option<SendableCmdBuf>>> =
-            std::sync::Mutex::new((0..graph.passes.len()).map(|_| None).collect());
-        let first_error: std::sync::Mutex<Option<RenderError>> = std::sync::Mutex::new(None);
-
-        let plan_ref = plan.as_ref();
-        let ctx_ref = ParallelCtxRef::new(self);
-        let timer = jobs::fan_out_timer();
-        let timer_ref = &timer;
-        let record_us: [AtomicU32; MAX_PASS_TIMINGS] =
-            [const { AtomicU32::new(0) }; MAX_PASS_TIMINGS];
-        let record_us_ref = &record_us;
-        jobs::pool().install(|| {
-            rayon::scope(|scope| {
-                for (idx, pass) in graph.passes.iter().enumerate() {
-                    if Some(idx) == composite_idx {
-                        continue;
-                    }
-                    let pass_id = pass.id;
-                    let pass_queue = pass.queue;
-                    let particle_ref = particle_frame.as_ref();
-                    let first_error_ref = &first_error;
-                    let worker_slots_ref = &worker_slots;
-                    // A rayon worker drains no autorelease pool of its own, so
-                    // without this one every autoreleased object the pass
-                    // encode creates (the command buffer and its encoders
-                    // among them) would be retained for the life of the
-                    // process.
-                    scope.spawn(move |_| {
-                        timer_ref.job_into(&record_us_ref[pass_id as usize], || {
-                            objc2::rc::autoreleasepool(|_| {
-                                let ctx = ctx_ref.as_ctx();
-                                let queue = match ctx.hw.graph_queues.as_ref() {
-                                    Some(queues) => queues.queue(pass_queue, &ctx.hw.command_queue),
-                                    None => &ctx.hw.command_queue,
-                                };
-                                let cmd_buf = match queue.commandBuffer() {
-                                    Some(cb) => cb,
-                                    None => {
-                                        let mut e = first_error_ref.lock().unwrap();
-                                        if e.is_none() {
-                                            *e = Some(RenderError::Other(
-                                                "graph executor: failed to mint per-pass cmd buf"
-                                                    .into(),
-                                            ));
-                                        }
-                                        return;
-                                    }
-                                };
-                                // Waits before the pass's own encoders, signals
-                                // after them: Metal accepts an event command only
-                                // while the command buffer has no open encoder.
-                                let sync = ctx.hw.graph_queues.as_ref().zip(plan_ref);
-                                if let Some((queues, plan)) = sync {
-                                    encode_waits(&cmd_buf, queues, plan.pass(idx));
-                                }
-                                match ctx.encode_pass_into(pass_id, &cmd_buf, params, particle_ref)
-                                {
-                                    Ok(count) => {
-                                        if let Some((queues, plan)) = sync {
-                                            encode_signals(
-                                                &cmd_buf,
-                                                queues,
-                                                plan.pass(idx),
-                                                pass_queue,
-                                            );
-                                        }
-                                        ctx.diagnostics
-                                            .draw_calls_accum
-                                            .fetch_add(count, Ordering::Relaxed);
-                                        let mut lock = worker_slots_ref.lock().unwrap();
-                                        lock[idx] = Some(SendableCmdBuf(cmd_buf));
-                                    }
-                                    Err(e) => {
-                                        let mut lock = first_error_ref.lock().unwrap();
-                                        if lock.is_none() {
-                                            *lock = Some(e);
-                                        }
-                                    }
-                                }
-                            })
-                        })
-                    });
-                }
-            });
-        });
-        self.diagnostics.frame_stats.recording_fan_out = timer.finish();
-        self.diagnostics.frame_stats.pass_record_us = record_us.map(AtomicU32::into_inner);
-
-        // Nothing has been committed yet, so an encode failure leaves the
-        // frame's event values unsignaled and unrecorded: the next frame
-        // reuses the slice rather than waiting on a value nothing reaches.
-        if let Some(err) = first_error.into_inner().unwrap_or(None) {
-            return Err(err);
-        }
+        // Workers encode into their own freshly-minted `MTLCommandBuffer` in
+        // parallel and hand the encoded-but-uncommitted buffer back. The main
+        // thread then commits each onto its own queue in compiled order, so
+        // each queue's commit order is that queue's graph order, which is that
+        // queue's GPU execution order.
+        let recorder = MtlPassRecorder {
+            ctx: ParallelCtxRef::new(self),
+            params,
+            particle: particle_frame.as_ref(),
+            events,
+        };
+        let mut executed = execute_passes(graph, &recorder, jobs::pool(), &mut scratch.passes)?;
+        self.diagnostics.frame_stats.recording_fan_out = executed.timing;
+        self.diagnostics.frame_stats.pass_record_us = executed.record_us;
 
         // Commit every worker-encoded cmd buf onto its own queue, walking the
-        // compiled order so each queue sees its passes in graph order.
-        let slots = worker_slots.into_inner().map_err(|_| {
-            RenderError::Other("graph executor: worker slot mutex poisoned".to_string())
-        })?;
-        for (idx, slot) in slots.into_iter().enumerate() {
-            if let Some(cb) = slot {
-                // Each pass commits its own command buffer, so its handler names
-                // the pass when the GPU faults it. The same handler reports the
-                // buffer to the frame's completion join, so the frame-in-flight
-                // slot outlives every queue's work rather than just the
-                // presenting buffer's.
-                let pass_id = graph.passes.get(idx).map(|p| p.id);
-                let part = std::sync::Arc::clone(join);
-                join.add_part();
-                let handler = block2::RcBlock::new(
-                    move |cbh: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
-                        // SAFETY: Metal hands the completion handler a live command buffer, and the
-                        // borrow does not escape the block.
-                        let cbh = unsafe { cbh.as_ref() };
-                        match pass_id {
-                            Some(id) => super::fault_log::report_fault(
-                                cbh,
-                                format_args!("render-graph pass {id:?}"),
-                            ),
-                            None => super::fault_log::report_fault(cbh, "render-graph pass"),
-                        }
-                        part.arrive();
-                    },
-                );
-                // SAFETY: addCompletedHandler copies the block, so the RcBlock
-                // may drop at end of iteration.
-                unsafe {
-                    cb.0.addCompletedHandler(block2::RcBlock::as_ptr(&handler));
-                }
-                cb.0.commit();
+        // compiled order so each queue sees its passes in graph order. Nothing
+        // has been committed before this point, so an encode failure leaves the
+        // frame's event values unsignaled and unrecorded: the next frame reuses
+        // the slice rather than waiting on a value nothing reaches.
+        for (idx, cb) in executed.take() {
+            // Each pass commits its own command buffer, so its handler names
+            // the pass when the GPU faults it. The same handler reports the
+            // buffer to the frame's completion join, so the frame-in-flight
+            // slot outlives every queue's work rather than just the
+            // presenting buffer's.
+            let pass_id = graph.passes[idx].id;
+            let part = std::sync::Arc::clone(join);
+            join.add_part();
+            let handler = block2::RcBlock::new(
+                move |cbh: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+                    // SAFETY: Metal hands the completion handler a live command buffer, and the
+                    // borrow does not escape the block.
+                    let cbh = unsafe { cbh.as_ref() };
+                    super::fault_log::report_fault(
+                        cbh,
+                        format_args!("render-graph pass {pass_id:?}"),
+                    );
+                    part.arrive();
+                },
+            );
+            // SAFETY: addCompletedHandler copies the block, so the RcBlock
+            // may drop at end of iteration.
+            unsafe {
+                cb.0.addCompletedHandler(block2::RcBlock::as_ptr(&handler));
             }
+            cb.0.commit();
         }
+        let plan = events.is_some().then_some(&scratch.events);
 
         // Every terminal but the deferred one is now committed, so the next
         // frame may wait on it. Also advances the value slice.
         let mut submission = GraphSubmission {
             pending_terminal: None,
         };
-        if let (Some(queues), Some(plan)) = (self.hw.graph_queues.as_mut(), plan.as_ref()) {
+        if let (Some(queues), Some(plan)) = (self.hw.graph_queues.as_mut(), plan) {
             queues.end_submission(plan, deferred_terminal);
             submission.pending_terminal = deferred_terminal.and_then(|q| plan.terminal(q));
         }
@@ -479,7 +448,7 @@ impl MtlContext {
         // this returns; every other graphics-queue cmd buf has already
         // committed, so the queue order places it strictly after them.
         if let Some(idx) = composite_idx {
-            let sync = self.hw.graph_queues.as_ref().zip(plan.as_ref());
+            let sync = self.hw.graph_queues.as_ref().zip(plan);
             if let Some((queues, plan)) = sync {
                 encode_waits(params.cmd_buf, queues, plan.pass(idx));
             }
@@ -499,6 +468,7 @@ impl MtlContext {
 
         self.diagnostics.frame_stats.draw_calls +=
             self.diagnostics.draw_calls_accum.load(Ordering::Relaxed);
+        self.graph_scratch = Some(scratch);
         Ok(submission)
     }
 
@@ -549,7 +519,7 @@ impl MtlContext {
         pass_id: PassId,
         cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
         params: &GraphFrameParams<'_>,
-        particle_frame: Option<&super::particle::ParticleFrame>,
+        particle_frame: Option<&concinnity_core::render::particles::ParticleFrame>,
     ) -> RenderResult<u32> {
         Ok(match pass_id {
             PassId::Cull => {
@@ -880,7 +850,7 @@ impl MtlContext {
                     pass_input(params.scene_pre_taa, PassId::Transparent, "scene_pre_taa")?;
                 let view = concinnity_core::render::uniforms::TransparentView::new(
                     &self.pass_camera(params),
-                    &self.light_uniforms,
+                    self.lights.uniforms(),
                 );
                 // The mirrors `PlanarReflection` rendered this frame, if the pass
                 // samples mirrors at all (the same gate that put the node in the

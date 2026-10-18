@@ -85,8 +85,9 @@ pub struct SkinnedSlotLayout {
 /// The paths an asset hot-reload and the editor's live previews mutate a
 /// built world through.
 ///
-/// All defaulted, so a shipped backend that never reloads an asset implements
-/// none of it. The edits that only rewrite the scene's draw slots are defaulted
+/// Reached through [`RenderBackend::live_edit`](super::RenderBackend::live_edit),
+/// so the per-frame trait carries none of it. All defaulted, so a shipped
+/// backend that never reloads an asset implements none of it. The edits that only rewrite the scene's draw slots are defaulted
 /// over [`SceneHost`]. Without a scene the size queries report `None`, which is
 /// what makes the callers above decide there is nothing to rewrite, and the
 /// rewrites report [`RenderError::Unsupported`], so a reload is never counted

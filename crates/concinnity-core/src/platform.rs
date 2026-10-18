@@ -1,8 +1,9 @@
 //! The shader `Platform` vocabulary: which rendering backend a compiled shader
-//! is for, and [`PlatformSet`] for a cook that targets several at once. The enum is pure data with no ambient resolution of its own, so it
-//! sits in the runtime foundation and every caller states the platform it
-//! means -- the engine names the backend it was built for, and the build
-//! pipeline is told the backend it cooks for.
+//! is for, and [`PlatformSet`] for a cook that targets several at once. The
+//! enum is pure data with no ambient resolution of its own, so it sits in the
+//! runtime foundation and every caller states the platform it means: the
+//! engine names the backend it was built for, and the build pipeline is told
+//! the backend it cooks for.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -107,6 +108,25 @@ impl FromIterator<Platform> for PlatformSet {
     fn from_iter<I: IntoIterator<Item = Platform>>(iter: I) -> Self {
         PlatformSet(iter.into_iter().fold(0, |bits, p| bits | p.bit()))
     }
+}
+
+/// The graphics APIs this build can run, native first, published as a world
+/// resource by the host that compiled them in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompiledPlatforms(pub &'static [Platform]);
+
+/// Where this launch stands on the graphics API chosen in the settings menu,
+/// published as a world resource by the host that selected the API.
+#[derive(Debug, Clone, Copy)]
+pub struct GraphicsApiStatus {
+    /// The API this launch renders with.
+    pub current: Platform,
+    /// The API this launch gave up on because the last launch on it never drew
+    /// a frame.
+    pub reverted: Option<Platform>,
+    /// Whether this launch is trying a newly chosen API that has not yet
+    /// drawn: the settings menu clears the persisted trial after a frame.
+    pub confirm_pending: bool,
 }
 
 #[cfg(test)]

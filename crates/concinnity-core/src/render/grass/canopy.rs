@@ -432,7 +432,8 @@ impl CanopyField {
     }
 
     /// Every layer's view table in layer order,
-    /// [`CANOPY_TABLE_LEN`](super::canopy_table::CANOPY_TABLE_LEN) rows each.
+    /// [`CANOPY_TABLE_LEN`](super::canopy_table::CANOPY_TABLE_LEN) rows each,
+    /// never more than [`MAX_CANOPY_TABLE_ROWS`](super::canopy_table::MAX_CANOPY_TABLE_ROWS).
     pub fn tables(&self) -> &[[f32; 4]] {
         &self.tables
     }
@@ -1000,6 +1001,25 @@ mod tests {
             planet: true,
         };
         assert_eq!(r.packed(), 5 | (3 << 8) | (1 << 16));
+    }
+
+    #[test]
+    fn a_planet_past_the_block_keeps_the_tables_in_bounds() {
+        use super::super::canopy_table::MAX_CANOPY_TABLE_ROWS;
+        let shape = PlanetShape {
+            center: [0.0, -50_000.0, 0.0],
+            radius: 50_000.0,
+            amplitude: 40.0,
+            feature_size: 2_000.0,
+            octaves: 6,
+            seed: 1,
+        };
+        let grass =
+            PlanetGrass::resolve(shape, &vec![Grass::default(); MAX_CANOPY_LAYERS + 4]).unwrap();
+        assert!(grass.layers.len() > MAX_CANOPY_LAYERS);
+        let (field, range) = CanopyField::for_planet(&grass, 0.0);
+        assert_eq!(range.count as usize, MAX_CANOPY_LAYERS);
+        assert_eq!(field.tables().len(), MAX_CANOPY_TABLE_ROWS);
     }
 
     // On a planet the block's rows take a point of the simulated frame to the

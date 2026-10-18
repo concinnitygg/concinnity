@@ -8,21 +8,18 @@
 //!   composite.rs           ACES tonemap + composite + text overlay
 //!   ../post/{bloom,taa,ssao}.rs    pipeline + targets + encoder, co-located
 
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::{
-    ClusterCamera, ClusterParams, LightUniforms, LineVertex, ShadowUniforms, TextDrawCall,
-};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::lights;
+use concinnity_core::gfx::render_types::{LightUniforms, LineVertex, ShadowUniforms, TextDrawCall};
+use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::frame_plan::FramePlan;
 use concinnity_core::render::pass_timing;
-use concinnity_core::render::render_graph::{PassId, build_frame_graph};
+use concinnity_core::render::render_graph::PassId;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::com;
 use super::context::DxContext;
 use super::graph_exec::GraphFrameParams;
 use crate::directx::error::map_hresult;
-use stages::FrameProjection;
+pub(super) use stages::PlanArgs;
 
 pub(in crate::directx) mod composite;
 pub(in crate::directx) mod main;
@@ -56,7 +53,6 @@ pub(super) struct RecordFrameView<'a> {
     pub elapsed: f64,
     pub fov_y_radians: f32,
     pub near: f32,
-    pub view_distance: Option<f32>,
     pub cam_pos: [f32; 3],
     pub text_calls: &'a [TextDrawCall],
     // This frame's expanded line ribbons. Empty whenever nothing published
@@ -64,6 +60,7 @@ pub(super) struct RecordFrameView<'a> {
     pub lines: &'a [LineVertex],
     // What may be trampling the grass this frame.
     pub grass_benders: &'a [concinnity_core::render::grass::GrassBender],
+    pub particle: Option<concinnity_core::render::particles::ParticleFrame>,
 }
 
 // Scene render resolution (every scene pass) plus output resolution (composite).
@@ -91,6 +88,7 @@ impl DxContext {
     pub(in crate::directx) fn record_frame_start(
         &mut self,
         frame: usize,
+        world_hidden: bool,
     ) -> RenderResult<ID3D12GraphicsCommandList> {
         // 1. Reset + record the START cmd list (timestamp pre-init only),
         //    then close it immediately. The `wait_frame_slot` fence wait
@@ -146,8 +144,11 @@ impl DxContext {
         // start cmd list (submitted before every per-pass trace on the serial
         // DIRECT queue, so the rebuild is ordered before this frame's reflection
         // trace reads it). A no-op when RT reflections are off or the BVH is
-        // static this frame.
-        self.rt_dynamic_update(&start_cmd, frame);
+        // static this frame. Skipped while the world is hidden, which traces
+        // nothing; a topology change stays owed to the next frame that draws it.
+        if !world_hidden {
+            self.rt_dynamic_update(&start_cmd, frame);
+        }
 
         // SAFETY: the command list is live and in the recording state, which is what `Close`
         // requires.
@@ -168,6 +169,7 @@ impl DxContext {
         targets: RecordFrameTargets<'_>,
         view: RecordFrameView<'_>,
         resolution: RecordFrameResolution,
+        plan: &FramePlan,
         world_hidden: bool,
     ) -> RenderResult<RecordedFrame> {
         let RecordFrameTargets {
@@ -180,11 +182,11 @@ impl DxContext {
             elapsed,
             fov_y_radians,
             near,
-            view_distance,
             cam_pos,
             text_calls,
             lines,
             grass_benders,
+            particle,
         } = view;
         let RecordFrameResolution {
             width,
@@ -192,26 +194,17 @@ impl DxContext {
             output_width,
             output_height,
         } = resolution;
-        // Render-target aspect, shared by the main projection below and the
-        // cull frustum.
-        let aspect = if height == 0 {
-            1.0
-        } else {
-            width as f32 / height as f32
-        };
-
-        // Cascaded-shadow UBO upload. `draw_frame` already advanced the cascade
-        // schedule and merged this frame's cascades into `self.shadow.uniforms`
-        // (skipped cascades keep the VP their slice was last rendered with, so
-        // the Main pass samples each cascade consistently); upload the carried
-        // set to this frame's shadow UBO (persistent mapping). It is the empty
-        // (identity VP / infinite split) set when shadows are disabled.
+        // Cascaded-shadow UBO upload: the plan's carried cascade set (skipped
+        // cascades keep the VP their slice was last rendered with, so the Main
+        // pass samples each cascade consistently), into this frame's shadow UBO
+        // (persistent mapping). It is the empty (identity VP / infinite split)
+        // set when shadows are disabled.
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &self.shadow.uniforms as *const ShadowUniforms as *const u8,
+                &self.state.planner.shadow.uniforms as *const ShadowUniforms as *const u8,
                 self.uniforms.shadow_ubo_ptrs[frame_idx],
                 std::mem::size_of::<ShadowUniforms>(),
             );
@@ -221,10 +214,10 @@ impl DxContext {
         // Light uniforms for this frame. Written only into slots a live edit
         // (directional set / ambient scale) has re-armed, so a steady world
         // writes nothing after the ring has caught up.
-        if self.uniforms.take_light_dirty(frame_idx) {
+        if self.uniforms.lights.take_dirty(frame_idx) {
             upload_light_uniforms(
                 self.uniforms.light_ubo_ptrs[frame_idx],
-                &self.uniforms.light_uniforms,
+                self.uniforms.lights.uniforms(),
             );
         }
         self.grass_lod.set(self.grass.as_ref().map(|g| {
@@ -244,118 +237,30 @@ impl DxContext {
         // skin fold reads. No-op when no SkinnedMesh carries morph targets.
         self.upload_morph_weights(frame_idx);
 
-        // GPU-driven cull gating; matches the inner check in
-        // encode_main_pass's bindless branch. When on, the host-side
-        // per-frame object + draw-args buffer rebuilds run inline here
-        // (mapped-memory CPU work, mirrors Vulkan's pattern) and the pre-graph
-        // picks up a `PassId::Cull` node that writes the indirect command
-        // buffer ahead of Main.
-        let bindless_cull_enabled = self.cull.main_bindless_pso.is_some() && self.cull_count() > 0;
-        // Skipped while the world is hidden behind an opaque menu: the masked
-        // graph drops the Cull pass and Main runs as a bare clear, so these
-        // per-object buffer rebuilds would feed nothing.
-        if !world_hidden && bindless_cull_enabled {
-            let packing = self.build_record_buffers(frame_idx, cam_pos, self.model_history_mode());
+        // Compute-cull host-side prep: rebuild this frame's object + draw-args
+        // buffers (mapped-memory CPU work) on a frame whose plan runs the cull,
+        // so the graph's `PassId::Cull` node writes the indirect command buffer
+        // ahead of Main from fresh data.
+        if let Some(history) = plan.records {
+            let packing = self.build_record_buffers(frame_idx, cam_pos, history);
             let mut stats = self.diagnostics.frame_stats.get();
             stats.packing_fan_out = packing;
             self.diagnostics.frame_stats.set(stats);
         }
 
-        // Clustered binning runs while a local light or a baked probe is live,
-        // the same test `ClusterParams::for_camera` sets `use_clusters` by, so
-        // no reader sees a list the skipped `LightCull` node did not write.
-        let clustered = lights::clustering_active(
-            self.uniforms.light_uniforms.num_local_lights,
-            self.probe.book.count(),
-        );
-        let seed_inputs = self.frame_graph_inputs(width, height, clustered, lines, world_hidden);
-        let FrameProjection {
-            proj,
-            cur_vp,
-            vp_mat,
-        } = self.frame_projection(fov_y_radians, aspect, near, width, height);
-        // The haze volume is laid along the un-jittered view rays, like the fog
-        // volume, so it holds still under the temporal jitter; depth is read
-        // back through the jittered inverse it was drawn with.
-        self.prepare_atmosphere(
-            frame_idx,
-            concinnity_core::render::atmosphere::AtmosphereView {
-                inv_vp: concinnity_core::transform::mat4_inverse(cur_vp),
-                depth_inv_vp: concinnity_core::transform::mat4_inverse(vp_mat),
-                cam_pos,
-                viewport: [width as f32, height as f32],
-                sky_rot: self.state.view.sky_rot,
-                pre_exposure: self.pre_exposure.value(),
-            },
-        );
-
-        // Clustered light-binning params (main camera). The compute pass reads
-        // these to build each cluster's world-space AABB (un-jittered inverse VP
-        // + camera forward, matching the fog froxel convention) and the forward
-        // pass reads the grid dims / depth range / screen size to place a
-        // fragment. `use_clusters` is set only while a local light or a baked
-        // probe is live; otherwise every reader iterates them all (zero
-        // iterations) rather than reading a list the skipped binning pass never
-        // wrote. Slot 1 of the same buffer holds the `use_clusters = 0`
-        // copy the planar / probe re-renders bind (written once at init).
-        let cluster_params = ClusterParams::for_camera(
-            &ClusterCamera {
-                view: self.state.view.matrix,
-                proj,
-                position: cam_pos,
-                near,
-                range: self.uniforms.cluster_reach.range(
-                    cam_pos,
-                    near,
-                    self.probe.book.records(),
-                    view_distance,
-                ),
-                width,
-                height,
-            },
-            self.uniforms.light_uniforms.num_local_lights,
-            self.probe.book.count() as u32,
-        );
-        self.write_cluster_params(frame_idx, &cluster_params);
-
-        // Upload this frame's view UBO.
-        // Fade the forward probe specular only when a resolve will actually
-        // composite its reflection over this scene. `reflection_resolve_active`
-        // alone matches the resolve gating, but require the composite target too
-        // so the fade can never zero a reflection that was never re-added.
-        let reflections_enabled =
-            if self.reflection_composite.is_some() && self.reflection_resolve_active() {
-                1.0
-            } else {
-                0.0
-            };
-        let view_uni = ViewUniforms {
-            vp: vp_mat,
-            view: self.state.view.matrix,
-            elapsed: elapsed as f32,
-            reflections_enabled,
-            cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2]],
-            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
-            shade_mode: self.shade_mode(),
-            ambient_occlusion: 1.0,
-            sky_rot: self.state.view.sky_rot,
-            irradiance: self.irradiance_lane(),
-            pre_exposure: self.pre_exposure.value(),
-            screen_bounce: if self.screen_bounce() { 1.0 } else { 0.0 },
-            _pad: 0.0,
-        };
+        // The plan's blocks into this frame's ring slots.
+        self.prepare_atmosphere(frame_idx, plan.atmosphere);
+        self.write_cluster_params(frame_idx, &plan.cluster);
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &view_uni as *const ViewUniforms as *const u8,
+                &plan.view as *const ViewUniforms as *const u8,
                 self.uniforms.view_ubo_ptrs[frame_idx],
                 std::mem::size_of::<ViewUniforms>(),
             );
         }
-
-        let frustum = Frustum::from_camera(vp_mat, view_distance);
 
         let (view_gva, light_gva, local_lights_gva) = (
             com::gpu_va(&self.uniforms.view_ubo_resources[frame_idx]),
@@ -384,22 +289,11 @@ impl DxContext {
         };
 
         // Single graph dispatch: every render-stack pass plus the Composite
-        // presenter routed through one `execute_graph` call. The graph
-        // shape lives in the shared
-        // [gfx/render_graph/frame.rs::build_frame_graph](../../gfx/render_graph/frame.rs);
-        // see [directx/graph_exec.rs](../graph_exec.rs) for the DirectX
-        // executor that routes each `PassId` to its `encode_*` method.
-        // Reuse the cached compiled graph when this frame's inputs match the ones
-        // it was built from (the common case: graph topology changes only when a
-        // feature toggles or a target resizes). `take`n out of the cache (the
-        // `borrow_mut` guard drops at the end of this statement) so the owned graph
-        // no longer borrows `self`; a mismatch (or a cold cache) rebuilds.
-        let cached_graph = self.graph_cache.borrow_mut().take();
-        let frame_graph = match cached_graph {
-            Some((cached_inputs, cached)) if cached_inputs == seed_inputs => cached,
-            _ => build_frame_graph(&seed_inputs)
-                .map_err(|e| RenderError::Other(format!("frame-graph compile: {e}")))?,
-        };
+        // presenter routed through one `execute_graph` call, over the graph the
+        // plan compiled from the shared builder; see
+        // [directx/graph_exec.rs](../graph_exec.rs) for the DirectX executor
+        // that routes each `PassId` to its `encode_*` method.
+        let frame_graph = &plan.graph;
         // The line ring is reserved and filled here rather than by the Lines
         // pass, since growing it allocates and no fanned-out pass may.
         let lines = if frame_graph.pass(PassId::Lines).is_some() {
@@ -430,42 +324,34 @@ impl DxContext {
             view_gva,
             light_gva,
             local_lights_gva,
-            vp_mat,
-            cur_vp,
-            frustum: &frustum,
+            vp_mat: plan.camera.vp,
+            cur_vp: plan.camera.cur_vp,
+            frustum: &plan.camera.frustum,
             fov_y_radians,
-            aspect,
             elapsed,
             near,
             prime_model_history,
             grass_benders,
+            particle,
             planar: self
                 .planar_reflection
                 .as_ref()
-                .map(|set| set.frame_plan(vp_mat))
+                .map(|set| set.frame_plan(plan.camera.vp))
                 .unwrap_or_default(),
-            cluster_params,
-            reactive: concinnity_core::render::reactive_mask::ReactiveMaskPlan::of(&seed_inputs),
+            cluster_params: plan.cluster,
+            fog: plan.fog,
+            gbuffer_view: plan.gbuffer_view,
+            effects: plan.effects,
+            reactive: plan.reactive,
         };
-        let pass_cmd_lists = match self.execute_graph(&frame_graph, &frame_params) {
-            Ok(lists) => lists,
-            Err(e) => {
-                if prime_model_history {
-                    self.state.model_history.borrow_mut().request_prime();
-                }
-                return Err(e);
+        let mut pass_cmd_lists = self.pass_lists.take();
+        pass_cmd_lists.clear();
+        if let Err(e) = self.execute_graph(frame_graph, &frame_params, &mut pass_cmd_lists) {
+            if prime_model_history {
+                self.state.model_history.borrow_mut().request_prime();
             }
-        };
-        // Cache the compiled graph under this frame's inputs so the next frame with
-        // matching inputs skips the rebuild.
-        *self.graph_cache.borrow_mut() = Some((seed_inputs, frame_graph));
-
-        self.advance_temporal_state(concinnity_core::render::view_history::ViewFrame {
-            vp: cur_vp,
-            elapsed: elapsed as f32,
-            cam_pos,
-        });
-
+            return Err(e);
+        }
         Ok(RecordedFrame {
             pass_cmd_lists,
             primed_model_history: prime_model_history,

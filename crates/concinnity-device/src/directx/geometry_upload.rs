@@ -20,7 +20,8 @@ use windows::core::Interface;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::error::map_hresult;
 use super::texture::transition_barrier;
-use crate::suballoc::staging::{STAGING_ALIGN, StagingRing, grown_capacity, reserved_capacity};
+use concinnity_core::render::staging_uploads::{StageError, StagingUploads};
+use concinnity_core::render::upload_ring::UploadBuffer;
 
 // Which shared buffer a staged write lands in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -62,10 +63,25 @@ struct StagedCopy {
     size: u64,
 }
 
-struct Staging {
+// The ring's UPLOAD-heap buffer and its persistent map.
+struct StagingBuffer {
     buffer: PooledBuffer,
     base: *mut u8,
-    ring: StagingRing,
+}
+
+impl UploadBuffer for StagingBuffer {
+    fn write(&self, offset: u64, bytes: &[u8]) {
+        // SAFETY: `base` is the persistent map of the ring's UPLOAD-heap buffer,
+        // and the ring writes `bytes` at `offset` inside its capacity. The source
+        // is a separate borrow, so the ranges cannot overlap.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                self.base.add(offset as usize),
+                bytes.len(),
+            );
+        }
+    }
 }
 
 // A reusable copy list plus the ring buffers its last submit read: a released
@@ -77,31 +93,24 @@ struct CopyList {
 }
 
 pub(in crate::directx) struct GeometryUploads {
-    staging: Option<Staging>,
+    staging: StagingUploads<StagingBuffer>,
     queued: Vec<StagedCopy>,
     lists: RetirePool<CopyList>,
-    tick: u64,
-    depth: u64,
 }
 
 impl GeometryUploads {
     pub(in crate::directx) fn new(frames_in_flight: usize) -> Self {
         Self {
-            staging: None,
+            staging: StagingUploads::new(frames_in_flight),
             queued: Vec::new(),
             lists: RetirePool::new(),
-            tick: 0,
-            depth: frames_in_flight as u64 + 1,
         }
     }
 
     // Advance the frame tick. Called after the frame-slot fence wait, which is
     // what proves a submit `depth` ticks old has retired.
     pub(in crate::directx) fn begin_frame(&mut self) {
-        self.tick += 1;
-        if let Some(staging) = self.staging.as_mut() {
-            staging.ring.reclaim(self.tick);
-        }
+        self.staging.begin_frame();
     }
 
     // Create the ring at load, sized for a stream that may stage up to
@@ -112,14 +121,8 @@ impl GeometryUploads {
         alloc: &DeviceAllocator,
         expected: u64,
     ) -> RenderResult<()> {
-        let capacity = reserved_capacity(expected);
-        if self
-            .staging
-            .as_ref()
-            .is_none_or(|s| s.ring.capacity() < capacity)
-        {
-            self.replace_ring(alloc, capacity)?;
-        }
+        self.staging
+            .reserve(expected, |capacity| staging_buffer(alloc, capacity))?;
         Ok(())
     }
 
@@ -131,81 +134,26 @@ impl GeometryUploads {
         dst_offset: u64,
         bytes: &[u8],
     ) -> RenderResult<()> {
-        if bytes.is_empty() {
+        let staged = self
+            .staging
+            .stage(bytes, |capacity| staging_buffer(alloc, capacity))
+            .map_err(|e| match e {
+                StageError::Create(e) => e,
+                StageError::Refused => {
+                    RenderError::Other("geometry staging: grown ring refused a write".into())
+                }
+            })?;
+        let Some(staged) = staged else {
             return Ok(());
-        }
-        let size = bytes.len() as u64;
-        let placed = self
-            .staging
-            .as_mut()
-            .and_then(|s| s.ring.alloc(size, STAGING_ALIGN));
-        let src_offset = match placed {
-            Some(offset) => offset,
-            None => {
-                self.grow(alloc, size)?;
-                self.staging
-                    .as_mut()
-                    .and_then(|s| s.ring.alloc(size, STAGING_ALIGN))
-                    .ok_or_else(|| {
-                        RenderError::Other("geometry staging: grown ring refused a write".into())
-                    })?
-            }
         };
-        let staging = self
-            .staging
-            .as_ref()
-            .ok_or_else(|| RenderError::Other("geometry staging: no ring".into()))?;
-        // SAFETY: `base` maps the whole ring buffer, and the ring placed `size`
-        // bytes at `src_offset` inside its capacity. The source is a separate
-        // borrow, so the ranges cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                staging.base.add(src_offset as usize),
-                bytes.len(),
-            );
-        }
+        // A replaced ring's buffer stays alive through the queued copies and the
+        // held submits that name it.
         self.queued.push(StagedCopy {
             target,
-            src: staging.buffer.clone(),
-            src_offset,
+            src: staged.buffer.buffer.clone(),
+            src_offset: staged.src_offset,
             dst_offset,
-            size,
-        });
-        Ok(())
-    }
-
-    // Replace the ring with one that holds `size` more bytes. The old buffer
-    // stays alive through the queued copies and the held submits that name it.
-    fn grow(&mut self, alloc: &DeviceAllocator, size: u64) -> RenderResult<()> {
-        let current = self.staging.as_ref().map_or(0, |s| s.ring.capacity());
-        let capacity = grown_capacity(current, size);
-        if current > 0 {
-            tracing::info!(
-                "geometry staging ring grew {} -> {} KiB for a {} KiB write",
-                current / 1024,
-                capacity / 1024,
-                size / 1024
-            );
-        }
-        self.replace_ring(alloc, capacity)
-    }
-
-    fn replace_ring(&mut self, alloc: &DeviceAllocator, capacity: u64) -> RenderResult<()> {
-        let buffer = alloc.alloc_buffer(
-            capacity,
-            D3D12_HEAP_TYPE_UPLOAD,
-            D3D12_RESOURCE_STATE_GENERIC_READ,
-        )?;
-        let mut base = std::ptr::null_mut::<std::ffi::c_void>();
-        // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
-        // that receives the mapping.
-        unsafe { buffer.Map(0, None, Some(&mut base)) }
-            .map_err(|e| map_hresult(e.code(), "geometry staging map"))?;
-        self.staging = Some(Staging {
-            buffer,
-            base: base.cast(),
-            ring: StagingRing::new(capacity),
+            size: bytes.len() as u64,
         });
         Ok(())
     }
@@ -220,7 +168,10 @@ impl GeometryUploads {
         if self.queued.is_empty() {
             return Ok(());
         }
-        let mut list = match self.lists.pop_due(self.tick, self.depth) {
+        let mut list = match self
+            .lists
+            .pop_due(self.staging.tick(), self.staging.depth())
+        {
             Some(list) => list,
             None => new_copy_list(device)?,
         };
@@ -280,13 +231,10 @@ impl GeometryUploads {
         // SAFETY: the list is live and closed, and the slice outlives the call.
         unsafe { queue.ExecuteCommandLists(&[Some(submit)]) };
 
-        let retire_at = self.tick + self.depth;
-        if let Some(staging) = self.staging.as_mut() {
-            staging.ring.seal(retire_at);
-        }
+        self.staging.seal();
         list.sources.extend(self.queued.drain(..).map(|c| c.src));
         list.sources.dedup_by(|a, b| **a == **b);
-        self.lists.push(self.tick, list);
+        self.lists.push(self.staging.tick(), list);
         Ok(())
     }
 }
@@ -300,6 +248,24 @@ fn touched_targets(queued: &[StagedCopy]) -> Vec<GeometryTarget> {
         }
     }
     targets
+}
+
+// An UPLOAD-heap staging buffer of `capacity` bytes, persistently mapped.
+fn staging_buffer(alloc: &DeviceAllocator, capacity: u64) -> RenderResult<StagingBuffer> {
+    let buffer = alloc.alloc_buffer(
+        capacity,
+        D3D12_HEAP_TYPE_UPLOAD,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+    )?;
+    let mut base = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
+    // that receives the mapping.
+    unsafe { buffer.Map(0, None, Some(&mut base)) }
+        .map_err(|e| map_hresult(e.code(), "geometry staging map"))?;
+    Ok(StagingBuffer {
+        buffer,
+        base: base.cast(),
+    })
 }
 
 fn new_copy_list(device: &ID3D12Device) -> RenderResult<CopyList> {
@@ -327,7 +293,7 @@ fn new_copy_list(device: &ID3D12Device) -> RenderResult<CopyList> {
 mod tests {
     use super::*;
     use crate::directx::texture::one_shot_submit;
-    use crate::suballoc::staging::STAGING_MIN_CAPACITY;
+    use concinnity_core::render::staging::STAGING_MIN_CAPACITY;
     use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 
     // A device, its direct queue and an allocator over them, or None where no
@@ -452,16 +418,13 @@ mod tests {
         let dest = destinations(alloc, 4096);
         let mut uploads = GeometryUploads::new(3);
         uploads.reserve(alloc, 0).expect("reserve");
-        let ring = uploads.staging.as_ref().expect("ring").buffer.clone();
-        assert_eq!(
-            uploads.staging.as_ref().expect("ring").ring.capacity(),
-            STAGING_MIN_CAPACITY
-        );
+        let ring = uploads.staging.buffer().expect("ring").buffer.clone();
+        assert_eq!(uploads.staging.capacity(), STAGING_MIN_CAPACITY);
         uploads.reserve(alloc, 0).expect("reserve again");
         uploads
             .stage(alloc, GeometryTarget::Vertex, 0, &pattern(64, 1))
             .expect("stage");
-        assert!(*uploads.staging.as_ref().expect("ring").buffer == *ring);
+        assert!(*uploads.staging.buffer().expect("ring").buffer == *ring);
         flush(device, queue, &mut uploads, &dest);
         assert_eq!(
             read(&gpu, GeometryTarget::Vertex, &dest.0, 0, 64),
@@ -482,17 +445,17 @@ mod tests {
         uploads
             .stage(alloc, GeometryTarget::Vertex, 0, &small)
             .expect("stage small");
-        let first_ring = uploads.staging.as_ref().expect("ring").buffer.clone();
+        let first_ring = uploads.staging.buffer().expect("ring").buffer.clone();
         let large = pattern(big, 11);
         uploads
             .stage(alloc, GeometryTarget::Vertex, 4096, &large)
             .expect("stage large");
-        let grown = uploads.staging.as_ref().expect("ring");
+        let grown = uploads.staging.buffer().expect("ring");
         assert!(
             *grown.buffer != *first_ring,
             "the large write grew the ring"
         );
-        assert!(grown.ring.capacity() >= big as u64);
+        assert!(uploads.staging.capacity() >= big as u64);
         drop(first_ring);
         flush(device, queue, &mut uploads, &dest);
         assert_eq!(read(&gpu, GeometryTarget::Vertex, &dest.0, 0, 256), small);
@@ -515,12 +478,12 @@ mod tests {
             .stage(alloc, GeometryTarget::Vertex, 0, &pattern(half, 5))
             .expect("stage");
         flush(device, queue, &mut uploads, &dest);
-        let ring = uploads.staging.as_ref().expect("ring").buffer.clone();
+        let ring = uploads.staging.buffer().expect("ring").buffer.clone();
         let first = uploads.lists.pop_due(u64::MAX, 0).expect("held");
         let first_cmd = first.cmd.clone();
         assert_eq!(first.sources.len(), 1, "one ring read, held once");
-        uploads.lists.push(uploads.tick, first);
-        for _ in 0..uploads.depth {
+        uploads.lists.push(uploads.staging.tick(), first);
+        for _ in 0..uploads.staging.depth() {
             uploads.begin_frame();
         }
         // Two more halves fit only because the first one's batch retired.
@@ -534,7 +497,7 @@ mod tests {
                 )
                 .expect("stage");
         }
-        assert!(*uploads.staging.as_ref().expect("ring").buffer == *ring);
+        assert!(*uploads.staging.buffer().expect("ring").buffer == *ring);
         flush(device, queue, &mut uploads, &dest);
         let reused = uploads.lists.pop_due(u64::MAX, 0).expect("held");
         assert!(reused.cmd == first_cmd, "the retired copy list was reused");

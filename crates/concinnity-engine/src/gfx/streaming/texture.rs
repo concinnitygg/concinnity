@@ -135,7 +135,7 @@ pub(crate) struct TextureStreamer {
     centers: Vec<Vec<[f32; 3]>>,
     // Slots that never load, whatever scene residency asks: textures only the
     // cook reads.
-    excluded: std::collections::HashSet<usize>,
+    excluded: hashbrown::HashSet<usize>,
     worker: super::worker::Worker<usize>,
     result_rx: Receiver<LoadResult>,
 }
@@ -165,7 +165,7 @@ impl TextureStreamer {
         Self {
             planner,
             centers,
-            excluded: std::collections::HashSet::new(),
+            excluded: hashbrown::HashSet::new(),
             result_rx,
             worker,
         }

@@ -7,6 +7,7 @@
 use concinnity_core::geometry::glass_quad::plane_basis;
 use concinnity_core::gfx::lines::Line;
 use concinnity_core::math::vec3::{add, scale};
+use concinnity_core::transform::mat4_transform_point;
 
 // Full-circle resolution. High enough that a large range sphere still reads
 // as a curve, cheap enough to ignore (a circle is 32 segments).
@@ -42,14 +43,6 @@ pub(crate) const EDGES: [(usize, usize); BOX_EDGES] = [
     (2, 6),
     (3, 7),
 ];
-
-fn transform_point(m: &[[f32; 4]; 4], p: [f32; 3]) -> [f32; 3] {
-    [
-        m[0][0] * p[0] + m[1][0] * p[1] + m[2][0] * p[2] + m[3][0],
-        m[0][1] * p[0] + m[1][1] * p[1] + m[2][1] * p[2] + m[3][1],
-        m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2],
-    ]
-}
 
 fn seg(out: &mut Vec<Line>, a: [f32; 3], b: [f32; 3], s: Stroke) {
     out.push(Line {
@@ -133,7 +126,7 @@ pub(crate) fn box_corners(model: &[[f32; 4]; 4], half_extents: [f32; 3]) -> [[f3
                 half_extents[2]
             },
         ];
-        *corner = transform_point(model, local);
+        *corner = mat4_transform_point(model, local);
     }
     corners
 }
@@ -160,7 +153,7 @@ fn push_local_circle(
     s: Stroke,
 ) {
     push_ring(out, s, |theta| {
-        transform_point(
+        mat4_transform_point(
             model,
             [radius * theta.cos(), center_y, radius * theta.sin()],
         )
@@ -186,7 +179,7 @@ fn push_cap_arc(
         let mut local = [0.0f32; 3];
         local[axis] = radius * theta.cos();
         local[1] = center_y + radius * y_off;
-        let p = transform_point(model, local);
+        let p = mat4_transform_point(model, local);
         if let Some(prev) = prev {
             seg(out, prev, p, s);
         }
@@ -211,8 +204,8 @@ pub(crate) fn push_capsule(
     push_local_circle(out, model, h, radius, s);
     push_local_circle(out, model, -h, radius, s);
     for local_dir in [[radius, 0.0], [-radius, 0.0], [0.0, radius], [0.0, -radius]] {
-        let top = transform_point(model, [local_dir[0], h, local_dir[1]]);
-        let bottom = transform_point(model, [local_dir[0], -h, local_dir[1]]);
+        let top = mat4_transform_point(model, [local_dir[0], h, local_dir[1]]);
+        let bottom = mat4_transform_point(model, [local_dir[0], -h, local_dir[1]]);
         seg(out, top, bottom, s);
     }
     for axis in [0usize, 2] {

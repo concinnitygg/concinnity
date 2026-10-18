@@ -31,40 +31,6 @@ pub(in crate::vulkan) const INDIRECT_COMMAND_STRIDE: u32 =
     std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32;
 
 impl VkContext {
-    // Total records the GPU-driven cull + bindless main pass processes: the
-    // build-time static objects, the instanced-cluster instances folded in after
-    // them, then the skinned objects (`draw.n_objects + n_instances + n_skinned`). The
-    // cull dispatch + the `GpuObjectData` / `GpuDrawArgs` / indirect buffers all
-    // count this; the main pass draws the static+instance prefix and the skinned
-    // tail with two `cmd_draw_indexed_indirect` calls. With no instanced props /
-    // skinned meshes (or a non-bindless world) the extra terms are 0, leaving it
-    // equal to the static `n_objects`. Mirrors `directx/cull.rs::cull_count`.
-    pub(in crate::vulkan) fn cull_count(&self) -> usize {
-        self.state.draw.n_objects
-            + self.state.draw.n_instances
-            + self.state.draw.n_runtime
-            + self.state.draw.n_skinned
-    }
-
-    // Buffer index of the first runtime record. The runtime reserve is
-    // `[runtime_record_base(), skinned_record_base())`, and holds both kinds of
-    // object that appear after init: streamed `VoxelWorld` chunks and spawned
-    // clones. Resident ones pack into the front each frame and the unused tail
-    // is disabled. Both ride the static+instance prefix indirect draw (their
-    // geometry lives in the shared VB/IB), so this is just the instance tail.
-    // Mirrors `directx/cull.rs`.
-    pub(in crate::vulkan) fn runtime_record_base(&self) -> usize {
-        self.state.draw.n_objects + self.state.draw.n_instances
-    }
-
-    // Buffer index of the first skinned record: the static + instance + runtime
-    // prefix the first indirect draw covers ends here, and the skinned tail
-    // `[skinned_record_base(), cull_count())` is the second indirect draw. The
-    // runtime reserve sits inside the prefix, so the skinned base is past it.
-    pub(in crate::vulkan) fn skinned_record_base(&self) -> usize {
-        self.state.draw.n_objects + self.state.draw.n_instances + self.state.draw.n_runtime
-    }
-
     // Shader-bucket regions the cull kernel routes between: the world default
     // program plus one per material-referenced world shader. 1 when the world
     // declares no extra shaders, which collapses the indirect buffer to the
@@ -96,49 +62,6 @@ impl VkContext {
             * INDIRECT_COMMAND_STRIDE as vk::DeviceSize
     }
 
-    // Walk every resident runtime draw object -- the tail past `draw.n_objects`,
-    // which is streamed `VoxelWorld` chunks and spawned clones alike -- invoking
-    // `emit` with the record's reserve index `k` (into
-    // `[runtime_record_base() + k]`), the object's draw index, and the
-    // `DrawObject`. Both kinds already
-    // have their geometry in the shared VB/IB (a clone reuses its template's
-    // slice), so both fold into the static+instance prefix indirect draw as plain
-    // records carrying their own `base_vertex` and pool indices.
-    //
-    // Non-resident slots are skipped: chunks and clones share the draw-slot free
-    // list, so a retired one leaves a gap in this tail, and counting gaps toward
-    // `k` could push a live record past `n_runtime` and silently drop it. Only
-    // resident objects consume a reserve index, bounded by the streaming window
-    // plus the clone cap (<= `n_runtime`). Returns the number emitted, so the
-    // caller can disable the unused reserve tail. Mirrors `directx/cull.rs`.
-    pub(in crate::vulkan) fn for_each_runtime_record<F>(&self, mut emit: F) -> usize
-    where
-        F: FnMut(usize, usize, &render_types::DrawObject),
-    {
-        if self.state.draw.n_runtime == 0 {
-            return 0;
-        }
-        let mut k = 0;
-        for (i, obj) in self
-            .state
-            .draw
-            .objects
-            .iter()
-            .enumerate()
-            .skip(self.state.draw.n_objects)
-        {
-            if !obj.resident {
-                continue;
-            }
-            if k >= self.state.draw.n_runtime {
-                break;
-            }
-            emit(k, i, obj);
-            k += 1;
-        }
-        k
-    }
-
     // True when two-pass Hi-Z occlusion runs this frame: the world requested
     // `occlusion_two_pass`, the phase-2 cull pipeline + Hi-Z + second indirect
     // buffers are built, and the bindless GPU-cull path is active with
@@ -148,7 +71,7 @@ impl VkContext {
     // and the executor's phase-2 arms all gate on it identically. Mirrors
     // `directx/cull.rs::two_pass_occlusion_active`.
     pub(in crate::vulkan) fn two_pass_occlusion_active(&self) -> bool {
-        self.two_pass_occlusion_built() && self.cull_count() > 0
+        self.two_pass_occlusion_built() && self.state.draw.record_count() > 0
     }
 
     // Whether launch built two-pass occlusion: requested, with the phase-two
@@ -192,13 +115,11 @@ impl VkContext {
         let mut params = CullParams {
             planes: [[0.0; 4]; 6],
             cam_pos,
-            object_count: self.cull_count() as u32,
+            object_count: self.state.draw.record_count() as u32,
             bucket_count: self.shader_bucket_count() as u32,
             bucket_stride: self.cull.bucket_stride as u32,
         };
-        for (i, p) in frustum.planes.iter().enumerate() {
-            params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
-        }
+        params.planes = frustum.packed_planes();
         // SAFETY: `cmd` is in the recording state, and every handle and slice the commands name is
         // live for the call.
         unsafe {
@@ -218,10 +139,10 @@ impl VkContext {
             // resolution exists, so the kernel falls back to frustum + distance.
             if let Some(hiz) = self.cull.hiz.as_ref() {
                 let params = CullHizParams {
-                    prev_view_proj: self.cull.hiz_prev_view_proj,
+                    prev_view_proj: self.state.planner.temporal().occlusion().prev_view_proj(),
                     hiz_size: [hiz.width as f32, hiz.height as f32],
                     hiz_mip_count: hiz.mip_count,
-                    hiz_enabled: u32::from(self.cull.hiz_valid),
+                    hiz_enabled: u32::from(self.state.planner.temporal().occlusion().valid()),
                 };
                 hiz.cull_ubos[frame_idx].write_val(0, &params);
                 device.cmd_bind_descriptor_sets(
@@ -241,7 +162,12 @@ impl VkContext {
                 &params,
             );
             // One invocation per build-time object, 64-wide local groups.
-            device.cmd_dispatch(cmd, (self.cull_count() as u32).div_ceil(64), 1, 1);
+            device.cmd_dispatch(
+                cmd,
+                (self.state.draw.record_count() as u32).div_ceil(64),
+                1,
+                1,
+            );
         }
     }
 
@@ -269,7 +195,10 @@ impl VkContext {
             if render_mask & (1u32 << c) == 0 {
                 continue;
             }
-            views[kept] = (set, Frustum::from_shadow(self.shadow.uniforms.light_vps[c]));
+            views[kept] = (
+                set,
+                Frustum::from_shadow(self.state.planner.shadow.uniforms.light_vps[c]),
+            );
             kept += 1;
         }
         self.encode_view_culls(cmd, &views[..kept], cam_pos);
@@ -303,7 +232,7 @@ impl VkContext {
     // the view's frustum and writing the indirect buffer its cull set binds. Ends
     // with one memory barrier ordering the writes before the shadow draws'
     // `cmd_draw_indexed_indirect` reads. A no-op when the GPU-driven shadow
-    // resources are absent, `cull_count() == 0`, or no view asked for.
+    // resources are absent, `draw.record_count() == 0`, or no view asked for.
     fn encode_view_culls(
         &self,
         cmd: vk::CommandBuffer,
@@ -316,11 +245,11 @@ impl VkContext {
         ) else {
             return;
         };
-        if self.cull_count() == 0 || views.is_empty() {
+        if self.state.draw.record_count() == 0 || views.is_empty() {
             return;
         }
         let device = &self.hw.device;
-        let object_count = self.cull_count() as u32;
+        let object_count = self.state.draw.record_count() as u32;
 
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
@@ -336,9 +265,7 @@ impl VkContext {
                     bucket_count: 1,
                     bucket_stride: object_count,
                 };
-                for (i, p) in frustum.planes.iter().enumerate() {
-                    params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
-                }
+                params.planes = frustum.packed_planes();
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::COMPUTE,
@@ -395,7 +322,7 @@ impl VkContext {
             return;
         };
         let layout = &kernels.pipeline_layout;
-        if self.cull.cull_sets2.is_empty() || self.cull_count() == 0 {
+        if self.cull.cull_sets2.is_empty() || self.state.draw.record_count() == 0 {
             return;
         }
         let device = &self.hw.device;
@@ -406,13 +333,11 @@ impl VkContext {
         let mut params = CullParams {
             planes: [[0.0; 4]; 6],
             cam_pos,
-            object_count: self.cull_count() as u32,
+            object_count: self.state.draw.record_count() as u32,
             bucket_count: self.shader_bucket_count() as u32,
             bucket_stride: self.cull.bucket_stride as u32,
         };
-        for (i, p) in frustum.planes.iter().enumerate() {
-            params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
-        }
+        params.planes = frustum.packed_planes();
 
         // Project AABBs through this frame's un-jittered VP against the pyramid
         // `HizBuild` just rebuilt from this frame's depth. `hiz_enabled = 1`:
@@ -453,7 +378,12 @@ impl VkContext {
                 vk::ShaderStageFlags::COMPUTE,
                 &params,
             );
-            device.cmd_dispatch(cmd, (self.cull_count() as u32).div_ceil(64), 1, 1);
+            device.cmd_dispatch(
+                cmd,
+                (self.state.draw.record_count() as u32).div_ceil(64),
+                1,
+                1,
+            );
         }
     }
 }

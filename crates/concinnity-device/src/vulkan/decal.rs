@@ -11,6 +11,7 @@
 //! `src/metal/decal.rs`.
 
 use ash::vk;
+use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::render::decal::DecalRecord;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -38,22 +39,8 @@ use crate::vulkan::owned::{
 // sets at init.
 pub(in crate::vulkan) const MAX_DECALS: usize = concinnity_core::render::decal::MAX_DECALS;
 
-// Eight unit-cube corners in [-0.5, 0.5]^3. Matches the DirectX / Metal
-// vertex lists.
-const CUBE_VERTS: [f32; 24] = [
-    -0.5, -0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, -0.5, -0.5, 0.5, -0.5, -0.5, -0.5, 0.5, 0.5, -0.5,
-    0.5, 0.5, 0.5, 0.5, -0.5, 0.5, 0.5,
-];
-
-// 36 indices forming 12 triangles wound CCW outward. Matches the
-// DirectX / Metal index list so the rasterized cube exactly mirrors the
-// reference.
-const CUBE_INDICES: [u16; 36] = [
-    // -Z face                +Z face
-    0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, // -Y                     +Y
-    0, 1, 5, 0, 5, 4, 3, 6, 2, 3, 7, 6, // -X                     +X
-    0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5,
-];
+// The unit cube in `[-0.5, 0.5]^3`, the local space a decal's `inv_model` maps into.
+const CUBE_VERTS: [[f32; 3]; 8] = cube_corners(0.5);
 
 // Stride for the per-decal params uniform buffer ring. Vulkan's
 // `minUniformBufferOffsetAlignment` is at most 256 bytes on every

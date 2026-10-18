@@ -23,13 +23,14 @@
 use concinnity_core::gfx::render_types::{FALLBACK_TEXTURE_COUNT, PostProcessParams};
 use concinnity_core::render::backend_init::{self, BackendInit, PlanarBudget, WorldShader};
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::feature_plan::{BackendFacts, FeaturePlan};
 use concinnity_core::render::scene_state::{DrawList, SceneState};
+use concinnity_core::render::shader_reload::ShaderReload;
 use concinnity_core::settings::ResolvedGraphics;
 
 use self::heap_layout::{RtvHeapLayout, SrvHeapParams};
 use super::context::*;
 use super::geometry_upload::GeometryUploads;
-use super::hot_reload::HotReloadState;
 use super::resources::skinning::SkinnedState;
 
 mod adapter;
@@ -77,20 +78,35 @@ struct Features {
 }
 
 impl Features {
-    fn resolve(hw: &DxHardware, graphics: &ResolvedGraphics, hdr_samples: u32) -> Self {
-        // FSR3 needs the velocity buffer + the TAA-velocity pre-pass
-        // PSOs, both of which live inside `TaaResources`. When upscale
-        // is on we force the TAA resources to be built even if the
-        // world's `AntiAliasing.mode` is off; the TAA *resolve*
-        // pass is still skipped (see `record_frame::seed_inputs`),
-        // because FSR owns the temporal accumulation.
-        let taa_enabled = graphics.taa() || graphics.anti_aliasing.upscaling;
-        // The adapter ceiling clamped to what the world asks for. A temporal
-        // technique resolves it to one sample, which drops the resolve step and
-        // makes `hdr.color` the scene spine; every PSO bakes the result into its
-        // `SampleDesc`.
-        let msaa_samples =
-            bootstrap::resolve_sample_count(bootstrap::query_msaa_samples(&hw.device), hdr_samples);
+    // The adapter ceiling clamped to what the world asks for. A temporal
+    // technique resolves it to one sample, which drops the resolve step and
+    // makes `hdr.color` the scene spine; every PSO bakes the result into its
+    // `SampleDesc`.
+    fn msaa_samples(hw: &DxHardware, hdr_samples: u32) -> u32 {
+        bootstrap::resolve_sample_count(bootstrap::query_msaa_samples(&hw.device), hdr_samples)
+    }
+
+    fn resolve(
+        hw: &DxHardware,
+        graphics: &ResolvedGraphics,
+        hdr_samples: u32,
+        upscaling: bool,
+    ) -> Self {
+        // A built upscaler needs the velocity buffer + the TAA-velocity
+        // pre-pass PSOs, both of which live inside `TaaResources`, so the TAA
+        // resources are built even if the world's `AntiAliasing.mode` is off;
+        // the TAA *resolve* pass is still skipped (see
+        // `record_frame::seed_inputs`), because the upscaler owns the temporal
+        // accumulation.
+        let plan = FeaturePlan::resolve(
+            graphics,
+            BackendFacts {
+                rt_capable: hw.rt_capable,
+                upscaling,
+            },
+        );
+        let taa_enabled = plan.temporal;
+        let msaa_samples = Self::msaa_samples(hw, hdr_samples);
         // Pair the authored tunables with the resolved mode's output flags. On
         // the SDR path both stay 0.0 and the shader runs the full ACES + gamma
         // + FXAA + LUT chain unchanged. Inside the HDR branch, `pq_output`
@@ -104,14 +120,7 @@ impl Features {
         // acceleration structure are built only when the world authored
         // `ray_traced_reflections` AND the GPU reports the DXR 1.1 tier inline
         // `RayQuery` needs, which the resolved settings already respect.
-        let rt_enabled = graphics.rt_reflections().is_some() && hw.rt_capable;
-        if graphics.rt_reflections().is_some() && !hw.rt_capable {
-            tracing::error!(
-                "the resolved settings asked for ray-traced reflections the device cannot run; \
-                 the capability probe and the backend disagree"
-            );
-        }
-        let ssao_enabled = graphics.ssao().is_some();
+        let ssao_enabled = plan.ssao;
         Self {
             taa_enabled,
             msaa_samples,
@@ -120,11 +129,7 @@ impl Features {
             // The unified G-buffer pre-pass exists when any screen-space
             // consumer needs it: SSR / SSGI / RT, SSAO, or TAA / FSR velocity.
             // `taa_enabled` already folds in temporal upscaling.
-            gbuffer_enabled: taa_enabled
-                || ssao_enabled
-                || graphics.ssr().is_some()
-                || graphics.ssgi().is_some()
-                || rt_enabled,
+            gbuffer_enabled: plan.gbuffer,
         }
     }
 }
@@ -212,7 +217,6 @@ impl DxContext {
                 swapchain_config,
             )?,
         };
-        let features = Features::resolve(&hw, &graphics, hdr_samples);
         // Persisted pipeline library: seeded from disk when a blob for this
         // adapter exists, consulted by every PSO creation below. No-op on the
         // reload path, where it is already installed.
@@ -235,7 +239,7 @@ impl DxContext {
         };
         let planar = effects::plan_planar(&fx, planar);
         let planar_slots = planar.assignment.slots.clone();
-        let rtv = RtvHeapLayout::compute(features.msaa_samples);
+        let rtv = RtvHeapLayout::compute(Features::msaa_samples(&hw, hdr_samples));
         let swapchain = heaps::build_swapchain(&gpu, swapchain, &rtv, vsync)?;
         let descriptors = descriptors::build_descriptors(
             &gpu,
@@ -254,6 +258,7 @@ impl DxContext {
             anisotropy,
         )?;
         let upscale = effects::build_upscale(&gpu, &descriptors, output, &graphics)?;
+        let features = Features::resolve(&hw, &graphics, hdr_samples, upscale.backend.is_some());
         let mut scene =
             scene_assets::build_scene_assets(&gpu, &descriptors, &media, &area_lights, &world)?;
         // The probe set, with the stand-in array in the SRV slot until a world
@@ -281,13 +286,7 @@ impl DxContext {
         )?;
         let uniforms = scene_data::build_uniforms(&gpu, light_uniforms, &local_lights)?;
         let light_cull = scene_data::build_light_cull(&gpu)?;
-        let shadow = shadow::build_shadow(
-            &gpu,
-            &descriptors,
-            &targets,
-            &shadows,
-            &uniforms.light_uniforms,
-        )?;
+        let shadow = shadow::build_shadow(&gpu, &descriptors, &targets, &shadows)?;
         let spot_shadow = shadow::build_spot_shadow(
             &gpu,
             &descriptors,
@@ -349,14 +348,7 @@ impl DxContext {
             effects::build_gbuffer(&gpu, &targets, &quality_slots, features.gbuffer_enabled)?;
 
         let decal = effects::build_decals(&gpu, &descriptors, &targets, &scene, fx.decals)?;
-        let fog = effects::build_fog(
-            &gpu,
-            &descriptors,
-            &targets,
-            &shadow,
-            fx.fog,
-            &uniforms.light_uniforms,
-        )?;
+        let fog = effects::build_fog(&gpu, &descriptors, &targets, &shadow, fx.fog)?;
         let particle =
             effects::build_particles(&gpu, &descriptors, &targets, &scene, fx.particles)?;
         let commands = commands::build_commands(&gpu)?;
@@ -509,19 +501,21 @@ impl DxContext {
                 ),
                 clear_color,
             ),
-            graph_cache: std::cell::RefCell::new(None),
-            gates: Default::default(),
+            graph_scratch: Default::default(),
+            pass_lists: Default::default(),
+            submission: Vec::new(),
             instanced: DxInstanced::new(world.instanced_clusters),
             wireframe: Default::default(),
             diagnostics: Default::default(),
             timestamps,
             auto_exposure,
-            hot_reload: HotReloadState::new(hot_reload),
+            hot_reload: ShaderReload::new(hot_reload),
             world_shader: world_programs.cloned(),
             quality_slots,
             probe: ProbeState::new(probe_prefilter, probe_gpu),
             hw,
         };
+        ctx.state.planner.shadow.cadence = shadows.cadence;
         ctx.refresh_gates(&graphics);
         Ok(ctx)
     }

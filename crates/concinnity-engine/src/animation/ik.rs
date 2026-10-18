@@ -16,7 +16,7 @@ use concinnity_core::components::{
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{PipelineContext, SkinnedMeshHandle};
-use concinnity_core::transform::{Mat4, mat4_affine_inverse};
+use concinnity_core::transform::{Mat4, mat4_affine_inverse, mat4_transform_point};
 use std::collections::{BTreeMap, HashMap};
 
 // Probe ray extents around the animated foot: the ray starts `PROBE_UP`
@@ -203,12 +203,12 @@ pub(super) fn apply_chains(
             continue;
         };
         let foot_mesh = [w[3][0], w[3][1], w[3][2]];
-        let foot_world = transform_point(&frame.model, foot_mesh);
+        let foot_world = mat4_transform_point(&frame.model, foot_mesh);
         if (pin_y - foot_world[1]).abs() > SNAP_THRESHOLD {
             continue;
         }
         let target_world = [foot_world[0], pin_y, foot_world[2]];
-        let target_mesh = transform_point(&frame.inv_model, target_world);
+        let target_mesh = mat4_transform_point(&frame.inv_model, target_world);
         ik::apply_two_bone_ik(
             skeleton,
             &mut scratch.locals,
@@ -254,9 +254,9 @@ pub(super) fn refresh_rays(
                 let mesh = pose
                     .joint_matrices
                     .get(end)
-                    .map(|m| transform_point(m, pose.skeleton.bind_position(end)))
+                    .map(|m| mat4_transform_point(m, pose.skeleton.bind_position(end)))
                     .unwrap_or([0.0; 3]);
-                transform_point(&model, mesh)
+                mat4_transform_point(&model, mesh)
             }));
         }
         if let Some(probes) = ctx.query_mut::<GroundProbes>().find(|p| p.target == target) {
@@ -271,14 +271,6 @@ pub(super) fn refresh_rays(
                 }));
         }
     }
-}
-
-fn transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
-    [
-        m[0][0] * p[0] + m[1][0] * p[1] + m[2][0] * p[2] + m[3][0],
-        m[0][1] * p[0] + m[1][1] * p[1] + m[2][1] * p[2] + m[3][1],
-        m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2],
-    ]
 }
 
 #[cfg(test)]

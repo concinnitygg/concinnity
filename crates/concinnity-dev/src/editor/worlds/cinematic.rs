@@ -268,7 +268,7 @@ pub(crate) fn hide(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::viewport::framing::forward;
+    use concinnity_core::math::forward;
 
     const FOV: f32 = std::f32::consts::FRAC_PI_3;
     const ASPECT: f32 = 16.0 / 9.0;

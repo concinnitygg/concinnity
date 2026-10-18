@@ -3,42 +3,17 @@
 //! uniform block the pass uploads, and tracks which frame-in-flight copy of
 //! that block is still stale.
 
-use alloc::vec::Vec;
 use core::cell::Cell;
-use core::fmt;
 
 use crate::gfx::frustum::Frustum;
 use crate::render::decal::DecalRecord;
 use crate::render::frame_dirty::FrameDirty;
+use crate::render::slot_table::{AtCapacity, RemoveError, SlotTable};
 use crate::render::uniforms::DecalParams;
 
 /// Exponent of the decal's edge-fade curve, applied by the fragment shader to
 /// the distance from the projection box's faces.
 const EDGE_FADE_POW: f32 = 2.0;
-
-/// Returned by [`DecalSet::insert`] when every slot up to the set's capacity is
-/// live. The capacity is the backend's own per-decal descriptor reservation, so
-/// the backend words the error.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AtCapacity;
-
-/// Why [`DecalSet::remove`] rejected an id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RemoveError {
-    /// No slot has ever been handed out under this id.
-    OutOfRange,
-    /// The id names a slot an earlier remove already tombstoned.
-    AlreadyRemoved,
-}
-
-impl fmt::Display for RemoveError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::OutOfRange => f.write_str("out of range"),
-            Self::AlreadyRemoved => f.write_str("already removed"),
-        }
-    }
-}
 
 // One live decal. `aabb_*` and `params` are derived from `record` at insert and
 // never recomputed: the pass reads them every frame, and a decal's transform is
@@ -95,10 +70,7 @@ impl Slot {
 /// assert!(decals.is_empty());
 /// ```
 pub struct DecalSet {
-    slots: Vec<Option<Slot>>,
-    free_slots: Vec<usize>,
-    live: usize,
-    capacity: usize,
+    slots: SlotTable<Slot>,
     frames: usize,
 }
 
@@ -107,10 +79,7 @@ impl DecalSet {
     /// `frames` frames in flight.
     pub fn new(capacity: usize, frames: usize) -> Self {
         Self {
-            slots: Vec::new(),
-            free_slots: Vec::new(),
-            live: 0,
-            capacity,
+            slots: SlotTable::new(capacity),
             frames,
         }
     }
@@ -119,40 +88,19 @@ impl DecalSet {
     /// before growing the table so a spawn / despawn cycle stays bounded. The
     /// new slot is marked stale for every frame in flight.
     pub fn insert(&mut self, record: DecalRecord) -> Result<usize, AtCapacity> {
-        let slot = Slot::new(record, self.frames);
-        let id = match self.free_slots.pop() {
-            Some(id) => {
-                self.slots[id] = Some(slot);
-                id
-            }
-            None => {
-                if self.slots.len() >= self.capacity {
-                    return Err(AtCapacity);
-                }
-                self.slots.push(Some(slot));
-                self.slots.len() - 1
-            }
-        };
-        self.live += 1;
-        Ok(id)
+        self.slots.insert(Slot::new(record, self.frames))
     }
 
     /// Tombstone the slot at `id`, freeing it for the next [`Self::insert`].
     pub fn remove(&mut self, id: usize) -> Result<(), RemoveError> {
-        let slot = self.slots.get_mut(id).ok_or(RemoveError::OutOfRange)?;
-        if slot.take().is_none() {
-            return Err(RemoveError::AlreadyRemoved);
-        }
-        self.free_slots.push(id);
-        self.live -= 1;
-        Ok(())
+        self.slots.remove(id).map(drop)
     }
 
     /// Carry every live decal into the frame `rebase` moves the world to,
     /// keeping its id; each slot is re-uploaded for every frame in flight.
     pub fn rebase(&mut self, rebase: &crate::planet::Rebase) {
         let frames = self.frames;
-        for slot in self.slots.iter_mut().flatten() {
+        for (_, slot) in self.slots.iter_mut() {
             let mut record = slot.record;
             record.model = rebase.apply_matrix(record.model);
             record.inv_model =
@@ -163,7 +111,7 @@ impl DecalSet {
 
     /// Whether no slot is live, so the pass can be skipped outright.
     pub fn is_empty(&self) -> bool {
-        self.live == 0
+        self.slots.is_empty()
     }
 
     /// The live decals whose cached world AABB meets `frustum`, in slot order.
@@ -173,8 +121,7 @@ impl DecalSet {
         &'a self,
         frustum: &'a Frustum,
     ) -> impl Iterator<Item = VisibleDecal<'a>> + 'a {
-        self.slots.iter().enumerate().filter_map(move |(id, slot)| {
-            let slot = slot.as_ref()?;
+        self.slots.iter().filter_map(move |(id, slot)| {
             if !frustum.intersects_aabb(slot.aabb_min, slot.aabb_max) {
                 return None;
             }
@@ -217,6 +164,7 @@ impl VisibleDecal<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     // A frame move carries every live decal's box and its inverse to where
     // the move says, keeps ids and tombstones, and re-arms the uploads.
@@ -231,13 +179,13 @@ mod tests {
         let a = set.insert(record_at([1_002.0, 0.0, -1.0])).unwrap();
         let gone = set.insert(record_at([0.0; 3])).unwrap();
         set.remove(gone).unwrap();
-        let uploaded = &set.slots[a].as_ref().unwrap().dirty;
+        let uploaded = &set.slots.get(a).unwrap().dirty;
         let mut d = uploaded.get();
         d.take(0);
         uploaded.set(d);
         set.rebase(&rebase);
 
-        let slot = set.slots[a].as_ref().unwrap();
+        let slot = set.slots.get(a).unwrap();
         let corner = |m: crate::transform::Mat4, p: [f32; 3]| -> [f32; 3] {
             core::array::from_fn(|i| m[0][i] * p[0] + m[1][i] * p[1] + m[2][i] * p[2] + m[3][i])
         };
@@ -250,7 +198,10 @@ mod tests {
         let back = corner(slot.record.inv_model, moved);
         assert!((0..3).all(|i| (back[i] - 0.5).abs() < 1e-3), "{back:?}");
         assert_eq!(slot.params.model, slot.record.model);
-        assert!(set.slots[gone].is_none(), "a tombstone stays a tombstone");
+        assert!(
+            set.slots.get(gone).is_none(),
+            "a tombstone stays a tombstone"
+        );
         let mut dirty = slot.dirty.get();
         assert!(dirty.take(0), "re-uploaded");
     }
@@ -305,15 +256,6 @@ mod tests {
     }
 
     #[test]
-    fn insert_hands_out_ascending_ids_up_to_capacity() {
-        let mut decals = DecalSet::new(2, 2);
-        assert_eq!(decals.insert(record_at([0.0; 3])), Ok(0));
-        assert_eq!(decals.insert(record_at([0.0; 3])), Ok(1));
-        assert_eq!(decals.insert(record_at([0.0; 3])), Err(AtCapacity));
-        assert!(!decals.is_empty());
-    }
-
-    #[test]
     fn a_removed_slot_is_reused_before_the_table_grows() {
         let mut decals = DecalSet::new(2, 2);
         let first = decals.insert(record_at([0.0; 3])).expect("first slot");
@@ -332,16 +274,6 @@ mod tests {
         assert_eq!(decals.remove(id), Ok(()));
         assert_eq!(decals.remove(id), Err(RemoveError::AlreadyRemoved));
         assert!(decals.is_empty());
-    }
-
-    #[test]
-    fn remove_errors_read_as_the_backend_messages() {
-        use alloc::format;
-        assert_eq!(format!("{}", RemoveError::OutOfRange), "out of range");
-        assert_eq!(
-            format!("{}", RemoveError::AlreadyRemoved),
-            "already removed"
-        );
     }
 
     #[test]

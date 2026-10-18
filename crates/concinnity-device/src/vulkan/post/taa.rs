@@ -25,10 +25,6 @@ pub(in crate::vulkan) type VkTaaPass = TaaPass<PostPipeline, PostTarget>;
 pub(in crate::vulkan) struct TaaResources {
     // The shared resolve.
     pub(in crate::vulkan) pass: VkTaaPass,
-    // Drives the Halton jitter sequence. Here rather than in the shared pass
-    // because it also drives the temporal upscalers, which run in the resolve's
-    // place.
-    pub(in crate::vulkan) taa_frame: u32,
 }
 
 impl TaaResources {
@@ -41,7 +37,6 @@ impl TaaResources {
     ) -> RenderResult<Self> {
         Ok(Self {
             pass: TaaPass::new(device, TaaRing::per_frame(frames), post_extent(extent))?,
-            taa_frame: 0,
         })
     }
 
@@ -61,7 +56,6 @@ impl TaaResources {
     ) -> RenderResult<()> {
         self.pass.resize(device, post_extent(extent))?;
         // Stale history cannot be reprojected onto the new resolution.
-        self.taa_frame = 0;
         Ok(())
     }
 

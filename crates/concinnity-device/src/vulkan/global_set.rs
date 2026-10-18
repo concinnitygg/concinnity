@@ -220,6 +220,21 @@ impl GlobalSetContents {
             ..self
         }
     }
+
+    // These contents reading frame `frame`'s reflection probes, as the main
+    // camera's set does.
+    pub(in crate::vulkan) fn with_probes(
+        self,
+        bindings: &GlobalBindings<'_>,
+        frame: usize,
+    ) -> Self {
+        Self {
+            probe_set: bindings.uniforms.probe_set_ubo_buffers[frame].buffer(),
+            probe_cubes: bindings.probes.bound_cubes().view(),
+            probe_records: bindings.probes.records[frame].buffer(),
+            ..self
+        }
+    }
 }
 
 // One descriptor of a global set, by binding.

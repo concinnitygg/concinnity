@@ -1,8 +1,8 @@
-// GraphicsSystem unit tests: drive run_init and run_step against the
-// recording mock backend (gfx::mock_backend) and a World over an in-memory
-// blob. No GPU device is created and the on-disk settings store is never read
-// or written: the injection seam (GraphicsSystem::test_hooks) supplies the
-// settings, the GPU profile, and the backend factory.
+// GraphicsSystem unit tests: drive run_init and run_step against core's
+// recording backend (built through gfx::test_hooks) and a World over an
+// in-memory blob. No GPU device is created and the on-disk settings store is
+// never read or written: a test's settings are the `StoredSettings` resource
+// it inserts, and the injection seam supplies the GPU profile and backend.
 
 use concinnity_core::bake::texture;
 use concinnity_core::components::AaMode;
@@ -65,8 +65,9 @@ use std::time::{Duration, Instant};
 
 use super::GraphicsSystem;
 use crate::app::run::LaunchRequest;
-use crate::gfx::mock_backend::{
-    Call, MockBackend, MockState, TestHooks, recording_hooks, recording_hooks_with,
+use crate::gfx::test_hooks::{TestHooks, recording_hooks, recording_hooks_with};
+use concinnity_core::render::backend::recording::{
+    Call, RecordingBackend, RecordingState, SharedRecording,
 };
 use concinnity_core::settings::quality::{QualityPreset, resolve_ceiling};
 use concinnity_core::settings::{
@@ -320,25 +321,30 @@ fn init_graphics(world: &mut World, hooks: TestHooks) -> GraphicsSystem {
     gs
 }
 
-// A first launch (no persisted preset, no launch request) seeds `Auto` and saves it
-// into the world's own state tree.
+// A first launch (no persisted preset, no launch request) seeds `Auto`, and the
+// settings writer saves it into the world's own state tree.
 #[test]
 fn a_first_launch_persists_the_auto_preset_into_the_state_tree() {
+    use concinnity_core::ecs::System;
     let dir = concinnity_testing::TempTree::new();
     let tree = concinnity_host::store::paths::StateTree::at(dir.path());
     let (_state, hooks) = recording_hooks();
-    assert!(hooks.settings.graphics.quality_preset.is_none());
     let mut world = scene_builder().build();
+    world.insert_resource(tree.clone());
     let mut gs = GraphicsSystem::new(Some(&tree));
     gs.test_hooks = Some(hooks);
+    let mut writer = crate::settings::SettingsWriterSystem::new();
     {
         let mut ctx = world.context();
         crate::ecs::decompose::run(&mut ctx);
         gs.run_init(&mut ctx);
+        writer.step(&mut ctx);
     }
+    // Dropping the writer waits for its queued save.
+    drop(writer);
     assert!(!gs.failed);
     assert_eq!(
-        crate::config::Settings::load(Some(&tree))
+        crate::settings::store::load(Some(&tree))
             .graphics
             .quality_preset,
         Some(concinnity_core::settings::quality::QualityPreset::Auto)
@@ -364,9 +370,9 @@ fn backend_parked(world: &World) -> bool {
 fn step(gs: &mut GraphicsSystem, world: &mut World) -> StepResult {
     use concinnity_core::ecs::System;
     let mut ctx = world.context();
-    crate::gfx::overlay::OverlaySystem::new().step(&mut ctx);
-    crate::spawn::SpawnSystem::new().step(&mut ctx);
-    crate::settings::system::SettingsSystem::new().step(&mut ctx);
+    concinnity_core::render::overlay::OverlaySystem::new().step(&mut ctx);
+    concinnity_core::spawn::SpawnSystem::new().step(&mut ctx);
+    concinnity_core::settings::system::SettingsSystem::new().step(&mut ctx);
     crate::gfx::streaming::system::StreamingSystem::new().step(&mut ctx);
     let result = gs.run_step(&mut ctx);
     if result != StepResult::Stop {
@@ -381,8 +387,8 @@ fn step(gs: &mut GraphicsSystem, world: &mut World) -> StepResult {
     result
 }
 
-fn lock(state: &Arc<Mutex<MockState>>) -> std::sync::MutexGuard<'_, MockState> {
-    state.lock().unwrap()
+fn lock(state: &SharedRecording) -> impl core::ops::DerefMut<Target = RecordingState> + '_ {
+    state.lock()
 }
 
 #[test]
@@ -440,8 +446,8 @@ fn init_builds_draw_list_and_render_handles() {
 // nothing. The chips surviving to the parked resource guards that.
 #[test]
 fn init_parks_overlay_assets_with_the_hud_chips() {
-    use crate::gfx::overlay::OverlayAssets;
     use concinnity_core::components::{DebugHud, StatHud};
+    use concinnity_core::render::overlay::OverlayAssets;
 
     let (_state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -525,7 +531,7 @@ fn pending_backend_reuses_instance_and_ends_with_new_world() {
     );
     drop(a);
     assert!(
-        state_b.lock().unwrap().init.is_none(),
+        state_b.lock().init.is_none(),
         "world B never built a fresh backend"
     );
 }
@@ -535,7 +541,7 @@ fn pending_backend_reuses_instance_and_ends_with_new_world() {
 #[test]
 fn pending_backend_swapchain_change_forces_full_rebuild() {
     let (state_t, _unused) = recording_hooks();
-    let transplant = MockBackend::transplant(
+    let transplant = RecordingBackend::transplant(
         Arc::clone(&state_t),
         Some(SwapchainConfig {
             // The scene world uses the default 2 frames-in-flight; 3 mismatches.
@@ -562,7 +568,7 @@ fn pending_backend_swapchain_change_forces_full_rebuild() {
     );
     drop(t);
     assert!(
-        state_b.lock().unwrap().init.is_some(),
+        state_b.lock().init.is_some(),
         "a fresh backend is built for the changed swapchain"
     );
 }
@@ -573,7 +579,7 @@ fn pending_backend_swapchain_change_forces_full_rebuild() {
 #[test]
 fn pending_backend_hdr_change_forces_full_rebuild() {
     let (state_t, _unused) = recording_hooks();
-    let transplant = MockBackend::transplant(
+    let transplant = RecordingBackend::transplant(
         Arc::clone(&state_t),
         Some(SwapchainConfig {
             // The scene world requests no HDR (the Display default); an
@@ -597,7 +603,7 @@ fn pending_backend_hdr_change_forces_full_rebuild() {
     assert!(!t.saw(&Call::ReloadWorld), "no reload across an HDR change");
     drop(t);
     assert!(
-        state_b.lock().unwrap().init.is_some(),
+        state_b.lock().init.is_some(),
         "a fresh backend is built for the changed HDR output"
     );
 }
@@ -610,7 +616,7 @@ fn reload_world_failure_marks_graphics_failed() {
     let mut world_a = scene_builder().build();
     let _gs_a = init_graphics(&mut world_a, hooks_a);
     let backend_a = crate::ecs::ActiveRenderBackend::take(world_a.context().resources).unwrap();
-    state_a.lock().unwrap().fail_reload = Some(error::RenderError::DeviceLost {
+    state_a.lock().fail_reload = Some(error::RenderError::DeviceLost {
         reason: error::DeviceLostReason::Removed,
         detail: "boom".to_string(),
     });
@@ -622,7 +628,7 @@ fn reload_world_failure_marks_graphics_failed() {
 
     assert!(gs_b.failed, "a failed reload marks the system failed");
     assert!(!backend_parked(&world_b));
-    assert!(state_a.lock().unwrap().saw(&Call::ReloadWorld));
+    assert!(state_a.lock().saw(&Call::ReloadWorld));
 }
 
 #[test]
@@ -697,10 +703,11 @@ fn ui_only_world_trims_scene_features() {
 // `--vsync` wins over the player's saved choice and the world's.
 #[test]
 fn launch_vsync_overrides_persisted_and_authored_config() {
-    let mut settings = crate::config::Settings::default();
+    let mut settings = concinnity_core::settings::StoredSettings::default();
     settings.graphics.vsync = Some(false);
-    let (state, hooks) = recording_hooks_with(settings, GpuProfile::UNKNOWN);
+    let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
+    world.insert_resource(settings);
     world.insert_resource(LaunchRequest {
         args: LaunchArgs {
             vsync: true,
@@ -709,29 +716,37 @@ fn launch_vsync_overrides_persisted_and_authored_config() {
         ..Default::default()
     });
     init_graphics(&mut world, hooks);
-    assert!(settings_state(&world).resolved.graphics.frame_pacing.vsync);
+    assert!(
+        settings_state(&world)
+            .resolved()
+            .graphics
+            .frame_pacing
+            .vsync
+    );
     assert!(lock(&state).init.as_ref().unwrap().vsync);
 }
 
 #[test]
 fn persisted_settings_override_authored_config() {
-    let mut settings = crate::config::Settings::default();
+    let mut settings = concinnity_core::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Custom);
     settings.graphics.vsync = Some(true);
     settings.graphics.fps_cap = Some(30);
     settings.graphics.frames_in_flight = Some(3);
     settings.graphics.shadow_map_size = Some(1024);
-    let (state, hooks) = recording_hooks_with(settings, GpuProfile::UNKNOWN);
+    let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
+    world.insert_resource(settings);
     let gs = init_graphics(&mut world, hooks);
 
     assert!(!gs.failed);
     let live = settings_state(&world);
     assert_eq!(
-        live.resolved.graphics.frame_pacing.fps_cap, 30,
+        live.resolved().graphics.frame_pacing.fps_cap,
+        30,
         "persisted cap overrides the world's 0"
     );
-    assert_eq!(live.quality_preset, QualityPreset::Custom);
+    assert_eq!(live.quality_preset(), QualityPreset::Custom);
     let s = lock(&state);
     let init = s.init.as_ref().unwrap();
     assert!(init.vsync, "persisted vsync overrides the authored false");
@@ -741,10 +756,11 @@ fn persisted_settings_override_authored_config() {
 
 #[test]
 fn low_preset_ceiling_clamps_quality_knobs() {
-    let mut settings = crate::config::Settings::default();
+    let mut settings = concinnity_core::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Low);
-    let (state, hooks) = recording_hooks_with(settings, GpuProfile::UNKNOWN);
+    let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
+    world.insert_resource(settings);
     init_graphics(&mut world, hooks);
 
     // The authored Shadows / TextureFiltering defaults (4096 / 80 / 4 / 16) are clamped
@@ -757,10 +773,10 @@ fn low_preset_ceiling_clamps_quality_knobs() {
     assert_eq!(init.shadows.cadence.cascades, 2);
     assert_eq!(init.anisotropy, 4);
     let live = settings_state(&world);
-    assert_eq!(live.authored.graphics.shadows.map_size, 4096);
-    assert_eq!(live.authored.graphics.shadows.distance, 80);
-    assert_eq!(live.authored.graphics.shadows.cascades, 4);
-    assert_eq!(live.authored.graphics.texture_filtering.anisotropy, 16);
+    assert_eq!(live.authored().graphics.shadows.map_size, 4096);
+    assert_eq!(live.authored().graphics.shadows.distance, 80);
+    assert_eq!(live.authored().graphics.shadows.cascades, 4);
+    assert_eq!(live.authored().graphics.texture_filtering.anisotropy, 16);
 }
 
 fn graphics_under(
@@ -819,11 +835,11 @@ fn auto_preset_resolves_ceiling_from_gpu_tier() {
         unified_memory: false,
         discrete: false,
     };
-    let (state, hooks) = recording_hooks_with(crate::config::Settings::default(), profile);
+    let (state, hooks) = recording_hooks_with(profile);
     let mut world = scene_builder().build();
     init_graphics(&mut world, hooks);
 
-    assert_eq!(settings_state(&world).quality_preset, QualityPreset::Auto);
+    assert_eq!(settings_state(&world).quality_preset(), QualityPreset::Auto);
     let s = lock(&state);
     assert_eq!(s.init.as_ref().unwrap().shadows.map_size, 1024);
 }
@@ -986,7 +1002,7 @@ fn extract_hands_the_spent_overlay_list_back() {
         assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
         assert!(
             world
-                .resource::<crate::gfx::overlay::OverlayRecycle>()
+                .resource::<concinnity_core::render::overlay::OverlayRecycle>()
                 .is_some(),
             "extraction returned the spent draw list"
         );
@@ -1041,7 +1057,9 @@ fn a_serial_frame_records_its_submission_as_the_render_handoff() {
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
     let mut gs = init_graphics(&mut world, hooks);
-    lock(&state).draw_duration = std::time::Duration::from_millis(3);
+    lock(&state).on_draw = Some(Box::new(|| {
+        std::thread::sleep(std::time::Duration::from_millis(3))
+    }));
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
 
     let ctx = world.context();
@@ -1116,7 +1134,7 @@ fn model_matrices_push_only_on_change() {
     let mut world = scene_builder().build();
     let mut gs = init_graphics(&mut world, hooks);
 
-    let model_pushes = |s: &MockState| {
+    let model_pushes = |s: &RecordingState| {
         s.calls
             .iter()
             .filter(|c| matches!(c, Call::UpdateModel(_)))
@@ -1488,12 +1506,12 @@ fn pipelined_max_frames_counts_frames_sent() {
     let (_feedback_tx, feedback_rx) = std::sync::mpsc::channel();
     world
         .context()
-        .insert_resource(crate::ecs::PipelinedFrames(Some(
+        .insert_resource(crate::ecs::PipelinedFrames::new(
             crate::ecs::PipelineChannels {
                 snapshot_tx,
                 feedback_rx,
             },
-        )));
+        ));
     // Stand in for the render half: receive every snapshot (the send is a
     // rendezvous, so an unread channel would deadlock the step) and report
     // nothing back.
@@ -1798,7 +1816,7 @@ fn voxel_world_rebases_the_draw_view_onto_the_chunk_origin() {
 // the churn.
 // One SpawnSystem step followed by a replay of its recorded ops onto the
 // parked backend, so the mock's call log reflects what submission would apply.
-fn spawn_step(spawn: &mut crate::spawn::SpawnSystem, world: &mut World) {
+fn spawn_step(spawn: &mut concinnity_core::spawn::SpawnSystem, world: &mut World) {
     use concinnity_core::ecs::System;
     {
         let mut ctx = world.context();
@@ -1810,14 +1828,16 @@ fn spawn_step(spawn: &mut crate::spawn::SpawnSystem, world: &mut World) {
 // Replay the recorded op queue onto the parked backend (both restored after),
 // standing in for the submit-path replay in tests that step one system.
 fn replay_pending_ops(world: &mut World) {
-    let Some(mut queues) = crate::ecs::ActiveRenderQueues::take(world.context().resources) else {
+    let Some(mut queues) =
+        concinnity_core::render::queues::ActiveRenderQueues::take(world.context().resources)
+    else {
         return;
     };
     if let Some(mut backend) = crate::ecs::ActiveRenderBackend::take(world.context().resources) {
         queues.ops.replay(backend.as_mut());
         crate::ecs::ActiveRenderBackend::put(world.context().resources, backend);
     }
-    crate::ecs::ActiveRenderQueues::put(world.context().resources, queues);
+    concinnity_core::render::queues::ActiveRenderQueues::put(world.context().resources, queues);
 }
 
 // The entity an asset id resolves to through `EntityById`.
@@ -1836,7 +1856,7 @@ fn spawn_system_without_graphics_leaves_the_churn_pending() {
     let (_state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
     let _gs = init_graphics(&mut world, hooks);
-    crate::ecs::ActiveRenderQueues::take(world.context().resources)
+    concinnity_core::render::queues::ActiveRenderQueues::take(world.context().resources)
         .expect("the recording surfaces were published");
 
     {
@@ -1845,7 +1865,7 @@ fn spawn_system_without_graphics_leaves_the_churn_pending() {
             target: PROP.into(),
         });
     }
-    let mut spawn = crate::spawn::SpawnSystem::new();
+    let mut spawn = concinnity_core::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
 
     assert_eq!(
@@ -1875,7 +1895,7 @@ fn reparent_request_repoints_the_child_under_the_named_parent() {
             parent: Some(PROP.into()),
         });
     }
-    let mut spawn = crate::spawn::SpawnSystem::new();
+    let mut spawn = concinnity_core::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
 
     let ctx = world.context();
@@ -1921,7 +1941,7 @@ fn reparent_request_with_an_unresolved_parent_is_skipped() {
             parent: Some(GHOST.into()),
         });
     }
-    let mut spawn = crate::spawn::SpawnSystem::new();
+    let mut spawn = concinnity_core::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
 
     assert_eq!(
@@ -1952,7 +1972,7 @@ fn reparent_request_without_a_parent_detaches_the_child() {
             parent: None,
         });
     }
-    let mut spawn = crate::spawn::SpawnSystem::new();
+    let mut spawn = concinnity_core::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
 
     let ctx = world.context();
@@ -1979,7 +1999,7 @@ fn expired_lifetime_despawns_the_entity_and_retires_its_slot() {
     let entity = entity_named(&mut world, PROP);
     world.context().insert(entity, Lifetime { remaining: 0.0 });
 
-    let mut spawn = crate::spawn::SpawnSystem::new();
+    let mut spawn = concinnity_core::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
 
     assert!(lock(&state).saw(&Call::RetireDrawObject(DrawIndex(0))));
@@ -2022,7 +2042,7 @@ fn due_spawner_clones_its_template_at_its_own_transform() {
         );
     }
 
-    let mut spawn = crate::spawn::SpawnSystem::new();
+    let mut spawn = concinnity_core::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
 
     assert!(lock(&state).saw(&Call::CloneStaticDrawObject {
@@ -2067,7 +2087,7 @@ fn menu_active_freezes_lifetimes_and_spawners() {
     }
     world.insert_resource(MenuActive(true));
 
-    let mut spawn = crate::spawn::SpawnSystem::new();
+    let mut spawn = concinnity_core::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
 
     {
@@ -2168,9 +2188,9 @@ fn effects_scene(effects: ResolvedGraphics) -> WorldBuilder {
 // The resolved settings snapshot init hands to SettingsSystem: the live values
 // every settings row displays and cycles, after the world's config, the
 // persisted overrides, and the preset ceiling have all settled.
-fn settings_state(world: &World) -> &crate::settings::system::SettingsState {
+fn settings_state(world: &World) -> &concinnity_core::settings::system::SettingsState {
     world
-        .resource::<crate::settings::system::SettingsSlot>()
+        .resource::<concinnity_core::settings::system::SettingsSlot>()
         .expect("SettingsSlot parked at init")
         .0
         .as_ref()
@@ -2195,7 +2215,7 @@ fn profile_at(tier: GpuTier) -> GpuProfile {
 fn persisted_post_process_overrides_win_over_authored_config() {
     use concinnity_core::components::{AaMode, IndirectTechnique, PassResolution};
 
-    let mut settings = crate::config::Settings::default();
+    let mut settings = concinnity_core::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Custom);
     // Sliders (stored as user-facing values; init runs them through the same
     // clamp/transform the live drag uses).
@@ -2228,7 +2248,7 @@ fn persisted_post_process_overrides_win_over_authored_config() {
     settings.graphics.auto_exposure_max_ev = Some(4.0);
     settings.graphics.auto_exposure_speed = Some(3.0);
 
-    let (state, hooks) = recording_hooks_with(settings, GpuProfile::UNKNOWN);
+    let (state, hooks) = recording_hooks();
     let mut world = effects_scene(effects(|e| {
         // Deliberately the opposite of every override above, so a value that
         // survives to the backend can only have come from the store.
@@ -2237,6 +2257,7 @@ fn persisted_post_process_overrides_win_over_authored_config() {
         e.exposure.ev = -3.0;
     }))
     .build();
+    world.insert_resource(settings);
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
@@ -2255,60 +2276,66 @@ fn persisted_post_process_overrides_win_over_authored_config() {
 
     let live = settings_state(&world);
     // Toggles.
-    assert!(live.resolved.graphics.ambient_occlusion.enabled);
-    assert!(live.resolved.graphics.reflections.screen_space);
-    assert!(live.resolved.graphics.reflections.ray_traced);
+    assert!(live.resolved().graphics.ambient_occlusion.enabled);
+    assert!(live.resolved().graphics.reflections.screen_space);
+    assert!(live.resolved().graphics.reflections.ray_traced);
     assert_eq!(
-        live.resolved.graphics.indirect_lighting.technique,
+        live.resolved().graphics.indirect_lighting.technique,
         IndirectTechnique::Ssgi
     );
-    assert!(live.resolved.graphics.exposure.auto);
+    assert!(live.resolved().graphics.exposure.auto);
     // Cycles.
-    assert_eq!(live.resolved.graphics.anti_aliasing.mode, AaMode::Taa);
+    assert_eq!(live.resolved().graphics.anti_aliasing.mode, AaMode::Taa);
     assert_eq!(
-        live.resolved.graphics.indirect_lighting.ssgi_resolution,
+        live.resolved().graphics.indirect_lighting.ssgi_resolution,
         PassResolution::Full
     );
-    assert_eq!(live.resolved.graphics.indirect_lighting.ssgi_rays, 2);
+    assert_eq!(live.resolved().graphics.indirect_lighting.ssgi_rays, 2);
     assert_eq!(
-        live.resolved.graphics.reflections.blur_resolution,
+        live.resolved().graphics.reflections.blur_resolution,
         PassResolution::Full
     );
     // Sub-quality sliders.
-    assert_eq!(live.resolved.graphics.ambient_occlusion.radius, 0.9);
-    assert_eq!(live.resolved.graphics.ambient_occlusion.intensity, 2.0);
-    assert_eq!(live.resolved.graphics.reflections.intensity, 0.4);
-    assert_eq!(live.resolved.graphics.reflections.max_distance, 20.0);
-    assert_eq!(live.resolved.graphics.indirect_lighting.ssgi_intensity, 1.5);
+    assert_eq!(live.resolved().graphics.ambient_occlusion.radius, 0.9);
+    assert_eq!(live.resolved().graphics.ambient_occlusion.intensity, 2.0);
+    assert_eq!(live.resolved().graphics.reflections.intensity, 0.4);
+    assert_eq!(live.resolved().graphics.reflections.max_distance, 20.0);
     assert_eq!(
-        live.resolved.graphics.indirect_lighting.ssgi_max_distance,
+        live.resolved().graphics.indirect_lighting.ssgi_intensity,
+        1.5
+    );
+    assert_eq!(
+        live.resolved().graphics.indirect_lighting.ssgi_max_distance,
         4.0
     );
-    assert_eq!(live.resolved.graphics.exposure.auto_min_ev, -4.0);
-    assert_eq!(live.resolved.graphics.exposure.auto_max_ev, 4.0);
-    assert_eq!(live.resolved.graphics.exposure.auto_speed, 3.0);
+    assert_eq!(live.resolved().graphics.exposure.auto_min_ev, -4.0);
+    assert_eq!(live.resolved().graphics.exposure.auto_max_ev, 4.0);
+    assert_eq!(live.resolved().graphics.exposure.auto_speed, 3.0);
     // Post-process params: exposure is stored as EV and applied as 2^EV.
     assert_eq!(
-        live.resolved.graphics.post_process().exposure,
+        live.resolved().graphics.post_process().exposure,
         4.0,
         "2^2 EV, not the authored -3"
     );
-    assert_eq!(live.resolved.graphics.post_process().bloom_intensity, 0.25);
-    assert_eq!(live.resolved.graphics.post_process().bloom_threshold, 1.5);
-    assert_eq!(live.resolved.graphics.post_process().bloom_knee, 0.2);
-    assert_eq!(live.resolved.graphics.post_process().vignette, 0.4);
-    assert_eq!(live.resolved.graphics.post_process().lut_strength, 0.3);
-    assert_eq!(live.resolved.graphics.ambient_intensity(), 2.0);
+    assert_eq!(
+        live.resolved().graphics.post_process().bloom_intensity,
+        0.25
+    );
+    assert_eq!(live.resolved().graphics.post_process().bloom_threshold, 1.5);
+    assert_eq!(live.resolved().graphics.post_process().bloom_knee, 0.2);
+    assert_eq!(live.resolved().graphics.post_process().vignette, 0.4);
+    assert_eq!(live.resolved().graphics.post_process().lut_strength, 0.3);
+    assert_eq!(live.resolved().graphics.ambient_intensity(), 2.0);
     // The composite FXAA flag follows the final AA mode, not the authored one.
     assert_eq!(
-        live.resolved.graphics.post_process().fxaa,
+        live.resolved().graphics.post_process().fxaa,
         1.0,
         "TAA keeps the FXAA cleanup"
     );
     // The world's pristine config is kept as the baseline a live preset change
     // re-clamps from, untouched by the overrides.
-    assert_eq!(live.authored.graphics.anti_aliasing.mode, AaMode::Off);
-    assert!(!live.authored.graphics.ambient_occlusion.enabled);
+    assert_eq!(live.authored().graphics.anti_aliasing.mode, AaMode::Off);
+    assert!(!live.authored().graphics.ambient_occlusion.enabled);
 }
 
 // A weak-tier ceiling forces the world's authored effects off -- but only where
@@ -2318,9 +2345,9 @@ fn persisted_post_process_overrides_win_over_authored_config() {
 fn low_preset_forces_authored_effects_off_but_keeps_the_baseline() {
     use concinnity_core::components::{AaMode, IndirectTechnique};
 
-    let mut settings = crate::config::Settings::default();
+    let mut settings = concinnity_core::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Low);
-    let (state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::Integrated));
+    let (state, hooks) = recording_hooks_with(profile_at(GpuTier::Integrated));
     let mut world = effects_scene(effects(|e| {
         e.ambient_occlusion.enabled = true;
         e.reflections.screen_space = true;
@@ -2330,6 +2357,7 @@ fn low_preset_forces_authored_effects_off_but_keeps_the_baseline() {
         e.anti_aliasing.mode = AaMode::Taa;
     }))
     .build();
+    world.insert_resource(settings);
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
@@ -2344,21 +2372,21 @@ fn low_preset_forces_authored_effects_off_but_keeps_the_baseline() {
     }
 
     let live = settings_state(&world);
-    assert!(!live.resolved.graphics.ambient_occlusion.enabled);
-    assert!(!live.resolved.graphics.reflections.screen_space);
-    assert!(!live.resolved.graphics.reflections.ray_traced);
+    assert!(!live.resolved().graphics.ambient_occlusion.enabled);
+    assert!(!live.resolved().graphics.reflections.screen_space);
+    assert!(!live.resolved().graphics.reflections.ray_traced);
     assert_eq!(
-        live.resolved.graphics.indirect_lighting.technique,
+        live.resolved().graphics.indirect_lighting.technique,
         IndirectTechnique::Ibl
     );
-    assert_ne!(live.resolved.graphics.anti_aliasing.mode, AaMode::Taa);
+    assert_ne!(live.resolved().graphics.anti_aliasing.mode, AaMode::Taa);
     // Auto-exposure is cheap enough that even the weakest ceiling permits it, so
     // the world's authored choice stands.
-    assert!(live.resolved.graphics.exposure.auto);
+    assert!(live.resolved().graphics.exposure.auto);
     // The authored baseline survives the clamp, so an up-shift restores it.
-    assert!(live.authored.graphics.ambient_occlusion.enabled);
-    assert!(live.authored.graphics.reflections.screen_space);
-    assert_eq!(live.authored.graphics.anti_aliasing.mode, AaMode::Taa);
+    assert!(live.authored().graphics.ambient_occlusion.enabled);
+    assert!(live.authored().graphics.reflections.screen_space);
+    assert_eq!(live.authored().graphics.anti_aliasing.mode, AaMode::Taa);
 }
 
 // An explicit per-row override beats the preset ceiling: the user asked for this
@@ -2368,32 +2396,33 @@ fn low_preset_forces_authored_effects_off_but_keeps_the_baseline() {
 fn an_explicit_override_survives_the_preset_ceiling() {
     use concinnity_core::components::AaMode;
 
-    let mut settings = crate::config::Settings::default();
+    let mut settings = concinnity_core::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Low);
     settings.graphics.ssao = Some(true);
     settings.graphics.aa_mode = Some(AaMode::Taa);
-    let (_state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::Integrated));
+    let (_state, hooks) = recording_hooks_with(profile_at(GpuTier::Integrated));
     let mut world = effects_scene(effects(|e| {
         e.ambient_occlusion.enabled = true;
         e.reflections.screen_space = true;
         e.anti_aliasing.mode = AaMode::Taa;
     }))
     .build();
+    world.insert_resource(settings);
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
     let live = settings_state(&world);
     assert!(
-        live.resolved.graphics.ambient_occlusion.enabled,
+        live.resolved().graphics.ambient_occlusion.enabled,
         "the explicit SSAO choice wins"
     );
     assert_eq!(
-        live.resolved.graphics.anti_aliasing.mode,
+        live.resolved().graphics.anti_aliasing.mode,
         AaMode::Taa,
         "explicit AA mode wins"
     );
     assert!(
-        !live.resolved.graphics.reflections.screen_space,
+        !live.resolved().graphics.reflections.screen_space,
         "a row the user never touched still clamps under the ceiling"
     );
 }
@@ -2408,20 +2437,22 @@ fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
     let authored = effects(|e| {
         e.reflections.ray_traced = true;
     });
-    let mut settings = crate::config::Settings::default();
+    let mut settings = concinnity_core::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Auto);
 
-    let (clamped, hooks) = recording_hooks_with(settings.clone(), profile_at(GpuTier::MidDiscrete));
+    let (clamped, hooks) = recording_hooks_with(profile_at(GpuTier::MidDiscrete));
     let mut world = effects_scene(authored.clone()).build();
+    world.insert_resource(settings.clone());
     init_graphics(&mut world, hooks);
-    assert_eq!(settings_state(&world).quality_preset, QualityPreset::Auto);
+    assert_eq!(settings_state(&world).quality_preset(), QualityPreset::Auto);
     assert!(
         !lock(&clamped).init.as_ref().unwrap().rt_reflections_on,
         "the Auto -> High ceiling clamps RT off, silently"
     );
 
-    let (forced, hooks) = recording_hooks_with(settings, profile_at(GpuTier::MidDiscrete));
+    let (forced, hooks) = recording_hooks_with(profile_at(GpuTier::MidDiscrete));
     let mut world = effects_scene(authored).build();
+    world.insert_resource(settings);
     world.insert_resource(LaunchRequest {
         args: LaunchArgs {
             quality_preset: Some(QualityPreset::Ultra),
@@ -2431,7 +2462,7 @@ fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
     });
     init_graphics(&mut world, hooks);
     assert_eq!(
-        settings_state(&world).quality_preset,
+        settings_state(&world).quality_preset(),
         QualityPreset::Ultra,
         "the flag outranks the persisted Auto"
     );
@@ -2482,7 +2513,7 @@ fn a_forced_dlss_preset_reaches_the_backend_and_the_menu_unpersisted() {
     use concinnity_core::render::dlss::DlssPreset;
 
     const ROW_LABEL: AssetId = AssetId(700);
-    let mut saved_settings = crate::config::Settings::default();
+    let mut saved_settings = concinnity_core::settings::StoredSettings::default();
     saved_settings.graphics.dlss_preset = Some(DlssPreset::K);
     let launch = |forced: Option<DlssPreset>| {
         // An NVIDIA GPU, where the DLSS preset row is live.
@@ -2490,10 +2521,11 @@ fn a_forced_dlss_preset_reaches_the_backend_and_the_menu_unpersisted() {
             vendor: GpuVendor::Nvidia,
             ..GpuProfile::UNKNOWN
         };
-        let (state, hooks) = recording_hooks_with(saved_settings.clone(), nvidia);
+        let (state, hooks) = recording_hooks_with(nvidia);
         let mut b = effects_scene(Default::default());
         push_settings_row(&mut b, "dlss_preset", "next", ROW_LABEL);
         let mut world = b.build();
+        world.insert_resource(saved_settings.clone());
         world.insert_resource(LaunchRequest {
             dlss_preset: forced,
             ..Default::default()
@@ -2506,8 +2538,8 @@ fn a_forced_dlss_preset_reaches_the_backend_and_the_menu_unpersisted() {
     let menu = |world: &mut World| {
         let live = settings_state(world);
         let shown = (
-            live.resolved.graphics.dlss_preset,
-            live.persisted_graphics.dlss_preset,
+            live.resolved().graphics.dlss_preset,
+            live.persisted_graphics().dlss_preset,
         );
         (shown, label_text(world, ROW_LABEL))
     };
@@ -2527,21 +2559,8 @@ fn a_forced_dlss_preset_reaches_the_backend_and_the_menu_unpersisted() {
     );
 
     // Cycling the row steps from the forced value and saves the preset alone.
-    let saved: Arc<Mutex<Vec<crate::config::Settings>>> = Arc::default();
-    {
-        let log = Arc::clone(&saved);
-        let slot = world
-            .resource_mut::<crate::settings::system::SettingsSlot>()
-            .expect("SettingsSlot parked at init");
-        let state = slot.0.as_mut().expect("SettingsState in its slot");
-        state.settings_cache = Some(saved_settings.clone());
-        state.settings_writer = Some(crate::settings::system::writer::SettingsWriter::with_sink(
-            move |cfg| {
-                log.lock().unwrap().push(cfg.clone());
-                Ok(())
-            },
-        ));
-    }
+    use concinnity_core::settings::{SettingsRevision, StoredSettings};
+    world.insert_resource(saved_settings.clone());
     world.events_mut::<SettingCommand>().send(SettingCommand {
         setting: SettingKey::DlssPreset,
         op: SettingOp::Next,
@@ -2550,23 +2569,21 @@ fn a_forced_dlss_preset_reaches_the_backend_and_the_menu_unpersisted() {
     });
     {
         use concinnity_core::ecs::System;
-        crate::settings::system::SettingsSystem::new().step(&mut world.context());
+        concinnity_core::settings::system::SettingsSystem::new().step(&mut world.context());
     }
     assert_eq!(
-        settings_state(&world).resolved.graphics.dlss_preset,
+        settings_state(&world).resolved().graphics.dlss_preset,
         DlssPreset::Default
     );
     assert_eq!(label_text(&mut world, ROW_LABEL), "Default");
-    world
-        .resource_mut::<crate::settings::system::SettingsSlot>()
-        .unwrap()
-        .0
-        .as_mut()
-        .unwrap()
-        .settings_writer = None;
     let mut expected = saved_settings;
     expected.graphics.dlss_preset = Some(DlssPreset::Default);
-    assert_eq!(saved.lock().unwrap().as_slice(), [expected]);
+    assert_eq!(world.resource::<StoredSettings>(), Some(&expected));
+    assert!(
+        world
+            .resource::<SettingsRevision>()
+            .is_some_and(|r| r.0 > 0)
+    );
 }
 
 // A world launched without a screenshot request keeps the presented frame
@@ -2691,63 +2708,66 @@ fn an_embedded_surface_resource_reaches_the_backend() {
 // menu row.
 #[test]
 fn a_high_ceiling_never_enables_what_the_world_turned_off() {
-    let mut settings = crate::config::Settings::default();
+    let mut settings = concinnity_core::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Ultra);
-    let (_state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::HighDiscrete));
+    let (_state, hooks) = recording_hooks_with(profile_at(GpuTier::HighDiscrete));
     let mut world = effects_scene(effects(|e| {
         e.ambient_occlusion.enabled = false;
         e.reflections.screen_space = false;
         e.reflections.ray_traced = false;
     }))
     .build();
+    world.insert_resource(settings);
     init_graphics(&mut world, hooks);
 
     let live = settings_state(&world);
-    assert_eq!(live.quality_preset, QualityPreset::Ultra);
+    assert_eq!(live.quality_preset(), QualityPreset::Ultra);
     assert!(
-        !live.resolved.graphics.ambient_occlusion.enabled,
+        !live.resolved().graphics.ambient_occlusion.enabled,
         "a feature turned off stays off"
     );
-    assert!(!live.resolved.graphics.reflections.screen_space);
-    assert!(!live.resolved.graphics.reflections.ray_traced);
+    assert!(!live.resolved().graphics.reflections.screen_space);
+    assert!(!live.resolved().graphics.reflections.ray_traced);
 }
 
 // The other direction: a world that authors nothing takes the schema defaults,
 // so the top tier runs the whole stack without the world asking for it.
 #[test]
 fn the_top_tier_runs_the_default_stack_for_a_world_that_authors_nothing() {
-    let mut settings = crate::config::Settings::default();
+    let mut settings = concinnity_core::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Ultra);
-    let (_state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::HighDiscrete));
+    let (_state, hooks) = recording_hooks_with(profile_at(GpuTier::HighDiscrete));
     let mut world = scene_builder().build();
+    world.insert_resource(settings);
     init_graphics(&mut world, hooks);
 
     let live = settings_state(&world);
-    assert!(live.resolved.graphics.ambient_occlusion.enabled);
-    assert!(live.resolved.graphics.reflections.screen_space);
-    assert!(live.resolved.graphics.reflections.ray_traced);
-    assert_eq!(live.resolved.graphics.anti_aliasing.mode, AaMode::Taa);
+    assert!(live.resolved().graphics.ambient_occlusion.enabled);
+    assert!(live.resolved().graphics.reflections.screen_space);
+    assert!(live.resolved().graphics.reflections.ray_traced);
+    assert_eq!(live.resolved().graphics.anti_aliasing.mode, AaMode::Taa);
 }
 
 // And the tier below it clamps that same default stack down, which is how a
 // world that authors nothing ends up matching its GPU.
 #[test]
 fn a_low_tier_clamps_the_default_stack_off() {
-    let mut settings = crate::config::Settings::default();
+    let mut settings = concinnity_core::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Low);
-    let (_state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::Integrated));
+    let (_state, hooks) = recording_hooks_with(profile_at(GpuTier::Integrated));
     let mut world = scene_builder().build();
+    world.insert_resource(settings);
     init_graphics(&mut world, hooks);
 
     let live = settings_state(&world);
-    assert!(!live.resolved.graphics.ambient_occlusion.enabled);
-    assert!(!live.resolved.graphics.reflections.screen_space);
-    assert!(!live.resolved.graphics.reflections.ray_traced);
+    assert!(!live.resolved().graphics.ambient_occlusion.enabled);
+    assert!(!live.resolved().graphics.reflections.screen_space);
+    assert!(!live.resolved().graphics.reflections.ray_traced);
     assert_eq!(
-        live.resolved.graphics.indirect_lighting.technique,
+        live.resolved().graphics.indirect_lighting.technique,
         IndirectTechnique::Ibl
     );
-    assert_eq!(live.resolved.graphics.anti_aliasing.mode, AaMode::Fxaa);
+    assert_eq!(live.resolved().graphics.anti_aliasing.mode, AaMode::Fxaa);
 }
 
 // Under `Auto` the ceiling re-resolves from the detected tier each launch: a
@@ -2763,11 +2783,10 @@ fn auto_preset_shadow_ceiling_tracks_the_detected_tier() {
     ]
     .into_iter()
     .map(|tier| {
-        let (state, hooks) =
-            recording_hooks_with(crate::config::Settings::default(), profile_at(tier));
+        let (state, hooks) = recording_hooks_with(profile_at(tier));
         let mut world = scene_builder().build();
         init_graphics(&mut world, hooks);
-        assert_eq!(settings_state(&world).quality_preset, QualityPreset::Auto);
+        assert_eq!(settings_state(&world).quality_preset(), QualityPreset::Auto);
         lock(&state).init.as_ref().unwrap().shadows.map_size
     })
     .collect();
@@ -2793,7 +2812,7 @@ fn persisted_display_and_system_overrides_reach_the_backend() {
     use concinnity_core::components::{UpscaleQuality, UpscalerBackend, WindowMode};
     use concinnity_core::window::display_mode::DisplayMode;
 
-    let mut settings = crate::config::Settings::default();
+    let mut settings = concinnity_core::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Custom);
     settings.graphics.window_mode = Some(WindowMode::Fullscreen);
     settings.graphics.resolution = Some([1920, 1080, 60]);
@@ -2809,10 +2828,11 @@ fn persisted_display_and_system_overrides_reach_the_backend() {
     settings.graphics.show_fps = Some(false);
     settings.graphics.show_vram = Some(false);
 
-    let (state, hooks) = recording_hooks_with(settings, GpuProfile::UNKNOWN);
+    let (state, hooks) = recording_hooks();
     let mut b = effects_scene(Default::default());
     b.push(StreamingConfig::default());
     let mut world = b.build();
+    world.insert_resource(settings);
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
@@ -2834,25 +2854,25 @@ fn persisted_display_and_system_overrides_reach_the_backend() {
 
     let live = settings_state(&world);
     assert_eq!(
-        live.resolved.graphics.anti_aliasing.upscale_quality,
+        live.resolved().graphics.anti_aliasing.upscale_quality,
         UpscaleQuality::Performance
     );
     assert_eq!(
-        live.resolved.graphics.anti_aliasing.upscaler,
+        live.resolved().graphics.anti_aliasing.upscaler,
         UpscalerBackend::Fsr3
     );
-    assert!(live.resolved.graphics.anti_aliasing.upscaling);
-    assert!(live.resolved.graphics.display.hdr);
-    assert!(live.resolved.graphics.display.pq);
-    assert!(live.resolved.graphics.culling.two_pass_occlusion);
-    assert_eq!(live.resolved.texture_cap, 192);
-    assert_eq!(live.resolved.texture_budget, 8);
-    assert!(!live.resolved.perf_stats);
-    assert!(!live.resolved.show_fps);
-    assert!(!live.resolved.show_vram);
-    assert_eq!(live.window_args.mode, WindowMode::Fullscreen);
+    assert!(live.resolved().graphics.anti_aliasing.upscaling);
+    assert!(live.resolved().graphics.display.hdr);
+    assert!(live.resolved().graphics.display.pq);
+    assert!(live.resolved().graphics.culling.two_pass_occlusion);
+    assert_eq!(live.resolved().texture_cap, 192);
+    assert_eq!(live.resolved().texture_budget, 8);
+    assert!(!live.resolved().perf_stats);
+    assert!(!live.resolved().show_fps);
+    assert!(!live.resolved().show_vram);
+    assert_eq!(live.window().mode, WindowMode::Fullscreen);
     assert_eq!(
-        live.resolution,
+        live.resolution(),
         Some(DisplayMode {
             width: 1920,
             height: 1080,
@@ -2863,7 +2883,7 @@ fn persisted_display_and_system_overrides_reach_the_backend() {
     // rather than publishing an empty dropdown.
     assert!(
         !world
-            .resource::<crate::ecs::DisplayModes>()
+            .resource::<concinnity_core::ecs::DisplayModes>()
             .expect("mode list published for the dropdown")
             .0
             .is_empty()
@@ -2922,7 +2942,7 @@ fn label_color(world: &mut World, id: AssetId) -> [f32; 3] {
 fn settings_rows_show_their_live_values_at_init() {
     use concinnity_core::components::ShadowUpdate;
 
-    let mut settings = crate::config::Settings::default();
+    let mut settings = concinnity_core::settings::StoredSettings::default();
     settings.graphics.vsync = Some(true);
     settings.graphics.fps_cap = Some(60);
     settings.graphics.shadow_map_size = Some(4096);
@@ -2938,7 +2958,7 @@ fn settings_rows_show_their_live_values_at_init() {
     settings.graphics.ssgi_rays = Some(4);
 
     // A classified GPU, so the Auto preset resolves to a named tier below.
-    let (_state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::MidDiscrete));
+    let (_state, hooks) = recording_hooks_with(profile_at(GpuTier::MidDiscrete));
     let mut b = effects_scene(Default::default());
     // (key, verb, label id) for a spread across every value-label arm: booleans,
     // discrete numeric levels, enums, a quality toggle, and a cycle dropdown.
@@ -2970,6 +2990,7 @@ fn settings_rows_show_their_live_values_at_init() {
         push_settings_row(&mut b, key, verb, label);
     }
     let mut world = b.build();
+    world.insert_resource(settings);
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
@@ -3010,12 +3031,12 @@ fn settings_rows_show_their_live_values_at_init() {
     // the HitRegions are drained right after init.
     let live = settings_state(&world);
     assert_eq!(
-        live.cycle_value_labels.get(&SettingKey::SsgiRays),
-        Some(&AssetId(120))
+        live.cycle_value_label(SettingKey::SsgiRays),
+        Some(AssetId(120))
     );
     assert_eq!(
-        live.cycle_value_labels.get(&SettingKey::Vsync),
-        Some(&AssetId(100))
+        live.cycle_value_label(SettingKey::Vsync),
+        Some(AssetId(100))
     );
 }
 
@@ -3025,11 +3046,11 @@ fn settings_rows_show_their_live_values_at_init() {
 // recover the EV to place the handle.
 #[test]
 fn slider_rows_sync_their_handle_and_label_to_the_live_value() {
-    let mut settings = crate::config::Settings::default();
+    let mut settings = concinnity_core::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Custom);
     settings.graphics.exposure_ev = Some(0.0);
     settings.graphics.vignette = Some(0.5);
-    let (_state, hooks) = recording_hooks_with(settings, GpuProfile::UNKNOWN);
+    let (_state, hooks) = recording_hooks();
 
     let mut b = effects_scene(Default::default());
     // A drag region spanning x = 0..100 with a 10-wide handle: the handle travels
@@ -3067,6 +3088,7 @@ fn slider_rows_sync_their_handle_and_label_to_the_live_value() {
         ..Default::default()
     });
     let mut world = b.build();
+    world.insert_resource(settings);
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
@@ -3086,18 +3108,13 @@ fn slider_rows_sync_their_handle_and_label_to_the_live_value() {
 
     // The captured rows are handed to SettingsSystem for the live drag drain.
     let live = settings_state(&world);
-    let keys: Vec<SettingKey> = live.sliders.iter().map(|s| s.key).collect();
-    assert!(keys.contains(&SettingKey::Exposure));
-    assert!(keys.contains(&SettingKey::Vignette));
-    let exposure = live
-        .sliders
+    let rows = live.slider_rows();
+    assert!(rows.iter().any(|(k, _)| *k == SettingKey::Vignette));
+    let exposure = rows
         .iter()
-        .find(|s| s.key == SettingKey::Exposure)
-        .unwrap();
-    assert_eq!(
-        (exposure.track_x, exposure.track_w, exposure.handle_w),
-        (0.0, 100.0, 10.0)
-    );
+        .find(|(k, _)| *k == SettingKey::Exposure)
+        .expect("the exposure slider is captured");
+    assert_eq!(exposure.1, [0.0, 100.0, 10.0]);
 }
 
 // Every slider this system owns recovers a live value, so no row silently shows
@@ -3164,7 +3181,7 @@ fn every_owned_slider_key_recovers_a_live_value() {
             "{key} never synced to a live value"
         );
     }
-    assert_eq!(settings_state(&world).sliders.len(), keys.len());
+    assert_eq!(settings_state(&world).slider_rows().len(), keys.len());
 }
 
 // Each Controls-tab rebind row's value label is synced to the live bound key
@@ -3175,12 +3192,12 @@ fn rebind_rows_show_their_bound_keys_at_init() {
     use concinnity_core::components::InputKey;
     use concinnity_core::input::keymap::{Bindable, KeyMap};
 
-    let mut settings = crate::config::Settings::default();
+    let mut settings = concinnity_core::settings::StoredSettings::default();
     settings.controls.keymap = Some(KeyMap {
         forward: InputKey::Up,
         ..Default::default()
     });
-    let (_state, hooks) = recording_hooks_with(settings, GpuProfile::UNKNOWN);
+    let (_state, hooks) = recording_hooks();
 
     let mut b = scene_builder();
     for (i, action) in Bindable::ALL.iter().enumerate() {
@@ -3201,6 +3218,7 @@ fn rebind_rows_show_their_bound_keys_at_init() {
         );
     }
     let mut world = b.build();
+    world.insert_resource(settings);
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
@@ -3217,9 +3235,9 @@ fn rebind_rows_show_their_bound_keys_at_init() {
         );
     }
     let live = settings_state(&world);
-    assert_eq!(live.rebind_rows.len(), Bindable::ALL.len());
+    assert_eq!(live.rebind_row_count(), Bindable::ALL.len());
     assert_eq!(
-        live.keymap.forward,
+        live.keymap().forward,
         InputKey::Up,
         "the persisted map is the live one"
     );
@@ -3256,7 +3274,7 @@ fn scroll_panel_rows_clip_their_elements_to_the_panel_band() {
     assert!(!gs.failed);
 
     let clips = &world
-        .resource::<crate::gfx::overlay::OverlayAssets>()
+        .resource::<concinnity_core::render::overlay::OverlayAssets>()
         .expect("OverlayAssets parked at init")
         .clip_rects;
     let band = [10.0, 20.0, 300.0, 400.0];
@@ -3283,7 +3301,7 @@ fn a_capability_gated_row_grays_out_its_whole_scroll_row() {
     use concinnity_core::components::{ScrollPanel, ScrollRow};
 
     let (state, hooks) = recording_hooks();
-    state.lock().unwrap().caps = backend::DeviceCapabilities {
+    state.lock().caps = backend::DeviceCapabilities {
         selectable_upscaler: false,
         ..backend::DeviceCapabilities::ALL
     };
@@ -3363,7 +3381,7 @@ fn the_dlss_preset_row_follows_whether_dlss_is_selectable() {
     let preset_row_disabled = |vendor| {
         let mut profile = GpuProfile::UNKNOWN;
         profile.vendor = vendor;
-        let (_, hooks) = recording_hooks_with(crate::config::Settings::default(), profile);
+        let (_, hooks) = recording_hooks_with(profile);
         let mut b = effects_scene(Default::default());
         push_settings_row(&mut b, "dlss_preset", "next", AssetId(600));
         let mut world = b.build();
@@ -3390,7 +3408,7 @@ fn the_dlss_preset_row_follows_whether_dlss_is_selectable() {
 }
 
 // The muted gray a disabled settings row is recolored to.
-const DISABLED: [f32; 3] = crate::settings::system::rows::DISABLED_ROW_COLOR;
+const DISABLED: [f32; 3] = concinnity_core::settings::system::DISABLED_ROW_COLOR;
 
 // The master "Display performance stats" toggle grays its two sub-rows when it
 // is off, and the Resolution row grays outside fullscreen (windowed sizes come
@@ -3399,9 +3417,9 @@ const DISABLED: [f32; 3] = crate::settings::system::rows::DISABLED_ROW_COLOR;
 fn master_toggles_gray_the_rows_they_govern() {
     use concinnity_core::components::{ScrollPanel, ScrollRow};
 
-    let mut settings = crate::config::Settings::default();
+    let mut settings = concinnity_core::settings::StoredSettings::default();
     settings.graphics.perf_stats = Some(false);
-    let (_state, hooks) = recording_hooks_with(settings, GpuProfile::UNKNOWN);
+    let (_state, hooks) = recording_hooks();
 
     let mut b = scene_builder();
     push_settings_row(&mut b, "show_fps", "next", AssetId(700));
@@ -3419,6 +3437,7 @@ fn master_toggles_gray_the_rows_they_govern() {
         ..Default::default()
     });
     let mut world = b.build();
+    world.insert_resource(settings);
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
@@ -3440,8 +3459,8 @@ fn master_toggles_gray_the_rows_they_govern() {
     );
     // The captured labels carry the authored colors the restore reads back.
     let live = settings_state(&world);
-    assert!(live.perf_sub_row_labels.contains(&(AssetId(700), LIT)));
-    assert!(live.resolution_row_labels.contains(&(AssetId(702), LIT)));
+    assert!(live.perf_sub_row_labels().contains(&(AssetId(700), LIT)));
+    assert!(live.resolution_row_labels().contains(&(AssetId(702), LIT)));
 }
 
 // A w x h font atlas in the compiled payload format, carrying one glyph so the
@@ -3520,7 +3539,7 @@ fn text_naming_no_font_falls_back_to_the_built_in_face() {
 
     let labels: Vec<TextLabel> = world.context().query::<TextLabel>().cloned().collect();
     let overlay = world
-        .resource::<crate::gfx::overlay::OverlayAssets>()
+        .resource::<concinnity_core::render::overlay::OverlayAssets>()
         .expect("OverlayAssets parked at init");
     let face = overlay
         .fonts
@@ -3576,7 +3595,7 @@ fn a_world_whose_text_names_its_fonts_registers_no_fallback() {
     assert!(!gs.failed);
 
     let overlay = world
-        .resource::<crate::gfx::overlay::OverlayAssets>()
+        .resource::<concinnity_core::render::overlay::OverlayAssets>()
         .expect("OverlayAssets parked at init");
     assert_eq!(overlay.fonts.len(), 1);
     assert!(overlay.fonts.resolve(None).is_none());
@@ -3626,7 +3645,7 @@ fn fonts_and_sprite_textures_share_the_text_atlas_pool() {
     drop(s);
 
     let overlay = world
-        .resource::<crate::gfx::overlay::OverlayAssets>()
+        .resource::<concinnity_core::render::overlay::OverlayAssets>()
         .expect("OverlayAssets parked at init");
     // A font's handle IS its atlas slot, so the pool's leading slots are the
     // fonts in handle order.
@@ -3671,7 +3690,7 @@ fn a_sprite_with_an_unknown_texture_keeps_its_tint() {
     );
     assert!(
         world
-            .resource::<crate::gfx::overlay::OverlayAssets>()
+            .resource::<concinnity_core::render::overlay::OverlayAssets>()
             .unwrap()
             .sprite_texture_slots
             .is_empty()
@@ -3716,7 +3735,7 @@ fn a_malformed_texture_payload_fails_init() {
 // bytes are kept for the streamer to re-decode.
 #[test]
 fn a_deferred_texture_slot_decodes_to_a_placeholder() {
-    use std::collections::HashSet;
+    use hashbrown::HashSet;
 
     let mut b = scene_builder();
     b.push_resource(
@@ -3767,7 +3786,8 @@ fn a_deferred_texture_slot_decodes_to_a_placeholder() {
 // slot keeps an empty entry so the streamer's slots stay dense.
 #[test]
 fn a_cook_only_texture_slot_stays_a_placeholder() {
-    use std::collections::{BTreeSet, HashSet};
+    use hashbrown::HashSet;
+    use std::collections::BTreeSet;
 
     let mut b = scene_builder();
     b.push_resource(
@@ -4311,7 +4331,7 @@ fn skinned_mesh_world_uploads_geometry_and_publishes_poses() {
     assert_eq!(rigs, vec![0], "only the capsule mesh gets a character rig");
     // The name index the debug animation commands address a mesh by.
     let names = ctx
-        .resource::<crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex>()
+        .resource::<concinnity_core::animation::skinned_mesh_map::SkinnedMeshNameIndex>()
         .expect("name index published before AnimationSystem inits");
     assert_eq!(names.0.get(&RIGGED).map(|h| h.0), Some(0));
     assert_eq!(names.0.get(&PLAIN).map(|h| h.0), Some(1));
@@ -4358,7 +4378,7 @@ fn skinned_instance_reserves_get_their_own_vertex_regions() {
     );
     assert_eq!(
         world
-            .resource::<crate::ecs::ActiveRenderQueues>()
+            .resource::<concinnity_core::render::queues::ActiveRenderQueues>()
             .and_then(|slot| slot.0.as_ref())
             .expect("graphics init publishes the recording surfaces")
             .slots
@@ -4755,7 +4775,7 @@ fn skinned_lod_alternates_rebase_onto_their_slot_vertex_region() {
     );
     assert_eq!(
         world
-            .resource::<crate::ecs::ActiveRenderQueues>()
+            .resource::<concinnity_core::render::queues::ActiveRenderQueues>()
             .and_then(|slot| slot.0.as_ref())
             .expect("graphics init publishes the recording surfaces")
             .slots
@@ -4809,7 +4829,7 @@ fn reparent_request_with_an_unresolved_child_is_skipped() {
             parent: Some(PROP.into()),
         });
     }
-    let mut spawn = crate::spawn::SpawnSystem::new();
+    let mut spawn = concinnity_core::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
 
     let child = entity_named(&mut world, PROP);
@@ -4849,7 +4869,7 @@ fn a_spawn_naming_an_unknown_template_is_skipped() {
             },
         );
     }
-    let mut spawn = crate::spawn::SpawnSystem::new();
+    let mut spawn = concinnity_core::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
 
     assert!(
@@ -4912,7 +4932,7 @@ fn a_spawn_naming_a_skinned_template_takes_the_instance_pool_path() {
             },
         );
     }
-    let mut spawn = crate::spawn::SpawnSystem::new();
+    let mut spawn = concinnity_core::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
 
     assert!(
@@ -5073,7 +5093,7 @@ fn story_stage_images_are_resident_before_any_sprite_references_them() {
         "every stage image is decoded into the pool ahead of the swap"
     );
     let overlay = world
-        .resource::<crate::gfx::overlay::OverlayAssets>()
+        .resource::<concinnity_core::render::overlay::OverlayAssets>()
         .unwrap();
     for slot in &slots {
         assert!(

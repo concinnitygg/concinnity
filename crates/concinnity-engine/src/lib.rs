@@ -17,10 +17,6 @@ mod heap;
 #[cfg(test)]
 mod bench;
 
-// The access-declaration mask builders, reached crate-wide as
-// `crate::component_mask!` / `crate::resource_mask!`.
-pub(crate) use ecs::access_ids::{component_mask, resource_mask};
-
 pub mod app;
 // Flat entry point for a shipped player: classify the path a world sits at and
 // run it. The runtime bin calls `concinnity_engine::run_from` rather than
@@ -57,10 +53,6 @@ pub(crate) mod animation;
 // through `ecs::animation_system_mut`.
 pub use animation::{AnimationSystem, GraphStateReport};
 pub(crate) mod cbor_file;
-pub(crate) mod config;
-/// Camera controllers: the internal systems that turn input into camera and
-/// player motion. `pub` so the editor crate can name the first-person controller.
-pub mod controller;
 /// Crash reporting: panic hook, native fault capture, local report files.
 /// `pub` so the binaries install the hooks and the editor composes the
 /// recent-log ring layer into its tracing subscriber.
@@ -73,9 +65,7 @@ pub(crate) mod audio;
 // The standalone startup-error window, shown when a fatal startup failure
 // happens before any world exists.
 pub(crate) mod error_screen;
-pub mod frame_report;
 pub mod gfx;
-pub(crate) mod hud;
 pub(crate) mod input;
 pub mod live_edit;
 // The rigid-body simulation driver: builds a `concinnity_core::physics::Simulation`
@@ -94,8 +84,4 @@ pub(crate) mod behavior;
 /// stream). `pub` so the editor's in-memory build path can construct the tables it
 /// inserts into the world, mirroring the shipped-runtime loader.
 pub mod resource;
-// Runtime entity churn (Lifetime/Spawner ticks + spawn/despawn/reparent
-// drains), scheduled before GraphicsSystem.
-pub(crate) mod spawn;
 pub(crate) mod story;
-pub(crate) mod ui;

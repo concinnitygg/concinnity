@@ -4,11 +4,10 @@ use crate::camera_track::CameraTrackStatus;
 use crate::camera_track::timeline::{self, Key};
 use crate::components::{Camera3D, CameraTrack, CameraTurnKey};
 use crate::ecs::{Entity, MenuActive, PipelineContext, SimTiming, StepResult, System};
-use crate::math::{quat_mul, quat_normalize, quat_rotate, rem_euclid, vec3};
+use crate::math::{quat_mul, quat_normalize, quat_rotate, shortest_turn, vec3};
 use crate::planet::{FrameRebases, RebaseCursor};
 use crate::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
 
-const HALF_TURN_DEG: f32 = 180.0;
 const FULL_TURN_DEG: f32 = 360.0;
 
 /// Drives the world's [`Camera3D`] along its declared
@@ -104,7 +103,7 @@ impl CameraTrackSystem {
         for leg in &self.turn_legs {
             let target_yaw = leg
                 .yaw_deg
-                .map_or(yaw, |to| yaw + shortest_turn_deg(yaw, to));
+                .map_or(yaw, |to| yaw + shortest_turn(yaw, to, FULL_TURN_DEG));
             let target_pitch = leg.pitch_deg.unwrap_or(pitch);
             let sweep = (target_yaw - yaw).abs().max((target_pitch - pitch).abs());
             let seconds = turn_seconds(leg, sweep);
@@ -228,11 +227,6 @@ fn turn_seconds(leg: &CameraTurnKey, sweep_deg: f32) -> f32 {
     } else {
         0.0
     }
-}
-
-// The signed turn from `from` to `to` the short way round, in -180..=180.
-fn shortest_turn_deg(from: f32, to: f32) -> f32 {
-    rem_euclid(to - from + HALF_TURN_DEG, FULL_TURN_DEG) - HALF_TURN_DEG
 }
 
 #[cfg(test)]

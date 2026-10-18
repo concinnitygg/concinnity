@@ -27,6 +27,7 @@ use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::feature_plan::{BackendFacts, FeaturePlan};
 use concinnity_core::render::post::reflection_path::ReflectionPath;
 use concinnity_core::render::post::rt_reflections;
 use concinnity_core::render::render_graph::{
@@ -73,35 +74,26 @@ impl DxContext {
         let slots = self.quality_slots;
 
         // RT is gated on the GPU reporting the DXR 1.1 tier: a non-DXR GPU cannot
-        // build the acceleration structure. The resolved settings never ask for
-        // it there; a request that does is reported and refused.
-        let rt_settings = g.rt_reflections().filter(|_| self.hw.rt_capable);
+        // build the acceleration structure. TAA resources stay present while the
+        // built upscaler consumes the velocity pre-pass; the TAA resolve is then
+        // dropped from the graph. The SSR resources' `resolve` half is built only
+        // when SSR itself is authored.
+        let plan = FeaturePlan::resolve(
+            g,
+            BackendFacts {
+                rt_capable: self.hw.rt_capable,
+                upscaling: self.upscale.backend.is_some(),
+            },
+        );
+        let rt_settings = plan.rt;
         let desired_rt = rt_settings.is_some();
-        if g.rt_reflections().is_some() && !self.hw.rt_capable {
-            tracing::error!(
-                "the resolved settings asked for ray-traced reflections the device cannot run; \
-                 the capability probe and the backend disagree"
-            );
-        }
-
-        let desired_ssr = g.ssr().is_some();
-        let desired_ssgi = g.ssgi().is_some();
-        let desired_ssao = g.ssao().is_some();
-        let desired_ae = g.auto_exposure().is_some();
-        // TAA resources are forced present while temporal upscaling is active
-        // (the upscaler consumes the velocity pre-pass); the TAA resolve is then
-        // dropped from the graph. Mirrors the init `taa_enabled` derivation.
-        let upscale_on = self.upscale.backend.is_some();
-        let desired_taa = g.taa() || upscale_on;
-
-        // The SSR pre-pass resources (`SsrResources`) exist whenever SSR, SSGI,
-        // or RT is on (SSGI / RT reuse the SSR resolve's G-buffer plumbing); its
-        // `resolve` half is built only when SSR itself is authored. The unified
-        // G-buffer pre-pass is needed by any screen-space consumer (RT samples
-        // its normal+depth and roughness). Mirrors the init `ssr_prepass_present`
-        // / `gbuffer_enabled` gates.
-        let ssr_needed = desired_ssr || desired_ssgi || desired_rt;
-        let gbuffer_needed = ssr_needed || desired_ssao || desired_taa;
+        let desired_ssr = plan.ssr;
+        let desired_ssgi = plan.ssgi;
+        let desired_ssao = plan.ssao;
+        let desired_ae = plan.auto_exposure;
+        let desired_taa = plan.temporal;
+        let ssr_needed = plan.ssr_resources;
+        let gbuffer_needed = plan.gbuffer;
 
         // Unified G-buffer pre-pass (shared dependency): build it before any
         // consumer that samples it. Kept alive once built (a later toggle-off of
@@ -339,7 +331,7 @@ impl DxContext {
             reactive_mask: true,
             composite_scene_fixed: false,
         };
-        self.gates = FeatureGates::new(graphics, &self.build_status(), traits);
+        self.state.planner.gates = FeatureGates::new(graphics, &self.build_status(), traits);
     }
 
     fn build_status(&self) -> BuildStatus {

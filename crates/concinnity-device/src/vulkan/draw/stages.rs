@@ -2,17 +2,12 @@
 //! the per-frame state `record_frame` advances around its graph dispatch.
 
 use ash::vk;
-use concinnity_core::components;
-use concinnity_core::planet::Rebase;
 use concinnity_core::profile;
 use concinnity_core::profile::PassTiming;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::pass_timing;
-use concinnity_core::render::shadow_schedule::{CascadeCamera, CascadeLight};
-use concinnity_core::render::view_history::ViewFrame;
 
-use super::upload_shadow_uniforms;
 use crate::gpu_wait::GpuWait;
 use crate::vulkan::context::VkContext;
 use crate::vulkan::error::map_vk_result;
@@ -29,8 +24,8 @@ impl VkContext {
         // doesn't loop, and the previous pipelines stay live so the session keeps rendering; only a
         // device failure propagates. Wait for the GPU to drain first so swapping pipelines out from
         // under in-flight command buffers is safe. Mirrors the DirectX `apply_pending_rebuilds`.
-        if self.shader_reload_requested() {
-            self.clear_shader_reload_flag();
+        if self.hot_reload.requested() {
+            self.hot_reload.clear();
             self.wait_idle();
             match self.reload_shaders() {
                 Ok(()) => tracing::info!("hot-reload: shader pipelines rebuilt"),
@@ -123,7 +118,7 @@ impl VkContext {
         // this frame's slot fence wait, before `record_frame` -- so any cube it
         // installs (a binding-8 rewrite + `probe.set.count` bump) is picked up by this
         // frame's `record_frame` ProbeSet upload + rendering. Non-fatal.
-        self.bake_pending_probes();
+        self.bake_pending_probes(elapsed);
 
         // Auto-exposure: step the EMA from a previous frame's GPU
         // measurement before any pipeline reads `post_process.exposure`.
@@ -190,7 +185,7 @@ impl VkContext {
             // One [value, availability] pair per query slot (TYPE_64 +
             // WITH_AVAILABILITY -> two u64 per query; ash uses the element size as
             // the stride and the slice length as the query count).
-            let mut results = vec![[0u64; 2]; pass_timing::SLOTS_PER_FRAME];
+            let mut results = [[0u64; 2]; pass_timing::SLOTS_PER_FRAME];
             // SAFETY: a property query on a live handle; it only reads.
             let res = unsafe {
                 device.get_query_pool_results(
@@ -235,7 +230,7 @@ impl VkContext {
         // `draw_calls` through `inc_draw_calls` (interior-mutability since
         // the encoders run through `&self`); the rest is filled here from
         // context state.
-        let counts = crate::object_counts::object_counts(
+        let counts = concinnity_core::render::object_counts::object_counts(
             self.state.draw.objects.len(),
             self.instanced.clusters.iter().map(|c| c.instances.len()),
             self.state.skinned.draw_objects.iter().map(|o| o.visible),
@@ -388,135 +383,6 @@ impl VkContext {
 
         self.current_frame = (self.current_frame + 1) % self.frames_in_flight;
         Ok(())
-    }
-
-    // Cascade light VPs and splits for this camera, the shadow UBO upload, and the spot schedule.
-    pub(super) fn update_shadow_schedule(
-        &mut self,
-        extent: vk::Extent2D,
-        cam_pos: [f32; 3],
-        fov_y_radians: f32,
-        near: f32,
-        view_distance: Option<f32>,
-        frame_idx: usize,
-    ) {
-        // Recompute cascade VPs + splits from the current camera + light, and
-        // push the result to the shadow UBO so both passes see the same data.
-        let cascade_aspect = if extent.height == 0 {
-            1.0
-        } else {
-            extent.width as f32 / extent.height as f32
-        };
-        if self.shadow.enabled() {
-            let camera = CascadeCamera {
-                view: self.state.view.matrix,
-                position: cam_pos,
-                fov_y_rad: fov_y_radians,
-                aspect: cascade_aspect,
-                near,
-                view_distance,
-            };
-            let shadow = &mut self.shadow;
-            let light = CascadeLight {
-                dir_to_source: shadow.light_dir,
-                map_size: shadow.map_size,
-            };
-            // Skipped cascades keep the VP + depth their slice was last rendered
-            // with; encode_shadow_pass re-rasterizes only the masked slices.
-            shadow.render_mask =
-                shadow
-                    .scheduler
-                    .refresh(&mut shadow.uniforms, &shadow.cadence, light, camera);
-            upload_shadow_uniforms(&self.shadow.ubos[frame_idx], &self.shadow.uniforms);
-        }
-
-        // Spot shadow refresh schedule. Prime-then-round-robin over the slices,
-        // so N shadowed spots cost one extra depth render per frame rather than
-        // N. No uniform refresh: the projections are static and were baked at
-        // init. A no-op (mask stays 0) when the world has no shadowed spot.
-        self.spot_shadow.advance(matches!(
-            self.shadow.cadence.update,
-            components::ShadowUpdate::EveryFrame
-        ));
-    }
-
-    // Drop every accumulated temporal history for a frame that does not
-    // continue the last: the TAA and SSGI rings, the camera half of the motion
-    // history, the Hi-Z pyramid the occlusion test would reproject the old view
-    // through, and the upscaler's history on its next dispatch.
-    pub(in crate::vulkan) fn reset_temporal_history(&mut self) {
-        self.cull.hiz_valid = false;
-        if let Some(taa) = &mut self.taa {
-            taa.pass.reset_history();
-        }
-        if let Some(ssgi) = &mut self.ssgi {
-            ssgi.reset_history();
-        }
-        if let Some(gb) = &mut self.gbuffer {
-            gb.view_history.reset();
-        }
-        if let Some(upscaler) = &self.upscale {
-            upscaler.request_history_reset();
-        }
-    }
-
-    // Carry the temporal history into the frame the world moved to: the
-    // camera half of the motion history, the view-projection the occlusion
-    // test reprojects last frame's pyramid through, and the per-object
-    // transforms, which are distrusted for one frame.
-    pub(in crate::vulkan) fn rebase_temporal_history(&mut self, rebase: &Rebase) {
-        if let Some(gb) = &mut self.gbuffer {
-            gb.view_history.rebase(rebase);
-        }
-        self.cull.hiz_prev_view_proj = rebase.reproject(self.cull.hiz_prev_view_proj);
-        self.state.model_history.get_mut().forget();
-    }
-
-    // History the next frame reads: TAA jitter and ring, G-buffer VP, Hi-Z VP and validity.
-    pub(super) fn advance_temporal_state(&mut self, cur: ViewFrame) {
-        // The Hi-Z reduction that feeds next frame's cull is the graph's terminal
-        // `HizFinal` pass, so it has already been recorded; `hiz_valid` only
-        // tracks whether a pyramid at the current resolution now exists.
-
-        // The cascade slices rest sampled (SHADER_READ_ONLY_OPTIMAL) between
-        // frames; next frame's Shadow producer barrier (graph-driven) performs
-        // the SHADER_READ_ONLY -> DEPTH_STENCIL_ATTACHMENT reset over every
-        // cascade layer, so no inline end-of-frame restore is needed here.
-
-        // Advance the TAA jitter sequence and the accumulation ring that
-        // validates next frame's history. The motion-vector temporal state lives
-        // on the unified G-buffer (advanced below); TAA only consumes its
-        // velocity view.
-        if let Some(taa) = &mut self.taa {
-            taa.taa_frame = taa.taa_frame.wrapping_add(1);
-            // Step the accumulation ring in lockstep: what this frame wrote is
-            // next frame's history.
-            taa.pass.advance();
-        }
-        // What the SSGI accumulation wrote this frame is next frame's history.
-        if let Some(ssgi) = &mut self.ssgi {
-            ssgi.advance();
-        }
-
-        // Advance the unified G-buffer's velocity-channel temporal state in
-        // lockstep with TAA's: this frame's un-jittered VP, clock and camera
-        // position become the previous frame next frame reprojects to. The
-        // per-object half of the same history was snapshotted on the GPU by the
-        // pre-pass's own dispatch. Owned by `GbufferResources` so the motion
-        // vector works for any consumer (TAA or FSR), exactly mirroring the TAA
-        // advance above.
-        if let Some(gb) = &mut self.gbuffer {
-            gb.view_history.advance(cur);
-        }
-
-        // Advance Hi-Z temporal state: this frame's un-jittered VP becomes next
-        // frame's occlusion-test projection, and the pyramid the graph's
-        // `HizFinal` pass just wrote is now valid for next frame's cull (kept
-        // independent of TAA, which may be off while Hi-Z is on).
-        if self.cull.hiz.is_some() {
-            self.cull.hiz_prev_view_proj = cur.vp;
-            self.cull.hiz_valid = true;
-        }
     }
 
     pub(super) fn finish_frame_stats(&self) {

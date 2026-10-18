@@ -66,15 +66,7 @@ impl VkLightCull {
         frame: usize,
         records: vk::DescriptorBufferInfo,
     ) {
-        SetWrites::new(self.sets[frame])
-            .buffer(
-                PROBE_RECORDS_BINDING,
-                vk::DescriptorType::STORAGE_BUFFER,
-                records.buffer,
-                records.offset,
-                records.range,
-            )
-            .apply(device);
+        write_probe_records(device, self.sets[frame], records);
     }
 
     // Destroy every owned GPU object. Called from `VkContext::drop` after
@@ -108,6 +100,23 @@ pub(in crate::vulkan) struct LightCullInputs {
     pub lights: vk::Buffer,
     pub lists: vk::Buffer,
     pub probe_records: Option<vk::Buffer>,
+}
+
+// Point a binning set's probe records at `records`.
+pub(in crate::vulkan) fn write_probe_records(
+    device: &VkDevice,
+    set: vk::DescriptorSet,
+    records: vk::DescriptorBufferInfo,
+) {
+    SetWrites::new(set)
+        .buffer(
+            PROBE_RECORDS_BINDING,
+            vk::DescriptorType::STORAGE_BUFFER,
+            records.buffer,
+            records.offset,
+            records.range,
+        )
+        .apply(device);
 }
 
 // Point a binning set (one allocated with `VkLightCull::set_layout`) at `inputs`.

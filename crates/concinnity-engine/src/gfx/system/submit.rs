@@ -5,7 +5,7 @@
 
 use concinnity_core::ecs::StepResult;
 use concinnity_core::profile::RenderStats;
-use concinnity_core::render::backend::{FrameParams, RenderBackend};
+use concinnity_core::render::backend::{FrameParams, RenderBackend, SkinnedFrame};
 use concinnity_core::render::error;
 use concinnity_core::render::ops::ReplayOutcome;
 use concinnity_core::render::snapshot::{RenderSnapshot, SceneOp};
@@ -77,15 +77,11 @@ pub(crate) fn submit(
         backend.update_models(&snap.models);
     }
 
-    for (skinned_index, joints) in snap.poses.iter() {
-        backend.update_skinned_pose(skinned_index, joints);
-    }
-    for (skinned_index, weights) in snap.morphs.iter() {
-        backend.update_morph_weights(skinned_index, weights);
-    }
-    if !snap.skinned_models.is_empty() {
-        backend.update_skinned_models(&snap.skinned_models);
-    }
+    backend.update_skinned(SkinnedFrame {
+        poses: &snap.poses,
+        morphs: &snap.morphs,
+        models: &snap.skinned_models,
+    });
 
     // Scene fade / visibility effects recorded during extraction, replayed in
     // record order (a mid-fade scene switch fades then swaps visibility).
@@ -193,8 +189,8 @@ pub(crate) fn micros_since(start: Instant) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::mock_backend::{Call, recording_backend};
     use concinnity_core::components::DirectionalLight;
+    use concinnity_core::render::backend::recording::{Call, recording_backend};
     use concinnity_core::render::lights::DirectionalLightSet;
 
     fn pushed_lights(directional: Option<DirectionalLightSet>) -> Vec<Call> {
@@ -202,7 +198,7 @@ mod tests {
         let mut snap = RenderSnapshot::default();
         snap.frame.directional = directional;
         submit(&mut FramePolicy::default(), &mut snap, &mut backend);
-        let calls = state.lock().unwrap().calls.clone();
+        let calls = state.lock().calls.clone();
         calls
             .into_iter()
             .filter(|c| matches!(c, Call::UpdateDirectionalLights(_)))
@@ -211,7 +207,7 @@ mod tests {
 
     fn draw_failing_with(e: error::RenderError) -> SubmitOutcome {
         let (state, mut backend) = recording_backend();
-        state.lock().unwrap().fail_draw = Some(e);
+        state.lock().fail_draw = Some(e);
         submit(
             &mut FramePolicy::default(),
             &mut RenderSnapshot::default(),
@@ -225,8 +221,8 @@ mod tests {
     fn submit_timed(draw: std::time::Duration, gpu_wait_us: u32) -> (RenderStats, u32) {
         let (state, mut backend) = recording_backend();
         {
-            let mut s = state.lock().unwrap();
-            s.draw_duration = draw;
+            let mut s = state.lock();
+            s.on_draw = Some(Box::new(move || std::thread::sleep(draw)));
             s.render_stats.gpu_wait_us = gpu_wait_us;
         }
         let started = Instant::now();
@@ -297,14 +293,14 @@ mod tests {
     // fails with `fail` when one is given.
     fn captured(capture: Option<&str>, fail: Option<error::RenderError>) -> Vec<Option<String>> {
         let (state, mut backend) = recording_backend();
-        state.lock().unwrap().fail_draw = fail;
+        state.lock().fail_draw = fail;
         let mut snap = RenderSnapshot {
             capture: capture.map(str::to_string),
             ..Default::default()
         };
         submit(&mut FramePolicy::default(), &mut snap, &mut backend);
         assert!(snap.capture.is_none(), "a capture is taken once");
-        let calls = state.lock().unwrap().calls.clone();
+        let calls = state.lock().calls.clone();
         assert!(
             !calls.iter().any(|c| matches!(c, Call::Screenshot(_))),
             "a frame capture never takes the blocking screenshot"
@@ -334,7 +330,7 @@ mod tests {
     #[test]
     fn a_dropped_frame_does_not_carry_its_capture_to_the_next() {
         let (state, mut backend) = recording_backend();
-        state.lock().unwrap().fail_draw = Some(error::RenderError::Other("draw".into()));
+        state.lock().fail_draw = Some(error::RenderError::Other("draw".into()));
         let mut snap = RenderSnapshot {
             capture: Some("shot.png".to_string()),
             ..Default::default()
@@ -342,9 +338,9 @@ mod tests {
         let mut policy = FramePolicy::default();
         let outcome = submit(&mut policy, &mut snap, &mut backend);
         assert!(outcome.skipped);
-        state.lock().unwrap().fail_draw = None;
+        state.lock().fail_draw = None;
         submit(&mut policy, &mut snap, &mut backend);
-        let last = state.lock().unwrap().last_draw_frame();
+        let last = state.lock().last_draw_frame();
         assert!(matches!(last, Some(Call::DrawFrame { capture: None, .. })));
     }
 

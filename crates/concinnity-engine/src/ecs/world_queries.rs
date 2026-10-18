@@ -8,7 +8,6 @@ use concinnity_core::render::backend::{GpuProfile, RenderBackend};
 use concinnity_host::store::paths::StateTree;
 
 use crate::animation::AnimationSystem;
-use crate::app::budget::{MemoryBudget, ThreadBudget};
 use crate::app::mem_drift::MemoryDrift;
 use crate::ecs::ActiveRenderBackend;
 use crate::gfx::streaming::system::{StreamingPressure, StreamingState, StreamingStats};
@@ -67,18 +66,6 @@ pub fn gpu_profile(world: &World) -> Option<GpuProfile> {
 /// disk. What every system reads instead of resolving a path of its own.
 pub fn state_tree(world: &World) -> Option<&StateTree> {
     world.resource::<StateTree>()
-}
-
-/// The process thread budget the runtime published at start. `None` before
-/// `Runtime::start`
-/// installs it. Read by the `cn debug` server's `budget` command.
-pub fn thread_budget(world: &World) -> Option<ThreadBudget> {
-    world.resource::<ThreadBudget>().copied()
-}
-
-/// The world's memory budget, once `start` has published one.
-pub fn memory_budget(world: &World) -> Option<MemoryBudget> {
-    world.resource::<MemoryBudget>().copied()
 }
 
 /// Take the live render backend out of the world's parked slot, leaving the

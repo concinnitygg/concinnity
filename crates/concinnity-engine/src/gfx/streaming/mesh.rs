@@ -128,13 +128,13 @@ pub(crate) enum DeferredMeshPayload {
 // Wraps a base mesh source with per-id deferred payload overrides.
 pub(crate) struct SceneDeferredMeshSource {
     base: std::sync::Arc<dyn MeshPayloadSource>,
-    deferred: std::collections::HashMap<usize, DeferredMeshPayload>,
+    deferred: hashbrown::HashMap<usize, DeferredMeshPayload>,
 }
 
 impl SceneDeferredMeshSource {
     pub(crate) fn new(
         base: std::sync::Arc<dyn MeshPayloadSource>,
-        deferred: std::collections::HashMap<usize, DeferredMeshPayload>,
+        deferred: hashbrown::HashMap<usize, DeferredMeshPayload>,
     ) -> Self {
         Self { base, deferred }
     }

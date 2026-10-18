@@ -28,7 +28,7 @@ bytemuck = { workspace = true, features = ["derive"] }
 hex = { workspace = true }
 png = { workspace = true }
 rayon = { workspace = true }
-tracing = { workspace = true }
+tracing = { workspace = true, features = ["std"] }
 sha2 = { workspace = true }
 
 [target.'cfg(not(any(target_vendor = "apple", target_os = "windows")))'.dependencies]

@@ -175,7 +175,7 @@ impl MtlContext {
         enc.set_value(froxel_params, 1);
         // ShadowUniforms at buffer(2) so the kernel can pick a CSM cascade per
         // froxel.
-        enc.set_value(&self.shadow.uniforms, 2);
+        enc.set_value(&self.state.planner.shadow.uniforms, 2);
         enc.set_texture(self.shadow.map.as_ref(), 0);
         enc.set_texture(volume.as_ref(), 1);
         // The per-slab CSM tap's comparison sampler, which the shader used

@@ -13,6 +13,7 @@
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::feature_plan::{BackendFacts, FeaturePlan};
 use concinnity_core::render::render_graph::{BackendTraits, BuildStatus, FeatureGates};
 use concinnity_core::settings::ResolvedGraphics;
 use concinnity_core::settings::apply::{ApplyPlan, SettingsTarget, apply_plan};
@@ -85,11 +86,11 @@ impl MtlContext {
     // re-derived per frame (unlike auto-exposure's `exposure`), so the value
     // stands until changed again.
     pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
-        self.light_uniforms.ambient_intensity = value;
+        self.lights.set_ambient(value);
     }
 
     pub(crate) fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {
-        self.shadow.cadence = cadence;
+        self.state.planner.shadow.cadence = cadence;
     }
 
     // Update the live scalar sub-tunables of the SSAO / SSR / SSGI / auto-exposure
@@ -122,7 +123,7 @@ impl MtlContext {
 
     // Gate the runtime-switched passes on `graphics` and what is built now.
     pub(super) fn refresh_gates(&mut self, graphics: &ResolvedGraphics) {
-        self.gates = FeatureGates::new(graphics, &self.build_status(), METAL_TRAITS);
+        self.state.planner.gates = FeatureGates::new(graphics, &self.build_status(), METAL_TRAITS);
     }
 
     fn build_status(&self) -> BuildStatus {
@@ -146,16 +147,16 @@ impl MtlContext {
         // The resolved settings never ask for ray tracing the device cannot
         // run; a request that does is a probe / backend disagreement, reported
         // and refused rather than built.
-        let rt_capable = raytracing_supported(&self.hw.device);
+        let plan = FeaturePlan::resolve(
+            g,
+            BackendFacts {
+                rt_capable: raytracing_supported(&self.hw.device),
+                upscaling: self.upscale.scaler.is_some(),
+            },
+        );
         let mut settings = EffectSettings::new(g);
-        if settings.rt_reflection.is_some() && !rt_capable {
-            tracing::error!(
-                "the resolved settings asked for ray-traced reflections the device cannot run; \
-                 the capability probe and the backend disagree"
-            );
-        }
-        settings.rt_reflection = settings.rt_reflection.filter(|_| rt_capable);
-        let rt_settings = settings.rt_reflection;
+        settings.rt_reflection = plan.rt;
+        let rt_settings = plan.rt;
 
         // TAA is bypassed while the MetalFX upscaler is active (the scaler does
         // its own temporal accumulation); the velocity pre-pass + G-buffer are
@@ -163,9 +164,8 @@ impl MtlContext {
         // the `effective_taa_enabled` / `velocity_needed` derivation in
         // `MtlContext::new`. Render dimensions come from the live HDR targets
         // (render-resolution, already post-upscale).
-        let upscaling_active = self.upscale.scaler.is_some();
-        let taa_effective = g.taa() && !upscaling_active;
-        let needs_velocity = taa_effective || upscaling_active;
+        let taa_effective = plan.taa_resolve;
+        let needs_velocity = plan.temporal;
 
         let effects = self.build_quality_effects(&settings, taa_effective, needs_velocity)?;
         let mut first_err: Option<RenderError> = None;

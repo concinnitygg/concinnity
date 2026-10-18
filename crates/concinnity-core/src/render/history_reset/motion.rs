@@ -12,7 +12,7 @@
 
 use super::tracker::HistoryView;
 use crate::ecs::SimTiming;
-use crate::math::{acos, exp2, ln, sqrt};
+use crate::math::{acos, half_life_decay, ln, sqrt};
 use crate::transform::Mat4;
 
 /// How far a step may stray from its prediction, in meters (world units),
@@ -250,7 +250,7 @@ impl MotionReference {
 }
 
 fn decay(dt: f32) -> f32 {
-    exp2(-dt / RATE_HALF_LIFE_SECONDS)
+    half_life_decay(dt, RATE_HALF_LIFE_SECONDS)
 }
 
 // The rotation block of a view matrix (stored column-major) as rows.

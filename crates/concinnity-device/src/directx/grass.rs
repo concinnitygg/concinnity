@@ -24,15 +24,15 @@ use concinnity_core::render::grass::lod::{
     GRASS_BAND_REGION, GRASS_LOD_COUNT, GRASS_LOD_VERTEX_STRIDE, GRASS_REGION_COUNT,
 };
 use concinnity_core::render::grass::{
-    DrawnPlanetTile, GrassBender, GrassCamera, GrassField, GrassFrameInputs, GrassHistory,
-    GrassHiz, GrassPass, GrassShadowView,
+    FRAME_PLANET_TILE_RECORDS, FRAME_TILE_RECORDS, GrassBender, GrassCamera, GrassField,
+    GrassFrameState, GrassPass, GrassShadowView, GrassView,
 };
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph::PassId;
 use concinnity_core::render::shadow_bias;
 use concinnity_core::render::uniforms::grass::{
     GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassBendParams, GrassParams, GrassTileGpu,
-    MAX_GRASS_TILE_RECORDS, MAX_PLANET_GRASS_TILES, PlanetGrassTileGpu, grass_args_offset,
+    PlanetGrassTileGpu, grass_args_offset,
 };
 use windows::Win32::Graphics::Direct3D::{
     D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
@@ -94,8 +94,6 @@ const KERNEL_TILES_PARAM: u32 = 9;
 
 // Planet tile and tile records one frame holds: the view's run and the
 // cascade's.
-const PLANET_TILE_RECORDS: usize = 2 * MAX_PLANET_GRASS_TILES;
-const TILE_RECORDS: usize = 2 * MAX_GRASS_TILE_RECORDS;
 
 // The bend pass's root signature: its block at b0 and the field at u1.
 fn create_bend_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
@@ -267,7 +265,7 @@ pub(in crate::directx) struct GrassResources {
     tiles: MappedBlocks,
     // What the field's frames carry from one to the next. Advanced from
     // `&self` on the render thread before the fan-out.
-    history: RefCell<GrassHistory>,
+    state: RefCell<GrassFrameState>,
 }
 
 // One persistently mapped upload-heap block per frame in flight.
@@ -350,7 +348,7 @@ impl GrassResources {
     // The phase of the next frame's per-pixel hand-off to the canopy, which
     // the canopy block carries beside the blades' own block.
     pub(in crate::directx) fn crossfade_phase(&self) -> f32 {
-        self.history.borrow().crossfade_phase()
+        self.state.borrow().history.crossfade_phase()
     }
 
     pub(in crate::directx) fn build(
@@ -406,15 +404,15 @@ impl GrassResources {
             )?,
             planet_tiles: MappedBlocks::new(
                 alloc,
-                PLANET_TILE_RECORDS * std::mem::size_of::<PlanetGrassTileGpu>(),
+                FRAME_PLANET_TILE_RECORDS * std::mem::size_of::<PlanetGrassTileGpu>(),
                 "map grass planet tiles",
             )?,
             tiles: MappedBlocks::new(
                 alloc,
-                TILE_RECORDS * std::mem::size_of::<GrassTileGpu>(),
+                FRAME_TILE_RECORDS * std::mem::size_of::<GrassTileGpu>(),
                 "map grass tiles",
             )?,
-            history: RefCell::new(GrassHistory::default()),
+            state: RefCell::new(GrassFrameState::default()),
         })
     }
 }
@@ -492,14 +490,8 @@ impl DxContext {
     // Carry the grass into the frame the world moved to.
     pub(in crate::directx) fn rebase_grass(&self, rebase: &Rebase) {
         if let Some(grass) = &self.grass {
-            grass.history.borrow_mut().rebase(rebase);
+            grass.state.borrow_mut().history.rebase(rebase);
         }
-    }
-
-    // Whether this frame's grass casts into the nearest cascade: shadows are on
-    // and that cascade re-renders.
-    pub(in crate::directx) fn grass_casts(&self) -> bool {
-        self.grass.is_some() && !self.shadow.dsvs.is_empty() && self.shadow.render_mask & 1 != 0
     }
 
     // Write this frame's grass blocks for `request`, advancing the field's
@@ -517,24 +509,16 @@ impl DxContext {
             cast,
             benders,
         } = request;
-        let planet_tiles: Vec<DrawnPlanetTile> = if grass.field.planet.is_some() {
-            self.state.drawn_planet_tiles()
-        } else {
-            Vec::new()
-        };
         // The pyramid holds last frame's depth once one has been built, tested
         // through the view-projection the draw cull tests through.
-        let hiz = self
-            .cull
-            .hiz
-            .as_ref()
-            .filter(|_| self.cull.hiz_valid.get())
-            .map(|h| GrassHiz {
-                prev_vp: self.cull.prev_view_proj.get(),
-                size: [h.width as f32, h.height as f32],
-                mip_count: h.mip_count,
-            });
-        let inputs = GrassFrameInputs {
+        let hiz = self.cull.hiz.as_ref().and_then(|h| {
+            self.state
+                .planner
+                .temporal()
+                .occlusion()
+                .grass_hiz([h.width as f32, h.height as f32], h.mip_count)
+        });
+        let view = GrassView {
             camera: GrassCamera {
                 position: cam_pos,
                 vp,
@@ -543,20 +527,17 @@ impl DxContext {
             },
             elapsed,
             shadow: cast.then(|| GrassShadowView {
-                vp: self.shadow.uniforms.light_vps[0],
-                to_light: self.shadow.light_dir,
+                vp: self.state.planner.shadow.uniforms.light_vps[0],
+                to_light: self.uniforms.lights.sun().direction,
             }),
             benders,
-            planet_tiles: &planet_tiles,
         };
-        let mut history = grass.history.borrow_mut();
-        let frame = grass.field.frame(&inputs, &mut history);
-        crate::grass_report::report_grass_limit(frame.limit);
+        let mut state = grass.state.borrow_mut();
+        let frame = state.frame(&grass.field, &self.state, &view);
         let view_gva = grass.params.write(frame_idx, &frame.view.params);
         let shadow = frame.shadow.map(|pass| {
             GrassPlacement::of(grass.shadow_params.write(frame_idx, &pass.params), &pass)
         });
-        let records = &frame.planet_tiles[..frame.planet_tiles.len().min(PLANET_TILE_RECORDS)];
         Some(GrassFrame {
             view: GrassPlacement::of(view_gva, &frame.view),
             shadow,
@@ -564,11 +545,10 @@ impl DxContext {
             bend_dispatch: frame.bend.dispatch,
             planet_tiles_gva: grass
                 .planet_tiles
-                .write_bytes(frame_idx, bytemuck::cast_slice(records)),
-            tiles_gva: grass.tiles.write_bytes(
-                frame_idx,
-                bytemuck::cast_slice(&frame.tiles[..frame.tiles.len().min(TILE_RECORDS)]),
-            ),
+                .write_bytes(frame_idx, bytemuck::cast_slice(frame.planet_tile_records())),
+            tiles_gva: grass
+                .tiles
+                .write_bytes(frame_idx, bytemuck::cast_slice(frame.tile_records())),
         })
     }
 

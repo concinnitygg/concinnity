@@ -2,24 +2,18 @@
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::render_types::{
-    ClusterParams, DrawIndex, InstancedCluster, LightUniforms, NUM_SHADOW_CASCADES, ShadowUniforms,
-};
+use concinnity_core::gfx::render_types::{ClusterParams, InstancedCluster, NUM_SHADOW_CASCADES};
 use concinnity_core::profile;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend_init;
-use concinnity_core::render::cluster_range::ClusterReach;
 use concinnity_core::render::decal;
 use concinnity_core::render::error;
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::particles;
 use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::render_graph;
-use concinnity_core::render::scene_flow;
 use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::shadow_schedule;
+use concinnity_core::render::shader_reload::ShaderReload;
 use concinnity_core::render::spot_shadow;
-use concinnity_core::render::view_history::ViewHistory;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -132,22 +126,7 @@ pub(super) struct ShadowState {
     // Per-cascade resolution, stored so the shadow pass can size the viewport to
     // the texture array's per-slice dimensions.
     pub map_size: u32,
-    pub cadence: backend_init::ShadowCadence,
-    // Round-robin clock + primed-set for the cascade schedule; advanced once per
-    // frame by `update_shadow_schedule`.
-    pub scheduler: shadow_schedule::ShadowCascadeScheduler,
-    // Cascades re-rendered this frame (bit `i` = cascade `i`). Computed in
-    // draw_frame and read by encode_shadow_pass so the two agree on which slices
-    // to refresh and which to leave intact.
-    pub render_mask: u32,
     pub sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
-    // Cascaded light VPs + split depths. The near cascade's VP refreshes every
-    // frame; far cascades' VPs persist between their round-robin refreshes
-    // (Hybrid mode) so each slice is sampled with the VP it was rendered with.
-    pub uniforms: ShadowUniforms,
-    // World-space unit vector pointing TOWARD the first directional light.
-    // Captured at init from the light uniforms; used by per-frame CSM updates.
-    pub light_dir: [f32; 3],
 }
 
 // Spot-light shadow slices + their refresh schedule. Mirrors
@@ -164,11 +143,8 @@ pub(super) struct SpotShadowState {
     pub count: u32,
     // Each slice's light frustum, which its GPU cull keeps casters inside.
     pub frusta: Vec<Frustum>,
-    // Prime-then-round-robin refresh schedule over the spot slices, the spot
-    // analogue of `ShadowState::scheduler`.
-    pub scheduler: spot_shadow::SpotShadowScheduler,
-    // Which spot slices re-render this frame; set once per frame in draw_frame
-    // and read by encode_spot_shadow_pass.
+    // Which spot slices re-render this frame, as the frame's plan scheduled
+    // them; read by encode_spot_shadow_pass and the spot cull.
     pub render_mask: u32,
 }
 
@@ -305,32 +281,6 @@ pub(super) struct TextState {
     // frame's labels into this frame's slot before the graph runs; the composite
     // pass binds sub-ranges of it.
     pub upload: super::text_upload::TextUploadRing,
-}
-
-// Built-in shader hot reload. `enabled` is true only under `cn debug`: it
-// switches the built-in shader source loader to a disk-first read with
-// embedded fallback, so an edited shader is picked up by
-// [`MtlContext::reload_shaders`]. Under `cn run` production keeps the embedded
-// path. `reload_pending` is the atomic flag the `reload-shaders` debug tool
-// call sets, polled at the top of `draw_frame`; the debug server reads its
-// `Arc` clone via `GraphicsSystem`. `Some` only when `enabled`.
-pub(super) struct HotReloadState {
-    pub enabled: bool,
-    pub reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    // Bumped by every engine-template reload, so a world Shader pipeline a
-    // worker built from the templates before it is never installed after it.
-    pub generation: u64,
-}
-
-impl HotReloadState {
-    pub(super) fn new(enabled: bool) -> Self {
-        Self {
-            enabled,
-            reload_pending: enabled
-                .then(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
-            generation: 0,
-        }
-    }
 }
 
 // The window this context draws into.
@@ -540,8 +490,6 @@ pub(super) struct MtlSceneAssets {
     // neutral placeholder when the scene declares no local lights) so the
     // binding is valid; `light_uniforms.num_local_lights` bounds iteration.
     pub local_light_buffer: PooledBuffer,
-    // The local lights' reach, which places the far end of the cluster grid.
-    pub cluster_reach: ClusterReach,
     // Per-scene rect area-light extents, indexed by `GpuLight.data_index`.
     // Uploaded once; a one-element placeholder when the world declares none.
     pub area_light_buffer: PooledBuffer,
@@ -630,22 +578,16 @@ pub(crate) struct MtlContext {
     // The CPU-side scene: draw list, view, skinned slots, model history and
     // streamed-geometry placement. See [`SceneState`].
     pub(super) state: SceneState,
-    // The frame graph last compiled, keyed by the `FrameGraphInputs` it was
-    // built from. `build_frame_graph` is a pure function of those inputs (which
-    // change only when a feature toggles or a target resizes), so a frame whose
-    // inputs match the cached key reuses it instead of rebuilding. Taken out
-    // during `execute_graph` (which needs `&mut self`) and put back after, so a
-    // steady scene compiles once.
-    pub(super) graph_cache: Option<(render_graph::FrameGraphInputs, render_graph::CompiledGraph)>,
-    // The runtime-switched passes the resolved settings and the last apply
-    // built leave on.
-    pub(super) gates: render_graph::FeatureGates,
+    // Scratch the graph executor refills each frame: the event plan and the
+    // per-pass recording slots. Only the allocations carry over.
+    pub(super) graph_scratch: Option<super::graph_exec::MtlGraphScratch>,
     // InstancedProp clusters. See [`InstancedState`].
     pub(super) instanced: InstancedState,
     // Scene assets. See [`MtlSceneAssets`].
     pub(super) scene: MtlSceneAssets,
-    // All scene lights packed and pushed to the fragment shader at buffer(4).
-    pub(super) light_uniforms: LightUniforms,
+    // All scene lights packed and pushed to the fragment shader at buffer(4),
+    // with the local lights' reach. Pushed every draw, so no copy is ever stale.
+    pub(super) lights: concinnity_core::render::light_state::LightState,
     // The far field's canopy block, refreshed each frame and pushed to the
     // fragment shader at buffer(21).
     pub(super) canopy: concinnity_core::render::uniforms::canopy::CanopyParams,
@@ -681,11 +623,6 @@ pub(crate) struct MtlContext {
     // Temporal-anti-aliasing feature state: the toggle, resolve pipeline,
     // ping-pong history buffers, and per-frame bookkeeping. See [`TaaState`].
     pub(super) taa: TaaState,
-    // Previous frame's un-jittered view-projection, fed to the velocity
-    // pre-pass to reproject motion. (Shared by both TAA and the upscaler when
-    // either drives the velocity pre-pass, so it is kept flat rather than
-    // under `taa`.)
-    pub(super) view_history: ViewHistory,
     // MetalFX-temporal-upscaling feature state: the scaler, the input/output
     // scale ratio, the per-frame projection jitter, and the history-reset
     // flag. When the scaler is `Some`, the 3D scene renders at
@@ -742,7 +679,7 @@ pub(crate) struct MtlContext {
     // EV + authored bias, the histogram/average compute pipelines + buffers,
     // and the per-frame timing bookkeeping. See [`AutoExposureGpu`].
     pub(super) auto_exposure: AutoExposureGpu,
-    pub(super) hot_reload: HotReloadState,
+    pub(super) hot_reload: ShaderReload,
     // The world default Shader's compiled programs, `None` for the engine's
     // own. Kept past init for the skinned pipeline built at upload and for the
     // hot-reload rebuild.
@@ -1319,16 +1256,20 @@ impl MtlContext {
             )?;
             self.particle.pipelines = Some(pipelines);
         }
+        let max = particles::MAX_EMITTERS;
+        if !self.particle.system.has_room() {
+            return Err(error::RenderError::Other(format!(
+                "add_emitter: MAX_EMITTERS ({max}) exceeded"
+            )));
+        }
         let gpu_state = super::particle::build_emitter_gpu_state(&self.hw.device, &record)?;
-        let idx = if let Some(slot) = self.particle.free_slots.pop() {
-            self.particle.records[slot] = Some(record);
-            self.particle.emitter_state[slot] = Some(gpu_state);
-            slot
-        } else {
-            self.particle.records.push(Some(record));
-            self.particle.emitter_state.push(Some(gpu_state));
-            self.particle.records.len() - 1
-        };
+        let idx = self
+            .particle
+            .system
+            .insert(record, gpu_state)
+            .map_err(|_| {
+                error::RenderError::Other(format!("add_emitter: MAX_EMITTERS ({max}) exceeded"))
+            })?;
         Ok(idx)
     }
 
@@ -1339,19 +1280,9 @@ impl MtlContext {
     // the per-frame hook window before the world step). Returns an error
     // when the index is out of range or already tombstoned.
     pub(crate) fn remove_emitter(&mut self, emitter_id: usize) -> error::RenderResult<()> {
-        let rec_slot = self.particle.records.get_mut(emitter_id).ok_or_else(|| {
-            error::RenderError::Other(format!("remove_emitter: id {emitter_id} out of range"))
+        self.particle.system.remove(emitter_id).map_err(|e| {
+            error::RenderError::Other(format!("remove_emitter: id {emitter_id} {e}"))
         })?;
-        if rec_slot.is_none() {
-            return Err(error::RenderError::Other(format!(
-                "remove_emitter: id {emitter_id} already removed"
-            )));
-        }
-        *rec_slot = None;
-        if let Some(gpu_slot) = self.particle.emitter_state.get_mut(emitter_id) {
-            *gpu_slot = None;
-        }
-        self.particle.free_slots.push(emitter_id);
         Ok(())
     }
 
@@ -1375,16 +1306,6 @@ impl MtlContext {
             .lock()
             .ok()
             .and_then(|mut slot| slot.take())
-    }
-}
-
-impl scene_flow::SceneControl for MtlContext {
-    fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool) {
-        self.state.update_visibility(draw_idx, visible);
-    }
-
-    fn set_fade(&mut self, fade: f32) {
-        self.state.set_fade(fade);
     }
 }
 

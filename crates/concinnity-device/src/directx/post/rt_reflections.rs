@@ -16,7 +16,7 @@
 
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::rt_reflections::{RtParamsInputs, RtReflectionSettings};
+use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -313,46 +313,24 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        fov_y_radians: f32,
-        aspect: f32,
-        cam_pos: [f32; 3],
+        params: Option<&RtParams>,
     ) {
-        let (rt, accel, gbuffer) = match (&self.rt_reflections, &self.rt.accel, &self.gbuffer) {
-            (Some(r), Some(a), Some(g)) => (r, a, g),
-            _ => return,
-        };
+        let (rt, accel, gbuffer, params) =
+            match (&self.rt_reflections, &self.rt.accel, &self.gbuffer, params) {
+                (Some(r), Some(a), Some(g), Some(p)) => (r, a, g, p),
+                _ => return,
+            };
         // The trace writes reflected radiance + weight into `rt.output`; the
         // reflection composite (below) blurs + composites it over the scene.
         let reflection_srv = rt.output_srv_gpu;
 
-        // Build + upload this frame's RtParams. `inv_view_rot` is the view->world
-        // rotation (the transpose of the view matrix's orthonormal 3x3), same as
-        // the SSR resolve; `params` then fills in the camera-position translation
-        // column to complete the camera-to-world transform.
-        let v = self.state.view.matrix;
-        let inv_view_rot = [
-            [v[0][0], v[1][0], v[2][0], 0.0],
-            [v[0][1], v[1][1], v[2][1], 0.0],
-            [v[0][2], v[1][2], v[2][2], 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ];
-        let params = rt.settings.params(RtParamsInputs {
-            fov_y_radians,
-            aspect,
-            inv_view_rot,
-            cam_pos,
-            sun_dir: self.fog.sun_dir,
-            sun_color: self.fog.sun_color,
-            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
-            sky_rot: self.state.view.sky_rot,
-            pre_exposure: self.pre_exposure.value(),
-        });
+        // Upload this frame's RtParams.
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &params as *const RtParams as *const u8,
+                params as *const RtParams as *const u8,
                 rt.params_ubo_ptrs[frame_idx],
                 std::mem::size_of::<RtParams>(),
             );

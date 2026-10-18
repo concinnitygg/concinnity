@@ -34,21 +34,6 @@ mod voices;
 pub(crate) use engine::{AudioEngine, EmitterId, EmitterParams};
 pub(crate) use system::AudioSystem;
 
-// Persisted mix volumes handed to `AudioSystem::new` (linear gains; `None`
-// leaves a stage at unity). Resolved from the settings store by the engine's
-// audio gate.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub(crate) struct AudioVolumes {
-    // Master output volume.
-    pub(crate) master: Option<f32>,
-    // Music bus volume.
-    pub(crate) music: Option<f32>,
-    // Sound-effects bus volume (one-shots and positional emitters).
-    pub(crate) sfx: Option<f32>,
-    // Voice / dialogue bus volume.
-    pub(crate) voice: Option<f32>,
-}
-
 // A minimal 16-bit PCM mono WAV of `frames` silent samples, decodable by the
 // symphonia backend without any file on disk. Shared by this module's tests.
 #[cfg(test)]

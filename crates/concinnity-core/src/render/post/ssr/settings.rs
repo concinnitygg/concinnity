@@ -56,8 +56,8 @@ pub struct SsrSettings {
 
 /// Per-frame camera inputs for building the SSR GPU uniform.
 /// `fov_y_radians` / `aspect` give the view-ray scale the resolve projects a
-/// view-space ray point to a UV with. `inv_view_rot` (the view-to-world
-/// rotation) and `cam_pos` form the camera-to-world transform, and
+/// view-space ray point to a UV with. `view` (the world-to-view
+/// matrix) and `cam_pos` form the camera-to-world transform, and
 /// `prefilter_mip_count` is the IBL prefilter cubemap mip count (0 = no IBL);
 /// the resolve uses these to sample the cubemap (or a reflection probe) as a
 /// reflection fallback, through the sky's inverse rotation `sky_rot`.
@@ -67,8 +67,8 @@ pub struct SsrParamsInputs {
     pub fov_y_radians: f32,
     /// Viewport aspect ratio, width over height.
     pub aspect: f32,
-    /// View-to-world rotation, column-major.
-    pub inv_view_rot: [[f32; 4]; 4],
+    /// World-to-view matrix, column-major. Only its rotation is read.
+    pub view: [[f32; 4]; 4],
     /// World-space camera position.
     pub cam_pos: [f32; 3],
     /// IBL cubemap mip count; 0 when there is no IBL fallback.
@@ -108,7 +108,7 @@ impl SsrSettings {
         let SsrParamsInputs {
             fov_y_radians,
             aspect,
-            inv_view_rot,
+            view,
             cam_pos,
             prefilter_mip_count,
             sky_rot,
@@ -117,7 +117,7 @@ impl SsrSettings {
         let stride = self.max_distance / MAX_STEPS as f32;
         // The resolve rebuilds the world-space surface position the reflection
         // probe box-projects against, so it needs the full camera-to-world.
-        let inv_view = camera_to_world(inv_view_rot, cam_pos);
+        let inv_view = camera_to_world(view, cam_pos);
         let (tan_half_fov_y, aspect) = view_ray_scale(fov_y_radians, aspect);
         SsrParams {
             intensity: self.intensity,
@@ -219,7 +219,7 @@ mod tests {
         let p = s.params(SsrParamsInputs {
             fov_y_radians: core::f32::consts::FRAC_PI_2,
             aspect: 1.6,
-            inv_view_rot: IDENTITY,
+            view: IDENTITY,
             cam_pos: [0.0; 3],
             prefilter_mip_count: 6.0,
             sky_rot: SkyOrientation::IDENTITY_ROWS,
@@ -239,7 +239,7 @@ mod tests {
         let p = s.params(SsrParamsInputs {
             fov_y_radians: core::f32::consts::FRAC_PI_2,
             aspect: 0.0,
-            inv_view_rot: IDENTITY,
+            view: IDENTITY,
             cam_pos: [0.0; 3],
             prefilter_mip_count: 0.0,
             sky_rot: SkyOrientation::IDENTITY_ROWS,
@@ -254,7 +254,7 @@ mod tests {
         let p = s.params(SsrParamsInputs {
             fov_y_radians: core::f32::consts::FRAC_PI_2,
             aspect: 1.6,
-            inv_view_rot: IDENTITY,
+            view: IDENTITY,
             cam_pos: [0.0; 3],
             prefilter_mip_count: 7.0,
             sky_rot: SkyOrientation::IDENTITY_ROWS,
@@ -275,7 +275,7 @@ mod tests {
         let p = s.params(SsrParamsInputs {
             fov_y_radians: core::f32::consts::FRAC_PI_2,
             aspect: 1.6,
-            inv_view_rot: IDENTITY,
+            view: IDENTITY,
             cam_pos: [3.0, 4.0, 5.0],
             prefilter_mip_count: 6.0,
             sky_rot: SkyOrientation::IDENTITY_ROWS,

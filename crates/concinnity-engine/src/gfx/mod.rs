@@ -1,58 +1,22 @@
-//! The client's render layer: the renderer driver, draw list, 2D overlay, asset
-//! streaming, and live previews. Settings resolution (the quality preset, its
-//! ceiling, and the layered resolver) lives in `concinnity_core::settings`.
-//!
-//! What these drive lives below the client, in concinnity-core: the GPU data
-//! layouts and render math in `concinnity_core::gfx`, and the
-//! backend-agnostic render-prep (record builders, render graph, the
-//! `RenderBackend` trait seam, and the GPU-free cursor / sprite / text /
-//! lights / streaming layout helpers) in `concinnity_core::render`. Each is
-//! named where it is used, by its owning crate.
+//! The client's render layer: the renderer driver and the asset-streaming
+//! drivers. The decisions they act on (settings, the draw list, the 2D overlay,
+//! the live previews, and the backend-agnostic render-prep) live in
+//! `concinnity_core::settings` and `concinnity_core::render`.
 
 // The bundled glyph atlas baked into the binary: the face the startup error
 // screen draws with, and the fallback for a world whose labels name no Font.
 pub(crate) mod builtin_font;
 
-pub(crate) mod draw_list;
-/// Live reassignment of a running world's draw slots (their material and cull
-/// distance), for an editor previewing a Prop edit without a rebuild.
-pub mod draw_preview;
-/// Live application of the world's lighting assets to a running world, for an
-/// editor previewing sun / fog / shadow / post-process edits without a rebuild.
-pub mod lighting_preview;
-/// The renderer's reading of one compiled `Material`: GPU uniforms plus the
-/// texture-pool slots its references resolve to.
-pub(crate) mod material_entry;
-/// Live edits of a loaded Material's Shader parameters, for an editor
-/// previewing them without a rebuild.
-pub mod material_preview;
-/// Live re-resolution of a `CharacterShape` against a running world's poses,
-/// for an editor previewing slider edits without a rebuild.
-pub mod shape_preview;
-/// The renderer driver. An internal system (not a declarable asset), constructed
-/// by `World::start` when the run resolved to a windowed one.
-pub(crate) mod system;
-// 2D overlay draw-list build + menu-state publish. Internal system,
-// constructed alongside GraphicsSystem (same gate) and scheduled first.
-pub(crate) mod overlay;
-// Engine-side allocation authority for backend draw slots + pre-reserved
-// skinned instances (the `RenderSlots` resource).
-pub(crate) mod render_slots;
 /// Asset-streaming home: the re-exported `no_std` policy core (`StreamPlanner`),
 /// the `std` texture / mesh / chunk drivers it schedules, and the system that
 /// drives them. `pub` for that system alone; everything else inside is
 /// crate-private.
 pub mod streaming;
-// Recording mock RenderBackend + the GraphicsSystem test-injection hooks,
-// compiled only into the unit-test binary. Implements `core::render`'s
-// RenderBackend seam on a client-local type and carries a `config::Settings`,
-// so it stays with the GraphicsSystem tests that consume it.
+/// The renderer driver. An internal system (not a declarable asset), constructed
+/// by `World::start` when the run resolved to a windowed one.
+pub(crate) mod system;
+// The GraphicsSystem test-injection hooks over core's recording backend.
 #[cfg(test)]
-pub(crate) mod mock_backend;
-// Every Terrain's cooked payload, decoded for the draw list and the grass.
-pub(crate) mod terrain;
+pub(crate) mod test_hooks;
 // A planet's grass layers, resolved at graphics init.
 pub(crate) mod planet_grass;
-// Handle -> asset id bridge for SkinnedMesh correlation references, published by
-// GraphicsSystem and read by the animation / third-person systems.
-pub(crate) mod skinned_mesh_map;

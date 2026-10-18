@@ -22,7 +22,7 @@ use concinnity_core::render::retire_pool::RetirePool;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::error::map_vk_result;
-use crate::suballoc::staging::{STAGING_ALIGN, StagingRing, grown_capacity, reserved_capacity};
+use concinnity_core::render::staging_uploads::{StageError, StagingUploads};
 
 // Which shared buffer a staged write lands in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -62,34 +62,25 @@ struct StagedCopy {
     region: vk::BufferCopy,
 }
 
-struct Staging {
-    buffer: PooledBuffer,
-    ring: StagingRing,
-}
-
 pub(in crate::vulkan) struct GeometryUploads {
-    staging: Option<Staging>,
+    staging: StagingUploads<PooledBuffer>,
     queued: Vec<StagedCopy>,
     command_buffers: RetirePool<vk::CommandBuffer>,
-    tick: u64,
-    depth: u64,
 }
 
 impl GeometryUploads {
     pub(in crate::vulkan) fn new(frames_in_flight: usize) -> Self {
         Self {
-            staging: None,
+            staging: StagingUploads::new(frames_in_flight),
             queued: Vec::new(),
             command_buffers: RetirePool::new(),
-            tick: 0,
-            depth: frames_in_flight as u64 + 1,
         }
     }
 
     // Drop the ring and every queued write, and forget the command buffers
     // their pool is about to free. The caller has idled the device.
     pub(in crate::vulkan) fn destroy(&mut self) {
-        self.staging = None;
+        self.staging.clear();
         self.queued.clear();
         self.command_buffers = RetirePool::new();
     }
@@ -97,10 +88,7 @@ impl GeometryUploads {
     // Advance the frame tick. Called after the frame-slot fence wait, which is
     // what proves a submit `depth` ticks old has retired.
     pub(in crate::vulkan) fn begin_frame(&mut self) {
-        self.tick += 1;
-        if let Some(staging) = self.staging.as_mut() {
-            staging.ring.reclaim(self.tick);
-        }
+        self.staging.begin_frame();
     }
 
     // Create the ring at load, sized for a stream that may stage up to
@@ -111,14 +99,8 @@ impl GeometryUploads {
         alloc: &DeviceAllocator,
         expected: u64,
     ) -> RenderResult<()> {
-        let capacity = reserved_capacity(expected);
-        if self
-            .staging
-            .as_ref()
-            .is_none_or(|s| s.ring.capacity() < capacity)
-        {
-            self.replace_ring(alloc, capacity)?;
-        }
+        self.staging
+            .reserve(expected, |capacity| staging_buffer(alloc, capacity))?;
         Ok(())
     }
 
@@ -130,67 +112,25 @@ impl GeometryUploads {
         dst_offset: u64,
         bytes: &[u8],
     ) -> RenderResult<()> {
-        if bytes.is_empty() {
-            return Ok(());
-        }
-        let size = bytes.len() as u64;
-        let src_offset = match self.place(size) {
-            Some(offset) => offset,
-            None => {
-                self.grow(alloc, size)?;
-                self.place(size).ok_or_else(|| {
-                    RenderError::Other("geometry staging: grown ring refused a write".into())
-                })?
-            }
-        };
-        let staging = self
+        let staged = self
             .staging
-            .as_ref()
-            .ok_or_else(|| RenderError::Other("geometry staging: no ring".into()))?;
-        staging.buffer.write_bytes(src_offset as usize, bytes);
+            .stage(bytes, |capacity| staging_buffer(alloc, capacity))
+            .map_err(|e| match e {
+                StageError::Create(e) => e,
+                StageError::Refused => {
+                    RenderError::Other("geometry staging: grown ring refused a write".into())
+                }
+            })?;
+        let Some(staged) = staged else {
+            return Ok(());
+        };
         self.queued.push(StagedCopy {
             target,
-            src: staging.buffer.clone(),
+            src: staged.buffer.clone(),
             region: vk::BufferCopy::default()
-                .src_offset(src_offset)
+                .src_offset(staged.src_offset)
                 .dst_offset(dst_offset)
-                .size(size),
-        });
-        Ok(())
-    }
-
-    fn place(&mut self, size: u64) -> Option<u64> {
-        self.staging
-            .as_mut()
-            .and_then(|s| s.ring.alloc(size, STAGING_ALIGN))
-    }
-
-    // Replace the ring with one that holds `size` more bytes. The old buffer
-    // stays alive through the queued copies that name it, and its destruction
-    // is deferred past the submits already in flight.
-    fn grow(&mut self, alloc: &DeviceAllocator, size: u64) -> RenderResult<()> {
-        let current = self.staging.as_ref().map_or(0, |s| s.ring.capacity());
-        let capacity = grown_capacity(current, size);
-        if current > 0 {
-            tracing::info!(
-                "geometry staging ring grew {} -> {} KiB for a {} KiB write",
-                current / 1024,
-                capacity / 1024,
-                size / 1024
-            );
-        }
-        self.replace_ring(alloc, capacity)
-    }
-
-    fn replace_ring(&mut self, alloc: &DeviceAllocator, capacity: u64) -> RenderResult<()> {
-        let buffer = alloc.create_buffer(
-            capacity,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
-        self.staging = Some(Staging {
-            buffer,
-            ring: StagingRing::new(capacity),
+                .size(bytes.len() as u64),
         });
         Ok(())
     }
@@ -205,7 +145,10 @@ impl GeometryUploads {
         if self.queued.is_empty() {
             return Ok(());
         }
-        let cmd = match self.command_buffers.pop_due(self.tick, self.depth) {
+        let cmd = match self
+            .command_buffers
+            .pop_due(self.staging.tick(), self.staging.depth())
+        {
             Some(cmd) => cmd,
             None => {
                 let info = vk::CommandBufferAllocateInfo::default()
@@ -245,14 +188,20 @@ impl GeometryUploads {
         }
         .map_err(|e| map_vk_result(e, "geometry copy submit"))?;
 
-        let retire_at = self.tick + self.depth;
-        if let Some(staging) = self.staging.as_mut() {
-            staging.ring.seal(retire_at);
-        }
+        self.staging.seal();
         self.queued.clear();
-        self.command_buffers.push(self.tick, cmd);
+        self.command_buffers.push(self.staging.tick(), cmd);
         Ok(())
     }
+}
+
+// A host-visible staging buffer of `capacity` bytes.
+fn staging_buffer(alloc: &DeviceAllocator, capacity: u64) -> RenderResult<PooledBuffer> {
+    alloc.create_buffer(
+        capacity,
+        vk::BufferUsageFlags::TRANSFER_SRC,
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+    )
 }
 
 fn record_copies(
@@ -313,8 +262,8 @@ fn record_copies(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::suballoc::staging::STAGING_MIN_CAPACITY;
     use crate::vulkan::test_gpu::{TestGpu, test_gpu};
+    use concinnity_core::render::staging::STAGING_MIN_CAPACITY;
 
     const HOST: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::from_raw(
         vk::MemoryPropertyFlags::HOST_VISIBLE.as_raw()
@@ -429,19 +378,13 @@ mod tests {
         let harness = Harness::new(&gpu, 4096);
         let mut uploads = GeometryUploads::new(2);
         uploads.reserve(&harness.alloc, 0).expect("reserve");
-        let ring = uploads.staging.as_ref().expect("ring").buffer.buffer();
-        assert_eq!(
-            uploads.staging.as_ref().expect("ring").ring.capacity(),
-            STAGING_MIN_CAPACITY
-        );
+        let ring = uploads.staging.buffer().expect("ring").buffer();
+        assert_eq!(uploads.staging.capacity(), STAGING_MIN_CAPACITY);
         uploads.reserve(&harness.alloc, 0).expect("reserve again");
         uploads
             .stage(&harness.alloc, GeometryTarget::Vertex, 0, &pattern(64, 1))
             .expect("stage");
-        assert_eq!(
-            uploads.staging.as_ref().expect("ring").buffer.buffer(),
-            ring
-        );
+        assert_eq!(uploads.staging.buffer().expect("ring").buffer(), ring);
         harness.flush(&gpu, &mut uploads);
         harness.destroy(&gpu, uploads);
     }
@@ -458,18 +401,14 @@ mod tests {
         uploads
             .stage(&harness.alloc, GeometryTarget::Vertex, 0, &small)
             .expect("stage small");
-        let first_ring = uploads.staging.as_ref().expect("ring").buffer.buffer();
+        let first_ring = uploads.staging.buffer().expect("ring").buffer();
         let large = pattern(big, 11);
         uploads
             .stage(&harness.alloc, GeometryTarget::Vertex, 4096, &large)
             .expect("stage large");
-        let grown = uploads.staging.as_ref().expect("ring");
-        assert_ne!(
-            grown.buffer.buffer(),
-            first_ring,
-            "the large write grew the ring"
-        );
-        assert!(grown.ring.capacity() >= big as u64);
+        let grown = uploads.staging.buffer().expect("ring");
+        assert_ne!(grown.buffer(), first_ring, "the large write grew the ring");
+        assert!(uploads.staging.capacity() >= big as u64);
         harness.flush(&gpu, &mut uploads);
         assert_eq!(Harness::read(&harness.vertex, 0, 256), small);
         assert_eq!(Harness::read(&harness.vertex, 4096, big), large);
@@ -488,10 +427,12 @@ mod tests {
             .stage(&harness.alloc, GeometryTarget::Vertex, 0, &chunk)
             .expect("stage");
         harness.flush(&gpu, &mut uploads);
-        let ring = uploads.staging.as_ref().expect("ring").buffer.buffer();
+        let ring = uploads.staging.buffer().expect("ring").buffer();
         let first_cmd = uploads.command_buffers.pop_due(u64::MAX, 0).expect("held");
-        uploads.command_buffers.push(uploads.tick, first_cmd);
-        for _ in 0..uploads.depth {
+        uploads
+            .command_buffers
+            .push(uploads.staging.tick(), first_cmd);
+        for _ in 0..uploads.staging.depth() {
             uploads.begin_frame();
         }
         // Two more halves fit only because the first one's batch retired.
@@ -506,10 +447,7 @@ mod tests {
                 )
                 .expect("stage");
         }
-        assert_eq!(
-            uploads.staging.as_ref().expect("ring").buffer.buffer(),
-            ring
-        );
+        assert_eq!(uploads.staging.buffer().expect("ring").buffer(), ring);
         harness.flush(&gpu, &mut uploads);
         assert_eq!(
             uploads.command_buffers.pop_due(u64::MAX, 0),

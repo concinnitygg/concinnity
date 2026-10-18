@@ -168,9 +168,9 @@ mod tests {
     use super::super::TargetState;
     use super::super::flat::{ClipEntry, FlatState};
     use super::*;
-    use crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex;
     use concinnity_core::animation::anim_graph::GraphCursor;
     use concinnity_core::animation::skeleton::AnimationClip;
+    use concinnity_core::animation::skinned_mesh_map::SkinnedMeshNameIndex;
     use concinnity_core::components::AnimationGraph;
     use concinnity_host::thread::asset_id;
 
@@ -249,7 +249,7 @@ mod tests {
     }
 
     fn name_index() -> SkinnedMeshNameIndex {
-        SkinnedMeshNameIndex(std::collections::HashMap::from([(NAME, TARGET)]))
+        SkinnedMeshNameIndex(hashbrown::HashMap::from([(NAME, TARGET)]))
     }
 
     // Reach into a flat bucket's in-flight ramp.

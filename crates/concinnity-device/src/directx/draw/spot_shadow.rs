@@ -44,10 +44,8 @@ pub(in crate::directx) struct SpotShadowState {
     pub slice_size: u32,
     // Each slice's light frustum, which its GPU cull keeps casters inside.
     pub frusta: Vec<Frustum>,
-    // Round-robin clock + primed set, advanced once per frame in record_frame.
-    pub scheduler: spot_shadow::SpotShadowScheduler,
-    // Slices re-rendered this frame (bit `i` = slice `i`). Set in record_frame
-    // and read by encode_spot_shadow_pass.
+    // Slices re-rendered this frame (bit `i` = slice `i`), as the frame's plan
+    // scheduled them; read by encode_spot_shadow_pass.
     pub render_mask: u32,
 }
 
@@ -56,13 +54,6 @@ impl SpotShadowState {
     // all carry exactly this many entries.
     pub(crate) fn count(&self) -> u32 {
         self.dsvs.len() as u32
-    }
-
-    // Advance the round-robin clock and record which slices re-render this
-    // frame. A no-op (mask stays 0) when the world has no shadowed spot.
-    pub(crate) fn advance(&mut self, every_frame: bool) {
-        let count = self.dsvs.len();
-        self.render_mask = self.scheduler.next_mask(every_frame, count);
     }
 
     // Slices that re-render this frame.

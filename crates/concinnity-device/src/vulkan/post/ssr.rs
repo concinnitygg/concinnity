@@ -6,9 +6,10 @@
 //! reflection probes from.
 
 use ash::vk;
+use concinnity_core::gfx::render_types::SsrParams;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostPassDevice;
-use concinnity_core::render::post::ssr::settings::{SsrParamsInputs, SsrSettings};
+use concinnity_core::render::post::ssr::settings::SsrSettings;
 use concinnity_core::render::post::ssr::{SsrInputs, SsrPass, target_desc};
 
 use crate::vulkan::context::VkContext;
@@ -75,35 +76,14 @@ impl VkContext {
         &self,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
-        fov_y_radians: f32,
-        aspect: f32,
-        cam_pos: [f32; 3],
+        params: Option<&SsrParams>,
     ) {
-        let Some(ssr) = &self.ssr else { return };
-        let Some(settings) = &ssr.settings else {
+        let (Some(ssr), Some(params)) = (&self.ssr, params) else {
             return;
         };
         let Some(gbuffer) = self.gbuffer_targets().and_then(|gb| gb.frame(frame_idx)) else {
             return;
         };
-        // The view-to-world rotation is the transpose of the view matrix's
-        // orthonormal 3x3, embedded in a 4x4.
-        let v = self.state.view.matrix;
-        let inv_view_rot = [
-            [v[0][0], v[1][0], v[2][0], 0.0],
-            [v[0][1], v[1][1], v[2][1], 0.0],
-            [v[0][2], v[1][2], v[2][2], 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ];
-        let params = settings.params(SsrParamsInputs {
-            fov_y_radians,
-            aspect,
-            inv_view_rot,
-            cam_pos,
-            prefilter_mip_count: self.scene.prefilter_mip_count as f32,
-            sky_rot: self.state.view.sky_rot,
-            pre_exposure: self.pre_exposure.value(),
-        });
         let device = self.post_device(frame_idx);
         let scene =
             &self.targets.hdr_resolve_images[frame_idx % self.targets.hdr_resolve_images.len()];
@@ -117,7 +97,7 @@ impl VkContext {
                 roughness: gbuffer.roughness,
                 prefilter: self.scene.env_map.prefilter.view,
             },
-            &params,
+            params,
         ) {
             tracing::error!("SSR resolve: {e}");
             return;

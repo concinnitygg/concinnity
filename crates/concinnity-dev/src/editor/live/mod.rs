@@ -23,7 +23,7 @@ use concinnity_core::components::{
     CharacterCapsule, CharacterShape, DirectionalLight, GraphicsConfig, Transform, VolumetricFog,
 };
 use concinnity_core::ecs::{ComponentAsset, Entity, World};
-use concinnity_engine::live_edit::shape_preview;
+use concinnity_core::render::live_preview::shape as shape_preview;
 pub(crate) use diff::{args_changes, same_assets};
 use serde_json::Value;
 use std::collections::BTreeMap;

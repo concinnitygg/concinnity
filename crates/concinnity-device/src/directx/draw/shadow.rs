@@ -13,10 +13,8 @@
 //! covered. The spot slices draw through the same `draw_shadow_view` from their
 //! own indirect buffer.
 
-use concinnity_core::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
-use concinnity_core::render::backend_init::ShadowCadence;
+use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;
 use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::shadow_schedule;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -28,9 +26,7 @@ use crate::directx::texture::GpuResource;
 
 // Shadow map resources. `resource` / `dsvs` are `None` / empty when the shadow
 // pass is disabled (a 1x1 array fallback SRV is still bound at `srv_gpu`).
-// `dsvs` is one DSV per cascade slice. `light_dir` is the world-space unit
-// vector pointing toward the first directional light, captured at init from
-// `light_uniforms` and used by per-frame CSM updates.
+// `dsvs` is one DSV per cascade slice.
 pub(in crate::directx) struct ShadowState {
     pub resource: Option<GpuResource<ID3D12Resource>>,
     pub dsvs: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
@@ -38,20 +34,6 @@ pub(in crate::directx) struct ShadowState {
     // Slices the bound resource holds: the cascades, or the fallback's one.
     pub layers: u32,
     pub srv_gpu: SrvSlot,
-    pub light_dir: [f32; 3],
-    pub cadence: ShadowCadence,
-    // Round-robin clock + primed-set for the cascade schedule; advanced once per
-    // frame in record_frame.
-    pub scheduler: shadow_schedule::ShadowCascadeScheduler,
-    // Cascades re-rendered this frame (bit `i` = cascade `i`). Set in
-    // record_frame and read by encode_shadow_pass so the two agree on which
-    // slices to refresh and which to leave intact.
-    pub render_mask: u32,
-    // Carried CSM uniforms: skipped cascades keep the VP their slice was last
-    // rendered with, so the Main pass samples each slice consistently. Splits
-    // refresh every frame; per-cascade light VPs only when the mask includes
-    // that cascade. Uploaded to the per-frame shadow UBO each frame.
-    pub uniforms: ShadowUniforms,
 }
 
 // One depth-only shadow view to draw from a cull-written indirect region: the
@@ -98,10 +80,10 @@ impl DxContext {
         // last rendered, so the Main pass still samples it consistently. The 0
         // sentinel (mask not yet set) falls back to all cascades.
         let all_cascades = (1u32 << NUM_SHADOW_CASCADES) - 1;
-        let render_mask = if self.shadow.render_mask == 0 {
+        let render_mask = if self.state.planner.shadow.cascade_mask == 0 {
             all_cascades
         } else {
-            self.shadow.render_mask
+            self.state.planner.shadow.cascade_mask
         };
 
         self.set_shadow_raster_state(cmd, sm);
@@ -123,7 +105,7 @@ impl DxContext {
             // as a compute prologue in this (shadow) command list, before any draw.
             self.encode_shadow_culls(cmd, frame_idx, render_mask, cam_pos);
             self.bind_shadow_views(cmd, frame_idx);
-            let n_cull = self.cull_count();
+            let n_cull = self.state.draw.record_count();
             for cascade_idx in 0..NUM_SHADOW_CASCADES {
                 if render_mask & (1u32 << cascade_idx) == 0 {
                     continue;
@@ -212,7 +194,7 @@ impl DxContext {
     pub(in crate::directx) fn shadow_views_drawable(&self) -> bool {
         self.cull.shadow_bindless_pso.is_some()
             && self.cull.shadow_bindless_cmd_sig.is_some()
-            && self.cull_count() > 0
+            && self.state.draw.record_count() > 0
     }
 
     // Bind the depth-only bindless shadow pipeline and this frame's object
@@ -258,7 +240,7 @@ impl DxContext {
         let Some(cmd_sig) = self.cull.shadow_bindless_cmd_sig.as_ref() else {
             return;
         };
-        let prefix = self.skinned_record_base();
+        let prefix = self.state.draw.skinned_record_base();
         let stride = crate::directx::cull::INDIRECT_COMMAND_STRIDE as u64;
         let byte_off = |first: usize| first as u64 * stride;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and

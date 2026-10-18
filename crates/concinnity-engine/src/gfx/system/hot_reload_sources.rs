@@ -12,13 +12,14 @@ use concinnity_core::ecs::PipelineContext;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_host::thread::asset_id;
-use std::collections::{BTreeSet, HashMap};
+use hashbrown::HashMap;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use super::parked::{ShaderOverrides, TextureNameSlots};
 use super::sdf_field_sources::SdfFieldMap;
 use super::shader_sources::ShaderSourceMap;
-use crate::gfx::draw_list::MeshSourceMeta;
+use concinnity_core::render::draw_list::MeshSourceMeta;
 
 // Every unique parent directory across `paths`. The watcher subscribes to
 // these; a bare-filename source (no parent) is skipped and only reachable via

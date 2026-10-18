@@ -1,13 +1,8 @@
-//! The schedule's resource-id registry and the debug-build access validator.
+//! The engine's access-id registry and the debug-build access validator.
 //!
-//! Component access ids are the component registry's discriminants; resources
-//! and event types have no such number, so this module assigns them one (by
-//! list position) in the `Access` resource-id space. A type absent from the
-//! list cannot be declared: a system touching it must stay exclusive, or the
-//! type gets registered here. Event send is a resource write of the event
-//! type's id, event read a resource read, which is what lets the schedule
-//! serialize same-queue systems in table order and keep event order
-//! bit-identical to serial.
+//! Resource and event types this crate defines get their access ids here,
+//! after core's (`concinnity_core::ecs::access_id`); a type absent from both
+//! lists cannot be declared, so a system touching it stays exclusive.
 //!
 //! The validator half installs the core `access_check` hooks: `World::step`
 //! announces the stepping system through one, and every context accessor's touch
@@ -15,150 +10,39 @@
 //! Exclusive systems pass everything; structural change and blob access require
 //! exclusivity. Debug builds only.
 
-use concinnity_core::components::AudioCommand;
-use concinnity_core::components::ControlsCommand;
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::InteractEvent;
-use concinnity_core::components::PlayCue;
-use concinnity_core::components::RootMotionEvent;
-use concinnity_core::components::SceneCommand;
-use concinnity_core::components::ScreenCommand;
-use concinnity_core::components::ScreenShown;
-use concinnity_core::components::SettingCommand;
-use concinnity_core::components::StoryCommand;
-use concinnity_core::components::StoryReload;
-use concinnity_core::ecs::{
-    Access, ComponentId, CursorState, DesiredCursor, EventStore, FlyCam, FrameTime, HudLayers,
-    HudPrefs, MenuActive, MenuOverride, OpenDropdown, ScheduleMode, ScreenStack, SimTiming,
-    WindowMinimized,
-};
-use std::any::TypeId;
-use std::sync::OnceLock;
+use concinnity_core::ecs::Access;
+use concinnity_core::ecs::EventStore;
+use concinnity_core::ecs::access_id::{self, ACCESS_ID_COUNT, ACCESS_IDS, AccessEntry};
 
-macro_rules! define_access_ids {
-    (
-        resources: [ $( $res:path, )* ],
-        events: [ $( $ev:path, )* ] $(,)?
-    ) => {
-        fn table() -> &'static [(TypeId, &'static str, u8)] {
-            static TABLE: OnceLock<Vec<(TypeId, &'static str, u8)>> = OnceLock::new();
-            TABLE.get_or_init(|| {
-                let types = [
-                    $( (TypeId::of::<$res>(), stringify!($res)), )*
-                    $( (TypeId::of::<$ev>(), stringify!($ev)), )*
-                ];
-                assert!(types.len() <= 128, "access-id registry exceeds the 128-bit mask");
-                types
-                    .into_iter()
-                    .enumerate()
-                    .map(|(id, (type_id, name))| (type_id, name, id as u8))
-                    .collect()
-            })
-        }
-
-        // Ensure every event queue a declared access can touch exists, so a
-        // validated system's `events_mut` never grows the store's map
-        // mid-tick. Exclusive systems keep today's lazy creation.
-        pub(crate) fn ensure_event_queues(store: &mut EventStore, access: Access) {
-            if access.is_exclusive() {
-                return;
-            }
-            $(
-                if let Some(id) = id_of::<$ev>() {
-                    if access.may_write_resource(id) || access.may_read_resource(id) {
-                        store.get_mut_or_create::<$ev>();
-                    }
-                }
-            )*
-        }
-    };
-}
-
-define_access_ids! {
+concinnity_core::define_access_ids! {
+    static ENGINE_ACCESS_IDS;
+    const ENGINE_ACCESS_END;
+    base: ACCESS_ID_COUNT,
     resources: [
-        FrameInput,
-        MenuActive,
-        SimTiming,
-        FrameTime,
-        MenuOverride,
-        DesiredCursor,
-        HudLayers,
-        ScreenStack,
-        FlyCam,
-        CursorState,
-        WindowMinimized,
-        HudPrefs,
-        OpenDropdown,
-        crate::ecs::DisabledSettingRows,
-        crate::ecs::DisplayModes,
         crate::ecs::InputMailbox,
-        crate::ecs::InputSampledAt,
-        ScheduleMode,
-        crate::ecs::ActiveSceneFlow,
-        crate::ecs::SceneResidencyStatus,
-        crate::ecs::ScreenshotRequest,
-        concinnity_core::ecs::EntityById,
-        crate::app::budget::MemoryBudget,
-        crate::app::budget::ThreadBudget,
-        crate::gfx::overlay::OverlayFrame,
-        crate::gfx::overlay::OverlayAssets,
-        crate::gfx::overlay::OverlayRecycle,
-        concinnity_core::planet::FrameRebases,
-        concinnity_core::camera_track::CameraTrackStatus,
     ],
-    events: [
-        ControlsCommand,
-        InteractEvent,
-        RootMotionEvent,
-        ScreenCommand,
-        ScreenShown,
-        SettingCommand,
-        SceneCommand,
-        StoryCommand,
-        StoryReload,
-        PlayCue,
-        AudioCommand,
-    ],
+    events: [],
 }
 
-// The schedule id of a registered resource or event type.
-pub(crate) fn id_of<T: 'static>() -> Option<ComponentId> {
-    resolve(TypeId::of::<T>())
-}
+const TABLES: [&[AccessEntry]; 2] = [ACCESS_IDS, ENGINE_ACCESS_IDS];
 
-fn resolve(type_id: TypeId) -> Option<ComponentId> {
-    table()
-        .iter()
-        .find(|(t, _, _)| *t == type_id)
-        .map(|&(_, _, id)| ComponentId::new(id))
+// Ensure every event queue a declared access can touch exists before the
+// first tick.
+pub(crate) fn ensure_event_queues(store: &mut EventStore, access: Access) {
+    access_id::ensure_event_queues(&TABLES, store, access);
 }
-
-// Build a resource mask from types in the access-id registry. Panics on an
-// unregistered type: called once at schedule build, so a typo fails loudly at
-// world start, not silently at runtime.
-macro_rules! resource_mask {
-    ( $( $ty:ty ),* $(,)? ) => {{
-        let mut m = ::concinnity_core::ecs::ComponentMask::EMPTY;
-        $( m.insert(
-            $crate::ecs::access_ids::id_of::<$ty>()
-                .unwrap_or_else(|| panic!(
-                    "not in the access-id registry: {}",
-                    stringify!($ty),
-                )),
-        ); )*
-        m
-    }};
-}
-
-pub(crate) use concinnity_core::component_mask;
-pub(crate) use resource_mask;
 
 #[cfg(debug_assertions)]
 mod validate {
-    use super::{resolve, table};
+    use super::{TABLES, access_id};
     use concinnity_core::ecs::Access;
     use concinnity_core::ecs::ComponentId;
     use concinnity_core::ecs::access_check::{self, Touch};
+
+    // The schedule id of a registered resource or event type, from its `TypeId`.
+    fn resolve(type_id: std::any::TypeId) -> Option<ComponentId> {
+        access_id::resolve(&TABLES, type_id)
+    }
 
     std::thread_local! {
         static ACTIVE: std::cell::Cell<Option<(Access, &'static str)>> =
@@ -219,7 +103,7 @@ mod validate {
                     "{system} touches resource {type_name}, which is not in the \
                      access-id registry; register it or keep the system exclusive \
                      (registry holds {} entries)",
-                    table().len(),
+                    access_id::registered(&TABLES),
                 ),
             },
         }
@@ -233,34 +117,25 @@ pub(crate) use validate::install_hook;
 mod tests {
     use super::*;
 
-    use concinnity_core::components::TextLabel;
-    use concinnity_core::ecs::Access;
+    use concinnity_core::components::{ScreenCommand, TextLabel};
+    use concinnity_core::ecs::access_id::AccessId;
+    use concinnity_core::ecs::{FlyCam, MenuActive, ScreenStack};
+    use concinnity_core::{component_mask, resource_mask};
+    use std::any::TypeId;
+
+    use crate::ecs::InputMailbox;
 
     #[test]
-    fn registered_types_resolve_to_distinct_ids() {
-        let a = id_of::<MenuActive>().unwrap();
-        let b = id_of::<ScreenCommand>().unwrap();
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn unregistered_types_do_not_resolve() {
+    fn engine_types_resolve_after_core_ones() {
+        let mailbox = access_id::resolve(&TABLES, TypeId::of::<InputMailbox>()).unwrap();
+        assert_eq!(mailbox, InputMailbox::ID);
+        assert!(mailbox.get() >= ACCESS_ID_COUNT);
+        assert_eq!(
+            access_id::resolve(&TABLES, TypeId::of::<ScreenCommand>()),
+            Some(ScreenCommand::ID)
+        );
         struct NotRegistered;
-        assert!(id_of::<NotRegistered>().is_none());
-    }
-
-    #[test]
-    fn ensure_event_queues_creates_declared_queues_only() {
-        let mut store = EventStore::new();
-        let access = Access::new().writes_resources(resource_mask![ScreenCommand]);
-        ensure_event_queues(&mut store, access);
-        assert!(store.get::<ScreenCommand>().is_some());
-        assert!(store.get::<PlayCue>().is_none());
-
-        // Exclusive systems keep lazy creation.
-        let mut lazy = EventStore::new();
-        ensure_event_queues(&mut lazy, Access::new().exclusive());
-        assert!(lazy.get::<ScreenCommand>().is_none());
+        assert!(access_id::resolve(&TABLES, TypeId::of::<NotRegistered>()).is_none());
     }
 
     #[cfg(debug_assertions)]
@@ -269,7 +144,8 @@ mod tests {
         use concinnity_core::components::Sprite;
         use concinnity_core::components::TextLabel;
         use concinnity_core::ecs::access_check::set_active;
-        use concinnity_core::ecs::{Access, World};
+        use concinnity_core::ecs::{Access, MenuActive, World};
+        use concinnity_core::{component_mask, resource_mask};
 
         #[test]
         #[should_panic(expected = "Sprite without declaring it")]
@@ -330,9 +206,9 @@ mod tests {
 
     #[test]
     fn masks_build_from_registered_types() {
-        let m = resource_mask![MenuActive, ScreenStack];
-        assert!(m.contains(id_of::<MenuActive>().unwrap()));
-        assert!(!m.contains(id_of::<FlyCam>().unwrap()));
+        let m = resource_mask![MenuActive, ScreenStack, InputMailbox];
+        assert!(m.contains(InputMailbox::ID));
+        assert!(!m.contains(FlyCam::ID));
 
         let c = component_mask![TextLabel];
         assert!(!c.is_empty());

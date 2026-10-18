@@ -1,7 +1,7 @@
 // The static draw list: every prop and instanced prop baked into draw objects,
 // with each prop entity given its draw slots and init world matrix.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use concinnity_core::components::{
     GlobalTransform, InstancedProp, PropInstance, RenderHandle, SubMeshRef,
@@ -13,15 +13,15 @@ use concinnity_core::memory::InlineVec;
 use concinnity_core::transform::propagation;
 
 use super::{GraphicsSystem, PickCandidate};
-use crate::gfx::draw_list::{self, DrawListData, LoadedMesh, RoomGeometry};
-use crate::gfx::material_entry::MaterialEntry;
+use concinnity_core::render::draw_list::{self, DrawListData, LoadedMesh, RoomGeometry};
+use concinnity_core::render::material_entry::MaterialEntry;
 
 // The decoded geometry and materials the draw list resolves props against.
 pub(super) struct PropDrawInputs<'a> {
     pub(super) model_map: &'a HashMap<AssetId, Vec<SubMeshRef>>,
     pub(super) mesh_geometry: &'a [LoadedMesh],
     pub(super) room_geometry: &'a [RoomGeometry],
-    pub(super) terrains: &'a [crate::gfx::terrain::LoadedTerrain],
+    pub(super) terrains: &'a [concinnity_core::render::terrain::LoadedTerrain],
     pub(super) texture_count: usize,
     pub(super) material_map: &'a HashMap<MaterialHandle, MaterialEntry>,
 }
@@ -55,7 +55,7 @@ impl GraphicsSystem {
                 resolved
                     .get(&entity)
                     .copied()
-                    .unwrap_or(draw_list::IDENTITY4),
+                    .unwrap_or(concinnity_core::transform::IDENTITY),
             );
         }
 

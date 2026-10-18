@@ -113,6 +113,27 @@ impl concinnity_core::bake::environment_map::RowScheduler for PoolRows<'_> {
     }
 }
 
+/// Records a frame graph's passes across the pool, one job per pass.
+impl concinnity_core::render::render_graph::PassFanOut for JobPool {
+    type Clock = SinceStart;
+
+    fn clock(&self) -> SinceStart {
+        SinceStart(Instant::now())
+    }
+
+    // One spawned job per pass, so each starts as soon as a worker is free.
+    fn for_each<T: Send, F: Fn(&mut T) + Send + Sync>(&self, items: &mut [T], job: F) {
+        let job = &job;
+        self.pool.install(|| {
+            rayon::scope(|scope| {
+                for item in items {
+                    scope.spawn(move |_| job(item));
+                }
+            });
+        });
+    }
+}
+
 /// The wall clock a fan-out is timed against: nanoseconds since it started.
 #[derive(Debug, Clone, Copy)]
 pub struct SinceStart(Instant);

@@ -57,7 +57,8 @@ fn of_body(collider: &PropCollider, model: [[f32; 4]; 4]) -> GrassBender {
     if collider.shape == PropColliderShape::Ball {
         // Balls scale by the X axis, like the collider they mirror.
         let x = model[0];
-        let r = collider.radius * (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt();
+        let r =
+            collider.radius * concinnity_core::math::sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]);
         let c = model[3];
         return GrassBender {
             base: [c[0], c[1] - r, c[2]],

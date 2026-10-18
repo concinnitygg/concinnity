@@ -25,8 +25,9 @@
 use concinnity_core::gfx::render_types::{ClusterParams, PostProcessParams};
 use concinnity_core::render::backend_init::BackendInit;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::feature_plan::{BackendFacts, FeaturePlan};
 use concinnity_core::render::scene_state::{DrawList, SceneState};
-use concinnity_core::render::view_history::ViewHistory;
+use concinnity_core::render::shader_reload::ShaderReload;
 use concinnity_core::settings::ResolvedGraphics;
 
 use self::effects::EffectSettings;
@@ -106,17 +107,22 @@ impl Features {
         // on (the scaler consumes both). `taa_enabled` is what the engine
         // carries downstream; the asset `taa` flag is ignored when upscaling
         // is on.
-        let upscaling_active = upscale.scaler.is_some();
-        let taa_enabled = graphics.taa() && !upscaling_active;
-        let needs_velocity = taa_enabled || upscaling_active;
+        let plan = FeaturePlan::resolve(
+            graphics,
+            BackendFacts {
+                rt_capable: crate::metal::raytrace::raytracing_supported(&hw.device),
+                upscaling: upscale.scaler.is_some(),
+            },
+        );
+        let taa_enabled = plan.taa_resolve;
         Self {
             scene,
             hdr_samples,
             output,
             render,
             taa_enabled,
-            ssao_enabled: graphics.ssao().is_some(),
-            gbuffer_enabled: EffectSettings::new(graphics).gbuffer_needed(needs_velocity),
+            ssao_enabled: plan.ssao,
+            gbuffer_enabled: plan.gbuffer,
             // Pair the authored tunables with the resolved mode's output flags.
             // On the SDR path both flags stay 0.0 and the shader runs the full
             // ACES + gamma + FXAA + LUT chain unchanged. On the HDR path
@@ -247,7 +253,7 @@ impl MtlContext {
         };
         let targets = targets::build_targets(&gpu, &features)?;
         let light_cull = scene_data::build_light_cull(&gpu)?;
-        let shadow = shadow::build_shadow(&gpu, &shadows, &light_uniforms)?;
+        let shadow = shadow::build_shadow(&gpu, &shadows)?;
         let spot_shadow = shadow::build_spot_shadow(&gpu, &spot_shadows, shadows.map_size)?;
         let cull = cull::build_cull(
             &gpu,
@@ -338,11 +344,14 @@ impl MtlContext {
                 DrawList::unreserved(world.draw_objects, n_instances),
                 graphics.background.color,
             ),
-            graph_cache: None,
-            gates: Default::default(),
+            graph_scratch: None,
             instanced,
             scene,
-            light_uniforms,
+            lights: concinnity_core::render::light_state::LightState::new(
+                light_uniforms,
+                &local_lights,
+                1,
+            ),
             canopy: Default::default(),
             grass_lod: None,
             canopy_tables: Default::default(),
@@ -356,7 +365,6 @@ impl MtlContext {
             post_process: features.post_process,
             pre_exposure: concinnity_core::gfx::auto_exposure::PreExposure::UNIT,
             taa,
-            view_history: ViewHistory::default(),
             upscale,
             ssao,
             ssr,
@@ -370,7 +378,7 @@ impl MtlContext {
             cluster_params: ClusterParams::ZERO,
             particle,
             auto_exposure,
-            hot_reload: HotReloadState::new(hot_reload),
+            hot_reload: ShaderReload::new(hot_reload),
             world_shader: world_shaders[0].programs.cloned(),
             capture,
             skinned: SkinnedState::new(),
@@ -389,6 +397,7 @@ impl MtlContext {
             atmosphere,
             hw,
         };
+        ctx.state.planner.shadow.cadence = shadows.cadence;
         ctx.refresh_gates(&graphics);
         let pooled = ctx.hw.allocator.stats();
         tracing::info!(

@@ -42,10 +42,9 @@ mod tests {
     use crate::input::snapshot::InputSnapshot;
     use crate::render::backend::{
         BackendProbe, DeviceCapabilities, DrawStreaming, FrameParams, LiveEdit, RenderBackend,
-        RenderTuning, SceneEffects, SkinnedDraws, WindowControl,
+        RenderTuning, SceneEffects, SkinnedDraws, SkinnedFrame, WindowControl,
     };
     use crate::render::draw_slot::SlotAlloc;
-    use crate::render::scene_flow::SceneControl;
     use crate::render::scene_state::{DrawList, GeometryBuffer};
     use crate::test_support::draw_object;
     use alloc::vec;
@@ -113,12 +112,15 @@ mod tests {
         }
     }
 
-    impl SceneControl for Hosted {
-        fn update_visibility(&mut self, _: DrawIndex, _: bool) {}
-        fn set_fade(&mut self, _: f32) {}
-    }
-
     impl RenderBackend for Hosted {
+        fn live_edit(&mut self) -> Option<&mut dyn LiveEdit> {
+            Some(self)
+        }
+
+        fn live_edit_ref(&self) -> Option<&dyn LiveEdit> {
+            Some(self)
+        }
+
         fn window_closed(&mut self) -> bool {
             false
         }
@@ -187,9 +189,15 @@ mod tests {
     #[test]
     fn the_skinned_pushes_land_in_the_slots() {
         let mut b = Hosted::new();
-        b.update_skinned_pose(SkinnedIndex(0), &[MOVED, MOVED]);
-        b.update_morph_weights(SkinnedIndex(0), &[0.5]);
-        b.update_skinned_models(&[(SkinnedIndex(0), MOVED)]);
+        let mut poses = crate::render::snapshot::SpanBuffer::default();
+        poses.push(SkinnedIndex(0), &[MOVED, MOVED]);
+        let mut morphs = crate::render::snapshot::SpanBuffer::default();
+        morphs.push(SkinnedIndex(0), &[0.5]);
+        b.update_skinned(SkinnedFrame {
+            poses: &poses,
+            morphs: &morphs,
+            models: &[(SkinnedIndex(0), MOVED)],
+        });
         b.reveal_skinned_instance(SkinnedIndex(0), MOVED);
         assert_eq!(b.scene.skinned.morph_weights[0], vec![0.5]);
         assert!(b.scene.skinned.draw_objects[0].visible);

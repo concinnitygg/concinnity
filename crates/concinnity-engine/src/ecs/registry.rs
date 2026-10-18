@@ -46,6 +46,9 @@
 //!   * Spawn/Settings/Streaming before Graphics: despawns leave the transform
 //!     push, setting and streaming ops land before this frame's submit, and
 //!     `CameraRelativeView` is ready for the draw.
+//!   * SettingsWriter right after Settings and before UiInput and Graphics:
+//!     both can stop the run, and a change made on the tick that stops must
+//!     still be written.
 //!   * LoadingOverlay after Streaming (reads the residency status published
 //!     this tick) and before UiInput (its screen commands apply same tick).
 //!   * Graphics last but for the report: the frame it submits shows the tick's
@@ -58,7 +61,7 @@
 
 use concinnity_core::ecs::PipelineContext;
 
-use crate::ecs::{access_ids, decompose, schedule};
+use crate::ecs::{access_ids, decompose, host_resources, schedule};
 
 // Runs once at world start, after the gates have built the systems and before
 // their `init`. The engine defaults the world is completed with land earlier
@@ -69,6 +72,7 @@ fn before_init(ctx: &mut PipelineContext) {
     // declared; the hook is installed before the first step can happen.
     #[cfg(debug_assertions)]
     access_ids::install_hook();
+    host_resources::publish(ctx);
     decompose::run(ctx);
 }
 
@@ -89,7 +93,7 @@ crate::define_systems! {
         GraphicsSystem,
     ],
 
-    OverlaySystem => crate::gfx::overlay::OverlaySystem {
+    OverlaySystem => concinnity_core::render::overlay::OverlaySystem {
         gate: schedule::overlay,
         present_when: "the world runs with a window",
         phase: Early,
@@ -138,14 +142,14 @@ crate::define_systems! {
         after: [OverlaySystem],
         before: [Camera3DSystem, ThirdPersonSystem],
     },
-    Camera3DSystem => crate::controller::camera::Camera3DSystem {
+    Camera3DSystem => concinnity_core::controller::camera::Camera3DSystem {
         gate: schedule::camera3d,
         present_when: "the first controlled Camera3D has no follow block",
         phase: Late,
         after: [PhysicsSystem],
         before: [AudioSystem],
     },
-    ThirdPersonSystem => crate::controller::third_person::ThirdPersonSystem {
+    ThirdPersonSystem => concinnity_core::controller::third_person::ThirdPersonSystem {
         gate: schedule::third_person,
         present_when: "the first controlled Camera3D has a follow block",
         phase: Late,
@@ -187,40 +191,47 @@ crate::define_systems! {
         after: [],
         before: [],
     },
-    StatHud => crate::hud::stat_hud::StatHudSystem {
+    StatHud => concinnity_core::hud::stat_hud::StatHudSystem {
         gate: schedule::stat_hud,
         present_when: "the world declares a StatHud",
         phase: Late,
         after: [],
         before: [],
     },
-    DebugHud => crate::hud::debug_hud::DebugHudSystem {
+    DebugHud => concinnity_core::hud::debug_hud::DebugHudSystem {
         gate: schedule::debug_hud,
         present_when: "the world declares a DebugHud AND the binary is a debug build or a `cn debug` session",
         phase: Late,
         after: [],
         before: [],
     },
-    FpsCounter => crate::hud::fps_counter::FpsCounterSystem {
+    FpsCounter => concinnity_core::hud::fps_counter::FpsCounterSystem {
         gate: schedule::fps_counter,
         present_when: "the world declares an FpsCounter",
         phase: Late,
         after: [],
         before: [],
     },
-    SpawnSystem => crate::spawn::SpawnSystem {
+    SpawnSystem => concinnity_core::spawn::SpawnSystem {
         gate: schedule::spawn,
         present_when: "the world runs with a window",
         phase: PreRender,
         after: [BehaviorSystem],
         before: [GraphicsSystem],
     },
-    SettingsSystem => crate::settings::system::SettingsSystem {
+    SettingsSystem => concinnity_core::settings::system::SettingsSystem {
         gate: schedule::settings,
         present_when: "the world runs with a window",
         phase: PreRender,
         after: [],
         before: [GraphicsSystem],
+    },
+    SettingsWriterSystem => crate::settings::SettingsWriterSystem {
+        gate: schedule::settings_writer,
+        present_when: "the world runs with a window",
+        phase: PreRender,
+        after: [SettingsSystem],
+        before: [UiInputSystem, GraphicsSystem],
     },
     StreamingSystem => crate::gfx::streaming::system::StreamingSystem {
         gate: schedule::streaming,
@@ -229,14 +240,14 @@ crate::define_systems! {
         after: [Camera3DSystem, ThirdPersonSystem, CameraTrackSystem],
         before: [GraphicsSystem],
     },
-    LoadingOverlaySystem => crate::hud::loading_overlay::LoadingOverlaySystem {
+    LoadingOverlaySystem => concinnity_core::hud::loading_overlay::LoadingOverlaySystem {
         gate: schedule::loading_overlay,
         present_when: "the world declares a LoadingOverlay",
         phase: PreRender,
         after: [StreamingSystem],
         before: [UiInputSystem],
     },
-    UiInputSystem => crate::ui::UiInputSystem {
+    UiInputSystem => concinnity_core::ui::UiInputSystem {
         gate: schedule::ui_input,
         present_when: "the world declares any HitRegion, Screen, or KeyBinding",
         phase: PreRender,
@@ -250,7 +261,7 @@ crate::define_systems! {
         after: [SpawnSystem, SettingsSystem, StreamingSystem],
         before: [],
     },
-    FrameReportSystem => crate::frame_report::FrameReportSystem {
+    FrameReportSystem => concinnity_core::frame_report::FrameReportSystem {
         gate: schedule::frame_report,
         present_when: "the run is benchmarked",
         phase: PostRender,
@@ -285,6 +296,24 @@ mod tests {
 
         let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
         assert_eq!(names, ["StatHud", "DebugHud", "FpsCounter"]);
+    }
+
+    // Any HitRegion, Screen or KeyBinding gates the UI system in; a world with
+    // none of them gets none.
+    #[test]
+    fn ui_components_gate_the_ui_system() {
+        use concinnity_core::components::Screen;
+        use concinnity_core::ecs::asset_id::AssetId;
+
+        let mut world = World::new();
+        world.start(SYSTEMS).unwrap();
+        assert!(world.systems().is_empty());
+
+        let mut world = World::new();
+        world.push_identified(AssetId(1), Screen::default());
+        world.start(SYSTEMS).unwrap();
+        let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+        assert_eq!(names, ["UiInputSystem"]);
     }
 
     // The manifest reports exactly the systems `start()` builds, in the same

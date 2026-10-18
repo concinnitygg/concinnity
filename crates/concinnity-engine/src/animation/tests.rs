@@ -434,15 +434,10 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
     }
 
     let pose = world.query::<SkeletonPose>().next().expect("pose survives");
-    let foot_mesh = {
-        let m = pose.joint_matrices[2];
-        let b = pose.skeleton.bind_position(2);
-        [
-            m[0][0] * b[0] + m[1][0] * b[1] + m[2][0] * b[2] + m[3][0],
-            m[0][1] * b[0] + m[1][1] * b[1] + m[2][1] * b[2] + m[3][1],
-            m[0][2] * b[0] + m[1][2] * b[1] + m[2][2] * b[2] + m[3][2],
-        ]
-    };
+    let foot_mesh = concinnity_core::transform::mat4_transform_point(
+        &pose.joint_matrices[2],
+        pose.skeleton.bind_position(2),
+    );
     let rig_y = world.query::<CharacterRig>().next().unwrap().position[1];
     // The ledge top is at world 0.25; the foot's mesh-space height plus the
     // rig's world height must land there (the animated pose kept it at ~0).

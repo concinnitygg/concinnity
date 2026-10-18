@@ -8,7 +8,6 @@ use concinnity_core::gfx::auto_exposure;
 use concinnity_core::render::backend_init::{PlanarBudget, WorldFx};
 use concinnity_core::render::decal;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::lights;
 use concinnity_core::render::planar_reflection::PlanarReflectors;
 use concinnity_core::settings::ResolvedGraphics;
 
@@ -684,14 +683,9 @@ pub(super) fn build_world_effects(
             // also writes each one's albedo descriptor.
             set: decal::DecalSet::new(crate::vulkan::decal::MAX_DECALS, frames),
         },
-        // The fog sun mirrors the first directional light, cached because the
-        // light UBO is uploaded rather than pushed each frame.
-        // `update_directional_lights` re-derives both.
         fog: FogState {
             resources: fog_resources,
             settings: fx.fog,
-            sun_dir: lights::sun_direction(&uniforms.light_uniforms),
-            sun_color: lights::sun_color(&uniforms.light_uniforms),
         },
         raymarch,
         planar_reflection,

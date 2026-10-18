@@ -6,27 +6,17 @@
 
 use concinnity_core::components::DirectionalLight;
 use concinnity_core::gfx::render_types::LightUniforms;
-use concinnity_core::render::cluster_range::ClusterReach;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::lights::{self, LightData};
+use concinnity_core::render::lights::LightData;
 use concinnity_core::render::spot_shadow;
 
 use super::context::{MtlContext, write_buffer_slice};
 
 impl MtlContext {
-    // Replace the live directional lights. The main pass, fog, raymarch, and RT
-    // reflection params all read `light_uniforms` afresh each draw, so they need
-    // nothing beyond the rewrite; `shadow.light_dir` is the one init-time cache.
+    // Replace the live directional lights. Every reader, the shadow cascades
+    // included, reads the sun from the light state each frame.
     pub(crate) fn update_directional_lights(&mut self, lights: &[DirectionalLight]) {
-        let (directional, num_directional) = lights::directional_light_data(lights);
-        if self.light_uniforms.directional == directional
-            && self.light_uniforms.num_directional == num_directional
-        {
-            return;
-        }
-        self.light_uniforms.directional = directional;
-        self.light_uniforms.num_directional = num_directional;
-        self.shadow.light_dir = lights::sun_direction(&self.light_uniforms);
+        self.lights.set_directional(lights);
     }
 
     // Move the local lights in place. The light, area and spot tables are
@@ -38,7 +28,7 @@ impl MtlContext {
         data: &LightData,
         uniforms: &LightUniforms,
     ) -> RenderResult<()> {
-        if data.lights.len() as i32 != self.light_uniforms.num_local_lights
+        if !self.lights.same_local_count(&data.lights)
             || data.spot_shadows.len() != self.spot_shadow.count as usize
         {
             return Err(RenderError::Other(
@@ -49,15 +39,13 @@ impl MtlContext {
         write_buffer_slice(&self.scene.local_light_buffer, &data.lights)?;
         write_buffer_slice(&self.scene.area_light_buffer, &data.area_lights)?;
         write_buffer_slice(&self.spot_shadow.buffer, &data.spot_shadows)?;
-        self.scene.cluster_reach = ClusterReach::new(&data.lights);
         self.spot_shadow.frusta = data
             .spot_shadows
             .iter()
             .map(spot_shadow::slice_frustum)
             .collect();
-        self.spot_shadow.scheduler = Default::default();
-        self.light_uniforms.point = uniforms.point;
-        self.light_uniforms.num_point = uniforms.num_point;
+        self.state.planner.shadow.reset_spots();
+        self.lights.move_local(&data.lights, uniforms);
         Ok(())
     }
 }

@@ -6,9 +6,10 @@
 //! `DxPostDevice`, which also binds the probe cube table and the frame's
 //! ProbeSet a missed ray falls back to.
 
+use concinnity_core::gfx::render_types::SsrParams;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::{PostExtent, PostPassDevice};
-use concinnity_core::render::post::ssr::settings::{SsrParamsInputs, SsrSettings};
+use concinnity_core::render::post::ssr::settings::SsrSettings;
 use concinnity_core::render::post::ssr::{SsrInputs, SsrPass, target_desc};
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -162,32 +163,13 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        fov_y_radians: f32,
-        aspect: f32,
-        cam_pos: [f32; 3],
+        params: Option<&SsrParams>,
     ) {
         let Some(resolve) = self.ssr.as_ref().and_then(|s| s.resolve.as_ref()) else {
             return;
         };
+        let Some(params) = params else { return };
         let Some(gbuffer) = &self.gbuffer else { return };
-        // The view-to-world rotation is the transpose of the view matrix's
-        // orthonormal 3x3, embedded in a 4x4.
-        let v = self.state.view.matrix;
-        let inv_view_rot = [
-            [v[0][0], v[1][0], v[2][0], 0.0],
-            [v[0][1], v[1][1], v[2][1], 0.0],
-            [v[0][2], v[1][2], v[2][2], 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ];
-        let params = resolve.settings.params(SsrParamsInputs {
-            fov_y_radians,
-            aspect,
-            inv_view_rot,
-            cam_pos,
-            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
-            sky_rot: self.state.view.sky_rot,
-            pre_exposure: self.pre_exposure.value(),
-        });
         let device = self.post_device(frame_idx);
         if let Err(e) = resolve.pass.encode(
             &device,
@@ -199,7 +181,7 @@ impl DxContext {
                 roughness: gbuffer.roughness_srv_gpu,
                 prefilter: self.prefilter_cube_srv_gpu(),
             },
-            &params,
+            params,
         ) {
             tracing::error!("SSR resolve: {e}");
             return;

@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::sync::mpsc::{Receiver, Sender};
 
 use concinnity_core::gfx::render_types::{DrawIndex, MaterialUniforms};
+use concinnity_core::math::dvec3;
 use concinnity_core::planet::{
     DVec3, HORIZON_SHADOW_REACH, Horizon, HorizonOccluder, LocalFrame, MAX_RESIDENT_TILES,
     PlanetFrame, TileBoundsCache, TileId, TileLod, TileMesh, TileMorphFrame, TileSeams, TileView,
@@ -24,7 +25,7 @@ use concinnity_core::render::error;
 use concinnity_core::render::ops::{OpFailure, RenderOps};
 
 use super::worker::Worker;
-use crate::gfx::render_slots::RenderSlots;
+use concinnity_core::render::render_slots::RenderSlots;
 
 // Threads building tile meshes. A fresh camera wants a thousand or more.
 const WORKERS: usize = 3;
@@ -129,9 +130,8 @@ fn plan(
         .filter(|id| !tiles.contains_key(id))
         .map(|&id| {
             let b = bounds.get(id);
-            let d = (0..3)
-                .map(|i| (camera[i] - b.center[i]).powi(2))
-                .sum::<f64>();
+            let to = dvec3::sub(camera, b.center);
+            let d = dvec3::dot(to, to);
             (id.level, d, id)
         })
         .collect();
@@ -143,10 +143,7 @@ fn plan(
 // Whether tiles chosen for `planned` still serve `view`: the same ranges,
 // and a camera within the drift the choice left room for.
 fn still_serves(lod: &TileLod, planned: &TileView, view: &TileView) -> bool {
-    let distance = (0..3)
-        .map(|i| (view.eye[i] - planned.eye[i]).powi(2))
-        .sum::<f64>()
-        .sqrt();
+    let distance = dvec3::length(dvec3::sub(view.eye, planned.eye));
     planned.range_widths == view.range_widths && distance < lod.drift(planned)
 }
 
@@ -692,12 +689,8 @@ mod tests {
         let mut hidden = 0;
         for t in sel.draw.iter().map(|d| d.id) {
             let b = bounds.get(t);
-            let near = (0..3)
-                .map(|i| (b.center[i] - camera[i]).powi(2))
-                .sum::<f64>()
-                .sqrt()
-                - b.radius
-                <= HORIZON_SHADOW_REACH;
+            let near =
+                dvec3::length(dvec3::sub(b.center, camera)) - b.radius <= HORIZON_SHADOW_REACH;
             let behind = horizon.hides_sphere(b.center, b.radius);
             assert_eq!(p.show.contains(&t), near || !behind, "{t:?}");
             hidden += usize::from(!p.show.contains(&t));

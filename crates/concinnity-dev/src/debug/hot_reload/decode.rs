@@ -449,6 +449,12 @@ pub(crate) fn poll_pending_assets(
         }
     }
 
+    // Everything past the textures rewrites built content in place.
+    let Some(backend) = backend.live_edit() else {
+        tracing::error!("asset hot-reload: the backend cannot rewrite a built world");
+        return true;
+    };
+
     if let Some(lut) = &batch.color_lut {
         match backend.update_color_lut(lut.size, &lut.data) {
             Ok(()) => reloaded += 1,
@@ -726,7 +732,7 @@ pub(crate) fn poll_pending_assets(
 // scheduled.
 pub(crate) fn poll_pending_envmap(
     state: &AssetHotReloadState,
-    backend: &mut dyn backend::RenderBackend,
+    backend: &mut dyn backend::LiveEdit,
 ) -> bool {
     let mut slot = match state.env_map_inflight.lock() {
         Ok(g) => g,

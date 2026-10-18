@@ -7,10 +7,7 @@
 use crate::components::IndirectTechnique;
 use crate::gfx::auto_exposure::EV_LIMIT;
 use crate::settings::SettingKey;
-use crate::settings::levels::{
-    aa_mode_at, aa_mode_index, pass_resolution_at, pass_resolution_index, ssgi_rays_at,
-    ssgi_rays_index,
-};
+use crate::settings::levels::{AA_MODE, PASS_RESOLUTION, SSGI_RAYS};
 use crate::settings::quality::{QualityCeiling, clamp_aa_mode};
 use crate::settings::resolve::ResolvedGraphics;
 use crate::settings::user::UserGraphicsSettings;
@@ -83,13 +80,14 @@ macro_rules! toggle {
     };
 }
 
-// A cycle knob over the effects field at `$path`, persisted as `$field`.
+// A cycle knob over the effects field at `$path` with options `$levels`,
+// persisted as `$field`.
 macro_rules! cycle {
-    ($key:ident, $field:ident, $($path:ident).+; $index:path, $at:path, $clamp:expr) => {
+    ($key:ident, $field:ident, $($path:ident).+; $levels:expr, $clamp:expr) => {
         QualityCycle {
             key: SettingKey::$key,
-            index: |cfg| $index(cfg.$($path).+),
-            set: |cfg, index| cfg.$($path).+ = $at(index),
+            index: |cfg| $levels.index_of(cfg.$($path).+),
+            set: |cfg, index| cfg.$($path).+ = $levels.at(index),
             overlay: |cfg, user| {
                 if let Some(v) = user.$field {
                     cfg.$($path).+ = v;
@@ -138,8 +136,7 @@ pub static QUALITY_CYCLES: [QualityCycle; 5] = [
         AaMode,
         aa_mode,
         anti_aliasing.mode;
-        aa_mode_index,
-        aa_mode_at,
+        AA_MODE,
         |cfg, ceiling| {
             let aa = &mut cfg.anti_aliasing;
             aa.mode = clamp_aa_mode(aa.mode, ceiling.aa_mode)
@@ -149,8 +146,7 @@ pub static QUALITY_CYCLES: [QualityCycle; 5] = [
         SsgiResolution,
         ssgi_resolution,
         indirect_lighting.ssgi_resolution;
-        pass_resolution_index,
-        pass_resolution_at,
+        PASS_RESOLUTION,
         |cfg, ceiling| {
             let gi = &mut cfg.indirect_lighting;
             gi.ssgi_resolution = gi.ssgi_resolution.max(ceiling.ssgi_resolution)
@@ -160,8 +156,7 @@ pub static QUALITY_CYCLES: [QualityCycle; 5] = [
         SsgiRays,
         ssgi_rays,
         indirect_lighting.ssgi_rays;
-        ssgi_rays_index,
-        ssgi_rays_at,
+        SSGI_RAYS,
         |cfg, ceiling| {
             let gi = &mut cfg.indirect_lighting;
             gi.ssgi_rays = gi.ssgi_rays.min(ceiling.ssgi_rays)
@@ -171,8 +166,7 @@ pub static QUALITY_CYCLES: [QualityCycle; 5] = [
         RtReflectionResolution,
         rt_reflection_resolution,
         reflections.ray_traced_resolution;
-        pass_resolution_index,
-        pass_resolution_at,
+        PASS_RESOLUTION,
         |cfg, ceiling| {
             let r = &mut cfg.reflections;
             r.ray_traced_resolution = r
@@ -184,8 +178,7 @@ pub static QUALITY_CYCLES: [QualityCycle; 5] = [
         ReflectionBlurResolution,
         reflection_blur_resolution,
         reflections.blur_resolution;
-        pass_resolution_index,
-        pass_resolution_at,
+        PASS_RESOLUTION,
         |cfg, ceiling| {
             let r = &mut cfg.reflections;
             r.blur_resolution = r.blur_resolution.max(ceiling.reflection_blur_resolution)

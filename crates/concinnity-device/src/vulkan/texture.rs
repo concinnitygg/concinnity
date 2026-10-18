@@ -4,6 +4,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types;
+use concinnity_core::render::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
 use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -517,6 +518,7 @@ pub(super) fn upload_texture_image_deferred(
     ctx: &GpuUploadContext,
     image: &concinnity_core::bake::texture::TextureImage,
 ) -> error::RenderResult<(GpuImage, UploadInFlight)> {
+    image.validate().map_err(RenderError::Other)?;
     let levels: Vec<TextureLevel<'_>> = image
         .mips
         .iter()
@@ -983,21 +985,10 @@ pub(super) fn upload_float_lut(
     Ok(GpuImage::from_pooled(pooled, view))
 }
 
-// Build a 2x2x2 identity color LUT: the eight corners of the unit RGB cube.
-// Mirrors `metal/texture.rs::create_fallback_color_lut`. With the identity LUT
-// the composite grade is a no-op at any `lut_strength`, so the `sampler3D`
-// binding stays valid even when the world declares no `ColorLut`.
+// Upload the identity color LUT, so the `sampler3D` binding stays valid even
+// when the world declares no `ColorLut`.
 pub(super) fn create_fallback_color_lut(ctx: &GpuUploadContext) -> RenderResult<GpuImage> {
-    // Red-fastest, then green, then blue, matching the payload texel order.
-    let mut data = Vec::with_capacity(2 * 2 * 2 * 4);
-    for b in 0..2u8 {
-        for g in 0..2u8 {
-            for r in 0..2u8 {
-                data.extend_from_slice(&[r * 255, g * 255, b * 255, 255]);
-            }
-        }
-    }
-    upload_color_lut(ctx, 2, &data)
+    upload_color_lut(ctx, IDENTITY_LUT_SIZE, &IDENTITY_LUT)
 }
 
 // Clear the 1x1 fallback array to the depth clear value and rest it sampled. No
@@ -1401,15 +1392,8 @@ fn create_cube_image(
     let mut mip_sizes: Vec<usize> = Vec::with_capacity(mip_count as usize);
     let mut total: usize = 0;
     for (m, bytes) in mip_bytes.iter().enumerate() {
-        let s = (face_size >> m) as usize;
-        if s == 0 {
-            return Err(RenderError::Other(format!(
-                "cubemap mip {} would have zero face size (face_size {} too small)",
-                m, face_size
-            )));
-        }
-        let face_bytes = s * s * 16;
-        let needed = 6 * face_bytes;
+        let needed = concinnity_core::bake::environment_map::cube_mip_byte_len(face_size, m)
+            .map_err(RenderError::Other)?;
         if bytes.len() < needed {
             return Err(RenderError::Other(format!(
                 "cubemap mip {} too short: {} bytes, need {}",

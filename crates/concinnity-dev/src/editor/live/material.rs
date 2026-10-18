@@ -1,13 +1,13 @@
 //! A Material's Shader parameters. Every other Material field is baked into the
 //! draws that use it at load, but `params` live in the renderer's parameter
 //! table, one row per material, so an edit that changes only them rewrites that
-//! row through the engine's `live_edit::material_preview` seam.
+//! row through core's `live_preview::material` module.
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::gfx::render_types::MATERIAL_PARAM_COUNT;
-use concinnity_engine::live_edit::{draw_preview, material_preview};
+use concinnity_core::render::live_preview::{draw as draw_preview, material as material_preview};
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 

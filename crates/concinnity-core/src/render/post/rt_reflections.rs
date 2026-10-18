@@ -43,9 +43,8 @@ pub struct RtReflectionSettings {
 
 /// Per-frame camera + sun inputs for building the RT-reflection GPU uniform.
 /// `fov_y_radians` / `aspect` give the view-ray scale used to rebuild a
-/// view-space position from the SSR pre-pass G-buffer. `inv_view_rot` is the
-/// view-to-world rotation (the transpose of the view matrix's orthonormal 3x3)
-/// and `cam_pos` the world camera position; together they form the
+/// view-space position from the SSR pre-pass G-buffer. `view` (the
+/// world-to-view matrix) and `cam_pos` (the world camera position) give the
 /// camera-to-world transform that lifts the reconstructed hit point + normal
 /// into the BVH's world space. `sun_dir` is the world-space unit direction
 /// toward the sun and `sun_color` its radiance; `prefilter_mip_count` is the IBL
@@ -56,8 +55,8 @@ pub struct RtParamsInputs {
     pub fov_y_radians: f32,
     /// Viewport aspect ratio, width over height.
     pub aspect: f32,
-    /// View-to-world rotation, column-major.
-    pub inv_view_rot: [[f32; 4]; 4],
+    /// World-to-view matrix, column-major. Only its rotation is read.
+    pub view: [[f32; 4]; 4],
     /// World-space camera position.
     pub cam_pos: [f32; 3],
     /// World-space unit direction toward the sun.
@@ -111,7 +110,7 @@ impl RtReflectionSettings {
         let RtParamsInputs {
             fov_y_radians,
             aspect,
-            inv_view_rot,
+            view,
             cam_pos,
             sun_dir,
             sun_color,
@@ -119,7 +118,7 @@ impl RtReflectionSettings {
             sky_rot,
             pre_exposure,
         } = inputs;
-        let inv_view = camera_to_world(inv_view_rot, cam_pos);
+        let inv_view = camera_to_world(view, cam_pos);
         let (tan_half_fov_y, aspect) = view_ray_scale(fov_y_radians, aspect);
         RtParams {
             intensity: self.intensity,
@@ -210,7 +209,7 @@ mod tests {
         let inputs = RtParamsInputs {
             fov_y_radians: 1.0,
             aspect: 1.0,
-            inv_view_rot: IDENTITY,
+            view: IDENTITY,
             cam_pos: [0.0; 3],
             sun_dir: [0.0, 1.0, 0.0],
             sun_color: [1.0; 3],
@@ -232,7 +231,7 @@ mod tests {
         let inputs = RtParamsInputs {
             fov_y_radians: 1.0,
             aspect: 1.0,
-            inv_view_rot: IDENTITY,
+            view: IDENTITY,
             cam_pos: [0.0; 3],
             sun_dir: [0.0, 1.0, 0.0],
             sun_color: [1.0; 3],
@@ -270,7 +269,7 @@ mod tests {
         let p = s.params(RtParamsInputs {
             fov_y_radians: core::f32::consts::FRAC_PI_2,
             aspect: 1.6,
-            inv_view_rot: IDENTITY,
+            view: IDENTITY,
             cam_pos: [3.0, 4.0, 5.0],
             sun_dir: [0.0, 1.0, 0.0],
             sun_color: [1.0, 0.9, 0.8],
@@ -297,7 +296,7 @@ mod tests {
         let p = s.params(RtParamsInputs {
             fov_y_radians: core::f32::consts::FRAC_PI_2,
             aspect: 1.6,
-            inv_view_rot: IDENTITY,
+            view: IDENTITY,
             cam_pos: [3.0, 4.0, 5.0],
             sun_dir: [0.0, 1.0, 0.0],
             sun_color: [1.0, 1.0, 1.0],
@@ -316,7 +315,7 @@ mod tests {
         let p = s.params(RtParamsInputs {
             fov_y_radians: core::f32::consts::FRAC_PI_2,
             aspect: 0.0,
-            inv_view_rot: IDENTITY,
+            view: IDENTITY,
             cam_pos: [0.0, 0.0, 0.0],
             sun_dir: [0.0, 1.0, 0.0],
             sun_color: [1.0, 1.0, 1.0],

@@ -14,10 +14,11 @@ use concinnity_core::ecs::{
     System,
 };
 use concinnity_core::resource::AudioClipTable;
+use concinnity_core::settings::StoredSettings;
 use std::collections::{HashMap, HashSet};
 
 use super::occlusion::OcclusionSmoother;
-use super::{AudioEngine, AudioVolumes, EmitterId, EmitterParams};
+use super::{AudioEngine, EmitterId, EmitterParams};
 use concinnity_core::planet::{FrameRebases, Rebase, RebaseCursor};
 
 // Audio behavior. Constructed internally by `World::start` when the world
@@ -25,10 +26,6 @@ use concinnity_core::planet::{FrameRebases, Rebase, RebaseCursor};
 // it carries no config.
 pub(crate) struct AudioSystem {
     engine: AudioEngine,
-    // The persisted mix volumes (settings menu), applied at init. Resolved by
-    // the engine's audio gate, which owns the settings store, and handed in at
-    // construction.
-    volumes: AudioVolumes,
     // One binding per live `AudioEmitter`, keyed by its entity. Emitters that
     // appear after init (runtime adds) are adopted each step; bindings whose
     // entity died are reaped, mirroring the physics prop-body lifecycle.
@@ -106,15 +103,13 @@ impl std::fmt::Debug for AudioSystem {
 }
 
 impl AudioSystem {
-    // Fresh system with no device, live emitters, or cues. `volumes` holds the
-    // persisted settings-menu mix (`None` per stage = unity), applied in
-    // `System::init`. The output device is acquired and the emitters / cues are
-    // bound from the world's components in `init`, so construction is
-    // side-effect-free (required by the `World::system_manifest` gate probe).
-    pub(crate) fn new(volumes: AudioVolumes) -> Self {
+    // Fresh system with no device, live emitters, or cues. The output device is
+    // acquired and the emitters / cues are bound from the world's components in
+    // `init`, so construction is side-effect-free (required by the
+    // `World::system_manifest` gate probe).
+    pub(crate) fn new() -> Self {
         Self {
             engine: AudioEngine::disabled(),
-            volumes,
             emitters: HashMap::new(),
             cues: HashMap::new(),
             clip_locators: Vec::new(),
@@ -269,18 +264,22 @@ impl System for AudioSystem {
             .map(|table| table.0.iter().map(|e| e.payload.clone()).collect())
             .unwrap_or_default();
 
-        // The persisted volumes (settings menu) scale the master mix and each
-        // bus, so they can be changed live (see `step`). `None` leaves a
-        // stage at unity. Clips play at their authored gain; these are
-        // separate output-stage multipliers.
-        self.engine
-            .set_volume(AudioTarget::Master, self.volumes.master.unwrap_or(1.0));
-        self.engine
-            .set_volume(AudioTarget::Music, self.volumes.music.unwrap_or(1.0));
-        self.engine
-            .set_volume(AudioTarget::Sfx, self.volumes.sfx.unwrap_or(1.0));
-        self.engine
-            .set_volume(AudioTarget::Voice, self.volumes.voice.unwrap_or(1.0));
+        // The stored settings-menu volumes scale the master mix and each bus,
+        // so they can be changed live (see `step`). `None` leaves a stage at
+        // unity. Clips play at their authored gain; these are separate
+        // output-stage multipliers.
+        let volumes = ctx
+            .resource::<StoredSettings>()
+            .map(|stored| stored.audio.clone())
+            .unwrap_or_default();
+        for (target, gain) in [
+            (AudioTarget::Master, volumes.master_volume),
+            (AudioTarget::Music, volumes.music_volume),
+            (AudioTarget::Sfx, volumes.sfx_volume),
+            (AudioTarget::Voice, volumes.voice_volume),
+        ] {
+            self.engine.set_volume(target, gain.unwrap_or(1.0));
+        }
 
         for (entity, emitter) in emitter_snaps {
             self.bind_emitter(ctx, entity, &emitter);
@@ -516,8 +515,8 @@ mod tests {
     // gate/schedule tests (which need a whole world) live in the engine's
     // `ecs/schedule.rs`.
     use super::{AudioSystem, EmitterBinding};
+    use crate::audio::EmitterId;
     use crate::audio::occlusion::OcclusionSmoother;
-    use crate::audio::{AudioVolumes, EmitterId};
     use concinnity_core::components::{
         AudioBus, AudioCommand, AudioCue, AudioEmitter, AudioOcclusionProbe, AudioTarget,
         BodyDynamics, Camera3D, ContactEvent, CueKind, PlayCue, ScreenShown, Story, Transform,
@@ -527,6 +526,7 @@ mod tests {
         AudioClipHandle, PayloadLocator, ResourceKind, ResourceRecord, StepResult, System, World,
     };
     use concinnity_core::resource::AudioClipTable;
+    use concinnity_core::settings::StoredSettings;
     use concinnity_host::store::blob::BlobData;
 
     // Accumulates one blob section serving every clip payload handed out, plus
@@ -592,7 +592,7 @@ mod tests {
             ..Default::default()
         });
 
-        let mut sys = AudioSystem::new(AudioVolumes::default());
+        let mut sys = AudioSystem::new();
         sys.init(&mut world.context());
 
         let bindings = sys.cues.get(&screen).expect("cue bound to its screen");
@@ -626,7 +626,7 @@ mod tests {
             ..Default::default()
         });
 
-        let mut sys = AudioSystem::new(AudioVolumes::default());
+        let mut sys = AudioSystem::new();
         sys.init(&mut world.context());
 
         let bindings = sys.cues.get(&screen).expect("cue bound");
@@ -645,7 +645,7 @@ mod tests {
             ..Default::default()
         });
 
-        let mut sys = AudioSystem::new(AudioVolumes::default());
+        let mut sys = AudioSystem::new();
         sys.init(&mut world.context());
 
         assert!(sys.cues.is_empty());
@@ -670,7 +670,7 @@ mod tests {
         });
         world.push(Story::default());
 
-        let mut sys = AudioSystem::new(AudioVolumes::default());
+        let mut sys = AudioSystem::new();
         sys.init(&mut world.context());
 
         let _ = page_clip;
@@ -690,7 +690,7 @@ mod tests {
             ..Default::default()
         });
 
-        let mut sys = AudioSystem::new(AudioVolumes::default());
+        let mut sys = AudioSystem::new();
         sys.init(&mut world.context());
 
         assert_eq!(sys.emitters.len(), 1);
@@ -721,7 +721,7 @@ mod tests {
             ..Default::default()
         });
         world.insert_resource(FrameRebases::default());
-        let mut sys = AudioSystem::new(AudioVolumes::default());
+        let mut sys = AudioSystem::new();
         sys.init(&mut world.context());
         let rebase = Rebase {
             rotation: concinnity_core::math::quat_from_axis_angle([0.0, 0.0, 1.0], 0.02),
@@ -756,7 +756,7 @@ mod tests {
             ..Default::default()
         });
 
-        let mut sys = AudioSystem::new(AudioVolumes::default());
+        let mut sys = AudioSystem::new();
         sys.init(&mut world.context());
         assert_eq!(sys.emitters.len(), 1);
 
@@ -813,7 +813,7 @@ mod tests {
             (crate_entity, bare_entity)
         };
 
-        let mut sys = AudioSystem::new(AudioVolumes::default());
+        let mut sys = AudioSystem::new();
         sys.init(&mut world.context());
         assert_eq!(sys.clips_queued(), 1, "impact clip queued up front");
 
@@ -855,7 +855,7 @@ mod tests {
             ..Default::default()
         });
 
-        let mut sys = AudioSystem::new(AudioVolumes::default());
+        let mut sys = AudioSystem::new();
         sys.init(&mut world.context());
 
         // Physics answered: the segment is blocked.
@@ -916,7 +916,7 @@ mod tests {
             ..Default::default()
         });
 
-        let mut sys = AudioSystem::new(AudioVolumes::default());
+        let mut sys = AudioSystem::new();
         sys.init(&mut world.context());
         assert_eq!(sys.cues.get(&screen).map(Vec::len), Some(2));
 
@@ -947,7 +947,7 @@ mod tests {
         let mut world = clips.seal();
         world.push(Story::default());
 
-        let mut sys = AudioSystem::new(AudioVolumes::default());
+        let mut sys = AudioSystem::new();
         sys.init(&mut world.context());
 
         {
@@ -995,7 +995,7 @@ mod tests {
         };
         assert!(world.context().get::<Transform>(entity).is_some());
 
-        let mut sys = AudioSystem::new(AudioVolumes::default());
+        let mut sys = AudioSystem::new();
         // A live emitter that follows the prop, seeded directly (a real
         // emitter needs a device, which the headless test has no access to).
         // Keyed by a spare entity standing in for the emitter's own.
@@ -1025,7 +1025,7 @@ mod tests {
     #[test]
     fn audio_command_applies_volumes_live_per_target() {
         let mut world = AudioClips::new().seal();
-        let mut sys = AudioSystem::new(AudioVolumes::default());
+        let mut sys = AudioSystem::new();
         sys.init(&mut world.context());
         // Init applied unity everywhere (no persisted volumes handed in).
         assert_eq!(sys.engine.last_volume(AudioTarget::Master), 1.0);
@@ -1056,7 +1056,7 @@ mod tests {
     #[test]
     fn audio_command_last_write_wins_per_tick() {
         let mut world = AudioClips::new().seal();
-        let mut sys = AudioSystem::new(AudioVolumes::default());
+        let mut sys = AudioSystem::new();
         sys.init(&mut world.context());
 
         {
@@ -1075,17 +1075,16 @@ mod tests {
         assert_eq!(sys.engine.last_volume(AudioTarget::Master), 0.25);
     }
 
-    // Persisted volumes handed in at construction are applied to every stage
-    // at init (the settings-menu volumes, resolved by the engine's gate).
+    // The stored settings-menu volumes are applied to every stage at init.
     #[test]
     fn init_applies_persisted_volumes() {
         let mut world = AudioClips::new().seal();
-        let mut sys = AudioSystem::new(AudioVolumes {
-            master: Some(0.5),
-            music: Some(0.75),
-            sfx: None,
-            voice: Some(0.25),
-        });
+        let mut stored = StoredSettings::default();
+        stored.audio.master_volume = Some(0.5);
+        stored.audio.music_volume = Some(0.75);
+        stored.audio.voice_volume = Some(0.25);
+        world.insert_resource(stored);
+        let mut sys = AudioSystem::new();
         sys.init(&mut world.context());
         assert_eq!(sys.engine.last_volume(AudioTarget::Master), 0.5);
         assert_eq!(sys.engine.last_volume(AudioTarget::Music), 0.75);

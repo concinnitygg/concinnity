@@ -40,10 +40,8 @@ use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::planet::Rebase;
 use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::rt_reflections::RtParamsInputs;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::reactive_mask::ReactiveWrite;
-use concinnity_core::render::water::frame::WaterMotion;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -71,17 +69,19 @@ const RT_PARAMS_UBO_SIZE: u64 = 144;
 // `TransparentView` (the per-frame view cbuffer) is a GPU-free layout struct
 // that lives in `core::render`; re-export it so the encode path and the
 // graph's view builder can keep naming it through this module.
-use concinnity_core::render::transparent::SeeThroughMesh;
+use concinnity_core::render::transparent::producer::{self, TransparentProducers, WaterParamsSink};
+use concinnity_core::render::transparent::{SeeThroughMesh, TransparentFramePlan};
 pub(in crate::directx) use concinnity_core::render::uniforms::TransparentView;
 use concinnity_core::render::uniforms::{GlassMeshParams, WaterParams};
+use std::sync::Mutex;
 
 pub(in crate::directx) use concinnity_core::render::transparent::Producer;
 
-// One drawable record of either producer: a static world-space (glass) or
+// One drawable record's GPU state: a static world-space (glass) or
 // origin-centered grid (water) VB + IB plus a per-record uniform CBV. Built
 // once at init; only a water record's params change afterwards, rewritten into
 // the frame slot's block each frame.
-pub(in crate::directx) struct TransparentRecord {
+pub(in crate::directx) struct RecordBuffers {
     #[expect(
         dead_code,
         reason = "held to keep the GPU memory alive; the encoder binds through vertex_buffer_view"
@@ -107,14 +107,26 @@ pub(in crate::directx) struct TransparentRecord {
     params_ptr: *mut u8,
     params_block: u64,
     frames: usize,
-    visible: bool,
-    // World-space center, used for the back-to-front camera-distance sort.
-    center: [f32; 3],
-    // Planar reflection resolve slot this record samples (index into the
-    // `PlanarReflectionSet`). `None` when the world has no planar set or this
-    // record's plane overflowed the budget; the shader then keeps the probe/sky
-    // path. Assigned at init by `assign_planar_slots`.
-    planar_slot: Option<usize>,
+}
+
+pub(in crate::directx) type TransparentRecord = producer::TransparentRecord<RecordBuffers>;
+pub(in crate::directx) type TransparentProducer =
+    producer::TransparentProducer<ID3D12PipelineState, RecordBuffers>;
+pub(in crate::directx) type ShapePsos = producer::ShapePipelines<ID3D12PipelineState>;
+
+// Upload one record's static geometry and its params into every frame slot's
+// block of its CBV buffer, which stays persistently mapped for the producers
+// whose params move.
+pub(in crate::directx) fn upload_record(
+    alloc: &DeviceAllocator,
+    upload: RecordUpload<'_>,
+) -> RenderResult<TransparentRecord> {
+    Ok(TransparentRecord {
+        gpu: RecordBuffers::upload(alloc, &upload)?,
+        visible: upload.visible,
+        center: upload.center,
+        planar_slot: upload.planar_slot,
+    })
 }
 
 // The geometry, uniform payload and per-record state one producer hands over for
@@ -129,14 +141,8 @@ pub(in crate::directx) struct RecordUpload<'a> {
     pub planar_slot: Option<usize>,
 }
 
-impl TransparentRecord {
-    // Upload one record's static geometry and its params into every frame
-    // slot's block of its CBV buffer, which stays persistently mapped for the
-    // producers whose params move.
-    pub(in crate::directx) fn upload(
-        alloc: &DeviceAllocator,
-        upload: RecordUpload<'_>,
-    ) -> RenderResult<Self> {
+impl RecordBuffers {
+    fn upload(alloc: &DeviceAllocator, upload: &RecordUpload<'_>) -> RenderResult<Self> {
         let vbytes = bytemuck::cast_slice(upload.vertices);
         let ibytes = bytemuck::cast_slice(upload.indices);
         let vertex_buffer = upload_buffer(
@@ -194,9 +200,6 @@ impl TransparentRecord {
             params_ptr,
             params_block,
             frames,
-            visible: upload.visible,
-            center: upload.center,
-            planar_slot: upload.planar_slot,
         })
     }
 
@@ -204,11 +207,11 @@ impl TransparentRecord {
     fn params_gva(&self, frame_idx: usize) -> u64 {
         self.params_cbuffer_gva + (frame_idx % self.frames) as u64 * self.params_block
     }
+}
 
-    // Overwrite a water record's params block for frame slot `frame_idx`, whose
-    // GPU reads the frame fence has retired. Only the water producer calls this,
-    // and its records were uploaded from a `WaterParams`, so each block holds
-    // exactly one.
+// A water record's params, which only the water producer writes: its records
+// were uploaded from a `WaterParams`, so each block holds exactly one.
+impl WaterParamsSink for RecordBuffers {
     fn write_water_params(&self, frame_idx: usize, params: &WaterParams) {
         let bytes = bytemuck::bytes_of(params);
         let offset = (frame_idx % self.frames) * self.params_block as usize;
@@ -218,134 +221,6 @@ impl TransparentRecord {
         unsafe {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.params_ptr.add(offset), bytes.len())
         };
-    }
-}
-
-// One producer's pipelines plus its records. The RT pair is `Some` only when the
-// GPU supports DXR and the DXC compile succeeded; a live RT toggle then selects
-// them with no rebuild. `water` is aligned with `records` for the water producer
-// and empty for glass, whose params never change.
-pub(in crate::directx) struct TransparentProducer {
-    pub pso: ID3D12PipelineState,
-    pub flat_rt_pso: Option<ID3D12PipelineState>,
-    pub textured_rt_pso: Option<ID3D12PipelineState>,
-    // The glass reflection pre-pass pair, built beside the RT pair for glass
-    // panes; `None` for water, which traces in place.
-    pub reflection_flat_pso: Option<ID3D12PipelineState>,
-    pub reflection_textured_pso: Option<ID3D12PipelineState>,
-    // A planet sea's own three, for the water producer's sea records; `None`
-    // when no record is one.
-    pub sea: Option<ShapePsos>,
-    pub records: Vec<TransparentRecord>,
-    pub water: Vec<WaterMotion>,
-}
-
-// The base and RT PSOs one water shape draws with.
-pub(in crate::directx) struct ShapePsos {
-    pub pso: ID3D12PipelineState,
-    pub flat_rt_pso: Option<ID3D12PipelineState>,
-    pub textured_rt_pso: Option<ID3D12PipelineState>,
-}
-
-impl TransparentProducer {
-    // Write each visible water surface's params, advanced to `time` seconds
-    // and seen from `camera`, into its `frame_idx` block.
-    fn advance_water(&self, frame_idx: usize, time: f64, camera: [f32; 3]) {
-        for (record, water) in self.records.iter().zip(&self.water) {
-            if record.visible {
-                record.write_water_params(frame_idx, &water.params_at(time, camera));
-            }
-        }
-    }
-
-    // True when a visible record samples a simulated ocean.
-    fn samples_ocean(&self) -> bool {
-        self.records
-            .iter()
-            .zip(&self.water)
-            .any(|(r, w)| r.visible && w.body().ocean.is_some())
-    }
-}
-
-impl TransparentProducer {
-    // Pick this producer's pipeline for the frame: the sharp per-pixel trace when
-    // RT is live, the textured variant when the bindless pool exists as well, and
-    // the probe / planar pipeline otherwise.
-    //
-    // The `expect`s are the point rather than an inconvenience: the base PSO is
-    // built against the base root signature and the RT pair against the RT one,
-    // so falling back across the two would bind a PSO under a signature it was
-    // not built for, which is a D3D12 error rather than a degraded frame. Both
-    // choices are whole-pass decisions the encoder makes from
-    // `rt_pipelines_ready` / `rt_textured_ready`, which require the pipeline of
-    // every live producer -- so a producer is never asked for one it lacks.
-    fn pipeline(&self, rt_live: bool, textured: bool) -> &ID3D12PipelineState {
-        pick_pso(
-            &self.pso,
-            self.flat_rt_pso.as_ref(),
-            self.textured_rt_pso.as_ref(),
-            rt_live,
-            textured,
-        )
-    }
-
-    // The PSO record `i` draws with: a planet sea's own, or the producer's.
-    fn record_pipeline(&self, i: usize, rt_live: bool, textured: bool) -> &ID3D12PipelineState {
-        match &self.sea {
-            Some(sea) if self.water.get(i).is_some_and(|w| w.body().sea.is_some()) => pick_pso(
-                &sea.pso,
-                sea.flat_rt_pso.as_ref(),
-                sea.textured_rt_pso.as_ref(),
-                rt_live,
-                textured,
-            ),
-            _ => self.pipeline(rt_live, textured),
-        }
-    }
-
-    // Whether every record can trace: the flat RT PSO of the producer and of
-    // its sea, or with `textured` the textured ones.
-    fn traces(&self, textured: bool) -> bool {
-        let built = |flat: &Option<ID3D12PipelineState>, tex: &Option<ID3D12PipelineState>| {
-            if textured {
-                tex.is_some()
-            } else {
-                flat.is_some()
-            }
-        };
-        built(&self.flat_rt_pso, &self.textured_rt_pso)
-            && self
-                .sea
-                .as_ref()
-                .is_none_or(|s| built(&s.flat_rt_pso, &s.textured_rt_pso))
-    }
-
-    // This producer's reflection pre-pass PSO, or `None` when it traces in place.
-    fn reflection_pipeline(&self, textured: bool) -> Option<&ID3D12PipelineState> {
-        match textured {
-            true => self.reflection_textured_pso.as_ref(),
-            false => self.reflection_flat_pso.as_ref(),
-        }
-    }
-}
-
-// The PSO a frame draws with out of a base / flat RT / textured RT three.
-// The `expect`s are explained on `TransparentProducer::pipeline`.
-fn pick_pso<'a>(
-    base: &'a ID3D12PipelineState,
-    flat_rt: Option<&'a ID3D12PipelineState>,
-    textured_rt: Option<&'a ID3D12PipelineState>,
-    rt_live: bool,
-    textured: bool,
-) -> &'a ID3D12PipelineState {
-    match (rt_live, textured) {
-        (true, true) => {
-            textured_rt.expect("rt_textured_ready gated the frame on every producer's textured PSO")
-        }
-        (true, false) => {
-            flat_rt.expect("rt_pipelines_ready gated the frame on every producer's flat RT PSO")
-        }
-        _ => base,
     }
 }
 
@@ -465,9 +340,10 @@ impl GlassMeshProducer {
 // scene-copy SRV is the transparent pass's own heap slot.
 pub(in crate::directx) struct TransparentResources {
     root_sig: ID3D12RootSignature,
-    glass: Option<TransparentProducer>,
-    water: Option<TransparentProducer>,
+    producers: TransparentProducers<ID3D12PipelineState, RecordBuffers>,
     glass_mesh: Option<GlassMeshProducer>,
+    // This frame's plan, reused frame to frame. Locked once by the encoder.
+    plan: Mutex<TransparentFramePlan<GlassMeshDraw>>,
 
     // Per-frame view UBO (single 256-byte block), persistently mapped.
     view_ubo_resources: Vec<PooledBuffer>,
@@ -512,8 +388,6 @@ unsafe impl Send for TransparentResources {}
 // SAFETY: sharing `&TransparentResources` hands out the pointer values but no way to dereference
 // them; every write goes through a `&mut self` method on the context.
 unsafe impl Sync for TransparentResources {}
-
-use concinnity_core::render::transparent::ordered_visible;
 
 // Root-signature layout (binds 1:1 with the `CN_BACKEND_DIRECTX` declarations
 // in glass.hlsl and water.hlsl, which are deliberately identical):
@@ -1046,8 +920,8 @@ impl TransparentResources {
 
         let mut me = Self {
             root_sig,
-            glass,
-            water,
+            producers: TransparentProducers { glass, water },
+            plan: Mutex::default(),
             glass_mesh,
             view_ubo_resources,
             view_ubo_ptrs,
@@ -1091,9 +965,10 @@ impl TransparentResources {
         height: u32,
     ) -> RenderResult<()> {
         let traced = self
+            .producers
             .glass
             .as_ref()
-            .is_some_and(|p| p.reflection_flat_pso.is_some())
+            .is_some_and(|p| p.reflection_flat.is_some())
             || self.glass_mesh.is_some();
         let d = self.reflection_divisor;
         self.reflection = None;
@@ -1123,20 +998,20 @@ impl TransparentResources {
         glass_pso: Option<ID3D12PipelineState>,
         water_pso: Option<ID3D12PipelineState>,
     ) {
-        if let (Some(pso), Some(p)) = (glass_pso, self.glass.as_mut()) {
-            p.pso = pso;
+        if let (Some(pso), Some(p)) = (glass_pso, self.producers.glass.as_mut()) {
+            p.shape.base = pso;
         }
-        if let (Some(pso), Some(p)) = (water_pso, self.water.as_mut()) {
-            p.pso = pso;
+        if let (Some(pso), Some(p)) = (water_pso, self.producers.water.as_mut()) {
+            p.shape.base = pso;
         }
     }
 
     pub(in crate::directx) fn has_glass(&self) -> bool {
-        self.glass.is_some()
+        self.producers.glass.is_some()
     }
 
     pub(in crate::directx) fn has_water(&self) -> bool {
-        self.water.is_some()
+        self.producers.water.is_some()
     }
 
     // True when the per-pixel RT pipelines are built (DXR-capable GPU + the DXC
@@ -1146,9 +1021,7 @@ impl TransparentResources {
     // the RT choice a per-frame one rather than a per-producer one, so the planar
     // mirror render the graph skips is never one a producer still needs.
     pub(in crate::directx) fn rt_pipelines_ready(&self) -> bool {
-        self.rt_root_sig.is_some()
-            && self.glass.as_ref().is_none_or(|p| p.flat_rt_pso.is_some())
-            && self.water.as_ref().is_none_or(|p| p.traces(false))
+        self.rt_root_sig.is_some() && self.producers.traces(false)
     }
 
     // True when every live producer also built its textured RT pipeline, so the
@@ -1158,10 +1031,7 @@ impl TransparentResources {
     // table, and a per-producer split would leave one drawing under a pipeline
     // the encoder's bind sequence does not match.
     pub(in crate::directx) fn rt_textured_ready(&self) -> bool {
-        self.glass
-            .as_ref()
-            .is_none_or(|p| p.textured_rt_pso.is_some())
-            && self.water.as_ref().is_none_or(|p| p.traces(true))
+        self.producers.traces(true)
             && self
                 .glass_mesh
                 .as_ref()
@@ -1192,19 +1062,11 @@ impl TransparentResources {
     // takes the mirror over its own trace (see `water.hlsl`), so this is what
     // `planar_pass_needed` reads; glass is deliberately not counted.
     pub(in crate::directx) fn water_planar_slot_live(&self) -> bool {
-        self.water.as_ref().is_some_and(|p| {
-            p.records
-                .iter()
-                .any(|r| r.visible && r.planar_slot.is_some())
-        })
+        self.producers.water_planar_slot_live()
     }
 
     pub(in crate::directx) fn any_visible(&self) -> bool {
-        let live = |p: &Option<TransparentProducer>| {
-            p.as_ref()
-                .is_some_and(|p| p.records.iter().any(|r| r.visible))
-        };
-        live(&self.glass) || live(&self.water)
+        self.producers.any_visible()
     }
 
     // The see-through meshes this producer was built over, or an empty slice
@@ -1224,31 +1086,15 @@ impl TransparentResources {
         self.glass_mesh.is_some()
     }
 
-    // Every visible record of the static producers plus this frame's mesh draws,
-    // farthest first.
-    fn draw_order(&self, meshes: &[[f32; 3]], cam: [f32; 3]) -> Vec<(Producer, usize)> {
-        let centers = |p: &Option<TransparentProducer>| -> Vec<([f32; 3], bool)> {
-            p.as_ref()
-                .map(|p| p.records.iter().map(|r| (r.center, r.visible)).collect())
-                .unwrap_or_default()
-        };
-        ordered_visible(&centers(&self.glass), &centers(&self.water), meshes, cam)
+    // The record-holding producer `kind` names; the mesh producer holds none.
+    fn producer(&self, kind: Producer) -> &TransparentProducer {
+        self.producers
+            .producer(kind)
+            .expect("the draw order only names live static producers")
     }
 
     fn record(&self, kind: Producer, index: usize) -> &TransparentRecord {
         &self.producer(kind).records[index]
-    }
-
-    // The record-holding producer `kind` names; the mesh producer holds none.
-    fn producer(&self, kind: Producer) -> &TransparentProducer {
-        let producer = match kind {
-            Producer::Glass => self.glass.as_ref(),
-            Producer::Water => self.water.as_ref(),
-            Producer::GlassMesh => {
-                unreachable!("mesh draws are per-frame and never resolve to a static record")
-            }
-        };
-        producer.expect("the draw order only names live producers")
     }
 }
 
@@ -1264,16 +1110,16 @@ impl DxContext {
         transparent: &TransparentResources,
         frame_idx: usize,
         cam: [f32; 3],
-    ) -> Vec<GlassMeshDraw> {
+        draws: &mut Vec<GlassMeshDraw>,
+    ) {
         let Some(producer) = transparent.glass_mesh.as_ref() else {
-            return Vec::new();
+            return;
         };
         let block = align256(std::mem::size_of::<GlassMeshParams>() as u64);
         let ring_base = com::gpu_va(&producer.params_ring[frame_idx]);
         let ring_ptr = producer.params_ptrs[frame_idx];
         let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
 
-        let mut draws = Vec::with_capacity(producer.object_indices.len());
         for (slot, &idx) in producer.object_indices.iter().enumerate() {
             let Some(obj) = self.state.draw.objects.get(idx) else {
                 continue;
@@ -1304,7 +1150,6 @@ impl DxContext {
                 center: mesh.center,
             });
         }
-        draws
     }
 
     // Encode the transparent pass: snapshot the scene for refraction, then draw
@@ -1324,10 +1169,12 @@ impl DxContext {
 
     // Carry the water surfaces into the frame the world moved to.
     pub(in crate::directx) fn rebase_transparent_water(&mut self, rebase: &Rebase) {
-        if let Some(water) = self.transparent.as_mut().and_then(|t| t.water.as_mut()) {
-            for motion in &mut water.water {
-                motion.rebase(rebase);
-            }
+        if let Some(water) = self
+            .transparent
+            .as_mut()
+            .and_then(|t| t.producers.water.as_mut())
+        {
+            water.rebase_water(rebase);
         }
     }
 
@@ -1340,7 +1187,11 @@ impl DxContext {
         time: f64,
         camera: [f32; 3],
     ) {
-        if let Some(water) = self.transparent.as_ref().and_then(|t| t.water.as_ref()) {
+        if let Some(water) = self
+            .transparent
+            .as_ref()
+            .and_then(|t| t.producers.water.as_ref())
+        {
             water.advance_water(frame_idx, time, camera);
         }
     }
@@ -1352,7 +1203,7 @@ impl DxContext {
             && self
                 .transparent
                 .as_ref()
-                .and_then(|t| t.water.as_ref())
+                .and_then(|t| t.producers.water.as_ref())
                 .is_some_and(|w| w.samples_ocean())
     }
 
@@ -1361,10 +1212,9 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         view: &TransparentView,
-        // Projection inputs for the per-pixel RT reflection trace's RtParams (the
-        // same values the RT-reflection resolve uses); only consumed on the RT path.
-        fov_y_radians: f32,
-        aspect: f32,
+        // The frame's RT reflection block, which the per-pixel trace shares with
+        // the RT-reflection resolve; only consumed on the RT path.
+        rt_params: Option<&RtParams>,
         reactive: ReactiveWrite,
     ) -> RenderResult<()> {
         let transparent = match &self.transparent {
@@ -1387,24 +1237,26 @@ impl DxContext {
         // This frame's see-through mesh draws. Empty unless RT is live: the
         // per-pixel trace is the feature, and with RT off those meshes rasterize
         // opaque in the main pass instead.
-        let mesh_draws = if rt_live {
-            self.collect_mesh_draws(transparent, frame_idx, cam)
-        } else {
-            Vec::new()
-        };
-        let mesh_centers: Vec<[f32; 3]> = mesh_draws.iter().map(|d| d.center).collect();
-        let order = transparent.draw_order(&mesh_centers, cam);
-        if order.is_empty() {
+        let mut plan = transparent
+            .plan
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        plan.begin(rt_live, textured);
+        if rt_live {
+            self.collect_mesh_draws(transparent, frame_idx, cam, plan.meshes_mut());
+        }
+        plan.order_draws(&transparent.producers, |d| d.center, cam);
+        if plan.order().is_empty() {
             return Ok(());
         }
+        let order = plan.order();
+        let mesh_draws = plan.meshes();
         // The glass reflection pre-pass runs when RT is live, the reduced layers
         // exist, and a traced glass surface draws this frame.
-        let reflection_layers = transparent.reflection.as_ref().filter(|_| {
-            rt_live
-                && order
-                    .iter()
-                    .any(|&(kind, _)| matches!(kind, Producer::Glass | Producer::GlassMesh))
-        });
+        let reflection_layers = transparent
+            .reflection
+            .as_ref()
+            .filter(|_| plan.reflection_prepass(true));
 
         // Upload this frame's view UBO.
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
@@ -1420,27 +1272,12 @@ impl DxContext {
         let view_gva = com::gpu_va(&transparent.view_ubo_resources[frame_idx]);
 
         // On the RT path, upload this frame's RtParams (sun + ray tunables) into
-        // the shared RtParams ring. Mirrors `encode_rt_reflections`'s build.
+        // the shared RtParams ring: the plan's block, which
+        // `encode_rt_reflections` binds too.
         let rt_params_gva = if rt_live {
-            let rt = self.rt_reflections.as_ref().expect("rt_reflections_active");
-            let v = self.state.view.matrix;
-            let inv_view_rot = [
-                [v[0][0], v[1][0], v[2][0], 0.0],
-                [v[0][1], v[1][1], v[2][1], 0.0],
-                [v[0][2], v[1][2], v[2][2], 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ];
-            let params = rt.settings.params(RtParamsInputs {
-                fov_y_radians,
-                aspect,
-                inv_view_rot,
-                cam_pos: cam,
-                sun_dir: self.fog.sun_dir,
-                sun_color: self.fog.sun_color,
-                prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
-                sky_rot: self.state.view.sky_rot,
-                pre_exposure: self.pre_exposure.value(),
-            });
+            let params = *rt_params.ok_or_else(|| {
+                RenderError::Other("transparent rt_live without an RT reflection block".to_string())
+            })?;
             // Traced glass reads the reduced layers back only when the pre-pass
             // below fills them this frame; otherwise it traces in place.
             let params = RtParams {
@@ -1617,10 +1454,10 @@ impl DxContext {
             frame_idx,
             planar_root,
             textured,
-            mesh_draws: &mesh_draws,
+            mesh_draws,
         };
         if let Some(layers) = reflection_layers {
-            self.encode_glass_reflection_layers(transparent, layers, &frame, &order);
+            self.encode_glass_reflection_layers(transparent, layers, &frame, order);
         }
         if rt_live {
             // SAFETY: the command list is in the recording state, and the table names this
@@ -1641,7 +1478,7 @@ impl DxContext {
         }
 
         let mut bound: Option<&ID3D12PipelineState> = None;
-        for &(kind, i) in &order {
+        for &(kind, i) in order {
             let pso = match kind {
                 Producer::GlassMesh => transparent
                     .glass_mesh
@@ -1760,11 +1597,11 @@ impl DxContext {
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
-                cmd.IASetVertexBuffers(0, Some(&[r.vertex_buffer_view]));
-                cmd.IASetIndexBuffer(Some(&r.index_buffer_view));
-                cmd.SetGraphicsRootConstantBufferView(1, r.params_gva(frame.frame_idx));
+                cmd.IASetVertexBuffers(0, Some(&[r.gpu.vertex_buffer_view]));
+                cmd.IASetIndexBuffer(Some(&r.gpu.index_buffer_view));
+                cmd.SetGraphicsRootConstantBufferView(1, r.gpu.params_gva(frame.frame_idx));
                 cmd.set_graphics_srv_table(frame.planar_root, planar_srv);
-                cmd.DrawIndexedInstanced(r.index_count, 1, 0, 0, 0);
+                cmd.DrawIndexedInstanced(r.gpu.index_count, 1, 0, 0, 0);
             }
         }
         self.inc_draw_calls(1);

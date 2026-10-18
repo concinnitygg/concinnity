@@ -20,7 +20,7 @@ concinnity-core = { workspace = true }
 
 rayon = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
+tracing = { workspace = true, features = ["std"] }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 libc = "0.2"

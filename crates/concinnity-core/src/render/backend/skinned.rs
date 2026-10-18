@@ -11,7 +11,20 @@ use super::SceneHost;
 use crate::gfx::mesh_payload::SkinnedVertex;
 use crate::gfx::render_types::{SkinnedDrawObject, SkinnedIndex};
 use crate::render::error::RenderResult;
+use crate::render::snapshot::SpanBuffer;
+use crate::transform::Mat4;
 use alloc::vec::Vec;
+
+/// One frame's skinned updates, borrowed from the snapshot that carried them.
+#[derive(Clone, Copy)]
+pub struct SkinnedFrame<'a> {
+    /// Changed joint matrices, one span per instance.
+    pub poses: &'a SpanBuffer<Mat4>,
+    /// Changed morph-target weights, one span per instance.
+    pub morphs: &'a SpanBuffer<f32>,
+    /// Moved instances' model-to-world matrices, in push order.
+    pub models: &'a [(SkinnedIndex, Mat4)],
+}
 
 /// The animated half of the draw set: skinned upload, pose, morph and
 /// instance reveal.
@@ -31,10 +44,19 @@ pub trait SkinnedDraws: SceneHost {
         indices: &[u32],
         draw_objects: Vec<SkinnedDrawObject>,
     ) -> RenderResult<()>;
-    /// Push one skinned slot's joint matrices for this frame.
-    fn update_skinned_pose(&mut self, skinned_index: SkinnedIndex, matrices: &[[[f32; 4]; 4]]) {
+    /// Push this frame's skinned updates: each changed instance's joint
+    /// matrices and morph weights, then each moved instance's model, applied in
+    /// order. Batched so the trait is crossed once per frame. Out-of-range
+    /// indices are ignored.
+    fn update_skinned(&mut self, frame: SkinnedFrame<'_>) {
         if let Some(scene) = self.scene_mut() {
-            scene.skinned.update_pose(skinned_index, matrices);
+            for (index, matrices) in frame.poses.iter() {
+                scene.skinned.update_pose(index, matrices);
+            }
+            for (index, weights) in frame.morphs.iter() {
+                scene.skinned.update_morph_weights(index, weights);
+            }
+            scene.skinned.update_models(frame.models);
         }
     }
 
@@ -48,15 +70,6 @@ pub trait SkinnedDraws: SceneHost {
     ) -> RenderResult<()> {
         let _ = morphs;
         Ok(())
-    }
-
-    /// Push a skinned object's current morph-target weights, sampled by the
-    /// animation system each frame. A no-op when the index is out of range or
-    /// the object carries no morph targets.
-    fn update_morph_weights(&mut self, skinned_index: SkinnedIndex, weights: &[f32]) {
-        if let Some(scene) = self.scene_mut() {
-            scene.skinned.update_morph_weights(skinned_index, weights);
-        }
     }
 
     // Runtime skinned spawn (pre-reserved instance pool): a backend pre-reserves
@@ -80,17 +93,6 @@ pub trait SkinnedDraws: SceneHost {
     fn retire_skinned_draw_object(&mut self, skinned_index: SkinnedIndex) {
         if let Some(scene) = self.scene_mut() {
             scene.skinned.retire(skinned_index);
-        }
-    }
-
-    /// Push this frame's changed skinned model-to-world matrices, one
-    /// `(skinned index, matrix)` entry per moved instance, applied in order
-    /// (a skinned object animates in place unless something moves it). Cheap:
-    /// the per-frame cull rebuild reads the object's model directly, so this
-    /// just writes the fields. Out-of-range indices are ignored.
-    fn update_skinned_models(&mut self, updates: &[(SkinnedIndex, [[f32; 4]; 4])]) {
-        if let Some(scene) = self.scene_mut() {
-            scene.skinned.update_models(updates);
         }
     }
 }

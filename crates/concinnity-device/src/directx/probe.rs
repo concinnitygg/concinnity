@@ -209,8 +209,8 @@ impl DxContext {
     // Advance the asynchronous reflection-probe bake one frame. Called every frame
     // from `draw_frame` after the frame-slot fence wait; cheap once the queue
     // drains. A failure abandons the remaining bakes, keeping what baked.
-    pub(super) fn bake_pending_probes(&mut self) {
-        let report = self.with_probe_bake(|bake, ctx| bake.advance(ctx, &()));
+    pub(super) fn bake_pending_probes(&mut self, elapsed: f32) {
+        let report = self.with_probe_bake(|bake, ctx| bake.advance(ctx, &elapsed));
         crate::probe_report::report_probe_bake(report);
     }
 
@@ -236,6 +236,7 @@ impl DxContext {
     // faces follow one per frame via `record_probe_face`.
     fn start_probe_capture(
         &mut self,
+        elapsed: f32,
         index: usize,
         placement: ProbePlacement,
     ) -> RenderResult<RenderingBake> {
@@ -292,7 +293,7 @@ impl DxContext {
         // initialized, and the borrow keeps them live for the snapshot copy below.
         let light_bytes = unsafe {
             std::slice::from_raw_parts(
-                &self.uniforms.light_uniforms as *const render_types::LightUniforms as *const u8,
+                self.uniforms.lights.uniforms() as *const render_types::LightUniforms as *const u8,
                 std::mem::size_of::<render_types::LightUniforms>(),
             )
         };
@@ -302,7 +303,8 @@ impl DxContext {
         // initialized, and the borrow keeps them live for the snapshot copy below.
         let shadow_bytes = unsafe {
             std::slice::from_raw_parts(
-                &self.shadow.uniforms as *const render_types::ShadowUniforms as *const u8,
+                &self.state.planner.shadow.uniforms as *const render_types::ShadowUniforms
+                    as *const u8,
                 std::mem::size_of::<render_types::ShadowUniforms>(),
             )
         };
@@ -323,24 +325,17 @@ impl DxContext {
         for face in 0..CAPTURE_FACES {
             let vp = reflection_probe::face_view_projection(eye, face);
             let view_mat = reflection_probe::face_view_matrix(eye, face);
-            let view = super::draw::ViewUniforms {
-                vp,
-                view: view_mat,
-                elapsed: 0.0,
-                // No reflection resolve runs over the probe cube, so the forward
-                // probe specular is the only reflection source here; keep it.
-                reflections_enabled: 0.0,
-                cam_pos: [eye[0], eye[1], eye[2]],
-                prefilter_mip_count,
-                // A probe capture is always lit, whatever the viewport shows.
-                shade_mode: 0.0,
-                ambient_occlusion: 0.0,
-                sky_rot: self.state.view.sky_rot,
-                irradiance: self.irradiance_lane(),
-                pre_exposure: FaceStorage::PROBE.scale(),
-                screen_bounce: 0.0,
-                _pad: 0.0,
-            };
+            let view =
+                super::draw::ViewUniforms::face(concinnity_core::render::uniforms::FaceCamera {
+                    vp,
+                    view: view_mat,
+                    cam_pos: eye,
+                    elapsed,
+                    prefilter_mip_count,
+                    sky_rot: self.state.view.sky_rot,
+                    irradiance: self.irradiance_lane(),
+                    pre_exposure: FaceStorage::PROBE.scale(),
+                });
             let cbv = alloc.alloc_buffer(
                 256,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -838,7 +833,7 @@ impl DxContext {
             // omitted (not captured into the probe in V1).
             cmd.ExecuteIndirect(
                 cull_sig,
-                self.skinned_record_base() as u32,
+                self.state.draw.skinned_record_base() as u32,
                 indirect,
                 indirect_offset as u64,
                 None::<&ID3D12Resource>,
@@ -860,7 +855,9 @@ impl DxContext {
 impl ProbeBakeDevice for DxContext {
     type Capture = RenderingBake;
     type Prefilter = PrefilteringBake;
-    type Frame<'f> = ();
+    // The frame's elapsed seconds, which a capture starting this frame
+    // animates its faces at.
+    type Frame<'f> = f32;
 
     fn book(&mut self) -> &mut ProbeBook {
         &mut self.probe.book
@@ -885,7 +882,7 @@ impl ProbeBakeDevice for DxContext {
     // atmosphere's sky and ambient light come from tables the frame writes, so
     // a capture also waits for the first of them.
     fn capture_ready(&self, prefilter_in_flight: bool) -> bool {
-        self.cull_count() > 0 && !prefilter_in_flight && self.atmosphere_tables_ready()
+        self.state.draw.record_count() > 0 && !prefilter_in_flight && self.atmosphere_tables_ready()
     }
 
     fn reserve_cubes(&mut self, count: usize) -> RenderResult<()> {
@@ -894,16 +891,16 @@ impl ProbeBakeDevice for DxContext {
 
     fn start_capture(
         &mut self,
-        _frame: &(),
+        elapsed: &f32,
         index: usize,
         placement: ProbePlacement,
     ) -> RenderResult<RenderingBake> {
-        self.start_probe_capture(index, placement)
+        self.start_probe_capture(*elapsed, index, placement)
     }
 
     fn render_face(
         &mut self,
-        _frame: &(),
+        _frame: &f32,
         capture: &mut RenderingBake,
         face: usize,
     ) -> RenderResult<()> {

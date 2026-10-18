@@ -16,7 +16,7 @@ use crate::components::{AaMode, PassResolution, ShadowUpdate, UpscaleQuality};
 use crate::render::backend::{GpuProfile, GpuTier};
 use crate::render::planar_reflection;
 use crate::render::water::ocean::OceanQuality;
-use crate::settings::levels::{aa_mode_index, render_scale_index};
+use crate::settings::levels::{AA_MODE, RENDER_SCALE};
 
 /// The master graphics-quality choice. `Auto` resolves from the detected GPU
 /// tier each launch; a named tier (Low..Ultra) is a fixed ceiling; `Custom`
@@ -38,7 +38,8 @@ pub enum QualityPreset {
 }
 
 impl QualityPreset {
-    /// The presets in menu-cycle order, matching `GRAPHICS_QUALITY_OPTIONS`.
+    /// The presets in menu-cycle order, matching
+    /// [`levels::GRAPHICS_QUALITY`](crate::settings::levels::GRAPHICS_QUALITY).
     pub const ALL: [QualityPreset; 6] = [
         Self::Auto,
         Self::Low,
@@ -266,7 +267,7 @@ impl QualityCeiling {
 /// The authored anti-aliasing mode under a cap: the cheaper of the two by cost
 /// rank (Off < FXAA < TAA). Never raises the authored mode.
 pub fn clamp_aa_mode(authored: AaMode, cap: AaMode) -> AaMode {
-    if aa_mode_index(authored) <= aa_mode_index(cap) {
+    if AA_MODE.index_of(authored) <= AA_MODE.index_of(cap) {
         authored
     } else {
         cap
@@ -285,7 +286,7 @@ pub fn clamp_shadow_update(authored: ShadowUpdate, ceiling: &QualityCeiling) -> 
 
 /// The more aggressive (lower internal resolution) of two upscale qualities.
 pub fn more_aggressive_upscale(a: UpscaleQuality, b: UpscaleQuality) -> UpscaleQuality {
-    if render_scale_index(a) >= render_scale_index(b) {
+    if RENDER_SCALE.index_of(a) >= RENDER_SCALE.index_of(b) {
         a
     } else {
         b
@@ -318,22 +319,6 @@ pub fn auto_tier(profile: &GpuProfile) -> (&'static str, QualityCeiling) {
         GpuTier::MidDiscrete => ("High", QualityCeiling::HIGH),
         GpuTier::HighDiscrete => ("Ultra", QualityCeiling::ULTRA),
     }
-}
-
-/// The cycle index of a preset in [`QualityPreset::ALL`].
-pub fn preset_index(preset: QualityPreset) -> usize {
-    QualityPreset::ALL
-        .iter()
-        .position(|&p| p == preset)
-        .unwrap_or(0)
-}
-
-/// The preset at a cycle index; an out-of-range index is `Auto`.
-pub fn preset_at(index: usize) -> QualityPreset {
-    QualityPreset::ALL
-        .get(index)
-        .copied()
-        .unwrap_or(QualityPreset::Auto)
 }
 
 /// The master row's text for a preset: a named tier shows its name, while

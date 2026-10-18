@@ -59,6 +59,31 @@ pub fn offset_in_cycle(frame_index: u32, cycle: u32) -> [f32; 2] {
     [radical_inverse(idx, 2) - 0.5, radical_inverse(idx, 3) - 0.5]
 }
 
+/// `proj` offset by a jitter of `jitter_px` render pixels on a `width` x
+/// `height` target.
+///
+/// The shift lands in the z-coefficients of clip x/y, so after the divide by
+/// `clip.w == -view_z` NDC moves by exactly the jitter and depth is untouched.
+///
+/// ```
+/// # use concinnity_core::gfx::jitter::jitter_projection;
+/// let identity = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+/// let p = jitter_projection(identity, [0.5, -0.25], 100, 50);
+/// assert_eq!(p[2][0], -0.01);
+/// assert_eq!(p[2][1], 0.01);
+/// ```
+pub fn jitter_projection(
+    proj: [[f32; 4]; 4],
+    jitter_px: [f32; 2],
+    width: u32,
+    height: u32,
+) -> [[f32; 4]; 4] {
+    let mut p = proj;
+    p[2][0] -= jitter_px[0] * 2.0 / width.max(1) as f32;
+    p[2][1] -= jitter_px[1] * 2.0 / height.max(1) as f32;
+    p
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,6 +96,13 @@ mod tests {
         assert_eq!(radical_inverse(2, 2), 0.25);
         assert_eq!(radical_inverse(3, 2), 0.75);
         assert_eq!(radical_inverse(4, 2), 0.125);
+    }
+
+    // A zero-sized target must not divide the projection by zero.
+    #[test]
+    fn jitter_on_an_empty_target_stays_finite() {
+        let p = jitter_projection([[0.0; 4]; 4], [0.5, 0.5], 0, 0);
+        assert!(p[2][0].is_finite() && p[2][1].is_finite());
     }
 
     #[test]

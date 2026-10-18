@@ -7,7 +7,7 @@
 // before the backend build so the GPU buffers are born small and the RT
 // acceleration structure sees the final offsets.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::mesh_seed::{self, MeshSeedRegion};

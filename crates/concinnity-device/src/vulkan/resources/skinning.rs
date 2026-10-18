@@ -99,7 +99,7 @@ impl VkContext {
         self.state.skinned.draw_objects = draw_objects;
         // A whole new skinned set: nothing in the model-history ring was written
         // for these records.
-        let n_cull = self.cull_count();
+        let n_cull = self.state.draw.record_count();
         self.state.model_history.get_mut().reset(n_cull);
 
         // Morph targets are attached by a later `upload_skinned_morphs`; until
@@ -112,7 +112,7 @@ impl VkContext {
 
         // GPU-driven main-pass skinning: build the `rt_skin` compute pipeline +
         // per-frame deformed-vertex buffers + their descriptor sets, and set
-        // `self.state.draw.n_skinned` so `cull_count()` covers the skinned tail. Every
+        // `self.state.draw.n_skinned` so `draw.record_count()` covers the skinned tail. Every
         // skinned draw rides the GPU-driven pass, so a build failure is a
         // startup error, as on Metal. Mirrors the DirectX `upload_skinned`.
         self.build_main_skin(vertices.len())

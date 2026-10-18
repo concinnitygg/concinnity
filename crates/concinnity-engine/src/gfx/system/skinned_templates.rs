@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use concinnity_core::animation::skeleton;
+use concinnity_core::animation::{character_shape, skeleton};
 use concinnity_core::components::{CharacterCapsule, CharacterRig, GlobalTransform, Transform};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{PickIndex, PipelineContext, SkinnedMeshHandle};
@@ -12,7 +12,7 @@ use concinnity_core::gfx::render_types::{SkinnedDrawObject, SkinnedIndex};
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_core::render::error::RenderResult;
 
-use super::{GraphicsSystem, PickCandidate, character_shape};
+use super::{GraphicsSystem, PickCandidate};
 
 // One skinned mesh's skeleton bookkeeping, driving the SkeletonPose +
 // CharacterRig publish after the geometry upload. `template_index` is recorded

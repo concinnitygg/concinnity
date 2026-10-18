@@ -36,9 +36,17 @@ pub(super) struct PreparedWorldShader {
     pub pipelines: BucketPipelines,
 }
 
+// What a volume's pipelines depend on beyond its flags: the shader source path
+// and the engine templates they were compiled from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct VolumeBuild {
+    pub hot_reload: bool,
+    pub template_generation: u64,
+}
+
 // A volume's pipelines and what they were built for.
 pub(super) struct PreparedVolume {
-    pub hot_reload: bool,
+    pub build: VolumeBuild,
     pub flags: VolumeFlags,
     pub pipelines: VolumePipelines,
 }
@@ -76,7 +84,10 @@ impl PipelineBuilder for MtlPipelineBuilder {
             build_volume_pipelines(&self.device, programs, flags, hot_reload, label)
         })?;
         Ok(PreparedPipelines::new(PreparedVolume {
-            hot_reload,
+            build: VolumeBuild {
+                hot_reload,
+                template_generation: self.targets.template_generation,
+            },
             flags,
             pipelines,
         }))
@@ -95,15 +106,15 @@ pub(super) fn world_shader_for(
 }
 
 // The volume pipelines in `prepared` when they were built for a volume with
-// `flags` under `hot_reload`.
+// `flags` under `build`.
 pub(super) fn volume_for(
     prepared: Option<PreparedPipelines>,
     flags: VolumeFlags,
-    hot_reload: bool,
+    build: VolumeBuild,
 ) -> Option<VolumePipelines> {
     prepared?
         .downcast::<PreparedVolume>()
-        .filter(|p| p.flags == flags && p.hot_reload == hot_reload)
+        .filter(|p| p.flags == flags && p.build == build)
         .map(|p| p.pipelines)
 }
 
@@ -149,13 +160,18 @@ mod tests {
         }))
     }
 
+    const BUILD: VolumeBuild = VolumeBuild {
+        hot_reload: true,
+        template_generation: 1,
+    };
+
     fn volume(
         flags: VolumeFlags,
-        hot_reload: bool,
+        build: VolumeBuild,
         pipeline: &Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     ) -> Option<PreparedPipelines> {
         Some(PreparedPipelines::new(PreparedVolume {
-            hot_reload,
+            build,
             flags,
             pipelines: VolumePipelines {
                 pipeline: pipeline.clone(),
@@ -192,20 +208,30 @@ mod tests {
             ..TARGETS
         };
         assert!(world_shader_for(world(TARGETS, &pso), reloaded).is_none());
-        assert!(world_shader_for(volume(SURFACE, true, &pso), TARGETS).is_none());
+        assert!(world_shader_for(volume(SURFACE, BUILD, &pso), TARGETS).is_none());
         assert!(world_shader_for(None, TARGETS).is_none());
     }
 
     #[test]
     fn volume_pipelines_are_taken_only_for_the_flags_they_were_built_for() {
         let Some(pso) = pipeline() else { return };
-        assert!(volume_for(volume(SURFACE, true, &pso), SURFACE, true).is_some());
+        assert!(volume_for(volume(SURFACE, BUILD, &pso), SURFACE, BUILD).is_some());
         let caster = VolumeFlags {
             cast_shadows: true,
             ..SURFACE
         };
-        assert!(volume_for(volume(SURFACE, true, &pso), caster, true).is_none());
-        assert!(volume_for(volume(SURFACE, true, &pso), SURFACE, false).is_none());
-        assert!(volume_for(world(TARGETS, &pso), SURFACE, true).is_none());
+        assert!(volume_for(volume(SURFACE, BUILD, &pso), caster, BUILD).is_none());
+        let embedded = VolumeBuild {
+            hot_reload: false,
+            ..BUILD
+        };
+        assert!(volume_for(volume(SURFACE, BUILD, &pso), SURFACE, embedded).is_none());
+        // Built from the templates a reload has since replaced.
+        let reloaded = VolumeBuild {
+            template_generation: 2,
+            ..BUILD
+        };
+        assert!(volume_for(volume(SURFACE, BUILD, &pso), SURFACE, reloaded).is_none());
+        assert!(volume_for(world(TARGETS, &pso), SURFACE, BUILD).is_none());
     }
 }

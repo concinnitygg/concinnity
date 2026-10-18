@@ -94,8 +94,8 @@ fn ceilings_are_monotonic_in_tier() {
         // The AA-mode cap rises (or holds) with the tier: a higher tier
         // never permits a less aggressive (cheaper) anti-aliasing mode.
         assert!(
-            crate::settings::levels::aa_mode_index(lo.aa_mode)
-                <= crate::settings::levels::aa_mode_index(hi.aa_mode),
+            crate::settings::levels::AA_MODE.index_of(lo.aa_mode)
+                <= crate::settings::levels::AA_MODE.index_of(hi.aa_mode),
             "a higher tier capped AA at a cheaper mode"
         );
         // And never forces more aggressive upscaling than a lower tier.
@@ -349,16 +349,6 @@ fn aa_mode_clamps_down_only() {
     assert_eq!(ultra.aa_mode, AaMode::Taa);
     let low = resolve_ceiling(QualityPreset::Low, &GpuProfile::UNKNOWN);
     assert_eq!(low.aa_mode, AaMode::Fxaa);
-}
-
-#[test]
-fn preset_index_and_at_round_trip() {
-    for p in QualityPreset::ALL {
-        assert_eq!(preset_at(preset_index(p)), p);
-    }
-    // Auto leads the cycle order; an out-of-range index falls back to Auto.
-    assert_eq!(preset_at(0), QualityPreset::Auto);
-    assert_eq!(preset_at(99), QualityPreset::Auto);
 }
 
 #[test]

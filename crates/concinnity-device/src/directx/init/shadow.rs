@@ -2,12 +2,11 @@
 //! spot shadow array with its per-slice projections.
 
 use concinnity_core::gfx::render_types::{
-    self, LightUniforms, NUM_SHADOW_CASCADES, ShadowUniforms, SpotShadowData,
+    self, NUM_SHADOW_CASCADES, ShadowUniforms, SpotShadowData,
 };
 use concinnity_core::render::backend_init::ShadowParams;
 use concinnity_core::render::csm;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::lights;
 use concinnity_core::render::spot_shadow;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -25,7 +24,6 @@ pub(super) fn build_shadow(
     descriptors: &DxDescriptors,
     targets: &DxTargets,
     shadows: &ShadowParams,
-    light_uniforms: &LightUniforms,
 ) -> RenderResult<ShadowState> {
     let hw = gpu.hw;
     let dsv_descriptor_size = heaps::descriptor_size(&hw.device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
@@ -71,12 +69,6 @@ pub(super) fn build_shadow(
         map_size: effective_shadow_size,
         layers: extent.layers,
         srv_gpu: shadow_srv_gpu,
-        // The first directional light's direction, for per-frame CSM updates.
-        light_dir: lights::sun_direction(light_uniforms),
-        cadence: shadows.cadence,
-        scheduler: Default::default(),
-        render_mask: 0,
-        uniforms: csm::empty_shadow_uniforms(),
     })
 }
 
@@ -198,7 +190,6 @@ pub(super) fn build_spot_shadow(
             .iter()
             .map(spot_shadow::slice_frustum)
             .collect(),
-        scheduler: Default::default(),
         render_mask: 0,
     })
 }

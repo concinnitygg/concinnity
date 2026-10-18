@@ -19,9 +19,9 @@
 
 use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams};
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::frame_plan::FogBlocks;
 use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use concinnity_core::render::volumetric_fog;
-use concinnity_core::transform::mat4_inverse;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -41,14 +41,10 @@ use crate::directx::texture::HDR_FORMAT;
 // Volumetric fog. All fields `None`/default until the world declares a
 // `VolumetricFog`; the fog pass is skipped while `resources` is `None`. The
 // settings are cached so the per-frame encoder can build its `FogParams`
-// without re-resolving the asset. `sun_dir` / `sun_color` mirror the first
-// directional light, cached on the CPU so the encoder never reads back the
-// light CBV; `update_directional_lights` re-derives both.
+// without re-resolving the asset. The sun it lights with is the light state's.
 pub(in crate::directx) struct FogState {
     pub resources: Option<FogResources>,
     pub settings: Option<volumetric_fog::FogSettings>,
-    pub sun_dir: [f32; 3],
-    pub sun_color: [f32; 3],
 }
 
 // Compile the fog vertex + fragment shaders; the MSAA define keeps the
@@ -443,23 +439,6 @@ impl DxContext {
         self.fog.settings = settings;
     }
 
-    // Compute the per-frame `FogFroxelParams` block. Mirrors the Metal
-    // `draw::mod::record_frame` block: view matrix + volume dimensions +
-    // near/far. `near` is the camera near-plane (clamped to ≥ 1e-3 so the
-    // linear-Z mapping stays finite), and `z_far` is the fog's authored
-    // `max_distance` (the volume covers `[z_near, max_distance]`).
-    fn fog_froxel_params(&self, near: f32) -> Option<FogFroxelParams> {
-        let fog = self.fog.settings?;
-        Some(FogFroxelParams {
-            view: self.state.view.matrix,
-            froxel_dims: [FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z],
-            _pad_align: 0,
-            z_near: near.max(1e-3),
-            z_far: fog.max_distance,
-            _pad: [0.0; 2],
-        })
-    }
-
     // Encode the volumetric-fog froxel-volume compute pass. Populates the
     // 3D `(scattered, 1 - T)` volume the fog fragment shader samples. The
     // caller (`execute_graph`) seeds this PassId before `Fog` so the RAW
@@ -468,51 +447,31 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        near: f32,
-        vp: [[f32; 4]; 4],
-        cam_pos: [f32; 3],
+        blocks: &FogBlocks,
         shadow_ubo_gva: u64,
     ) {
-        let fog_settings = match &self.fog.settings {
-            Some(s) => *s,
-            None => return,
-        };
         let fog = match &self.fog.resources {
             Some(f) => f,
             None => return,
         };
-        let froxel_params = match self.fog_froxel_params(near) {
-            Some(p) => p,
-            None => return,
-        };
-
+        let FogBlocks {
+            params,
+            froxel: froxel_params,
+        } = blocks;
         // Write per-frame `FogParams` + `FogFroxelParams` into their ring
         // slots. The `Fog` render pass below reads from the same slot, so
         // both passes see the same params this frame.
-        let inv_vp = mat4_inverse(vp);
-        let viewport = [
-            self.targets.extent.render_width as f32,
-            self.targets.extent.render_height as f32,
-        ];
-        let params = fog_settings.params(
-            inv_vp,
-            cam_pos,
-            self.fog.sun_dir,
-            self.fog.sun_color,
-            viewport,
-            self.pre_exposure.value(),
-        );
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &params as *const FogParams as *const u8,
+                params as *const FogParams as *const u8,
                 fog.params_ubo_ptrs[frame_idx],
                 std::mem::size_of::<FogParams>(),
             );
             std::ptr::copy_nonoverlapping(
-                &froxel_params as *const FogFroxelParams as *const u8,
+                froxel_params as *const FogFroxelParams as *const u8,
                 fog.froxel_params_ubo_ptrs[frame_idx],
                 std::mem::size_of::<FogFroxelParams>(),
             );
@@ -555,17 +514,7 @@ impl DxContext {
     // the resolved scene target holds the resolved scene + decal color.
     // The pass alpha-blends `(scattered, 1 - T)` over the resolved HDR
     // target.
-    pub(in crate::directx) fn encode_fog(
-        &self,
-        cmd: &ID3D12GraphicsCommandList,
-        frame_idx: usize,
-        _vp: [[f32; 4]; 4],
-        _cam_pos: [f32; 3],
-    ) {
-        let _ = match &self.fog.settings {
-            Some(s) => *s,
-            None => return,
-        };
+    pub(in crate::directx) fn encode_fog(&self, cmd: &ID3D12GraphicsCommandList, frame_idx: usize) {
         let fog = match &self.fog.resources {
             Some(f) => f,
             None => return,

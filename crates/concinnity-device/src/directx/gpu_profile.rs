@@ -46,14 +46,9 @@ pub(crate) fn probe_device() -> Option<DeviceProbe> {
     })
 }
 
-// Classify a chosen adapter's description, mirroring `DxContext::gpu_profile`.
-fn adapter_profile(desc: &DXGI_ADAPTER_DESC1) -> GpuProfile {
-    let vendor = match desc.VendorId {
-        0x10DE => GpuVendor::Nvidia,
-        0x1002 => GpuVendor::Amd,
-        0x8086 => GpuVendor::Intel,
-        _ => GpuVendor::Other,
-    };
+// Classify an adapter from its description: the vendor and its dedicated VRAM.
+pub(super) fn adapter_profile(desc: &DXGI_ADAPTER_DESC1) -> GpuProfile {
+    let vendor = GpuVendor::from_pci_id(desc.VendorId);
     let dedicated = desc.DedicatedVideoMemory as u64;
     // A discrete GPU has dedicated VRAM; an integrated part reports little or
     // none. A small floor keeps a few MB of carve-out from reading as discrete.

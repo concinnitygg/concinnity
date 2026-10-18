@@ -21,7 +21,7 @@ use concinnity_core::render::shader_programs::ShaderProgram;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::transparent::{
     ProducerCtx, RecordUpload, ShapePipelines, TransparentProducer, TransparentRecord,
-    TransparentVertexInput, create_transparent_pipeline,
+    TransparentVertexInput, create_transparent_pipeline, upload_record,
 };
 
 // The programs one water shape draws with: a rectangle's, or a planet sea's.
@@ -102,7 +102,7 @@ fn build_surface_record(
     let surface = &body.surface;
     let (vertices, indices) = body.mesh().map_err(RenderError::Other)?;
     let motion = WaterMotion::new(body, planar_slot.is_some());
-    let record = TransparentRecord::upload(
+    let record = upload_record(
         &ctx.gpu(),
         ctx.record_descriptors(planar_slot),
         RecordUpload {
@@ -146,11 +146,9 @@ pub(in crate::vulkan) fn build_water_producer(
     }
 
     Ok(TransparentProducer {
-        pipeline: rectangle.pipeline,
-        flat_rt_pso: rectangle.flat_rt_pso,
-        textured_rt_pso: rectangle.textured_rt_pso,
-        reflection_flat_pso: None,
-        reflection_textured_pso: None,
+        shape: rectangle,
+        reflection_flat: None,
+        reflection_textured: None,
         sea,
         records,
         water,
@@ -186,9 +184,9 @@ fn build_water_pipelines(
         None => (None, None),
     };
     Ok(ShapePipelines {
-        pipeline,
-        flat_rt_pso,
-        textured_rt_pso,
+        base: pipeline,
+        flat_rt: flat_rt_pso,
+        textured_rt: textured_rt_pso,
     })
 }
 

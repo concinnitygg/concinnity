@@ -2,6 +2,7 @@
 // All texture uploads use an upload heap (CPU-visible) that is copied to a
 // default heap (GPU-local) via CopyTextureRegion on a one-shot command list.
 
+use concinnity_core::render::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
 use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::mipmap;
@@ -299,6 +300,7 @@ pub(super) fn upload_texture_image_deferred(
     alloc: &DeviceAllocator,
     image: &concinnity_core::bake::texture::TextureImage,
 ) -> RenderResult<(PooledTexture, UploadInFlight)> {
+    image.validate().map_err(RenderError::Other)?;
     let levels: Vec<TextureLevel<'_>> = image
         .mips
         .iter()
@@ -1455,8 +1457,8 @@ fn upload_cube_resource(
     mip_count: u32,
     bytes: &[u8],
 ) -> RenderResult<PooledTexture> {
-    let face_bytes_mip0 = (face_size as usize) * (face_size as usize) * 16;
-    let needed = 6 * face_bytes_mip0 * mip_count as usize;
+    let needed = concinnity_core::bake::environment_map::cube_mip_byte_len(face_size, 0)
+        .map_err(RenderError::Other)?;
     if mip_count == 1 && bytes.len() < needed {
         return Err(RenderError::Other(format!(
             "cubemap data too short for face_size {}: {} bytes, need {}",
@@ -1532,6 +1534,22 @@ fn upload_face_major_into_cube(
     mip_count: u32,
     mip_bytes: &[&[u8]],
 ) -> RenderResult<()> {
+    if mip_bytes.len() < mip_count as usize {
+        return Err(RenderError::Other(format!(
+            "cube upload has {} mip slabs, need {mip_count}",
+            mip_bytes.len()
+        )));
+    }
+    for (mip, slab) in mip_bytes.iter().enumerate().take(mip_count as usize) {
+        let needed = concinnity_core::bake::environment_map::cube_mip_byte_len(face_size, mip)
+            .map_err(RenderError::Other)?;
+        if slab.len() < needed {
+            return Err(RenderError::Other(format!(
+                "cube upload mip {mip} too short: {} bytes, need {needed}",
+                slab.len()
+            )));
+        }
+    }
     let device = alloc.device();
     let num_subresources = 6 * mip_count;
     let mut layouts: Vec<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> =
@@ -1569,20 +1587,9 @@ fn upload_face_major_into_cube(
     // Layout in D3D12: subresource index = mip + face * MipLevels.
     // Source data layout: per-mip slab `mip_bytes[m]`, face-major within each.
     for mip in 0..mip_count {
-        let mip_face_size = (face_size >> mip).max(1);
+        let mip_face_size = face_size >> mip;
         let face_bytes = (mip_face_size as usize) * (mip_face_size as usize) * 16;
         let slab = mip_bytes[mip as usize];
-        if slab.len() < 6 * face_bytes {
-            // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping
-            // past this call.
-            unsafe { upload.Unmap(0, None) };
-            return Err(RenderError::Other(format!(
-                "cube upload mip {} too short: {} bytes, need {}",
-                mip,
-                slab.len(),
-                6 * face_bytes
-            )));
-        }
         for face in 0..6u32 {
             let subres = mip + face * mip_count;
             let layout = &layouts[subres as usize];
@@ -1947,23 +1954,12 @@ pub(super) fn upload_float_lut(
     })
 }
 
-// Build a 2×2×2 identity color LUT so the composite pass always binds a valid
-// Texture3D even when the world declares no `ColorLut`. With the identity LUT
-// the grade is a no-op at any `lut_strength`. Mirrors
-// `vulkan/texture.rs::create_fallback_color_lut`.
+// Upload the identity color LUT, so the composite pass always binds a valid
+// Texture3D even when the world declares no `ColorLut`.
 pub(super) fn create_fallback_color_lut(
     alloc: &DeviceAllocator,
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     srv_gpu: SrvSlot,
 ) -> RenderResult<GpuResource> {
-    // Red-fastest, then green, then blue, matching the payload texel order.
-    let mut data = Vec::with_capacity(2 * 2 * 2 * 4);
-    for b in 0..2u8 {
-        for g in 0..2u8 {
-            for r in 0..2u8 {
-                data.extend_from_slice(&[r * 255, g * 255, b * 255, 255]);
-            }
-        }
-    }
-    upload_color_lut(alloc, 2, &data, srv_cpu, srv_gpu)
+    upload_color_lut(alloc, IDENTITY_LUT_SIZE, &IDENTITY_LUT, srv_cpu, srv_gpu)
 }

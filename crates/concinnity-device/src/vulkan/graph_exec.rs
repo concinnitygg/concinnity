@@ -34,17 +34,19 @@ use ash::Device;
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{ClusterParams, LineVertex, TextDrawCall};
-use concinnity_core::profile::MAX_PASS_TIMINGS;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::frame_plan::{EffectBlocks, FogBlocks};
+use concinnity_core::render::particles::ParticleFrame;
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
 use concinnity_core::render::reactive_mask::{ReactiveMaskPlan, ReactiveWrite};
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{
-    BarrierOp, CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
+    AliasRows, BarrierOp, BarrierTable, CompiledGraph, CompiledPass, GraphResourceClass, PassId,
+    PassRecorder, PassScratch, execute_passes,
 };
+use concinnity_core::render::uniforms::GBufferView;
 use concinnity_host::thread::jobs;
-use std::sync::atomic::AtomicU32;
 
 use super::barrier_translate::{VkResting, vk_restore, vk_transition};
 use super::context::VkContext;
@@ -88,54 +90,93 @@ struct VkBarrierTarget {
 }
 
 // `ResourceId`-indexed table of barrier targets for the graph-driven resources
-// (`None` for every resource the executor doesn't graph-drive). A resource is
-// graph-driven iff it has a `Some` entry, so this table is the single source of
-// truth. Built on the main thread by `build_barrier_registry`, where the only
-// field-naming of the graph-driven resources lives; the parallel emit path stays
-// field-agnostic.
-struct VkBarrierRegistry {
-    targets: Vec<Option<VkBarrierTarget>>,
-    // Backing store for the `VkTargetObject::BufferSet` ranges, so a label that
-    // covers several buffers costs no allocation of its own.
-    buffers: Vec<vk::Buffer>,
-}
+// (`None` for every resource the executor doesn't graph-drive), with an arena for
+// the `VkTargetObject::BufferSet` ranges. Refilled on the main thread by
+// `refill_graph_tables`, where the only field-naming of the graph-driven
+// resources lives; the parallel emit path stays field-agnostic.
+type VkBarrierRegistry = BarrierTable<VkBarrierTarget, vk::Buffer>;
 
-impl VkBarrierRegistry {
-    fn target(&self, resource_index: usize) -> Option<&VkBarrierTarget> {
-        self.targets.get(resource_index)?.as_ref()
-    }
-
-    // The buffers a `BufferSet` range names.
-    fn set(&self, first: usize, count: usize) -> &[vk::Buffer] {
-        &self.buffers[first..first + count]
-    }
-}
-
-// The two per-frame tables the executor builds, kept across frames on `VkContext`
-// so their backing allocations are reused. Only the allocations survive: both are
-// cleared and refilled from live state at the start of every `execute_graph`, so
-// nothing here can outlive the object it names. That matters because the barrier
-// targets are raw `vk::Image` / `vk::Buffer` handles: caching their *contents*
-// would mean tracking every event that rebuilds one of the ~10 fields
-// `barrier_objects_for_label` reads, and a missed one would put a destroyed handle
-// in a barrier. Refilling is cheap now that the pool resolves a label in O(1).
-pub(in crate::vulkan) struct VkBarrierScratch {
+// The per-frame tables the executor builds, kept across frames on `VkContext`
+// so their backing allocations are reused. Only the allocations survive: every
+// table is cleared and refilled from live state at the start of every
+// `execute_graph`, so nothing here can outlive the object it names. That matters
+// because the barrier targets are raw `vk::Image` / `vk::Buffer` handles: caching
+// their *contents* would mean tracking every event that rebuilds one of the ~10
+// fields `barrier_objects_for_label` reads, and a missed one would put a
+// destroyed handle in a barrier.
+#[derive(Default)]
+pub(in crate::vulkan) struct VkGraphScratch {
     registry: VkBarrierRegistry,
-    // `alias[i]` holds the pooled images to alias-barrier before graph pass `i`.
-    // The inner `Vec`s are cleared rather than dropped, so their allocations are
-    // reused too; the outer one is resized to the pass count.
-    alias: Vec<Vec<vk::Image>>,
+    // The pooled images to alias-barrier before each graph pass.
+    alias: AliasRows<vk::Image>,
+    passes: PassScratch<vk::CommandBuffer>,
 }
 
-impl VkBarrierScratch {
-    fn new() -> Self {
-        Self {
-            registry: VkBarrierRegistry {
-                targets: Vec::new(),
-                buffers: Vec::new(),
-            },
-            alias: Vec::new(),
+// Records one graph pass into its own per-`(frame, pass)` command buffer on a
+// job-pool worker.
+struct VkPassRecorder<'a, 'p> {
+    ctx: ParallelCtxRef<'a>,
+    device: &'a Device,
+    params: &'a GraphFrameParams<'p>,
+    particle: Option<&'a ParticleFrame>,
+    grass: Option<&'a super::grass::GrassFrame>,
+    registry: &'a VkBarrierRegistry,
+    alias: &'a AliasRows<vk::Image>,
+}
+
+impl PassRecorder for VkPassRecorder<'_, '_> {
+    type Recorded = vk::CommandBuffer;
+
+    fn record(&self, index: usize, pass: &CompiledPass) -> RenderResult<vk::CommandBuffer> {
+        let ctx = self.ctx.as_ctx();
+        let frame_idx = self.params.frame_idx;
+        let pass_id = pass.id;
+        let buf = ctx.commands.pass_command_buffers
+            [frame_idx * render_graph::PASS_COUNT + pass_id as usize];
+        // Reset + begin this pass's own buffer (its own pool, so no cross-worker
+        // pool contention), encode, end.
+        // SAFETY: `buf` belongs to this frame slot, whose fence was already waited
+        // on, so it is not in flight and may be reset.
+        unsafe {
+            self.device
+                .reset_command_buffer(buf, vk::CommandBufferResetFlags::empty())
         }
+        .map_err(|e| {
+            super::error::map_vk_result(e, &format!("reset pass cmd buf ({})", pass_id.name()))
+        })?;
+        let rec = Recorder::begin(
+            self.device,
+            buf,
+            vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+        )
+        .map_err(|e| {
+            super::error::map_vk_result(e, &format!("begin pass cmd buf ({})", pass_id.name()))
+        })?;
+        // Per-pass GPU timing: bracket this pass's encode with a (start, end)
+        // timestamp pair in its own buffer. The block was reset in the start
+        // buffer (submitted first), so these writes are valid. A pass absent from
+        // a later frame's graph leaves its slots unwritten; the readback's
+        // `WITH_AVAILABILITY` reports those as 0.
+        if let Some(pool) = ctx.hw.timestamp_query_pool {
+            let (ts_start, _) = pass_timing::pass_pair(frame_idx, pass_id);
+            rec.write_timestamp(vk::PipelineStageFlags::TOP_OF_PIPE, pool, ts_start);
+        }
+        emit_pass_prologue(
+            self.device,
+            buf,
+            self.registry,
+            self.alias.for_pass(index),
+            pass,
+        );
+        ctx.encode_pass_into(pass_id, &rec, self.params, self.particle, self.grass)?;
+        emit_pass_epilogue(self.device, buf, self.registry, pass);
+        if let Some(pool) = ctx.hw.timestamp_query_pool {
+            let (_, ts_end) = pass_timing::pass_pair(frame_idx, pass_id);
+            rec.write_timestamp(vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, ts_end);
+        }
+        rec.end().map_err(|e| {
+            super::error::map_vk_result(e, &format!("end pass cmd buf ({})", pass_id.name()))
+        })
     }
 }
 
@@ -168,6 +209,9 @@ fn emit_graph_barriers(
         emit_one(device, cmd, registry, target, transition);
     }
 }
+
+// How many buffers of one set a single `vkCmdPipelineBarrier` carries.
+const BUFFER_BARRIER_BATCH: usize = 16;
 
 // Record one resolved transition against a target's GPU object: a buffer memory
 // barrier over the whole range, or an image memory barrier over every mip and
@@ -217,28 +261,27 @@ fn emit_one(
             }
         }
         VkTargetObject::BufferSet { first, count } => {
-            // One `vkCmdPipelineBarrier` covering the whole set: the members
-            // share a transition, and the barrier array is what they differ in.
-            let barriers: Vec<vk::BufferMemoryBarrier> = registry
-                .set(first, count)
-                .iter()
-                .map(|&b| buffer_barrier(b))
-                .collect();
-            if barriers.is_empty() {
-                return;
-            }
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_pipeline_barrier(
-                    cmd,
-                    src_stage,
-                    dst_stage,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &barriers,
-                    &[],
-                );
+            // The members share a transition, so they go out in batches of one
+            // `vkCmdPipelineBarrier` each, the barrier array being what they
+            // differ in.
+            for chunk in registry.set(first, count).chunks(BUFFER_BARRIER_BATCH) {
+                let mut barriers = [vk::BufferMemoryBarrier::default(); BUFFER_BARRIER_BATCH];
+                for (barrier, &buffer) in barriers.iter_mut().zip(chunk) {
+                    *barrier = buffer_barrier(buffer);
+                }
+                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
+                // slice these commands name is live for the call.
+                unsafe {
+                    device.cmd_pipeline_barrier(
+                        cmd,
+                        src_stage,
+                        dst_stage,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &barriers[..chunk.len()],
+                        &[],
+                    );
+                }
             }
         }
         VkTargetObject::Image {
@@ -293,7 +336,7 @@ fn emit_graph_restores(
     registry: &VkBarrierRegistry,
     graph: &CompiledGraph,
 ) {
-    for (idx, (state, stages)) in final_states(graph).into_iter().enumerate() {
+    for (idx, &(state, stages)) in graph.final_states().iter().enumerate() {
         let Some(target) = registry.target(idx) else {
             continue;
         };
@@ -410,7 +453,7 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry
     use super::barrier_translate::vk_state;
     use concinnity_core::render::render_graph::{ResourceState, barrier_coverage_gaps_for_driven};
 
-    let driven: Vec<bool> = registry.targets.iter().map(|t| t.is_some()).collect();
+    let driven: Vec<bool> = registry.driven().collect();
     let gaps = barrier_coverage_gaps_for_driven(graph, &driven);
     assert!(
         gaps.is_empty(),
@@ -449,7 +492,7 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry
         }
     }
 
-    for (idx, (state, stages)) in final_states(graph).into_iter().enumerate() {
+    for (idx, &(state, stages)) in graph.final_states().iter().enumerate() {
         let Some(target) = registry.target(idx) else {
             continue;
         };
@@ -511,13 +554,9 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // stored motion vector is free of sub-pixel jitter. `Default::default()`
     // for frames where the velocity channel isn't dispatched.
     pub cur_vp: [[f32; 4]; 4],
-    // Vertical FOV in radians: SSAO needs it for the projection
-    // reconstruction used by the GTAO horizon search; SSR resolve
-    // uses it for the same.
+    // Vertical FOV in radians, which the temporal upscaler linearizes depth
+    // with.
     pub fov_y_radians: f32,
-    // Camera aspect ratio (width / height); same SSAO + SSR use
-    // as `fov_y_radians`.
-    pub aspect: f32,
     // Frame-global elapsed seconds. The particle encoder needs it to
     // derive `dt` from the last-frame snapshot it stashed in a `Cell`;
     // the compute kernel multiplies dt against `spawn_rate` and the
@@ -536,6 +575,12 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // The main camera's cluster params, which each mirror render re-aims
     // through its reflected view.
     pub cluster_params: ClusterParams,
+    // The fog's blocks, when fog contributes.
+    pub fog: Option<FogBlocks>,
+    // The G-buffer pre-pass's view block.
+    pub gbuffer_view: GBufferView,
+    // The screen-space effects' blocks.
+    pub effects: EffectBlocks,
     // How the particle and transparent passes treat the reactive mask, and
     // whether TAA, the upscaler or the reactive view reads it.
     pub reactive: ReactiveMaskPlan,
@@ -556,7 +601,8 @@ impl VkContext {
         &mut self,
         graph: &CompiledGraph,
         params: &GraphFrameParams<'_>,
-    ) -> RenderResult<Vec<vk::CommandBuffer>> {
+        submit: &mut Vec<vk::CommandBuffer>,
+    ) -> RenderResult<()> {
         // Particle per-frame state (dt / frame index / per-emitter spawn
         // budgets) is advanced here on `&mut self` before any pass encodes, so
         // the `&self` `encode_particles` (which may run on a parallel-recording
@@ -567,48 +613,30 @@ impl VkContext {
         // only on a frame whose graph runs the kernel, so the draw-argument
         // slot it fills alternates frame to frame.
         let grass_frame = graph
-            .passes
-            .iter()
-            .any(|p| p.id == PassId::Grass)
+            .pass(PassId::Grass)
+            .is_some()
             .then(|| {
                 self.prepare_grass_frame(super::grass::GrassRequest {
                     frame_idx: params.frame_idx,
                     cam_pos: params.cam_pos,
                     vp: params.cur_vp,
                     elapsed: params.elapsed as f32,
-                    cast: graph.passes.iter().any(|p| p.id == PassId::GrassShadow),
+                    cast: graph.pass(PassId::GrassShadow).is_some(),
                     benders: params.grass_benders,
                 })
             })
             .flatten();
-
-        // Composite stays on the main thread (it writes the swapchain image
-        // and allocates + drops transient text buffers through the RefCell
-        // device allocator); every other pass fans onto a `jobs::pool()`
-        // worker that records into its own `(frame, pass)` command buffer.
-        let composite_idx = graph.passes.iter().position(|p| p.id == PassId::Composite);
         let frame_idx = params.frame_idx;
         // The raw device, not the owning handle: a worker records through it and
         // must never create or retire an owned object, so it is handed the
-        // dispatch table alone. The owning handle is `Arc` and would be sound to
-        // send, but nothing here needs the device's lifetime.
+        // dispatch table alone.
         let device = ash::Device::clone(&self.hw.device);
 
-        // One output slot per graph pass index; each worker stores its finished
-        // command buffer at its own index. Disjoint indices, but a `Mutex`
-        // keeps the store sound + simple (it's once per pass). `first_error`
-        // captures the first worker failure.
-        let worker_slots: std::sync::Mutex<Vec<Option<vk::CommandBuffer>>> =
-            std::sync::Mutex::new(vec![None; graph.passes.len()]);
-        let first_error: std::sync::Mutex<Option<RenderError>> = std::sync::Mutex::new(None);
-
-        // Resolve every graph-driven resource's barrier target once, on the main
-        // thread, then share the table read-only into the parallel pass workers.
-        let mut scratch = self
-            .barrier_scratch
-            .take()
-            .unwrap_or_else(VkBarrierScratch::new);
-        self.refill_barrier_registry(&mut scratch.registry, graph, frame_idx);
+        // Resolve every graph-driven resource's barrier target and every pass's
+        // aliasing barriers once, on the main thread, then share the tables
+        // read-only into the parallel pass workers.
+        let mut scratch = self.graph_scratch.take().unwrap_or_default();
+        self.refill_graph_tables(&mut scratch, graph, frame_idx);
         #[cfg(debug_assertions)]
         debug_assert_graph_drives(graph, &scratch.registry);
         #[cfg(debug_assertions)]
@@ -628,137 +656,39 @@ impl VkContext {
         // which is what this asserts.
         #[cfg(debug_assertions)]
         render_graph::assert_serial_order_honors_schedule(graph, "vulkan");
-        // Per-pass aliasing barriers for the pooled transients that share memory
-        // this frame (e.g. `bloom_top` reusing `ao_output`'s slot). Empty when no
-        // slot is shared.
-        self.refill_alias_barriers(&mut scratch.alias, graph, frame_idx);
-        let VkBarrierScratch {
+
+        let VkGraphScratch {
             registry,
-            alias: alias_barriers,
-        } = &scratch;
-        let ctx_ref = ParallelCtxRef::new(self);
-        let particle_ref = particle_frame.as_ref();
-        let grass_ref = grass_frame.as_ref();
-        let device_ref = &device;
-        let worker_slots_ref = &worker_slots;
-        let first_error_ref = &first_error;
-        let registry_ref = registry;
-        let alias_barriers_ref = alias_barriers;
-        let timer = jobs::fan_out_timer();
-        let timer_ref = &timer;
-        let record_us: [AtomicU32; MAX_PASS_TIMINGS] =
-            [const { AtomicU32::new(0) }; MAX_PASS_TIMINGS];
-        let record_us_ref = &record_us;
-
-        jobs::pool().install(|| {
-            rayon::scope(|scope| {
-                for (idx, pass) in graph.passes.iter().enumerate() {
-                    if Some(idx) == composite_idx {
-                        continue;
-                    }
-                    let pass_id = pass.id;
-                    scope.spawn(move |_| {
-                        timer_ref.job_into(&record_us_ref[pass_id as usize], || {
-                            let ctx = ctx_ref.as_ctx();
-                            let pool_idx = frame_idx * render_graph::PASS_COUNT + pass_id as usize;
-                            let buf = ctx.commands.pass_command_buffers[pool_idx];
-                            let set_err = |error: RenderError| {
-                                let mut lock = first_error_ref.lock().unwrap();
-                                if lock.is_none() {
-                                    *lock = Some(error);
-                                }
-                            };
-                            // Reset + begin this pass's own buffer (its own pool, so
-                            // no cross-worker pool contention), encode, end.
-                            // SAFETY: `buf` belongs to this frame slot, whose fence was already
-                            // waited on, so it is not in flight and may be reset.
-                            let reset = unsafe {
-                                device_ref
-                                    .reset_command_buffer(buf, vk::CommandBufferResetFlags::empty())
-                            };
-                            if let Err(e) = reset {
-                                set_err(super::error::map_vk_result(
-                                    e,
-                                    &format!("reset pass cmd buf ({})", pass_id.name()),
-                                ));
-                                return;
-                            }
-                            let rec = match Recorder::begin(
-                                device_ref,
-                                buf,
-                                vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
-                            ) {
-                                Ok(rec) => rec,
-                                Err(e) => {
-                                    set_err(super::error::map_vk_result(
-                                        e,
-                                        &format!("begin pass cmd buf ({})", pass_id.name()),
-                                    ));
-                                    return;
-                                }
-                            };
-                            // Per-pass GPU timing: bracket this pass's encode with a
-                            // (start, end) timestamp pair in its own buffer. The block
-                            // was reset in the start buffer (submitted first), so these
-                            // writes are valid. A pass absent from a later frame's graph
-                            // leaves its slots unwritten; the readback's
-                            // `WITH_AVAILABILITY` reports those as 0.
-                            if let Some(pool) = ctx.hw.timestamp_query_pool {
-                                let (ts_start, _) = pass_timing::pass_pair(frame_idx, pass_id);
-                                rec.write_timestamp(
-                                    vk::PipelineStageFlags::TOP_OF_PIPE,
-                                    pool,
-                                    ts_start,
-                                );
-                            }
-                            emit_pass_prologue(
-                                device_ref,
-                                buf,
-                                registry_ref,
-                                &alias_barriers_ref[idx],
-                                pass,
-                            );
-                            if let Err(e) =
-                                ctx.encode_pass_into(pass_id, &rec, params, particle_ref, grass_ref)
-                            {
-                                set_err(e);
-                                return;
-                            }
-                            emit_pass_epilogue(device_ref, buf, registry_ref, pass);
-                            if let Some(pool) = ctx.hw.timestamp_query_pool {
-                                let (_, ts_end) = pass_timing::pass_pair(frame_idx, pass_id);
-                                rec.write_timestamp(
-                                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                                    pool,
-                                    ts_end,
-                                );
-                            }
-                            if let Err(e) = rec.end() {
-                                set_err(super::error::map_vk_result(
-                                    e,
-                                    &format!("end pass cmd buf ({})", pass_id.name()),
-                                ));
-                                return;
-                            }
-                            worker_slots_ref.lock().unwrap()[idx] = Some(buf);
-                        })
-                    });
-                }
-            });
-        });
+            alias,
+            passes,
+        } = &mut scratch;
+        // Every pass but Composite records into its own command buffer on a
+        // job-pool worker. Composite stays on the main thread: it writes the
+        // swapchain image and allocates + drops transient text buffers through
+        // the RefCell device allocator.
+        let recorder = VkPassRecorder {
+            ctx: ParallelCtxRef::new(self),
+            device: &device,
+            params,
+            particle: particle_frame.as_ref(),
+            grass: grass_frame.as_ref(),
+            registry,
+            alias,
+        };
+        let mut executed = execute_passes(graph, &recorder, jobs::pool(), passes)?;
         let mut stats = self.frame_stats.get();
-        stats.recording_fan_out = timer.finish();
-        stats.pass_record_us = record_us.map(AtomicU32::into_inner);
+        stats.recording_fan_out = executed.timing;
+        stats.pass_record_us = executed.record_us;
         self.frame_stats.set(stats);
-
-        if let Some(e) = first_error.into_inner().unwrap() {
-            return Err(e);
-        }
+        // The per-pass buffers in ascending graph index = toposort order. Never
+        // sort: the submit array order must equal toposort order for the inline
+        // barriers to synchronize correctly across buffer boundaries.
+        submit.extend(executed.take().map(|(_, buf)| buf));
 
         // Composite on the main thread, into the outer "end" buffer. Bracket it
         // with its own per-pass timestamp pair (in the end buffer, which also
         // carries the whole-frame end timestamp written later in `record_frame`).
-        if let Some(idx) = composite_idx {
+        if let Some(idx) = executed.presenter {
             if let Some(pool) = self.hw.timestamp_query_pool {
                 let (ts_start, _) = pass_timing::pass_pair(frame_idx, PassId::Composite);
                 // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
@@ -776,7 +706,7 @@ impl VkContext {
                 &self.hw.device,
                 params.cmd,
                 registry,
-                &alias_barriers[idx],
+                alias.for_pass(idx),
                 &graph.passes[idx],
             );
             // The outer "end" buffer was begun by `draw_frame` before it called
@@ -812,88 +742,39 @@ impl VkContext {
         // every pass buffer.
         emit_graph_restores(&self.hw.device, params.cmd, registry, graph);
 
-        // Collect the per-pass buffers in ascending graph index = toposort
-        // order (the `None` Composite slot is skipped). Never sort: the submit
-        // array order must equal toposort order for the inline barriers to
-        // synchronize correctly across buffer boundaries.
-        let ordered: Vec<vk::CommandBuffer> = worker_slots
-            .into_inner()
-            .unwrap()
-            .into_iter()
-            .flatten()
-            .collect();
         // Hand the tables' allocations back for the next frame to refill. An
         // error path above skips this and the next frame allocates fresh, which
         // is immaterial: that frame already failed.
-        self.barrier_scratch = Some(scratch);
-        Ok(ordered)
+        self.graph_scratch = Some(scratch);
+        Ok(())
     }
 
     // Resolve every graph-driven resource to its barrier target, indexed by
-    // `ResourceId` (its position in `graph.resources`), so the parallel emit path
-    // can look a target up by `BarrierOp::resource_index()`. This is the single
-    // place that names the graph-driven resources' backing `VkContext` fields;
-    // field-grouping re-cuts here, not in the executor. A resource the owning
-    // feature disabled gets `None`, and the graph carries no barrier for it either.
-    fn refill_barrier_registry(
+    // `ResourceId`, and every pooled transient that reuses an earlier one's
+    // memory to the pass that first writes it. This is the single place that
+    // names the graph-driven resources' backing `VkContext` fields. A resource
+    // the owning feature disabled gets `None`, and the graph carries no barrier
+    // for it either.
+    fn refill_graph_tables(
         &self,
-        registry: &mut VkBarrierRegistry,
+        scratch: &mut VkGraphScratch,
         graph: &CompiledGraph,
         frame_idx: usize,
     ) {
-        registry.targets.clear();
-        registry.buffers.clear();
-        // A plain loop rather than an `extend`: a label resolving to a set of
-        // buffers appends them to the arena while the table is being filled.
-        for res in &graph.resources {
-            let target = res.class().and_then(|class| {
-                let (object, resting) =
-                    self.barrier_objects_for_label(res.label, frame_idx, &mut registry.buffers)?;
-                Some(VkBarrierTarget {
-                    object,
-                    class,
-                    resting,
-                })
-            });
-            registry.targets.push(target);
-        }
-    }
-
-    // Build the per-pass aliasing-barrier table for this frame: `table[i]` holds
-    // the pooled images to alias-barrier at the start of graph pass `i`. A pooled
-    // transient that reuses an earlier transient's memory (a slot predecessor in
-    // the pool) needs the predecessor's prior use ordered before its first write;
-    // the barrier lands before the pass that first writes it (`lifetime.first`).
-    // Empty for every resource the pool does not alias (no predecessor), so the
-    // table is empty whenever no slot is shared this frame.
-    fn refill_alias_barriers(
-        &self,
-        table: &mut Vec<Vec<vk::Image>>,
-        graph: &CompiledGraph,
-        frame_idx: usize,
-    ) {
-        // Clear each row rather than the table, so a row that carried barriers
-        // last frame keeps its allocation.
-        for row in table.iter_mut() {
-            row.clear();
-        }
-        table.resize_with(graph.passes.len(), Vec::new);
-        for res in &graph.resources {
-            if self
-                .targets
-                .transient_pool
-                .alias_predecessor(res.label)
-                .is_none()
-            {
-                continue;
-            }
-            if let Some(image) = self.targets.transient_pool.image_for(res.label, frame_idx) {
-                let first = res.lifetime.first;
-                if first < table.len() {
-                    table[first].push(image);
-                }
-            }
-        }
+        scratch.registry.refill(graph, |res, arena| {
+            let class = res.class()?;
+            let (object, resting) = self.barrier_objects_for_label(res.label, frame_idx, arena)?;
+            Some(VkBarrierTarget {
+                object,
+                class,
+                resting,
+            })
+        });
+        let pool = &self.targets.transient_pool;
+        scratch.alias.refill(graph, |_, res| {
+            pool.alias_predecessor(res.label)?;
+            pool.image_for(res.label, frame_idx)
+        });
     }
 
     // Map one graph resource label to its backing GPU object and the layout it
@@ -997,9 +878,8 @@ impl VkContext {
                 let first = arena.len();
                 arena.extend(
                     self.particle
-                        .emitter_state
-                        .iter()
-                        .flatten()
+                        .system
+                        .gpu_states()
                         .map(|gpu| gpu.pool_buffer.buffer()),
                 );
                 let count = arena.len() - first;
@@ -1092,7 +972,7 @@ impl VkContext {
         pass_id: PassId,
         rec: &Recorder<'_>,
         params: &GraphFrameParams<'_>,
-        particle_frame: Option<&super::particle::ParticleFrame>,
+        particle_frame: Option<&concinnity_core::render::particles::ParticleFrame>,
         grass_frame: Option<&super::grass::GrassFrame>,
     ) -> RenderResult<()> {
         let cmd = rec.raw();
@@ -1119,7 +999,7 @@ impl VkContext {
                 // blur over the unified pre-pass's normal+depth. The SsaoDepth /
                 // SsaoKernel PassIds stay timing-only (rejected as graph nodes
                 // below) like Metal's same pattern.
-                self.encode_ssao(cmd, params.frame_idx, params.fov_y_radians, params.aspect)?;
+                self.encode_ssao(cmd, params.frame_idx, params.effects.ssao.as_ref())?;
             }
             PassId::SsaoDepth | PassId::SsaoKernel => {
                 return Err(RenderError::Other(format!(
@@ -1165,24 +1045,13 @@ impl VkContext {
                 )));
             }
             PassId::SsrResolve => {
-                self.encode_ssr_resolve(
-                    cmd,
-                    params.frame_idx,
-                    params.fov_y_radians,
-                    params.aspect,
-                    params.cam_pos,
-                );
+                self.encode_ssr_resolve(cmd, params.frame_idx, params.effects.ssr.as_ref());
             }
             PassId::Ssgi => {
-                self.encode_ssgi(cmd, params.frame_idx, params.fov_y_radians, params.aspect);
+                self.encode_ssgi(cmd, params.frame_idx, params.effects.ssgi.as_ref());
             }
             PassId::SsgiResolve => {
-                self.encode_ssgi_resolve(
-                    cmd,
-                    params.frame_idx,
-                    params.fov_y_radians,
-                    params.aspect,
-                );
+                self.encode_ssgi_resolve(cmd, params.frame_idx, params.effects.ssgi.as_ref());
             }
             PassId::RtReflections => {
                 // Hardware ray-traced reflections (inline `rayQueryEXT`). Traces a
@@ -1192,13 +1061,7 @@ impl VkContext {
                 // `FrameGraphInputs::rt_reflections_enabled`
                 // (`ReflectionPath::rt_node`). The per-frame TLAS update +
                 // descriptor re-point already ran on the outer "start" buffer.
-                self.encode_rt_reflections(
-                    cmd,
-                    params.frame_idx,
-                    params.fov_y_radians,
-                    params.aspect,
-                    params.cam_pos,
-                );
+                self.encode_rt_reflections(cmd, params.frame_idx, params.effects.rt.as_ref());
             }
             PassId::TaaResolve => {
                 self.encode_taa(cmd, params.frame_idx, params.reactive.readable);
@@ -1246,16 +1109,15 @@ impl VkContext {
                 // Populate the screen-aligned 3D scatter/transmittance volume
                 // the `Fog` render pass samples. The shared graph seeds this
                 // before `Fog` (RAW edge on the froxel volume handle).
-                self.encode_fog_froxel(
-                    rec,
-                    params.frame_idx,
-                    params.near,
-                    params.vp_mat,
-                    params.cam_pos,
-                );
+                let blocks = params.fog.as_ref().ok_or_else(|| {
+                    RenderError::Other(
+                        "graph executor (vulkan): FogFroxel without fog blocks".into(),
+                    )
+                })?;
+                self.encode_fog_froxel(rec, params.frame_idx, blocks);
             }
             PassId::Fog => {
-                self.encode_fog(rec, params.frame_idx, params.vp_mat, params.cam_pos);
+                self.encode_fog(rec, params.frame_idx);
             }
             PassId::Atmosphere => self.encode_atmosphere(rec, params.frame_idx)?,
             PassId::WaterSim => self.encode_water_sim(rec, params.elapsed),
@@ -1297,7 +1159,7 @@ impl VkContext {
                 // so the reprojected hit depth shares the scene's depth space.
                 let view =
                     self.build_raymarch_view(params.vp_mat, params.cam_pos, params.elapsed as f32);
-                self.encode_raymarch(cmd, params.frame_idx, &view)?;
+                self.encode_raymarch(cmd, params.frame_idx, &view, params.frustum)?;
             }
             PassId::PlanarReflection => {
                 // Mirror renders for the flat reflectors in view, each cropped to
@@ -1326,8 +1188,7 @@ impl VkContext {
                     cmd,
                     params.frame_idx,
                     &view,
-                    params.fov_y_radians,
-                    params.aspect,
+                    params.effects.rt.as_ref(),
                     write,
                 )?;
                 if !drew && write == ReactiveWrite::Clear {
@@ -1373,18 +1234,17 @@ impl VkContext {
                             .into(),
                     )
                 })?;
-                let velocity_active = self.reads_motion();
                 self.encode_gbuffer_prepass(
                     gb,
                     cmd,
                     params.frame_idx,
                     GbufferPrepassView {
                         jittered_vp: params.vp_mat,
-                        cur_vp: params.cur_vp,
                         elapsed: params.elapsed as f32,
                         cam_pos: params.cam_pos,
+                        frustum: params.frustum,
                     },
-                    velocity_active,
+                    &params.gbuffer_view,
                     grass_frame,
                 );
             }

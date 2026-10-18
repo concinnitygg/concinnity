@@ -12,10 +12,12 @@
 //! fence (waited before a slot is reused) guarantees the GPU has finished
 //! reading a slot's buffer before the CPU overwrites or grows it.
 
-use concinnity_core::render::buffer_growth::grow_capacity;
+//!
+//! The ring itself is `concinnity_core::render::upload_ring`; this binds it to
+//! pooled UPLOAD-heap buffers.
+
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::fullscreen::align_up;
-use std::cell::RefCell;
+use concinnity_core::render::upload_ring::{self, UploadBuffer};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
@@ -30,105 +32,77 @@ pub(in crate::directx) const UPLOAD_ALIGN: u64 = 16;
 // kilobytes, so this avoids any growth in practice while staying tiny.
 const UPLOAD_MIN_CAPACITY: u64 = 64 * 1024;
 
-// One frame slot's persistently-mapped upload buffer. `base` is the CPU map
-// pointer (null until the first allocation) and `gpu_va` its GPU virtual
-// address; both are re-read whenever the buffer is grown.
-struct Slot {
-    buffer: Option<PooledBuffer>,
+// One slot's buffer, its persistent map and its GPU address.
+struct MappedUpload {
+    _buffer: PooledBuffer,
     base: *mut u8,
     gpu_va: u64,
-    capacity: u64,
-    cursor: u64,
 }
 
-impl Slot {
-    fn empty() -> Self {
-        Slot {
-            buffer: None,
-            base: std::ptr::null_mut(),
-            gpu_va: 0,
-            capacity: 0,
-            cursor: 0,
+impl UploadBuffer for MappedUpload {
+    fn write(&self, offset: u64, bytes: &[u8]) {
+        // SAFETY: `base` is the persistent map of the buffer the ring sized, and
+        // the ring writes only inside that capacity. Every ring is reserved and
+        // pushed on the main thread only, and the frame fence retired the GPU's
+        // last read of this slot.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                self.base.add(offset as usize),
+                bytes.len(),
+            );
         }
     }
 }
 
-// A persistently-mapped upload buffer per frame-in-flight slot for transient
-// geometry. Interior-mutable so the `&self` frame recording can fill it, but
-// main-thread only: growth allocates through the device allocator, which the
-// parallel encode fan-out must never touch.
+// One persistently mapped upload buffer per frame slot.
 pub(in crate::directx) struct UploadRing {
-    slots: Vec<RefCell<Slot>>,
+    ring: upload_ring::UploadRing<MappedUpload>,
 }
 
 impl UploadRing {
     pub(in crate::directx) fn new(frames: usize) -> Self {
-        UploadRing {
-            slots: (0..frames).map(|_| RefCell::new(Slot::empty())).collect(),
+        Self {
+            ring: upload_ring::UploadRing::new(frames, UPLOAD_ALIGN, UPLOAD_MIN_CAPACITY),
         }
     }
 
-    // Begin a frame for `frame`'s slot: reset the write cursor and ensure the
-    // buffer holds at least `needed` bytes, growing (and remapping) it if not.
-    // The caller must invoke this once per frame before any `push`, after the
-    // frame fence has confirmed the GPU is done with this slot.
+    // Start `frame`'s slot over with room for `needed` bytes, growing its buffer
+    // when it is too small. The frame fence for `frame` has been waited.
     pub(in crate::directx) fn reserve(
         &self,
         alloc: &DeviceAllocator,
         frame: usize,
         needed: u64,
     ) -> RenderResult<()> {
-        let mut slot = self.slots[frame].borrow_mut();
-        slot.cursor = 0;
-        let Some(new_cap) = grow_capacity(slot.capacity, needed, UPLOAD_MIN_CAPACITY) else {
-            return Ok(());
-        };
-        let buffer = alloc.alloc_buffer(
-            new_cap,
-            D3D12_HEAP_TYPE_UPLOAD,
-            D3D12_RESOURCE_STATE_GENERIC_READ,
-        )?;
-        let mut base = std::ptr::null_mut::<std::ffi::c_void>();
-        // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
-        // that receives the mapping.
-        unsafe { buffer.Map(0, None, Some(&mut base)) }
-            .map_err(|e| super::error::map_hresult(e.code(), "upload map"))?;
-        let gpu_va = com::gpu_va(&buffer);
-        // Replacing `buffer` drops the old resource (and unmaps it); the frame
-        // fence already proved the GPU finished reading it.
-        slot.buffer = Some(buffer);
-        slot.base = base as *mut u8;
-        slot.gpu_va = gpu_va;
-        slot.capacity = new_cap;
-        Ok(())
+        self.ring.reserve(frame, needed, |capacity| {
+            let buffer = alloc.alloc_buffer(
+                capacity,
+                D3D12_HEAP_TYPE_UPLOAD,
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+            )?;
+            let mut base = std::ptr::null_mut::<std::ffi::c_void>();
+            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+            // local that receives the mapping.
+            unsafe { buffer.Map(0, None, Some(&mut base)) }
+                .map_err(|e| super::error::map_hresult(e.code(), "upload map"))?;
+            Ok(MappedUpload {
+                gpu_va: com::gpu_va(&buffer),
+                base: base as *mut u8,
+                _buffer: buffer,
+            })
+        })
     }
 
-    // Append `bytes` at the slot's next aligned offset and return the GPU
-    // virtual address of the copy. Errors if the running total would exceed the
-    // reserved capacity, which cannot happen when `reserve` was called with the
-    // aligned-block sum of the same blocks.
+    // Copy `bytes` into `frame`'s slot, returning the GPU address to bind.
     pub(in crate::directx) fn push(&self, frame: usize, bytes: &[u8]) -> RenderResult<u64> {
-        let mut slot = self.slots[frame].borrow_mut();
-        let offset = align_up(slot.cursor, UPLOAD_ALIGN);
-        let end = offset + bytes.len() as u64;
-        if end > slot.capacity {
-            return Err(RenderError::Other(format!(
-                "upload ring overflow: need {end} bytes, reserved {}",
-                slot.capacity
-            )));
-        }
-        // SAFETY: `base` is the persistent map of a buffer of `capacity` bytes and
-        // `offset + bytes.len() <= capacity` was checked above. Every ring is
-        // reserved and pushed on the main thread only, and the frame fence
-        // retired the GPU's last read of this slot.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                slot.base.add(offset as usize),
-                bytes.len(),
-            );
-        }
-        slot.cursor = end;
-        Ok(slot.gpu_va + offset)
+        self.ring
+            .push(frame, bytes, |mapped, offset| mapped.gpu_va + offset)
+            .map_err(|o| {
+                RenderError::Other(format!(
+                    "upload ring overflow: need {} bytes, reserved {}",
+                    o.need, o.reserved
+                ))
+            })
     }
 }

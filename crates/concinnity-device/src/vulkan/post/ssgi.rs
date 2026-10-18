@@ -7,7 +7,7 @@
 use ash::vk;
 use concinnity_core::gfx::render_types::SsgiParams;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::ssgi::settings::SsgiSettings;
+use concinnity_core::render::post::ssgi::settings::{SsgiFrame, SsgiSettings};
 use concinnity_core::render::post::ssgi::{
     SsgiPass, SsgiPipelines, SsgiResolveInputs, SsgiTraceInputs,
 };
@@ -24,6 +24,11 @@ pub(in crate::vulkan) struct SsgiResources {
 }
 
 impl SsgiResources {
+    // Where the accumulation stands this frame.
+    pub(in crate::vulkan) fn frame(&self) -> SsgiFrame {
+        self.pass.frame()
+    }
+
     // Build every pipeline and target for a render resolution of `extent`.
     pub(in crate::vulkan) fn new(
         device: &VkPostDevice,
@@ -77,26 +82,17 @@ impl VkContext {
         self.ssgi.is_some()
     }
 
-    // This frame's SSGI uniform.
-    fn ssgi_params(&self, ssgi: &SsgiResources, fov_y_radians: f32, aspect: f32) -> SsgiParams {
-        ssgi.settings.params(
-            fov_y_radians,
-            aspect,
-            ssgi.pass.frame(),
-            self.pre_exposure.history_scale(),
-        )
-    }
-
     // Encode the resolve ahead of the main pass: last frame's accumulation
     // reprojected onto this frame's G-buffer, folded with the occlusion.
     pub(in crate::vulkan) fn encode_ssgi_resolve(
         &self,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
-        fov_y_radians: f32,
-        aspect: f32,
+        params: Option<&SsgiParams>,
     ) {
-        let Some(ssgi) = &self.ssgi else { return };
+        let (Some(ssgi), Some(params)) = (&self.ssgi, params) else {
+            return;
+        };
         let Some(gbuffer) = self.gbuffer_targets().and_then(|gb| gb.frame(frame_idx)) else {
             return;
         };
@@ -105,7 +101,6 @@ impl VkContext {
             .transient_pool
             .view_for("ao_output", frame_idx)
             .unwrap_or(self.scene.ssao_white.view);
-        let params = self.ssgi_params(ssgi, fov_y_radians, aspect);
         if let Err(e) = ssgi.pass.encode_resolve(
             &self.post_device(frame_idx),
             &cmd,
@@ -114,7 +109,7 @@ impl VkContext {
                 velocity: gbuffer.velocity,
                 occlusion,
             },
-            &params,
+            params,
         ) {
             tracing::error!("SSGI resolve: {e}");
             return;
@@ -146,16 +141,16 @@ impl VkContext {
         &self,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
-        fov_y_radians: f32,
-        aspect: f32,
+        params: Option<&SsgiParams>,
     ) {
-        let Some(ssgi) = &self.ssgi else { return };
+        let (Some(ssgi), Some(params)) = (&self.ssgi, params) else {
+            return;
+        };
         // With no G-buffer there is nothing to trace against, so skip rather
         // than read a stale view.
         let Some(gbuffer) = self.gbuffer_targets().and_then(|gb| gb.frame(frame_idx)) else {
             return;
         };
-        let params = self.ssgi_params(ssgi, fov_y_radians, aspect);
         if let Err(e) = ssgi.pass.encode(
             &self.post_device(frame_idx),
             &cmd,
@@ -164,7 +159,7 @@ impl VkContext {
                 normal_depth: gbuffer.normal_depth,
                 velocity: gbuffer.velocity,
             },
-            &params,
+            params,
         ) {
             tracing::error!("SSGI: {e}");
         }

@@ -1,7 +1,7 @@
 // Streamed texture and deferred mesh payload sources, and the voxel block
 // palette conversion.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use concinnity_core::components::BlockType;
 use concinnity_core::ecs::PayloadLocator;
@@ -10,8 +10,8 @@ use concinnity_core::gfx::render_types::DrawIndex;
 use concinnity_host::store::blob::blob_path;
 use concinnity_host::store::blob::payload_section_start;
 
-use crate::gfx::draw_list::DeferredMeshSeed;
 use crate::gfx::streaming::mesh::DeferredMeshPayload;
+use concinnity_core::render::draw_list::DeferredMeshSeed;
 
 // Resolve a `BlockType` asset into the chunk mesher's palette entry. Per-face
 // UV overrides fall back to the uv_min/uv_max rectangle, mirroring the
@@ -44,7 +44,7 @@ pub(super) fn build_texture_payload_source(
             crate::gfx::streaming::texture::MemPayloadSource::new(payloads),
         ));
     }
-    let mut section_starts: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+    let mut section_starts: hashbrown::HashMap<u32, u64> = hashbrown::HashMap::new();
     let mut disk_locators = Vec::with_capacity(locators.len());
     for loc in locators {
         let path = blob_path(loc.blob_index)

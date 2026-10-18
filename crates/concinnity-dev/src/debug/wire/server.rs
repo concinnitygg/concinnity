@@ -166,8 +166,8 @@ impl FrameHook for DebugServer {
         // Process thread + memory budgets (fixed at start) plus the live RSS
         // (one cheap syscall per tick, dev-only), for the `budget` query.
         if let (Some(threads), Some(memory)) = (
-            concinnity_engine::ecs::thread_budget(world),
-            concinnity_engine::ecs::memory_budget(world),
+            world.resource::<concinnity_core::budget::ThreadBudget>(),
+            world.resource::<concinnity_core::budget::MemoryBudget>(),
         ) {
             state.budget = Some(BudgetSnapshot {
                 threads: BudgetThreads {

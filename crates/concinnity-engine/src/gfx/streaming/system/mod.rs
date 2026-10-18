@@ -36,15 +36,15 @@ use concinnity_core::render::scene_residency::{
 };
 
 use crate::ecs::RenderOpFailures;
-use crate::gfx::overlay::OverlayFrame;
-use crate::gfx::render_slots::RenderSlots;
 use crate::gfx::streaming::planet::TileCamera;
+use concinnity_core::render::overlay::OverlayFrame;
+use concinnity_core::render::render_slots::RenderSlots;
 
 pub(crate) mod accounting;
 pub(crate) mod pressure;
 pub(crate) mod stats_log;
 
-const IDENTITY4: [[f32; 4]; 4] = crate::gfx::draw_list::IDENTITY4;
+const IDENTITY4: [[f32; 4]; 4] = concinnity_core::transform::IDENTITY;
 
 // Throttled RSS sampling cadence for the process-RAM back-off valve. RSS is a
 // syscall, so the valve re-evaluates ~2x/second (every 30 frames near 60 fps)
@@ -221,7 +221,7 @@ impl System for StreamingSystem {
         // the state below is borrowed in place instead of moved out of its
         // resource slot (which would free and re-box it every frame).
         let ram_budget = ctx
-            .resource::<crate::app::budget::MemoryBudget>()
+            .resource::<concinnity_core::budget::MemoryBudget>()
             .map(|b| b.budget_bytes);
         let planet = ctx
             .resource::<concinnity_core::planet::PlanetFrame>()
@@ -236,9 +236,9 @@ impl System for StreamingSystem {
         // The viewport the input system sampled last tick: with the field of
         // view, how large a planet's ground looks.
         let viewport_height = ctx.resource::<FrameInput>().map_or(0.0, |i| i.viewport[1]);
-        let finest_cell_size = f64::from(crate::settings::system::planet_finest_cell_size(
-            ctx.resources,
-        ));
+        let finest_cell_size = f64::from(
+            concinnity_core::settings::system::planet_finest_cell_size(ctx.resources),
+        );
         // Peek (not take) the overlay's world-hidden flag: OverlaySystem
         // published it first this tick and GraphicsSystem takes it later.
         // Streaming pauses behind an opaque menu (the world is not drawn),
@@ -253,7 +253,7 @@ impl System for StreamingSystem {
         // fade target mid-transition so the destination starts loading before
         // visibility flips.
         let pin_pair: Option<([AssetId; 2], usize)> = ctx
-            .resource::<crate::ecs::ActiveSceneFlow>()
+            .resource::<scene_flow::ActiveSceneFlow>()
             .and_then(|slot| slot.flow.as_ref())
             .map(|flow| {
                 let mut pins = [flow.current; 2];
@@ -298,7 +298,9 @@ impl System for StreamingSystem {
 
         // The recording surfaces graphics init published beside this state.
         // Taken out for the drive so `ctx` stays freely borrowable.
-        let Some(mut queues) = crate::ecs::ActiveRenderQueues::take(ctx.resources) else {
+        let Some(mut queues) =
+            concinnity_core::render::queues::ActiveRenderQueues::take(ctx.resources)
+        else {
             // Should not happen (published together with this state): publish
             // the absolute view so the draw is still driven.
             ctx.insert_resource(CameraRelativeView {
@@ -368,19 +370,19 @@ impl System for StreamingSystem {
             None => false,
         };
 
-        crate::ecs::ActiveRenderQueues::put(ctx.resources, queues);
+        concinnity_core::render::queues::ActiveRenderQueues::put(ctx.resources, queues);
         ctx.insert_resource(CameraRelativeView { view, cam_pos });
         // Republish the per-scene load status when it changed, so menus and
         // loading screens can read scene progress without touching the pools.
         if have_residency {
-            match ctx.resource_mut::<crate::ecs::SceneResidencyStatus>() {
+            match ctx.resource_mut::<scene_residency::SceneResidencyStatus>() {
                 Some(published) => {
                     if published.scenes != self.scene_status_scratch {
                         published.scenes.clone_from(&self.scene_status_scratch);
                     }
                 }
                 None => {
-                    ctx.insert_resource(crate::ecs::SceneResidencyStatus {
+                    ctx.insert_resource(scene_residency::SceneResidencyStatus {
                         scenes: self.scene_status_scratch.clone(),
                     });
                 }
@@ -959,7 +961,6 @@ pub(crate) fn chunk_model_matrix(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::mock_backend::{Call, MockBackend, recording_backend};
     use crate::gfx::streaming::chunk::{ChunkSource, ChunkStreamer};
     use crate::gfx::streaming::mesh::{DecodedMesh, MeshPayloadSource, MeshStreamer};
     use crate::gfx::streaming::texture::{DecodedTexture, PayloadSource, TextureStreamer};
@@ -967,6 +968,7 @@ mod tests {
     use concinnity_core::ecs::World;
     use concinnity_core::gfx::chunk_coord::ChunkCoord;
     use concinnity_core::gfx::mesh_payload::Vertex;
+    use concinnity_core::render::backend::recording::{Call, RecordingBackend, recording_backend};
     use concinnity_core::render::chunk_window::ChunkDetail;
     use concinnity_core::render::ops::ReplayOutcome;
     use pressure::StreamPressureStage;
@@ -1121,7 +1123,7 @@ mod tests {
     // behavior rather than the multi-frame pump `drive_until` covers.
     fn drive_once(
         state: &mut StreamingState,
-        backend: &mut MockBackend,
+        backend: &mut RecordingBackend,
         cam: [f32; 3],
         view: [[f32; 4]; 4],
         world_hidden: bool,
@@ -1191,7 +1193,7 @@ mod tests {
         }
         assert!(!loading(&state));
         assert_eq!(
-            recorded.lock().unwrap().calls,
+            recorded.lock().calls,
             [Call::InstallWorldShader {
                 bucket: 1,
                 name: "cooked".into(),
@@ -1202,7 +1204,7 @@ mod tests {
 
     fn drive_until(
         state: &mut StreamingState,
-        backend: &mut MockBackend,
+        backend: &mut RecordingBackend,
         cam: [f32; 3],
         done: impl Fn(&StreamingState) -> bool,
     ) {
@@ -1234,12 +1236,12 @@ mod tests {
     // Publish the op queue + slot allocator the step takes and reparks (the
     // pair graphics init publishes in production).
     fn park_render_queues(w: &mut World) {
-        w.insert_resource(crate::ecs::ActiveRenderQueues(Some(
-            crate::ecs::RenderQueues {
+        w.insert_resource(concinnity_core::render::queues::ActiveRenderQueues::new(
+            concinnity_core::render::queues::RenderQueues {
                 ops: Default::default(),
                 slots: RenderSlots::new(0, true, &[]),
             },
-        )));
+        ));
     }
 
     fn step_streaming(w: &mut World) -> StepResult {
@@ -1492,7 +1494,7 @@ mod tests {
     // with its failures not yet applied.
     fn replay_until_failure(
         state: &mut StreamingState,
-        backend: &mut MockBackend,
+        backend: &mut RecordingBackend,
         slots: &mut RenderSlots,
         wanted: impl Fn(&OpFailure) -> bool,
     ) -> ReplayOutcome {
@@ -1514,7 +1516,7 @@ mod tests {
     #[test]
     fn an_out_of_memory_texture_upload_raises_pressure_and_rolls_back() {
         let (recorded, mut backend) = recording_backend();
-        recorded.lock().unwrap().fail_texture_upload =
+        recorded.lock().fail_texture_upload =
             Some(error::RenderError::OutOfDeviceMemory("texture heap".into()));
         let mut state = pooled_state(8);
         let mut slots = RenderSlots::new(0, true, &[]);
@@ -1530,8 +1532,7 @@ mod tests {
     #[test]
     fn a_non_memory_texture_upload_failure_rolls_back_without_pressure() {
         let (recorded, mut backend) = recording_backend();
-        recorded.lock().unwrap().fail_texture_upload =
-            Some(error::RenderError::Other("bad image".into()));
+        recorded.lock().fail_texture_upload = Some(error::RenderError::Other("bad image".into()));
         let mut state = pooled_state(8);
         let mut slots = RenderSlots::new(0, true, &[]);
         let outcome = replay_until_failure(&mut state, &mut backend, &mut slots, |f| {
@@ -1561,7 +1562,7 @@ mod tests {
         let progress = |s: &StreamingState| s.scene_residency.as_ref().unwrap().progress(scene);
         assert_eq!(progress(&state), Some(1.0));
 
-        recorded.lock().unwrap().fail_texture_evict =
+        recorded.lock().fail_texture_evict =
             Some(error::RenderError::OutOfDeviceMemory("evict".into()));
         state
             .texture_streamer
@@ -1707,7 +1708,7 @@ mod tests {
                 && s.mesh_streamer.as_ref().unwrap().stats().0 == 2
         });
 
-        let s = recorded.lock().unwrap();
+        let s = recorded.lock();
         assert!(s.saw(&Call::UpdateTextureSlot {
             slot: 0,
             w: 1,
@@ -1743,7 +1744,6 @@ mod tests {
         assert!(
             !recorded
                 .lock()
-                .unwrap()
                 .calls
                 .iter()
                 .any(|c| matches!(c, Call::UploadMesh { .. }))
@@ -1761,7 +1761,7 @@ mod tests {
             s.texture_streamer.as_ref().unwrap().stats().0 == 1
                 && s.mesh_streamer.as_ref().unwrap().stats().0 == 1
         });
-        recorded.lock().unwrap().calls.clear();
+        recorded.lock().calls.clear();
 
         // Item 1's center is now the near one, so item 0 is displaced.
         drive_once(
@@ -1772,7 +1772,7 @@ mod tests {
             false,
             None,
         );
-        let s = recorded.lock().unwrap();
+        let s = recorded.lock();
         assert!(s.saw(&Call::EvictTextureSlot(0)), "{:?}", s.calls);
         assert!(s.saw(&Call::EvictMesh(DrawIndex(10))), "{:?}", s.calls);
     }
@@ -1835,7 +1835,7 @@ mod tests {
             None,
         );
         {
-            let s = recorded.lock().unwrap();
+            let s = recorded.lock();
             assert!(s.saw(&Call::SetChunkModel(DrawIndex(3))));
             assert!(s.saw(&Call::SetChunkModel(DrawIndex(4))));
         }
@@ -1844,7 +1844,7 @@ mod tests {
             ChunkCoord::new(1, 0)
         );
 
-        recorded.lock().unwrap().calls.clear();
+        recorded.lock().calls.clear();
         drive_once(
             &mut state,
             &mut backend,
@@ -1856,7 +1856,6 @@ mod tests {
         assert!(
             !recorded
                 .lock()
-                .unwrap()
                 .calls
                 .iter()
                 .any(|c| matches!(c, Call::SetChunkModel(_)))
@@ -1886,12 +1885,7 @@ mod tests {
             None,
         );
 
-        assert!(
-            recorded
-                .lock()
-                .unwrap()
-                .saw(&Call::RemoveChunkMesh(DrawIndex(9)))
-        );
+        assert!(recorded.lock().saw(&Call::RemoveChunkMesh(DrawIndex(9))));
         assert!(
             !state
                 .chunk_stream
@@ -1915,7 +1909,7 @@ mod tests {
 
         let cs = state.chunk_stream.as_ref().unwrap();
         assert_eq!(cs.draws.get(&ChunkCoord::new(0, 0)), Some(&DrawIndex(0)));
-        assert!(recorded.lock().unwrap().saw(&Call::AddChunkMesh));
+        assert!(recorded.lock().saw(&Call::AddChunkMesh));
     }
 
     #[test]
@@ -1960,7 +1954,7 @@ mod tests {
 
         step_streaming(&mut w);
         assert!(
-            w.resource::<crate::ecs::ActiveRenderQueues>()
+            w.resource::<concinnity_core::render::queues::ActiveRenderQueues>()
                 .is_some_and(|slot| slot.0.is_some())
         );
         assert_eq!(parked_state(&w).frame_count, 1);
@@ -2005,7 +1999,7 @@ mod tests {
         w.insert_resource(state);
         // A 1 MiB ceiling is under any real process RSS, so a sample that ran
         // would certainly engage the valve.
-        w.insert_resource(crate::app::budget::MemoryBudget::compute(None, 1));
+        w.insert_resource(concinnity_core::budget::MemoryBudget::compute(None, 1));
 
         step_streaming(&mut w);
         assert!(w.resource::<StreamingPressure>().is_none());
@@ -2025,7 +2019,7 @@ mod tests {
     fn an_rss_sample_over_the_memory_budget_publishes_engaged_pressure() {
         let mut w = World::new();
         w.insert_resource(empty_state());
-        w.insert_resource(crate::app::budget::MemoryBudget::compute(None, 1));
+        w.insert_resource(concinnity_core::budget::MemoryBudget::compute(None, 1));
 
         step_streaming(&mut w);
         // The valve is inert (and publishes nothing) where RSS cannot be read.

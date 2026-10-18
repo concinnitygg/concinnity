@@ -27,8 +27,8 @@ use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::dump_on_err;
 use crate::directx::transparent::{
-    GlassMeshProducer, RecordUpload, TracedGlassPsos, TransparentProducer, TransparentRecord,
-    create_glass_reflection_pso, create_transparent_pso,
+    GlassMeshProducer, RecordUpload, ShapePsos, TracedGlassPsos, TransparentProducer,
+    create_glass_reflection_pso, create_transparent_pso, upload_record,
 };
 
 // Compile the glass vertex + fragment shaders. The fragment comes in an MSAA
@@ -168,7 +168,7 @@ pub(in crate::directx) fn build_glass_producer(
         // Bake the planar flag: the pane samples the sharp mirror render only
         // when it was assigned a planar slot.
         let params = GlassParams::from_panel(panel, planar_slot.is_some());
-        records.push(TransparentRecord::upload(
+        records.push(upload_record(
             alloc,
             RecordUpload {
                 vertices: &packed,
@@ -192,11 +192,13 @@ pub(in crate::directx) fn build_glass_producer(
         None => (None, None, None, None),
     };
     Ok(TransparentProducer {
-        pso,
-        flat_rt_pso,
-        textured_rt_pso,
-        reflection_flat_pso,
-        reflection_textured_pso,
+        shape: ShapePsos {
+            base: pso,
+            flat_rt: flat_rt_pso,
+            textured_rt: textured_rt_pso,
+        },
+        reflection_flat: reflection_flat_pso,
+        reflection_textured: reflection_textured_pso,
         sea: None,
         records,
         water: Vec::new(),

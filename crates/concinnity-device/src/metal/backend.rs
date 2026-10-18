@@ -27,6 +27,14 @@ use super::context::{MtlContext, debug_assert_main_thread};
 use crate::forward::forward;
 
 impl RenderBackend for MtlContext {
+    fn live_edit(&mut self) -> Option<&mut dyn LiveEdit> {
+        Some(self)
+    }
+
+    fn live_edit_ref(&self) -> Option<&dyn LiveEdit> {
+        Some(self)
+    }
+
     forward! { assert = debug_assert_main_thread,
         via = self.window().appkit, via_mut = self.window_mut().appkit;
         fn take_input(&mut self) -> InputSnapshot;
@@ -149,10 +157,7 @@ impl LiveEdit for MtlContext {
     }
 
     fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
-        self.hot_reload
-            .reload_pending
-            .as_ref()
-            .map(std::sync::Arc::clone)
+        self.hot_reload.flag()
     }
 
     // The swapchain config this live context can hot-swap a new world onto: the

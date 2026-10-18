@@ -112,16 +112,9 @@ pub(crate) struct CullState {
     // Built at the end of `draw_frame`, consumed by the next frame's cull
     // dispatch (projected through `prev_view_proj`).
     pub hiz: Option<super::hiz::HiZResources>,
-    // Previous frame's un-jittered view-projection, captured every Hi-Z build.
-    // The next frame's cull kernel projects AABBs through it. Distinct from the
-    // velocity pre-pass's `view_history`.
-    pub prev_view_proj: [[f32; 4]; 4],
     // This frame's un-jittered view-projection, captured before `execute_graph`
     // so the phase-2 cull can project AABBs against the freshly built pyramid.
     pub cur_view_proj: [[f32; 4]; 4],
-    // `false` on the first frame and after a resize; while false the cull
-    // kernel skips the Hi-Z test. Flipped `true` after the first build.
-    pub hiz_valid: bool,
     // GPU-driven shadow views. Both pipelines are `Some` only on the bindless
     // path with shadows enabled (`bindless && shadow.map_size > 0`). The
     // frustum-only shadow decision kernel (`shadow_pipeline`) writes each
@@ -697,11 +690,7 @@ impl MtlContext {
             return Ok(());
         }
 
-        // Pack the six already-normalized frustum planes for the kernel.
-        let mut planes = [[0.0f32; 4]; 6];
-        for (i, p) in frustum.planes.iter().enumerate() {
-            planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
-        }
+        let planes = frustum.packed_planes();
         // Hi-Z occlusion metadata + binding. `hiz_enabled` is gated on `use_hiz`
         // (off for the mirror cull, whose pyramid would be the wrong screen
         // space), the per-context `hiz_valid` flag (false on the first frame and
@@ -713,7 +702,7 @@ impl MtlContext {
                 Some(h.texture.as_ref()),
                 [h.width as f32, h.height as f32],
                 h.mip_count,
-                if use_hiz && self.cull.hiz_valid {
+                if use_hiz && self.state.planner.temporal().occlusion().valid() {
                     1u32
                 } else {
                     0u32
@@ -724,7 +713,7 @@ impl MtlContext {
         let cull_uniforms = CullUniforms {
             planes,
             cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2], 0.0],
-            prev_view_proj: self.cull.prev_view_proj,
+            prev_view_proj: self.state.planner.temporal().occlusion().prev_view_proj(),
             hiz_size,
             hiz_mip_count,
             hiz_enabled,
@@ -834,10 +823,7 @@ impl MtlContext {
         // Frustum planes are unused by the phase-2 kernel (candidates already
         // passed the frustum test in phase 1) but the uniform layout is shared,
         // so pack them anyway for a clean struct.
-        let mut planes = [[0.0f32; 4]; 6];
-        for (i, p) in frustum.planes.iter().enumerate() {
-            planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
-        }
+        let planes = frustum.packed_planes();
         // Project AABBs through this frame's un-jittered VP: it matches the
         // pyramid we just rebuilt from this frame's depth. `hiz_enabled = 1`:
         // the `HizBuild` pass always precedes this dispatch in the graph, so a
@@ -956,14 +942,22 @@ impl MtlContext {
         // cascade keeps its prior depth slice, so its cull dispatch + ICB region
         // are left untouched.
         let all = (1u32 << NUM_SHADOW_CASCADES) - 1;
-        let mask = if self.shadow.render_mask == 0 {
+        let mask = if self.state.planner.shadow.cascade_mask == 0 {
             all
         } else {
-            self.shadow.render_mask
+            self.state.planner.shadow.cascade_mask
         };
         let mut cascades = [(0, Frustum::from_shadow(IDENTITY)); NUM_SHADOW_CASCADES];
         let mut kept = 0;
-        for (c, light_vp) in self.shadow.uniforms.light_vps.iter().enumerate() {
+        for (c, light_vp) in self
+            .state
+            .planner
+            .shadow
+            .uniforms
+            .light_vps
+            .iter()
+            .enumerate()
+        {
             if mask & (1u32 << c) == 0 {
                 continue;
             }
@@ -1038,10 +1032,7 @@ impl MtlContext {
         enc.useResource_usage(ProtocolObject::from_ref(&**icb), MTLResourceUsage::Write);
 
         for (region, frustum) in views.views {
-            let mut planes = [[0.0f32; 4]; 6];
-            for (i, p) in frustum.planes.iter().enumerate() {
-                planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
-            }
+            let planes = frustum.packed_planes();
             let cull_uniforms = CullUniforms {
                 planes,
                 // Unused by the shadow kernel (no distance cull); kept zero.

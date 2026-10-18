@@ -21,10 +21,10 @@
 //! pipelines frames-in-flight deep.
 
 use ash::vk;
+use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::{GBufferView, ModelHistoryParams};
-use concinnity_core::render::view_history::{ViewFrame, ViewHistory};
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::VkContext;
@@ -542,11 +542,6 @@ pub(in crate::vulkan) struct GbufferResources {
     pub(in crate::vulkan) depth_images: Vec<GpuImage>,
     pub(in crate::vulkan) framebuffers: Vec<OwnedFramebuffer>,
 
-    // Last frame's un-jittered VP, owned here so the velocity channel works for
-    // any consumer (TAA or FSR) independent of whether engine-TAA is on. The
-    // per-object half of the same history is the GPU-filled model-history ring.
-    pub(in crate::vulkan) view_history: ViewHistory,
-
     // The sky's motion behind the geometry.
     pub(in crate::vulkan) sky: GbufferSky,
 }
@@ -610,7 +605,6 @@ impl GbufferResources {
             velocity_images: Vec::new(),
             depth_images: Vec::new(),
             framebuffers: Vec::new(),
-            view_history: ViewHistory::default(),
             sky,
         };
         me.build_targets(ctx, queue, extent, pooled)?;
@@ -761,30 +755,22 @@ impl GbufferResources {
     }
 }
 
-// Camera / view state the G-buffer pre-pass rasterizes with. `jittered_vp` is
-// the jittered VP that rasterizes (matching the main pass); `cur_vp` is the
-// un-jittered current VP the shader pairs with the previous VP for the motion
-// vector.
-pub(in crate::vulkan) struct GbufferPrepassView {
+// Camera / view state the G-buffer pre-pass's raymarched surfaces rasterize
+// with. `jittered_vp` is the jittered VP that rasterizes (matching the main
+// pass).
+pub(in crate::vulkan) struct GbufferPrepassView<'a> {
     pub jittered_vp: [[f32; 4]; 4],
-    pub cur_vp: [[f32; 4]; 4],
     // The main pass's clock and camera position, which a vertex hook reads.
     pub elapsed: f32,
     pub cam_pos: [f32; 3],
+    // The camera frustum the raymarched surfaces are culled against.
+    pub frustum: &'a Frustum,
 }
 
 impl VkContext {
     // The G-buffer while it has targets to draw into and sample.
     pub(in crate::vulkan) fn gbuffer_targets(&self) -> Option<&GbufferResources> {
         self.gbuffer.as_ref().filter(|gb| gb.has_targets())
-    }
-
-    // Whether anything reprojects through the pre-pass's motion channel this
-    // frame: TAA, the FSR upscaler, or the SSGI accumulation.
-    pub(in crate::vulkan) fn reads_motion(&self) -> bool {
-        self.taa.is_some()
-            || self.upscale.is_some()
-            || self.ssgi.as_ref().is_some_and(|s| s.settings.contributes())
     }
 
     // Give the G-buffer whatever its pre-pass still lacks to draw with: the
@@ -831,10 +817,9 @@ impl VkContext {
 
     // Encode the unified G-buffer pre-pass: one jittered traversal of the cull
     // records into the per-frame normal+depth / roughness / velocity MRT plus a
-    // private depth buffer. Runs
-    // before the main pass. `velocity_active` is true when a consumer (TAA, FSR
-    // or SSGI) reads motion; when false, prev == cur so the motion channel is a
-    // harmless zero. Fuses the former SSR depth+normal and TAA velocity
+    // private depth buffer. Runs before the main pass. When no consumer (TAA,
+    // FSR or SSGI) reads motion the block's previous frame is this one, so the
+    // motion channel is a harmless zero. Fuses the former SSR depth+normal and TAA velocity
     // pre-passes.
     //
     // `gb` is borrowed from the owning `self.gbuffer` field by the caller,
@@ -844,37 +829,19 @@ impl VkContext {
         gb: &GbufferResources,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
-        view: GbufferPrepassView,
-        velocity_active: bool,
+        view: GbufferPrepassView<'_>,
+        // The frame's planned view block, collapsed onto this frame's own camera
+        // when no pass reads motion.
+        block: &GBufferView,
         grass: Option<&crate::vulkan::grass::GrassFrame>,
     ) {
-        let GbufferPrepassView {
-            jittered_vp,
-            cur_vp,
-            elapsed,
-            cam_pos,
-        } = view;
         let Some(framebuffer) = gb.framebuffers.get(frame_idx) else {
             return;
         };
         let device = &self.hw.device;
         let extent = self.targets.render_extent;
-
-        // Upload this frame's view UBO. When velocity is inactive the previous
-        // camera and clock equal the current ones, so instanced + sky motion
-        // is zero and the surfaces skip reprojecting.
-        let cur = ViewFrame {
-            vp: cur_vp,
-            elapsed,
-            cam_pos,
-        };
-        let view_uni = GBufferView::new(
-            jittered_vp,
-            self.state.view.matrix,
-            cur,
-            gb.view_history.prev_or(cur),
-            velocity_active,
-        );
+        let velocity_active = block.motion != 0;
+        let view_uni = *block;
         gb.view_ubo_buffers[frame_idx].write_val(0, &view_uni);
 
         // Clears: alpha-0 normal+depth = "no geometry"; roughness 1.0 = no SSR;
@@ -960,7 +927,7 @@ impl VkContext {
         let Some(history) = self.cull.model_history.as_ref() else {
             return;
         };
-        let records = self.cull_count();
+        let records = self.state.draw.record_count();
         if records == 0 {
             return;
         }
@@ -1100,7 +1067,7 @@ impl VkContext {
             return;
         };
         let stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32;
-        let prefix = self.skinned_record_base() as u32;
+        let prefix = self.state.draw.skinned_record_base() as u32;
 
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
@@ -1186,7 +1153,7 @@ impl VkContext {
                 device.cmd_draw_indexed_indirect(
                     cmd,
                     indirect,
-                    (self.skinned_record_base() * stride as usize) as u64,
+                    (self.state.draw.skinned_record_base() * stride as usize) as u64,
                     self.state.draw.n_skinned as u32,
                     stride,
                 );

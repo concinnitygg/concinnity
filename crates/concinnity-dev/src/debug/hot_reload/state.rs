@@ -315,7 +315,9 @@ pub(crate) fn run_frame(
     // Asset-payload poll. Pick up any completed off-thread work first so a
     // fresh `reload_assets` below finds the in-flight slots empty. Cheap when
     // nothing is in flight (a Mutex lock + `None` check).
-    poll_pending_envmap(state, backend);
+    if let Some(edit) = backend.live_edit() {
+        poll_pending_envmap(state, edit);
+    }
     poll_pending_assets(state, backend);
     // Skeleton-shape changes queued by `poll_pending_assets` are applied to the
     // ECS-owned `SkeletonPose` components by the caller.
@@ -340,7 +342,6 @@ pub(crate) fn run_frame(
             .shaders
             .request(&pending_shaders, backend.pipeline_builder());
     }
-    reload_reports.extend(state.shaders.poll(backend));
     let pending_volumes = state.signals.take_sdf_volumes();
     if !pending_volumes.is_empty() {
         reload_reports.extend(
@@ -349,7 +350,10 @@ pub(crate) fn run_frame(
                 .request(&pending_volumes, backend.pipeline_builder()),
         );
     }
-    reload_reports.extend(state.sdf_fields.poll(backend));
+    if let Some(edit) = backend.live_edit() {
+        reload_reports.extend(state.shaders.poll(edit));
+        reload_reports.extend(state.sdf_fields.poll(edit));
+    }
     super::report::report(&reload_reports, notify);
     effects.reload_reports = reload_reports;
 
@@ -382,7 +386,10 @@ pub(crate) fn run_frame(
     if state.signals.take_world() {
         let path = state.world_jsonl_path.clone();
         if let Some(path) = path {
-            let pm_result = reload_procedural_meshes(&path, &mut state.procedural_meshes, backend);
+            let pm_result = match backend.live_edit() {
+                Some(edit) => reload_procedural_meshes(&path, &mut state.procedural_meshes, edit),
+                None => Default::default(),
+            };
             if pm_result.regenerated > 0 || pm_result.failed > 0 {
                 tracing::info!(
                     "ProceduralMesh hot-reload: regenerated={} unchanged={} failed={}",

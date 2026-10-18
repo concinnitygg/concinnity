@@ -3,7 +3,7 @@
 //! Camera3D) and pass them in as needed.
 
 use crate::math::vec3::{cross, normalize_or};
-use crate::math::{sin_cos, tan};
+use crate::math::{forward, tan};
 
 // Floor applied to a viewport aspect ratio before it reaches a shader, so a
 // zero-height viewport cannot divide by zero in the ray reconstruction.
@@ -15,13 +15,17 @@ pub(crate) fn view_ray_scale(fov_y_radians: f32, aspect: f32) -> (f32, f32) {
     (tan(fov_y_radians * 0.5), aspect.max(MIN_ASPECT))
 }
 
-// Camera-to-world from the view rotation and the world camera position. The
-// rotation already lives in `inv_view_rot`'s 3x3; only the translation column
-// has to be filled in.
-pub(crate) fn camera_to_world(inv_view_rot: [[f32; 4]; 4], cam_pos: [f32; 3]) -> [[f32; 4]; 4] {
-    let mut inv_view = inv_view_rot;
-    inv_view[3] = [cam_pos[0], cam_pos[1], cam_pos[2], 1.0];
-    inv_view
+// Camera-to-world from a world-to-view matrix and the world camera position: the
+// view rotation is orthonormal, so its inverse is its transpose, and the
+// translation column is the camera position.
+pub(crate) fn camera_to_world(view: [[f32; 4]; 4], cam_pos: [f32; 3]) -> [[f32; 4]; 4] {
+    let v = view;
+    [
+        [v[0][0], v[1][0], v[2][0], 0.0],
+        [v[0][1], v[1][1], v[2][1], 0.0],
+        [v[0][2], v[1][2], v[2][2], 0.0],
+        [cam_pos[0], cam_pos[1], cam_pos[2], 1.0],
+    ]
 }
 
 /// Build a column-major view matrix from position, yaw, and pitch.
@@ -29,10 +33,7 @@ pub(crate) fn camera_to_world(inv_view_rot: [[f32; 4]; 4], cam_pos: [f32; 3]) ->
 /// Convention matches the GLSL mat4 layout used by the shader UBOs:
 /// `view[column][row]`, right-handed, Y-up.
 pub fn view_matrix(position: [f32; 3], yaw: f32, pitch: f32) -> [[f32; 4]; 4] {
-    let (sin_yaw, cos_yaw) = sin_cos(yaw);
-    let (sin_pitch, cos_pitch) = sin_cos(pitch);
-
-    let fwd = [-sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch];
+    let fwd = forward(yaw, pitch);
     let right = normalize_or(cross(fwd, [0.0, 1.0, 0.0]), 1e-7, [0.0, 0.0, 1.0]);
     let up = cross(right, fwd);
 
@@ -195,5 +196,18 @@ mod tests {
     #[test]
     fn cross_is_right_handed() {
         assert_eq!(cross([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]), [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn camera_to_world_inverts_the_view() {
+        let pos = [3.0, -2.0, 5.0];
+        let view = view_matrix(pos, 0.9, -0.4);
+        let round_trip = crate::transform::mat4_mul(view, camera_to_world(view, pos));
+        for (c, column) in round_trip.iter().enumerate() {
+            for (r, value) in column.iter().enumerate() {
+                let expected = if c == r { 1.0 } else { 0.0 };
+                assert!((value - expected).abs() < 1e-5, "[{c}][{r}] = {value}");
+            }
+        }
     }
 }

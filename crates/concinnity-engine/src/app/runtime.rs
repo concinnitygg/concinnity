@@ -1,7 +1,7 @@
 //! The `Runtime` value: a world plus the loop state that drives it.
 
 use concinnity_core::components::AppConfig;
-use concinnity_core::ecs::{Clock, MenuActive, StepResult, World};
+use concinnity_core::ecs::{MenuActive, StepResult, World};
 use concinnity_core::error::WorldError;
 use concinnity_core::render::error::RenderError;
 use concinnity_host::store::paths::StateTree;
@@ -224,10 +224,6 @@ impl Runtime {
         self.install_home();
         self.publish_state_tree();
         self.install_budgets();
-        // The world times each system against this; without it the profile's
-        // per-system micros read zero.
-        self.world
-            .insert_resource(Clock(concinnity_host::clock::monotonic_micros));
         if let Some(args) = self.world.remove_resource::<LaunchArgs>() {
             self.launch.args = args;
         }
@@ -366,9 +362,11 @@ impl Runtime {
             .cloned()
             .unwrap_or_default();
 
-        let threads = budget::ThreadBudget::compute(config.job_threads, config.frame_priority);
-        let memory =
-            budget::MemoryBudget::compute(sysmem::total_physical_bytes(), config.max_memory_mb);
+        let threads = budget::thread_budget(config.job_threads, config.frame_priority);
+        let memory = concinnity_core::budget::MemoryBudget::compute(
+            sysmem::total_physical_bytes(),
+            config.max_memory_mb,
+        );
 
         let sized = configure(threads.job_threads, threads.frame_priority);
         let job_workers = pool().thread_count();
@@ -503,8 +501,17 @@ fn resolve_home(home: &str, content_root: &std::path::Path) -> Option<std::path:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::budget::{MemoryBudget, ThreadBudget};
     use concinnity_core::components::{AppConfig, FramePriority};
     use concinnity_core::ecs::FrameRateCap;
+
+    fn thread_budget(runtime: &Runtime) -> ThreadBudget {
+        *runtime.world().resource().expect("thread budget published")
+    }
+
+    fn memory_budget(runtime: &Runtime) -> MemoryBudget {
+        *runtime.world().resource().expect("memory budget published")
+    }
 
     // Starting the runtime publishes the thread + memory budgets as world resources,
     // honoring an `AppConfig`'s overrides. A world with nothing to draw starts
@@ -521,10 +528,10 @@ mod tests {
         });
         runtime.start().unwrap();
 
-        let threads = crate::ecs::thread_budget(runtime.world()).expect("thread budget published");
+        let threads = thread_budget(&runtime);
         assert_eq!(threads.job_threads, 2.min(threads.total_cores));
 
-        let memory = crate::ecs::memory_budget(runtime.world()).expect("memory budget published");
+        let memory = memory_budget(&runtime);
         assert!(memory.overridden, "the AppConfig override is recorded");
         // 512 MiB is well under 85% of any test machine's RAM, so it passes through.
         assert_eq!(memory.budget_bytes, 512 * 1024 * 1024);
@@ -537,12 +544,12 @@ mod tests {
         let mut runtime = Runtime::new();
         runtime.start().unwrap();
 
-        let threads = crate::ecs::thread_budget(runtime.world()).expect("thread budget published");
+        let threads = thread_budget(&runtime);
         assert_eq!(
             threads.job_threads,
             threads.total_cores.saturating_sub(1).max(1)
         );
-        let memory = crate::ecs::memory_budget(runtime.world()).expect("memory budget published");
+        let memory = memory_budget(&runtime);
         assert!(!memory.overridden);
         assert!(memory.budget_bytes > 0);
     }
@@ -581,7 +588,7 @@ mod tests {
         );
         runtime.start().expect("the reset status permits a restart");
         // The restart budgeted against the new world's limits, not the old one's.
-        let memory = crate::ecs::memory_budget(runtime.world()).expect("memory budget published");
+        let memory = memory_budget(&runtime);
         assert_eq!(memory.budget_bytes, 256 * 1024 * 1024);
     }
 

@@ -15,19 +15,17 @@
 //!   stream_sources.rs  streamed texture payload sources + voxel palette entries
 //!   draw_geometry.rs   draw-object positions + auto-seed triangle gathering
 
-use concinnity_core::components::{Background, GamepadAction};
+use concinnity_core::components::Background;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Entity, PipelineContext, StepResult, System};
 use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
-use concinnity_core::input::keymap;
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_core::render::history_reset::HistoryResetTracker;
 use concinnity_core::render::{backend, overlay_maps, scene_flow, snapshot, text};
-use concinnity_core::settings::SettingKey;
 use concinnity_core::transform::propagation;
 use concinnity_host::store::paths::StateTree;
 
-const IDENTITY4: [[f32; 4]; 4] = crate::gfx::draw_list::IDENTITY4;
+const IDENTITY4: [[f32; 4]; 4] = concinnity_core::transform::IDENTITY;
 
 // Initializes the GPU backend and draws frame data.
 //
@@ -105,7 +103,7 @@ pub(crate) struct GraphicsSystem {
     scene_flow: Option<scene_flow::SceneFlow>,
     // Per-entity scene-visibility snapshot, refreshed (buffers reused) every
     // frame a fade runs and on scene-visibility applies.
-    scene_visibility: scene::SceneVisibilityScratch,
+    scene_visibility: concinnity_core::render::scene_flow::SceneVisibilityScratch,
     // Overlay build inputs assembled during init() and handed to OverlaySystem
     // (as the `OverlayAssets` resource) at its end; empty afterwards. Fonts is
     // the atlas data keyed by handle; sprite_texture_slots maps a Sprite's
@@ -179,42 +177,11 @@ pub(crate) struct GraphicsSystem {
     // Logical viewport size the line builder maps ribbon widths with. Seeded
     // from the backend at init, refreshed each frame from `FrameInput`.
     viewport: (f32, f32),
-    // Test-only injection seam: pre-resolved settings, a fabricated GPU
-    // profile, and a mock backend factory, so unit tests can drive
-    // run_init / run_step without a GPU device or the on-disk settings store.
+    // Test-only injection seam: a fabricated GPU profile and a recording
+    // backend factory, so unit tests can drive run_init / run_step without a
+    // GPU device.
     #[cfg(test)]
-    pub(crate) test_hooks: Option<crate::gfx::mock_backend::TestHooks>,
-}
-
-// One key-rebind row's runtime bookkeeping: the action it rebinds and the value
-// `TextLabel` showing its bound key. Built at init (`init_rebind_rows`) from the
-// row's `key_*` rebind HitRegion (`action` -> `Bindable`, `label`) and
-// handed to SettingsState, which drives the live rebind drain.
-pub(crate) struct RebindViz {
-    pub(crate) action: keymap::Bindable,
-    pub(crate) value_id: AssetId,
-}
-
-// One gamepad-rebind row's runtime bookkeeping, mirroring `RebindViz`: built at
-// init (`init_rebind_rows`) from the row's `pad_*` rebind HitRegion
-// and handed to SettingsState for the button-rebind drain.
-pub(crate) struct PadRebindViz {
-    pub(crate) action: GamepadAction,
-    pub(crate) value_id: AssetId,
-}
-
-// One slider row's runtime bookkeeping: the engine setting it controls, the
-// track geometry it maps a fraction onto, and the handle Sprite + value
-// TextLabel it drives. Built at init (`init_sliders`) from the row's
-// drag HitRegion (track `x`/`width`, `label`, `drag_handle`) and
-// the handle Sprite's width, then handed to SettingsState for the slider drain.
-pub(crate) struct SliderViz {
-    pub(crate) key: SettingKey,
-    pub(crate) track_x: f32,
-    pub(crate) track_w: f32,
-    pub(crate) handle_w: f32,
-    pub(crate) handle_id: AssetId,
-    pub(crate) value_id: AssetId,
+    pub(crate) test_hooks: Option<crate::gfx::test_hooks::TestHooks>,
 }
 
 impl std::fmt::Debug for GraphicsSystem {
@@ -276,17 +243,6 @@ impl GraphicsSystem {
         }
     }
 
-    // The persisted settings store consulted at init. Reads the on-disk file
-    // in production; a test-injected copy takes its place so unit tests never
-    // read (or depend on) the developer's real settings.
-    fn persisted_settings(&self) -> crate::config::Settings {
-        #[cfg(test)]
-        if let Some(hooks) = &self.test_hooks {
-            return hooks.settings.clone();
-        }
-        crate::config::Settings::load(self.state.as_ref())
-    }
-
     // The `assets/` a bare source filename is searched under: the running
     // world's own, or nothing for a world with no state tree (which leaves a
     // bare filename unresolved rather than searched from the cwd).
@@ -313,15 +269,6 @@ impl GraphicsSystem {
             capabilities: backend::DeviceCapabilities::ALL,
         })
     }
-
-    // Seed and persist the first-launch `Auto` quality preset.
-    fn seed_first_launch_preset(&self, persisted: &crate::config::Settings) {
-        let mut s = persisted.clone();
-        s.graphics.quality_preset = Some(concinnity_core::settings::QualityPreset::Auto);
-        if let Err(e) = s.save(self.state.as_ref()) {
-            tracing::warn!("first-launch quality preset save failed: {e}");
-        }
-    }
 }
 
 impl System for GraphicsSystem {
@@ -337,7 +284,6 @@ impl System for GraphicsSystem {
 mod atmosphere;
 mod backend_handoff;
 mod blob_release;
-pub(crate) mod character_shape;
 mod draw_geometry;
 mod far_band_shaders;
 mod frame;

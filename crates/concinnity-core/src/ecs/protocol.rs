@@ -456,3 +456,34 @@ impl ScheduleMode {
             .unwrap_or(ScheduleMode::Serial)
     }
 }
+
+/// When the input this tick consumed was sampled, in microseconds on the host
+/// clock. Published by the input system; it names the tick's frame, which
+/// carries it to the backend and which the frame report pairs with its GPU
+/// completion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputSampledAt(pub u64);
+
+/// A frame the report wants saved: the PNG path for the next frame drawn.
+/// Written by the frame report; the graphics system moves it onto that frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameCaptureRequest(pub String);
+
+/// A `screenshot` action fired: save this many consecutive frames, starting
+/// with the next drawn. Written by the UI input system; the graphics system
+/// schedules the burst.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenshotRequest(pub u32);
+
+/// Setting rows disabled at runtime (e.g. `show_fps` while "Display
+/// performance stats" is off), published each frame by the graphics system.
+/// The UI input system makes a matching row inert (no hover, no click) while
+/// its labels are grayed independently.
+#[derive(Debug, Clone, Default)]
+pub struct DisabledSettingRows(pub hashbrown::HashSet<crate::settings::SettingKey>);
+
+/// The display modes the "Resolution" settings row offers, published once by
+/// the graphics system at init and read by the UI input system to seed the
+/// row's dropdown list. Ordered as displayed; a pick's `SetIndex` indexes it.
+#[derive(Debug, Clone, Default)]
+pub struct DisplayModes(pub Vec<crate::window::display_mode::DisplayMode>);

@@ -56,7 +56,7 @@ impl DxContext {
     // propagate per frame, so only a world with nothing to GPU-drive (which
     // draws nothing) answers yes.
     fn streamed_slot_needs_drain(&self) -> bool {
-        !(self.cull.main_bindless_pso.is_some() && self.cull_count() > 0)
+        !(self.cull.main_bindless_pso.is_some() && self.state.draw.record_count() > 0)
     }
 
     // Replace texture-pool `slot` with a freshly decoded texture.

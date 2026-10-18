@@ -1,23 +1,25 @@
 //! User-facing settings and how they resolve.
 //!
-//! The ordered option labels for every cycle setting are shared by the client
-//! renderer and the build pipeline: the client's settings drain reads a key's
-//! labels to display + persist the chosen value; the cook reads the label count
-//! to decide whether a settings row expands into a `<`/`>` stepper (two
-//! options) or a click-to-open dropdown (more than two). Keeping the labels
-//! here means the two never drift on a setting's option count.
+//! Every cycle setting's option labels live in [`levels`], beside the values
+//! they stand for, and are shared by the settings menu and the build pipeline:
+//! the menu reads a key's labels to display and persist the chosen value; the
+//! cook reads the label count to decide whether a settings row expands into a
+//! `<`/`>` stepper (two options) or a click-to-open dropdown (more than two).
 //!
 //! [`resolve`] turns the world's authored settings, the quality preset's
 //! ceiling ([`quality`]), and the user's choices ([`user`]) into the snapshot
 //! the renderer is built with, reading the settings rows in [`rows`]. Reading
-//! the user's choices from disk and detecting the GPU are the engine's.
+//! the user's choices from disk and detecting the GPU are the host's.
 
 pub mod apply;
 mod key;
 pub mod levels;
 pub mod quality;
+pub mod registry;
 pub mod resolve;
 pub mod rows;
+pub mod stored;
+pub mod system;
 pub mod user;
 
 pub use key::{SettingKey, SettingKind};
@@ -26,67 +28,16 @@ pub use resolve::{
     ResolvedGraphics, ResolvedSettings, SceneOverride, SettingsDiff, SettingsLayers, WorldAssets,
     WorldSettings,
 };
+pub use stored::{SettingsRevision, StoredSettings};
 pub use user::{GraphicsApiTrial, UserGraphicsSettings};
 
-// Ordered option labels for `vsync`: index 0 is off, index 1 is on.
-pub(crate) const VSYNC_OPTIONS: [&str; 2] = ["Off", "On"];
-/// Shared Off/On labels for the boolean quality toggles. Index 0 is off, 1 on,
-/// so `bool as usize` indexes directly.
+/// Shared Off/On labels for the boolean rows. Index 0 is off, 1 on, so
+/// `bool as usize` indexes directly.
 pub const OFF_ON_OPTIONS: [&str; 2] = ["Off", "On"];
 
-/// Window mode options, in cycle order.
-pub const WINDOW_MODE_OPTIONS: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
-// Render-scale (upscaling quality) options, in cycle order.
-pub(crate) const RENDER_SCALE_OPTIONS: [&str; 4] = ["Quality", "Balanced", "Performance", "Ultra"];
-/// Upscaler-backend options, in cycle order matching the UpscalerBackend enum
-/// (Auto / FSR3 / DLSS / XeSS). DirectX / Vulkan only (Metal uses MetalFX).
-pub const UPSCALE_BACKEND_OPTIONS: [&str; 4] = ["Auto", "FSR 3", "DLSS", "XeSS"];
-
-// Frame-rate cap options (Video Display group), in cycle order. "Unlimited" is
-// no cap; the rest are target FPS. The client pairs these with the numeric caps.
-pub(crate) const FPS_CAP_OPTIONS: [&str; 8] =
-    ["Unlimited", "30", "60", "120", "144", "240", "300", "360"];
-
-/// Pass resolution options (SSGI trace, ray-traced reflection trace,
-/// reflection blur), finest first, matching `PassResolution::ALL`.
-pub const PASS_RESOLUTION_OPTIONS: [&str; 3] = ["Full", "Half", "Quarter"];
-/// SSGI rays-per-pixel options, in cycle order.
-pub(crate) const SSGI_RAYS_OPTIONS: [&str; 3] = ["1", "2", "4"];
-
-/// Anti-aliasing mode options, in cycle order matching the AaMode enum: Off,
-/// FXAA (cheap composite edge filter), TAA (temporal accumulation). Ascending
-/// cost, so the index doubles as the aggressiveness rank the preset clamps.
-pub const AA_MODE_OPTIONS: [&str; 3] = ["Off", "FXAA", "TAA"];
-
-// Shadow-map cascade resolution options (texels), in cycle order. "Off"
-// disables shadows; the rest are the per-cascade texel dimensions.
-pub(crate) const SHADOW_RESOLUTION_OPTIONS: [&str; 4] = ["Off", "1024", "2048", "4096"];
-/// Shadow re-render cadence options, best (most expensive) first.
-pub const SHADOW_UPDATE_OPTIONS: [&str; 2] = ["Every Frame", "Hybrid"];
-// Shadow-distance options (world units the cascades cover), in cycle order.
-pub(crate) const SHADOW_DISTANCE_OPTIONS: [&str; 4] = ["40 m", "80 m", "160 m", "320 m"];
-// Shadow cascade-count options, in cycle order.
-pub(crate) const SHADOW_CASCADES_OPTIONS: [&str; 3] = ["2", "3", "4"];
-// Anisotropic-filtering degree options for the scene sampler, in cycle order.
-// "Off" is 1x (plain trilinear); the rest are the max anisotropy degree.
-pub(crate) const ANISOTROPY_OPTIONS: [&str; 5] = ["Off", "2x", "4x", "8x", "16x"];
-/// Frame-buffering (ring-buffer depth / frames-in-flight) options, in cycle
-/// order. Lower is less latency, higher is smoother pacing.
-pub const FRAME_BUFFERING_OPTIONS: [&str; 3] = ["1", "2", "3"];
-// Texture-quality options, in cycle order (drive the streaming pool cap + the
-// per-frame upload budget on the client).
-pub(crate) const TEXTURE_QUALITY_OPTIONS: [&str; 4] = ["Low", "Medium", "High", "Ultra"];
-
-/// Master "Graphics Quality" preset options, in cycle order. The labels mirror
-/// `QualityPreset::ALL`'s order (locked by a client test); the `Auto` row is
-/// relabeled with its resolved tier by the client, which this static table
-/// cannot express.
-pub const GRAPHICS_QUALITY_OPTIONS: [&str; 6] =
-    ["Auto", "Low", "Medium", "High", "Ultra", "Custom"];
-
-// Volume options shared by the master and per-bus volume rows, in cycle
-// order. The client maps each to a linear gain.
-pub(crate) const VOLUME_OPTIONS: [&str; 5] = ["Off", "25%", "50%", "75%", "100%"];
+/// Effective gamepad look sensitivity (radians per second at full stick
+/// deflection) when the user has never chosen one.
+pub const DEFAULT_GAMEPAD_LOOK_SENSITIVITY: f32 = 2.5;
 
 /// Whether `key`'s options are enumerated at runtime (a dropdown row with no
 /// static label table; `options` returns `None` for it). `resolution` lists the
@@ -102,28 +53,29 @@ pub fn is_dynamic_dropdown(key: SettingKey) -> bool {
 pub fn options(key: SettingKey) -> Option<&'static [&'static str]> {
     use SettingKey as K;
     match key {
-        K::GraphicsQuality => Some(&GRAPHICS_QUALITY_OPTIONS),
-        K::Vsync => Some(&VSYNC_OPTIONS),
-        K::WindowMode => Some(&WINDOW_MODE_OPTIONS),
-        K::RenderScale => Some(&RENDER_SCALE_OPTIONS),
-        K::UpscaleBackend => Some(&UPSCALE_BACKEND_OPTIONS),
-        K::DlssPreset => Some(&crate::render::dlss::DlssPreset::LABELS),
-        K::FpsCap => Some(&FPS_CAP_OPTIONS),
-        K::MasterVolume | K::MusicVolume | K::SfxVolume | K::VoiceVolume => Some(&VOLUME_OPTIONS),
-        K::AaMode => Some(&AA_MODE_OPTIONS),
-        K::SsgiResolution | K::RtReflectionResolution | K::ReflectionBlurResolution => {
-            Some(&PASS_RESOLUTION_OPTIONS)
+        K::GraphicsQuality => Some(levels::GRAPHICS_QUALITY.labels()),
+        K::WindowMode => Some(levels::WINDOW_MODE.labels()),
+        K::RenderScale => Some(levels::RENDER_SCALE.labels()),
+        K::UpscaleBackend => Some(levels::UPSCALE_BACKEND.labels()),
+        K::DlssPreset => Some(levels::DLSS_PRESET.labels()),
+        K::FpsCap => Some(levels::FPS_CAP.labels()),
+        K::MasterVolume | K::MusicVolume | K::SfxVolume | K::VoiceVolume => {
+            Some(levels::VOLUME.labels())
         }
-        K::SsgiRays => Some(&SSGI_RAYS_OPTIONS),
-        K::ShadowMapSize => Some(&SHADOW_RESOLUTION_OPTIONS),
-        K::ShadowUpdate => Some(&SHADOW_UPDATE_OPTIONS),
-        K::ShadowDistance => Some(&SHADOW_DISTANCE_OPTIONS),
-        K::ShadowCascades => Some(&SHADOW_CASCADES_OPTIONS),
-        K::Anisotropy => Some(&ANISOTROPY_OPTIONS),
-        K::FramesInFlight => Some(&FRAME_BUFFERING_OPTIONS),
-        K::TextureQuality => Some(&TEXTURE_QUALITY_OPTIONS),
+        K::AaMode => Some(levels::AA_MODE.labels()),
+        K::SsgiResolution | K::RtReflectionResolution | K::ReflectionBlurResolution => {
+            Some(levels::PASS_RESOLUTION.labels())
+        }
+        K::SsgiRays => Some(levels::SSGI_RAYS.labels()),
+        K::ShadowMapSize => Some(levels::SHADOW_RESOLUTION.labels()),
+        K::ShadowUpdate => Some(levels::SHADOW_UPDATE.labels()),
+        K::ShadowDistance => Some(levels::SHADOW_DISTANCE.labels()),
+        K::ShadowCascades => Some(levels::SHADOW_CASCADES.labels()),
+        K::Anisotropy => Some(levels::ANISOTROPY.labels()),
+        K::FramesInFlight => Some(levels::FRAMES_IN_FLIGHT.labels()),
+        K::TextureQuality => Some(levels::TEXTURE_QUALITY.labels()),
         // Display-output / upscaling preference + occlusion toggles (Off/On).
-        K::TemporalUpscaling | K::HdrDisplay | K::HdrPq | K::OcclusionTwoPass => {
+        K::Vsync | K::TemporalUpscaling | K::HdrDisplay | K::HdrPq | K::OcclusionTwoPass => {
             Some(&OFF_ON_OPTIONS)
         }
         // Stats-HUD display toggles: a master and one per readout (Off/On).

@@ -5,12 +5,13 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::components::GlassPanel;
+use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_core::gfx::render_types::DrawObject;
 use concinnity_core::render::backend_init::PlanarBudget;
 use concinnity_core::render::backend_init::SdfVolumeSource;
 use concinnity_core::render::decal::{DecalRecord, DecalSet};
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::particles::ParticleEmitterRecord;
+use concinnity_core::render::particles::{MAX_EMITTERS, ParticleEmitterRecord, ParticleSystem};
 use concinnity_core::render::planar_reflection::PlanarReflectors;
 use concinnity_core::render::volumetric_fog::FogSettings;
 use concinnity_core::render::water::WaterBody;
@@ -85,41 +86,7 @@ pub(in crate::metal) fn build_decal_resources_for_runtime(
     hot_reload: bool,
 ) -> RenderResult<DecalResources> {
     let ps = build_decal_pipeline(device, hot_reload)?;
-    #[repr(C)]
-    #[derive(Copy, Clone)]
-    struct CubeVtx {
-        p: [f32; 3],
-    }
-    const CUBE_VERTS: [CubeVtx; 8] = [
-        CubeVtx {
-            p: [-0.5, -0.5, -0.5],
-        },
-        CubeVtx {
-            p: [0.5, -0.5, -0.5],
-        },
-        CubeVtx {
-            p: [0.5, 0.5, -0.5],
-        },
-        CubeVtx {
-            p: [-0.5, 0.5, -0.5],
-        },
-        CubeVtx {
-            p: [-0.5, -0.5, 0.5],
-        },
-        CubeVtx {
-            p: [0.5, -0.5, 0.5],
-        },
-        CubeVtx { p: [0.5, 0.5, 0.5] },
-        CubeVtx {
-            p: [-0.5, 0.5, 0.5],
-        },
-    ];
-    const CUBE_INDICES: [u16; 36] = [
-        // -Z face                    +Z face
-        0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, // -Y                         +Y
-        0, 1, 5, 0, 5, 4, 3, 6, 2, 3, 7, 6, // -X                         +X
-        0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5,
-    ];
+    const CUBE_VERTS: [[f32; 3]; 8] = cube_corners(0.5);
     // SAFETY: the pointer and length describe the live `CUBE_VERTS` allocation, and Metal copies
     // those bytes into the new buffer before the call returns.
     let vbuf = unsafe {
@@ -191,24 +158,25 @@ pub(super) fn build_particles(
     particles: Vec<ParticleEmitterRecord>,
 ) -> RenderResult<ParticleState> {
     let device = &*gpu.hw.device;
-    let (pipelines, emitter_state) = if !particles.is_empty() {
-        let pipelines = build_particle_pipelines(device, gpu.hot_reload)?;
-        let mut states = Vec::with_capacity(particles.len());
-        for rec in &particles {
-            states.push(build_emitter_gpu_state(device, rec)?);
-        }
-        (Some(pipelines), states)
+    if particles.len() > MAX_EMITTERS {
+        return Err(RenderError::Other(format!(
+            "particles: {} authored emitters exceed MAX_EMITTERS ({MAX_EMITTERS})",
+            particles.len()
+        )));
+    }
+    let mut system = ParticleSystem::new();
+    let pipelines = if particles.is_empty() {
+        None
     } else {
-        (None, Vec::new())
+        Some(build_particle_pipelines(device, gpu.hot_reload)?)
     };
-    Ok(ParticleState {
-        records: particles.into_iter().map(Some).collect(),
-        emitter_state: emitter_state.into_iter().map(Some).collect(),
-        free_slots: Vec::new(),
-        pipelines,
-        last_elapsed: 0.0,
-        frame_index: 0,
-    })
+    for rec in particles {
+        let state = build_emitter_gpu_state(device, &rec)?;
+        system
+            .insert(rec, state)
+            .map_err(|_| RenderError::Other("particles: no free emitter slot".into()))?;
+    }
+    Ok(ParticleState { system, pipelines })
 }
 
 // Planar reflection slots: group every flat reflector (water surfaces + glass

@@ -47,6 +47,13 @@ impl Frustum {
         })
     }
 
+    /// The planes as `[normal.x, normal.y, normal.z, d]` rows, the layout the
+    /// GPU cull kernels read.
+    pub fn packed_planes(&self) -> [[f32; 4]; 6] {
+        self.planes
+            .map(|p| [p.normal[0], p.normal[1], p.normal[2], p.d])
+    }
+
     /// The frustum of a shadow view-projection: a directional cascade or a spot
     /// slice. Same layout as [`Frustum::from_camera`].
     pub fn from_shadow(vp: [[f32; 4]; 4]) -> Self {
@@ -100,6 +107,13 @@ impl Frustum {
             }
         }
         true
+    }
+
+    /// True when the box at `center` with half-widths `extent` is not entirely outside any plane.
+    pub fn intersects_box(&self, center: [f32; 3], extent: [f32; 3]) -> bool {
+        let min = [0, 1, 2].map(|i| center[i] - extent[i]);
+        let max = [0, 1, 2].map(|i| center[i] + extent[i]);
+        self.intersects_aabb(min, max)
     }
 }
 
@@ -195,6 +209,17 @@ mod tests {
     }
 
     #[test]
+    fn packed_planes_keep_each_plane_in_order() {
+        let frustum = Frustum::from_camera(identity4(), None);
+        for (row, plane) in frustum.packed_planes().iter().zip(frustum.planes) {
+            assert_eq!(
+                *row,
+                [plane.normal[0], plane.normal[1], plane.normal[2], plane.d]
+            );
+        }
+    }
+
+    #[test]
     fn identity_vp_contains_origin_aabb() {
         // Identity VP defines the clip box (x, y in [-1, 1], depth up to 1) as
         // the visible region.
@@ -210,6 +235,17 @@ mod tests {
         let f = Frustum::from_camera(identity4(), None);
         // entirely past the right clip plane
         assert!(!f.intersects_aabb([5.0, -0.5, -0.5], [6.0, 0.5, 0.5]));
+    }
+
+    #[test]
+    fn a_centered_box_matches_its_corner_aabb() {
+        let f = Frustum::from_camera(identity4(), None);
+        assert!(f.intersects_box([0.0, 0.0, 0.0], [0.5, 0.5, 0.5]));
+        assert!(!f.intersects_box([10.0, 0.0, 0.0], [0.5, 0.5, 0.5]));
+        // Overlapping the right plane by its extent alone still intersects.
+        assert!(f.intersects_box([1.4, 0.0, 0.0], [0.5, 0.5, 0.5]));
+        // A box enclosing the whole frustum intersects it.
+        assert!(f.intersects_box([0.0, 0.0, 0.0], [100.0, 100.0, 100.0]));
     }
 
     fn point_inside(f: &Frustum, p: [f32; 3]) -> bool {

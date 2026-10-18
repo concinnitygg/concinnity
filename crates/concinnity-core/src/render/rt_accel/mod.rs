@@ -10,10 +10,12 @@
 //! and residency stay with the API.
 
 mod book;
+mod drive;
 mod plan;
 mod rings;
 
 pub use book::{AccelBook, HeadRefresh, InstanceBlas, SeedSet};
+pub use drive::{RefreshStep, RtAccelSteps, RtDriveInputs, drive_update};
 pub use plan::{
     EmptyHead, FailureStreak, RefreshMode, RtStep, RtUpdate, RtUpdatePlan, StreakChange,
     empty_head, seed_wanted,

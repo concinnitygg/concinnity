@@ -25,13 +25,8 @@ pub(crate) mod gpu_wait;
 // How a grass frame reaching a placement limit is logged, the same on every
 // backend.
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
-pub(crate) mod grass_report;
 #[cfg(backend_metal)]
 pub mod metal;
-// The `objects` / `skinned_visible` render stats, shared so they mean the same
-// thing on every backend.
-#[cfg(any(backend_metal, backend_dx, backend_vk))]
-pub(crate) mod object_counts;
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod png_encode;
 // Consuming a temporal upscaler's history reset, the same on every backend.
@@ -76,9 +71,6 @@ mod audit;
 // How a failed ray-tracing BVH update is logged, the same on every backend.
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod rt_report;
-// Device-memory placement policy shared by the backends' allocators.
-#[cfg(any(backend_metal, backend_dx, backend_vk))]
-pub(crate) mod suballoc;
 
 mod factory;
 pub use factory::{COMPILED_PLATFORMS, init_backend, probe_device};

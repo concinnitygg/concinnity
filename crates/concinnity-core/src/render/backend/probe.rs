@@ -97,6 +97,19 @@ pub enum GpuVendor {
     Other,
 }
 
+impl GpuVendor {
+    /// The vendor a PCI vendor id names, as Vulkan and DXGI report it.
+    pub fn from_pci_id(id: u32) -> Self {
+        match id {
+            0x10DE => Self::Nvidia,
+            0x1002 => Self::Amd,
+            0x8086 => Self::Intel,
+            0x106B => Self::Apple,
+            _ => Self::Other,
+        }
+    }
+}
+
 /// Coarse performance class for default-quality selection, ordered low -> high so
 /// callers can compare with `>=`. Each backend maps its native signals (memory
 /// budget, discrete / integrated, Apple GPU family) onto this via `classify_tier`.
@@ -280,6 +293,15 @@ pub trait BackendProbe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pci_ids_name_their_vendors() {
+        assert_eq!(GpuVendor::from_pci_id(0x10DE), GpuVendor::Nvidia);
+        assert_eq!(GpuVendor::from_pci_id(0x1002), GpuVendor::Amd);
+        assert_eq!(GpuVendor::from_pci_id(0x8086), GpuVendor::Intel);
+        assert_eq!(GpuVendor::from_pci_id(0x106B), GpuVendor::Apple);
+        assert_eq!(GpuVendor::from_pci_id(0x5143), GpuVendor::Other);
+    }
 
     const GB: u64 = 1 << 30;
 

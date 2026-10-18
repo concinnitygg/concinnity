@@ -27,15 +27,12 @@
 //! instanced + chunk geometry only -- skinned meshes are not drawn into the mirror
 //! (the bindless face render omits the skinned tail), exactly like the probe capture.
 
-use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::ClusterParams;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::{
-    self, PLANAR_CLIP_BIAS, PLANAR_CROP_MARGIN, PixelRect, PlanarReflectors,
+    self, MirrorFrame, MirrorShading, MirrorView, PLANAR_CROP_MARGIN, PixelRect, PlanarReflectors,
 };
 use concinnity_core::render::radiance_storage::FaceStorage;
-use concinnity_core::transform::mat4_inverse;
-use concinnity_core::transform::mat4_mul;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -177,6 +174,11 @@ pub(in crate::directx) struct PlanarTargets<'a> {
 }
 
 impl PlanarReflectionSet {
+    // Whether the set holds a mirror target for any plane.
+    pub(in crate::directx) fn has_targets(&self) -> bool {
+        !self.resolves.is_empty()
+    }
+
     // Build the planar set: shared color + depth at `width`x`height` (matching
     // the main pass's formats + sample count so the bindless face render binds the
     // standard pipeline), one resolve per plane with its SRV written into the
@@ -514,9 +516,21 @@ impl DxContext {
         // Recover the (jittered) projection from this frame's view-projection so
         // the mirror render shares the main camera's projection + jitter, keeping
         // the reflection aligned with the reflective fragment's screen-space sample.
-        let proj = mat4_mul(params.vp_mat, mat4_inverse(self.state.view.matrix));
-        let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
+        let frame = MirrorFrame::new(
+            self.state.view.matrix,
+            params.vp_mat,
+            params.cam_pos,
+            self.state.view.view_distance,
+            (set.width, set.height),
+        );
         let storage = FaceStorage::mirror(&self.pre_exposure);
+        let shading = MirrorShading {
+            elapsed: params.elapsed as f32,
+            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
+            sky_rot: self.state.view.sky_rot,
+            irradiance: self.irradiance_lane(),
+            pre_exposure: storage.scale(),
+        };
 
         // Per kept plane: compute the reflected matrices, write the reflected
         // view CBV, and collect the cropped reflected frustum + eye for the
@@ -525,33 +539,9 @@ impl DxContext {
         let mut kept = 0;
         let mut clustered = [false; MAX_PLANAR_PLANES];
         for &(slot, crop) in crops {
-            let oriented =
-                planar_reflection::orient_plane_toward(set.layout.planes()[slot], params.cam_pos);
-            let m = planar_reflection::planar_matrices(
-                self.state.view.matrix,
-                proj,
-                params.cam_pos,
-                oriented,
-                PLANAR_CLIP_BIAS,
-            );
-            let view = ViewUniforms {
-                vp: m.view_proj,
-                view: m.view,
-                elapsed: params.elapsed as f32,
-                // No reflection resolve runs over the planar mirror render, so
-                // the forward probe specular is its only reflection source.
-                reflections_enabled: 0.0,
-                cam_pos: [m.eye[0], m.eye[1], m.eye[2]],
-                prefilter_mip_count,
-                // A mirror render is always lit, whatever the viewport shows.
-                shade_mode: 0.0,
-                ambient_occlusion: 0.0,
-                sky_rot: self.state.view.sky_rot,
-                irradiance: self.irradiance_lane(),
-                pre_exposure: storage.scale(),
-                screen_bounce: 0.0,
-                _pad: 0.0,
-            };
+            let mirror = MirrorView::new(&frame, set.layout.planes()[slot], crop);
+            let m = mirror.matrices;
+            let view = ViewUniforms::face(mirror.face_camera(shading));
             let ring = set.ring_index(slot, params.frame_idx);
             // SAFETY: `ring < planes.len() * frames`; the CBV is 256 bytes and
             // `ViewUniforms` is 208. The slot is this frame's own, written before
@@ -565,17 +555,12 @@ impl DxContext {
             }
             // Bin the frame's lights and probes over this plane's reflected
             // view, as `LightCull` does for the main camera's.
-            let cluster_params = params.cluster_params.with_camera(&m.cluster_camera(
-                params.cluster_params.z_near,
-                self.uniforms.cluster_reach.range(
-                    m.eye,
-                    params.cluster_params.z_near,
-                    self.probe.book.records(),
-                    self.state.view.view_distance,
-                ),
-                set.width,
-                set.height,
-            ));
+            let cluster_params = mirror.cluster_params(
+                &frame,
+                &params.cluster_params,
+                self.uniforms.lights.cluster_reach(),
+                self.probe.book.records(),
+            );
             clustered[slot] = cluster_params.use_clusters != 0;
             // SAFETY: the ring entry is `MIRROR_CBV_SIZE` bytes and `ClusterParams`
             // (128) fits past `MIRROR_CLUSTER_OFFSET`; the entry is this frame's own,
@@ -590,10 +575,7 @@ impl DxContext {
             if let Some(cull) = culls.get_mut(kept) {
                 *cull = RegionCull {
                     region: slot,
-                    frustum: Frustum::from_camera(
-                        crop.crop_view_projection(m.view_proj, set.width, set.height),
-                        self.state.view.view_distance,
-                    ),
+                    frustum: mirror.frustum,
                     eye: m.eye,
                 };
                 kept += 1;

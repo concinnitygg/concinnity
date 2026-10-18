@@ -23,19 +23,16 @@
 //! the skinned tail is not drawn into a mirror (static + instance + chunk only).
 
 use ash::vk;
-use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::ClusterParams;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::planar_reflection::{
-    self, PLANAR_CLIP_BIAS, PLANAR_CROP_MARGIN, PlanarReflectors,
+    self, MirrorFrame, MirrorShading, MirrorView, PLANAR_CROP_MARGIN, PlanarReflectors,
 };
 use concinnity_core::render::radiance_storage::FaceStorage;
-use concinnity_core::transform::mat4_inverse;
-use concinnity_core::transform::mat4_mul;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{HDR_FORMAT, VkContext};
-use super::descriptor_layout::{PoolSizes, global_set};
+use super::descriptor_layout::{PROBE_RECORDS_SSBO_BINDING, PoolSizes, global_set};
 use super::draw::ViewUniforms;
 use super::global_set::{GlobalBindings, GlobalSetContents};
 use super::graph_exec::GraphFrameParams;
@@ -94,8 +91,8 @@ pub(in crate::vulkan) struct PlanarReflectionSet {
     // planar global set.
     view_bufs: Vec<PooledBuffer>,
     // Per-(plane, frame) global set (the bindless main set): that (plane,
-    // frame)'s reflected view and cluster grid, and no probe set, so the mirror
-    // render reflects only the sky and never recurses into the probes it feeds.
+    // frame)'s reflected view and cluster grid, and the frame's reflection
+    // probes.
     global_sets: Vec<vk::DescriptorSet>,
 
     // The frame's local lights binned over each plane's reflected view: a
@@ -351,7 +348,7 @@ struct MirrorBuffers {
 }
 
 // What a planar global set holds: its (plane, frame) reflected view and cluster
-// grid, and that frame's light, shadow and canopy UBOs.
+// grid, and that frame's light, shadow, canopy and reflection probes.
 fn global_contents(
     bindings: &GlobalBindings<'_>,
     mirror: MirrorBuffers,
@@ -365,13 +362,19 @@ fn global_contents(
             bindings.canopy(frame),
         )
         .with_clusters(mirror.cluster_params, mirror.cluster_lists)
+        .with_probes(bindings, frame)
 }
 
 impl PlanarReflectionSet {
+    // Whether the set holds a mirror target for any plane.
+    pub(in crate::vulkan) fn has_targets(&self) -> bool {
+        !self.targets.is_empty()
+    }
+
     // Build the planar set: shared color + depth + per-plane targets at render
     // dimensions, per-plane framebuffers, the per-(plane, frame) reflected-view
     // UBO ring, and the per-(plane, frame) global sets (each carrying its reflected
-    // view and no probe set, so the mirror render samples only sky) + the
+    // view and the frame's reflection probes) + the
     // per-(plane, frame) reflected-frustum cull
     // resources (indirect + status + cull set reading the frame's object/draw-args).
     // The bindless object SSBO + texture pool (the bindless set) is the FRAME's,
@@ -502,9 +505,8 @@ impl PlanarReflectionSet {
             global_contents(&bindings, mirror(i), i % frames).write(device, set);
         }
 
-        // Per-(plane, frame) binning sets. The mirror's global set reads no
-        // probe, so the kernel bins none: it reads the stand-in records, and the
-        // params ask for zero probes.
+        // Per-(plane, frame) binning sets, binning the frame's lights and probes
+        // over the plane's reflected view.
         let cluster_layouts = vec![bindings.light_cull.set_layout.handle(); ring];
         let cluster_sets = alloc_descriptor_sets(device, pool.handle(), &cluster_layouts)?;
         for (i, &set) in cluster_sets.iter().enumerate() {
@@ -515,7 +517,7 @@ impl PlanarReflectionSet {
                     params: cluster_params_bufs[i].buffer(),
                     lights: bindings.uniforms.local_light_buffer.buffer(),
                     lists: cluster_lists[i / frames].buffer(),
-                    probe_records: Some(bindings.probes.stand_in_records.buffer()),
+                    probe_records: Some(bindings.probes.records[i % frames].buffer()),
                 },
             );
         }
@@ -598,6 +600,26 @@ impl PlanarReflectionSet {
         for (i, &set) in self.global_sets.iter().enumerate() {
             global_contents(bindings, self.mirror_buffers(i), i % self.frames)
                 .write_binding(device, set, binding);
+        }
+    }
+
+    // Point frame `frame`'s mirror sets at that frame's probe records, after its
+    // records buffer was replaced. The frame's fence has retired, so none of
+    // its sets is in flight.
+    pub(in crate::vulkan) fn rewrite_probe_records(
+        &self,
+        device: &VkDevice,
+        bindings: &GlobalBindings<'_>,
+        frame: usize,
+    ) {
+        let records = bindings.probes.records[frame].descriptor();
+        for i in (0..self.global_sets.len()).filter(|i| i % self.frames == frame) {
+            global_contents(bindings, self.mirror_buffers(i), frame).write_binding(
+                device,
+                self.global_sets[i],
+                PROBE_RECORDS_SSBO_BINDING,
+            );
+            super::light_cull::write_probe_records(device, self.cluster_sets[i], records);
         }
     }
 
@@ -728,43 +750,30 @@ impl VkContext {
         // Recover the (jittered) projection from this frame's view-projection so the
         // mirror render shares the main camera's projection + jitter, keeping the
         // reflection aligned with the reflective fragment's screen-space sample.
-        let proj = mat4_mul(params.vp_mat, mat4_inverse(self.state.view.matrix));
-        let prefilter_mip_count = self.scene.prefilter_mip_count as f32;
+        let frame = MirrorFrame::new(
+            self.state.view.matrix,
+            params.vp_mat,
+            params.cam_pos,
+            self.state.view.view_distance,
+            (set.width, set.height),
+        );
         let storage = FaceStorage::mirror(&self.pre_exposure);
+        let shading = MirrorShading {
+            elapsed: params.elapsed as f32,
+            prefilter_mip_count: self.scene.prefilter_mip_count as f32,
+            sky_rot: self.state.view.sky_rot,
+            irradiance: self.irradiance_lane(),
+            pre_exposure: storage.scale(),
+        };
         let extent = vk::Extent2D {
             width: set.width,
             height: set.height,
         };
 
         for &(slot, crop) in crops {
-            let oriented =
-                planar_reflection::orient_plane_toward(set.layout.planes()[slot], params.cam_pos);
-            let m = planar_reflection::planar_matrices(
-                self.state.view.matrix,
-                proj,
-                params.cam_pos,
-                oriented,
-                PLANAR_CLIP_BIAS,
-            );
-            let view = ViewUniforms {
-                vp: m.view_proj,
-                view: m.view,
-                elapsed: params.elapsed as f32,
-                // No reflection composite runs over the mirror render, so the
-                // forward probe specular is its only reflection source; the EMPTY
-                // ProbeSet then leaves it on the sky path.
-                reflections_enabled: 0.0,
-                cam_pos: [m.eye[0], m.eye[1], m.eye[2]],
-                prefilter_mip_count,
-                // A mirror render is always lit, whatever the viewport shows.
-                shade_mode: 0.0,
-                ambient_occlusion: 0.0,
-                sky_rot: self.state.view.sky_rot,
-                irradiance: self.irradiance_lane(),
-                pre_exposure: storage.scale(),
-                screen_bounce: 0.0,
-                _pad: 0.0,
-            };
+            let mirror = MirrorView::new(&frame, set.layout.planes()[slot], crop);
+            let m = mirror.matrices;
+            let view = ViewUniforms::face(mirror.face_camera(shading));
             let ring = slot * set.frames + params.frame_idx;
             set.view_bufs[ring].write_val(0, &view);
             // Reflected-frustum cull (compute, outside any render pass) into this
@@ -773,25 +782,19 @@ impl VkContext {
             // narrowed to the crop, and the oblique clip rides the view-proj, so it
             // also rejects geometry that cannot reach the crop or sits behind the
             // reflector.
-            let frustum = Frustum::from_camera(
-                crop.crop_view_projection(m.view_proj, set.width, set.height),
-                self.state.view.view_distance,
+            self.encode_probe_cull(
+                cmd,
+                set.cull_sets[ring],
+                set.hiz_set,
+                &mirror.frustum,
+                m.eye,
             );
-            self.encode_probe_cull(cmd, set.cull_sets[ring], set.hiz_set, &frustum, m.eye);
-            let cluster_params = ClusterParams {
-                num_probes: 0,
-                ..params.cluster_params.with_camera(&m.cluster_camera(
-                    params.cluster_params.z_near,
-                    self.uniforms.cluster_reach.range(
-                        m.eye,
-                        params.cluster_params.z_near,
-                        &[],
-                        self.state.view.view_distance,
-                    ),
-                    set.width,
-                    set.height,
-                ))
-            };
+            let cluster_params = mirror.cluster_params(
+                &frame,
+                &params.cluster_params,
+                self.uniforms.lights.cluster_reach(),
+                self.probe.book.records(),
+            );
             set.cluster_params_bufs[ring].write_val(0, &cluster_params);
             if cluster_params.use_clusters != 0 {
                 self.encode_mirror_light_cull(cmd, set, slot, ring);

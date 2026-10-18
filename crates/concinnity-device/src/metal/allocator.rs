@@ -60,18 +60,10 @@ use std::rc::{Rc, Weak};
 use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::error::allocation_failed;
-use crate::suballoc::block_alloc::{BlockAllocator, Placement};
+use concinnity_core::render::block_alloc::Placement;
+use concinnity_core::render::block_pool::{BlockGrowth, BlockPool, ReserveError};
 
-// Largest block the pool asks for. Big enough that a heavy world holds its
-// persistent set in a handful of heaps, small enough that one block is not an
-// absurd commitment. A resource too large for one gets a dedicated block sized
-// to itself.
-const MAX_BLOCK_BYTES: u64 = 64 * 1024 * 1024;
-
-// Size of a pool's first block. Blocks double from here to `MAX_BLOCK_BYTES` as
-// a pool fills, so a small world commits megabytes rather than a full-size heap
-// for a handful of textures.
-const FIRST_BLOCK_BYTES: u64 = 8 * 1024 * 1024;
+const GROWTH: BlockGrowth = BlockGrowth::STANDARD;
 
 // The properties that must match for two resources to share a heap. Both are
 // fixed at heap creation and `newBufferWithLength:options:offset:` /
@@ -122,33 +114,8 @@ fn pool_key(options: MTLResourceOptions) -> RenderResult<PoolKey> {
     .check_heap_backed()
 }
 
-// The blocks of one pool. `placement` names them by index; `heaps` holds the
-// matching device allocation, with `None` for a slot whose heap was released.
-struct Pool {
-    placement: BlockAllocator,
-    heaps: Vec<Option<Retained<ProtocolObject<dyn MTLHeap>>>>,
-}
-
-impl Pool {
-    fn new() -> Self {
-        Self {
-            placement: BlockAllocator::new(MAX_BLOCK_BYTES),
-            heaps: Vec::new(),
-        }
-    }
-
-    // How large the next block should be to host `size` bytes at `align`. The
-    // standard size doubles with the pool's block count up to `MAX_BLOCK_BYTES`,
-    // and any request too large for that gets a block of its own size (which
-    // `BlockAllocator::add_block` then marks dedicated).
-    fn next_block_bytes(&self, size: u64, align: u64) -> u64 {
-        let grown = FIRST_BLOCK_BYTES
-            .saturating_mul(1 << self.placement.block_count().min(3))
-            .min(MAX_BLOCK_BYTES);
-        let needed = size.saturating_add(align.max(1).saturating_sub(1));
-        needed.max(grown)
-    }
-}
+// The heaps of one pool, by the index its placement names them.
+type Pool = BlockPool<Retained<ProtocolObject<dyn MTLHeap>>>;
 
 struct Inner {
     pools: HashMap<PoolKey, Pool>,
@@ -164,7 +131,7 @@ impl Inner {
     fn free(&mut self, key: PoolKey, placement: Placement, size: u64) {
         let retire = self.frame + self.retire_depth;
         if let Some(pool) = self.pools.get_mut(&key) {
-            pool.placement.free(placement, size, retire);
+            pool.free(placement, size, retire);
         }
     }
 }
@@ -389,12 +356,8 @@ impl DeviceAllocator {
         inner.frame += 1;
         let frame = inner.frame;
         for pool in inner.pools.values_mut() {
-            pool.placement.reclaim(frame);
-            for index in pool.placement.take_empty_blocks() {
-                if let Some(slot) = pool.heaps.get_mut(index) {
-                    *slot = None;
-                }
-            }
+            pool.reclaim(frame);
+            pool.release_empty(|_, _| {});
         }
     }
 
@@ -402,9 +365,9 @@ impl DeviceAllocator {
         let inner = self.inner.borrow();
         let mut stats = AllocatorStats::default();
         for pool in inner.pools.values() {
-            stats.reserved_bytes += pool.placement.reserved_bytes();
-            stats.in_use_bytes += pool.placement.in_use_bytes();
-            stats.block_count += pool.placement.block_count();
+            stats.reserved_bytes += pool.reserved_bytes();
+            stats.in_use_bytes += pool.in_use_bytes();
+            stats.block_count += pool.block_count();
         }
         stats
     }
@@ -413,37 +376,22 @@ impl DeviceAllocator {
     // existing block can host them.
     fn reserve(&self, key: PoolKey, size: u64, align: u64) -> RenderResult<Reservation> {
         let mut inner = self.inner.borrow_mut();
-        let pool = inner.pools.entry(key).or_insert_with(Pool::new);
-
-        if let Some(placement) = pool.placement.alloc(size, align) {
-            let heap = pool.heaps[placement.block].clone().ok_or_else(|| {
-                RenderError::Other("allocator: placement named a released heap".to_string())
+        let pool = inner.pools.entry(key).or_insert_with(|| Pool::new(GROWTH));
+        let reserved = pool
+            .reserve(size, align, |bytes| new_heap(&self.device, key, bytes))
+            .map_err(|e| match e {
+                ReserveError::Open(e) => e,
+                ReserveError::Released => {
+                    RenderError::Other("allocator: placement named a released heap".to_string())
+                }
+                ReserveError::Unhosted => RenderError::Other(
+                    "allocator: a block sized for a request failed to host it".to_string(),
+                ),
             })?;
-            return Ok(Reservation {
-                heap,
-                key,
-                placement,
-                size,
-            });
-        }
-
-        let block_bytes = pool.next_block_bytes(size, align);
-        let heap = new_heap(&self.device, key, block_bytes)?;
-        let index = pool.placement.add_block(block_bytes);
-        if index == pool.heaps.len() {
-            pool.heaps.push(Some(heap.clone()));
-        } else {
-            pool.heaps[index] = Some(heap.clone());
-        }
-        let placement = pool.placement.alloc_in(index, size, align).ok_or_else(|| {
-            RenderError::Other(
-                "allocator: a block sized for a request failed to host it".to_string(),
-            )
-        })?;
         Ok(Reservation {
-            heap,
+            heap: reserved.block.clone(),
             key,
-            placement,
+            placement: reserved.placement,
             size,
         })
     }
@@ -462,8 +410,7 @@ impl DeviceAllocator {
     fn release(&self, reservation: Reservation) {
         let mut inner = self.inner.borrow_mut();
         if let Some(pool) = inner.pools.get_mut(&reservation.key) {
-            pool.placement
-                .free(reservation.placement, reservation.size, 0);
+            pool.free(reservation.placement, reservation.size, 0);
         }
     }
 }
@@ -561,35 +508,13 @@ mod tests {
     }
 
     #[test]
-    fn blocks_grow_from_the_first_size_up_to_the_cap() {
-        // A small world should not commit a full-size heap for a few textures,
-        // so the first blocks are small and the size doubles as the pool fills.
-        let mut pool = Pool::new();
-        let mut sizes = Vec::new();
-        for _ in 0..5 {
-            let bytes = pool.next_block_bytes(1024, 256);
-            sizes.push(bytes);
-            pool.placement.add_block(bytes);
-        }
+    fn blocks_grow_from_4_mib_to_the_cap() {
+        let mib = 1024 * 1024;
+        let sizes: Vec<u64> = (0..6).map(|n| GROWTH.block_bytes(n, 1024, 256)).collect();
         assert_eq!(
             sizes,
-            vec![
-                FIRST_BLOCK_BYTES,
-                FIRST_BLOCK_BYTES * 2,
-                FIRST_BLOCK_BYTES * 4,
-                MAX_BLOCK_BYTES,
-                MAX_BLOCK_BYTES,
-            ]
+            vec![4 * mib, 8 * mib, 16 * mib, 32 * mib, 64 * mib, 64 * mib]
         );
-    }
-
-    #[test]
-    fn an_oversized_request_sizes_its_own_block() {
-        // Larger than the cap, so the block is sized to the request (and the
-        // block allocator marks it dedicated rather than sharing the remainder).
-        let pool = Pool::new();
-        let huge = MAX_BLOCK_BYTES * 3;
-        assert_eq!(pool.next_block_bytes(huge, 256), huge + 255);
     }
 
     #[test]

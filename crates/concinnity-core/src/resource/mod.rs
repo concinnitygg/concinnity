@@ -4,20 +4,25 @@
 //! owning system reads the table by that handle instead of querying an ECS column
 //! or scanning names, so a resource lives in a table it owns rather than as a
 //! component. Renderer-free (the tables are plain handle-indexed data), so they
-//! live here where the physics / audio subsystem crates can reach them; the
-//! client re-exports them under `crate::resource::*`, alongside the engine-side
-//! `install_resource_tables` that inserts them as World resources.
+//! live here where the physics / audio subsystem crates can reach them. The
+//! development source catalogs ([`MeshSources`] and its siblings) sit beside
+//! them.
 
 mod environment_map;
 mod handles;
 mod install;
 mod runtime;
+mod sources;
 mod texture;
 
 pub use environment_map::EnvironmentMapRecord;
 pub use handles::{MeshBlock, ResourceHandles};
 pub use install::{append_environment_map, append_font, append_material, append_mesh};
 pub use runtime::RuntimeMeshPayloads;
+pub use sources::{
+    ColorLutSources, EnvironmentMapSourceInfo, EnvironmentMapSources, MaterialNames, MeshSource,
+    MeshSources, TextureSource, TextureSources,
+};
 pub use texture::TextureRecord;
 
 use alloc::collections::BTreeSet;

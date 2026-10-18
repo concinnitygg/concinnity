@@ -20,7 +20,9 @@ use ash::vk;
 use concinnity_core::gfx::render_types::PostProcessParams;
 use concinnity_core::render::backend_init::{BackendInit, WorldShader};
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::feature_plan::{BackendFacts, FeaturePlan};
 use concinnity_core::render::scene_state::{DrawList, SceneState};
+use concinnity_core::render::shader_reload::ShaderReload;
 use concinnity_core::settings::ResolvedGraphics;
 
 use super::context::*;
@@ -74,12 +76,24 @@ struct Features {
 }
 
 impl Features {
-    fn resolve(hw: &VkHardware, graphics: &ResolvedGraphics, hdr_samples: u32) -> Self {
-        // Temporal upscaling (FSR) consumes the velocity pre-pass's
+    fn resolve(
+        hw: &VkHardware,
+        graphics: &ResolvedGraphics,
+        hdr_samples: u32,
+        upscaling: bool,
+    ) -> Self {
+        // A built temporal upscaler consumes the velocity pre-pass's
         // render-resolution motion + depth, which TaaResources owns, so force
-        // the TAA stack built when upscaling is on (the TAA *resolve* is still
-        // dropped from the frame graph; only the velocity pre-pass is reused).
-        let taa_enabled = graphics.taa() || graphics.anti_aliasing.upscaling;
+        // the TAA stack built while one is (the TAA *resolve* is still dropped
+        // from the frame graph; only the velocity pre-pass is reused).
+        let plan = FeaturePlan::resolve(
+            graphics,
+            BackendFacts {
+                rt_capable: hw.rt_capable,
+                upscaling,
+            },
+        );
+        let taa_enabled = plan.temporal;
         // The device's ceiling for the HDR format, re-queried on both paths since
         // the outgoing world's AA mode may differ; the resolved setting is what
         // the world actually asks for. A temporal technique resolves it to one
@@ -95,13 +109,7 @@ impl Features {
         // shader's `hdr_output > 0.5` branch and its in-branch `pq_output`
         // encode flag. Mirrors `DxContext::new`.
         let post_process = hw.hdr_mode.post_process_params(graphics.post_process());
-        let rt_wanted = graphics.rt_reflections().is_some() && hw.rt_capable;
-        if graphics.rt_reflections().is_some() && !hw.rt_capable {
-            tracing::error!(
-                "the resolved settings asked for ray-traced reflections the device cannot run; \
-                 the capability probe and the backend disagree"
-            );
-        }
+        let rt_wanted = plan.rt.is_some();
         Self {
             taa_enabled,
             msaa_samples,
@@ -111,11 +119,7 @@ impl Features {
             // it. Derived once: the transient pool gate and the feature gate
             // disagreeing would mean the pool places no images while the feature
             // expects them, or the reverse.
-            gbuffer_enabled: taa_enabled
-                || graphics.ssao().is_some()
-                || graphics.ssr().is_some()
-                || graphics.ssgi().is_some()
-                || rt_wanted,
+            gbuffer_enabled: plan.gbuffer,
         }
     }
 }
@@ -189,7 +193,6 @@ impl VkContext {
             Some(reuse) => bootstrap::inherit_hardware(reuse, &request)?,
             None => bootstrap::acquire_hardware(&request)?,
         };
-        let features = Features::resolve(&hw, &graphics, hdr_samples);
         let command_pool = commands::create_command_pool(&hw)?;
         let gpu = InitGpu {
             hw: &hw,
@@ -201,6 +204,7 @@ impl VkContext {
         let mut upscale_requested = crate::upscale_sdk::UpscaleRequest::from_graphics(&graphics);
         let (upscale, render_extent) =
             effects::build_upscale(&gpu, swapchain.extent, &graphics, &mut upscale_requested)?;
+        let features = Features::resolve(&hw, &graphics, hdr_samples, upscale.is_some());
         commands::reset_timestamp_queries(&gpu)?;
         let area_light = scene_data::build_area_lights(&gpu, &area_lights)?;
         let mut scene =
@@ -237,7 +241,7 @@ impl VkContext {
                 light_uniforms,
             },
         )?;
-        let shadow = shadow::build_shadow(&gpu, &shadows, &uniforms.light_uniforms)?;
+        let shadow = shadow::build_shadow(&gpu, &shadows)?;
         let spot_shadow = shadow::build_spot_shadow(&gpu, &shadow, &spot_shadows)?;
         let probe_gpu = crate::vulkan::probe_set::ProbeSetGpu::new(&gpu.upload(), frames)?;
         for (frame, records) in probe_gpu.records.iter().enumerate() {
@@ -451,7 +455,7 @@ impl VkContext {
             grass,
             grass_lod: None,
             auto_exposure: world_fx.auto_exposure,
-            hot_reload: HotReloadState::new(hot_reload),
+            hot_reload: ShaderReload::new(hot_reload),
             pipeline_gate: Default::default(),
             world_shader: world_programs.cloned(),
             frame_stats: Default::default(),
@@ -476,9 +480,8 @@ impl VkContext {
                 ),
                 clear_color,
             ),
-            graph_cache: None,
-            gates: Default::default(),
-            barrier_scratch: None,
+            graph_scratch: None,
+            submit_scratch: Vec::new(),
             wireframe: Default::default(),
             probe: ProbeState::new(probe_prefilter, probe_gpu),
             stream: StreamState::new(frames),
@@ -497,6 +500,7 @@ impl VkContext {
         // descriptor sets land before the first frame.
         me.upload_initial_particles(fx.particles)?;
         me.sync_grass_prepass(false);
+        me.state.planner.shadow.cadence = shadows.cadence;
         me.refresh_gates(&graphics);
         if me.ssgi.is_some() {
             me.rewrite_global_binding(SCREEN_INDIRECT_BINDING);

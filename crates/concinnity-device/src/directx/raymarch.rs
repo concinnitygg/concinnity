@@ -37,6 +37,8 @@
 
 use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::components::sdf_volume::SdfVolume;
+use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
+use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::LightUniforms;
@@ -148,6 +150,11 @@ impl FacePsos {
 }
 
 impl RaymarchVolumeRecord {
+    // True when the volume is shown and its box reaches into `frustum`.
+    fn drawn(&self, frustum: &Frustum) -> bool {
+        self.visible && frustum.intersects_box(self.center, self.extent)
+    }
+
     // The faces this volume's proxy draws with from `view`: a medium always
     // takes the back faces.
     fn faces(&self, view: &RaymarchView) -> ProxyFaces {
@@ -606,32 +613,8 @@ fn build_cube_buffers(
     D3D12_VERTEX_BUFFER_VIEW,
     D3D12_INDEX_BUFFER_VIEW,
 )> {
-    #[rustfmt::skip]
-    let corners: [Vertex; 8] = [
-        v([-1.0, -1.0, -1.0]),
-        v([ 1.0, -1.0, -1.0]),
-        v([ 1.0,  1.0, -1.0]),
-        v([-1.0,  1.0, -1.0]),
-        v([-1.0, -1.0,  1.0]),
-        v([ 1.0, -1.0,  1.0]),
-        v([ 1.0,  1.0,  1.0]),
-        v([-1.0,  1.0,  1.0]),
-    ];
-    #[rustfmt::skip]
-    let indices: [u16; 36] = [
-        // -Z
-        0, 2, 1,  0, 3, 2,
-        // +Z
-        4, 5, 6,  4, 6, 7,
-        // -X
-        0, 4, 7,  0, 7, 3,
-        // +X
-        1, 2, 6,  1, 6, 5,
-        // -Y
-        0, 1, 5,  0, 5, 4,
-        // +Y
-        3, 7, 6,  3, 6, 2,
-    ];
+    let corners: [Vertex; 8] = cube_corners(1.0).map(v);
+    let indices = CUBE_INDICES;
 
     let vb_bytes = std::mem::size_of_val(&corners) as u64;
     let ib_bytes = std::mem::size_of_val(&indices) as u64;
@@ -1098,11 +1081,13 @@ impl RaymarchResources {
         self.volumes.iter().any(|v| v.visible)
     }
 
-    // True when a visible volume reads the scene behind its surface, which is
+    // True when a drawn volume reads the scene behind its surface, which is
     // the only thing `hdr_resolve_copy` feeds. A world of opaque volumes skips
     // the full-target copy and the four transitions that bracket it.
-    fn any_refractive_visible(&self) -> bool {
-        self.volumes.iter().any(|v| v.visible && v.refractive)
+    fn any_refractive_drawn(&self, frustum: &Frustum) -> bool {
+        self.volumes
+            .iter()
+            .any(|v| v.refractive && v.drawn(frustum))
     }
 }
 
@@ -1131,11 +1116,12 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         view: &RaymarchView,
+        frustum: &Frustum,
     ) -> RenderResult<()> {
         let Some(rm) = self.raymarch.as_ref() else {
             return Ok(());
         };
-        if !rm.any_visible() {
+        if !rm.volumes.iter().any(|v| v.drawn(frustum)) {
             return Ok(());
         }
 
@@ -1189,7 +1175,7 @@ impl DxContext {
         // visible volumes never call it skips the copy and all four
         // transitions; `hdr_resolve_copy` stays rested in PIXEL_SHADER_RESOURCE
         // where its SRV expects it, holding an earlier frame nothing reads.
-        if rm.any_refractive_visible() {
+        if rm.any_refractive_drawn(frustum) {
             let snapshot_src_to_copy = transition_barrier(
                 self.hdr_scene_target(),
                 D3D12_RESOURCE_STATE_RENDER_TARGET,
@@ -1268,7 +1254,7 @@ impl DxContext {
         }
 
         for vol in &rm.volumes {
-            if !vol.visible {
+            if !vol.drawn(frustum) {
                 continue;
             }
             // SAFETY: the command list is in the recording state, and every resource, descriptor
@@ -1344,7 +1330,7 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        prepass: &GbufferPrepassView,
+        prepass: &GbufferPrepassView<'_>,
         gbuffer: &GBufferView,
     ) {
         let Some(rm) = self.raymarch.as_ref() else {
@@ -1353,7 +1339,7 @@ impl DxContext {
         let surfaces = || {
             rm.volumes
                 .iter()
-                .filter(|v| v.visible)
+                .filter(|v| v.drawn(prepass.frustum))
                 .filter_map(|v| v.prepass_psos.as_ref().map(|psos| (v, psos)))
         };
         if surfaces().next().is_none() {
@@ -1521,10 +1507,10 @@ impl DxContext {
         // rendered (raster + SDF), so we neither clear nor add to it. The 0
         // sentinel falls back to all cascades. Mirrors Metal.
         let all_cascades = (1u32 << render_types::NUM_SHADOW_CASCADES) - 1;
-        let render_mask = if self.shadow.render_mask == 0 {
+        let render_mask = if self.state.planner.shadow.cascade_mask == 0 {
             all_cascades
         } else {
-            self.shadow.render_mask
+            self.state.planner.shadow.cascade_mask
         };
         for cascade_idx in 0..render_types::NUM_SHADOW_CASCADES {
             if render_mask & (1u32 << cascade_idx) == 0 {

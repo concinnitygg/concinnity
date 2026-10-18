@@ -65,14 +65,18 @@ pub mod bake;
 pub mod behavior;
 pub mod benchmark;
 pub mod blob;
+pub mod budget;
 pub mod camera_track;
 pub mod components;
+pub mod controller;
 pub mod decode;
 pub mod defaults;
 pub mod ecs;
 pub mod error;
+pub mod frame_report;
 pub mod geometry;
 pub mod gfx;
+pub mod hud;
 pub mod input;
 pub mod launch;
 pub mod math;
@@ -90,6 +94,7 @@ pub mod terrain;
 #[cfg(test)]
 mod test_support;
 pub mod transform;
+pub mod ui;
 pub mod window;
 
 // The headless driver over a world and the trait any loop that runs one

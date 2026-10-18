@@ -24,6 +24,7 @@
 
 use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::components::sdf_volume::SdfVolume;
+use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::LightUniforms;
@@ -142,6 +143,11 @@ fn cull_mode(faces: ProxyFaces) -> MTLCullMode {
 }
 
 impl RaymarchVolumeRecord {
+    // True when the volume is shown and its box reaches into `frustum`.
+    fn drawn(&self, frustum: &Frustum) -> bool {
+        self.visible && frustum.intersects_box(self.world_center, self.world_extent)
+    }
+
     // The faces this volume's proxy draws with from `view`: a medium always
     // takes the back faces.
     fn faces(&self, view: &RaymarchView) -> ProxyFaces {
@@ -159,27 +165,6 @@ impl RaymarchVolumeRecord {
             _ => &self.pipeline,
         }
     }
-}
-
-// True when a volume at `center` with half-widths `extent` is not entirely
-// outside the camera frustum. Factored out of the draw loop so the cull
-// predicate can be unit-tested without a GPU-backed `RaymarchVolumeRecord`.
-pub(in crate::metal) fn volume_in_frustum(
-    center: [f32; 3],
-    extent: [f32; 3],
-    frustum: &Frustum,
-) -> bool {
-    let min = [
-        center[0] - extent[0],
-        center[1] - extent[1],
-        center[2] - extent[2],
-    ];
-    let max = [
-        center[0] + extent[0],
-        center[1] + extent[1],
-        center[2] + extent[2],
-    ];
-    frustum.intersects_aabb(min, max)
 }
 
 // One entry point of a volume's field, out of the library its MSL builds.
@@ -598,7 +583,7 @@ fn volume_uniforms_from(volume: &SdfVolume) -> RaymarchVolumeUniforms {
 // Build the shared unit-cube proxy geometry buffers. The vertices ride
 // in `Vertex` shape so the proxy works through the engine's standard
 // vertex descriptor (the same five-attribute layout the main pass and
-// every custom mesh shader expect). 8 corners in `[-0.5, 0.5]^3`; the
+// every custom mesh shader expect). 8 corners at `±1`; the
 // vertex shader scales by `vol.extent` and translates by `vol.center`.
 // Indices wind 36 CCW triangles; the encoder culls one face set per volume.
 type RaymarchCubeBuffers = (
@@ -613,34 +598,8 @@ pub(in crate::metal) fn build_raymarch_cube_buffers(
     // `center ± extent`. The vertex shader computes `pos * extent +
     // center`, so the proxy corners must be at `±1.0` for the scaled
     // corners to land at `center ± extent`.
-    #[rustfmt::skip]
-    let corners: [Vertex; 8] = [
-        v([-1.0, -1.0, -1.0]),
-        v([ 1.0, -1.0, -1.0]),
-        v([ 1.0,  1.0, -1.0]),
-        v([-1.0,  1.0, -1.0]),
-        v([-1.0, -1.0,  1.0]),
-        v([ 1.0, -1.0,  1.0]),
-        v([ 1.0,  1.0,  1.0]),
-        v([-1.0,  1.0,  1.0]),
-    ];
-    // 36 CCW indices (outward winding when viewed from +x / +y / +z
-    // halfspaces).
-    #[rustfmt::skip]
-    let indices: [u16; 36] = [
-        // -Z
-        0, 2, 1,  0, 3, 2,
-        // +Z
-        4, 5, 6,  4, 6, 7,
-        // -X
-        0, 4, 7,  0, 7, 3,
-        // +X
-        1, 2, 6,  1, 6, 5,
-        // -Y
-        0, 1, 5,  0, 5, 4,
-        // +Y
-        3, 7, 6,  3, 6, 2,
-    ];
+    let corners: [Vertex; 8] = cube_corners(1.0).map(v);
+    let indices = CUBE_INDICES;
 
     let vb_bytes = std::mem::size_of_val(&corners);
     let ib_bytes = std::mem::size_of_val(&indices);
@@ -691,17 +650,9 @@ impl MtlContext {
         if self.raymarch.volumes.is_empty() {
             return Ok(0);
         }
-        // Frustum-cull each volume's world-space AABB up front. A volume that
-        // is hidden or entirely off-screen costs nothing this frame -- not even
-        // the scene-copy blit + render encoder below. Mirrors the decal /
-        // particle passes' pre-pass visibility mask.
-        let visible: Vec<bool> = self
-            .raymarch
-            .volumes
-            .iter()
-            .map(|v| v.visible && volume_in_frustum(v.world_center, v.world_extent, frustum))
-            .collect();
-        if !visible.iter().any(|&v| v) {
+        // A volume that is hidden or entirely off-screen costs nothing this
+        // frame, not even the scene-copy blit and render encoder below.
+        if !self.raymarch.volumes.iter().any(|v| v.drawn(frustum)) {
             return Ok(0);
         }
         let vbuf = self
@@ -716,8 +667,8 @@ impl MtlContext {
             .ok_or_else(|| RenderError::Other("raymarch cube index buffer missing".into()))?;
         let depth_sampler = self.composite.sampler.as_ref();
 
-        let lights_gpu: RaymarchLightsGpu = self.light_uniforms;
-        let shadow_uniforms = self.shadow.uniforms;
+        let lights_gpu: RaymarchLightsGpu = *self.lights.uniforms();
+        let shadow_uniforms = self.state.planner.shadow.uniforms;
 
         // Refraction support: snapshot the pre-raymarch
         // `hdr_resolve` into `hdr_resolve_copy` so user SDF shaders can
@@ -735,8 +686,7 @@ impl MtlContext {
             .raymarch
             .volumes
             .iter()
-            .zip(&visible)
-            .any(|(v, &vis)| vis && v.refractive);
+            .any(|v| v.refractive && v.drawn(frustum));
         // The scene-depth snapshot the cone-march early-out reads. Unlike the
         // color copy it is unconditional: every visible volume's fragment
         // clips against the rasterized surface, and the pass writes the depth
@@ -851,8 +801,8 @@ impl MtlContext {
         enc.set_fragment_sampler(depth_sampler, 2);
 
         let mut draws: u32 = 0;
-        for (i, vol) in self.raymarch.volumes.iter().enumerate() {
-            if !visible[i] {
+        for vol in &self.raymarch.volumes {
+            if !vol.drawn(frustum) {
                 continue;
             }
             // A surface draws the faces that let a hidden volume be rejected
@@ -913,15 +863,15 @@ impl MtlContext {
             let Some(pipelines) = vol.prepass_pipelines.as_ref() else {
                 continue;
             };
-            if !vol.visible || !volume_in_frustum(vol.world_center, vol.world_extent, frustum) {
+            if !vol.drawn(frustum) {
                 continue;
             }
             if draws == 0 {
                 enc.set_depth_stencil(self.targets.depth_state_inclusive.as_ref());
                 enc.set_vertex_value(view, 0);
                 enc.set_fragment_value(view, 0);
-                enc.set_fragment_value(&self.light_uniforms, 2);
-                enc.set_fragment_value(&self.shadow.uniforms, 3);
+                enc.set_fragment_value(self.lights.uniforms(), 2);
+                enc.set_fragment_value(&self.state.planner.shadow.uniforms, 3);
                 enc.set_vertex_buffer(vbuf, 0, RAYMARCH_VERTEX_BUFFER);
             }
             let faces = vol.faces(view);
@@ -984,17 +934,17 @@ impl MtlContext {
         let ibuf = self.raymarch.cube_index_buffer.as_ref().ok_or_else(|| {
             RenderError::Other("raymarch shadow: cube index buffer missing".into())
         })?;
-        let lights_gpu: RaymarchLightsGpu = self.light_uniforms;
-        let shadow_uniforms = self.shadow.uniforms;
+        let lights_gpu: RaymarchLightsGpu = *self.lights.uniforms();
+        let shadow_uniforms = self.state.planner.shadow.uniforms;
 
         let mut draws: u32 = 0;
         // Only cast into cascades the rasterized shadow pass re-rendered this
         // frame: a skipped cascade's slice must stay exactly as it was last
         // fully rendered (raster + SDF), so we neither clear nor add to it.
-        let render_mask = if self.shadow.render_mask == 0 {
+        let render_mask = if self.state.planner.shadow.cascade_mask == 0 {
             (1u32 << NUM_SHADOW_CASCADES) - 1
         } else {
-            self.shadow.render_mask
+            self.state.planner.shadow.cascade_mask
         };
         for cascade_idx in 0..NUM_SHADOW_CASCADES {
             if render_mask & (1u32 << cascade_idx) == 0 {
@@ -1067,34 +1017,5 @@ impl MtlContext {
             }
         }
         Ok(draws)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn volume_in_frustum_culls_offscreen_boxes() {
-        use concinnity_core::gfx::frustum::Frustum;
-        // Identity view-projection -> the visible region is the clip box,
-        // x and y in [-1, 1] and depth in [0, 1]. A unit box at the origin overlaps it; a box far to the right is
-        // entirely past the right clip plane and is culled.
-        let identity = [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ];
-        let f = Frustum::from_camera(identity, None);
-        assert!(volume_in_frustum([0.0, 0.0, 0.0], [0.5, 0.5, 0.5], &f));
-        assert!(!volume_in_frustum([10.0, 0.0, 0.0], [0.5, 0.5, 0.5], &f));
-        // A box the camera sits inside (origin within its extent) still
-        // overlaps the frustum.
-        assert!(volume_in_frustum(
-            [0.0, 0.0, 0.0],
-            [100.0, 100.0, 100.0],
-            &f
-        ));
     }
 }
