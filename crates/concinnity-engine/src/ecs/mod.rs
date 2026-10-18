@@ -40,9 +40,7 @@ pub mod render_mode;
 pub mod schedule;
 mod world_queries;
 
-use concinnity_core::ecs::MeshBoundsRecord;
 use concinnity_core::ecs::Parked;
-use concinnity_core::ecs::SceneGroup;
 use concinnity_core::render::backend;
 // The `SYSTEMS` table is written client-side, since its gates name the client's
 // own system types (see `registry`); a gate builds one `BuiltSystem` per
@@ -123,15 +121,6 @@ pub(crate) struct PipelineChannels {
 // top of its step and puts it back before returning. `None` while a step has
 // it taken, or once a live edit transplanted it out.
 pub(crate) type ActiveRenderBackend = Parked<Box<dyn backend::RenderBackend>>;
-
-/// The blob's baked per-scene exclusive content groups, published at blob load
-/// for the streaming/residency wiring to consume at graphics init.
-pub struct BlobSceneGroups(pub Vec<SceneGroup>);
-
-/// The blob's baked per-mesh geometry summaries (AABB + counts by mesh-source
-/// handle), published at blob load so graphics init can build draw records for
-/// deferred scene-owned meshes without decoding their payloads.
-pub struct BlobMeshBounds(pub Vec<MeshBoundsRecord>);
 
 /// The system table. Generates the `SYSTEMS` table a world starts from; table
 /// order is run order.

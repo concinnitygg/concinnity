@@ -110,16 +110,13 @@ impl BuildRequest {
             };
             let programs = install.programs();
             if !Arc::ptr_eq(&programs, &install.cooked) {
-                tracing::info!(
-                    "StreamingSystem: shader bucket {} installs its hot-reloaded edit",
-                    bucket
-                );
+                tracing::info!("shader bucket {} installs its hot-reloaded edit", bucket);
             }
             let prepared = builder.map(|builder| {
                 let started = Instant::now();
                 let prepared = builder.world_shader(bucket, &programs);
                 tracing::info!(
-                    "StreamingSystem: shader bucket {} pipeline built off the frame \
+                    "shader bucket {} pipeline built off the frame \
                      thread ({:.1} ms)",
                     bucket,
                     started.elapsed().as_secs_f32() * 1000.0
@@ -172,15 +169,11 @@ impl ReadyShader {
         let started = Instant::now();
         match backend.install_world_shader(bucket, &programs, prepared) {
             Ok(()) => tracing::info!(
-                "StreamingSystem: shader bucket {} pipeline ready ({:.1} ms)",
+                "shader bucket {} pipeline ready ({:.1} ms)",
                 bucket,
                 started.elapsed().as_secs_f32() * 1000.0
             ),
-            Err(e) => tracing::error!(
-                "StreamingSystem: shader bucket {} pipeline build failed: {}",
-                bucket,
-                e
-            ),
+            Err(e) => tracing::error!("shader bucket {} pipeline build failed: {}", bucket, e),
         }
     }
 }

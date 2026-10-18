@@ -72,6 +72,7 @@ mod storage;
 mod system;
 mod system_entry;
 mod tick;
+mod tick_accumulator;
 mod user_system;
 mod waves;
 mod world;
@@ -94,6 +95,7 @@ pub use mask::{ComponentId, ComponentMask};
 pub use parked::Parked;
 pub use resource::Resources;
 pub use tick::{AtomicTick, MAX_CHANGE_AGE, Tick};
+pub use tick_accumulator::TickAccumulator;
 
 // The runtime-facing component contract and the metadata enums the registry and
 // the blob format are built from.
@@ -122,12 +124,13 @@ pub use frame::{FrameContext, FrameVec};
 // the world's cook-counted physics reservation. They name no renderer type, so
 // they live here where the physics / audio subsystem crates can reach them.
 pub use protocol::{
-    CursorShape, CursorState, DesiredCursor, DisabledSettingRows, DisplayModes, DropdownView,
-    ExecutionTrace, FlyCam, FrameCaptureRequest, FrameRateCap, FrameTime, GpuMemoryPressure,
-    HiddenAssets, HudLayers, HudPrefs, InputSampledAt, MenuActive, MenuOverride, OpenDropdown,
-    OverlayImage, OverlayImages, PickEntry, PickIndex, ScheduleMode, ScreenStack,
-    ScreenshotRequest, SimTiming, TraceEvent, TracePath, TracePaths, TraceRequest, TraceStep,
-    TraceVal, TransientSaves, ViewOverrides, WindowMinimized, WorldLines, WorldPhysicsBudget,
+    BlobMeshBounds, BlobSceneGroups, CursorShape, CursorState, DesiredCursor, DisabledSettingRows,
+    DisplayModes, DropdownView, ExecutionTrace, FlyCam, FrameCaptureRequest, FrameRateCap,
+    FrameTime, GpuMemoryPressure, HiddenAssets, HudLayers, HudPrefs, InputSampledAt, MenuActive,
+    MenuOverride, OpenDropdown, OverlayImage, OverlayImages, PickEntry, PickIndex, ScheduleMode,
+    ScreenStack, ScreenshotRequest, SimTiming, TraceEvent, TracePath, TracePaths, TraceRequest,
+    TraceStep, TraceVal, TransientSaves, ViewOverrides, WindowMinimized, WorldLines,
+    WorldPhysicsBudget,
 };
 
 // The runtime behavior trait every engine system implements + its per-step

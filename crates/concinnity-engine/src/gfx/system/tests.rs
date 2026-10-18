@@ -1635,13 +1635,14 @@ fn despawn_request_retires_draw_slots() {
     );
 }
 
-// The streaming pools graphics init builds are parked in the `StreamingState`
+// The streaming pools graphics init builds are parked in the streaming runtime
 // resource (StreamingSystem drives them each frame). Read its per-pool stats
 // for the streaming assertions.
-fn streaming_stats(world: &World) -> crate::gfx::streaming::system::StreamingStats {
+fn streaming_stats(world: &World) -> concinnity_core::render::stream_pools::StreamingStats {
     world
-        .resource::<crate::gfx::streaming::system::StreamingState>()
-        .expect("StreamingState parked at init")
+        .resource::<crate::gfx::streaming::system::StreamingRuntime>()
+        .expect("streaming runtime parked at init")
+        .state
         .streaming_stats()
 }
 
@@ -1654,10 +1655,10 @@ fn streaming_init_evicts_streamable_slots() {
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
-    // The streamers were handed off to the parked StreamingState, so the
+    // The pools were handed off to the parked streaming runtime, so the
     // system's own scratch fields are cleared.
-    assert!(gs.texture_streamer.is_none());
-    assert!(gs.mesh_streamer.is_none());
+    assert!(gs.stream_pools.texture.is_none());
+    assert!(gs.stream_pools.mesh.is_none());
     let stats = streaming_stats(&world);
     assert!(stats.texture.is_some(), "texture pool streaming");
     assert!(stats.mesh.is_some(), "mesh pool streaming");
@@ -3750,12 +3751,12 @@ fn a_deferred_texture_slot_decodes_to_a_placeholder() {
     let mut world = b.build();
     let deferred = HashSet::from([1]);
     let cook_only = std::collections::BTreeSet::new();
-    let skips = || super::texture_payloads::TextureSlotSkips {
+    let skips = || concinnity_core::render::world_load::texture_payloads::TextureSlotSkips {
         deferred: &deferred,
         cook_only: &cook_only,
     };
 
-    let disk = super::texture_payloads::decode_texture_payloads(
+    let disk = concinnity_core::render::world_load::texture_payloads::decode_texture_payloads(
         &mut world.context(),
         &locators,
         skips(),
@@ -3767,7 +3768,7 @@ fn a_deferred_texture_slot_decodes_to_a_placeholder() {
     assert_eq!((disk.images[1].width(), disk.images[1].height()), (1, 1));
     assert!(disk.payloads.is_empty());
 
-    let ram = super::texture_payloads::decode_texture_payloads(
+    let ram = concinnity_core::render::world_load::texture_payloads::decode_texture_payloads(
         &mut world.context(),
         &locators,
         skips(),
@@ -3801,11 +3802,11 @@ fn a_cook_only_texture_slot_stays_a_placeholder() {
         .collect();
     let mut world = b.build();
     let cook_only = BTreeSet::from([0]);
-    let skips = super::texture_payloads::TextureSlotSkips {
+    let skips = concinnity_core::render::world_load::texture_payloads::TextureSlotSkips {
         deferred: &HashSet::new(),
         cook_only: &cook_only,
     };
-    let ram = super::texture_payloads::decode_texture_payloads(
+    let ram = concinnity_core::render::world_load::texture_payloads::decode_texture_payloads(
         &mut world.context(),
         &locators,
         skips,
@@ -4127,7 +4128,10 @@ fn sdf_volumes_without_a_readable_payload_are_skipped() {
     );
     let mut world = b.build();
 
-    let volumes = super::world_fx::drain_sdf_volumes(&mut world.context());
+    let volumes = concinnity_core::render::world_load::world_fx::drain_sdf_volumes(
+        &mut world.context(),
+        concinnity_host::thread::asset_id::name_of,
+    );
     assert_eq!(volumes.len(), 1);
     assert_eq!(volumes[0].fragment_source, b"sdf-fragment-bytes");
     assert_eq!(volumes[0].label, "glass_orb");
@@ -5117,7 +5121,11 @@ fn pick_index_publishes_world_bounds_only_when_opted_in() {
     world.insert_resource(PickIndex::default());
     let mut gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
-    assert_eq!(gs.pick_candidates.len(), 1, "one candidate per prop");
+    assert_eq!(
+        gs.extractor.pick_candidates().len(),
+        1,
+        "one candidate per prop"
+    );
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
 
     let index = world
@@ -5135,7 +5143,7 @@ fn pick_index_publishes_world_bounds_only_when_opted_in() {
     let mut world = scene_builder().build();
     let mut gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
-    assert!(gs.pick_candidates.is_empty());
+    assert!(gs.extractor.pick_candidates().is_empty());
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     assert!(world.resource::<PickIndex>().is_none());
 }
@@ -5196,7 +5204,11 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
     world.insert_resource(PickIndex::default());
     let mut gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
-    assert_eq!(gs.pick_candidates.len(), 2, "the prop and the skinned mesh");
+    assert_eq!(
+        gs.extractor.pick_candidates().len(),
+        2,
+        "the prop and the skinned mesh"
+    );
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     let index = world
         .resource::<PickIndex>()
@@ -5239,7 +5251,7 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
-    assert!(gs.pick_candidates.is_empty());
+    assert!(gs.extractor.pick_candidates().is_empty());
     assert_eq!(
         world.context().join2::<SkeletonPose, Transform>().count(),
         0

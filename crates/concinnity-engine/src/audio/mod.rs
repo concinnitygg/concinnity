@@ -8,30 +8,21 @@
 //! and the background decode worker. `AudioSystem` builds it at init and
 //! drives it every frame; the system registry constructs it.
 //!
-//! Only [`AudioEngine`] names kira. The policy submodules (voices, occlusion,
-//! rolloff, impact, clips) are generic over the handle type, so they are
-//! unit-testable without an audio device.
+//! Only [`AudioEngine`] names kira. The policy it runs (voices, occlusion,
+//! impact, clips, distances) is core's `audio`, generic over the handle type.
 
-// Clip decode bookkeeping (in flight / ready / failed + deferred plays).
-mod clips;
 // The background decode worker thread.
 mod decode;
 // The kira-backed mixer facade.
 mod engine;
-// Contact-impulse to impact-gain mapping.
-mod impact;
-// Occlusion smoothing and its volume / lowpass mapping.
-mod occlusion;
 // Authored attenuation mapped onto kira's spatial parameters.
 mod rolloff;
 // The internal positional-audio system that drives `AudioEngine` from the
 // world's `AudioEmitter` / `AudioCue` components.
 mod system;
-// The capped one-shot voice pool.
-mod voices;
 
 // The audio system the engine registry wraps.
-pub(crate) use engine::{AudioEngine, EmitterId, EmitterParams};
+pub(crate) use engine::{AudioEngine, EmitterParams};
 pub(crate) use system::AudioSystem;
 
 // A minimal 16-bit PCM mono WAV of `frames` silent samples, decodable by the

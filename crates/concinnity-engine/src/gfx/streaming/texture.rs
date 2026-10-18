@@ -1,48 +1,26 @@
-//! The `std`-side half of the asset-streaming subsystem.
-//!
-//! This owns the background payload-fetch thread and the channels that carry
-//! work to it, and wraps the `no_std` policy core in `crate::gfx::streaming`.
-//! The split is deliberate: `gfx::streaming::StreamPlanner` decides *what* to
-//! stream using only `core` + `alloc`; everything OS-coupled (threads,
-//! payload I/O) is confined here so a future `no_std` client runtime only has
-//! to replace this file.
+//! Where streamed texture payloads come from, and the thread that decodes them
+//! for core's texture pool.
 //!
 //! `PayloadSource` is the seam. `MemPayloadSource` serves compiled texture
 //! payloads already resident in RAM (used by `cn debug`, which builds payloads
 //! in memory); `DiskPayloadSource` re-reads them from their blob files on disk
-//! (used by `cn run`, so the bytes never stay RAM-resident). Both plug into the
-//! same planner and renderer.
+//! (used by `cn run`, so the bytes never stay RAM-resident).
 
-use concinnity_core::bake::texture;
-use concinnity_core::bake::texture::TextureImage;
-use concinnity_core::render::streaming::StreamPlanner;
-use concinnity_core::render::streaming::StreamState;
+use concinnity_core::bake::texture::{self, TextureImage};
+use concinnity_core::render::stream_pools::ItemLoad;
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender};
 
-// A texture payload decoded to a GPU-ready image (RGBA8 or block-compressed
-// with its mip chain).
-pub(crate) struct DecodedTexture {
-    pub image: TextureImage,
-}
+use crate::worker::Worker;
 
-// Fetches and decodes a streamable texture payload by item id.
-//
-// `Send + Sync` so the background worker thread can own one. Implementors do
-// the slow part of streaming (disk read, decompression); the renderer only
-// ever sees the finished [`DecodedTexture`].
+// Fetches and decodes a streamable texture payload by item id. `Send + Sync`
+// so the load thread can own one; called off the main thread.
 pub(crate) trait PayloadSource: Send + Sync {
-    // Decode item `id` into GPU-ready pixels, or return a human-readable
-    // error. Called off the main thread.
-    fn fetch(&self, id: usize) -> Result<DecodedTexture, String>;
+    // Decode item `id` into GPU-ready pixels, or a human-readable error.
+    fn fetch(&self, id: usize) -> Result<TextureImage, String>;
 }
 
-// Payload source for the `cn debug` path: compiled texture payloads kept
-// resident in RAM.
-//
-// `cn debug` builds payloads in memory with no blob files on disk, so it
-// cannot use [`DiskPayloadSource`]; the bytes stay RAM-resident and this
-// streams the *GPU upload* only. `cn run` uses [`DiskPayloadSource`] instead.
+// Compiled texture payloads kept resident in RAM. `cn debug` builds payloads in
+// memory with no blob files on disk, so this streams the GPU upload only.
 pub(crate) struct MemPayloadSource {
     payloads: Vec<Vec<u8>>,
 }
@@ -55,21 +33,18 @@ impl MemPayloadSource {
 }
 
 impl PayloadSource for MemPayloadSource {
-    fn fetch(&self, id: usize) -> Result<DecodedTexture, String> {
+    fn fetch(&self, id: usize) -> Result<TextureImage, String> {
         let bytes = self
             .payloads
             .get(id)
             .ok_or_else(|| format!("no payload for streamed texture {}", id))?;
-        let image = texture::deserialize(bytes)?;
-        Ok(DecodedTexture { image })
+        texture::deserialize(bytes)
     }
 }
 
 // Locates one streamed texture payload inside a blob file on disk.
-//
-// `file_offset` is absolute into the file -- the payload-section start (past
-// the blob header and defs) is already folded in by the caller, so the
-// background worker only seeks and reads.
+// `file_offset` is absolute into the file: the payload-section start is
+// already folded in, so the load thread only seeks and reads.
 #[derive(Clone)]
 pub(crate) struct DiskTextureLocator {
     pub path: String,
@@ -77,13 +52,8 @@ pub(crate) struct DiskTextureLocator {
     pub len: u64,
 }
 
-// Disk-backed payload source: re-reads each compiled texture payload
-// from its blob file on disk, so the bytes never stay RAM-resident.
-//
-// This is the counterpart to [`MemPayloadSource`] for the `cn run` path,
-// where the world was loaded from blob files that are still on disk. The
-// `cn debug` path builds payloads in memory with no blob files, so it must
-// keep using [`MemPayloadSource`].
+// Re-reads each compiled texture payload from its blob file on disk, so the
+// bytes never stay RAM-resident (`cn run`).
 pub(crate) struct DiskPayloadSource {
     // locators[id] points streamed item `id` at its bytes in a blob file.
     locators: Vec<DiskTextureLocator>,
@@ -97,248 +67,26 @@ impl DiskPayloadSource {
 }
 
 impl PayloadSource for DiskPayloadSource {
-    fn fetch(&self, id: usize) -> Result<DecodedTexture, String> {
+    fn fetch(&self, id: usize) -> Result<TextureImage, String> {
         let loc = self
             .locators
             .get(id)
             .ok_or_else(|| format!("no disk locator for streamed texture {}", id))?;
         let bytes = super::file_range::read_at(&loc.path, loc.file_offset, loc.len)?;
-        let image = texture::deserialize(&bytes)?;
-        Ok(DecodedTexture { image })
+        texture::deserialize(&bytes)
     }
 }
 
-// Outcome of one background load, carried back to the main thread.
-struct LoadResult {
-    id: usize,
-    decoded: Result<DecodedTexture, String>,
-}
-
-// Drives streaming of one of the renderer's texture pools.
-//
-// One instance drives the albedo pool, a second the normal-map pool; the
-// type is pool-agnostic -- the caller's `upload` callback routes a completed
-// load to the right pool slot.
-//
-// Owns the [`StreamPlanner`] policy core plus the background fetch thread.
-// Each frame the renderer calls [`update_scores`], [`plan_and_dispatch`], and
-// [`drain_completed`] in that order.
-//
-// [`update_scores`]: TextureStreamer::update_scores
-// [`plan_and_dispatch`]: TextureStreamer::plan_and_dispatch
-// [`drain_completed`]: TextureStreamer::drain_completed
-pub(crate) struct TextureStreamer {
-    planner: StreamPlanner,
-    // centers[id] holds the world-space positions of every draw object that
-    // samples texture slot `id`; the streaming priority is the squared
-    // distance from the camera to the nearest of them.
-    centers: Vec<Vec<[f32; 3]>>,
-    // Slots that never load, whatever scene residency asks: textures only the
-    // cook reads.
-    excluded: hashbrown::HashSet<usize>,
-    worker: super::worker::Worker<usize>,
-    result_rx: Receiver<LoadResult>,
-}
-
-impl TextureStreamer {
-    // Spawn the background worker and build a streamer for `centers.len()`
-    // texture slots.
-    //
-    // `centers[id]` lists the draw-object positions that reference slot `id`.
-    // `load_budget` caps loads dispatched per frame; `resident_cap` caps how
-    // many textures stay resident at once before LRU eviction kicks in.
-    pub(crate) fn new(
-        source: Arc<dyn PayloadSource>,
-        centers: Vec<Vec<[f32; 3]>>,
-        load_budget: usize,
-        resident_cap: usize,
-    ) -> Self {
-        let planner = StreamPlanner::new(centers.len(), load_budget, resident_cap);
-        let (request_tx, request_rx) = std::sync::mpsc::channel::<usize>();
-        let (result_tx, result_rx) = std::sync::mpsc::channel::<LoadResult>();
-
-        let worker =
-            super::worker::Worker::spawn("cn-texture-stream", request_rx, request_tx, move |rx| {
-                worker_loop(source, rx, result_tx)
-            });
-
-        Self {
-            planner,
-            centers,
-            excluded: hashbrown::HashSet::new(),
-            result_rx,
-            worker,
-        }
-    }
-
-    // Number of streamed texture slots.
-    pub(crate) fn len(&self) -> usize {
-        self.planner.len()
-    }
-
-    // Set (or clear with `None`) the resident-byte budget for this pool. When
-    // set, the planner evicts farther-from-camera textures to hold resident
-    // bytes at or under the budget, on top of the item-count cap.
-    pub(crate) fn set_byte_budget(&mut self, budget: Option<u64>) {
-        self.planner.set_byte_budget(budget);
-    }
-
-    // Total resident texture bytes, for diagnostics.
-    pub(crate) fn resident_bytes(&self) -> u64 {
-        self.planner.resident_bytes()
-    }
-
-    // Block or unblock a slot for scene residency: a blocked slot never loads
-    // and is evicted by the next plan if resident. An excluded slot stays
-    // blocked.
-    pub(crate) fn set_blocked(&mut self, slot: usize, blocked: bool) {
-        if !blocked && self.excluded.contains(&slot) {
-            return;
-        }
-        self.planner.set_blocked(slot, blocked);
-    }
-
-    // Keep `slot` from ever loading: nothing samples it.
-    pub(crate) fn exclude(&mut self, slot: usize) {
-        self.excluded.insert(slot);
-        self.planner.set_blocked(slot, true);
-    }
-
-    // The active resident-byte budget, or `None` when byte accounting is off.
-    pub(crate) fn byte_budget(&self) -> Option<u64> {
-        self.planner.byte_budget()
-    }
-
-    // Re-score every slot from the camera position and refresh the LRU
-    // timestamp of resident slots. Call once per frame before
-    // [`plan_and_dispatch`](Self::plan_and_dispatch).
-    pub(crate) fn update_scores(&mut self, camera: [f32; 3], frame: u64) {
-        for id in 0..self.planner.len() {
-            self.planner
-                .set_score(id, nearest_sq_distance(&self.centers[id], camera));
-            if self.planner.state(id) == Some(StreamState::Resident) {
-                self.planner.touch(id, frame);
-            }
-        }
-    }
-
-    // Run the planner: dispatch this frame's loads to the worker and return
-    // the slots the caller must evict from the GPU.
-    pub(crate) fn plan_and_dispatch(&mut self) -> Vec<usize> {
-        let plan = self.planner.plan();
-        for &id in &plan.to_load {
-            let sent = self.worker.send(id);
-            if !sent {
-                // Worker gone: revert so the slot is retried rather than
-                // stuck Pending forever.
-                self.planner.mark_unloaded(id);
-            }
-        }
-        plan.to_evict
-    }
-
-    // Apply every completed background load via `upload`, which receives the
-    // decoded image by value so it can carry it into a recorded backend op.
-    // Returns the number of slots brought resident this call.
-    pub(crate) fn drain_completed(
-        &mut self,
-        frame: u64,
-        mut upload: impl FnMut(usize, TextureImage),
-    ) -> usize {
-        let mut applied = 0;
-        while let Ok(result) = self.result_rx.try_recv() {
-            match result.decoded {
-                Ok(tex) => {
-                    // Resident footprint is the sum of every mip level's bytes.
-                    let bytes = tex.image.byte_len() as u64;
-                    upload(result.id, tex.image);
-                    self.planner.mark_resident(result.id, frame, bytes);
-                    applied += 1;
-                }
-                Err(e) => {
-                    tracing::warn!("texture stream: load of slot {} failed: {}", result.id, e);
-                    // Treat a failed fetch as terminally resident so the
-                    // planner stops retrying; the slot keeps its placeholder,
-                    // which occupies no streamed bytes.
-                    self.planner.mark_resident(result.id, frame, 0);
-                }
-            }
-        }
-        applied
-    }
-
-    // Roll a slot whose recorded upload was refused back to `Unloaded`, so the
-    // planner re-dispatches it. Unloading removes its bytes from the resident
-    // sum.
-    pub(crate) fn note_upload_failed(&mut self, slot: usize) {
-        tracing::debug!(
-            "texture stream: upload of slot {} deferred, will retry",
-            slot
-        );
-        self.planner.mark_unloaded(slot);
-    }
-
-    // Restore a slot whose recorded eviction failed: the texture is still on
-    // the GPU, so its bytes count toward the resident sum again.
-    pub(crate) fn note_evict_failed(&mut self, slot: usize, frame: u64) {
-        self.planner.restore_resident(slot, frame);
-    }
-
-    // `(resident, pending, unloaded)` slot counts, for diagnostics.
-    pub(crate) fn stats(&self) -> (usize, usize, usize) {
-        self.planner.counts()
-    }
-}
-
-// Background worker: fetch each requested payload and ship the result back.
-// Exits when the request channel closes (the streamer was dropped).
-fn worker_loop(
+// The thread that answers the texture pool's loads from `source`.
+pub(crate) fn spawn_worker(
     source: Arc<dyn PayloadSource>,
-    requests: Receiver<usize>,
-    results: Sender<LoadResult>,
-) {
-    while let Ok(id) = requests.recv() {
-        let decoded = source.fetch(id);
-        if results.send(LoadResult { id, decoded }).is_err() {
-            break;
-        }
-    }
-}
-
-// Squared distance from `camera` to the nearest position in `centers`.
-//
-// Squared (not true) distance keeps the math `sqrt`-free: ordering is all
-// the planner needs. An empty `centers` (a texture referenced by no draw)
-// scores 0 so it still streams in promptly rather than stalling forever.
-fn nearest_sq_distance(centers: &[[f32; 3]], camera: [f32; 3]) -> f32 {
-    let mut nearest = f32::MAX;
-    for c in centers {
-        let dx = c[0] - camera[0];
-        let dy = c[1] - camera[1];
-        let dz = c[2] - camera[2];
-        let d = dx * dx + dy * dy + dz * dz;
-        if d < nearest {
-            nearest = d;
-        }
-    }
-    if centers.is_empty() { 0.0 } else { nearest }
+) -> std::io::Result<Worker<usize, ItemLoad<TextureImage>>> {
+    Worker::spawn("cn-texture-stream", 1, move |id| (id, source.fetch(id)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn nearest_sq_distance_picks_the_closest_center() {
-        let centers = [[10.0, 0.0, 0.0], [3.0, 0.0, 0.0], [7.0, 0.0, 0.0]];
-        // Closest center is at x=3, so squared distance from origin is 9.
-        assert_eq!(nearest_sq_distance(&centers, [0.0, 0.0, 0.0]), 9.0);
-    }
-
-    #[test]
-    fn nearest_sq_distance_of_no_centers_is_zero() {
-        assert_eq!(nearest_sq_distance(&[], [5.0, 5.0, 5.0]), 0.0);
-    }
 
     // Build a minimal compiled RGBA8 texture payload via the shared serializer.
     fn make_payload(w: u32, h: u32, fill: u8) -> Vec<u8> {
@@ -349,10 +97,10 @@ mod tests {
     #[test]
     fn mem_payload_source_decodes_a_payload() {
         let source = MemPayloadSource::new(vec![make_payload(2, 1, 0xAB)]);
-        let tex = source.fetch(0).expect("fetch ok");
-        assert_eq!((tex.image.width(), tex.image.height()), (2, 1));
-        assert_eq!(tex.image.mips[0].data.len(), 2 * 4);
-        assert!(tex.image.mips[0].data.iter().all(|&b| b == 0xAB));
+        let image = source.fetch(0).expect("fetch ok");
+        assert_eq!((image.width(), image.height()), (2, 1));
+        assert_eq!(image.mips[0].data.len(), 2 * 4);
+        assert!(image.mips[0].data.iter().all(|&b| b == 0xAB));
     }
 
     #[test]
@@ -375,10 +123,9 @@ mod tests {
             file_offset: prefix.len() as u64,
             len: payload.len() as u64,
         }]);
-        let tex = source.fetch(0).expect("fetch ok");
-        assert_eq!((tex.image.width(), tex.image.height()), (2, 1));
-        assert_eq!(tex.image.mips[0].data.len(), 2 * 4);
-        assert!(tex.image.mips[0].data.iter().all(|&b| b == 0xCD));
+        let image = source.fetch(0).expect("fetch ok");
+        assert_eq!((image.width(), image.height()), (2, 1));
+        assert!(image.mips[0].data.iter().all(|&b| b == 0xCD));
         let _ = std::fs::remove_file(&path);
     }
 
@@ -396,160 +143,5 @@ mod tests {
             len: 4,
         }]);
         assert!(source.fetch(0).is_err());
-    }
-
-    // A source that yields a fixed 1x1 texture for any id, used to exercise
-    // the worker thread without the build pipeline.
-    struct ConstSource;
-    impl PayloadSource for ConstSource {
-        fn fetch(&self, _id: usize) -> Result<DecodedTexture, String> {
-            Ok(DecodedTexture {
-                image: TextureImage::rgba8(1, 1, vec![1, 2, 3, 4]),
-            })
-        }
-    }
-
-    // Pump drain_completed until `want` slots are resident or a deadline hits.
-    fn drain_until(streamer: &mut TextureStreamer, frame: u64, want: usize) -> usize {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        let mut uploads = 0;
-        while std::time::Instant::now() < deadline {
-            uploads += streamer.drain_completed(frame, |_, _| {});
-            if streamer.stats().0 >= want {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        uploads
-    }
-
-    #[test]
-    fn streamer_loads_nearest_slots_within_budget() {
-        let centers = vec![
-            vec![[100.0, 0.0, 0.0]], // slot 0: far
-            vec![[2.0, 0.0, 0.0]],   // slot 1: near
-            vec![[50.0, 0.0, 0.0]],  // slot 2: mid
-        ];
-        // Budget 1/frame, generous cap.
-        let mut streamer = TextureStreamer::new(Arc::new(ConstSource), centers, 1, 8);
-        assert_eq!(streamer.len(), 3);
-
-        // Frame 1: nearest slot (1) is dispatched first.
-        streamer.update_scores([0.0, 0.0, 0.0], 1);
-        let evict = streamer.plan_and_dispatch();
-        assert!(evict.is_empty());
-        drain_until(&mut streamer, 1, 1);
-        assert_eq!(streamer.stats().0, 1);
-
-        // Frame 2: next-nearest (slot 2) follows.
-        streamer.update_scores([0.0, 0.0, 0.0], 2);
-        streamer.plan_and_dispatch();
-        drain_until(&mut streamer, 2, 2);
-        assert_eq!(streamer.stats().0, 2);
-
-        // Frame 3: the far slot finishes the set.
-        streamer.update_scores([0.0, 0.0, 0.0], 3);
-        streamer.plan_and_dispatch();
-        drain_until(&mut streamer, 3, 3);
-        assert_eq!(streamer.stats(), (3, 0, 0));
-    }
-
-    // An excluded slot never loads, not even when scene residency unblocks it,
-    // while its neighbors stream as usual.
-    #[test]
-    fn an_excluded_slot_never_loads() {
-        let centers = vec![vec![], vec![[2.0, 0.0, 0.0]]];
-        let mut streamer = TextureStreamer::new(Arc::new(ConstSource), centers, 4, 8);
-        streamer.exclude(0);
-        streamer.set_blocked(0, false);
-        for frame in 1..4 {
-            streamer.update_scores([0.0, 0.0, 0.0], frame);
-            streamer.plan_and_dispatch();
-            drain_until(&mut streamer, frame, 1);
-        }
-        assert_eq!(streamer.stats().0, 1);
-        assert_eq!(streamer.planner.state(0), Some(StreamState::Unloaded));
-        assert_eq!(streamer.planner.state(1), Some(StreamState::Resident));
-    }
-
-    // A payload that will never decode.
-    struct FailingSource;
-    impl PayloadSource for FailingSource {
-        fn fetch(&self, _id: usize) -> Result<DecodedTexture, String> {
-            Err("undecodable payload".to_string())
-        }
-    }
-
-    // A failed fetch is terminal, not transient: the slot is marked resident
-    // (keeping its placeholder, occupying no streamed bytes) so the planner
-    // stops re-dispatching a payload that will never decode.
-    #[test]
-    fn a_failed_fetch_is_not_retried() {
-        let centers = vec![vec![[1.0, 0.0, 0.0]]];
-        let mut streamer = TextureStreamer::new(Arc::new(FailingSource), centers, 4, 8);
-        streamer.update_scores([0.0, 0.0, 0.0], 1);
-        streamer.plan_and_dispatch();
-
-        let uploads = drain_until(&mut streamer, 1, 1);
-        assert_eq!(uploads, 0, "a failed load uploads no pixels");
-        assert_eq!(streamer.stats(), (1, 0, 0));
-        assert_eq!(streamer.resident_bytes(), 0);
-    }
-
-    #[test]
-    fn upload_failure_rolls_back_to_unloaded_for_retry() {
-        let centers = vec![vec![[1.0, 0.0, 0.0]]];
-        let mut streamer = TextureStreamer::new(Arc::new(ConstSource), centers, 4, 8);
-        streamer.update_scores([0.0, 0.0, 0.0], 1);
-        streamer.plan_and_dispatch();
-        assert_eq!(drain_until(&mut streamer, 1, 1), 1);
-        streamer.note_upload_failed(0);
-        assert_eq!(streamer.stats(), (0, 0, 1));
-
-        streamer.update_scores([0.0, 0.0, 0.0], 2);
-        streamer.plan_and_dispatch();
-        drain_until(&mut streamer, 2, 1);
-        assert_eq!(streamer.stats().0, 1);
-    }
-
-    #[test]
-    fn evict_failure_restores_the_slot_to_resident() {
-        let centers = vec![vec![[1.0, 0.0, 0.0]]];
-        let mut streamer = TextureStreamer::new(Arc::new(ConstSource), centers, 4, 8);
-        streamer.update_scores([0.0, 0.0, 0.0], 1);
-        streamer.plan_and_dispatch();
-        drain_until(&mut streamer, 1, 1);
-        let resident_bytes = streamer.resident_bytes();
-        assert!(resident_bytes > 0);
-
-        streamer.set_blocked(0, true);
-        assert_eq!(streamer.plan_and_dispatch(), vec![0]);
-        assert_eq!(streamer.resident_bytes(), 0);
-        streamer.note_evict_failed(0, 2);
-        assert_eq!(streamer.stats(), (1, 0, 0));
-        assert_eq!(streamer.resident_bytes(), resident_bytes);
-    }
-
-    #[test]
-    fn upload_callback_receives_decoded_pixels() {
-        let centers = vec![vec![[1.0, 0.0, 0.0]]];
-        let mut streamer = TextureStreamer::new(Arc::new(ConstSource), centers, 4, 8);
-        streamer.update_scores([0.0, 0.0, 0.0], 1);
-        streamer.plan_and_dispatch();
-
-        let mut seen: Option<(usize, u32, u32, Vec<u8>)> = None;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while std::time::Instant::now() < deadline && seen.is_none() {
-            streamer.drain_completed(1, |id, image| {
-                seen = Some((
-                    id,
-                    image.width(),
-                    image.height(),
-                    image.mips[0].data.clone(),
-                ));
-            });
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        assert_eq!(seen, Some((0, 1, 1, vec![1, 2, 3, 4])));
     }
 }

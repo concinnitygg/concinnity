@@ -3,26 +3,20 @@
 
 use concinnity_core::bake::font;
 use concinnity_core::bake::texture;
-use concinnity_core::components::DebugHud;
-use concinnity_core::components::KeyBinding;
 use concinnity_core::components::Planet;
 use concinnity_core::components::Screen;
 use concinnity_core::components::ShaderPrograms;
 use concinnity_core::components::SkeletonJoint;
 use concinnity_core::components::SkinnedMesh;
 use concinnity_core::components::Sprite;
-use concinnity_core::components::StatHud;
 use concinnity_core::components::Story;
 use concinnity_core::components::SubMeshRef;
-use concinnity_core::components::TextInput;
-use concinnity_core::components::TextLabel;
 use concinnity_core::components::Transform;
-use concinnity_core::components::UiAction;
 use concinnity_core::components::WindowMode;
 use concinnity_core::components::build_skeleton_from_joint_defs;
 use concinnity_core::components::{
-    BlockType, Camera3D, GraphicsConfig, HitRegion, Material, Model, Shader, StreamingConfig,
-    VoxelWorld, Window,
+    BlockType, Camera3D, GraphicsConfig, HitRegion, Model, Shader, StreamingConfig, VoxelWorld,
+    Window,
 };
 use concinnity_core::ecs::FontHandle;
 use concinnity_core::ecs::MaterialHandle;
@@ -30,7 +24,6 @@ use concinnity_core::ecs::MenuOverride;
 use concinnity_core::ecs::OverlayImages;
 use concinnity_core::ecs::PayloadLocator;
 use concinnity_core::ecs::PipelineContext;
-use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::SkinnedMeshHandle;
 use concinnity_core::ecs::TextureHandle;
 use concinnity_core::ecs::asset_id::AssetId;
@@ -48,22 +41,31 @@ use concinnity_host::store::blob::blob_path;
 use concinnity_host::store::blob::payload_section_start;
 
 use super::backend_handoff::RuntimeHandoff;
-use super::blob_release::{blobs_to_release, retained_blobs};
-use super::draw_geometry::{auto_seed_probe_placements, declared_probe_placements, seeds_probes};
 use super::hot_reload_sources::{
     HotReloadSources, capture_hot_reload_sources, mesh_source_map, procedural_mesh_snapshot,
     procedural_mesh_source_map,
 };
-use super::prop_draws::PropDrawInputs;
-use super::scene_lights::gather_lights;
 use super::skinned_templates::{SkinnedSkeletonEntry, SkinnedUpload};
-use super::stream_plan::{StreamGeometry, StreamingSetup, plan_stream_geometry};
-use super::texture_payloads::{TexturePayloads, TextureSlotSkips, decode_texture_payloads};
-use super::world_fx::drain_world_fx;
+use super::streaming::StreamingSetup;
 use super::*;
 use crate::app::run::LaunchRequest;
 use concinnity_core::render::draw_list;
+use concinnity_core::render::extract::gather_lights;
 use concinnity_core::render::material_entry::MaterialEntry;
+use concinnity_core::render::world_load::blob_release::{blobs_to_release, retained_blobs};
+use concinnity_core::render::world_load::draw_geometry::{
+    auto_seed_probe_placements, declared_probe_placements, seeds_probes,
+};
+use concinnity_core::render::world_load::prop_draws::{PropDrawInputs, assemble_prop_draws};
+use concinnity_core::render::world_load::stream_seed::{StreamGeometry, plan_stream_seed};
+use concinnity_core::render::world_load::tables::{self, DecodedMaterials};
+use concinnity_core::render::world_load::texture_payloads::{
+    TexturePayloads, TextureSlotSkips, decode_texture_payloads,
+};
+use concinnity_core::render::world_load::world_fx::drain_world_fx;
+use concinnity_core::render::world_load::world_scan::{
+    capture_hud_chips, color_lut_strength, declares_frame_captures, font_less_text,
+};
 use concinnity_core::settings::quality::resolve_ceiling;
 use concinnity_core::settings::system::{DisplayReport, SettingsInit, SettingsSlot, SettingsState};
 use concinnity_core::settings::{QualityCeiling, QualityPreset, WorldAssets, WorldSettings};
@@ -125,13 +127,6 @@ struct TextureTableDecode {
     cook_only: std::collections::BTreeSet<usize>,
 }
 
-// The MaterialTable decoded by `build_material_map`: each material's draw entry
-// by handle, and the material parameter table's rows.
-struct DecodedMaterials {
-    map: hashbrown::HashMap<MaterialHandle, MaterialEntry>,
-    params: Vec<concinnity_core::gfx::render_types::GpuMaterialParams>,
-}
-
 // One world Shader as decoded at init: its compiled programs, or nothing for
 // a bucket a non-start scene owns.
 #[derive(Default)]
@@ -188,65 +183,12 @@ struct TextAtlases {
     font_blob_indices: Vec<u32>,
 }
 
-// Whether any text in the world names no Font, and so has no face to draw with
-// unless one is registered as the fallback.
-fn font_less_text(ctx: &PipelineContext) -> bool {
-    ctx.query::<TextLabel>().any(|l| l.font.is_none())
-        || ctx.query::<TextInput>().any(|t| t.font.is_none())
-}
-
 // The GPU the backend is built for and the quality preset resolved against it.
 struct DetectedQuality {
     gpu_profile: backend::GpuProfile,
     capabilities: backend::DeviceCapabilities,
     preset: QualityPreset,
     ceiling: QualityCeiling,
-}
-
-// The DebugHud chip ids (cursor, camera, sys, passes: the top-right stack
-// order) and the StatHud chip ids (fps, gpu wait, vram, ram, ev, edr, track: the
-// top-left strip order) the frame step anchors. Passes is last because its
-// height follows the frame's step count.
-fn capture_hud_chips(ctx: &PipelineContext) -> (Vec<AssetId>, Vec<AssetId>) {
-    let debug = ctx
-        .query::<DebugHud>()
-        .next()
-        .map(|d| {
-            [d.mouse_label, d.camera_label, d.sys_label, d.passes_label]
-                .into_iter()
-                .flatten()
-                .map(Ref::id)
-                .collect()
-        })
-        .unwrap_or_default();
-    let stat = ctx
-        .query::<StatHud>()
-        .next()
-        .map(|s| {
-            [
-                s.fps_label,
-                s.gpu_wait_label,
-                s.vram_label,
-                s.ram_label,
-                s.ev_label,
-                s.edr_label,
-                s.track_label,
-            ]
-            .into_iter()
-            .flatten()
-            .map(Ref::id)
-            .collect()
-        })
-        .unwrap_or_default();
-    (debug, stat)
-}
-
-// The blend strength of the world's first `ColorLut`, read from its compiled
-// payload, or `None` without one.
-fn color_lut_strength(ctx: &mut PipelineContext) -> Option<f32> {
-    let locator = ctx.resource::<ColorLutTable>()?.locator(0)?;
-    let bytes = ctx.read_payload(&locator).ok()?;
-    concinnity_core::bake::color_lut::strength(bytes).ok()
 }
 
 impl GraphicsSystem {
@@ -653,114 +595,53 @@ impl GraphicsSystem {
     // neither. Returns None, failing init, if a texture lacks a payload.
     fn decode_texture_table(
         &self,
-        ctx: &mut PipelineContext,
+        ctx: &PipelineContext,
         capture_sources: bool,
     ) -> Option<TextureTableDecode> {
-        // The shared texture pool comes from the blob's resource stream: cook
-        // assigned each texture a dense `TextureHandle` (== its pool slot) and the
-        // runtime loaded them into a `TextureTable`. Reading the table by handle
-        // replaces draining a `Texture` component column and scanning names.
-        let texture_table = ctx.resource::<TextureTable>().cloned().unwrap_or_default();
-        // Dev-only source catalog (present under `cn debug`) so the hot-reload
-        // watcher can map a texture handle back to the file that backs it.
-        let texture_sources = ctx
-            .resource::<concinnity_core::resource::TextureSources>()
-            .cloned();
-        let mut texture_locators = Vec::with_capacity(texture_table.len());
-        let mut asset_source_map = super::hot_reload_sources::TextureSourceMap::new();
-        // Name -> pool slot, built only under `cn debug` for the runtime
-        // spawn-by-name path (`TextureNameSlots`).
-        let mut texture_name_to_slot: hashbrown::HashMap<AssetId, usize> =
-            hashbrown::HashMap::new();
-        for (slot, entry) in texture_table.0.iter().enumerate() {
-            match &entry.payload {
-                Some(l) => {
-                    texture_locators.push(l.clone());
-                    if capture_sources
-                        && let Some(info) = texture_sources.as_ref().and_then(|s| s.0.get(slot))
-                    {
-                        texture_name_to_slot.insert(AssetId(info.name_id), slot);
-                        if !info.source.is_empty() {
-                            asset_source_map.push_texture(
-                                info.source.clone(),
-                                info.image_index,
-                                slot,
-                            );
-                        }
-                    }
-                }
-                None => {
-                    tracing::error!(
-                        "GraphicsSystem: Texture has no compiled payload -- did the build succeed?"
-                    );
-                    return None;
-                }
-            }
-        }
-        let count = texture_table.len();
-        let cook_only = match texture_table.cook_only_slots() {
-            Ok(slots) => slots,
+        let empty = TextureTable::default();
+        let table = ctx.resource::<TextureTable>().unwrap_or(&empty);
+        let pool = match tables::texture_pool(table) {
+            Ok(pool) => pool,
             Err(e) => {
-                tracing::error!("GraphicsSystem: malformed texture record: {e}");
+                tracing::error!("GraphicsSystem: {e}");
                 return None;
             }
         };
-        Some(TextureTableDecode {
-            locators: texture_locators,
-            source_map: asset_source_map,
-            name_to_slot: texture_name_to_slot,
-            count,
-            cook_only,
-        })
-    }
-
-    // Decode the MaterialTable (dense by `MaterialHandle`) into the per-object GPU
-    // uniforms + resolved texture slots the draw list indexes, and the material
-    // parameter table's rows. Materials have no payload; all data lives in the
-    // baked `data_bytes`. Returns None, failing init, on any decode or
-    // resolution failure.
-    fn build_material_map(
-        &self,
-        ctx: &mut PipelineContext,
-        texture_count: usize,
-    ) -> Option<DecodedMaterials> {
-        let material_table = ctx.resource::<MaterialTable>().cloned().unwrap_or_default();
-        let mut material_map: hashbrown::HashMap<MaterialHandle, MaterialEntry> =
-            hashbrown::HashMap::with_capacity(material_table.len());
-        let mut params = Vec::with_capacity(material_table.len());
-        for (material_handle, entry) in material_table.0.iter().enumerate() {
-            let mat: Material = match postcard::from_bytes(&entry.data_bytes) {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::error!(
-                        "GraphicsSystem: Material handle {} failed to decode: {}",
-                        material_handle,
-                        e
-                    );
-                    return None;
-                }
-            };
-            let handle = MaterialHandle::new(material_handle as u32);
-            params.push(mat.params);
-            match concinnity_core::render::material_entry::of(handle, &mat, texture_count) {
-                Ok(entry) => {
-                    material_map.insert(handle, entry);
-                }
-                Err(field) => {
-                    tracing::error!(
-                        "GraphicsSystem: Material {} references an out-of-range {} texture handle (only {} textures)",
-                        material_handle,
-                        field,
-                        texture_count
-                    );
-                    return None;
+        let mut source_map = super::hot_reload_sources::TextureSourceMap::new();
+        let mut name_to_slot = hashbrown::HashMap::new();
+        // Dev-only source catalog (present under `cn debug`) so the hot-reload
+        // watcher can map a texture handle back to the file that backs it.
+        let sources = ctx.resource::<concinnity_core::resource::TextureSources>();
+        if capture_sources && let Some(sources) = sources {
+            for (slot, info) in sources.0.iter().enumerate().take(table.len()) {
+                name_to_slot.insert(AssetId(info.name_id), slot);
+                if !info.source.is_empty() {
+                    source_map.push_texture(info.source.clone(), info.image_index, slot);
                 }
             }
         }
-        Some(DecodedMaterials {
-            map: material_map,
-            params: concinnity_core::render::material_params::rows(params),
+        Some(TextureTableDecode {
+            count: table.len(),
+            locators: pool.locators,
+            source_map,
+            name_to_slot,
+            cook_only: pool.cook_only,
         })
+    }
+
+    // Decode the MaterialTable into the per-object GPU uniforms + resolved
+    // texture slots the draw list indexes, and the material parameter table's
+    // rows. Returns None, failing init, on any decode or resolution failure.
+    fn build_material_map(
+        &self,
+        ctx: &PipelineContext,
+        texture_count: usize,
+    ) -> Option<DecodedMaterials> {
+        let empty = MaterialTable::default();
+        let table = ctx.resource::<MaterialTable>().unwrap_or(&empty);
+        tables::decode_materials(table, texture_count)
+            .map_err(|e| tracing::error!("GraphicsSystem: {e}"))
+            .ok()
     }
 
     // Drain the world's Shader components, read every compiled stage
@@ -798,10 +679,14 @@ impl GraphicsSystem {
         // pins. The backend sees them flagged `deferred` and leaves the bucket's
         // pipeline unbuilt.
         self.deferred_shader_scenes =
-            super::streaming::deferred_shader_buckets(ctx, streaming, &shader_ids)
-                .into_iter()
-                .map(|(bucket, scene)| (bucket as u32, scene))
-                .collect();
+            concinnity_core::render::world_load::scene_deferral::deferred_shader_buckets(
+                ctx,
+                streaming,
+                &shader_ids,
+            )
+            .into_iter()
+            .map(|(bucket, scene)| (bucket as u32, scene))
+            .collect();
         let deferred_buckets: hashbrown::HashSet<u32> = self
             .deferred_shader_scenes
             .iter()
@@ -849,7 +734,7 @@ impl GraphicsSystem {
                     }
                 }
             }
-            // Read the stage container before the blob is released -- it may
+            // Read the stage container before the blob is released: it may
             // share one blob with the mesh/texture payloads read elsewhere in
             // init.
             let payload = match ctx.read_payload(&locator) {
@@ -941,7 +826,8 @@ impl GraphicsSystem {
         let has_ui =
             ctx.query::<HitRegion>().next().is_some() || ctx.query::<Screen>().next().is_some();
         let has_camera = ctx.query::<Camera3D>().next().is_some();
-        self.menu_mode = has_camera && has_ui;
+        let menu_mode = has_camera && has_ui;
+        self.extractor.set_menu_mode(menu_mode);
         // A menu / editor driver (a `MenuOverride` is present) owns cursor capture
         // per frame, so the startup auto-grab is skipped: the editor re-runs this
         // init on every live-preview rebuild, and grabbing there would re-hide and
@@ -962,7 +848,7 @@ impl GraphicsSystem {
                 gpu.unified_memory,
                 gpu.discrete,
             );
-            backend.set_menu_mode(self.menu_mode);
+            backend.set_menu_mode(menu_mode);
             // Push the effective ambient scale (world value or persisted
             // override). The backend already seeds the world value at its own
             // init, so this is the path that applies a persisted Ambient-slider
@@ -1147,7 +1033,7 @@ impl GraphicsSystem {
                 },
                 (None, None) => {
                     tracing::error!(
-                        "GraphicsSystem: Font handle {} has no compiled payload -- did the build succeed?",
+                        "GraphicsSystem: Font handle {} has no compiled payload; did the build succeed?",
                         slot
                     );
                     return None;
@@ -1194,7 +1080,7 @@ impl GraphicsSystem {
                     self.loaded_fonts.set_fallback(handle);
                 }
                 None => tracing::error!(
-                    "GraphicsSystem: text naming no Font cannot draw -- the built-in face failed to decode"
+                    "GraphicsSystem: text naming no Font cannot draw: the built-in face failed to decode"
                 ),
             }
         }
@@ -1340,7 +1226,10 @@ impl GraphicsSystem {
         // payload decode: draw records use the blob's baked bounds, and the
         // mesh streamer decodes the payload when the owning scene pins.
         let deferred_mesh_sources =
-            super::streaming::deferred_mesh_sources(ctx, streaming_config.is_some());
+            concinnity_core::render::world_load::scene_deferral::deferred_mesh_sources(
+                ctx,
+                streaming_config.is_some(),
+            );
         let draw_list::MeshGeometry {
             meshes: mesh_geometry,
             sources: mesh_sources,
@@ -1405,11 +1294,12 @@ impl GraphicsSystem {
             source_map: skinned_mesh_source_map,
         } = self.assemble_skinned_meshes(&skinned_geometry, &material_map, capture_sources)?;
 
-        let deferred_slots = super::streaming::deferred_texture_slots(
-            ctx,
-            streaming_config.is_some(),
-            texture_locators.len(),
-        );
+        let deferred_slots =
+            concinnity_core::render::world_load::scene_deferral::deferred_texture_slots(
+                ctx,
+                streaming_config.is_some(),
+                texture_locators.len(),
+            );
         let TexturePayloads {
             images: texture_data,
             payloads: texture_payloads,
@@ -1466,7 +1356,7 @@ impl GraphicsSystem {
             mut instanced_clusters,
             mesh_handle_to_draws,
             ..
-        } = self.assemble_prop_draws(
+        } = assemble_prop_draws(
             ctx,
             PropDrawInputs {
                 model_map: &model_map,
@@ -1476,6 +1366,7 @@ impl GraphicsSystem {
                 texture_count,
                 material_map: &material_map,
             },
+            self.extractor.pick_candidates_mut(),
         )?;
 
         // Taken before streaming plans its geometry, so a Shader's far band is
@@ -1485,7 +1376,7 @@ impl GraphicsSystem {
             .map(|d| (d.shader_bucket, d.material.far_field))
             .collect();
 
-        let stream_plan = plan_stream_geometry(StreamGeometry {
+        let stream_seed = plan_stream_seed(StreamGeometry {
             vertices: &mut all_vertices,
             indices: &mut all_indices,
             draw_objects: &mut draw_objects,
@@ -1502,7 +1393,7 @@ impl GraphicsSystem {
         let total_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
 
         let planet_grass = planet.as_ref().and_then(|p| {
-            crate::gfx::planet_grass::resolve(
+            concinnity_core::render::world_load::world_scan::planet_grass(
                 p,
                 &concinnity_core::render::terrain::grass_by_id(ctx),
             )
@@ -1510,14 +1401,15 @@ impl GraphicsSystem {
         let planet_far_field = planet_grass.as_ref().map(|g| g.far_field());
         let fx = drain_world_fx(
             ctx,
+            concinnity_host::thread::asset_id::name_of,
             texture_count,
             &terrains,
             planet_grass,
             planet.as_ref(),
             quality_ceiling.ocean,
         );
-        self.grows_grass = fx.grass.is_some();
-        self.atmosphere = fx.atmosphere.map(super::atmosphere::AtmosphereDrive::new);
+        self.extractor.set_grows_grass(fx.grass.is_some());
+        self.extractor.set_atmosphere(fx.atmosphere);
         let sdf_fields = if capture_sources {
             super::sdf_field_sources::SdfFieldMap::resolve(
                 &fx.sdf_volumes,
@@ -1592,7 +1484,11 @@ impl GraphicsSystem {
                             .as_ref()
                             .map_or(0, |_| concinnity_core::planet::MAX_RESIDENT_TILES)
                     },
-                    super::streaming::chunk_reserve_count,
+                    |vw| {
+                        concinnity_core::render::stream_pools::budget::chunk_reserve_count(
+                            vw.impostor_radius() as u32,
+                        )
+                    },
                 ),
                 material_params,
             },
@@ -1600,11 +1496,13 @@ impl GraphicsSystem {
             // entry 0 is the world default program.
             shaders: decoded_shaders
                 .iter()
-                .zip(super::far_band_shaders::far_band_shaders(
-                    decoded_shaders.len(),
-                    far_bands,
-                    planet_far_field.is_some(),
-                ))
+                .zip(
+                    concinnity_core::render::world_load::far_band_shaders::far_band_shaders(
+                        decoded_shaders.len(),
+                        far_bands,
+                        planet_far_field.is_some(),
+                    ),
+                )
                 .map(|(s, canopy)| WorldShader {
                     programs: s.programs.as_ref(),
                     deferred: s.deferred,
@@ -1689,7 +1587,7 @@ impl GraphicsSystem {
 
         self.setup_streaming(StreamingSetup {
             config: streaming_config,
-            plan: stream_plan,
+            seed: stream_seed,
             texture_payloads,
             texture_locators: &texture_locators,
             cook_only_textures: &cook_only_textures,
@@ -1733,19 +1631,4 @@ impl GraphicsSystem {
         ctx.insert_resource(SettingsSlot::new(settings));
         Some(())
     }
-}
-
-// Whether the world saves frames as it goes, from its benchmark or from a
-// `screenshot` action, which needs the presented frame readable just as an
-// exit screenshot does.
-fn declares_frame_captures(ctx: &PipelineContext) -> bool {
-    let screenshot = |action: Option<&UiAction>| matches!(action, Some(UiAction::Screenshot(_)));
-    ctx.resource::<concinnity_core::benchmark::BenchmarkRun>()
-        .is_some_and(|run| !run.config.captures.is_empty())
-        || ctx
-            .query::<KeyBinding>()
-            .any(|kb| screenshot(kb.action.as_ref()))
-        || ctx
-            .query::<HitRegion>()
-            .any(|r| screenshot(r.action.as_ref()))
 }

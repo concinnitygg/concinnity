@@ -28,7 +28,7 @@ impl GpuWait {
     pub(crate) fn measure<T>(&mut self, f: impl FnOnce() -> T) -> T {
         let start = std::time::Instant::now();
         let value = f();
-        let elapsed = start.elapsed().as_micros().min(u32::MAX as u128) as u32;
+        let elapsed = concinnity_host::clock::micros_since(start);
         self.micros = self.micros.saturating_add(elapsed);
         value
     }

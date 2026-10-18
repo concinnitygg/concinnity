@@ -6,6 +6,8 @@ use concinnity_cook::WorldSource;
 use concinnity_cook::authoring::registry::RegisteredType;
 pub(crate) use concinnity_cook::build_compiled;
 use concinnity_cook::build_only::LoadedWorld;
+use concinnity_core::ecs::BlobMeshBounds;
+use concinnity_core::ecs::BlobSceneGroups;
 use concinnity_core::ecs::{ComponentAsset, World};
 use concinnity_core::resource::ColorLutSources;
 use concinnity_core::resource::EnvironmentMapSourceInfo;
@@ -15,8 +17,6 @@ use concinnity_core::resource::MeshSource;
 use concinnity_core::resource::MeshSources;
 use concinnity_core::resource::TextureSource;
 use concinnity_core::resource::TextureSources;
-use concinnity_engine::ecs::BlobMeshBounds;
-use concinnity_engine::ecs::BlobSceneGroups;
 use concinnity_engine::resource::install_resource_tables;
 use concinnity_host::store::blob::BlobData;
 

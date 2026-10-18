@@ -1,26 +1,24 @@
 //! Sliding-window streaming policy for an infinite voxel world.
 //!
-//! `gfx::streaming::StreamPlanner` streams a *fixed* pool of items known at
-//! init (textures, build-time meshes). An infinite chunk world is different:
-//! the item set is unbounded and only a bounded *window* around the camera is
-//! ever resident. This module is that policy -- given the camera's chunk and a
-//! view radius it decides which chunks to load (nearest first, budget-limited)
-//! and which to evict (those that have fallen well outside the window).
+//! [`StreamPlanner`](crate::render::streaming::StreamPlanner) streams a
+//! *fixed* pool of items known at init (textures, build-time meshes). An
+//! infinite chunk world is different: the item set is unbounded and only a
+//! bounded *window* around the camera is ever resident. This module is that
+//! policy: given the camera's chunk and a view radius it decides which chunks
+//! to load (nearest first, budget-limited) and which to evict (those that have
+//! fallen well outside the window).
 //!
 //! Two concentric bands: chunks within `near_radius` stream at full voxel
 //! detail; chunks beyond it but within `far_radius` stream as cheap coarse
 //! "impostors" (a low-poly surface mesh). As the camera moves a chunk crosses
-//! the near/far boundary and is *re-detailed* -- evicted and reloaded at the new
+//! the near/far boundary and is *re-detailed*: evicted and reloaded at the new
 //! detail. A small detail hysteresis keeps a chunk pacing across the boundary
 //! from thrashing. When `far_radius == near_radius` (the default) the far band
 //! is empty, so the window behaves exactly as the original single-detail one.
-//!
-//! The `std`-side driver (background generation thread, GPU upload) lives in
-//! concinnity-engine's `app::chunk_stream`.
 
 // `BTreeMap` rather than a hash map: `plan` hands back its eviction lists in
 // this map's iteration order, which a hash map would leave unpinned.
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 use crate::gfx::chunk_coord::ChunkCoord;
@@ -42,9 +40,27 @@ const DETAIL_HYSTERESIS: i32 = 1;
 // that stops the radius oscillating a ring in and out at the boundary.
 const BYTE_BUDGET_LOW_PCT: u64 = 75;
 
+// Chunks in the square of Chebyshev radius `radius` around the camera's chunk.
+fn square(radius: u64) -> u64 {
+    let span = 2 * radius + 1;
+    span * span
+}
+
+/// The most chunks a window reaching `far_radius` keeps resident: every chunk
+/// short of its evict radius.
+pub fn max_resident_chunks(far_radius: u32) -> u64 {
+    square(u64::from(far_radius) + EVICT_HYSTERESIS as u64)
+}
+
+/// The most chunks a window keeps at full detail for `near_radius`, counting
+/// the receding ring a full chunk keeps before it becomes an impostor.
+pub fn max_full_detail_chunks(near_radius: u32) -> u64 {
+    square(u64::from(near_radius) + DETAIL_HYSTERESIS as u64)
+}
+
 // Residency state of a chunk the window is currently tracking.
 //
-// A chunk not in the window's map is simply unloaded -- there is no explicit
+// A chunk not in the window's map is simply unloaded: there is no explicit
 // `Unloaded` state, since the grid is infinite and tracking every never-seen
 // chunk would be unbounded.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -91,7 +107,7 @@ pub struct ChunkPlan {
 /// Decides which chunks stream in and out of the camera-centered view window,
 /// and at which detail.
 ///
-/// The window owns only residency *bookkeeping* -- it never generates a chunk
+/// The window owns only residency *bookkeeping*: it never generates a chunk
 /// or touches a GPU resource. Each frame the driver calls [`plan`] with the
 /// camera's current chunk, dispatches the loads, applies the evictions, and
 /// reports completed loads back via [`mark_resident`].
@@ -101,6 +117,8 @@ pub struct ChunkPlan {
 pub struct ChunkWindow {
     // Tracked chunks only: a chunk absent from the map is unloaded.
     states: BTreeMap<ChunkCoord, Slot>,
+    // Chunks whose generation failed for good, never dispatched again.
+    failed: BTreeSet<ChunkCoord>,
     // Chebyshev radius (in chunks) of the full-detail square window.
     near_radius: i32,
     // Chebyshev radius of the outer impostor window (>= near_radius).
@@ -134,6 +152,7 @@ impl ChunkWindow {
         let far_radius = far_radius.max(near_radius);
         Self {
             states: BTreeMap::new(),
+            failed: BTreeSet::new(),
             near_radius,
             far_radius,
             load_budget: load_budget.max(1),
@@ -281,7 +300,7 @@ impl ChunkWindow {
         for dz in -far_radius..=far_radius {
             for dx in -far_radius..=far_radius {
                 let c = camera.offset(dx, dz);
-                if !self.states.contains_key(&c) {
+                if !self.states.contains_key(&c) && !self.failed.contains(&c) {
                     candidates.push(c);
                 }
             }
@@ -314,10 +333,8 @@ impl ChunkWindow {
 
     /// Mark a dispatched chunk resident once its mesh is on the GPU, recording
     /// its GPU footprint in `bytes` (the decoded vertex + index buffer size).
-    /// `bytes` may be 0 when nothing was uploaded (e.g. a generation that
-    /// deterministically failed and is being retired to stop retrying it).
     ///
-    /// A no-op if the chunk is no longer tracked -- the camera may have moved
+    /// A no-op if the chunk is no longer tracked: the camera may have moved
     /// far enough to evict it while its load was still in flight.
     pub fn mark_resident(&mut self, coord: ChunkCoord, bytes: u64) {
         if let Some(slot) = self.states.get_mut(&coord) {
@@ -345,6 +362,13 @@ impl ChunkWindow {
         self.states.remove(&coord);
     }
 
+    /// Retire `coord` after a generation that cannot succeed: it is dropped
+    /// from tracking and never dispatched again.
+    pub fn mark_failed(&mut self, coord: ChunkCoord) {
+        self.states.remove(&coord);
+        self.failed.insert(coord);
+    }
+
     /// Whether the window is still tracking `coord` (pending or resident).
     ///
     /// The driver checks this when a background load completes: a chunk
@@ -353,7 +377,7 @@ impl ChunkWindow {
         self.states.contains_key(&coord)
     }
 
-    /// `(resident, pending)` chunk counts -- for diagnostics.
+    /// `(resident, pending)` chunk counts: for diagnostics.
     pub fn counts(&self) -> (usize, usize) {
         let mut resident = 0;
         let mut pending = 0;
@@ -366,7 +390,7 @@ impl ChunkWindow {
         (resident, pending)
     }
 
-    /// `(near_resident, far_resident)` counts -- resident full chunks vs
+    /// `(near_resident, far_resident)` counts: resident full chunks vs
     /// resident impostors, for diagnostics / verifying the far band is active.
     pub fn counts_by_detail(&self) -> (usize, usize) {
         let mut near = 0;
@@ -409,7 +433,7 @@ mod tests {
     // until the byte clamp reaches a fixed point. Convergence is a streak of
     // plans that neither load nor evict: a single quiet plan is not enough,
     // because the effective radius shrinks two frames before the `+2` evict
-    // hysteresis actually drops the outer ring. Panics if it never settles --
+    // hysteresis actually drops the outer ring. Panics if it never settles,
     // which doubles as the assertion that the clamp does not oscillate.
     fn settle(w: &mut ChunkWindow, camera: ChunkCoord, bytes: u64) {
         let mut quiet = 0;
@@ -430,6 +454,33 @@ mod tests {
         panic!("byte-budget clamp did not converge (oscillating?)");
     }
 
+    // A camera walking across the world never holds more chunks than the
+    // resident bound, nor more full-detail ones than the full-detail bound.
+    #[test]
+    fn a_walking_window_stays_within_its_resident_bounds() {
+        let (near, far) = (1, 3);
+        let mut w = ChunkWindow::new(near, far, 10_000);
+        let mut resident: BTreeMap<ChunkCoord, ChunkDetail> = BTreeMap::new();
+        for step in 0..12 {
+            let plan = w.plan(cc(step, step / 2));
+            for c in &plan.to_evict {
+                resident.remove(c);
+            }
+            for &(c, detail) in &plan.to_load {
+                w.mark_resident(c, 1);
+                resident.insert(c, detail);
+            }
+            let full = resident
+                .values()
+                .filter(|d| **d == ChunkDetail::Near)
+                .count();
+            assert!(resident.len() as u64 <= max_resident_chunks(far as u32));
+            assert!(full as u64 <= max_full_detail_chunks(near as u32));
+        }
+        assert_eq!(max_resident_chunks(0), 25);
+        assert_eq!(max_full_detail_chunks(0), 9);
+    }
+
     #[test]
     fn plan_loads_nearest_in_window_chunks_within_budget() {
         // near=far=2 -> a 5x5 window of 25 chunks, impostors off; budget 4.
@@ -437,7 +488,7 @@ mod tests {
         let plan = w.plan(cc(0, 0));
         assert!(plan.to_evict.is_empty());
         assert_eq!(plan.to_load.len(), 4);
-        // The camera's own chunk is distance 0 -- it must be dispatched first.
+        // The camera's own chunk is distance 0: it must be dispatched first.
         assert_eq!(plan.to_load[0], (cc(0, 0), ChunkDetail::Near));
         // Every dispatched chunk is within the load radius and full-detail.
         for (c, detail) in &plan.to_load {
@@ -490,9 +541,23 @@ mod tests {
     #[test]
     fn mark_resident_of_an_untracked_chunk_is_a_noop() {
         let mut w = ChunkWindow::new(0, 0, 1);
-        w.mark_resident(cc(9, 9), 0); // never planned -- must not panic or insert
+        w.mark_resident(cc(9, 9), 0); // never planned: must not panic or insert
         assert_eq!(w.counts(), (0, 0));
         assert!(!w.is_tracked(cc(9, 9)));
+    }
+
+    // A failed chunk is dropped and never dispatched again, even after the
+    // camera leaves and returns.
+    #[test]
+    fn a_failed_chunk_is_never_redispatched() {
+        let mut w = ChunkWindow::new(0, 0, 4);
+        assert_eq!(load_coords(&w.plan(cc(0, 0))), vec![cc(0, 0)]);
+        w.mark_failed(cc(0, 0));
+        assert!(!w.is_tracked(cc(0, 0)));
+        assert_eq!(w.counts(), (0, 0));
+        assert!(w.plan(cc(0, 0)).to_load.is_empty());
+        w.plan(cc(50, 0));
+        assert!(w.plan(cc(0, 0)).to_load.is_empty());
     }
 
     #[test]
@@ -604,7 +669,7 @@ mod tests {
     #[test]
     fn no_byte_budget_never_shrinks_the_window() {
         // Absurd resident bytes but no budget: the window stays the configured
-        // radius and a stationary replan neither loads nor evicts -- byte-for-byte
+        // radius and a stationary replan neither loads nor evicts: byte-for-byte
         // the pure radius-only behavior the existing tests pin.
         let mut w = ChunkWindow::new(1, 3, 1000);
         fill(&mut w, cc(0, 0), 10_000_000);
@@ -638,7 +703,7 @@ mod tests {
 
     #[test]
     fn tighter_byte_budget_shrinks_the_window_further() {
-        // A tighter budget must keep strictly fewer chunks resident -- once the
+        // A tighter budget must keep strictly fewer chunks resident: once the
         // far band is exhausted the clamp shrinks into the near band too.
         let build = |budget: u64| {
             let mut w = ChunkWindow::new(2, 6, 1000);

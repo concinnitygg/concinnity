@@ -774,7 +774,7 @@ impl FrameDevice for VkContext {
         let submitted = self.submit_and_present(frame_idx, image_index, &submit);
         self.submit_scratch = submit;
         let mut stats = self.frame_stats.get();
-        stats.submit_present_us = started.elapsed().as_micros().min(u32::MAX.into()) as u32;
+        stats.submit_present_us = concinnity_host::clock::micros_since(started);
         self.frame_stats.set(stats);
         // A submitted frame's capture waits for its slot's fence; a failed one
         // is reported as a dropped frame by the caller.

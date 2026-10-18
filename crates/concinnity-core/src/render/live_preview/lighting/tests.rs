@@ -100,6 +100,23 @@ fn the_live_field_lists_name_real_args() {
     }
 }
 
+// The derived live copy moves the live fields only and reports whether any did.
+#[test]
+fn copy_live_moves_only_the_live_fields() {
+    use crate::components::Shadows;
+    let mut held = Shadows::default();
+    let edited = Shadows {
+        distance: held.distance + 10,
+        map_size: held.map_size * 2,
+        ..held.clone()
+    };
+    let map_size = held.map_size;
+    assert!(held.copy_live(&edited));
+    assert_eq!(held.distance, edited.distance);
+    assert_eq!(held.map_size, map_size, "map size rebuilds, it is not live");
+    assert!(!held.copy_live(&edited), "nothing left to move");
+}
+
 // A world with no renderer takes nothing, and says so rather than pretending:
 // that is the signal the caller rebuilds on.
 #[test]

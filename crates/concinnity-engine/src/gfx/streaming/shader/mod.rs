@@ -14,6 +14,7 @@ mod build;
 mod tests;
 
 use concinnity_core::render::ops::RenderOps;
+use concinnity_core::render::stream_pools::ShaderPump;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
@@ -82,8 +83,10 @@ impl ShaderWarmup {
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+}
 
-    pub(crate) fn set_blocked(&mut self, bucket: u32, blocked: bool) {
+impl ShaderPump for ShaderWarmup {
+    fn set_blocked(&mut self, bucket: u32, blocked: bool) {
         if let Some(e) = self.entries.iter_mut().find(|e| e.bucket == bucket) {
             e.blocked = blocked;
         }
@@ -97,7 +100,7 @@ impl ShaderWarmup {
     // build) is reported resident anyway after the error: its draws stay
     // skipped, but the owning scene finishes loading instead of holding its
     // loading screen open forever on work that will never succeed.
-    pub(crate) fn pump(&mut self, ops: &mut RenderOps, mut on_resident: impl FnMut(u32, bool)) {
+    fn pump(&mut self, ops: &mut RenderOps, mut on_resident: impl FnMut(u32, bool)) {
         while let Ok(built) = self.built_rx.try_recv() {
             if let Some(bucket) = self.finish(built, ops) {
                 on_resident(bucket, true);
@@ -111,17 +114,16 @@ impl ShaderWarmup {
                 let bucket = entry.bucket;
                 ops.record(move |backend| {
                     backend.evict_world_shader(bucket);
-                    tracing::info!(
-                        "StreamingSystem: shader bucket {} pipeline released",
-                        bucket
-                    );
+                    tracing::info!("shader bucket {} pipeline released", bucket);
                 });
                 self.entries[i].resident = false;
                 on_resident(bucket, false);
             }
         }
     }
+}
 
+impl ShaderWarmup {
     // Record a build of entry `i`, started when the frame thread replays it.
     fn dispatch(&mut self, i: usize, ops: &mut RenderOps) {
         let entry = &mut self.entries[i];
@@ -145,11 +147,7 @@ impl ShaderWarmup {
         }
         let bucket = built.bucket;
         match built.outcome {
-            Err(e) => tracing::error!(
-                "StreamingSystem: shader bucket {} could not be built: {}",
-                bucket,
-                e
-            ),
+            Err(e) => tracing::error!("shader bucket {} could not be built: {}", bucket, e),
             Ok(shader) if !shader.is_current() => {
                 // A hot-reloaded edit landed mid-build: build that instead.
                 self.dispatch(i, ops);
@@ -157,11 +155,7 @@ impl ShaderWarmup {
             }
             Ok(shader) => match shader.ready() {
                 Ok(ready) => ops.record(move |backend| ready.install(backend)),
-                Err(e) => tracing::error!(
-                    "StreamingSystem: shader bucket {} pipeline build failed: {}",
-                    bucket,
-                    e
-                ),
+                Err(e) => tracing::error!("shader bucket {} pipeline build failed: {}", bucket, e),
             },
         }
         self.entries[i].resident = true;

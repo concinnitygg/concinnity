@@ -19,7 +19,9 @@
 //!   planet, and the conversions to and from the simulated frame.
 //! - [`Horizon`]: the planet's lowest ground as an occluder.
 
+mod carry;
 pub(crate) mod dvec;
+mod follow;
 mod frame;
 mod geo;
 mod ground;
@@ -31,7 +33,9 @@ mod seams;
 mod shape;
 mod tile;
 
+pub use carry::carry_world;
 pub use dvec::{DMat3, DVec3};
+pub use follow::{PATCH_CELLS, PATCH_HALF_WIDTH, PatchPlan, PatchPurpose, build_patch, next_patch};
 pub use frame::LocalFrame;
 pub use geo::{CameraGeo, GeoPose, GeoPosition, geo_axes, geo_direction, geo_lat_lon};
 pub use ground::{GroundPatch, ground_patch};

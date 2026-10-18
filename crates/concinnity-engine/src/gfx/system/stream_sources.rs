@@ -10,8 +10,8 @@ use concinnity_core::gfx::render_types::DrawIndex;
 use concinnity_host::store::blob::blob_path;
 use concinnity_host::store::blob::payload_section_start;
 
-use crate::gfx::streaming::mesh::DeferredMeshPayload;
 use concinnity_core::render::draw_list::DeferredMeshSeed;
+use concinnity_core::render::stream_pools::DeferredMeshPayload;
 
 // Resolve a `BlockType` asset into the chunk mesher's palette entry. Per-face
 // UV overrides fall back to the uv_min/uv_max rectangle, mirroring the
@@ -171,8 +171,8 @@ mod tests {
 
         let src = build_texture_payload_source(vec![payload], &[], false).expect("mem source");
         let decoded = src.fetch(0).expect("decodes item 0");
-        assert_eq!((decoded.image.width(), decoded.image.height()), (1, 1));
-        assert_eq!(decoded.image.mips[0].data, vec![0x11, 0x22, 0x33, 0xFF]);
+        assert_eq!((decoded.width(), decoded.height()), (1, 1));
+        assert_eq!(decoded.mips[0].data, vec![0x11, 0x22, 0x33, 0xFF]);
         // Out-of-range item id surfaces an error rather than panicking.
         assert!(src.fetch(1).is_err());
     }

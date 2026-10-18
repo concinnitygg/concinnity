@@ -5,23 +5,21 @@
 //!
 //! Each target `SkinnedMesh` gets a bucket of clips driven in one of two
 //! modes: `Flat` blends every clip by a live weight vector (startup fade-in +
-//! runtime crossfades; see `flat`), while `Graph` walks a compiled animation
+//! runtime crossfades; see core's `animation::flat_blend`), while `Graph` walks a compiled animation
 //! state machine whose transitions are driven by the target's `AnimationParams`
 //! component (see `graph`). Name-addressed runtime control for both modes
 //! lives in `commands`.
 
 mod commands;
-mod flat;
 mod graph;
 mod ik;
-mod morph;
-mod root;
 #[cfg(test)]
 mod tests;
 
 pub use commands::GraphStateReport;
 
 use concinnity_core::animation::anim_graph;
+use concinnity_core::animation::flat_blend::{self, ClipEntry, FlatState, Transition};
 use concinnity_core::animation::pose_blend::PoseBlend;
 use concinnity_core::animation::skeleton::AnimationClip;
 use concinnity_core::components::Animation;
@@ -35,9 +33,9 @@ use concinnity_core::ecs::{
     Access, FrameTime, MenuActive, PipelineContext, SkinnedMeshHandle, StepResult, System,
 };
 use concinnity_host::thread::jobs;
-use flat::{ClipEntry, FlatState, Transition};
 use graph::GraphTarget;
-use std::collections::{BTreeMap, HashMap};
+use hashbrown::HashMap;
+use std::collections::BTreeMap;
 
 // Per-`SkinnedMesh` bucket: the clips targeting it plus the mode that drives
 // them. Clip storage is mode-independent so hot-reload can swap a clip in
@@ -114,7 +112,7 @@ pub struct AnimationSystem {
     reload_entries: Vec<AnimationReloadEntry>,
     // Per-target IK solve inputs, refreshed in place each frame so the pin
     // buffers persist across frames.
-    ik_frames: std::collections::HashMap<SkinnedMeshHandle, ik::IkFrame>,
+    ik_frames: HashMap<SkinnedMeshHandle, ik::IkFrame>,
     // Foot-position scratch for the probe-ray refresh, reused across targets.
     ik_feet_scratch: Vec<[f32; 3]>,
 }
@@ -143,7 +141,7 @@ impl AnimationSystem {
             name_index: Default::default(),
             clip_secs: 0.0,
             reload_entries: Vec::new(),
-            ik_frames: std::collections::HashMap::new(),
+            ik_frames: HashMap::new(),
             ik_feet_scratch: Vec::new(),
         }
     }
@@ -337,8 +335,8 @@ impl System for AnimationSystem {
             let TargetState { clips, mode } = state;
             let delta = match mode {
                 TargetMode::Flat(flat) => {
-                    flat::advance_weights(flat, t);
-                    root::flat_root_delta(clips, &flat.current_weights, t - dt, t)
+                    flat_blend::advance_weights(flat, t);
+                    flat_blend::root_delta(clips, &flat.current_weights, t - dt, t)
                 }
                 TargetMode::Graph(g) => {
                     let before = g.cursor.clone();
@@ -430,7 +428,14 @@ impl System for AnimationSystem {
             // the shape's base layer. Graph-driven targets do not sample
             // morph tracks.
             if let TargetMode::Flat(flat) = &state.mode {
-                morph::update_weights(&state.clips, flat, t, morph_base, scratch, morph_weights);
+                flat_blend::morph_weights_into(
+                    &state.clips,
+                    flat,
+                    t,
+                    morph_base,
+                    scratch,
+                    morph_weights,
+                );
             }
         });
 

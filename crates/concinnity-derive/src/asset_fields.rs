@@ -68,6 +68,8 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let mut params = Vec::new();
     let mut clamps = Vec::new();
     let mut changes = Vec::new();
+    let mut live_keys = Vec::new();
+    let mut live_copies = Vec::new();
     for AuthoredField { field, key, .. } in &authored {
         let ty = &field.ty;
         let asset = asset_attrs(&field.attrs)?;
@@ -132,6 +134,15 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
                     }
                 });
             }
+            if asset.apply.as_ref().is_some_and(|class| class == "live") {
+                live_keys.push(quote!(#key));
+                live_copies.push(quote! {
+                    if ::core::cmp::PartialEq::ne(&self.#ident, &src.#ident) {
+                        self.#ident = ::core::clone::Clone::clone(&src.#ident);
+                        moved = true;
+                    }
+                });
+            }
         }
         let key = if key.is_empty() {
             quote!(::core::option::Option::None)
@@ -179,6 +190,18 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             const PARAMS: &'static [(&'static str, #fields_path::ParamMeta)] = &[#(#params),*];
         }
     };
+    let live_items = if live_keys.is_empty() {
+        quote!()
+    } else {
+        quote! {
+            const LIVE_PARAMS: &'static [&'static str] = &[#(#live_keys),*];
+            fn copy_live(&mut self, src: &Self) -> bool {
+                let mut moved = false;
+                #(#live_copies)*
+                moved
+            }
+        }
+    };
     let clamp_item = if clamps.is_empty() {
         quote!()
     } else {
@@ -211,6 +234,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             for #ident #ty_generics #where_clause
         {
             #params_items
+            #live_items
             fn collect_fields(
                 prefix: &str,
                 out: &mut ::concinnity_core::ecs::asset_fields::FieldTable,
@@ -320,7 +344,22 @@ mod tests {
         // Only the ranged field is clamped; both classed fields are compared.
         assert_eq!(out.matches("clamp_param (& mut self .").count(), 1, "{out}");
         assert!(out.contains("clamp_param (& mut self . intensity"), "{out}");
-        assert_eq!(out.matches("PartialEq :: ne").count(), 2, "{out}");
+        let (_, copy) = out
+            .split_once("fn copy_live")
+            .expect("a live field gets a copy");
+        let (copy, _) = copy.split_once("fn collect_fields").unwrap();
+        assert!(
+            copy.contains(
+                "self . intensity = :: core :: clone :: Clone :: clone (& src . intensity)"
+            ),
+            "{copy}"
+        );
+        assert!(!copy.contains("hdr"), "{copy}");
+        assert!(
+            out.contains("LIVE_PARAMS : & 'static [& 'static str] = & [\"strength\"]"),
+            "{out}"
+        );
+        assert_eq!(out.matches("PartialEq :: ne").count(), 3, "{out}");
         assert!(out.contains("asset : \"Bloom\""), "{out}");
         assert!(out.contains("probe :: param (prefix , key"), "{out}");
         // The schema carries the same metadata for the docs and the editor.
@@ -335,6 +374,7 @@ mod tests {
         assert!(!out.contains("PARAMS"), "{out}");
         assert!(!out.contains("fn clamp_params"), "{out}");
         assert!(!out.contains("fn changed_params"), "{out}");
+        assert!(!out.contains("fn copy_live"), "{out}");
     }
 
     #[test]

@@ -1,17 +1,9 @@
 // The background thread that builds a planet's ground patches, so sampling
 // tens of thousands of heights never lands on a frame.
 
-use std::sync::mpsc::{Receiver, Sender};
+use concinnity_core::planet::{GroundPatch, LocalFrame, PlanetShape, build_patch};
 
-use concinnity_core::planet::{GroundPatch, LocalFrame, PlanetShape, ground_patch};
-
-use crate::gfx::streaming::worker::Worker;
-
-/// Cells along each side of a ground patch.
-pub(super) const PATCH_CELLS: u32 = 128;
-
-/// Half the width of a ground patch, in meters: one-meter cells.
-pub(super) const PATCH_HALF_WIDTH: f32 = 64.0;
+use crate::worker::{Job, Worker};
 
 // One patch to build: around local point `around` of `frame`, tagged `id`.
 pub(super) struct PatchRequest {
@@ -27,10 +19,17 @@ pub(super) struct PatchResult {
     pub(super) patch: Option<GroundPatch>,
 }
 
-// The worker and the channel its results come back on.
+impl Job for PatchRequest {
+    type Key = u64;
+
+    fn key(&self) -> u64 {
+        self.id
+    }
+}
+
+// The thread building patches.
 pub(super) struct GroundWorker {
-    worker: Worker<PatchRequest>,
-    results: Receiver<PatchResult>,
+    worker: Worker<PatchRequest, PatchResult>,
 }
 
 impl std::fmt::Debug for GroundWorker {
@@ -40,50 +39,33 @@ impl std::fmt::Debug for GroundWorker {
 }
 
 impl GroundWorker {
-    pub(super) fn spawn(shape: PlanetShape) -> Self {
-        let (request_tx, request_rx) = std::sync::mpsc::channel::<PatchRequest>();
-        let (result_tx, results) = std::sync::mpsc::channel::<PatchResult>();
-        let worker = Worker::spawn("cn-planet-ground", request_rx, request_tx, move |rx| {
-            work(shape, rx, result_tx)
-        });
-        Self { worker, results }
+    pub(super) fn spawn(shape: PlanetShape) -> std::io::Result<Self> {
+        let worker = Worker::spawn("cn-planet-ground", 1, move |request: PatchRequest| {
+            PatchResult {
+                id: request.id,
+                patch: build(&shape, &request),
+            }
+        })?;
+        Ok(Self { worker })
     }
 
     // Queue a patch. `false` when the worker is gone.
-    pub(super) fn request(&self, request: PatchRequest) -> bool {
-        self.worker.send(request)
+    pub(super) fn request(&mut self, request: PatchRequest) -> bool {
+        self.worker.send(request).is_ok()
     }
 
-    // A finished patch, if one is waiting.
+    // A finished patch, if one is waiting. A build that panicked comes back
+    // with no patch.
     pub(super) fn try_recv(&self) -> Option<PatchResult> {
-        self.results.try_recv().ok()
+        self.worker
+            .try_recv()
+            .map(|answer| answer.unwrap_or_else(|id| PatchResult { id, patch: None }))
     }
 }
 
 // The patch for `request`, built on the calling thread.
 pub(super) fn build(shape: &PlanetShape, request: &PatchRequest) -> Option<GroundPatch> {
-    ground_patch(
-        shape,
-        &request.frame,
-        request.around,
-        PATCH_CELLS,
-        PATCH_HALF_WIDTH,
-    )
-}
-
-fn work(shape: PlanetShape, requests: Receiver<PatchRequest>, results: Sender<PatchResult>) {
-    while let Ok(request) = requests.recv() {
-        let patch = build(&shape, &request);
-        if results
-            .send(PatchResult {
-                id: request.id,
-                patch,
-            })
-            .is_err()
-        {
-            break;
-        }
-    }
+    build_patch(shape, &request.frame, request.around)
 }
 
 #[cfg(test)]
@@ -100,7 +82,7 @@ mod tests {
             octaves: 3,
             seed: 2,
         };
-        let worker = GroundWorker::spawn(shape);
+        let mut worker = GroundWorker::spawn(shape).expect("thread");
         let request = PatchRequest {
             id: 7,
             frame: LocalFrame::AUTHORED,

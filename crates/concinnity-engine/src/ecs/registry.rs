@@ -184,7 +184,7 @@ crate::define_systems! {
         after: [BehaviorSystem, Camera3DSystem, ThirdPersonSystem, StorySystem],
         before: [],
     },
-    TextInputSystem => crate::input::text_system::TextInputSystem {
+    TextInputSystem => concinnity_core::input::text_input::TextInputSystem {
         gate: schedule::text_input,
         present_when: "the world declares any TextInput",
         phase: Late,

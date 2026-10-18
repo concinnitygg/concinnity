@@ -84,6 +84,9 @@ pub trait AssetFields {
     /// class, by authored key, in declaration order.
     const PARAMS: &'static [(&'static str, ParamMeta)] = &[];
 
+    /// The authored keys of this schema's live parameters, in declaration order.
+    const LIVE_PARAMS: &'static [&'static str] = &[];
+
     /// Append this schema's fields to `out`, each path under `prefix` (empty
     /// at the top level).
     fn collect_fields(prefix: &str, out: &mut FieldTable);
@@ -101,6 +104,16 @@ pub trait AssetFields {
         Self: Sized,
     {
         let _ = (other, out);
+    }
+
+    /// Copy every live parameter of `src` that differs onto `self`; whether
+    /// any moved.
+    fn copy_live(&mut self, src: &Self) -> bool
+    where
+        Self: Sized,
+    {
+        let _ = src;
+        false
     }
 
     /// The parameter metadata of the field at authored key `key`, if it

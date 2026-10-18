@@ -5,9 +5,8 @@
 //! resident at once, this decides *which* items to load and *which* to evict.
 //! It performs no I/O, spawns no threads, and touches no backend.
 //!
-//! The `std`-side half -- the background fetch thread, the channels, and the
-//! GPU upload -- lives in concinnity-engine's `app::texture_stream`. Keep that
-//! boundary: no thread, file, or clock belongs in this file.
+//! The background fetch threads live with the host; no thread, file, or clock
+//! belongs in this file.
 
 use crate::memory::{Arena, MemTag};
 use alloc::vec;
@@ -22,6 +21,9 @@ pub enum StreamState {
     Pending,
     /// On the GPU and ready to sample.
     Resident,
+    /// Its load failed for good: never requested again, holds no bytes and no
+    /// pool slot.
+    Failed,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -156,8 +158,7 @@ impl StreamPlanner {
     /// Report that a dispatched load for item `id` has completed and the
     /// resource is now on the GPU, occupying `bytes` of GPU memory. The driver
     /// knows the exact resident size at completion (decoded pixel bytes, or
-    /// vertex + index buffer bytes); `bytes` may be 0 when the size is unknown
-    /// or nothing was actually uploaded (e.g. a failed fetch left a placeholder).
+    /// vertex + index buffer bytes).
     pub fn mark_resident(&mut self, id: usize, frame: u64, bytes: u64) {
         if let Some(item) = self.items.get_mut(id) {
             item.state = StreamState::Resident;
@@ -185,6 +186,17 @@ impl StreamPlanner {
         }
     }
 
+    /// Retire item `id` after a load that cannot succeed, so it is never
+    /// requested again. Only a pending item fails; out-of-range ids are
+    /// ignored.
+    pub fn mark_failed(&mut self, id: usize) {
+        if let Some(item) = self.items.get_mut(id)
+            && item.state == StreamState::Pending
+        {
+            item.state = StreamState::Failed;
+        }
+    }
+
     /// Return item `id` to `Resident` after an eviction that did not take
     /// effect, refreshing its LRU timestamp. Its retained byte weight counts
     /// toward `resident_bytes` again. Out-of-range ids are ignored.
@@ -205,7 +217,8 @@ impl StreamPlanner {
             .sum()
     }
 
-    /// `(resident, pending, unloaded)` item counts, for diagnostics.
+    /// `(resident, pending, unloaded)` item counts, for diagnostics. A failed
+    /// item counts as unloaded.
     pub fn counts(&self) -> (usize, usize, usize) {
         let mut resident = 0;
         let mut pending = 0;
@@ -214,7 +227,7 @@ impl StreamPlanner {
             match item.state {
                 StreamState::Resident => resident += 1,
                 StreamState::Pending => pending += 1,
-                StreamState::Unloaded => unloaded += 1,
+                StreamState::Unloaded | StreamState::Failed => unloaded += 1,
             }
         }
         (resident, pending, unloaded)
@@ -374,11 +387,11 @@ impl StreamPlanner {
         plan
     }
 
-    // Items occupying (or about to occupy) a pool slot: everything not Unloaded.
+    // Items occupying (or about to occupy) a pool slot.
     fn occupied(&self) -> usize {
         self.items
             .iter()
-            .filter(|it| it.state != StreamState::Unloaded)
+            .filter(|it| matches!(it.state, StreamState::Pending | StreamState::Resident))
             .count()
     }
 }
@@ -539,6 +552,19 @@ mod tests {
         let mut p = StreamPlanner::new(0, 4, 8);
         assert_eq!(p.len(), 0);
         assert_eq!(p.plan(), StreamPlan::default());
+    }
+
+    // A failed item is never planned again and holds no slot.
+    #[test]
+    fn a_failed_item_is_never_planned_again() {
+        let mut p = StreamPlanner::new(2, 4, 1);
+        p.set_score(0, 1.0);
+        p.set_score(1, 2.0);
+        assert_eq!(p.plan().to_load, vec![0]);
+        p.mark_failed(0);
+        assert_eq!(p.state(0), Some(StreamState::Failed));
+        assert_eq!(p.plan().to_load, vec![1], "the failed item frees its slot");
+        assert_eq!(p.counts(), (0, 1, 1));
     }
 
     #[test]

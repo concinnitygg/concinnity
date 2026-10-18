@@ -1,74 +1,59 @@
 //! Background clip decoding. One named worker thread receives encoded clip
-//! bytes over a channel, decodes them with kira, and sends the result back;
-//! the engine drains completions once per tick. Decode failures travel in the
-//! result message, so the thread itself never fails. Shutdown lives entirely
-//! in Drop: dropping the request sender ends the worker's recv loop, then the
-//! thread is joined, so a world rebuild never leaks the thread.
+//! bytes, decodes them with kira, and sends the result back; the engine drains
+//! completions once per tick. Decode failures, and a decode that panics, travel
+//! in the result, so a clip is never left waiting.
 
-use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 use kira::sound::static_sound::StaticSoundData;
 use std::io::Cursor;
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::thread::JoinHandle;
+
+use crate::worker::{Job, Worker};
 
 pub(crate) struct DecodeResult {
     pub key: u64,
     pub decoded: Result<StaticSoundData, String>,
 }
 
+// One clip's encoded bytes, tagged with the caller's key.
+struct DecodeRequest {
+    key: u64,
+    bytes: Vec<u8>,
+}
+
+impl Job for DecodeRequest {
+    type Key = u64;
+
+    fn key(&self) -> u64 {
+        self.key
+    }
+}
+
 pub(crate) struct DecodeWorker {
-    // `None` only during Drop, which needs to hang up before joining.
-    request_tx: Option<Sender<(u64, Vec<u8>)>>,
-    results: Receiver<DecodeResult>,
-    thread: Option<JoinHandle<()>>,
+    worker: Worker<DecodeRequest, DecodeResult>,
 }
 
 impl DecodeWorker {
-    pub(crate) fn spawn() -> Self {
-        let (request_tx, requests) = channel::<(u64, Vec<u8>)>();
-        let (result_tx, results) = channel();
-        let thread = std::thread::Builder::new()
-            .name("audio-decode".into())
-            .spawn(move || {
-                set_current_thread_role(ThreadRole::Background);
-                while let Ok((key, bytes)) = requests.recv() {
-                    let decoded = decode(bytes);
-                    if result_tx.send(DecodeResult { key, decoded }).is_err() {
-                        break;
-                    }
-                }
-            })
-            .expect("audio decode worker spawn failed");
-        Self {
-            request_tx: Some(request_tx),
-            results,
-            thread: Some(thread),
-        }
+    // The decode thread, or the error the OS refused it with.
+    pub(crate) fn spawn() -> std::io::Result<Self> {
+        let worker = Worker::spawn("audio-decode", 1, |request: DecodeRequest| DecodeResult {
+            key: request.key,
+            decoded: decode(request.bytes),
+        })?;
+        Ok(Self { worker })
     }
 
     // Hand encoded bytes to the worker. False if the worker is gone.
-    pub(crate) fn send(&self, key: u64, bytes: Vec<u8>) -> bool {
-        self.request_tx
-            .as_ref()
-            .is_some_and(|tx| tx.send((key, bytes)).is_ok())
+    pub(crate) fn send(&mut self, key: u64, bytes: Vec<u8>) -> bool {
+        self.worker.send(DecodeRequest { key, bytes }).is_ok()
     }
 
-    // Every decode finished since the last call. Never blocks.
-    pub(crate) fn drain(&self) -> Vec<DecodeResult> {
-        let mut out = Vec::new();
-        while let Ok(result) = self.results.try_recv() {
-            out.push(result);
-        }
-        out
-    }
-}
-
-impl Drop for DecodeWorker {
-    fn drop(&mut self) {
-        self.request_tx = None;
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+    // One decode finished since the last call, if any. Never blocks.
+    pub(crate) fn try_recv(&self) -> Option<DecodeResult> {
+        self.worker.try_recv().map(|answer| {
+            answer.unwrap_or_else(|key| DecodeResult {
+                key,
+                decoded: Err("the decoder panicked".to_string()),
+            })
+        })
     }
 }
 
@@ -85,7 +70,7 @@ mod tests {
     // poll briefly instead of assuming completion within one call.
     fn drain_one(worker: &DecodeWorker) -> DecodeResult {
         for _ in 0..500 {
-            if let Some(result) = worker.drain().into_iter().next() {
+            if let Some(result) = worker.try_recv() {
                 return result;
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
@@ -95,7 +80,7 @@ mod tests {
 
     #[test]
     fn worker_decodes_valid_bytes_off_thread() {
-        let worker = DecodeWorker::spawn();
+        let mut worker = DecodeWorker::spawn().expect("thread");
         assert!(worker.send(11, pcm_wav_mono(64)));
         let result = drain_one(&worker);
         assert_eq!(result.key, 11);
@@ -105,7 +90,7 @@ mod tests {
 
     #[test]
     fn worker_reports_undecodable_bytes_as_errors() {
-        let worker = DecodeWorker::spawn();
+        let mut worker = DecodeWorker::spawn().expect("thread");
         assert!(worker.send(3, b"not an audio file".to_vec()));
         let result = drain_one(&worker);
         assert_eq!(result.key, 3);
@@ -114,7 +99,7 @@ mod tests {
 
     #[test]
     fn drop_joins_the_worker_cleanly() {
-        let worker = DecodeWorker::spawn();
+        let mut worker = DecodeWorker::spawn().expect("thread");
         worker.send(1, pcm_wav_mono(16));
         // Dropping with work possibly still queued must not hang or panic.
         drop(worker);

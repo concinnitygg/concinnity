@@ -4,7 +4,7 @@
 //! The SceneControl trait decouples this module from any specific backend;
 //! callers supply a concrete backend that implements the two mutation methods.
 
-use crate::components::{Hidden, RenderHandle, SceneMember, SceneTransition};
+use crate::components::{Hidden, Identity, RenderHandle, Scene, SceneMember, SceneTransition};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, PipelineContext};
 use crate::gfx::render_types::DrawIndex;
@@ -20,6 +20,30 @@ pub struct SceneFlow {
     pub current: AssetId,
     /// Where the transition fade stands.
     pub fade: FadePhase,
+}
+
+// Every identified Scene, in declaration order.
+fn identified_scenes<'a>(ctx: &'a PipelineContext<'_>) -> impl Iterator<Item = AssetId> + 'a {
+    ctx.join2::<Scene, Identity>()
+        .map(|(_, _, identity)| identity.id())
+}
+
+/// The scene active at world start: the first declared Scene.
+pub fn start_scene(ctx: &PipelineContext) -> Option<AssetId> {
+    identified_scenes(ctx).next()
+}
+
+impl SceneFlow {
+    /// The world's declared Scenes at world start, the [`start_scene`]
+    /// active, or `None` for a world with no scenes.
+    pub fn starting(ctx: &PipelineContext) -> Option<SceneFlow> {
+        let scenes: Vec<AssetId> = identified_scenes(ctx).collect();
+        Some(SceneFlow {
+            current: *scenes.first()?,
+            scenes,
+            fade: FadePhase::None,
+        })
+    }
 }
 
 /// A scene transition's fade phase.
@@ -274,6 +298,23 @@ mod snapshot_tests {
             scenes.push(s);
         }
         (draws, scenes)
+    }
+
+    // The start scene is the first identified Scene; the flow lists them all
+    // and starts there. A world with no scenes has neither.
+    #[test]
+    fn the_flow_starts_at_the_first_declared_scene() {
+        let mut world = World::new();
+        assert_eq!(start_scene(&world.context()), None);
+        assert!(SceneFlow::starting(&world.context()).is_none());
+        world.push(Scene { camera_shot: None });
+        world.push_identified(AssetId(5), Scene { camera_shot: None });
+        world.push_identified(AssetId(6), Scene { camera_shot: None });
+        let ctx = world.context();
+        assert_eq!(start_scene(&ctx), Some(AssetId(5)));
+        let flow = SceneFlow::starting(&ctx).expect("scenes");
+        assert_eq!(flow.current, AssetId(5));
+        assert_eq!(flow.scenes, vec![AssetId(5), AssetId(6)]);
     }
 
     // The snapshot pairs each entity's draw slots with its scene; scene-less

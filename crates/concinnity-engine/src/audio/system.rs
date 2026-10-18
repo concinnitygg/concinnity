@@ -3,6 +3,7 @@
 //! the world contains any `AudioEmitter` or `AudioCue`, so a world with neither
 //! never opens an audio device.
 
+use concinnity_core::audio::EmitterId;
 use concinnity_core::components::{
     AudioBus, AudioCommand, AudioCue, AudioEmitter, AudioOcclusionProbe, AudioTarget, Behavior,
     BodyDynamics, Camera3D, ContactEvent, CueKind, PlayCue, ScreenShown, Story, Transform,
@@ -15,10 +16,10 @@ use concinnity_core::ecs::{
 };
 use concinnity_core::resource::AudioClipTable;
 use concinnity_core::settings::StoredSettings;
-use std::collections::{HashMap, HashSet};
+use hashbrown::{HashMap, HashSet};
 
-use super::occlusion::OcclusionSmoother;
-use super::{AudioEngine, EmitterId, EmitterParams};
+use super::{AudioEngine, EmitterParams};
+use concinnity_core::audio::occlusion::OcclusionSmoother;
 use concinnity_core::planet::{FrameRebases, Rebase, RebaseCursor};
 
 // Audio behavior. Constructed internally by `World::start` when the world
@@ -219,7 +220,7 @@ impl AudioSystem {
                 id,
                 follows: emitter.prop.map(Ref::id),
                 position: emitter.position,
-                occlusion: OcclusionSmoother::new(),
+                occlusion: OcclusionSmoother::default(),
             },
         );
     }
@@ -442,7 +443,8 @@ impl System for AudioSystem {
                     let Some(clip) = dynamics.impact_clip else {
                         continue;
                     };
-                    let gain = super::impact::gain(contact.impulse) * dynamics.impact_volume;
+                    let gain = concinnity_core::audio::impact::gain(contact.impulse)
+                        * dynamics.impact_volume;
                     self.impacts_played += 1;
                     self.engine
                         .play_sound_at(contact.point, clip.0 as u64, gain, 0);
@@ -514,9 +516,8 @@ mod tests {
     // match counters, emitter bindings, and the occlusion probes. The
     // gate/schedule tests (which need a whole world) live in the engine's
     // `ecs/schedule.rs`.
-    use super::{AudioSystem, EmitterBinding};
-    use crate::audio::EmitterId;
-    use crate::audio::occlusion::OcclusionSmoother;
+    use super::{AudioSystem, EmitterBinding, EmitterId};
+    use concinnity_core::audio::occlusion::OcclusionSmoother;
     use concinnity_core::components::{
         AudioBus, AudioCommand, AudioCue, AudioEmitter, AudioOcclusionProbe, AudioTarget,
         BodyDynamics, Camera3D, ContactEvent, CueKind, PlayCue, ScreenShown, Story, Transform,
@@ -1006,7 +1007,7 @@ mod tests {
                 id: Some(EmitterId(0)),
                 follows: Some(prop),
                 position: [0.0; 3],
-                occlusion: OcclusionSmoother::new(),
+                occlusion: OcclusionSmoother::default(),
             },
         );
 

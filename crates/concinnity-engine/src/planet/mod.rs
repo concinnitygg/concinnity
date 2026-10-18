@@ -14,59 +14,17 @@
 //! behaviors, spawns, physics, the controllers and this tick's frame all see
 //! the world already in its new frame.
 
-mod carry;
 mod ground;
 
 use concinnity_core::components::{Camera3D, Planet, SkyRotation};
 use concinnity_core::ecs::{MenuActive, PipelineContext, StepResult, System};
 use concinnity_core::planet::{
-    CameraGeo, FrameRebases, GroundPatch, LocalFrame, PlanetFrame, PlanetGravity, PlanetGround,
-    REBASE_DISTANCE, Rebase, needs_rebase,
+    CameraGeo, FrameRebases, GroundPatch, LocalFrame, PatchPurpose, PlanetFrame, PlanetGravity,
+    PlanetGround, Rebase, carry_world, next_patch,
 };
 use concinnity_core::sky::{SkyFrame, SkyOrientation};
 
-use ground::{GroundWorker, PATCH_HALF_WIDTH, PatchRequest};
-
-// How far the camera may walk from the ground patch's center before a new
-// patch is built around it, in meters: well inside the patch's half width.
-const FOLLOW_DISTANCE: f32 = PATCH_HALF_WIDTH * 0.375;
-
-// What an outstanding patch request is for.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Purpose {
-    // The camera walked from the patch; same frame.
-    Follow,
-    // The frame moves once the patch built in it arrives.
-    Rebase { frame: LocalFrame, rebase: Rebase },
-}
-
-// What the camera at local point `camera` needs next, if anything: the frame
-// moved under it once it strays too far, else the patch moved under it once
-// it walks off the current one's middle.
-fn next_purpose(
-    camera: [f32; 3],
-    frame: &PlanetFrame,
-    patch_center: Option<[f32; 3]>,
-) -> Option<(Purpose, LocalFrame, [f32; 3])> {
-    if needs_rebase(camera, REBASE_DISTANCE) {
-        let up = frame.shape.up_at(frame.frame.to_world(camera));
-        let (next, rebase) = frame.frame.recentered(camera, up);
-        let around = rebase.apply_point(camera);
-        return Some((
-            Purpose::Rebase {
-                frame: next,
-                rebase,
-            },
-            next,
-            around,
-        ));
-    }
-    let strayed = patch_center.is_none_or(|c| {
-        let (dx, dz) = (camera[0] - c[0], camera[2] - c[2]);
-        dx * dx + dz * dz > FOLLOW_DISTANCE * FOLLOW_DISTANCE
-    });
-    strayed.then_some((Purpose::Follow, frame.frame, camera))
-}
+use ground::{GroundWorker, PatchRequest};
 
 /// Keeps a planet world's simulated frame, gravity and ground around its
 /// camera. Constructed by `World::start` when the world declares a `Planet`.
@@ -79,7 +37,7 @@ pub(crate) struct PlanetSystem {
     ground: Option<PlanetGround>,
     worker: Option<GroundWorker>,
     // The outstanding request: its id and what it is for.
-    pending: Option<(u64, Purpose)>,
+    pending: Option<(u64, PatchPurpose)>,
     next_id: u64,
     // Whether a `SkyRotation` publishes the sky; without one this system does.
     sky_rotates: bool,
@@ -134,7 +92,7 @@ impl PlanetSystem {
         );
         self.frame.frame = frame;
         self.rebases.push(rebase);
-        carry::carry(ctx, &rebase, &self.frame);
+        carry_world(ctx, &rebase, &self.frame);
         self.publish(ctx);
     }
 
@@ -149,7 +107,7 @@ impl PlanetSystem {
                 continue;
             }
             self.pending = None;
-            if let Purpose::Rebase { frame, rebase } = purpose {
+            if let PatchPurpose::Rebase { frame, rebase } = purpose {
                 self.rebase(ctx, frame, rebase);
             }
             match result.patch {
@@ -165,10 +123,10 @@ impl PlanetSystem {
             return;
         }
         let patch_center = self.ground.as_ref().map(|g| g.patch.center);
-        let Some((purpose, frame, around)) = next_purpose(camera, &self.frame, patch_center) else {
+        let Some((purpose, frame, around)) = next_patch(camera, &self.frame, patch_center) else {
             return;
         };
-        let Some(worker) = &self.worker else {
+        let Some(worker) = &mut self.worker else {
             return;
         };
         let id = self.next_id;
@@ -215,7 +173,11 @@ impl System for PlanetSystem {
             camera.up = frame.up_at(camera.position);
             camera.recompose_view();
         }
-        self.worker = Some(GroundWorker::spawn(self.frame.shape));
+        self.worker = GroundWorker::spawn(self.frame.shape)
+            .map_err(|e| {
+                tracing::warn!("PlanetSystem: no ground worker, the ground stays put: {e}");
+            })
+            .ok();
         self.next_id = 1;
         publish_camera_geo(ctx, &frame);
     }
@@ -243,63 +205,6 @@ mod tests {
     use super::*;
     use concinnity_core::components::cook::Camera3D as Camera3DArgs;
     use concinnity_core::ecs::World;
-    use concinnity_core::planet::PlanetShape;
-
-    const SHAPE: PlanetShape = PlanetShape {
-        center: [0.0, -50_000.0, 0.0],
-        radius: 50_000.0,
-        amplitude: 20.0,
-        feature_size: 1_000.0,
-        octaves: 4,
-        seed: 1,
-    };
-
-    fn frame() -> PlanetFrame {
-        PlanetFrame {
-            shape: SHAPE,
-            frame: LocalFrame::AUTHORED,
-        }
-    }
-
-    #[test]
-    fn a_camera_near_the_patch_middle_needs_nothing() {
-        assert_eq!(
-            next_purpose([5.0, 1.0, -3.0], &frame(), Some([0.0; 3])),
-            None
-        );
-    }
-
-    #[test]
-    fn a_camera_off_the_patch_middle_moves_the_patch() {
-        let (purpose, f, around) =
-            next_purpose([30.0, 1.0, 0.0], &frame(), Some([0.0; 3])).unwrap();
-        assert_eq!(purpose, Purpose::Follow);
-        assert_eq!(f, LocalFrame::AUTHORED);
-        assert_eq!(around, [30.0, 1.0, 0.0]);
-        assert!(
-            next_purpose([0.0; 3], &frame(), None).is_some(),
-            "no patch yet"
-        );
-    }
-
-    // Far enough out, the frame moves to the camera and the patch is built
-    // around it there.
-    #[test]
-    fn a_camera_far_from_the_origin_moves_the_frame() {
-        let camera = [1_001.0, -9.0, 0.0];
-        let (purpose, f, around) =
-            next_purpose(camera, &frame(), Some([1_000.0, 0.0, 0.0])).unwrap();
-        let Purpose::Rebase {
-            frame: next,
-            rebase,
-        } = purpose
-        else {
-            panic!("expected a rebase, got {purpose:?}");
-        };
-        assert_eq!(next, f);
-        assert!(around.iter().all(|c| c.abs() < 1e-3), "{around:?}");
-        assert_eq!(rebase.apply_point(camera), around);
-    }
 
     // Init publishes everything physics and the renderer read, with ground
     // under the camera and the camera's up away from the center.

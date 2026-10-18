@@ -8,7 +8,8 @@ use concinnity_core::animation::anim_graph::{CompiledGraph, GraphCursor};
 use concinnity_core::components::{AnimationGraph, AnimationParams, GroundProbes, SkeletonPose};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{PipelineContext, SkinnedMeshHandle};
-use std::collections::{BTreeMap, HashMap};
+use hashbrown::HashMap;
+use std::collections::BTreeMap;
 
 use super::{TargetMode, TargetState};
 
@@ -151,7 +152,7 @@ mod tests {
     use concinnity_host::thread::asset_id::intern;
 
     use super::super::TargetState;
-    use super::super::flat::{ClipEntry, FlatState};
+    use concinnity_core::animation::flat_blend::{ClipEntry, FlatState};
 
     // A bare clip; installing a graph reads only its duration and loop flag.
     fn clip_entry() -> ClipEntry {

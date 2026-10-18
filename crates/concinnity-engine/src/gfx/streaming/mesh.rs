@@ -1,57 +1,30 @@
-//! The `std`-side driver for mesh-geometry streaming.
+//! Where streamed mesh geometry comes from, and the thread that fetches it for
+//! core's mesh pool.
 //!
-//! This is the geometry counterpart of `super::texture`: it owns a
-//! background payload-fetch thread and the channels that carry work to it, and
-//! wraps the `no_std` policy core in `crate::gfx::streaming`. The split:
-//! `gfx::streaming::StreamPlanner` decides *what* to stream using only
-//! `core` + `alloc`; everything OS-coupled -- threads, payload I/O --
-//! lives here so a future `no_std` client runtime only has to replace
-//! this file.
-//!
-//! `MeshPayloadSource` is the seam. `MemMeshSource` serves mesh geometry kept
+//! `MeshPayloadSource` is the seam. `MemMeshSource` serves geometry kept
 //! resident in RAM (used by `cn debug`, which builds geometry in memory with no
 //! disk artifacts); `DiskMeshSource` re-reads it from a scratch file written by
 //! `write_mesh_scratch` (used by `cn run`, so the geometry never stays a second
-//! RAM copy past GPU upload). Both plug into the same planner and renderer.
+//! RAM copy past GPU upload).
 
-use concinnity_core::decode::ByteReader;
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::streaming::StreamPlanner;
-use concinnity_core::render::streaming::StreamState;
+use concinnity_core::render::stream_pools::{
+    DecodedMesh, DeferredMeshPayload, ItemLoad, decode_deferred_payload, decode_mesh, encode_mesh,
+};
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender};
 
-// A mesh payload decoded to GPU-ready vertex and index data.
-//
-// Index values are mesh-relative (0-based): the renderer's sub-allocator
-// places the vertices at an arbitrary offset on upload, so the backend
-// rebases the indices onto that region rather than the payload baking in a
-// fixed base.
-#[derive(Clone)]
-pub(crate) struct DecodedMesh {
-    pub vertices: Vec<Vertex>,
-    pub indices: Vec<u16>,
-}
+use crate::worker::Worker;
 
-// Fetches and decodes a streamable mesh payload by item id.
-//
-// `Send + Sync` so the background worker thread can own one. Implementors do
-// the slow part of streaming (disk read, decompression); the renderer only
-// ever sees the finished [`DecodedMesh`].
+// Fetches and decodes a streamable mesh payload by item id. `Send + Sync` so
+// the load thread can own one; called off the main thread.
 pub(crate) trait MeshPayloadSource: Send + Sync {
-    // Decode item `id` into GPU-ready geometry, or return a human-readable
-    // error. Called off the main thread.
+    // Decode item `id` into GPU-ready geometry, or a human-readable error.
     fn fetch(&self, id: usize) -> Result<DecodedMesh, String>;
 }
 
-// Mesh source for the `cn debug` path: geometry kept resident in RAM.
-//
-// `cn debug` builds geometry in memory with no disk artifacts, so it cannot
-// re-read from a scratch file; the geometry stays RAM-resident and this
-// streams the *GPU upload* only. `cn run` uses [`DiskMeshSource`] instead.
+// Geometry kept resident in RAM. `cn debug` has no disk artifacts to re-read,
+// so this streams the GPU upload only.
 pub(crate) struct MemMeshSource {
     meshes: Vec<DecodedMesh>,
 }
@@ -79,17 +52,11 @@ pub(crate) struct DiskMeshLocator {
     pub len: u64,
 }
 
-// Disk-backed mesh source: re-reads each mesh's geometry from a
-// scratch file on disk, so the geometry never stays a second RAM copy.
-//
-// Unlike a streamed texture -- whose compiled payload already sits in a blob
-// file the streamer can re-read -- a streamed mesh's geometry only exists as
-// a region of the assembled vertex/index buffers, with no discrete on-disk
-// payload. [`write_mesh_scratch`] therefore writes the streamed geometry to a
-// scratch file once, and this source re-reads each record from it on demand.
+// Re-reads each mesh's geometry from a scratch file on disk, so the geometry
+// never stays a second RAM copy. A streamed mesh's geometry only exists as a
+// region of the assembled buffers, with no discrete on-disk payload, so
+// `write_mesh_scratch` writes it once and this re-reads each record on demand.
 // The file is removed when the source is dropped (world rebuild or shutdown).
-//
-// `cn debug`, which has no disk artifacts, keeps using [`MemMeshSource`].
 pub(crate) struct DiskMeshSource {
     path: String,
     // locators[id] points streamed mesh `id` at its record in the scratch file
@@ -115,25 +82,15 @@ impl Drop for DiskMeshSource {
     }
 }
 
-// One deferred streamed mesh's compiled payload: init skipped its decode
-// (owned by a scene other than the start scene), so no geometry copy exists
-// in the scratch/RAM source and the worker decodes the blob payload instead.
-pub(crate) enum DeferredMeshPayload {
-    // RAM-backed world: the raw compiled payload bytes.
-    Bytes(Vec<u8>),
-    // Disk-backed world: the payload's absolute byte range in its blob file.
-    Disk { path: String, offset: u64, len: u64 },
-}
-
 // Wraps a base mesh source with per-id deferred payload overrides.
 pub(crate) struct SceneDeferredMeshSource {
-    base: std::sync::Arc<dyn MeshPayloadSource>,
+    base: Arc<dyn MeshPayloadSource>,
     deferred: hashbrown::HashMap<usize, DeferredMeshPayload>,
 }
 
 impl SceneDeferredMeshSource {
     pub(crate) fn new(
-        base: std::sync::Arc<dyn MeshPayloadSource>,
+        base: Arc<dyn MeshPayloadSource>,
         deferred: hashbrown::HashMap<usize, DeferredMeshPayload>,
     ) -> Self {
         Self { base, deferred }
@@ -153,19 +110,8 @@ impl MeshPayloadSource for SceneDeferredMeshSource {
     }
 }
 
-// Decode a compiled mesh payload into LOD0 geometry (streamed draws strip
-// their LOD alternates, so only LOD0 is ever uploaded).
-fn decode_deferred_payload(bytes: &[u8]) -> Result<DecodedMesh, String> {
-    let (vertices, indices, _) = mesh_payload::deserialize_with_lods(bytes)?;
-    Ok(DecodedMesh { vertices, indices })
-}
-
-// Write every streamed mesh's geometry to `path` and return a
-// [`DiskMeshSource`] that re-reads each record on demand.
-//
-// Lets the caller drop the RAM-resident [`DecodedMesh`] payloads: under
-// `cn run` the geometry then lives only in the GPU buffers and this scratch
-// file, not in a second CPU-side copy.
+// Write every streamed mesh's geometry to `path` and return a `DiskMeshSource`
+// that re-reads each record on demand, so the caller can drop the RAM copy.
 pub(crate) fn write_mesh_scratch(
     path: String,
     meshes: &[DecodedMesh],
@@ -187,274 +133,26 @@ pub(crate) fn write_mesh_scratch(
     Ok(DiskMeshSource { path, locators })
 }
 
-// A scratch-file path for one disk-backed source.
-//
-// Each call returns a distinct path so a world rebuild's new source does not
-// collide with the old one's file. Unguarded on purpose: [`DiskMeshSource`]
-// owns the file and removes it on drop, which outlives this call.
+// A scratch-file path for one disk-backed source. Each call returns a
+// distinct path so a world rebuild's new source does not collide with the old
+// one's file; the source owns the file and removes it on drop.
 pub(crate) fn default_scratch_path() -> String {
     concinnity_host::scratch::path("mesh-stream.bin")
         .to_string_lossy()
         .into_owned()
 }
 
-// Serialize one mesh's geometry into the scratch-file record format:
-// `u32 vertex_count`, the vertices as 56-byte records, `u32 index_count`,
-// the indices as little-endian `u16`s.
-fn encode_mesh(mesh: &DecodedMesh) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(4 + mesh.vertices.len() * 56 + 4 + mesh.indices.len() * 2);
-    buf.extend_from_slice(&(mesh.vertices.len() as u32).to_le_bytes());
-    for v in &mesh.vertices {
-        for x in v
-            .pos
-            .iter()
-            .chain(v.normal.iter())
-            .chain(v.tangent.iter())
-            .chain(v.color.iter())
-            .chain(v.uv.iter())
-        {
-            buf.extend_from_slice(&x.to_le_bytes());
-        }
-    }
-    buf.extend_from_slice(&(mesh.indices.len() as u32).to_le_bytes());
-    for i in &mesh.indices {
-        buf.extend_from_slice(&i.to_le_bytes());
-    }
-    buf
-}
-
-// Inverse of [`encode_mesh`]: decode one scratch-file record. Errors rather
-// than panics on a truncated record, so a corrupt scratch file fails the
-// load loudly instead of reading out of bounds.
-fn decode_mesh(bytes: &[u8]) -> Result<DecodedMesh, String> {
-    const VERTEX_BYTES: usize = size_of::<Vertex>();
-
-    let mut r = ByteReader::new(bytes, "mesh record");
-    // Counts are read from the record, so each reservation is capped at what
-    // the buffer could actually hold rather than what it claims.
-    let vertex_count = r.u32()? as usize;
-    let mut vertices = Vec::with_capacity(vertex_count.min(r.remaining() / VERTEX_BYTES));
-    for _ in 0..vertex_count {
-        vertices.push(Vertex {
-            pos: [r.f32()?, r.f32()?, r.f32()?],
-            normal: [r.f32()?, r.f32()?, r.f32()?],
-            tangent: [r.f32()?, r.f32()?, r.f32()?],
-            color: [r.f32()?, r.f32()?, r.f32()?],
-            uv: [r.f32()?, r.f32()?],
-        });
-    }
-
-    let index_count = r.u32()? as usize;
-    let mut indices = Vec::with_capacity(index_count.min(r.remaining() / 2));
-    for _ in 0..index_count {
-        indices.push(r.u16()?);
-    }
-
-    Ok(DecodedMesh { vertices, indices })
-}
-
-// Outcome of one background load, carried back to the main thread.
-struct LoadResult {
-    id: usize,
-    decoded: Result<DecodedMesh, String>,
-}
-
-// Drives streaming of the renderer's static mesh geometry.
-//
-// Owns the [`StreamPlanner`] policy core plus the background fetch thread.
-// Each frame the renderer calls [`update_scores`], [`plan_and_dispatch`], and
-// [`drain_completed`] in that order.
-//
-// [`update_scores`]: MeshStreamer::update_scores
-// [`plan_and_dispatch`]: MeshStreamer::plan_and_dispatch
-// [`drain_completed`]: MeshStreamer::drain_completed
-pub(crate) struct MeshStreamer {
-    planner: StreamPlanner,
-    // centers[id] holds the world-space position(s) used to score streamed
-    // mesh `id`; the streaming priority is the squared distance from the
-    // camera to the nearest of them.
-    centers: Vec<Vec<[f32; 3]>>,
-    worker: super::worker::Worker<usize>,
-    result_rx: Receiver<LoadResult>,
-}
-
-impl MeshStreamer {
-    // Spawn the background worker and build a streamer for `centers.len()`
-    // meshes.
-    //
-    // `centers[id]` lists the world-space position(s) used to score mesh
-    // `id`. `load_budget` caps loads dispatched per frame; `resident_cap`
-    // caps how many meshes stay resident at once before LRU eviction.
-    pub(crate) fn new(
-        source: Arc<dyn MeshPayloadSource>,
-        centers: Vec<Vec<[f32; 3]>>,
-        load_budget: usize,
-        resident_cap: usize,
-    ) -> Self {
-        let planner = StreamPlanner::new(centers.len(), load_budget, resident_cap);
-        let (request_tx, request_rx) = std::sync::mpsc::channel::<usize>();
-        let (result_tx, result_rx) = std::sync::mpsc::channel::<LoadResult>();
-
-        let worker =
-            super::worker::Worker::spawn("cn-mesh-stream", request_rx, request_tx, move |rx| {
-                worker_loop(source, rx, result_tx)
-            });
-
-        Self {
-            planner,
-            centers,
-            result_rx,
-            worker,
-        }
-    }
-
-    // Number of streamed meshes.
-    pub(crate) fn len(&self) -> usize {
-        self.planner.len()
-    }
-
-    // Set (or clear with `None`) the resident-byte budget for this pool. When
-    // set, the planner evicts farther-from-camera meshes to hold resident bytes
-    // at or under the budget, on top of the item-count cap.
-    pub(crate) fn set_byte_budget(&mut self, budget: Option<u64>) {
-        self.planner.set_byte_budget(budget);
-    }
-
-    // Total resident mesh bytes, for diagnostics.
-    pub(crate) fn resident_bytes(&self) -> u64 {
-        self.planner.resident_bytes()
-    }
-
-    // Block or unblock a streamed mesh for scene residency: a blocked mesh
-    // never loads and is evicted by the next plan if resident.
-    pub(crate) fn set_blocked(&mut self, stream_id: usize, blocked: bool) {
-        self.planner.set_blocked(stream_id, blocked);
-    }
-
-    // The active resident-byte budget, or `None` when byte accounting is off.
-    pub(crate) fn byte_budget(&self) -> Option<u64> {
-        self.planner.byte_budget()
-    }
-
-    // Re-score every mesh from the camera position and refresh the LRU
-    // timestamp of resident meshes. Call once per frame before
-    // [`plan_and_dispatch`](Self::plan_and_dispatch).
-    pub(crate) fn update_scores(&mut self, camera: [f32; 3], frame: u64) {
-        for id in 0..self.planner.len() {
-            self.planner
-                .set_score(id, nearest_sq_distance(&self.centers[id], camera));
-            if self.planner.state(id) == Some(StreamState::Resident) {
-                self.planner.touch(id, frame);
-            }
-        }
-    }
-
-    // Run the planner: dispatch this frame's loads to the worker and return
-    // the meshes the caller must evict from the GPU.
-    pub(crate) fn plan_and_dispatch(&mut self) -> Vec<usize> {
-        let plan = self.planner.plan();
-        for &id in &plan.to_load {
-            let sent = self.worker.send(id);
-            if !sent {
-                // Worker gone -- revert so the mesh is retried rather than
-                // stuck Pending forever.
-                self.planner.mark_unloaded(id);
-            }
-        }
-        plan.to_evict
-    }
-
-    // Apply every completed background load via `upload`, which receives the
-    // decoded geometry by value so it can carry it into a recorded backend
-    // op. Returns the number of meshes marked resident this call.
-    //
-    // The mesh is marked resident when its upload is handed off; a transient
-    // upload refusal (the shrinkable seed headroom momentarily full) surfaces
-    // later as an op failure, which `note_upload_failed` rolls back to
-    // `Unloaded` so the planner retries once freed space reclaims. A failed
-    // *fetch* (decode / disk error) is terminal and marked resident so the
-    // planner stops retrying a payload that will never decode.
-    pub(crate) fn drain_completed(
-        &mut self,
-        frame: u64,
-        mut upload: impl FnMut(usize, Vec<Vertex>, Vec<u16>),
-    ) -> usize {
-        let mut applied = 0;
-        while let Ok(result) = self.result_rx.try_recv() {
-            match result.decoded {
-                Ok(mesh) => {
-                    // Resident footprint is the vertex + index buffer bytes.
-                    let bytes = (mesh.vertices.len() * core::mem::size_of::<Vertex>()
-                        + mesh.indices.len() * core::mem::size_of::<u16>())
-                        as u64;
-                    upload(result.id, mesh.vertices, mesh.indices);
-                    self.planner.mark_resident(result.id, frame, bytes);
-                    applied += 1;
-                }
-                Err(e) => {
-                    tracing::warn!("mesh stream: load of mesh {} failed: {}", result.id, e);
-                    // Treat a failed fetch as terminally resident so the
-                    // planner stops retrying; the mesh keeps its empty region,
-                    // which occupies no streamed bytes.
-                    self.planner.mark_resident(result.id, frame, 0);
-                }
-            }
-        }
-        applied
-    }
-
-    // Roll a mesh whose recorded upload was refused (transient region
-    // exhaustion) back to `Unloaded`, so the planner re-dispatches it once an
-    // eviction's space reclaims. Unloading removes its bytes from the
-    // resident sum (`resident_bytes` counts Resident items only).
-    pub(crate) fn note_upload_failed(&mut self, id: usize) {
-        tracing::debug!("mesh stream: upload of mesh {} deferred, will retry", id);
-        self.planner.mark_unloaded(id);
-    }
-
-    // `(resident, pending, unloaded)` mesh counts -- for diagnostics.
-    pub(crate) fn stats(&self) -> (usize, usize, usize) {
-        self.planner.counts()
-    }
-}
-
-// Background worker: fetch each requested payload and ship the result back.
-// Exits when the request channel closes (the streamer was dropped).
-fn worker_loop(
+// The thread that answers the mesh pool's loads from `source`.
+pub(crate) fn spawn_worker(
     source: Arc<dyn MeshPayloadSource>,
-    requests: Receiver<usize>,
-    results: Sender<LoadResult>,
-) {
-    while let Ok(id) = requests.recv() {
-        let decoded = source.fetch(id);
-        if results.send(LoadResult { id, decoded }).is_err() {
-            break;
-        }
-    }
-}
-
-// Squared distance from `camera` to the nearest position in `centers`.
-//
-// Squared (not true) distance keeps the math `sqrt`-free -- ordering is all
-// the planner needs. An empty `centers` scores 0 so it still streams in
-// promptly rather than stalling forever.
-fn nearest_sq_distance(centers: &[[f32; 3]], camera: [f32; 3]) -> f32 {
-    let mut nearest = f32::MAX;
-    for c in centers {
-        let dx = c[0] - camera[0];
-        let dy = c[1] - camera[1];
-        let dz = c[2] - camera[2];
-        let d = dx * dx + dy * dy + dz * dz;
-        if d < nearest {
-            nearest = d;
-        }
-    }
-    if centers.is_empty() { 0.0 } else { nearest }
+) -> std::io::Result<Worker<usize, ItemLoad<DecodedMesh>>> {
+    Worker::spawn("cn-mesh-stream", 1, move |id| (id, source.fetch(id)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::gfx::mesh_payload::Vertex;
 
     fn mk_vertex(x: f32) -> Vertex {
         Vertex {
@@ -464,17 +162,6 @@ mod tests {
             color: [1.0, 1.0, 1.0],
             uv: [0.0, 0.0],
         }
-    }
-
-    #[test]
-    fn nearest_sq_distance_picks_the_closest_center() {
-        let centers = [[10.0, 0.0, 0.0], [3.0, 0.0, 0.0], [7.0, 0.0, 0.0]];
-        assert_eq!(nearest_sq_distance(&centers, [0.0, 0.0, 0.0]), 9.0);
-    }
-
-    #[test]
-    fn nearest_sq_distance_of_no_centers_is_zero() {
-        assert_eq!(nearest_sq_distance(&[], [5.0, 5.0, 5.0]), 0.0);
     }
 
     #[test]
@@ -497,177 +184,6 @@ mod tests {
         assert!(source.fetch(9).is_err());
     }
 
-    // A source yielding a fixed 1-triangle mesh for any id, used to exercise
-    // the worker thread without the build pipeline.
-    struct ConstSource;
-    impl MeshPayloadSource for ConstSource {
-        fn fetch(&self, _id: usize) -> Result<DecodedMesh, String> {
-            Ok(DecodedMesh {
-                vertices: vec![mk_vertex(0.0), mk_vertex(1.0), mk_vertex(2.0)],
-                indices: vec![0, 1, 2],
-            })
-        }
-    }
-
-    // Pump drain_completed until `want` meshes are resident or a deadline hits.
-    fn drain_until(streamer: &mut MeshStreamer, frame: u64, want: usize) -> usize {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        let mut uploads = 0;
-        while std::time::Instant::now() < deadline {
-            uploads += streamer.drain_completed(frame, |_, _, _| {});
-            if streamer.stats().0 >= want {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        uploads
-    }
-
-    #[test]
-    fn streamer_loads_nearest_meshes_within_budget() {
-        let centers = vec![
-            vec![[100.0, 0.0, 0.0]], // mesh 0: far
-            vec![[2.0, 0.0, 0.0]],   // mesh 1: near
-            vec![[50.0, 0.0, 0.0]],  // mesh 2: mid
-        ];
-        // Budget 1/frame, generous cap.
-        let mut streamer = MeshStreamer::new(Arc::new(ConstSource), centers, 1, 8);
-        assert_eq!(streamer.len(), 3);
-
-        // Frame 1: nearest mesh (1) is dispatched first.
-        streamer.update_scores([0.0, 0.0, 0.0], 1);
-        let evict = streamer.plan_and_dispatch();
-        assert!(evict.is_empty());
-        drain_until(&mut streamer, 1, 1);
-        assert_eq!(streamer.stats().0, 1);
-
-        // Frame 2: next-nearest (mesh 2) follows.
-        streamer.update_scores([0.0, 0.0, 0.0], 2);
-        streamer.plan_and_dispatch();
-        drain_until(&mut streamer, 2, 2);
-        assert_eq!(streamer.stats().0, 2);
-
-        // Frame 3: the far mesh finishes the set.
-        streamer.update_scores([0.0, 0.0, 0.0], 3);
-        streamer.plan_and_dispatch();
-        drain_until(&mut streamer, 3, 3);
-        assert_eq!(streamer.stats(), (3, 0, 0));
-    }
-
-    // A payload that will never decode.
-    struct FailingSource;
-    impl MeshPayloadSource for FailingSource {
-        fn fetch(&self, _id: usize) -> Result<DecodedMesh, String> {
-            Err("undecodable record".to_string())
-        }
-    }
-
-    // A failed fetch is terminal, unlike a failed upload: the mesh is marked
-    // resident (keeping its empty region) so the planner stops re-dispatching a
-    // payload that will never decode.
-    #[test]
-    fn a_failed_fetch_is_not_retried() {
-        let centers = vec![vec![[1.0, 0.0, 0.0]]];
-        let mut streamer = MeshStreamer::new(Arc::new(FailingSource), centers, 4, 8);
-        streamer.update_scores([0.0, 0.0, 0.0], 1);
-        streamer.plan_and_dispatch();
-
-        let uploads = drain_until(&mut streamer, 1, 1);
-        assert_eq!(uploads, 0, "a failed load uploads no geometry");
-        assert_eq!(streamer.stats(), (1, 0, 0));
-        assert_eq!(streamer.resident_bytes(), 0);
-    }
-
-    #[test]
-    fn upload_callback_receives_decoded_geometry() {
-        let centers = vec![vec![[1.0, 0.0, 0.0]]];
-        let mut streamer = MeshStreamer::new(Arc::new(ConstSource), centers, 4, 8);
-        streamer.update_scores([0.0, 0.0, 0.0], 1);
-        streamer.plan_and_dispatch();
-
-        let mut seen: Option<(usize, usize, Vec<u16>)> = None;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while std::time::Instant::now() < deadline && seen.is_none() {
-            streamer.drain_completed(1, |id, verts, idxs| {
-                seen = Some((id, verts.len(), idxs));
-            });
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        assert_eq!(seen, Some((0, 3, vec![0, 1, 2])));
-    }
-
-    #[test]
-    fn upload_failure_rolls_back_to_unloaded_for_retry() {
-        let centers = vec![vec![[1.0, 0.0, 0.0]]];
-        let mut streamer = MeshStreamer::new(Arc::new(ConstSource), centers, 4, 8);
-
-        // Frame 1: dispatch and drain (the mesh is marked resident on
-        // handoff), then report the deferred upload failure (transient
-        // seed-full miss), which rolls it back.
-        streamer.update_scores([0.0, 0.0, 0.0], 1);
-        streamer.plan_and_dispatch();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        let mut drained = false;
-        while std::time::Instant::now() < deadline && !drained {
-            streamer.drain_completed(1, |_, _, _| {
-                drained = true;
-            });
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        assert!(drained, "worker should have produced a result");
-        streamer.note_upload_failed(0);
-        // Not resident: the planner rolled it back to Unloaded for retry.
-        assert_eq!(streamer.stats(), (0, 0, 1));
-
-        // Frame 2: re-dispatch + a succeeding upload brings it resident.
-        streamer.update_scores([0.0, 0.0, 0.0], 2);
-        streamer.plan_and_dispatch();
-        drain_until(&mut streamer, 2, 1);
-        assert_eq!(streamer.stats().0, 1);
-    }
-
-    #[test]
-    fn encode_mesh_round_trips_through_decode() {
-        let mesh = DecodedMesh {
-            vertices: vec![mk_vertex(1.0), mk_vertex(2.0), mk_vertex(3.0)],
-            indices: vec![0, 1, 2, 2, 1, 0],
-        };
-        let decoded = decode_mesh(&encode_mesh(&mesh)).expect("decode ok");
-        assert_eq!(decoded.vertices.len(), 3);
-        assert_eq!(decoded.indices, vec![0, 1, 2, 2, 1, 0]);
-        assert_eq!(decoded.vertices[1].pos, [2.0, 0.0, 0.0]);
-        assert_eq!(decoded.vertices[2].normal, [0.0, 1.0, 0.0]);
-        assert_eq!(decoded.vertices[0].tangent, [1.0, 0.0, 0.0]);
-    }
-
-    #[test]
-    fn decode_mesh_errors_on_truncated_record() {
-        let bytes = encode_mesh(&DecodedMesh {
-            vertices: vec![mk_vertex(0.0)],
-            indices: vec![0],
-        });
-        // dropping the final index byte leaves an incomplete record
-        assert!(decode_mesh(&bytes[..bytes.len() - 1]).is_err());
-        // a header claiming more vertices than the buffer holds
-        assert!(decode_mesh(&[9, 0, 0, 0]).is_err());
-        // an empty buffer has not even a vertex count
-        assert!(decode_mesh(&[]).is_err());
-    }
-
-    // A count near u32::MAX must fail on the missing data, without first
-    // reserving one `Vertex` per claimed entry.
-    #[test]
-    fn decode_mesh_errors_on_an_absurd_vertex_count() {
-        assert!(decode_mesh(&u32::MAX.to_le_bytes()).is_err());
-    }
-
-    #[test]
-    fn decode_mesh_errors_on_an_absurd_index_count() {
-        let mut bytes = 0u32.to_le_bytes().to_vec();
-        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
-        assert!(decode_mesh(&bytes).is_err());
-    }
-
     #[test]
     fn disk_mesh_source_round_trips_multiple_meshes() {
         let meshes = vec![
@@ -681,13 +197,10 @@ mod tests {
             },
         ];
         let source = write_mesh_scratch(default_scratch_path(), &meshes).expect("write scratch");
-
         let m0 = source.fetch(0).expect("fetch 0");
-        assert_eq!(m0.vertices.len(), 1);
         assert_eq!(m0.vertices[0].pos, [1.0, 0.0, 0.0]);
         assert_eq!(m0.indices, vec![0]);
-
-        // mesh 1 lives at a non-zero offset -- exercises the per-record seek
+        // mesh 1 lives at a non-zero offset, exercising the per-record seek
         let m1 = source.fetch(1).expect("fetch 1");
         assert_eq!(m1.vertices.len(), 2);
         assert_eq!(m1.vertices[1].pos, [3.0, 0.0, 0.0]);
@@ -719,28 +232,5 @@ mod tests {
     #[test]
     fn default_scratch_path_is_unique_per_call() {
         assert_ne!(default_scratch_path(), default_scratch_path());
-    }
-
-    #[test]
-    fn streamer_loads_from_a_disk_source() {
-        let meshes = vec![DecodedMesh {
-            vertices: vec![mk_vertex(0.0), mk_vertex(1.0), mk_vertex(2.0)],
-            indices: vec![0, 1, 2],
-        }];
-        let source = write_mesh_scratch(default_scratch_path(), &meshes).expect("write scratch");
-        let centers = vec![vec![[1.0, 0.0, 0.0]]];
-        let mut streamer = MeshStreamer::new(Arc::new(source), centers, 4, 8);
-        streamer.update_scores([0.0, 0.0, 0.0], 1);
-        streamer.plan_and_dispatch();
-
-        let mut seen: Option<(usize, usize, Vec<u16>)> = None;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while std::time::Instant::now() < deadline && seen.is_none() {
-            streamer.drain_completed(1, |id, verts, idxs| {
-                seen = Some((id, verts.len(), idxs));
-            });
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        assert_eq!(seen, Some((0, 3, vec![0, 1, 2])));
     }
 }

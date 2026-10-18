@@ -12,7 +12,8 @@ use concinnity_core::gfx::render_types::{SkinnedDrawObject, SkinnedIndex};
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_core::render::error::RenderResult;
 
-use super::{GraphicsSystem, PickCandidate};
+use super::GraphicsSystem;
+use concinnity_core::render::extract::PickCandidate;
 
 // One skinned mesh's skeleton bookkeeping, driving the SkeletonPose +
 // CharacterRig publish after the geometry upload. `template_index` is recorded
@@ -112,7 +113,7 @@ impl GraphicsSystem {
             if want_pick {
                 ctx.insert(entity, transform);
                 ctx.insert(entity, GlobalTransform(model));
-                self.pick_candidates.push(PickCandidate {
+                self.extractor.pick_candidates_mut().push(PickCandidate {
                     asset_id: name_id,
                     entity,
                     local_min: local_bounds.0,

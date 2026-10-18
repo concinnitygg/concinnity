@@ -5,7 +5,7 @@
 //! vertex/index buffers, so the buffers are sized for the *whole* streamed set
 //! and streaming never shrinks GPU memory. The shrinkable-seed path instead
 //! keeps only the resident geometry baked in and reserves a smaller `seed`
-//! headroom for streamed meshes -- sized to the cap-many largest meshes the
+//! headroom for streamed meshes, sized to the cap-many largest meshes the
 //! residency cap permits. The streamer places meshes into the headroom on
 //! upload and tolerates a transient `alloc` miss while freed regions await
 //! their retire frame.
@@ -52,7 +52,7 @@ pub struct MeshSeedRegion {
 /// upper bound for each buffer.
 ///
 /// Returns `None` (the caller keeps the full set baked in, as before) when the
-/// cap -- plus margin -- can already hold every streamed mesh, so there is no
+/// cap, plus margin, can already hold every streamed mesh, so there is no
 /// VRAM to reclaim.
 pub fn plan_seed_bytes(mesh_byte_sizes: &[(u64, u64)], cap: usize) -> Option<(u64, u64)> {
     let n = mesh_byte_sizes.len();
@@ -65,7 +65,7 @@ pub fn plan_seed_bytes(mesh_byte_sizes: &[(u64, u64)], cap: usize) -> Option<(u6
     let margin = (cap / 4).max(1);
     let residency = (cap + margin).min(n);
     if residency >= n {
-        // The margin already covers the whole set -- shrinking would not help.
+        // The margin already covers the whole set: shrinking would not help.
         return None;
     }
     let mut vtx: Vec<u64> = mesh_byte_sizes.iter().map(|&(v, _)| v).collect();
@@ -89,8 +89,8 @@ struct Region<'a> {
     alts: &'a [(usize, usize)],
 }
 
-// Copy one geometry region -- its vertices plus its LOD0 and alternate index
-// ranges -- into the growing destination buffers, rebasing the region's
+// Copy one geometry region (its vertices plus its LOD0 and alternate index
+// ranges) into the growing destination buffers, rebasing the region's
 // absolute indices onto the moved vertex base. Returns the region's new
 // vertex byte offset, its new LOD0 index element offset, and the new element
 // offset of each alternate (in input order).
@@ -140,7 +140,7 @@ fn relocate_region(
 /// offset) is rewritten to its new place, rebasing its absolute indices onto
 /// the moved vertex region. Each streamed draw (`streamed[i] == true`) is
 /// marked non-resident with placeholder offsets and its geometry is *not*
-/// copied -- it lives in the streamer's payload source and is uploaded on
+/// copied: it lives in the streamer's payload source and is uploaded on
 /// demand into the headroom.
 ///
 /// Run before backend init so the GPU buffers are created at the compacted
@@ -162,7 +162,7 @@ pub fn compact_for_streaming(
     for (i, obj) in draw_objects.iter_mut().enumerate() {
         if streamed.get(i).copied().unwrap_or(false) {
             // Streamed draws are uploaded on demand; their geometry is not
-            // baked in. Placeholder offsets -- `upload_mesh` assigns real ones
+            // baked in. Placeholder offsets: `upload_mesh` assigns real ones
             // from the seeded headroom. (Alternates are already stripped from
             // streamable draws upstream; clear defensively so no stale offset
             // survives into the smaller buffer.)
@@ -223,8 +223,8 @@ pub fn compact_for_streaming(
         }
     }
 
-    // Append the zeroed seed headroom. Contents are irrelevant -- a streamed
-    // draw is skipped until its geometry is uploaded over this region -- only
+    // Append the zeroed seed headroom. Contents are irrelevant (a streamed
+    // draw is skipped until its geometry is uploaded over this region); only
     // the size matters, so the buffers are born at resident + headroom bytes.
     let vtx_offset = (new_v.len() * VERTEX_STRIDE) as u64;
     let idx_offset = (new_i.len() * INDEX_STRIDE) as u64;

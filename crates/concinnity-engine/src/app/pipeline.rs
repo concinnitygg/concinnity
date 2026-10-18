@@ -32,9 +32,10 @@ use crate::app::budget::main_thread_role;
 use crate::app::frame_gate::{FrameGo, GoTiming};
 use crate::app::runtime::Runtime;
 use crate::ecs::PipelinedFrames;
-use crate::gfx::system::frame_policy::FramePolicy;
-use crate::gfx::system::submit::{micros_since, submit};
+use crate::gfx::system::submit::submit;
 use crate::shutdown::ShutdownToken;
+use concinnity_core::render::frame_submit::FramePolicy;
+use concinnity_host::clock::micros_since;
 
 // Drive a started Runtime with pipelined frames until it stops. Evicts the
 // backend from the world onto this (main) thread, publishes the channel pair,
@@ -170,7 +171,7 @@ fn render_half(
         let _ = feedback_tx.send(feedback);
         if stop {
             return RenderHalfOutcome {
-                device_lost: outcome.device_lost,
+                device_lost: outcome.device_lost.is_some(),
                 submitted,
             };
         }

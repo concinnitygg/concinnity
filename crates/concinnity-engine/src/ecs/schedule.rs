@@ -328,11 +328,13 @@ pub(crate) fn ui_input(world: &World) -> Option<concinnity_core::ui::UiInputSyst
 // TextInputSystem: present whenever the world declares any `TextInput`. It
 // edits the focused field in place from the frame's typed character and
 // caret keys, so it runs after InputSystem publishes `FrameInput`.
-pub(crate) fn text_input(world: &World) -> Option<crate::input::text_system::TextInputSystem> {
+pub(crate) fn text_input(
+    world: &World,
+) -> Option<concinnity_core::input::text_input::TextInputSystem> {
     world
         .query::<TextInput>()
         .next()
-        .map(|_| crate::input::text_system::TextInputSystem::new())
+        .map(|_| concinnity_core::input::text_input::TextInputSystem::default())
 }
 
 #[cfg(test)]

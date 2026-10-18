@@ -85,3 +85,5 @@ pub(crate) mod behavior;
 /// inserts into the world, mirroring the shipped-runtime loader.
 pub mod resource;
 pub(crate) mod story;
+// Background threads that answer load requests off the frame thread.
+pub(crate) mod worker;

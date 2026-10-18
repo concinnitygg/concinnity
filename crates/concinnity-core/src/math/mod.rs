@@ -19,5 +19,5 @@ pub use rotation::{
 
 pub use scalar::{
     acos, asin, atan2, ceil, cos, exp, exp2, floor, fract, half_life_decay, hypot, ln, log2,
-    mul_add, powf, powi, rem_euclid, round, round_f64, sin, sin_cos, sqrt, tan, trunc,
+    mul_add, powf, powf_f64, powi, rem_euclid, round, round_f64, sin, sin_cos, sqrt, tan, trunc,
 };

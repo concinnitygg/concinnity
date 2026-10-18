@@ -4,6 +4,7 @@
 //! targets with the weights that drive them.
 pub mod anim_graph;
 pub mod character_shape;
+pub mod flat_blend;
 pub mod ik;
 pub mod morph_targets;
 pub mod morph_weights;

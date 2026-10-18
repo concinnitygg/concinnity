@@ -138,6 +138,11 @@ pub fn round_f64(x: f64) -> f64 {
     libm::round(x)
 }
 
+/// [`powf`] for an `f64`.
+pub fn powf_f64(x: f64, n: f64) -> f64 {
+    libm::pow(x, n)
+}
+
 /// Least nonnegative remainder of `x (mod rhs)`.
 pub fn rem_euclid(x: f32, rhs: f32) -> f32 {
     let r = libm::fmodf(x, rhs);
@@ -210,6 +215,22 @@ mod tests {
             approx(trunc(x), f32::trunc(x));
             approx(fract(x), f32::fract(x));
             assert_eq!(round_f64(f64::from(x)), f64::round(f64::from(x)));
+        }
+    }
+
+    #[test]
+    fn powf_f64_matches_std() {
+        for &(x, n) in &[
+            (0.05f64, 0.0f64),
+            (0.05, 0.5),
+            (2.0, 10.0),
+            (20_000.0, 0.25),
+        ] {
+            let (got, want) = (powf_f64(x, n), f64::powf(x, n));
+            assert!(
+                (got - want).abs() <= 1e-12 * want.abs().max(1.0),
+                "{got} vs {want}"
+            );
         }
     }
 

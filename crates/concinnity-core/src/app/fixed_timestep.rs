@@ -3,7 +3,7 @@
 //! reproducible: the simulation sees the same timing sequence on a slow host as
 //! on a fast one, and a host with no clock at all can still drive it.
 //!
-//! The windowed driver's accumulator (engine `app::clock`) is the other half of
+//! The windowed driver's [`crate::ecs::TickAccumulator`] is the other half of
 //! this seam: it turns real elapsed time into the same budget, emitting zero
 //! ticks on a short frame and several on a long one.
 

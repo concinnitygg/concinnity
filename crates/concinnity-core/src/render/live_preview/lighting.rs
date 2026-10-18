@@ -12,8 +12,11 @@
 //! preset's ceiling. So editing a row the user has overridden moves the
 //! authored baseline and leaves the picture alone, exactly as relaunching would.
 
-use crate::components::{DirectionalLight, GraphicsConfig, VolumetricFog};
-use crate::ecs::World;
+use crate::components::{
+    AmbientOcclusion, Bloom, DirectionalLight, Exposure, GraphicsConfig, IndirectLighting,
+    PlanetDetail, Reflections, Shadows, Vignette, VolumetricFog,
+};
+use crate::ecs::{AssetFields, World};
 use crate::render::ops::RenderOps;
 use crate::render::queues::ActiveRenderQueues;
 use crate::render::volumetric_fog;
@@ -29,28 +32,14 @@ use super::has_queue;
 /// map resolution, the feature toggles and the resolution knobs) size or gate a
 /// GPU resource built at load and need the world rebuilt.
 pub(crate) const LIVE_SETTINGS_FIELDS: &[(&str, &[&str])] = &[
-    ("shadows", &["distance", "cascades", "update"]),
-    ("ambient_occlusion", &["radius", "intensity"]),
-    ("reflections", &["intensity", "max_distance"]),
-    (
-        "indirect_lighting",
-        &["ambient_intensity", "ssgi_intensity", "ssgi_max_distance"],
-    ),
-    (
-        "exposure",
-        &[
-            "ev",
-            "auto_min_ev",
-            "auto_max_ev",
-            "auto_speed",
-            "auto_night_ev",
-            "night_vision",
-            "auto_highlight_ev",
-        ],
-    ),
-    ("bloom", &["intensity", "threshold", "knee"]),
-    ("vignette", &["strength"]),
-    ("planet_detail", &["finest_cell_size"]),
+    ("shadows", Shadows::LIVE_PARAMS),
+    ("ambient_occlusion", AmbientOcclusion::LIVE_PARAMS),
+    ("reflections", Reflections::LIVE_PARAMS),
+    ("indirect_lighting", IndirectLighting::LIVE_PARAMS),
+    ("exposure", Exposure::LIVE_PARAMS),
+    ("bloom", Bloom::LIVE_PARAMS),
+    ("vignette", Vignette::LIVE_PARAMS),
+    ("planet_detail", PlanetDetail::LIVE_PARAMS),
 ];
 
 /// The fields of `GraphicsConfig` section `section` this module applies live,
@@ -139,16 +128,13 @@ struct LiveChanges {
 }
 
 // Move the authored baseline's live fields to the edited world's, leaving the
-// toggles and resolution knobs beside them alone. The shadows section moves
-// whole, as its map size is only read back through the resolved quality.
+// toggles and resolution knobs beside them alone. The shadow map size moves
+// too, as it is only read back through the resolved quality.
 fn adopt_live(world: &mut WorldSettings, edited: &WorldSettings) -> LiveChanges {
     let (world, edited) = (&mut world.graphics, &edited.graphics);
-    let (from, to) = (&edited.shadows, &world.shadows);
-    let shadows = from.distance != to.distance
-        || from.cascades != to.cascades
-        || from.update != to.update
-        || from.map_size != to.map_size;
-    world.shadows = edited.shadows.clone();
+    let map_size = world.shadows.map_size != edited.shadows.map_size;
+    world.shadows.map_size = edited.shadows.map_size;
+    let shadows = world.shadows.copy_live(&edited.shadows) | map_size;
     let look = copy_look(world, edited);
     let planet_detail =
         world.planet_detail.finest_cell_size != edited.planet_detail.finest_cell_size;
@@ -162,34 +148,12 @@ fn adopt_live(world: &mut WorldSettings, edited: &WorldSettings) -> LiveChanges 
 
 // Copy the live look scalars of `src` onto `dst`; whether any of them moved.
 fn copy_look(dst: &mut ResolvedGraphics, src: &ResolvedGraphics) -> bool {
-    let mut moved = false;
-    macro_rules! copy {
-        ($($field:ident).+) => {
-            if dst.$($field).+ != src.$($field).+ {
-                dst.$($field).+ = src.$($field).+;
-                moved = true;
-            }
-        };
-    }
-    copy!(ambient_occlusion.radius);
-    copy!(ambient_occlusion.intensity);
-    copy!(reflections.intensity);
-    copy!(reflections.max_distance);
-    copy!(indirect_lighting.ambient_intensity);
-    copy!(indirect_lighting.ssgi_intensity);
-    copy!(indirect_lighting.ssgi_max_distance);
-    copy!(exposure.ev);
-    copy!(exposure.auto_min_ev);
-    copy!(exposure.auto_max_ev);
-    copy!(exposure.auto_speed);
-    copy!(exposure.auto_night_ev);
-    copy!(exposure.night_vision);
-    copy!(exposure.auto_highlight_ev);
-    copy!(bloom.intensity);
-    copy!(bloom.threshold);
-    copy!(bloom.knee);
-    copy!(vignette.strength);
-    moved
+    dst.ambient_occlusion.copy_live(&src.ambient_occlusion)
+        | dst.reflections.copy_live(&src.reflections)
+        | dst.indirect_lighting.copy_live(&src.indirect_lighting)
+        | dst.exposure.copy_live(&src.exposure)
+        | dst.bloom.copy_live(&src.bloom)
+        | dst.vignette.copy_live(&src.vignette)
 }
 
 // Re-resolve the cascade schedule and push it when it moved.

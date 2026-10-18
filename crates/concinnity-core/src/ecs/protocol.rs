@@ -20,6 +20,15 @@ use crate::ecs::asset_id::AssetId;
 /// simulation driver reads it, and the engine depends on the driver.
 pub struct WorldPhysicsBudget(pub PhysicsBudgetRecord);
 
+/// The blob's baked per-scene exclusive content groups, published at blob load
+/// for the streaming and scene-residency wiring to consume at graphics init.
+pub struct BlobSceneGroups(pub Vec<crate::blob::SceneGroup>);
+
+/// The blob's baked per-mesh geometry summaries (AABB + counts by mesh-source
+/// handle), published at blob load so graphics init can build draw records for
+/// deferred scene-owned meshes without decoding their payloads.
+pub struct BlobMeshBounds(pub Vec<crate::blob::MeshBoundsRecord>);
+
 /// Per-frame menu state, published as a resource by the overlay build (which runs
 /// first in the schedule) and read by the simulation systems the same tick.
 /// `true` while any world-pausing screen is open: physics and animation then freeze so they

@@ -1,0 +1,330 @@
+//! Draw-object world positions and reflection-probe placement: the declared
+//! probes, or an auto-seed over the world's triangles.
+
+use alloc::vec::Vec;
+
+use crate::components::{GlassPanel, ReflectionProbe, WaterSurface};
+use crate::ecs::PipelineContext;
+use crate::gfx::mesh_payload::Vertex;
+use crate::gfx::render_types;
+use crate::render::reflection_probe::{self, ProbePlacement};
+use crate::transform::mat4_transform_point;
+
+/// World-space position used to score a draw object for texture streaming:
+/// the AABB center when bounds are finite, otherwise the model-matrix
+/// translation (dynamic props carry a non-finite sentinel AABB).
+pub fn draw_object_position(obj: &render_types::DrawObject) -> [f32; 3] {
+    let finite = obj
+        .bb_min
+        .iter()
+        .chain(obj.bb_max.iter())
+        .all(|v| v.is_finite());
+    if finite {
+        [
+            0.5 * (obj.bb_min[0] + obj.bb_max[0]),
+            0.5 * (obj.bb_min[1] + obj.bb_max[1]),
+            0.5 * (obj.bb_min[2] + obj.bb_max[2]),
+        ]
+    } else {
+        [obj.model[3][0], obj.model[3][1], obj.model[3][2]]
+    }
+}
+
+// Above this triangle count the reflection-probe auto-seed skips the world-triangle
+// gather and keeps coarse object-AABB occupancy, so a heavy import (Bistro is ~2.8M
+// triangles) pays nothing extra at load. Small authored scenes stay well under it and
+// get the finer surface-voxel interior detection (a watertight single-mesh room is then
+// seen as hollow).
+const AUTO_SEED_MAX_TRIANGLES: usize = 200_000;
+
+/// Gather world-space triangles from the static draw list for reflection-probe auto-seed
+/// interior detection (surface voxelization needs real geometry, not AABBs). Returns
+/// `None` when there is no cullable static geometry or the scene exceeds
+/// `AUTO_SEED_MAX_TRIANGLES`; the caller then falls back to coarse AABB occupancy. A
+/// streamed draw not yet resident has no indices to read and is skipped. Each
+/// cullable draw's indexed triangles are transformed to world space by its model matrix;
+/// `base_vertex` is honored so streamed (mesh-relative) chunks resolve too, and every
+/// fetch is bounds-checked against the shared vertex buffer (build-time offsets should be
+/// in range, but a bad offset is skipped rather than risking an out-of-bounds index).
+pub fn gather_auto_seed_triangles(
+    draw_objects: &[render_types::DrawObject],
+    all_vertices: &[Vertex],
+    all_indices: &[u32],
+) -> Option<Vec<[[f32; 3]; 3]>> {
+    let eligible = |o: &render_types::DrawObject| o.resident && o.cullable() && o.index_count >= 3;
+    let total_tris: usize = draw_objects
+        .iter()
+        .filter(|o| eligible(o))
+        .map(|o| o.index_count / 3)
+        .sum();
+    if total_tris == 0 || total_tris > AUTO_SEED_MAX_TRIANGLES {
+        return None;
+    }
+
+    let mut tris = Vec::with_capacity(total_tris);
+    for o in draw_objects.iter().filter(|o| eligible(o)) {
+        let iend = o.index_offset + o.index_count;
+        if iend > all_indices.len() {
+            continue;
+        }
+        for t in all_indices[o.index_offset..iend].chunks_exact(3) {
+            let vi = |k: usize| (t[k] as i64 + o.base_vertex as i64) as usize;
+            let (a, b, c) = (vi(0), vi(1), vi(2));
+            if a >= all_vertices.len() || b >= all_vertices.len() || c >= all_vertices.len() {
+                continue;
+            }
+            tris.push([
+                mat4_transform_point(&o.model, all_vertices[a].pos),
+                mat4_transform_point(&o.model, all_vertices[b].pos),
+                mat4_transform_point(&o.model, all_vertices[c].pos),
+            ]);
+        }
+    }
+    (!tris.is_empty()).then_some(tris)
+}
+
+/// The world's declared reflection probes. Read, not drained, so editor tooling
+/// can address the authored probes by name.
+pub fn declared_probe_placements(ctx: &PipelineContext) -> Vec<ProbePlacement> {
+    ctx.query::<ReflectionProbe>()
+        .map(ProbePlacement::from)
+        .collect()
+}
+
+/// Whether a world without declared probes gets auto-seeded ones: not a planet
+/// world, whose frame moves would leave a seeded probe's cube behind.
+pub fn seeds_probes(ctx: &PipelineContext) -> bool {
+    ctx.query::<crate::components::Planet>().next().is_none()
+}
+
+/// Geometry-aware probe auto-seed for a world that declares no ReflectionProbe:
+/// surface-voxelizing the static geometry detects a watertight single-mesh
+/// interior, which object AABBs alone would read as a solid block. An
+/// over-budget import falls back to coarse AABB occupancy rather than no seed.
+///
+/// The grid bounds union the reflectors with the geometry, because a water
+/// surface or glass pane is not a draw object: a pool wider than every mesh
+/// would otherwise sit outside the grid. Occupancy stays geometry-only, since
+/// it answers "is this capture point inside a wall", which a plane does not make
+/// true. `None` when nothing is bounded, leaving the backend's own AABB seed.
+pub fn auto_seed_probe_placements<'a>(
+    draw_objects: &[render_types::DrawObject],
+    vertices: &[Vertex],
+    indices: &[u32],
+    water_surfaces: impl IntoIterator<Item = &'a WaterSurface>,
+    glass_panels: &[GlassPanel],
+) -> Option<Vec<ProbePlacement>> {
+    let occupancy: Vec<([f32; 3], [f32; 3])> = draw_objects
+        .iter()
+        .map(|o| (o.bb_min, o.bb_max))
+        .filter(|(mn, mx)| mn.iter().chain(mx).all(|c| c.is_finite()))
+        .collect();
+    let reflectors = water_surfaces
+        .into_iter()
+        .map(|w| reflection_probe::reflector_bounds(w.center, [w.extent[0], 0.0, w.extent[1]]))
+        .chain(glass_panels.iter().map(|g| {
+            // A pane is an oriented quad; its longest half-side bounds it on
+            // every axis whatever its normal.
+            let r = g.half_size[0].max(g.half_size[1]);
+            reflection_probe::reflector_bounds(g.center, [r, r, r])
+        }));
+    let tris = gather_auto_seed_triangles(draw_objects, vertices, indices).unwrap_or_default();
+    reflection_probe::fold_world_bounds(occupancy.iter().copied().chain(reflectors))
+        .map(|(mn, mx)| reflection_probe::auto_seed_probes_with_geometry(mn, mx, &occupancy, &tris))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_planet_world_seeds_no_probes() {
+        let mut world = crate::ecs::World::new();
+        assert!(seeds_probes(&world.context()));
+        world.push(crate::components::Planet::default());
+        assert!(!seeds_probes(&world.context()));
+    }
+
+    use super::*;
+    use crate::gfx::render_types::{DrawObject, MaterialUniforms, NO_NORMAL_MAP_SLOT};
+    use alloc::vec;
+
+    // A finite-bounds draw object at `model` covering `[index_offset, +count)`
+    // of the shared index buffer. Culling stays enabled unless the caller
+    // passes a non-finite AABB.
+    fn draw(
+        model: [[f32; 4]; 4],
+        bb_min: [f32; 3],
+        bb_max: [f32; 3],
+        index_offset: usize,
+        index_count: usize,
+        base_vertex: i32,
+    ) -> DrawObject {
+        DrawObject {
+            vertex_offset: 0,
+            vertex_count: 0,
+            index_offset,
+            index_count,
+            planet_tile: None,
+            base_vertex,
+            geometry_generation: 0,
+            shader_bucket: 0,
+            model,
+            texture_slot: 0,
+            normal_map_slot: NO_NORMAL_MAP_SLOT,
+            material: MaterialUniforms::DEFAULT,
+            visible: true,
+            resident: true,
+            bb_min,
+            bb_max,
+            local_bounds: None,
+            cull_distance: 0.0,
+            lod_alternates: Vec::new(),
+        }
+    }
+
+    fn vert(pos: [f32; 3]) -> Vertex {
+        Vertex {
+            pos,
+            normal: [0.0, 1.0, 0.0],
+            tangent: [1.0, 0.0, 0.0],
+            color: [1.0, 1.0, 1.0],
+            uv: [0.0, 0.0],
+        }
+    }
+
+    const IDENTITY: [[f32; 4]; 4] = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+
+    // Finite bounds score at the AABB center.
+    #[test]
+    fn draw_object_position_uses_aabb_center_when_finite() {
+        let obj = draw(IDENTITY, [-2.0, 0.0, 4.0], [4.0, 6.0, 8.0], 0, 0, 0);
+        assert_eq!(draw_object_position(&obj), [1.0, 3.0, 6.0]);
+    }
+
+    // A non-finite (dynamic sentinel) AABB falls back to the model translation.
+    #[test]
+    fn draw_object_position_uses_model_translation_when_unbounded() {
+        let model = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [7.0, 8.0, 9.0, 1.0],
+        ];
+        let obj = draw(model, [f32::NAN; 3], [f32::NAN; 3], 0, 0, 0);
+        assert_eq!(draw_object_position(&obj), [7.0, 8.0, 9.0]);
+    }
+
+    // A cullable draw's indexed triangle is transformed to world space by its
+    // model matrix, honoring base_vertex.
+    #[test]
+    fn gather_auto_seed_triangles_transforms_by_model_and_base_vertex() {
+        // Translate the whole draw by +10 on X; base_vertex shifts the index
+        // fetch by one so indices 0,1,2 read vertices 1,2,3.
+        let model = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [10.0, 0.0, 0.0, 1.0],
+        ];
+        let verts = vec![
+            vert([0.0, 0.0, 0.0]),
+            vert([0.0, 0.0, 0.0]),
+            vert([1.0, 0.0, 0.0]),
+            vert([0.0, 0.0, 1.0]),
+        ];
+        let idx = vec![0u32, 1, 2];
+        let objs = vec![draw(model, [-1.0; 3], [1.0; 3], 0, 3, 1)];
+        let tris = gather_auto_seed_triangles(&objs, &verts, &idx).expect("one triangle");
+        assert_eq!(tris.len(), 1);
+        assert_eq!(tris[0][0], [10.0, 0.0, 0.0]);
+        assert_eq!(tris[0][1], [11.0, 0.0, 0.0]);
+        assert_eq!(tris[0][2], [10.0, 0.0, 1.0]);
+    }
+
+    // With no cullable geometry (a non-finite AABB draw) the auto-seed gather
+    // returns None so the caller falls back to coarse AABB occupancy.
+    #[test]
+    fn gather_auto_seed_triangles_none_without_cullable_geometry() {
+        let objs = vec![draw(IDENTITY, [f32::NAN; 3], [f32::NAN; 3], 0, 3, 0)];
+        let verts = vec![vert([0.0; 3]), vert([1.0, 0.0, 0.0]), vert([0.0, 0.0, 1.0])];
+        assert!(gather_auto_seed_triangles(&objs, &verts, &[0, 1, 2]).is_none());
+    }
+
+    // A compacted streamed draw keeps its counts but points at offset 0, which
+    // holds another draw's indices; it contributes no triangles.
+    #[test]
+    fn gather_auto_seed_triangles_skips_compacted_streamed_draws() {
+        let verts = vec![
+            vert([0.0; 3]),
+            vert([1.0, 0.0, 0.0]),
+            vert([0.0, 0.0, 1.0]),
+            vert([5.0, 0.0, 0.0]),
+        ];
+        let streamed = || {
+            let mut d = draw(IDENTITY, [-1.0; 3], [1.0; 3], 0, 3, 1);
+            d.resident = false;
+            d
+        };
+        let resident = draw(IDENTITY, [-1.0; 3], [1.0; 3], 0, 3, 0);
+        let tris = gather_auto_seed_triangles(&[resident, streamed()], &verts, &[0, 1, 2])
+            .expect("the resident triangle");
+        assert_eq!(tris.len(), 1);
+        assert!(gather_auto_seed_triangles(&[streamed()], &verts, &[0, 1, 2]).is_none());
+    }
+
+    // An index range past the end of the shared buffer is skipped rather than
+    // panicking; with nothing left to gather the result is None.
+    #[test]
+    fn gather_auto_seed_triangles_skips_out_of_range_index_span() {
+        let objs = vec![draw(IDENTITY, [-1.0; 3], [1.0; 3], 0, 6, 0)];
+        // index_count claims 6 indices but the buffer holds only 3.
+        let verts = vec![vert([0.0; 3]), vert([1.0, 0.0, 0.0]), vert([0.0, 0.0, 1.0])];
+        assert!(gather_auto_seed_triangles(&objs, &verts, &[0, 1, 2]).is_none());
+    }
+
+    // A triangle referencing a vertex past the end of the vertex buffer is
+    // dropped; an all-dropped scene yields None.
+    #[test]
+    fn gather_auto_seed_triangles_skips_out_of_range_vertex_index() {
+        let objs = vec![draw(IDENTITY, [-1.0; 3], [1.0; 3], 0, 3, 0)];
+        let verts = vec![vert([0.0; 3]), vert([1.0, 0.0, 0.0]), vert([0.0, 0.0, 1.0])];
+        // Index 9 is out of range for a 3-vertex buffer.
+        assert!(gather_auto_seed_triangles(&objs, &verts, &[0, 1, 9]).is_none());
+    }
+
+    // A world with no bounded geometry and no reflectors leaves the seed to the backend.
+    #[test]
+    fn auto_seed_probe_placements_none_without_geometry_or_reflectors() {
+        let unbounded = vec![draw(IDENTITY, [f32::NAN; 3], [f32::NAN; 3], 0, 0, 0)];
+        assert!(auto_seed_probe_placements(&[], &[], &[], &[], &[]).is_none());
+        assert!(auto_seed_probe_placements(&unbounded, &[], &[], &[], &[]).is_none());
+    }
+
+    // A water surface past every mesh stretches the grid to cover it.
+    #[test]
+    fn auto_seed_probe_placements_widen_the_grid_to_a_reflector() {
+        let objs = vec![draw(IDENTITY, [-1.0; 3], [1.0; 3], 0, 3, 0)];
+        let verts = vec![vert([0.0; 3]), vert([1.0, 0.0, 0.0]), vert([0.0, 0.0, 1.0])];
+        let idx = [0u32, 1, 2];
+        let reach = |placements: Vec<ProbePlacement>| {
+            placements
+                .iter()
+                .map(|p| p.box_max[0])
+                .fold(f32::NEG_INFINITY, f32::max)
+        };
+        let alone = auto_seed_probe_placements(&objs, &verts, &idx, &[], &[]).expect("geometry");
+        let pool = WaterSurface {
+            center: [50.0, 0.0, 0.0],
+            extent: [5.0, 5.0],
+            ..Default::default()
+        };
+        let widened = auto_seed_probe_placements(&objs, &verts, &idx, &[pool], &[])
+            .expect("geometry and a reflector");
+        assert!(reach(alone) <= 1.0);
+        assert!(reach(widened) >= 55.0);
+    }
+}

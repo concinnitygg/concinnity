@@ -1670,7 +1670,7 @@ impl FrameDevice for DxContext {
         pass_lists.clear();
         self.pass_lists.set(pass_lists);
         let mut stats = self.diagnostics.frame_stats.get();
-        stats.submit_present_us = started.elapsed().as_micros().min(u32::MAX.into()) as u32;
+        stats.submit_present_us = concinnity_host::clock::micros_since(started);
         self.diagnostics.frame_stats.set(stats);
         // A submitted frame's capture waits for the fence value it signaled; a
         // failed one is reported as a dropped frame by the caller.

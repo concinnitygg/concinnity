@@ -19,9 +19,25 @@ pub fn micros_at(at: Instant) -> u64 {
     at.saturating_duration_since(epoch).as_micros() as u64
 }
 
+/// Wall microseconds since `start`, saturating rather than wrapping.
+pub fn micros_since(start: Instant) -> u32 {
+    u32::try_from(start.elapsed().as_micros()).unwrap_or(u32::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn micros_since_measures_and_saturates() {
+        let start = Instant::now();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        assert!(micros_since(start) >= 2_000);
+        let long_ago = Instant::now().checked_sub(std::time::Duration::from_secs(5_000));
+        if let Some(long_ago) = long_ago {
+            assert_eq!(micros_since(long_ago), u32::MAX);
+        }
+    }
 
     #[test]
     fn the_clock_never_goes_backwards() {

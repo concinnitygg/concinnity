@@ -5,12 +5,13 @@
 
 use concinnity_core::ecs::World;
 use concinnity_core::render::backend::{GpuProfile, RenderBackend};
+use concinnity_core::render::stream_pools::{StreamingPressure, StreamingStats};
 use concinnity_host::store::paths::StateTree;
 
 use crate::animation::AnimationSystem;
 use crate::app::mem_drift::MemoryDrift;
 use crate::ecs::ActiveRenderBackend;
-use crate::gfx::streaming::system::{StreamingPressure, StreamingState, StreamingStats};
+use crate::gfx::streaming::system::StreamingRuntime;
 
 /// Whether the world runs with a renderer: the run mode `Runtime::start`
 /// resolved and published, or a constructed `GraphicsSystem` for a world
@@ -30,14 +31,14 @@ pub fn renders(world: &World) -> bool {
 }
 
 /// Per-pool `(resident, pending, unloaded)` streaming counts from the parked
-/// `StreamingState` (StreamingSystem drives it against the backend each
+/// streaming runtime (StreamingSystem drives it against the backend each
 /// frame). `None` before graphics init parks it, and from inside a system
 /// step, which takes the state out. Read by the `cn debug` server's
 /// `streaming` command and the editor's Health panel.
 pub fn streaming_stats(world: &World) -> Option<StreamingStats> {
     world
-        .resource::<StreamingState>()
-        .map(|s| s.streaming_stats())
+        .resource::<StreamingRuntime>()
+        .map(|r| r.state.streaming_stats())
 }
 
 /// Live process-RAM back-off pressure on streaming, published by

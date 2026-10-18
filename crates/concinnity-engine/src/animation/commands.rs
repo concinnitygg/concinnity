@@ -7,9 +7,9 @@ use concinnity_core::animation::anim_graph::normalized_time;
 use concinnity_core::ecs::SkinnedMeshHandle;
 use concinnity_core::ecs::asset_id::AssetId;
 
-use super::flat::Transition;
 use super::graph::GraphTarget;
 use super::{AnimationSystem, TargetMode};
+use concinnity_core::animation::flat_blend::Transition;
 
 /// Snapshot of a graph target's live state. Parameter values are as of the
 /// last completed animation step, so a pending [`AnimationSystem::set_param`]
@@ -166,9 +166,9 @@ impl AnimationSystem {
 #[cfg(test)]
 mod tests {
     use super::super::TargetState;
-    use super::super::flat::{ClipEntry, FlatState};
     use super::*;
     use concinnity_core::animation::anim_graph::GraphCursor;
+    use concinnity_core::animation::flat_blend::{ClipEntry, FlatState};
     use concinnity_core::animation::skeleton::AnimationClip;
     use concinnity_core::animation::skinned_mesh_map::SkinnedMeshNameIndex;
     use concinnity_core::components::AnimationGraph;

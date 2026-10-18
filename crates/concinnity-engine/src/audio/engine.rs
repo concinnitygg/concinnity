@@ -19,18 +19,15 @@ use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
 use kira::track::{SpatialTrackBuilder, SpatialTrackHandle, TrackBuilder, TrackHandle};
 use kira::{AudioManager, AudioManagerSettings, Decibels, Tween};
 
-use super::clips::{ClipState, ClipStore, PendingPlay};
+use concinnity_core::audio::clips::{ClipState, ClipStore, PendingPlay};
+use concinnity_core::audio::voices::{Admission, VoiceSlots};
+use concinnity_core::audio::{EmitterId, distance, occlusion};
+
 use super::decode::DecodeWorker;
-use super::voices::{Admission, VoiceSlots};
-use super::{occlusion, rolloff};
+use super::rolloff;
 
 // Most one-shot sounds audible at once; see `VoiceSlots`.
 const MAX_VOICES: usize = 32;
-
-// Opaque handle to a spatial emitter inside an [`AudioEngine`]. Internal to
-// the crate; the engine only ever touches `AudioSystem`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct EmitterId(pub(crate) usize);
 
 // Authored acoustics for one emitter, resolved by the system from the
 // AudioEmitter schema.
@@ -79,7 +76,8 @@ struct Active<B: Backend> {
     // the same clip keeps the track running instead of restarting it.
     music: Option<(u64, StaticSoundHandle)>,
     voices: VoiceSlots<StaticSoundHandle>,
-    decoder: DecodeWorker,
+    // `None` when the OS refused the decode thread: clips then never play.
+    decoder: Option<DecodeWorker>,
     clips: ClipStore<StaticSoundData>,
 }
 
@@ -174,8 +172,12 @@ impl<B: Backend> AudioEngine<B> {
             free_slots: Vec::new(),
             music: None,
             voices: VoiceSlots::new(MAX_VOICES),
-            decoder: DecodeWorker::spawn(),
-            clips: ClipStore::new(),
+            decoder: DecodeWorker::spawn()
+                .map_err(|e| {
+                    tracing::warn!("audio decode worker spawn failed, clips stay silent: {e}")
+                })
+                .ok(),
+            clips: ClipStore::default(),
         })
     }
 
@@ -191,7 +193,12 @@ impl<B: Backend> AudioEngine<B> {
         let Some(active) = self.active.as_mut() else {
             return;
         };
-        if active.clips.begin(key) && !active.decoder.send(key, bytes) {
+        if active.clips.begin(key)
+            && !active
+                .decoder
+                .as_mut()
+                .is_some_and(|decoder| decoder.send(key, bytes))
+        {
             tracing::warn!("audio decode worker is gone; clip {key} will never play");
         }
     }
@@ -205,7 +212,7 @@ impl<B: Backend> AudioEngine<B> {
         active
             .voices
             .reap(|handle| handle.state() == PlaybackState::Stopped);
-        for result in active.decoder.drain() {
+        while let Some(result) = active.decoder.as_ref().and_then(DecodeWorker::try_recv) {
             let flushed = active.clips.complete(result.key, result.decoded);
             for play in flushed {
                 let Some(data) = active.clips.get(result.key).cloned() else {
@@ -224,7 +231,7 @@ impl<B: Backend> AudioEngine<B> {
         params: &EmitterParams,
     ) -> Option<EmitterId> {
         let active = self.active.as_mut()?;
-        let (min, max) = rolloff::clamp_distances(params.min_distance, params.max_distance);
+        let (min, max) = distance::clamp_distances(params.min_distance, params.max_distance);
         // The lowpass starts acoustically transparent; occlusion sweeps it.
         let (filter_effect, filter) = FilterBuilder::new()
             .cutoff(occlusion::cutoff_hz(0.0))

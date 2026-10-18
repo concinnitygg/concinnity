@@ -1,21 +1,13 @@
-//! The asset-streaming home: the `std` drivers and the system that schedules
-//! them. The policy core they consult (`StreamPlanner` / `StreamState` and its
-//! LRU scoring) is `no_std` and lives in `concinnity_core::render::streaming`,
-//! so a future `no_std` client runtime can share it.
+//! The asset-streaming home: the load threads and payload sources behind
+//! core's streaming pools (`concinnity_core::render::stream_pools`), and the
+//! system that runs them each frame.
 
-// Async asset-streaming drivers, scheduled by `StreamingSystem` against
-// whichever backend the world is running on.
-pub(crate) mod chunk;
 mod file_range;
 pub(crate) mod mesh;
 pub(crate) mod planet;
 pub(crate) mod shader;
 pub(crate) mod texture;
-pub(crate) mod worker;
 
-/// Asset-streaming drive (texture / mesh / voxel-world chunk pools) + the
-/// camera-relative view publish. Internal system, constructed alongside
-/// GraphicsSystem (same gate) and scheduled immediately before it. `pub` so the
-/// editor's debug server can name `StreamingStats` (its state lives in the
-/// parked `StreamingState` resource, read via `World::streaming_stats`).
-pub mod system;
+// The streaming drive (texture / mesh / chunk / planet-tile pools) and the
+// camera-relative view publish, scheduled immediately before GraphicsSystem.
+pub(crate) mod system;

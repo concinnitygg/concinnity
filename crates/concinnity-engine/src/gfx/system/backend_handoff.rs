@@ -92,11 +92,12 @@ impl GraphicsSystem {
     ) {
         // Seed the frame extraction's viewport from the live backend;
         // FrameInput refreshes it once InputSystem starts publishing.
-        self.viewport = self
+        let viewport = self
             .backend
             .as_ref()
             .map(|b| b.logical_size())
             .unwrap_or((0.0, 0.0));
+        self.extractor.set_viewport(viewport);
         // OverlaySystem shapes the overlay draw list from these each frame.
         ctx.insert_resource(concinnity_core::render::overlay::OverlayAssets {
             fonts: std::mem::take(&mut self.loaded_fonts),
@@ -104,7 +105,7 @@ impl GraphicsSystem {
             debug_hud_chips: std::mem::take(&mut self.debug_hud_chips),
             stat_hud_chips: std::mem::take(&mut self.stat_hud_chips),
             clip_rects: std::mem::take(&mut self.clip_rects),
-            initial_viewport: self.viewport,
+            initial_viewport: viewport,
         });
 
         self.publish_streaming_state(ctx, handoff.frames_in_flight);

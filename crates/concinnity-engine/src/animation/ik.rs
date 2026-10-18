@@ -17,7 +17,8 @@ use concinnity_core::components::{
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{PipelineContext, SkinnedMeshHandle};
 use concinnity_core::transform::{Mat4, mat4_affine_inverse, mat4_transform_point};
-use std::collections::{BTreeMap, HashMap};
+use hashbrown::HashMap;
+use std::collections::BTreeMap;
 
 // Probe ray extents around the animated foot: the ray starts `PROBE_UP`
 // above it and reaches `PROBE_DOWN` below.

@@ -177,8 +177,8 @@ impl Runtime {
         for (id, asset) in assets {
             world.add(asset, id);
         }
-        world.insert_resource(crate::ecs::BlobSceneGroups(scene_groups));
-        world.insert_resource(crate::ecs::BlobMeshBounds(mesh_bounds));
+        world.insert_resource(concinnity_core::ecs::BlobSceneGroups(scene_groups));
+        world.insert_resource(concinnity_core::ecs::BlobMeshBounds(mesh_bounds));
         // Absent for a world with no physics content, which is also a world
         // with no PhysicsSystem to read it.
         if let Some(budget) = physics_budget {

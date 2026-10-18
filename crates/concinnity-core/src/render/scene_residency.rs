@@ -50,6 +50,9 @@ struct SceneSet {
     members: Vec<Member>,
     // Parallel to `members`.
     resident: Vec<bool>,
+    // Parallel to `members`: a member whose load failed for good, which the
+    // scene no longer waits on.
+    failed: Vec<bool>,
 }
 
 /// Per-scene residency pins, one refcount per resource and channel.
@@ -83,6 +86,7 @@ impl SceneResidency {
                 scene,
                 pinned: false,
                 resident: vec![false; members.len()],
+                failed: vec![false; members.len()],
                 members,
             })
             .collect();
@@ -131,6 +135,18 @@ impl SceneResidency {
         self.sets[set_idx].resident[member_idx] = resident;
     }
 
+    /// Record a member whose load failed for good: it is never resident, and
+    /// its scene loads without it. Members owned by no scene are ignored.
+    pub fn note_failed(&mut self, member: Member) {
+        let Ok(pos) = self.owner.binary_search_by_key(&member, |&(m, ..)| m) else {
+            return;
+        };
+        let (_, set_idx, member_idx) = self.owner[pos];
+        let set = &mut self.sets[set_idx];
+        set.failed[member_idx] = true;
+        set.resident[member_idx] = false;
+    }
+
     /// The scene's derived load state, or `None` for an unknown scene.
     pub fn state(&self, scene: AssetId) -> Option<SceneLoadState> {
         self.sets
@@ -174,9 +190,18 @@ impl SceneResidency {
     }
 }
 
+// Each member the scene still waits on, with whether it is resident.
+fn awaited(set: &SceneSet) -> impl Iterator<Item = bool> + '_ {
+    set.resident
+        .iter()
+        .zip(&set.failed)
+        .filter(|(_, failed)| !**failed)
+        .map(|(&resident, _)| resident)
+}
+
 fn derive_state(set: &SceneSet) -> SceneLoadState {
-    let all_resident = set.resident.iter().all(|&r| r);
-    let none_resident = set.resident.iter().all(|&r| !r);
+    let all_resident = awaited(set).all(|r| r);
+    let none_resident = awaited(set).all(|r| !r);
     match (set.pinned, all_resident, none_resident) {
         (true, true, _) => SceneLoadState::Resident,
         (true, false, _) => SceneLoadState::Loading,
@@ -186,11 +211,11 @@ fn derive_state(set: &SceneSet) -> SceneLoadState {
 }
 
 fn derive_progress(set: &SceneSet) -> f32 {
-    if set.members.is_empty() {
+    let (resident, total) = awaited(set).fold((0, 0), |(r, t), res| (r + usize::from(res), t + 1));
+    if total == 0 {
         return 1.0;
     }
-    let resident = set.resident.iter().filter(|&&r| r).count();
-    resident as f32 / set.members.len() as f32
+    resident as f32 / total as f32
 }
 
 /// Per-scene streamed-content load status, republished by the streaming system
@@ -334,5 +359,19 @@ mod tests {
         assert_eq!(status[0].0, AssetId(1));
         assert_eq!(status[1], (AssetId(2), SceneLoadState::Resident, 1.0));
         assert_eq!(status[2], (AssetId(3), SceneLoadState::Unloaded, 1.0));
+    }
+
+    // A member that failed for good no longer holds its scene loading.
+    #[test]
+    fn a_failed_member_does_not_hold_its_scene_loading() {
+        let mut r = residency();
+        r.sync_pins(&[AssetId(1)]);
+        r.note_resident((CHANNEL_TEXTURE, 0), true);
+        r.note_resident((CHANNEL_MESH, 5), true);
+        assert!(r.any_loading());
+        r.note_failed((CHANNEL_TEXTURE, 1));
+        assert_eq!(r.state(AssetId(1)), Some(SceneLoadState::Resident));
+        assert_eq!(r.progress(AssetId(1)), Some(1.0));
+        assert!(!r.any_loading());
     }
 }

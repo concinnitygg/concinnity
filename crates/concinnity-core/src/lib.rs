@@ -61,6 +61,7 @@ pub const SCHEMA_VERSION: u32 = 3;
 
 pub mod animation;
 mod app;
+pub mod audio;
 pub mod bake;
 pub mod behavior;
 pub mod benchmark;
