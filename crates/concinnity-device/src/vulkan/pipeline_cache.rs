@@ -16,6 +16,7 @@
 
 use ash::vk::Handle;
 use ash::{Device, vk};
+use concinnity_core::math::SaturatingFrom;
 use std::fmt::Write as _;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -55,7 +56,9 @@ pub(in crate::vulkan) fn create_graphics_pipelines(
     // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
     // they name belongs to this device.
     let result = unsafe { device.create_graphics_pipelines(current(), infos, None) };
-    crate::shader::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
+    crate::shader::pipeline_cache::note_creation(u64::saturating_from(
+        started.elapsed().as_micros(),
+    ));
     own(device, result)
 }
 
@@ -79,7 +82,9 @@ pub(in crate::vulkan) fn create_compute_pipelines(
     // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
     // they name belongs to this device.
     let result = unsafe { device.create_compute_pipelines(current(), infos, None) };
-    crate::shader::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
+    crate::shader::pipeline_cache::note_creation(u64::saturating_from(
+        started.elapsed().as_micros(),
+    ));
     own(device, result)
 }
 
@@ -247,7 +252,7 @@ fn header_matches(blob: &[u8], vendor_id: u32, device_id: u32, uuid: &[u8; 16]) 
     }
     let word = |at: usize| u32::from_le_bytes(blob[at..at + 4].try_into().expect("4 bytes"));
     word(0) >= 32
-        && word(4) == vk::PipelineCacheHeaderVersion::ONE.as_raw() as u32
+        && word(4) == u32::saturating_from(vk::PipelineCacheHeaderVersion::ONE.as_raw())
         && word(8) == vendor_id
         && word(12) == device_id
         && blob[16..32] == uuid[..]

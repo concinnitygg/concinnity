@@ -2,6 +2,8 @@
 //! handled by `crate::check::cross_reference::validate_cross_references`; this check
 //! only catches problems we can see from the chunk's own args alone.
 
+use concinnity_core::math::SaturatingFrom;
+
 /// Check a `VoxelChunk`'s authored args.
 pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
     let dim = args
@@ -54,7 +56,7 @@ pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> 
         let idx = entry.as_u64().ok_or_else(|| {
             format!("Asset '{name}': VoxelChunk blocks[{i}] must be a non-negative integer")
         })?;
-        if palette_len == 0 || (idx as usize) >= palette_len {
+        if palette_len == 0 || usize::saturating_from(idx) >= palette_len {
             return Err(format!(
                 "Asset '{name}': VoxelChunk blocks[{i}] = {idx} out of palette range (len {palette_len})"
             ));

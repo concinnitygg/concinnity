@@ -4,6 +4,7 @@
 //! The components stay in place for the physics system, which inits after
 //! graphics and builds each terrain's collider from the same payload.
 
+use crate::math::SaturatingFrom;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
@@ -127,7 +128,7 @@ pub fn append_terrain_draws(
     for chunk in chunks {
         let vertex_offset = vertices.len() * size_of::<Vertex>();
         let index_offset = indices.len();
-        let base = vertices.len() as u32;
+        let base = u32::saturating_from(vertices.len());
         vertices.extend_from_slice(&chunk.vertices);
         indices.extend(chunk.indices.iter().map(|&i| u32::from(i) + base));
         let (bb_min, bb_max) = frustum::transform_aabb(chunk.bounds.0, chunk.bounds.1, model);
@@ -194,7 +195,7 @@ mod tests {
     // on running.
     #[test]
     fn a_terrain_appends_one_culled_draw_per_chunk() {
-        let t = loaded(TERRAIN_CHUNK_CELLS as u32 + 2, Vec::new());
+        let t = loaded(u32::saturating_from(TERRAIN_CHUNK_CELLS) + 2, Vec::new());
         let (mut vertices, mut indices, mut draws) = (Vec::new(), Vec::new(), Vec::new());
         vertices.push(Vertex {
             pos: [0.0; 3],

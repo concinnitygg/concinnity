@@ -225,6 +225,7 @@ impl<P, R> TransparentProducers<P, R> {
 mod tests {
     use super::*;
     use crate::components::WaterSurface;
+    use crate::math::SaturatingFrom;
     use crate::render::water::WaterBody;
     use crate::render::water::sea::{SeaBody, SeaSphere};
     use crate::render::wind::WindField;
@@ -267,7 +268,7 @@ mod tests {
 
     impl WaterParamsSink for Cell<u32> {
         fn write_water_params(&self, frame_idx: usize, _: &WaterParams) {
-            self.set(self.get() + 1 + frame_idx as u32 * 100);
+            self.set(self.get() + 1 + u32::saturating_from(frame_idx) * 100);
         }
     }
 

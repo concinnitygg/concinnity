@@ -1,5 +1,6 @@
 //! Process CPU utilization from successive readings of its CPU-time clock.
 
+use crate::math::narrow_f32;
 use core::time::Duration;
 
 /// Turns successive process CPU-time readings into a utilization rate.
@@ -28,7 +29,7 @@ impl CpuRate {
                 // CPU time is monotonic, but a failed platform read must not be
                 // able to produce a negative rate.
                 let busy = cpu.saturating_sub(last_cpu).as_secs_f64();
-                Some((busy / wall) as f32)
+                Some(narrow_f32(busy / wall))
             }
             None => None,
         };

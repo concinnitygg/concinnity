@@ -1,5 +1,6 @@
 use super::*;
 use crate::gfx::render_types::MaterialUniforms;
+use crate::math::SaturatingFrom;
 use crate::render::rt_geom::RT_SKINNED_FLAG;
 use crate::test_support::{draw_object, skinned_draw_object};
 
@@ -68,7 +69,7 @@ fn seeded(n: usize) -> (Vec<DrawObject>, Book) {
     }
     let clusters = [cluster(&[100.0, 101.0])];
     let seed = SeedSet::new(&draw, &clusters, false);
-    let blas = (0..(seed.objects.len() + seed.clusters.len()) as u32)
+    let blas = (0..u32::saturating_from(seed.objects.len() + seed.clusters.len()))
         .map(|b| 10 + b)
         .collect();
     let book = Book::new(&seed, blas, &draw, 4).expect("one BLAS per seed entry");
@@ -97,7 +98,7 @@ fn a_seed_builds_whenever_its_book_would_not_start_out_spent() {
         (&draw[..0], &clusters[..]),
     ] {
         let seed = SeedSet::new(objects, clusters, false);
-        let blas = (0..(seed.objects.len() + seed.clusters.len()) as u32).collect();
+        let blas = (0..u32::saturating_from(seed.objects.len() + seed.clusters.len())).collect();
         let book = Book::new(&seed, blas, objects, 0).expect("one BLAS per seed entry");
         for skinned_present in [false, true] {
             assert_eq!(

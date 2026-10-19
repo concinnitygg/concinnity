@@ -16,6 +16,7 @@
 
 use concinnity_cook::cache::thumbnails::Thumbnails;
 use concinnity_core::ecs::{OverlayImage, OverlayImages, TextureHandle};
+use concinnity_core::math::SaturatingFrom;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -129,7 +130,7 @@ fn load(names: &[(String, String)], png: &dyn Fn(&str) -> Option<Vec<u8>>) -> Th
         let Some((w, h, rgba)) = png(key).and_then(|bytes| decode_png(&bytes)) else {
             continue;
         };
-        let handle = TextureHandle::new(HANDLE_BASE + set.images.len() as u32);
+        let handle = TextureHandle::new(HANDLE_BASE + u32::saturating_from(set.images.len()));
         set.by_name.insert(
             name.clone(),
             Thumb {

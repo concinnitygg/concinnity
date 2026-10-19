@@ -2,6 +2,7 @@
 //! back-buffer views, the DSV heap, and the sampler heap with its static
 //! samplers, plus the handle arithmetic every stage addresses a slot with.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -65,7 +66,7 @@ pub(super) fn build_swapchain(
     let rtv_heap: ID3D12DescriptorHeap = unsafe {
         device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
             Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-            NumDescriptors: rtv.rtv_slots as u32,
+            NumDescriptors: u32::saturating_from(rtv.rtv_slots),
             ..Default::default()
         })
     }
@@ -76,7 +77,7 @@ pub(super) fn build_swapchain(
     for i in 0..BACK_BUFFERS {
         // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters
         // it fills are live locals that outlive the call.
-        let buf: ID3D12Resource = unsafe { swapchain.handle.GetBuffer(i as u32) }
+        let buf: ID3D12Resource = unsafe { swapchain.handle.GetBuffer(u32::saturating_from(i)) }
             .map_err(|e| map_hresult(e.code(), &format!("GetBuffer[{i}]")))?;
         let rtv_handle = cpu_handle(&rtv_heap, rtv_descriptor_size, i);
         // SAFETY: the view descriptor and the resource it names are live for the call, and the
@@ -98,7 +99,7 @@ pub(super) fn build_swapchain(
     // flight (its default is three), so a refresh-paced run does not add a
     // frame of input latency on top of the CPU's own lead.
     // DXGI accepts 1 to 16.
-    let frames = gpu.hw.swapchain_config.frames_in_flight.clamp(1, 16) as u32;
+    let frames = u32::saturating_from(gpu.hw.swapchain_config.frames_in_flight.clamp(1, 16));
     // SAFETY: a setter on the live swapchain, which was created with the waitable-object flag the
     // call requires; it takes only a scalar.
     unsafe { swapchain.handle.SetMaximumFrameLatency(frames) }
@@ -126,7 +127,7 @@ pub(super) fn create_dsv_heap(device: &ID3D12Device) -> RenderResult<ID3D12Descr
     let dsv_heap: ID3D12DescriptorHeap = unsafe {
         device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
             Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
-            NumDescriptors: DSV_SLOTS as u32,
+            NumDescriptors: u32::saturating_from(DSV_SLOTS),
             ..Default::default()
         })
     }

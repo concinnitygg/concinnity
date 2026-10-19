@@ -38,6 +38,7 @@
 //! order or barriers.
 
 use crate::gfx::render_types::NUM_SHADOW_CASCADES;
+use crate::math::SaturatingFrom;
 use crate::render::post::ssgi;
 
 use super::{
@@ -1321,7 +1322,7 @@ fn shadow_map_desc(size: u32) -> TextureDesc {
         PixelFormat::Depth32Float,
         TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ),
     )
-    .with_array_layers(NUM_SHADOW_CASCADES as u32)
+    .with_array_layers(u32::saturating_from(NUM_SHADOW_CASCADES))
 }
 
 fn spot_shadow_map_desc(slice_size: u32, slices: u32) -> TextureDesc {

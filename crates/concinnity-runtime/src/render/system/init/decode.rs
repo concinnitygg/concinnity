@@ -9,6 +9,7 @@ use super::{
     decode_texture_payloads, draw_list, font, font_less_text, media, procedural_mesh_snapshot,
     retained_blobs, skinned, skinned_mesh_source_map, tables, texture, texture_catalog,
 };
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::overlay_maps::{Atlas, AtlasPool};
 use concinnity_core::render::terrain::LoadedTerrain;
 use concinnity_core::render::world_load::scene_deferral::ShaderDeferral;
@@ -152,11 +153,14 @@ impl GraphicsSystem {
                 tracing::error!("GraphicsSystem: Shader has no compiled payload");
                 return None;
             };
-            if self.shader_deferral.is_deferred(bucket as u32) {
+            if self
+                .shader_deferral
+                .is_deferred(u32::saturating_from(bucket))
+            {
                 match deferred_shader_source(ctx, &locator, blob_disk_backed) {
                     Ok(source) => {
                         deferred_sources.push(crate::render::streaming::shader::DeferredBucket {
-                            bucket: bucket as u32,
+                            bucket: u32::saturating_from(bucket),
                             source,
                         });
                         locators.push(locator);
@@ -173,7 +177,8 @@ impl GraphicsSystem {
                             bucket,
                             e
                         );
-                        self.shader_deferral.build_at_init(bucket as u32);
+                        self.shader_deferral
+                            .build_at_init(u32::saturating_from(bucket));
                     }
                 }
             }

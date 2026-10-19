@@ -23,6 +23,7 @@ pub fn process_resident_bytes() -> Option<u64> {
 
 #[cfg(target_os = "macos")]
 mod imp {
+    use concinnity_core::math::saturating_u32;
     // hw.memsize is total physical RAM; task_info(MACH_TASK_BASIC_INFO) carries
     // the process resident size.
     pub(super) fn total_physical_bytes() -> Option<u64> {
@@ -54,8 +55,8 @@ mod imp {
         // SAFETY: `mach_task_basic_info` is a plain C struct of integer
         // fields, so all-zero is a valid inhabitant.
         let mut info: libc::mach_task_basic_info = unsafe { std::mem::zeroed() };
-        let mut count = (size_of::<libc::mach_task_basic_info>() / size_of::<libc::natural_t>())
-            as libc::mach_msg_type_number_t;
+        let mut count: libc::mach_msg_type_number_t =
+            saturating_u32(size_of::<libc::mach_task_basic_info>() / size_of::<libc::natural_t>());
         // SAFETY: `info`/`count` are a correctly sized MACH_TASK_BASIC_INFO
         // output buffer; `mach_task_self_` is the current task port (the raw
         // static behind the deprecated `mach_task_self()` wrapper).
@@ -91,19 +92,20 @@ mod imp {
         let resident_pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
         // SAFETY: sysconf with a valid name has no memory effects.
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-        (page_size > 0).then(|| resident_pages * page_size as u64)
+        (page_size > 0).then(|| resident_pages * page_size.unsigned_abs())
     }
 }
 
 #[cfg(target_os = "windows")]
 mod imp {
+    use concinnity_core::math::saturating_u32;
     use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
     use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
     use windows::Win32::System::Threading::GetCurrentProcess;
 
     pub(super) fn total_physical_bytes() -> Option<u64> {
         let mut status = MEMORYSTATUSEX {
-            dwLength: size_of::<MEMORYSTATUSEX>() as u32,
+            dwLength: saturating_u32(size_of::<MEMORYSTATUSEX>()),
             ..Default::default()
         };
         // SAFETY: `status.dwLength` is set to the struct size as the API requires.
@@ -118,7 +120,7 @@ mod imp {
             GetProcessMemoryInfo(
                 GetCurrentProcess(),
                 &raw mut counters,
-                size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+                saturating_u32(size_of::<PROCESS_MEMORY_COUNTERS>()),
             )
         };
         ok.ok().map(|()| counters.WorkingSetSize as u64)

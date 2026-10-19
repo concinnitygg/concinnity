@@ -187,6 +187,7 @@ pub(crate) fn resolve_handle(kind: HandleKind, name: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
+    use crate::math::SaturatingFrom;
     // These tests own the process-global resolver: each installs the same
     // deterministic stand-in first, so they stay correct regardless of the order
     // the test harness runs them in (installs are idempotent, last-writer-wins).
@@ -247,7 +248,7 @@ mod tests {
         // ordered table, so the spaces never share an answer by accident.
         install_resolvers();
         fn textures_only(kind: HandleKind, name: &str) -> Option<u32> {
-            (kind == HandleKind::Texture).then_some(name.len() as u32)
+            (kind == HandleKind::Texture).then_some(u32::saturating_from(name.len()))
         }
         set_handle_resolver(HandleKind::Texture, textures_only);
         set_handle_resolver(HandleKind::Shader, textures_only);

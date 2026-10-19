@@ -22,6 +22,7 @@
 // splits nothing. The two must land in the same place, which
 // `assert_deterministic` checks rather than assumes.
 
+use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::vec::Vec;
 
@@ -191,7 +192,7 @@ fn stacked_world(
         .expect("room for the floor");
     }
     let columns = bodies.div_ceil(STACK);
-    let per_row = (columns as f32).sqrt().ceil().max(1.0) as usize;
+    let per_row = usize::saturating_from((columns as f32).sqrt().ceil().max(1.0));
     let handles = (0..bodies)
         .map(|i| {
             let (column, level) = (i / STACK, i % STACK);
@@ -310,7 +311,7 @@ fn terrain_world(bodies: usize, side: usize) -> (Simulation, Vec<BodyHandle>) {
     )
     .expect("room for the terrain");
 
-    let per_row = (bodies as f32).sqrt().ceil().max(1.0) as usize;
+    let per_row = usize::saturating_from((bodies as f32).sqrt().ceil().max(1.0));
     let handles = (0..bodies)
         .map(|i| {
             let x = (i % per_row) as f32 * 1.5 - 40.0;
@@ -335,7 +336,7 @@ fn terrain_world(bodies: usize, side: usize) -> (Simulation, Vec<BodyHandle>) {
 // they have all settled.
 fn sensor_world(bodies: usize) -> (Simulation, Vec<BodyHandle>) {
     let columns = bodies.div_ceil(STACK);
-    let per_row = (columns as f32).sqrt().ceil().max(1.0) as usize;
+    let per_row = usize::saturating_from((columns as f32).sqrt().ceil().max(1.0));
     let mut sim = Simulation::new(
         SimConfig {
             gravity: 9.81,
@@ -408,7 +409,7 @@ fn hail_world(bodies: usize) -> (Simulation, Vec<BodyHandle>) {
         LayerMask::ALL,
     )
     .expect("room for the slab");
-    let per_row = (bodies as f32).sqrt().ceil().max(1.0) as usize;
+    let per_row = usize::saturating_from((bodies as f32).sqrt().ceil().max(1.0));
     let handles = (0..bodies)
         .map(|i| {
             let x = (i % per_row) as f32 * 0.5;

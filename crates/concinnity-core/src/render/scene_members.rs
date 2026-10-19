@@ -4,6 +4,7 @@
 //! entity, and shader members from the deferred buckets (a bucket's pipeline
 //! is built when its scene pins).
 
+use crate::math::SaturatingFrom;
 use alloc::vec;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
@@ -69,7 +70,7 @@ pub fn scene_residency(
             if let Some(scene) = scene_of_draw.get(draw_idx)
                 && let Some(&idx) = scene_idx.get(scene)
             {
-                members[idx].push((CHANNEL_MESH, stream_id as u32));
+                members[idx].push((CHANNEL_MESH, u32::saturating_from(stream_id)));
             }
         }
     }

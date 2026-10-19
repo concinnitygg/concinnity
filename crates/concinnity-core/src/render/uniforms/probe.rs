@@ -4,6 +4,8 @@
 //! probe's prefiltered radiance, a cube per probe. Matches `shaders/probe_types.hlsl`.
 //! Nothing in a shader depends on how many probes the host allocated room for.
 
+use crate::math::SaturatingFrom;
+
 /// One reflection probe's parallax box. The specular IBL term box-projects the
 /// reflection vector against [`box_min`, `box_max`] (the probe's influence volume)
 /// and re-anchors the cube sample at the box hit relative to `probe_pos` (the
@@ -96,7 +98,7 @@ impl ProbeSet {
     /// The header for `count` live records of `mip_count`-level cubes.
     pub fn new(count: usize, mip_count: u32) -> Self {
         Self {
-            count: count as u32,
+            count: u32::saturating_from(count),
             mip_count,
             ..Self::EMPTY
         }

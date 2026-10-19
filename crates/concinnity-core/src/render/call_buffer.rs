@@ -4,6 +4,7 @@
 //! geometry allocations.
 
 use crate::gfx::render_types::{TextDrawCall, TextVertex};
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 #[derive(Default)]
@@ -65,14 +66,14 @@ impl TextCallBuffer {
         // insertion order.
         let order = &mut self.sort_order;
         order.clear();
-        order.extend(0..calls.len() as u32);
+        order.extend(0..u32::saturating_from(calls.len()));
         order.sort_unstable_by_key(|&i| (calls[i as usize].layer, i));
         // Invert to `dest[old] = new`, then walk each swap cycle in place.
         let dest = &mut self.sort_dest;
         dest.clear();
         dest.resize(calls.len(), 0);
         for (new, &old) in order.iter().enumerate() {
-            dest[old as usize] = new as u32;
+            dest[old as usize] = u32::saturating_from(new);
         }
         for i in 0..calls.len() {
             while dest[i] as usize != i {

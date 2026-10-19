@@ -1,3 +1,4 @@
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 
@@ -393,7 +394,7 @@ impl<B, I> AccelBook<B, I> {
             .filter_map(|(index, &i)| Some((index, draw_objects.get(i)?)))
         {
             if let Some(b) = blas.get(index) {
-                let id = scratch.instances.len() as u32;
+                let id = u32::saturating_from(scratch.instances.len());
                 scratch
                     .instances
                     .push(make(obj.model, id, InstanceBlas::Head { index, blas: b }));
@@ -417,7 +418,7 @@ impl<B, I> AccelBook<B, I> {
                 .filter_map(|&i| objects.get(i))
                 .enumerate()
             {
-                let id = scratch.instances.len() as u32;
+                let id = u32::saturating_from(scratch.instances.len());
                 scratch
                     .instances
                     .push(make(obj.model, id, InstanceBlas::Skinned { n }));
@@ -507,7 +508,7 @@ impl<B, I> AccelBook<B, I> {
                 },
                 None => InstanceBlas::Fresh { index },
             };
-            let id = scratch.instances.len() as u32;
+            let id = u32::saturating_from(scratch.instances.len());
             scratch.instances.push(make(obj.model, id, target));
             scratch.geom.push(geom_entry(obj, *albedo_count));
         }
@@ -686,7 +687,7 @@ fn push_clusters<'b, B: 'b, I>(
 ) {
     for c in clusters {
         if let Some(t) = target(draw_count + c.cluster) {
-            let id = scratch.instances.len() as u32;
+            let id = u32::saturating_from(scratch.instances.len());
             scratch.instances.push(make(c.model, id, t));
             scratch.geom.push(c.geom);
         }

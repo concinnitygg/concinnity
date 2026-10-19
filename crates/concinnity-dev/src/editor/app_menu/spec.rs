@@ -3,6 +3,7 @@
 //! checkmarks and the tag round trip are all testable without a window.
 
 use crate::editor::panels::registry;
+use concinnity_core::math::SaturatingFrom;
 
 // The name the application menu's own items read. The menu's title is taken
 // from the bundle by AppKit and cannot be set here.
@@ -29,14 +30,16 @@ impl MenuCommand {
     pub(super) fn tag(self) -> isize {
         match self {
             Self::Quit => QUIT_TAG,
-            Self::PanelToggle(i) => PANEL_TAG_BASE + i as isize,
+            Self::PanelToggle(i) => PANEL_TAG_BASE + isize::saturating_from(i),
         }
     }
 
     pub(super) fn from_tag(tag: isize) -> Option<Self> {
         match tag {
             QUIT_TAG => Some(Self::Quit),
-            t if t >= PANEL_TAG_BASE => Some(Self::PanelToggle((t - PANEL_TAG_BASE) as usize)),
+            t if t >= PANEL_TAG_BASE => Some(Self::PanelToggle(usize::saturating_from(
+                t - PANEL_TAG_BASE,
+            ))),
             _ => None,
         }
     }

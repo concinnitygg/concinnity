@@ -4,6 +4,7 @@
 //! by [`World`](crate::ecs::World)'s data-entry methods, so a resource the
 //! engine injects and one an application hands over land identically.
 
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 use crate::components::{File, FileKind, Material, ProceduralMesh, VoxelChunk, validate};
@@ -28,7 +29,7 @@ pub fn append_mesh(ctx: &mut PipelineContext<'_>, id: AssetId, payload: Vec<u8>)
     if let Some(payloads) = ctx.resource_mut::<RuntimeMeshPayloads>() {
         payloads.push(id, payload);
     }
-    MeshHandle::new(handle as u32)
+    MeshHandle::new(u32::saturating_from(handle))
 }
 
 /// Install `material` into the world's material table and return its handle.

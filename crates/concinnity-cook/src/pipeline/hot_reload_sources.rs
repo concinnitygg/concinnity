@@ -1,6 +1,8 @@
 //! The file source behind each texture and mesh handle, so a hot-reload
 //! watcher can map a saved file back to the handle it feeds.
 
+use concinnity_core::math::SaturatingFrom;
+use concinnity_core::math::narrow_f32;
 use concinnity_host::thread::asset_id;
 
 use super::partition::ResourceJob;
@@ -53,9 +55,11 @@ fn str_arg(args: &serde_json::Value, key: &str) -> String {
 }
 
 fn u32_arg(args: &serde_json::Value, key: &str, default: u32) -> u32 {
-    args.get(key)
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or_else(|| u64::from(default)) as u32
+    u32::saturating_from(
+        args.get(key)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_else(|| u64::from(default)),
+    )
 }
 
 fn texture_source(asset: &WorldJsonlAsset) -> TextureSourceInfo {
@@ -87,7 +91,7 @@ fn mesh_source(asset: &WorldJsonlAsset) -> MeshSourceInfo {
             .map(|a| {
                 a.iter()
                     .filter_map(serde_json::Value::as_f64)
-                    .map(|d| d as f32)
+                    .map(narrow_f32)
                     .collect()
             })
             .unwrap_or_default(),

@@ -2,6 +2,7 @@
 //! locator and whether only the cook reads it, and each material's draw entry
 //! and parameter row.
 
+use crate::math::SaturatingFrom;
 use alloc::collections::BTreeSet;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -112,7 +113,7 @@ pub fn decode_materials(
                 handle: index,
                 error: e.to_string(),
             })?;
-        let handle = MaterialHandle::new(index as u32);
+        let handle = MaterialHandle::new(u32::saturating_from(index));
         params.push(mat.params);
         let drawn = material_entry::of(handle, &mat, texture_count).map_err(|field| {
             TableError::MaterialTextureOutOfRange {

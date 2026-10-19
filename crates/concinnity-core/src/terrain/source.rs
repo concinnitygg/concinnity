@@ -1,6 +1,7 @@
 // Where a terrain grid's heights come from: a generated noise field, or the
 // red channel of a decoded heightmap image.
 
+use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -45,8 +46,8 @@ fn noise(s: f32, t: f32, offset: [u32; 2]) -> f32 {
         let (x0, y0) = (floor(gs), floor(gt));
         let fade = |f: f32| f * f * (3.0 - 2.0 * f);
         let (fx, fy) = (fade(gs - x0), fade(gt - y0));
-        let x = (x0 as u32).wrapping_add(offset[0]);
-        let y = (y0 as u32).wrapping_add(offset[1]);
+        let x = u32::saturating_from(x0).wrapping_add(offset[0]);
+        let y = u32::saturating_from(y0).wrapping_add(offset[1]);
         let v = |dx: u32, dy: u32| lattice_value(x.wrapping_add(dx), y.wrapping_add(dy));
         let top = v(0, 0) + (v(1, 0) - v(0, 0)) * fx;
         let bottom = v(0, 1) + (v(1, 1) - v(0, 1)) * fx;
@@ -95,7 +96,10 @@ pub(super) fn red_channel(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8
 pub(super) fn sample_bilinear(texels: &[u8], width: u32, height: u32, s: f32, t: f32) -> f32 {
     let fx = s.clamp(0.0, 1.0) * (width - 1) as f32;
     let fy = t.clamp(0.0, 1.0) * (height - 1) as f32;
-    let (x0, y0) = (floor(fx) as u32, floor(fy) as u32);
+    let (x0, y0) = (
+        u32::saturating_from(floor(fx)),
+        u32::saturating_from(floor(fy)),
+    );
     let (x1, y1) = ((x0 + 1).min(width - 1), (y0 + 1).min(height - 1));
     let (sx, sy) = (fx - x0 as f32, fy - y0 as f32);
     let at = |x: u32, y: u32| f32::from(texels[(y * width + x) as usize]) / 255.0;

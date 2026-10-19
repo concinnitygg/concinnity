@@ -4,6 +4,7 @@
 
 use concinnity_core::components::WindowMode;
 use concinnity_core::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
+use concinnity_core::math::SaturatingFrom;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
@@ -12,7 +13,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{SetFocus, VK_ESCAPE, VK_MENU};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::chrome::windowed_style;
-use super::input::{KeyState, MouseSnapshot, vk_from_wparam};
+use super::input::{KeyState, MouseSnapshot, hi_word, lo_word, vk_from_wparam};
 
 // The `cn editor` live world-swap drops the old render backend and builds a new
 // one on the same thread (see graphics init's `PendingBackend` fallback).
@@ -333,7 +334,7 @@ pub(crate) fn set_window_mode(state: &mut WindowState, mode: WindowMode) {
         match mode {
             WindowMode::Windowed => {
                 let style = windowed_style(state.title_bar);
-                SetWindowLongPtrW(hwnd, GWL_STYLE, style.0 as isize);
+                SetWindowLongPtrW(hwnd, GWL_STYLE, isize::saturating_from(style.0));
                 let w = state.width.max(640);
                 let h = state.height.max(480);
                 let mut rect = RECT {
@@ -354,7 +355,11 @@ pub(crate) fn set_window_mode(state: &mut WindowState, mode: WindowMode) {
                 );
             }
             WindowMode::Borderless | WindowMode::Fullscreen => {
-                SetWindowLongPtrW(hwnd, GWL_STYLE, (WS_POPUP | WS_VISIBLE).0 as isize);
+                SetWindowLongPtrW(
+                    hwnd,
+                    GWL_STYLE,
+                    isize::saturating_from((WS_POPUP | WS_VISIBLE).0),
+                );
                 if let Some(rect) = monitor_rect(hwnd) {
                     let _ = SetWindowPos(
                         hwnd,
@@ -383,8 +388,8 @@ pub(crate) fn set_window_size(state: &mut WindowState, width: u32, height: u32) 
         let mut rect = RECT {
             left: 0,
             top: 0,
-            right: width as i32,
-            bottom: height as i32,
+            right: i32::saturating_from(width),
+            bottom: i32::saturating_from(height),
         };
         let _ = AdjustWindowRect(&raw mut rect, windowed_style(state.title_bar), false);
         let _ = SetWindowPos(
@@ -406,7 +411,7 @@ fn monitor_rect(hwnd: HWND) -> Option<RECT> {
     unsafe {
         let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
         let mut info = MONITORINFO {
-            cbSize: size_of::<MONITORINFO>() as u32,
+            cbSize: u32::saturating_from(size_of::<MONITORINFO>()),
             ..Default::default()
         };
         if GetMonitorInfoW(mon, &raw mut info).as_bool() {
@@ -443,8 +448,8 @@ unsafe extern "system" fn wnd_proc(
                 LRESULT(0)
             }
             WM_SIZE => {
-                state.width = (lparam.0 & 0xFFFF) as i32;
-                state.height = ((lparam.0 >> 16) & 0xFFFF) as i32;
+                state.width = i32::from(lo_word(lparam.0.cast_unsigned()));
+                state.height = i32::from(hi_word(lparam.0.cast_unsigned()));
                 LRESULT(0)
             }
             WM_KEYDOWN => {
@@ -492,7 +497,7 @@ unsafe extern "system" fn wnd_proc(
                 // already applied, so wParam is the final UTF-16 code unit. Feed
                 // it to the text queue; `on_char` joins surrogate pairs and filters
                 // out the control codes (Backspace, Enter, Escape, ...).
-                state.key.on_char(wparam.0 as u16);
+                state.key.on_char(lo_word(wparam.0));
                 LRESULT(0)
             }
             WM_KILLFOCUS => {
@@ -513,8 +518,8 @@ unsafe extern "system" fn wnd_proc(
                 LRESULT(0)
             }
             WM_MOUSEMOVE => {
-                let x = f32::from((lparam.0 & 0xFFFF) as i16);
-                let y = f32::from(((lparam.0 >> 16) & 0xFFFF) as i16);
+                let x = f32::from(lo_word(lparam.0.cast_unsigned()).cast_signed());
+                let y = f32::from(hi_word(lparam.0.cast_unsigned()).cast_signed());
                 if !state.cursor_captured {
                     // Track the cursor position for UI hit-testing only. Camera-look
                     // deltas come solely from raw input while the cursor is captured
@@ -538,13 +543,14 @@ unsafe extern "system" fn wnd_proc(
                 // destination always holds the whole packet.
                 if state.cursor_captured {
                     let mut raw = windows::Win32::UI::Input::RAWINPUT::default();
-                    let mut size = size_of::<windows::Win32::UI::Input::RAWINPUT>() as u32;
+                    let mut size =
+                        u32::saturating_from(size_of::<windows::Win32::UI::Input::RAWINPUT>());
                     let copied = windows::Win32::UI::Input::GetRawInputData(
                         windows::Win32::UI::Input::HRAWINPUT(lparam.0 as _),
                         windows::Win32::UI::Input::RID_INPUT,
                         Some((&raw mut raw).cast::<std::ffi::c_void>()),
                         &raw mut size,
-                        size_of::<windows::Win32::UI::Input::RAWINPUTHEADER>() as u32,
+                        u32::saturating_from(size_of::<windows::Win32::UI::Input::RAWINPUTHEADER>()),
                     );
                     if copied != u32::MAX
                         && raw.header.dwType == windows::Win32::UI::Input::RIM_TYPEMOUSE.0
@@ -591,7 +597,7 @@ unsafe extern "system" fn wnd_proc(
                 // user; normalize to notches and convert to a scroll_delta
                 // increment (matching the Metal sign convention).
                 if !state.cursor_captured {
-                    let raw = f32::from((wparam.0 >> 16) as i16);
+                    let raw = f32::from(hi_word(wparam.0).cast_signed());
                     let notches = raw / WHEEL_DELTA as f32;
                     state.scroll_delta += wheel_notches_to_scroll_delta(notches);
                 }
@@ -653,7 +659,7 @@ fn install_window_state(hwnd: HWND, win_state: &mut WindowState) {
     let _ = unsafe {
         windows::Win32::UI::Input::RegisterRawInputDevices(
             &[rid],
-            size_of::<windows::Win32::UI::Input::RAWINPUTDEVICE>() as u32,
+            u32::saturating_from(size_of::<windows::Win32::UI::Input::RAWINPUTDEVICE>()),
         )
     };
     // SAFETY: the stored address is that of a `WindowState` held in a `Box` whose heap allocation
@@ -712,7 +718,11 @@ pub(crate) fn create_window(
         // the style the state claims.
         // SAFETY: `hwnd` is the parked window's live handle, and the restyle borrows nothing else.
         unsafe {
-            SetWindowLongPtrW(hwnd, GWL_STYLE, windowed_style(title_bar).0 as isize);
+            SetWindowLongPtrW(
+                hwnd,
+                GWL_STYLE,
+                isize::saturating_from(windowed_style(title_bar).0),
+            );
             let _ = SetWindowPos(
                 hwnd,
                 None,
@@ -734,7 +744,7 @@ pub(crate) fn create_window(
         .map_err(|e| format!("GetModuleHandle: {e}"))?;
 
     let wc = WNDCLASSEXW {
-        cbSize: size_of::<WNDCLASSEXW>() as u32,
+        cbSize: u32::saturating_from(size_of::<WNDCLASSEXW>()),
         style: CS_HREDRAW | CS_VREDRAW,
         lpfnWndProc: Some(wnd_proc),
         hInstance: hinstance.into(),
@@ -751,8 +761,8 @@ pub(crate) fn create_window(
     let mut rect = RECT {
         left: 0,
         top: 0,
-        right: width as i32,
-        bottom: height as i32,
+        right: i32::saturating_from(width),
+        bottom: i32::saturating_from(height),
     };
     // SAFETY: `rect` is a live local the call adjusts in place.
     unsafe { AdjustWindowRect(&raw mut rect, style, false) }.ok();
@@ -791,7 +801,12 @@ pub(crate) fn create_window(
         let _ = SetFocus(Some(hwnd));
     };
 
-    let mut win_state = fresh_window_state(hwnd, width as i32, height as i32, title_bar);
+    let mut win_state = fresh_window_state(
+        hwnd,
+        i32::saturating_from(width),
+        i32::saturating_from(height),
+        title_bar,
+    );
 
     // Register for raw mouse input (the captured-cursor camera delta arrives
     // via WM_INPUT, not WM_MOUSEMOVE) and point the wnd_proc at the state.

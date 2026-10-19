@@ -8,6 +8,7 @@
 // this module tracks the driver, not the authoring schema.
 
 use concinnity_core::blob::PhysicsBudgetRecord;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::physics::{PhysicsBudget, PhysicsCounts};
 use std::collections::HashSet;
 
@@ -73,8 +74,8 @@ pub(crate) fn count(assets: &[WorldJsonlAsset]) -> Option<PhysicsCounts> {
         .collect();
 
     let mut counts = PhysicsCounts {
-        static_colliders: (colliders.len() - dynamic.len()) as u32,
-        dynamic_colliders: dynamic.len() as u32,
+        static_colliders: u32::saturating_from(colliders.len() - dynamic.len()),
+        dynamic_colliders: u32::saturating_from(dynamic.len()),
         ..PhysicsCounts::default()
     };
 
@@ -123,13 +124,15 @@ pub(crate) fn count(assets: &[WorldJsonlAsset]) -> Option<PhysicsCounts> {
 
 // The world's authored spawn headroom, from its PhysicsConfig.
 fn spawn_headroom(assets: &[WorldJsonlAsset]) -> u32 {
-    assets
-        .iter()
-        .find(|a| a.asset_type == RegisteredType::PhysicsConfig)
-        .and_then(|a| a.args.get("spawn_headroom"))
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0)
-        .min(u64::from(u32::MAX)) as u32
+    u32::saturating_from(
+        assets
+            .iter()
+            .find(|a| a.asset_type == RegisteredType::PhysicsConfig)
+            .and_then(|a| a.args.get("spawn_headroom"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+            .min(u64::from(u32::MAX)),
+    )
 }
 
 /// Derive the world's physics reservation for the blob. `None` when the world

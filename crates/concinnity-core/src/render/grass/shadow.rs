@@ -51,6 +51,7 @@ mod tests {
     use super::*;
     use crate::gfx::projection::look_at;
     use crate::gfx::render_types::NUM_SHADOW_CASCADES;
+    use crate::math::SaturatingFrom;
     use crate::render::csm::{ShadowUniformInputs, compute_shadow_uniforms};
 
     // The nearest cascade of a camera at eye height looking down -Z, lit by a
@@ -66,7 +67,7 @@ mod tests {
             shadow_distance: 80.0,
             light_dir_to_source: to_light,
             shadow_map_size: 2048,
-            active_cascades: NUM_SHADOW_CASCADES as u32,
+            active_cascades: u32::saturating_from(NUM_SHADOW_CASCADES),
         });
         GrassShadowView {
             vp: u.light_vps[0],

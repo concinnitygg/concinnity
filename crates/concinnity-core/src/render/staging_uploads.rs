@@ -156,6 +156,7 @@ impl<B: UploadBuffer> StagingUploads<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
     use crate::render::staging::STAGING_MIN_CAPACITY;
     use alloc::vec::Vec;
     use core::cell::RefCell;
@@ -203,7 +204,7 @@ mod tests {
     fn a_burst_past_the_ring_grows_it() {
         let mut s = StagingUploads::new(1);
         s.reserve(0, make).unwrap();
-        let big = alloc::vec![0u8; (STAGING_MIN_CAPACITY + 1) as usize];
+        let big = alloc::vec![0u8; usize::saturating_from(STAGING_MIN_CAPACITY + 1)];
         let staged = s.stage(&big, make).unwrap().unwrap();
         let (from, to) = staged.grew.expect("grew");
         assert_eq!(from, STAGING_MIN_CAPACITY);

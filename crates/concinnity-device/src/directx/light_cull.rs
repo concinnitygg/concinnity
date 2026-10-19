@@ -7,6 +7,7 @@
 //! `src/metal/light_cull.rs`.
 
 use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterParams};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -139,7 +140,9 @@ pub(in crate::directx) fn build_cluster_params_buffers(
         unsafe {
             std::ptr::copy_nonoverlapping(
                 (&raw const unclustered).cast::<u8>(),
-                ptr.add((CLUSTER_SLOT_UNCLUSTERED * CLUSTER_PARAMS_SLOT_STRIDE) as usize),
+                ptr.add(usize::saturating_from(
+                    CLUSTER_SLOT_UNCLUSTERED * CLUSTER_PARAMS_SLOT_STRIDE,
+                )),
                 size_of::<ClusterParams>(),
             );
         }
@@ -181,7 +184,9 @@ impl DxContext {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 std::ptr::from_ref::<ClusterParams>(params).cast::<u8>(),
-                dst.add((CLUSTER_SLOT_CLUSTERED * CLUSTER_PARAMS_SLOT_STRIDE) as usize),
+                dst.add(usize::saturating_from(
+                    CLUSTER_SLOT_CLUSTERED * CLUSTER_PARAMS_SLOT_STRIDE,
+                )),
                 size_of::<ClusterParams>(),
             );
         }

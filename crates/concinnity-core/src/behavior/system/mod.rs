@@ -43,6 +43,7 @@ use crate::ecs::{
     Entity, EntityById, EventCursor, FrameContext, MenuActive, PipelineContext, ScheduleMode,
     SimTiming, StepResult, System, TraceRequest, TransientSaves, World,
 };
+use crate::math::narrow_f32;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
@@ -210,7 +211,7 @@ impl System for BehaviorSystem {
         let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
         for _ in 0..timing.ticks {
             self.sim_ticks += 1;
-            let elapsed = (self.sim_ticks as f64 * f64::from(timing.tick_dt)) as f32;
+            let elapsed = narrow_f32(self.sim_ticks as f64 * f64::from(timing.tick_dt));
             self.tick(ctx, timing.tick_dt, elapsed);
         }
         StepResult::Continue

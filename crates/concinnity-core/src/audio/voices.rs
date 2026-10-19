@@ -93,12 +93,13 @@ impl<H> VoiceSlots<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
 
     fn filled(cap: usize, priorities: &[i32]) -> VoiceSlots<u32> {
         let mut slots = VoiceSlots::new(cap);
         for (i, &p) in priorities.iter().enumerate() {
             assert!(matches!(slots.make_room(p), Admission::Available));
-            slots.admit(p, i as u32);
+            slots.admit(p, u32::saturating_from(i));
         }
         slots
     }

@@ -1,7 +1,7 @@
 // One square of a planet's surface: a quadtree node on one cube face, and the
 // mesh a worker builds for it from the planet's shape.
 
-use crate::math::dvec3;
+use crate::math::{SaturatingFrom, dvec3, narrow_f32};
 use alloc::vec::Vec;
 
 use super::dvec::DVec3;
@@ -119,7 +119,7 @@ impl TileId {
             TileSide::MaxT => t += past,
         }
         let (face, s, t) = CubeFace::locate(self.face.cube_point(s, t));
-        let index = |c: f64| (libm::floor((c + 1.0) / span).max(0.0) as u32).min(last);
+        let index = |c: f64| u32::saturating_from(libm::floor((c + 1.0) / span).max(0.0)).min(last);
         Self {
             face,
             level: self.level,
@@ -249,8 +249,8 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
     let base = [s0, t0].map(|c| libm::floor(face_m(c) / UV_PERIOD_M) * UV_PERIOD_M);
     let uv = |i: usize, j: usize| {
         [
-            (face_m(s0 + i as f64 / n as f64 * span) - base[0]) as f32,
-            (face_m(t0 + j as f64 / n as f64 * span) - base[1]) as f32,
+            narrow_f32(face_m(s0 + i as f64 / n as f64 * span) - base[0]),
+            narrow_f32(face_m(t0 + j as f64 / n as f64 * span) - base[1]),
         ]
     };
     let u_axis = tile.face.u_axis();
@@ -279,12 +279,12 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
     let radial = vertices
         .iter()
         .fold([f32::INFINITY, f32::NEG_INFINITY], |[lo, hi], v| {
-            let h = dvec3::dot(dvec3::from_f32(v.pos), up) as f32;
+            let h = narrow_f32(dvec3::dot(dvec3::from_f32(v.pos), up));
             [lo.min(h), hi.max(h)]
         });
 
     let mut indices = Vec::with_capacity(n * n * 6);
-    let corner = |i: usize, j: usize| (j * side + i) as u16;
+    let corner = |i: usize, j: usize| u16::saturating_from(j * side + i);
     for j in 0..n {
         for i in 0..n {
             let (a, b, c, d) = (
@@ -334,7 +334,7 @@ fn morph_extent(points: &[DVec3], n: usize) -> f32 {
             }
         }
     }
-    most as f32
+    narrow_f32(most)
 }
 
 #[cfg(test)]
@@ -497,7 +497,7 @@ mod tests {
         let [lo, hi] = mesh.radial;
         assert!(lo < hi);
         for v in &mesh.vertices[..side * side] {
-            let h = dvec3::dot(dvec3::from_f32(v.pos), up) as f32;
+            let h = narrow_f32(dvec3::dot(dvec3::from_f32(v.pos), up));
             assert!(h >= lo && h <= hi);
         }
     }
@@ -615,9 +615,9 @@ mod tests {
         let side = TILE_CELLS as usize + 1;
         let ua = ma.vertices[side - 1].uv[0];
         let ub = mb.vertices[0].uv[0];
-        let wrapped = (ua - ub).abs() % UV_PERIOD_M as f32;
+        let wrapped = (ua - ub).abs() % narrow_f32(UV_PERIOD_M);
         assert!(
-            wrapped < 0.05 || (UV_PERIOD_M as f32 - wrapped) < 0.05,
+            wrapped < 0.05 || (narrow_f32(UV_PERIOD_M) - wrapped) < 0.05,
             "{ua} {ub}"
         );
     }

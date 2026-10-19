@@ -3,6 +3,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{self, InstancedCluster, ShadowUniforms};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 
 use super::InitGpu;
@@ -41,7 +42,8 @@ pub(super) fn build_descriptors(
     bindings: &GlobalBindings<'_>,
 ) -> RenderResult<VkDescriptors> {
     let global_set_layout = create_descriptor_set_layout(&gpu.hw.device, &global_set())?;
-    let shadow_views = render_types::NUM_SHADOW_CASCADES as u32 + bindings.spot_shadow.count();
+    let shadow_views =
+        u32::saturating_from(render_types::NUM_SHADOW_CASCADES) + bindings.spot_shadow.count();
     let descriptor_pool = create_descriptor_pool(gpu, pool, bindings.shadow, shadow_views)?;
     let global_sets = write_global_sets(gpu, &global_set_layout, &descriptor_pool, bindings)?;
     let shadow_global_sets = write_shadow_global_sets(gpu, &descriptor_pool, bindings.shadow)?;
@@ -75,9 +77,9 @@ fn create_descriptor_pool(
         bindless_uab,
         ..
     } = *plan;
-    let n_cluster = instanced_clusters.len() as u32;
-    let n_atlas = text_atlas_count.max(1) as u32;
-    let n_frames = frames as u32;
+    let n_cluster = u32::saturating_from(instanced_clusters.len());
+    let n_atlas = u32::saturating_from(text_atlas_count.max(1));
+    let n_frames = u32::saturating_from(frames);
     let bindless_sets_count = if bindless_active { n_frames } else { 0 };
     // GPU-driven G-buffer pre-pass: one set per frame (1 UBO + 2 SSBOs: the
     // previous frame's model-history slot and this frame's draw args),
@@ -115,7 +117,7 @@ fn create_descriptor_pool(
             vk::DescriptorType::SAMPLED_IMAGE,
             n_atlas
                 + n_frames * super::composite::COMPOSITE_SOURCES
-                + bindless_pool_size as u32 * bindless_sets_count,
+                + u32::saturating_from(bindless_pool_size) * bindless_sets_count,
         )
         .add(
             vk::DescriptorType::SAMPLER,

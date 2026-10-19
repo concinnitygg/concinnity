@@ -257,9 +257,21 @@ impl KeyState {
     }
 }
 
+// The low 16 bits of a message parameter, as Win32's `LOWORD`.
+pub(crate) fn lo_word(param: usize) -> u16 {
+    let [a, b, ..] = param.to_le_bytes();
+    u16::from_le_bytes([a, b])
+}
+
+// Bits 16..32 of a message parameter, as Win32's `HIWORD`.
+pub(crate) fn hi_word(param: usize) -> u16 {
+    let [_, _, a, b, ..] = param.to_le_bytes();
+    u16::from_le_bytes([a, b])
+}
+
 // Translate a WM_KEYDOWN/WM_KEYUP wParam into a VIRTUAL_KEY.
 pub(crate) fn vk_from_wparam(wparam: usize) -> VIRTUAL_KEY {
-    VIRTUAL_KEY(wparam as u16)
+    VIRTUAL_KEY(lo_word(wparam))
 }
 
 // Whether a character from WM_CHAR is a printable glyph suitable for a text
@@ -344,6 +356,16 @@ fn key_from_vk(vk: VIRTUAL_KEY) -> Option<InputKey> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn words_split_a_message_parameter_like_loword_and_hiword() {
+        let param = 0xDEAD_FFFE_usize;
+        assert_eq!(lo_word(param), 0xFFFE);
+        assert_eq!(hi_word(param), 0xDEAD);
+        // A signed mouse coordinate survives the round trip through the word.
+        assert_eq!(lo_word((-2_isize).cast_unsigned()).cast_signed(), -2);
+        assert_eq!(hi_word(0x0078_0000), 120);
+    }
 
     fn snapshot(ks: &mut KeyState) -> InputSnapshot {
         ks.take(MouseSnapshot {

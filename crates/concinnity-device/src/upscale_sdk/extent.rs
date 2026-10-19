@@ -1,5 +1,6 @@
 //! The render-to-output resolution split every upscaler is created for.
 
+use concinnity_core::math::SaturatingFrom;
 use std::fmt;
 
 /// The render resolution an upscaler reads, the output resolution it
@@ -22,7 +23,7 @@ impl UpscaleExtent {
         } else {
             1.0
         };
-        let axis = |size: u32| (((size as f32) * scale).round() as u32).max(1);
+        let axis = |size: u32| u32::saturating_from(((size as f32) * scale).round()).max(1);
         Self {
             render: (axis(output.0), axis(output.1)),
             output,

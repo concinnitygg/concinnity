@@ -352,6 +352,7 @@ mod tests {
     use crate::components::{FollowController, PhysicsConfig};
     use crate::ecs::World;
     use crate::gfx::render_types::SkinnedIndex;
+    use crate::math::SaturatingFrom;
     use crate::test_support::from_json;
     use crate::transform;
     use alloc::string::ToString;
@@ -374,7 +375,7 @@ mod tests {
     // The handle the authored "hero" reference resolves to under the test
     // resolvers, which map a name to its byte length.
     fn hero() -> SkinnedMeshHandle {
-        SkinnedMeshHandle::new("hero".len() as u32)
+        SkinnedMeshHandle::new(u32::saturating_from("hero".len()))
     }
 
     fn follow_controller(drive: FollowDrive, jump_height: f32) -> CameraController {

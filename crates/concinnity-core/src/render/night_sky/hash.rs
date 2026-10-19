@@ -23,6 +23,7 @@ pub fn seed_lane(seed: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
 
     #[test]
     fn the_hash_spreads_neighbors_apart_and_units_stay_in_range() {
@@ -41,7 +42,7 @@ mod tests {
     fn the_seed_lane_is_an_exact_integer() {
         for seed in [0, 1, 7, u32::MAX] {
             let lane = seed_lane(seed);
-            assert_eq!(lane as u32 as f32, lane);
+            assert_eq!(u32::saturating_from(lane) as f32, lane);
             assert!(lane < 16_777_216.0);
         }
     }

@@ -1,5 +1,6 @@
 use concinnity_core::ecs::Ref;
 use concinnity_core::gfx::render_types::{MaterialUniforms, NO_NORMAL_MAP_SLOT};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend::recording::{Call, SharedRecording, recording_backend};
 
 use super::*;
@@ -20,7 +21,7 @@ fn system_with_backend() -> (SharedRecording, GraphicsSystem) {
 // The payload bytes are never decoded at setup (the streamer's worker does
 // that later), so any bytes stand in for a compiled texture.
 fn texture_payloads(n: usize) -> Vec<Vec<u8>> {
-    (0..n).map(|i| vec![i as u8; 8]).collect()
+    (0..n).map(|i| vec![u8::saturating_from(i); 8]).collect()
 }
 
 fn centers(n: usize) -> Vec<Vec<[f32; 3]>> {

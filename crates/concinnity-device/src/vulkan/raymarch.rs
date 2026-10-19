@@ -29,6 +29,7 @@ use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
+use concinnity_core::math::{SaturatingFrom, saturating_u32};
 use concinnity_core::platform::Platform;
 use concinnity_core::render::backend_init::SdfVolumeSource;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -82,7 +83,7 @@ pub(in crate::vulkan) fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUn
         _pad1: 0.0,
         cone_ratio: v.cone_ratio(),
         max_distance: v.max_distance,
-        max_steps: v.max_steps as i32,
+        max_steps: i32::saturating_from(v.max_steps),
         receive_shadows: i32::from(v.receive_shadows),
         params: v.params,
     }
@@ -417,8 +418,8 @@ fn create_descriptor_pool(
     volumes: usize,
     rings: ViewRings,
 ) -> RenderResult<OwnedDescriptorPool> {
-    let f = frames as u32;
-    let v = volumes as u32;
+    let f = u32::saturating_from(frames);
+    let v = u32::saturating_from(volumes);
     let shadow_sets = f * (u32::from(rings.shadow) + u32::from(rings.prepass));
     let sizes = PoolSizes::default()
         .sets(&view_set_bindings(), f)
@@ -533,7 +534,7 @@ fn write_volume_set(device: &VkDevice, set: vk::DescriptorSet, volume_ubo: vk::B
 const CUBE_VERTEX_BINDINGS: [vk::VertexInputBindingDescription; 1] =
     [vk::VertexInputBindingDescription {
         binding: 0,
-        stride: size_of::<Vertex>() as u32,
+        stride: saturating_u32(size_of::<Vertex>()),
         input_rate: vk::VertexInputRate::VERTEX,
     }];
 const CUBE_VERTEX_ATTRIBUTES: [vk::VertexInputAttributeDescription; 1] =
@@ -1064,7 +1065,7 @@ impl RaymarchResources {
             let push = vk::PushConstantRange::default()
                 .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
                 .offset(0)
-                .size(size_of::<RaymarchShadowCascade>() as u32);
+                .size(u32::saturating_from(size_of::<RaymarchShadowCascade>()));
             let info = vk::PipelineLayoutCreateInfo::default()
                 .set_layouts(&set_layouts)
                 .push_constant_ranges(std::slice::from_ref(&push));
@@ -1366,7 +1367,7 @@ impl VkContext {
         }
         let device = &self.hw.device;
         let push = RaymarchShadowCascade {
-            cascade_idx: cascade_idx as u32,
+            cascade_idx: u32::saturating_from(cascade_idx),
             _pad: [0; 3],
         };
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice

@@ -3,6 +3,7 @@
 //! frame sync objects.
 
 use ash::vk;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::{pass_timing, render_graph};
 
@@ -47,7 +48,7 @@ pub(super) fn reset_timestamp_queries(gpu: &InitGpu<'_>) -> RenderResult<()> {
                     cmd,
                     pool,
                     0,
-                    (pass_timing::SLOTS_PER_FRAME * frames) as u32,
+                    u32::saturating_from(pass_timing::SLOTS_PER_FRAME * frames),
                 );
             },
         )?;
@@ -69,7 +70,7 @@ pub(super) fn build_frame_commands(
     let alloc_info = vk::CommandBufferAllocateInfo::default()
         .command_pool(command_pool)
         .level(vk::CommandBufferLevel::PRIMARY)
-        .command_buffer_count(frames as u32);
+        .command_buffer_count(u32::saturating_from(frames));
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
     // it names belongs to this device.
     let command_buffers = unsafe { device.allocate_command_buffers(&alloc_info) }

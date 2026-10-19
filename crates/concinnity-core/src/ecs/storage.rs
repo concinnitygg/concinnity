@@ -67,7 +67,7 @@ macro_rules! define_component_storage {
                 let tick = self.change_tick.bump();
                 let col = C::column_mut(self);
                 col.push(entity, c, tick);
-                let row = (col.len() - 1) as u32;
+                let row = u32::try_from(col.len() - 1).unwrap_or(u32::MAX);
                 self.join.set(entity, $crate::ecs::ComponentId::new(C::DISCRIMINANT), row);
                 entity
             }
@@ -111,7 +111,7 @@ macro_rules! define_component_storage {
                 let tick = self.change_tick.bump();
                 let col = C::column_mut(self);
                 col.push(entity, c, tick);
-                let row = (col.len() - 1) as u32;
+                let row = u32::try_from(col.len() - 1).unwrap_or(u32::MAX);
                 self.join.set(entity, id, row);
                 true
             }
@@ -130,7 +130,7 @@ macro_rules! define_component_storage {
                 let value = col.swap_remove(row, tick);
                 self.join.clear(entity, id);
                 if let Some(moved) = moved {
-                    self.join.set(moved, id, row as u32);
+                    self.join.set(moved, id, u32::try_from(row).unwrap_or(u32::MAX));
                 }
                 Some(value)
             }
@@ -154,7 +154,7 @@ macro_rules! define_component_storage {
                                 if row != last { Some(col.entities()[last]) } else { None };
                             col.swap_remove(row, tick);
                             if let Some(moved) = moved {
-                                self.join.set(moved, id, row as u32);
+                                self.join.set(moved, id, u32::try_from(row).unwrap_or(u32::MAX));
                             }
                         }
                     }

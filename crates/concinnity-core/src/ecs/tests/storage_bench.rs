@@ -17,6 +17,7 @@
     reason = "BenchWorld is module-private, so the generated pub items are unreachable and dead_code fires on whichever ones these benchmarks skip"
 )]
 
+use crate::math::SaturatingFrom;
 use std::collections::VecDeque;
 use std::format;
 use std::vec::Vec;
@@ -44,7 +45,7 @@ impl Rng {
 
     fn shuffle<T>(&mut self, items: &mut [T]) {
         for i in (1..items.len()).rev() {
-            let j = (self.next_u64() % (i as u64 + 1)) as usize;
+            let j = usize::saturating_from(self.next_u64() % (i as u64 + 1));
             items.swap(i, j);
         }
     }
@@ -132,8 +133,8 @@ fn build_world(n: usize, renderable_permil: usize, seed: u64) -> (BenchWorld, Ve
         world.insert_typed(
             e,
             Renderer {
-                mesh: i as u32,
-                material: i as u32 * 2,
+                mesh: u32::saturating_from(i),
+                material: u32::saturating_from(i) * 2,
             },
         );
         world.insert_typed(
@@ -162,8 +163,8 @@ fn run(pace: Pace) {
                 world.insert_typed(
                     e,
                     Renderer {
-                        mesh: i as u32,
-                        material: i as u32,
+                        mesh: u32::saturating_from(i),
+                        material: u32::saturating_from(i),
                     },
                 );
             }

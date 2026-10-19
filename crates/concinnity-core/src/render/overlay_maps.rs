@@ -10,6 +10,7 @@
 use crate::components::ScrollPanel;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{FontHandle, OverlayImage, PipelineContext, TextureHandle};
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
 
@@ -66,7 +67,7 @@ pub struct AtlasPool {
 impl AtlasPool {
     /// The handle the next font face added is named by: its slot.
     pub fn next_font(&self) -> FontHandle {
-        FontHandle::new(self.atlases.len() as u32)
+        FontHandle::new(u32::saturating_from(self.atlases.len()))
     }
 
     /// Add a font face's atlas, returning the handle that names it. Fonts are

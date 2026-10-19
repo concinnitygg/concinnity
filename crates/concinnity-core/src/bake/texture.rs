@@ -23,7 +23,7 @@
 
 // Magic tagging every compiled 2D texture payload.
 use crate::decode::{ByteReader, checked_product};
-use crate::math::ceil;
+use crate::math::{SaturatingFrom, ceil};
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
@@ -230,11 +230,11 @@ pub fn serialize(image: &TextureImage) -> Vec<u8> {
     let mut buf = Vec::with_capacity(total);
     buf.extend_from_slice(&TEXTURE_PAYLOAD_MAGIC.to_le_bytes());
     buf.extend_from_slice(&image.format.id().to_le_bytes());
-    buf.extend_from_slice(&(image.mips.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&u32::saturating_from(image.mips.len()).to_le_bytes());
     for mip in &image.mips {
         buf.extend_from_slice(&mip.width.to_le_bytes());
         buf.extend_from_slice(&mip.height.to_le_bytes());
-        buf.extend_from_slice(&(mip.data.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&u32::saturating_from(mip.data.len()).to_le_bytes());
         buf.extend_from_slice(&mip.data);
     }
     buf
@@ -293,7 +293,7 @@ pub fn downscale_rgba(
     if max_size == 0 || (width <= max_size && height <= max_size) {
         return (width, height, pixels);
     }
-    let scale = ceil(width.max(height) as f32 / max_size as f32) as u32;
+    let scale = u32::saturating_from(ceil(width.max(height) as f32 / max_size as f32));
     let scale = scale.max(2);
     let dst_w = (width / scale).max(1);
     let dst_h = (height / scale).max(1);
@@ -322,7 +322,7 @@ pub fn downscale_rgba(
             }
             let di = ((dy * dst_w + dx) * 4) as usize;
             for c in 0..4 {
-                out[di + c] = acc[c].checked_div(n).unwrap_or(0) as u8;
+                out[di + c] = u8::saturating_from(acc[c].checked_div(n).unwrap_or(0));
             }
         }
     }

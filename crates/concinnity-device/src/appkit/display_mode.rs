@@ -8,6 +8,7 @@
 //! context is dropped. Outside fullscreen the choice is only remembered; the
 //! windowed resize path is unaffected.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::window::display_mode::DisplayMode;
 use objc2_app_kit::{NSScreen, NSWindow};
 use objc2_core_foundation::{CFDictionary, CFRetained, Type, kCFBooleanTrue};
@@ -102,12 +103,12 @@ fn copy_all_modes(display: CGDirectDisplayID) -> Vec<CFRetained<CGDisplayMode>> 
 // `None` for a degenerate mode. A refresh of 0 stays 0 (unknown; some built-in
 // panels report none).
 fn display_mode_of(mode: &CGDisplayMode) -> Option<DisplayMode> {
-    let width = CGDisplayMode::pixel_width(Some(mode)) as u32;
-    let height = CGDisplayMode::pixel_height(Some(mode)) as u32;
+    let width = u32::saturating_from(CGDisplayMode::pixel_width(Some(mode)));
+    let height = u32::saturating_from(CGDisplayMode::pixel_height(Some(mode)));
     if width == 0 || height == 0 {
         return None;
     }
-    let refresh_hz = CGDisplayMode::refresh_rate(Some(mode)).round().max(0.0) as u32;
+    let refresh_hz = u32::saturating_from(CGDisplayMode::refresh_rate(Some(mode)).round().max(0.0));
     Some(DisplayMode {
         width,
         height,

@@ -11,6 +11,7 @@
 
 use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::decal::{DecalRecord, DecalSet};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::transform::mat4_inverse;
@@ -208,12 +209,12 @@ impl DecalResources {
         let index_buffer = upload_buffer(alloc, ibytes, D3D12_RESOURCE_STATE_INDEX_BUFFER)?;
         let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&vertex_buffer),
-            SizeInBytes: vbytes.len() as u32,
+            SizeInBytes: u32::saturating_from(vbytes.len()),
             StrideInBytes: 12,
         };
         let index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&index_buffer),
-            SizeInBytes: ibytes.len() as u32,
+            SizeInBytes: u32::saturating_from(ibytes.len()),
             Format: DXGI_FORMAT_R16_UINT,
         };
 
@@ -398,8 +399,8 @@ impl DxContext {
             let scissor = RECT {
                 left: 0,
                 top: 0,
-                right: w as i32,
-                bottom: h as i32,
+                right: i32::saturating_from(w),
+                bottom: i32::saturating_from(h),
             };
             cmd.RSSetScissorRects(&[scissor]);
             cmd.IASetPrimitiveTopology(
@@ -433,8 +434,9 @@ impl DxContext {
                 // refuses records past `MAX_DECALS`, so `id * params_stride` stays inside this
                 // frame's mapping.
                 let dst = unsafe {
-                    decals.params_ubo_ptrs[frame_idx]
-                        .add((decal.id as u64 * decals.params_stride) as usize)
+                    decals.params_ubo_ptrs[frame_idx].add(usize::saturating_from(
+                        decal.id as u64 * decals.params_stride,
+                    ))
                 };
                 // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload,
                 // and the source is a separate allocation, so the ranges cannot overlap.

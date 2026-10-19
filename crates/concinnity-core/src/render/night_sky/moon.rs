@@ -3,6 +3,7 @@
 //! `moon_face` in `night_sky.hlsl`.
 
 use super::celestial::CelestialBasis;
+use crate::math::narrow_f32;
 use crate::math::vec3::{cross, dot, normalize_or, scale, sub};
 use crate::math::{acos, cos, sin, sqrt};
 use core::f32::consts::PI;
@@ -29,7 +30,7 @@ impl MoonPath {
         let days = f64::from(turns) + f64::from(angle_deg) / 360.0;
         let deg = (f64::from(self.start_deg) + days * 360.0 / f64::from(self.period_days)) % 360.0;
         let deg = if deg < 0.0 { deg + 360.0 } else { deg };
-        (deg as f32).to_radians()
+        narrow_f32(deg).to_radians()
     }
 
     /// The moon's direction on the celestial sphere at `elongation`: on the

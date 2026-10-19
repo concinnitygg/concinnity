@@ -5,6 +5,7 @@
 //! exists).
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_core::render::backend_init::{EmbeddedSurface, SwapchainConfig};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hdr_output;
@@ -285,7 +286,7 @@ fn initial_target_size(drawable: (f64, f64), config: &WindowConfig<'_>) -> (u32,
     }
     let pick = |live: f64, requested: u32| {
         if live > 0.0 {
-            live as u32
+            u32::saturating_from(live)
         } else {
             requested.max(1)
         }
@@ -321,7 +322,7 @@ pub(crate) fn measure_max_edr(mtm: objc2::MainThreadMarker) -> f32 {
             best = v;
         }
     }
-    best as f32
+    narrow_f32(best)
 }
 
 // The drawable is now the composite/post-pass target only -- main pass renders

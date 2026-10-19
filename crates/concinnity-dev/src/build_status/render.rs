@@ -1,6 +1,7 @@
 //! Turns a board into styled lines of text. Nothing here touches the
 //! terminal: the caller picks the width and whether to paint.
 
+use concinnity_core::math::SaturatingFrom;
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
@@ -169,7 +170,7 @@ pub(super) fn footer(board: &Board) -> Option<Line> {
     let problems = [(board.errors, "error"), (board.warnings, "warning")]
         .into_iter()
         .filter(|(n, _)| *n > 0)
-        .map(|(n, noun)| counted(n as u32, noun))
+        .map(|(n, noun)| counted(u32::saturating_from(n), noun))
         .collect::<Vec<_>>();
     if problems.is_empty() {
         return Some(line);
@@ -211,7 +212,9 @@ fn shown_item(item: &str) -> &str {
 pub(super) fn bar(done: u32, total: u32, width: usize) -> (String, String) {
     let halves = match total {
         0 => 0,
-        total => (u64::from(done.min(total)) * width as u64 * 2 / u64::from(total)) as usize,
+        total => {
+            usize::saturating_from(u64::from(done.min(total)) * width as u64 * 2 / u64::from(total))
+        }
     };
     let full = halves / 2;
     let half = halves % 2 == 1;

@@ -39,6 +39,7 @@
 //!     a probe bakes on an early frame), exactly like Metal.
 
 use concinnity_core::gfx::render_types;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PixelRect;
@@ -505,7 +506,7 @@ impl DxContext {
         let sample_count = bake.sample_count;
         // Subresource index of mip 0 of array slice `face`, which D3D12 orders
         // mip-major within a slice.
-        let dst_subresource = face as u32 * bake.prefilter.mips();
+        let dst_subresource = u32::saturating_from(face) * bake.prefilter.mips();
         let dst_loc = D3D12_TEXTURE_COPY_LOCATION {
             pResource: com::borrowed(bake.prefilter.capture()),
             Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
@@ -721,16 +722,16 @@ impl DxContext {
         } = extent;
         let scissor = match area {
             Some(r) => windows::Win32::Foundation::RECT {
-                left: r.x as i32,
-                top: r.y as i32,
-                right: (r.x + r.width) as i32,
-                bottom: (r.y + r.height) as i32,
+                left: i32::saturating_from(r.x),
+                top: i32::saturating_from(r.y),
+                right: i32::saturating_from(r.x + r.width),
+                bottom: i32::saturating_from(r.y + r.height),
             },
             None => windows::Win32::Foundation::RECT {
                 left: 0,
                 top: 0,
-                right: width as i32,
-                bottom: height as i32,
+                right: i32::saturating_from(width),
+                bottom: i32::saturating_from(height),
             },
         };
         let bindless_pso = self.face_bindless_pso().expect("bindless PSO is live");
@@ -829,7 +830,7 @@ impl DxContext {
             // omitted (not captured into the probe in V1).
             cmd.ExecuteIndirect(
                 cull_sig,
-                self.state.draw.skinned_record_base() as u32,
+                u32::saturating_from(self.state.draw.skinned_record_base()),
                 indirect,
                 u64::from(indirect_offset),
                 None::<&ID3D12Resource>,

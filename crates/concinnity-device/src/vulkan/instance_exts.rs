@@ -116,7 +116,7 @@ mod tests {
         let mut props = vk::ExtensionProperties::default();
         let bytes = PORTABILITY.to_bytes_with_nul();
         for (dst, src) in props.extension_name.iter_mut().zip(bytes) {
-            *dst = *src as std::os::raw::c_char;
+            *dst = std::os::raw::c_char::from_ne_bytes([*src]);
         }
         let props = [props];
         assert_eq!(names_of(&props), vec![PORTABILITY]);

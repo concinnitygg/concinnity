@@ -11,6 +11,7 @@
 //! Greedy merging of adjacent same-block faces into larger quads is a future
 //! optimization; this pass only does hidden-face culling.
 
+use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -73,10 +74,18 @@ pub fn build_voxel_mesh(
     let bs = block_size;
 
     let at = |x: i32, y: i32, z: i32| -> Option<&PaletteSlot> {
-        if x < 0 || y < 0 || z < 0 || x >= dx as i32 || y >= dy as i32 || z >= dz as i32 {
+        if x < 0
+            || y < 0
+            || z < 0
+            || x >= i32::saturating_from(dx)
+            || y >= i32::saturating_from(dy)
+            || z >= i32::saturating_from(dz)
+        {
             return None;
         }
-        let i = (x as usize) + (y as usize) * dx + (z as usize) * dx * dy;
+        let i = usize::saturating_from(x)
+            + usize::saturating_from(y) * dx
+            + usize::saturating_from(z) * dx * dy;
         palette[blocks[i] as usize].as_ref()
     };
 
@@ -85,7 +94,7 @@ pub fn build_voxel_mesh(
         if verts.len() + 4 > u16::MAX as usize {
             return;
         }
-        let base = verts.len() as u16;
+        let base = u16::saturating_from(verts.len());
         let [u0, v0, u1, v1] = uv_rect;
         // CCW from outside; UVs map a -> (u0,v0), b -> (u1,v0), c -> (u1,v1), d -> (u0,v1).
         let uvs = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
@@ -98,7 +107,11 @@ pub fn build_voxel_mesh(
     for z in 0..dz {
         for y in 0..dy {
             for x in 0..dx {
-                let Some(slot) = at(x as i32, y as i32, z as i32) else {
+                let Some(slot) = at(
+                    i32::saturating_from(x),
+                    i32::saturating_from(y),
+                    i32::saturating_from(z),
+                ) else {
                     continue;
                 };
                 let x0 = x as f32 * bs;
@@ -109,7 +122,13 @@ pub fn build_voxel_mesh(
                 let z1 = z0 + bs;
 
                 // +X
-                if at(x as i32 + 1, y as i32, z as i32).is_none() {
+                if at(
+                    i32::saturating_from(x) + 1,
+                    i32::saturating_from(y),
+                    i32::saturating_from(z),
+                )
+                .is_none()
+                {
                     emit_quad(
                         [[x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]],
                         [1.0, 0.0, 0.0],
@@ -117,7 +136,13 @@ pub fn build_voxel_mesh(
                     );
                 }
                 // -X
-                if at(x as i32 - 1, y as i32, z as i32).is_none() {
+                if at(
+                    i32::saturating_from(x) - 1,
+                    i32::saturating_from(y),
+                    i32::saturating_from(z),
+                )
+                .is_none()
+                {
                     emit_quad(
                         [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]],
                         [-1.0, 0.0, 0.0],
@@ -125,7 +150,13 @@ pub fn build_voxel_mesh(
                     );
                 }
                 // +Y (top)
-                if at(x as i32, y as i32 + 1, z as i32).is_none() {
+                if at(
+                    i32::saturating_from(x),
+                    i32::saturating_from(y) + 1,
+                    i32::saturating_from(z),
+                )
+                .is_none()
+                {
                     emit_quad(
                         [[x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]],
                         [0.0, 1.0, 0.0],
@@ -133,7 +164,13 @@ pub fn build_voxel_mesh(
                     );
                 }
                 // -Y (bottom)
-                if at(x as i32, y as i32 - 1, z as i32).is_none() {
+                if at(
+                    i32::saturating_from(x),
+                    i32::saturating_from(y) - 1,
+                    i32::saturating_from(z),
+                )
+                .is_none()
+                {
                     emit_quad(
                         [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],
                         [0.0, -1.0, 0.0],
@@ -141,7 +178,13 @@ pub fn build_voxel_mesh(
                     );
                 }
                 // +Z
-                if at(x as i32, y as i32, z as i32 + 1).is_none() {
+                if at(
+                    i32::saturating_from(x),
+                    i32::saturating_from(y),
+                    i32::saturating_from(z) + 1,
+                )
+                .is_none()
+                {
                     emit_quad(
                         [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]],
                         [0.0, 0.0, 1.0],
@@ -149,7 +192,13 @@ pub fn build_voxel_mesh(
                     );
                 }
                 // -Z
-                if at(x as i32, y as i32, z as i32 - 1).is_none() {
+                if at(
+                    i32::saturating_from(x),
+                    i32::saturating_from(y),
+                    i32::saturating_from(z) - 1,
+                )
+                .is_none()
+                {
                     emit_quad(
                         [[x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]],
                         [0.0, 0.0, -1.0],

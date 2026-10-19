@@ -81,6 +81,7 @@ pub fn load_face(slot: usize, bytes: &[u8]) -> Result<(LoadedFont, FontAtlas), S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
     use alloc::vec;
 
     // A payload in the wire format the cook crate emits.
@@ -94,7 +95,7 @@ mod tests {
             0xABu8,
             (atlas_w as usize) * (atlas_h as usize) * 4,
         ));
-        out.extend_from_slice(&(glyphs.len() as u32).to_le_bytes());
+        out.extend_from_slice(&u32::saturating_from(glyphs.len()).to_le_bytes());
         for m in glyphs {
             out.extend_from_slice(&m.char_code.to_le_bytes());
             out.extend_from_slice(&m.atlas_x.to_le_bytes());

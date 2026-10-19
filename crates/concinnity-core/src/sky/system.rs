@@ -1,4 +1,5 @@
 use crate::ecs::{Entity, MenuActive, PipelineContext, SimTiming, StepResult, System, World};
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 use crate::components::{SkyRotation, Transform};
@@ -87,7 +88,8 @@ impl System for SkyRotationSystem {
         } else {
             wrapped
         };
-        let whole = crate::math::round((total - self.angle_deg) / FULL_TURN_DEG) as i32;
+        let whole =
+            i32::saturating_from(crate::math::round((total - self.angle_deg) / FULL_TURN_DEG));
         self.turns = self.turns.saturating_add(whole);
         self.publish(ctx);
         StepResult::Continue

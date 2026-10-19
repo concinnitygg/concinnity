@@ -12,7 +12,7 @@
 //! `grass_gathered_density` line for line.
 
 use super::planet::density::grass_hash;
-use crate::math::{floor, sqrt};
+use crate::math::{SaturatingFrom, floor, sqrt};
 
 /// How far the strongest clumping draws a blade at its clump's center toward
 /// it: the share of its distance it keeps there is `1 - GATHER_STRENGTH`.
@@ -32,7 +32,10 @@ pub struct Clump {
 
 // The kernel's `grass_hash2`.
 fn hash2(c: [i32; 2]) -> u32 {
-    grass_hash((c[0] as u32).wrapping_add(grass_hash(c[1] as u32)))
+    grass_hash(
+        c[0].cast_unsigned()
+            .wrapping_add(grass_hash(c[1].cast_unsigned())),
+    )
 }
 
 // The kernel's `grass_unit`.
@@ -44,7 +47,10 @@ fn unit(h: u32, salt: u32) -> f32 {
 /// `clump_size` across salted by `seed` and `salt`.
 pub fn clump_at(p: [f32; 2], clump_size: f32, seed: u32, salt: u32) -> Clump {
     let q = [p[0] / clump_size, p[1] / clump_size];
-    let base = [floor(q[0]) as i32, floor(q[1]) as i32];
+    let base = [
+        i32::saturating_from(floor(q[0])),
+        i32::saturating_from(floor(q[1])),
+    ];
     let (mut best, mut second) = (f32::MAX, f32::MAX);
     let mut clump = Clump {
         hash: 0,
@@ -110,6 +116,7 @@ pub fn max_gather_offset(clump_size: f32, clumping: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
     use alloc::vec::Vec;
 
     // Blades on an even jittered grid, as the kernel scatters them.
@@ -205,7 +212,7 @@ mod tests {
         let mut blades_in = [0.0f32; 4];
         let mut ground_in = [0.0f32; 4];
         let mut predicted = [0.0f32; 4];
-        let band = |s: f32| ((s * bands as f32) as usize).min(bands - 1);
+        let band = |s: f32| usize::saturating_from(s * bands as f32).min(bands - 1);
         for &p in &blades(260, 0.01) {
             let c = clump_at(p, size, 4, 0);
             blades_in[band(clump_at(gathered(p, &c, clumping), size, 4, 0).spot)] += 1.0;

@@ -36,6 +36,7 @@ mod gltf_material;
 mod rig;
 
 use crate::authoring::world::args_with_id;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::transform::{
     IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul, mat4_transform_point,
 };
@@ -248,8 +249,9 @@ fn entries_from_fbx(path: &str, opts: &ImportOptions) -> std::io::Result<Vec<ser
         }
         // Oversized: count the chunks the build will produce and emit one Mesh
         // per chunk, each carrying its `chunk_index`.
-        let (_, indices32) = crate::import::fbx::read_primitive_geometry(&scene, i as u32)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let (_, indices32) =
+            crate::import::fbx::read_primitive_geometry(&scene, u32::saturating_from(i))
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         let chunk_count = crate::import::glb::count_u16_chunks(&indices32);
         for chunk_idx in 0..chunk_count {
             let mesh_name = format!("{prefix}_prim_{i}_chunk_{chunk_idx}");
@@ -491,9 +493,12 @@ fn entries_from_glb(
             // chunks the build will produce. Emit one Mesh per chunk by name;
             // each carries `chunk_index` so desugar can re-split the primitive
             // and pick the right slice: no inline data baked into world.jsonl.
-            let (_, indices32) =
-                crate::import::glb::read_primitive_geometry(&doc, path, prim_idx as u32)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            let (_, indices32) = crate::import::glb::read_primitive_geometry(
+                &doc,
+                path,
+                u32::saturating_from(prim_idx),
+            )
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
             let chunk_count = crate::import::glb::count_u16_chunks(&indices32);
             for chunk_idx in 0..chunk_count {
                 let mesh_name = format!("{prefix}_prim_{prim_idx}_chunk_{chunk_idx}");
@@ -777,6 +782,7 @@ fn framed_camera_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::SaturatingFrom;
 
     #[test]
     fn sanitize_name_lowercases_and_replaces_punctuation() {
@@ -894,11 +900,11 @@ mod tests {
         let mut out = Vec::with_capacity(total);
         out.extend_from_slice(b"glTF");
         out.extend_from_slice(&2u32.to_le_bytes());
-        out.extend_from_slice(&(total as u32).to_le_bytes());
-        out.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&u32::saturating_from(total).to_le_bytes());
+        out.extend_from_slice(&u32::saturating_from(json_bytes.len()).to_le_bytes());
         out.extend_from_slice(b"JSON");
         out.extend_from_slice(&json_bytes);
-        out.extend_from_slice(&(bin_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&u32::saturating_from(bin_bytes.len()).to_le_bytes());
         out.extend_from_slice(b"BIN\0");
         out.extend_from_slice(&bin_bytes);
         out

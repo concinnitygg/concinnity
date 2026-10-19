@@ -16,6 +16,7 @@
 // (transform) column, so the partner read is a real scattered access in the
 // hashmap and probe paths, not a coincidental sequential one.
 
+use crate::math::SaturatingFrom;
 use std::println;
 use std::vec::Vec;
 
@@ -64,7 +65,7 @@ impl Rng {
     }
 
     fn below(&mut self, n: usize) -> usize {
-        (self.next_u64() % n as u64) as usize
+        usize::saturating_from(self.next_u64() % n as u64)
     }
 }
 
@@ -100,7 +101,7 @@ fn build(n: usize, renderable_permil: u32, seed: u64) -> Bench {
 
     for i in 0..n {
         let e = entities.alloc();
-        let row = transforms.len() as u32;
+        let row = u32::saturating_from(transforms.len());
         transforms.push(e, Transform { m: [i as f32; 16] }, Tick::ZERO);
         join.set(e, transform_id(), row);
         if rng.below(1000) < renderable_permil as usize {
@@ -114,7 +115,7 @@ fn build(n: usize, renderable_permil: u32, seed: u64) -> Bench {
     let mut mesh_row_by_index = HashMap::new();
     for &e in &renderable {
         let idx = e.index();
-        let row = meshes.len() as u32;
+        let row = u32::saturating_from(meshes.len());
         meshes.push(
             e,
             MeshRenderer {

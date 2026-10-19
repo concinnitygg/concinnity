@@ -7,6 +7,7 @@
 // through `add` / `adopt` and leave through `reap`, so the indices have exactly
 // two places to stay honest.
 
+use crate::math::SaturatingFrom;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -154,7 +155,7 @@ impl PropBodies {
         snap: PropCollSnap,
         body_cap: u32,
     ) {
-        let full = world.body_count() as u32 >= body_cap;
+        let full = u32::saturating_from(world.body_count()) >= body_cap;
         if full || self.add(layers, world, entity, snap).is_none() {
             self.refused.insert(entity);
         }
@@ -480,7 +481,7 @@ mod tests {
         let bodies_before = world.body_count();
         let late = entities[3];
 
-        let cap = bodies_before as u32;
+        let cap = u32::saturating_from(bodies_before);
         props.adopt(&layers, &mut world, late, ball_snap([9.0, 2.0, 0.0]), cap);
         assert_eq!(props.len(), 3, "the refused entity got no body");
         assert_eq!(world.body_count(), bodies_before, "and none was built");
@@ -509,7 +510,7 @@ mod tests {
     fn reap_forgets_refused_entities_whose_entity_is_gone() {
         let (mut world, layers, mut props, entities) = three_props_and_a_spare();
         let late = entities[3];
-        let cap = world.body_count() as u32;
+        let cap = u32::saturating_from(world.body_count());
         props.adopt(&layers, &mut world, late, ball_snap([9.0, 2.0, 0.0]), cap);
         assert!(props.is_refused(late));
 

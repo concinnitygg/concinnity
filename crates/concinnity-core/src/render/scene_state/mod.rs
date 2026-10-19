@@ -114,12 +114,12 @@ impl SceneState {
             (obj.visible && obj.resident).then_some(DrawnPlanetTile {
                 id: chunk.tile,
                 model: obj.model,
-                vertex_base: obj.base_vertex as u32,
+                vertex_base: obj.base_vertex.cast_unsigned(),
                 radial: chunk.radial,
                 morph_extent: chunk.morph_extent,
                 morph: self
                     .tile_morph
-                    .map(|m| m.row(obj.planet_tile, obj.base_vertex as u32))
+                    .map(|m| m.row(obj.planet_tile, obj.base_vertex.cast_unsigned()))
                     .unwrap_or_default(),
             })
         })

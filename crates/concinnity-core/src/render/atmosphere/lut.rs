@@ -217,6 +217,7 @@ pub fn aerial_slice_of(distance: f32, reach: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
     use crate::math::exp;
 
     const BOTTOM: f32 = 6360.0;
@@ -359,13 +360,13 @@ mod tests {
     // A linear read of `table` at `uv`, as the sampler takes it, clamped.
     fn linear(table: &[f32], uv: f32) -> f32 {
         let x = (uv * table.len() as f32 - 0.5).clamp(0.0, (table.len() - 1) as f32);
-        let i = (floor(x) as usize).min(table.len() - 2);
+        let i = usize::saturating_from(floor(x)).min(table.len() - 2);
         let f = x - i as f32;
         table[i] * (1.0 - f) + table[i + 1] * f
     }
 
     fn spline(table: &[f32], uv: f32) -> f32 {
-        let (h, g) = bspline_taps(uv, table.len() as u32);
+        let (h, g) = bspline_taps(uv, u32::saturating_from(table.len()));
         g[0] * linear(table, h[0]) + g[1] * linear(table, h[1])
     }
 

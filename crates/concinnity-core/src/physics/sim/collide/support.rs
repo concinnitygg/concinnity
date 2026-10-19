@@ -7,6 +7,7 @@
 // whenever the geometry repeats, which is exactly the property warm starting
 // needs; an algorithmic one drifts as soon as the clip order changes.
 
+use crate::math::SaturatingFrom;
 use crate::physics::sim::math::{Quat, Vec3, vec3};
 
 /// A body's placement, all the narrow phase needs of it.
@@ -230,7 +231,7 @@ pub(crate) fn clipped_feature(point: Vec3, corners: &[Vec3; 4], half: Vec3, axis
     let mut corner_index = 0xFu32;
     for (index, corner) in corners.iter().enumerate() {
         if (point - *corner).length_squared() <= FEATURE_EPSILON * FEATURE_EPSILON {
-            corner_index = index as u32;
+            corner_index = u32::saturating_from(index);
             break;
         }
     }

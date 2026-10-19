@@ -133,6 +133,7 @@ pub(crate) fn evaluate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::narrow_f32;
 
     const IDENTITY: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
@@ -156,7 +157,7 @@ mod tests {
                 }
             }
         }
-        (hits / total as f64) as f32
+        narrow_f32(hits / total as f64)
     }
 
     // Ray from the origin along `dir` against the quad, as two triangles.

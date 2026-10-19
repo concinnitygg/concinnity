@@ -9,6 +9,7 @@
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::SaturatingFrom;
 
 use super::character_shape::{Row, SliderRow};
 use super::registry::PanelKey;
@@ -129,10 +130,7 @@ pub(crate) fn size(n_rows: usize) -> [f32; 2] {
 
 // How many rows a panel `h` tall shows, capped by the pool.
 pub(crate) fn window(h: f32) -> usize {
-    (((h - widget::TITLE_H - HEADER_H - PAD) / ROW_H)
-        .floor()
-        .max(0.0) as usize)
-        .min(MAX_ROWS)
+    usize::saturating_from(((h - widget::TITLE_H - HEADER_H - PAD) / ROW_H).floor()).min(MAX_ROWS)
 }
 
 // The header buttons, pinned to the header row's right end: Randomize at the

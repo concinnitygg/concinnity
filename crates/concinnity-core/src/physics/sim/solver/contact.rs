@@ -12,6 +12,7 @@
 // accumulated as it is applied, which is what an impact is measured by.
 
 use super::bodies::{Bodies, SolverBody};
+use crate::math::SaturatingFrom;
 use crate::math::sqrt;
 use crate::physics::sim::config::{SimConfig, Softness};
 use crate::physics::sim::contact::{MAX_MANIFOLD_POINTS, Manifold};
@@ -135,7 +136,7 @@ pub(crate) fn prepare(
             restitution: manifold.restitution,
             coupling: Coupling::build(&body_a, &body_b, normal, &anchors[..count]),
             points: [ConstraintPoint::default(); MAX_MANIFOLD_POINTS],
-            count: count as u8,
+            count: u8::saturating_from(count),
         };
 
         for ((slot, point), &(ra, rb)) in constraint

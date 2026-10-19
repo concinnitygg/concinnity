@@ -3,6 +3,7 @@
 //! internal system (not a declarable asset), present only when the world has
 //! something to play, so a world with nothing never opens an audio device.
 
+use crate::math::SaturatingFrom;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use hashbrown::{HashMap, HashSet};
@@ -343,7 +344,10 @@ impl System for AudioSystem {
                 .clip_locators
                 .iter()
                 .enumerate()
-                .filter_map(|(i, loc)| loc.as_ref().map(|_| AudioClipHandle::new(i as u32)))
+                .filter_map(|(i, loc)| {
+                    loc.as_ref()
+                        .map(|_| AudioClipHandle::new(u32::saturating_from(i)))
+                })
                 .collect();
             for clip in clips {
                 if !self.queue_clip(ctx, clip) {

@@ -7,6 +7,7 @@
 
 use crate::components::ShadowUpdate;
 use crate::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
+use crate::math::SaturatingFrom;
 use crate::render::backend_init::ShadowCadence;
 use crate::render::csm::{self, ShadowUniformInputs};
 
@@ -130,7 +131,7 @@ fn select_cascade_mask(
     // scheduled (and never sampled -- the shader bounds its lookup by the same
     // count). `primed` may carry bits for cascades that were active under a
     // higher count; `& all` masks them off so they never force a render.
-    let active = active_cascades.clamp(1, NUM_SHADOW_CASCADES as u32);
+    let active = active_cascades.clamp(1, u32::saturating_from(NUM_SHADOW_CASCADES));
     let all = (1u32 << active) - 1;
     let scheduled = match update {
         ShadowUpdate::EveryFrame => all,
@@ -153,6 +154,7 @@ mod tests {
     };
     use crate::components::ShadowUpdate;
     use crate::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
+    use crate::math::SaturatingFrom;
     use crate::render::csm;
     use crate::transform::IDENTITY;
 
@@ -178,7 +180,7 @@ mod tests {
         ShadowCadence {
             update,
             distance,
-            cascades: NUM_SHADOW_CASCADES as u32,
+            cascades: u32::saturating_from(NUM_SHADOW_CASCADES),
         }
     }
 
@@ -270,7 +272,8 @@ mod tests {
         // From the unprimed state both policies render all cascades on the
         // very first frame, so no slice is sampled before it holds depth.
         for update in [ShadowUpdate::Hybrid, ShadowUpdate::EveryFrame] {
-            let (mask, primed) = select_cascade_mask(update, 0, 0, NUM_SHADOW_CASCADES as u32);
+            let (mask, primed) =
+                select_cascade_mask(update, 0, 0, u32::saturating_from(NUM_SHADOW_CASCADES));
             assert_eq!(mask, ALL, "{update:?} should prime all cascades on frame 0");
             assert_eq!(primed, ALL, "every cascade is primed after frame 0");
         }
@@ -303,10 +306,14 @@ mod tests {
         // Once primed, Hybrid drops back to its steady-state set: the near
         // cascade plus exactly one far cascade. The full-prime render only
         // happens while a cascade is still unprimed, never again.
-        let far_count = (NUM_SHADOW_CASCADES as u32 - 1).max(1);
+        let far_count = (u32::saturating_from(NUM_SHADOW_CASCADES) - 1).max(1);
         for clock in 0..(far_count * 3) {
-            let (mask, primed) =
-                select_cascade_mask(ShadowUpdate::Hybrid, clock, ALL, NUM_SHADOW_CASCADES as u32);
+            let (mask, primed) = select_cascade_mask(
+                ShadowUpdate::Hybrid,
+                clock,
+                ALL,
+                u32::saturating_from(NUM_SHADOW_CASCADES),
+            );
             assert_eq!(primed, ALL, "already-primed set is unchanged");
             assert_eq!(mask & 1, 1, "near cascade refreshes every frame");
             let extra = (mask & !1u32).count_ones();
@@ -318,11 +325,15 @@ mod tests {
     fn hybrid_round_robins_every_far_cascade() {
         // Over `far_count` consecutive frames the steady-state Hybrid mask
         // touches each far cascade exactly once.
-        let far_count = (NUM_SHADOW_CASCADES as u32 - 1).max(1);
+        let far_count = (u32::saturating_from(NUM_SHADOW_CASCADES) - 1).max(1);
         let mut union = 0u32;
         for clock in 0..far_count {
-            let (mask, _) =
-                select_cascade_mask(ShadowUpdate::Hybrid, clock, ALL, NUM_SHADOW_CASCADES as u32);
+            let (mask, _) = select_cascade_mask(
+                ShadowUpdate::Hybrid,
+                clock,
+                ALL,
+                u32::saturating_from(NUM_SHADOW_CASCADES),
+            );
             union |= mask;
         }
         assert_eq!(union, ALL, "every cascade is refreshed within one round");
@@ -335,7 +346,7 @@ mod tests {
                 ShadowUpdate::EveryFrame,
                 clock,
                 ALL,
-                NUM_SHADOW_CASCADES as u32,
+                u32::saturating_from(NUM_SHADOW_CASCADES),
             );
             assert_eq!(mask, ALL);
             assert_eq!(primed, ALL);
@@ -350,15 +361,15 @@ mod tests {
         // rendered at most once across the whole run.
         let mut primed = 0u32;
         let mut prime_renders = [0u32; NUM_SHADOW_CASCADES];
-        for clock in 0..(NUM_SHADOW_CASCADES as u32 + 4) {
-            let far_count = (NUM_SHADOW_CASCADES as u32 - 1).max(1);
+        for clock in 0..(u32::saturating_from(NUM_SHADOW_CASCADES) + 4) {
+            let far_count = (u32::saturating_from(NUM_SHADOW_CASCADES) - 1).max(1);
             let scheduled_near_far = 1u32 | (1u32 << (1 + clock % far_count));
             let before = primed;
             let (mask, next) = select_cascade_mask(
                 ShadowUpdate::Hybrid,
                 clock,
                 primed,
-                NUM_SHADOW_CASCADES as u32,
+                u32::saturating_from(NUM_SHADOW_CASCADES),
             );
             assert_eq!(next & before, before, "primed set must never lose a bit");
             for (c, count) in prime_renders.iter_mut().enumerate() {
@@ -385,14 +396,20 @@ mod tests {
         // to near + one far cascade and rotates the far cascade each frame.
         let mut sched = ShadowCascadeScheduler::default();
         assert_eq!(
-            sched.next_mask(ShadowUpdate::Hybrid, NUM_SHADOW_CASCADES as u32),
+            sched.next_mask(
+                ShadowUpdate::Hybrid,
+                u32::saturating_from(NUM_SHADOW_CASCADES)
+            ),
             ALL,
             "frame 0 primes all"
         );
-        let far_count = (NUM_SHADOW_CASCADES as u32 - 1).max(1);
+        let far_count = (u32::saturating_from(NUM_SHADOW_CASCADES) - 1).max(1);
         let mut union = 0u32;
         for _ in 0..far_count {
-            let mask = sched.next_mask(ShadowUpdate::Hybrid, NUM_SHADOW_CASCADES as u32);
+            let mask = sched.next_mask(
+                ShadowUpdate::Hybrid,
+                u32::saturating_from(NUM_SHADOW_CASCADES),
+            );
             assert_eq!(mask & 1, 1, "near cascade refreshes every frame");
             assert_eq!((mask & !1u32).count_ones(), 1, "one far cascade per frame");
             union |= mask;

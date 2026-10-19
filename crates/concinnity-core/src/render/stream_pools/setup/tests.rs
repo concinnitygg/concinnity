@@ -1,5 +1,6 @@
 use super::*;
 use crate::bake::texture::TextureImage;
+use crate::math::SaturatingFrom;
 use alloc::vec;
 
 const MIB: u64 = 1024 * 1024;
@@ -60,8 +61,8 @@ fn a_voxel_world_plan_sizes_its_window_headroom() {
     let plan = VoxelStream::plan(&vw, &HashMap::new(), &HashMap::new(), 0);
     let expected = budget::chunk_headroom(ChunkWindowShape {
         chunk_blocks: vw.chunk_blocks(),
-        near_radius: vw.view_radius() as u32,
-        far_radius: vw.impostor_radius() as u32,
+        near_radius: u32::saturating_from(vw.view_radius()),
+        far_radius: u32::saturating_from(vw.impostor_radius()),
         impostor_step: vw.impostor_step(),
     });
     assert_eq!(plan.headroom, expected);

@@ -19,6 +19,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::frame_plan::FogBlocks;
 use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
@@ -458,7 +459,7 @@ fn create_fog_descriptor_pool(
     device: &VkDevice,
     frames: usize,
 ) -> RenderResult<OwnedDescriptorPool> {
-    let f = frames as u32;
+    let f = u32::saturating_from(frames);
     let sizes = PoolSizes::default()
         .sets(&fog_set_bindings(), f)
         .sets(&froxel_set_bindings(), f)

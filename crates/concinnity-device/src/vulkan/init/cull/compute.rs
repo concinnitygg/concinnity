@@ -4,6 +4,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend_init::SceneData;
 use concinnity_core::render::error::RenderResult;
 
@@ -44,7 +45,7 @@ pub(super) struct ComputeInputs<'a> {
 pub(super) fn cull_set_bindings<const N: usize>() -> [Binding; N] {
     std::array::from_fn(|b| {
         (
-            b as u32,
+            u32::saturating_from(b),
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::COMPUTE,
         )
@@ -235,8 +236,10 @@ pub(super) fn build_compute_cull(
         use concinnity_core::gfx::render_types::{
             GpuDrawArgs, GpuObjectData, draw_args_flags, instance_object_records,
         };
-        let records =
-            instance_object_records(&world.instanced_clusters, scene.textures.len() as u32);
+        let records = instance_object_records(
+            &world.instanced_clusters,
+            u32::saturating_from(scene.textures.len()),
+        );
         // Cluster base LOD slice (absolute indices, so `base_vertex = 0`),
         // which `build_record_buffers` patches per frame for the clusters
         // that declare alternates. Every instance is visible + resident +
@@ -246,8 +249,8 @@ pub(super) fn build_compute_cull(
         for cluster in &world.instanced_clusters {
             for _ in &cluster.instances {
                 draw_args.push(GpuDrawArgs {
-                    index_count: cluster.index_count as u32,
-                    index_offset: cluster.index_offset as u32,
+                    index_count: u32::saturating_from(cluster.index_count),
+                    index_offset: u32::saturating_from(cluster.index_offset),
                     base_vertex: 0,
                     flags: draw_args_flags(true, true, true),
                 });

@@ -6,6 +6,7 @@ use super::skin_index_arg;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 use crate::pipeline::progress::StageProgress;
+use concinnity_core::math::SaturatingFrom;
 
 // Expand FBX-sourced SkinnedMesh assets in place, mirroring the glTF pass:
 // the file's first skinned geometry lands in the asset's inline `vertices` /
@@ -125,16 +126,18 @@ pub(in crate::pipeline) fn desugar_fbx_meshes(
         ) {
             continue;
         }
-        let primitive_index = asset
-            .args
-            .get("primitive_index")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0) as u32;
+        let primitive_index = u32::saturating_from(
+            asset
+                .args
+                .get("primitive_index")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+        );
         let chunk_index = asset
             .args
             .get("chunk_index")
             .and_then(serde_json::Value::as_u64)
-            .map_or(0, |n| n as usize);
+            .map_or(0, usize::saturating_from);
 
         progress.begin(&source);
         if !parsed_cache.contains_key(&source) {

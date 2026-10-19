@@ -99,10 +99,14 @@ impl Visitor<'_> for AssetIdVisitor {
     }
 
     fn visit_u64<E: de::Error>(self, v: u64) -> Result<AssetId, E> {
-        Ok(AssetId(v as u32))
+        u32::try_from(v)
+            .map(AssetId)
+            .map_err(|_| E::invalid_value(de::Unexpected::Unsigned(v), &self))
     }
     fn visit_i64<E: de::Error>(self, v: i64) -> Result<AssetId, E> {
-        Ok(AssetId(v as u32))
+        i32::try_from(v)
+            .map(|v| AssetId(v.cast_unsigned()))
+            .map_err(|_| E::invalid_value(de::Unexpected::Signed(v), &self))
     }
     fn visit_str<E: de::Error>(self, v: &str) -> Result<AssetId, E> {
         if v.is_empty() {

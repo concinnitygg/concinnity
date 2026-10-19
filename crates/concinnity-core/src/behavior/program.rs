@@ -1,6 +1,7 @@
 // The compiled form of a behavior body: every authored name resolved to a dense
 // slot, so evaluating the body touches no strings.
 
+use crate::math::SaturatingFrom;
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -298,12 +299,15 @@ impl VarTable {
             return i;
         }
         self.declare(name, Val::Int(0));
-        (self.names.len() - 1) as u16
+        u16::saturating_from(self.names.len() - 1)
     }
 
     /// The slot a name was assigned, if it has one.
     pub fn slot_of(&self, name: &str) -> Option<u16> {
-        self.names.iter().position(|n| n == name).map(|i| i as u16)
+        self.names
+            .iter()
+            .position(|n| n == name)
+            .map(u16::saturating_from)
     }
 
     /// Every declared name, in slot order.

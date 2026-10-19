@@ -80,6 +80,7 @@ impl Default for CharacterModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::SaturatingFrom;
 
     #[test]
     fn a_blank_model_names_the_builtin_schema_and_no_source() {
@@ -99,7 +100,7 @@ mod tests {
         ONCE.call_once(|| {
             concinnity_core::ecs::set_handle_resolver(
                 concinnity_core::ecs::HandleKind::Material,
-                |_, n| Some(n.len() as u32),
+                |_, n| Some(u32::saturating_from(n.len())),
             );
         });
     }

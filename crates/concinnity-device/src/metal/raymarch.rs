@@ -28,6 +28,7 @@ use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::LightUniforms;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shader_programs::raymarch::{Family, ProxyFaces, VolumeFlags};
@@ -573,7 +574,7 @@ fn volume_uniforms_from(volume: &SdfVolume) -> RaymarchVolumeUniforms {
         _pad1: 0.0,
         cone_ratio: volume.cone_ratio(),
         max_distance: volume.max_distance,
-        max_steps: volume.max_steps as i32,
+        max_steps: i32::saturating_from(volume.max_steps),
         receive_shadows: i32::from(volume.receive_shadows),
         params: volume.params,
     }
@@ -976,7 +977,7 @@ impl MtlContext {
             enc.set_depth_stencil(self.targets.depth_state.as_ref());
 
             let cascade = RaymarchShadowCascade {
-                cascade_idx: cascade_idx as u32,
+                cascade_idx: u32::saturating_from(cascade_idx),
                 _pad: [0; 3],
             };
             // Per-cascade shared bindings: view@0 (fragment reads

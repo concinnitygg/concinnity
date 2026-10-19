@@ -5,6 +5,7 @@
 use super::payload;
 use super::sdf::{EdtScratch, SdfScratch, cell_coverage_to_sdf};
 use crate::gfx::font::GlyphMetrics;
+use crate::math::SaturatingFrom;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
@@ -79,8 +80,8 @@ pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, 
     // OVERSAMPLE for the working high-res atlas, so atlas dimensions and
     // every glyph position downsample cleanly to integer low-res coordinates.
     const PAD_LO: u16 = 4;
-    let pad_hi = PAD_LO * OVERSAMPLE as u16;
-    let oversample_u16 = OVERSAMPLE as u16;
+    let pad_hi = PAD_LO * u16::saturating_from(OVERSAMPLE);
+    let oversample_u16 = u16::saturating_from(OVERSAMPLE);
 
     // Per-glyph high-res sizes, rounded up to a multiple of OVERSAMPLE so each
     // glyph cell aligns to the low-res grid.
@@ -88,8 +89,8 @@ pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, 
         .iter()
         .map(|(_, _, m)| {
             (
-                round_up_to(m.width as u16, oversample_u16),
-                round_up_to(m.height as u16, oversample_u16),
+                round_up_to(u16::saturating_from(m.width), oversample_u16),
+                round_up_to(u16::saturating_from(m.height), oversample_u16),
             )
         })
         .collect();
@@ -97,7 +98,7 @@ pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, 
     let max_glyph_w_hi = glyph_dims_hi.iter().map(|(w, _)| *w).max().unwrap_or(0) + pad_hi * 2;
     let max_glyph_h_hi = glyph_dims_hi.iter().map(|(_, h)| *h).max().unwrap_or(0) + pad_hi * 2;
 
-    let glyph_count = bitmaps.len() as u16;
+    let glyph_count = u16::saturating_from(bitmaps.len());
     // Compute the atlas layout in u32: at larger font sizes the high-res glyph
     // stride times the glyph count overflows u16 (a debug-only multiply panic),
     // even though the packed atlas width is then clamped to <= 2048 logical px.
@@ -105,9 +106,9 @@ pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, 
     let atlas_w_hi = u32::next_power_of_two(ideal_w_hi.max(64)).min(2048 * OVERSAMPLE) as u16;
     let glyphs_per_row = (atlas_w_hi / (max_glyph_w_hi + pad_hi)).max(1);
     let rows = glyph_count.div_ceil(glyphs_per_row);
-    let atlas_h_hi = u32::next_power_of_two(
+    let atlas_h_hi = u16::saturating_from(u32::next_power_of_two(
         (u32::from(max_glyph_h_hi) + u32::from(pad_hi)) * u32::from(rows) + u32::from(pad_hi),
-    ) as u16;
+    ));
 
     let atlas_w_hi = u32::from(atlas_w_hi);
     let atlas_h_hi = u32::from(atlas_h_hi);
@@ -153,13 +154,13 @@ pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, 
     let mut metrics_out: Vec<GlyphMetrics> = Vec::new();
 
     for (i, (ch, bitmap, metrics)) in bitmaps.iter().enumerate() {
-        let col = (i as u16) % glyphs_per_row;
-        let row = (i as u16) / glyphs_per_row;
+        let col = u16::saturating_from(i) % glyphs_per_row;
+        let row = u16::saturating_from(i) / glyphs_per_row;
         let ax_hi = pad_hi + col * (max_glyph_w_hi + pad_hi);
         let ay_hi = pad_hi + row * (max_glyph_h_hi + pad_hi);
 
-        let gw_raw = metrics.width as u16;
-        let gh_raw = metrics.height as u16;
+        let gw_raw = u16::saturating_from(metrics.width);
+        let gh_raw = u16::saturating_from(metrics.height);
 
         // Fill cell_hi: zero it, then place glyph coverage at (pad_hi, pad_hi).
         cell_hi.fill(0);
@@ -203,7 +204,7 @@ pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, 
                 let ax = cell_ax_lo + lx;
                 let ay = cell_ay_lo + ly;
                 let lo_idx = ((ay * atlas_w + ax) * 4) as usize;
-                let v = (sum[0] / block_count) as u8;
+                let v = u8::saturating_from(sum[0] / block_count);
                 atlas[lo_idx] = v;
                 atlas[lo_idx + 1] = v;
                 atlas[lo_idx + 2] = v;

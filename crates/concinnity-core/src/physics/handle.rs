@@ -26,6 +26,10 @@ impl BodyHandle {
     }
 
     /// The generation this handle was minted at.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the low 32 bits hold the generation"
+    )]
     pub const fn generation(self) -> u32 {
         self.0 as u32
     }

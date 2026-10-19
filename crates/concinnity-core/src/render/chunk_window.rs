@@ -410,6 +410,7 @@ impl ChunkWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
 
     use alloc::vec;
     fn cc(x: i32, z: i32) -> ChunkCoord {
@@ -474,8 +475,8 @@ mod tests {
                 .values()
                 .filter(|d| **d == ChunkDetail::Near)
                 .count();
-            assert!(resident.len() as u64 <= max_resident_chunks(far as u32));
-            assert!(full as u64 <= max_full_detail_chunks(near as u32));
+            assert!(resident.len() as u64 <= max_resident_chunks(u32::saturating_from(far)));
+            assert!(full as u64 <= max_full_detail_chunks(u32::saturating_from(near)));
         }
         assert_eq!(max_resident_chunks(0), 25);
         assert_eq!(max_full_detail_chunks(0), 9);

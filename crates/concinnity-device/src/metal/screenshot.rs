@@ -18,6 +18,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::image_decode::PixelLayout;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hdr_output::HdrEncoding;
 use objc2::rc::Retained;
@@ -113,8 +114,8 @@ impl MtlContext {
 
         // Read the staging texture back tightly (no row padding) and decode.
         let image = CaptureImage::tight(
-            width as u32,
-            height as u32,
+            u32::saturating_from(width),
+            u32::saturating_from(height),
             classify(self.hw.swap_pixel_format, self.hw.hdr_encoding()),
         );
         let bytes_per_row = image.row_pitch;
@@ -243,8 +244,8 @@ impl MtlContext {
 
     fn capture_image(&self, drawable: &ProtocolObject<dyn MTLTexture>) -> CaptureImage {
         CaptureImage::tight(
-            drawable.width() as u32,
-            drawable.height() as u32,
+            u32::saturating_from(drawable.width()),
+            u32::saturating_from(drawable.height()),
             classify(self.hw.swap_pixel_format, self.hw.hdr_encoding()),
         )
     }

@@ -1,6 +1,7 @@
 //! What a build's status display draws: one row per step the build has
 //! reached, and the messages waiting to scroll out above them.
 
+use concinnity_core::math::SaturatingFrom;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
@@ -86,7 +87,7 @@ impl Row {
             Step::Cook(BuildStage::Import) => format!(
                 "{} from {}",
                 super::render::counted(self.done, "asset"),
-                super::render::counted(self.sources.len() as u32, "file"),
+                super::render::counted(u32::saturating_from(self.sources.len()), "file"),
             ),
             Step::Cook(BuildStage::Compile) => {
                 let assets = super::render::counted(self.done, "asset");

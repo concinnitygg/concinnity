@@ -5,6 +5,7 @@
 use super::PassCamera;
 use crate::components::GlassPanel;
 use crate::gfx::render_types::LightUniforms;
+use crate::math::{SaturatingFrom, narrow_f32};
 use crate::render::lights::glint_sun;
 use crate::render::water::motion::BodyMotion;
 use crate::render::water::ocean::foam::FOAM_CASCADES;
@@ -229,11 +230,11 @@ impl WaterOceanGpu {
         }
         Self {
             layers: [
-                c.count() as u32,
+                u32::saturating_from(c.count()),
                 ocean.first_layer,
                 c.size(),
                 if whitecaps {
-                    c.count().min(FOAM_CASCADES) as u32
+                    u32::saturating_from(c.count().min(FOAM_CASCADES))
                 } else {
                     0
                 },
@@ -317,10 +318,10 @@ impl WaterSeaGpu {
         let r = sphere.radius;
         let blend = r / (2.0 * core::f64::consts::SQRT_2 * sphere.blend_half_width());
         Self {
-            up: [motion.up[0], motion.up[1], motion.up[2], r as f32],
+            up: [motion.up[0], motion.up[1], motion.up[2], narrow_f32(r)],
             tangent_u: [tu[0], tu[1], tu[2], motion.grid_scale],
             tangent_v: [tv[0], tv[1], tv[2], motion.reach],
-            shape: [(1.0 / r) as f32, blend as f32, 0.0, 0.0],
+            shape: [narrow_f32(1.0 / r), narrow_f32(blend), 0.0, 0.0],
             wind_map,
             faces: motion.faces.each_ref().map(WaterSeaFaceGpu::from_motion),
         }
@@ -450,8 +451,8 @@ impl WaterParams {
             fresnel_power: surface.fresnel_power,
             roughness: surface.roughness,
             refraction_strength: surface.refraction_strength,
-            wave_count: wave_count as u32,
-            displace_count: body.displacing.min(wave_count) as u32,
+            wave_count: u32::saturating_from(wave_count),
+            displace_count: u32::saturating_from(body.displacing.min(wave_count)),
             wind,
             wind_gust: [gust[0], surface.wind_response, surface.whitecaps, 0.0],
             waves,
@@ -686,7 +687,10 @@ mod tests {
             grid: OceanGrid::new(56.0, [6000.0, 6000.0]),
         };
         let full = WaterOceanGpu::from_ocean(&body(3), true);
-        assert_eq!(full.layers, [3, 3, 256, FOAM_CASCADES as u32]);
+        assert_eq!(
+            full.layers,
+            [3, 3, 256, u32::saturating_from(FOAM_CASCADES)]
+        );
         assert!((full.inv_lengths[0] * 560.0 - 1.0).abs() < 1e-5);
         assert_eq!(full.inv_lengths[3], 0.0);
         assert_eq!(WaterOceanGpu::from_ocean(&body(1), true).layers[3], 1);
@@ -842,7 +846,7 @@ mod tests {
         };
         assert_eq!(
             WaterParams::from_body(&body(&surface), false).wave_count,
-            WATER_MAX_WAVES as u32
+            u32::saturating_from(WATER_MAX_WAVES)
         );
     }
 

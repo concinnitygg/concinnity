@@ -3,6 +3,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::CompositeParams;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 
 use super::InitGpu;
@@ -69,7 +70,7 @@ pub(super) fn build_composite(
     let composite_pc_range = vk::PushConstantRange::default()
         .stage_flags(vk::ShaderStageFlags::FRAGMENT)
         .offset(0)
-        .size(size_of::<CompositeParams>() as u32);
+        .size(u32::saturating_from(size_of::<CompositeParams>()));
     let set_layouts = [set_layout.handle()];
     let pipeline_layout = device
         .create_pipeline_layout(

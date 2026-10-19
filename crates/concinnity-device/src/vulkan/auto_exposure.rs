@@ -12,6 +12,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::auto_exposure::HISTOGRAM_BINS;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::uniforms::{AutoExposureParams, ExposureMeasurement};
 
@@ -141,13 +142,13 @@ impl AutoExposureResources {
 
         // Descriptor pool: `frames` build sets + 1 average set.
         let pool_sizes = PoolSizes::default()
-            .sets(&build_set_bindings(), frames as u32)
+            .sets(&build_set_bindings(), u32::saturating_from(frames))
             .sets(&average_set_bindings(), 1)
             .build();
         let descriptor_pool = device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
-                    .max_sets((frames + 1) as u32)
+                    .max_sets(u32::saturating_from(frames + 1))
                     .pool_sizes(&pool_sizes),
             )
             .map_err(|e| super::error::map_vk_result(e, "auto-exposure descriptor pool"))?;

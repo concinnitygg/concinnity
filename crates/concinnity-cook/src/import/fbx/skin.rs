@@ -9,6 +9,7 @@
 // scene-pose transform instead.
 
 use concinnity_core::components::{SkeletonJoint, SkinnedVertexData, VertexData};
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_core::transform::{
     IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_affine_inverse, mat4_mul,
     mat4_transform_point,
@@ -276,7 +277,7 @@ pub(super) fn parse_skin(
         let (translation, rotation, scale) = decompose(local);
         joints.push(SkeletonJoint {
             name: model_by_id.get(&id).map(object_name).unwrap_or_default(),
-            parent: parents[i].map_or(-1, |j| j as i32),
+            parent: parents[i].map_or(-1, i32::saturating_from),
             translation,
             rotation_deg: euler_yxz_from_quat(rotation),
             scale,
@@ -288,7 +289,7 @@ pub(super) fn parse_skin(
     for c in &clusters {
         let joint = model_to_joint[&c.bone];
         for (i, &cp) in c.indexes.iter().enumerate() {
-            let w = c.weights.get(i).copied().unwrap_or(0.0) as f32;
+            let w = narrow_f32(c.weights.get(i).copied().unwrap_or(0.0));
             if w > 0.0 {
                 weights.entry(cp).or_default().push((joint, w));
             }
@@ -362,13 +363,13 @@ pub(crate) fn import_skinned_fbx(
 
     let mut indices: Vec<u16> = Vec::with_capacity(indices32.len());
     for i in indices32 {
-        if i > u32::from(u16::MAX) {
-            return Err(format!(
+        let index = u16::try_from(i).map_err(|_| {
+            format!(
                 "'{path}': skinned mesh exceeds the {}-vertex u16 index limit",
                 u16::MAX
-            ));
-        }
-        indices.push(i as u16);
+            )
+        })?;
+        indices.push(index);
     }
 
     Ok(ImportedSkinnedMesh {
@@ -403,7 +404,7 @@ pub(super) fn mat4_from_flat(a: &[f64]) -> Option<Mat4> {
     }
     let mut m = IDENTITY;
     for (i, v) in a.iter().enumerate() {
-        m[i / 4][i % 4] = *v as f32;
+        m[i / 4][i % 4] = narrow_f32(*v);
     }
     Some(m)
 }
@@ -428,7 +429,7 @@ fn top4_weights(list: Option<&Vec<(usize, f32)>>) -> ([u32; 4], [f32; 4]) {
     let mut joints = [0u32; 4];
     let mut weights = [0.0f32; 4];
     for (i, (j, w)) in sorted.iter().enumerate() {
-        joints[i] = *j as u32;
+        joints[i] = u32::saturating_from(*j);
         weights[i] = w / sum;
     }
     (joints, weights)
@@ -475,18 +476,18 @@ fn extract_skinned_geometry(
         let uv_key = if uv_indexed {
             uv_index.and_then(|ui| ui.get(pv)).copied().unwrap_or(0)
         } else {
-            pv as i32
+            i32::saturating_from(pv)
         };
         let out = if let Some(&i) = dedup.get(&(cp, uv_key)) {
             i
         } else {
-            let c = (cp as usize) * 3;
+            let c = usize::saturating_from(cp) * 3;
             let pos = [
-                positions.get(c).copied().unwrap_or(0.0) as f32,
-                positions.get(c + 1).copied().unwrap_or(0.0) as f32,
-                positions.get(c + 2).copied().unwrap_or(0.0) as f32,
+                narrow_f32(positions.get(c).copied().unwrap_or(0.0)),
+                narrow_f32(positions.get(c + 1).copied().unwrap_or(0.0)),
+                narrow_f32(positions.get(c + 2).copied().unwrap_or(0.0)),
             ];
-            let i = vertices.len() as u32;
+            let i = u32::saturating_from(vertices.len());
             vertices.push(VertexData {
                 pos,
                 color: [1.0, 1.0, 1.0],
@@ -1019,11 +1020,12 @@ mod tests {
         assert_eq!(names(&hair), names(&body));
 
         // The hair is fully weighted to Tip, so its own cluster drives it.
-        let tip = hair
-            .skeleton
-            .iter()
-            .position(|j| j.name == "Tip")
-            .expect("Tip joint") as u32;
+        let tip = u32::saturating_from(
+            hair.skeleton
+                .iter()
+                .position(|j| j.name == "Tip")
+                .expect("Tip joint"),
+        );
         for v in &hair.vertices {
             assert_eq!(v.joints[0], tip);
             assert!((v.weights[0] - 1.0).abs() < 1e-5);

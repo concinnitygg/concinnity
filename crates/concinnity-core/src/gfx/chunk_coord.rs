@@ -5,6 +5,8 @@
 //! the integer index of a chunk column; the world position of its `(0,0,0)`
 //! corner is `coord * chunk_world_size`.
 
+use crate::math::SaturatingFrom;
+
 /// Integer index of a chunk column in the infinite X/Z grid.
 ///
 /// `x` and `z` are chunk indices, not world units; the chunk's world-space
@@ -71,7 +73,7 @@ fn floor_div(v: f32, size: f32) -> i32 {
     if size <= 0.0 {
         return 0;
     }
-    crate::math::floor(v / size) as i32
+    i32::saturating_from(crate::math::floor(v / size))
 }
 
 /// Rebase a column-major view matrix onto a render `origin` for

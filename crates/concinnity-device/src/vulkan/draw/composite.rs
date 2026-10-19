@@ -13,6 +13,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::fullscreen;
 use concinnity_core::render::fullscreen::TextBindCache;
@@ -231,7 +232,7 @@ impl fullscreen::CompositeEncoder for VkContext {
             }
             device.cmd_bind_vertex_buffers(*cmd, 0, &[vert_buf], &[vert_offset]);
             device.cmd_bind_index_buffer(*cmd, idx_buf, idx_offset, vk::IndexType::UINT16);
-            device.cmd_draw_indexed(*cmd, call.indices.len() as u32, 1, 0, 0, 0);
+            device.cmd_draw_indexed(*cmd, u32::saturating_from(call.indices.len()), 1, 0, 0, 0);
         }
         self.inc_draw_calls(1);
         Ok(())

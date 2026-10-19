@@ -4,6 +4,7 @@
 //! frame, so it draws whether or not the world has cull records.
 
 use ash::vk;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 
 use super::gbuffer::{GBUFFER_VIEW_UBO_SIZE, PREPASS_TARGETS};
@@ -41,7 +42,7 @@ impl GbufferSky {
         view_ubos: &[PooledBuffer],
         hot_reload: bool,
     ) -> RenderResult<Self> {
-        let frames = view_ubos.len() as u32;
+        let frames = u32::saturating_from(view_ubos.len());
         let sizes = PoolSizes::default().sets(&VIEW_SET, frames).build();
         let pool = device
             .create_descriptor_pool(

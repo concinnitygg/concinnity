@@ -89,6 +89,7 @@ mod tests {
     use super::*;
     use crate::components::{Planet, WaterShape, WaterSurface, Wind};
     use crate::math::dvec3;
+    use crate::math::{SaturatingFrom, narrow_f32};
     use crate::planet::{DVec3, LocalFrame};
     use crate::render::water::WaterBody;
     use crate::render::water::frame::WaterMotion;
@@ -250,11 +251,11 @@ mod tests {
         // a cascade tile long on each of two faces, plus the shares' turn.
         let step = 0.5;
         let half = sphere_half_band(&body);
-        let bound = step * (6.0 * core::f32::consts::TAU / length + 4.0 / half as f32);
+        let bound = step * (6.0 * core::f32::consts::TAU / length + 4.0 / narrow_f32(half));
 
         let mut last: Option<(f32, [f32; 3])> = None;
         let mut saw_blend = false;
-        let n = (2.0 * 1500.0 / step) as i32;
+        let n = i32::saturating_from(2.0 * 1500.0 / step);
         for i in 0..=n {
             let meters = -1500.0 + f64::from(i) * f64::from(step);
             let q = on_sea(&body, at_edge, core::f64::consts::FRAC_PI_2, meters);

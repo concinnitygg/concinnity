@@ -16,6 +16,7 @@
 //! still be riding it a few seconds later.
 
 use super::fixtures::{TICK, add_floor, awake, drop_ball};
+use crate::math::SaturatingFrom;
 use crate::math::vec3::length;
 use crate::physics::{
     BodyHandle, ColliderShape, DynamicParams, LayerMask, ShapeCast, SimConfig, Simulation,
@@ -258,7 +259,7 @@ fn rolled(speed: f32, damping: f32, seconds: f32) -> f32 {
     );
     sim.set_linear_velocity(ball, [speed, 0.0, 0.0]);
     sim.set_angular_velocity(ball, [0.0, 0.0, -speed / 0.5]);
-    settle(&mut sim, (seconds / TICK) as usize);
+    settle(&mut sim, usize::saturating_from(seconds / TICK));
     length(sim.linear_velocity(ball).expect("live"))
 }
 

@@ -3,6 +3,7 @@
 //! shadow, G-buffer and two-pass occlusion passes built over them.
 
 use concinnity_core::gfx::render_types::clone_reserve;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend_init::{SceneData, WorldShader};
 use concinnity_core::render::error::RenderResult;
 
@@ -202,7 +203,10 @@ fn write_instance_records(
         return;
     }
     let n_objects = world.draw_objects.len();
-    let records = instance_object_records(&world.instanced_clusters, albedo_count as u32);
+    let records = instance_object_records(
+        &world.instanced_clusters,
+        u32::saturating_from(albedo_count),
+    );
     // Cluster base index range (cluster indices are absolute, so
     // base_vertex = 0), which `build_draw_args_buffer` patches per frame
     // for the clusters that declare alternates. Every instance is
@@ -212,8 +216,8 @@ fn write_instance_records(
     for cluster in &world.instanced_clusters {
         for _ in &cluster.instances {
             draw_args.push(GpuDrawArgs {
-                index_count: cluster.index_count as u32,
-                index_offset: cluster.index_offset as u32,
+                index_count: u32::saturating_from(cluster.index_count),
+                index_offset: u32::saturating_from(cluster.index_offset),
                 base_vertex: 0,
                 flags: draw_args_flags(true, true, true),
             });

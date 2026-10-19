@@ -3,6 +3,7 @@ use super::{
     PipelineContext, SLOT_COUNT, SLOT_SCROLL_UNIT, SaveSlot, ScreenCommand, StorySystem, String,
     Vec, format, set_label, set_sprite,
 };
+use crate::math::SaturatingFrom;
 
 impl StorySystem {
     pub(super) fn toggle_log(&mut self, ctx: &mut PipelineContext<'_>) {
@@ -247,7 +248,7 @@ impl StorySystem {
         if !matches!(self.overlay, Overlay::SaveMenu | Overlay::LoadMenu) {
             return;
         }
-        let mut scroll = self.slot_scroll as i32;
+        let mut scroll = i32::saturating_from(self.slot_scroll);
         self.slot_scroll_accum += frame.scroll_delta;
         while self.slot_scroll_accum >= SLOT_SCROLL_UNIT {
             self.slot_scroll_accum -= SLOT_SCROLL_UNIT;
@@ -264,14 +265,14 @@ impl StorySystem {
                 _ => {}
             }
         }
-        let max = self.max_slot_scroll() as i32;
+        let max = i32::saturating_from(self.max_slot_scroll());
         let clamped = scroll.clamp(0, max);
         if clamped != scroll {
             // At an edge: don't bank overshoot travel, so scrolling back is
             // immediate rather than having to unwind the excess first.
             self.slot_scroll_accum = 0.0;
         }
-        let clamped = clamped as usize;
+        let clamped = usize::saturating_from(clamped);
         if clamped != self.slot_scroll {
             self.slot_scroll = clamped;
             self.render_slot_rows(ctx);

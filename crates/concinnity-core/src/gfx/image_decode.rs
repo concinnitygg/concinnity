@@ -6,7 +6,7 @@
 //! I/O stay in the backends (debug-only, and would pull `std::fs` / the png crate
 //! into core).
 
-use crate::math::{powf, powi};
+use crate::math::{SaturatingFrom, powf, powi};
 use alloc::vec::Vec;
 
 /// The decode layout of the raw read-back bytes, classified from the backend's
@@ -144,12 +144,12 @@ fn unorm_to_u8(c: f32) -> u8 {
     if c.is_nan() {
         return 0;
     }
-    (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+    u8::saturating_from(c.clamp(0.0, 1.0) * 255.0 + 0.5)
 }
 
 // Scale a 10-bit unsigned value (0..=1023) to 8-bit with rounding.
 fn u10_to_u8(v: u32) -> u8 {
-    ((v * 255 + 511) / 1023) as u8
+    u8::saturating_from((v * 255 + 511) / 1023)
 }
 
 #[cfg(test)]

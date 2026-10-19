@@ -44,6 +44,7 @@
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{ClusterParams, TextDrawCall};
+use concinnity_core::math::narrow_f32;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::frame_plan::{EffectBlocks, FogBlocks};
 use concinnity_core::render::particles::ParticleFrame;
@@ -713,7 +714,7 @@ impl DxContext {
                     frame_idx: params.frame_idx,
                     cam_pos: params.cam_pos,
                     vp: params.cur_vp,
-                    elapsed: params.elapsed as f32,
+                    elapsed: narrow_f32(params.elapsed),
                     cast: graph.pass(PassId::GrassShadow).is_some(),
                     benders: params.grass_benders,
                 })
@@ -1111,7 +1112,7 @@ impl DxContext {
             inv_vp: mat4_inverse(vp),
             cam_pos: params.cam_pos,
             viewport: [params.width as f32, params.height as f32],
-            time: params.elapsed as f32,
+            time: narrow_f32(params.elapsed),
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             irradiance: self.irradiance_lane(),
             sky_rot: self.state.view.sky_rot,
@@ -1409,7 +1410,7 @@ impl DxContext {
                     params.frame_idx,
                     crate::directx::post::gbuffer::GbufferPrepassView {
                         jittered_vp: params.vp_mat,
-                        elapsed: params.elapsed as f32,
+                        elapsed: narrow_f32(params.elapsed),
                         cam_pos: params.cam_pos,
                         frustum: params.frustum,
                     },

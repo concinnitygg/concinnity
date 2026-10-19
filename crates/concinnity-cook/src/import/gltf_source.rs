@@ -8,6 +8,7 @@
 //! paths, and `..` traversal are rejected so a cook never reads outside the
 //! source's directory tree.
 
+use concinnity_core::math::SaturatingFrom;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -300,7 +301,7 @@ fn percent_decode(s: &str) -> String {
                 bytes.get(i + 2).and_then(|b| (*b as char).to_digit(16)),
             )
         {
-            out.push((hi * 16 + lo) as u8);
+            out.push(u8::saturating_from(hi * 16 + lo));
             i += 3;
         } else {
             out.push(bytes[i]);
@@ -349,14 +350,14 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
             acc = (acc << 6) | value(c)?;
         }
         match chunk.len() {
-            4 => out.extend_from_slice(&[(acc >> 16) as u8, (acc >> 8) as u8, acc as u8]),
+            4 => out.extend_from_slice(&acc.to_be_bytes()[1..]),
             3 => {
                 acc <<= 6;
-                out.extend_from_slice(&[(acc >> 16) as u8, (acc >> 8) as u8]);
+                out.extend_from_slice(&acc.to_be_bytes()[1..3]);
             }
             2 => {
                 acc <<= 12;
-                out.push((acc >> 16) as u8);
+                out.push(acc.to_be_bytes()[1]);
             }
             _ => unreachable!("chunk length 1 rejected above"),
         }

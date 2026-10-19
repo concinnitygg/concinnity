@@ -11,6 +11,7 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::ecs::{Entity, World};
+use concinnity_core::math::narrow_f32;
 use concinnity_core::render::live_preview::draw::{self as draw_preview, DrawMaterial};
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
@@ -53,7 +54,7 @@ pub(super) fn plan(
     for key in keys {
         match key.as_str() {
             "material" => change.material = Some(swap(world, entity, args)?),
-            _ => change.cull_distance = Some(args.get(key)?.as_f64()? as f32),
+            _ => change.cull_distance = Some(narrow_f32(args.get(key)?.as_f64()?)),
         }
     }
     Some(Apply::Draw(change))

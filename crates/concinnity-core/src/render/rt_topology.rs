@@ -128,12 +128,13 @@ pub fn plan_topology_refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
 
     // A distinct geometry signature keyed off `tag` (used as the index offset),
     // so two slots with different tags never compare equal.
     fn sig(tag: usize) -> GeomSig {
         GeomSig {
-            base_vertex: tag as i32,
+            base_vertex: i32::saturating_from(tag),
             vertex_offset: tag * 100,
             index_offset: tag,
             index_count: 3,

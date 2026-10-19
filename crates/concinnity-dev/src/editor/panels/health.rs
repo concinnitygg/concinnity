@@ -33,6 +33,7 @@
 use concinnity_core::budget::drift::MemoryDrift;
 use concinnity_core::budget::{MemoryBudget, ThreadBudget};
 use concinnity_core::ecs::World;
+use concinnity_core::math::narrow_f32;
 use concinnity_core::memory::{LedgerSnapshot, MemStats, MemTag, Realm, SizeClass};
 use concinnity_core::render::backend::GpuProfile;
 use concinnity_core::render::stream_pools::StreamingRuntime;
@@ -103,7 +104,7 @@ impl Meter {
 // capacity is real (an over-budget pool) but must not draw past the bar.
 fn frac(value: Option<f64>, total: Option<f64>) -> f32 {
     match (value, total) {
-        (Some(v), Some(t)) if t > 0.0 => (v / t).clamp(0.0, 1.0) as f32,
+        (Some(v), Some(t)) if t > 0.0 => narrow_f32((v / t).clamp(0.0, 1.0)),
         _ => 0.0,
     }
 }
@@ -347,7 +348,8 @@ impl HealthState {
         }
 
         let window_us = elapsed.as_micros() as f64;
-        let systems_cores = (window_us > 0.0).then(|| (self.systems_us as f64 / window_us) as f32);
+        let systems_cores =
+            (window_us > 0.0).then(|| narrow_f32(self.systems_us as f64 / window_us));
         self.systems_us = 0;
         self.window_start = Some(now);
 

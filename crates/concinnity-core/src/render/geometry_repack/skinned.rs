@@ -5,6 +5,7 @@
 //! The shared skinned index buffer holds absolute indices: each slot's
 //! mesh-relative indices are rebased onto its `vertex_base`.
 
+use crate::math::SaturatingFrom;
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::ToString;
@@ -144,7 +145,7 @@ pub fn repack_skinned_geometry(
     let mut regions = Vec::with_capacity(objects.len());
     for (i, obj) in objects.iter().enumerate() {
         let skinned_index = SkinnedIndex::from_usize(i);
-        let vertex_base = vertices.len() as u32;
+        let vertex_base = u32::saturating_from(vertices.len());
         let index_offset = indices.len();
         let (vertex_count, index_count) = if let Some(change) = change_map.remove(&skinned_index) {
             vertices.extend_from_slice(&change.vertices);

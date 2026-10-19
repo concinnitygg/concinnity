@@ -20,6 +20,7 @@ use concinnity_cook::authoring::world::{
 };
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;
+use concinnity_core::math::SaturatingFrom;
 use serde_json::Value;
 use std::sync::OnceLock;
 
@@ -392,8 +393,8 @@ impl EditorHook {
         if total == 0 {
             return;
         }
-        let at = self.behavior.index.min(total - 1) as i32;
-        self.behavior.index = (at + delta).rem_euclid(total as i32) as usize;
+        let at = i32::saturating_from(self.behavior.index.min(total - 1));
+        self.behavior.index = (at + delta).rem_euclid(i32::saturating_from(total)) as usize;
         self.open_behavior(world);
     }
 

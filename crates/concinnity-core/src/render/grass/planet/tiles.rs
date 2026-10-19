@@ -5,11 +5,11 @@
 //! model matrix, so the blades stand exactly on the ground the tile draws, in
 //! whatever frame the world is simulated in.
 
+use crate::math::{SaturatingFrom, dvec3, narrow_f32};
 use alloc::vec::Vec;
 
 use super::cells::PlanetGrassGrid;
 use crate::gfx::render_types::GpuTileMorph;
-use crate::math::dvec3;
 use crate::planet::{PlanetShape, TileId};
 use crate::render::grass::nest::GRASS_NEST_LEVELS;
 use crate::render::grass::tiles::{GrassBox, NestView, NestedTiles, nested_tiles};
@@ -155,14 +155,19 @@ pub fn nested_planet_tiles(
     let top = n.trailing_zeros().min(GRASS_NEST_LEVELS);
     let first = origin.map(|o| o >> top);
     let last: [u32; 2] = core::array::from_fn(|i| (origin[i] + count[i] - 1) >> top);
-    let mut roots =
-        (first[1]..=last[1]).flat_map(|y| (first[0]..=last[0]).map(move |x| [x as i32, y as i32]));
+    let mut roots = (first[1]..=last[1]).flat_map(|y| {
+        (first[0]..=last[0]).map(move |x| [i32::saturating_from(x), i32::saturating_from(y)])
+    });
     let model = &tile.model;
     let o = translation(model);
     let rho = dvec3::length(dvec3::sub(o, dvec3::from_f32(center)));
     let bounds = |level: u32, t: [i32; 2]| -> Option<GrassBox> {
         let per = n >> level;
-        if t[0] < 0 || t[1] < 0 || t[0] as u32 >= per || t[1] as u32 >= per {
+        if t[0] < 0
+            || t[1] < 0
+            || u32::saturating_from(t[0]) >= per
+            || u32::saturating_from(t[1]) >= per
+        {
             return None;
         }
         let f = |c: i32| f64::from(c) / f64::from(per);
@@ -189,8 +194,8 @@ pub fn nested_planet_tiles(
         }
         let grow = f64::from(reach) + slack;
         Some((
-            core::array::from_fn(|i| (lo[i] - grow) as f32),
-            core::array::from_fn(|i| (hi[i] + grow) as f32),
+            core::array::from_fn(|i| narrow_f32(lo[i] - grow)),
+            core::array::from_fn(|i| narrow_f32(hi[i] + grow)),
         ))
     };
     nested_tiles(view, width, (top, &mut roots), &bounds, out);
@@ -264,7 +269,7 @@ fn block(
         let reach = distance / len.max(1e-6);
         let lo = (libm::floor((at - reach) * f64::from(n)) - 1.0).max(0.0);
         let hi = (libm::ceil((at + reach) * f64::from(n)) + 1.0).min(f64::from(n));
-        (lo < hi).then_some((lo as u32, (hi - lo) as u32))
+        (lo < hi).then_some((u32::saturating_from(lo), u32::saturating_from(hi - lo)))
     };
     let (x0, xn) = span(u, libm::sqrt(ss))?;
     let (y0, yn) = span(v, libm::sqrt(tt))?;

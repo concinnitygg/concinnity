@@ -12,6 +12,7 @@ use crate::components::{
     StoryCommand, StoryPlayback, VisibilityRequest, WakeRequest,
 };
 use crate::ecs::{Entity, PipelineContext};
+use crate::math::SaturatingFrom;
 use crate::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
 
 impl BehaviorSystem {
@@ -156,7 +157,9 @@ impl BehaviorSystem {
 // Adding to a local keeps its declared type.
 fn add_vals(current: Val, delta: Val) -> Val {
     match (current, delta) {
-        (Val::Int(a), b) => Val::Int(a.saturating_add(b.as_f32().unwrap_or(0.0) as i32)),
+        (Val::Int(a), b) => {
+            Val::Int(a.saturating_add(i32::saturating_from(b.as_f32().unwrap_or(0.0))))
+        }
         (Val::Float(a), b) => Val::Float(a + b.as_f32().unwrap_or(0.0)),
         (Val::Vec3(a), Val::Vec3(b)) => Val::Vec3([a[0] + b[0], a[1] + b[1], a[2] + b[2]]),
         // Booleans and entities have no addition; assignment wins.

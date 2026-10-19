@@ -215,6 +215,7 @@ pub fn decode_source(
 mod tests {
     use super::*;
     use concinnity_core::bake::environment_map::deserialize;
+    use concinnity_core::math::SaturatingFrom;
 
     #[test]
     fn validate_environment_map_args_requires_source_or_generator() {
@@ -422,16 +423,16 @@ mod tests {
             return [0, 0, 0, 0];
         }
         let bits = maxv.to_bits();
-        let raw_exp = ((bits >> 23) & 0xff) as i32;
+        let raw_exp = i32::saturating_from((bits >> 23) & 0xff);
         let exp = raw_exp - 126;
         let mantissa_bits = (bits & 0x7f_ffff) | (126 << 23);
         let mantissa = f32::from_bits(mantissa_bits);
         let scale = (mantissa * 256.0) / maxv;
         [
-            (r * scale) as u8,
-            (g * scale) as u8,
-            (b * scale) as u8,
-            (exp + 128) as u8,
+            u8::saturating_from(r * scale),
+            u8::saturating_from(g * scale),
+            u8::saturating_from(b * scale),
+            u8::saturating_from(exp + 128),
         ]
     }
 

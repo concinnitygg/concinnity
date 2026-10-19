@@ -26,6 +26,7 @@
 // toolchain upgrade whose output differs for identical source wants.
 
 use concinnity_core::blob::CacheEntryKind;
+use concinnity_core::math::SaturatingFrom;
 use sha2::{Digest, Sha256};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -84,7 +85,7 @@ pub(crate) fn cached<E>(
     }
     let started = std::time::Instant::now();
     let bytes = compile()?;
-    let micros = started.elapsed().as_micros() as u64;
+    let micros = u64::saturating_from(started.elapsed().as_micros());
     MISSES.fetch_add(1, Ordering::Relaxed);
     COMPILE_MICROS.fetch_add(micros, Ordering::Relaxed);
     tracing::debug!(

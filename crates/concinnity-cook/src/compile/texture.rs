@@ -25,6 +25,7 @@ use concinnity_core::bake::texture::{
     TextureFormat, TextureImage, TextureMip, downscale_rgba, serialize,
 };
 use concinnity_core::components::Texture;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::math::noise::{lattice_hash, lattice_value, lcg_hash};
 use serde::Deserialize;
 use std::path::Path;
@@ -317,9 +318,9 @@ fn load_jpg(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
                 let m = f32::from(chunk[1]) / 255.0;
                 let y = f32::from(chunk[2]) / 255.0;
                 let k = f32::from(chunk[3]) / 255.0;
-                let r = ((1.0 - c) * (1.0 - k) * 255.0) as u8;
-                let g = ((1.0 - m) * (1.0 - k) * 255.0) as u8;
-                let b = ((1.0 - y) * (1.0 - k) * 255.0) as u8;
+                let r = u8::saturating_from((1.0 - c) * (1.0 - k) * 255.0);
+                let g = u8::saturating_from((1.0 - m) * (1.0 - k) * 255.0);
+                let b = u8::saturating_from((1.0 - y) * (1.0 - k) * 255.0);
                 out.extend_from_slice(&[r, g, b, 255]);
             }
             out
@@ -517,9 +518,9 @@ fn generate_brick(resolution: u32) -> (u32, u32, Vec<u8>) {
             } else {
                 // small per-brick brightness variation for visual variety
                 let brick_idx = (shifted_x / brick_w + row * 4) % 5;
-                let delta = (brick_idx * 8) as i16;
-                let r = (i16::from(brick_color[0]) + delta - 16).clamp(0, 255) as u8;
-                let g = (i16::from(brick_color[1]) + delta / 2 - 8).clamp(0, 255) as u8;
+                let delta = i16::saturating_from(brick_idx * 8);
+                let r = u8::saturating_from(i16::from(brick_color[0]) + delta - 16);
+                let g = u8::saturating_from(i16::from(brick_color[1]) + delta / 2 - 8);
                 [r, g, brick_color[2], 255]
             };
             pixels.extend_from_slice(&color);
@@ -537,7 +538,7 @@ fn generate_concrete(resolution: u32) -> (u32, u32, Vec<u8>) {
         for x in 0..size {
             let v = smooth_noise(x, y, size);
             // concrete sits in the 140-190 gray range
-            let g = 140u8.saturating_add((v >> 2) as u8).min(190);
+            let g = 140u8.saturating_add(u8::saturating_from(v >> 2)).min(190);
             pixels.extend_from_slice(&[g, g, g, 255]);
         }
     }
@@ -562,9 +563,9 @@ fn generate_grass(resolution: u32) -> (u32, u32, Vec<u8>) {
         for x in 0..size {
             let v = smooth_noise(x, y, size);
             // bias toward green-brown; darker than the blades to read as ground
-            let r = 38u8.saturating_add((v >> 3) as u8);
-            let g = 52u8.saturating_add((v >> 2) as u8);
-            let b = 18u8.saturating_add((v >> 4) as u8);
+            let r = 38u8.saturating_add(u8::saturating_from(v >> 3));
+            let g = 52u8.saturating_add(u8::saturating_from(v >> 2));
+            let b = 18u8.saturating_add(u8::saturating_from(v >> 4));
             let idx = ((y * size + x) * 4) as usize;
             pixels[idx] = r;
             pixels[idx + 1] = g;
@@ -601,9 +602,9 @@ fn generate_grass(resolution: u32) -> (u32, u32, Vec<u8>) {
                 // brightness increases toward the blade tip
                 let t = dy as f32 / blade_h as f32;
                 let bright = (0.6 + t * 0.4).min(1.0);
-                let r = ((40.0 + f32::from(r_shift)) * bright).clamp(0.0, 255.0) as u8;
-                let g = ((100.0 + f32::from(g_shift)) * bright).clamp(0.0, 255.0) as u8;
-                let b = (20.0 * bright).clamp(0.0, 255.0) as u8;
+                let r = u8::saturating_from((40.0 + f32::from(r_shift)) * bright);
+                let g = u8::saturating_from((100.0 + f32::from(g_shift)) * bright);
+                let b = u8::saturating_from(20.0 * bright);
                 let idx = ((y * size + bx) * 4) as usize;
                 pixels[idx] = r;
                 pixels[idx + 1] = g;
@@ -657,7 +658,7 @@ fn generate_sky(resolution: u32) -> (u32, u32, Vec<u8>) {
             // mid-sky -> horizon
             let s = t * 2.0;
             // faint warm haze near the horizon
-            let warm = ((1.0 - s) * (1.0 - s) * 18.0) as u8;
+            let warm = u8::saturating_from((1.0 - s) * (1.0 - s) * 18.0);
             (
                 lerp_u8(horizon[0], mid[0], s).saturating_add(warm / 2),
                 lerp_u8(horizon[1], mid[1], s).saturating_add(warm / 4),
@@ -674,9 +675,7 @@ fn generate_sky(resolution: u32) -> (u32, u32, Vec<u8>) {
 }
 
 fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
-    (f32::from(a) + (f32::from(b) - f32::from(a)) * t)
-        .round()
-        .clamp(0.0, 255.0) as u8
+    u8::saturating_from((f32::from(a) + (f32::from(b) - f32::from(a)) * t).round())
 }
 
 // Bilinear smooth noise: interpolates between four deterministic lattice hashes.
@@ -692,7 +691,7 @@ fn smooth_noise(x: u32, y: u32, size: u32) -> u32 {
     let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
     let top = lerp(g(gx, gy), g(gx + 1, gy), fx);
     let bot = lerp(g(gx, gy + 1), g(gx + 1, gy + 1), fx);
-    lerp(top, bot, fy) as u32
+    u32::saturating_from(lerp(top, bot, fy))
 }
 
 // Horizontal wood grain: warm brown base with alternating lighter/darker bands
@@ -712,9 +711,9 @@ fn generate_wood(resolution: u32) -> (u32, u32, Vec<u8>) {
                 + 0.5;
 
             // Base brown range: [130, 80, 40] to [200, 140, 80]
-            let r = (130.0 + grain * 70.0) as u8;
-            let g = (80.0 + grain * 60.0) as u8;
-            let b = (40.0 + grain * 40.0) as u8;
+            let r = u8::saturating_from(130.0 + grain * 70.0);
+            let g = u8::saturating_from(80.0 + grain * 60.0);
+            let b = u8::saturating_from(40.0 + grain * 40.0);
             pixels.extend_from_slice(&[r, g, b, 255]);
         }
     }
@@ -746,10 +745,10 @@ fn generate_tile(resolution: u32) -> (u32, u32, Vec<u8>) {
                 let tx = x / cell;
                 let ty = y / cell;
                 let seed = lcg_hash(tx.wrapping_mul(17).wrapping_add(ty.wrapping_mul(31)));
-                let var = (seed & 0x0F) as i32 - 8; // ±8 brightness offset
-                let r = (i32::from(tile_color[0]) + var).clamp(0, 255) as u8;
-                let g = (i32::from(tile_color[1]) + var).clamp(0, 255) as u8;
-                let b = (i32::from(tile_color[2]) + var).clamp(0, 255) as u8;
+                let var = i32::saturating_from(seed & 0x0F) - 8; // ±8 brightness offset
+                let r = u8::saturating_from(i32::from(tile_color[0]) + var);
+                let g = u8::saturating_from(i32::from(tile_color[1]) + var);
+                let b = u8::saturating_from(i32::from(tile_color[2]) + var);
                 pixels.extend_from_slice(&[r, g, b, 255]);
             }
         }
@@ -774,9 +773,9 @@ fn generate_metal(resolution: u32) -> (u32, u32, Vec<u8>) {
 
             // Base: cool gray [165, 172, 178] modulated by band noise.
             let base = 165.0 + band * 30.0 + highlight * 60.0;
-            let r = (base * 0.97).clamp(0.0, 255.0) as u8;
-            let g = (base).clamp(0.0, 255.0) as u8;
-            let b = (base * 1.04).clamp(0.0, 255.0) as u8;
+            let r = u8::saturating_from(base * 0.97);
+            let g = u8::saturating_from(base);
+            let b = u8::saturating_from(base * 1.04);
             pixels.extend_from_slice(&[r, g, b, 255]);
         }
     }
@@ -826,10 +825,10 @@ fn generate_terrain(resolution: u32) -> (u32, u32, Vec<u8>) {
             };
 
             // Apply fine detail as a brightness modulation (±15 levels).
-            let d = (detail * 30.0) as i32 - 15;
-            let r = (i32::from(base_r) + d).clamp(0, 255) as u8;
-            let g = (i32::from(base_g) + d / 2).clamp(0, 255) as u8;
-            let b = (i32::from(base_b) + d / 3).clamp(0, 255) as u8;
+            let d = i32::saturating_from(detail * 30.0) - 15;
+            let r = u8::saturating_from(i32::from(base_r) + d);
+            let g = u8::saturating_from(i32::from(base_g) + d / 2);
+            let b = u8::saturating_from(i32::from(base_b) + d / 3);
             pixels.extend_from_slice(&[r, g, b, 255]);
         }
     }
@@ -864,9 +863,9 @@ fn generate_stone(resolution: u32) -> (u32, u32, Vec<u8>) {
             let t = base * 0.6 + detail * 0.25 + strat * 0.15;
 
             // Cool gray-blue stone: [60, 65, 75] to [115, 118, 125]
-            let r = (60.0 + t * 55.0) as u8;
-            let g = (65.0 + t * 53.0) as u8;
-            let b = (75.0 + t * 50.0) as u8;
+            let r = u8::saturating_from(60.0 + t * 55.0);
+            let g = u8::saturating_from(65.0 + t * 53.0);
+            let b = u8::saturating_from(75.0 + t * 50.0);
             pixels.extend_from_slice(&[r, g, b, 255]);
         }
     }
@@ -909,9 +908,9 @@ fn generate_plaster(resolution: u32) -> (u32, u32, Vec<u8>) {
             let t = coarse * 0.7 + fine * 0.3;
 
             // Cream-white: [210, 205, 195] to [240, 238, 230]
-            let r = (210.0 + t * 30.0) as u8;
-            let g_ch = (205.0 + t * 33.0) as u8;
-            let b = (195.0 + t * 35.0) as u8;
+            let r = u8::saturating_from(210.0 + t * 30.0);
+            let g_ch = u8::saturating_from(205.0 + t * 33.0);
+            let b = u8::saturating_from(195.0 + t * 35.0);
             pixels.extend_from_slice(&[r, g_ch, b, 255]);
         }
     }
@@ -1050,10 +1049,10 @@ mod tests {
         }
         // Frame header: one 1x1 pixel, every component at 1x1 sampling.
         v.extend_from_slice(&[0xFF, sof]);
-        v.extend_from_slice(&(8 + 3 * components as u16).to_be_bytes());
-        v.extend_from_slice(&[precision, 0, 1, 0, 1, components as u8]);
+        v.extend_from_slice(&(8 + 3 * u16::saturating_from(components)).to_be_bytes());
+        v.extend_from_slice(&[precision, 0, 1, 0, 1, u8::saturating_from(components)]);
         for c in 0..components {
-            v.extend_from_slice(&[c as u8 + 1, 0x11, 0]);
+            v.extend_from_slice(&[u8::saturating_from(c) + 1, 0x11, 0]);
         }
         // Huffman tables: a single one-bit code for symbol 0. A lossless frame
         // codes no AC coefficients, so it carries the DC table alone.
@@ -1066,10 +1065,10 @@ mod tests {
         // Scan header, then entropy-coded data: one bit per coded coefficient,
         // with the final byte padded out with ones.
         v.extend_from_slice(&[0xFF, 0xDA]);
-        v.extend_from_slice(&(6 + 2 * components as u16).to_be_bytes());
-        v.push(components as u8);
+        v.extend_from_slice(&(6 + 2 * u16::saturating_from(components)).to_be_bytes());
+        v.push(u8::saturating_from(components));
         for c in 0..components {
-            v.extend_from_slice(&[c as u8 + 1, 0x00]);
+            v.extend_from_slice(&[u8::saturating_from(c) + 1, 0x00]);
         }
         let coded_bits = if lossless {
             v.extend_from_slice(&[1, 0, 0]); // predictor 1, no point transform
@@ -1078,7 +1077,7 @@ mod tests {
             v.extend_from_slice(&[0, 63, 0]); // full spectral selection
             2 * components // a zero DC difference plus an end-of-block
         };
-        v.push((0xFFu16 >> coded_bits) as u8);
+        v.push(u8::saturating_from(0xFFu16 >> coded_bits));
         v.extend_from_slice(&[0xFF, 0xD9]); // EOI
         v
     }

@@ -10,6 +10,7 @@
 // Union-find over body slots, in two fixed arrays: no allocation while
 // stepping, and no traversal order that could vary between runs.
 
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 pub(crate) struct Islands {
@@ -23,7 +24,7 @@ pub(crate) struct Islands {
 impl Islands {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
-            parent: (0..capacity as u32).collect(),
+            parent: (0..u32::saturating_from(capacity)).collect(),
             rank: alloc::vec![0; capacity],
             ready: alloc::vec![true; capacity],
         }
@@ -37,7 +38,7 @@ impl Islands {
     /// Start a step: every body is its own island again.
     pub(crate) fn clear(&mut self) {
         for (slot, parent) in self.parent.iter_mut().enumerate() {
-            *parent = slot as u32;
+            *parent = u32::saturating_from(slot);
         }
         self.rank.fill(0);
         self.ready.fill(true);

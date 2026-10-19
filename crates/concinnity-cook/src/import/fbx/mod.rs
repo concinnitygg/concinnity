@@ -22,6 +22,7 @@ mod skin;
 pub(crate) use anim::fbx_animation_names;
 pub use anim::import_fbx_animation;
 use concinnity_core::components::VertexData;
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_core::transform::{
     IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul, mat4_transform_point,
 };
@@ -204,22 +205,22 @@ fn prop_scalar(p70: &NodeHandle<'_>, name: &str) -> Option<f64> {
 
 fn translate(t: [f64; 3]) -> Mat4 {
     let mut m = IDENTITY;
-    m[3][0] = t[0] as f32;
-    m[3][1] = t[1] as f32;
-    m[3][2] = t[2] as f32;
+    m[3][0] = narrow_f32(t[0]);
+    m[3][1] = narrow_f32(t[1]);
+    m[3][2] = narrow_f32(t[2]);
     m
 }
 
 fn scale_mat(s: [f64; 3]) -> Mat4 {
     let mut m = IDENTITY;
-    m[0][0] = s[0] as f32;
-    m[1][1] = s[1] as f32;
-    m[2][2] = s[2] as f32;
+    m[0][0] = narrow_f32(s[0]);
+    m[1][1] = narrow_f32(s[1]);
+    m[2][2] = narrow_f32(s[2]);
     m
 }
 
 fn rot_x(deg: f64) -> Mat4 {
-    let (s, c) = (deg as f32).to_radians().sin_cos();
+    let (s, c) = narrow_f32(deg).to_radians().sin_cos();
     let mut m = IDENTITY;
     m[1][1] = c;
     m[1][2] = s;
@@ -229,7 +230,7 @@ fn rot_x(deg: f64) -> Mat4 {
 }
 
 fn rot_y(deg: f64) -> Mat4 {
-    let (s, c) = (deg as f32).to_radians().sin_cos();
+    let (s, c) = narrow_f32(deg).to_radians().sin_cos();
     let mut m = IDENTITY;
     m[0][0] = c;
     m[0][2] = -s;
@@ -239,7 +240,7 @@ fn rot_y(deg: f64) -> Mat4 {
 }
 
 fn rot_z(deg: f64) -> Mat4 {
-    let (s, c) = (deg as f32).to_radians().sin_cos();
+    let (s, c) = narrow_f32(deg).to_radians().sin_cos();
     let mut m = IDENTITY;
     m[0][0] = c;
     m[0][1] = s;
@@ -287,7 +288,7 @@ fn node_scene_local(model: &NodeHandle<'_>) -> Mat4 {
     let r = prop_vec3(&p70, "Lcl Rotation").unwrap_or([0.0, 0.0, 0.0]);
     let s = prop_vec3(&p70, "Lcl Scaling").unwrap_or([1.0, 1.0, 1.0]);
     let pre = prop_vec3(&p70, "PreRotation").unwrap_or([0.0, 0.0, 0.0]);
-    let order = prop_scalar(&p70, "RotationOrder").unwrap_or(0.0) as i32;
+    let order = i32::saturating_from(prop_scalar(&p70, "RotationOrder").unwrap_or(0.0));
     let rot = mat4_mul(rot_ordered_xyz(pre), rot_ordered(r, order));
     mat4_mul(translate(t), mat4_mul(rot, scale_mat(s)))
 }
@@ -358,7 +359,7 @@ fn unit_scale_to_meters(root: &NodeHandle<'_>) -> f32 {
         .and_then(|gs| gs.first_child_by_name("Properties70"))
         .and_then(|p| prop_scalar(&p, "UnitScaleFactor"))
         .unwrap_or(1.0);
-    (factor / 100.0) as f32
+    narrow_f32(factor / 100.0)
 }
 
 // Read a binary FBX file into its v7.4/7.5 node tree.
@@ -466,10 +467,14 @@ pub(crate) fn parse_fbx(path: &str) -> Result<FbxScene, String> {
         let p70 = c.first_child_by_name("Properties70");
         let diffuse = p70
             .and_then(|p| prop_vec3(&p, "DiffuseColor"))
-            .map_or([1.0, 1.0, 1.0], |v| [v[0] as f32, v[1] as f32, v[2] as f32]);
+            .map_or([1.0, 1.0, 1.0], |v| {
+                [narrow_f32(v[0]), narrow_f32(v[1]), narrow_f32(v[2])]
+            });
         let emissive_factor = p70
             .and_then(|p| prop_vec3(&p, "EmissiveColor").or_else(|| prop_vec3(&p, "Emissive")))
-            .map_or([0.0, 0.0, 0.0], |v| [v[0] as f32, v[1] as f32, v[2] as f32]);
+            .map_or([0.0, 0.0, 0.0], |v| {
+                [narrow_f32(v[0]), narrow_f32(v[1]), narrow_f32(v[2])]
+            });
         // Opacity: `Opacity` (1 = opaque) preferred; else `TransparencyFactor`
         // (0 = opaque, so invert). Absent -> fully opaque.
         let opacity = p70
@@ -477,7 +482,7 @@ pub(crate) fn parse_fbx(path: &str) -> Result<FbxScene, String> {
                 prop_scalar(&p, "Opacity")
                     .or_else(|| prop_scalar(&p, "TransparencyFactor").map(|t| 1.0 - t))
             })
-            .map_or(1.0, |v| v.clamp(0.0, 1.0) as f32);
+            .map_or(1.0, |v| narrow_f32(v.clamp(0.0, 1.0)));
 
         let mut mat = FbxMaterial {
             name: object_name(&c),
@@ -637,13 +642,12 @@ fn lookup_uv(uv: Option<&[f64]>, indexed: bool, uv_index: Option<&[i32]>, pv: us
         uv_index
             .and_then(|ui| ui.get(pv))
             .copied()
-            .unwrap_or(0)
-            .max(0) as usize
+            .map_or(0, usize::saturating_from)
     } else {
         pv
     };
-    let u = uv.get(k * 2).copied().unwrap_or(0.0) as f32;
-    let v = uv.get(k * 2 + 1).copied().unwrap_or(0.0) as f32;
+    let u = narrow_f32(uv.get(k * 2).copied().unwrap_or(0.0));
+    let v = narrow_f32(uv.get(k * 2 + 1).copied().unwrap_or(0.0));
     [u, 1.0 - v]
 }
 
@@ -710,7 +714,10 @@ fn extract_geometry_groups(
             mat_per_poly.and_then(|m| m.get(poly)).copied()
         };
         let material = match local_mat {
-            Some(li) if li >= 0 => local_mats.get(li as usize).copied().flatten(),
+            Some(li) if li >= 0 => local_mats
+                .get(usize::saturating_from(li))
+                .copied()
+                .flatten(),
             _ => None,
         };
 
@@ -721,24 +728,24 @@ fn extract_geometry_groups(
             let uv_key = if uv_indexed {
                 uv_index.and_then(|ui| ui.get(pv)).copied().unwrap_or(0)
             } else {
-                pv as i32
+                i32::saturating_from(pv)
             };
             let key = (cp, uv_key);
             let out = if let Some(&i) = group.0.get(&key) {
                 i
             } else {
-                let c = (cp as usize) * 3;
+                let c = usize::saturating_from(cp) * 3;
                 let pos = [
-                    positions.get(c).copied().unwrap_or(0.0) as f32,
-                    positions.get(c + 1).copied().unwrap_or(0.0) as f32,
-                    positions.get(c + 2).copied().unwrap_or(0.0) as f32,
+                    narrow_f32(positions.get(c).copied().unwrap_or(0.0)),
+                    narrow_f32(positions.get(c + 1).copied().unwrap_or(0.0)),
+                    narrow_f32(positions.get(c + 2).copied().unwrap_or(0.0)),
                 ];
                 let vd = VertexData {
                     pos,
                     color: NEUTRAL_COLOR,
                     uv: lookup_uv(uv, uv_indexed, uv_index, pv),
                 };
-                let i = group.1.len() as u32;
+                let i = u32::saturating_from(group.1.len());
                 group.1.push(vd);
                 group.0.insert(key, i);
                 i
@@ -760,7 +767,7 @@ fn extract_geometry_groups(
     // Deterministic primitive order: by material index, untextured group last.
     let mut out: Vec<(Option<usize>, Vec<VertexData>, Vec<u32>)> =
         groups.into_iter().map(|(m, (_, v, i))| (m, v, i)).collect();
-    out.sort_by_key(|(m, _, _)| m.map_or(i64::MAX, |x| x as i64));
+    out.sort_by_key(|(m, _, _)| m.map_or(i64::MAX, i64::saturating_from));
     out
 }
 

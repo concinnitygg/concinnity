@@ -3,6 +3,7 @@
 //! read live world state; everything it consumes arrives through the snapshot
 //! and everything it produces leaves through [`SubmitOutcome`].
 
+use crate::math::SaturatingFrom;
 use alloc::string::{String, ToString};
 
 use crate::ecs::StepResult;
@@ -63,7 +64,7 @@ pub fn submit(
     now_us: fn() -> u64,
 ) -> SubmitOutcome {
     let started = now_us();
-    let since = |start: u64| now_us().saturating_sub(start).min(u64::from(u32::MAX)) as u32;
+    let since = |start: u64| u32::saturating_from(now_us().saturating_sub(start));
     // Replay the tick's recorded backend effects first, in record order:
     // spawn slot ops, settings appliers, and streaming uploads all landed
     // before the draw when they ran in-place, and still do here.

@@ -6,6 +6,7 @@
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::SkinnedVertex;
 use concinnity_core::gfx::render_types::{SkinnedDrawObject, SkinnedIndex};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::{backend, geometry_repack, rt_geom};
 use concinnity_core::transform::IDENTITY;
@@ -260,12 +261,12 @@ impl MtlContext {
         )?;
         write_buffer_region(
             v_buf,
-            write.vertex_offset as usize,
+            usize::saturating_from(write.vertex_offset),
             bytes_of_slice(vertices),
         )?;
         write_buffer_region(
             i_buf,
-            write.index_offset as usize,
+            usize::saturating_from(write.index_offset),
             bytes_of_slice(&write.indices),
         )?;
         Ok(())
@@ -405,7 +406,7 @@ impl MtlContext {
                         };
                         let b = MorphBinding {
                             buffer,
-                            target_count: data.target_count() as u32,
+                            target_count: u32::saturating_from(data.target_count()),
                         };
                         by_source.insert(key, b.clone());
                         b

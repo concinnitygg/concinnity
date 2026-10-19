@@ -7,6 +7,7 @@
 //! GPU buffers are allocated.
 
 use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms, TextVertex};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::fullscreen;
 use concinnity_core::render::fullscreen::TextBindCache;
@@ -80,8 +81,8 @@ impl fullscreen::CompositeEncoder for DxContext {
             let scissor = RECT {
                 left: 0,
                 top: 0,
-                right: args.width as i32,
-                bottom: args.height as i32,
+                right: i32::saturating_from(args.width),
+                bottom: i32::saturating_from(args.height),
             };
             cmd.RSSetScissorRects(&[scissor]);
             // The SRV + sampler heaps both the composite and the text pipeline
@@ -232,12 +233,12 @@ impl fullscreen::CompositeEncoder for DxContext {
 
         let vbv = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: vert_va,
-            SizeInBytes: vert_bytes.len() as u32,
-            StrideInBytes: size_of::<TextVertex>() as u32,
+            SizeInBytes: u32::saturating_from(vert_bytes.len()),
+            StrideInBytes: u32::saturating_from(size_of::<TextVertex>()),
         };
         let ibv = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: idx_va,
-            SizeInBytes: idx_bytes.len() as u32,
+            SizeInBytes: u32::saturating_from(idx_bytes.len()),
             Format: DXGI_FORMAT_R16_UINT,
         };
 
@@ -249,8 +250,8 @@ impl fullscreen::CompositeEncoder for DxContext {
                 cmd.RSSetScissorRects(&[RECT {
                     left: x,
                     top: y,
-                    right: x + w as i32,
-                    bottom: y + h as i32,
+                    right: x + i32::saturating_from(w),
+                    bottom: y + i32::saturating_from(h),
                 }]);
             }
             if binds.atlas_changed(atlas_idx) {
@@ -258,7 +259,7 @@ impl fullscreen::CompositeEncoder for DxContext {
             }
             cmd.IASetVertexBuffers(0, Some(&[vbv]));
             cmd.IASetIndexBuffer(Some(&raw const ibv));
-            cmd.DrawIndexedInstanced(call.indices.len() as u32, 1, 0, 0, 0);
+            cmd.DrawIndexedInstanced(u32::saturating_from(call.indices.len()), 1, 0, 0, 0);
         }
         self.inc_draw_calls(1);
         Ok(())

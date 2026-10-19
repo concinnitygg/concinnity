@@ -8,6 +8,7 @@
 // Concave (reflex) corners and corners where the radius would exceed the
 // available edge length are passed through as-is rather than rounded.
 
+use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -76,7 +77,7 @@ pub fn build_extrude(
     let mut idxs: Vec<u16> = Vec::new();
 
     // Top cap (y = +half_h, normal +Y). Planar UV uses XZ directly.
-    let top_base = verts.len() as u16;
+    let top_base = u16::saturating_from(verts.len());
     for &[x, z] in &profile {
         verts.push(([x, half_h, z], [0.0, 1.0, 0.0], top_color, [x, z]));
     }
@@ -84,22 +85,22 @@ pub fn build_extrude(
     for &[a, b, c] in &top_tris {
         // Reversed winding so the face normal matches the per-vertex +Y.
         idxs.extend_from_slice(&[
-            top_base + c as u16,
-            top_base + b as u16,
-            top_base + a as u16,
+            top_base + u16::saturating_from(c),
+            top_base + u16::saturating_from(b),
+            top_base + u16::saturating_from(a),
         ]);
     }
 
     // Bottom cap (y = -half_h, normal -Y). Original winding gives -Y face normal.
-    let bot_base = verts.len() as u16;
+    let bot_base = u16::saturating_from(verts.len());
     for &[x, z] in &profile {
         verts.push(([x, -half_h, z], [0.0, -1.0, 0.0], bot_color, [x, z]));
     }
     for &[a, b, c] in &top_tris {
         idxs.extend_from_slice(&[
-            bot_base + a as u16,
-            bot_base + b as u16,
-            bot_base + c as u16,
+            bot_base + u16::saturating_from(a),
+            bot_base + u16::saturating_from(b),
+            bot_base + u16::saturating_from(c),
         ]);
     }
 
@@ -113,7 +114,7 @@ pub fn build_extrude(
         // Outward normal for CCW-math polygon: rotate edge direction -90° in XZ.
         let normal = [dz / len, 0.0, -dx / len];
 
-        let base = verts.len() as u16;
+        let base = u16::saturating_from(verts.len());
         verts.push(([p0[0], -half_h, p0[1]], normal, side_color, [0.0, 0.0]));
         verts.push(([p0[0], half_h, p0[1]], normal, side_color, [0.0, height]));
         verts.push(([p1[0], half_h, p1[1]], normal, side_color, [len, height]));

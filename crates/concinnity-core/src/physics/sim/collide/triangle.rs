@@ -14,7 +14,7 @@
 // continued, because there is no neighbor to own that region. Inside the
 // grid, where every edge is shared, there is nothing to lose.
 
-use crate::math::sqrt;
+use crate::math::{SaturatingFrom, sqrt};
 use crate::physics::ColliderShape;
 
 use crate::physics::sim::math::{Vec3, vec3};
@@ -249,7 +249,7 @@ fn feature_of(point: Vec3, incident: &[Vec3], planes: &[Plane; 3]) -> u32 {
     let mut corner = 0x7u32;
     for (index, candidate) in incident.iter().enumerate() {
         if (point - *candidate).length_squared() <= FEATURE_EPSILON * FEATURE_EPSILON {
-            corner = index as u32;
+            corner = u32::saturating_from(index);
             break;
         }
     }

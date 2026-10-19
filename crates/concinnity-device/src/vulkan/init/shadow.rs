@@ -5,6 +5,7 @@ use ash::vk;
 use concinnity_core::gfx::render_types::{
     self, NUM_SHADOW_CASCADES, ShadowUniforms, SpotShadowData,
 };
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend_init::ShadowParams;
 use concinnity_core::render::error::RenderResult;
 
@@ -23,7 +24,11 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
     let InitGpu { hw, frames, .. } = *gpu;
     let device = &hw.device;
     // Shadow map: a 4-layer D32_SFLOAT array image, one slice per cascade.
-    let map = create_shadow_map_array(&gpu.upload(), shadows.map_size, NUM_SHADOW_CASCADES as u32)?;
+    let map = create_shadow_map_array(
+        &gpu.upload(),
+        shadows.map_size,
+        u32::saturating_from(NUM_SHADOW_CASCADES),
+    )?;
     let render_pass = create_shadow_render_pass(device)?;
     let sampler = create_sampler_shadow(device)?;
     // Shadow global set (set 0 for shadow pass): ShadowUniforms UBO.
@@ -89,7 +94,11 @@ pub(super) fn build_spot_shadow(
     // the cascade resolution (a spot slice covers a single cone, not a
     // view-frustum slab). No shadowed spot yields the 1x1 fallback.
     let slice_size = render_types::spot_shadow_slice_size(shadow.map_size);
-    let map = create_shadow_map_array(&gpu.upload(), slice_size, spot_shadows.len() as u32)?;
+    let map = create_shadow_map_array(
+        &gpu.upload(),
+        slice_size,
+        u32::saturating_from(spot_shadows.len()),
+    )?;
     crate::vulkan::draw::spot_shadow::build_spot_shadow(
         crate::vulkan::draw::spot_shadow::SpotShadowBuild {
             alloc: &hw.alloc,

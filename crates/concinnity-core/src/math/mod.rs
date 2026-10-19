@@ -4,12 +4,15 @@
 //! double-precision twins), and the quaternion / Euler convention rotations
 //! are authored and stepped in.
 mod angle;
+mod cast;
 pub mod dvec3;
 pub mod noise;
 pub mod pick;
 mod rotation;
 mod scalar;
 pub mod vec3;
+
+pub use cast::{SaturatingFrom, narrow_f32, saturating_u32};
 
 pub use angle::{flat_forward, flat_right, forward, heading_of, shortest_turn};
 pub use rotation::{

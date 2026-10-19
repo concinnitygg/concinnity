@@ -37,7 +37,7 @@ impl Tick {
     // The difference is interpreted as signed: positive means ahead, within the
     // half-range window the clamp guarantees.
     pub(crate) fn is_newer_than(self, other: Self) -> bool {
-        (self.0.wrapping_sub(other.0) as i32) > 0
+        self.0.wrapping_sub(other.0).cast_signed() > 0
     }
 
     /// Pull a stored tick forward if it has fallen more than `MAX_CHANGE_AGE`

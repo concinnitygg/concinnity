@@ -5,6 +5,7 @@
 use crate::metal::cull::ShadowViewIcb;
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types::{GpuDrawArgs, InstancedCluster, draw_args_flags};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend_init::WorldShader;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::probe_book::ProbeBook;
@@ -115,8 +116,8 @@ pub(super) fn build_instanced(
     for cluster in &clusters {
         for _ in &cluster.instances {
             draw_args.push(GpuDrawArgs {
-                index_count: cluster.index_count as u32,
-                index_offset: cluster.index_offset as u32,
+                index_count: u32::saturating_from(cluster.index_count),
+                index_offset: u32::saturating_from(cluster.index_offset),
                 base_vertex: 0,
                 flags: draw_args_flags(true, true, true),
             });

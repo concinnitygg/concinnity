@@ -13,6 +13,7 @@
 //! itself only deals with the HDR pass.
 
 use ash::vk;
+use concinnity_core::math::SaturatingFrom;
 
 use super::super::context::VkContext;
 use crate::vulkan::depth;
@@ -205,8 +206,8 @@ impl VkContext {
                     cmd,
                     self.cull.indirect_buffers[frame_idx].buffer(),
                     0,
-                    self.state.draw.skinned_record_base() as u32,
-                    size_of::<vk::DrawIndexedIndirectCommand>() as u32,
+                    u32::saturating_from(self.state.draw.skinned_record_base()),
+                    u32::saturating_from(size_of::<vk::DrawIndexedIndirectCommand>()),
                 );
             }
             // GPU expands the indirect buffer to up to `draw.n_objects` draw
@@ -216,7 +217,7 @@ impl VkContext {
             self.inc_draw_calls(self.draw_bucket_regions(
                 cmd,
                 self.cull.indirect_buffers[frame_idx].buffer(),
-                self.state.draw.skinned_record_base() as u32,
+                u32::saturating_from(self.state.draw.skinned_record_base()),
             ));
             // Restore the default bindless pipeline for the sub-paths below.
             if self.shader_bucket_count() > 1 {
@@ -288,8 +289,8 @@ impl VkContext {
                     cmd,
                     self.cull.indirect_buffers[frame_idx].buffer(),
                     (self.state.draw.skinned_record_base() * cmd_stride) as u64,
-                    self.state.draw.n_skinned as u32,
-                    cmd_stride as u32,
+                    u32::saturating_from(self.state.draw.n_skinned),
+                    u32::saturating_from(cmd_stride),
                 );
             }
             self.inc_draw_calls(1);
@@ -436,15 +437,15 @@ impl VkContext {
                 cmd,
                 self.cull.indirect_buffers2[frame_idx].buffer(),
                 0,
-                self.state.draw.skinned_record_base() as u32,
-                size_of::<vk::DrawIndexedIndirectCommand>() as u32,
+                u32::saturating_from(self.state.draw.skinned_record_base()),
+                u32::saturating_from(size_of::<vk::DrawIndexedIndirectCommand>()),
             );
         }
         self.inc_draw_calls(1);
         self.inc_draw_calls(self.draw_bucket_regions(
             cmd,
             self.cull.indirect_buffers2[frame_idx].buffer(),
-            self.state.draw.skinned_record_base() as u32,
+            u32::saturating_from(self.state.draw.skinned_record_base()),
         ));
 
         // Indirect draw #2: the skinned tail against the deformed VB + skinned IB.
@@ -475,8 +476,8 @@ impl VkContext {
                     cmd,
                     self.cull.indirect_buffers2[frame_idx].buffer(),
                     (self.state.draw.skinned_record_base() * cmd_stride) as u64,
-                    self.state.draw.n_skinned as u32,
-                    cmd_stride as u32,
+                    u32::saturating_from(self.state.draw.n_skinned),
+                    u32::saturating_from(cmd_stride),
                 );
             }
             self.inc_draw_calls(1);

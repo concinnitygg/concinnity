@@ -1,5 +1,6 @@
 //! Shared in-memory build orchestration
 
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use std::path::Path;
 
 use concinnity_cook::WorldSource;
@@ -65,7 +66,7 @@ fn scan_environment_map_source(
         a.args
             .get(key)
             .and_then(serde_json::Value::as_u64)
-            .map_or(default, |v| v as u32)
+            .map_or(default, u32::saturating_from)
     };
     Some(EnvironmentMapSourceInfo {
         source: source.to_string(),
@@ -76,7 +77,7 @@ fn scan_environment_map_source(
             .args
             .get("prefilter_clamp")
             .and_then(serde_json::Value::as_f64)
-            .map_or(12.0, |v| v as f32),
+            .map_or(12.0, narrow_f32),
     })
 }
 

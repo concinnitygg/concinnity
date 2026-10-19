@@ -10,6 +10,7 @@
 // is reserved when the simulation is built and reused, which is what lets the
 // step run inside a frame budget rather than at the allocator's convenience.
 
+use crate::math::SaturatingFrom;
 use crate::physics::sim::joint::JointImpulses;
 use alloc::vec::Vec;
 
@@ -845,7 +846,7 @@ impl Simulation {
             body.angular_velocity = q.rotate(body.angular_velocity);
             body.kinematic_target = body.kinematic_target.map(|k| q.rotate(k) + t);
             body.bounds = body.tight_bounds().expanded(margin);
-            broadphase.set_proxy(handle.index() as u32, proxy_for(body));
+            broadphase.set_proxy(u32::saturating_from(handle.index()), proxy_for(body));
         }
         self.config.gravity_center = center.map(|c| (q.rotate(Vec3::from_array(c)) + t).to_array());
     }
@@ -1259,7 +1260,7 @@ impl Simulation {
         if spread.is_dominated() {
             return 0;
         }
-        spread.reachable(self.step_cost(awake) as u64) as usize
+        usize::saturating_from(spread.reachable(self.step_cost(awake) as u64))
     }
 
     /// Everything a step does once the bounds are current and the workers, if
@@ -1321,7 +1322,7 @@ impl Simulation {
             if !body.is_simulated() {
                 continue;
             }
-            let slot = handle.index() as u32;
+            let slot = u32::saturating_from(handle.index());
             sensors.mark_moved(slot);
             let solved = solver.body(slot);
             let began_at = body.position;
@@ -1390,7 +1391,7 @@ impl Simulation {
         body.refresh_bounds(self.config.bounds_margin);
         let proxy = proxy_for(&body);
         let handle = self.bodies.insert(body)?;
-        let slot = handle.index() as u32;
+        let slot = u32::saturating_from(handle.index());
         self.broadphase.insert(slot);
         self.broadphase.set_proxy(slot, proxy);
         // A body arriving inside a settled stack has to be able to disturb it.
@@ -1451,7 +1452,7 @@ impl Simulation {
             }
             awake += 1;
             if body.refresh_bounds(margin) {
-                broadphase.set_proxy(handle.index() as u32, proxy_for(body));
+                broadphase.set_proxy(u32::saturating_from(handle.index()), proxy_for(body));
             }
         }
         awake
@@ -1465,7 +1466,10 @@ impl Simulation {
 fn gather(bodies: &Pool<Body>, solver: &mut Solver, manifolds: &[Manifold], joints: &[Joint]) {
     for (handle, body) in bodies.iter() {
         if body.is_simulated() {
-            solver.set_body(handle.index() as u32, SolverBody::from_body(body));
+            solver.set_body(
+                u32::saturating_from(handle.index()),
+                SolverBody::from_body(body),
+            );
         }
     }
     for manifold in manifolds {
@@ -1520,7 +1524,7 @@ pub(super) fn body_at(bodies: &Pool<Body>, handle: BodyHandle) -> Option<&Body> 
 }
 
 fn body_handle(handle: PoolHandle) -> BodyHandle {
-    BodyHandle::from_parts(handle.index() as u32, handle.generation())
+    BodyHandle::from_parts(u32::saturating_from(handle.index()), handle.generation())
 }
 
 /// The handle naming whatever occupies a slot, for a caller that walked the
@@ -1595,7 +1599,7 @@ fn update_sleep(
     for (handle, body) in bodies.iter() {
         if body.is_dynamic() {
             islands.mark(
-                handle.index() as u32,
+                u32::saturating_from(handle.index()),
                 body.sleep_timer >= config.time_to_sleep,
             );
         }
@@ -1616,7 +1620,7 @@ fn update_sleep(
         if !body.is_dynamic() {
             continue;
         }
-        if islands.island_is_still(handle.index() as u32) {
+        if islands.island_is_still(u32::saturating_from(handle.index())) {
             body.sleep();
         } else {
             body.sleeping = false;

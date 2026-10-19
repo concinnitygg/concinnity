@@ -6,6 +6,7 @@
 
 use concinnity_core::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, Transform};
 use concinnity_core::ecs::{Entity, World};
+use concinnity_core::math::narrow_f32;
 use concinnity_host::thread::asset_id;
 
 use crate::frame_hook::FrameHook;
@@ -264,7 +265,7 @@ fn gizmo_translate_drag_snaps_to_the_grid_and_ctrl_suspends_it() {
     h.tick(&mut world);
     set_input(&mut world, drag_input(target, false));
     h.tick(&mut world);
-    let committed = h.entries[0]["args"]["position"][0].as_f64().unwrap() as f32 - start[0];
+    let committed = narrow_f32(h.entries[0]["args"]["position"][0].as_f64().unwrap()) - start[0];
     assert!(
         off_grid(committed, 0.25) < 1e-3,
         "the commit is on the grid: {committed}"

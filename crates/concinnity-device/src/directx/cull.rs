@@ -17,6 +17,7 @@
 use concinnity_core::gfx::frustum::{Frustum, Plane};
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types::MAX_SHADOWED_SPOTS;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::profile::FanOutTiming;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::model_history::HistoryMode;
@@ -228,7 +229,7 @@ pub(in crate::directx) fn create_cull_command_signature(
     ];
     let desc = D3D12_COMMAND_SIGNATURE_DESC {
         ByteStride: INDIRECT_COMMAND_STRIDE,
-        NumArgumentDescs: arg_descs.len() as u32,
+        NumArgumentDescs: u32::saturating_from(arg_descs.len()),
         pArgumentDescs: arg_descs.as_ptr(),
         NodeMask: 0,
     };
@@ -361,7 +362,7 @@ impl DxContext {
         // texture_slot, normal = the normal map's own handle (or the flat-normal
         // fallback slot for a normal-less draw). The bindless main pass + RT hit
         // shader bind the pool base, so a shared texture resolves to one descriptor.
-        let texture_count = self.scene.textures.len() as u32;
+        let texture_count = u32::saturating_from(self.scene.textures.len());
         // Main thread only, ahead of the encode fan-out: no worker borrows the tracker.
         let mut model_history = self.state.model_history.borrow_mut();
         model_history.begin(history, n_cull);
@@ -429,9 +430,9 @@ impl DxContext {
             let opaque_visible =
                 obj.visible && !(mesh_glass_active && obj.material.see_through != 0);
             *arg = GpuDrawArgs {
-                index_count: index_count as u32,
-                index_offset: index_offset as u32,
-                base_vertex: obj.base_vertex as u32,
+                index_count: u32::saturating_from(index_count),
+                index_offset: u32::saturating_from(index_offset),
+                base_vertex: obj.base_vertex.cast_unsigned(),
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
                     | draw_args_bucket_bits(draw_bucket(obj, cam_pos, grass_route))
                     | model_history.draw_flags(runtime_base + k, i),
@@ -482,8 +483,8 @@ impl DxContext {
             let d = lod::skinned_camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             *arg = GpuDrawArgs {
-                index_count: index_count as u32,
-                index_offset: index_offset as u32,
+                index_count: u32::saturating_from(index_count),
+                index_offset: u32::saturating_from(index_offset),
                 base_vertex: 0,
                 flags: draw_args_flags(obj.visible, true, true)
                     | model_history.skinned_flags(skinned_base + k, k),
@@ -503,8 +504,8 @@ impl DxContext {
                 |record, index_offset, index_count| {
                     if let Some(arg) = draw_args.get_mut(instance_base + record) {
                         *arg = GpuDrawArgs {
-                            index_count: index_count as u32,
-                            index_offset: index_offset as u32,
+                            index_count: u32::saturating_from(index_count),
+                            index_offset: u32::saturating_from(index_offset),
                             base_vertex: 0,
                             flags: draw_args_flags(true, true, true),
                         };
@@ -567,13 +568,13 @@ impl DxContext {
         let mut cull_params = CullParams {
             planes: [[0.0; 4]; 6],
             cam_pos,
-            object_count: self.state.draw.record_count() as u32,
+            object_count: u32::saturating_from(self.state.draw.record_count()),
             prev_view_proj: self.state.planner.temporal().occlusion().prev_view_proj(),
             hiz_size,
             hiz_mip_count,
             hiz_enabled,
-            bucket_count: self.shader_bucket_count() as u32,
-            bucket_stride: self.cull.bucket_stride as u32,
+            bucket_count: u32::saturating_from(self.shader_bucket_count()),
+            bucket_stride: u32::saturating_from(self.cull.bucket_stride),
             _pad: [0; 2],
         };
         cull_params.planes = frustum.packed_planes();
@@ -598,7 +599,11 @@ impl DxContext {
             cmd.SetComputeRootUnorderedAccessView(4, com::gpu_va(indirect));
             cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva);
             // One thread per build-time object, 64-wide threadgroups.
-            cmd.Dispatch((self.state.draw.record_count() as u32).div_ceil(64), 1, 1);
+            cmd.Dispatch(
+                u32::saturating_from(self.state.draw.record_count()).div_ceil(64),
+                1,
+                1,
+            );
         }
     }
 
@@ -636,7 +641,7 @@ impl DxContext {
         let mut cull_params = CullParams {
             planes: [[0.0; 4]; 6],
             cam_pos,
-            object_count: self.state.draw.record_count() as u32,
+            object_count: u32::saturating_from(self.state.draw.record_count()),
             prev_view_proj: self.state.planner.temporal().occlusion().prev_view_proj(),
             hiz_size: [1.0, 1.0],
             hiz_mip_count: 1,
@@ -645,7 +650,7 @@ impl DxContext {
             // pipeline, so every record is routed into region 0: a bucketed draw
             // is captured into the probe cube with default shading.
             bucket_count: 1,
-            bucket_stride: self.cull.bucket_stride as u32,
+            bucket_stride: u32::saturating_from(self.cull.bucket_stride),
             _pad: [0; 2],
         };
         cull_params.planes = frustum.packed_planes();
@@ -669,7 +674,11 @@ impl DxContext {
             }
             cmd.SetComputeRootUnorderedAccessView(4, com::gpu_va(indirect));
             cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva);
-            cmd.Dispatch((self.state.draw.record_count() as u32).div_ceil(64), 1, 1);
+            cmd.Dispatch(
+                u32::saturating_from(self.state.draw.record_count()).div_ceil(64),
+                1,
+                1,
+            );
             cmd.ResourceBarrier(&[transition_barrier(
                 indirect,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -885,14 +894,14 @@ impl DxContext {
                 let mut cull_params = CullParams {
                     planes: [[0.0; 4]; 6],
                     cam_pos: r.eye,
-                    object_count: n_cull as u32,
+                    object_count: u32::saturating_from(n_cull),
                     // Unused with Hi-Z disabled (the reprojection is never taken).
                     prev_view_proj: [[0.0; 4]; 4],
                     hiz_size,
                     hiz_mip_count,
                     hiz_enabled: 0,
                     bucket_count: 1,
-                    bucket_stride: pass.region_stride as u32,
+                    bucket_stride: u32::saturating_from(pass.region_stride),
                     _pad: [0; 2],
                 };
                 cull_params.planes = r.frustum.packed_planes();
@@ -902,7 +911,7 @@ impl DxContext {
                 let region_gva = base_gva
                     + (r.region * pass.region_stride * INDIRECT_COMMAND_STRIDE as usize) as u64;
                 cmd.SetComputeRootUnorderedAccessView(4, region_gva);
-                cmd.Dispatch((n_cull as u32).div_ceil(64), 1, 1);
+                cmd.Dispatch(u32::saturating_from(n_cull).div_ceil(64), 1, 1);
             }
 
             cmd.ResourceBarrier(&[transition_barrier(
@@ -960,13 +969,13 @@ impl DxContext {
         let mut cull_params = CullParams {
             planes: [[0.0; 4]; 6],
             cam_pos: [0.0; 3],
-            object_count: self.state.draw.record_count() as u32,
+            object_count: u32::saturating_from(self.state.draw.record_count()),
             prev_view_proj: cur_vp,
             hiz_size: [hiz.width as f32, hiz.height as f32],
             hiz_mip_count: hiz.mip_count,
             hiz_enabled: 1,
-            bucket_count: self.shader_bucket_count() as u32,
-            bucket_stride: self.cull.bucket_stride as u32,
+            bucket_count: u32::saturating_from(self.shader_bucket_count()),
+            bucket_stride: u32::saturating_from(self.cull.bucket_stride),
             _pad: [0; 2],
         };
         cull_params.planes = frustum.packed_planes();
@@ -985,7 +994,11 @@ impl DxContext {
             cmd.set_compute_srv_table(3, hiz.srv_gpu);
             cmd.SetComputeRootUnorderedAccessView(4, com::gpu_va(indirect));
             cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva);
-            cmd.Dispatch((self.state.draw.record_count() as u32).div_ceil(64), 1, 1);
+            cmd.Dispatch(
+                u32::saturating_from(self.state.draw.record_count()).div_ceil(64),
+                1,
+                1,
+            );
         }
     }
 

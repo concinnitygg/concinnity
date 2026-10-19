@@ -5,6 +5,7 @@
 //! skeleton builder and the model matrix, both built through `animation::skeleton`.
 
 use crate::ecs::{MaterialHandle, PayloadLocator};
+use crate::math::SaturatingFrom;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -236,7 +237,7 @@ pub fn build_skeleton_from_joint_defs(
         .iter()
         .map(|jd| skinning::Joint {
             name: jd.name.clone(),
-            parent: (jd.parent >= 0).then_some(jd.parent as usize),
+            parent: (jd.parent >= 0).then_some(usize::saturating_from(jd.parent)),
             bind: skinning::JointPose {
                 translation: jd.translation,
                 rotation_deg: jd.rotation_deg,

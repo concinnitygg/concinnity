@@ -41,6 +41,7 @@ pub mod source;
 pub mod stars;
 
 use crate::decode::{ByteReader, checked_product};
+use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -84,7 +85,9 @@ pub fn check_sizes(map: &crate::components::EnvironmentMap) -> Result<(), String
 /// Bytes mip `mip` of an RGBA32F cube with `face_size`-texel faces holds across
 /// its six faces, or an error when the mip would have no texels.
 pub fn cube_mip_byte_len(face_size: u32, mip: usize) -> Result<usize, String> {
-    let face = face_size.checked_shr(mip as u32).unwrap_or(0) as usize;
+    let face = face_size
+        .checked_shr(u32::saturating_from(mip))
+        .unwrap_or(0) as usize;
     if face == 0 {
         return Err(format!(
             "cube mip {mip} has no texels (face size {face_size})"

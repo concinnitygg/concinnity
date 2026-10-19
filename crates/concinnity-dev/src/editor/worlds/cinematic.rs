@@ -269,6 +269,7 @@ pub(crate) fn hide(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::SaturatingFrom;
     use concinnity_core::math::forward;
 
     const FOV: f32 = std::f32::consts::FRAC_PI_3;
@@ -453,7 +454,9 @@ mod tests {
     fn the_moving_shots_stand_outside_the_bounds_and_look_at_them() {
         let f = framing();
         let mut c = Cinematic::new();
-        for _ in 0..((Shot::Orbit.secs() + SPIN_SECS + Shot::Drift.secs()) / MAX_DT) as usize {
+        for _ in 0..usize::saturating_from(
+            (Shot::Orbit.secs() + SPIN_SECS + Shot::Drift.secs()) / MAX_DT,
+        ) {
             if c.shot() != Shot::Spin {
                 let p = c.pose(&f);
                 assert!(

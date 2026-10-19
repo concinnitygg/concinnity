@@ -7,6 +7,7 @@
 //! resolve and runs `Upscale` in its slot; the projection is jittered by FFX's
 //! own sequence rather than the engine's Halton one.
 
+use concinnity_core::math::SaturatingFrom;
 use std::cell::Cell;
 use std::ffi::c_void;
 
@@ -42,7 +43,7 @@ struct ffxCreateBackendVKDesc {
 
 // A Vulkan handle as the pointer-sized value `ffx_api` takes.
 fn raw(handle: impl Handle) -> *mut c_void {
-    handle.as_raw() as usize as *mut c_void
+    usize::saturating_from(handle.as_raw()) as *mut c_void
 }
 
 // The FFX upscale context and the output image it writes.

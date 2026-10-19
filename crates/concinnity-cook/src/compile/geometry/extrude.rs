@@ -2,6 +2,9 @@
 // extruded along Y, authored by the macOS Mesh Editor); the geometry itself is
 // `concinnity_core::geometry::build_extrude`.
 
+use super::json_args::{f32_arg, u32_arg};
+use concinnity_core::math::narrow_f32;
+
 type Verts = Vec<([f32; 3], [f32; 3], [f32; 3], [f32; 2])>;
 type GeomResult = Result<(Verts, Vec<u16>), String>;
 
@@ -22,27 +25,22 @@ pub(super) fn build_extrude(args: &serde_json::Value) -> GeomResult {
                 arr.len()
             ));
         }
-        let x = arr[0]
-            .as_f64()
-            .ok_or_else(|| format!("profile[{i}][0] must be a number"))? as f32;
-        let z = arr[1]
-            .as_f64()
-            .ok_or_else(|| format!("profile[{i}][1] must be a number"))? as f32;
+        let x = narrow_f32(
+            arr[0]
+                .as_f64()
+                .ok_or_else(|| format!("profile[{i}][0] must be a number"))?,
+        );
+        let z = narrow_f32(
+            arr[1]
+                .as_f64()
+                .ok_or_else(|| format!("profile[{i}][1] must be a number"))?,
+        );
         profile.push([x, z]);
     }
 
-    let height = args
-        .get("height")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(1.0) as f32;
-    let corner_radius = args
-        .get("corner_radius")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(0.0) as f32;
-    let corner_segments = args
-        .get("corner_segments")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(8) as u32;
+    let height = f32_arg(args, "height", 1.0);
+    let corner_radius = f32_arg(args, "corner_radius", 0.0);
+    let corner_segments = u32_arg(args, "corner_segments", 8)?;
 
     concinnity_core::geometry::build_extrude(&profile, height, corner_radius, corner_segments)
 }

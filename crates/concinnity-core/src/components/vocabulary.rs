@@ -35,7 +35,7 @@ macro_rules! vocabulary_synonyms {
                     ser.serialize_str(self.as_str())
                 } else {
                     let idx = <$ty>::ALL.iter().position(|v| v == self).unwrap_or(0);
-                    ser.serialize_u32(idx as u32)
+                    ser.serialize_u32(u32::try_from(idx).unwrap_or(u32::MAX))
                 }
             }
         }

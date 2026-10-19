@@ -5,7 +5,7 @@
 // region's joints, so a region boundary is exactly as smooth as the skinning.
 
 use concinnity_core::components::{SkeletonJoint, SkinnedVertexData};
-use concinnity_core::math::vec3;
+use concinnity_core::math::{SaturatingFrom, vec3};
 use concinnity_core::transform::Mat4;
 
 // One joint's bind-pose frame in model space.
@@ -48,7 +48,7 @@ pub(crate) fn bone_frames(
     let origins = joint_origins(skeleton);
     let n = skeleton.len();
     let first_child: Vec<Option<usize>> = (0..n)
-        .map(|j| (0..n).find(|&c| skeleton[c].parent == j as i32))
+        .map(|j| (0..n).find(|&c| skeleton[c].parent == i32::saturating_from(j)))
         .collect();
     let mut frames: Vec<BoneFrame> = Vec::with_capacity(n);
     for j in 0..n {
@@ -63,7 +63,7 @@ pub(crate) fn bone_frames(
         } else {
             let parent = skeleton[j].parent;
             let axis = if parent >= 0 {
-                let p = &frames[parent as usize];
+                let p = &frames[usize::saturating_from(parent)];
                 let d = vec3::sub(origins[j], p.origin);
                 let len = vec3::length(d);
                 if len > 1e-6 {
@@ -80,7 +80,7 @@ pub(crate) fn bone_frames(
                 .map(|v| vec3::dot(vec3::sub(v.pos, origins[j]), axis))
                 .fold(0.0_f32, f32::max);
             let fallback = if parent >= 0 {
-                frames[parent as usize].length
+                frames[usize::saturating_from(parent)].length
             } else {
                 0.0
             };

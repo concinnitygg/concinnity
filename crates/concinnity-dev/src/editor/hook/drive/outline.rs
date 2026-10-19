@@ -12,6 +12,7 @@ use concinnity_core::components::{
 };
 use concinnity_core::ecs::{Entity, World};
 use concinnity_core::gfx::lines::Line;
+use concinnity_core::math::narrow_f32;
 
 use concinnity_cook::authoring::world::entry_handles;
 
@@ -224,7 +225,7 @@ fn push_camera(ctx: &ShapeCtx<'_>, out: &mut Vec<Line>) {
     let num = |key: &str, default: f32| {
         args.get(key)
             .and_then(serde_json::Value::as_f64)
-            .map_or(default, |v| v as f32)
+            .map_or(default, narrow_f32)
     };
     let authored = billboards::position_of(&args).unwrap_or([0.0; 3]);
     let origin = anchored_position(ctx.world, ctx.entity, authored);

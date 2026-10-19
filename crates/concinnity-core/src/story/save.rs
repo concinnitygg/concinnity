@@ -2,6 +2,7 @@ use super::{
     Overlay, PipelineContext, SLOT_COUNT, SaveSlot, ScreenCommand, StorySave, StoryStore,
     StorySystem,
 };
+use crate::math::SaturatingFrom;
 
 impl StorySystem {
     pub(super) fn start(&mut self, ctx: &mut PipelineContext<'_>) {
@@ -64,7 +65,7 @@ impl StorySystem {
     pub(super) fn current_save(&self) -> StorySave {
         StorySave {
             slug: self.story.nodes[self.node].slug.clone(),
-            page: self.page as u32,
+            page: u32::saturating_from(self.page),
             vars: self.vars.clone(),
         }
     }

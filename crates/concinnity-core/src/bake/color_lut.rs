@@ -23,6 +23,7 @@
 //! `.cube` data-line order, so the `.cube` path appends triplets verbatim.
 
 use crate::decode::{ByteReader, checked_product};
+use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -118,7 +119,7 @@ pub fn parse_cube(text: &str) -> Result<(u32, Vec<u8>), String> {
             let v: f32 = tok
                 .parse()
                 .map_err(|e| format!("bad {label} value {tok:?} in .cube: {e}"))?;
-            Ok((v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)
+            Ok(u8::saturating_from(v.clamp(0.0, 1.0) * 255.0 + 0.5))
         };
         let r = next_channel("red")?;
         let g = next_channel("green")?;

@@ -10,6 +10,7 @@
 //! depth it last rendered, which stays correct until a caster moves.
 
 use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::spot_shadow;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -53,7 +54,7 @@ impl SpotShadowState {
     // Slices actually handed out; the array, the DSV list, and the data buffer
     // all carry exactly this many entries.
     pub(crate) fn count(&self) -> u32 {
-        self.dsvs.len() as u32
+        u32::saturating_from(self.dsvs.len())
     }
 
     // Slices that re-render this frame.

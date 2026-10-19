@@ -3,7 +3,7 @@
 use super::air::AirProfile;
 use super::apparent::ApparentGround;
 use crate::components::Atmosphere;
-use crate::math::cos;
+use crate::math::{cos, narrow_f32};
 use crate::render::night_sky::NightSkySettings;
 
 /// Meters in a kilometer: world units are meters, the atmosphere's are
@@ -149,7 +149,7 @@ impl AtmosphereSettings {
                 0.0,
             ],
         };
-        core::array::from_fn(|i| ((camera[i] - center[i]) / f64::from(METERS_PER_KM)) as f32)
+        core::array::from_fn(|i| narrow_f32((camera[i] - center[i]) / f64::from(METERS_PER_KM)))
     }
 }
 

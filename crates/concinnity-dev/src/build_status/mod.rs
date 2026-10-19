@@ -7,6 +7,7 @@ mod capture;
 mod render;
 mod terminal;
 
+use concinnity_core::math::SaturatingFrom;
 use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -166,7 +167,11 @@ impl BuildStatus {
         for error in errors {
             self.shared.note(NoteLevel::Error, error.clone());
         }
-        let detail = render::plural(errors.len() as u32, "validation error", "validation errors");
+        let detail = render::plural(
+            u32::saturating_from(errors.len()),
+            "validation error",
+            "validation errors",
+        );
         self.end(Outcome::Failed, Some(detail));
     }
 
@@ -193,15 +198,15 @@ impl Drop for BuildStatus {
 // The load step's summary: how far the authored entries expanded, and the
 // defaults the build added.
 fn load_summary(authored: usize, assets: usize, injected: usize) -> String {
-    let counted = render::counted(assets as u32, "asset");
+    let counted = render::counted(u32::saturating_from(assets), "asset");
     let mut summary = if authored == assets {
         counted
     } else {
-        let entries = render::plural(authored as u32, "entry", "entries");
+        let entries = render::plural(u32::saturating_from(authored), "entry", "entries");
         format!("{entries} → {counted}")
     };
     if injected > 0 {
-        let added = render::counted(injected as u32, "default");
+        let added = render::counted(u32::saturating_from(injected), "default");
         let _ = write!(summary, " · {added} added");
     }
     summary
@@ -213,8 +218,8 @@ fn thumbnail_summary(board: &Board, report: &BuildReport) -> Option<String> {
     let running = board.rows.last().filter(|r| r.state == RowState::Running)?;
     (running.step == Step::Cook(BuildStage::Thumbnails)).then(|| {
         board::thumbnail_summary(
-            report.thumbnails.baked as u32,
-            report.thumbnails.reused as u32,
+            u32::saturating_from(report.thumbnails.baked),
+            u32::saturating_from(report.thumbnails.reused),
         )
     })
 }

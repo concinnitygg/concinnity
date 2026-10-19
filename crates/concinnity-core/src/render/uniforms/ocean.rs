@@ -3,6 +3,7 @@
 //! whitecap and how much of last frame's foam survives, and, for the mip
 //! reduction, which level it writes.
 
+use crate::math::SaturatingFrom;
 use crate::render::water::ocean::clock::time_fraction;
 use crate::render::water::ocean::{OCEAN_CHOPPINESS, OceanSimulation};
 
@@ -55,7 +56,7 @@ impl OceanFftParams {
                 size,
                 size.trailing_zeros(),
                 sim.first_layer,
-                c.count() as u32,
+                u32::saturating_from(c.count()),
             ],
             lengths: c.padded_lengths(),
             foam_thresholds: foam.thresholds,

@@ -12,6 +12,7 @@
 //! the one resource that carries state from frame to frame, stays in unordered
 //! access and is bound as a root UAV.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::ocean::{
     OceanFftParams, ocean_mip_groups, ocean_mip_levels,
@@ -116,11 +117,11 @@ impl DxOceanSim {
         let mip_tables: Vec<SrvSlot> = (0..mips as usize)
             .map(|level| {
                 let base = 2 + 4 * level;
-                let src = level.saturating_sub(1) as u32;
+                let src = u32::saturating_from(level.saturating_sub(1));
                 for (j, array) in [&displacement, &slopes].into_iter().enumerate() {
                     write_mip_srv(device, array, layers, src, (slots.cpu)(base + j));
                     let uav = (slots.cpu)(base + 2 + j);
-                    write_mip_uav(device, array, layers, level as u32, uav);
+                    write_mip_uav(device, array, layers, u32::saturating_from(level), uav);
                 }
                 slots.gpu.offset(base, slots.stride)
             })
@@ -222,8 +223,8 @@ fn cascade_array(
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
         Width: u64::from(size),
         Height: size,
-        DepthOrArraySize: layers as u16,
-        MipLevels: mips as u16,
+        DepthOrArraySize: u16::saturating_from(layers),
+        MipLevels: u16::saturating_from(mips),
         Format: CASCADE_FORMAT,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,

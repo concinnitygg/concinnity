@@ -176,7 +176,7 @@ pub(crate) fn average_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
     if count == 0 {
         LUM_LOG2_MIN
     } else {
-        (weighted_sum / count as f64) as f32
+        crate::math::narrow_f32(weighted_sum / count as f64)
     }
 }
 
@@ -212,6 +212,7 @@ pub(crate) fn highlight_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 
 mod tests {
     use super::*;
     use crate::gfx::auto_exposure::{HDR_MIDDLE_GRAY_LOG2, HIGHLIGHT_FRACTION, METERED_RANGE_EV};
+    use crate::math::SaturatingFrom;
 
     // A frame of one luminance throughout: its highlights are its mean.
     fn even(log_lum: f32) -> ExposureMeasurement {
@@ -488,7 +489,7 @@ mod tests {
         // the top quarter of the bright bin, the black pixels counted toward
         // the total.
         const TOTAL: u32 = 1_000_000;
-        let share = (HIGHLIGHT_FRACTION * TOTAL as f32).round() as u32;
+        let share = u32::saturating_from((HIGHLIGHT_FRACTION * TOTAL as f32).round());
         let mut histogram = [0u32; HISTOGRAM_BINS];
         histogram[0] = 850_000;
         histogram[220] = 4 * share;
@@ -523,7 +524,7 @@ mod tests {
     fn average_log_luminance_leaves_out_what_sits_far_under_the_highlight() {
         let step = (LUM_LOG2_MAX - LUM_LOG2_MIN) / HISTOGRAM_BINS as f32;
         let center = |bin: usize| LUM_LOG2_MIN + (bin as f32 + 0.5) * step;
-        let bin_at = |log_lum: f32| ((log_lum - LUM_LOG2_MIN) / step) as usize;
+        let bin_at = |log_lum: f32| usize::saturating_from((log_lum - LUM_LOG2_MIN) / step);
         let lit = bin_at(5.0);
         let space = bin_at(5.0 - METERED_RANGE_EV - 1.0);
         let mut histogram = [0u32; HISTOGRAM_BINS];

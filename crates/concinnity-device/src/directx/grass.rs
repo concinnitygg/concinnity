@@ -15,6 +15,7 @@
 //! flight, and their meshes, from the shared vertex buffer, which rests in
 //! `GENERIC_READ`.
 
+use concinnity_core::math::SaturatingFrom;
 use std::cell::RefCell;
 
 use concinnity_core::planet::Rebase;
@@ -119,8 +120,8 @@ fn create_draw_signature(device: &ID3D12Device) -> RenderResult<ID3D12CommandSig
         ..Default::default()
     }];
     let desc = D3D12_COMMAND_SIGNATURE_DESC {
-        ByteStride: GRASS_ARGS_STRIDE as u32,
-        NumArgumentDescs: arg_descs.len() as u32,
+        ByteStride: u32::saturating_from(GRASS_ARGS_STRIDE),
+        NumArgumentDescs: u32::saturating_from(arg_descs.len()),
         pArgumentDescs: arg_descs.as_ptr(),
         NodeMask: 0,
     };
@@ -181,7 +182,7 @@ impl GrassPipelines {
             .depth(DXGI_FORMAT_D32_FLOAT, Depth::write())
             .raster(Raster {
                 bias: DepthBias {
-                    constant: shadow_bias::RASTER_CONSTANT as i32,
+                    constant: i32::saturating_from(shadow_bias::RASTER_CONSTANT),
                     clamp: shadow_bias::RASTER_CLAMP,
                     slope: shadow_bias::RASTER_SLOPE,
                 },
@@ -299,7 +300,7 @@ impl MappedBlocks {
         Ok(Self {
             buffers,
             ptrs,
-            size: size as usize,
+            size: usize::saturating_from(size),
         })
     }
 
@@ -774,7 +775,7 @@ impl DxContext {
                 if region == GRASS_BAND_REGION {
                     cmd.SetPipelineState(&pipelines.band);
                 }
-                let first_vertex = region as u32 * GRASS_LOD_VERTEX_STRIDE;
+                let first_vertex = u32::saturating_from(region) * GRASS_LOD_VERTEX_STRIDE;
                 cmd.set_graphics_root_constants(FIRST_VERTEX_PARAM, &first_vertex);
                 cmd.ExecuteIndirect(
                     &grass.draw_signature,
@@ -787,7 +788,7 @@ impl DxContext {
             }
             cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         }
-        self.inc_draw_calls(GRASS_REGION_COUNT as u32);
+        self.inc_draw_calls(u32::saturating_from(GRASS_REGION_COUNT));
     }
 
     // `record` bracketed by `pass`'s timestamps inside the enclosing pass's

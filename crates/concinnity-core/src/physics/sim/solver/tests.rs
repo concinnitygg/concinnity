@@ -2,6 +2,7 @@ use super::contact::effective_mass;
 use super::*;
 use crate::fanout::Inline;
 use crate::fanout::test_pools::Reversed;
+use crate::math::SaturatingFrom;
 use crate::physics::sim::body::Body;
 use crate::physics::sim::contact::ManifoldPoint;
 use crate::physics::sim::math::{Vec3, vec3};
@@ -83,7 +84,7 @@ fn resting_manifold(a: u32, b: u32, separation: f32) -> Manifold {
         manifold.push(ManifoldPoint {
             point: vec3(x, 0.0, z),
             separation,
-            id: id as u32,
+            id: u32::saturating_from(id),
             ..Default::default()
         });
     }
@@ -318,7 +319,10 @@ fn columns(stacks: usize) -> (Solver, Vec<Manifold>, usize) {
     let mut manifolds = Vec::new();
     for stack in 0..stacks {
         let x = stack as f32 * 4.0;
-        let (lower, upper) = (1 + stack as u32 * 2, 2 + stack as u32 * 2);
+        let (lower, upper) = (
+            1 + u32::saturating_from(stack) * 2,
+            2 + u32::saturating_from(stack) * 2,
+        );
         solver.set_body(
             lower,
             SolverBody::from_body(&unit_cube(vec3(x, 0.499, 0.0), 0.0)),
@@ -363,15 +367,17 @@ fn chunk_order_does_not_change_the_result() {
                 clippy::needless_collect,
                 reason = "the bodies are read before begin clears them"
             )]
-            let taken: Vec<SolverBody> = (0..capacity).map(|s| *solver.body(s as u32)).collect();
+            let taken: Vec<SolverBody> = (0..capacity)
+                .map(|s| *solver.body(u32::saturating_from(s)))
+                .collect();
             solver.begin();
             for (slot, body) in taken.into_iter().enumerate() {
-                solver.set_body(slot as u32, body);
+                solver.set_body(u32::saturating_from(slot), body);
             }
         }
         (0..capacity)
             .map(|s| {
-                let body = solver.body(s as u32);
+                let body = solver.body(u32::saturating_from(s));
                 (
                     body.position.x.to_bits(),
                     body.position.y.to_bits(),

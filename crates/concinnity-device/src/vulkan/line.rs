@@ -13,6 +13,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::LineVertex;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::buffer_growth::grow_capacity;
 use concinnity_core::render::error::RenderResult;
 
@@ -330,7 +331,7 @@ fn create_line_descriptor_pool(
     device: &VkDevice,
     frames: usize,
 ) -> RenderResult<OwnedDescriptorPool> {
-    let frames = frames as u32;
+    let frames = u32::saturating_from(frames);
     let sizes = PoolSizes::default()
         .sets(&view_set_bindings(), frames)
         .build();
@@ -382,7 +383,7 @@ fn create_line_pipeline(
     // `line_vertex_layout_matches_shaders`.
     let bindings = [vk::VertexInputBindingDescription::default()
         .binding(0)
-        .stride(size_of::<LineVertex>() as u32)
+        .stride(u32::saturating_from(size_of::<LineVertex>()))
         .input_rate(vk::VertexInputRate::VERTEX)];
     let attrs = [
         vk::VertexInputAttributeDescription::default()
@@ -562,7 +563,7 @@ impl VkContext {
             &[],
         );
         rec.bind_vertex_buffers(0, &[slot.buffer.buffer()], &[0]);
-        rec.draw(vertices.len() as u32, 1, 0, 0);
+        rec.draw(u32::saturating_from(vertices.len()), 1, 0, 0);
         rec.end_render_pass();
 
         self.inc_draw_calls(1);

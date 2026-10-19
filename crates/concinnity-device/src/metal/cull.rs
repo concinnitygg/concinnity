@@ -6,6 +6,7 @@
 use concinnity_core::gfx::cull_status::CullStatus;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::{lod, render_types};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::shader_programs::metal::bindless_textures;
@@ -206,8 +207,8 @@ pub(super) fn metal_flat_pool_indices(
     material: &render_types::MaterialUniforms,
 ) -> FlatPoolIndices {
     use concinnity_core::gfx::render_types::{albedo_pool_index, normal_pool_index};
-    let cap = (BINDLESS_TEXTURE_COUNT as u32).saturating_sub(1);
-    let tc = texture_count as u32;
+    let cap = u32::saturating_from(BINDLESS_TEXTURE_COUNT).saturating_sub(1);
+    let tc = u32::saturating_from(texture_count);
     let clamp = |i: u32| i.min(cap);
     // The emissive / ORM indices already carry their final shared-pool handle
     // (cook / the graphics system resolve them, `0` = unset), so they index the
@@ -507,8 +508,8 @@ impl MtlContext {
                     cam_pos,
                     |record, index_offset, index_count| {
                         if let Some(rec) = instance_args.get_mut(record) {
-                            rec.index_offset = index_offset as u32;
-                            rec.index_count = index_count as u32;
+                            rec.index_offset = u32::saturating_from(index_offset);
+                            rec.index_count = u32::saturating_from(index_count);
                         }
                     },
                 );
@@ -536,8 +537,8 @@ impl MtlContext {
             let (index_offset, index_count) =
                 obj.active_lod(lod::skinned_camera_distance(obj, cam_pos));
             *arg = GpuDrawArgs {
-                index_count: index_count as u32,
-                index_offset: index_offset as u32,
+                index_count: u32::saturating_from(index_count),
+                index_offset: u32::saturating_from(index_offset),
                 base_vertex: 0,
                 flags: draw_args_flags(obj.visible, true, true)
                     | model_history.skinned_flags(skinned_base + k, k),
@@ -712,12 +713,12 @@ impl MtlContext {
             hiz_size,
             hiz_mip_count,
             hiz_enabled,
-            object_count: object_count as u32,
-            skinned_base: counts.skinned_base as u32,
+            object_count: u32::saturating_from(object_count),
+            skinned_base: u32::saturating_from(counts.skinned_base),
             // Main + mirror cull write at `tid` (cascade_base 0); the shadow cull
             // is the only path that offsets by cascade.
             cascade_base: 0,
-            bucket_count: icbs.len() as u32,
+            bucket_count: u32::saturating_from(icbs.len()),
         };
 
         let cull_pass_desc = MTLComputePassDescriptor::new();
@@ -763,11 +764,11 @@ impl MtlContext {
         enc.set_pipeline(encode);
         enc.set_value(
             &EncodeParams {
-                object_count: object_count as u32,
+                object_count: u32::saturating_from(object_count),
                 region_count: 1,
                 region_mask: 1,
-                skinned_base: counts.skinned_base as u32,
-                bucket_count: icbs.len() as u32,
+                skinned_base: u32::saturating_from(counts.skinned_base),
+                bucket_count: u32::saturating_from(icbs.len()),
                 draw_status: CullStatus::DRAWN,
                 region_base: 0,
                 _pad: 0,
@@ -823,7 +824,7 @@ impl MtlContext {
         // pyramid we just rebuilt from this frame's depth. `hiz_enabled = 1`:
         // the `HizBuild` pass always precedes this dispatch in the graph, so a
         // valid pyramid is guaranteed (the kernel still guards defensively).
-        let skinned_base = self.skinned_record_base() as u32;
+        let skinned_base = u32::saturating_from(self.skinned_record_base());
         let cull_uniforms = CullUniforms {
             planes,
             cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2], 0.0],
@@ -831,10 +832,10 @@ impl MtlContext {
             hiz_size: [hiz.width as f32, hiz.height as f32],
             hiz_mip_count: hiz.mip_count,
             hiz_enabled: 1,
-            object_count: object_count as u32,
+            object_count: u32::saturating_from(object_count),
             skinned_base,
             cascade_base: 0,
-            bucket_count: self.cull.icbs_2.len() as u32,
+            bucket_count: u32::saturating_from(self.cull.icbs_2.len()),
         };
 
         let cull_pass_desc = MTLComputePassDescriptor::new();
@@ -869,11 +870,11 @@ impl MtlContext {
         enc.set_pipeline(encode);
         enc.set_value(
             &EncodeParams {
-                object_count: object_count as u32,
+                object_count: u32::saturating_from(object_count),
                 region_count: 1,
                 region_mask: 1,
                 skinned_base,
-                bucket_count: self.cull.icbs_2.len() as u32,
+                bucket_count: u32::saturating_from(self.cull.icbs_2.len()),
                 draw_status: CullStatus::REDRAW,
                 region_base: 0,
                 _pad: 0,
@@ -1018,7 +1019,7 @@ impl MtlContext {
             return;
         }
         let object_count = self.cull_count();
-        let skinned_base = self.skinned_record_base() as u32;
+        let skinned_base = u32::saturating_from(self.skinned_record_base());
         enc.set_pipeline(pipeline);
         enc.set_buffer(arg_buf, 0, CULL_ICB_BUFFER_INDEX);
         enc.set_buffer(status, 0, CULL_STATUS_BUFFER_INDEX);
@@ -1037,9 +1038,9 @@ impl MtlContext {
                 hiz_size: [1.0, 1.0],
                 hiz_mip_count: 1,
                 hiz_enabled: 0,
-                object_count: object_count as u32,
+                object_count: u32::saturating_from(object_count),
                 skinned_base,
-                cascade_base: (region * object_count) as u32,
+                cascade_base: u32::saturating_from(region * object_count),
                 // The shadow cull writes one depth-only stream: icbs[0].
                 bucket_count: 1,
             };
@@ -1049,15 +1050,15 @@ impl MtlContext {
         // One encode dispatch over the span of refreshed regions; the mask
         // leaves a skipped region's commands exactly as its last cull left them.
         let (region_base, span) =
-            EncodeParams::encoded_span(views.region_mask, views.region_count as u32);
+            EncodeParams::encoded_span(views.region_mask, u32::saturating_from(views.region_count));
         if span == 0 {
             return;
         }
         enc.set_pipeline(encode);
         enc.set_value(
             &EncodeParams {
-                object_count: object_count as u32,
-                region_count: views.region_count as u32,
+                object_count: u32::saturating_from(object_count),
+                region_count: u32::saturating_from(views.region_count),
                 region_mask: views.region_mask,
                 skinned_base,
                 bucket_count: 1,
@@ -1287,6 +1288,7 @@ pub(super) fn build_shadow_cull_pipeline(
 mod tests {
     use super::metal_flat_pool_indices;
     use concinnity_core::gfx::render_types::{MaterialUniforms, NO_NORMAL_MAP_SLOT};
+    use concinnity_core::math::SaturatingFrom;
 
     #[test]
     fn flat_pool_indices_share_one_handle_indexed_pool() {
@@ -1323,7 +1325,7 @@ mod tests {
         assert_eq!(idx.normal, 3);
         let cap = super::super::context::BINDLESS_TEXTURE_COUNT;
         let idx = metal_flat_pool_indices(cap + 5, 9999, 9999, &MaterialUniforms::DEFAULT);
-        assert_eq!(idx.albedo, (cap - 1) as u32);
-        assert_eq!(idx.normal, (cap - 1) as u32);
+        assert_eq!(idx.albedo, u32::saturating_from(cap - 1));
+        assert_eq!(idx.normal, u32::saturating_from(cap - 1));
     }
 }

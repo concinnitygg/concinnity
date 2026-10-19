@@ -106,11 +106,12 @@ impl ContactGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
     use alloc::vec::Vec;
 
     fn handles(n: usize) -> Vec<BodyHandle> {
         (0..n)
-            .map(|i| BodyHandle::from_parts(i as u32, 0))
+            .map(|i| BodyHandle::from_parts(u32::saturating_from(i), 0))
             .collect()
     }
 

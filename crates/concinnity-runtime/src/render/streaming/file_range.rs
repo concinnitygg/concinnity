@@ -4,6 +4,7 @@
 // RAM-resident, so both the texture source (reading its blob file) and the mesh
 // source (reading its geometry scratch file) need the same seek-and-read.
 
+use concinnity_core::math::SaturatingFrom;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
@@ -15,7 +16,7 @@ pub(super) fn read_at(path: &str, file_offset: u64, len: u64) -> Result<Vec<u8>,
     let mut file = File::open(path).map_err(|e| format!("open {path}: {e}"))?;
     file.seek(SeekFrom::Start(file_offset))
         .map_err(|e| format!("seek {file_offset} in {path}: {e}"))?;
-    let mut bytes = vec![0u8; len as usize];
+    let mut bytes = vec![0u8; usize::saturating_from(len)];
     file.read_exact(&mut bytes)
         .map_err(|e| format!("read {len} bytes from {path}: {e}"))?;
     Ok(bytes)

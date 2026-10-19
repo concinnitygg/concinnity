@@ -19,6 +19,7 @@
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
+use concinnity_core::math::{SaturatingFrom, saturating_u32};
 use concinnity_core::render::uniforms::vulkan::{CullHizParams, CullParams};
 
 use crate::vulkan::record::cmd_push_constants;
@@ -28,7 +29,7 @@ use super::context::VkContext;
 
 // Byte stride of one `VkDrawIndexedIndirectCommand` in the cull kernel's output.
 pub(in crate::vulkan) const INDIRECT_COMMAND_STRIDE: u32 =
-    size_of::<vk::DrawIndexedIndirectCommand>() as u32;
+    saturating_u32(size_of::<vk::DrawIndexedIndirectCommand>());
 
 impl VkContext {
     // Shader-bucket regions the cull kernel routes between: the world default
@@ -115,9 +116,9 @@ impl VkContext {
         let mut params = CullParams {
             planes: [[0.0; 4]; 6],
             cam_pos,
-            object_count: self.state.draw.record_count() as u32,
-            bucket_count: self.shader_bucket_count() as u32,
-            bucket_stride: self.cull.bucket_stride as u32,
+            object_count: u32::saturating_from(self.state.draw.record_count()),
+            bucket_count: u32::saturating_from(self.shader_bucket_count()),
+            bucket_stride: u32::saturating_from(self.cull.bucket_stride),
         };
         params.planes = frustum.packed_planes();
         // SAFETY: `cmd` is in the recording state, and every handle and slice the commands name is
@@ -164,7 +165,7 @@ impl VkContext {
             // One invocation per build-time object, 64-wide local groups.
             device.cmd_dispatch(
                 cmd,
-                (self.state.draw.record_count() as u32).div_ceil(64),
+                u32::saturating_from(self.state.draw.record_count()).div_ceil(64),
                 1,
                 1,
             );
@@ -249,7 +250,7 @@ impl VkContext {
             return;
         }
         let device = &self.hw.device;
-        let object_count = self.state.draw.record_count() as u32;
+        let object_count = u32::saturating_from(self.state.draw.record_count());
 
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
@@ -333,9 +334,9 @@ impl VkContext {
         let mut params = CullParams {
             planes: [[0.0; 4]; 6],
             cam_pos,
-            object_count: self.state.draw.record_count() as u32,
-            bucket_count: self.shader_bucket_count() as u32,
-            bucket_stride: self.cull.bucket_stride as u32,
+            object_count: u32::saturating_from(self.state.draw.record_count()),
+            bucket_count: u32::saturating_from(self.shader_bucket_count()),
+            bucket_stride: u32::saturating_from(self.cull.bucket_stride),
         };
         params.planes = frustum.packed_planes();
 
@@ -380,7 +381,7 @@ impl VkContext {
             );
             device.cmd_dispatch(
                 cmd,
-                (self.state.draw.record_count() as u32).div_ceil(64),
+                u32::saturating_from(self.state.draw.record_count()).div_ceil(64),
                 1,
                 1,
             );
@@ -390,13 +391,14 @@ impl VkContext {
 
 #[cfg(test)]
 mod tests {
+    use concinnity_core::math::SaturatingFrom;
     // The `CullParams` layout test lives with the struct in
     // `concinnity_core::render::uniforms::vulkan`. The struct-size == push-range
     // cross-check stays here, where `CULL_PUSH_CONSTANT_BYTES` is defined.
     #[test]
     fn cull_params_size_matches_push_range() {
         assert_eq!(
-            size_of::<super::CullParams>() as u32,
+            u32::saturating_from(size_of::<super::CullParams>()),
             super::super::pipeline::CULL_PUSH_CONSTANT_BYTES
         );
     }

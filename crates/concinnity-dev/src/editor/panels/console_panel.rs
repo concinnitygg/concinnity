@@ -7,6 +7,7 @@
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
+use concinnity_core::math::SaturatingFrom;
 
 use super::console::{ConsoleLine, Severity};
 use super::registry::PanelKey;
@@ -55,12 +56,12 @@ const CHROME_H: f32 = widget::TITLE_H + INPUT_H + PAD;
 // The visible log-row count for panel height `h`, clamped to the injected pool.
 // At the default height this is exactly `LINE_POOL`.
 pub(crate) fn visible_lines(h: f32) -> usize {
-    (((h - CHROME_H) / LINE_H).floor() as usize).clamp(LINE_POOL, LINE_POOL_MAX)
+    usize::saturating_from(((h - CHROME_H) / LINE_H).floor()).clamp(LINE_POOL, LINE_POOL_MAX)
 }
 
 // The log-line character budget at width `w` (grows past the default with width).
 fn max_line_chars(w: f32) -> usize {
-    (MAX_LINE_CHARS as f32 + (w - CONSOLE_W) / CHAR_W).max(8.0) as usize
+    usize::saturating_from((MAX_LINE_CHARS as f32 + (w - CONSOLE_W) / CHAR_W).max(8.0))
 }
 
 const TRACK_TINT: [f32; 4] = [0.12, 0.12, 0.15, 0.9];

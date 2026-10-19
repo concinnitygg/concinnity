@@ -6,6 +6,7 @@
 // `CExpr::Never` or `COp::Never`, which evaluates to nothing and skips its node
 // rather than panicking.
 
+use crate::math::SaturatingFrom;
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -29,25 +30,28 @@ impl Names<'_> {
     fn bind(&mut self, name: &str) -> u16 {
         self.bindings.push(name.to_string());
         self.peak = self.peak.max(self.bindings.len());
-        (self.bindings.len() - 1) as u16
+        u16::saturating_from(self.bindings.len() - 1)
     }
 
     fn binding(&self, name: &str) -> Option<u16> {
         self.bindings
             .iter()
             .rposition(|n| n == name)
-            .map(|i| i as u16)
+            .map(u16::saturating_from)
     }
 
     fn local(&self, name: &str) -> Option<u16> {
-        self.locals.iter().position(|n| n == name).map(|i| i as u16)
+        self.locals
+            .iter()
+            .position(|n| n == name)
+            .map(u16::saturating_from)
     }
 
     fn query(&self, name: &str) -> Option<u16> {
         self.queries
             .iter()
             .position(|n| n == name)
-            .map(|i| i as u16)
+            .map(u16::saturating_from)
     }
 }
 
@@ -136,10 +140,10 @@ fn compile_nodes(
         .enumerate()
         .map(|(i, n)| {
             let mut path = base.to_vec();
-            path.push(TraceStep::Index(i as u32));
+            path.push(TraceStep::Index(u32::saturating_from(i)));
             // Pre-order: the node claims its id (and path slot) before its
             // branches compile, so ids read top-down.
-            let id = paths.len() as u32;
+            let id = u32::saturating_from(paths.len());
             paths.push(path.clone());
             let op = compile_node(n, names, vars, &path, paths);
             CNode { id, op }

@@ -7,6 +7,7 @@
 
 use crate::gfx::render_types::{DrawIndex, LineVertex, SkinnedIndex, TextDrawCall};
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
+use crate::math::SaturatingFrom;
 use crate::render::scene_flow::SceneControl;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -117,9 +118,10 @@ impl<T: Copy> SpanBuffer<T> {
 
     /// Append one slot's values as a new span.
     pub fn push(&mut self, slot: SkinnedIndex, values: &[T]) {
-        let start = self.values.len() as u32;
+        let start = u32::saturating_from(self.values.len());
         self.values.extend_from_slice(values);
-        self.spans.push((slot, start, values.len() as u32));
+        self.spans
+            .push((slot, start, u32::saturating_from(values.len())));
     }
 
     /// The spans in push order as `(slot, values)`.

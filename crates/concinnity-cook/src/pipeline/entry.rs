@@ -4,6 +4,7 @@
 
 use concinnity_core::ecs::BlobAssetDef;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::platform::PlatformSet;
 use concinnity_host::thread::asset_id;
 use std::path::Path;
@@ -118,7 +119,10 @@ pub fn write_build_outputs(
     progress: Option<ProgressFn<'_>>,
 ) -> std::io::Result<BuildReport> {
     let progress = Progress::new(progress);
-    let stage = progress.stage(BuildStage::Write, result.payloads.len() as u32);
+    let stage = progress.stage(
+        BuildStage::Write,
+        u32::saturating_from(result.payloads.len()),
+    );
     let pack_result = write_blobs_to(
         result,
         &concinnity_host::store::blob::primary_in(&tree.data_dir()),
@@ -246,7 +250,7 @@ pub fn build_compiled_with_progress(
     crate::resource_handles::reset_resource_handles();
     let resource_assets = assets.iter().enumerate().filter_map(|(i, a)| {
         crate::authoring::resource_type::asset_resource_kind(a.asset_type)
-            .map(|kind| (AssetId(i as u32), kind))
+            .map(|kind| (AssetId(u32::saturating_from(i)), kind))
     });
     let mut resource_handles =
         concinnity_core::resource::ResourceHandles::from_assets(resource_assets);
@@ -345,7 +349,7 @@ fn assign_asset_ids(assets: &[WorldJsonlAsset]) {
     let handles: Vec<(u32, String)> = assets
         .iter()
         .enumerate()
-        .map(|(i, a)| (i as u32, a.id.clone()))
+        .map(|(i, a)| (u32::saturating_from(i), a.id.clone()))
         .collect();
     asset_id::prime_name_table(&handles);
 }

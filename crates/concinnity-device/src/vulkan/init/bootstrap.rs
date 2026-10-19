@@ -4,6 +4,7 @@
 
 use ash::vk;
 use concinnity_core::components;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::{backend_init, hdr_output, pass_timing};
 use concinnity_core::settings::ResolvedGraphics;
@@ -314,7 +315,7 @@ pub(super) fn acquire_hardware(
         // both available.
         let info = vk::QueryPoolCreateInfo::default()
             .query_type(vk::QueryType::TIMESTAMP)
-            .query_count((pass_timing::SLOTS_PER_FRAME * frames) as u32);
+            .query_count(u32::saturating_from(pass_timing::SLOTS_PER_FRAME * frames));
         // SAFETY: the create-info and every slice it borrows are live for the call, and
         // each handle it names belongs to this device.
         match unsafe { device.create_query_pool(&info, None) } {
@@ -343,7 +344,7 @@ pub(super) fn acquire_hardware(
                     .flags
                     .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
             })
-            .map(|i| i as u32)
+            .map(u32::saturating_from)
             .collect()
     } else {
         Vec::new()

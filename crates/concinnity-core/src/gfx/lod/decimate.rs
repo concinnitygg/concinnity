@@ -10,6 +10,7 @@
 // buffer stays untouched and a LOD swap is a pure
 // `(index_offset, index_count)` change.
 
+use crate::math::SaturatingFrom;
 use crate::math::vec3::length;
 use alloc::collections::{BTreeSet, BinaryHeap};
 use alloc::vec;
@@ -78,7 +79,11 @@ pub fn decimate_by_qem(
         quadrics[i0] = quadrics[i0].add(q);
         quadrics[i1] = quadrics[i1].add(q);
         quadrics[i2] = quadrics[i2].add(q);
-        tris.push([i0 as u32, i1 as u32, i2 as u32]);
+        tris.push([
+            u32::saturating_from(i0),
+            u32::saturating_from(i1),
+            u32::saturating_from(i2),
+        ]);
     }
     if tris.is_empty() {
         return Vec::new();
@@ -90,9 +95,9 @@ pub fn decimate_by_qem(
     if target_tri_count >= tris.len() {
         let mut out: Vec<u16> = Vec::with_capacity(tris.len() * 3);
         for tri in &tris {
-            out.push(tri[0] as u16);
-            out.push(tri[1] as u16);
-            out.push(tri[2] as u16);
+            out.push(u16::saturating_from(tri[0]));
+            out.push(u16::saturating_from(tri[1]));
+            out.push(u16::saturating_from(tri[2]));
         }
         return out;
     }
@@ -127,7 +132,7 @@ pub fn decimate_by_qem(
 
     // 3. Pop in ascending cost; collapse `deleted → survivor` if both
     //    are still alive. Track collapses through a union-find `remap`.
-    let mut remap: Vec<u32> = (0..n_verts as u32).collect();
+    let mut remap: Vec<u32> = (0..u32::saturating_from(n_verts)).collect();
     let mut tri_count = tris.len();
     while tri_count > target_tri_count {
         let Some(edge) = heap.pop() else { break };
@@ -159,9 +164,9 @@ pub fn decimate_by_qem(
         if a > max_idx || b > max_idx || c > max_idx {
             continue;
         }
-        out.push(a as u16);
-        out.push(b as u16);
-        out.push(c as u16);
+        out.push(u16::saturating_from(a));
+        out.push(u16::saturating_from(b));
+        out.push(u16::saturating_from(c));
     }
     out
 }
@@ -377,11 +382,11 @@ mod tests {
                 verts.push(pos(i as f32, 0.0, j as f32));
             }
         }
-        let stride = (n + 1) as u16;
+        let stride = u16::saturating_from(n + 1);
         let mut idxs: Vec<u16> = Vec::with_capacity(n * n * 6);
         for j in 0..n {
             for i in 0..n {
-                let a = (j as u16) * stride + i as u16;
+                let a = u16::saturating_from(j) * stride + u16::saturating_from(i);
                 let b = a + 1;
                 let c = a + stride;
                 let d = c + 1;

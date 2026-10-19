@@ -3,6 +3,7 @@
 //! tiles need.
 
 use crate::gfx::mesh_payload::Vertex;
+use crate::math::SaturatingFrom;
 use crate::planet::MAX_RESIDENT_TILES;
 use crate::render::chunk_window::{max_full_detail_chunks, max_resident_chunks};
 use crate::render::stream_pools::tile_mesh_size;
@@ -33,7 +34,7 @@ pub fn derive_byte_budget(override_mb: u32, gpu_memory_bytes: u64, fraction: f64
     if gpu_memory_bytes == 0 {
         return None;
     }
-    Some((gpu_memory_bytes as f64 * fraction) as u64)
+    Some(u64::saturating_from(gpu_memory_bytes as f64 * fraction))
 }
 
 /// The draw records a chunk window reaching `far_radius` reserves: one for
@@ -134,7 +135,7 @@ mod tests {
         );
         assert_eq!(
             derive_byte_budget(0, VRAM, CHUNK_VRAM_FRACTION),
-            Some((VRAM as f64 * 0.15) as u64)
+            Some(u64::saturating_from(VRAM as f64 * 0.15))
         );
         assert_eq!(derive_byte_budget(0, 0, MESH_VRAM_FRACTION), None);
     }
@@ -178,7 +179,10 @@ mod tests {
         assert!(banded.0 < full.0 && banded.1 < full.1);
         assert_eq!(
             chunk_headroom(shape(200, 200)),
-            (MAX_CHUNK_HEADROOM as usize, MAX_CHUNK_HEADROOM as usize)
+            (
+                usize::saturating_from(MAX_CHUNK_HEADROOM),
+                usize::saturating_from(MAX_CHUNK_HEADROOM)
+            )
         );
     }
 }

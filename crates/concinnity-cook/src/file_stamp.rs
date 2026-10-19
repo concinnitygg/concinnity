@@ -15,6 +15,7 @@
 // the rest, paying a repeat read for at most `SETTLE_WINDOW` after a write and
 // nothing after that.
 
+use concinnity_core::math::SaturatingFrom;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 // How long after a write a file's stamp stays untrusted. Comfortably above the
@@ -37,7 +38,7 @@ impl FileStamp {
                 .modified()
                 .ok()
                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map_or(0, |d| d.as_nanos() as u64),
+                .map_or(0, |d| u64::saturating_from(d.as_nanos())),
             len: meta.len(),
         })
     }
@@ -46,7 +47,7 @@ impl FileStamp {
     pub(crate) fn settled(&self) -> bool {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos() as u64);
+            .map_or(0, |d| u64::saturating_from(d.as_nanos()));
         self.settled_at(now)
     }
 
@@ -54,7 +55,7 @@ impl FileStamp {
     // newer source) reads as unsettled, costing a re-read rather than risking a
     // stale hit.
     fn settled_at(&self, now_nanos: u64) -> bool {
-        now_nanos.saturating_sub(self.mtime_nanos) > SETTLE_WINDOW.as_nanos() as u64
+        now_nanos.saturating_sub(self.mtime_nanos) > u64::saturating_from(SETTLE_WINDOW.as_nanos())
     }
 }
 
@@ -87,7 +88,7 @@ mod tests {
 
     #[test]
     fn settled_only_once_the_window_has_elapsed() {
-        let window = SETTLE_WINDOW.as_nanos() as u64;
+        let window = u64::saturating_from(SETTLE_WINDOW.as_nanos());
         let s = stamp(1_000_000, 5);
         assert!(!s.settled_at(1_000_000), "a just-written file is unsettled");
         assert!(

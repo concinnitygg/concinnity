@@ -10,6 +10,7 @@
 use super::seams::TileSeams;
 use super::tile::{TILE_CELLS, TileSide};
 use crate::gfx::render_types::{GpuTileMorph, PlanetTileDraw};
+use crate::math::narrow_f32;
 
 /// The camera a planet's tiles morph by, this frame and the last, in
 /// the simulated frame, and how far level 0 reaches from it: what every
@@ -78,7 +79,7 @@ pub fn morph_factor(row: &GpuTileMorph, i: usize, j: usize, distance: f32) -> f3
     if row.range <= 0.0 {
         return 0.0;
     }
-    let start = super::MORPH_START as f32;
+    let start = narrow_f32(super::MORPH_START);
     let k = ((distance - start * row.range) / ((1.0 - start) * row.range)).clamp(0.0, 1.0);
     match side_of(i, j) {
         Some(side) if row.seams & u32::from(side.bit()) != 0 => 1.0,
@@ -161,6 +162,7 @@ pub fn morph_point(grid: &[[f32; 3]], i: usize, j: usize, k: f32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
     use crate::math::dvec3;
     use crate::planet::dvec::DVec3;
     use crate::planet::shape::{CubeFace, PlanetShape};
@@ -193,8 +195,8 @@ mod tests {
         let side = TILE_CELLS as usize + 1;
         let (gs, gt) = (fs * n, ft * n);
         let (ci, cj) = (
-            (gs.floor() as usize).min(side - 2),
-            (gt.floor() as usize).min(side - 2),
+            usize::saturating_from(gs.floor()).min(side - 2),
+            usize::saturating_from(gt.floor()).min(side - 2),
         );
         let (rs, rt) = (gs - ci as f64, gt - cj as f64);
         let at = |i: usize, j: usize| dvec3::add(origin, dvec3::from_f32(grid[j * side + i]));
@@ -270,7 +272,7 @@ mod tests {
         let uint = |name| crate::render::shader_consts::uint(src, name);
         assert_eq!(uint("PLANET_TILE_CELLS"), TILE_CELLS as usize);
         let start = crate::render::shader_consts::float(src, "TILE_MORPH_START");
-        assert_eq!(start, crate::planet::MORPH_START as f32);
+        assert_eq!(start, narrow_f32(crate::planet::MORPH_START));
         let ramp = crate::render::shader_consts::float(src, "TILE_SEAM_RAMP_CELLS");
         assert_eq!(ramp, SEAM_RAMP_CELLS);
     }
@@ -297,7 +299,7 @@ mod tests {
     #[test]
     fn the_factor_runs_over_the_end_of_the_range() {
         let r = row(100.0, TileSeams::default());
-        let start = crate::planet::MORPH_START as f32 * 100.0;
+        let start = narrow_f32(crate::planet::MORPH_START) * 100.0;
         assert_eq!(morph_factor(&r, 3, 5, 0.0), 0.0);
         assert_eq!(morph_factor(&r, 3, 5, start), 0.0);
         assert!((morph_factor(&r, 3, 5, (start + 100.0) * 0.5) - 0.5).abs() < 1e-5);
@@ -318,7 +320,7 @@ mod tests {
             finer: TileSide::MaxS.bit(),
         };
         let r = row(100.0, seams);
-        let mid = (crate::planet::MORPH_START as f32 * 100.0 + 100.0) * 0.5;
+        let mid = (narrow_f32(crate::planet::MORPH_START) * 100.0 + 100.0) * 0.5;
         assert_eq!(morph_factor(&r, 0, 3, 0.0), 1.0);
         assert_eq!(morph_factor(&r, 5, n, 0.0), 1.0);
         assert_eq!(morph_factor(&r, n, 3, 1e6), 0.0);
@@ -333,7 +335,7 @@ mod tests {
     #[test]
     fn a_pin_fades_inward_from_its_side() {
         let n = TILE_CELLS as usize;
-        let ramp = SEAM_RAMP_CELLS as usize;
+        let ramp = usize::saturating_from(SEAM_RAMP_CELLS);
         let near = row(
             100.0,
             TileSeams {

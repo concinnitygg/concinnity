@@ -9,6 +9,7 @@
 // sampling the cubes installed before it are never reading a subresource in a
 // write state.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::record_pack::StaticSlots;
 use concinnity_core::render::reflection_probe::PrefilterPlan;
@@ -69,7 +70,7 @@ pub(in crate::directx) fn create_cube_resource(
         Height: face_size,
         DepthOrArraySize: u16::try_from(6 * cubes)
             .map_err(|_| RenderError::Other(format!("{label}: {cubes} cubes exceed an array")))?,
-        MipLevels: mips as u16,
+        MipLevels: u16::saturating_from(mips),
         Format: PROBE_CUBE_FORMAT,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
@@ -115,7 +116,7 @@ pub(in crate::directx) fn write_cube_mip_uav(
         Anonymous: D3D12_UNORDERED_ACCESS_VIEW_DESC_0 {
             Texture2DArray: D3D12_TEX2D_ARRAY_UAV {
                 MipSlice: mip,
-                FirstArraySlice: 6 * cube as u32,
+                FirstArraySlice: 6 * u32::saturating_from(cube),
                 ArraySize: 6,
                 PlaneSlice: 0,
             },
@@ -192,7 +193,7 @@ impl ProbeCubeArray {
                     MostDetailedMip: 0,
                     MipLevels: self.mips,
                     First2DArrayFace: 0,
-                    NumCubes: self.capacity.max(1) as u32,
+                    NumCubes: u32::saturating_from(self.capacity.max(1)),
                     ResourceMinLODClamp: 0.0,
                 },
             },
@@ -223,7 +224,7 @@ impl ProbeCubeArray {
         before: D3D12_RESOURCE_STATES,
         after: D3D12_RESOURCE_STATES,
     ) -> Vec<D3D12_RESOURCE_BARRIER> {
-        cube_subresources(cube as u32, self.mips)
+        cube_subresources(u32::saturating_from(cube), self.mips)
             .map(|sub| D3D12_RESOURCE_BARRIER {
                 Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
                 Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,

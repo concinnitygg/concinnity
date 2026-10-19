@@ -210,6 +210,7 @@ fn current_shard() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
     use std::vec::Vec;
 
     // A fresh block has never seen an allocation, which is how a readout tells
@@ -278,7 +279,7 @@ mod tests {
 
         let stats = counters.snapshot().expect("block has seen allocations");
         assert_eq!(stats.live_bytes, 0);
-        assert_eq!(stats.peak_bytes as usize, PEAK_SAMPLE_BYTES);
+        assert_eq!(usize::saturating_from(stats.peak_bytes), PEAK_SAMPLE_BYTES);
     }
 
     #[test]
@@ -363,8 +364,14 @@ mod tests {
         }
 
         let stats = counters.snapshot().expect("threads allocated");
-        assert_eq!(stats.alloc_count as usize, THREADS * PER_THREAD);
-        assert_eq!(stats.live_bytes as usize, THREADS * PER_THREAD * SIZE);
+        assert_eq!(
+            usize::saturating_from(stats.alloc_count),
+            THREADS * PER_THREAD
+        );
+        assert_eq!(
+            usize::saturating_from(stats.live_bytes),
+            THREADS * PER_THREAD * SIZE
+        );
         assert!(
             counters.touched_shards() > 1,
             "every thread landed on one shard, which is the contention sharding removes"
@@ -388,7 +395,13 @@ mod tests {
 
         let stats = counters.snapshot().expect("threads allocated");
         assert_eq!(stats.live_bytes, 0);
-        assert_eq!(stats.free_count as usize, THREADS * PER_THREAD);
-        assert_eq!(stats.peak_bytes as usize, THREADS * PER_THREAD * SIZE);
+        assert_eq!(
+            usize::saturating_from(stats.free_count),
+            THREADS * PER_THREAD
+        );
+        assert_eq!(
+            usize::saturating_from(stats.peak_bytes),
+            THREADS * PER_THREAD * SIZE
+        );
     }
 }

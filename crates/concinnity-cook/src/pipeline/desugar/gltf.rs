@@ -2,6 +2,7 @@
 //! parsed once per source and its geometry, skeleton, and morph targets land in
 //! the asset's args.
 
+use concinnity_core::math::SaturatingFrom;
 use std::path::Path;
 
 use super::super::pack::MeshCacheEntry;
@@ -194,16 +195,18 @@ pub(in crate::pipeline) fn desugar_gltf_meshes(
         ) {
             continue;
         }
-        let primitive_index = asset
-            .args
-            .get("primitive_index")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0) as u32;
+        let primitive_index = u32::saturating_from(
+            asset
+                .args
+                .get("primitive_index")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+        );
         let chunk_index = asset
             .args
             .get("chunk_index")
             .and_then(serde_json::Value::as_u64)
-            .map(|n| n as usize);
+            .map(usize::saturating_from);
 
         progress.begin(&source);
         if !parsed_cache.contains_key(&source) {

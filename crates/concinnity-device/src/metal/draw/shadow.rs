@@ -14,6 +14,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowPassPush, ShadowUniforms};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shadow_bias;
 use objc2::rc::Retained;
@@ -135,7 +136,7 @@ impl MtlContext {
                     &shadow_enc,
                     ShadowView {
                         uniforms: &self.state.planner.shadow.uniforms,
-                        vp_index: cascade_idx as u32,
+                        vp_index: u32::saturating_from(cascade_idx),
                         set: &self.cull.shadow_views,
                         region: cascade_idx,
                     },

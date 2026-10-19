@@ -17,6 +17,7 @@
 //! queried up front (in `init.rs`, before `create_instance`) and threaded into
 //! `device::create_logical_device`; see its docs.
 
+use concinnity_core::math::narrow_f32;
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_void};
 
@@ -773,7 +774,7 @@ impl VkContext {
             },
             UpscaleCamera::new(
                 upscaler.jitter().get(),
-                params.elapsed as f32,
+                narrow_f32(params.elapsed),
                 params.near,
                 params.fov_y_radians,
                 self.pre_exposure.value(),

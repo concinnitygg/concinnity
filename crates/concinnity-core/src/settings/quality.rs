@@ -126,7 +126,15 @@ pub struct QualityCeiling {
 // The engine maxima each cap takes where a tier imposes none.
 const SSGI_RAYS_MAX: u32 = crate::render::post::ssgi::settings::MAX_RAYS;
 const ANISO_MAX: u32 = 16;
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a single-digit cascade count"
+)]
 const SHADOW_CASCADES_MAX: u32 = crate::gfx::render_types::NUM_SHADOW_CASCADES as u32;
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a single-digit plane count"
+)]
 const PLANAR_PLANES_MAX: u32 = planar_reflection::MAX_PLANAR_PLANES as u32;
 
 impl QualityCeiling {

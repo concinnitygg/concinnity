@@ -2,6 +2,7 @@
 // left, so motion is measured against the cadence frames finished at rather
 // than the cadence the simulation thread happened to sample.
 
+use crate::math::SaturatingFrom;
 use alloc::collections::VecDeque;
 
 use crate::profile::GpuDone;
@@ -61,7 +62,9 @@ impl ShownFrames {
             .iter()
             .find(|(at, _)| *at == done.input_sampled_us)
             .map(|(_, pose)| *pose)?;
-        let micros = |us: f64| crate::math::round_f64(us).clamp(0.0, f64::from(u32::MAX)) as u32;
+        let micros = |us: f64| {
+            u32::saturating_from(crate::math::round_f64(us).clamp(0.0, f64::from(u32::MAX)))
+        };
         let (step_us, interval_us) = match self.last {
             Some((_, last_done, last_pose)) => (
                 micros(f64::from(pose - last_pose) * 1e6),

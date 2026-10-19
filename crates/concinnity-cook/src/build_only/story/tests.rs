@@ -2,6 +2,7 @@ use super::emit::choices::CHOICE_BOX_RADIUS;
 use super::emit::stage::DIALOG_BOX_RADIUS;
 use super::helpers::{slug, wrap_text};
 use super::*;
+use concinnity_core::math::narrow_f32;
 
 const CROSSROADS: &str = r#"---
 title: The Crossroads
@@ -616,7 +617,7 @@ fn portraits_compile_at_native_size_and_bottom_anchor() {
     assert_eq!(p["width"], 456.0);
     assert_eq!(p["height"], 700.0);
     assert_eq!(p["y"], 20.0);
-    let x = p["x"].as_f64().unwrap() as f32;
+    let x = narrow_f32(p["x"].as_f64().unwrap());
     assert!((x - (320.0 - 456.0 / 2.0)).abs() < 1e-3);
     // The portrait image becomes a Texture entry like a backdrop.
     assert_eq!(p["texture"], find(&entries, "s_img0")["args"]["$id"]);
@@ -634,7 +635,7 @@ fn oversized_portrait_scales_down_to_the_canvas_height() {
     assert_eq!(p["width"], 450.0);
     assert_eq!(p["y"], 0.0);
     // Centered on the canvas.
-    let x = p["x"].as_f64().unwrap() as f32;
+    let x = narrow_f32(p["x"].as_f64().unwrap());
     assert!((x - (640.0 - 450.0 / 2.0)).abs() < 1e-3);
 }
 

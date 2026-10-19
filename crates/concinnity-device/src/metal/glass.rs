@@ -10,6 +10,7 @@
 use concinnity_core::components::GlassPanel;
 use concinnity_core::geometry::glass_quad::build_glass_quad;
 use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
 use concinnity_core::render::transparent;
@@ -98,7 +99,7 @@ pub(in crate::metal) fn build_glass_panel_record(
     Ok(GlassPanelRecord {
         vertex_buffer: vb,
         index_buffer: ib,
-        index_count: idxs.len() as u32,
+        index_count: u32::saturating_from(idxs.len()),
         params: GlassParams::from_panel(panel, false),
         visible: panel.visible,
         center: panel.center,
@@ -258,7 +259,10 @@ impl GlassReflectionTargets {
     }
 
     fn extent(&self) -> (u32, u32) {
-        (self.depth.width() as u32, self.depth.height() as u32)
+        (
+            u32::saturating_from(self.depth.width()),
+            u32::saturating_from(self.depth.height()),
+        )
     }
 }
 
@@ -581,7 +585,7 @@ impl MtlContext {
                 reflection_pipeline: reflection_pipeline.clone(),
                 vertex_buffer: self.scene.vertex_buffer.retained(),
                 index_buffer: self.scene.index_buffer.retained(),
-                index_count: mesh.index_count as u32,
+                index_count: u32::saturating_from(mesh.index_count),
                 index_type: objc2_metal::MTLIndexType::UInt32,
                 index_offset_bytes: mesh.index_offset * size_of::<u32>(),
                 base_vertex: mesh.base_vertex,

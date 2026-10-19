@@ -23,6 +23,7 @@
 //! `UNORDERED_ACCESS` for the dispatches that write it and back after the last one,
 //! one subresource at a time, so the cubes other frames sample never move.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::reflection_probe::PrefilterPlan;
 use concinnity_core::render::uniforms::ProbePrefilterParams;
@@ -145,7 +146,7 @@ pub(in crate::directx) fn typed_uav_load_supported(device: &ID3D12Device) -> boo
         device.CheckFeatureSupport(
             D3D12_FEATURE_D3D12_OPTIONS,
             (&raw mut options).cast::<std::ffi::c_void>(),
-            size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS>() as u32,
+            u32::saturating_from(size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS>()),
         )
     };
     ok.is_ok() && options.TypedUAVLoadAdditionalFormats.as_bool()

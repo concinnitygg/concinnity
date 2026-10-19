@@ -12,6 +12,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{ShadowUniforms, SpotShadowData};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::{csm, spot_shadow};
 
@@ -104,7 +105,7 @@ pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResu
     // The pass's own descriptor pool: one single-UBO set per slice. Kept
     // separate from the shared pool so the slice count does not have to be
     // threaded into the main pool sizing.
-    let set_count = framebuffers.len().max(1) as u32;
+    let set_count = u32::saturating_from(framebuffers.len().max(1));
     let pool_sizes = PoolSizes::default()
         .sets(&shadow_global_set(), set_count)
         .build();
@@ -187,7 +188,7 @@ fn upload_records<T: Copy>(buffer: &PooledBuffer, records: &[T]) {
 // back its own uniform-buffer descriptor.
 fn upload_strided<T: Copy>(buffer: &PooledBuffer, records: &[T], stride: u64) {
     for (i, r) in records.iter().enumerate() {
-        buffer.write_val(i * stride as usize, r);
+        buffer.write_val(i * usize::saturating_from(stride), r);
     }
 }
 

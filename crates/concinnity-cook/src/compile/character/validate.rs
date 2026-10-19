@@ -3,6 +3,7 @@
 // plus the model's own args. Every problem is reported, in one pass.
 
 use concinnity_core::components::SkeletonJoint;
+use concinnity_core::math::SaturatingFrom;
 
 use crate::authoring::registry::build_only::{CharacterModel, CharacterSchema, KeyPolarity};
 
@@ -18,7 +19,7 @@ pub(crate) fn source_errors(
         let j = skeleton.iter().find(|j| j.name == name)?;
         Some(if j.parent >= 0 {
             skeleton
-                .get(j.parent as usize)
+                .get(usize::saturating_from(j.parent))
                 .map(|p| p.name.clone())
                 .unwrap_or_default()
         } else {

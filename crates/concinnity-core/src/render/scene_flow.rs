@@ -8,6 +8,7 @@ use crate::components::{Hidden, Identity, RenderHandle, Scene, SceneMember, Scen
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, PipelineContext};
 use crate::gfx::render_types::DrawIndex;
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 const FADE_HALF_SECS: f32 = 0.3;
@@ -127,7 +128,7 @@ impl SceneVisibility {
     /// Start the next prop's entry; its draw slots follow via
     /// [`SceneVisibility::push_draw`].
     pub fn begin_prop(&mut self, scene: Option<AssetId>) {
-        self.spans.push((self.draws.len() as u32, 0));
+        self.spans.push((u32::saturating_from(self.draws.len()), 0));
         self.scenes.push(scene);
     }
 

@@ -17,6 +17,7 @@
 //! to `D3D12_TEXTURE_DATA_PITCH_ALIGNMENT` (256 bytes), which the decode strips.
 
 use concinnity_core::gfx::image_decode::PixelLayout;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hdr_output::HdrEncoding;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -153,7 +154,7 @@ impl DxContext {
                 Width: width,
                 Height: height,
                 Depth: 1,
-                RowPitch: image.row_pitch as u32,
+                RowPitch: u32::saturating_from(image.row_pitch),
             },
         };
         (footprint, image)

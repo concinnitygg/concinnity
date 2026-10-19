@@ -15,12 +15,12 @@ mod face;
 #[cfg(test)]
 mod mirror;
 
+use crate::math::{dvec3, narrow_f32};
 pub use face::SeaFace;
 
 use super::WaterBody;
 use super::motion::BodyMotion;
 use super::ocean::grid::OceanGrid;
-use crate::math::dvec3;
 use crate::planet::{DVec3, LocalFrame, PlanetShape};
 
 /// The faces a sea's shader reads: the three around the corner of the cube
@@ -79,7 +79,7 @@ pub struct SeaBody {
 impl SeaBody {
     /// The sea on `sphere` for a sea peaking at `peak_wavelength` meters.
     pub fn new(sphere: SeaSphere, peak_wavelength: f32) -> Self {
-        let reach = SEA_GRID_REACH_RADII * MAX_FACE_STRETCH * sphere.radius as f32;
+        let reach = SEA_GRID_REACH_RADII * MAX_FACE_STRETCH * narrow_f32(sphere.radius);
         Self {
             sphere,
             grid: OceanGrid::reaching(peak_wavelength, reach),
@@ -140,14 +140,14 @@ impl WaterBody {
         let a = home.unproject(r, sea.grid.snap(home.project(r, dir)));
         let anchor = frame.to_local(dvec3::add(sphere.center, dvec3::scale(a, r)));
         let [tu, tv] = home.tangents(a);
-        let grid_scale = (1.0 / home.stretch(a)) as f32;
+        let grid_scale = narrow_f32(1.0 / home.stretch(a));
 
         let faces = core::array::from_fn(|axis| {
             let face = SeaFace::of_axis(axis, a[axis] >= 0.0);
             let at = face.coords(a);
             let rows = core::array::from_fn(|i| {
                 let [x, y, z] = frame.dir_to_local(face.axes()[i]);
-                [x, y, z, at[i] as f32]
+                [x, y, z, narrow_f32(at[i])]
             });
             SeaFaceMotion {
                 rows,
@@ -176,7 +176,7 @@ impl WaterBody {
             up: frame.dir_to_local(a),
             tangents: [frame.dir_to_local(tu), frame.dir_to_local(tv)],
             grid_scale,
-            reach: reach.min(0.95 * r) as f32,
+            reach: narrow_f32(reach.min(0.95 * r)),
             faces,
         })
     }

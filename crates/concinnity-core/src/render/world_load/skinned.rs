@@ -3,6 +3,7 @@
 //! by its hidden pre-reserved instance copies), and the posed template entity
 //! per mesh that animation drives and a runtime spawn clones.
 
+use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -64,7 +65,7 @@ pub fn decode_skinned(
     let mut blob_indices = Vec::with_capacity(table.0.len());
     let mut name_index: HashMap<AssetId, SkinnedMeshHandle> = HashMap::new();
     for (index, entry) in table.0.iter().enumerate() {
-        let handle = SkinnedMeshHandle::new(index as u32);
+        let handle = SkinnedMeshHandle::new(u32::saturating_from(index));
         let (name_id, mesh): (u32, SkinnedMesh) = postcard::from_bytes(&entry.data_bytes)
             .map_err(|e| format!("SkinnedMesh handle {index} baked data failed to decode: {e}"))?;
         let name_id = AssetId(name_id);
@@ -171,7 +172,7 @@ impl SkinnedAssembly {
         morphs: Option<&Arc<PayloadMorphs>>,
         visible: bool,
     ) -> SkinnedIndex {
-        let base = self.vertices.len() as u32;
+        let base = u32::saturating_from(self.vertices.len());
         let index_offset = self.indices.len();
         self.vertices.extend_from_slice(&g.vertices);
         self.indices

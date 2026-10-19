@@ -236,6 +236,7 @@ const fn ssgi(textures: usize) -> PostProgramBindings {
 mod tests {
     use super::*;
     use crate::gfx::render_types::{PostProcessParams, SsaoParams, SsgiParams, SsrParams};
+    use crate::math::SaturatingFrom;
     use crate::render::shaders;
     use crate::render::uniforms::TaaParams;
     use alloc::vec::Vec;
@@ -401,7 +402,7 @@ mod tests {
         for (program, file, defines) in programs() {
             let src = shaders::embedded(file).expect("the program's source is embedded");
             let lines = active_lines(src, defines);
-            let n = program.bindings().textures as u32;
+            let n = u32::saturating_from(program.bindings().textures);
             assert_eq!(
                 set0_bindings(&lines, &["Texture2D<", "TextureCube<"]),
                 (0..n).collect::<Vec<_>>(),

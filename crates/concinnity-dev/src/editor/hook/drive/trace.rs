@@ -11,6 +11,7 @@ use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
     ExecutionTrace, FrameTime, TraceEvent, TracePaths, TraceRequest, World,
 };
+use concinnity_core::math::SaturatingFrom;
 
 use crate::editor::behavior::path::Path;
 use crate::editor::behavior::pulse::{self, NodePulse};
@@ -97,7 +98,7 @@ impl EditorHook {
                 let node = paths.iter().position(|p| trace::matches(p, path))?;
                 Some(TraceEvent {
                     behavior: id,
-                    node: node as u32,
+                    node: u32::saturating_from(node),
                 })
             })
             .collect()

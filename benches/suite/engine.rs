@@ -12,6 +12,7 @@
 use crate::support::{Bench, Rng};
 use concinnity_core::components::Prop;
 use concinnity_core::ecs::{ComponentSlot, Entity, World};
+use concinnity_core::math::SaturatingFrom;
 
 const SIZES: [(usize, &str); 2] = [(10_000, "10k"), (100_000, "100k")];
 const LOOKUPS: usize = 4_096;
@@ -26,7 +27,10 @@ fn prop(i: usize) -> Prop {
 // A world holding `n` Props, with the entity handle for each.
 fn populated(n: usize) -> (World, Vec<Entity>) {
     let mut world = World::new();
-    world.reserve_components(&[(<Prop as ComponentSlot>::DISCRIMINANT, n as u32)]);
+    world.reserve_components(&[(
+        <Prop as ComponentSlot>::DISCRIMINANT,
+        u32::saturating_from(n),
+    )]);
     let entities = (0..n).map(|i| world.push(prop(i))).collect();
     (world, entities)
 }

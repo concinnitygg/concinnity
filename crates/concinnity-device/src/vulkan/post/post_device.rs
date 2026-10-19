@@ -10,6 +10,7 @@
 //! has to rewire an input another effect owns.
 
 use ash::vk;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::{
     PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostSampler, check_level,
@@ -175,7 +176,7 @@ impl VkPostDevice<'_> {
     fn set_layout(&self, n: usize) -> RenderResult<OwnedSetLayout> {
         crate::vulkan::resources::create_descriptor_set_layout(
             self.device,
-            &crate::vulkan::resources::source_set_bindings(n as u32),
+            &crate::vulkan::resources::source_set_bindings(u32::saturating_from(n)),
         )
     }
 
@@ -213,7 +214,7 @@ impl PostPassDevice for VkPostDevice<'_> {
         let push = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
-            .size(bindings.constants as u32);
+            .size(u32::saturating_from(bindings.constants));
         let mut layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
         if bindings.constants > 0 {
             layout_info = layout_info.push_constant_ranges(std::slice::from_ref(&push));
@@ -399,7 +400,7 @@ impl PostPassDevice for VkPostDevice<'_> {
         let set = self
             .arena
             .alloc(self.device, self.frame, pipe.set_layout.handle())?;
-        let n = draw.binds.len() as u32;
+        let n = u32::saturating_from(draw.binds.len());
         draw.binds
             .iter()
             .zip(0..)

@@ -2,6 +2,7 @@
 //! swapchain rebuild path.
 
 use ash::vk;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
@@ -76,8 +77,8 @@ impl VkContext {
         let (width, height) = self.window().framebuffer_size();
         Ok(resolve_swapchain_extent(
             &caps,
-            width.max(0) as u32,
-            height.max(0) as u32,
+            u32::saturating_from(width),
+            u32::saturating_from(height),
         ))
     }
 
@@ -132,8 +133,8 @@ impl VkContext {
                 present_family,
             },
             SwapchainConfig {
-                width: width as u32,
-                height: height as u32,
+                width: u32::saturating_from(width),
+                height: u32::saturating_from(height),
                 old_swapchain: vk::SwapchainKHR::null(),
                 hdr_mode: self.hw.hdr_mode,
                 vsync: self.hw.vsync,

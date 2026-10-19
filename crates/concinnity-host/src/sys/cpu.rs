@@ -54,6 +54,7 @@ impl CpuSampler {
 
 #[cfg(unix)]
 mod imp {
+    use concinnity_core::math::SaturatingFrom;
     use std::time::Duration;
 
     // getrusage(RUSAGE_SELF) sums user + kernel time over every thread in the
@@ -69,8 +70,8 @@ mod imp {
     }
 
     fn timeval(t: libc::timeval) -> Duration {
-        let secs = t.tv_sec.max(0) as u64;
-        let micros = t.tv_usec.clamp(0, 999_999) as u32;
+        let secs = u64::saturating_from(t.tv_sec);
+        let micros = u32::saturating_from(t.tv_usec.clamp(0, 999_999));
         Duration::new(secs, micros * 1_000)
     }
 }

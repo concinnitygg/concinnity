@@ -17,6 +17,7 @@
 //! one `StorageModeShared` buffer per slot.
 
 use ash::vk;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::upload_ring::{self, UploadBuffer};
 
@@ -34,7 +35,7 @@ const UPLOAD_MIN_CAPACITY: u64 = 64 * 1024;
 
 impl UploadBuffer for PooledBuffer {
     fn write(&self, offset: u64, bytes: &[u8]) {
-        self.write_bytes(offset as usize, bytes);
+        self.write_bytes(usize::saturating_from(offset), bytes);
     }
 }
 

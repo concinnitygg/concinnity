@@ -1,4 +1,5 @@
 use concinnity_core::components::{Sprite, TextLabel};
+use concinnity_core::math::SaturatingFrom;
 
 use super::*;
 use crate::editor::text_area::Scroll;
@@ -250,7 +251,7 @@ fn long_lines_draw_their_scrolled_window() {
     let text = label(&world, IDS.text(0)).content;
     assert_eq!(
         text.chars().next(),
-        char::from_digit((left % 10) as u32, 10)
+        char::from_digit(u32::saturating_from(left % 10), 10)
     );
     assert!(sprite(&world, IDS.h_thumb()).visible);
 }

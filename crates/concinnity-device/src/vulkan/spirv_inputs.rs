@@ -42,9 +42,10 @@ pub(super) fn input_locations(words: &[u32]) -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::SaturatingFrom;
 
     fn instruction(op: u32, operands: &[u32]) -> Vec<u32> {
-        let mut words = vec![((operands.len() as u32 + 1) << 16) | op];
+        let mut words = vec![((u32::saturating_from(operands.len()) + 1) << 16) | op];
         words.extend_from_slice(operands);
         words
     }

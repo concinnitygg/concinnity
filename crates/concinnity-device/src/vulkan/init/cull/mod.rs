@@ -5,6 +5,7 @@
 use ash::vk;
 use concinnity_core::bake::texture::TextureImage;
 use concinnity_core::gfx::render_types::clone_reserve;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend_init::{SceneData, WorldShader};
 use concinnity_core::render::error::RenderResult;
 
@@ -91,7 +92,7 @@ pub(super) fn plan_cull(
     let pool_overflows = bindless_active
         && crate::vulkan::descriptor_layout::bindless_pool_needs_update_after_bind(
             limits,
-            bindless_pool_size as u32,
+            u32::saturating_from(bindless_pool_size),
         );
     if pool_overflows && !hw.update_after_bind {
         tracing::warn!(

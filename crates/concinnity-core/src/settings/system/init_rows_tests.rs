@@ -10,6 +10,7 @@ use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Ref, World};
 use crate::input::keymap::{Bindable, KeyMap};
 use crate::launch::LaunchRequest;
+use crate::math::SaturatingFrom;
 use crate::render::backend::{DeviceCapabilities, GpuProfile, GpuTier, GpuVendor};
 use crate::render::dlss::DlssPreset;
 use crate::render::ops::RenderOps;
@@ -254,10 +255,15 @@ fn every_owned_slider_key_recovers_a_live_value() {
         "auto_exposure_max_ev",
         "auto_exposure_speed",
     ];
-    let label = |i: usize| AssetId(301 + i as u32 * 2);
+    let label = |i: usize| AssetId(301 + u32::saturating_from(i) * 2);
     let mut world = World::new();
     for (i, key) in keys.iter().enumerate() {
-        push_slider(&mut world, key, AssetId(300 + i as u32 * 2), label(i));
+        push_slider(
+            &mut world,
+            key,
+            AssetId(300 + u32::saturating_from(i) * 2),
+            label(i),
+        );
     }
     let live = synced(&mut world, &Launch::new(effects(|_| {})));
 
@@ -282,7 +288,7 @@ fn rebind_rows_show_their_bound_keys_at_init() {
     });
     let mut world = World::new();
     for (i, action) in Bindable::ALL.iter().enumerate() {
-        let label = AssetId(400 + i as u32);
+        let label = AssetId(400 + u32::saturating_from(i));
         world.push(HitRegion {
             action: act(
                 serde_json::json!({"setting": {"key": action.setting_key(), "verb": "rebind"}}),
@@ -304,7 +310,7 @@ fn rebind_rows_show_their_bound_keys_at_init() {
     );
     for i in 1..Bindable::ALL.len() {
         assert_ne!(
-            label_text(&mut world, AssetId(400 + i as u32)),
+            label_text(&mut world, AssetId(400 + u32::saturating_from(i))),
             PLACEHOLDER,
             "row {i} never synced to its default binding"
         );

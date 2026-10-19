@@ -8,6 +8,7 @@
 
 use concinnity_core::bake::texture::TextureFormat;
 use concinnity_core::decode::checked_product;
+use concinnity_core::math::SaturatingFrom;
 
 // Expand a 16-bit 565 color to RGB888.
 fn rgb565(c: u16) -> [u8; 3] {
@@ -15,9 +16,9 @@ fn rgb565(c: u16) -> [u8; 3] {
     let g = u32::from((c >> 5) & 0x3F);
     let b = u32::from(c & 0x1F);
     [
-        ((r * 255 + 15) / 31) as u8,
-        ((g * 255 + 31) / 63) as u8,
-        ((b * 255 + 15) / 31) as u8,
+        u8::saturating_from((r * 255 + 15) / 31),
+        u8::saturating_from((g * 255 + 31) / 63),
+        u8::saturating_from((b * 255 + 15) / 31),
     ]
 }
 
@@ -35,14 +36,14 @@ fn decode_bc1_block(block: &[u8], opaque: bool) -> [[u8; 4]; 16] {
     pal[1] = [b[0], b[1], b[2], 255];
     if opaque || c0 > c1 {
         for k in 0..3 {
-            pal[2][k] = ((2 * u32::from(a[k]) + u32::from(b[k])) / 3) as u8;
-            pal[3][k] = ((u32::from(a[k]) + 2 * u32::from(b[k])) / 3) as u8;
+            pal[2][k] = u8::saturating_from((2 * u32::from(a[k]) + u32::from(b[k])) / 3);
+            pal[3][k] = u8::saturating_from((u32::from(a[k]) + 2 * u32::from(b[k])) / 3);
         }
         pal[2][3] = 255;
         pal[3][3] = 255;
     } else {
         for k in 0..3 {
-            pal[2][k] = u32::midpoint(u32::from(a[k]), u32::from(b[k])) as u8;
+            pal[2][k] = u8::saturating_from(u32::midpoint(u32::from(a[k]), u32::from(b[k])));
         }
         pal[2][3] = 255;
         pal[3] = [0, 0, 0, 0];
@@ -67,13 +68,19 @@ fn decode_bc4_block(block: &[u8]) -> [u8; 16] {
     pal[1] = e1;
     if e0 > e1 {
         for i in 0..6 {
-            pal[2 + i] =
-                (((6 - i as u32) * u32::from(e0) + (1 + i as u32) * u32::from(e1)) / 7) as u8;
+            pal[2 + i] = u8::saturating_from(
+                ((6 - u32::saturating_from(i)) * u32::from(e0)
+                    + (1 + u32::saturating_from(i)) * u32::from(e1))
+                    / 7,
+            );
         }
     } else {
         for i in 0..4 {
-            pal[2 + i] =
-                (((4 - i as u32) * u32::from(e0) + (1 + i as u32) * u32::from(e1)) / 5) as u8;
+            pal[2 + i] = u8::saturating_from(
+                ((4 - u32::saturating_from(i)) * u32::from(e0)
+                    + (1 + u32::saturating_from(i)) * u32::from(e1))
+                    / 5,
+            );
         }
         pal[6] = 0;
         pal[7] = 255;
@@ -182,7 +189,7 @@ pub(crate) fn decode_bc5(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>
             let nx = f32::from(red[i]) / 255.0 * 2.0 - 1.0;
             let ny = f32::from(green[i]) / 255.0 * 2.0 - 1.0;
             let nz = (1.0 - nx * nx - ny * ny).max(0.0).sqrt();
-            let bz = ((nz * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
+            let bz = u8::saturating_from(((nz * 0.5 + 0.5) * 255.0).round());
             rgba[i] = [red[i], green[i], bz, 255];
         }
         rgba

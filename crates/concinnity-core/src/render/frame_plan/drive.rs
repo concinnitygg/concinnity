@@ -95,6 +95,7 @@ mod tests {
     use super::*;
     use crate::gfx::render_types::LightUniforms;
     use crate::gfx::view_modes::{ShowFlags, ViewMode};
+    use crate::math::narrow_f32;
     use crate::render::frame_plan::{EffectInputs, PlanInputs, SurfaceInputs};
     use crate::render::light_state::LightState;
     use crate::render::render_graph::{FrameContent, ResidentFeatures};
@@ -158,7 +159,7 @@ mod tests {
             self.steps.push(Step::Plan);
             let inputs = PlanInputs {
                 camera: camera_inputs(&self.scene, params),
-                elapsed: params.elapsed as f32,
+                elapsed: narrow_f32(params.elapsed),
                 render_size: [8, 8],
                 resident: ResidentFeatures {
                     hdr_width: 8,

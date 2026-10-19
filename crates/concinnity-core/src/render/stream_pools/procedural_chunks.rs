@@ -2,6 +2,7 @@
 //! pure function of the seed and the coordinate, so a chunk that streams out
 //! and back in is regenerated identically, and no RAM or disk copy is kept.
 
+use crate::math::SaturatingFrom;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -35,7 +36,8 @@ impl ProceduralChunks {
         palette: Vec<ChunkBlockType>,
         impostor_step: u32,
     ) -> Self {
-        let generator = ChunkGenerator::new(seed, chunk_blocks, palette.len() as u32);
+        let generator =
+            ChunkGenerator::new(seed, chunk_blocks, u32::saturating_from(palette.len()));
         // The surface block is the one the generator paints the top of each
         // column with; a degenerate single-entry palette falls back to its
         // first entry.
@@ -92,13 +94,13 @@ impl ProceduralChunks {
         let [dx, _dy, dz] = self.chunk_blocks;
         let nx = dx.div_ceil(step);
         let nz = dz.div_ceil(step);
-        let base_x = coord.x * dx as i32;
-        let base_z = coord.z * dz as i32;
+        let base_x = coord.x * i32::saturating_from(dx);
+        let base_z = coord.z * i32::saturating_from(dz);
         let mut heights = Vec::with_capacity(((nx + 1) * (nz + 1)) as usize);
         for gz in 0..=nz {
-            let lz = (gz * step).min(dz) as i32;
+            let lz = i32::saturating_from((gz * step).min(dz));
             for gx in 0..=nx {
-                let lx = (gx * step).min(dx) as i32;
+                let lx = i32::saturating_from((gx * step).min(dx));
                 heights.push(
                     self.generator
                         .surface_height_world(base_x + lx, base_z + lz),

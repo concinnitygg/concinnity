@@ -22,6 +22,7 @@ mod room;
 mod voxel;
 pub mod water_grid;
 
+use crate::math::SaturatingFrom;
 pub use extrude::build_extrude;
 pub use primitives::{build_box, build_cylinder, build_plane, build_sphere};
 pub use room::build_room_geometry;
@@ -169,7 +170,7 @@ pub fn build_chunk_impostor_mesh(
         if verts.len() + 4 > u16::MAX as usize {
             return;
         }
-        let base = verts.len() as u16;
+        let base = u16::saturating_from(verts.len());
         let [u0, v0, u1, v1] = uv_rect;
         let uvs = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
         for (i, p) in corners.iter().enumerate() {

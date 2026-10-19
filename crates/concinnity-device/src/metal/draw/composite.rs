@@ -13,6 +13,7 @@
 //! are its construction and its drop rather than driver steps.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use std::cell::Cell;
 
 use concinnity_core::gfx::render_types;
@@ -192,8 +193,8 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
         if binds.scissor_changed(scissor) {
             let (x, y, w, h) = scissor;
             enc.setScissorRect(MTLScissorRect {
-                x: x as usize,
-                y: y as usize,
+                x: usize::saturating_from(x),
+                y: usize::saturating_from(y),
                 width: w as usize,
                 height: h as usize,
             });
@@ -261,7 +262,7 @@ impl MtlContext {
         // Recover the drawable's pixel size from the composite color attachment
         // so a per-call clip rect scales from points to pixels.
         let size = self.window().view.bounds().size;
-        let logical = (size.width as f32, size.height as f32);
+        let logical = (narrow_f32(size.width), narrow_f32(size.height));
         // SAFETY: attachment 0 is the only color attachment this pass declares, and the
         // accessors only read it.
         let framebuffer = unsafe {
@@ -270,8 +271,14 @@ impl MtlContext {
                 .objectAtIndexedSubscript(0)
                 .texture()
             {
-                Some(t) => (t.width() as u32, t.height() as u32),
-                None => (logical.0.max(0.0) as u32, logical.1.max(0.0) as u32),
+                Some(t) => (
+                    u32::saturating_from(t.width()),
+                    u32::saturating_from(t.height()),
+                ),
+                None => (
+                    u32::saturating_from(logical.0.max(0.0)),
+                    u32::saturating_from(logical.1.max(0.0)),
+                ),
             }
         };
         let bloom_top = self.targets.transient_pool.bloom_top()?;

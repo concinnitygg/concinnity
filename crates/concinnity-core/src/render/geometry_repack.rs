@@ -8,6 +8,7 @@
 //! draw holds mesh-relative indices, which are kept and given a new
 //! `base_vertex` instead.
 
+use crate::math::SaturatingFrom;
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::ToString;
@@ -121,7 +122,11 @@ impl Placement {
             vertex_count,
             index_offset: self.index_offset,
             index_count,
-            base_vertex: if self.absolute { 0 } else { self.base as i32 },
+            base_vertex: if self.absolute {
+                0
+            } else {
+                self.base.cast_signed()
+            },
             lod_alternates: lods,
         }
     }
@@ -138,7 +143,7 @@ impl Packer {
         Placement {
             vertex_offset: self.vertices.len() * size_of::<Vertex>(),
             index_offset: self.indices.len(),
-            base: self.vertices.len() as u32,
+            base: u32::saturating_from(self.vertices.len()),
             absolute: obj.base_vertex == 0,
         }
     }
@@ -181,9 +186,9 @@ impl Packer {
         )?;
         self.vertices.extend_from_slice(src);
         let old_base = if place.absolute {
-            v_start as u32
+            u32::saturating_from(v_start)
         } else {
-            obj.base_vertex as u32
+            obj.base_vertex.cast_unsigned()
         };
         let range = obj.index_offset..obj.index_offset + obj.index_count;
         let src = region(old_indices, range, draw_idx, "index region", "indices")?;

@@ -10,6 +10,7 @@
 // declaration-ordered ids; this reproduces exactly that, and nothing else the
 // production interner does.
 
+use crate::math::SaturatingFrom;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::cell::RefCell;
@@ -99,10 +100,10 @@ fn resolve(name: &str) -> u32 {
     NAMES.with(|names| {
         let mut names = names.borrow_mut();
         if let Some(id) = names.iter().position(|n| n == name) {
-            id as u32
+            u32::saturating_from(id)
         } else {
             names.push(name.to_string());
-            (names.len() - 1) as u32
+            u32::saturating_from(names.len() - 1)
         }
     })
 }
@@ -209,14 +210,14 @@ pub(crate) fn len_handle_resolver(_: crate::ecs::handle::HandleKind, name: &str)
     if name.starts_with("unknown_") {
         None
     } else {
-        Some(name.len() as u32)
+        Some(u32::saturating_from(name.len()))
     }
 }
 
 // A name resolves to its byte length, standing in for the build-time interner
 // the handle resolvers fall back to.
 pub(crate) fn len_name_resolver(name: &str) -> u32 {
-    name.len() as u32
+    u32::saturating_from(name.len())
 }
 
 // Installs every seam with the stand-ins above.
@@ -322,8 +323,8 @@ impl crate::ecs::PayloadStore for OneSection {
         &mut self,
         locator: &crate::ecs::PayloadLocator,
     ) -> Result<&[u8], crate::error::PayloadError> {
-        let start = locator.offset as usize;
-        let end = start + locator.len as usize;
+        let start = usize::saturating_from(locator.offset);
+        let end = start + usize::saturating_from(locator.len);
         self.0
             .get(start..end)
             .filter(|_| locator.blob_index == 0)

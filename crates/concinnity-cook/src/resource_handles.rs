@@ -335,6 +335,7 @@ mod tests {
     use concinnity_core::blob::ResourceKind;
     use concinnity_core::components::{AudioCue, AudioEmitter, Decal, Prop};
     use concinnity_core::ecs::{AudioClipHandle, MaterialHandle, ShaderHandle, TextureHandle};
+    use concinnity_core::math::SaturatingFrom;
 
     // The classification tests (which types are resources, mesh-source blocks)
     // live in `crate::authoring::resource_type` with the classifiers.
@@ -443,9 +444,9 @@ mod tests {
         let prop: Prop = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(
             prop.material,
-            Some(MaterialHandle::new(
-                asset_id::intern("granite").0 as usize as u32
-            ))
+            Some(MaterialHandle::new(u32::saturating_from(
+                asset_id::intern("granite").0 as usize
+            )))
         );
     }
 

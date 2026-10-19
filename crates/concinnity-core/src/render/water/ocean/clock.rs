@@ -4,6 +4,7 @@
 //! each cascade tile repeats every `length` meters, so a lookup only needs the
 //! anchor's position within one tile.
 
+use crate::math::narrow_f32;
 use core::f64::consts::TAU;
 
 /// The period, in seconds, the simulated sea repeats over: each wave's
@@ -15,7 +16,7 @@ pub const OCEAN_REPEAT_SECONDS: f64 = 256.0;
 /// stands still.
 pub fn omega_steps(omega: f32) -> f32 {
     let turns = f64::from(omega) * OCEAN_REPEAT_SECONDS / TAU;
-    libm::round(turns).max(1.0) as f32
+    narrow_f32(libm::round(turns).max(1.0))
 }
 
 /// The angular frequency, in radians per second, a wave of `steps` turns
@@ -29,7 +30,7 @@ pub fn stepped_omega(steps: f32) -> f64 {
 pub fn time_fraction(time: f64) -> f32 {
     let f = libm::fmod(time, OCEAN_REPEAT_SECONDS) / OCEAN_REPEAT_SECONDS;
     let f = if f < 0.0 { f + 1.0 } else { f };
-    let f = f as f32;
+    let f = narrow_f32(f);
     if f >= 1.0 { 0.0 } else { f }
 }
 
@@ -38,7 +39,7 @@ pub fn time_fraction(time: f64) -> f32 {
 pub fn tile_offset(xz: [f64; 2], length: f32) -> [f32; 2] {
     xz.map(|v| {
         let t = v / f64::from(length);
-        let f = (t - libm::floor(t)) as f32;
+        let f = narrow_f32(t - libm::floor(t));
         if f >= 1.0 { 0.0 } else { f }
     })
 }

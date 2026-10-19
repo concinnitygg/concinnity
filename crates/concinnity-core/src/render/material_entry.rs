@@ -8,6 +8,7 @@ use crate::ecs::{MaterialHandle, TextureHandle};
 use crate::gfx::render_types::{
     FarFieldTint, MaterialUniforms, NO_ALBEDO_SLOT, NO_NORMAL_MAP_SLOT,
 };
+use crate::math::SaturatingFrom;
 use crate::render::material_params;
 
 /// One decoded material as the draw list consumes it: resolved texture pool
@@ -74,8 +75,8 @@ pub fn of(
             _pad0: 0.0,
             emissive: mat.emissive_factor,
             _pad1: 0.0,
-            emissive_map_index: emissive_map_slot as u32,
-            orm_map_index: orm_map_slot as u32,
+            emissive_map_index: u32::saturating_from(emissive_map_slot),
+            orm_map_index: u32::saturating_from(orm_map_slot),
             transparent: u32::from(mat.transparent),
             see_through: u32::from(mat.see_through),
             params_index: material_params::row_of(Some(handle)),

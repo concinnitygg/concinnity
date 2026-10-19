@@ -8,6 +8,7 @@
 use concinnity_core::components::{Sprite, TextAlign, TextInput, TextLabel};
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::SaturatingFrom;
 
 use super::theme;
 
@@ -122,7 +123,7 @@ pub(crate) const LINE_H: f32 = theme::TEXT_HALF * 2.0;
 
 // How many lines of text fit in a box `h` pixels tall.
 pub(crate) fn lines_in(h: f32) -> u32 {
-    ((h / LINE_H).floor() as u32).max(1)
+    u32::saturating_from((h / LINE_H).floor()).max(1)
 }
 
 // A message bounded by the box that holds it: it wraps to `rect`'s width and

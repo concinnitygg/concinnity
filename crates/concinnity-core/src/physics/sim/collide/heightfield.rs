@@ -15,7 +15,7 @@
 // path, and silently answering with part of the surface would read as an
 // answer.
 
-use crate::math::floor;
+use crate::math::{SaturatingFrom, floor};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -162,7 +162,7 @@ impl Heightfield {
         let (min_x, min_z) = self.grid_min();
         let (rows, cols) = self.cells();
         let clamp = |value: f32, start: f32, step: f32, count: usize| {
-            floor((value - start) / step).clamp(0.0, (count - 1) as f32) as usize
+            usize::saturating_from(floor((value - start) / step).clamp(0.0, (count - 1) as f32))
         };
         (
             clamp(point.z, min_z, self.cell_z, rows),
@@ -173,7 +173,7 @@ impl Heightfield {
     /// A number naming one triangle of the grid, so a contact on it can be
     /// recognized again next step.
     pub(crate) fn triangle_key(&self, row: usize, col: usize, half: usize) -> u32 {
-        ((row * (self.cols - 1) + col) * 2 + half) as u32
+        u32::saturating_from((row * (self.cols - 1) + col) * 2 + half)
     }
 
     /// The cells an axis-aligned box reaches, or `None` when it reaches none.
@@ -186,8 +186,8 @@ impl Heightfield {
             let last = floor((high - start) / step);
             let limit = (count - 2) as f32;
             (
-                first.clamp(0.0, limit) as usize,
-                last.clamp(0.0, limit) as usize,
+                usize::saturating_from(first.clamp(0.0, limit)),
+                usize::saturating_from(last.clamp(0.0, limit)),
             )
         };
         let (col0, col1) = span(
@@ -314,7 +314,7 @@ impl Heightfields {
     /// Store a grid and return the index a body names it by.
     pub(crate) fn push(&mut self, field: Heightfield) -> u32 {
         self.fields.push(field);
-        (self.fields.len() - 1) as u32
+        u32::saturating_from(self.fields.len() - 1)
     }
 
     /// Put `field` in place of the grid at `index`, which the body naming it

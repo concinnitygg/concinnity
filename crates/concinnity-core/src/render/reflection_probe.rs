@@ -13,6 +13,7 @@ use crate::components::ReflectionProbe;
 use crate::gfx::cubemap::FACE_BASIS;
 use crate::gfx::frustum::Frustum;
 use crate::gfx::projection::view_from_basis;
+use crate::math::SaturatingFrom;
 use crate::math::vec3::dot;
 use crate::math::{ceil, floor, powi, round, sqrt};
 use crate::render::depth::camera_projection;
@@ -466,8 +467,8 @@ fn fit_grid(nx: usize, nz: usize, budget: usize) -> (usize, usize) {
     let (mut nx, mut nz) = (nx.max(1), nz.max(1));
     if nx * nz > budget {
         let scale = sqrt(budget as f32 / (nx * nz) as f32);
-        nx = (round(nx as f32 * scale) as usize).max(1);
-        nz = (round(nz as f32 * scale) as usize).max(1);
+        nx = usize::saturating_from(round(nx as f32 * scale)).max(1);
+        nz = usize::saturating_from(round(nz as f32 * scale)).max(1);
         while nx * nz > budget {
             if nx >= nz {
                 nx -= 1;
@@ -537,7 +538,7 @@ fn interior_voxel_grid(
         return None;
     }
     let vs = (long / INTERIOR_VOXELS_LONG_AXIS as f32).max(0.25);
-    let dim = |e: f32| (ceil(e / vs) as usize).clamp(1, INTERIOR_MAX_DIM);
+    let dim = |e: f32| usize::saturating_from(ceil(e / vs)).clamp(1, INTERIOR_MAX_DIM);
     Some((vs, dim(extent[0]), dim(extent[1]), dim(extent[2])))
 }
 
@@ -554,8 +555,9 @@ fn solid_from_aabbs(
 ) -> Vec<bool> {
     let idx = |x: usize, y: usize, z: usize| (z * ny + y) * nx + x;
     let mut solid = vec![false; nx * ny * nz];
-    let to_vx =
-        |v: f32, origin: f32, hi: usize| (floor((v - origin) / vs).max(0.0) as usize).min(hi);
+    let to_vx = |v: f32, origin: f32, hi: usize| {
+        usize::saturating_from(floor((v - origin) / vs).max(0.0)).min(hi)
+    };
     for (mn, mx) in occupancy {
         let x0 = to_vx(mn[0], aabb_min[0], nx - 1);
         let x1 = to_vx(mx[0], aabb_min[0], nx - 1);
@@ -640,8 +642,9 @@ fn solid_from_triangles(
     // that lets the enclosure sweep leak. The margin is far below one voxel, so it never
     // reaches an interior cell.
     let half = [vs * 0.5 + vs * 1e-3; 3];
-    let to_vx =
-        |v: f32, origin: f32, hi: usize| (floor((v - origin) / vs).max(0.0) as usize).min(hi);
+    let to_vx = |v: f32, origin: f32, hi: usize| {
+        usize::saturating_from(floor((v - origin) / vs).max(0.0)).min(hi)
+    };
     for tri in triangles {
         let mut tmn = tri[0];
         let mut tmx = tri[0];
@@ -1014,8 +1017,8 @@ fn seed_grid_probes(
     }
     let dx = aabb_max[0] - aabb_min[0];
     let dz = aabb_max[2] - aabb_min[2];
-    let nx_raw = ceil(dx / AUTO_SEED_CELL_TARGET).max(1.0) as usize;
-    let nz_raw = ceil(dz / AUTO_SEED_CELL_TARGET).max(1.0) as usize;
+    let nx_raw = usize::saturating_from(ceil(dx / AUTO_SEED_CELL_TARGET).max(1.0));
+    let nz_raw = usize::saturating_from(ceil(dz / AUTO_SEED_CELL_TARGET).max(1.0));
     let (nx, nz) = fit_grid(nx_raw, nz_raw, budget);
 
     let y_eye = probe_eye_point(aabb_min, aabb_max)[1];

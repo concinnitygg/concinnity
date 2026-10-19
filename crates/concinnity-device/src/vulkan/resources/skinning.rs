@@ -7,6 +7,7 @@ use ash::vk;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::SkinnedVertex;
 use concinnity_core::gfx::render_types::{MAX_JOINTS, SkinnedDrawObject, SkinnedIndex};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::{geometry_repack, rt_geom};
 use concinnity_core::transform::IDENTITY;
@@ -154,7 +155,7 @@ impl VkContext {
             vertex_base,
             vertices.len(),
             indices,
-            self.skinned.vertex_buffer_bytes as usize,
+            usize::saturating_from(self.skinned.vertex_buffer_bytes),
         )?;
 
         self.wait_idle();
@@ -222,7 +223,7 @@ impl VkContext {
                 )?;
                 let buf = pooled.buffer();
                 self.write_geometry_region(buf, 0, bytes)?;
-                let count = data.target_count() as u32;
+                let count = u32::saturating_from(data.target_count());
                 delta_unique.push(pooled);
                 by_source.insert(key, (buf, count));
                 (buf, count)
@@ -247,7 +248,7 @@ impl VkContext {
                         vk::MemoryPropertyFlags::HOST_VISIBLE
                             | vk::MemoryPropertyFlags::HOST_COHERENT,
                     )?;
-                    buf.zero_bytes(0, size as usize);
+                    buf.zero_bytes(0, usize::saturating_from(size));
                     bufs.push(buf);
                 }
                 weight_buffers.push(bufs);

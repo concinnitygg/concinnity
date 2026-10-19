@@ -94,6 +94,7 @@ impl HorizonOccluder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::narrow_f32;
 
     const R: f64 = 50_000.0;
     const CENTER: DVec3 = [0.0, -R, 0.0];
@@ -177,8 +178,8 @@ mod tests {
     fn a_box_is_hidden_as_its_bounding_sphere() {
         let eye = standing(2.0);
         let c = round(0.5, 0.0);
-        let lo = c.map(|v| (v - 3.0) as f32);
-        let hi = c.map(|v| (v + 3.0) as f32);
+        let lo = c.map(|v| narrow_f32(v - 3.0));
+        let hi = c.map(|v| narrow_f32(v + 3.0));
         assert!(eye.hides_box(lo, hi));
         assert!(!eye.hides_box([-1.0, 0.0, -21.0], [1.0, 2.0, -19.0]));
     }

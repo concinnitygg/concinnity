@@ -11,6 +11,7 @@
 // 3. Add a branch to the match in compile_mesh_payload().
 
 mod extrude;
+mod json_args;
 mod primitives;
 mod room;
 
@@ -19,6 +20,8 @@ use concinnity_core::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, 
 use concinnity_core::geometry::{PaletteSlot, Vert, build_voxel_mesh, compute_tangents};
 use concinnity_core::gfx::{lod, mesh_payload};
 use concinnity_core::math::vec3::{vec3_add, vec3_face_normal, vec3_normalize};
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use json_args::{f32_arg, u32_arg};
 
 // Raw inline vertex form: position, color, uv (inline input, before normals
 // are derived).
@@ -48,18 +51,9 @@ pub(crate) fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
         // The `water_grid` generator stays in the runtime crate (the GPU
         // backends call it directly), so reach it there for the compile branch.
         "water_grid" => {
-            let half_width = args
-                .get("half_width")
-                .and_then(serde_json::Value::as_f64)
-                .unwrap_or(10.0) as f32;
-            let half_depth = args
-                .get("half_depth")
-                .and_then(serde_json::Value::as_f64)
-                .unwrap_or(10.0) as f32;
-            let subdivisions = args
-                .get("subdivisions")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(64) as u32;
+            let half_width = f32_arg(args, "half_width", 10.0);
+            let half_depth = f32_arg(args, "half_depth", 10.0);
+            let subdivisions = u32_arg(args, "subdivisions", 64)?;
             concinnity_core::geometry::water_grid::build_water_grid(
                 half_width,
                 half_depth,
@@ -85,16 +79,13 @@ fn finish_mesh_payload(
     indices: Vec<u16>,
     args: &serde_json::Value,
 ) -> Result<Vec<u8>, String> {
-    let lod_levels = args
-        .get("lod_levels")
-        .and_then(serde_json::Value::as_u64)
-        .map_or(1, |v| v as u32);
+    let lod_levels = u32_arg(args, "lod_levels", 1)?;
     let lod_distances: Vec<f32> = args
         .get("lod_distances")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|x| x.as_f64().map(|n| n as f32))
+                .filter_map(|x| x.as_f64().map(narrow_f32))
                 .collect()
         })
         .unwrap_or_default();
@@ -198,10 +189,10 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
                 color: *color,
                 uv: *uv,
                 joints: [
-                    v.joints[0] as u16,
-                    v.joints[1] as u16,
-                    v.joints[2] as u16,
-                    v.joints[3] as u16,
+                    u16::saturating_from(v.joints[0]),
+                    u16::saturating_from(v.joints[1]),
+                    u16::saturating_from(v.joints[2]),
+                    u16::saturating_from(v.joints[3]),
                 ],
                 weights,
             }
@@ -283,10 +274,7 @@ where
     F: FnMut(&str) -> Option<serde_json::Value>,
 {
     let dim = parse_u32x3(args.get("dim"), "dim")?;
-    let block_size = args
-        .get("block_size")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(1.0) as f32;
+    let block_size = f32_arg(args, "block_size", 1.0);
     let palette_names: Vec<String> = args
         .get("palette")
         .and_then(|v| v.as_array())
@@ -306,7 +294,7 @@ where
         .enumerate()
         .map(|(i, v)| {
             v.as_u64()
-                .map(|x| x as u32)
+                .and_then(|x| u32::try_from(x).ok())
                 .ok_or_else(|| format!("VoxelChunk: blocks[{i}] must be a non-negative integer"))
         })
         .collect::<Result<_, _>>()?;
@@ -342,7 +330,7 @@ fn resolve_block_type(bt_args: &serde_json::Value) -> Option<PaletteSlot> {
                 }
                 let mut out = [0.0f32; 4];
                 for (i, e) in out.iter_mut().enumerate() {
-                    *e = a[i].as_f64()? as f32;
+                    *e = narrow_f32(a[i].as_f64()?);
                 }
                 Some(out)
             })
@@ -365,7 +353,7 @@ fn parse_u32x3(v: Option<&serde_json::Value>, label: &str) -> Result<[u32; 3], S
     let f = |i: usize| -> Result<u32, String> {
         arr[i]
             .as_u64()
-            .map(|x| x as u32)
+            .and_then(|x| u32::try_from(x).ok())
             .ok_or_else(|| format!("{label}[{i}] must be a non-negative integer"))
     };
     Ok([f(0)?, f(1)?, f(2)?])
@@ -383,23 +371,14 @@ pub(crate) fn compile_room_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
         .and_then(|v| v.as_array())
         .filter(|a| a.len() >= 3)
     {
-        let w = size[0].as_f64().unwrap_or(16.0) as f32;
-        let d = size[1].as_f64().unwrap_or(20.0) as f32;
-        let h = size[2].as_f64().unwrap_or(3.5) as f32;
+        let w = narrow_f32(size[0].as_f64().unwrap_or(16.0));
+        let d = narrow_f32(size[1].as_f64().unwrap_or(20.0));
+        let h = narrow_f32(size[2].as_f64().unwrap_or(3.5));
         (w / 2.0, d / 2.0, h)
     } else {
-        let hw = args
-            .get("half_width")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(8.0) as f32;
-        let hd = args
-            .get("half_depth")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(10.0) as f32;
-        let ch = args
-            .get("ceiling_height")
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(3.5) as f32;
+        let hw = f32_arg(args, "half_width", 8.0);
+        let hd = f32_arg(args, "half_depth", 10.0);
+        let ch = f32_arg(args, "ceiling_height", 3.5);
         (hw, hd, ch)
     };
 
@@ -436,8 +415,8 @@ fn build_inline(args: &serde_json::Value) -> Result<(Vec<Vert>, Vec<u16>), Strin
         .enumerate()
         .map(|(i, v)| {
             v.as_u64()
-                .map(|x| x as u16)
-                .ok_or_else(|| format!("index[{i}] must be an integer"))
+                .and_then(|x| u16::try_from(x).ok())
+                .ok_or_else(|| format!("index[{i}] must be a u16 index"))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -476,7 +455,7 @@ pub(super) fn parse_f32x3(v: Option<&serde_json::Value>, label: &str) -> Result<
     let f = |i: usize| -> Result<f32, String> {
         arr[i]
             .as_f64()
-            .map(|x| x as f32)
+            .map(narrow_f32)
             .ok_or_else(|| format!("{label}[{i}] must be a number"))
     };
     Ok([f(0)?, f(1)?, f(2)?])
@@ -492,7 +471,7 @@ fn parse_f32x2(v: Option<&serde_json::Value>, label: &str) -> Result<[f32; 2], S
     let f = |i: usize| -> Result<f32, String> {
         arr[i]
             .as_f64()
-            .map(|x| x as f32)
+            .map(narrow_f32)
             .ok_or_else(|| format!("{label}[{i}] must be a number"))
     };
     Ok([f(0)?, f(1)?])
@@ -996,9 +975,9 @@ mod tests {
         let mut indices: Vec<u16> = Vec::new();
         for z in 0..n - 1 {
             for x in 0..n - 1 {
-                let a = (z * n + x) as u16;
+                let a = u16::saturating_from(z * n + x);
                 let b = a + 1;
-                let c = a + n as u16;
+                let c = a + u16::saturating_from(n);
                 let d = c + 1;
                 indices.extend_from_slice(&[a, b, d, d, c, a]);
             }
@@ -1098,13 +1077,13 @@ mod tests {
         let mut indices: Vec<u16> = Vec::new();
         for z in 0..n - 1 {
             for x in 0..n - 1 {
-                let a = (z * n + x) as u16;
+                let a = u16::saturating_from(z * n + x);
                 indices.extend_from_slice(&[
                     a,
                     a + 1,
-                    a + 1 + n as u16,
-                    a + 1 + n as u16,
-                    a + n as u16,
+                    a + 1 + u16::saturating_from(n),
+                    a + 1 + u16::saturating_from(n),
+                    a + u16::saturating_from(n),
                     a,
                 ]);
             }

@@ -35,6 +35,7 @@ use concinnity::components::{
 };
 use concinnity::cook::WorldBuilder;
 use concinnity::math::dvec3::{self, DVec3};
+use concinnity_core::math::narrow_f32;
 
 use flight::PHASES;
 use path::Path;
@@ -97,7 +98,7 @@ pub(crate) fn declare(builder: &mut WorldBuilder, world: &str) -> Result<(), Str
                 .iter()
                 .map(|phase| BenchmarkPhase {
                     name: phase.name.to_string(),
-                    seconds: phase.seconds as f32,
+                    seconds: narrow_f32(phase.seconds),
                 })
                 .collect(),
             captures: CAPTURES

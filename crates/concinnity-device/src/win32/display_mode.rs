@@ -9,6 +9,7 @@
 //! Outside fullscreen the choice is only remembered. Mirrors
 //! `metal/display_mode.rs`.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::window::display_mode::{DisplayMode, best_native_index};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{
@@ -27,7 +28,7 @@ fn device_name(hwnd: HWND) -> Option<[u16; 32]> {
     let mut info = MONITORINFOEXW::default();
     // GetMonitorInfoW fills the extended struct (device name included) when
     // cbSize says the buffer is the EXW size; the two structs share a prefix.
-    info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
+    info.monitorInfo.cbSize = u32::saturating_from(size_of::<MONITORINFOEXW>());
     // SAFETY: `mon` comes from the query above, and `info` is a live local whose `cbSize` was set
     // to the extended size the call fills.
     unsafe { GetMonitorInfoW(mon, &raw mut info.monitorInfo) }
@@ -39,7 +40,7 @@ fn device_name(hwnd: HWND) -> Option<[u16; 32]> {
 // the monitor is running), or None past the end of the mode list.
 fn enum_mode(device: &[u16; 32], index: ENUM_DISPLAY_SETTINGS_MODE) -> Option<DEVMODEW> {
     let mut dm = DEVMODEW {
-        dmSize: size_of::<DEVMODEW>() as u16,
+        dmSize: u16::saturating_from(size_of::<DEVMODEW>()),
         ..Default::default()
     };
     // SAFETY: `device` is the OS-written, NUL-terminated device name held by the caller, and `dm`

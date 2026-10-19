@@ -22,6 +22,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types;
+use concinnity_core::math::SaturatingFrom;
 
 use super::super::context::VkContext;
 use crate::vulkan::depth;
@@ -112,7 +113,7 @@ impl VkContext {
                     frame_idx,
                     ShadowView {
                         uniforms_set: self.descriptors.shadow_global_sets[frame_idx],
-                        vp_index: cascade_idx as u32,
+                        vp_index: u32::saturating_from(cascade_idx),
                         indirect: indirect.buffer(),
                     },
                 );
@@ -205,8 +206,8 @@ impl VkContext {
         ) else {
             return;
         };
-        let stride = size_of::<vk::DrawIndexedIndirectCommand>() as u32;
-        let prefix = self.state.draw.skinned_record_base() as u32;
+        let stride = u32::saturating_from(size_of::<vk::DrawIndexedIndirectCommand>());
+        let prefix = u32::saturating_from(self.state.draw.skinned_record_base());
 
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
@@ -261,7 +262,7 @@ impl VkContext {
                     cmd,
                     view.indirect,
                     (self.state.draw.skinned_record_base() * stride as usize) as u64,
-                    self.state.draw.n_skinned as u32,
+                    u32::saturating_from(self.state.draw.n_skinned),
                     stride,
                 );
                 self.inc_draw_calls(1);

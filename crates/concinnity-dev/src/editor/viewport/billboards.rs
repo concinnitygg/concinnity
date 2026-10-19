@@ -17,6 +17,7 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::Sprite;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 
 use crate::editor::hud_ids::{Family, family_base, hud_ids};
 use crate::editor::outlines::shapes::{BOX_EDGES, EDGES};
@@ -101,7 +102,7 @@ pub(crate) fn vec3(
     }
     let mut out = [0.0f32; 3];
     for (o, v) in out.iter_mut().zip(a) {
-        *o = v.as_f64()? as f32;
+        *o = narrow_f32(v.as_f64()?);
     }
     Some(out)
 }
@@ -143,7 +144,7 @@ pub(crate) fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     let c = v * s;
     let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
     let m = v - c;
-    let (r, g, b) = match (h / 60.0) as u32 {
+    let (r, g, b) = match u32::saturating_from(h / 60.0) {
         0 => (c, x, 0.0),
         1 => (x, c, 0.0),
         2 => (0.0, c, x),

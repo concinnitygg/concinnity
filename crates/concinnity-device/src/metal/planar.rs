@@ -26,6 +26,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use super::error::allocation_failed;
+use concinnity_core::math::narrow_f32;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::planar_reflection::{
     self, MirrorFrame, MirrorView, PLANAR_CROP_MARGIN, PlanarReflectors,
@@ -304,7 +305,7 @@ impl MtlContext {
                     resolve_slice: 0,
                 },
                 MainPassCamera {
-                    elapsed: params.elapsed as f32,
+                    elapsed: narrow_f32(params.elapsed),
                     vp: m.view_proj,
                     view: m.view,
                     cam_pos: m.eye,

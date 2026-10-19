@@ -18,6 +18,7 @@
 //! shared vertex buffer.
 
 use ash::vk;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::planet::Rebase;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::grass::bend::GRASS_BEND_WORDS;
@@ -467,7 +468,7 @@ impl GrassResources {
             })
             .collect::<RenderResult<Vec<_>>>()?;
 
-        let n = frames as u32;
+        let n = u32::saturating_from(frames);
         let sizes = PoolSizes::default()
             .sets(&draw_set_bindings(), 2 * n)
             .sets(&kernel_set_bindings(), 2 * n)
@@ -1055,7 +1056,7 @@ impl VkContext {
                 device.cmd_draw_indirect(cmd, grass.args.buffer(), offset, 1, 0);
             }
         }
-        self.inc_draw_calls(GRASS_REGION_COUNT as u32);
+        self.inc_draw_calls(u32::saturating_from(GRASS_REGION_COUNT));
     }
 
     // `record` bracketed by `pass`'s timestamps inside the enclosing pass.

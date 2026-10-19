@@ -10,6 +10,7 @@
 
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::SaturatingFrom;
 
 use super::graph::{Card, CardKind, Chart};
 use super::panel::CHAR_W;
@@ -143,6 +144,11 @@ const LABEL_CHAR_W: f32 = 10.0;
 // The longest label the gap holds. A longer one is drawn clipped, so what the
 // overview puts on a wire is checked against this (`behavior/relations.rs`)
 // rather than guessed.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a character count from small positive layout constants"
+)]
 pub(crate) const LABEL_CHARS: usize = (LABEL_RUN / LABEL_CHAR_W) as usize;
 const INDICATOR_H: f32 = 4.0;
 
@@ -355,7 +361,7 @@ fn layout_cards(
         // height, so a half-scrolled card truncates cleanly instead of drawing
         // its label over the panel chrome.
         let readable = part[0] <= rect[0] + 0.5 && part[3] >= CARD_H - 0.5;
-        let budget = ((part[2] - CARD_PAD * 2.0) / CHAR_W).max(0.0) as usize;
+        let budget = usize::saturating_from(((part[2] - CARD_PAD * 2.0) / CHAR_W).max(0.0));
         if !readable || budget < 4 {
             widget::set_label_visible(world, view.ids.card_title(slot), false);
             widget::set_label_visible(world, view.ids.card_detail(slot), false);

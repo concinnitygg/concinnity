@@ -4,6 +4,7 @@
 use concinnity_core::gfx::render_types::{
     self, NUM_SHADOW_CASCADES, ShadowUniforms, SpotShadowData,
 };
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend_init::ShadowParams;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::{csm, spot_shadow};
@@ -36,8 +37,10 @@ pub(super) fn build_shadow(
     // shadows). The casters draw through the GPU-driven shadow pipeline the
     // cull builds.
     let effective_shadow_size = shadows.map_size;
-    let extent =
-        render_types::shadow_array_extent(effective_shadow_size, NUM_SHADOW_CASCADES as u32);
+    let extent = render_types::shadow_array_extent(
+        effective_shadow_size,
+        u32::saturating_from(NUM_SHADOW_CASCADES),
+    );
     let (shadow_resource_opt, shadow_dsvs, shadow_srv_gpu) = if effective_shadow_size > 0 {
         let (sm, dsvs) = create_shadow_map_array(
             &hw.device,
@@ -92,7 +95,7 @@ pub(in crate::directx) fn write_spot_uniforms(
         unsafe {
             std::ptr::copy_nonoverlapping(
                 (&raw const u).cast::<u8>(),
-                ptr.cast::<u8>().add(i * stride as usize),
+                ptr.cast::<u8>().add(i * usize::saturating_from(stride)),
                 size_of::<ShadowUniforms>(),
             );
         }
@@ -131,7 +134,7 @@ pub(super) fn build_spot_shadow(
         let (sm, dsvs) = create_shadow_map_array(
             &hw.device,
             spot_shadow_slice_size,
-            spot_shadows.len() as u32,
+            u32::saturating_from(spot_shadows.len()),
             heaps::cpu_handle(
                 &targets.depth.heap,
                 dsv_descriptor_size,

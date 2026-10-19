@@ -7,6 +7,7 @@
 //! the background sits low enough that the map lights a scene only as a cold
 //! fill.
 
+use crate::math::SaturatingFrom;
 use crate::math::vec3::dot;
 use alloc::vec::Vec;
 use core::f32::consts::PI;
@@ -118,17 +119,17 @@ fn star_color(seed: u32) -> [f32; 3] {
 // Draw one star's gaussian core. The box it covers is wider in texels the
 // closer it sits to a pole, since a row of texels there spans less sky.
 fn splat(pixels: &mut [[f32; 3]], dir: [f32; 3], color: [f32; 3], u: f32, v: f32, sin_theta: f32) {
-    let half_y = (STAR_REACH / PI * HEIGHT as f32) as i32 + 1;
+    let half_y = i32::saturating_from(STAR_REACH / PI * HEIGHT as f32) + 1;
     let spread = STAR_REACH / (2.0 * PI * sin_theta.max(1e-4)) * WIDTH as f32;
-    let half_x = spread.min(WIDTH as f32 * 0.5) as i32 + 1;
-    let center_x = floor(u * WIDTH as f32 - 0.5) as i32;
-    let center_y = floor(v * HEIGHT as f32 - 0.5) as i32;
+    let half_x = i32::saturating_from(spread.min(WIDTH as f32 * 0.5)) + 1;
+    let center_x = i32::saturating_from(floor(u * WIDTH as f32 - 0.5));
+    let center_y = i32::saturating_from(floor(v * HEIGHT as f32 - 0.5));
     let inv_sigma2 = 1.0 / (2.0 * STAR_SIGMA * STAR_SIGMA);
     for row in (center_y - half_y)..=(center_y + half_y) {
-        if row < 0 || row >= HEIGHT as i32 {
+        if row < 0 || row >= i32::saturating_from(HEIGHT) {
             continue;
         }
-        let (st, ct) = sin_cos(row_theta(row as u32));
+        let (st, ct) = sin_cos(row_theta(u32::saturating_from(row)));
         for col in (center_x - half_x)..=(center_x + half_x) {
             let d = direction((col as f32 + 0.5) / WIDTH as f32, st, ct);
             let dot = dot(d, dir);
@@ -136,7 +137,7 @@ fn splat(pixels: &mut [[f32; 3]], dir: [f32; 3], color: [f32; 3], u: f32, v: f32
             if falloff < STAR_CUTOFF {
                 continue;
             }
-            let texel = &mut pixels[(row as u32 * WIDTH + wrap_col(col)) as usize];
+            let texel = &mut pixels[(u32::saturating_from(row) * WIDTH + wrap_col(col)) as usize];
             for k in 0..3 {
                 texel[k] += color[k] * falloff;
             }
@@ -157,7 +158,7 @@ fn direction(u: f32, sin_theta: f32, cos_theta: f32) -> [f32; 3] {
 }
 
 fn wrap_col(col: i32) -> u32 {
-    col.rem_euclid(WIDTH as i32) as u32
+    col.rem_euclid(i32::saturating_from(WIDTH)) as u32
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {

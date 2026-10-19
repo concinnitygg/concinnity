@@ -86,6 +86,7 @@ fn camera_shot_preset(preset: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::narrow_f32;
 
     #[test]
     fn expands_to_camera3d() {
@@ -241,6 +242,6 @@ mod tests {
             serde_json::json!([1.0f32, 2.0f32, 3.0f32])
         );
         assert_eq!(args["yaw"], serde_json::json!(1.5f32));
-        assert_eq!(args["pitch"].as_f64().map(|p| p as f32), Some(-1.3963));
+        assert_eq!(args["pitch"].as_f64().map(narrow_f32), Some(-1.3963));
     }
 }

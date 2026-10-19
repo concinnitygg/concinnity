@@ -2,6 +2,7 @@
 //! dispatch.
 
 use concinnity_core::gfx::render_types::LineVertex;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::profile;
 use concinnity_core::render::error;
 use concinnity_core::render::frame_plan::{
@@ -195,7 +196,7 @@ impl MtlContext {
         // read. Advanced once per built frame; skipped frames (no drawable) bail
         // above without consuming a slot.
         let frame_id = self.frame_ring_index;
-        let ring_slot = (frame_id % self.frames_in_flight as u64) as usize;
+        let ring_slot = usize::saturating_from(frame_id % self.frames_in_flight as u64);
         self.frame_ring_index = frame_id.wrapping_add(1);
 
         // Hand back the pooled ranges whose retire frame has passed and release
@@ -419,7 +420,7 @@ impl MtlContext {
                     // GPUStartTime / GPUEndTime are valid only inside the handler.
                     let span = cb.GPUEndTime() - cb.GPUStartTime();
                     composite_span_us.store(
-                        (span * 1.0e6).clamp(0.0, f64::from(u32::MAX)) as u32,
+                        u32::saturating_from((span * 1.0e6).clamp(0.0, f64::from(u32::MAX))),
                         std::sync::atomic::Ordering::Relaxed,
                     );
                     // Fires on success and on GPU fault alike, so the join can
@@ -458,8 +459,8 @@ impl MtlContext {
             (1, 1)
         } else {
             (
-                draw_size.width.max(1.0) as u32,
-                draw_size.height.max(1.0) as u32,
+                u32::saturating_from(draw_size.width.max(1.0)),
+                u32::saturating_from(draw_size.height.max(1.0)),
             )
         };
         self.resize_targets_if_needed(want_w, want_h)?;

@@ -10,12 +10,12 @@
 //! moves: every resident tile is re-placed in the new frame on the frame it
 //! moves.
 
+use crate::math::{dvec3, narrow_f32};
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 use super::{LoadPool, Mailbox};
 use crate::gfx::render_types::{self, DrawIndex, MaterialUniforms};
-use crate::math::dvec3;
 use crate::planet::{
     DVec3, HORIZON_SHADOW_REACH, Horizon, HorizonOccluder, LocalFrame, MAX_RESIDENT_TILES,
     PlanetFrame, PlanetShape, TileBoundsCache, TileId, TileLod, TileMesh, TileMorphFrame,
@@ -157,7 +157,7 @@ fn morph_frame(
     TileMorphFrame {
         eye: planet.frame.to_local(view.eye),
         prev_eye: planet.frame.to_local(prev_eye),
-        level0_range: lod.range(0, view) as f32,
+        level0_range: narrow_f32(lod.range(0, view)),
         coarsest_level: lod.min_level,
     }
 }
@@ -407,7 +407,7 @@ impl PlanetTiles {
             self.occluder_in = Some(planet.frame);
             let occluder = HorizonOccluder {
                 center: planet.center(),
-                radius: planet.shape.radius as f32,
+                radius: narrow_f32(planet.shape.radius),
             };
             ops.record(move |backend| backend.set_horizon_occluder(Some(occluder)));
         }
@@ -563,6 +563,7 @@ impl PlanetTiles {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
     use crate::planet::{CubeFace, tile_mesh};
     use alloc::vec;
 
@@ -645,7 +646,7 @@ mod tests {
         let tiles: BTreeMap<TileId, Tile> = CubeFace::ALL
             .iter()
             .enumerate()
-            .map(|(i, &f)| (TileId::root(f), resident(i as u32, false)))
+            .map(|(i, &f)| (TileId::root(f), resident(u32::saturating_from(i), false)))
             .collect();
         let p = plan(
             &l,
@@ -673,7 +674,7 @@ mod tests {
         let mut tiles: BTreeMap<TileId, Tile> = CubeFace::ALL
             .iter()
             .enumerate()
-            .map(|(i, &f)| (TileId::root(f), resident(i as u32, true)))
+            .map(|(i, &f)| (TileId::root(f), resident(u32::saturating_from(i), true)))
             .collect();
         // A deep tile on the far side of the planet.
         let far = TileId {
@@ -687,7 +688,7 @@ mod tests {
         tiles.insert(gone, Tile::Pending);
         // Every child of the top face resident, so the top root hides.
         for (i, c) in TileId::root(CubeFace(2)).children().iter().enumerate() {
-            tiles.insert(*c, resident(10 + i as u32, false));
+            tiles.insert(*c, resident(10 + u32::saturating_from(i), false));
         }
         let p = plan(
             &l,
@@ -717,7 +718,7 @@ mod tests {
             .wanted
             .iter()
             .enumerate()
-            .map(|(i, &t)| (t, resident(i as u32, false)))
+            .map(|(i, &t)| (t, resident(u32::saturating_from(i), false)))
             .collect();
         let p = plan(&l, &tiles, &BTreeSet::new(), &view(camera), &mut bounds);
         let horizon = Horizon::new(camera, l.shape.center, l.shape.radius, 0.0).unwrap();

@@ -4,6 +4,7 @@
 //! `#[derive(AssetFields)]` turns them into the field's [`ParamMeta`], the clamp
 //! a load applies, and the comparison a settings diff groups by class.
 
+use crate::math::{SaturatingFrom, narrow_f32};
 use alloc::vec::Vec;
 
 /// When a change to a parameter takes effect.
@@ -148,7 +149,7 @@ macro_rules! param_numbers {
                 param_numbers!(@$convert self)
             }
             fn from_f64(value: f64) -> Self {
-                value as $ty
+                <$ty>::saturating_from(value)
             }
         }
     )*};
@@ -160,8 +161,17 @@ macro_rules! param_numbers {
     };
 }
 
-param_numbers!(lossless: f32, u8, u16, u32, i8, i16, i32);
+param_numbers!(lossless: u8, u16, u32, i8, i16, i32);
 param_numbers!(rounded: u64, usize, i64, isize);
+
+impl ParamNumber for f32 {
+    fn to_f64(self) -> f64 {
+        f64::from(self)
+    }
+    fn from_f64(value: f64) -> Self {
+        narrow_f32(value)
+    }
+}
 
 impl ParamNumber for f64 {
     fn to_f64(self) -> f64 {

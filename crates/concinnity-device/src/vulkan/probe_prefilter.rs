@@ -24,6 +24,7 @@
 //! before, and one making them visible to the fragment reads after install.
 
 use ash::vk;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::reflection_probe::PrefilterPlan;
 use concinnity_core::render::uniforms::ProbePrefilterParams;
@@ -77,7 +78,7 @@ impl<'a> PrefilterTarget<'a> {
             })?;
         Ok(Self {
             image: cubes.image(),
-            cube: index as u32,
+            cube: u32::saturating_from(index),
             mip_views,
         })
     }
@@ -110,7 +111,7 @@ impl ProbePrefilterPipelines {
         let push = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .offset(0)
-            .size(size_of::<ProbePrefilterParams>() as u32);
+            .size(u32::saturating_from(size_of::<ProbePrefilterParams>()));
         let mip_pipeline_layout = create_pipeline_layout(device, mip_set_layout.handle(), push)?;
         let ggx_pipeline_layout = create_pipeline_layout(device, ggx_set_layout.handle(), push)?;
 
@@ -391,7 +392,7 @@ impl super::context::VkContext {
             plan.face_size(),
         );
         for (step, &set) in gpu.downsample_sets.iter().enumerate() {
-            let dst = step as u32 + 1;
+            let dst = u32::saturating_from(step) + 1;
             // Each level reads the one the previous dispatch wrote.
             storage_barrier(&self.hw.device, cmd);
             self.dispatch_prefilter(
@@ -533,7 +534,7 @@ fn create_pipeline_layout(
 // One bake's sets: the mirror-mip copy plus one downsample and one GGX set per
 // destination mip past 0.
 fn create_pool(device: &VkDevice, steps: usize) -> RenderResult<OwnedDescriptorPool> {
-    let steps = steps as u32;
+    let steps = u32::saturating_from(steps);
     let sizes = PoolSizes::default()
         .sets(&mip_set(), 1 + steps)
         .sets(&ggx_set(), steps)

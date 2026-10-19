@@ -45,6 +45,7 @@
 //! every allocation and drop happens on the main thread.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::math::SaturatingFrom;
 use objc2::Message as _;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -278,7 +279,7 @@ impl DeviceAllocator {
             reservation.heap.newBufferWithLength_options_offset(
                 len,
                 key.options(),
-                reservation.placement.offset as usize,
+                usize::saturating_from(reservation.placement.offset),
             )
         };
         if let Some(buffer) = placed {
@@ -327,9 +328,10 @@ impl DeviceAllocator {
         // SAFETY: as `alloc_buffer`, with the size and alignment Metal reported
         // for this descriptor.
         let placed = unsafe {
-            reservation
-                .heap
-                .newTextureWithDescriptor_offset(desc, reservation.placement.offset as usize)
+            reservation.heap.newTextureWithDescriptor_offset(
+                desc,
+                usize::saturating_from(reservation.placement.offset),
+            )
         };
         if let Some(texture) = placed {
             Ok(PooledTexture {
@@ -434,7 +436,7 @@ fn new_heap(
     desc.setStorageMode(key.storage);
     desc.setCpuCacheMode(key.cache);
     desc.setHazardTrackingMode(MTLHazardTrackingMode::Tracked);
-    desc.setSize(size.max(1) as usize);
+    desc.setSize(usize::saturating_from(size.max(1)));
     device
         .newHeapWithDescriptor(&desc)
         .ok_or_else(|| allocation_failed(format_args!("{size}-byte placement heap")))

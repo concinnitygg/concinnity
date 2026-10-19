@@ -15,6 +15,7 @@
 use crate::components::RectAreaLight;
 use crate::geometry::glass_quad::plane_basis;
 use crate::gfx::render_types::{AreaLightData, MAX_AREA_LIGHTS};
+use crate::math::SaturatingFrom;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -22,7 +23,13 @@ use alloc::vec::Vec;
 // or -1 once the table is full. The value is what `GpuLight.data_index` carries.
 pub(crate) fn assign_area_light_slots(rect_lights: &[RectAreaLight]) -> Vec<i32> {
     (0..rect_lights.len())
-        .map(|i| if i < MAX_AREA_LIGHTS { i as i32 } else { -1 })
+        .map(|i| {
+            if i < MAX_AREA_LIGHTS {
+                i32::saturating_from(i)
+            } else {
+                -1
+            }
+        })
         .collect()
 }
 
@@ -34,7 +41,7 @@ pub(crate) fn build_area_light_data(
     let mut out = vec![AreaLightData::ZERO; count_area_lights(slots)];
     for (light, &slot) in rect_lights.iter().zip(slots) {
         if slot >= 0 {
-            out[slot as usize] = area_light_data(light);
+            out[usize::saturating_from(slot)] = area_light_data(light);
         }
     }
     out

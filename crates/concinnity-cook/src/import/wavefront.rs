@@ -7,6 +7,7 @@
 // Polygons with more than 3 vertices are triangulated with a fan.
 
 use concinnity_core::components::VertexData;
+use concinnity_core::math::SaturatingFrom;
 use std::collections::HashMap;
 
 use crate::import::NEUTRAL_COLOR;
@@ -71,13 +72,15 @@ pub(crate) fn parse_obj(content: &str) -> Result<(Vec<VertexData>, Vec<u16>), St
                     let vi = if let Some(&i) = vertex_map.get(&key) {
                         i
                     } else {
-                        if vertices.len() >= u16::MAX as usize {
-                            return Err(format!(
-                                "mesh exceeds {} unique vertices (u16 index limit)",
-                                u16::MAX
-                            ));
-                        }
-                        let i = vertices.len() as u16;
+                        let i = u16::try_from(vertices.len())
+                            .ok()
+                            .filter(|&i| i < u16::MAX)
+                            .ok_or_else(|| {
+                                format!(
+                                    "mesh exceeds {} unique vertices (u16 index limit)",
+                                    u16::MAX
+                                )
+                            })?;
                         let uv = if key.1 == NO_UV {
                             [0.0, 0.0]
                         } else {
@@ -155,9 +158,9 @@ fn resolve_index(raw: i32, len: usize, line_idx: usize, kind: &str) -> Result<u3
         ));
     }
     let idx = if raw > 0 {
-        (raw - 1) as usize
+        usize::saturating_from(raw.unsigned_abs() - 1)
     } else {
-        let abs = (-raw) as usize;
+        let abs = usize::saturating_from(raw.unsigned_abs());
         if abs > len {
             return Err(format!(
                 "line {}: {} index {} out of range ({} {}s defined so far)",
@@ -180,7 +183,7 @@ fn resolve_index(raw: i32, len: usize, line_idx: usize, kind: &str) -> Result<u3
             kind
         ));
     }
-    Ok(idx as u32)
+    Ok(u32::saturating_from(idx))
 }
 
 fn parse_f32(token: Option<&str>, line_idx: usize, field: &str) -> Result<f32, String> {
@@ -197,6 +200,14 @@ mod tests {
 
     fn triangle_obj() -> &'static str {
         "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3"
+    }
+
+    #[test]
+    fn the_most_negative_index_is_out_of_range_rather_than_an_overflow() {
+        let err = resolve_index(i32::MIN, 3, 0, "position").unwrap_err();
+        assert!(err.contains("out of range"), "{err}");
+        assert_eq!(resolve_index(-1, 3, 0, "position"), Ok(2));
+        assert_eq!(resolve_index(3, 3, 0, "position"), Ok(2));
     }
 
     #[test]

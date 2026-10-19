@@ -8,6 +8,7 @@
 // only) for command recording on worker threads. `flush` materializes reserved
 // ids into the metadata table before they are looked up.
 
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 use core::num::NonZeroU32;
@@ -49,6 +50,10 @@ impl Entity {
     /// Inverse of `to_bits`. Returns `None` when the generation half is zero,
     /// which no live handle ever has, so a zeroed or truncated value is rejected
     /// instead of forged into a valid-looking entity.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the low 32 bits hold the generation"
+    )]
     pub fn from_bits(bits: u64) -> Option<Self> {
         let generation = NonZeroU32::new(bits as u32)?;
         Some(Self {
@@ -171,7 +176,7 @@ impl Entities {
     // despawned (the free-list tracks the despawned ones), so a newly
     // materialized slot starts alive at the first generation.
     fn grow_to(&mut self, index: u32) {
-        while self.meta.len() as u32 <= index {
+        while u32::saturating_from(self.meta.len()) <= index {
             self.meta.push(EntityMeta {
                 generation: FIRST_GEN,
                 alive: true,

@@ -14,6 +14,7 @@
 //! contaminates motion. Mirrors src/metal/post/gbuffer.rs.
 
 use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::uniforms::ModelHistoryParams;
@@ -539,8 +540,8 @@ impl DxContext {
             let scissor = RECT {
                 left: 0,
                 top: 0,
-                right: w as i32,
-                bottom: h as i32,
+                right: i32::saturating_from(w),
+                bottom: i32::saturating_from(h),
             };
             cmd.RSSetScissorRects(&[scissor]);
             cmd.IASetPrimitiveTopology(
@@ -596,7 +597,7 @@ impl DxContext {
             frame_idx..frame_idx + 1
         };
         let params = ModelHistoryParams {
-            record_count: records as u32,
+            record_count: u32::saturating_from(records),
             _pad: [0; 3],
         };
         let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
@@ -610,7 +611,11 @@ impl DxContext {
             for slot in slots {
                 let history = &self.cull.prev_model_buffers[slot];
                 cmd.SetComputeRootUnorderedAccessView(2, com::gpu_va(history));
-                cmd.Dispatch((records as u32).div_ceil(MODEL_HISTORY_THREADGROUP), 1, 1);
+                cmd.Dispatch(
+                    u32::saturating_from(records).div_ceil(MODEL_HISTORY_THREADGROUP),
+                    1,
+                    1,
+                );
                 // A UAV barrier, not a transition: a buffer lives in COMMON and
                 // is promoted implicitly at each use, so this only has to order
                 // the write against the next frame's read of the same slot.
@@ -709,7 +714,7 @@ impl DxContext {
                 cmd.SetPipelineState(pso);
                 cmd.ExecuteIndirect(
                     cmd_sig,
-                    prefix as u32,
+                    u32::saturating_from(prefix),
                     indirect,
                     0,
                     None::<&ID3D12Resource>,
@@ -726,7 +731,7 @@ impl DxContext {
             cmd,
             cmd_sig,
             indirect,
-            prefix as u32,
+            u32::saturating_from(prefix),
         ));
 
         // Skinned tail: bind the current deformed VB (slot 0) + the previous-frame
@@ -772,7 +777,7 @@ impl DxContext {
                 cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view));
                 cmd.ExecuteIndirect(
                     cmd_sig,
-                    self.state.draw.n_skinned as u32,
+                    u32::saturating_from(self.state.draw.n_skinned),
                     indirect,
                     (prefix * stride) as u64,
                     None::<&ID3D12Resource>,

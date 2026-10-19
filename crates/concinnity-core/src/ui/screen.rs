@@ -2,6 +2,7 @@
 // one's policies are. Pure bookkeeping: UiInputSystem owns applying the
 // resulting element-visibility and focus changes to the world.
 
+use crate::math::SaturatingFrom;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -135,7 +136,7 @@ impl ScreenRegistry {
                     .known
                     .get(id)
                     .map_or(0, |m| m.layer.clamp(-LAYER_MAX, LAYER_MAX));
-                (*id, band * LAYER_BAND + (i as i32) + 1)
+                (*id, band * LAYER_BAND + i32::saturating_from(i) + 1)
             })
             .collect()
     }

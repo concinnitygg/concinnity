@@ -11,6 +11,7 @@ use crate::components::{
     ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight, Terrain,
     VolumetricFog, VoxelChunk, WaterShape, WaterSurface, WaterWave, Wind,
 };
+use crate::math::SaturatingFrom;
 use crate::math::sqrt;
 use crate::math::vec3::length;
 
@@ -319,7 +320,7 @@ pub fn night_sky(mut args: NightSky) -> NightSky {
     args.milky_way_core_deg = finite_or(args.milky_way_core_deg, 0.0);
     args.galaxies = args
         .galaxies
-        .min(crate::render::night_sky::MAX_GALAXIES as u32);
+        .min(u32::saturating_from(crate::render::night_sky::MAX_GALAXIES));
     args.moon_start_deg = finite_or(args.moon_start_deg, defaults.moon_start_deg);
     args.moon_period_days = finite_at_least(args.moon_period_days, 0.0, 0.0);
     args.moon_inclination_deg = finite_or(args.moon_inclination_deg, 0.0).clamp(-90.0, 90.0);

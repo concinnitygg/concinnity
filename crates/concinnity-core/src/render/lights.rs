@@ -11,6 +11,7 @@ use crate::gfx::render_types::{
     LIGHT_KIND_SPOT, LightUniforms, MAX_DIRECTIONAL_LIGHTS, MAX_LOCAL_LIGHTS, MAX_POINT_LIGHTS,
     PointLightData, SpotShadowData,
 };
+use crate::math::SaturatingFrom;
 use crate::math::vec3::{length, scale};
 use crate::render::{area_light, spot_shadow};
 use alloc::vec::Vec;
@@ -178,7 +179,10 @@ pub fn directional_light_data(
             _pad: 0.0,
         };
     }
-    (directional, lights.len().min(MAX_DIRECTIONAL_LIGHTS) as i32)
+    (
+        directional,
+        i32::saturating_from(lights.len().min(MAX_DIRECTIONAL_LIGHTS)),
+    )
 }
 
 /// The direction the cascade shadow projection and the fog ray-march follow:
@@ -269,9 +273,9 @@ pub fn build_light_uniforms(
         directional,
         point,
         num_directional,
-        num_point: num_point as i32,
+        num_point: i32::saturating_from(num_point),
         ambient_intensity,
-        num_local_lights: local_lights.len() as i32,
+        num_local_lights: i32::saturating_from(local_lights.len()),
     }
 }
 
@@ -380,7 +384,7 @@ mod tests {
             .map(|i| dir([0.0, 1.0, 0.0], [1.0; 3], i as f32))
             .collect();
         let (packed, count) = directional_light_data(&many);
-        assert_eq!(count, MAX_DIRECTIONAL_LIGHTS as i32);
+        assert_eq!(count, i32::saturating_from(MAX_DIRECTIONAL_LIGHTS));
         assert_eq!(packed.len(), MAX_DIRECTIONAL_LIGHTS);
     }
 
@@ -433,7 +437,10 @@ mod tests {
             .map(|i| dir([i as f32, 0.0, 0.0], [1.0; 3], 1.0))
             .collect();
         let u = uniforms(lights, vec![]);
-        assert_eq!(u.num_directional, MAX_DIRECTIONAL_LIGHTS as i32);
+        assert_eq!(
+            u.num_directional,
+            i32::saturating_from(MAX_DIRECTIONAL_LIGHTS)
+        );
     }
 
     #[test]
@@ -444,8 +451,11 @@ mod tests {
             .map(|i| pt([i as f32, 0.0, 0.0], [1.0; 3], 1.0, 5.0))
             .collect();
         let u = uniforms(vec![], lights);
-        assert_eq!(u.num_point, MAX_POINT_LIGHTS as i32);
-        assert_eq!(u.num_local_lights, (MAX_POINT_LIGHTS + 2) as i32);
+        assert_eq!(u.num_point, i32::saturating_from(MAX_POINT_LIGHTS));
+        assert_eq!(
+            u.num_local_lights,
+            i32::saturating_from(MAX_POINT_LIGHTS + 2)
+        );
     }
 
     // Spot lights live only in the local buffer, so a spot-only scene still has
@@ -543,7 +553,7 @@ mod tests {
         assert_eq!(data.spot_shadows.len(), 2);
         for l in &data.lights {
             assert!(
-                l.shadow_index < data.spot_shadows.len() as i32,
+                l.shadow_index < i32::saturating_from(data.spot_shadows.len()),
                 "shadow_index stays in bounds of spot_shadows"
             );
         }
@@ -604,7 +614,7 @@ mod tests {
         assert_eq!(data.lights[1].data_index, -1);
         assert_eq!(data.lights[1].shadow_index, 0);
         for l in &data.lights {
-            assert!(l.data_index < data.area_lights.len() as i32);
+            assert!(l.data_index < i32::saturating_from(data.area_lights.len()));
         }
     }
 

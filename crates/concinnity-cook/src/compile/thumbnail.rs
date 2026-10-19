@@ -15,6 +15,7 @@ use concinnity_core::bake::texture::{TextureFormat, downscale_rgba};
 use concinnity_core::blob::{BlobAssetDef, PayloadLocator, ResourceKind, ResourceRecord};
 use concinnity_core::components::{Material, Model};
 use concinnity_core::gfx::raster;
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
@@ -70,7 +71,7 @@ fn candidates(result: &PipelineResult) -> u32 {
             .filter(|d| d.discriminant == disc)
             .count()
     });
-    (resources + models) as u32
+    u32::saturating_from(resources + models)
 }
 
 // Render every previewable asset, asking `held` whether the segment already
@@ -355,7 +356,7 @@ fn envmap_preview(payload: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
             let v = f32::from_le_bytes(texel[c * 4..c * 4 + 4].try_into().ok()?);
             // Reinhard + gamma, clamped: an HDR sky stays readable.
             let mapped = (v.max(0.0) / (1.0 + v.max(0.0))).powf(1.0 / 2.2);
-            rgba.push((mapped * 255.0) as u8);
+            rgba.push(u8::saturating_from(mapped * 255.0));
         }
         rgba.push(255);
     }
@@ -379,9 +380,9 @@ fn average_color(rgba: &[u8]) -> [f32; 3] {
         return [0.8, 0.8, 0.8];
     }
     [
-        (acc[0] / n as f64 / 255.0) as f32,
-        (acc[1] / n as f64 / 255.0) as f32,
-        (acc[2] / n as f64 / 255.0) as f32,
+        narrow_f32(acc[0] / n as f64 / 255.0),
+        narrow_f32(acc[1] / n as f64 / 255.0),
+        narrow_f32(acc[2] / n as f64 / 255.0),
     ]
 }
 

@@ -1,4 +1,5 @@
 use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
+use concinnity_core::math::SaturatingFrom;
 
 use super::media::MediaAssets;
 use super::names::StoryNames;
@@ -31,11 +32,13 @@ pub(super) fn compile_nodes(
     image_dims: ImageDims<'_>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let node_index = |slug: &str| -> u32 {
-        story
-            .nodes
-            .iter()
-            .position(|n| n.slug == slug)
-            .expect("targets validated against node slugs") as u32
+        u32::saturating_from(
+            story
+                .nodes
+                .iter()
+                .position(|n| n.slug == slug)
+                .expect("targets validated against node slugs"),
+        )
     };
     let mut nodes_json = Vec::new();
     for node in &story.nodes {

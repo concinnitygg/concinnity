@@ -16,6 +16,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::FALLBACK_TEXTURE_COUNT;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::uniforms::BINDLESS_POOL_SIZE;
 
 // One descriptor binding: (binding index, descriptor type, shader stages).
@@ -169,10 +170,12 @@ pub(in crate::vulkan) fn stage_limits(limits: &vk::PhysicalDeviceLimits) -> Stag
 // binds the set pays.
 fn global_fragment_descriptors() -> StageDescriptors {
     let count = |ty| {
-        global_set()
-            .iter()
-            .filter(|&&(_, t, stage)| t == ty && stage.contains(vk::ShaderStageFlags::FRAGMENT))
-            .count() as u32
+        u32::saturating_from(
+            global_set()
+                .iter()
+                .filter(|&&(_, t, stage)| t == ty && stage.contains(vk::ShaderStageFlags::FRAGMENT))
+                .count(),
+        )
     };
     StageDescriptors {
         samplers: count(vk::DescriptorType::SAMPLER),
@@ -222,7 +225,7 @@ pub(in crate::vulkan) fn bindless_pool_needs_update_after_bind(
 // cannot seat a full pool, and false on every desktop driver, which leaves
 // their device-creation feature chain and descriptor path untouched.
 pub(in crate::vulkan) fn update_after_bind_is_wanted(limits: StageDescriptors) -> bool {
-    bindless_pool_needs_update_after_bind(limits, BINDLESS_POOL_SIZE as u32)
+    bindless_pool_needs_update_after_bind(limits, u32::saturating_from(BINDLESS_POOL_SIZE))
 }
 
 // Shadow global set (set 0 for the shadow pass): ShadowUniforms UBO, vertex-only
@@ -246,7 +249,8 @@ mod tests {
         idx.sort_unstable();
         for (expected, &got) in idx.iter().enumerate() {
             assert_eq!(
-                got, expected as u32,
+                got,
+                u32::saturating_from(expected),
                 "descriptor bindings must be 0..n gap-free and unique, got {idx:?}"
             );
         }

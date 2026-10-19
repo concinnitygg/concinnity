@@ -2,6 +2,8 @@
 //! for: a planet tens of kilometers across placed to the centimeter, or a
 //! path stepped across one. The f32 twins are in [`vec3`](super::vec3).
 
+use crate::math::narrow_f32;
+
 /// A double-precision 3-vector.
 pub type DVec3 = [f64; 3];
 
@@ -56,7 +58,7 @@ pub fn from_f32(v: [f32; 3]) -> DVec3 {
 
 /// A double-precision vector narrowed to f32.
 pub fn to_f32(v: DVec3) -> [f32; 3] {
-    [v[0] as f32, v[1] as f32, v[2] as f32]
+    [narrow_f32(v[0]), narrow_f32(v[1]), narrow_f32(v[2])]
 }
 
 #[cfg(test)]

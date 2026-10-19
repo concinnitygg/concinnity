@@ -115,6 +115,7 @@ pub fn decode(bytes: &[u8], count: usize) -> Result<Vec<u32>, &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
 
     #[test]
     fn tally_counts_every_outcome() {
@@ -134,7 +135,7 @@ mod tests {
         assert_eq!(c.redrawn, 1);
         assert_eq!(c.hiz_culled, 2);
         assert_eq!(c.unknown, 0);
-        assert_eq!(c.total(), raw.len() as u32);
+        assert_eq!(c.total(), u32::saturating_from(raw.len()));
         assert_eq!(c.visible(), 3);
         assert_eq!(c.hiz_rejected(), 3);
     }

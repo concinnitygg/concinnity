@@ -18,7 +18,7 @@
 
 use super::cascades::Cascades;
 use super::{MAX_OCEAN_CASCADES, OCEAN_CHOPPINESS, OceanSea};
-use crate::math::{exp, ln, powf, sqrt};
+use crate::math::{exp, ln, narrow_f32, powf, sqrt};
 use crate::render::water::spectrum::{GRAVITY, SeaShape};
 use core::f32::consts::TAU;
 
@@ -64,7 +64,7 @@ impl FoamClock {
     /// foam from clear water.
     pub fn advance(&mut self, time: f64) -> f32 {
         let keep = match self.last {
-            Some(last) if time >= last => foam_keep((time - last) as f32),
+            Some(last) if time >= last => foam_keep(narrow_f32(time - last)),
             _ => 0.0,
         };
         self.last = Some(time);
@@ -185,6 +185,7 @@ mod tests {
     use super::super::initial::{SpectrumTexel, frequency_index, initial_spectrum};
     use super::super::{OceanQuality, OceanSea};
     use super::*;
+    use crate::math::SaturatingFrom;
     use crate::render::water::ocean::clock::time_fraction;
     use alloc::vec;
     use alloc::vec::Vec;
@@ -339,7 +340,7 @@ mod tests {
             .collect();
         let mut foam = vec![vec![0.0f32; n]; cascades.count()];
         let mut clock = FoamClock::default();
-        let frames = (seconds * 60.0) as usize;
+        let frames = usize::saturating_from(seconds * 60.0);
         let (mut sum, mut counted) = (0.0f64, 0usize);
         for frame in 0..frames {
             let time = 1000.0 + frame as f64 / 60.0;
@@ -360,7 +361,7 @@ mod tests {
                 counted += 1;
             }
         }
-        (sum / counted as f64) as f32
+        narrow_f32(sum / counted as f64)
     }
 
     // The foam the shader's update builds from the cascades' own evolving

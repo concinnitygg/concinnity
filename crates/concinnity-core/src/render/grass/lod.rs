@@ -43,11 +43,11 @@
 //! [`GrassSizing`]): what any of them can keep in each region, inside the cone
 //! of its corners, from any height.
 
+use crate::math::{SaturatingFrom, acos, asin, atan2, ceil, cos, powf, sin, sqrt, tan};
 use alloc::vec::Vec;
 
 use super::nest::GRASS_NEST_LEVELS;
 use super::tiles::{GrassGrid, GroundRect, MAX_GRASS_BLADES};
-use crate::math::{acos, asin, atan2, ceil, cos, powf, sin, sqrt, tan};
 use crate::render::uniforms::grass::MAX_GRASS_TILE_RECORDS;
 
 /// Strip detail levels: full, half and quarter segment counts.
@@ -496,7 +496,7 @@ pub fn tile_capacity(
     if tiles >= u32::MAX as f32 {
         u32::MAX
     } else {
-        margin(tiles as u32)
+        margin(u32::saturating_from(tiles))
     }
 }
 
@@ -570,7 +570,7 @@ fn band_capacity(
     if blades >= MAX_GRASS_BLADES as f32 {
         MAX_GRASS_BLADES
     } else {
-        blades as u32
+        u32::saturating_from(blades)
     }
 }
 
@@ -677,7 +677,7 @@ impl GrassCapacity {
         let cap = u64::from(MAX_GRASS_BLADES);
         let spans = sums.map(|n| {
             let n = if total > cap { n * cap / total } else { n };
-            n.max(1) as u32
+            u32::saturating_from(n.max(1))
         });
         Self { spans }
     }
@@ -1083,7 +1083,7 @@ mod tests {
         let r = 24.0;
         let cap = shadow_capacity(&f, &v, r);
         let cell = grid.cell_size();
-        let n = (r / cell) as i32 + 1;
+        let n = i32::saturating_from(r / cell) + 1;
         for focal in [100.0, 600.0, 1285.0, LONG] {
             let view = GrassLodView::new(focal, HEIGHT);
             let mut kept = 0.0f32;
@@ -1218,7 +1218,9 @@ mod tests {
         let many = GrassSizing::new([3200, 1800], &|v| CapacityBounds {
             layers: alloc::vec![[1000; GRASS_SPAN_COUNT]],
             shadow: 0,
-            tiles: (4.0 * MAX_GRASS_TILE_RECORDS as f32 * (v.focal / full).powi(2)) as u32,
+            tiles: u32::saturating_from(
+                4.0 * MAX_GRASS_TILE_RECORDS as f32 * (v.focal / full).powi(2),
+            ),
             reach: [views_at(v), f32::INFINITY],
         });
         assert!(many.views.focal < 0.5 * full, "{}", many.views.focal);

@@ -68,7 +68,9 @@ pub fn gather_auto_seed_triangles(
             continue;
         }
         for t in all_indices[o.index_offset..iend].chunks_exact(3) {
-            let vi = |k: usize| (i64::from(t[k]) + i64::from(o.base_vertex)) as usize;
+            let vi = |k: usize| {
+                usize::try_from(i64::from(t[k]) + i64::from(o.base_vertex)).unwrap_or(usize::MAX)
+            };
             let (a, b, c) = (vi(0), vi(1), vi(2));
             if a >= all_vertices.len() || b >= all_vertices.len() || c >= all_vertices.len() {
                 continue;

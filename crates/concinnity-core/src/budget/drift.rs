@@ -17,6 +17,7 @@
 //! fragmentation, driver growth and newly mapped assets together; separating
 //! those further is the ledger's job, not this module's.
 
+use crate::math::SaturatingFrom;
 // How far a term must move, as a percentage of the memory budget, before it
 // counts as drift, and how far back it must fall before it stops counting. Any
 // long session jitters by a few megabytes and none of it means anything, and a
@@ -158,7 +159,7 @@ impl DriftTracker {
 // Signed movement from `base` to `now`, saturating rather than wrapping at the
 // extremes a bogus platform reading could produce.
 fn growth(now: u64, base: u64) -> i64 {
-    (i128::from(now) - i128::from(base)).clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+    i64::saturating_from(i128::from(now) - i128::from(base))
 }
 
 // Whether one term counts as drifting, given whether it already did. A term
@@ -173,7 +174,7 @@ fn moved(growth: i64, budget_bytes: u64, was_moved: bool) -> bool {
         SIGNIFICANT_PCT
     };
     let threshold = budget_bytes.saturating_mul(pct) / 100;
-    threshold > 0 && growth > 0 && growth as u64 > threshold
+    threshold > 0 && growth > 0 && u64::saturating_from(growth) > threshold
 }
 
 fn verdict(heap_moved: bool, outside_heap_moved: bool) -> DriftVerdict {
@@ -188,6 +189,7 @@ fn verdict(heap_moved: bool, outside_heap_moved: bool) -> DriftVerdict {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
 
     const MIB: u64 = 1024 * 1024;
     const BUDGET: u64 = 1000 * MIB;
@@ -220,7 +222,7 @@ mod tests {
             .expect("the baseline is captured");
         assert_eq!(d.verdict, DriftVerdict::OutsideHeap);
         assert_eq!(d.heap_growth_bytes, 0);
-        assert_eq!(d.outside_heap_growth_bytes, (400 * MIB) as i64);
+        assert_eq!(d.outside_heap_growth_bytes, i64::saturating_from(400 * MIB));
         assert_eq!(d.window_secs, 3600);
     }
 
@@ -235,7 +237,7 @@ mod tests {
             .sample(2400 * MIB, 800 * MIB, BUDGET, start + 60 * 1_000_000)
             .expect("the baseline is captured");
         assert_eq!(d.verdict, DriftVerdict::Heap);
-        assert_eq!(d.heap_growth_bytes, (400 * MIB) as i64);
+        assert_eq!(d.heap_growth_bytes, i64::saturating_from(400 * MIB));
         // The heap explains all of it, so nothing is left outside it.
         assert_eq!(d.outside_heap_growth_bytes, 0);
     }
@@ -248,8 +250,8 @@ mod tests {
             .sample(2600 * MIB, 700 * MIB, BUDGET, start)
             .expect("the baseline is captured");
         assert_eq!(d.verdict, DriftVerdict::Both);
-        assert_eq!(d.heap_growth_bytes, (300 * MIB) as i64);
-        assert_eq!(d.outside_heap_growth_bytes, (300 * MIB) as i64);
+        assert_eq!(d.heap_growth_bytes, i64::saturating_from(300 * MIB));
+        assert_eq!(d.outside_heap_growth_bytes, i64::saturating_from(300 * MIB));
     }
 
     // A few megabytes either way is what every long session does; the verdict
@@ -317,8 +319,11 @@ mod tests {
             .sample(1500 * MIB, 300 * MIB, BUDGET, start)
             .expect("the baseline is captured");
         assert_eq!(d.verdict, DriftVerdict::Settled);
-        assert_eq!(d.heap_growth_bytes, -((100 * MIB) as i64));
-        assert_eq!(d.outside_heap_growth_bytes, -((400 * MIB) as i64));
+        assert_eq!(d.heap_growth_bytes, -i64::saturating_from(100 * MIB));
+        assert_eq!(
+            d.outside_heap_growth_bytes,
+            -i64::saturating_from(400 * MIB)
+        );
     }
 
     // The failure a fixed warm-up timer produces: a baseline captured while
@@ -398,7 +403,10 @@ mod tests {
             .sample(9000 * MIB, 400 * MIB, 0, start)
             .expect("the baseline is captured");
         assert_eq!(d.verdict, DriftVerdict::Settled);
-        assert_eq!(d.outside_heap_growth_bytes, (7000 * MIB) as i64);
+        assert_eq!(
+            d.outside_heap_growth_bytes,
+            i64::saturating_from(7000 * MIB)
+        );
     }
 
     #[test]

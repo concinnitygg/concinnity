@@ -30,6 +30,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::planet::Rebase;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
@@ -102,7 +103,7 @@ pub(in crate::metal) fn build_water_surface_record(
     Ok(WaterSurfaceRecord {
         vertex_buffer: vb,
         index_buffer: ib,
-        index_count: idxs.len() as u32,
+        index_count: u32::saturating_from(idxs.len()),
         motion: WaterMotion::new(body, false),
         visible: surface.visible,
         center: body.sort_center(),

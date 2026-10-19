@@ -14,6 +14,7 @@
 
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{DrawObject, InstancedCluster};
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 const VERTEX_STRIDE: usize = size_of::<Vertex>();
@@ -114,8 +115,8 @@ fn relocate_region(
     // from old_vbase to new_vbase shifts every index by the same delta. Use
     // i64 so a cluster relocated *forward* (its geometry sat behind the props
     // it now trails) rebases correctly too.
-    let delta = new_vbase as i64 - old_vbase as i64;
-    let rebase = |i: u32| -> u32 { (i64::from(i) + delta) as u32 };
+    let delta = i64::saturating_from(new_vbase) - i64::saturating_from(old_vbase);
+    let rebase = |i: u32| -> u32 { u32::saturating_from(i64::from(i) + delta) };
 
     let (i0_off, i0_count) = lod0;
     let new_i0_off = dst_i.len();
@@ -235,8 +236,8 @@ pub fn compact_for_streaming(
         color: [0.0; 3],
         uv: [0.0; 2],
     };
-    let seed_v_count = (seed_vtx_bytes as usize) / VERTEX_STRIDE;
-    let seed_i_count = (seed_idx_bytes as usize) / INDEX_STRIDE;
+    let seed_v_count = usize::saturating_from(seed_vtx_bytes) / VERTEX_STRIDE;
+    let seed_i_count = usize::saturating_from(seed_idx_bytes) / INDEX_STRIDE;
     new_v.extend(core::iter::repeat_n(zero_v, seed_v_count));
     new_i.extend(core::iter::repeat_n(0u32, seed_i_count));
 
@@ -269,7 +270,7 @@ mod tests {
     // Append `n` vertices (tagged by `tag` so a relocated region is
     // identifiable) at the current end and return (vertex_byte_offset, base).
     fn push_verts(v: &mut Vec<Vertex>, n: usize, tag: f32) -> (usize, u32) {
-        let base = v.len() as u32;
+        let base = u32::saturating_from(v.len());
         for k in 0..n {
             v.push(vtx(tag + k as f32 / 100.0));
         }
@@ -281,7 +282,7 @@ mod tests {
     fn push_idx(i: &mut Vec<u32>, base: u32, n: usize) -> (usize, usize) {
         let off = i.len();
         for k in 0..n {
-            i.push(base + (k as u32 % 3));
+            i.push(base + (u32::saturating_from(k) % 3));
         }
         (off, n)
     }
@@ -487,7 +488,7 @@ mod tests {
         assert_eq!(v.len(), 3 + 10);
         assert_eq!(i.len(), 3 + 24);
         // Headroom start is vertex-aligned (offset is a whole multiple of stride).
-        assert_eq!(region.vtx_offset as usize % VERTEX_STRIDE, 0);
+        assert_eq!(usize::saturating_from(region.vtx_offset) % VERTEX_STRIDE, 0);
     }
 
     #[test]

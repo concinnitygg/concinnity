@@ -3,6 +3,7 @@
 // state the system tracks: cue bindings, queued-clip and match counters,
 // emitter bindings, the occlusion probes and the requested mix.
 
+use crate::math::SaturatingFrom;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
@@ -31,8 +32,8 @@ struct OneSection(Vec<u8>);
 
 impl PayloadStore for OneSection {
     fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], PayloadError> {
-        let start = locator.offset as usize;
-        let end = start + locator.len as usize;
+        let start = usize::saturating_from(locator.offset);
+        let end = start + usize::saturating_from(locator.len);
         self.0.get(start..end).ok_or(PayloadError::OutOfBounds {
             index: locator.blob_index,
             offset: locator.offset,
@@ -70,7 +71,7 @@ impl AudioClips {
     // Add an audio clip whose payload is `bytes`, returning its handle (its
     // record order, which the table indexes by).
     fn clip(&mut self, bytes: &[u8]) -> AudioClipHandle {
-        let handle = AudioClipHandle::new(self.clips.len() as u32);
+        let handle = AudioClipHandle::new(u32::saturating_from(self.clips.len()));
         let offset = self.section.len() as u64;
         self.section.extend_from_slice(bytes);
         self.clips.push(ResourceRecord {

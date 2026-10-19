@@ -5,6 +5,7 @@
 //! the last range was added.
 
 use bytemuck::NoUninit;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -229,7 +230,7 @@ impl RootSig {
     // The number of root parameters so far, which is the index the next one
     // lands at.
     pub(in crate::directx) fn len(&self) -> u32 {
-        self.params.len() as u32
+        u32::saturating_from(self.params.len())
     }
 
     // `dwords` 32-bit root constants at `b{register}`.
@@ -396,7 +397,7 @@ impl RootSig {
                     ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
                     Anonymous: D3D12_ROOT_PARAMETER_0 {
                         DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                            NumDescriptorRanges: len as u32,
+                            NumDescriptorRanges: u32::saturating_from(len),
                             pDescriptorRanges: self.ranges[first..first + len].as_ptr(),
                         },
                     },
@@ -419,9 +420,9 @@ impl RootSig {
         let params = self.raw_params();
         let samplers = self.raw_samplers();
         let desc = D3D12_ROOT_SIGNATURE_DESC {
-            NumParameters: params.len() as u32,
+            NumParameters: u32::saturating_from(params.len()),
             pParameters: params.as_ptr(),
-            NumStaticSamplers: samplers.len() as u32,
+            NumStaticSamplers: u32::saturating_from(samplers.len()),
             pStaticSamplers: samplers.as_ptr(),
             Flags: self.flags(),
         };

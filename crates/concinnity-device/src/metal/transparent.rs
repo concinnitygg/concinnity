@@ -21,6 +21,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::reactive_mask::ReactiveWrite;
 use concinnity_core::render::transparent;
@@ -491,6 +492,6 @@ impl MtlContext {
             encode_transparent_draw(&enc, &draws[i], &draws[i].pipeline)?;
         }
 
-        Ok(order.len() as u32)
+        Ok(u32::saturating_from(order.len()))
     }
 }

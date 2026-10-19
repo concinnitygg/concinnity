@@ -242,6 +242,7 @@ fn plan<'a>(index: &Index, stored: &[(CacheEntryKind, &'a str, &'a [u8])]) -> Ve
 
 #[cfg(test)]
 mod tests {
+    use concinnity_core::math::SaturatingFrom;
     use std::path::PathBuf;
 
     use super::*;
@@ -480,7 +481,9 @@ mod tests {
     fn a_large_entry_survives_being_carried_through() {
         let dir = tempfile::tempdir().unwrap();
         let path = segment_path(&dir);
-        let big: Vec<u8> = (0..512 * 1024).map(|i| (i % 251) as u8).collect();
+        let big: Vec<u8> = (0..512 * 1024)
+            .map(|i| u8::saturating_from(i % 251))
+            .collect();
         written(&path, &[(PAYLOAD, "big", &big), (PAYLOAD, "small", &[9])]);
 
         let first = Index::read(&path, TOKEN);

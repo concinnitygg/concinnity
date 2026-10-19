@@ -9,6 +9,7 @@
 
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::saturating_u32;
 
 use super::panels::registry::PanelKey;
 use super::widget;
@@ -49,7 +50,7 @@ pub(crate) const fn panel_base(key: PanelKey) -> u32 {
 }
 
 const fn nth_base(n: u32) -> u32 {
-    ID_BASE + n * FAMILY_SPAN as u32
+    ID_BASE + n * saturating_u32(FAMILY_SPAN)
 }
 
 // One module's injected elements, each list in draw order (the overlay draws
@@ -156,7 +157,7 @@ macro_rules! hud_ids {
     // `blocks: [NAME: span]`: a base with `span` ids reserved behind it.
     (@entry $ids:ident blocks [$($off:tt)*] $acc:tt
         [$vis:vis $name:ident : $span:expr $(, $($tail:tt)*)?] $($rest:tt)*) => {
-        $vis const $name: u32 = IDS_BASE + ($($off)*) as u32;
+        $vis const $name: u32 = IDS_BASE + ::concinnity_core::math::saturating_u32($($off)*);
         $crate::editor::hud_ids::hud_ids!(@entry $ids blocks [$($off)* + ($span)] $acc
             [$($($tail)*)?] $($rest)*);
     };
@@ -172,7 +173,7 @@ macro_rules! hud_ids {
     (@entry $ids:ident fields [$($off:tt)*] [$($acc:tt)*]
         [$vis:vis $name:ident = $ph:expr $(, $($tail:tt)*)?] $($rest:tt)*) => {
         $vis const $name: ::concinnity_core::ecs::asset_id::AssetId =
-            ::concinnity_core::ecs::asset_id::AssetId(IDS_BASE + ($($off)*) as u32);
+            ::concinnity_core::ecs::asset_id::AssetId(IDS_BASE + ::concinnity_core::math::saturating_u32($($off)*));
         $crate::editor::hud_ids::hud_ids!(@entry $ids fields [$($off)* + 1]
             [$($acc)* $ids.fields.push(($name, $ph));]
             [$($($tail)*)?] $($rest)*);
@@ -214,7 +215,7 @@ macro_rules! hud_ids {
     (@entry $ids:ident $kind:ident [$($off:tt)*] [$($acc:tt)*]
         [$vis:vis $name:ident $(, $($tail:tt)*)?] $($rest:tt)*) => {
         $vis const $name: ::concinnity_core::ecs::asset_id::AssetId =
-            ::concinnity_core::ecs::asset_id::AssetId(IDS_BASE + ($($off)*) as u32);
+            ::concinnity_core::ecs::asset_id::AssetId(IDS_BASE + ::concinnity_core::math::saturating_u32($($off)*));
         $crate::editor::hud_ids::hud_ids!(@entry $ids $kind [$($off)* + 1]
             [$($acc)* $ids.$kind.push($name);]
             [$($($tail)*)?] $($rest)*);
@@ -222,7 +223,7 @@ macro_rules! hud_ids {
 
     (@pool $vis:vis $name:ident [$($off:tt)*]) => {
         $vis const fn $name(i: usize) -> ::concinnity_core::ecs::asset_id::AssetId {
-            ::concinnity_core::ecs::asset_id::AssetId(IDS_BASE + ($($off)*) as u32 + i as u32)
+            ::concinnity_core::ecs::asset_id::AssetId(IDS_BASE + ::concinnity_core::math::saturating_u32($($off)*) + ::concinnity_core::math::saturating_u32(i))
         }
     };
 }
@@ -235,6 +236,7 @@ mod tests {
 
     mod sample {
         use super::super::{Family, family_base};
+        use concinnity_core::math::saturating_u32;
 
         pub(super) const AREA_SPAN: usize = 4;
         const ROWS: usize = 3;
@@ -249,7 +251,7 @@ mod tests {
         }
 
         pub(super) fn area() -> Vec<super::AssetId> {
-            (0..AREA_SPAN as u32)
+            (0..saturating_u32(AREA_SPAN))
                 .map(|i| super::AssetId(AREA + i))
                 .collect()
         }
@@ -350,15 +352,15 @@ mod tests {
     #[test]
     fn families_are_a_stride_apart() {
         assert_eq!(
-            family_base(Family::TopBar) + FAMILY_SPAN as u32,
+            family_base(Family::TopBar) + saturating_u32(FAMILY_SPAN),
             family_base(Family::Highlight)
         );
         assert_eq!(
-            family_base(Family::Loading) + FAMILY_SPAN as u32,
+            family_base(Family::Loading) + saturating_u32(FAMILY_SPAN),
             panel_base(PanelKey::ALL[0])
         );
         assert_eq!(
-            panel_base(PanelKey::ALL[0]) + FAMILY_SPAN as u32,
+            panel_base(PanelKey::ALL[0]) + saturating_u32(FAMILY_SPAN),
             panel_base(PanelKey::ALL[1])
         );
     }

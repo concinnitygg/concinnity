@@ -6,6 +6,7 @@
 
 use concinnity_core::ecs::PayloadLocator;
 use concinnity_core::error::PayloadError;
+use concinnity_core::math::SaturatingFrom;
 
 // State of one blob file's payload section.
 //
@@ -96,7 +97,7 @@ impl BlobData {
     /// released, or the on-demand load fails.
     pub fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], PayloadError> {
         let index = locator.blob_index;
-        let count = self.slots.len() as u32;
+        let count = u32::saturating_from(self.slots.len());
         let idx = index as usize;
         let slot = self
             .slots
@@ -125,9 +126,9 @@ impl BlobData {
             len: locator.len,
             section_len: section.len(),
         };
-        let start = locator.offset as usize;
+        let start = usize::saturating_from(locator.offset);
         let end = start
-            .checked_add(locator.len as usize)
+            .checked_add(usize::saturating_from(locator.len))
             .ok_or_else(out_of_bounds)?;
         section.get(start..end).ok_or_else(out_of_bounds)
     }

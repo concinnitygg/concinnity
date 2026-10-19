@@ -1,6 +1,7 @@
 //! Vulkan physical/logical device selection and queue-family queries.
 
 use ash::{Device, vk};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::ffi::{CStr, CString, c_void};
 
@@ -51,13 +52,15 @@ pub(super) fn query_queue_families(
     let mut present = None;
     for (i, f) in families.iter().enumerate() {
         if f.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-            graphics = Some(i as u32);
+            graphics = Some(u32::saturating_from(i));
         }
         // SAFETY: a property query on a live handle; it only reads.
-        if unsafe { surface_loader.get_physical_device_surface_support(pd, i as u32, surface) }
-            .unwrap_or(false)
+        if unsafe {
+            surface_loader.get_physical_device_surface_support(pd, u32::saturating_from(i), surface)
+        }
+        .unwrap_or(false)
         {
-            present = Some(i as u32);
+            present = Some(u32::saturating_from(i));
         }
     }
     match (graphics, present) {

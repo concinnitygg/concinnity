@@ -1,6 +1,8 @@
 // The run's timetable: how high over the ground and how fast the camera goes
 // at each moment, and how far around the planet that carries it.
 
+use concinnity_core::math::SaturatingFrom;
+
 /// One stretch of the flight, named as a phase of the report.
 pub(super) struct Phase {
     pub(super) name: &'static str,
@@ -107,7 +109,7 @@ pub(super) fn fixes(radius: f64, step: f64) -> Vec<Fix> {
     }];
     let mut start = 0.0;
     for (phase, at) in PHASES.iter().enumerate() {
-        let steps = (at.seconds / step).round().max(1.0) as usize;
+        let steps = usize::saturating_from((at.seconds / step).round().max(1.0));
         let dt = at.seconds / steps as f64;
         for i in 1..=steps {
             let prev = *fixes.last().expect("starts with a fix");

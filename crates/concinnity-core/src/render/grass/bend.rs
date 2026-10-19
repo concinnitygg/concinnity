@@ -13,9 +13,9 @@
 //! always at hand. The bend pass and the blade kernel in `grass.hlsl` mirror
 //! the addressing and the stamp below.
 
+use crate::math::{SaturatingFrom, exp, floor, sqrt};
 use alloc::vec::Vec;
 
-use crate::math::{exp, floor, sqrt};
 use crate::render::uniforms::grass::MAX_GRASS_STAMPS;
 
 /// Cells along each side of the window. A power of two, so wrapping a cell
@@ -68,7 +68,7 @@ pub struct BendWindow {
 impl BendWindow {
     /// The window centered, to the cell, on world `position`.
     pub fn around(position: [f32; 3]) -> Self {
-        let half = (GRASS_BEND_RESOLUTION / 2) as i32;
+        let half = i32::saturating_from(GRASS_BEND_RESOLUTION / 2);
         let [x, z] = cell_of([position[0], position[2]]);
         Self {
             origin: [x - half, z - half],
@@ -77,20 +77,23 @@ impl BendWindow {
 
     /// Whether world cell `cell` lies inside the window.
     pub fn contains(&self, cell: [i32; 2]) -> bool {
-        let n = GRASS_BEND_RESOLUTION as i32;
+        let n = i32::saturating_from(GRASS_BEND_RESOLUTION);
         (0..2).all(|i| cell[i] >= self.origin[i] && cell[i] < self.origin[i] + n)
     }
 
     /// The world cell the window holds in slot `slot`.
     pub fn cell_at_slot(&self, slot: usize) -> [i32; 2] {
-        let n = GRASS_BEND_RESOLUTION as i32;
-        let s = [slot as i32 % n, slot as i32 / n];
+        let n = i32::saturating_from(GRASS_BEND_RESOLUTION);
+        let s = [
+            i32::saturating_from(slot) % n,
+            i32::saturating_from(slot) / n,
+        ];
         core::array::from_fn(|i| self.origin[i] + (s[i] - self.origin[i]).rem_euclid(n))
     }
 
     /// The window's ground rectangle, `[min x, min z, max x, max z]`.
     pub fn rect(&self) -> [f32; 4] {
-        let n = GRASS_BEND_RESOLUTION as i32;
+        let n = i32::saturating_from(GRASS_BEND_RESOLUTION);
         let at = |c: i32| c as f32 * GRASS_BEND_CELL_SIZE;
         [
             at(self.origin[0]),
@@ -103,14 +106,14 @@ impl BendWindow {
 
 /// The world cell world `xz` falls in.
 pub fn cell_of(xz: [f32; 2]) -> [i32; 2] {
-    xz.map(|v| floor(v / GRASS_BEND_CELL_SIZE) as i32)
+    xz.map(|v| i32::saturating_from(floor(v / GRASS_BEND_CELL_SIZE)))
 }
 
 /// The slot world cell `cell` is kept in, whichever window holds it: its
 /// coordinates wrapped by the window's size, row-major.
 pub fn slot_of(cell: [i32; 2]) -> usize {
-    let mask = GRASS_BEND_RESOLUTION as i32 - 1;
-    ((cell[0] & mask) + (cell[1] & mask) * GRASS_BEND_RESOLUTION as i32) as usize
+    let mask = i32::saturating_from(GRASS_BEND_RESOLUTION) - 1;
+    usize::saturating_from((cell[0] & mask) + (cell[1] & mask) * (mask + 1))
 }
 
 /// What a bend is scaled by as it springs back over `dt` seconds.
@@ -233,7 +236,7 @@ impl BendHistory {
 mod tests {
     use super::*;
 
-    const N: i32 = GRASS_BEND_RESOLUTION as i32;
+    const N: i32 = GRASS_BEND_RESOLUTION.cast_signed();
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-5

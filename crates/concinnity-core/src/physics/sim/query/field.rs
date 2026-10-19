@@ -18,6 +18,7 @@
 // testing everything under its bounds, because a ray long enough to cross a
 // terrain has bounds that cover most of it.
 
+use crate::math::SaturatingFrom;
 use crate::physics::ColliderShape;
 
 use crate::physics::sim::aabb::Aabb;
@@ -261,15 +262,25 @@ impl<'a> GridWalk<'a> {
             )
         };
         let at = ray.origin + ray.direction * enter;
-        let (col_step, col_delta, col_next) =
-            axis(at.x, ray.direction.x, min_x, cell_x, col as isize);
-        let (row_step, row_delta, row_next) =
-            axis(at.z, ray.direction.z, min_z, cell_z, row as isize);
+        let (col_step, col_delta, col_next) = axis(
+            at.x,
+            ray.direction.x,
+            min_x,
+            cell_x,
+            isize::saturating_from(col),
+        );
+        let (row_step, row_delta, row_next) = axis(
+            at.z,
+            ray.direction.z,
+            min_z,
+            cell_z,
+            isize::saturating_from(row),
+        );
 
         (rows > 0 && cols > 0).then_some(GridWalk {
             field,
-            row: row as isize,
-            col: col as isize,
+            row: isize::saturating_from(row),
+            col: isize::saturating_from(col),
             row_step,
             col_step,
             row_delta,
@@ -286,7 +297,11 @@ impl<'a> GridWalk<'a> {
     /// The next cell the ray crosses, with how far along the ray it starts.
     fn next_cell(&mut self) -> Option<(usize, usize, f32)> {
         let (rows, cols) = self.field.cells();
-        if self.row < 0 || self.col < 0 || self.row >= rows as isize || self.col >= cols as isize {
+        if self.row < 0
+            || self.col < 0
+            || self.row >= isize::saturating_from(rows)
+            || self.col >= isize::saturating_from(cols)
+        {
             return None;
         }
         if self.entry > self.exit {
@@ -297,7 +312,11 @@ impl<'a> GridWalk<'a> {
             return None;
         }
         self.budget -= 1;
-        let cell = (self.row as usize, self.col as usize, self.entry);
+        let cell = (
+            usize::saturating_from(self.row),
+            usize::saturating_from(self.col),
+            self.entry,
+        );
         if self.col_next < self.row_next {
             self.entry = self.col_next;
             self.col_next += self.col_delta;

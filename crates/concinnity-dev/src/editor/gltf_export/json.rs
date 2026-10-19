@@ -4,6 +4,7 @@
 //! accessor tables packed by `buffer.rs`.
 
 use concinnity_core::components::SkeletonJoint;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::transform::{decompose, trs_matrix};
 use serde_json::{Value, json};
 
@@ -37,7 +38,7 @@ pub(crate) fn document(
     let mut nodes: Vec<Value> = skeleton.iter().map(joint_node).collect();
     for (i, j) in skeleton.iter().enumerate() {
         if j.parent >= 0 {
-            let children = nodes[j.parent as usize]
+            let children = nodes[usize::saturating_from(j.parent)]
                 .as_object_mut()
                 .expect("joint node is an object")
                 .entry("children")

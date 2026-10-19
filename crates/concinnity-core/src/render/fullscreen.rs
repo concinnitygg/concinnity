@@ -19,7 +19,7 @@
 //! from `&self`, consistent with the read-only parallel-encode contract.
 
 use crate::gfx::render_types::TextDrawCall;
-use crate::math::{ceil, floor};
+use crate::math::{SaturatingFrom, ceil, floor};
 use crate::render::error::RenderResult;
 
 /// Convert a `TextDrawCall.clip_rect` (a rectangle `[x, y, w, h]` in overlay
@@ -52,7 +52,12 @@ pub fn clip_rect_to_scissor(
     if x1 <= x0 || y1 <= y0 {
         return None;
     }
-    Some((x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32))
+    Some((
+        i32::saturating_from(x0),
+        i32::saturating_from(y0),
+        u32::saturating_from(x1 - x0),
+        u32::saturating_from(y1 - y0),
+    ))
 }
 
 /// Round `offset` up to the next multiple of `align` (a power of two). An

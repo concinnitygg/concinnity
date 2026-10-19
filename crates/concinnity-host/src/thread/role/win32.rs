@@ -4,6 +4,7 @@
 // thread also runs above normal priority, so a busy machine's normal-priority
 // work cannot hold it off a core.
 
+use concinnity_core::math::saturating_u32;
 use windows::Win32::System::Threading::{
     GetCurrentThread, SetThreadInformation, SetThreadPriority,
     THREAD_POWER_THROTTLING_CURRENT_VERSION, THREAD_POWER_THROTTLING_EXECUTION_SPEED,
@@ -47,7 +48,7 @@ pub(super) fn apply(role: ThreadRole) -> std::io::Result<()> {
             GetCurrentThread(),
             ThreadPowerThrottling,
             (&raw const state).cast(),
-            size_of::<THREAD_POWER_THROTTLING_STATE>() as u32,
+            saturating_u32(size_of::<THREAD_POWER_THROTTLING_STATE>()),
         )
     }
     .map_err(|e| std::io::Error::other(format!("SetThreadInformation(ThreadPowerThrottling): {e}")))

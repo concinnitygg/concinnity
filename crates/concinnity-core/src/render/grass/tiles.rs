@@ -5,11 +5,11 @@
 //! Cells are counted from the world origin, so a blade's place depends only on
 //! its cell and not on which tiles the camera currently covers.
 
+use crate::math::{SaturatingFrom, ceil, floor, round, sqrt};
 use alloc::vec::Vec;
 
 use super::lod::GRASS_SHRINK_BAND;
 use super::nest::{GRASS_NEST_LEVELS, nest_level};
-use crate::math::{ceil, floor, round, sqrt};
 
 /// Edge of one grass tile, in meters: the unit the kernel frustum- and
 /// occlusion-culls.
@@ -42,7 +42,7 @@ impl GrassGrid {
         let density = density.min(MAX_GRASS_DENSITY);
         let cells = round(GRASS_TILE_SIZE * sqrt(density)).max(1.0);
         Some(Self {
-            cells_per_side: cells as u32,
+            cells_per_side: u32::saturating_from(cells),
         })
     }
 
@@ -213,8 +213,8 @@ pub fn terrain_tiles(
     if area.area() <= 0.0 {
         return;
     }
-    let lo = |v: f32| floor(v / size) as i32;
-    let hi = |v: f32| ceil(v / size) as i32 - 1;
+    let lo = |v: f32| i32::saturating_from(floor(v / size));
+    let hi = |v: f32| i32::saturating_from(ceil(v / size)) - 1;
     let (x0, x1, z0, z1) = (
         lo(area.min[0]),
         hi(area.max[0]),
@@ -316,7 +316,7 @@ mod tests {
         let ground = GroundRect::centered([10.0, -20.0], [300.0, 250.0]);
         let v = view([3.0, 2.5, 7.0], 200.0, &OPEN);
         let visited = spanned(&tiles(&v, &ground));
-        let n = (210.0 / GRASS_TILE_SIZE) as i32 + 2;
+        let n = i32::saturating_from(210.0 / GRASS_TILE_SIZE) + 2;
         let mut in_reach = 0;
         for z in -n..n {
             for x in -n..n {

@@ -14,6 +14,7 @@
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
+use concinnity_core::math::SaturatingFrom;
 
 use super::asset_list::{self, ListRow, MAX_ROWS, ROW_H};
 use super::registry::PanelKey;
@@ -101,7 +102,7 @@ fn panel_height(rows: usize) -> f32 {
 
 // The number of row slots that fit panel height `h`, capped at the pool.
 pub(crate) fn rows_for_height(h: f32) -> usize {
-    (((h - CHROME_H) / ROW_H).floor() as usize).clamp(1, POOL_MAX)
+    usize::saturating_from(((h - CHROME_H) / ROW_H).floor()).clamp(1, POOL_MAX)
 }
 
 // The tallest the panel resizes to for a template of `n_rows`: its rows shown in

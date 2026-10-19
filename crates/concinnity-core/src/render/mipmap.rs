@@ -9,6 +9,7 @@
 //! convention `max(1, base >> level)`. That keeps the CPU chain in lockstep with
 //! the image's allocated mip levels on all three backends.
 
+use crate::math::SaturatingFrom;
 use crate::render::render_graph::full_mip_levels;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -79,7 +80,7 @@ fn downsample_box(src: &MipLevel, dw: u32, dh: u32, dst: &mut [u8]) {
                     + u32::from(src.pixels[i10 + c])
                     + u32::from(src.pixels[i11 + c]);
                 // +2 rounds to nearest before the divide by 4.
-                dst[d + c] = ((sum + 2) / 4) as u8;
+                dst[d + c] = u8::saturating_from((sum + 2) / 4);
             }
         }
     }
@@ -88,6 +89,7 @@ fn downsample_box(src: &MipLevel, dw: u32, dh: u32, dst: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
 
     #[test]
     fn level_count_matches_floor_log2_plus_one() {
@@ -106,7 +108,7 @@ mod tests {
         let chain = generate_mip_chain(4, 4, &px);
         let dims: Vec<(u32, u32)> = chain.iter().map(|m| (m.width, m.height)).collect();
         assert_eq!(dims, vec![(4, 4), (2, 2), (1, 1)]);
-        assert_eq!(chain.len() as u32, full_mip_levels(4, 4));
+        assert_eq!(u32::saturating_from(chain.len()), full_mip_levels(4, 4));
     }
 
     #[test]

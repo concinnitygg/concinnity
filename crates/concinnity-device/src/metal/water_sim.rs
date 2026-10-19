@@ -7,6 +7,7 @@
 //! one's through `graph_events::plan_frame`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::render_graph::PassId;
 use concinnity_core::render::uniforms::ocean::{
@@ -302,7 +303,7 @@ impl MtlContext {
             dispatch(&enc, [size, cascades, 1], fft);
             enc.set_pipeline(&k.mip);
             for level in 1..k.displacement_mips.len() {
-                let reduce = params.reduce(level as u32);
+                let reduce = params.reduce(u32::saturating_from(level));
                 let groups = ocean_mip_groups(reduce.mip_size);
                 enc.set_value(&reduce, PARAMS_INDEX);
                 enc.set_texture(&k.displacement_mips[level - 1], SRC_DISPLACEMENT_INDEX);

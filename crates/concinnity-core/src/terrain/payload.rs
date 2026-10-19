@@ -6,6 +6,7 @@
 //! for a layer with no mask) followed by its texels. The extent is the
 //! component's own, so it is not repeated here.
 
+use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -33,7 +34,7 @@ impl TerrainPayload {
         for h in heights {
             out.extend_from_slice(&h.to_le_bytes());
         }
-        out.extend_from_slice(&(self.masks.len() as u32).to_le_bytes());
+        out.extend_from_slice(&u32::saturating_from(self.masks.len()).to_le_bytes());
         for mask in &self.masks {
             let (w, h) = mask.as_ref().map_or((0, 0), |m| (m.width(), m.height()));
             out.extend_from_slice(&w.to_le_bytes());

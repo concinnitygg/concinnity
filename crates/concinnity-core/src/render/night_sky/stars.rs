@@ -10,7 +10,7 @@
 //! changing its total, and a temporal filter sees a steady point.
 
 use super::hash::{night_hash, night_unit};
-use crate::math::{exp, ln, powf, sqrt};
+use crate::math::{SaturatingFrom, exp, ln, powf, sqrt};
 
 /// Cells along each edge of a cube face.
 pub const STAR_GRID: u32 = 128;
@@ -55,7 +55,7 @@ pub fn cube_face(dir: [f32; 3]) -> (u32, f32, f32) {
         2
     };
     let major = abs[axis].max(1e-20);
-    let face = axis as u32 * 2 + u32::from(dir[axis] < 0.0);
+    let face = u32::saturating_from(axis) * 2 + u32::from(dir[axis] < 0.0);
     (
         face,
         dir[(axis + 1) % 3] / major,
@@ -260,7 +260,7 @@ mod tests {
                 found += 1;
                 let (f, u, v) = cube_face(star.direction);
                 assert_eq!(f, face);
-                let cell = |x: f32| ((x + 1.0) * 0.5 * STAR_GRID as f32) as u32;
+                let cell = |x: f32| u32::saturating_from((x + 1.0) * 0.5 * STAR_GRID as f32);
                 assert_eq!((cell(u), cell(v)), (i, j));
                 assert_eq!(star_in_cell(9, density, 8.0, face, i, j), Some(star));
             }

@@ -19,6 +19,7 @@
 //! The graph allocates no GPU resources and interprets no barriers per
 //! backend. This module only produces the data the backend executor consumes.
 
+use crate::math::SaturatingFrom;
 use alloc::collections::BinaryHeap;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -591,7 +592,7 @@ fn derive_barriers(passes: &mut [CompiledPass], n_resources: usize) {
     // Walk each resource's timeline, tracking its running state and the current
     // read-run's stage union, emitting a barrier on each state change.
     for (r_idx, entries) in timeline.iter().enumerate() {
-        let resource = ResourceId(r_idx as u32);
+        let resource = ResourceId(u32::saturating_from(r_idx));
         let mut state = ResourceState::Undefined;
         let mut run_stages = ReadStages::empty();
 

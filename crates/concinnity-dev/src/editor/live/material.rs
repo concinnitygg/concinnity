@@ -7,6 +7,7 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::gfx::render_types::MATERIAL_PARAM_COUNT;
+use concinnity_core::math::narrow_f32;
 use concinnity_core::render::live_preview::{draw as draw_preview, material as material_preview};
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
@@ -63,7 +64,7 @@ fn params_of(value: Option<&Value>) -> Option<[f32; MATERIAL_PARAM_COUNT]> {
     }
     let mut out = [0.0; MATERIAL_PARAM_COUNT];
     for (slot, v) in out.iter_mut().zip(values) {
-        *slot = v.as_f64()? as f32;
+        *slot = narrow_f32(v.as_f64()?);
     }
     Some(out)
 }

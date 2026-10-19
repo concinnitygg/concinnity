@@ -23,6 +23,8 @@
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::ParticleParams;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_core::math::saturating_u32;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleFrame, ParticleSystem};
 use concinnity_core::render::reactive_mask::ReactiveWrite;
@@ -474,7 +476,7 @@ fn create_render_pass(
         .initial_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
         .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
     let attachments = device.writer_targets().attachments(attachment, mask);
-    let color_refs: Vec<_> = (0..attachments.len() as u32)
+    let color_refs: Vec<_> = (0..u32::saturating_from(attachments.len()))
         .map(|i| {
             vk::AttachmentReference::default()
                 .attachment(i)
@@ -548,7 +550,7 @@ fn emitter_set_bindings() -> [Binding; 3] {
 // vertex emits the color; fragment reads it via varyings) + compute
 // (every field). The vertex stage actually only reads the gradient + size
 // fields, but binding the full struct keeps the host upload single-shot.
-const PARTICLE_PUSH_BYTES: u32 = size_of::<ParticleParams>() as u32;
+const PARTICLE_PUSH_BYTES: u32 = saturating_u32(size_of::<ParticleParams>());
 // 128 bytes is the `maxPushConstantsSize` every Vulkan device offers.
 const _: () = assert!(PARTICLE_PUSH_BYTES <= 128);
 
@@ -588,8 +590,8 @@ fn create_render_pipeline_layout(
 }
 
 fn create_descriptor_pool(device: &VkDevice, frames: usize) -> RenderResult<OwnedDescriptorPool> {
-    let frames = frames as u32;
-    let max_emitters = MAX_EMITTERS as u32;
+    let frames = u32::saturating_from(frames);
+    let max_emitters = u32::saturating_from(MAX_EMITTERS);
     // One view set per frame slot, one compute + one render set per emitter.
     let sizes = PoolSizes::default()
         .sets(&view_set_bindings(), frames)

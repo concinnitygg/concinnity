@@ -7,6 +7,7 @@
 use crate::ecs::PayloadLocator;
 use crate::ecs::asset_id::AssetId;
 use crate::error::AssetError;
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -138,7 +139,7 @@ impl WorldManifest {
             .iter()
             .enumerate()
             .filter(|&(_, &n)| n > 0)
-            .map(|(d, &n)| (d as u8, n))
+            .map(|(d, &n)| (u8::saturating_from(d), n))
             .collect();
         let max_blob_index = defs
             .iter()

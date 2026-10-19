@@ -6,6 +6,7 @@
 
 use crate::components::ParticleEmitter;
 use crate::gfx::render_types::ParticleParams;
+use crate::math::SaturatingFrom;
 use crate::math::vec3::{length, normalize_or};
 use crate::math::{cos, floor};
 use alloc::collections::VecDeque;
@@ -210,7 +211,7 @@ pub struct ParticleSpawns {
 /// because their seeds differ on every frame.
 pub fn spawn_seed(frame_index: u32, emitter: usize) -> u32 {
     // A bijective integer finalizer, so distinct inputs never share a seed.
-    let mut h = frame_index ^ (emitter as u32).wrapping_mul(0x9E37_79B9);
+    let mut h = frame_index ^ u32::saturating_from(emitter).wrapping_mul(0x9E37_79B9);
     h ^= h >> 16;
     h = h.wrapping_mul(0x85EB_CA6B);
     h ^= h >> 13;
@@ -272,7 +273,7 @@ impl ParticleSpawnState {
         }
         let budget = self.take_budget(dt, record.spawn_rate, pool);
         let count = self.dead_slots(budget);
-        let first = (self.issued % u64::from(pool)) as u32;
+        let first = u32::saturating_from(self.issued % u64::from(pool));
         if count > 0 {
             self.runs.push_back(SpawnedRun {
                 first: self.issued,
@@ -329,7 +330,7 @@ impl ParticleSpawnState {
         if self.accumulator > max_per_frame {
             self.accumulator = max_per_frame;
         }
-        let whole = floor(self.accumulator) as u32;
+        let whole = u32::saturating_from(floor(self.accumulator));
         self.accumulator -= whole as f32;
         whole
     }
@@ -577,7 +578,11 @@ mod tests {
         // Every frame's particles die before the next frame, so nothing drops
         // and the ring keeps advancing by four.
         for (frame, r) in all.iter().enumerate() {
-            assert_eq!(*r, run((frame as u32 * 4) % 6, 4), "frame {frame}");
+            assert_eq!(
+                *r,
+                run((u32::saturating_from(frame) * 4) % 6, 4),
+                "frame {frame}"
+            );
         }
         // Only the runs a future spawn can land on are kept.
         assert!(s.runs.len() <= 2, "{} runs kept", s.runs.len());

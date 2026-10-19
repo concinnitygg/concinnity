@@ -11,6 +11,7 @@
 //! its sub-pixel offset.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::depth::CAMERA_DEPTH;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::history_reset::UpscalerResetLatch;
@@ -106,8 +107,8 @@ fn scaler_input_size(output: (u32, u32), scale: f32, ratio_range: (f32, f32)) ->
     let clamped_ratio = requested_ratio.clamp(lo, max_ratio.max(lo));
     let scale = 1.0 / clamped_ratio;
     (
-        ((output.0 as f32) * scale).max(1.0) as u32,
-        ((output.1 as f32) * scale).max(1.0) as u32,
+        u32::saturating_from(((output.0 as f32) * scale).max(1.0)),
+        u32::saturating_from(((output.1 as f32) * scale).max(1.0)),
     )
 }
 
@@ -354,10 +355,11 @@ impl UpscaleJitter {
     }
 
     pub(crate) fn load(&self, ordering: std::sync::atomic::Ordering) -> [f32; 2] {
-        let packed = self.0.load(ordering);
-        let jx = f32::from_bits(packed as u32);
-        let jy = f32::from_bits((packed >> 32) as u32);
-        [jx, jy]
+        let [a, b, c, d, e, f, g, h] = self.0.load(ordering).to_le_bytes();
+        [
+            f32::from_le_bytes([a, b, c, d]),
+            f32::from_le_bytes([e, f, g, h]),
+        ]
     }
 }
 

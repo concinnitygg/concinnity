@@ -8,6 +8,7 @@
 //! Developer readouts (passes / cursor / camera) live on `DebugHud`.
 
 use crate::ecs::{Access, FrameTime, HudPrefs, PipelineContext, Ref, StepResult, System, World};
+use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::String;
 
@@ -295,7 +296,7 @@ impl System for StatHudSystem {
                 self.gpu_wait_label,
                 if show_fps {
                     let mean = self.gpu_wait_sum_us / u64::from(self.gpu_wait_frames.max(1));
-                    gpu_wait_text(mean as u32)
+                    gpu_wait_text(u32::saturating_from(mean))
                 } else {
                     String::new()
                 },

@@ -4,6 +4,7 @@
 //! stops the run at.
 
 use crate::ecs::{GpuMemoryPressure, PipelineContext, StepResult};
+use crate::math::SaturatingFrom;
 use crate::profile::RenderStats;
 use crate::render::extract::FrameExtractor;
 use crate::render::ops::ReplayOutcome;
@@ -113,7 +114,9 @@ fn apply(
 fn skinned_pool_free(ctx: &PipelineContext<'_>) -> u32 {
     ctx.resource::<ActiveRenderQueues>()
         .and_then(|slot| slot.0.as_ref())
-        .map_or(0, |queues| queues.slots.skinned_free() as u32)
+        .map_or(0, |queues| {
+            u32::saturating_from(queues.slots.skinned_free())
+        })
 }
 
 // Count a device-memory failure where the streaming valve observes it.

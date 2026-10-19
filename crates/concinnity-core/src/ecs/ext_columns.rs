@@ -12,6 +12,7 @@
 //! rest of the storage has to carry is that a column here may not exist yet: a
 //! type nothing has pushed has no entry, which reads as an empty column.
 
+use crate::math::SaturatingFrom;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use core::any::Any;
@@ -108,7 +109,7 @@ impl ExtColumns {
             };
             column.remove_row(row, tick);
             if let Some(moved) = moved {
-                join.set(moved, component, row as u32);
+                join.set(moved, component, u32::saturating_from(row));
             }
         }
     }
@@ -129,7 +130,7 @@ impl ExtColumns {
         self.columns
             .iter()
             .filter(|(_, c)| c.len() > 0)
-            .map(|(&id, c)| (id, c.len() as u32))
+            .map(|(&id, c)| (id, u32::saturating_from(c.len())))
     }
 }
 

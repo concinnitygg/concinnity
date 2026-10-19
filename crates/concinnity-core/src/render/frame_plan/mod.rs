@@ -11,6 +11,7 @@ mod drive;
 mod shadow;
 mod temporal;
 
+use crate::math::SaturatingFrom;
 pub use camera::{CameraInputs, FrameCamera, Jitter};
 pub use drive::{FrameDevice, camera_inputs, drive_frame};
 pub use shadow::ShadowPlan;
@@ -309,7 +310,7 @@ impl FramePlanner {
                     height,
                 },
                 num_local_lights,
-                inputs.probes.len() as u32,
+                u32::saturating_from(inputs.probes.len()),
             ),
             clustered,
             fog: inputs

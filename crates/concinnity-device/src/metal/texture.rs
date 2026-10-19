@@ -2,6 +2,7 @@
 
 use super::error::allocation_failed;
 use concinnity_core::bake::texture::{TextureFormat, TextureImage};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
 use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -356,7 +357,7 @@ pub(super) fn upload_environment_map(
     Ok(EnvironmentMapTextures {
         irradiance,
         prefilter,
-        prefilter_mip_count: mip_bytes.len() as u32,
+        prefilter_mip_count: u32::saturating_from(mip_bytes.len()),
     })
 }
 
@@ -367,7 +368,7 @@ fn upload_prefilter_cube(
     face_size: u32,
     mip_bytes: &[&[u8]],
 ) -> RenderResult<PooledTexture> {
-    let mip_count = mip_bytes.len() as u32;
+    let mip_count = u32::saturating_from(mip_bytes.len());
     let desc = TextureDesc {
         kind: MTLTextureType::TypeCube,
         format: MTLPixelFormat::RGBA32Float,
@@ -682,8 +683,8 @@ pub(super) fn create_hdr_targets(
         depth_resolve,
         depth_copy,
         reactive_mask,
-        width: w as u32,
-        height: h as u32,
+        width: u32::saturating_from(w),
+        height: u32::saturating_from(h),
         sample_count: sample_count.max(1),
     })
 }

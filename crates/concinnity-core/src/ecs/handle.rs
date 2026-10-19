@@ -242,11 +242,13 @@ impl Visitor<'_> for HandleVisitor {
     }
 
     fn visit_u64<E: de::Error>(self, v: u64) -> Result<u32, E> {
-        Ok(v as u32)
+        u32::try_from(v).map_err(|_| E::invalid_value(de::Unexpected::Unsigned(v), &self))
     }
 
     fn visit_i64<E: de::Error>(self, v: i64) -> Result<u32, E> {
-        Ok(v as u32)
+        i32::try_from(v)
+            .map(i32::cast_unsigned)
+            .map_err(|_| E::invalid_value(de::Unexpected::Signed(v), &self))
     }
 
     // A build has the declaration-ordered handle map installed, so a name
@@ -275,6 +277,7 @@ impl Visitor<'_> for HandleVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
     use alloc::string::ToString;
     use alloc::vec;
     use alloc::vec::Vec;
@@ -311,7 +314,7 @@ mod tests {
     fn a_name_resolves_through_its_own_space() {
         install_resolvers();
         fn only_shaders(kind: HandleKind, name: &str) -> Option<u32> {
-            (kind == HandleKind::Shader).then_some(name.len() as u32 + 100)
+            (kind == HandleKind::Shader).then_some(u32::saturating_from(name.len()) + 100)
         }
         for kind in HandleKind::ALL {
             crate::ecs::resolver::set_handle_resolver(*kind, only_shaders);

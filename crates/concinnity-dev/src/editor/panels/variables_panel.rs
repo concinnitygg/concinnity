@@ -11,6 +11,7 @@
 
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::SaturatingFrom;
 
 use super::registry::PanelKey;
 use super::variables::Row;
@@ -83,7 +84,8 @@ const WARN_BORDER: [f32; 4] = [0.55, 0.42, 0.18, 1.0];
 const MISSING_LABEL: [f32; 3] = theme::LOG_WARN;
 
 pub(crate) fn visible_rows(h: f32) -> usize {
-    (((h - CHROME_H - PAD - STATUS_H) / ROW_H).floor() as usize).clamp(ROW_POOL, ROW_POOL_MAX)
+    usize::saturating_from(((h - CHROME_H - PAD - STATUS_H) / ROW_H).floor())
+        .clamp(ROW_POOL, ROW_POOL_MAX)
 }
 
 pub(crate) fn size() -> [f32; 2] {
@@ -329,7 +331,7 @@ fn layout_header(world: &mut World, view: &VariablesView<'_>, o: [f32; 2], w: f3
             world,
             MODE_LABEL,
             [field[0], field[1] + CTRL_H * 0.5 - theme::TEXT_HALF],
-            &widget::clip_text(&text, (field[2] / CHAR_W) as usize),
+            &widget::clip_text(&text, usize::saturating_from(field[2] / CHAR_W)),
             color,
             true,
         );
@@ -423,7 +425,7 @@ fn layout_columns(world: &mut World, view: &VariablesView<'_>, o: [f32; 2], _w: 
 
 fn layout_rows(world: &mut World, view: &VariablesView<'_>, o: [f32; 2], s: [f32; 2]) {
     let shown = visible_rows(s[1]);
-    let budget = |from: f32, to: f32| (((to - from) / CHAR_W) as usize).max(4);
+    let budget = |from: f32, to: f32| usize::saturating_from((to - from) / CHAR_W).max(4);
     for slot in 0..ROW_POOL_MAX {
         let Some(row) = view.row_at(slot).filter(|_| slot < shown) else {
             widget::set_sprite_visible(world, row_bg(slot), false);

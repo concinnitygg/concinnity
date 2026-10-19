@@ -10,6 +10,7 @@ use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{OverlayImages, PayloadLocator, PipelineContext};
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{DrawIndex, DrawObject, FarFieldTint, InstancedCluster};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend_init::EmbeddedSurface;
 use concinnity_core::render::queues::ActiveDeviceCaps;
 use concinnity_core::render::world_load::stream_seed::{
@@ -466,7 +467,9 @@ impl GraphicsSystem {
                 // Worst-case resident chunk count, so the GPU-cull buffers
                 // reserve a chunk record region (0 for a non-voxel world).
                 n_chunk_max: concinnity_core::render::stream_pools::budget::chunk_record_reserve(
-                    voxel_world.as_ref().map(|vw| vw.impostor_radius() as u32),
+                    voxel_world
+                        .as_ref()
+                        .map(|vw| u32::saturating_from(vw.impostor_radius())),
                     planet.is_some(),
                 ),
                 material_params: world.materials.params,

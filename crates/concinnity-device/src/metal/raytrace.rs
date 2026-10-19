@@ -41,6 +41,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
 use concinnity_core::render::retire_pool::RetirePool;
@@ -424,7 +425,7 @@ fn book_instance(
         InstanceBlas::Head { index, .. } | InstanceBlas::Fresh { index } => index,
         InstanceBlas::Skinned { n } => static_blas_count + n,
     };
-    instance_desc_at(model, index as u32)
+    instance_desc_at(model, u32::saturating_from(index))
 }
 
 // The TLAS descriptor over `blas_refs`, reading transforms from
@@ -647,8 +648,8 @@ fn encode_skin_object(
     // satisfies them.
     let params = SkinParams {
         vertex_base: obj.vertex_base,
-        vertex_count: obj.vertex_count as u32,
-        joint_count: joint_count as u32,
+        vertex_count: u32::saturating_from(obj.vertex_count),
+        joint_count: u32::saturating_from(joint_count),
         target_count: 0,
     };
     cenc.set_buffer(bufs.vertex, 0, 0);
@@ -740,8 +741,8 @@ impl crate::metal::context::MtlContext {
             let weights = weight_bufs.get(i);
             let params = SkinParams {
                 vertex_base: obj.vertex_base,
-                vertex_count: obj.vertex_count as u32,
-                joint_count: joint_count as u32,
+                vertex_count: u32::saturating_from(obj.vertex_count),
+                joint_count: u32::saturating_from(joint_count),
                 target_count: match (morph, weights) {
                     (Some(m), Some(_)) => m.target_count,
                     _ => 0,
@@ -831,7 +832,7 @@ pub(crate) fn build_rt_accel(
             prim_desc_for(
                 vertex_buffer,
                 index_buffer,
-                obj.base_vertex as usize,
+                usize::saturating_from(obj.base_vertex),
                 obj.index_offset,
                 obj.index_count,
                 MTLIndexType::UInt32,
@@ -862,7 +863,7 @@ pub(crate) fn build_rt_accel(
         .iter()
         .map(|prim| allocate(prim))
         .collect::<RenderResult<Vec<Structure>>>()?;
-    let albedo_count = albedo_count as u32;
+    let albedo_count = u32::saturating_from(albedo_count);
     let mut book = AccelBook::new(&seed, head, draw_objects, albedo_count)?;
     book.select_skinned(Some(skinned_list));
     let skinned_objects = book.visible_skinned().to_vec();
@@ -882,8 +883,9 @@ pub(crate) fn build_rt_accel(
     // The 1-vertex dummy is allocated unconditionally: it is what the encoder
     // binds whenever no skinned geometry is traced, both here and after the
     // per-frame update stops publishing its ring slot.
-    let deformed_bytes =
-        (book.skinned_vertex_extent(skinned_list) as usize * VERTEX_STRIDE).max(VERTEX_STRIDE);
+    let deformed_bytes = (usize::saturating_from(book.skinned_vertex_extent(skinned_list))
+        * VERTEX_STRIDE)
+        .max(VERTEX_STRIDE);
     let deformed_dummy = device
         .newBufferWithLength_options(VERTEX_STRIDE, MTLResourceOptions::StorageModeShared)
         .ok_or_else(|| allocation_failed("RT deformed-vertex dummy buffer"))?;
@@ -1268,7 +1270,8 @@ impl RtAccelData {
 
     // Follow a change to the shared texture pool's real-texture count.
     pub(crate) fn set_albedo_count(&mut self, albedo_count: usize) {
-        self.book.set_albedo_count(albedo_count as u32);
+        self.book
+            .set_albedo_count(u32::saturating_from(albedo_count));
     }
 
     // Bring the draw-object BLAS head in line with the current participating draw
@@ -1342,7 +1345,7 @@ impl RtAccelData {
             let prim = prim_desc_for(
                 vertex_buffer,
                 index_buffer,
-                obj.base_vertex as usize,
+                usize::saturating_from(obj.base_vertex),
                 obj.index_offset,
                 obj.index_count,
                 MTLIndexType::UInt32,
@@ -1532,9 +1535,10 @@ impl RtAccelData {
         }
         // The deformed buffer mirrors the skinned vertex buffer's indexing, so it
         // spans the highest vertex any visible skinned object reaches.
-        let deformed_bytes = (self.book.skinned_vertex_extent(skinned.objects) as usize
-            * VERTEX_STRIDE)
-            .max(VERTEX_STRIDE);
+        let deformed_bytes =
+            (usize::saturating_from(self.book.skinned_vertex_extent(skinned.objects))
+                * VERTEX_STRIDE)
+                .max(VERTEX_STRIDE);
         self.book.fill_skinned_shapes(skinned.objects, 0);
 
         // TLAS instances + geometry table in the book's order. Skinned BLAS follow

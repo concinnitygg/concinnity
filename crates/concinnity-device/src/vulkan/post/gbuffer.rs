@@ -23,6 +23,7 @@
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::{GBufferView, ModelHistoryParams};
 
@@ -451,7 +452,7 @@ fn build_model_history(
     // The record count never moves for a built world, so one host-visible UBO
     // serves every frame's set.
     let params = ModelHistoryParams {
-        record_count: n_cull as u32,
+        record_count: u32::saturating_from(n_cull),
         _pad: [0; 3],
     };
     let params_size = size_of::<ModelHistoryParams>() as u64;
@@ -944,7 +945,7 @@ impl VkContext {
             frame_idx..frame_idx + 1
         };
         let device = &self.hw.device;
-        let groups = records.div_ceil(MODEL_HISTORY_THREADGROUP) as u32;
+        let groups = u32::saturating_from(records.div_ceil(MODEL_HISTORY_THREADGROUP));
         for slot in slots {
             let Some(&set) = history.sets.get(frame_idx * frames + slot) else {
                 continue;
@@ -1067,8 +1068,8 @@ impl VkContext {
         let Some(&gset) = self.cull.gbuffer_sets.get(frame_idx) else {
             return;
         };
-        let stride = size_of::<vk::DrawIndexedIndirectCommand>() as u32;
-        let prefix = self.state.draw.skinned_record_base() as u32;
+        let stride = u32::saturating_from(size_of::<vk::DrawIndexedIndirectCommand>());
+        let prefix = u32::saturating_from(self.state.draw.skinned_record_base());
 
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
@@ -1155,7 +1156,7 @@ impl VkContext {
                     cmd,
                     indirect,
                     (self.state.draw.skinned_record_base() * stride as usize) as u64,
-                    self.state.draw.n_skinned as u32,
+                    u32::saturating_from(self.state.draw.n_skinned),
                     stride,
                 );
             }

@@ -4,6 +4,7 @@
 use concinnity_core::components::GamepadButton;
 use concinnity_core::input::pad::{PadAxis, PadEvent, PadState};
 use concinnity_core::input::system::PadSource;
+use concinnity_core::math::SaturatingFrom;
 
 // The OS-facing gamepad event source. Construction is deferred to the first
 // poll so a world without a step never starts the platform's HID machinery;
@@ -24,7 +25,7 @@ impl PadSource for GamepadSource {
                     // Seed pads that were already connected before init.
                     for (id, _) in gilrs.gamepads() {
                         state.ingest(PadEvent::Connected {
-                            pad: usize::from(id) as u32,
+                            pad: u32::saturating_from(usize::from(id)),
                         });
                     }
                     self.gilrs = Some(gilrs);
@@ -47,7 +48,7 @@ impl PadSource for GamepadSource {
 // engine does not consume. Triggers arrive as buttons (gilrs applies its press
 // threshold), so they bind like any other button.
 fn convert(event: &gilrs::Event) -> Option<PadEvent> {
-    let pad = usize::from(event.id) as u32;
+    let pad = u32::saturating_from(usize::from(event.id));
     Some(match event.event {
         gilrs::EventType::ButtonPressed(b, _) => PadEvent::Button {
             pad,

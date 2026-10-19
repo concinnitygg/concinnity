@@ -16,6 +16,7 @@ pub(in crate::pipeline) use gltf::{desugar_gltf_meshes, desugar_gltf_skinned_mes
 use super::pack::MeshCacheEntry;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
+use concinnity_core::math::SaturatingFrom;
 
 // How many assets the import passes will read a source file for: every
 // source-backed mesh the payload cache missed, and every source-backed
@@ -53,17 +54,19 @@ pub(in crate::pipeline) fn pending_imports(
         RegisteredType::Animation => !source(asset).is_empty(),
         _ => false,
     });
-    pending.count() as u32
+    u32::saturating_from(pending.count())
 }
 
 // Which skinned mesh of the asset's source file it selects; absent means the
 // file's first.
 fn skin_index_arg(asset: &WorldJsonlAsset) -> u32 {
-    asset
-        .args
-        .get("skin_index")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0) as u32
+    u32::saturating_from(
+        asset
+            .args
+            .get("skin_index")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+    )
 }
 
 #[cfg(test)]

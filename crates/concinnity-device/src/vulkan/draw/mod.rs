@@ -13,6 +13,7 @@ mod stages;
 use ash::vk;
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_core::profile::FanOutTiming;
 use concinnity_core::render::backend::FrameParams;
 use concinnity_core::render::error::RenderResult;
@@ -84,8 +85,8 @@ impl VkContext {
             cam_pos,
             |record, index_offset, index_count| {
                 let rec = GpuDrawArgs {
-                    index_count: index_count as u32,
-                    index_offset: index_offset as u32,
+                    index_count: u32::saturating_from(index_count),
+                    index_offset: u32::saturating_from(index_offset),
                     base_vertex: 0,
                     flags: draw_args_flags(true, true, true),
                 };
@@ -119,7 +120,7 @@ impl VkContext {
         use concinnity_core::render::record_pack::{
             PackView, StaticPack, draw_bucket, pool_object_record,
         };
-        let texture_count = self.scene.textures.len() as u32;
+        let texture_count = u32::saturating_from(self.scene.textures.len());
         let record_stride = size_of::<GpuObjectData>();
         let args_stride = size_of::<GpuDrawArgs>();
         let mut model_history = self.state.model_history.borrow_mut();
@@ -202,9 +203,9 @@ impl VkContext {
             let opaque_visible =
                 obj.visible && !(mesh_glass_active && obj.material.see_through != 0);
             let rec = GpuDrawArgs {
-                index_count: index_count as u32,
-                index_offset: index_offset as u32,
-                base_vertex: obj.base_vertex as u32,
+                index_count: u32::saturating_from(index_count),
+                index_offset: u32::saturating_from(index_offset),
+                base_vertex: obj.base_vertex.cast_unsigned(),
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
                     | draw_args_bucket_bits(draw_bucket(obj, cam_pos, grass_route))
                     | model_history.draw_flags(runtime_base + k, i),
@@ -250,8 +251,8 @@ impl VkContext {
             let d = lod::skinned_camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             let rec = GpuDrawArgs {
-                index_count: index_count as u32,
-                index_offset: index_offset as u32,
+                index_count: u32::saturating_from(index_count),
+                index_offset: u32::saturating_from(index_offset),
                 base_vertex: 0,
                 flags: draw_args_flags(obj.visible, true, true)
                     | model_history.skinned_flags(skinned_base + k, k),
@@ -313,7 +314,7 @@ impl VkContext {
                     start_cmd,
                     pool,
                     block_base,
-                    pass_timing::SLOTS_PER_FRAME as u32,
+                    u32::saturating_from(pass_timing::SLOTS_PER_FRAME),
                 );
                 device.cmd_write_timestamp(
                     start_cmd,
@@ -536,7 +537,7 @@ impl FrameDevice for VkContext {
         self.reserve_frame_capture();
         // Staged geometry writes go ahead of everything this frame submits.
         self.flush_geometry_uploads()?;
-        self.service_background_work(params.elapsed as f32, frame_idx);
+        self.service_background_work(narrow_f32(params.elapsed), frame_idx);
         let timings = self.read_gpu_timings(frame_idx);
         let gpu_done = self.read_gpu_done(frame_idx);
         self.frame_input_sampled_us[frame_idx] = params.input_sampled_us;
@@ -610,7 +611,7 @@ impl FrameDevice for VkContext {
     fn plan(&mut self, frame: &VkFrame, params: &FrameParams<'_>) -> RenderResult<FramePlan> {
         self.plan_frame(PlanArgs {
             camera: camera_inputs(&self.state, params),
-            elapsed: params.elapsed as f32,
+            elapsed: narrow_f32(params.elapsed),
             render_size: [frame.extent.width, frame.extent.height],
             lines_published: !params.lines.is_empty(),
             world_hidden: params.world_hidden,

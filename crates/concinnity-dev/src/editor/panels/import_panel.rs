@@ -8,6 +8,7 @@
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
+use concinnity_core::math::SaturatingFrom;
 
 use super::registry::PanelKey;
 use crate::editor::hud_ids::{hud_ids, panel_base};
@@ -95,12 +96,13 @@ const CHROME_H: f32 = widget::TITLE_H + HEADER_H + HINT_H + STATUS_H + LIST_HEAD
 // The visible row count for panel height `h`, clamped to the injected pool. At
 // the default height this is exactly `IMPORT_POOL`.
 pub(crate) fn visible_rows(h: f32) -> usize {
-    (((h - CHROME_H - PAD) / ROW_H).floor() as usize).clamp(IMPORT_POOL, IMPORT_POOL_MAX)
+    usize::saturating_from(((h - CHROME_H - PAD) / ROW_H).floor())
+        .clamp(IMPORT_POOL, IMPORT_POOL_MAX)
 }
 
 // The caption character budget at width `w` (grows past the default with width).
 fn max_row_chars(w: f32) -> usize {
-    (MAX_ROW_CHARS as f32 + (w - IMPORT_W) / CHAR_W).max(8.0) as usize
+    usize::saturating_from((MAX_ROW_CHARS as f32 + (w - IMPORT_W) / CHAR_W).max(8.0))
 }
 
 const ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];

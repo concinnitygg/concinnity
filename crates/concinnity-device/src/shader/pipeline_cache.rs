@@ -84,13 +84,24 @@ fn within_budget(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::SaturatingFrom;
 
     #[test]
     fn an_empty_or_over_budget_blob_is_not_kept() {
         assert!(within_budget(&[1]));
-        assert!(within_budget(&vec![0u8; FILE_BUDGET_BYTES as usize]));
+        assert!(within_budget(&vec![
+            0u8;
+            usize::saturating_from(
+                FILE_BUDGET_BYTES
+            )
+        ]));
         assert!(!within_budget(&[]), "a truncated entry");
-        assert!(!within_budget(&vec![0u8; FILE_BUDGET_BYTES as usize + 1]));
+        assert!(!within_budget(&vec![
+            0u8;
+            usize::saturating_from(
+                FILE_BUDGET_BYTES
+            ) + 1
+        ]));
     }
 
     // Under `cargo test` nothing reaches the state dir, in either direction.

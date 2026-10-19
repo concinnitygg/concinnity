@@ -10,6 +10,7 @@
 use concinnity_core::components::{InputKey, KeyEvent, KeyPress, WindowMode};
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
+use concinnity_core::math::narrow_f32;
 use concinnity_core::window::clipboard::Clipboard;
 use concinnity_core::window::display_mode::DisplayMode;
 use objc2::rc::Retained;
@@ -161,7 +162,7 @@ impl AppKitWindow {
     // (see `RenderBackend::logical_size`).
     pub(crate) fn logical_size(&self) -> (f32, f32) {
         let s = self.view.bounds().size;
-        (s.width as f32, s.height as f32)
+        (narrow_f32(s.width), narrow_f32(s.height))
     }
 
     // How much of the frame's top edge the window chrome sits over, in the same
@@ -180,7 +181,7 @@ impl AppKitWindow {
         }
         let content_h = window.contentRectForFrameRect(window.frame()).size.height;
         let laid_out_h = window.contentLayoutRect().size.height;
-        ((content_h - laid_out_h) as f32).max(0.0)
+        narrow_f32(content_h - laid_out_h).max(0.0)
     }
 
     // Whether the window is off screen: minimized to the Dock, or its app
@@ -593,8 +594,8 @@ impl AppKitWindow {
                         if self.keys.discard_next_motion {
                             self.keys.discard_next_motion = false;
                         } else {
-                            self.keys.mouse_dx += event.deltaX() as f32;
-                            self.keys.mouse_dy += event.deltaY() as f32;
+                            self.keys.mouse_dx += narrow_f32(event.deltaX());
+                            self.keys.mouse_dy += narrow_f32(event.deltaY());
                         }
                     } else {
                         // Track the absolute cursor position for UI hit-testing and
@@ -644,7 +645,7 @@ impl AppKitWindow {
                     // up (away from the user); negate so positive moves a panel's
                     // content up (matching FrameInput.scroll_delta's convention).
                     if !self.cursor_captured {
-                        self.keys.scroll_delta -= event.scrollingDeltaY() as f32;
+                        self.keys.scroll_delta -= narrow_f32(event.scrollingDeltaY());
                     }
                     ns_app.sendEvent(&event);
                 }
@@ -676,12 +677,12 @@ impl AppKitWindow {
         // correct throughout, so convert THAT through our own window + view.
         let glob = NSEvent::mouseLocation();
         let Some(window) = self.host_window() else {
-            return (glob.x as f32, 0.0);
+            return (narrow_f32(glob.x), 0.0);
         };
         let win_pt = window.convertPointFromScreen(glob);
         let p = self.view.convertPoint_fromView(win_pt, None);
         let h = self.view.bounds().size.height;
-        (p.x as f32, (h - p.y) as f32)
+        (narrow_f32(p.x), narrow_f32(h - p.y))
     }
 
     // Returns true when the event's click position is inside the view's

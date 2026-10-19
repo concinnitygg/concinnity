@@ -120,6 +120,7 @@ pub fn drive_update<D: RtAccelSteps>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
     use crate::render::error::RenderError;
     use crate::render::rt_accel::SeedSet;
     use crate::test_support::{draw_object, skinned_draw_object};
@@ -146,7 +147,7 @@ mod tests {
     impl Fake {
         fn seeded(draw: &[DrawObject]) -> Self {
             let seed = SeedSet::new(draw, &[], false);
-            let blas = (0..seed.objects.len() as u32).collect();
+            let blas = (0..u32::saturating_from(seed.objects.len())).collect();
             Self {
                 book: AccelBook::new(&seed, blas, draw, 1).expect("one BLAS per object"),
                 calls: Vec::new(),

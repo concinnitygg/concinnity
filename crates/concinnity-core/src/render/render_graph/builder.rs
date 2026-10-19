@@ -10,6 +10,7 @@ use super::types::{
     BufferDesc, BufferHandle, PassKind, ReadStages, ResourceId, ResourceOrigin, TextureDesc,
     TextureHandle,
 };
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 // One entry in the builder's resource arena. Texture and buffer kinds
@@ -221,7 +222,7 @@ impl GraphBuilder {
         desc: TextureDesc,
         origin: ResourceOrigin,
     ) -> TextureHandle {
-        let resource = ResourceId(self.resources.len() as u32);
+        let resource = ResourceId(u32::saturating_from(self.resources.len()));
         self.resources.push(ResourceDecl::Texture {
             label,
             desc,
@@ -240,7 +241,7 @@ impl GraphBuilder {
         desc: BufferDesc,
         origin: ResourceOrigin,
     ) -> BufferHandle {
-        let resource = ResourceId(self.resources.len() as u32);
+        let resource = ResourceId(u32::saturating_from(self.resources.len()));
         self.resources.push(ResourceDecl::Buffer {
             label,
             desc,

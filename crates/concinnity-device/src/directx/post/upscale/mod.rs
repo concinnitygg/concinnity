@@ -11,6 +11,7 @@
 //! constructs the first backend that initializes, in the shared fallback order,
 //! and `encode_upscale` drives whichever is active.
 
+use concinnity_core::math::narrow_f32;
 use std::cell::Cell;
 use std::ffi::{CStr, c_void};
 
@@ -370,7 +371,7 @@ impl crate::directx::context::DxContext {
             },
             UpscaleCamera::new(
                 self.upscale.jitter.get(),
-                params.elapsed as f32,
+                narrow_f32(params.elapsed),
                 params.near,
                 params.fov_y_radians,
                 self.pre_exposure.value(),

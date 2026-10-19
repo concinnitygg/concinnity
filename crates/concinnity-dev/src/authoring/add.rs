@@ -16,6 +16,7 @@
 
 use concinnity_cook::asset_api::{AssetRequest, create_asset_def};
 use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_core::math::SaturatingFrom;
 
 use crate::build_status::Verbosity;
 use concinnity_cook::authoring::world::{
@@ -671,7 +672,7 @@ const TEXT_LABEL_MAX_BYTES: usize = 64 * 1024;
 fn read_text_content(path_str: &str) -> std::io::Result<String> {
     let metadata = std::fs::metadata(path_str)
         .map_err(|e| std::io::Error::new(e.kind(), format!("could not read '{path_str}': {e}")))?;
-    if metadata.len() as usize > TEXT_LABEL_MAX_BYTES {
+    if usize::saturating_from(metadata.len()) > TEXT_LABEL_MAX_BYTES {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(

@@ -1,5 +1,6 @@
 // The distribution summary reported over one column of samples.
 
+use crate::math::SaturatingFrom;
 use serde::Serialize;
 
 /// How one measured quantity was distributed over a run, in microseconds.
@@ -41,7 +42,7 @@ impl Distribution {
         let total: u64 = values.iter().map(|v| u64::from(*v)).sum();
         Self {
             count,
-            mean_us: (total / count as u64) as u32,
+            mean_us: u32::saturating_from(total / count as u64),
             p50_us: nearest_rank(values, 0.50),
             p95_us: nearest_rank(values, 0.95),
             p99_us: nearest_rank(values, 0.99),
@@ -62,7 +63,7 @@ impl Distribution {
 // The smallest sample at or above quantile `q` of an already sorted, non-empty
 // slice.
 pub(super) fn nearest_rank(sorted: &[u32], q: f32) -> u32 {
-    let rank = crate::math::ceil(q * sorted.len() as f32) as usize;
+    let rank = usize::saturating_from(crate::math::ceil(q * sorted.len() as f32));
     sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
 }
 
@@ -74,7 +75,7 @@ pub(super) fn mean_u32(values: impl Iterator<Item = u32>) -> u32 {
         total += u64::from(v);
         count += 1;
     }
-    total.checked_div(count).unwrap_or(0) as u32
+    u32::saturating_from(total.checked_div(count).unwrap_or(0))
 }
 
 #[cfg(test)]

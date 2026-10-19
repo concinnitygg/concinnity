@@ -5,6 +5,7 @@
 // tree built from the first asks' view of the world is the view every later
 // ask would have scanned.
 
+use crate::math::SaturatingFrom;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use spin::Once;
@@ -88,7 +89,7 @@ impl NeighborIndex {
                     .filter(|e| rank_of(candidates, *e).is_some())
                     .and_then(|e| position::of(components, e))
                     .is_some_and(|p| distance_sq(p, point) <= limit);
-                counted.saturating_sub(usize::from(excluded)) as i32
+                i32::saturating_from(counted.saturating_sub(usize::from(excluded)))
             }
             _ => count_within_linear(components, candidates, point, radius, exclude),
         }

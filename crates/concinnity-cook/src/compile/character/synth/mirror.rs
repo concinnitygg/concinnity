@@ -4,6 +4,7 @@
 // author one side of an asymmetric key.
 
 use concinnity_core::components::MorphDelta;
+use concinnity_core::math::SaturatingFrom;
 use std::collections::HashMap;
 
 use super::SynthInput;
@@ -34,9 +35,9 @@ impl Grid {
 
     fn key(p: [f32; 3], cell: f32) -> [i32; 3] {
         [
-            (p[0] / cell).floor() as i32,
-            (p[1] / cell).floor() as i32,
-            (p[2] / cell).floor() as i32,
+            i32::saturating_from((p[0] / cell).floor()),
+            i32::saturating_from((p[1] / cell).floor()),
+            i32::saturating_from((p[2] / cell).floor()),
         ]
     }
 

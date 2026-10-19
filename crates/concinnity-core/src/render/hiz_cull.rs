@@ -3,7 +3,7 @@
 //! one occluder depth. Mirrors `hiz_rect_occluded` in `hiz_test.hlsl`, which
 //! the draw cull and the grass kernel share.
 
-use crate::math::{ceil, floor, log2};
+use crate::math::{SaturatingFrom, ceil, floor, log2};
 use crate::render::depth;
 
 /// Widest footprint per axis, in texels, the cull gathers at the deepest mip of
@@ -42,11 +42,16 @@ impl Footprint {
         let max_dim = ((uv_max[0] - uv_min[0]) * hiz_size[0])
             .max((uv_max[1] - uv_min[1]) * hiz_size[1])
             .max(1.0);
-        let mip = (ceil(log2(max_dim)) as i32).clamp(0, mip_count.max(1) as i32 - 1) as u32;
+        let mip = u32::saturating_from(
+            i32::saturating_from(ceil(log2(max_dim)))
+                .clamp(0, i32::saturating_from(mip_count.max(1)) - 1),
+        );
         let scale = (1u32 << mip) as f32;
         let texel = |axis: usize, uv: f32| {
             let dim = (hiz_size[axis] / scale).max(1.0);
-            (floor(uv * dim) as i32).clamp(0, dim as i32 - 1) as u32
+            u32::saturating_from(
+                i32::saturating_from(floor(uv * dim)).clamp(0, i32::saturating_from(dim) - 1),
+            )
         };
         Self {
             mip,

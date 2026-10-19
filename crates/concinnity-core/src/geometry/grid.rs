@@ -2,6 +2,7 @@
 // [-half_width, half_width] x [-half_depth, half_depth], row-major with rows
 // running along Z, two triangles per cell, which the water generator fills.
 
+use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -68,9 +69,9 @@ impl Grid {
         let mut idxs = Vec::with_capacity(self.subdivisions * self.subdivisions * 6);
         for row in 0..self.subdivisions {
             for col in 0..self.subdivisions {
-                let tl = (row * cols + col) as u16;
+                let tl = u16::saturating_from(row * cols + col);
                 let tr = tl + 1;
-                let bl = tl + cols as u16;
+                let bl = tl + u16::saturating_from(cols);
                 let br = bl + 1;
                 idxs.extend_from_slice(&[tl, bl, tr, tr, bl, br]);
             }

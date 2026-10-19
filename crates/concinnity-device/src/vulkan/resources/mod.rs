@@ -17,6 +17,7 @@
 //! because every submodule + `init.rs` needs them.
 
 use ash::vk;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -76,7 +77,7 @@ pub(in crate::vulkan) fn write_source_set(
     set: vk::DescriptorSet,
     sources: &[(vk::ImageView, vk::Sampler)],
 ) {
-    let n = sources.len() as u32;
+    let n = u32::saturating_from(sources.len());
     sources
         .iter()
         .zip(0..)

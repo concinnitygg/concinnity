@@ -20,6 +20,7 @@
 //! read-only field access (see `metal/parallel_encoder.rs`).
 
 use concinnity_core::gfx::render_types::TextDrawCall;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::fullscreen;
 use objc2::rc::Retained;
@@ -42,7 +43,7 @@ pub(super) struct TextRange {
 }
 
 fn align_up(offset: usize) -> usize {
-    fullscreen::align_up(offset as u64, TEXT_UPLOAD_ALIGN) as usize
+    usize::saturating_from(fullscreen::align_up(offset as u64, TEXT_UPLOAD_ALIGN))
 }
 
 // Lay out every call's vertex and index block back to back at aligned offsets,
@@ -189,7 +190,7 @@ mod tests {
         let calls = [glyph_call(1), glyph_call(9), glyph_call(3)];
         let mut ranges = Vec::new();
         let total = plan_text_upload(&calls, &mut ranges);
-        let align = TEXT_UPLOAD_ALIGN as usize;
+        let align = usize::saturating_from(TEXT_UPLOAD_ALIGN);
         let mut prev_end = 0usize;
         for (call, range) in calls.iter().zip(ranges.iter()) {
             assert_eq!(range.vertex_offset % align, 0);

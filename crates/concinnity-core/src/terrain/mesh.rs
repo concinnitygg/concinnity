@@ -1,6 +1,7 @@
 // A terrain grid as render geometry: square chunks of cells, each small enough
 // for 16-bit indices and culled on its own.
 
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 use super::TerrainGrid;
@@ -88,9 +89,9 @@ fn chunk(
     let mut indices = Vec::with_capacity((across - 1) * (down - 1) * 6);
     for r in 0..down - 1 {
         for c in 0..across - 1 {
-            let tl = (r * across + c) as u16;
+            let tl = u16::saturating_from(r * across + c);
             let tr = tl + 1;
-            let bl = tl + across as u16;
+            let bl = tl + u16::saturating_from(across);
             let br = bl + 1;
             indices.extend_from_slice(&[tl, bl, tr, tr, bl, br]);
         }
@@ -105,6 +106,7 @@ fn chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
     use crate::math::round;
     use crate::math::vec3::cross;
     use alloc::vec;
@@ -134,7 +136,7 @@ mod tests {
     // corners, and together hold every cell exactly once.
     #[test]
     fn a_large_grid_splits_into_chunks_that_cover_every_cell() {
-        let g = grid(TERRAIN_CHUNK_CELLS as u32 + 6);
+        let g = grid(u32::saturating_from(TERRAIN_CHUNK_CELLS) + 6);
         let chunks = terrain_chunks(&g);
         assert_eq!(chunks.len(), 4);
         let triangles: usize = chunks.iter().map(|c| c.indices.len() / 3).sum();
@@ -186,14 +188,14 @@ mod tests {
     // corners shared by two chunks included.
     #[test]
     fn colored_chunks_carry_each_corners_color() {
-        let g = grid(TERRAIN_CHUNK_CELLS as u32 + 2);
+        let g = grid(u32::saturating_from(TERRAIN_CHUNK_CELLS) + 2);
         let side = g.side();
         let colors: Vec<[f32; 3]> = (0..side * side).map(|i| [i as f32, 0.5, 0.0]).collect();
         let n = g.resolution() as f32;
         for c in terrain_chunks_colored(&g, &colors) {
             for v in &c.vertices {
-                let col = round((v.pos[0] + 10.0) / 20.0 * n) as usize;
-                let row = round((v.pos[2] + 6.0) / 12.0 * n) as usize;
+                let col = usize::saturating_from(round((v.pos[0] + 10.0) / 20.0 * n));
+                let row = usize::saturating_from(round((v.pos[2] + 6.0) / 12.0 * n));
                 assert_eq!(v.color, colors[row * side + col]);
             }
         }

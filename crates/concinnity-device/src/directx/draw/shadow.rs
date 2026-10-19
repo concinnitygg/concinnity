@@ -14,6 +14,7 @@
 //! own indirect buffer.
 
 use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::depth::DEPTH_CLEAR;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -116,7 +117,7 @@ impl DxContext {
                     ShadowView {
                         dsv: self.shadow.dsvs[cascade_idx],
                         ubo_gva: shadow_ubo_gva,
-                        vp_index: cascade_idx as u32,
+                        vp_index: u32::saturating_from(cascade_idx),
                         indirect,
                         first_command: cascade_idx * n_cull,
                     },
@@ -169,8 +170,8 @@ impl DxContext {
             cmd.RSSetScissorRects(&[RECT {
                 left: 0,
                 top: 0,
-                right: size as i32,
-                bottom: size as i32,
+                right: i32::saturating_from(size),
+                bottom: i32::saturating_from(size),
             }]);
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
@@ -254,7 +255,7 @@ impl DxContext {
             cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view));
             cmd.ExecuteIndirect(
                 cmd_sig,
-                prefix as u32,
+                u32::saturating_from(prefix),
                 view.indirect,
                 byte_off(view.first_command),
                 None::<&ID3D12Resource>,
@@ -275,7 +276,7 @@ impl DxContext {
                 cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view));
                 cmd.ExecuteIndirect(
                     cmd_sig,
-                    self.state.draw.n_skinned as u32,
+                    u32::saturating_from(self.state.draw.n_skinned),
                     view.indirect,
                     byte_off(view.first_command + prefix),
                     None::<&ID3D12Resource>,

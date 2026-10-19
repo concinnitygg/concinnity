@@ -11,6 +11,8 @@
 //! RSS nears the RAM ceiling, with hysteresis so it does not flap at the
 //! threshold.
 
+use crate::math::SaturatingFrom;
+
 // Back-off engages when RSS exceeds this percentage of the memory budget and
 // releases below `RELEASE_PCT`; the gap between them is the hysteresis band that
 // stops the valve toggling on every sample near the threshold.
@@ -144,7 +146,7 @@ pub(super) fn scale_budget(baseline: u64, factor: f64) -> u64 {
     if factor >= 1.0 {
         baseline
     } else {
-        (baseline as f64 * factor) as u64
+        u64::saturating_from(baseline as f64 * factor)
     }
 }
 

@@ -5,6 +5,7 @@ use crate::gfx::render_types::{
     DrawObject, GpuDrawArgs, GpuObjectData, GpuTileMorph, albedo_pool_index, draw_args_bucket_bits,
     draw_args_flags, normal_pool_index, pack_object_record,
 };
+use crate::math::SaturatingFrom;
 use crate::planet::{Horizon, TileMorphFrame};
 use crate::render::model_history::HistoryWindow;
 use crate::render::world_pipelines::GrassTwins;
@@ -32,7 +33,7 @@ impl PackView {
     /// camera when it is a planet tile, not at all otherwise.
     pub fn tile_morph_row(&self, obj: &DrawObject) -> GpuTileMorph {
         self.tile_morph
-            .map(|m| m.row(obj.planet_tile, obj.base_vertex as u32))
+            .map(|m| m.row(obj.planet_tile, obj.base_vertex.cast_unsigned()))
             .unwrap_or_default()
     }
 }
@@ -194,9 +195,9 @@ fn draw_args(
     let opaque_visible =
         obj.visible && !behind && !(view.mesh_glass_active && obj.material.see_through != 0);
     GpuDrawArgs {
-        index_count: index_count as u32,
-        index_offset: index_offset as u32,
-        base_vertex: obj.base_vertex as u32,
+        index_count: u32::saturating_from(index_count),
+        index_offset: u32::saturating_from(index_offset),
+        base_vertex: obj.base_vertex.cast_unsigned(),
         // The shader bucket rides the upper flag bits so the cull kernel can
         // route the record's command into that bucket's region.
         flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
@@ -248,7 +249,7 @@ mod tests {
                 obj.visible = !i.is_multiple_of(7);
                 obj.resident = !i.is_multiple_of(11);
                 obj.material.see_through = u32::from(i.is_multiple_of(5));
-                obj.shader_bucket = (i % 3) as u32;
+                obj.shader_bucket = u32::saturating_from(i % 3);
                 if i.is_multiple_of(13) {
                     obj.bb_min = [f32::NAN; 3];
                 }
@@ -699,7 +700,7 @@ mod tests {
         chunk.pack(&view, &|obj| pool_object_record(obj, TEXTURES));
         assert_eq!(
             records[0].tile_morph,
-            morph.row(objs[0].planet_tile, objs[0].base_vertex as u32)
+            morph.row(objs[0].planet_tile, objs[0].base_vertex.cast_unsigned())
         );
         assert_eq!(records[0].tile_morph.range, 256.0);
         assert_eq!(records[1].tile_morph, GpuTileMorph::default());

@@ -7,6 +7,7 @@
 
 use concinnity_core::components::Transform;
 use concinnity_core::ecs::World;
+use concinnity_core::math::narrow_f32;
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 
@@ -50,7 +51,7 @@ fn vec3(value: Option<&Value>) -> Option<[f32; 3]> {
     }
     let mut out = [0.0; 3];
     for (slot, v) in out.iter_mut().zip(array) {
-        *slot = v.as_f64()? as f32;
+        *slot = narrow_f32(v.as_f64()?);
     }
     Some(out)
 }

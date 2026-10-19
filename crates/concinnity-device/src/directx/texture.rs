@@ -2,6 +2,7 @@
 // All texture uploads use an upload heap (CPU-visible) that is copied to a
 // default heap (GPU-local) via CopyTextureRegion on a one-shot command list.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
 use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -169,7 +170,7 @@ pub(super) fn upload_buffer_padded(
     // the pad write stay inside the mapping.
     unsafe {
         std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.cast::<u8>(), data.len());
-        let pad = size as usize - data.len();
+        let pad = usize::saturating_from(size) - data.len();
         if pad > 0 {
             std::ptr::write_bytes(ptr.cast::<u8>().add(data.len()), 0, pad);
         }
@@ -338,7 +339,7 @@ fn upload_texture_levels_deferred(
         .first()
         .ok_or_else(|| RenderError::Other("texture upload has no mip level".into()))?;
     let (width, height) = (base.width, base.height);
-    let mip_count = levels.len() as u32;
+    let mip_count = u32::saturating_from(levels.len());
 
     // Texture resource (pooled default heap, copy-dest initially), full mip chain.
     let desc = D3D12_RESOURCE_DESC {
@@ -346,7 +347,7 @@ fn upload_texture_levels_deferred(
         Width: u64::from(width),
         Height: height,
         DepthOrArraySize: 1,
-        MipLevels: mip_count as u16,
+        MipLevels: u16::saturating_from(mip_count),
         Format: format,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
@@ -392,7 +393,7 @@ fn upload_texture_levels_deferred(
     unsafe { upload.Map(0, None, Some(&raw mut map_ptr)) }
         .map_err(|e| map_hresult(e.code(), "upload tex map"))?;
     for (m, level) in levels.iter().enumerate() {
-        let src_row = row_sizes[m] as usize;
+        let src_row = usize::saturating_from(row_sizes[m]);
         let rows = row_counts[m] as usize;
         let needed = src_row * rows;
         if level.data.len() < needed {
@@ -409,7 +410,7 @@ fn upload_texture_levels_deferred(
             )));
         }
         let dst_pitch = layouts[m].Footprint.RowPitch as usize;
-        let base_off = layouts[m].Offset as usize;
+        let base_off = usize::saturating_from(layouts[m].Offset);
         for row in 0..rows {
             let src = &level.data[row * src_row..(row + 1) * src_row];
             // SAFETY: `map_ptr` is the base of an UPLOAD buffer sized by `GetCopyableFootprints`
@@ -812,7 +813,7 @@ pub(super) fn create_shadow_map_array(
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
         Width: u64::from(size),
         Height: size,
-        DepthOrArraySize: layers as u16,
+        DepthOrArraySize: u16::saturating_from(layers),
         MipLevels: 1,
         Format: DXGI_FORMAT_R32_TYPELESS,
         SampleDesc: DXGI_SAMPLE_DESC {
@@ -1123,7 +1124,7 @@ fn create_rt_resource(
         Width: u64::from(width.max(1)),
         Height: height.max(1),
         DepthOrArraySize: 1,
-        MipLevels: levels.clamp(1, u32::from(u16::MAX)) as u16,
+        MipLevels: u16::saturating_from(levels.clamp(1, u32::from(u16::MAX))),
         Format: format,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
@@ -1441,7 +1442,12 @@ pub(super) fn upload_environment_map(
 
     let prefilter_res = upload_prefilter_cube_resource(alloc, prefilter_face, mip_bytes)
         .map_err(|e| e.context("envmap prefilter"))?;
-    write_cube_srv_mips(device, &prefilter_res, mip_bytes.len() as u32, pre_srv_cpu);
+    write_cube_srv_mips(
+        device,
+        &prefilter_res,
+        u32::saturating_from(mip_bytes.len()),
+        pre_srv_cpu,
+    );
 
     Ok(EnvironmentMapTextures {
         irradiance: GpuResource {
@@ -1454,7 +1460,7 @@ pub(super) fn upload_environment_map(
             srv_cpu: pre_srv_cpu,
             srv_gpu: pre_srv_gpu,
         },
-        prefilter_mip_count: mip_bytes.len() as u32,
+        prefilter_mip_count: u32::saturating_from(mip_bytes.len()),
     })
 }
 
@@ -1482,7 +1488,7 @@ fn upload_cube_resource(
         Width: u64::from(face_size),
         Height: face_size,
         DepthOrArraySize: 6,
-        MipLevels: mip_count as u16,
+        MipLevels: u16::saturating_from(mip_count),
         Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
@@ -1507,13 +1513,13 @@ fn upload_prefilter_cube_resource(
     face_size: u32,
     mip_bytes: &[&[u8]],
 ) -> RenderResult<PooledTexture> {
-    let mip_count = mip_bytes.len() as u32;
+    let mip_count = u32::saturating_from(mip_bytes.len());
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
         Width: u64::from(face_size),
         Height: face_size,
         DepthOrArraySize: 6,
-        MipLevels: mip_count as u16,
+        MipLevels: u16::saturating_from(mip_count),
         Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
@@ -1613,7 +1619,7 @@ fn upload_face_major_into_cube(
                     // `GetCopyableFootprints` for every cube subresource, and `layout.Offset + row
                     // * row_pitch` is the start of a row inside this face's footprint, so the
                     // offset stays in bounds.
-                    unsafe { map_ptr.cast::<u8>().add(layout.Offset as usize + row * row_pitch) };
+                    unsafe { map_ptr.cast::<u8>().add(usize::saturating_from(layout.Offset) + row * row_pitch) };
                 // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload,
                 // and the source is a separate allocation, so the ranges cannot overlap.
                 unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), dst, src_row) };
@@ -1711,7 +1717,7 @@ pub(super) fn upload_color_lut(
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE3D,
         Width: u64::from(size),
         Height: size,
-        DepthOrArraySize: size as u16,
+        DepthOrArraySize: u16::saturating_from(size),
         MipLevels: 1,
         Format: DXGI_FORMAT_R8G8B8A8_UNORM,
         SampleDesc: DXGI_SAMPLE_DESC {
@@ -1771,7 +1777,7 @@ pub(super) fn upload_color_lut(
             let dst = unsafe {
                 map_ptr
                     .cast::<u8>()
-                    .add(layout.Offset as usize + z * slice_pitch + y * dst_pitch)
+                    .add(usize::saturating_from(layout.Offset) + z * slice_pitch + y * dst_pitch)
             };
             // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
             // the source is a separate allocation, so the ranges cannot overlap.
@@ -1911,7 +1917,7 @@ pub(super) fn upload_float_lut(
             // for the whole LUT, and `layout.Offset + y * dst_pitch` is the start of a row inside
             // its footprint. D3D12 hands back a page-aligned mapping and both the footprint offset
             // and the row pitch are multiples of four, so the `f32` cast is aligned.
-            unsafe { map_ptr.cast::<u8>().add(layout.Offset as usize + y * dst_pitch).cast::<f32>() };
+            unsafe { map_ptr.cast::<u8>().add(usize::saturating_from(layout.Offset) + y * dst_pitch).cast::<f32>() };
         // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
         // source is a separate allocation, so the ranges cannot overlap.
         unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), dst, src_row) };

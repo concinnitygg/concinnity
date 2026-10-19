@@ -76,7 +76,7 @@ pub fn procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, String> {
             mesh.radius.unwrap_or(CYLINDER_RADIUS),
             mesh.height.unwrap_or(CYLINDER_HEIGHT),
             mesh.segments.unwrap_or(CYLINDER_SEGMENTS),
-        ),
+        )?,
         "plane" => build_plane(mesh.half_width, mesh.half_depth),
         "sphere" => build_sphere(
             mesh.radius.unwrap_or(SPHERE_RADIUS),

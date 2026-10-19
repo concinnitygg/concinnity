@@ -5,6 +5,7 @@ use crate::ecs::{
     Clock, FrameCaptureRequest, FrameTime, PipelineContext, StepResult, System, WindowMinimized,
     World,
 };
+use crate::math::{SaturatingFrom, narrow_f32, round, round_f64};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -13,7 +14,6 @@ use core::fmt::Write as _;
 use crate::benchmark::BenchmarkRun;
 use crate::camera_track::CameraTrackStatus;
 use crate::components::FrameCapture;
-use crate::math::{round, round_f64};
 use crate::planet::FrameRebases;
 use crate::profile::RenderStats;
 
@@ -100,7 +100,7 @@ impl FrameReportSystem {
             pending: None,
             options: ReduceOptions {
                 warmup_seconds: config.warmup_seconds,
-                budget_us: (config.budget_ms * MICROS_PER_MILLI) as u32,
+                budget_us: u32::saturating_from(config.budget_ms * MICROS_PER_MILLI),
             },
             benchmark: benchmark.clone(),
             out,
@@ -182,15 +182,16 @@ impl System for FrameReportSystem {
         let started = *self.started.get_or_insert(now);
         let status = ctx.resource::<CameraTrackStatus>().copied();
         let run_seconds = status.map_or_else(
-            || (now.saturating_sub(started) as f64 * 1e-6) as f32,
+            || narrow_f32(now.saturating_sub(started) as f64 * 1e-6),
             |s| s.elapsed_seconds,
         );
         let rebases = ctx
             .resource::<FrameRebases>()
             .map_or(0, FrameRebases::count);
         let pose_seconds = status.map_or(run_seconds, |s| s.pose_seconds);
-        let run_step_us =
-            round((pose_seconds - self.previous_pose_seconds).max(0.0) * 1_000_000.0) as u32;
+        let run_step_us = u32::saturating_from(round(
+            (pose_seconds - self.previous_pose_seconds).max(0.0) * 1_000_000.0,
+        ));
         let rebased = rebases != self.previous_rebases;
         self.previous_pose_seconds = pose_seconds;
         self.previous_rebases = rebases;
@@ -209,8 +210,10 @@ impl System for FrameReportSystem {
         // The step clock's interval, which is what the frame advanced the
         // world by; a world without one falls back to this system's own.
         let frame_us = ctx.resource::<FrameTime>().map_or_else(
-            || now.saturating_sub(previous).min(u32::MAX.into()) as u32,
-            |time| round_f64(f64::from(time.dt) * 1e6).min(f64::from(u32::MAX)) as u32,
+            || u32::saturating_from(now.saturating_sub(previous)),
+            |time| {
+                u32::saturating_from(round_f64(f64::from(time.dt) * 1e6).min(f64::from(u32::MAX)))
+            },
         );
 
         let render = ctx.profile.render;

@@ -20,7 +20,7 @@ pub mod grid;
 pub mod initial;
 
 use crate::components::WaterSurface;
-use crate::math::atan2;
+use crate::math::{SaturatingFrom, atan2};
 use alloc::vec::Vec;
 use cascades::Cascades;
 
@@ -77,7 +77,9 @@ impl OceanQuality {
         let size = self.size.clamp(Self::MIN_SIZE, Self::MAX_SIZE);
         Self {
             size: 1 << size.ilog2(),
-            cascades: self.cascades.clamp(1, MAX_OCEAN_CASCADES as u32),
+            cascades: self
+                .cascades
+                .clamp(1, u32::saturating_from(MAX_OCEAN_CASCADES)),
         }
     }
 
@@ -225,7 +227,7 @@ impl OceanPlan {
     pub fn layer_count(&self) -> u32 {
         self.simulations
             .iter()
-            .map(|s| s.cascades.count() as u32)
+            .map(|s| u32::saturating_from(s.cascades.count()))
             .sum()
     }
 

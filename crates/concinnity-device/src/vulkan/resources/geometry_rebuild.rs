@@ -15,6 +15,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend::{
     DrawGeometryUpdate, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
 };
@@ -231,7 +232,7 @@ fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> Rend
             "readback_typed: buffer size {bytes} not a multiple of T stride {stride}"
         )));
     }
-    let count = (bytes / stride) as usize;
+    let count = usize::saturating_from(bytes / stride);
     let staging = ctx.hw.alloc.create_buffer(
         bytes,
         vk::BufferUsageFlags::TRANSFER_DST,

@@ -53,6 +53,7 @@
 //! handles, never drop or allocate.
 
 use ash::{Device, vk};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error;
 use concinnity_core::render::retire_pool::RetirePool;
 use std::cell::RefCell;
@@ -199,7 +200,9 @@ impl PooledBuffer {
     // Byte length of the leased range backing this buffer: its aligned
     // allocation size, at least the size requested at creation. 0 for `null()`.
     pub(super) fn byte_len(&self) -> usize {
-        self.lease.as_ref().map_or(0, |l| l.size as usize)
+        self.lease
+            .as_ref()
+            .map_or(0, |l| usize::saturating_from(l.size))
     }
 
     // Records `first..first + len` of this buffer's mapping viewed as `T`s, for a
@@ -859,7 +862,7 @@ fn resource_ptr(reservation: &Reservation) -> *mut u8 {
         unsafe {
             reservation
                 .mapped
-                .add(reservation.placement.offset as usize)
+                .add(usize::saturating_from(reservation.placement.offset))
         }
     }
 }

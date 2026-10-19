@@ -24,6 +24,7 @@
 //! main depth attachment (decals, fog, and SSAO/SSR pre-passes already share
 //! that target).
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hiz_spd::{self, Plan};
 use concinnity_core::render::uniforms::HizSpdParams;
@@ -133,7 +134,12 @@ fn write_hiz_mip_uavs(
     slots: &[D3D12_CPU_DESCRIPTOR_HANDLE],
 ) {
     for (slot, &cpu) in slots.iter().enumerate() {
-        write_hiz_mip_uav(device, tex, (slot as u32).min(mip_count - 1), cpu);
+        write_hiz_mip_uav(
+            device,
+            tex,
+            u32::saturating_from(slot).min(mip_count - 1),
+            cpu,
+        );
     }
 }
 
@@ -155,7 +161,7 @@ fn create_hiz_texture(
         Width: u64::from(width),
         Height: height,
         DepthOrArraySize: 1,
-        MipLevels: mip_count as u16,
+        MipLevels: u16::saturating_from(mip_count),
         Format: DXGI_FORMAT_R32_FLOAT,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,

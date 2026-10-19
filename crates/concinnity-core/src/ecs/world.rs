@@ -11,6 +11,7 @@
 //! per-system profile micros, and the debug-build access validator's hooks in
 //! [`access_check`](crate::ecs::access_check).
 
+use crate::math::SaturatingFrom;
 use crate::memory::{Arena, MemTag};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -671,15 +672,13 @@ impl World {
             #[cfg(debug_assertions)]
             crate::ecs::access_check::set_active(None);
             let micros = clock.map_or(0, |c| {
-                c.read().saturating_sub(started).min(u64::from(u32::MAX)) as u32
+                u32::saturating_from(c.read().saturating_sub(started))
             });
             ctx.profile.record_system(name, micros);
             #[cfg(debug_assertions)]
             if let (Some(start), Some(end)) = (alloc_start, crate::memory::alloc_count()) {
-                ctx.profile.record_system_allocs(
-                    name,
-                    end.saturating_sub(start).min(u64::from(u32::MAX)) as u32,
-                );
+                ctx.profile
+                    .record_system_allocs(name, u32::saturating_from(end.saturating_sub(start)));
             }
             match result {
                 StepResult::Stop => return StepResult::Stop,
@@ -698,8 +697,9 @@ impl World {
         self.take_scratch_overflows();
         #[cfg(debug_assertions)]
         if let (Some(start), Some(end)) = (frame_alloc_start, crate::memory::alloc_count()) {
-            self.profile
-                .set_frame_allocs(end.saturating_sub(start).min(u64::from(u32::MAX)) as u32);
+            self.profile.set_frame_allocs(u32::saturating_from(
+                end.saturating_sub(start).min(u64::from(u32::MAX)),
+            ));
         }
         if self.systems.is_empty() {
             StepResult::Done

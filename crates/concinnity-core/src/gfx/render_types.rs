@@ -1,5 +1,6 @@
 //! The `repr(C)` GPU layouts every backend and the render prep share with the shaders.
 
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 /// Capacity of the fixed directional-light array in `LightUniforms`.
@@ -469,7 +470,7 @@ impl ClusterParams {
     /// the counts; a negative `num_local_lights` bins none.
     pub fn for_camera(camera: &ClusterCamera, num_local_lights: i32, num_probes: u32) -> Self {
         Self {
-            num_lights: num_local_lights.max(0) as u32,
+            num_lights: u32::saturating_from(num_local_lights),
             use_clusters: u32::from(crate::render::lights::clustering_active(
                 num_local_lights,
                 num_probes as usize,
@@ -1293,7 +1294,7 @@ macro_rules! draw_list_index {
                     u32::try_from(i).is_ok(),
                     concat!(stringify!($name), " does not fit in a u32")
                 );
-                Self(i as u32)
+                Self(u32::saturating_from(i))
             }
         }
 
@@ -1556,7 +1557,7 @@ pub fn albedo_pool_index(texture_slot: usize, texture_count: u32) -> u32 {
     if texture_slot == NO_ALBEDO_SLOT {
         texture_count + 1
     } else {
-        (texture_slot as u32).min(texture_count.saturating_sub(1))
+        u32::saturating_from(texture_slot).min(texture_count.saturating_sub(1))
     }
 }
 
@@ -1569,7 +1570,7 @@ pub fn normal_pool_index(normal_map_slot: usize, texture_count: u32) -> u32 {
     if normal_map_slot == NO_NORMAL_MAP_SLOT {
         texture_count
     } else {
-        (normal_map_slot as u32).min(texture_count.saturating_sub(1))
+        u32::saturating_from(normal_map_slot).min(texture_count.saturating_sub(1))
     }
 }
 
@@ -1806,7 +1807,7 @@ pub fn draw_args_no_history() -> u32 {
 /// region that does not exist; the world-shape check fails such a world at build
 /// time, so the clamp is a backstop.
 pub fn draw_args_bucket_bits(shader_bucket: u32) -> u32 {
-    let bucket = (shader_bucket as usize).min(MAX_DRAW_BUCKETS - 1) as u32;
+    let bucket = u32::saturating_from((shader_bucket as usize).min(MAX_DRAW_BUCKETS - 1));
     bucket << DrawArgsFlags::BUCKET_SHIFT
 }
 
@@ -2621,8 +2622,11 @@ mod tests {
         assert_eq!(draw_args_bucket_bits(1), 1 << 8);
         assert_eq!(draw_args_bucket_bits(3), 3 << 8);
         // A bucket past the routing budget clamps to the last routable one.
-        let last = (MAX_DRAW_BUCKETS - 1) as u32;
-        assert_eq!(draw_args_bucket_bits(MAX_DRAW_BUCKETS as u32), last << 8);
+        let last = u32::saturating_from(MAX_DRAW_BUCKETS - 1);
+        assert_eq!(
+            draw_args_bucket_bits(u32::saturating_from(MAX_DRAW_BUCKETS)),
+            last << 8
+        );
         assert_eq!(draw_args_bucket_bits(u32::MAX), last << 8);
         // Packed alongside the decision bits, each half reads back unchanged.
         let flags = draw_args_flags(true, true, true) | draw_args_bucket_bits(2);
@@ -2648,7 +2652,7 @@ mod tests {
     // cascade count the disabled array never got.
     #[test]
     fn an_empty_shadow_array_is_one_texel_and_one_slice() {
-        let cascades = NUM_SHADOW_CASCADES as u32;
+        let cascades = u32::saturating_from(NUM_SHADOW_CASCADES);
         let one = ShadowArrayExtent { size: 1, layers: 1 };
         assert_eq!(shadow_array_extent(0, cascades), one, "shadows off");
         assert_eq!(shadow_array_extent(512, 0), one, "no slices");

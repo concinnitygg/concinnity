@@ -5,7 +5,7 @@
 //! [`meadow_density`] is the kernel's `grass_meadow_density` line for line, so
 //! the far field the tiles are tinted with thins exactly where the blades do.
 
-use crate::math::floor;
+use crate::math::{SaturatingFrom, floor, narrow_f32};
 
 /// Width of the bare and grassy patches a planet's meadow is made of, in
 /// meters.
@@ -25,9 +25,12 @@ pub fn grass_hash(v: u32) -> u32 {
 
 // A unit value at a 3D lattice point, salted.
 fn lattice(c: [i32; 3], salt: u32) -> f32 {
-    let h = grass_hash((c[0] as u32).wrapping_add(grass_hash(
-        (c[1] as u32).wrapping_add(grass_hash((c[2] as u32) ^ salt)),
-    )));
+    let h = grass_hash(
+        c[0].cast_unsigned().wrapping_add(grass_hash(
+            c[1].cast_unsigned()
+                .wrapping_add(grass_hash(c[2].cast_unsigned() ^ salt)),
+        )),
+    );
     (h >> 8) as f32 * (1.0 / 16_777_216.0)
 }
 
@@ -60,7 +63,7 @@ pub fn value_noise(p: [f32; 3], salt: u32) -> f32 {
         let t = p[i] - cell[i];
         t * t * (3.0 - 2.0 * t)
     });
-    let c = cell.map(|v| v as i32);
+    let c = cell.map(i32::saturating_from);
     let at = |dx: i32, dy: i32, dz: i32| lattice([c[0] + dx, c[1] + dy, c[2] + dz], salt);
     let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
     let x00 = lerp(at(0, 0, 0), at(1, 0, 0), f[0]);
@@ -73,7 +76,7 @@ pub fn value_noise(p: [f32; 3], salt: u32) -> f32 {
 /// Lattice cells of the meadow noise per unit of direction on a planet of
 /// `radius` meters.
 pub fn meadow_scale(radius: f64) -> f32 {
-    (radius / f64::from(MEADOW_PATCH_SIZE)) as f32
+    narrow_f32(radius / f64::from(MEADOW_PATCH_SIZE))
 }
 
 /// The share of a layer's density that grows in unit direction `dir` from

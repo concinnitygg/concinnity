@@ -19,6 +19,7 @@
 
 use basisu::{DecodeFlags, SourceFormat, TargetFormat, Transcoder};
 use concinnity_core::bake::texture::{TextureFormat, TextureImage, TextureMip};
+use concinnity_core::math::SaturatingFrom;
 use ktx2::{Format, Reader, SupercompressionScheme};
 
 // VkFormat values for the BCn block formats this compiler accepts, matched
@@ -124,7 +125,7 @@ fn compile_block_format(
 
     let mut mips = Vec::with_capacity(level_blocks.len());
     for (level, blocks) in level_blocks.into_iter().enumerate() {
-        let (mw, mh) = mip_dims(width, height, level as u32);
+        let (mw, mh) = mip_dims(width, height, u32::saturating_from(level));
         let expected = tex_format.mip_byte_len(mw, mh)?;
         if blocks.len() < expected {
             return Err(format!(
@@ -281,6 +282,7 @@ fn mip_dims(width: u32, height: u32, level: u32) -> (u32, u32) {
 #[cfg(test)]
 pub(crate) mod test_fixtures {
     use super::VK_BC1_RGBA_UNORM;
+    use concinnity_core::math::SaturatingFrom;
 
     // Assemble a KTX2 container around already-laid-out level data. `levels`
     // are (width, height, bytes), level 0 first; `dfd` is the whole Data Format
@@ -297,7 +299,7 @@ pub(crate) mod test_fixtures {
         const LEVEL_INDEX_LEN: usize = 24;
         let level_index_bytes = levels.len() * LEVEL_INDEX_LEN;
         let dfd_offset = HEADER_LEN + level_index_bytes;
-        let dfd_len = dfd.len() as u32;
+        let dfd_len = u32::saturating_from(dfd.len());
         let mut data_offset = dfd_offset + dfd.len();
 
         // Precompute each level's absolute byte offset.
@@ -320,10 +322,10 @@ pub(crate) mod test_fixtures {
         put(&mut out, 28, 0); // pixelDepth
         put(&mut out, 32, 0); // layerCount
         put(&mut out, 36, 1); // faceCount
-        put(&mut out, 40, levels.len() as u32); // levelCount
+        put(&mut out, 40, u32::saturating_from(levels.len())); // levelCount
         put(&mut out, 44, supercompression);
         // Index section
-        put(&mut out, 48, dfd_offset as u32);
+        put(&mut out, 48, u32::saturating_from(dfd_offset));
         put(&mut out, 52, dfd_len);
         put(&mut out, 56, 0); // kvdByteOffset
         put(&mut out, 60, 0); // kvdByteLength
@@ -407,8 +409,8 @@ mod tests {
     fn raw_zstd_frame(data: &[u8]) -> Vec<u8> {
         let mut frame = 0xFD2F_B528u32.to_le_bytes().to_vec();
         frame.push(0x20);
-        frame.push(data.len() as u8);
-        let block_header = ((data.len() as u32) << 3) | 1;
+        frame.push(u8::try_from(data.len()).unwrap());
+        let block_header = (u32::try_from(data.len()).unwrap() << 3) | 1;
         frame.extend_from_slice(&block_header.to_le_bytes()[..3]);
         frame.extend_from_slice(data);
         frame

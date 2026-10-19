@@ -20,6 +20,7 @@ mod shadow;
 mod spot_shadow;
 mod stages;
 
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_core::render::backend::FrameParams;
 use concinnity_core::render::frame_plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
 use concinnity_core::render::grass::lod as grass_lod;
@@ -132,7 +133,7 @@ impl FrameDevice for MtlContext {
             .commandBuffer()
             .ok_or_else(|| error::RenderError::Other("failed to get command buffer".into()))?;
 
-        self.service_background_work(params.elapsed as f32, ring_slot);
+        self.service_background_work(narrow_f32(params.elapsed), ring_slot);
 
         // Transient per-frame GPU buffers holding each skinned object's joint
         // matrices. Built once and reused across the shadow cascades and the
@@ -172,7 +173,7 @@ impl FrameDevice for MtlContext {
     ) -> error::RenderResult<FramePlan> {
         self.plan_frame(PlanArgs {
             camera: camera_inputs(&self.state, params),
-            elapsed: params.elapsed as f32,
+            elapsed: narrow_f32(params.elapsed),
             render_size: frame.render_size,
             lines: params.lines,
             world_hidden: params.world_hidden,
@@ -196,7 +197,7 @@ impl FrameDevice for MtlContext {
             input_sampled_us,
             ..
         } = *frame_params;
-        let elapsed = elapsed_f64 as f32;
+        let elapsed = narrow_f32(elapsed_f64);
         let MtlFrame {
             acquired:
                 AcquiredFrame {
@@ -387,7 +388,7 @@ impl FrameDevice for MtlContext {
                         let span = concinnity_core::render::pass_timing::FrameSpan::after(
                             start, end, previous,
                         );
-                        let micros = |ns: u64| (ns / 1000).min(u64::from(u32::MAX)) as u32;
+                        let micros = |ns: u64| u32::saturating_from(ns / 1000);
                         frame_us = micros(span.own);
                         overlap_us = micros(span.overlap);
                     }

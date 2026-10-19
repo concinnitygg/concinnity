@@ -3,6 +3,7 @@
 
 use concinnity_core::ecs::BlobAssetDef;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::resource::ResourceHandles;
 
 use crate::asset_api::{self, AssetRequest};
@@ -35,7 +36,7 @@ pub(super) fn partition_components(
     };
     for (i, asset) in assets.iter().enumerate() {
         if let Some(kind) = asset.asset_type.resource_kind() {
-            let id = AssetId(i as u32);
+            let id = AssetId(u32::saturating_from(i));
             let handle = handles
                 .get(kind, id)
                 .expect("resource asset was assigned a handle");
@@ -52,7 +53,7 @@ pub(super) fn partition_components(
                 format!("Asset '{}': {}", asset.id, e),
             )
         })?;
-        def.name = Some(AssetId(i as u32));
+        def.name = Some(AssetId(u32::saturating_from(i)));
         out.named.push((asset.id.clone(), def));
         out.named_src.push(i);
     }

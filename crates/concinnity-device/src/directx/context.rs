@@ -8,6 +8,7 @@ use concinnity_core::gfx::render_types::{
 };
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_core::render::backend::FrameParams;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::frame_plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
@@ -93,7 +94,7 @@ pub(super) fn build_timestamp_resources(
     // here, so those slots stay zero and drop out of the on-screen chip.
     let heap_desc = D3D12_QUERY_HEAP_DESC {
         Type: D3D12_QUERY_HEAP_TYPE_TIMESTAMP,
-        Count: (pass_timing::SLOTS_PER_FRAME * alloc.frames_in_flight()) as u32,
+        Count: u32::saturating_from(pass_timing::SLOTS_PER_FRAME * alloc.frames_in_flight()),
         NodeMask: 0,
     };
     let mut heap: Option<ID3D12QueryHeap> = None;
@@ -1510,7 +1511,7 @@ impl FrameDevice for DxContext {
         self.reserve_frame_capture();
         // Staged geometry writes go ahead of everything this frame submits.
         self.flush_geometry_uploads()?;
-        self.service_background_work(params.elapsed as f32, frame);
+        self.service_background_work(narrow_f32(params.elapsed), frame);
         let timings = self.read_gpu_timings(frame);
         let gpu_done = self.read_gpu_done(frame);
         self.timestamps.input_sampled_us[frame] = params.input_sampled_us;
@@ -1548,7 +1549,7 @@ impl FrameDevice for DxContext {
     fn plan(&mut self, _: &DxFrame, params: &FrameParams<'_>) -> RenderResult<FramePlan> {
         self.plan_frame(crate::directx::draw::PlanArgs {
             camera: camera_inputs(&self.state, params),
-            elapsed: params.elapsed as f32,
+            elapsed: narrow_f32(params.elapsed),
             render_size: [
                 self.targets.extent.render_width.max(1),
                 self.targets.extent.render_height.max(1),
@@ -1589,7 +1590,7 @@ impl FrameDevice for DxContext {
             params.upload(frame);
         }
 
-        let particle = self.prepare_particle_pass(elapsed_f64 as f32);
+        let particle = self.prepare_particle_pass(narrow_f32(elapsed_f64));
 
         // 2. Open the END cmd list (Composite + final timestamp +
         //    ResolveQueryData + per-frame restore barriers). The

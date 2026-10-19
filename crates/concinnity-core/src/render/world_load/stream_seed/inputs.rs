@@ -2,6 +2,7 @@
 // backend: texture scoring centers, per-streamed-mesh geometry copies, and the
 // draw-to-mesh-handle mapping.
 
+use crate::math::SaturatingFrom;
 use alloc::vec;
 use alloc::vec::Vec;
 use hashbrown::{HashMap, HashSet};
@@ -91,12 +92,12 @@ pub(super) fn mesh_stream_data(
         }
         draw_indices.push(draw_idx);
         centers.push(vec![draw_object_position(obj)]);
-        let vbase = vstart as u32;
+        let vbase = u32::saturating_from(vstart);
         payloads.push(DecodedMesh {
             vertices: all_vertices[vstart..vend].to_vec(),
             indices: all_indices[obj.index_offset..iend]
                 .iter()
-                .map(|&i| (i - vbase) as u16)
+                .map(|&i| u16::saturating_from(i - vbase))
                 .collect(),
         });
     }

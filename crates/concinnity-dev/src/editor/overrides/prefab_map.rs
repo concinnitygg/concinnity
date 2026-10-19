@@ -4,6 +4,7 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{entry_id, find_entry};
+use concinnity_core::math::narrow_f32;
 use concinnity_core::math::vec3::add;
 use serde_json::Value;
 
@@ -292,9 +293,9 @@ fn as_vec3(v: &Value) -> Option<[f32; 3]> {
         return None;
     }
     Some([
-        arr[0].as_f64()? as f32,
-        arr[1].as_f64()? as f32,
-        arr[2].as_f64()? as f32,
+        narrow_f32(arr[0].as_f64()?),
+        narrow_f32(arr[1].as_f64()?),
+        narrow_f32(arr[2].as_f64()?),
     ])
 }
 
@@ -308,9 +309,9 @@ fn f32_arr3(v: &Value, key: &str, default: [f32; 3]) -> [f32; 3] {
         .filter(|a| a.len() == 3)
         .map_or(default, |a| {
             [
-                a[0].as_f64().unwrap_or_else(|| f64::from(default[0])) as f32,
-                a[1].as_f64().unwrap_or_else(|| f64::from(default[1])) as f32,
-                a[2].as_f64().unwrap_or_else(|| f64::from(default[2])) as f32,
+                narrow_f32(a[0].as_f64().unwrap_or_else(|| f64::from(default[0]))),
+                narrow_f32(a[1].as_f64().unwrap_or_else(|| f64::from(default[1]))),
+                narrow_f32(a[2].as_f64().unwrap_or_else(|| f64::from(default[2]))),
             ]
         })
 }

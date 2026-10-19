@@ -9,6 +9,7 @@ use concinnity_cook::authoring::world::write_world_jsonl;
 use concinnity_core::components::{Camera3D, FrameInput, InputKey, KeyEvent, TextInput, Transform};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Entity, PickEntry, PickIndex, World};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_host::store::paths::StateTree;
 use concinnity_host::thread::asset_id;
 
@@ -542,7 +543,7 @@ pub(in crate::editor::hook) fn press_modal(h: &mut EditorHook, world: &mut World
 pub(in crate::editor::hook) fn press_modal_check(h: &mut EditorHook, world: &mut World) {
     let c = h.modal.as_ref().expect("a dialog is open").controls();
     let p = modal::panel_rect(VP, c);
-    let at = (0..p[3] as usize)
+    let at = (0..usize::saturating_from(p[3]))
         .map(|dy| [p[0] + 20.0, p[1] + dy as f32])
         .find(|m| modal::hit_check(m[0], m[1], VP, c))
         .expect("the dialog has a checkbox");

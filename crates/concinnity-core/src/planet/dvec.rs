@@ -3,6 +3,7 @@
 
 pub use crate::math::dvec3::DVec3;
 use crate::math::dvec3::{cross, dot, normalize_or, scale, sub};
+use crate::math::narrow_f32;
 
 /// A column-major double-precision 3x3 matrix, `m[col][row]`.
 pub type DMat3 = [[f64; 3]; 3];
@@ -121,7 +122,7 @@ pub(crate) fn quat_of(m: &DMat3) -> [f32; 4] {
             (m[0][1] - m[1][0]) / s,
         ]
     };
-    q.map(|c| c as f32)
+    q.map(narrow_f32)
 }
 
 #[cfg(test)]

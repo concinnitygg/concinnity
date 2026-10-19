@@ -9,6 +9,7 @@ use concinnity_core::blob::{
     MeshBoundsRecord, PhysicsBudgetRecord, SceneGroup, WorldManifest, encode_cnb, payload_section,
 };
 use concinnity_core::ecs::{BlobAssetDef, BlobMeta, PayloadLocator, ResourceRecord};
+use concinnity_core::math::SaturatingFrom;
 #[cfg(test)]
 pub(crate) use concinnity_host::store::blob::read_cnb;
 use serde::{Deserialize, Serialize};
@@ -237,7 +238,7 @@ pub(crate) fn write_blobs(
     let mut blob_paths = Vec::new();
 
     for (idx, payload) in blob_payloads.iter().enumerate() {
-        let path = blob_file(idx as u32);
+        let path = blob_file(u32::saturating_from(idx));
         let meta = if idx == 0 {
             primary_meta()
         } else {
@@ -255,7 +256,7 @@ pub(crate) fn write_blobs(
 
     // Remove stale overflow blobs left by a previous, larger build so the
     // directory matches the manifest exactly.
-    let mut stale = blob_paths.len() as u32;
+    let mut stale = u32::saturating_from(blob_paths.len());
     while fs::remove_file(blob_file(stale)).is_ok() {
         stale += 1;
     }

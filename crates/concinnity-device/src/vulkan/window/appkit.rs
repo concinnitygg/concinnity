@@ -15,6 +15,7 @@ use ash::vk;
 use concinnity_core::components::WindowMode;
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::window::clipboard::Clipboard;
 use concinnity_core::window::display_mode::DisplayMode;
@@ -105,7 +106,7 @@ impl AppKitVkWindow {
         self.layer.setContentsScale(scale);
         self.layer
             .setDrawableSize(NSSize::new(w.max(1.0), h.max(1.0)));
-        (w as i32, h as i32)
+        (i32::saturating_from(w), i32::saturating_from(h))
     }
 
     // Drain pending AppKit events; true when the window should close.

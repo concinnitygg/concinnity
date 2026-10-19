@@ -12,6 +12,7 @@
 
 mod derive;
 
+use crate::math::SaturatingFrom;
 pub use derive::{PhysicsBudget, PhysicsCounts};
 
 use alloc::collections::BTreeSet;
@@ -78,7 +79,8 @@ pub(crate) fn scan_counts(ctx: &PipelineContext<'_>) -> PhysicsCounts {
         .query_with_entity::<BodyDynamics>()
         .map(|(e, _)| e)
         .collect();
-    let dynamic_colliders = bodies.iter().filter(|e| dynamics.contains(e)).count() as u32;
+    let dynamic_colliders =
+        u32::saturating_from(bodies.iter().filter(|e| dynamics.contains(e)).count());
 
     let has_body = |body: Ref<Prop>| {
         ctx.entity_of(body.id())
@@ -86,10 +88,10 @@ pub(crate) fn scan_counts(ctx: &PipelineContext<'_>) -> PhysicsCounts {
     };
 
     let mut counts = PhysicsCounts {
-        static_colliders: bodies.len() as u32 - dynamic_colliders,
+        static_colliders: u32::saturating_from(bodies.len()) - dynamic_colliders,
         dynamic_colliders,
-        trigger_volumes: ctx.query::<TriggerVolume>().count() as u32,
-        rig_capsules: ctx.query::<CharacterRig>().count() as u32,
+        trigger_volumes: u32::saturating_from(ctx.query::<TriggerVolume>().count()),
+        rig_capsules: u32::saturating_from(ctx.query::<CharacterRig>().count()),
         ..PhysicsCounts::default()
     };
 

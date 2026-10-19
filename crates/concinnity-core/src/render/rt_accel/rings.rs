@@ -285,6 +285,7 @@ impl<B> ScratchRing<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
     use alloc::vec;
     use alloc::vec::Vec;
 
@@ -334,7 +335,7 @@ mod tests {
             let mut ring = StaticRing::new(depth, ());
             let mut live = Some(0usize);
             let mut last_traced: Vec<Option<u64>> = vec![None; depth];
-            let mut rng = 0x2545_f491_u32 + depth as u32;
+            let mut rng = 0x2545_f491_u32 + u32::saturating_from(depth);
             for now in 0..2000u64 {
                 rng = rng.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
                 match rng >> 30 {

@@ -243,6 +243,7 @@ mod tests {
     use crate::components::cook::Camera3D as Camera3DArgs;
     use crate::components::{CameraTravel, CameraTurn, Ease};
     use crate::ecs::World;
+    use crate::math::SaturatingFrom;
     use alloc::vec;
 
     const TICKS_PER_SECOND: usize = 60;
@@ -273,7 +274,7 @@ mod tests {
     }
 
     fn run(world: &mut World, system: &mut CameraTrackSystem, seconds: f32) {
-        let ticks = (seconds * TICKS_PER_SECOND as f32).round() as usize;
+        let ticks = usize::saturating_from((seconds * TICKS_PER_SECOND as f32).round());
         for _ in 0..ticks {
             system.step(&mut world.context());
         }
@@ -688,7 +689,7 @@ mod tests {
 
     // The ticks, counted from the first, on which the track raised a cut.
     fn cut_ticks(world: &mut World, system: &mut CameraTrackSystem, seconds: f32) -> Vec<usize> {
-        let ticks = (seconds * TICKS_PER_SECOND as f32).round() as usize;
+        let ticks = usize::saturating_from((seconds * TICKS_PER_SECOND as f32).round());
         let mut cuts = Vec::new();
         for tick in 0..ticks {
             let mut ctx = world.context();
@@ -797,7 +798,7 @@ mod tests {
         let mut step_counts = Vec::new();
         for _ in 0..200 {
             accumulator += frame_dt;
-            let ticks = (accumulator / SimTiming::TICK_DT) as u32;
+            let ticks = u32::saturating_from(accumulator / SimTiming::TICK_DT);
             accumulator -= ticks as f32 * SimTiming::TICK_DT;
             frame(
                 &mut world,

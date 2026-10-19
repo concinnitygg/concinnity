@@ -16,6 +16,7 @@
 mod index;
 mod tree;
 
+use crate::math::SaturatingFrom;
 pub(crate) use index::NeighborIndex;
 
 use crate::behavior::position;
@@ -68,12 +69,14 @@ pub(crate) fn count_within_linear(
         return 0;
     }
     let limit = radius * radius;
-    candidates
-        .iter()
-        .filter(|entity| Some(**entity) != exclude)
-        .filter_map(|entity| position::of(components, *entity))
-        .filter(|candidate| distance_sq(*candidate, point) <= limit)
-        .count() as i32
+    i32::saturating_from(
+        candidates
+            .iter()
+            .filter(|entity| Some(**entity) != exclude)
+            .filter_map(|entity| position::of(components, *entity))
+            .filter(|candidate| distance_sq(*candidate, point) <= limit)
+            .count(),
+    )
 }
 
 /// The candidate a ray meets first, skipping `exclude` and anything with no

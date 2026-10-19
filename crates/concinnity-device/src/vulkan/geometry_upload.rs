@@ -262,6 +262,7 @@ fn record_copies(
 mod tests {
     use super::*;
     use crate::vulkan::test_gpu::{TestGpu, test_gpu};
+    use concinnity_core::math::SaturatingFrom;
     use concinnity_core::render::staging::STAGING_MIN_CAPACITY;
 
     const HOST: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::from_raw(
@@ -293,7 +294,7 @@ mod tests {
                 let buffer = alloc
                     .create_buffer(bytes, vk::BufferUsageFlags::TRANSFER_DST, HOST)
                     .expect("destination");
-                buffer.zero_bytes(0, bytes as usize);
+                buffer.zero_bytes(0, usize::saturating_from(bytes));
                 buffer
             };
             let (vertex, index) = (dest(), dest());
@@ -339,7 +340,7 @@ mod tests {
 
     fn pattern(len: usize, seed: u8) -> Vec<u8> {
         (0..len)
-            .map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed))
+            .map(|i| u8::saturating_from(i).wrapping_mul(31).wrapping_add(seed))
             .collect()
     }
 
@@ -393,7 +394,7 @@ mod tests {
         let Some(gpu) = test_gpu() else {
             return;
         };
-        let big = STAGING_MIN_CAPACITY as usize + 1;
+        let big = usize::saturating_from(STAGING_MIN_CAPACITY) + 1;
         let harness = Harness::new(&gpu, big as u64 + 4096);
         let mut uploads = GeometryUploads::new(2);
         let small = pattern(256, 3);
@@ -421,7 +422,7 @@ mod tests {
         };
         let harness = Harness::new(&gpu, STAGING_MIN_CAPACITY);
         let mut uploads = GeometryUploads::new(2);
-        let chunk = pattern(STAGING_MIN_CAPACITY as usize / 2, 5);
+        let chunk = pattern(usize::saturating_from(STAGING_MIN_CAPACITY) / 2, 5);
         uploads
             .stage(&harness.alloc, GeometryTarget::Vertex, 0, &chunk)
             .expect("stage");

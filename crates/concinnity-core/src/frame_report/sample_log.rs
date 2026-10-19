@@ -85,13 +85,14 @@ impl From<Vec<FrameSample>> for SampleLog {
 mod tests {
     use super::*;
     use crate::frame_report::sample::FrameTiming;
+    use crate::math::SaturatingFrom;
     use crate::profile::RenderStats;
 
     fn frame(n: usize) -> FrameSample {
         FrameSample::new(
             FrameTiming {
                 run_seconds: n as f32,
-                frame_us: n as u32,
+                frame_us: u32::saturating_from(n),
                 ..Default::default()
             },
             &RenderStats::default(),
@@ -105,10 +106,14 @@ mod tests {
     fn frames_keep_their_order_across_blocks() {
         let log: SampleLog = (0..BLOCK_SAMPLES * 2 + 3).map(frame).collect();
         assert_eq!(log.len(), BLOCK_SAMPLES * 2 + 3);
-        assert!(log.iter().enumerate().all(|(n, s)| s.frame_us == n as u32));
+        assert!(
+            log.iter()
+                .enumerate()
+                .all(|(n, s)| s.frame_us == u32::saturating_from(n))
+        );
         assert_eq!(
             log.get(BLOCK_SAMPLES).map(|s| s.frame_us),
-            Some(BLOCK_SAMPLES as u32)
+            Some(u32::saturating_from(BLOCK_SAMPLES))
         );
         assert_eq!(log.get(BLOCK_SAMPLES * 2 + 3), None);
     }

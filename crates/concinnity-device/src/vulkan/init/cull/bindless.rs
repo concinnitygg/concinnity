@@ -4,6 +4,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend_init::WorldShader;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::shader_programs::surface::GrassShading;
@@ -112,7 +113,7 @@ pub(super) fn build_bindless_pass(
             vk::DescriptorSetLayoutBinding::default()
                 .binding(1)
                 .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .descriptor_count(bindless_pool_size as u32)
+                .descriptor_count(u32::saturating_from(bindless_pool_size))
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
             vk::DescriptorSetLayoutBinding::default()
                 .binding(MATERIAL_PARAMS_BINDING)

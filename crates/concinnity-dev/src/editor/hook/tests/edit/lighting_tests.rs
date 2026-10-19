@@ -5,6 +5,7 @@
 
 use concinnity_core::components::{FrameInput, Sprite};
 use concinnity_core::ecs::World;
+use concinnity_core::math::narrow_f32;
 
 use crate::frame_hook::FrameHook;
 
@@ -96,9 +97,9 @@ fn lighting_apply_commits_sun_intensity() {
         "commit marks the world changed"
     );
     let args = h.entries[0]["args"].as_object().unwrap();
-    assert_eq!(args["intensity"].as_f64().unwrap() as f32, 5.5);
+    assert_eq!(narrow_f32(args["intensity"].as_f64().unwrap()), 5.5);
     assert_eq!(
-        args["direction"][1].as_f64().unwrap() as f32,
+        narrow_f32(args["direction"][1].as_f64().unwrap()),
         0.85,
         "untouched fields keep their authored values"
     );
@@ -117,7 +118,7 @@ fn lighting_apply_with_unparseable_text_keeps_the_authored_value() {
     h.apply_lighting(&mut world);
     assert_eq!(h.lighting.status, None);
     let args = h.entries[0]["args"].as_object().unwrap();
-    assert_eq!(args["intensity"].as_f64().unwrap() as f32, 2.2);
+    assert_eq!(narrow_f32(args["intensity"].as_f64().unwrap()), 2.2);
 }
 
 // A checkbox toggle commits immediately (live preview on the click) without
@@ -139,7 +140,7 @@ fn lighting_bool_toggle_commits_immediately_and_keeps_typed_text() {
     let args = h.entries[0]["args"].as_object().unwrap();
     assert_eq!(args["enabled"], serde_json::Value::Bool(true));
     assert_eq!(
-        args["density"].as_f64().unwrap() as f32,
+        narrow_f32(args["density"].as_f64().unwrap()),
         0.02,
         "the pending text edit is not committed by the toggle"
     );

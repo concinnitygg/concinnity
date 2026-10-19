@@ -2,7 +2,7 @@
 //! sampled into a fixed set of discrete waves, spread in direction around the
 //! wind, each moving at its deep-water speed.
 
-use crate::math::{cos, exp, ln, powf, sin, sqrt};
+use crate::math::{SaturatingFrom, cos, exp, ln, powf, sin, sqrt};
 use alloc::vec::Vec;
 use core::f32::consts::{FRAC_PI_2, TAU};
 
@@ -203,7 +203,7 @@ pub fn wind_sea(wind_speed: f32, direction: [f32; 2], fetch: f32) -> Vec<Wave> {
             let wavelength = longest * powf(ratio, i as f32);
             let omega = sqrt(GRAVITY * TAU / wavelength);
             let mut amplitude = sqrt(2.0 * sea.density(omega) * omega * band);
-            let seed = i as u32;
+            let seed = u32::saturating_from(i);
             let heading = if i % CROSS_WIND_EVERY == 2 {
                 amplitude *= CROSS_WIND_AMPLITUDE;
                 let side = if (i / CROSS_WIND_EVERY).is_multiple_of(2) {

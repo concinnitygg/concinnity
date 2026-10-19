@@ -1,6 +1,7 @@
 //! Streamed mesh geometry: the decoded vertex and index data a mesh or chunk
 //! load produces, and the record format a disk-backed mesh source keeps it in.
 
+use crate::math::SaturatingFrom;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -57,7 +58,7 @@ pub fn decode_deferred_payload(bytes: &[u8]) -> Result<DecodedMesh, String> {
 /// the indices as little-endian `u16`s.
 pub fn encode_mesh(mesh: &DecodedMesh) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + mesh.vertices.len() * 56 + 4 + mesh.indices.len() * 2);
-    buf.extend_from_slice(&(mesh.vertices.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&u32::saturating_from(mesh.vertices.len()).to_le_bytes());
     for v in &mesh.vertices {
         for x in v
             .pos
@@ -70,7 +71,7 @@ pub fn encode_mesh(mesh: &DecodedMesh) -> Vec<u8> {
             buf.extend_from_slice(&x.to_le_bytes());
         }
     }
-    buf.extend_from_slice(&(mesh.indices.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&u32::saturating_from(mesh.indices.len()).to_le_bytes());
     for i in &mesh.indices {
         buf.extend_from_slice(&i.to_le_bytes());
     }

@@ -6,6 +6,7 @@
 //! shader clamps every vertex to the surface's rectangle.
 
 use crate::gfx::mesh_payload::Vertex;
+use crate::math::SaturatingFrom;
 use crate::math::{hypot, powi};
 use alloc::vec::Vec;
 
@@ -49,19 +50,20 @@ impl OceanGrid {
 
     /// Distance from the anchor to grid line `i` (signed).
     pub fn line(&self, i: i32) -> f32 {
-        let n0 = OCEAN_GRID_INNER_CELLS as i32;
-        let m = i.unsigned_abs() as i32 - n0;
+        let n0 = i32::saturating_from(OCEAN_GRID_INNER_CELLS);
+        let m = i32::saturating_from(i.unsigned_abs()) - n0;
         let at = if m <= 0 {
             i.unsigned_abs() as f32 * self.inner_cell
         } else {
-            n0 as f32 * self.inner_cell + outer_span(self.inner_cell, self.growth, m as u32)
+            n0 as f32 * self.inner_cell
+                + outer_span(self.inner_cell, self.growth, u32::saturating_from(m))
         };
         if i < 0 { -at } else { at }
     }
 
     /// How far the grid reaches from its anchor.
     pub fn reach(&self) -> f32 {
-        self.line(OCEAN_GRID_HALF_LINES as i32)
+        self.line(i32::saturating_from(OCEAN_GRID_HALF_LINES))
     }
 
     /// The anchor for a camera at `xz`: snapped to whole inner cells.
@@ -91,7 +93,7 @@ impl OceanGrid {
 
     /// The grid's vertices, relative to the anchor, and its triangles.
     pub fn mesh(&self) -> (Vec<Vertex>, Vec<u16>) {
-        let n = OCEAN_GRID_HALF_LINES as i32;
+        let n = i32::saturating_from(OCEAN_GRID_HALF_LINES);
         let lines: Vec<f32> = (-n..=n).map(|i| self.line(i)).collect();
         let cols = lines.len();
         let mut vertices = Vec::with_capacity(cols * cols);
@@ -109,9 +111,9 @@ impl OceanGrid {
         let mut indices = Vec::with_capacity((cols - 1) * (cols - 1) * 6);
         for row in 0..cols - 1 {
             for col in 0..cols - 1 {
-                let tl = (row * cols + col) as u16;
+                let tl = u16::saturating_from(row * cols + col);
                 let tr = tl + 1;
-                let bl = tl + cols as u16;
+                let bl = tl + u16::saturating_from(cols);
                 let br = bl + 1;
                 indices.extend_from_slice(&[tl, bl, tr, tr, bl, br]);
             }
@@ -126,7 +128,7 @@ fn outer_span(inner: f32, growth: f32, m: u32) -> f32 {
     if growth <= 1.0 {
         return inner * m as f32;
     }
-    inner * growth * (powi(growth, m as i32) - 1.0) / (growth - 1.0)
+    inner * growth * (powi(growth, i32::saturating_from(m)) - 1.0) / (growth - 1.0)
 }
 
 // The least growth at which the grid's outer cells reach `reach` meters.
@@ -167,12 +169,12 @@ mod tests {
             g.reach()
         );
         assert!((g.inner_cell - 56.0 / 48.0).abs() < 1e-5);
-        let n = OCEAN_GRID_HALF_LINES as i32;
+        let n = i32::saturating_from(OCEAN_GRID_HALF_LINES);
         for i in -n..n {
             assert!(g.line(i + 1) > g.line(i), "{i}");
             assert_eq!(g.line(-i), -g.line(i));
         }
-        let inner = OCEAN_GRID_INNER_CELLS as i32;
+        let inner = i32::saturating_from(OCEAN_GRID_INNER_CELLS);
         for i in 0..inner {
             assert!((g.line(i + 1) - g.line(i) - g.inner_cell).abs() < 1e-4);
         }
@@ -186,7 +188,7 @@ mod tests {
     #[test]
     fn the_cell_estimate_tracks_the_grid() {
         let g = ocean();
-        let n = OCEAN_GRID_HALF_LINES as i32;
+        let n = i32::saturating_from(OCEAN_GRID_HALF_LINES);
         for i in 0..n {
             let cell = g.line(i + 1) - g.line(i);
             let mid = 0.5 * (g.line(i + 1) + g.line(i));
@@ -231,7 +233,7 @@ mod tests {
         assert!(idx.iter().all(|&i| (i as usize) < verts.len()));
         assert_eq!(
             verts[0].pos[0],
-            ocean().line(-(OCEAN_GRID_HALF_LINES as i32))
+            ocean().line(-i32::saturating_from(OCEAN_GRID_HALF_LINES))
         );
     }
 }

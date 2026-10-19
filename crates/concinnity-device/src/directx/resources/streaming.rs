@@ -3,6 +3,7 @@
 //! scene bookkeeping, done in `SceneState`.
 
 use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -89,12 +90,12 @@ impl DxContext {
 
         self.scene.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_vbuf),
-            SizeInBytes: new_v_len as u32,
-            StrideInBytes: size_of::<Vertex>() as u32,
+            SizeInBytes: u32::saturating_from(new_v_len),
+            StrideInBytes: u32::saturating_from(size_of::<Vertex>()),
         };
         self.scene.geometry.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_ibuf),
-            SizeInBytes: new_i_len as u32,
+            SizeInBytes: u32::saturating_from(new_i_len),
             // Static IB is u32 (matches the `Format` chosen in init/mod.rs).
             Format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT,
         };

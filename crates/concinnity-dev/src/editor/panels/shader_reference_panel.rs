@@ -4,6 +4,7 @@
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
+use concinnity_core::math::SaturatingFrom;
 
 use super::shader_reference::RefRow;
 use crate::editor::hud_ids::hud_ids;
@@ -38,7 +39,7 @@ pub(crate) struct RefView<'a> {
 
 // How many rows the column at `rect` shows.
 pub(crate) fn rows_shown(rect: [f32; 4]) -> usize {
-    (((rect[3] - 2.0 * INSET) / ROW_H).floor().max(1.0) as usize).min(POOL)
+    usize::saturating_from(((rect[3] - 2.0 * INSET) / ROW_H).floor().max(1.0)).min(POOL)
 }
 
 fn row_rect(rect: [f32; 4], slot: usize) -> [f32; 4] {
@@ -55,7 +56,7 @@ pub(crate) fn slot_at(rect: [f32; 4], mx: f32, my: f32) -> Option<usize> {
     if !point_in(mx, my, rect) || my < rect[1] + INSET {
         return None;
     }
-    let slot = ((my - rect[1] - INSET) / ROW_H).floor() as usize;
+    let slot = usize::saturating_from(((my - rect[1] - INSET) / ROW_H).floor());
     (slot < rows_shown(rect)).then_some(slot)
 }
 

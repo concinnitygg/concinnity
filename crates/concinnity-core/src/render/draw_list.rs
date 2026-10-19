@@ -11,6 +11,7 @@ use crate::gfx::render_types::{
     DrawIndex, DrawObject, InstancedCluster, LodSlice, MaterialUniforms, NO_NORMAL_MAP_SLOT,
 };
 use crate::gfx::{frustum, mesh_payload};
+use crate::math::SaturatingFrom;
 use crate::render::material_entry::{MaterialEntry, resolve_material_slots};
 use crate::resource::MeshTable;
 use crate::transform::IDENTITY as IDENTITY4;
@@ -69,10 +70,10 @@ pub struct DeferredMeshSources {
 impl DeferredMeshSources {
     // Baked bounds for a deferred resource-stream Mesh, or None to decode.
     fn resource_bounds(&self, handle: usize) -> Option<([f32; 3], [f32; 3])> {
-        if !self.by_handle.contains(&(handle as u32)) {
+        if !self.by_handle.contains(&u32::saturating_from(handle)) {
             return None;
         }
-        self.bounds.get(&(handle as u32)).copied()
+        self.bounds.get(&u32::saturating_from(handle)).copied()
     }
 
     // Baked bounds for a deferred mesh-source component at its push position,
@@ -81,7 +82,7 @@ impl DeferredMeshSources {
         if !self.by_def.contains(&id) {
             return None;
         }
-        self.bounds.get(&(handle as u32)).copied()
+        self.bounds.get(&u32::saturating_from(handle)).copied()
     }
 }
 
@@ -490,7 +491,11 @@ impl<'a> MeshSink<'a> {
                     indices: Vec::new(),
                     lod_alternates: Vec::new(),
                     bounds: Some(bounds),
-                    counts: self.deferred.counts.get(&(handle as u32)).copied(),
+                    counts: self
+                        .deferred
+                        .counts
+                        .get(&u32::saturating_from(handle))
+                        .copied(),
                 }
             }
         };
@@ -628,7 +633,7 @@ pub fn build_draw_list(inputs: DrawListInputs<'_>) -> Option<DrawListData> {
         let loaded = mesh_geometry.get(handle)?;
         let vertex_byte_offset = all_vertices.len() * size_of::<Vertex>();
         let index_elem_offset = all_indices.len();
-        let base = all_vertices.len() as u32;
+        let base = u32::saturating_from(all_vertices.len());
         let (bb_min, bb_max) = loaded
             .bounds
             .unwrap_or_else(|| local_bounds(&loaded.vertices));
@@ -915,7 +920,7 @@ pub fn build_draw_list(inputs: DrawListInputs<'_>) -> Option<DrawListData> {
     for (room, verts, idxs, room_lods) in room_geometry {
         let vertex_byte_offset = all_vertices.len() * size_of::<Vertex>();
         let index_elem_offset = all_indices.len();
-        let base = all_vertices.len() as u32;
+        let base = u32::saturating_from(all_vertices.len());
         all_vertices.extend_from_slice(verts);
         all_indices.extend(idxs.iter().map(|i| u32::from(*i) + base));
         let lod_slices = append_lod_slices(&mut all_indices, room_lods, base);
@@ -1001,8 +1006,8 @@ mod tests {
 
     impl PayloadStore for OneSection {
         fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], PayloadError> {
-            let start = locator.offset as usize;
-            let end = start + locator.len as usize;
+            let start = usize::saturating_from(locator.offset);
+            let end = start + usize::saturating_from(locator.len);
             self.0.get(start..end).ok_or(PayloadError::OutOfBounds {
                 index: locator.blob_index,
                 offset: locator.offset,

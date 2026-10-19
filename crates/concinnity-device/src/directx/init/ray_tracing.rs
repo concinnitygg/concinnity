@@ -2,6 +2,7 @@
 //! resolves feed, the RT reflection pipelines with their output target, and the
 //! acceleration structure they trace.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend_init::{RenderLaunch, SceneData};
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::settings::ResolvedGraphics;
@@ -110,7 +111,7 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> DxRa
             shared: raytrace::SharedGeometry::of(&scene.geometry),
             draw_objects: &world.draw_objects,
             clusters: &world.instanced_clusters,
-            albedo_count: scene.textures.len() as u32,
+            albedo_count: u32::saturating_from(scene.textures.len()),
             // Exclude the meshes the transparent pass will reroute. Decided
             // here rather than through `seethrough_meshes_enabled` because
             // the context does not exist yet; the two agree because both read

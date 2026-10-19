@@ -18,6 +18,7 @@ use concinnity_core::ecs::{
 use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_core::gfx::{chunk_coord, mesh_payload};
 use concinnity_core::launch::{LaunchArgs, LaunchRequest};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend::{GpuProfile, GpuTier, GpuVendor};
 use concinnity_core::render::backend_init::SwapchainConfig;
 use concinnity_core::render::{backend, error, text};
@@ -154,7 +155,7 @@ impl WorldBuilder {
         // next mesh handle; the Prop below references it by that handle, as cook
         // resolves a `.mesh` name. `mesh`'s asset id is unused.
         let _ = mesh;
-        let mesh_handle = MeshHandle::new(self.mesh_records.len() as u32);
+        let mesh_handle = MeshHandle::new(u32::saturating_from(self.mesh_records.len()));
         self.mesh_records
             .push(concinnity_core::ecs::ResourceRecord {
                 resource_kind: concinnity_core::ecs::ResourceKind::Mesh,
@@ -166,7 +167,7 @@ impl WorldBuilder {
         // Textures are resources now: the payload rides the resource stream at
         // the next texture handle. The Material references `TextureHandle::new(0)` (the
         // first texture) regardless of any texture's asset id.
-        let handle = self.texture_records.len() as u32;
+        let handle = u32::saturating_from(self.texture_records.len());
         self.texture_records
             .push(concinnity_core::ecs::ResourceRecord {
                 resource_kind: concinnity_core::ecs::ResourceKind::Texture,
@@ -178,7 +179,7 @@ impl WorldBuilder {
         // next handle (serialized like cook does), and reference it by that
         // handle. `mat`'s asset id is unused now that the reference is a handle.
         let _ = mat;
-        let mat_handle = self.material_records.len() as u32;
+        let mat_handle = u32::saturating_from(self.material_records.len());
         let mat_bytes = postcard::to_allocvec(&Material {
             albedo: Some(TextureHandle::new(0)),
             ..Default::default()
@@ -421,7 +422,7 @@ fn skinned_payload(n: u16, lods: &[(f32, Vec<u16>)]) -> Vec<u8> {
 // the table index IS the mesh's `SkinnedMeshHandle`.
 fn push_skinned_payload(b: &mut WorldBuilder, name: AssetId, sm: SkinnedMesh, payload: &[u8]) {
     let locator = b.payload(payload);
-    let handle = b.skinned_records.len() as u32;
+    let handle = u32::saturating_from(b.skinned_records.len());
     let data = postcard::to_allocvec(&(name.0, sm)).unwrap();
     b.skinned_records
         .push(concinnity_core::ecs::ResourceRecord {

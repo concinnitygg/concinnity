@@ -27,6 +27,7 @@
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::probe_bake::{CAPTURE_FACES, ProbeBake, ProbeBakeDevice};
 use concinnity_core::render::probe_book::ProbeBook;
@@ -344,7 +345,7 @@ impl VkContext {
             .dst_subresource(vk::ImageSubresourceLayers {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 mip_level: 0,
-                base_array_layer: face as u32,
+                base_array_layer: u32::saturating_from(face),
                 layer_count: 1,
             })
             .dst_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
@@ -480,7 +481,11 @@ impl VkContext {
         };
         let (pipeline, layout) = (&kernels.pipeline, &kernels.pipeline_layout);
         let device = &self.hw.device;
-        let params = capture_cull_params(frustum, cam_pos, self.state.draw.record_count() as u32);
+        let params = capture_cull_params(
+            frustum,
+            cam_pos,
+            u32::saturating_from(self.state.draw.record_count()),
+        );
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
@@ -512,7 +517,7 @@ impl VkContext {
             );
             device.cmd_dispatch(
                 cmd,
-                (self.state.draw.record_count() as u32).div_ceil(64),
+                u32::saturating_from(self.state.draw.record_count()).div_ceil(64),
                 1,
                 1,
             );
@@ -616,8 +621,8 @@ impl VkContext {
                 cmd,
                 indirect,
                 0,
-                self.state.draw.skinned_record_base() as u32,
-                size_of::<vk::DrawIndexedIndirectCommand>() as u32,
+                u32::saturating_from(self.state.draw.skinned_record_base()),
+                u32::saturating_from(size_of::<vk::DrawIndexedIndirectCommand>()),
             );
         }
         // A face is always rendered lit, whatever the viewport shows.
@@ -1158,9 +1163,9 @@ impl BakeResources {
         // The pool binding's declared length, not the world's image count: the
         // bake allocates the same bindless set layout the main pass does, so it
         // has to budget for every slot that layout declares.
-        let tex_pool = ctx.cull.bindless_pool_size as u32;
+        let tex_pool = u32::saturating_from(ctx.cull.bindless_pool_size);
         let has_hiz = u32::from(ctx.cull.hiz.is_some());
-        let faces = CAPTURE_FACES as u32;
+        let faces = u32::saturating_from(CAPTURE_FACES);
         // The six per-face global sets, the four cull SSBOs, the object SSBO,
         // texture pool, parameter table and vertex stream of each face's
         // bindless set, and a Hi-Z set (an image and a UBO) when the world runs

@@ -15,6 +15,7 @@ mod shader_tests;
 
 use crate::components::{MAX_WATER_WAVES, WaterShape, WaterSurface};
 use crate::gfx::mesh_payload::Vertex;
+use crate::math::{SaturatingFrom, narrow_f32};
 use crate::planet::PlanetShape;
 use crate::render::wind::WindField;
 use alloc::string::String;
@@ -200,7 +201,7 @@ impl WaterBody {
                 direction: w.direction,
                 amplitude: w.amplitude,
                 wavelength: w.wavelength,
-                phase: unit_hash(i as u32, 11) * core::f32::consts::TAU,
+                phase: unit_hash(u32::saturating_from(i), 11) * core::f32::consts::TAU,
                 steepness: w.steepness,
             });
 
@@ -282,7 +283,7 @@ impl WaterBody {
     /// planet's center.
     pub fn sort_center(&self) -> [f32; 3] {
         match &self.sea {
-            Some(sea) => sea.sphere.center.map(|c| c as f32),
+            Some(sea) => sea.sphere.center.map(narrow_f32),
             None => self.surface.center,
         }
     }

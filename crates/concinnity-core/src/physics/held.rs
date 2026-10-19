@@ -86,6 +86,7 @@ impl HeldBodies {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
     use crate::physics::{ColliderShape, DynamicParams, LayerMask, SimConfig};
     use crate::terrain::TerrainGrid;
     use alloc::vec;
@@ -206,7 +207,7 @@ mod tests {
         step(&mut world, &mut held, &balls, &back);
         assert!(!held.is_held(balls[0]));
         let fall = (2.0 * 2.5 / crate::physics::GRAVITY).sqrt();
-        let ticks = (fall / TICK) as usize + 60;
+        let ticks = usize::saturating_from(fall / TICK) + 60;
         for _ in 0..ticks {
             step(&mut world, &mut held, &balls, &back);
         }

@@ -1,6 +1,7 @@
 //! The catalog of every world `Shader`'s files a hot reload watches, each with
 //! the shader bucket its pipeline occupies.
 
+use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -78,7 +79,7 @@ impl ShaderSourceMap {
                 Some(ShaderSourceEntry {
                     id,
                     name: name_of(id).unwrap_or_else(|| format!("shader bucket {bucket}")),
-                    bucket: bucket as u32,
+                    bucket: u32::saturating_from(bucket),
                     files,
                 })
             })

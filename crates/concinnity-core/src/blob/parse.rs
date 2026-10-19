@@ -6,6 +6,7 @@ use crate::blob::HEADER_SIZE;
 use crate::blob::error::BlobError;
 use crate::blob::frame::{FrameError, decode_exact};
 use crate::blob::kind::BlobKind;
+use crate::math::SaturatingFrom;
 
 /// Parse a blob image's header and metadata block. Returns the metadata and the
 /// offset at which the payload section begins.
@@ -19,7 +20,7 @@ use crate::blob::kind::BlobKind;
 /// [`BlobMeta`](crate::blob::BlobMeta) it is a schema version, and runtime
 /// callers pass `concinnity_core::SCHEMA_VERSION`.
 pub fn parse_cnb<K: BlobKind>(validity: u32, data: &[u8]) -> Result<(K, usize), BlobError> {
-    let meta_len = parse_header::<K>(data)? as usize;
+    let meta_len = usize::saturating_from(parse_header::<K>(data)?);
 
     let stored = le_u32(data, 4).ok_or(BlobError::TooShort)?;
     if stored != validity {
@@ -56,7 +57,7 @@ pub fn payload_section(data: &[u8]) -> &[u8] {
     let Some(meta_len) = le_u64(data, 8) else {
         return &[];
     };
-    let meta_len = meta_len as usize;
+    let meta_len = usize::saturating_from(meta_len);
     HEADER_SIZE
         .checked_add(meta_len)
         .and_then(|start| data.get(start..))
@@ -173,7 +174,7 @@ mod tests {
             u32::from_le_bytes(image[4..8].try_into().unwrap()),
             TEST_SCHEMA_VERSION
         );
-        let meta_len = u64::from_le_bytes(image[8..16].try_into().unwrap()) as usize;
+        let meta_len = usize::saturating_from(u64::from_le_bytes(image[8..16].try_into().unwrap()));
         assert_eq!(image.len(), HEADER_SIZE + meta_len + 1);
     }
 

@@ -2,6 +2,7 @@
 
 use crate::components::BlockType;
 use crate::ecs::{MaterialHandle, Ref};
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 /// An infinite, procedurally generated voxel world.
@@ -85,14 +86,14 @@ impl VoxelWorld {
     /// View radius in chunks, floored at 0 and capped so a typo cannot ask for
     /// a multi-thousand-chunk window.
     pub fn view_radius(&self) -> i32 {
-        (self.view_radius as i32).clamp(0, 32)
+        i32::saturating_from(self.view_radius).clamp(0, 32)
     }
 
     /// Effective impostor (far) radius in chunks. Capped well above the
     /// full-detail cap since impostors are cheap, and floored at `view_radius`
     /// (a smaller value disables impostors, there is no far band to fill).
     pub fn impostor_radius(&self) -> i32 {
-        (self.impostor_radius as i32)
+        i32::saturating_from(self.impostor_radius)
             .clamp(0, 96)
             .max(self.view_radius())
     }

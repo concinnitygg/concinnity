@@ -5,6 +5,7 @@
 //! path of the value it edits and, when it is a list member, the path the
 //! delete / reorder buttons act on.
 
+use concinnity_core::math::SaturatingFrom;
 use serde_json::Value;
 
 use super::palette::{self, Shape};
@@ -632,7 +633,7 @@ fn vec3_text(value: Option<&Value>) -> String {
 // `.0`, so re-committing a row does not churn the authored JSON.
 pub(crate) fn fmt_num(n: f64) -> String {
     if n.fract() == 0.0 && n.abs() < 1.0e15 {
-        format!("{}", n as i64)
+        format!("{}", i64::saturating_from(n))
     } else {
         format!("{n}")
     }

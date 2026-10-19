@@ -28,6 +28,7 @@ use ash::vk;
 use concinnity_core::components::GlassPanel;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::fullscreen::align_up;
 use concinnity_core::render::reactive_mask::ReactiveWrite;
@@ -200,7 +201,7 @@ pub(in crate::vulkan) fn upload_record(
         gpu: RecordBuffers {
             vertex_buffer,
             index_buffer,
-            index_count: upload.indices.len() as u32,
+            index_count: u32::saturating_from(upload.indices.len()),
             params_ubos,
             params_sets,
         },
@@ -284,7 +285,7 @@ impl GlassMeshProducer {
             )?);
         }
 
-        let sets_needed = (frames * count) as u32;
+        let sets_needed = u32::saturating_from(frames * count);
         let sizes = PoolSizes::default()
             .sets(&params_set_bindings(), sets_needed)
             .build();
@@ -610,7 +611,7 @@ fn build_transparent_rt(
     }
 
     // Pool: one set per frame.
-    let f = frames as u32;
+    let f = u32::saturating_from(frames);
     let pool_sizes = PoolSizes::default().sets(&rt_set_bindings(), f).build();
     let pool = device
         .create_descriptor_pool(
@@ -678,7 +679,7 @@ fn create_transparent_render_pass(
         .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
     // The reactive mask beside the scene, when the writers carry it.
     let attachments = device.writer_targets().attachments(color, mask);
-    let color_refs: Vec<_> = (0..attachments.len() as u32)
+    let color_refs: Vec<_> = (0..u32::saturating_from(attachments.len()))
         .map(|i| {
             vk::AttachmentReference::default()
                 .attachment(i)
@@ -918,8 +919,8 @@ fn create_descriptor_pool(
 ) -> RenderResult<OwnedDescriptorPool> {
     // One view set per frame per `FrameViewSets` slot.
     // One params set per record per frame slot.
-    let v = (frames * FrameViewSets::COUNT) as u32;
-    let r = (records * frames) as u32;
+    let v = u32::saturating_from(frames * FrameViewSets::COUNT);
+    let r = u32::saturating_from(records * frames);
     let sizes = PoolSizes::default()
         .sets(&view_set_bindings(), v)
         .sets(&params_set_bindings(), r)
@@ -1100,7 +1101,7 @@ fn transparent_pipeline(
     } = shaders;
     let binding = [vk::VertexInputBindingDescription {
         binding: 0,
-        stride: size_of::<Vertex>() as u32,
+        stride: u32::saturating_from(size_of::<Vertex>()),
         input_rate: vk::VertexInputRate::VERTEX,
     }];
     let attr = |location: u32, offset: u32| vk::VertexInputAttributeDescription {
@@ -1945,12 +1946,12 @@ impl VkContext {
             }
             let mesh = SeeThroughMesh::new(obj, cam, prefilter_mip_count);
             ring.write_val(
-                (slot as u64 * producer.params_stride) as usize,
+                usize::saturating_from(slot as u64 * producer.params_stride),
                 &mesh.params,
             );
             draws.push(GlassMeshDraw {
-                index_offset: mesh.index_offset as u32,
-                index_count: mesh.index_count as u32,
+                index_offset: u32::saturating_from(mesh.index_offset),
+                index_count: u32::saturating_from(mesh.index_count),
                 base_vertex: mesh.base_vertex,
                 params_set: producer.params_sets[frame_idx * count + slot],
                 center: mesh.center,

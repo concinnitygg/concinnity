@@ -10,6 +10,7 @@ use crate::components::Sprite;
 use crate::ecs::CursorShape;
 use crate::gfx::overlay::OverlayTransform;
 use crate::gfx::render_types::{TextDrawCall, TextVertex};
+use crate::math::SaturatingFrom;
 #[cfg(test)]
 use alloc::vec::Vec;
 
@@ -197,7 +198,7 @@ fn push_shape(
     alpha: f32,
     sil: &Silhouette,
 ) {
-    let base = call.vertices.len() as u16;
+    let base = u16::saturating_from(call.vertices.len());
     let (c, s) = sil.rot;
     for &(nx, ny) in sil.verts {
         let rx = nx * c - ny * s;

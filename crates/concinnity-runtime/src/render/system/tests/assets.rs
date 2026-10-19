@@ -5,6 +5,7 @@ use concinnity_core::components::{
     VolumetricFog, WaterSurface, Wind,
 };
 use concinnity_core::ecs::ResourceKind;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::reflection_probe::ProbePlacement;
 use concinnity_core::terrain::TerrainGrid;
 use concinnity_core::terrain::payload::TerrainPayload;
@@ -34,7 +35,7 @@ impl WorldBuilder {
     // with `bytes` as its compiled payload, and return the handle.
     fn push_resource(&mut self, kind: ResourceKind, bytes: &[u8]) -> u32 {
         let locator = self.payload(bytes);
-        let handle = self.kind_records(kind).len() as u32;
+        let handle = u32::saturating_from(self.kind_records(kind).len());
         self.kind_records(kind)
             .push(concinnity_core::ecs::ResourceRecord {
                 resource_kind: kind,
@@ -507,7 +508,7 @@ impl WorldBuilder {
     // the way cook does (Materials are a data resource; all their data lives in
     // the baked bytes).
     fn push_material(&mut self, mat: Material) -> MaterialHandle {
-        let handle = self.material_records.len() as u32;
+        let handle = u32::saturating_from(self.material_records.len());
         self.material_records
             .push(concinnity_core::ecs::ResourceRecord {
                 resource_kind: ResourceKind::Material,

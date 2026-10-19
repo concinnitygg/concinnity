@@ -3,6 +3,7 @@
 //! block's size climbs. The backend owns block creation and the bind; this owns
 //! which block a request lands in and when a block is opened or released.
 
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 use super::block_alloc::{BlockAllocator, Placement};
@@ -38,7 +39,7 @@ impl BlockGrowth {
     /// host `size` bytes at `align`. Keyed off the live count, so a pool that
     /// empties out restarts the ladder.
     pub fn block_bytes(&self, live_blocks: usize, size: u64, align: u64) -> u64 {
-        let step = (live_blocks as u32).min(self.doublings);
+        let step = u32::saturating_from(live_blocks).min(self.doublings);
         let grown = self
             .first
             .saturating_mul(1u64.checked_shl(step).unwrap_or(u64::MAX))

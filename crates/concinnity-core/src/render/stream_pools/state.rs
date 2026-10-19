@@ -5,6 +5,7 @@
 //! comes back a frame later as an [`OpFailure`] and is rolled back by
 //! [`StreamingState::apply_op_failures`].
 
+use crate::math::SaturatingFrom;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
@@ -115,7 +116,7 @@ impl StreamingPools {
 // loads without it.
 fn note_failed(residency: &mut Option<SceneResidency>, channel: u8, id: usize) {
     if let Some(residency) = residency {
-        residency.note_failed((channel, id as u32));
+        residency.note_failed((channel, u32::saturating_from(id)));
     }
 }
 
@@ -305,7 +306,7 @@ impl StreamingState {
                     note_resident(
                         &mut pools.scene_residency,
                         CHANNEL_MESH,
-                        stream_id as u32,
+                        u32::saturating_from(stream_id),
                         false,
                     );
                 }
@@ -316,7 +317,7 @@ impl StreamingState {
                     note_resident(
                         &mut pools.scene_residency,
                         CHANNEL_TEXTURE,
-                        slot as u32,
+                        u32::saturating_from(slot),
                         false,
                     );
                 }
@@ -327,7 +328,7 @@ impl StreamingState {
                     note_resident(
                         &mut pools.scene_residency,
                         CHANNEL_TEXTURE,
-                        slot as u32,
+                        u32::saturating_from(slot),
                         true,
                     );
                 }
@@ -455,7 +456,12 @@ impl StreamingState {
                         out.failures.push(OpFailure::TextureEvict { slot });
                     }
                 });
-                note_resident(residency, CHANNEL_TEXTURE, slot as u32, false);
+                note_resident(
+                    residency,
+                    CHANNEL_TEXTURE,
+                    u32::saturating_from(slot),
+                    false,
+                );
             }
         }
         pool.drain_completed(frame, |slot, image| {
@@ -468,7 +474,7 @@ impl StreamingState {
                     out.failures.push(OpFailure::TextureUpload { slot });
                 }
             });
-            note_resident(residency, CHANNEL_TEXTURE, slot as u32, true);
+            note_resident(residency, CHANNEL_TEXTURE, u32::saturating_from(slot), true);
         });
         pool.drain_failed(|slot| note_failed(residency, CHANNEL_TEXTURE, slot));
         if let Some((resident, pending, unloaded)) =
@@ -504,7 +510,12 @@ impl StreamingState {
                         }
                     });
                 }
-                note_resident(residency, CHANNEL_MESH, stream_id as u32, false);
+                note_resident(
+                    residency,
+                    CHANNEL_MESH,
+                    u32::saturating_from(stream_id),
+                    false,
+                );
             }
         }
         pool.drain_completed(frame, |stream_id, mesh| {
@@ -520,7 +531,12 @@ impl StreamingState {
                     }
                 });
             }
-            note_resident(residency, CHANNEL_MESH, stream_id as u32, true);
+            note_resident(
+                residency,
+                CHANNEL_MESH,
+                u32::saturating_from(stream_id),
+                true,
+            );
         });
         pool.drain_failed(|stream_id| note_failed(residency, CHANNEL_MESH, stream_id));
         if let Some((resident, pending, unloaded)) =

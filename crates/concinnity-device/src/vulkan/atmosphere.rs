@@ -16,6 +16,7 @@
 //! Mirrors src/metal/atmosphere.rs and src/directx/atmosphere.rs.
 
 use ash::vk;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::atmosphere::{
     AERIAL_SIZE, AirTables, AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
     IRRADIANCE_FACE, MULTISCATTER_SIZE, SKY_CUBE_FACE, SKY_CUBE_PLAN, SKY_VIEW_HEIGHT,
@@ -560,16 +561,16 @@ impl VkAtmosphere {
         let kernel_set_layout = create_descriptor_set_layout(device, &kernel_bindings())?;
         let sky_set_layout = create_descriptor_set_layout(device, &sky_bindings())?;
         let aerial_set_layout = create_descriptor_set_layout(device, &aerial_bindings())?;
-        let f = frames as u32;
+        let f = u32::saturating_from(frames);
         let sizes = PoolSizes::default()
-            .sets(&kernel_bindings(), f * KERNELS as u32)
+            .sets(&kernel_bindings(), f * u32::saturating_from(KERNELS))
             .sets(&sky_bindings(), f)
             .sets(&aerial_bindings(), f)
             .build();
         let pool = device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
-                    .max_sets(f * (KERNELS as u32 + 2))
+                    .max_sets(f * (u32::saturating_from(KERNELS) + 2))
                     .pool_sizes(&sizes),
             )
             .map_err(|e| super::error::map_vk_result(e, "atmosphere descriptor pool"))?;

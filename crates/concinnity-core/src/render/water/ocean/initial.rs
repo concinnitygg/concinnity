@@ -8,7 +8,7 @@
 use super::OceanSea;
 use super::cascades::Cascades;
 use super::clock::omega_steps;
-use crate::math::{cos, exp, ln, sin, sqrt};
+use crate::math::{SaturatingFrom, cos, exp, ln, sin, sqrt};
 use crate::render::water::spectrum::{GRAVITY, unit_hash};
 use alloc::vec::Vec;
 use core::f32::consts::{PI, TAU};
@@ -24,9 +24,9 @@ const SPECTRUM_SALT: u32 = 0x0cea_0001;
 /// `i` below `size / 2`, `i - size` above.
 pub fn frequency_index(i: u32, size: u32) -> i32 {
     if i < size / 2 {
-        i as i32
+        i32::saturating_from(i)
     } else {
-        i as i32 - size as i32
+        i32::saturating_from(i) - i32::saturating_from(size)
     }
 }
 
@@ -44,7 +44,7 @@ pub fn initial_spectrum(sea: &OceanSea, cascades: &Cascades, c: usize) -> Vec<Sp
     let dk = TAU / length;
     let [lo, hi] = cascades.band(c);
     let wind = sea.wind_angle();
-    let half = size as i32 / 2;
+    let half = i32::saturating_from(size) / 2;
     let mut texels = Vec::with_capacity((size * size) as usize);
     for y in 0..size {
         for x in 0..size {
@@ -63,7 +63,7 @@ pub fn initial_spectrum(sea: &OceanSea, cascades: &Cascades, c: usize) -> Vec<Sp
             // S(k) = S(w) D(theta) (dw/dk) / k, with dw/dk = g / (2 w).
             let density = shape.density(omega) * spread * GRAVITY / (2.0 * omega * kl);
             let rms = 0.5 * sqrt(density * dk * dk);
-            let [gr, gi] = gaussian_pair((c as u32) * size * size + y * size + x);
+            let [gr, gi] = gaussian_pair(u32::saturating_from(c) * size * size + y * size + x);
             texels.push([gr * rms, gi * rms, omega_steps(omega), 0.0]);
         }
     }
@@ -97,6 +97,7 @@ fn gaussian_pair(i: u32) -> [f32; 2] {
 mod tests {
     use super::super::{OceanQuality, OceanSea};
     use super::*;
+    use crate::math::SaturatingFrom;
 
     fn sea() -> OceanSea {
         OceanSea {
@@ -142,8 +143,8 @@ mod tests {
         let mut mean = [0.0f32; 2];
         for (i, t) in spectra[0].iter().enumerate() {
             let e = t[0] * t[0] + t[1] * t[1];
-            let fx = frequency_index(i as u32 % size, size) as f32;
-            let fy = frequency_index(i as u32 / size, size) as f32;
+            let fx = frequency_index(u32::saturating_from(i) % size, size) as f32;
+            let fy = frequency_index(u32::saturating_from(i) / size, size) as f32;
             let l = (fx * fx + fy * fy).sqrt().max(1.0);
             mean[0] += e * fx / l;
             mean[1] += e * fy / l;
@@ -168,11 +169,11 @@ mod tests {
             assert_eq!(s.len(), (size * size) as usize);
             assert_eq!(s[0], [0.0; 4]);
             for (i, t) in s.iter().enumerate() {
-                let fx = frequency_index(i as u32 % size, size);
-                let fy = frequency_index(i as u32 / size, size);
+                let fx = frequency_index(u32::saturating_from(i) % size, size);
+                let fy = frequency_index(u32::saturating_from(i) / size, size);
                 let k = dk(b) * ((fx * fx + fy * fy) as f32).sqrt();
-                if fx == -(size as i32) / 2
-                    || fy == -(size as i32) / 2
+                if fx == -i32::saturating_from(size) / 2
+                    || fy == -i32::saturating_from(size) / 2
                     || k <= 0.0
                     || k < lo
                     || k >= hi

@@ -31,6 +31,7 @@
 use concinnity_core::bake::color_lut::{
     LutFormat, classify_source, parse_cube, serialize, validate_size,
 };
+use concinnity_core::math::narrow_f32;
 use std::path::Path;
 
 // The `source` path a `ColorLut`'s args declare.
@@ -66,7 +67,7 @@ fn color_lut_strength(args: &serde_json::Value) -> f32 {
     let strength = args
         .get("strength")
         .and_then(serde_json::Value::as_f64)
-        .unwrap_or(1.0) as f32;
+        .map_or(1.0, narrow_f32);
     if !(0.0..=1.0).contains(&strength) {
         tracing::warn!("ColorLut.strength: {strength} is outside its range, clamped");
     }

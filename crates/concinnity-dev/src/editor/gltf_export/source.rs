@@ -107,6 +107,7 @@ fn export_mesh_from_payload(name: &str, p: SkinnedPayload) -> ExportMesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::SaturatingFrom;
 
     // A two-joint prism with a `wide` target and a live shape, as one
     // world.jsonl string. `baking` arms the shape's bake flag.
@@ -198,9 +199,11 @@ mod tests {
         assert!(doc["meshes"][0].get("extras").is_none());
         assert!(doc["meshes"][0]["primitives"][0].get("targets").is_none());
         // wide at 0.5 moved every vertex +0.5 in X: min/max shift with it.
-        let pos = doc["meshes"][0]["primitives"][0]["attributes"]["POSITION"]
-            .as_u64()
-            .unwrap() as usize;
+        let pos = usize::saturating_from(
+            doc["meshes"][0]["primitives"][0]["attributes"]["POSITION"]
+                .as_u64()
+                .unwrap(),
+        );
         let min_x = doc["accessors"][pos]["min"][0].as_f64().unwrap();
         assert!((min_x - 0.5).abs() < 1e-5, "{min_x}");
     }

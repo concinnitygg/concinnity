@@ -33,6 +33,7 @@
 use ash::{Device, vk};
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{ClusterParams, LineVertex, TextDrawCall};
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::frame_plan::{EffectBlocks, FogBlocks};
 use concinnity_core::render::particles::ParticleFrame;
@@ -606,7 +607,7 @@ impl VkContext {
         // the `&self` `encode_particles` (which may run on a parallel-recording
         // worker) never mutates the particle `Cell`s. `None` when the pass is
         // inert. Mirrors Metal's `prepare_particle_pass` hoist.
-        let particle_frame = self.prepare_particle_pass(params.elapsed as f32);
+        let particle_frame = self.prepare_particle_pass(narrow_f32(params.elapsed));
         // The grass block for the kernel and both draws, written once here and
         // only on a frame whose graph runs the kernel, so the draw-argument
         // slot it fills alternates frame to frame.
@@ -618,7 +619,7 @@ impl VkContext {
                     frame_idx: params.frame_idx,
                     cam_pos: params.cam_pos,
                     vp: params.cur_vp,
-                    elapsed: params.elapsed as f32,
+                    elapsed: narrow_f32(params.elapsed),
                     cast: graph.pass(PassId::GrassShadow).is_some(),
                     benders: params.grass_benders,
                 })
@@ -908,7 +909,7 @@ impl VkContext {
             "shadow_map" if !self.shadow.framebuffers.is_empty() => Some(image(
                 self.shadow.map.image,
                 1,
-                self.shadow.framebuffers.len() as u32,
+                u32::saturating_from(self.shadow.framebuffers.len()),
                 VkResting::Sampled,
             )),
             // The spot array; one layer per shadowed spot. Only imported when the
@@ -917,7 +918,7 @@ impl VkContext {
             "spot_shadow_map" if !self.spot_shadow.framebuffers.is_empty() => Some(image(
                 self.spot_shadow.map.image,
                 1,
-                self.spot_shadow.framebuffers.len() as u32,
+                u32::saturating_from(self.spot_shadow.framebuffers.len()),
                 VkResting::Sampled,
             )),
             // The volumetric-fog scatter volume: one array layer (the 3D volume).
@@ -1075,7 +1076,7 @@ impl VkContext {
                     cmd,
                     params.frame_idx,
                     params.cam_pos,
-                    params.elapsed as f32,
+                    narrow_f32(params.elapsed),
                     grass_frame,
                 );
             }
@@ -1155,8 +1156,11 @@ impl VkContext {
                 // Composite each visible SDF volume into the scene. Uses the
                 // jittered VP (the matrix the main pass rasterized depth with)
                 // so the reprojected hit depth shares the scene's depth space.
-                let view =
-                    self.build_raymarch_view(params.vp_mat, params.cam_pos, params.elapsed as f32);
+                let view = self.build_raymarch_view(
+                    params.vp_mat,
+                    params.cam_pos,
+                    narrow_f32(params.elapsed),
+                );
                 self.encode_raymarch(cmd, params.frame_idx, &view, params.frustum)?;
             }
             PassId::PlanarReflection => {
@@ -1178,7 +1182,7 @@ impl VkContext {
                 let view = self.build_transparent_view(
                     params.vp_mat,
                     params.cam_pos,
-                    params.elapsed as f32,
+                    narrow_f32(params.elapsed),
                 );
                 let write = params.reactive.transparent;
                 self.advance_transparent_water(params.frame_idx, params.elapsed, params.cam_pos);
@@ -1238,7 +1242,7 @@ impl VkContext {
                     params.frame_idx,
                     GbufferPrepassView {
                         jittered_vp: params.vp_mat,
-                        elapsed: params.elapsed as f32,
+                        elapsed: narrow_f32(params.elapsed),
                         cam_pos: params.cam_pos,
                         frustum: params.frustum,
                     },

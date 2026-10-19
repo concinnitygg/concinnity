@@ -2,6 +2,7 @@
 //! and threads: an input sample taken on one thread and a GPU completion
 //! observed on another land on the same axis.
 
+use concinnity_core::math::SaturatingFrom;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -19,7 +20,7 @@ pub fn monotonic_nanos() -> u64 {
 /// `at` on the [`monotonic_micros`] axis; an instant before the first call
 /// reads as zero.
 pub fn micros_at(at: Instant) -> u64 {
-    at.saturating_duration_since(epoch()).as_micros() as u64
+    u64::saturating_from(at.saturating_duration_since(epoch()).as_micros())
 }
 
 fn epoch() -> Instant {

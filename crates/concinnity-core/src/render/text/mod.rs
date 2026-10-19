@@ -6,6 +6,7 @@ use crate::components::{LabelBox, SpriteFit, TextAlign, TextLabel};
 use crate::ecs::FontHandle;
 use crate::gfx::overlay::OverlayTransform;
 use crate::gfx::render_types::{TextDrawCall, TextVertex};
+use crate::math::SaturatingFrom;
 use crate::render::overlay_maps::Placement;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
@@ -394,7 +395,7 @@ pub fn build_text_calls_into<'a>(
             let u1 = (f32::from(m.atlas_x) + f32::from(m.atlas_w)) / aw;
             let v1 = (f32::from(m.atlas_y) + f32::from(m.atlas_h)) / ah;
             let color = colors.at(laid.source(i));
-            let base = vertices.len() as u16;
+            let base = u16::saturating_from(vertices.len());
             vertices.extend_from_slice(&[
                 TextVertex {
                     pos: [gx, gy],

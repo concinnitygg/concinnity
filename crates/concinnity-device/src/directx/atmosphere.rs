@@ -13,6 +13,7 @@
 //!
 //! Mirrors src/metal/atmosphere.rs and src/vulkan/atmosphere.rs.
 
+use concinnity_core::math::SaturatingFrom;
 use std::cell::Cell;
 
 use concinnity_core::render::atmosphere::{
@@ -204,7 +205,7 @@ fn table_desc(extent: [u32; 3]) -> D3D12_RESOURCE_DESC {
         },
         Width: u64::from(extent[0]),
         Height: extent[1],
-        DepthOrArraySize: extent[2] as u16,
+        DepthOrArraySize: u16::saturating_from(extent[2]),
         MipLevels: 1,
         Format: TABLE_FORMAT,
         SampleDesc: DXGI_SAMPLE_DESC {
@@ -784,8 +785,8 @@ impl DxContext {
             cmd.RSSetScissorRects(&[RECT {
                 left: 0,
                 top: 0,
-                right: w as i32,
-                bottom: h as i32,
+                right: i32::saturating_from(w),
+                bottom: i32::saturating_from(h),
             }]);
             cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             cmd.SetPipelineState(&atmo.aerial_pso);

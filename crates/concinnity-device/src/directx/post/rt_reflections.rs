@@ -15,6 +15,7 @@
 //! Vulkan hosts bind the same source at their own slots.
 
 use concinnity_core::gfx::render_types::RtParams;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
 use windows::Win32::Foundation::RECT;
@@ -371,8 +372,8 @@ impl DxContext {
             let scissor = RECT {
                 left: 0,
                 top: 0,
-                right: w as i32,
-                bottom: h as i32,
+                right: i32::saturating_from(w),
+                bottom: i32::saturating_from(h),
             };
             cmd.RSSetScissorRects(&[scissor]);
 

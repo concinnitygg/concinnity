@@ -4,6 +4,7 @@
 //! offers a fixed palette rather than free text and the checker never sees an
 //! invented verb.
 
+use concinnity_core::math::SaturatingFrom;
 use serde_json::{Value, json};
 
 // What an expression's body looks like. Replacing a verb with one of the same
@@ -509,7 +510,7 @@ fn literal_body(from: &Value, verb: &str) -> Value {
             from.as_bool()
                 .unwrap_or_else(|| number.is_some_and(|n| n != 0.0))
         ),
-        "int" => json!(number.unwrap_or(0.0) as i64),
+        "int" => json!(i64::saturating_from(number.unwrap_or(0.0))),
         "float" => json!(number.unwrap_or(0.0)),
         _ => match from.as_array() {
             Some(a) if a.len() == 3 => from.clone(),

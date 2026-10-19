@@ -3,6 +3,7 @@
 //! reach the cluster grid is sliced to. Every live light change goes through
 //! here, so the copies are re-armed the same way on every backend.
 
+use crate::math::SaturatingFrom;
 use core::cell::Cell;
 
 use crate::components::DirectionalLight;
@@ -94,7 +95,7 @@ impl LightState {
     /// Whether `local_lights` can move in place: the packed count is the one
     /// the block was built with.
     pub fn same_local_count(&self, local_lights: &[GpuLight]) -> bool {
-        local_lights.len() as i32 == self.uniforms.num_local_lights
+        i32::saturating_from(local_lights.len()) == self.uniforms.num_local_lights
     }
 
     /// Take moved local lights: their reach, and the point array of

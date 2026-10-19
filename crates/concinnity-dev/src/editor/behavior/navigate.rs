@@ -6,6 +6,7 @@
 //! positions alone, so neither needs a panel to be exercised.
 
 use super::graph::Card;
+use concinnity_core::math::SaturatingFrom;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Dir {
@@ -36,7 +37,9 @@ impl Dir {
 pub(crate) fn step(current: Option<usize>, delta: isize, total: usize) -> Option<usize> {
     let last = total.checked_sub(1)?;
     Some(match current {
-        Some(i) => (i as isize + delta).clamp(0, last as isize) as usize,
+        Some(i) => usize::saturating_from(
+            (isize::saturating_from(i) + delta).clamp(0, isize::saturating_from(last)),
+        ),
         None if delta < 0 => last,
         None => 0,
     })

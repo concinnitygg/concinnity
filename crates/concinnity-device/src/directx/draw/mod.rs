@@ -9,6 +9,7 @@
 //!   ../post/{bloom,taa,ssao}.rs    pipeline + targets + encoder, co-located
 
 use concinnity_core::gfx::render_types::{LightUniforms, LineVertex, ShadowUniforms, TextDrawCall};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::frame_plan::FramePlan;
 use concinnity_core::render::pass_timing;
@@ -120,7 +121,7 @@ impl DxContext {
         // cleanly report 0 µs.
         if let Some(heap) = self.timestamps.query_heap.as_ref() {
             let (start_slot, _) = pass_timing::whole_frame_pair(frame);
-            let block_base = (frame * pass_timing::SLOTS_PER_FRAME) as u32;
+            let block_base = u32::saturating_from(frame * pass_timing::SLOTS_PER_FRAME);
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
@@ -130,7 +131,7 @@ impl DxContext {
                 // ts_end` and the readback's `ts_end > ts_start` check
                 // returns false (clean 0 µs reading).
                 let pass_count = pass_timing::SLOTS_PER_FRAME / 2 - 1;
-                for pass_idx in 0..pass_count as u32 {
+                for pass_idx in 0..u32::saturating_from(pass_count) {
                     let pair_start = block_base + 2 + 2 * pass_idx;
                     let pair_end = pair_start + 1;
                     start_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, pair_end);

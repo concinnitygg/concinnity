@@ -15,6 +15,7 @@
 use super::fixtures::TICK;
 use crate::fanout::Fanout;
 use crate::fanout::test_pools::Threads;
+use crate::math::SaturatingFrom;
 use crate::physics::{
     BodyHandle, ColliderShape, DynamicParams, JointMotor, JointSpec, LayerMask, SimConfig,
     Simulation,
@@ -138,7 +139,7 @@ fn stacked(bodies: usize, restitution: f32, damping: f32) -> (Simulation, Vec<Bo
     )
     .expect("room for the floor");
     let columns = bodies.div_ceil(STACK);
-    let per_row = (columns as f32).sqrt().ceil().max(1.0) as usize;
+    let per_row = usize::saturating_from((columns as f32).sqrt().ceil().max(1.0));
     let handles = (0..bodies)
         .map(|i| {
             let (column, level) = (i / STACK, i % STACK);
@@ -240,7 +241,7 @@ fn terrain(bodies: usize) -> (Simulation, Vec<BodyHandle>) {
         LayerMask::ALL,
     )
     .expect("room for the terrain");
-    let per_row = (bodies as f32).sqrt().ceil().max(1.0) as usize;
+    let per_row = usize::saturating_from((bodies as f32).sqrt().ceil().max(1.0));
     let handles = (0..bodies)
         .map(|i| {
             sim.add_dynamic(
@@ -275,7 +276,7 @@ fn hail(bodies: usize) -> (Simulation, Vec<BodyHandle>) {
         LayerMask::ALL,
     )
     .expect("room for the slab");
-    let per_row = (bodies as f32).sqrt().ceil().max(1.0) as usize;
+    let per_row = usize::saturating_from((bodies as f32).sqrt().ceil().max(1.0));
     let mut handles = Vec::with_capacity(bodies);
     for i in 0..bodies {
         let (x, z) = ((i % per_row) as f32 * 0.5, (i / per_row) as f32 * 0.5);

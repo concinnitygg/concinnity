@@ -1,6 +1,8 @@
 // JSON arg parsing for the box, cylinder, plane, and sphere generators; the
 // geometry itself is `concinnity_core::geometry`.
 
+use super::json_args::{f32_arg, u32_arg};
+
 type Verts = Vec<([f32; 3], [f32; 3], [f32; 3], [f32; 2])>;
 type GeomResult = Result<(Verts, Vec<u16>), String>;
 
@@ -11,50 +13,24 @@ pub(super) fn build_box(args: &serde_json::Value) -> GeomResult {
 }
 
 pub(super) fn build_cylinder(args: &serde_json::Value) -> GeomResult {
-    let radius = args
-        .get("radius")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(0.5) as f32;
-    let height = args
-        .get("height")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(1.0) as f32;
-    let segments = args
-        .get("segments")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(16) as u32;
-    Ok(concinnity_core::geometry::build_cylinder(
-        radius, height, segments,
-    ))
+    let radius = f32_arg(args, "radius", 0.5);
+    let height = f32_arg(args, "height", 1.0);
+    let segments = u32_arg(args, "segments", 16)?;
+    concinnity_core::geometry::build_cylinder(radius, height, segments)
 }
 
 pub(super) fn build_plane(args: &serde_json::Value) -> GeomResult {
-    let half_width = args
-        .get("half_width")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(1.0) as f32;
-    let half_depth = args
-        .get("half_depth")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(1.0) as f32;
+    let half_width = f32_arg(args, "half_width", 1.0);
+    let half_depth = f32_arg(args, "half_depth", 1.0);
     Ok(concinnity_core::geometry::build_plane(
         half_width, half_depth,
     ))
 }
 
 pub(super) fn build_sphere(args: &serde_json::Value) -> GeomResult {
-    let radius = args
-        .get("radius")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(1.0) as f32;
-    let rings = args
-        .get("rings")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(12) as u32;
-    let segments = args
-        .get("segments")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(16) as u32;
+    let radius = f32_arg(args, "radius", 1.0);
+    let rings = u32_arg(args, "rings", 12)?;
+    let segments = u32_arg(args, "segments", 16)?;
     concinnity_core::geometry::build_sphere(radius, rings, segments)
 }
 

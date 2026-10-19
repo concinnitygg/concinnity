@@ -6,6 +6,7 @@
 //! lives in the same atlas pool as the font atlases. Either way, screen-space
 //! rectangles need no pipeline of their own.
 
+use crate::math::SaturatingFrom;
 use crate::math::sin_cos;
 use alloc::vec::Vec;
 
@@ -231,7 +232,7 @@ fn rect_geometry(
     if radius > 0.5 {
         rounded_rect_geometry(vertices, indices, rect, radius, alpha, v);
     } else {
-        let base = vertices.len() as u16;
+        let base = u16::saturating_from(vertices.len());
         vertices.extend_from_slice(&[
             v(x0, y0, alpha),
             v(x1, y0, alpha),
@@ -354,7 +355,7 @@ fn rounded_ring_geometry(
     let outer = rounded_boundary(rect, radius);
     let inner = rounded_boundary([x0 + width, y0 + width, x1 - width, y1 - width], inner_r);
     let m = outer.len();
-    let base = vertices.len() as u16;
+    let base = u16::saturating_from(vertices.len());
     vertices.reserve(3 * m);
     for &(cx, cy, cos, sin) in &outer {
         vertices.push(v(cx + radius * cos, cy + radius * sin, 0.0));
@@ -369,7 +370,11 @@ fn rounded_ring_geometry(
     for loop_start in [0, m] {
         for i in 0..m {
             let j = (i + 1) % m;
-            let (i, j, m) = ((loop_start + i) as u16, (loop_start + j) as u16, m as u16);
+            let (i, j, m) = (
+                u16::saturating_from(loop_start + i),
+                u16::saturating_from(loop_start + j),
+                u16::saturating_from(m),
+            );
             indices.extend([i, j, m + j, i, m + j, m + i].map(|k| base + k));
         }
     }
@@ -389,7 +394,7 @@ fn rounded_rect_geometry(
 ) {
     let boundary = rounded_boundary(rect, radius);
     let m = boundary.len();
-    let base = vertices.len() as u16;
+    let base = u16::saturating_from(vertices.len());
     let inner_r = (radius - EDGE_FEATHER).max(0.0);
     vertices.reserve(2 * m);
     for &(cx, cy, cos, sin) in &boundary {
@@ -400,11 +405,19 @@ fn rounded_rect_geometry(
     }
     indices.reserve(3 * (m - 2) + 6 * m);
     for i in 1..m - 1 {
-        indices.extend([base, base + i as u16, base + (i + 1) as u16]);
+        indices.extend([
+            base,
+            base + u16::saturating_from(i),
+            base + u16::saturating_from(i + 1),
+        ]);
     }
     for i in 0..m {
         let j = (i + 1) % m;
-        let (i, j, m) = (i as u16, j as u16, m as u16);
+        let (i, j, m) = (
+            u16::saturating_from(i),
+            u16::saturating_from(j),
+            u16::saturating_from(m),
+        );
         indices.extend([i, j, m + j, i, m + j, m + i].map(|k| base + k));
     }
 }

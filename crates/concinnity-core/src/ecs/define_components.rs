@@ -360,7 +360,7 @@ macro_rules! define_components {
                 $(
                     let count = self.$variant.len();
                     if count > 0 {
-                        out.push((ComponentTag::$variant as u8, count as u32));
+                        out.push((ComponentTag::$variant as u8, u32::try_from(count).unwrap_or(u32::MAX)));
                     }
                 )+
                 // Every discriminant here is past the registry's, so appending

@@ -6,6 +6,7 @@
 
 use ash::vk;
 use concinnity_core::bake;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::super::context::VkContext;
@@ -34,7 +35,7 @@ impl VkContext {
         // The bindless pool addresses each texture at pool index == its handle,
         // shared by albedo and normal sampling, so one re-point covers both.
         for &set in &self.cull.bindless_sets {
-            self.write_pool_image(set, slot as u32, view);
+            self.write_pool_image(set, u32::saturating_from(slot), view);
         }
         // Per-decal albedo descriptors. Walk the decal-side slot tracker;
         // a world with no decals pays nothing here.
@@ -145,7 +146,7 @@ impl VkContext {
             for slot in self.stream.pool_rewrites.begin_frame() {
                 let view = self.scene.textures[slot.min(last)].view;
                 if let Some(&set) = self.cull.bindless_sets.get(frame) {
-                    self.write_pool_image(set, slot as u32, view);
+                    self.write_pool_image(set, u32::saturating_from(slot), view);
                 }
             }
         }

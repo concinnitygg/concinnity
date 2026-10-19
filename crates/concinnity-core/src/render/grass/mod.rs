@@ -32,6 +32,7 @@ pub mod tiles;
 pub mod tint;
 pub mod variation;
 
+use crate::math::{SaturatingFrom, narrow_f32};
 pub use bend::{BendHistory, GrassBender};
 pub use canopy::{CanopyField, CanopyRange};
 pub use ground::{GrassGround, GrassGroundBuffers, GrassMask, GroundSample};
@@ -437,7 +438,7 @@ pub(crate) fn grown_layers(terrains: &[GrassTerrain]) -> Vec<GrownLayer> {
                 layer: li,
                 grass,
                 grid,
-                seed: lcg_hash(out.len() as u32 ^ 0x5bd1_e995),
+                seed: lcg_hash(u32::saturating_from(out.len()) ^ 0x5bd1_e995),
             });
         }
     }
@@ -609,7 +610,7 @@ impl GrassField {
             // A planet's ground is unbounded, and its grass tiles are
             // narrowest where the face is stretched least.
             let ground = tiles::GroundRect::centered([0.0, 0.0], [1.0e7, 1.0e7]);
-            let tile = (planet.grid.tile_size() / libm::sqrt(planet.grid.max_stretch)) as f32;
+            let tile = narrow_f32(planet.grid.tile_size() / libm::sqrt(planet.grid.max_stretch));
             for layer in &planet.layers {
                 // Its blades stand at most at the layer's density, with a
                 // margin for slopes holding more ground than their
@@ -669,7 +670,7 @@ impl GrassField {
     ) -> GrassFrame<'h> {
         let camera = &inputs.camera;
         let phase = history.crossfade_phase();
-        let args_slot = history.runs % GRASS_ARGS_SLOTS as u32;
+        let args_slot = history.runs % u32::saturating_from(GRASS_ARGS_SLOTS);
         history.runs = history.runs.wrapping_add(1);
         let step = history.bend.advance(camera.position, inputs.elapsed);
         let prev_map = core::mem::replace(&mut history.prev_map, GRASS_IDENTITY_MAP);
@@ -809,7 +810,10 @@ impl GrassField {
             },
             planet_tile_base: 0,
             planet_tile_count: 0,
-            planet_radius: self.planet.as_ref().map_or(0.0, |p| p.shape.radius as f32),
+            planet_radius: self
+                .planet
+                .as_ref()
+                .map_or(0.0, |p| narrow_f32(p.shape.radius)),
             wind_map,
             bend_prev_map,
             planet_density: [0.0; MAX_GRASS_LAYERS],
@@ -887,8 +891,8 @@ impl GrassField {
                 if scratch.reach.clipped {
                     limit.get_or_insert(GrassLimit::PlanetTiles);
                 }
-                params.planet_tile_base = scratch.planet_tiles.len() as u32;
-                params.planet_tile_count = scratch.reach.records.len() as u32;
+                params.planet_tile_base = u32::saturating_from(scratch.planet_tiles.len());
+                params.planet_tile_count = u32::saturating_from(scratch.reach.records.len());
                 let groups = place_planet(
                     (grass, p),
                     &view,
@@ -910,8 +914,8 @@ impl GrassField {
             limit.get_or_insert(GrassLimit::TileRecords);
             found.truncate(MAX_GRASS_TILE_RECORDS);
         }
-        params.tile_base = scratch.tiles.len() as u32;
-        params.tile_count = found.len() as u32;
+        params.tile_base = u32::saturating_from(scratch.tiles.len());
+        params.tile_count = u32::saturating_from(found.len());
         scratch.tiles.extend(found.iter().map(|&(_, _, t)| t));
         GrassPass {
             params,
@@ -951,7 +955,7 @@ impl GrassField {
             add_found(found, &visited.tiles, slot, 0);
             slot += 1;
         }
-        params.layer_count = slot as u32;
+        params.layer_count = u32::saturating_from(slot);
         groups
     }
 
@@ -988,7 +992,7 @@ impl GrassField {
                 resolution: GRASS_BEND_RESOLUTION,
                 cell_size: GRASS_BEND_CELL_SIZE,
                 decay: step.decay,
-                stamp_count: found.len() as u32,
+                stamp_count: u32::saturating_from(found.len()),
                 write_half: step.write_half,
                 prev_valid: u32::from(step.prev.is_some()),
                 _pad: [0; 2],
@@ -1026,7 +1030,7 @@ fn planet_ground_under(planet: &PlanetView<'_>, base: [f32; 3]) -> f32 {
     let dir = dvec3::normalize_or(world, [0.0, 1.0, 0.0]);
     let shape = &planet.grass.shape;
     let gap = dvec3::length(offset) - (shape.radius + shape.height(dir));
-    base[1] - gap as f32
+    base[1] - narrow_f32(gap)
 }
 
 // `tiles`' records for layer slot `slot`, in planet tile record
@@ -1038,9 +1042,9 @@ fn add_found(
     slot: usize,
     planet_tile: u32,
 ) {
-    let first = found.len() as u32;
+    let first = u32::saturating_from(found.len());
     found.extend(tiles.iter().zip(first..).map(|(t, order)| {
-        let record = GrassTileGpu::new(t.tile, t.level, slot as u32, planet_tile);
+        let record = GrassTileGpu::new(t.tile, t.level, u32::saturating_from(slot), planet_tile);
         (t.near, order, record)
     }));
 }
@@ -1082,11 +1086,11 @@ fn place_planet(
                 [gpu.reach, gpu.width],
                 visited,
             );
-            add_found(found, &visited.tiles, slot, record as u32);
+            add_found(found, &visited.tiles, slot, u32::saturating_from(record));
         }
     }
-    params.layer_count = layers as u32;
-    params.tile_size = planet.grid.tile_size() as f32;
+    params.layer_count = u32::saturating_from(layers);
+    params.tile_size = narrow_f32(planet.grid.tile_size());
     groups
 }
 
@@ -1834,7 +1838,7 @@ mod tests {
         fn standing() -> (Vec<DrawnPlanetTile>, [f32; 3]) {
             let s = shape();
             let lod = TileLod::new(s, crate::planet::FINEST_CELL_SIZE);
-            let cam = [0.0, s.height([0.0, 1.0, 0.0]) as f32 + 1.7, 0.0];
+            let cam = [0.0, narrow_f32(s.height([0.0, 1.0, 0.0])) + 1.7, 0.0];
             let cam_world = LocalFrame::AUTHORED.to_world(cam);
             let tiles = lod
                 .select(
@@ -1893,7 +1897,7 @@ mod tests {
             assert_eq!(view.params.planet_tile_base, 0);
             assert_eq!(cast.params.planet_tile_base, view.params.planet_tile_count);
             assert_eq!(
-                frame.planet_tiles.len() as u32,
+                u32::saturating_from(frame.planet_tiles.len()),
                 view.params.planet_tile_count + cast.params.planet_tile_count
             );
             assert!(cast.dispatch[1] < view.dispatch[1]);
@@ -1925,7 +1929,7 @@ mod tests {
             let (tiles, cam) = standing();
             let s = shape();
             let under = crate::math::dvec3::normalize_or([0.5, 50_000.0, 0.5], [0.0; 3]);
-            let ground = s.height(under) as f32;
+            let ground = narrow_f32(s.height(under));
             let benders = [
                 GrassBender {
                     base: [0.5, ground, 0.5],

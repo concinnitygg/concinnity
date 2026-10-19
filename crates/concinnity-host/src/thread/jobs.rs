@@ -162,6 +162,7 @@ fn serial_pool() -> &'static JobPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::SaturatingFrom;
 
     #[test]
     fn pool_is_a_singleton() {
@@ -290,7 +291,11 @@ mod tests {
     fn parallel_for_visits_every_item() {
         let mut data: Vec<u32> = (0..10_000).collect();
         pool().for_each(&mut data, |x| *x += 1);
-        assert!(data.iter().enumerate().all(|(i, &x)| x == i as u32 + 1));
+        assert!(
+            data.iter()
+                .enumerate()
+                .all(|(i, &x)| x == u32::saturating_from(i) + 1)
+        );
     }
 
     #[test]

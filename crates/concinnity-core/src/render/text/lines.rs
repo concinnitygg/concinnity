@@ -4,6 +4,7 @@
 
 use super::{LoadedFont, advance_px};
 use crate::components::TextLabel;
+use crate::math::SaturatingFrom;
 use alloc::borrow::Cow;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -106,7 +107,7 @@ fn source_map(content: &str, lines: &[Range<usize>], ellipsis: bool) -> Vec<u32>
         if i > 0 {
             out.push(chars);
         }
-        chars += content[byte..line.start].chars().count() as u32;
+        chars += u32::saturating_from(content[byte..line.start].chars().count());
         for _ in content[line.clone()].chars() {
             out.push(chars);
             chars += 1;

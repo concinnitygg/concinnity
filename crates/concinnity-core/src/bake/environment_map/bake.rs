@@ -6,6 +6,7 @@
 //! decides whether to run those rows one at a time or all at once; this module
 //! spawns nothing and takes no thread, so the two produce identical bytes.
 
+use crate::math::SaturatingFrom;
 use crate::math::{cos, floor, sin, sin_cos, sqrt};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -50,14 +51,14 @@ fn sample_cube(faces: &[Vec<f32>; 6], face_size: u32, dir: [f32; 3]) -> [f32; 3]
     // s, t in [-1, 1] after multiplying by inv*2; map to pixel coords.
     let fx = (s * inv + 0.5) * fs - 0.5;
     let fy = (t * inv + 0.5) * fs - 0.5;
-    let x0 = (floor(fx) as i32).clamp(0, face_size as i32 - 1);
-    let y0 = (floor(fy) as i32).clamp(0, face_size as i32 - 1);
-    let x1 = (x0 + 1).clamp(0, face_size as i32 - 1);
-    let y1 = (y0 + 1).clamp(0, face_size as i32 - 1);
+    let x0 = i32::saturating_from(floor(fx)).clamp(0, i32::saturating_from(face_size) - 1);
+    let y0 = i32::saturating_from(floor(fy)).clamp(0, i32::saturating_from(face_size) - 1);
+    let x1 = (x0 + 1).clamp(0, i32::saturating_from(face_size) - 1);
+    let y1 = (y0 + 1).clamp(0, i32::saturating_from(face_size) - 1);
     let dx = (fx - floor(fx)).clamp(0.0, 1.0);
     let dy = (fy - floor(fy)).clamp(0.0, 1.0);
     let p = |x: i32, y: i32| -> [f32; 3] {
-        let off = ((y as usize) * face_size as usize + x as usize) * 4;
+        let off = (usize::saturating_from(y) * face_size as usize + usize::saturating_from(x)) * 4;
         let face_data = &faces[face];
         [face_data[off], face_data[off + 1], face_data[off + 2]]
     };
@@ -176,7 +177,7 @@ pub fn face_rows(faces: &mut [Vec<f32>; 6], face_size: u32) -> Vec<FaceRow<'_>> 
                 .enumerate()
                 .map(move |(y, texels)| FaceRow {
                     face,
-                    y: y as u32,
+                    y: u32::saturating_from(y),
                     texels,
                 })
         })
@@ -760,7 +761,7 @@ mod tests {
             let off = (y * face + 8) * 4;
             source[4][off] = 20.0;
         }
-        let mips = compute_prefilter(&source, face as u32, 3, 256, 0.0, false);
+        let mips = compute_prefilter(&source, u32::saturating_from(face), 3, 256, 0.0, false);
         // Compare variance of +Z face at mip 0 vs mip 2.
         let v0 = face_variance_red(&mips[0][4]);
         let v2 = face_variance_red(&mips[2][4]);
@@ -793,8 +794,22 @@ mod tests {
         // brightest reflection texel is far dimmer, while the background (below
         // the cap) is preserved.
         let face = 16usize;
-        let unclamped = compute_prefilter(&firefly_cube(face), face as u32, 3, 256, 0.0, false);
-        let clamped = compute_prefilter(&firefly_cube(face), face as u32, 3, 256, 8.0, false);
+        let unclamped = compute_prefilter(
+            &firefly_cube(face),
+            u32::saturating_from(face),
+            3,
+            256,
+            0.0,
+            false,
+        );
+        let clamped = compute_prefilter(
+            &firefly_cube(face),
+            u32::saturating_from(face),
+            3,
+            256,
+            8.0,
+            false,
+        );
         let p_unclamped = peak(&unclamped[1][4]);
         let p_clamped = peak(&clamped[1][4]);
         assert!(
@@ -814,7 +829,14 @@ mod tests {
         let face = 16usize;
         // clamp_mip0 = false (an imported env map / background): the blazing texel survives
         // mip 0 untouched, so the on-screen sky would keep its true HDR sun.
-        let unclamped_mip0 = compute_prefilter(&firefly_cube(face), face as u32, 2, 16, 8.0, false);
+        let unclamped_mip0 = compute_prefilter(
+            &firefly_cube(face),
+            u32::saturating_from(face),
+            2,
+            16,
+            8.0,
+            false,
+        );
         assert!(
             peak(&unclamped_mip0[0][4]) > 1000.0,
             "mip 0 should be unclamped when clamp_mip0 is false: peak {}",
@@ -822,7 +844,14 @@ mod tests {
         );
         // clamp_mip0 = true (a reflection probe): the same firefly is capped at mip 0,
         // while the uniform background (below the cap) is preserved.
-        let clamped_mip0 = compute_prefilter(&firefly_cube(face), face as u32, 2, 16, 8.0, true);
+        let clamped_mip0 = compute_prefilter(
+            &firefly_cube(face),
+            u32::saturating_from(face),
+            2,
+            16,
+            8.0,
+            true,
+        );
         let p = peak(&clamped_mip0[0][4]);
         assert!(p <= 8.0 + 1e-3, "mip 0 firefly not capped: peak {p}");
         assert!(p >= 0.9, "mip 0 clamp crushed the background: peak {p}");

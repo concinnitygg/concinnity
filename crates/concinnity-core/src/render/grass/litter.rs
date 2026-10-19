@@ -9,7 +9,7 @@
 //! line.
 
 use super::planet::density::grass_hash;
-use crate::math::floor;
+use crate::math::{SaturatingFrom, floor};
 
 /// The hue dead grass browns toward, at unit luminance.
 pub const LITTER_HUE: [f32; 3] = [1.38, 0.94, 0.52];
@@ -30,9 +30,9 @@ const SALTS: [u32; 3] = [0x6a09_e667, 0xbb67_ae85, 0x3c6e_f372];
 /// shaders' `grass_patch_lattice`.
 pub fn patch_lattice(c: [i32; 3], salt: u32) -> f32 {
     let h = grass_hash(
-        (c[0] as u32).wrapping_mul(0x8da6_b343)
-            ^ (c[1] as u32).wrapping_mul(0xd816_3841)
-            ^ (c[2] as u32).wrapping_mul(0xcb1a_b31f)
+        c[0].cast_unsigned().wrapping_mul(0x8da6_b343)
+            ^ c[1].cast_unsigned().wrapping_mul(0xd816_3841)
+            ^ c[2].cast_unsigned().wrapping_mul(0xcb1a_b31f)
             ^ salt,
     );
     (h >> 8) as f32 * (1.0 / 16_777_216.0)
@@ -46,7 +46,7 @@ pub fn patch_noise(p: [f32; 3], salt: u32) -> f32 {
         let t = p[i] - cell[i];
         t * t * (3.0 - 2.0 * t)
     });
-    let c = cell.map(|v| v as i32);
+    let c = cell.map(i32::saturating_from);
     let at = |dx: i32, dy: i32, dz: i32| patch_lattice([c[0] + dx, c[1] + dy, c[2] + dz], salt);
     let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
     let x00 = lerp(at(0, 0, 0), at(1, 0, 0), f[0]);

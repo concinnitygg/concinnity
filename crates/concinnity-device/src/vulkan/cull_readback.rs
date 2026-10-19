@@ -12,6 +12,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::cull_status;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::context::VkContext;
@@ -78,7 +79,9 @@ impl VkContext {
 
         // SAFETY: the buffer is HOST_COHERENT and at least `byte_size` bytes long, and the copy
         // above completed (one_shot_submit waits its fence).
-        let raw = unsafe { std::slice::from_raw_parts(readback.mapped_ptr(), byte_size as usize) };
+        let raw = unsafe {
+            std::slice::from_raw_parts(readback.mapped_ptr(), usize::saturating_from(byte_size))
+        };
         cull_status::decode(raw, count).map_err(|e| RenderError::Other(format!("cull-status: {e}")))
     }
 }

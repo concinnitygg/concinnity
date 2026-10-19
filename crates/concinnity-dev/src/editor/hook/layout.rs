@@ -3,6 +3,7 @@
 
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{CursorShape, HudLayers, World};
+use concinnity_core::math::SaturatingFrom;
 
 use super::{EditorHook, TOP_BAR_LAYER};
 use crate::editor::panels::asset_list::{self, ListRow};
@@ -44,7 +45,7 @@ impl EditorHook {
             // Ranks are spaced so each panel owns a band of layers: its own
             // elements at the bottom of the band and any open overlay above
             // them, while the panel in front still clears the whole band.
-            let layer = (rank as i32 + 1) * PANEL_LAYER_SPAN;
+            let layer = (i32::saturating_from(rank) + 1) * PANEL_LAYER_SPAN;
             for id in registry::panel(key).ids().all() {
                 layers.insert(id, layer);
             }

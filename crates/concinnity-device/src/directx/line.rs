@@ -12,6 +12,7 @@
 //! Mirrors src/metal/line.rs.
 
 use concinnity_core::gfx::render_types::LineVertex;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::fullscreen::align_up;
 use windows::Win32::Foundation::RECT;
@@ -242,14 +243,14 @@ impl LineUpload {
     }
 
     fn vertex_count(&self) -> u32 {
-        self.byte_len / size_of::<LineVertex>() as u32
+        self.byte_len / u32::saturating_from(size_of::<LineVertex>())
     }
 
     fn vertex_buffer_view(&self) -> D3D12_VERTEX_BUFFER_VIEW {
         D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: self.gpu_va,
             SizeInBytes: self.byte_len,
-            StrideInBytes: size_of::<LineVertex>() as u32,
+            StrideInBytes: u32::saturating_from(size_of::<LineVertex>()),
         }
     }
 }
@@ -369,8 +370,8 @@ impl DxContext {
             cmd.RSSetScissorRects(&[RECT {
                 left: 0,
                 top: 0,
-                right: w as i32,
-                bottom: h as i32,
+                right: i32::saturating_from(w),
+                bottom: i32::saturating_from(h),
             }]);
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
@@ -391,8 +392,9 @@ impl DxContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::saturating_u32;
 
-    const STRIDE: u32 = size_of::<LineVertex>() as u32;
+    const STRIDE: u32 = saturating_u32(size_of::<LineVertex>());
 
     #[test]
     fn line_vertex_bytes_is_count_times_stride() {
@@ -403,7 +405,10 @@ mod tests {
     #[test]
     fn line_vertex_bytes_accepts_the_largest_view() {
         let max = (u32::MAX / STRIDE) as usize;
-        assert_eq!(line_vertex_bytes(max).unwrap(), max as u32 * STRIDE);
+        assert_eq!(
+            line_vertex_bytes(max).unwrap(),
+            u32::saturating_from(max) * STRIDE
+        );
     }
 
     #[test]

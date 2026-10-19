@@ -8,6 +8,7 @@
 //! bloom/TAA/SSAO live in `directx/post/`; the GPU-cull compute pipeline lives
 //! in `directx/cull.rs`.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shader_programs::surface::{self, GrassShading};
 use concinnity_core::render::shadow_bias;
@@ -236,7 +237,7 @@ pub(in crate::directx) fn create_shadow_pso(
         // shadows correctly.
         .raster(Raster {
             bias: DepthBias {
-                constant: shadow_bias::RASTER_CONSTANT as i32,
+                constant: i32::saturating_from(shadow_bias::RASTER_CONSTANT),
                 clamp: shadow_bias::RASTER_CLAMP,
                 slope: shadow_bias::RASTER_SLOPE,
             },

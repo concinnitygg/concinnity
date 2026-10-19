@@ -4,6 +4,7 @@
 //! the box's surface, along with a frame that traces the box's edges.
 
 use concinnity::bake::{Mesh, VertexData};
+use concinnity_core::math::SaturatingFrom;
 
 // The mark's polygons in the icon's units, y down: the upper and lower rows
 // of slats, then the board. Every polygon is convex.
@@ -163,7 +164,7 @@ impl FaceSheet {
         if signed_area(&points) < 0.0 {
             points.reverse();
         }
-        let first = self.vertices.len() as u16;
+        let first = u16::saturating_from(self.vertices.len());
         let height = self.half_extent + self.lift;
         for [u, v] in &points {
             let pos = core::array::from_fn(|k| {
@@ -178,7 +179,7 @@ impl FaceSheet {
                 ],
             });
         }
-        for i in 1..points.len() as u16 - 1 {
+        for i in 1..u16::saturating_from(points.len()) - 1 {
             self.indices.extend([first, first + i, first + i + 1]);
         }
     }

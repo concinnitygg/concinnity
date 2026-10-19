@@ -443,6 +443,7 @@ fn scan_range(
 
 #[cfg(test)]
 mod tests {
+    use crate::math::SaturatingFrom;
     use alloc::vec::Vec;
 
     use super::*;
@@ -469,8 +470,11 @@ mod tests {
     fn build(centers: &[(Vec3, bool)]) -> SweepPrune {
         let mut sap = SweepPrune::with_capacity(centers.len().max(1));
         for (slot, (center, responds)) in centers.iter().enumerate() {
-            sap.insert(slot as u32);
-            sap.set_proxy(slot as u32, proxy(*center, 0.5, role(*responds)));
+            sap.insert(u32::saturating_from(slot));
+            sap.set_proxy(
+                u32::saturating_from(slot),
+                proxy(*center, 0.5, role(*responds)),
+            );
         }
         sap
     }
@@ -480,9 +484,9 @@ mod tests {
     fn touching(roles: &[Role]) -> SweepPrune {
         let mut sap = SweepPrune::with_capacity(roles.len().max(1));
         for (slot, &role) in roles.iter().enumerate() {
-            sap.insert(slot as u32);
+            sap.insert(u32::saturating_from(slot));
             sap.set_proxy(
-                slot as u32,
+                u32::saturating_from(slot),
                 proxy(vec3(slot as f32 * 0.5, 0.0, 0.0), 0.5, role),
             );
         }

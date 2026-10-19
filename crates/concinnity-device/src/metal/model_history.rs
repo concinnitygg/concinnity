@@ -8,6 +8,7 @@
 //! same 64 bytes per record a second time.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::ModelHistoryParams;
 use objc2::rc::Retained;
@@ -44,7 +45,7 @@ impl MtlContext {
             return Ok(());
         }
         let params = ModelHistoryParams {
-            record_count: record_count as u32,
+            record_count: u32::saturating_from(record_count),
             _pad: [0; 3],
         };
         // No timing attachment: this dispatch is not the `GBufferPrepass`

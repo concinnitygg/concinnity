@@ -2,6 +2,7 @@
 // `decode::deserialize`; the two must agree field for field.
 
 use crate::gfx::font::GlyphMetrics;
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 pub(crate) fn serialize(
@@ -20,7 +21,7 @@ pub(crate) fn serialize(
     // line-height / cap-height now that Font carries no drained `size_px` field.
     out.extend_from_slice(&size_px.to_le_bytes());
     out.extend_from_slice(rgba);
-    out.extend_from_slice(&(metrics.len() as u32).to_le_bytes());
+    out.extend_from_slice(&u32::saturating_from(metrics.len()).to_le_bytes());
     for m in metrics {
         out.extend_from_slice(&m.char_code.to_le_bytes());
         out.extend_from_slice(&m.atlas_x.to_le_bytes());

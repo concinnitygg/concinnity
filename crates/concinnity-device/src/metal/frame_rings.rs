@@ -11,6 +11,7 @@
 //! never shrunk, so steady state does zero allocation.
 
 use super::error::allocation_failed;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::buffer_growth::grow_capacity;
 use concinnity_core::render::error::RenderResult;
 use objc2::rc::Retained;
@@ -23,7 +24,7 @@ use super::context::{bytes_of_slice, write_buffer_region};
 // bytes, or `None` when its current `have` bytes already do. An empty slot always
 // allocates, so a zero-byte request still gets a buffer to bind.
 pub(super) fn grow_to(have: usize, needed: usize) -> Option<usize> {
-    grow_capacity(have as u64, needed.max(1) as u64, 256).map(|c| c as usize)
+    grow_capacity(have as u64, needed.max(1) as u64, 256).map(usize::saturating_from)
 }
 
 // A small ring of persistent shared-storage buffers, one usable slot per

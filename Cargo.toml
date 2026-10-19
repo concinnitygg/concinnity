@@ -177,9 +177,6 @@ maybe_infinite_iter = "allow"
 # Exact float compares here are change detection, tie-breaks and sentinels; an epsilon changes behavior.
 float_cmp = "allow"
 # Not yet enforced: each call site needs a decision, not a mechanical fix.
-cast_possible_truncation = "allow"
-cast_sign_loss = "allow"
-cast_possible_wrap = "allow"
 too_many_lines = "allow"
 needless_pass_by_value = "allow"
 # Nursery and restriction lints adopted one by one.

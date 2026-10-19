@@ -2,6 +2,7 @@
 //! the per-frame state `record_frame` advances around its graph dispatch.
 
 use ash::vk;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::profile;
 use concinnity_core::profile::PassTiming;
 use concinnity_core::render::error::RenderResult;
@@ -204,7 +205,7 @@ impl VkContext {
                     let [e_val, e_avail] = results[end_slot];
                     if s_avail != 0 && e_avail != 0 && e_val > s_val && period > 0.0 {
                         let nanos = (e_val - s_val) as f64 * f64::from(period);
-                        ((nanos / 1000.0) as u64).min(u64::from(u32::MAX)) as u32
+                        u32::saturating_from(nanos / 1000.0)
                     } else {
                         0
                     }

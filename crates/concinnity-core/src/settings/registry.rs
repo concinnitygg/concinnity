@@ -11,12 +11,12 @@
 //!
 //! [`options`]: crate::settings::options
 
+use crate::math::{SaturatingFrom, round};
 use alloc::format;
 use alloc::string::{String, ToString};
 
 use crate::components::{ControlsCommand, SettingOp, UpscalerBackend};
 use crate::gfx::auto_exposure::EV_LIMIT;
-use crate::math::round;
 use crate::platform::Platform;
 use crate::render::backend::{DeviceCapabilities, GpuVendor};
 use crate::settings::rows::{GRAPHICS_SLIDERS, GraphicsSlider, Lens};
@@ -283,7 +283,7 @@ fn format_meters(value: f32) -> String {
 }
 
 fn format_fraction_percent(value: f32) -> String {
-    format!("{}%", round(value * 100.0) as i32)
+    format!("{}%", i32::saturating_from(round(value * 100.0)))
 }
 
 fn format_two_decimals(value: f32) -> String {
@@ -424,7 +424,7 @@ pub static SLIDERS: [SliderSetting; 20] = [
         key: SettingKey::MouseSensitivity,
         range: (1.0, 100.0),
         recover: |stored| hundred_scale_from(stored, MOUSE_SENS_MIN, MOUSE_SENS_MAX),
-        format: |v| format!("{}", round(v) as i32),
+        format: |v| format!("{}", i32::saturating_from(round(v))),
         target: SliderTarget::Controls {
             persisted: lens!(controls.mouse_sensitivity),
             command: |v| ControlsCommand {
@@ -439,7 +439,7 @@ pub static SLIDERS: [SliderSetting; 20] = [
         key: SettingKey::GamepadLookSensitivity,
         range: (1.0, 100.0),
         recover: |stored| hundred_scale_from(stored, GAMEPAD_LOOK_MIN, GAMEPAD_LOOK_MAX),
-        format: |v| format!("{}", round(v) as i32),
+        format: |v| format!("{}", i32::saturating_from(round(v))),
         target: SliderTarget::Controls {
             persisted: lens!(controls.gamepad_look_sensitivity),
             command: |v| ControlsCommand {
@@ -456,7 +456,7 @@ pub static SLIDERS: [SliderSetting; 20] = [
         key: SettingKey::GamepadDeadzone,
         range: (0.0, 40.0),
         recover: |stored| stored * 100.0,
-        format: |v| format!("{}%", round(v) as i32),
+        format: |v| format!("{}%", i32::saturating_from(round(v))),
         target: SliderTarget::Controls {
             persisted: lens!(controls.gamepad_deadzone),
             command: |v| ControlsCommand {
@@ -473,7 +473,7 @@ pub static SLIDERS: [SliderSetting; 20] = [
         key: SettingKey::Fov,
         range: (50.0, 100.0),
         recover: identity,
-        format: |v| format!("{}\u{00b0}", round(v) as i32),
+        format: |v| format!("{}\u{00b0}", i32::saturating_from(round(v))),
         target: SliderTarget::Controls {
             persisted: lens!(graphics.fov),
             command: |v| ControlsCommand {

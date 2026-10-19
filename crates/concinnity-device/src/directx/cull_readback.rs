@@ -11,6 +11,7 @@
 //! probe-only path, never a per-frame one. Mirrors `src/vulkan/cull_readback.rs`.
 
 use concinnity_core::gfx::cull_status;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -76,7 +77,9 @@ impl DxContext {
             .map_err(|e| map_hresult(e.code(), "cull-status: map readback"))?;
         // SAFETY: the mapping covers `byte_size` bytes (the size the buffer was created at), and
         // the copy completed (one_shot_submit waits its fence).
-        let raw = unsafe { std::slice::from_raw_parts(map_ptr as *const u8, byte_size as usize) };
+        let raw = unsafe {
+            std::slice::from_raw_parts(map_ptr as *const u8, usize::saturating_from(byte_size))
+        };
         let decoded = cull_status::decode(raw, count)
             .map_err(|e| RenderError::Other(format!("cull-status: {e}")));
         // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past

@@ -4,6 +4,7 @@
 // from here, so they cannot disagree about where the ground is.
 
 use super::dvec::{self, DMat3, DVec3};
+use crate::math::SaturatingFrom;
 use crate::math::dvec3;
 use crate::math::noise::lcg_hash;
 
@@ -176,7 +177,7 @@ fn value_noise(p: DVec3, salt: u32) -> (f64, DVec3) {
     let t = [p[0] - cell[0], p[1] - cell[1], p[2] - cell[2]];
     let [u, v, w] = t.map(|t| t * t * (3.0 - 2.0 * t));
     let [du, dv, dw] = t.map(|t| 6.0 * t * (1.0 - t));
-    let [x, y, z] = cell.map(|c| c as i64 as u32);
+    let [x, y, z] = cell.map(|c| i32::saturating_from(c).cast_unsigned());
     let at = |dx: u32, dy: u32, dz: u32| {
         lattice_value(
             x.wrapping_add(dx),

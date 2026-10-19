@@ -4,6 +4,7 @@
 // warm dark gray floor, light gray ceiling, slightly different grays per wall.
 // UV coordinates tile at one repeat per meter.
 
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 use super::Vert;
@@ -41,7 +42,7 @@ pub fn build_room_geometry(
                          uv_b: [f32; 2],
                          uv_c: [f32; 2],
                          uv_d: [f32; 2]| {
-        let base = verts.len() as u16;
+        let base = u16::saturating_from(verts.len());
         verts.extend_from_slice(&[
             (a, normal, color, uv_a),
             (b, normal, color, uv_b),

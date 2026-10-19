@@ -8,7 +8,7 @@
 
 use super::MAX_PLANAR_PLANES;
 use super::mirror::mat_vec;
-use crate::math::{ceil, floor};
+use crate::math::{SaturatingFrom, ceil, floor};
 use crate::transform::Mat4;
 
 type Vec4 = [f32; 4];
@@ -155,9 +155,10 @@ impl UvRect {
     /// the target. `None` for an empty target.
     pub fn to_pixels(self, width: u32, height: u32, margin: u32) -> Option<PixelRect> {
         let span = |lo: f32, hi: f32, size: u32| {
-            let a = (floor(lo * size as f32) as i64 - i64::from(margin)).max(0);
-            let b = (ceil(hi * size as f32) as i64 + i64::from(margin)).min(i64::from(size));
-            (b > a).then_some((a as u32, (b - a) as u32))
+            let a = (i64::saturating_from(floor(lo * size as f32)) - i64::from(margin)).max(0);
+            let b = (i64::saturating_from(ceil(hi * size as f32)) + i64::from(margin))
+                .min(i64::from(size));
+            (b > a).then_some((u32::saturating_from(a), u32::saturating_from(b - a)))
         };
         let (x, w) = span(self.min[0], self.max[0], width)?;
         let (y, h) = span(self.min[1], self.max[1], height)?;

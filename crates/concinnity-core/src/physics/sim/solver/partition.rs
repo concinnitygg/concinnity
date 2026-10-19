@@ -21,6 +21,7 @@
 // world of a hundred small ones both get the best split their shape allows --
 // which for the first one is no split at all.
 
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 use crate::physics::sim::contact::Manifold;
@@ -218,7 +219,7 @@ impl Partition {
             let root = islands.find(slot);
             let island = self.island_of_root[root as usize];
             if island == UNOWNED {
-                self.island_of_root[root as usize] = self.islands as u32;
+                self.island_of_root[root as usize] = u32::saturating_from(self.islands);
                 self.roots.push(root);
                 self.bodies_at[self.islands] = 1;
                 self.contacts_at[self.islands] = 0;
@@ -292,9 +293,9 @@ impl Partition {
                 self.contacts_at[island],
                 self.joints_at[island],
             );
-            self.bodies_at[island] = bodies as u32;
-            self.contacts_at[island] = contacts as u32;
-            self.joints_at[island] = joints as u32;
+            self.bodies_at[island] = u32::saturating_from(bodies);
+            self.contacts_at[island] = u32::saturating_from(contacts);
+            self.joints_at[island] = u32::saturating_from(joints);
             bodies += held.0 as usize;
             contacts += held.1 as usize;
             joints += held.2 as usize;
@@ -336,7 +337,7 @@ impl Partition {
                 continue;
             }
             let at = &mut self.contacts_at[island as usize];
-            self.contact_source[*at as usize] = index as u32;
+            self.contact_source[*at as usize] = u32::saturating_from(index);
             self.contact_order.push(*at);
             *at += 1;
         }
@@ -345,7 +346,7 @@ impl Partition {
                 continue;
             }
             let at = &mut self.joints_at[island as usize];
-            self.joint_source[*at as usize] = index as u32;
+            self.joint_source[*at as usize] = u32::saturating_from(index);
             *at += 1;
         }
     }
@@ -398,7 +399,7 @@ mod tests {
             .iter()
             .enumerate()
             .filter(|&(_, &s)| s)
-            .map(|(i, _)| i as u32)
+            .map(|(i, _)| u32::saturating_from(i))
             .collect()
     }
 

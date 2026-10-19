@@ -3,6 +3,7 @@
 
 use super::layout::{Geometry, scroll_on_track};
 use super::{Scroll, TextArea};
+use concinnity_core::math::SaturatingFrom;
 
 // Scroll-delta units per line: three lines per wheel notch on the backends
 // that report notches, and proportional on a trackpad.
@@ -87,7 +88,7 @@ impl TextArea {
         self.wheel_carry += delta;
         let steps = (self.wheel_carry / WHEEL_UNITS_PER_LINE).trunc();
         self.wheel_carry -= steps * WHEEL_UNITS_PER_LINE;
-        let steps = steps as isize;
+        let steps = isize::saturating_from(steps);
         if horizontal {
             self.scroll_by(0, steps);
         } else {

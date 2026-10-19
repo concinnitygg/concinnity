@@ -56,6 +56,7 @@
 //! by 1000 for microseconds. A proper `sampleTimestamps:gpuTimestamp:`
 //! calibration would be needed for a future Intel Mac path.
 
+use concinnity_core::math::SaturatingFrom;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSArray, NSRange, NSString};
@@ -428,7 +429,7 @@ fn durations_us(samples: &[u64; SAMPLE_COUNT], attached: u64) -> [u32; PASS_COUN
             continue;
         }
         let (start, end) = (samples[i * 2], samples[i * 2 + 1]);
-        *slot = ((end - start) / 1000).min(u64::from(u32::MAX)) as u32;
+        *slot = u32::saturating_from((end - start) / 1000);
     }
     out
 }
@@ -455,7 +456,9 @@ fn ran_this_frame(samples: &[u64; SAMPLE_COUNT], attached: u64, i: usize) -> boo
 #[cfg(test)]
 fn span_us(samples: &[u64; SAMPLE_COUNT], attached: u64) -> Option<u32> {
     let (start, end) = span_bounds(samples, attached)?;
-    Some(((end - start) / 1000).min(u64::from(u32::MAX)) as u32)
+    Some(u32::saturating_from(
+        ((end - start) / 1000).min(u64::from(u32::MAX)),
+    ))
 }
 
 // The earliest sampled start and latest sampled end, in GPU nanoseconds, with

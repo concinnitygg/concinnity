@@ -33,6 +33,11 @@ const NAME_CHARS: usize = 18;
 const SUMMARY_X: f32 = NAME_CHARS as f32 * CHAR_W;
 // What the row has left for the summary once the name column and the row's own
 // margins are taken.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a character count from small positive layout constants"
+)]
 const SUMMARY_CHARS: usize = ((MENU_W - PAD * 2.0 - 6.0 - SUMMARY_X) / CHAR_W) as usize;
 const ROW_H: f32 = 24.0;
 const PAD: f32 = 4.0;

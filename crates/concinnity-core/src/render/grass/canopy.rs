@@ -15,6 +15,7 @@
 //! masks, a planet's meadow) and the field's slow drift
 //! ([`super::variation`]), all on ground-fixed coordinates.
 
+use crate::math::{SaturatingFrom, atan2, cos, exp, narrow_f32, powf, sin, sqrt};
 use alloc::vec::Vec;
 
 use super::canopy_table::canopy_table;
@@ -22,7 +23,6 @@ use super::planet::PlanetGrass;
 use super::planet::density::meadow_density;
 use super::planet::tiles::{DrawnPlanetTile, planet_center};
 use super::{GrassBladeLook, GrassLodView, GrassTerrain, grown_layers};
-use crate::math::{atan2, cos, exp, powf, sin, sqrt};
 use crate::planet::{OCTAVE_TURN, PlanetShape};
 use crate::render::uniforms::canopy::{CanopyLayerGpu, CanopyParams, MAX_CANOPY_LAYERS};
 
@@ -367,7 +367,7 @@ impl CanopyField {
         for grown in grown_layers(terrains) {
             let run = runs[grown.terrain].get_or_insert_with(|| TerrainCanopy {
                 range: CanopyRange {
-                    first: layers.len() as u32,
+                    first: u32::saturating_from(layers.len()),
                     count: 0,
                     planet: false,
                 },
@@ -408,7 +408,7 @@ impl CanopyField {
         let seeds: Vec<u32> = layers.iter().map(|l| l.seed).collect();
         let range = CanopyRange {
             first: 0,
-            count: layers.len() as u32,
+            count: u32::saturating_from(layers.len()),
             planet: true,
         };
         let planet = PlanetCanopy {
@@ -448,7 +448,7 @@ impl CanopyField {
         tile: Option<&DrawnPlanetTile>,
     ) -> CanopyParams {
         let mut params = CanopyParams {
-            layer_count: self.layers.len() as u32,
+            layer_count: u32::saturating_from(self.layers.len()),
             band: [lod.fade_start(), lod.extent, phase, 0.0],
             ..CanopyParams::default()
         };
@@ -462,7 +462,7 @@ impl CanopyField {
                 let d = axis[0] * center[0] + axis[1] * center[1] + axis[2] * center[2];
                 [axis[0], axis[1], axis[2], -d]
             });
-            params.planet_radius = planet.shape.radius as f32;
+            params.planet_radius = narrow_f32(planet.shape.radius);
             params.meadow_scale = planet.meadow_scale;
             params.meadow_mean = planet.meadow_mean;
             set_ground_noise(&mut params, &planet.shape);
@@ -475,15 +475,21 @@ impl CanopyField {
 // normals per pixel.
 fn set_ground_noise(params: &mut CanopyParams, shape: &PlanetShape) {
     params.ground_turn = core::array::from_fn(|r| {
-        core::array::from_fn(|c| if c < 3 { OCTAVE_TURN[c][r] as f32 } else { 0.0 })
+        core::array::from_fn(|c| {
+            if c < 3 {
+                narrow_f32(OCTAVE_TURN[c][r])
+            } else {
+                0.0
+            }
+        })
     });
     let octaves = shape.octave_count();
     for octave in 0..octaves {
         params.ground_salts[octave as usize / 4][octave as usize % 4] = shape.octave_salt(octave);
     }
-    params.ground_frequency = shape.base_frequency() as f32;
-    params.ground_height_scale = shape.noise_scale() as f32;
-    params.ground_cell = (shape.radius / shape.base_frequency()) as f32;
+    params.ground_frequency = narrow_f32(shape.base_frequency());
+    params.ground_height_scale = narrow_f32(shape.noise_scale());
+    params.ground_cell = narrow_f32(shape.radius / shape.base_frequency());
     params.ground_octaves = octaves;
 }
 
@@ -1134,10 +1140,10 @@ mod tests {
         let lattice = |c: [i32; 3]| {
             let h = lcg_hash(
                 lcg_hash(
-                    lcg_hash(c[0] as u32 ^ salt)
-                        .wrapping_add((c[1] as u32).wrapping_mul(0x85eb_ca6b)),
+                    lcg_hash(c[0].cast_unsigned() ^ salt)
+                        .wrapping_add(c[1].cast_unsigned().wrapping_mul(0x85eb_ca6b)),
                 )
-                .wrapping_add((c[2] as u32).wrapping_mul(0xc2b2_ae35)),
+                .wrapping_add(c[2].cast_unsigned().wrapping_mul(0xc2b2_ae35)),
             );
             (h & 0xffff) as f32 / 65535.0
         };
@@ -1145,7 +1151,7 @@ mod tests {
         let t: [f32; 3] = core::array::from_fn(|i| p[i] - cell[i]);
         let s = t.map(|t| t * t * (3.0 - 2.0 * t));
         let ds = t.map(|t| 6.0 * t * (1.0 - t));
-        let c = cell.map(|v| v as i32);
+        let c = cell.map(i32::saturating_from);
         let at = |x: i32, y: i32, z: i32| lattice([c[0] + x, c[1] + y, c[2] + z]);
         let (a, b, d0, d1) = (at(0, 0, 0), at(1, 0, 0), at(0, 1, 0), at(1, 1, 0));
         let (e, f, g, h) = (at(0, 0, 1), at(1, 0, 1), at(0, 1, 1), at(1, 1, 1));

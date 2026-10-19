@@ -17,6 +17,7 @@ mod settings_tab;
 mod tests;
 
 use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
+use concinnity_core::math::SaturatingFrom;
 use rows::settings_tabs;
 use screen::{MenuMetrics, emit_menu_screen};
 use settings_tab::emit_settings_tab;
@@ -161,7 +162,10 @@ fn expand_one(
     // measured for this one.
     let font_name = if menu.font.is_empty() {
         let name = format!("{menu_name}_font");
-        out.push(spec_to_value(&asset::font(&name, font_px as u32)));
+        out.push(spec_to_value(&asset::font(
+            &name,
+            u32::saturating_from(font_px),
+        )));
         name
     } else {
         menu.font.to_string()

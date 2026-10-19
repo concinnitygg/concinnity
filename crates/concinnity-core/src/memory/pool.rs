@@ -10,6 +10,7 @@
 // Handles carry a generation, so a handle to a removed object reads as absent
 // rather than silently addressing whatever took its slot.
 
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 // A slot's occupant, or the emptiness left when it was removed.
@@ -71,7 +72,7 @@ impl<T> Pool<T> {
             });
             // Reversed, so the first insert takes slot 0 and a fresh pool fills
             // in order.
-            free.push((capacity - 1 - index) as u32);
+            free.push(u32::saturating_from(capacity - 1 - index));
         }
         Self {
             slots,
@@ -168,7 +169,7 @@ impl<T> Pool<T> {
         let slot = self.slots.get(index)?;
         slot.value.as_ref()?;
         Some(PoolHandle {
-            index: index as u32,
+            index: u32::saturating_from(index),
             generation: slot.generation,
         })
     }
@@ -184,7 +185,7 @@ impl<T> Pool<T> {
             let value = slot.value.as_ref()?;
             Some((
                 PoolHandle {
-                    index: index as u32,
+                    index: u32::saturating_from(index),
                     generation: slot.generation,
                 },
                 value,
@@ -202,7 +203,7 @@ impl<T> Pool<T> {
                 let value = slot.value.as_mut()?;
                 Some((
                     PoolHandle {
-                        index: index as u32,
+                        index: u32::saturating_from(index),
                         generation,
                     },
                     value,
@@ -218,7 +219,7 @@ impl<T> Pool<T> {
             if slot.value.take().is_some() {
                 slot.generation = slot.generation.wrapping_add(1);
             }
-            self.free.push(index as u32);
+            self.free.push(u32::saturating_from(index));
         }
         self.len = 0;
     }
@@ -388,7 +389,7 @@ mod tests {
     fn handles_rebuild_from_their_parts() {
         let mut pool = Pool::with_capacity(2);
         let a = pool.insert("a").expect("room");
-        let rebuilt = PoolHandle::from_parts(a.index() as u32, a.generation());
+        let rebuilt = PoolHandle::from_parts(u32::saturating_from(a.index()), a.generation());
         assert_eq!(rebuilt, a);
         assert_eq!(pool.get(rebuilt), Some(&"a"));
 

@@ -4,6 +4,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
 use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -578,7 +579,7 @@ fn upload_texture_levels_deferred(
         .first()
         .ok_or_else(|| RenderError::Other("texture upload has no mip level".into()))?;
     let (width, height) = (base.width, base.height);
-    let mip_count = levels.len() as u32;
+    let mip_count = u32::saturating_from(levels.len());
 
     // One packed staging buffer holding mip 0..N concatenated.
     let total: usize = levels.iter().map(|m| m.data.len()).sum();
@@ -640,7 +641,7 @@ fn upload_texture_levels_deferred(
                     .image_subresource(
                         vk::ImageSubresourceLayers::default()
                             .aspect_mask(vk::ImageAspectFlags::COLOR)
-                            .mip_level(m as u32)
+                            .mip_level(u32::saturating_from(m))
                             .base_array_layer(0)
                             .layer_count(1),
                     )
@@ -1380,7 +1381,7 @@ fn create_cube_image(
         command_pool,
         queue,
     } = ctx;
-    let mip_count = mip_bytes.len() as u32;
+    let mip_count = u32::saturating_from(mip_bytes.len());
     if mip_count == 0 {
         return Err(RenderError::Other(
             "cubemap upload: mip_bytes must not be empty".into(),
@@ -1474,7 +1475,7 @@ fn create_cube_image(
                         .image_subresource(
                             vk::ImageSubresourceLayers::default()
                                 .aspect_mask(vk::ImageAspectFlags::COLOR)
-                                .mip_level(m as u32)
+                                .mip_level(u32::saturating_from(m))
                                 .base_array_layer(face)
                                 .layer_count(1),
                         )
@@ -1580,7 +1581,7 @@ pub(super) fn upload_environment_map(
     Ok(EnvironmentMapTextures {
         irradiance,
         prefilter,
-        prefilter_mip_count: mip_bytes.len() as u32,
+        prefilter_mip_count: u32::saturating_from(mip_bytes.len()),
     })
 }
 

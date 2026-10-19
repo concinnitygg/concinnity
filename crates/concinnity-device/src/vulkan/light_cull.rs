@@ -8,6 +8,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterParams};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -183,7 +184,7 @@ pub(in crate::vulkan) fn build_light_cull(
     let pipeline = compute_pipeline(device, pipeline_layout.handle(), &spirv, "light cull")?;
 
     // One compute set per frame, each pointing at that frame's params UBO.
-    let f = frames as u32;
+    let f = u32::saturating_from(frames);
     let sizes = PoolSizes::default()
         .sets(&light_cull_set_bindings(), f)
         .build();

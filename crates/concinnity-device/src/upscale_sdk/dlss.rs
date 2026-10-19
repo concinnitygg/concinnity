@@ -23,7 +23,7 @@ use super::UpscaleExtent;
 /// `NVSDK_NGX_Result_Fail`: the high bits every failure code carries.
 pub(crate) const NVSDK_NGX_RESULT_FAIL: u32 = 0xBAD0_0000;
 /// `NVSDK_NGX_Version_API`, the version the build checked the SDK headers for.
-pub(crate) const NVSDK_NGX_VERSION_API: i32 = NGX_API_VERSION as i32;
+pub(crate) const NVSDK_NGX_VERSION_API: i32 = NGX_API_VERSION.cast_signed();
 pub(crate) const NVSDK_NGX_ENGINE_TYPE_CUSTOM: i32 = 0;
 pub(crate) const NVSDK_NGX_FEATURE_SUPERSAMPLING: i32 = 1;
 
@@ -270,7 +270,14 @@ impl DlssVersion {
 
     // From `VS_FIXEDFILEINFO`'s most and least significant halves.
     const fn from_file_version(ms: u32, ls: u32) -> Self {
-        Self::new((ms >> 16) as u16, ms as u16, (ls >> 16) as u16, ls as u16)
+        let [ms0, ms1, ms2, ms3] = ms.to_le_bytes();
+        let [ls0, ls1, ls2, ls3] = ls.to_le_bytes();
+        Self::new(
+            u16::from_le_bytes([ms2, ms3]),
+            u16::from_le_bytes([ms0, ms1]),
+            u16::from_le_bytes([ls2, ls3]),
+            u16::from_le_bytes([ls0, ls1]),
+        )
     }
 }
 
@@ -647,7 +654,7 @@ mod tests {
     #[test]
     fn the_api_version_is_the_one_the_build_checks_for() {
         assert_eq!(NVSDK_NGX_VERSION_API, 0x15);
-        assert_eq!(NVSDK_NGX_VERSION_API as u32, NGX_API_VERSION);
+        assert_eq!(NVSDK_NGX_VERSION_API.cast_unsigned(), NGX_API_VERSION);
     }
 
     #[test]

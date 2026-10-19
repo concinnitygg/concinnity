@@ -24,6 +24,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::ClusterParams;
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::planar_reflection::{
     self, MirrorFrame, MirrorShading, MirrorView, PLANAR_CROP_MARGIN, PlanarReflectors,
@@ -477,7 +478,7 @@ impl PlanarReflectionSet {
         // One pool: the per-(plane, frame) global, cull and binning sets, and
         // one Hi-Z set (an image and a UBO) when the world runs Hi-Z.
         let has_hiz = u32::from(cull.hiz.is_some());
-        let ring_sets = ring as u32;
+        let ring_sets = u32::saturating_from(ring);
         let pool_sizes = PoolSizes::default()
             .sets(&global_set(), ring_sets)
             .sets(&light_cull_set_bindings(), ring_sets)
@@ -759,7 +760,7 @@ impl VkContext {
         );
         let storage = FaceStorage::mirror(&self.pre_exposure);
         let shading = MirrorShading {
-            elapsed: params.elapsed as f32,
+            elapsed: narrow_f32(params.elapsed),
             prefilter_mip_count: self.scene.prefilter_mip_count as f32,
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
@@ -844,8 +845,8 @@ impl VkContext {
                     extent,
                     render_area: vk::Rect2D {
                         offset: vk::Offset2D {
-                            x: crop.x as i32,
-                            y: crop.y as i32,
+                            x: i32::saturating_from(crop.x),
+                            y: i32::saturating_from(crop.y),
                         },
                         extent: vk::Extent2D {
                             width: crop.width,

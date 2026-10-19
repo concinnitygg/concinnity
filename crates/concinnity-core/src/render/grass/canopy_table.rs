@@ -8,10 +8,10 @@
 //! deep into the blades a ray gets keeps changing long after nearly every ray
 //! is stopped.
 
+use crate::math::{SaturatingFrom, acos, cos, exp, floor, ln};
 use alloc::vec::Vec;
 
 use super::canopy::{CanopyBand, CanopyView, canopy_view, projection};
-use crate::math::{acos, cos, exp, floor, ln};
 use crate::render::uniforms::canopy::MAX_CANOPY_LAYERS;
 
 /// View angles a layer's table holds, from straight down to grazing.
@@ -101,7 +101,10 @@ pub fn canopy_table(bend: f32, height_variance: f32) -> Vec<[f32; 4]> {
 
 // Row `r` of the cell at fractional angle `x` and depth `y`, interpolated.
 fn fetch(table: &[[f32; 4]], x: f32, y: f32, r: usize) -> [f32; 4] {
-    let (i0, j0) = (floor(x) as usize, floor(y) as usize);
+    let (i0, j0) = (
+        usize::saturating_from(floor(x)),
+        usize::saturating_from(floor(y)),
+    );
     let (i1, j1) = (
         (i0 + 1).min(CANOPY_TABLE_ANGLES - 1),
         (j0 + 1).min(CANOPY_TABLE_DEPTHS - 1),

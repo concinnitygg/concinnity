@@ -1,5 +1,6 @@
 // Box, cylinder, plane, and sphere generators.
 
+use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -88,7 +89,7 @@ pub fn build_box(half_extents: [f32; 3]) -> (Vec<Vert>, Vec<u16>) {
     ];
 
     for (a, b, c, d, normal, u_max, v_max) in faces {
-        let base = verts.len() as u16;
+        let base = u16::saturating_from(verts.len());
         verts.extend_from_slice(&[
             (*a, *normal, color, [0.0, 0.0]),
             (*b, *normal, color, [*u_max, 0.0]),
@@ -105,9 +106,19 @@ pub fn build_box(half_extents: [f32; 3]) -> (Vec<Vert>, Vec<u16>) {
 ///
 /// Centered on the origin: bottom cap at y = -height/2, top cap at y = +height/2.
 /// Sides use cylindrical UV projection; caps use planar UV. `segments` is
-/// clamped to at least 3.
-pub fn build_cylinder(radius: f32, height: f32, segments: u32) -> (Vec<Vert>, Vec<u16>) {
+/// clamped to at least 3; a tessellation past the u16 index limit is refused.
+pub fn build_cylinder(
+    radius: f32,
+    height: f32,
+    segments: u32,
+) -> Result<(Vec<Vert>, Vec<u16>), String> {
     let segments = segments.max(3) as usize;
+    let vert_count = 4 * segments + 2;
+    if vert_count > 65536 {
+        return Err(format!(
+            "cylinder segments={segments} produces {vert_count} vertices, exceeding the u16 limit"
+        ));
+    }
 
     let half_h = height / 2.0;
     let side_color = [0.70f32, 0.68, 0.66];
@@ -117,7 +128,7 @@ pub fn build_cylinder(radius: f32, height: f32, segments: u32) -> (Vec<Vert>, Ve
     let mut idxs: Vec<u16> = Vec::new();
 
     // sides: two rings (bottom then top)
-    let side_base = verts.len() as u16;
+    let side_base = u16::saturating_from(verts.len());
     for ring in 0..=1 {
         let y = if ring == 0 { -half_h } else { half_h };
         for i in 0..segments {
@@ -137,15 +148,15 @@ pub fn build_cylinder(radius: f32, height: f32, segments: u32) -> (Vec<Vert>, Ve
     }
     for i in 0..segments {
         let next = (i + 1) % segments;
-        let b = side_base + i as u16;
-        let bn = side_base + next as u16;
-        let t = b + segments as u16;
-        let tn = bn + segments as u16;
+        let b = side_base + u16::saturating_from(i);
+        let bn = side_base + u16::saturating_from(next);
+        let t = b + u16::saturating_from(segments);
+        let tn = bn + u16::saturating_from(segments);
         idxs.extend_from_slice(&[b, bn, tn, tn, t, b]);
     }
 
     // top cap; normal = +Y
-    let top_base = verts.len() as u16;
+    let top_base = u16::saturating_from(verts.len());
     verts.push(([0.0, half_h, 0.0], [0.0, 1.0, 0.0], cap_color, [0.5, 0.5]));
     for i in 0..segments {
         let t = i as f32 / segments as f32;
@@ -163,13 +174,13 @@ pub fn build_cylinder(radius: f32, height: f32, segments: u32) -> (Vec<Vert>, Ve
         let next = (i + 1) % segments;
         idxs.extend_from_slice(&[
             top_base,
-            top_base + 1 + next as u16,
-            top_base + 1 + i as u16,
+            top_base + 1 + u16::saturating_from(next),
+            top_base + 1 + u16::saturating_from(i),
         ]);
     }
 
     // bottom cap; normal = -Y
-    let bot_base = verts.len() as u16;
+    let bot_base = u16::saturating_from(verts.len());
     verts.push(([0.0, -half_h, 0.0], [0.0, -1.0, 0.0], cap_color, [0.5, 0.5]));
     for i in 0..segments {
         let t = i as f32 / segments as f32;
@@ -187,12 +198,12 @@ pub fn build_cylinder(radius: f32, height: f32, segments: u32) -> (Vec<Vert>, Ve
         let next = (i + 1) % segments;
         idxs.extend_from_slice(&[
             bot_base,
-            bot_base + 1 + i as u16,
-            bot_base + 1 + next as u16,
+            bot_base + 1 + u16::saturating_from(i),
+            bot_base + 1 + u16::saturating_from(next),
         ]);
     }
 
-    (verts, idxs)
+    Ok((verts, idxs))
 }
 
 /// Build a flat horizontal plane from half-width and half-depth.
@@ -268,33 +279,37 @@ pub fn build_sphere(
     }
 
     // north pole cap
-    let pole_n = verts.len() as u16;
+    let pole_n = u16::saturating_from(verts.len());
     verts.push(([0.0, radius, 0.0], [0.0, 1.0, 0.0], color, [0.5, 0.0]));
     for seg in 0..segments {
-        idxs.extend_from_slice(&[pole_n, seg as u16, (seg + 1) as u16]);
+        idxs.extend_from_slice(&[
+            pole_n,
+            u16::saturating_from(seg),
+            u16::saturating_from(seg + 1),
+        ]);
     }
 
     // south pole cap
-    let pole_s = verts.len() as u16;
+    let pole_s = u16::saturating_from(verts.len());
     verts.push(([0.0, -radius, 0.0], [0.0, -1.0, 0.0], color, [0.5, 1.0]));
-    let last_ring_start = ((rings - 1) * (segments + 1)) as u16;
+    let last_ring_start = u16::saturating_from((rings - 1) * (segments + 1));
     for seg in 0..segments {
         idxs.extend_from_slice(&[
             pole_s,
-            last_ring_start + (seg + 1) as u16,
-            last_ring_start + seg as u16,
+            last_ring_start + u16::saturating_from(seg + 1),
+            last_ring_start + u16::saturating_from(seg),
         ]);
     }
 
     // quads between adjacent rings
     for ring in 0..rings - 1 {
-        let row0 = (ring * (segments + 1)) as u16;
-        let row1 = row0 + (segments + 1) as u16;
+        let row0 = u16::saturating_from(ring * (segments + 1));
+        let row1 = row0 + u16::saturating_from(segments + 1);
         for seg in 0..segments {
-            let tl = row0 + seg as u16;
-            let tr = row0 + (seg + 1) as u16;
-            let bl = row1 + seg as u16;
-            let br = row1 + (seg + 1) as u16;
+            let tl = row0 + u16::saturating_from(seg);
+            let tr = row0 + u16::saturating_from(seg + 1);
+            let bl = row1 + u16::saturating_from(seg);
+            let br = row1 + u16::saturating_from(seg + 1);
             idxs.extend_from_slice(&[tl, bl, tr, tr, bl, br]);
         }
     }
@@ -354,10 +369,17 @@ mod tests {
 
     #[test]
     fn cylinder_clamps_segments_to_three() {
-        let clamped = build_cylinder(1.0, 2.0, 0);
-        assert_eq!(clamped, build_cylinder(1.0, 2.0, 3));
+        let clamped = build_cylinder(1.0, 2.0, 0).unwrap();
+        assert_eq!(clamped, build_cylinder(1.0, 2.0, 3).unwrap());
         assert_well_formed(&clamped);
-        assert_well_formed(&build_cylinder(0.5, 4.0, 32));
+        assert_well_formed(&build_cylinder(0.5, 4.0, 32).unwrap());
+    }
+
+    #[test]
+    fn cylinder_refuses_more_vertices_than_u16_indices_reach() {
+        assert!(build_cylinder(1.0, 1.0, 16_383).is_ok());
+        let err = build_cylinder(1.0, 1.0, 16_384).unwrap_err();
+        assert!(err.contains("u16"), "{err}");
     }
 
     #[test]

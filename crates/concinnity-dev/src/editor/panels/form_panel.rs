@@ -19,6 +19,7 @@
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::SaturatingFrom;
 
 use super::form::{self, FieldKind, FormField};
 use super::form_extras::{self, ExtraRow};
@@ -171,7 +172,7 @@ fn visible_rows(n_fields: usize) -> usize {
 
 // The number of field slots that fit panel height `h`, capped at the pool.
 pub(crate) fn rows_for_height(h: f32) -> usize {
-    (((h - CHROME_H) / FIELD_H).floor() as usize).clamp(1, form::FIELD_POOL_MAX)
+    usize::saturating_from(((h - CHROME_H) / FIELD_H).floor()).clamp(1, form::FIELD_POOL_MAX)
 }
 
 // The panel footprint for `n_fields` total fields (the field area tracks the

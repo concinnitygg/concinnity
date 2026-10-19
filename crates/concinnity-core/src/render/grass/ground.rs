@@ -6,10 +6,10 @@
 //! the `grass_ground` and `grass_mask_density` functions in `grass.hlsl`, so
 //! tests can hold the kernel's placement to the terrain's own surface.
 
+use crate::math::{SaturatingFrom, floor, sqrt};
 use alloc::vec::Vec;
 
 use super::tiles::GroundRect;
-use crate::math::{floor, sqrt};
 use crate::terrain::{DensityMask, TerrainGrid};
 
 /// The heights and mask texels every layer's ground and mask index into.
@@ -26,7 +26,7 @@ pub struct GrassGroundBuffers {
 impl GrassGroundBuffers {
     /// Append `grid`'s heights, returning the index of the first.
     pub fn push_heights(&mut self, grid: &TerrainGrid) -> u32 {
-        let offset = self.heights.len() as u32;
+        let offset = u32::saturating_from(self.heights.len());
         self.heights.extend_from_slice(grid.heights());
         offset
     }
@@ -98,7 +98,10 @@ impl GrassMask {
         let (w, h) = (self.width, self.height);
         let fx = s.clamp(0.0, 1.0) * (w - 1) as f32;
         let fy = t.clamp(0.0, 1.0) * (h - 1) as f32;
-        let (x0, y0) = (floor(fx) as u32, floor(fy) as u32);
+        let (x0, y0) = (
+            u32::saturating_from(floor(fx)),
+            u32::saturating_from(floor(fy)),
+        );
         let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
         let (sx, sy) = (fx - x0 as f32, fy - y0 as f32);
         let at = |x: u32, y: u32| buffers.mask_texel(self.offset + y * w + x) as f32 / 255.0;
@@ -162,7 +165,9 @@ impl GrassGround {
         let (fx, fz) = (gx - col, gz - row);
         let side = self.resolution + 1;
         let at = |c: f32, r: f32| {
-            buffers.heights[(self.heights_offset + r as u32 * side + c as u32) as usize]
+            buffers.heights[(self.heights_offset
+                + u32::saturating_from(r) * side
+                + u32::saturating_from(c)) as usize]
         };
         let h00 = at(col, row);
         let h10 = at(col + 1.0, row);

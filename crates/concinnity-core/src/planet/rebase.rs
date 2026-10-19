@@ -1,6 +1,7 @@
 // What a move of the simulated frame does to everything in it, and the record
 // of those moves the systems holding positions catch up from.
 
+use crate::math::SaturatingFrom;
 use crate::math::{
     Quat, euler_yxz_deg_from_quat, quat_from_euler_yxz_deg, quat_mul, quat_normalize, quat_rotate,
 };
@@ -147,7 +148,7 @@ impl Default for FrameRebases {
 impl FrameRebases {
     /// Record one more move.
     pub fn push(&mut self, rebase: Rebase) {
-        self.recent[(self.count % KEPT as u64) as usize] = rebase;
+        self.recent[usize::saturating_from(self.count % KEPT as u64)] = rebase;
         self.count += 1;
     }
 
@@ -166,7 +167,7 @@ impl FrameRebases {
         let first = seen.max(self.count.saturating_sub(KEPT as u64));
         let mut total = Rebase::IDENTITY;
         for n in first..self.count {
-            total = total.then(&self.recent[(n % KEPT as u64) as usize]);
+            total = total.then(&self.recent[usize::saturating_from(n % KEPT as u64)]);
         }
         Some(total)
     }

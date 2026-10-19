@@ -10,6 +10,7 @@ use concinnity_core::gfx::render_types::{
 };
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend::FrameParams;
 use concinnity_core::render::frame_plan::drive_frame;
 use concinnity_core::render::lights::LightData;
@@ -111,7 +112,7 @@ impl VkSpotShadow {
     // Slices actually handed out; the array layers, the framebuffers, and the
     // data buffer all carry exactly this many entries.
     pub(super) fn count(&self) -> u32 {
-        self.framebuffers.len() as u32
+        u32::saturating_from(self.framebuffers.len())
     }
 
     // Slices that re-render this frame.

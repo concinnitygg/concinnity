@@ -11,6 +11,7 @@
 //! targets' descriptors from the post block, so a pass whose target count
 //! follows the resolution (the bloom chain's octaves) moves no other slot.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 use windows::Win32::Graphics::Direct3D12::*;
@@ -33,8 +34,8 @@ impl DxContext {
     // resize cycle and leave the targets at their previous size; the next
     // non-zero size restores them).
     pub(super) fn maybe_handle_resize(&mut self) -> RenderResult<()> {
-        let new_w = self.win().width.max(0) as u32;
-        let new_h = self.win().height.max(0) as u32;
+        let new_w = u32::saturating_from(self.win().width.max(0));
+        let new_h = u32::saturating_from(self.win().height.max(0));
         if new_w == 0 || new_h == 0 {
             return Ok(());
         }
@@ -59,8 +60,9 @@ impl DxContext {
         for i in 0..BACK_BUFFERS {
             // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters
             // it fills are live locals that outlive the call.
-            let buf: ID3D12Resource = unsafe { self.swapchain.handle.GetBuffer(i as u32) }
-                .map_err(|e| map_hresult(e.code(), &format!("GetBuffer[{i}]")))?;
+            let buf: ID3D12Resource =
+                unsafe { self.swapchain.handle.GetBuffer(u32::saturating_from(i)) }
+                    .map_err(|e| map_hresult(e.code(), &format!("GetBuffer[{i}]")))?;
             let rtv_handle = D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: rtv_base.ptr + i * self.swapchain.rtv_descriptor_size,
             };
@@ -151,7 +153,7 @@ impl DxContext {
         // above, and the call takes only scalars besides the format and flags.
         if let Err(e) = unsafe {
             self.swapchain.handle.ResizeBuffers(
-                BACK_BUFFERS as u32,
+                u32::saturating_from(BACK_BUFFERS),
                 new_w,
                 new_h,
                 self.swapchain.format,

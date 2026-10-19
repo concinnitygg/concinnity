@@ -224,6 +224,7 @@ fn check_panorama_aspect(width: u32, height: u32) -> Result<(), String> {
 #[cfg(test)]
 pub(crate) mod test_fixtures {
     use crate::import::glb::test_fixtures::{f32s, make_glb, u16s};
+    use concinnity_core::math::SaturatingFrom;
 
     // A UV sphere with `segments` columns and `rings` rows of quads, unit
     // radius, UVs spanning the full unit square: the shape an exporter writes
@@ -313,7 +314,7 @@ pub(crate) mod test_fixtures {
             .iter()
             .map(|uv| [uv[0] * shape.uv_scale, uv[1] * shape.uv_scale])
             .collect();
-        let indices: Vec<u16> = (0..positions.len() as u16).collect();
+        let indices: Vec<u16> = (0..u16::saturating_from(positions.len())).collect();
 
         let pos_bytes = f32s(&positions.iter().flatten().copied().collect::<Vec<f32>>());
         let uv_bytes = f32s(&scaled.iter().flatten().copied().collect::<Vec<f32>>());

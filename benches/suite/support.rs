@@ -9,6 +9,7 @@
 //! per-item costs. Bodies must be deterministic and self-contained: whatever a
 //! body builds it should also tear down, or the heap column will show the drift.
 
+use concinnity_core::math::SaturatingFrom;
 use std::fmt::Write as _;
 use std::time::Instant;
 
@@ -54,7 +55,7 @@ impl Rng {
 
     /// A value in `0..n`.
     pub(crate) fn below(&mut self, n: usize) -> usize {
-        (self.next_u64() % n as u64) as usize
+        usize::saturating_from(self.next_u64() % n as u64)
     }
 
     /// Shuffle `items` in place.
@@ -158,16 +159,17 @@ impl Bench {
         // A separate pass for memory, so snapshot reads sit outside the timed
         // windows and the timing loop sits outside the counted window.
         let ledger = concinnity_core::memory::ledger();
-        let device_before = ledger.snapshot().realm_bytes(Realm::Device) as i64;
+        let device_before = i64::saturating_from(ledger.snapshot().realm_bytes(Realm::Device));
         let heap_before = concinnity_core::memory::stats().unwrap_or_default();
         for _ in 0..iters {
             core::hint::black_box(body());
         }
         let heap_after = concinnity_core::memory::stats().unwrap_or_default();
-        let device_after = ledger.snapshot().realm_bytes(Realm::Device) as i64;
+        let device_after = i64::saturating_from(ledger.snapshot().realm_bytes(Realm::Device));
 
-        let per_iter =
-            |after: u64, before: u64| (after as i64 - before as i64) as f64 / iters as f64;
+        let per_iter = |after: u64, before: u64| {
+            (i64::saturating_from(after) - i64::saturating_from(before)) as f64 / iters as f64
+        };
         let record = Record {
             name: name.to_string(),
             items: items.max(1),
@@ -200,7 +202,7 @@ impl Bench {
             if elapsed >= self.target_sample_ns || iters >= MAX_ITERS {
                 return (iters, elapsed);
             }
-            let scale = self.target_sample_ns.div_ceil(elapsed.max(1)).max(2) as u64;
+            let scale = u64::saturating_from(self.target_sample_ns.div_ceil(elapsed.max(1)).max(2));
             iters = iters.saturating_mul(scale).min(MAX_ITERS);
         }
     }
@@ -237,8 +239,8 @@ pub(crate) fn percentile(sorted: &[f64], p: f64) -> f64 {
         [only] => *only,
         _ => {
             let rank = p / 100.0 * (sorted.len() - 1) as f64;
-            let lo = rank.floor() as usize;
-            let hi = rank.ceil() as usize;
+            let lo = usize::saturating_from(rank.floor());
+            let hi = usize::saturating_from(rank.ceil());
             sorted[lo] + (sorted[hi] - sorted[lo]) * (rank - lo as f64)
         }
     }

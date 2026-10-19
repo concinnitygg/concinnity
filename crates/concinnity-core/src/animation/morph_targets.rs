@@ -9,6 +9,7 @@
 //!
 //! The GPU consumes both tables through one buffer, see [`PayloadMorphs::packed_words`].
 
+use crate::math::SaturatingFrom;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::{format, vec};
@@ -99,13 +100,13 @@ impl PayloadMorphs {
                 let d = name_block[v];
                 if is_significant(&d) {
                     entries.push(MorphEntry {
-                        target: t as u32,
+                        target: u32::saturating_from(t),
                         position: d.position,
                         normal: d.normal,
                     });
                 }
             }
-            offsets.push(entries.len() as u32);
+            offsets.push(u32::saturating_from(entries.len()));
         }
         Ok(Self {
             names,
@@ -159,7 +160,7 @@ impl PayloadMorphs {
                 self.entries.len()
             ));
         }
-        let targets = self.target_count() as u32;
+        let targets = u32::saturating_from(self.target_count());
         if let Some(e) = self.entries.iter().find(|e| e.target >= targets) {
             return Err(format!(
                 "morph entry names target {} of {targets}",

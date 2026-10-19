@@ -27,7 +27,10 @@ pub const GRASS_NEST_LEVELS: u32 = 5;
 
 // The kernel's `grass_hash2`.
 fn hash2(c: [i32; 2]) -> u32 {
-    grass_hash((c[0] as u32).wrapping_add(grass_hash(c[1] as u32)))
+    grass_hash(
+        c[0].cast_unsigned()
+            .wrapping_add(grass_hash(c[1].cast_unsigned())),
+    )
 }
 
 // The child, as x in bit 0 and y in bit 1, that cell `cell` of level `level`
@@ -40,7 +43,7 @@ fn pick(cell: [i32; 2], level: u32, salt: u32) -> u32 {
 pub fn representative(cell: [i32; 2], level: u32, salt: u32) -> [i32; 2] {
     let mut c = cell;
     for l in (1..=level).rev() {
-        let b = pick(c, l, salt) as i32;
+        let b = pick(c, l, salt).cast_signed();
         c = [
             c[0].wrapping_mul(2).wrapping_add(b & 1),
             c[1].wrapping_mul(2).wrapping_add(b >> 1),
@@ -56,7 +59,7 @@ pub fn rank(cell: [i32; 2], salt: u32) -> u32 {
     let mut rank = 0;
     while rank < GRASS_NEST_LEVELS {
         let parent = [c[0] >> 1, c[1] >> 1];
-        let b = pick(parent, rank + 1, salt) as i32;
+        let b = pick(parent, rank + 1, salt).cast_signed();
         if (c[0] & 1) != (b & 1) || (c[1] & 1) != (b >> 1) {
             break;
         }
@@ -95,6 +98,7 @@ pub fn nest_level(keep: f32, span: f32, cap: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
     use crate::render::grass::lod::survives;
     use crate::render::shaders;
 
@@ -143,7 +147,7 @@ mod tests {
                 let h = grass_hash(hash2([x, y]));
                 let u = (h >> 8) as f32 / 16_777_216.0;
                 let v = nested_hash(rank([x, y], SALT), u);
-                counts[(v * 16.0) as usize] += 1;
+                counts[usize::saturating_from(v * 16.0)] += 1;
             }
         }
         let mean = (n * n) as f32 / 16.0;
@@ -155,7 +159,7 @@ mod tests {
             .flat_map(|y| (0..n).map(move |x| rank([x, y], SALT)))
             .filter(|&r| r >= 1)
             .count();
-        assert_eq!(ranked, (n * n / 4) as usize);
+        assert_eq!(ranked, usize::saturating_from(n * n / 4));
     }
 
     // At the level picked for a keep fraction, every survivor is one of the

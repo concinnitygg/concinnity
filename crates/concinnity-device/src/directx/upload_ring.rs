@@ -16,6 +16,7 @@
 //! The ring itself is `concinnity_core::render::upload_ring`; this binds it to
 //! pooled UPLOAD-heap buffers.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::upload_ring::{self, UploadBuffer};
 use windows::Win32::Graphics::Direct3D12::*;
@@ -48,7 +49,7 @@ impl UploadBuffer for MappedUpload {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 bytes.as_ptr(),
-                self.base.add(offset as usize),
+                self.base.add(usize::saturating_from(offset)),
                 bytes.len(),
             );
         }

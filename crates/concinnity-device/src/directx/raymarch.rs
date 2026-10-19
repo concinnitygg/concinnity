@@ -42,6 +42,7 @@ use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::LightUniforms;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::backend_init::SdfVolumeSource;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -86,7 +87,7 @@ fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
         _pad1: 0.0,
         cone_ratio: v.cone_ratio(),
         max_distance: v.max_distance,
-        max_steps: v.max_steps as i32,
+        max_steps: i32::saturating_from(v.max_steps),
         receive_shadows: i32::from(v.receive_shadows),
         params: v.params,
     }
@@ -363,7 +364,7 @@ fn create_raymarch_volumetric_pso(
         DestBlendAlpha: D3D12_BLEND_INV_SRC_ALPHA,
         BlendOpAlpha: D3D12_BLEND_OP_ADD,
         LogicOp: D3D12_LOGIC_OP_NOOP,
-        RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
+        RenderTargetWriteMask: u8::saturating_from(D3D12_COLOR_WRITE_ENABLE_ALL.0),
     };
 
     // Early-z against the bbox far face, but no depth write: the
@@ -388,7 +389,7 @@ fn create_raymarch_volumetric_pso(
         DepthStencilState: depth_stencil,
         InputLayout: D3D12_INPUT_LAYOUT_DESC {
             pInputElementDescs: input_layout.as_ptr(),
-            NumElements: input_layout.len() as u32,
+            NumElements: u32::saturating_from(input_layout.len()),
         },
         PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
         NumRenderTargets: 1,
@@ -637,7 +638,7 @@ fn build_cube_buffers(
         std::ptr::copy_nonoverlapping(
             corners.as_ptr().cast::<u8>(),
             p.cast::<u8>(),
-            vb_bytes as usize,
+            usize::saturating_from(vb_bytes),
         );
         vb.Unmap(0, None);
 
@@ -647,19 +648,19 @@ fn build_cube_buffers(
         std::ptr::copy_nonoverlapping(
             indices.as_ptr().cast::<u8>(),
             p.cast::<u8>(),
-            ib_bytes as usize,
+            usize::saturating_from(ib_bytes),
         );
         ib.Unmap(0, None);
     }
 
     let vbv = D3D12_VERTEX_BUFFER_VIEW {
         BufferLocation: com::gpu_va(&vb),
-        SizeInBytes: vb_bytes as u32,
-        StrideInBytes: size_of::<Vertex>() as u32,
+        SizeInBytes: u32::saturating_from(vb_bytes),
+        StrideInBytes: u32::saturating_from(size_of::<Vertex>()),
     };
     let ibv = D3D12_INDEX_BUFFER_VIEW {
         BufferLocation: com::gpu_va(&ib),
-        SizeInBytes: ib_bytes as u32,
+        SizeInBytes: u32::saturating_from(ib_bytes),
         Format: DXGI_FORMAT_R16_UINT,
     };
     Ok((vb, ib, vbv, ibv))
@@ -1232,8 +1233,8 @@ impl DxContext {
             let scissor = windows::Win32::Foundation::RECT {
                 left: 0,
                 top: 0,
-                right: w as i32,
-                bottom: h as i32,
+                right: i32::saturating_from(w),
+                bottom: i32::saturating_from(h),
             };
             cmd.RSSetScissorRects(&[scissor]);
             cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1487,8 +1488,8 @@ impl DxContext {
             let scissor = windows::Win32::Foundation::RECT {
                 left: 0,
                 top: 0,
-                right: sm as i32,
-                bottom: sm as i32,
+                right: i32::saturating_from(sm),
+                bottom: i32::saturating_from(sm),
             };
             cmd.RSSetScissorRects(&[scissor]);
 
@@ -1520,7 +1521,7 @@ impl DxContext {
             // and slice these commands name is live for the call.
             unsafe {
                 cmd.OMSetRenderTargets(0, None, false, Some(&raw const dsv));
-                let constants = [cascade_idx as u32, 0u32, 0u32, 0u32];
+                let constants = [u32::saturating_from(cascade_idx), 0u32, 0u32, 0u32];
                 cmd.set_graphics_root_constants(4, &constants);
             }
             for vol in &rm.volumes {

@@ -25,6 +25,7 @@
 
 use crate::gfx::projection::look_at;
 use crate::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
+use crate::math::SaturatingFrom;
 use crate::math::vec3::{add, cross, dot, length_sq, normalize_clamped, scale, sub};
 use crate::math::{powf, round, sqrt, tan};
 use crate::render::depth::shadow_ortho;
@@ -39,7 +40,7 @@ pub fn empty_shadow_uniforms() -> ShadowUniforms {
     ShadowUniforms {
         light_vps: [IDENTITY; NUM_SHADOW_CASCADES],
         cascade_splits: [f32::INFINITY; NUM_SHADOW_CASCADES],
-        active_cascades: NUM_SHADOW_CASCADES as u32,
+        active_cascades: u32::saturating_from(NUM_SHADOW_CASCADES),
         _pad: [0; 3],
     }
 }
@@ -85,7 +86,7 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         active_cascades,
     } = inputs;
     let shadow_far = shadow_distance.max(near + 1.0);
-    let active = active_cascades.clamp(1, NUM_SHADOW_CASCADES as u32) as usize;
+    let active = active_cascades.clamp(1, u32::saturating_from(NUM_SHADOW_CASCADES)) as usize;
 
     // Practical PSSM splits over the `active` cascades. The unused tail keeps a
     // negative sentinel so the fragment shader's `view_depth < split` test never
@@ -210,7 +211,7 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
     ShadowUniforms {
         light_vps,
         cascade_splits: splits,
-        active_cascades: active as u32,
+        active_cascades: u32::saturating_from(active),
         _pad: [0; 3],
     }
 }

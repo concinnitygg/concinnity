@@ -7,6 +7,7 @@
 //! vertex region); a chunk keeps mesh-relative ones and draws through
 //! `base_vertex`, since it can land past the `u16` index range.
 
+use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -94,7 +95,7 @@ fn place_mesh(
             what()
         )));
     };
-    Ok((v_off as usize, i_off as usize))
+    Ok((usize::saturating_from(v_off), usize::saturating_from(i_off)))
 }
 
 // Write a freshly placed mesh's vertex and index bytes. A failed write hands
@@ -180,7 +181,7 @@ impl SceneState {
             indices.len() * size_of::<u32>(),
             || format!("upload_mesh: draw {draw_idx}"),
         )?;
-        let rebased = widen(indices, vertex_base(v_off) as u32);
+        let rebased = widen(indices, u32::saturating_from(vertex_base(v_off)));
         write_placed(
             writer,
             &mut placement.mesh_vtx,
@@ -270,7 +271,7 @@ impl SceneState {
             .ok_or_else(|| out_of_range("update_mesh_geometry", draw_idx))?;
         check_in_place_counts(obj, draw_idx, vertices, indices, lod_alternates)?;
 
-        let base = vertex_base(obj.vertex_offset) as u32;
+        let base = u32::saturating_from(vertex_base(obj.vertex_offset));
         let v_off = obj.vertex_offset;
         let i_off = obj.index_offset * size_of::<u32>();
         let lod_offsets: Vec<usize> = obj
@@ -359,7 +360,7 @@ impl SceneState {
                 level: t.tile.level,
                 seams: crate::planet::TileSeams::default(),
             }),
-            base_vertex: vertex_base(v_off) as i32,
+            base_vertex: i32::saturating_from(vertex_base(v_off)),
             geometry_generation: 0,
             model,
             texture_slot,
@@ -410,13 +411,13 @@ impl SceneState {
         self.gpu_dirty.rt_topology = true;
         writer.release(
             GeometryBuffer::Vertex,
-            region.vertex_offset as usize,
-            region.vertex_bytes as usize,
+            usize::saturating_from(region.vertex_offset),
+            usize::saturating_from(region.vertex_bytes),
         )?;
         writer.release(
             GeometryBuffer::Index,
-            region.index_offset as usize,
-            region.index_bytes as usize,
+            usize::saturating_from(region.index_offset),
+            usize::saturating_from(region.index_bytes),
         )
     }
 }
@@ -909,7 +910,7 @@ mod tests {
         assert_eq!(drawn[0].radial, [-1.0, 2.0]);
         assert_eq!(
             drawn[0].vertex_base,
-            scene.draw.objects[0].base_vertex as u32
+            scene.draw.objects[0].base_vertex.cast_unsigned()
         );
         scene.update_visibility(DrawIndex(0), false);
         scene.drawn_planet_tiles_into(&mut drawn);
@@ -940,7 +941,10 @@ mod tests {
             .expect("room for the chunk");
         let obj = &scene.draw.objects[0];
         assert_eq!(obj.vertex_offset, VERTEX);
-        assert_eq!(obj.base_vertex as usize * VERTEX, w.writes[0].1);
+        assert_eq!(
+            usize::saturating_from(obj.base_vertex) * VERTEX,
+            w.writes[0].1
+        );
         assert_eq!(obj.index_offset * 4, w.writes[1].1);
     }
 

@@ -5,6 +5,7 @@
 //! no catch-up burst by construction. The same delta is published unpaused as
 //! the frame's [`FrameTime`].
 
+use crate::math::{SaturatingFrom, narrow_f32};
 use core::num::NonZeroU32;
 
 use super::{FrameTime, MenuActive, SimTiming, World};
@@ -28,7 +29,7 @@ impl TickAccumulator {
         self.elapsed += f64::from(dt);
         let frame = FrameTime {
             dt,
-            elapsed: self.elapsed as f32,
+            elapsed: narrow_f32(self.elapsed),
         };
         (self.ticks(dt, paused), frame)
     }
@@ -61,7 +62,7 @@ impl TickAccumulator {
         let ticks = if paused {
             0
         } else {
-            (self.accumulator / tick_dt) as u32
+            u32::saturating_from(self.accumulator / tick_dt)
         };
         self.accumulator -= ticks as f32 * tick_dt;
         SimTiming {

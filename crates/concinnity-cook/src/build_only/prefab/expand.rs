@@ -3,6 +3,7 @@
 // authored line with a generated asset's name is the user's patch of it: the
 // authored fields win and the rest keep the generated values.
 
+use concinnity_core::math::narrow_f32;
 use std::path::Path;
 
 use crate::authoring::registry::RegisteredType;
@@ -341,9 +342,9 @@ fn f32_arr3(v: &serde_json::Value, key: &str, default: [f32; 3]) -> [f32; 3] {
         .and_then(|a| {
             if a.len() == 3 {
                 Some([
-                    a[0].as_f64().unwrap_or_else(|| f64::from(default[0])) as f32,
-                    a[1].as_f64().unwrap_or_else(|| f64::from(default[1])) as f32,
-                    a[2].as_f64().unwrap_or_else(|| f64::from(default[2])) as f32,
+                    narrow_f32(a[0].as_f64().unwrap_or_else(|| f64::from(default[0]))),
+                    narrow_f32(a[1].as_f64().unwrap_or_else(|| f64::from(default[1]))),
+                    narrow_f32(a[2].as_f64().unwrap_or_else(|| f64::from(default[2]))),
                 ])
             } else {
                 None

@@ -4,6 +4,7 @@
 //! a source *file* into an [`HdrImage`] is the cook crate's job; nothing here
 //! touches I/O.
 
+use crate::math::SaturatingFrom;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -74,8 +75,8 @@ fn sample_equirect(hdr: &HdrImage, dir: [f32; 3]) -> [f32; 3] {
     let v = theta / core::f32::consts::PI;
     let fx = u * hdr.width as f32 - 0.5;
     let fy = v * hdr.height as f32 - 0.5;
-    let x0 = floor(fx) as i32;
-    let y0 = floor(fy) as i32;
+    let x0 = i32::saturating_from(floor(fx));
+    let y0 = i32::saturating_from(floor(fy));
     let dx = fx - x0 as f32;
     let dy = fy - y0 as f32;
     let x1 = x0 + 1;
@@ -97,11 +98,11 @@ fn sample_equirect(hdr: &HdrImage, dir: [f32; 3]) -> [f32; 3] {
 
 fn fetch_wrap(hdr: &HdrImage, x: i32, y: i32) -> [f32; 3] {
     // Horizontal wrap (longitude), vertical clamp (latitude poles).
-    let w = hdr.width as i32;
-    let h = hdr.height as i32;
+    let w = i32::saturating_from(hdr.width);
+    let h = i32::saturating_from(hdr.height);
     let xw = x.rem_euclid(w);
     let yc = y.clamp(0, h - 1);
-    hdr.pixels[(yc * w + xw) as usize]
+    hdr.pixels[usize::saturating_from(yc * w + xw)]
 }
 
 /// Convolve an equirectangular source into the serialized IBL payload:

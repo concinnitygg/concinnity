@@ -1,8 +1,10 @@
 //! RIFF/WAVE bytes.
 
+use concinnity_core::math::SaturatingFrom;
+
 /// A 16-bit mono PCM WAV carrying `samples` at `sample_rate`.
 pub fn pcm16_mono(sample_rate: u32, samples: &[i16]) -> Vec<u8> {
-    let data_len = (samples.len() * 2) as u32;
+    let data_len = u32::saturating_from(samples.len() * 2);
     let mut wav = Vec::with_capacity(44 + data_len as usize);
     wav.extend_from_slice(b"RIFF");
     wav.extend_from_slice(&(36 + data_len).to_le_bytes());

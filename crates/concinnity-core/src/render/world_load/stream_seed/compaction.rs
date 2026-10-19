@@ -7,6 +7,7 @@
 // before the backend build so the GPU buffers are born small and the RT
 // acceleration structure sees the final offsets.
 
+use crate::math::SaturatingFrom;
 use alloc::vec;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
@@ -60,7 +61,7 @@ pub(super) fn plan_mesh_seed_bytes(
             }
             draw_to_handle
                 .get(draw_idx)
-                .and_then(|h| deferred_counts.get(&(*h as u32)))
+                .and_then(|h| deferred_counts.get(&u32::saturating_from(*h)))
                 .map_or((0, 0), |&(vc, ic)| {
                     (u64::from(vc) * vertex_bytes, u64::from(ic) * index_bytes)
                 })
@@ -134,6 +135,7 @@ pub(super) fn compact_streamed_geometry(
 mod tests {
     use super::*;
     use crate::gfx::render_types::{LodSlice, MaterialUniforms, NO_NORMAL_MAP_SLOT};
+    use crate::math::SaturatingFrom;
 
     const VERTEX_BYTES: u64 = size_of::<Vertex>() as u64;
     const INDEX_BYTES: u64 = size_of::<u32>() as u64;
@@ -147,7 +149,7 @@ mod tests {
         index_count: usize,
     ) -> DrawObject {
         DrawObject {
-            vertex_offset: first_vertex * VERTEX_BYTES as usize,
+            vertex_offset: first_vertex * usize::saturating_from(VERTEX_BYTES),
             vertex_count,
             index_offset,
             index_count,

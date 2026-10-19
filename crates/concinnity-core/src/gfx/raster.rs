@@ -3,6 +3,7 @@
 //! simple key + ambient shading. No GPU, no backend, no ECS; deterministic
 //! across platforms, so a baked image is identical everywhere.
 
+use crate::math::SaturatingFrom;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -181,10 +182,10 @@ fn fill_triangle(
     let max_x = ceil(p.iter().map(|v| v[0]).fold(f32::NEG_INFINITY, f32::max));
     let min_y = floor(p.iter().map(|v| v[1]).fold(f32::INFINITY, f32::min));
     let max_y = ceil(p.iter().map(|v| v[1]).fold(f32::NEG_INFINITY, f32::max));
-    let x0 = (min_x.max(0.0)) as u32;
-    let x1 = (max_x.min(img.width as f32 - 1.0)).max(0.0) as u32;
-    let y0 = (min_y.max(0.0)) as u32;
-    let y1 = (max_y.min(img.height as f32 - 1.0)).max(0.0) as u32;
+    let x0 = u32::saturating_from(min_x.max(0.0));
+    let x1 = u32::saturating_from((max_x.min(img.width as f32 - 1.0)).max(0.0));
+    let y0 = u32::saturating_from(min_y.max(0.0));
+    let y1 = u32::saturating_from((max_y.min(img.height as f32 - 1.0)).max(0.0));
     for y in y0..=y1 {
         for x in x0..=x1 {
             let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
@@ -217,7 +218,7 @@ fn fill_triangle(
             let shade = AMBIENT + DIFFUSE * diff;
             let o = idx * 4;
             for (c, &b) in base_color.iter().enumerate() {
-                img.rgba[o + c] = ((b * shade).clamp(0.0, 1.0) * 255.0) as u8;
+                img.rgba[o + c] = u8::saturating_from((b * shade).clamp(0.0, 1.0) * 255.0);
             }
             img.rgba[o + 3] = 255;
         }
@@ -265,7 +266,7 @@ pub fn shade_sphere(size: u32, albedo: [f32; 3], roughness: f32, metallic: f32) 
             for c in 0..3 {
                 let v = albedo[c] * (AMBIENT + DIFFUSE * diff) * (1.0 - metal * 0.7)
                     + spec_color[c] * spec;
-                img.rgba[o + c] = (v.clamp(0.0, 1.0) * 255.0) as u8;
+                img.rgba[o + c] = u8::saturating_from(v.clamp(0.0, 1.0) * 255.0);
             }
             img.rgba[o + 3] = 255;
         }
@@ -336,7 +337,7 @@ mod tests {
                 *p -= d * 2.0;
             }
         }
-        let base = near.len() as u16;
+        let base = u16::saturating_from(near.len());
         near.extend(far);
         idx.extend(far_idx.iter().map(|i| i + base));
         // Shade in one pass with a single color, then re-shade each quad alone

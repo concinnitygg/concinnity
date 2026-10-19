@@ -11,6 +11,7 @@ pub mod asset;
 
 mod json;
 
+use concinnity_core::math::SaturatingFrom;
 pub use json::{arg_value_to_json, spec_args, spec_to_value};
 
 /// A JSON-shaped value: exactly the shapes an asset's `args` object can hold. Kept
@@ -59,7 +60,7 @@ impl From<u32> for ArgValue {
 }
 impl From<usize> for ArgValue {
     fn from(v: usize) -> Self {
-        Self::Int(v as i64)
+        Self::Int(i64::saturating_from(v))
     }
 }
 impl From<f32> for ArgValue {

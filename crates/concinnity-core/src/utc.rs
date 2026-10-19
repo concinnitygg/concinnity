@@ -1,5 +1,6 @@
 //! Civil UTC time.
 
+use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::String;
 
@@ -25,7 +26,7 @@ impl UtcTime {
     /// The civil time `secs` after the Unix epoch (Gregorian, proleptic;
     /// Hinnant's civil-from-days).
     pub fn from_unix(secs: u64) -> Self {
-        let days = (secs / 86_400) as i64;
+        let days = i64::saturating_from(secs / 86_400);
         let rem = secs % 86_400;
         let z = days + 719_468;
         let era = z.div_euclid(146_097);
@@ -33,9 +34,9 @@ impl UtcTime {
         let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
         let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
         let mp = (5 * doy + 2) / 153;
-        let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
-        let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-        let year = yoe as i64 + era * 400 + i64::from(month <= 2);
+        let day = u32::saturating_from(doy - (153 * mp + 2) / 5 + 1);
+        let month = u32::saturating_from(if mp < 10 { mp + 3 } else { mp - 9 });
+        let year = i64::saturating_from(yoe) + era * 400 + i64::from(month <= 2);
         Self {
             year,
             month,

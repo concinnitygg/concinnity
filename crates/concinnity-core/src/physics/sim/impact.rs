@@ -173,6 +173,7 @@ fn deepest(manifolds: &[Manifold], run: &[ContactLoad]) -> Option<(Vec3, Vec3)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
     use crate::physics::sim::body::Body;
     use crate::physics::sim::contact::ManifoldPoint;
     use crate::physics::sim::math::{Quat, vec3};
@@ -223,7 +224,7 @@ mod tests {
             manifold.push(ManifoldPoint {
                 point: vec3(x, 0.0, 0.0),
                 separation,
-                id: id as u32,
+                id: u32::saturating_from(id),
                 normal_impulse: 0.0,
                 tangent_impulse: [0.0; 2],
             });

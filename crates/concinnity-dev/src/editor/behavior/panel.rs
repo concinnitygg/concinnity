@@ -15,6 +15,7 @@
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::SaturatingFrom;
 
 use super::edit::{self, Pick};
 use super::graph::{Card, CardKind, Chart};
@@ -142,11 +143,11 @@ const INSPECT_TINT: [f32; 4] = [0.10, 0.10, 0.13, 1.0];
 const CHROME_H: f32 = widget::TITLE_H + HEADER_H + TOOL_H;
 
 pub(crate) fn visible_rows(h: f32) -> usize {
-    (((h - CHROME_H - PAD) / ROW_H).floor() as usize).clamp(ROW_POOL, ROW_POOL_MAX)
+    usize::saturating_from(((h - CHROME_H - PAD) / ROW_H).floor()).clamp(ROW_POOL, ROW_POOL_MAX)
 }
 
 fn max_value_chars(w: f32) -> usize {
-    (MAX_VALUE_CHARS as f32 + (w - BEHAVIOR_W) / CHAR_W).max(8.0) as usize
+    usize::saturating_from((MAX_VALUE_CHARS as f32 + (w - BEHAVIOR_W) / CHAR_W).max(8.0))
 }
 
 // The column the value text starts at, so labels and values line up down the
@@ -568,7 +569,7 @@ pub(crate) fn body_row_rect(o: [f32; 2], s: [f32; 2], mode: ViewMode, slot: usiz
 // How many field rows the inspector has room for at panel size `s`.
 pub(crate) fn inspect_rows(s: [f32; 2]) -> usize {
     let h = inspect_rect([0.0, 0.0], s)[3] - INSPECT_HEAD_H;
-    ((h / ROW_H).floor().max(0.0) as usize).min(ROW_POOL_MAX)
+    usize::saturating_from((h / ROW_H).floor().max(0.0)).min(ROW_POOL_MAX)
 }
 
 // The palette floats over the outline, anchored under the toolbar so it always
@@ -898,7 +899,7 @@ fn layout_name(world: &mut World, view: &BehaviorView<'_>, o: [f32; 2], w: f32) 
     if view.total == 0 {
         widget::hide_field(world, NAME_INPUT);
         let left = caption_x(o);
-        let budget = ((view_rect(o, w)[0] - left) / CHAR_W) as usize;
+        let budget = usize::saturating_from((view_rect(o, w)[0] - left) / CHAR_W);
         widget::place_left_label(
             world,
             NAME_LABEL,
@@ -1046,7 +1047,10 @@ fn layout_inspector(world: &mut World, view: &BehaviorView<'_>, o: [f32; 2], s: 
         world,
         INSPECT_LABEL,
         [b[0] + PAD, b[1] + INSPECT_HEAD_H * 0.5 - theme::TEXT_HALF],
-        &widget::clip_text(&caption, ((b[2] - 2.0 * PAD) / CHAR_W) as usize),
+        &widget::clip_text(
+            &caption,
+            usize::saturating_from((b[2] - 2.0 * PAD) / CHAR_W),
+        ),
         if view.card.is_some() {
             theme::HEADING
         } else {
@@ -1062,10 +1066,10 @@ fn layout_rows(world: &mut World, view: &BehaviorView<'_>, o: [f32; 2], s: [f32;
         ViewMode::Outline => (value_column(s[0]), max_value_chars(s[0])),
         _ => (
             INSPECT_VALUE_X,
-            ((INSPECT_W - INSPECT_VALUE_X - PAD) / CHAR_W) as usize,
+            usize::saturating_from((INSPECT_W - INSPECT_VALUE_X - PAD) / CHAR_W),
         ),
     };
-    let label_budget = ((value_x - PAD * 2.0) / CHAR_W) as usize;
+    let label_budget = usize::saturating_from((value_x - PAD * 2.0) / CHAR_W);
     // The inspector starts at the selected node, so its rows indent from there
     // rather than from however deep in the body that node sits.
     let base_depth = view.base_depth();

@@ -4,6 +4,7 @@
 //! samples enabled, no stencil), and creates it through the pipeline library.
 //! [`compute_pso`] is the compute counterpart.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::depth::{DEPTH_INCLUSIVE_COMPARE, DEPTH_WRITE_COMPARE, DepthCompare};
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostBlend;
@@ -40,7 +41,7 @@ impl From<PostBlend> for Blend {
 
 impl Blend {
     fn raw(self) -> D3D12_RENDER_TARGET_BLEND_DESC {
-        let mask = D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8;
+        let mask = u8::saturating_from(D3D12_COLOR_WRITE_ENABLE_ALL.0);
         let (src, dst) = match self {
             Self::Opaque => {
                 return D3D12_RENDER_TARGET_BLEND_DESC {
@@ -344,10 +345,10 @@ impl<'a> GraphicsPso<'a> {
                 } else {
                     self.input_layout.as_ptr()
                 },
-                NumElements: self.input_layout.len() as u32,
+                NumElements: u32::saturating_from(self.input_layout.len()),
             },
             PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-            NumRenderTargets: self.targets.len().min(MAX_TARGETS) as u32,
+            NumRenderTargets: u32::saturating_from(self.targets.len().min(MAX_TARGETS)),
             RTVFormats: formats,
             DSVFormat: self.depth_format,
             SampleDesc: DXGI_SAMPLE_DESC {
@@ -441,7 +442,7 @@ mod tests {
         ] {
             assert_eq!(
                 b.raw().RenderTargetWriteMask,
-                D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8
+                u8::saturating_from(D3D12_COLOR_WRITE_ENABLE_ALL.0)
             );
         }
     }
@@ -463,7 +464,7 @@ mod tests {
         assert!(!blend.IndependentBlendEnable.as_bool());
         assert_eq!(
             blend.RenderTarget[1].RenderTargetWriteMask,
-            D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8
+            u8::saturating_from(D3D12_COLOR_WRITE_ENABLE_ALL.0)
         );
         assert_eq!(blend.RenderTarget[2].RenderTargetWriteMask, 0);
         let (_, mixed) = color_targets(&[

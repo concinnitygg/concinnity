@@ -84,6 +84,7 @@ use concinnity_core::gfx::render_types::{
     ClusterParams, FogFroxelParams, FogParams, RtParams, SsaoParams, SsgiParams, SsrParams,
     TextDrawCall,
 };
+use concinnity_core::math::narrow_f32;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::particles::ParticleFrame;
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
@@ -353,7 +354,7 @@ impl MtlContext {
         // to happen before the read-only `encode_particles` path runs. We
         // build the (dt, frame_index, per-emitter spawn budgets) tuple
         // once here and stash it for the match arm below.
-        let particle_frame = self.prepare_particle_pass(params.elapsed as f32);
+        let particle_frame = self.prepare_particle_pass(narrow_f32(params.elapsed));
         self.diagnostics
             .draw_calls_accum
             .store(0, Ordering::Relaxed);
@@ -504,7 +505,7 @@ impl MtlContext {
                 self.targets.hdr.width as f32,
                 self.targets.hdr.height as f32,
             ],
-            time: params.elapsed as f32,
+            time: narrow_f32(params.elapsed),
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             irradiance: self.irradiance_lane(),
             sky_rot: self.state.view.sky_rot,
@@ -583,7 +584,7 @@ impl MtlContext {
             PassId::Main2 => self.encode_main_pass_phase2(
                 cmd_buf,
                 crate::metal::draw::main::MainPassCamera {
-                    elapsed: params.elapsed as f32,
+                    elapsed: narrow_f32(params.elapsed),
                     vp: params.vp,
                     view: self.state.view.matrix,
                     cam_pos: params.cam_pos,
@@ -623,7 +624,7 @@ impl MtlContext {
             PassId::Main => self.encode_main_pass(
                 cmd_buf,
                 crate::metal::draw::main::MainPassCamera {
-                    elapsed: params.elapsed as f32,
+                    elapsed: narrow_f32(params.elapsed),
                     vp: params.vp,
                     view: self.state.view.matrix,
                     cam_pos: params.cam_pos,
@@ -666,7 +667,7 @@ impl MtlContext {
                 // un-jittered cur/prev VPs drive the motion vector.
                 let main_view =
                     self.main_view_uniforms(&crate::metal::draw::main::MainPassCamera {
-                        elapsed: params.elapsed as f32,
+                        elapsed: narrow_f32(params.elapsed),
                         vp: params.vp,
                         view: self.state.view.matrix,
                         cam_pos: params.cam_pos,

@@ -3,6 +3,8 @@
 //! The JSON chunk is taken as text rather than a parsed document, so the
 //! harness stays out of the business of which JSON library a caller uses.
 
+use concinnity_core::math::SaturatingFrom;
+
 /// Assemble a GLB: the 12-byte header, the JSON chunk, and an optional BIN
 /// chunk. Both chunks are padded to the 4-byte alignment the format requires.
 ///
@@ -29,12 +31,12 @@ pub fn container(json: &str, bin: Option<&[u8]>) -> Vec<u8> {
     let mut out = Vec::with_capacity(total);
     out.extend_from_slice(b"glTF");
     out.extend_from_slice(&2u32.to_le_bytes());
-    out.extend_from_slice(&(total as u32).to_le_bytes());
-    out.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+    out.extend_from_slice(&u32::saturating_from(total).to_le_bytes());
+    out.extend_from_slice(&u32::saturating_from(json_bytes.len()).to_le_bytes());
     out.extend_from_slice(b"JSON");
     out.extend_from_slice(&json_bytes);
     if let Some(b) = &bin_bytes {
-        out.extend_from_slice(&(b.len() as u32).to_le_bytes());
+        out.extend_from_slice(&u32::saturating_from(b.len()).to_le_bytes());
         out.extend_from_slice(b"BIN\0");
         out.extend_from_slice(b);
     }

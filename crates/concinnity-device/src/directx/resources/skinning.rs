@@ -7,6 +7,7 @@
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_core::gfx::render_types::{MAX_JOINTS, SkinnedDrawObject, SkinnedIndex};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::{geometry_repack, rt_geom};
 use concinnity_core::transform::IDENTITY;
@@ -134,12 +135,12 @@ impl DxContext {
         )?;
         self.skinned.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&skinned_vertex_buffer),
-            SizeInBytes: vtx_bytes.len() as u32,
-            StrideInBytes: size_of::<SkinnedVertex>() as u32,
+            SizeInBytes: u32::saturating_from(vtx_bytes.len()),
+            StrideInBytes: u32::saturating_from(size_of::<SkinnedVertex>()),
         };
         self.skinned.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&skinned_index_buffer),
-            SizeInBytes: idx_bytes.len() as u32,
+            SizeInBytes: u32::saturating_from(idx_bytes.len()),
             Format: DXGI_FORMAT_R32_UINT,
         };
 
@@ -182,7 +183,7 @@ impl DxContext {
                     std::ptr::copy_nonoverlapping(
                         identity_seed.as_ptr().cast::<u8>(),
                         ptr.cast::<u8>(),
-                        joint_buf_bytes as usize,
+                        usize::saturating_from(joint_buf_bytes),
                     );
                 }
                 frame_bufs.push(buf);
@@ -240,8 +241,8 @@ impl DxContext {
                 )?;
                 let vbv = D3D12_VERTEX_BUFFER_VIEW {
                     BufferLocation: com::gpu_va(&buf),
-                    SizeInBytes: deformed_bytes as u32,
-                    StrideInBytes: stride as u32,
+                    SizeInBytes: u32::saturating_from(deformed_bytes),
+                    StrideInBytes: u32::saturating_from(stride),
                 };
                 deformed_buffers.push(buf);
                 deformed_vbvs.push(vbv);
@@ -408,7 +409,7 @@ impl DxContext {
                             bytes,
                             D3D12_RESOURCE_STATE_GENERIC_READ,
                         )?;
-                        let count = data.target_count() as u32;
+                        let count = u32::saturating_from(data.target_count());
                         by_source.insert(key, (buf.clone(), count));
                         (buf, count)
                     };
@@ -451,7 +452,7 @@ impl DxContext {
                     unsafe {
                         buf.Map(0, None, Some(&raw mut ptr))
                             .map_err(|e| map_hresult(e.code(), "map morph weight buf"))?;
-                        std::ptr::write_bytes(ptr.cast::<u8>(), 0, bytes as usize);
+                        std::ptr::write_bytes(ptr.cast::<u8>(), 0, usize::saturating_from(bytes));
                     }
                     frame_bufs.push(buf);
                     frame_ptrs.push(ptr.cast::<u8>());

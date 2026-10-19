@@ -14,6 +14,7 @@
 use concinnity_core::components::{InputKey, KeyEvent, KeyMods, KeyPress, WindowMode};
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::window::display_mode;
 use concinnity_core::window::display_mode::DisplayMode;
@@ -475,8 +476,8 @@ impl GlfwWindow {
                     glfw::WindowMode::Windowed,
                     x.max(0),
                     y.max(0),
-                    w.max(640) as u32,
-                    h.max(480) as u32,
+                    u32::saturating_from(w.max(640)),
+                    u32::saturating_from(h.max(480)),
                     None,
                 );
             }
@@ -567,7 +568,8 @@ impl GlfwWindow {
     // Resize the window (windowed mode only; GraphicsSystem gates this). The
     // framebuffer-size change triggers a swapchain rebuild via OUT_OF_DATE.
     pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
-        self.window.set_size(width as i32, height as i32);
+        self.window
+            .set_size(i32::saturating_from(width), i32::saturating_from(height));
     }
 
     // Replace the runtime movement key map. `poll` decodes key events through
@@ -657,8 +659,8 @@ impl GlfwWindow {
                 glfw::WindowEvent::CursorPos(x, y) => {
                     if self.cursor_captured {
                         if let Some((lx, ly)) = self.last_cursor {
-                            self.input.mouse_dx += (x - lx) as f32;
-                            self.input.mouse_dy += (y - ly) as f32;
+                            self.input.mouse_dx += narrow_f32(x - lx);
+                            self.input.mouse_dy += narrow_f32(y - ly);
                         }
                         self.last_cursor = Some((x, y));
                     } else {
@@ -668,8 +670,8 @@ impl GlfwWindow {
                         // space (`logical_size`), so it needs no scaling: a
                         // hi-DPI framebuffer larger than the window is absorbed
                         // by the overlay's divide to NDC.
-                        self.input.mouse_x = x as f32;
-                        self.input.mouse_y = y as f32;
+                        self.input.mouse_x = narrow_f32(x);
+                        self.input.mouse_y = narrow_f32(y);
                     }
                 }
                 glfw::WindowEvent::MouseButton(
@@ -705,7 +707,7 @@ impl GlfwWindow {
                     // cursor is free. GLFW yoffset is in notches, positive when
                     // rotated away from the user; convert to a scroll_delta
                     // increment (matching the Metal sign convention).
-                    self.input.scroll_delta += wheel_notches_to_scroll_delta(yoffset as f32);
+                    self.input.scroll_delta += wheel_notches_to_scroll_delta(narrow_f32(yoffset));
                 }
                 _ => {}
             }
@@ -781,7 +783,7 @@ impl GlfwWindow {
         // GLFW writes the surface handle into; the allocator argument is null.
         let result = unsafe {
             self.window.create_window_surface(
-                instance.handle().as_raw() as usize as *mut _,
+                usize::saturating_from(instance.handle().as_raw()) as *mut _,
                 std::ptr::null(),
                 (&raw mut raw_surface).cast::<*mut _>(),
             )

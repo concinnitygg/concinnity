@@ -2,6 +2,8 @@
 //! from plain counts so `objects` and `skinned_visible` mean the same thing on
 //! each.
 
+use crate::math::SaturatingFrom;
+
 /// Scene size for one frame's render stats.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ObjectCounts {
@@ -28,8 +30,8 @@ pub fn object_counts(
             (slots + 1, visible + usize::from(v))
         });
     ObjectCounts {
-        objects: (static_objects + instances + skinned_slots) as u32,
-        skinned_visible: skinned_visible as u32,
+        objects: u32::saturating_from(static_objects + instances + skinned_slots),
+        skinned_visible: u32::saturating_from(skinned_visible),
     }
 }
 

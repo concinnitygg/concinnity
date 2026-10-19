@@ -17,6 +17,7 @@ use crate::ecs::{
     Access, DropdownView, EventCursor, FontHandle, OpenDropdown, PipelineContext, Ref, ScreenStack,
     StepResult, System, World, by_asset_id,
 };
+use crate::math::SaturatingFrom;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -205,7 +206,7 @@ impl OpenDropdownState {
     // The top shown option: the scroll accumulator rounded and clamped to the
     // windowable range. 0 for a list that fits.
     fn first(&self) -> usize {
-        (crate::math::round(self.scroll_rows).max(0.0) as usize)
+        usize::saturating_from(crate::math::round(self.scroll_rows).max(0.0))
             .min(dropdown::max_first(self.options.len()))
     }
 }
@@ -1049,7 +1050,7 @@ impl UiInputSystem {
                         base_ys,
                         base_y: r.base_y,
                         height: r.height,
-                        group: (r.group >= 0).then_some(r.group as usize),
+                        group: (r.group >= 0).then_some(usize::saturating_from(r.group)),
                     }
                 })
                 .collect();

@@ -275,17 +275,18 @@ fn rgbe_to_float(r: u8, g: u8, b: u8, e: u8) -> [f32; 3] {
 // to disk to exercise its compiler end to end.
 #[cfg(test)]
 pub(crate) mod test_fixtures {
+    use concinnity_core::math::SaturatingFrom;
     // An uncompressed (old-format) Radiance blob of solid `rgb` pixels.
     pub(crate) fn solid_hdr_blob(width: u32, height: u32, rgb: [f32; 3]) -> Vec<u8> {
         let maxv = rgb[0].max(rgb[1]).max(rgb[2]);
-        let raw_exp = ((maxv.to_bits() >> 23) & 0xff) as i32;
+        let raw_exp = i32::saturating_from((maxv.to_bits() >> 23) & 0xff);
         let mantissa = f32::from_bits((maxv.to_bits() & 0x7f_ffff) | (126 << 23));
         let scale = (mantissa * 256.0) / maxv;
         let pixel = [
-            (rgb[0] * scale) as u8,
-            (rgb[1] * scale) as u8,
-            (rgb[2] * scale) as u8,
-            (raw_exp - 126 + 128) as u8,
+            u8::saturating_from(rgb[0] * scale),
+            u8::saturating_from(rgb[1] * scale),
+            u8::saturating_from(rgb[2] * scale),
+            u8::saturating_from(raw_exp - 126 + 128),
         ];
         let mut blob = Vec::new();
         blob.extend_from_slice(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n");
@@ -302,6 +303,7 @@ pub(crate) mod test_fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::SaturatingFrom;
 
     fn synth_rgbe_one_pixel(r: f32, g: f32, b: f32) -> [u8; 4] {
         let maxv = r.max(g).max(b);
@@ -311,10 +313,10 @@ mod tests {
         let (mantissa, exp) = frexp_f32(maxv);
         let scale = (mantissa * 256.0) / maxv;
         [
-            (r * scale) as u8,
-            (g * scale) as u8,
-            (b * scale) as u8,
-            (exp + 128) as u8,
+            u8::saturating_from(r * scale),
+            u8::saturating_from(g * scale),
+            u8::saturating_from(b * scale),
+            u8::saturating_from(exp + 128),
         ]
     }
 
@@ -322,7 +324,7 @@ mod tests {
     // called with a strictly positive value (the caller screens out zero).
     fn frexp_f32(x: f32) -> (f32, i32) {
         let bits = x.to_bits();
-        let raw_exp = ((bits >> 23) & 0xff) as i32;
+        let raw_exp = i32::saturating_from((bits >> 23) & 0xff);
         let exp = raw_exp - 126;
         let mantissa_bits = (bits & 0x7f_ffff) | (126 << 23);
         let mantissa = f32::from_bits(mantissa_bits);
@@ -552,7 +554,8 @@ mod tests {
         let mut blob = Vec::new();
         blob.extend_from_slice(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n");
         blob.extend_from_slice(format!("-Y 1 +X {width}\n").as_bytes());
-        blob.extend_from_slice(&[0x02, 0x02, (width >> 8) as u8, (width & 0xFF) as u8]);
+        let [_, _, width_hi, width_lo] = width.to_be_bytes();
+        blob.extend_from_slice(&[0x02, 0x02, width_hi, width_lo]);
         for packets in channels {
             blob.extend_from_slice(&packets);
         }

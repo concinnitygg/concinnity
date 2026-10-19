@@ -19,6 +19,7 @@
 use crate::codec::hdr::{
     CUBE_FORMAT_RGBA32F, CUBE_PAYLOAD_HEADER_BYTES, CUBE_PAYLOAD_MAGIC, equirect_to_cube,
 };
+use concinnity_core::math::SaturatingFrom;
 
 // The `source` path a `CubemapTexture`'s args declare, checked for extension.
 fn cubemap_source(args: &serde_json::Value) -> Result<&str, String> {
@@ -58,10 +59,11 @@ pub(crate) fn validate_cubemap_args(args: &serde_json::Value) -> Result<(), Stri
 pub(crate) fn compile_cubemap_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     validate_cubemap_args(args)?;
     let source = cubemap_source(args)?;
-    let face_size = args
-        .get("face_size")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(256) as u32;
+    let face_size = u32::saturating_from(
+        args.get("face_size")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(256),
+    );
 
     let hdr = crate::codec::hdr::load_file(source)?;
     let faces = equirect_to_cube(&hdr, face_size);

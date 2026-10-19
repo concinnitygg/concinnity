@@ -39,6 +39,7 @@
 //! before this frame's write.
 
 use ash::vk;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
@@ -266,7 +267,7 @@ impl HiZResources {
         let push_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .offset(0)
-            .size(size_of::<HizSpdParams>() as u32);
+            .size(u32::saturating_from(size_of::<HizSpdParams>()));
         let spd_pipeline_layout =
             create_pipeline_layout(device, spd_set_layout.handle(), push_range)?;
         let spd_tail_pipeline_layout =
@@ -638,7 +639,7 @@ fn create_pool(
     frames: usize,
     two_pass: bool,
 ) -> RenderResult<OwnedDescriptorPool> {
-    let f = frames as u32;
+    let f = u32::saturating_from(frames);
     // Two-pass occlusion adds one extra cull-read set per frame (phase 2),
     // each with an image + a UBO descriptor.
     let read_rings = if two_pass { 2 } else { 1 };

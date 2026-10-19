@@ -17,6 +17,7 @@ use crate::components::SpotLight;
 use crate::gfx::frustum::Frustum;
 use crate::gfx::projection::{look_at, up_for};
 use crate::gfx::render_types::{MAX_SHADOWED_SPOTS, SpotShadowData};
+use crate::math::SaturatingFrom;
 use crate::math::vec3::{add, scale};
 use crate::render::depth::shadow_perspective;
 use crate::transform::mat4_mul;
@@ -51,7 +52,7 @@ pub(crate) fn assign_spot_shadow_slices(spot_lights: &[SpotLight]) -> Vec<i32> {
                 return -1;
             }
             wanted += 1;
-            if (next as usize) < MAX_SHADOWED_SPOTS {
+            if usize::saturating_from(next) < MAX_SHADOWED_SPOTS {
                 let slice = next;
                 next += 1;
                 slice
@@ -73,7 +74,7 @@ pub(crate) fn build_spot_shadow_data(
     let mut out = vec![SpotShadowData::ZERO; count_shadowed(slices)];
     for (light, &slice) in spot_lights.iter().zip(slices) {
         if slice >= 0 {
-            out[slice as usize] = spot_shadow_data(light);
+            out[usize::saturating_from(slice)] = spot_shadow_data(light);
         }
     }
     out
@@ -151,7 +152,7 @@ fn select_slice_mask(every_frame: bool, clock: u32, primed: u32, shadowed: usize
 /// The slices a spot shadow pass re-renders this frame: the set bits of
 /// `mask` below `count`, or every slice when no mask was set.
 pub fn refreshed_slices(mask: u32, count: u32) -> impl Iterator<Item = u32> {
-    let count = count.min(MAX_SHADOWED_SPOTS as u32);
+    let count = count.min(u32::saturating_from(MAX_SHADOWED_SPOTS));
     let mask = if mask == 0 { u32::MAX } else { mask };
     (0..count).filter(move |s| mask & (1 << s) != 0)
 }
@@ -201,7 +202,7 @@ mod tests {
         assert_eq!(count_shadowed(&slices), MAX_SHADOWED_SPOTS);
         assert_eq!(
             slices[MAX_SHADOWED_SPOTS - 1],
-            MAX_SHADOWED_SPOTS as i32 - 1
+            i32::saturating_from(MAX_SHADOWED_SPOTS) - 1
         );
         assert!(slices[MAX_SHADOWED_SPOTS..].iter().all(|s| *s == -1));
     }

@@ -119,6 +119,7 @@ mod tests {
     use super::*;
     use concinnity_core::components::Prop;
     use concinnity_core::ecs::Ref;
+    use concinnity_core::math::SaturatingFrom;
 
     #[test]
     fn intern_is_idempotent_and_dense() {
@@ -166,7 +167,7 @@ mod tests {
             name_table()
                 .iter()
                 .position(|n| n == name)
-                .map(|i| AssetId(i as u32))
+                .map(|i| AssetId(u32::saturating_from(i)))
         };
 
         reset_interner();

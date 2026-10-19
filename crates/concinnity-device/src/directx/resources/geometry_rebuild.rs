@@ -6,6 +6,7 @@
 //! the new ones) where Metal can just read `StorageModeShared` `contents()`.
 
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::{backend, geometry_repack, rt_geom};
 use windows::Win32::Graphics::Direct3D12::*;
@@ -99,8 +100,8 @@ impl DxContext {
         // Map the readback staging buffers and copy into typed CPU Vecs.
         // The static IB is `u32` (set when the buffer was created in
         // init/mod.rs); the VB stride is `size_of::<Vertex>()`.
-        let old_v_count = (old_v_bytes as usize) / size_of::<Vertex>();
-        let old_i_count = (old_i_bytes as usize) / size_of::<u32>();
+        let old_v_count = usize::saturating_from(old_v_bytes) / size_of::<Vertex>();
+        let old_i_count = usize::saturating_from(old_i_bytes) / size_of::<u32>();
         let old_vertices: Vec<Vertex> = read_typed_vec(&v_readback, old_v_count)?;
         let old_indices: Vec<u32> = read_typed_vec(&i_readback, old_i_count)?;
 
@@ -180,12 +181,12 @@ impl DxContext {
         }
         self.scene.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_vbuf),
-            SizeInBytes: new_v_bytes as u32,
-            StrideInBytes: size_of::<Vertex>() as u32,
+            SizeInBytes: u32::saturating_from(new_v_bytes),
+            StrideInBytes: u32::saturating_from(size_of::<Vertex>()),
         };
         self.scene.geometry.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_ibuf),
-            SizeInBytes: new_i_bytes as u32,
+            SizeInBytes: u32::saturating_from(new_i_bytes),
             Format: DXGI_FORMAT_R32_UINT,
         };
         self.scene.geometry.vertex_buffer = new_vbuf;
@@ -287,8 +288,8 @@ impl DxContext {
 
         // Skinned VB stride is `size_of::<SkinnedVertex>()`; skinned IB is
         // `u32` (matches the format set in `upload_skinned`).
-        let old_v_count = (old_v_bytes as usize) / size_of::<SkinnedVertex>();
-        let old_i_count = (old_i_bytes as usize) / size_of::<u32>();
+        let old_v_count = usize::saturating_from(old_v_bytes) / size_of::<SkinnedVertex>();
+        let old_i_count = usize::saturating_from(old_i_bytes) / size_of::<u32>();
         let old_vertices: Vec<SkinnedVertex> = read_typed_vec(&v_readback, old_v_count)?;
         let old_indices: Vec<u32> = read_typed_vec(&i_readback, old_i_count)?;
 
@@ -359,12 +360,12 @@ impl DxContext {
         repacked.apply_to(&mut self.state.skinned.draw_objects);
         self.skinned.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_vbuf),
-            SizeInBytes: new_v_bytes as u32,
-            StrideInBytes: size_of::<SkinnedVertex>() as u32,
+            SizeInBytes: u32::saturating_from(new_v_bytes),
+            StrideInBytes: u32::saturating_from(size_of::<SkinnedVertex>()),
         };
         self.skinned.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_ibuf),
-            SizeInBytes: new_i_bytes as u32,
+            SizeInBytes: u32::saturating_from(new_i_bytes),
             Format: DXGI_FORMAT_R32_UINT,
         };
         self.skinned.vertex_buffer = Some(new_vbuf);

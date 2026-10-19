@@ -12,6 +12,7 @@
 //! also holds the ring buffers its copies read until it is reused, so one a
 //! larger ring replaced outlives the submits that still name it.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::retire_pool::RetirePool;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -77,7 +78,7 @@ impl UploadBuffer for StagingBuffer {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 bytes.as_ptr(),
-                self.base.add(offset as usize),
+                self.base.add(usize::saturating_from(offset)),
                 bytes.len(),
             );
         }
@@ -382,7 +383,7 @@ mod tests {
 
     fn pattern(len: usize, seed: u8) -> Vec<u8> {
         (0..len)
-            .map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed))
+            .map(|i| u8::saturating_from(i).wrapping_mul(31).wrapping_add(seed))
             .collect()
     }
 
@@ -439,7 +440,7 @@ mod tests {
             return;
         };
         let (device, queue, alloc) = &gpu;
-        let big = STAGING_MIN_CAPACITY as usize + 1;
+        let big = usize::saturating_from(STAGING_MIN_CAPACITY) + 1;
         let dest = destinations(alloc, big as u64 + 4096);
         let mut uploads = GeometryUploads::new(3);
         let small = pattern(256, 3);
@@ -474,7 +475,7 @@ mod tests {
         let (device, queue, alloc) = &gpu;
         let dest = destinations(alloc, STAGING_MIN_CAPACITY);
         let mut uploads = GeometryUploads::new(3);
-        let half = STAGING_MIN_CAPACITY as usize / 2;
+        let half = usize::saturating_from(STAGING_MIN_CAPACITY) / 2;
         uploads
             .stage(alloc, GeometryTarget::Vertex, 0, &pattern(half, 5))
             .expect("stage");

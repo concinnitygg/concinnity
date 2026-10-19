@@ -10,6 +10,7 @@
 //! the one resource that carries state from frame to frame.
 
 use ash::vk;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::shader_programs::ShaderProgram;
 use concinnity_core::render::uniforms::ocean::{
@@ -208,7 +209,7 @@ impl OceanKernels {
         let push = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .offset(0)
-            .size(size_of::<OceanFftParams>() as u32);
+            .size(u32::saturating_from(size_of::<OceanFftParams>()));
         let set_layouts = [set_layout.handle()];
         let layout = device
             .create_pipeline_layout(
@@ -235,12 +236,12 @@ impl OceanKernels {
 
         let levels = displacement.mips.len();
         let sizes = PoolSizes::default()
-            .sets(&kernel_bindings(), levels as u32)
+            .sets(&kernel_bindings(), u32::saturating_from(levels))
             .build();
         let pool = device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
-                    .max_sets(levels as u32)
+                    .max_sets(u32::saturating_from(levels))
                     .pool_sizes(&sizes),
             )
             .map_err(|e| super::error::map_vk_result(e, "ocean descriptor pool"))?;
@@ -422,7 +423,7 @@ impl VkContext {
             rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &k.mip);
             for level in 1..levels {
                 compute_step(rec);
-                let reduce = params.reduce(level as u32);
+                let reduce = params.reduce(u32::saturating_from(level));
                 let groups = ocean_mip_groups(reduce.mip_size);
                 rec.bind_descriptor_sets(
                     vk::PipelineBindPoint::COMPUTE,

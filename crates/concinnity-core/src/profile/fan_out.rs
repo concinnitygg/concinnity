@@ -6,6 +6,7 @@
 //! waking) and the tail after the last one ends (the waiting thread resuming),
 //! which is what this records alongside the job times.
 
+use crate::math::SaturatingFrom;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed};
 
 /// A monotonic clock reading nanoseconds since the fan-out it times began.
@@ -125,7 +126,7 @@ impl<C: FanOutClock> FanOutTimer<C> {
 
 // Saturates rather than wrapping: a pathological stall reports the ceiling.
 fn micros(ns: u64) -> u32 {
-    (ns / 1_000).min(u64::from(u32::MAX)) as u32
+    u32::saturating_from(ns / 1_000)
 }
 
 #[cfg(test)]

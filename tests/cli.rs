@@ -14,6 +14,7 @@
 //! an argv-less run (which is `cn editor`) stand up a renderer + window and are
 //! verified by screenshot probes instead.
 
+use concinnity_core::math::SaturatingFrom;
 use core::time::Duration;
 use std::io::{ErrorKind, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
@@ -634,11 +635,11 @@ fn skinned_morph_glb() -> Vec<u8> {
     let mut out = Vec::with_capacity(total);
     out.extend_from_slice(b"glTF");
     out.extend_from_slice(&2u32.to_le_bytes());
-    out.extend_from_slice(&(total as u32).to_le_bytes());
-    out.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    out.extend_from_slice(&u32::saturating_from(total).to_le_bytes());
+    out.extend_from_slice(&u32::saturating_from(json.len()).to_le_bytes());
     out.extend_from_slice(b"JSON");
     out.extend_from_slice(&json);
-    out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+    out.extend_from_slice(&u32::saturating_from(bin.len()).to_le_bytes());
     out.extend_from_slice(b"BIN\0");
     out.extend_from_slice(&bin);
     out

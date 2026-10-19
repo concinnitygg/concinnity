@@ -2,6 +2,7 @@
 //! the static spot projections.
 
 use concinnity_core::gfx::render_types::{self, NUM_SHADOW_CASCADES, SpotShadowData};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend_init::ShadowParams;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::spot_shadow;
@@ -24,8 +25,11 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
     let enabled = shadows.map_size > 0;
     let (map, map_size) = if enabled {
         // Depth32Float 2D array, NUM_SHADOW_CASCADES layers, GPU-private.
-        let shadow_tex =
-            create_shadow_map_array(device, shadows.map_size, NUM_SHADOW_CASCADES as u32)?;
+        let shadow_tex = create_shadow_map_array(
+            device,
+            shadows.map_size,
+            u32::saturating_from(NUM_SHADOW_CASCADES),
+        )?;
         (shadow_tex, shadows.map_size)
     } else {
         // 1x1 fallback depth array holding the clear value, which every
@@ -68,7 +72,7 @@ pub(super) fn build_spot_shadow(
     shadow_map_size: u32,
 ) -> RenderResult<SpotShadowState> {
     let device = &*gpu.hw.device;
-    let count = spot_shadows.len() as u32;
+    let count = u32::saturating_from(spot_shadows.len());
     let map = if spot_shadows.is_empty() {
         create_shadow_map_fallback(device)?
     } else {

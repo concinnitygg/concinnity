@@ -4,7 +4,7 @@
 
 use super::dvec::{self, DMat3, DVec3};
 use super::rebase::Rebase;
-use crate::math::dvec3;
+use crate::math::{dvec3, narrow_f32};
 
 /// Where the simulated frame sits in the world it was authored in.
 ///
@@ -68,7 +68,7 @@ impl LocalFrame {
     pub fn rotation_from_world(&self) -> [[f32; 3]; 3] {
         let b = &self.basis;
         // The transpose of the basis.
-        core::array::from_fn(|col| core::array::from_fn(|row| b[row][col] as f32))
+        core::array::from_fn(|col| core::array::from_fn(|row| narrow_f32(b[row][col])))
     }
 
     /// The model matrix placing geometry whose vertices are relative to the

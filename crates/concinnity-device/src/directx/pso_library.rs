@@ -16,6 +16,7 @@
 // the main thread, and a live editor `reload_world` reuses the device: the
 // library stays installed across the successor context.
 
+use concinnity_core::math::SaturatingFrom;
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use windows::Win32::Foundation::{
@@ -158,7 +159,9 @@ pub(super) unsafe fn create_graphics(
             })
         }
     });
-    crate::shader::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
+    crate::shader::pipeline_cache::note_creation(u64::saturating_from(
+        started.elapsed().as_micros(),
+    ));
     result
 }
 
@@ -197,7 +200,9 @@ pub(super) unsafe fn create_compute(
             })
         }
     });
-    crate::shader::pipeline_cache::note_creation(started.elapsed().as_micros() as u64);
+    crate::shader::pipeline_cache::note_creation(u64::saturating_from(
+        started.elapsed().as_micros(),
+    ));
     result
 }
 
@@ -269,8 +274,8 @@ unsafe fn graphics_name(desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> String {
     hash_u32s(
         &mut h,
         &[
-            desc.BlendState.AlphaToCoverageEnable.0 as u32,
-            desc.BlendState.IndependentBlendEnable.0 as u32,
+            desc.BlendState.AlphaToCoverageEnable.0.cast_unsigned(),
+            desc.BlendState.IndependentBlendEnable.0.cast_unsigned(),
             desc.SampleMask,
         ],
     );
@@ -280,21 +285,21 @@ unsafe fn graphics_name(desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> String {
     hash_u32s(
         &mut h,
         &[
-            desc.RasterizerState.FillMode.0 as u32,
-            desc.RasterizerState.CullMode.0 as u32,
-            desc.RasterizerState.FrontCounterClockwise.0 as u32,
-            desc.RasterizerState.DepthBias as u32,
+            desc.RasterizerState.FillMode.0.cast_unsigned(),
+            desc.RasterizerState.CullMode.0.cast_unsigned(),
+            desc.RasterizerState.FrontCounterClockwise.0.cast_unsigned(),
+            desc.RasterizerState.DepthBias.cast_unsigned(),
             desc.RasterizerState.DepthBiasClamp.to_bits(),
             desc.RasterizerState.SlopeScaledDepthBias.to_bits(),
-            desc.RasterizerState.DepthClipEnable.0 as u32,
-            desc.RasterizerState.MultisampleEnable.0 as u32,
-            desc.RasterizerState.AntialiasedLineEnable.0 as u32,
+            desc.RasterizerState.DepthClipEnable.0.cast_unsigned(),
+            desc.RasterizerState.MultisampleEnable.0.cast_unsigned(),
+            desc.RasterizerState.AntialiasedLineEnable.0.cast_unsigned(),
             desc.RasterizerState.ForcedSampleCount,
-            desc.RasterizerState.ConservativeRaster.0 as u32,
-            desc.DepthStencilState.DepthEnable.0 as u32,
-            desc.DepthStencilState.DepthWriteMask.0 as u32,
-            desc.DepthStencilState.DepthFunc.0 as u32,
-            desc.DepthStencilState.StencilEnable.0 as u32,
+            desc.RasterizerState.ConservativeRaster.0.cast_unsigned(),
+            desc.DepthStencilState.DepthEnable.0.cast_unsigned(),
+            desc.DepthStencilState.DepthWriteMask.0.cast_unsigned(),
+            desc.DepthStencilState.DepthFunc.0.cast_unsigned(),
+            desc.DepthStencilState.StencilEnable.0.cast_unsigned(),
             u32::from(desc.DepthStencilState.StencilReadMask),
             u32::from(desc.DepthStencilState.StencilWriteMask),
         ],
@@ -324,10 +329,10 @@ unsafe fn graphics_name(desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> String {
                 &mut h,
                 &[
                     e.SemanticIndex,
-                    e.Format.0 as u32,
+                    e.Format.0.cast_unsigned(),
                     e.InputSlot,
                     e.AlignedByteOffset,
-                    e.InputSlotClass.0 as u32,
+                    e.InputSlotClass.0.cast_unsigned(),
                     e.InstanceDataStepRate,
                 ],
             );
@@ -336,22 +341,22 @@ unsafe fn graphics_name(desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> String {
     hash_u32s(
         &mut h,
         &[
-            desc.IBStripCutValue.0 as u32,
-            desc.PrimitiveTopologyType.0 as u32,
+            desc.IBStripCutValue.0.cast_unsigned(),
+            desc.PrimitiveTopologyType.0.cast_unsigned(),
             desc.NumRenderTargets,
         ],
     );
     for format in &desc.RTVFormats {
-        hash_u32s(&mut h, &[format.0 as u32]);
+        hash_u32s(&mut h, &[format.0.cast_unsigned()]);
     }
     hash_u32s(
         &mut h,
         &[
-            desc.DSVFormat.0 as u32,
+            desc.DSVFormat.0.cast_unsigned(),
             desc.SampleDesc.Count,
             desc.SampleDesc.Quality,
             desc.NodeMask,
-            desc.Flags.0 as u32,
+            desc.Flags.0.cast_unsigned(),
         ],
     );
     format!("g{}", truncated(h.finalize()))
@@ -366,7 +371,7 @@ unsafe fn compute_name(desc: &D3D12_COMPUTE_PIPELINE_STATE_DESC) -> String {
     let mut h = Sha256::new();
     // SAFETY: the caller guarantees the kernel bytecode pointer and length agree.
     unsafe { hash_bytecode(&mut h, &desc.CS) };
-    hash_u32s(&mut h, &[desc.NodeMask, desc.Flags.0 as u32]);
+    hash_u32s(&mut h, &[desc.NodeMask, desc.Flags.0.cast_unsigned()]);
     format!("c{}", truncated(h.finalize()))
 }
 
@@ -403,15 +408,15 @@ fn hash_blend(h: &mut Sha256, rt: &D3D12_RENDER_TARGET_BLEND_DESC) {
     hash_u32s(
         h,
         &[
-            rt.BlendEnable.0 as u32,
-            rt.LogicOpEnable.0 as u32,
-            rt.SrcBlend.0 as u32,
-            rt.DestBlend.0 as u32,
-            rt.BlendOp.0 as u32,
-            rt.SrcBlendAlpha.0 as u32,
-            rt.DestBlendAlpha.0 as u32,
-            rt.BlendOpAlpha.0 as u32,
-            rt.LogicOp.0 as u32,
+            rt.BlendEnable.0.cast_unsigned(),
+            rt.LogicOpEnable.0.cast_unsigned(),
+            rt.SrcBlend.0.cast_unsigned(),
+            rt.DestBlend.0.cast_unsigned(),
+            rt.BlendOp.0.cast_unsigned(),
+            rt.SrcBlendAlpha.0.cast_unsigned(),
+            rt.DestBlendAlpha.0.cast_unsigned(),
+            rt.BlendOpAlpha.0.cast_unsigned(),
+            rt.LogicOp.0.cast_unsigned(),
             u32::from(rt.RenderTargetWriteMask),
         ],
     );
@@ -421,10 +426,10 @@ fn hash_stencil_op(h: &mut Sha256, op: &D3D12_DEPTH_STENCILOP_DESC) {
     hash_u32s(
         h,
         &[
-            op.StencilFailOp.0 as u32,
-            op.StencilDepthFailOp.0 as u32,
-            op.StencilPassOp.0 as u32,
-            op.StencilFunc.0 as u32,
+            op.StencilFailOp.0.cast_unsigned(),
+            op.StencilDepthFailOp.0.cast_unsigned(),
+            op.StencilPassOp.0.cast_unsigned(),
+            op.StencilFunc.0.cast_unsigned(),
         ],
     );
 }

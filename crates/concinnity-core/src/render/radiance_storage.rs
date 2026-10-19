@@ -96,6 +96,7 @@ pub fn with_sky_cube_scale(mut rows: [[f32; 4]; 3], atmosphere: bool) -> [[f32; 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::{SaturatingFrom, narrow_f32};
     use crate::render::shader_consts::float;
 
     // The half-float value nearest `x`, ties to even, subnormals included.
@@ -107,9 +108,9 @@ mod tests {
         if a >= 65520.0 {
             return f32::INFINITY.copysign(x);
         }
-        let exponent = a.log2().floor().max(-14.0) as i32;
+        let exponent = i32::saturating_from(a.log2().floor().max(-14.0));
         let step = 2f64.powi(exponent - 10);
-        ((a / step).round_ties_even() * step).copysign(f64::from(x)) as f32
+        narrow_f32(((a / step).round_ties_even() * step).copysign(f64::from(x)))
     }
 
     // `x` written at `scale` into half float and read back.

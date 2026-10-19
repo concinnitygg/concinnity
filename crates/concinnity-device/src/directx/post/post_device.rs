@@ -16,6 +16,7 @@
 //! (post/descriptors.rs) instead of slots reserved for the effect by name in
 //! `init/heap_layout.rs`.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::{
     PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostTargetState, check_level,
@@ -63,13 +64,13 @@ pub(in crate::directx) struct PostPipeline {
 impl PostPipeline {
     // Root parameter of the constant block, which follows the source tables.
     fn constants_parameter(&self) -> u32 {
-        self.bindings.textures as u32
+        u32::saturating_from(self.bindings.textures)
     }
 
     // Root parameter of the probe cube table; the ProbeSet, the probe records,
     // the cluster params and the cluster lists are the four after it.
     fn probes_parameter(&self) -> u32 {
-        self.bindings.textures as u32 + u32::from(self.bindings.constants > 0)
+        u32::saturating_from(self.bindings.textures) + u32::from(self.bindings.constants > 0)
     }
 }
 
@@ -223,12 +224,12 @@ fn create_root_signature(
     device: &ID3D12Device,
     bindings: PostProgramBindings,
 ) -> RenderResult<ID3D12RootSignature> {
-    let textures = bindings.textures as u32;
+    let textures = u32::saturating_from(bindings.textures);
     let mut sig = (0..textures).fold(RootSig::new(), |sig, reg| {
         sig.srv_table(reg, 1, Visibility::Pixel)
     });
     if bindings.constants > 0 {
-        let dwords = bindings.constants.div_ceil(4) as u32;
+        let dwords = u32::saturating_from(bindings.constants.div_ceil(4));
         sig = sig.constant_dwords(0, dwords, Visibility::Pixel);
     }
     if bindings.probes {
@@ -410,8 +411,8 @@ impl PostPassDevice for DxPostDevice<'_> {
             cmd.RSSetScissorRects(&[windows::Win32::Foundation::RECT {
                 left: 0,
                 top: 0,
-                right: target.extent.width as i32,
-                bottom: target.extent.height as i32,
+                right: i32::saturating_from(target.extent.width),
+                bottom: i32::saturating_from(target.extent.height),
             }]);
             cmd.SetDescriptorHeaps(&[Some(self.srv_heap.clone())]);
             cmd.SetPipelineState(&pipe.pso);
@@ -419,7 +420,7 @@ impl PostPassDevice for DxPostDevice<'_> {
             // Every source binds through a static sampler the root signature
             // declared at its own slot, so a bind is just its table.
             for (slot, bind) in draw.binds.iter().enumerate() {
-                cmd.set_graphics_srv_table(slot as u32, bind.texture);
+                cmd.set_graphics_srv_table(u32::saturating_from(slot), bind.texture);
             }
             if !draw.constants.is_empty() {
                 cmd.set_graphics_root_constant_bytes(pipe.constants_parameter(), draw.constants);

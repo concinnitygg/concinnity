@@ -1,6 +1,7 @@
 // The armed run: the config it was armed from and where its phases fall on the
 // run's clock.
 
+use crate::math::SaturatingFrom;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -58,7 +59,7 @@ impl BenchmarkRun {
             .iter()
             .position(|&end| run_seconds < end)
             .unwrap_or(last);
-        Some(at as u32)
+        Some(u32::saturating_from(at))
     }
 
     /// When the last phase ends and the run is complete.

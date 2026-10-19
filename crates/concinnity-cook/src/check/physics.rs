@@ -4,6 +4,7 @@
 //! which of its assets can create collider-bearing props while it runs.
 
 use concinnity_core::components::PropColliderShape;
+use concinnity_core::math::narrow_f32;
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
@@ -193,7 +194,7 @@ pub(crate) fn collider_spawn_sources(assets: &[WorldJsonlAsset]) -> ColliderSpaw
                         .args
                         .get(field)
                         .and_then(serde_json::Value::as_f64)
-                        .map_or(fallback, |v| v as f32)
+                        .map_or(fallback, narrow_f32)
                 };
                 sources.spawners.push(ColliderSpawner {
                     name: &asset.id,

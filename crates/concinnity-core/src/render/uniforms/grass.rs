@@ -5,6 +5,7 @@
 //! / `GrassBlade` / `GrassBendParams` / `PlanetGrassTile` in
 //! `shaders/grass.hlsl`.
 
+use crate::math::SaturatingFrom;
 use crate::render::grass::lod::{
     GRASS_LOD_VERTEX_STRIDE, GRASS_LOD_VERTICES, GRASS_REGION_COUNT, region_level,
 };
@@ -330,7 +331,7 @@ pub fn initial_grass_args() -> [u32; GRASS_ARGS_BYTES / 4] {
         let region = i % (GRASS_REGION_COUNT + 1);
         if region < GRASS_REGION_COUNT {
             record[0] = GRASS_LOD_VERTICES[region_level(region)];
-            record[2] = region as u32 * GRASS_LOD_VERTEX_STRIDE;
+            record[2] = u32::saturating_from(region) * GRASS_LOD_VERTEX_STRIDE;
         }
     }
     args

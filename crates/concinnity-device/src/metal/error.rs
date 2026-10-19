@@ -3,6 +3,7 @@
 //! command buffers, so the completion handler classifies here and parks the
 //! result on the context for the next `draw_frame` to report.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{DeviceLostReason, RenderError, RenderResult};
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSError;
@@ -52,7 +53,7 @@ pub(super) fn classify_ns_error(error: &NSError) -> RenderError {
     // comparison.
     let in_metal_domain = &*error.domain() == unsafe { objc2_metal::MTLCommandBufferErrorDomain };
     if in_metal_domain {
-        classify_command_buffer_error(error.code() as usize, detail)
+        classify_command_buffer_error(usize::saturating_from(error.code()), detail)
     } else {
         RenderError::Other(detail)
     }

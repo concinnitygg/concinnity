@@ -11,6 +11,7 @@
 // transition would leave that view spanning two layouts.
 
 use ash::vk;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::record_pack::StaticSlots;
 use concinnity_core::render::reflection_probe::PrefilterPlan;
@@ -60,7 +61,7 @@ impl ProbeCubeArray {
         mips: u32,
         cubes: usize,
     ) -> RenderResult<Self> {
-        let layers = 6 * cubes as u32;
+        let layers = 6 * u32::saturating_from(cubes);
         let image = create_image(
             upload.alloc,
             CubeImage {
@@ -204,7 +205,7 @@ pub(super) fn mip_storage_views(
                 device,
                 image.image(),
                 vk::ImageViewType::TYPE_2D_ARRAY,
-                range(mip, 1, 6 * cube as u32, 6),
+                range(mip, 1, 6 * u32::saturating_from(cube), 6),
             )?;
             image.attach_view(view);
             Ok(view)

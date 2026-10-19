@@ -7,6 +7,7 @@
 
 use concinnity_cook::authoring::registry::build_only::{CharacterSchema, ShapePreset};
 use concinnity_core::components::{JointProportion, ShapeSlider};
+use concinnity_core::math::narrow_f32;
 
 // The trailing section for keys and groups the schema does not place.
 pub(crate) const OTHER_SECTION: &str = "Other";
@@ -322,7 +323,7 @@ impl SplitMix64 {
     // A draw in `lo..=hi`, from the top 53 bits mapped onto [0, 1].
     fn next_in(&mut self, lo: f32, hi: f32) -> f32 {
         let unit = (self.next_u64() >> 11) as f64 / ((1u64 << 53) - 1) as f64;
-        (f64::from(lo) + (f64::from(hi) - f64::from(lo)) * unit) as f32
+        narrow_f32(f64::from(lo) + (f64::from(hi) - f64::from(lo)) * unit)
     }
 }
 

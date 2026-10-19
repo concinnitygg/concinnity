@@ -1,5 +1,6 @@
 //! The action vocabulary a `HitRegion` click or `KeyBinding` press fires.
 
+use crate::math::SaturatingFrom;
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize, Serializer};
 
@@ -108,12 +109,14 @@ impl Encoded {
             UiAction::Screen(ScreenCommand::Clear) => return None,
             UiAction::GroupToggle(i) => Self::GroupToggle(u32::try_from(*i).ok()?),
             UiAction::Story(cmd) => Self::Story {
-                verb: StoryCommand::VERBS.iter().position(|v| *v == cmd.verb())? as u8,
+                verb: u8::saturating_from(
+                    StoryCommand::VERBS.iter().position(|v| *v == cmd.verb())?,
+                ),
                 index: u32::try_from(cmd.index().unwrap_or(0)).ok()?,
             },
             UiAction::Setting { key, verb } => Self::Setting {
                 key: u8::try_from(SettingKey::ALL.iter().position(|k| k == key)?).ok()?,
-                verb: SettingVerb::ALL.iter().position(|v| v == verb)? as u8,
+                verb: u8::saturating_from(SettingVerb::ALL.iter().position(|v| v == verb)?),
             },
             UiAction::Screenshot(frames) => Self::Screenshot(*frames),
         })

@@ -15,6 +15,7 @@ use crate::components::BlockType;
 use crate::ecs::Ref;
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::chunk_coord::ChunkCoord;
+use crate::math::SaturatingFrom;
 use alloc::vec;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
@@ -134,16 +135,16 @@ impl ChunkGenerator {
         ];
         let mut blocks = vec![0u32; dx * dy * dz];
         // World block coordinate of this chunk's (0,0) corner.
-        let base_x = coord.x * self.chunk_blocks[0] as i32;
-        let base_z = coord.z * self.chunk_blocks[2] as i32;
+        let base_x = coord.x * i32::saturating_from(self.chunk_blocks[0]);
+        let base_z = coord.z * i32::saturating_from(self.chunk_blocks[2]);
 
         for z in 0..dz {
             for x in 0..dx {
-                let wx = base_x + x as i32;
-                let wz = base_z + z as i32;
-                let height = self.surface_height(wx, wz, dy as i32);
+                let wx = base_x + i32::saturating_from(x);
+                let wz = base_z + i32::saturating_from(z);
+                let height = self.surface_height(wx, wz, i32::saturating_from(dy));
                 for y in 0..dy {
-                    let yi = y as i32;
+                    let yi = i32::saturating_from(y);
                     let id = match yi.cmp(&height) {
                         core::cmp::Ordering::Greater => 0, // air
                         core::cmp::Ordering::Equal => self.surface_idx,
@@ -165,7 +166,7 @@ impl ChunkGenerator {
     /// two impostor chunks sample identical heights along their shared edge, so
     /// their coarse surfaces meet watertight.
     pub fn surface_height_world(&self, wx: i32, wz: i32) -> i32 {
-        self.surface_height(wx, wz, self.chunk_blocks[1] as i32)
+        self.surface_height(wx, wz, i32::saturating_from(self.chunk_blocks[1]))
     }
 
     /// Palette index of the surface (topmost) block: `1` when the palette has
@@ -184,7 +185,7 @@ impl ChunkGenerator {
         let base = dy as f32 * 0.45;
         let amplitude = dy as f32 * 0.30;
         let h = base + (n - 0.5) * 2.0 * amplitude;
-        (h as i32).clamp(0, dy - 1)
+        i32::saturating_from(h).clamp(0, dy - 1)
     }
 
     // Multi-octave value noise at world block coordinate `(wx, wz)`, in
@@ -240,9 +241,13 @@ fn smoothstep(t: f32) -> f32 {
 // is deterministic and reproducible across platforms.
 fn hash01(seed: u64, x: i32, z: i32) -> f32 {
     let mut h = seed;
-    h ^= (i64::from(x) as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    h ^= i64::from(x)
+        .cast_unsigned()
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15);
     h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    h ^= (i64::from(z) as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+    h ^= i64::from(z)
+        .cast_unsigned()
+        .wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
     h ^= h >> 31;
     h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
     h ^= h >> 31;
@@ -355,16 +360,23 @@ mod tests {
         let blocks = g.generate(chunk);
         let base_x = chunk.x * dx;
         let base_z = chunk.z * dz;
-        for z in 0..dz as usize {
-            for x in 0..dx as usize {
+        for z in 0..usize::saturating_from(dz) {
+            for x in 0..usize::saturating_from(dx) {
                 let mut top = 0;
-                for y in (0..dy as usize).rev() {
-                    if blocks[x + y * dx as usize + z * (dx * dy) as usize] != 0 {
-                        top = y as i32;
+                for y in (0..usize::saturating_from(dy)).rev() {
+                    if blocks
+                        [x + y * usize::saturating_from(dx) + z * usize::saturating_from(dx * dy)]
+                        != 0
+                    {
+                        top = i32::saturating_from(y);
                         break;
                     }
                 }
-                let expected = g.surface_height(base_x + x as i32, base_z + z as i32, dy);
+                let expected = g.surface_height(
+                    base_x + i32::saturating_from(x),
+                    base_z + i32::saturating_from(z),
+                    dy,
+                );
                 assert_eq!(top, expected, "column ({x},{z}) height");
             }
         }

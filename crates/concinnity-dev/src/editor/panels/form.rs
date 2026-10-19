@@ -26,6 +26,7 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::ID_KEY;
 use concinnity_core::components::{AuthoredAction, NamedAction, StoryCommand};
 use concinnity_core::ecs::{ActionField, RefField};
+use concinnity_core::math::narrow_f32;
 use serde_json::{Map, Value};
 
 // The form's default (and minimum) scrolling window: the number of field rows the
@@ -353,7 +354,7 @@ pub(crate) fn number_text(n: &serde_json::Number) -> String {
     match n.as_f64() {
         // `{:?}` on an f32 is the shortest decimal that round-trips, keeping a
         // decimal point (`1.0`, not `1`) so a float still reads as a float.
-        Some(v) if f64::from(v as f32) == v => format!("{:?}", v as f32),
+        Some(v) if f64::from(narrow_f32(v)) == v => format!("{:?}", narrow_f32(v)),
         _ => n.to_string(),
     }
 }
@@ -860,7 +861,7 @@ fn assemble_sparse(
 fn same_value(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
-            (Some(x), Some(y)) => x as f32 == y as f32,
+            (Some(x), Some(y)) => narrow_f32(x) == narrow_f32(y),
             _ => x == y,
         },
         (Value::Array(x), Value::Array(y)) => {

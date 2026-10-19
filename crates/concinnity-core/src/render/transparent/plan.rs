@@ -3,6 +3,7 @@
 //! order over every producer. The buffers are reused frame to frame, so a
 //! steady frame allocates nothing.
 
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
@@ -84,14 +85,18 @@ impl<M> TransparentFramePlan<M> {
                 continue;
             };
             for (i, r) in p.records.iter().enumerate().filter(|(_, r)| r.visible) {
-                self.keys
-                    .push((sort_distance(r.center, cam), self.order.len() as u32));
+                self.keys.push((
+                    sort_distance(r.center, cam),
+                    u32::saturating_from(self.order.len()),
+                ));
                 self.order.push((kind, i));
             }
         }
         for (i, m) in self.meshes.iter().enumerate() {
-            self.keys
-                .push((sort_distance(mesh_center(m), cam), self.order.len() as u32));
+            self.keys.push((
+                sort_distance(mesh_center(m), cam),
+                u32::saturating_from(self.order.len()),
+            ));
             self.order.push((Producer::GlassMesh, i));
         }
         let finite = |d: f32| if d.is_finite() { d } else { f32::NEG_INFINITY };

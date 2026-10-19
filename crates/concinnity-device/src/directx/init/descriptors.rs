@@ -2,6 +2,7 @@
 //! `heap_layout.rs`, the sampler heap's GPU handles, and the shared post
 //! passes' descriptor block.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -31,7 +32,7 @@ pub(super) fn build_descriptors(
             // `srv_slots` is the running total of every block in the
             // heap_layout cascade, so it sizes the heap to exactly cover
             // the highest slot any descriptor write addresses.
-            NumDescriptors: layout.srv_slots as u32,
+            NumDescriptors: u32::saturating_from(layout.srv_slots),
             Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
             ..Default::default()
         })

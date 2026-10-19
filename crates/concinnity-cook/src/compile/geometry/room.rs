@@ -1,21 +1,14 @@
 // JSON arg parsing for the room generator; the geometry itself is
 // `concinnity_core::geometry::build_room_geometry`.
 
+use super::json_args::f32_arg;
+
 type Verts = Vec<([f32; 3], [f32; 3], [f32; 3], [f32; 2])>;
 
 pub(super) fn build_room(args: &serde_json::Value) -> Result<(Verts, Vec<u16>), String> {
-    let half_width = args
-        .get("half_width")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(8.0) as f32;
-    let half_depth = args
-        .get("half_depth")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(10.0) as f32;
-    let ceiling_height = args
-        .get("ceiling_height")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(3.5) as f32;
+    let half_width = f32_arg(args, "half_width", 8.0);
+    let half_depth = f32_arg(args, "half_depth", 10.0);
+    let ceiling_height = f32_arg(args, "ceiling_height", 3.5);
     Ok(concinnity_core::geometry::build_room_geometry(
         half_width,
         half_depth,

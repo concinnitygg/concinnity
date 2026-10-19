@@ -5,6 +5,7 @@
 //! `hdr_color` to `PIXEL_SHADER_RESOURCE` so post-process passes can sample
 //! it.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::depth::DEPTH_CLEAR;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -93,8 +94,8 @@ impl DxContext {
             let scissor = RECT {
                 left: 0,
                 top: 0,
-                right: width as i32,
-                bottom: height as i32,
+                right: i32::saturating_from(width),
+                bottom: i32::saturating_from(height),
             };
             cmd.RSSetScissorRects(&[scissor]);
         }
@@ -238,7 +239,7 @@ impl DxContext {
                 // double-draw.
                 cmd.ExecuteIndirect(
                     cull_sig,
-                    self.state.draw.skinned_record_base() as u32,
+                    u32::saturating_from(self.state.draw.skinned_record_base()),
                     indirect,
                     0,
                     None::<&ID3D12Resource>,
@@ -253,7 +254,7 @@ impl DxContext {
                 cmd,
                 cull_sig,
                 indirect,
-                self.state.draw.skinned_record_base() as u32,
+                u32::saturating_from(self.state.draw.skinned_record_base()),
             ));
             // Restore the default bindless pipeline for the sub-paths below.
             if self.shader_bucket_count() > 1 {
@@ -338,7 +339,7 @@ impl DxContext {
                 // same indirect command buffer.
                 cmd.ExecuteIndirect(
                     cull_sig,
-                    self.state.draw.n_skinned as u32,
+                    u32::saturating_from(self.state.draw.n_skinned),
                     indirect,
                     (self.state.draw.skinned_record_base()
                         * crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize)
@@ -472,8 +473,8 @@ impl DxContext {
             let scissor = RECT {
                 left: 0,
                 top: 0,
-                right: width as i32,
-                bottom: height as i32,
+                right: i32::saturating_from(width),
+                bottom: i32::saturating_from(height),
             };
             cmd.RSSetScissorRects(&[scissor]);
 
@@ -543,7 +544,7 @@ impl DxContext {
                 // VB/IB (bound above), once per shader bucket.
                 cmd.ExecuteIndirect(
                     cull_sig,
-                    self.state.draw.skinned_record_base() as u32,
+                    u32::saturating_from(self.state.draw.skinned_record_base()),
                     indirect,
                     0,
                     None::<&ID3D12Resource>,
@@ -555,7 +556,7 @@ impl DxContext {
                 cmd,
                 cull_sig,
                 indirect,
-                self.state.draw.skinned_record_base() as u32,
+                u32::saturating_from(self.state.draw.skinned_record_base()),
             ));
 
             // ExecuteIndirect #2: skinned tail against the deformed VB + skinned
@@ -573,7 +574,7 @@ impl DxContext {
                     cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view));
                     cmd.ExecuteIndirect(
                         cull_sig,
-                        self.state.draw.n_skinned as u32,
+                        u32::saturating_from(self.state.draw.n_skinned),
                         indirect,
                         (self.state.draw.skinned_record_base()
                             * crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize)

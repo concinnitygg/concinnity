@@ -14,6 +14,7 @@
 //! draws that reach their band, and a ground twin, without the canopy, for
 //! those wholly nearer. The twins share one Shader's place in the budget.
 
+use crate::math::SaturatingFrom;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 use alloc::{format, vec};
@@ -86,8 +87,8 @@ impl<'a> BucketPlan<'a> {
             }
             let ground = sources.len() - 1;
             twins = GrassTwins {
-                canopy: Some(ground as u32 - 1),
-                ground: Some(ground as u32),
+                canopy: Some(u32::saturating_from(ground) - 1),
+                ground: Some(u32::saturating_from(ground)),
             };
         }
         let budgeted = sources.len() - usize::from(twins.ground.is_some());

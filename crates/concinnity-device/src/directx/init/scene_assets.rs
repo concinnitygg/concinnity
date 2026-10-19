@@ -5,6 +5,7 @@
 use concinnity_core::bake;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{AreaLightData, FALLBACK_TEXTURE_COUNT};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend_init::{MediaPayloads, SceneData};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::ltc;
@@ -193,7 +194,7 @@ fn build_area_light(
     // Area-light LTC tables. Scene-independent (they depend only on the
     // build-time fit), so they are created unconditionally and the shader
     // simply never samples them when no area light is declared.
-    let ltc_size = ltc::LTC_LUT_SIZE as u32;
+    let ltc_size = u32::saturating_from(ltc::LTC_LUT_SIZE);
     let ltc_matrix_texture = upload_float_lut(
         &hw.alloc,
         ltc_size,
@@ -231,12 +232,12 @@ fn build_geometry(gpu: &InitGpu<'_>, world: &SceneData<'_>) -> RenderResult<DxGe
 
     let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
         BufferLocation: com::gpu_va(&vertex_buffer),
-        SizeInBytes: vert_bytes_raw.len().max(4) as u32,
-        StrideInBytes: size_of::<Vertex>() as u32,
+        SizeInBytes: u32::saturating_from(vert_bytes_raw.len().max(4)),
+        StrideInBytes: u32::saturating_from(size_of::<Vertex>()),
     };
     let index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
         BufferLocation: com::gpu_va(&index_buffer),
-        SizeInBytes: idx_bytes_raw.len().max(4) as u32,
+        SizeInBytes: u32::saturating_from(idx_bytes_raw.len().max(4)),
         // Static IB is u32: the `indices: &[u32]` signature is honored
         // end-to-end. A previous half-completed migration left this as
         // R16_UINT while the byte count was already widened: the GPU then

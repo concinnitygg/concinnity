@@ -49,6 +49,7 @@
 //! dereferences a pooled resource to bind it, which touches no refcount; every
 //! allocation, clone and drop happens on the main thread.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::retire_pool::RetirePool;
 use std::cell::RefCell;
@@ -626,7 +627,7 @@ fn resource_heap_tier(device: &ID3D12Device) -> D3D12_RESOURCE_HEAP_TIER {
         device.CheckFeatureSupport(
             D3D12_FEATURE_D3D12_OPTIONS,
             (&raw mut options).cast::<std::ffi::c_void>(),
-            size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS>() as u32,
+            u32::saturating_from(size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS>()),
         )
     };
     if ok.is_ok() {

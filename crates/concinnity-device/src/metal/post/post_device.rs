@@ -6,6 +6,7 @@
 //! translation, not a mechanism.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::{
     PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostSampler, PostTiming,
@@ -66,7 +67,7 @@ impl MtlPostTarget {
 
     // Mip `level` alone.
     fn level(&self, level: u32) -> RenderResult<&ProtocolObject<dyn MTLTexture>> {
-        let count = (self.levels.len() as u32).max(1);
+        let count = u32::saturating_from(self.levels.len()).max(1);
         check_level(self.label, level, count)?;
         Ok(match self.levels.get(level as usize) {
             Some(view) => view,

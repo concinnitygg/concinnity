@@ -4,6 +4,7 @@
 //! The debug server's `profile` command also reports it for headless
 //! verification.
 
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 mod fan_out;
@@ -40,9 +41,11 @@ pub struct GpuDone {
 impl GpuDone {
     /// Microseconds from the input sample to the end of the GPU work.
     pub fn latency_us(self) -> u32 {
-        self.done_us
-            .saturating_sub(self.input_sampled_us)
-            .min(u64::from(u32::MAX)) as u32
+        u32::saturating_from(
+            self.done_us
+                .saturating_sub(self.input_sampled_us)
+                .min(u64::from(u32::MAX)),
+        )
     }
 }
 

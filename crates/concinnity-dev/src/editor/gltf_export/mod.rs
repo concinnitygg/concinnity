@@ -12,6 +12,7 @@ mod source;
 
 use concinnity_core::components::{SkeletonJoint, build_skeleton_from_joint_defs};
 use concinnity_core::gfx::mesh_payload::MorphDelta;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::transform::{Mat4, mat4_affine_inverse};
 pub(crate) use source::export_world_mesh;
 
@@ -65,7 +66,7 @@ impl ExportMesh {
             return Err(format!("index {bad} out of range ({n} vertices)"));
         }
         for (i, j) in self.skeleton.iter().enumerate() {
-            if j.parent >= i as i32 {
+            if j.parent >= i32::saturating_from(i) {
                 return Err(format!(
                     "joint {i} ('{}') has parent {} at or after it",
                     j.name, j.parent
@@ -228,7 +229,7 @@ mod tests {
             serde_json::json!(["wide", "lift+"])
         );
         // POSITION bounds cover the quad.
-        let pos = &doc["accessors"][attrs["POSITION"].as_u64().unwrap() as usize];
+        let pos = &doc["accessors"][usize::saturating_from(attrs["POSITION"].as_u64().unwrap())];
         assert_eq!(pos["min"], serde_json::json!([-0.5, 0.0, 0.0]));
         assert_eq!(pos["max"], serde_json::json!([0.5, 1.0, 0.0]));
         // Every morph POSITION accessor carries bounds too.

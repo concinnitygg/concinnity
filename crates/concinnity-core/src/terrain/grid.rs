@@ -1,11 +1,10 @@
 // The square height grid a terrain is cooked into, and the surface its two
 // triangles per cell span.
 
+use crate::math::{SaturatingFrom, floor, sqrt};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-
-use crate::math::{floor, sqrt};
 
 /// `resolution` cells along each side of a rectangle `2 * extent` across, with
 /// one height per corner.
@@ -113,7 +112,10 @@ impl TerrainGrid {
         }
         let col = floor(gx).min(n - 1.0);
         let row = floor(gz).min(n - 1.0);
-        Some(([col as usize, row as usize], [gx - col, gz - row]))
+        Some((
+            [usize::saturating_from(col), usize::saturating_from(row)],
+            [gx - col, gz - row],
+        ))
     }
 
     /// The surface height at `local` (relative to the center, `[x, z]`), on

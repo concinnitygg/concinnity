@@ -313,6 +313,7 @@ mod tests {
     use super::*;
     use concinnity_core::budget::drift::{DriftVerdict, MemoryDrift};
     use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_core::math::SaturatingFrom;
     use concinnity_core::memory::{Ledger, MemStats, MemTag, Realm};
 
     const GB: u64 = 1024 * 1024 * 1024;
@@ -533,8 +534,8 @@ mod tests {
     fn the_widest_drift_line_fits_the_panel() {
         let snap = HealthSnapshot {
             drift: Some(MemoryDrift {
-                heap_growth_bytes: -999 * GB as i64,
-                outside_heap_growth_bytes: 999 * GB as i64,
+                heap_growth_bytes: -999 * i64::saturating_from(GB),
+                outside_heap_growth_bytes: 999 * i64::saturating_from(GB),
                 window_secs: 999 * 24 * 3600,
                 verdict: DriftVerdict::Both,
             }),

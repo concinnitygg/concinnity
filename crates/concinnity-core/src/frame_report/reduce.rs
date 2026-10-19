@@ -1,5 +1,6 @@
 // Samples in, report out. Pure: no clock, no world, no I/O.
 
+use crate::math::SaturatingFrom;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -291,7 +292,9 @@ impl Pacing {
         let shown: Vec<&&FrameSample> = frames.iter().filter(|s| s.shown_us > 0).collect();
         let mut ratios: Vec<u32> = shown
             .iter()
-            .map(|s| (u64::from(s.shown_step_us) * 1_000 / u64::from(s.shown_us)) as u32)
+            .map(|s| {
+                u32::saturating_from(u64::from(s.shown_step_us) * 1_000 / u64::from(s.shown_us))
+            })
             .collect();
         if ratios.is_empty() {
             return Self::default();
@@ -995,7 +998,7 @@ mod tests {
             f.gpu_frame_us = 20_000 + n * 10;
             f.gpu_overlap_us = 4_000;
             for slot in 0..passes {
-                f.pass_us[slot] = 2_000 - slot as u32 * 100;
+                f.pass_us[slot] = 2_000 - u32::saturating_from(slot) * 100;
             }
             // One async pass that overlaps the frame.
             f.pass_us[passes] = 5_000;
@@ -1615,7 +1618,7 @@ mod tests {
         let mut busy = sample(0.0, Some(0), 20_000);
         let mut run_names = Vec::new();
         for slot in 0..6 {
-            busy.system_us[slot] = 100 * (slot as u32 + 1);
+            busy.system_us[slot] = 100 * (u32::saturating_from(slot) + 1);
             run_names.push(format!("System{slot}"));
         }
         let mut run = run_of(vec![busy]);

@@ -8,6 +8,7 @@ pub mod cells;
 pub mod density;
 pub mod tiles;
 
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 use super::GrassBladeLook;
@@ -62,7 +63,7 @@ impl PlanetGrass {
                 density: grass.density.min(super::tiles::MAX_GRASS_DENSITY),
                 cells,
                 cell_size: grid.cell_size(cells),
-                seed: lcg_hash(out.len() as u32 ^ 0x5bd1_e995),
+                seed: lcg_hash(u32::saturating_from(out.len()) ^ 0x5bd1_e995),
             });
         }
         (!out.is_empty()).then(|| Self {

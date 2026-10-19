@@ -57,6 +57,7 @@ impl RecordPacker {
 mod tests {
     use super::*;
     use concinnity_core::gfx::render_types::{FarFieldTint, GpuDrawArgs, MaterialUniforms};
+    use concinnity_core::math::SaturatingFrom;
     use concinnity_core::render::model_history::{HistoryMode, ModelHistory};
     use concinnity_core::render::record_pack::{MIN_CHUNK_RECORDS, pool_object_record};
 
@@ -94,7 +95,7 @@ mod tests {
                 params_index: 0,
                 far_field: FarFieldTint::NONE,
             },
-            shader_bucket: (i % 2) as u32,
+            shader_bucket: u32::saturating_from(i % 2),
             visible: !i.is_multiple_of(9),
             resident: true,
             bb_min: [x - 0.5, -0.5, -0.5],

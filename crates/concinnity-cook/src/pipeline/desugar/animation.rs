@@ -1,6 +1,8 @@
 //! Animation clips imported from a source file, and the root-motion bake that
 //! lifts a clip's root track into the asset's args.
 
+use concinnity_core::math::SaturatingFrom;
+use concinnity_core::math::narrow_f32;
 use concinnity_host::thread::asset_id;
 use serde::Deserialize;
 use std::path::Path;
@@ -56,11 +58,13 @@ pub(in crate::pipeline) fn desugar_animation_imports(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let animation_index = asset
-            .args
-            .get("animation_index")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0) as usize;
+        let animation_index = usize::saturating_from(
+            asset
+                .args
+                .get("animation_index")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+        );
         let skin_index = asset
             .args
             .get("target")
@@ -75,10 +79,10 @@ pub(in crate::pipeline) fn desugar_animation_imports(
                 .args
                 .get("sample_rate")
                 .and_then(serde_json::Value::as_f64)
-                .unwrap_or(30.0) as f32;
+                .map_or(30.0, narrow_f32);
             crate::import::fbx::import_fbx_animation(
                 &source,
-                animation_index as u32,
+                u32::saturating_from(animation_index),
                 &animation_name,
                 sample_rate,
                 skin_index,

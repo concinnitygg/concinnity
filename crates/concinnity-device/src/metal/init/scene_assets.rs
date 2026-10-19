@@ -6,6 +6,7 @@
 use concinnity_core::bake;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{AreaLightData, GpuLight};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend_init::{MediaPayloads, SceneData};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::ltc;
@@ -108,12 +109,16 @@ pub(super) fn build_scene_assets(
     // Area-light LTC tables. Scene-independent (they depend only on the
     // build-time fit), so they are created unconditionally and the shader
     // simply never samples them when no area light is declared.
-    let ltc_matrix_texture =
-        create_lut_texture(allocator, ltc::matrix_texels(), ltc::LTC_LUT_SIZE as u32, 4)?;
+    let ltc_matrix_texture = create_lut_texture(
+        allocator,
+        ltc::matrix_texels(),
+        u32::saturating_from(ltc::LTC_LUT_SIZE),
+        4,
+    )?;
     let ltc_magnitude_texture = create_lut_texture(
         allocator,
         ltc::magnitude_texels(),
-        ltc::LTC_LUT_SIZE as u32,
+        u32::saturating_from(ltc::LTC_LUT_SIZE),
         2,
     )?;
 

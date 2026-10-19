@@ -3,6 +3,7 @@
 //! The host builds the payload sources and load threads and makes the device
 //! calls.
 
+use crate::math::SaturatingFrom;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
@@ -129,8 +130,8 @@ impl VoxelStream {
         let impostor_step = voxel_world.impostor_step();
         let headroom = budget::chunk_headroom(ChunkWindowShape {
             chunk_blocks,
-            near_radius: near_radius as u32,
-            far_radius: far_radius as u32,
+            near_radius: u32::saturating_from(near_radius),
+            far_radius: u32::saturating_from(far_radius),
             impostor_step,
         });
         let source = ProceduralChunks::new(

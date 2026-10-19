@@ -6,7 +6,7 @@ use super::hash::seed_lane;
 use super::moon::MoonPath;
 use super::stars::stars_per_steradian;
 use crate::components::NightSky;
-use crate::math::cos;
+use crate::math::{SaturatingFrom, cos};
 
 /// Light of a magnitude-0 star, as a fraction of the sunlight, at
 /// `star_brightness` 1: the 26.74 magnitudes between a star like Vega and
@@ -68,7 +68,7 @@ impl NightSkySettings {
     /// Resolve an authored night sky.
     pub fn resolve(night: &NightSky) -> Self {
         let n = crate::components::validate::night_sky(night.clone());
-        let seed = seed_lane(n.seed) as u32;
+        let seed = u32::saturating_from(seed_lane(n.seed));
         Self {
             star_illuminance: STAR_ZERO_ILLUMINANCE * n.star_brightness,
             star_limit: n.star_limit_magnitude,
@@ -78,7 +78,7 @@ impl NightSkySettings {
             milky_way_tilt: n.milky_way_tilt_deg.to_radians(),
             milky_way_turn: n.milky_way_turn_deg.to_radians(),
             milky_way_core: n.milky_way_core_deg.to_radians(),
-            galaxies: core::array::from_fn(|i| galaxy(seed, i as u32)),
+            galaxies: core::array::from_fn(|i| galaxy(seed, u32::saturating_from(i))),
             galaxy_count: (n.galaxies as usize).min(MAX_GALAXIES),
             moon: n.moon.then(|| MoonSettings {
                 path: MoonPath {

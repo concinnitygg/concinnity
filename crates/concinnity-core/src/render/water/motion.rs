@@ -10,6 +10,7 @@ use super::ocean::MAX_OCEAN_CASCADES;
 use super::ocean::clock::tile_offset;
 use super::ripples::{NOISE_PERIOD, RIPPLE_CREST, RIPPLES, WARP_DRIFT, WARP_FREQUENCY};
 use super::{MAX_WAVES, WaterBody};
+use crate::math::narrow_f32;
 use core::f64::consts::TAU;
 
 /// What moves on a body at one instant.
@@ -69,7 +70,7 @@ impl WaterBody {
         let bound = |axis: usize, side: f32| {
             let c = f64::from(s.center[2 * axis]);
             let e = f64::from(s.extent[axis]);
-            ((c + f64::from(side) * e) - anchor[axis]) as f32
+            narrow_f32((c + f64::from(side) * e) - anchor[axis])
         };
         let mut ocean_offsets = [[0.0; 2]; MAX_OCEAN_CASCADES];
         if let Some(ocean) = &self.ocean {
@@ -78,7 +79,7 @@ impl WaterBody {
             }
         }
         BodyMotion {
-            anchor: [anchor[0] as f32, s.center[1], anchor[1] as f32],
+            anchor: [narrow_f32(anchor[0]), s.center[1], narrow_f32(anchor[1])],
             rest_bounds: [bound(0, -1.0), bound(1, -1.0), bound(0, 1.0), bound(1, 1.0)],
             wave_phases,
             ripple_offsets,
@@ -91,13 +92,13 @@ impl WaterBody {
 // `x` radians wrapped into `[0, tau)`. A remainder that rounds up to tau in
 // f32 lands on 0 instead, the same angle.
 fn wrap_phase(x: f64) -> f32 {
-    let r = wrap(x, TAU) as f32;
+    let r = narrow_f32(wrap(x, TAU));
     if r >= core::f32::consts::TAU { 0.0 } else { r }
 }
 
 // `x` wrapped into `[-period / 2, period / 2)`.
 fn wrap_centered(x: f64, period: f64) -> f32 {
-    (wrap(x + 0.5 * period, period) - 0.5 * period) as f32
+    narrow_f32(wrap(x + 0.5 * period, period) - 0.5 * period)
 }
 
 // `x` wrapped into `[0, period)`.

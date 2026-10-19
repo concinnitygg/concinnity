@@ -42,6 +42,7 @@ pub(super) struct PoolHeartbeats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::SaturatingFrom;
 
     #[test]
     fn emits_the_first_sample() {
@@ -53,7 +54,10 @@ mod tests {
     fn skips_frames_off_the_interval() {
         let mut hb = StatsHeartbeat::default();
         for frame in 1..SAMPLE_INTERVAL {
-            assert_eq!(hb.sample(frame, || (frame as usize, 0, 0)), None);
+            assert_eq!(
+                hb.sample(frame, || (usize::saturating_from(frame), 0, 0)),
+                None
+            );
         }
     }
 

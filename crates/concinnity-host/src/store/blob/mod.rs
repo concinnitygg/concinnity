@@ -154,6 +154,7 @@ fn load_raw_from(
 mod tests {
     use super::*;
     use concinnity_core::blob::{BlobError, encode_cnb};
+    use concinnity_core::math::SaturatingFrom;
 
     #[test]
     fn an_anchored_primary_owns_blob_zero_and_its_siblings() {
@@ -255,7 +256,7 @@ mod tests {
         fs::write(&path, &image).unwrap();
 
         let start = payload_section_start(&path).expect("section start");
-        assert_eq!(&image[start as usize..], b"payloadbytes");
+        assert_eq!(&image[usize::saturating_from(start)..], b"payloadbytes");
     }
 
     #[test]

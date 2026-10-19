@@ -20,6 +20,7 @@
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::ParticleParams;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleFrame, ParticleSystem};
 use concinnity_core::render::reactive_mask::ReactiveWrite;
@@ -297,7 +298,7 @@ pub(in crate::directx) fn zero_default_buffer(
         .map_err(|e| map_hresult(e.code(), "zero_default_buffer: map upload"))?;
     // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
     // is a separate allocation, so the ranges cannot overlap.
-    unsafe { std::ptr::write_bytes(ptr.cast::<u8>(), 0, bytes as usize) };
+    unsafe { std::ptr::write_bytes(ptr.cast::<u8>(), 0, usize::saturating_from(bytes)) };
     // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past this
     // call.
     unsafe { upload.Unmap(0, None) };
@@ -412,8 +413,9 @@ impl DxContext {
             // that init sized for `MAX_EMITTERS` slots of this payload, and the source is a
             // separate live value, so the ranges cannot overlap.
             unsafe {
-                let dst = resources.params_ubo_ptrs[frame_idx]
-                    .add((emitter.id as u64 * resources.params_stride) as usize);
+                let dst = resources.params_ubo_ptrs[frame_idx].add(usize::saturating_from(
+                    emitter.id as u64 * resources.params_stride,
+                ));
                 std::ptr::copy_nonoverlapping(
                     (&raw const emitter.params).cast::<u8>(),
                     dst,
@@ -543,8 +545,8 @@ impl DxContext {
                 let scissor = RECT {
                     left: 0,
                     top: 0,
-                    right: w as i32,
-                    bottom: h as i32,
+                    right: i32::saturating_from(w),
+                    bottom: i32::saturating_from(h),
                 };
                 cmd.RSSetScissorRects(&[scissor]);
                 cmd.IASetPrimitiveTopology(

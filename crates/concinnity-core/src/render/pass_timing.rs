@@ -13,6 +13,7 @@
 //! DirectX and Vulkan backends decode their readback through
 //! [`decode_frame_block`].
 
+use crate::math::SaturatingFrom;
 use crate::profile::{MAX_PASS_TIMINGS, PassTiming};
 use crate::render::render_graph::{PASS_COUNT, PASS_NAMES, PassId};
 
@@ -28,6 +29,10 @@ pub const FRAME_BLOCK_BYTES: u64 = (SLOTS_PER_FRAME * 8) as u64;
 
 /// First slot of `frame`'s block. Also the start of the range a per-frame
 /// resolve should walk, paired with [`SLOTS_PER_FRAME`] as the count.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "frame is a frames-in-flight index, so its block starts within a few hundred slots"
+)]
 pub const fn frame_block_base(frame: usize) -> u32 {
     (frame * SLOTS_PER_FRAME) as u32
 }
@@ -105,7 +110,7 @@ pub fn gpu_end_on_host(
     host_now_us: u64,
 ) -> u64 {
     let ago_us = gpu_now_tick.saturating_sub(end_tick) as f64 * ns_per_tick / 1_000.0;
-    host_now_us.saturating_sub(ago_us as u64)
+    host_now_us.saturating_sub(u64::saturating_from(ago_us))
 }
 
 #[cfg(test)]
@@ -171,10 +176,16 @@ mod tests {
         assert_eq!(whole_frame_pair(0), (0, 1));
         assert_eq!(
             whole_frame_pair(1),
-            (SLOTS_PER_FRAME as u32, SLOTS_PER_FRAME as u32 + 1)
+            (
+                u32::saturating_from(SLOTS_PER_FRAME),
+                u32::saturating_from(SLOTS_PER_FRAME) + 1
+            )
         );
         assert_eq!(frame_block_base(0), 0);
-        assert_eq!(frame_block_base(2), 2 * SLOTS_PER_FRAME as u32);
+        assert_eq!(
+            frame_block_base(2),
+            2 * u32::saturating_from(SLOTS_PER_FRAME)
+        );
         assert_eq!(frame_readback_byte_offset(0), 0);
         assert_eq!(frame_readback_byte_offset(1), FRAME_BLOCK_BYTES);
     }
@@ -204,7 +215,7 @@ mod tests {
     #[test]
     fn decode_frame_block_pairs_every_name_with_its_slots() {
         // Encodes both slots into the reading so a swapped or shifted pair shows.
-        let (frame_us, passes) = decode_frame_block(|s, e| (s * 1000 + e) as u32);
+        let (frame_us, passes) = decode_frame_block(|s, e| u32::saturating_from(s * 1000 + e));
         assert_eq!(frame_us, 1);
         for pass in PassId::ALL {
             let (s, e) = pass_pair(0, pass);

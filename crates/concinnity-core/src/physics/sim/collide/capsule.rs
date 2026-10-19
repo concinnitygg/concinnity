@@ -7,6 +7,7 @@
 // the aligned case and clip the overlapping stretch to two points. That is the
 // same reason a box contact is a patch rather than a point.
 
+use crate::math::SaturatingFrom;
 use crate::physics::sim::contact::{Manifold, ManifoldPoint};
 use crate::physics::sim::math::Vec3;
 
@@ -141,7 +142,7 @@ pub(crate) fn box_capsule(
             out.push(ManifoldPoint {
                 point: (edge_point + (axis_point - best_normal * radius)) * 0.5,
                 separation: best_separation,
-                id: EDGE_ID_BASE + axis_index as u32,
+                id: EDGE_ID_BASE + u32::saturating_from(axis_index),
                 ..Default::default()
             });
             true
@@ -331,7 +332,7 @@ pub(crate) fn capsules(
         out.push(ManifoldPoint {
             point: ((on_a + normal * radius_a) + (on_b - normal * radius_b)) * 0.5,
             separation,
-            id: id as u32,
+            id: u32::saturating_from(id),
             ..Default::default()
         });
     }

@@ -225,6 +225,7 @@ impl HistoryResetTracker {
 mod tests {
     use super::*;
     use crate::gfx::camera::view_matrix;
+    use crate::math::SaturatingFrom;
     use alloc::vec;
     use alloc::vec::Vec;
     use core::f32::consts::{FRAC_PI_2, TAU};
@@ -274,7 +275,7 @@ mod tests {
     // (at least one, at most its catch-up limit).
     fn ran(dt: f32) -> FrameClock {
         let max = crate::ecs::SimTiming::MAX_TICKS_PER_FRAME;
-        ticks_over(dt, ((dt / TICK).round() as u32).clamp(1, max))
+        ticks_over(dt, u32::saturating_from((dt / TICK).round()).clamp(1, max))
     }
 
     fn ticks_over(dt: f32, ticks: u32) -> FrameClock {
@@ -329,7 +330,7 @@ mod tests {
     fn fast_drive(fps: f32, cruise: f32) -> Vec<(Pose, FrameClock)> {
         let dt = 1.0 / fps;
         let accel_end = 1.0;
-        let frames = ((accel_end + cruise) * fps).round() as usize;
+        let frames = usize::saturating_from(((accel_end + cruise) * fps).round());
         let distance = |t: f32| {
             if t < accel_end {
                 150.0 * t * t

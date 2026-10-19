@@ -3,6 +3,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{AreaLightData, GpuLight, LightUniforms};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend_init::SceneData;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::ltc;
@@ -37,7 +38,7 @@ pub(super) fn build_area_lights(
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
     upload_static_records(&buffer, &area_light_data);
-    let ltc_size = ltc::LTC_LUT_SIZE as u32;
+    let ltc_size = u32::saturating_from(ltc::LTC_LUT_SIZE);
     let ltc_upload = gpu.upload();
     let ltc_matrix = upload_float_lut(&ltc_upload, ltc_size, 4, ltc::matrix_texels())?;
     let ltc_magnitude = upload_float_lut(&ltc_upload, ltc_size, 2, ltc::magnitude_texels())?;

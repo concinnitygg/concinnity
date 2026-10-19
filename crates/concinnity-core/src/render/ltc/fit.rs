@@ -276,6 +276,10 @@ fn compute_avg_terms(v: Vec3, alpha: f32) -> (f32, f32, Vec3) {
 // distributions and weights each sample by the sum of the two pdfs, so neither
 // tail dominates. The cubed difference penalizes large local errors harder than
 // an L2 norm would, which is what keeps highlight shapes faithful.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the error is accumulated in f64 and only compared at f32 precision"
+)]
 fn compute_error(ltc: &Ltc, v: Vec3, alpha: f32) -> f32 {
     let mut error = 0.0_f64;
     let n = ERROR_SAMPLES;

@@ -15,6 +15,7 @@
 //! dirty set large enough that the subtree walks would overlap all fall back to
 //! the full resolve.
 
+use crate::math::SaturatingFrom;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
@@ -122,7 +123,7 @@ impl TransformCache {
         self.slot_of.clear();
         self.slot_of.resize(widest, NO_SLOT);
         for (slot, entity) in self.entity.iter().enumerate() {
-            self.slot_of[entity.index() as usize] = slot as u32;
+            self.slot_of[entity.index() as usize] = u32::saturating_from(slot);
         }
 
         // A Parent naming an entity with no Transform composes against nothing,
@@ -183,7 +184,7 @@ impl TransformCache {
                     known => break known + 1,
                 }
                 self.depth[current] = VISITING;
-                self.path.push(current as u32);
+                self.path.push(u32::saturating_from(current));
                 match self.parent[current] {
                     NO_SLOT => break 0,
                     parent => current = parent as usize,
@@ -234,7 +235,7 @@ impl TransformCache {
             } else {
                 self.depth[slot] as usize
             };
-            self.order[self.offsets[bucket] as usize] = slot as u32;
+            self.order[self.offsets[bucket] as usize] = u32::saturating_from(slot);
             self.offsets[bucket] += 1;
         }
     }
@@ -266,7 +267,7 @@ impl TransformCache {
             }
             let at = self.offsets[parent as usize] as usize;
             self.offsets[parent as usize] += 1;
-            self.child_list[at] = slot as u32;
+            self.child_list[at] = u32::saturating_from(slot);
         }
     }
 

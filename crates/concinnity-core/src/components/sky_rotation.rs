@@ -1,5 +1,7 @@
 // Celestial-sphere rotation schema.
 
+use crate::math::narrow_f32;
+
 /// Turns the whole celestial sphere: the sky, the image-based lighting it
 /// casts, every [`DirectionalLight`](#directionallight), and any
 /// [Prop](#prop) hung on it.
@@ -50,7 +52,7 @@ impl SkyRotation {
     /// shines from at that moment.
     pub fn turned(&self, dir: [f32; 3], seconds: f64) -> [f32; 3] {
         let angle = f64::from(self.angle_deg) + f64::from(self.degrees_per_second) * seconds;
-        crate::sky::SkyOrientation::new(self.axis, (angle % 360.0) as f32).rotate(dir)
+        crate::sky::SkyOrientation::new(self.axis, narrow_f32(angle % 360.0)).rotate(dir)
     }
 }
 

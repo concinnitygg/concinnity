@@ -9,6 +9,7 @@
 // equal the linear scan's bit for bit, ties included, whatever shape the tree
 // takes.
 
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 use super::distance_sq;
@@ -103,8 +104,8 @@ impl Tree {
         self.nodes.push(Node {
             min,
             max,
-            start: start as u32,
-            end: end as u32,
+            start: u32::saturating_from(start),
+            end: u32::saturating_from(end),
             right: 0,
         });
         let len = end - start;
@@ -116,7 +117,7 @@ impl Tree {
         self.points[start..end]
             .select_nth_unstable_by(half, |a, b| a.pos[axis].total_cmp(&b.pos[axis]));
         self.split(start, start + half);
-        self.nodes[node].right = self.nodes.len() as u32;
+        self.nodes[node].right = u32::saturating_from(self.nodes.len());
         self.split(start + half, end);
     }
 
@@ -308,7 +309,7 @@ mod tests {
     // Ranks are shuffled against position, so a tie is decided by rank and
     // never by where the point landed in the tree.
     fn scattered(rng: &mut Lcg, count: usize, cells: u32) -> Vec<(u32, [f32; 3])> {
-        let mut ranks: Vec<u32> = (0..count as u32).collect();
+        let mut ranks: Vec<u32> = (0..u32::saturating_from(count)).collect();
         for i in (1..ranks.len()).rev() {
             ranks.swap(i, rng.next() as usize % (i + 1));
         }
@@ -328,7 +329,7 @@ mod tests {
         let mut rng = Lcg(7);
         for round in 0..200 {
             let count = 1 + round % 97 * 3;
-            let points = scattered(&mut rng, count, 6 + round as u32 % 20);
+            let points = scattered(&mut rng, count, 6 + u32::saturating_from(round) % 20);
             let tree = built(&points);
             for _ in 0..40 {
                 let point = [
@@ -339,7 +340,7 @@ mod tests {
                 let skip = rng
                     .next()
                     .is_multiple_of(3)
-                    .then(|| rng.next() % count as u32);
+                    .then(|| rng.next() % u32::saturating_from(count));
                 assert_eq!(
                     tree.nearest(point, skip),
                     scan_nearest(&points, point, skip),
@@ -354,7 +355,7 @@ mod tests {
         let mut rng = Lcg(11);
         for round in 0..200 {
             let count = 1 + round % 97 * 3;
-            let points = scattered(&mut rng, count, 6 + round as u32 % 20);
+            let points = scattered(&mut rng, count, 6 + u32::saturating_from(round) % 20);
             let tree = built(&points);
             for _ in 0..40 {
                 let point = [rng.lattice(30), rng.lattice(30), rng.unit() * 15.0];

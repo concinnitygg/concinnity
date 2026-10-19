@@ -11,6 +11,7 @@
 //! buffer.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::planet::Rebase;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::grass::bend::GRASS_BEND_WORDS;
@@ -602,7 +603,7 @@ impl MtlContext {
         enc.set_fragment_value(gbuffer, prepass_buffers::VIEW);
         self.draw_grass(enc, grass, &grass.pipelines.prepass, frame);
         enc.popDebugGroup();
-        GRASS_REGION_COUNT as u32
+        u32::saturating_from(GRASS_REGION_COUNT)
     }
 
     // Draw the lit blades into the main pass `enc` has open. The fragment reads
@@ -622,7 +623,7 @@ impl MtlContext {
         enc.set_vertex_value(view, 0);
         self.draw_grass(enc, grass, &grass.pipelines.main, frame);
         enc.popDebugGroup();
-        GRASS_REGION_COUNT as u32
+        u32::saturating_from(GRASS_REGION_COUNT)
     }
 
     // The draws both passes issue, one per region: a strip per visible blade,

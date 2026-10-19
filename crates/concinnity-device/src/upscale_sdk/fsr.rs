@@ -459,7 +459,7 @@ impl<L: SdkLibrary> FfxContext<L> {
         let phase_count = self.jitter_phase_count.max(1);
         let mut desc = ffxQueryDescUpscaleGetJitterOffset {
             header: ffxApiHeader::new(FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTEROFFSET),
-            index: (frame_index as i32).rem_euclid(phase_count),
+            index: frame_index.cast_signed().rem_euclid(phase_count),
             phase_count: self.jitter_phase_count,
             out_x: &raw mut x,
             out_y: &raw mut y,

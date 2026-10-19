@@ -15,6 +15,7 @@ mod runtime;
 mod sources;
 mod texture;
 
+use crate::math::SaturatingFrom;
 pub use environment_map::EnvironmentMapRecord;
 pub use handles::{MeshBlock, ResourceHandles};
 pub use install::{append_environment_map, append_font, append_material, append_mesh};
@@ -127,7 +128,7 @@ macro_rules! resource_tables {
                 /// handle, so an append extends the space past every handle
                 /// the build assigned and moves none of them.
                 pub fn append(&mut self, entry: ResourceEntry) -> u32 {
-                    let handle = self.0.len() as u32;
+                    let handle = u32::saturating_from(self.0.len());
                     self.0.push(entry);
                     handle
                 }
@@ -280,7 +281,7 @@ mod tests {
                 offset: u64::from(handle) * 16,
                 len: 16,
             }),
-            data_bytes: vec![handle as u8; 4],
+            data_bytes: vec![u8::saturating_from(handle); 4],
         }
     }
 

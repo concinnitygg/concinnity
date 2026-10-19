@@ -11,11 +11,12 @@ pub const IDENTITY_LUT: [u8; 32] = identity_lut();
 
 const fn identity_lut() -> [u8; 32] {
     let mut data = [255u8; 32];
-    let mut i = 0;
+    let mut i = 0_u8;
     while i < 8 {
-        data[i * 4] = (i & 1) as u8 * 255;
-        data[i * 4 + 1] = ((i >> 1) & 1) as u8 * 255;
-        data[i * 4 + 2] = ((i >> 2) & 1) as u8 * 255;
+        let at = i as usize * 4;
+        data[at] = (i & 1) * 255;
+        data[at + 1] = ((i >> 1) & 1) * 255;
+        data[at + 2] = ((i >> 2) & 1) * 255;
         i += 1;
     }
     data

@@ -13,6 +13,7 @@
 
 use concinnity_core::animation::skeleton::JointPose;
 use concinnity_core::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::transform::euler_yxz_from_quat;
 use concinnity_host::store::source::resolve_source_path;
 use std::collections::HashMap;
@@ -119,16 +120,16 @@ pub(crate) fn import_static_glb_primitive_from_doc(
     let (vertices, indices_u32) = read_primitive_geometry(doc, source, primitive_index)?;
     let mut indices: Vec<u16> = Vec::with_capacity(indices_u32.len());
     for v in indices_u32 {
-        if v > u32::from(u16::MAX) {
-            return Err(format!(
+        let index = u16::try_from(v).map_err(|_| {
+            format!(
                 "'{}': primitive {} exceeds the {}-vertex u16 index limit; \
                  import via `cn add` to auto-split it",
                 source,
                 primitive_index,
                 u16::MAX
-            ));
-        }
-        indices.push(v as u16);
+            )
+        })?;
+        indices.push(index);
     }
     Ok((vertices, indices))
 }
@@ -189,7 +190,7 @@ pub(crate) fn read_primitive_geometry(
 
     let indices: Vec<u32> = match reader.read_indices() {
         Some(idx) => idx.into_u32().collect(),
-        None => (0..positions.len() as u32).collect(),
+        None => (0..u32::saturating_from(positions.len())).collect(),
     };
 
     if vertices.is_empty() {
@@ -267,7 +268,7 @@ pub(crate) fn split_into_u16_chunks(
         }
         for &v in tri {
             let local = *remap.entry(v).or_insert_with(|| {
-                let idx = cur_verts.len() as u16;
+                let idx = u16::saturating_from(cur_verts.len());
                 cur_verts.push(vertices[v as usize].clone());
                 idx
             });
@@ -341,7 +342,7 @@ fn import_skeleton(skin: &gltf::Skin<'_>) -> Result<ImportedSkeleton, String> {
             let (translation, rotation, scale) = node.transform().decomposed();
             SkeletonJoint {
                 name: node.name().unwrap_or("").to_string(),
-                parent: parents[sj].map_or(-1, |p| remap[p] as i32),
+                parent: parents[sj].map_or(-1, |p| i32::saturating_from(remap[p])),
                 translation,
                 rotation_deg: euler_yxz_from_quat(rotation),
                 scale,
@@ -449,7 +450,7 @@ fn import_geometry(
             .map(|c| c.into_rgb_f32().collect())
             .unwrap_or_default();
 
-        let base = vertices.len() as u32;
+        let base = u32::saturating_from(vertices.len());
 
         let prim_targets: Vec<PrimTargetDeltas> = reader
             .read_morph_targets()
@@ -486,7 +487,9 @@ fn import_geometry(
             let bound = |j: u16| -> u32 {
                 // A JOINTS_0 index always indexes the skin's joint array;
                 // remap it into the topologically-sorted index space.
-                remap.get(j as usize).map_or(0, |&r| r as u32)
+                remap
+                    .get(j as usize)
+                    .map_or(0, |&r| u32::saturating_from(r))
             };
             vertices.push(SkinnedVertexData {
                 pos,
@@ -498,14 +501,13 @@ fn import_geometry(
         }
 
         let push_index = |indices: &mut Vec<u16>, v: u32| -> Result<(), String> {
-            let abs = base + v;
-            if abs > u32::from(u16::MAX) {
-                return Err(format!(
+            let index = u16::try_from(base + v).map_err(|_| {
+                format!(
                     "imported skinned mesh exceeds the {}-vertex u16 index limit",
                     u16::MAX
-                ));
-            }
-            indices.push(abs as u16);
+                )
+            })?;
+            indices.push(index);
             Ok(())
         };
         match reader.read_indices() {
@@ -516,7 +518,7 @@ fn import_geometry(
             }
             None => {
                 // A non-indexed primitive draws vertices sequentially.
-                for v in 0..positions.len() as u32 {
+                for v in 0..u32::saturating_from(positions.len()) {
                     push_index(&mut indices, v)?;
                 }
             }

@@ -4,7 +4,7 @@
 //! *lifetimes*: it does not allocate transient GPU resources (those stay
 //! backend-owned).
 
-use crate::math::floor;
+use crate::math::{SaturatingFrom, floor};
 use crate::render::depth::DEPTH_CLEAR;
 use core::num::NonZeroU32;
 
@@ -488,7 +488,7 @@ impl TextureSize {
         match self {
             Self::Absolute(n) => n.max(1),
             Self::Drawable => drawable.max(1),
-            Self::DrawableScaled(f) => (floor(drawable as f32 * f) as u32).max(1),
+            Self::DrawableScaled(f) => u32::saturating_from(floor(drawable as f32 * f)).max(1),
         }
     }
 }

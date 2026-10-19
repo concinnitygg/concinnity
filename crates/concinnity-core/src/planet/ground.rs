@@ -1,6 +1,7 @@
 // The patch of a planet's ground around one point, as a height grid in the
 // simulated frame: what bodies near that point collide with.
 
+use crate::math::narrow_f32;
 use alloc::vec::Vec;
 
 use super::dvec;
@@ -55,11 +56,11 @@ pub fn ground_patch(
     let grid = TerrainGrid::new(
         cells,
         [half_width; 2],
-        heights.iter().map(|h| (h - base) as f32).collect(),
+        heights.iter().map(|h| narrow_f32(h - base)).collect(),
     )
     .ok()?;
     Some(GroundPatch {
-        center: [around[0], base as f32, around[2]],
+        center: [around[0], narrow_f32(base), around[2]],
         grid,
     })
 }
@@ -82,7 +83,7 @@ fn ground_y(
             return None;
         }
         y = center[1] + libm::sqrt(under);
-        let world = frame.to_world([x as f32, y as f32, z as f32]);
+        let world = frame.to_world([narrow_f32(x), narrow_f32(y), narrow_f32(z)]);
         let dir = shape.up_at(world);
         radius = shape.radius + shape.height(dir);
     }

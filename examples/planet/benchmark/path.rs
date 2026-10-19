@@ -2,6 +2,7 @@
 // run between, and where the camera looks along the way.
 
 use concinnity::components::{CameraTravel, CameraTurn, Ease, Planet};
+use concinnity_core::math::narrow_f32;
 
 use super::flight::{self, Fix, PHASES, smoothstep};
 use concinnity::math::dvec3::{DVec3, add, cross, dot, length, scale, sub};
@@ -82,19 +83,19 @@ impl Path {
         let mut turn = Vec::with_capacity(fixes.len() - 1);
         for i in 1..fixes.len() {
             let (from, to) = (fixes[i - 1], fixes[i]);
-            let seconds = (to.seconds - from.seconds) as f32;
+            let seconds = narrow_f32(to.seconds - from.seconds);
             let step = sub(points[i], points[i - 1]);
             travel.push(CameraTravel {
-                direction: step.map(|c| c as f32),
-                distance: length(step) as f32,
+                direction: step.map(narrow_f32),
+                distance: narrow_f32(length(step)),
                 seconds,
                 ease: Ease::Linear,
                 ..Default::default()
             });
             let [yaw, pitch] = views[i];
             turn.push(CameraTurn {
-                yaw_deg: Some(yaw as f32),
-                pitch_deg: Some(pitch as f32),
+                yaw_deg: Some(narrow_f32(yaw)),
+                pitch_deg: Some(narrow_f32(pitch)),
                 seconds,
                 ease: Ease::Linear,
                 ..Default::default()
@@ -102,9 +103,9 @@ impl Path {
         }
         let [yaw, pitch] = views[0];
         Self {
-            start: points[0].map(|c| c as f32),
-            yaw_deg: yaw as f32,
-            pitch_deg: pitch as f32,
+            start: points[0].map(narrow_f32),
+            yaw_deg: narrow_f32(yaw),
+            pitch_deg: narrow_f32(pitch),
             travel,
             turn,
         }

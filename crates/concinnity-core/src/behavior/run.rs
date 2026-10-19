@@ -6,6 +6,7 @@
 // (an empty query's `first`, an unresolved name, a despawned entity) yields
 // None, and the node holding it is skipped rather than guessing.
 
+use crate::math::SaturatingFrom;
 use crate::math::vec3::length;
 use alloc::vec::Vec;
 
@@ -207,7 +208,9 @@ fn eval(expr: &CExpr, view: &View<'_>) -> Option<Val> {
             .first()
             .copied()
             .map(Val::Entity),
-        CExpr::Count(slot) => Some(Val::Int(view.queries.get(*slot as usize)?.len() as i32)),
+        CExpr::Count(slot) => Some(Val::Int(i32::saturating_from(
+            view.queries.get(*slot as usize)?.len(),
+        ))),
         CExpr::Nearest { query, of } => {
             let candidates = view.queries.get(*query as usize)?;
             let point = point(of, view)?;
@@ -304,7 +307,9 @@ fn arith(op: Arith, a: Val, b: Val) -> Option<Val> {
         }
     };
     match (a, b) {
-        (Val::Int(x), Val::Int(y)) => Some(Val::Int(scalar(x as f32, y as f32) as i32)),
+        (Val::Int(x), Val::Int(y)) => {
+            Some(Val::Int(i32::saturating_from(scalar(x as f32, y as f32))))
+        }
         (Val::Vec3(x), Val::Vec3(y)) => Some(Val::Vec3([
             scalar(x[0], y[0]),
             scalar(x[1], y[1]),

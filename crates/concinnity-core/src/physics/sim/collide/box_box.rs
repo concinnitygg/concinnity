@@ -8,6 +8,7 @@
 // them trade places from step to step would swap a four-point patch for a
 // one-point contact and back, which reads as a stack that will not settle.
 
+use crate::math::SaturatingFrom;
 use crate::physics::sim::contact::{MAX_MANIFOLD_POINTS, Manifold, ManifoldPoint};
 use crate::physics::sim::math::{Quat, Vec3};
 
@@ -254,8 +255,8 @@ fn clip_faces(clip: &FaceClip, out: &mut Manifold) -> bool {
 
 /// Pack the features a clipped point came from into one stable id.
 fn feature_id(reference_face: usize, incident_face: usize, flipped: bool, clipped: u32) -> u32 {
-    let reference = reference_face as u32 + if flipped { 6 } else { 0 };
-    (reference << 16) | ((incident_face as u32) << 12) | clipped
+    let reference = u32::saturating_from(reference_face) + if flipped { 6 } else { 0 };
+    (reference << 16) | (u32::saturating_from(incident_face) << 12) | clipped
 }
 
 /// Two crossing edges touch at one point: the closest pair on the supporting
@@ -278,7 +279,9 @@ fn edge_contact(cross: &EdgeCross, out: &mut Manifold) -> bool {
     out.push(ManifoldPoint {
         point: (on_a + on_b) * 0.5,
         separation: cross.separation,
-        id: EDGE_ID_BASE + (cross.axis_a as u32) * 3 + cross.axis_b as u32,
+        id: EDGE_ID_BASE
+            + u32::saturating_from(cross.axis_a) * 3
+            + u32::saturating_from(cross.axis_b),
         ..Default::default()
     });
     true

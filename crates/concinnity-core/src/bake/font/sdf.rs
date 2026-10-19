@@ -4,7 +4,7 @@
 // outline. Values > 0.5 are inside; values < 0.5 are outside. The fragment
 // shader uses smoothstep + fwidth to reconstruct crisp, scale-independent alpha.
 
-use crate::math::{round, sqrt};
+use crate::math::{SaturatingFrom, round, sqrt};
 use alloc::vec::Vec;
 
 // Reusable working buffers for the separable Euclidean distance transform,
@@ -143,14 +143,14 @@ pub(crate) fn cell_coverage_to_sdf(
             if d2 >= spread2 {
                 255
             } else {
-                round(255.0 * (0.5 + 0.5 * sqrt(d2) / spread)) as u8
+                u8::saturating_from(round(255.0 * (0.5 + 0.5 * sqrt(d2) / spread)))
             }
         } else {
             let d2 = inside_dist2[i];
             if d2 >= spread2 {
                 0
             } else {
-                round(255.0 * (0.5 - 0.5 * sqrt(d2) / spread).max(0.0)) as u8
+                u8::saturating_from(round(255.0 * (0.5 - 0.5 * sqrt(d2) / spread).max(0.0)))
             }
         };
         cell[i * 4] = v;

@@ -10,6 +10,7 @@
 //! and a backend that bakes per-object material state at build time are all
 //! refused here rather than reported as applied.
 
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
 use crate::components::{Material, MeshRenderer, ModelRenderer, RenderHandle};
@@ -70,7 +71,7 @@ pub(super) fn material_handle(world: &World, name: AssetId) -> Option<MaterialHa
         .0
         .iter()
         .position(|&id| id == name.0)?;
-    Some(MaterialHandle::new(handle as u32))
+    Some(MaterialHandle::new(u32::saturating_from(handle)))
 }
 
 /// The material `entity`'s draw slots currently render with. `None` for an

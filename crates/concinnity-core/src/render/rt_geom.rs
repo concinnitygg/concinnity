@@ -10,6 +10,7 @@ use crate::gfx::render_types::{
     DrawObject, InstancedCluster, MaterialUniforms, RtGeomEntry, SkinnedDrawObject,
     albedo_pool_index, normal_pool_index,
 };
+use crate::math::SaturatingFrom;
 
 // Marks a `RtGeomEntry.normal_index` as belonging to a skinned object: the
 // reflection trace then fetches the hit triangle from the deformed-vertex / u16
@@ -103,8 +104,8 @@ pub fn geom_entry(obj: &DrawObject, texture_count: u32) -> RtGeomEntry {
     let (albedo_index, normal_index) =
         pool_indices(obj.texture_slot, obj.normal_map_slot, texture_count);
     entry(
-        obj.index_offset as u32,
-        obj.base_vertex as u32,
+        u32::saturating_from(obj.index_offset),
+        obj.base_vertex.cast_unsigned(),
         obj.model,
         albedo_index,
         normal_index,
@@ -123,7 +124,7 @@ pub fn cluster_geom_entry(
     let (albedo_index, normal_index) =
         pool_indices(cluster.texture_slot, cluster.normal_map_slot, texture_count);
     entry(
-        cluster.index_offset as u32,
+        u32::saturating_from(cluster.index_offset),
         0,
         model,
         albedo_index,
@@ -143,7 +144,7 @@ pub fn skinned_geom_entry(obj: &SkinnedDrawObject, texture_count: u32) -> RtGeom
     let (albedo_index, normal_index) =
         pool_indices(obj.texture_slot, obj.normal_map_slot, texture_count);
     entry(
-        obj.index_offset as u32,
+        u32::saturating_from(obj.index_offset),
         0,
         obj.model,
         albedo_index,
@@ -357,8 +358,8 @@ mod tests {
         let texture_count = 12u32;
         let e = geom_entry(&obj, texture_count);
 
-        assert_eq!(e.index_offset, obj.index_offset as u32);
-        assert_eq!(e.base_vertex, obj.base_vertex as u32);
+        assert_eq!(e.index_offset, u32::saturating_from(obj.index_offset));
+        assert_eq!(e.base_vertex, obj.base_vertex.cast_unsigned());
         // Nothing about a static draw is skinned, so the flag bit stays clear
         // and the shader reads the static u32 index buffer.
         assert_eq!(e.normal_index & RT_SKINNED_FLAG, 0);
@@ -405,7 +406,7 @@ mod tests {
         let e = cluster_geom_entry(&cluster, model, texture_count);
 
         assert_eq!(e.base_vertex, 0, "cluster indices are already absolute");
-        assert_eq!(e.index_offset, cluster.index_offset as u32);
+        assert_eq!(e.index_offset, u32::saturating_from(cluster.index_offset));
         assert_eq!(
             e.model, model,
             "the instance's own transform, not the cluster's"

@@ -13,6 +13,7 @@
 // a warning instead of silently mis-posing.
 
 use concinnity_core::animation::skeleton;
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_core::transform::{decompose, euler_yxz_from_quat, mat4_mul};
 use fbxcel::tree::v7400::NodeHandle;
 use std::collections::{BTreeMap, HashMap};
@@ -217,11 +218,11 @@ pub fn import_fbx_animation(
         (Some(a), Some(b)) if b > a => (a, b),
         _ => key_time_range(&node_axis_curves, &curve_by_id),
     };
-    let duration = ((stop_kt - start_kt) / KTIME_PER_SEC).max(1e-3) as f32;
+    let duration = narrow_f32(((stop_kt - start_kt) / KTIME_PER_SEC).max(1e-3));
 
     // Bake each animated joint at the uniform rate.
     let rate = if sample_rate > 0.0 { sample_rate } else { 30.0 };
-    let samples = ((duration * rate).ceil() as usize + 1).max(2);
+    let samples = (usize::saturating_from((duration * rate).ceil()) + 1).max(2);
     let mut tracks: Vec<ImportedAnimationTrack> = Vec::new();
     for (model_id, channels) in &per_model {
         let Some(&joint) = skin.model_to_joint.get(model_id) else {
@@ -239,7 +240,7 @@ pub fn import_fbx_animation(
         let rotation_order = model_p70
             .as_ref()
             .and_then(|p| prop_scalar(p, "RotationOrder"))
-            .unwrap_or(0.0) as i32;
+            .map_or(0, i32::saturating_from);
 
         let read = |id: Option<i64>| -> Option<AxisCurves<'_>> {
             id.map(|id| AxisCurves::read(id, &curve_node_by_id, &node_axis_curves, &curve_by_id))
@@ -334,7 +335,7 @@ impl<'a> AxisCurves<'a> {
         let default = |name: &str| -> f32 {
             p70.as_ref()
                 .and_then(|p| prop_scalar(p, name))
-                .unwrap_or(0.0) as f32
+                .map_or(0.0, narrow_f32)
         };
         let defaults = [default("d|X"), default("d|Y"), default("d|Z")];
         let ids = axis_curves.get(&node_id).copied().unwrap_or_default();
@@ -396,7 +397,7 @@ impl<'a> Curve<'a> {
         if t1 <= t0 {
             return v1;
         }
-        let f = ((kt - t0) / (t1 - t0)) as f32;
+        let f = narrow_f32((kt - t0) / (t1 - t0));
         v0 + (v1 - v0) * f
     }
 }
@@ -500,7 +501,7 @@ mod tests {
         assert_eq!(KTIME_PER_SEC, 46_186_158_000.0);
     }
 
-    const ONE_SECOND: i64 = KTIME_PER_SEC as i64;
+    const ONE_SECOND: i64 = 46_186_158_000;
     const STACK: i64 = 500;
     const LAYER: i64 = 510;
     const TRANSLATION_NODE: i64 = 520;

@@ -12,6 +12,11 @@ use crate::launch::LaunchRequest;
 // to idle the GPU, enough that every frame's simulation ticks fit under the
 // per-frame tick limit, so the world keeps running at full speed behind it.
 const MINIMIZED_FPS: u32 = 30;
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the tick rate is a small positive constant"
+)]
 const _: () =
     assert!(MINIMIZED_FPS * SimTiming::MAX_TICKS_PER_FRAME >= (1.0 / SimTiming::TICK_DT) as u32);
 

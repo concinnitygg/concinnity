@@ -2,6 +2,7 @@ use super::{
     AUTO_BASE_SECS, AUTO_PER_CHAR_SECS, FrameInput, Overlay, PipelineContext, SKIP_PAGE_SECS,
     StorySystem, set_label, set_sprite,
 };
+use crate::math::SaturatingFrom;
 
 impl StorySystem {
     // Ordinary page mode: mid-story, no menu, no overlay, stage in front.
@@ -99,7 +100,7 @@ impl StorySystem {
             return;
         }
         self.typewriter.budget += dt * self.story.text_speed;
-        let step = self.typewriter.budget as usize;
+        let step = usize::saturating_from(self.typewriter.budget);
         if step == 0 {
             return;
         }

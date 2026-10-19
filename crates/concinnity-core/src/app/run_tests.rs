@@ -7,6 +7,7 @@
 //! judge. The tracking allocator this crate's test binary installs (see
 //! `alloc_guard`) is what arms it.
 
+use crate::math::SaturatingFrom;
 use alloc::boxed::Box;
 
 use crate::app::App;
@@ -142,7 +143,7 @@ fn a_tick_publishes_the_fixed_virtual_timing() {
 fn a_system_stopping_the_world_ends_the_run() {
     let mut app = App::with_systems(counting_world(), &HALTING);
     assert_eq!(app.run().expect("the run succeeds"), StepResult::Stop);
-    assert_eq!(app.ticks(), STOP_AT as u64);
+    assert_eq!(app.ticks(), u64::saturating_from(STOP_AT));
 }
 
 // Stop is honored inside a bounded run too: the remaining ticks are not run.
@@ -153,7 +154,7 @@ fn a_bounded_run_honors_a_stop_before_its_count() {
         app.run_for(100).expect("the run succeeds"),
         StepResult::Stop
     );
-    assert_eq!(app.ticks(), STOP_AT as u64);
+    assert_eq!(app.ticks(), u64::saturating_from(STOP_AT));
 }
 
 // A world with no systems is done as soon as it is stepped, which is what an

@@ -20,6 +20,7 @@
 //! `ao_output` only when SSAO is on); `resource_for` returns `None` otherwise and
 //! the consumer keeps its disabled-feature fallback.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::render_graph::{
     ClearValue, PixelFormat, TextureUsage, TransientSlot, TransientTexture,
@@ -333,8 +334,8 @@ fn rt_desc(m: &TransientTexture) -> D3D12_RESOURCE_DESC {
         Alignment: 0,
         Width: u64::from(m.width.max(1)),
         Height: m.height.max(1),
-        DepthOrArraySize: depth_or_array as u16,
-        MipLevels: m.mip_levels.max(1) as u16,
+        DepthOrArraySize: u16::saturating_from(depth_or_array),
+        MipLevels: u16::saturating_from(m.mip_levels.max(1)),
         Format: dxgi_format(m.format),
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: m.sample_count.max(1),

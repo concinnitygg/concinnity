@@ -38,6 +38,7 @@
 use concinnity_core::components::GlassPanel;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::planet::Rebase;
 use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -152,12 +153,12 @@ impl RecordBuffers {
         let index_buffer = upload_buffer(alloc, ibytes, D3D12_RESOURCE_STATE_INDEX_BUFFER)?;
         let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&vertex_buffer),
-            SizeInBytes: vbytes.len() as u32,
-            StrideInBytes: size_of::<Vertex>() as u32,
+            SizeInBytes: u32::saturating_from(vbytes.len()),
+            StrideInBytes: u32::saturating_from(size_of::<Vertex>()),
         };
         let index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&index_buffer),
-            SizeInBytes: ibytes.len() as u32,
+            SizeInBytes: u32::saturating_from(ibytes.len()),
             Format: DXGI_FORMAT_R16_UINT,
         };
 
@@ -181,7 +182,7 @@ impl RecordBuffers {
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     upload.params.as_ptr(),
-                    params_ptr.add(frame * params_block as usize),
+                    params_ptr.add(frame * usize::saturating_from(params_block)),
                     upload.params.len(),
                 );
             };
@@ -193,7 +194,7 @@ impl RecordBuffers {
             vertex_buffer_view,
             index_buffer,
             index_buffer_view,
-            index_count: upload.indices.len() as u32,
+            index_count: u32::saturating_from(upload.indices.len()),
             params_cbuffer,
             params_cbuffer_gva,
             params_ptr,
@@ -213,7 +214,7 @@ impl RecordBuffers {
 impl WaterParamsSink for RecordBuffers {
     fn write_water_params(&self, frame_idx: usize, params: &WaterParams) {
         let bytes = bytemuck::bytes_of(params);
-        let offset = (frame_idx % self.frames) * self.params_block as usize;
+        let offset = (frame_idx % self.frames) * usize::saturating_from(self.params_block);
         // SAFETY: the destination is `frame_idx`'s block of the persistent mapping, which this
         // water record's upload sized (256-aligned) for one `WaterParams`, and the source is a
         // separate live value, so the ranges cannot overlap.
@@ -1138,13 +1139,13 @@ impl DxContext {
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     (&raw const mesh.params).cast::<u8>(),
-                    ring_ptr.add(offset as usize),
+                    ring_ptr.add(usize::saturating_from(offset)),
                     size_of::<GlassMeshParams>(),
                 );
             }
             draws.push(GlassMeshDraw {
-                index_offset: mesh.index_offset as u32,
-                index_count: mesh.index_count as u32,
+                index_offset: u32::saturating_from(mesh.index_offset),
+                index_count: u32::saturating_from(mesh.index_count),
                 base_vertex: mesh.base_vertex,
                 params_gva: ring_base + offset,
                 center: mesh.center,
@@ -1640,8 +1641,8 @@ unsafe fn set_viewport(cmd: &ID3D12GraphicsCommandList, (w, h): (u32, u32)) {
     let scissor = RECT {
         left: 0,
         top: 0,
-        right: w as i32,
-        bottom: h as i32,
+        right: i32::saturating_from(w),
+        bottom: i32::saturating_from(h),
     };
     // SAFETY: the caller guarantees `cmd` is recording; the viewport and scissor slices are
     // live for the call.

@@ -2,6 +2,7 @@
 //! the per-frame inputs `record_frame` derives before its graph dispatch.
 
 use concinnity_core::gfx::render_types::LineVertex;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::profile;
 use concinnity_core::profile::PassTiming;
 use concinnity_core::render::error::RenderResult;
@@ -198,7 +199,9 @@ impl DxContext {
             };
             let frequency = self.timestamps.frequency;
             let ticks_to_micros = |ticks: u64| -> u32 {
-                (ticks.saturating_mul(1_000_000) / frequency).min(u64::from(u32::MAX)) as u32
+                u32::saturating_from(
+                    (ticks.saturating_mul(1_000_000) / frequency).min(u64::from(u32::MAX)),
+                )
             };
             pass_timing::decode_frame_block(|start_slot, end_slot| {
                 // SAFETY: `decode_frame_block` only passes slots below `SLOTS_PER_FRAME`, so
@@ -344,7 +347,7 @@ impl DxContext {
                     heap,
                     D3D12_QUERY_TYPE_TIMESTAMP,
                     pass_timing::frame_block_base(frame),
-                    pass_timing::SLOTS_PER_FRAME as u32,
+                    u32::saturating_from(pass_timing::SLOTS_PER_FRAME),
                     &**readback,
                     pass_timing::frame_readback_byte_offset(frame),
                 );

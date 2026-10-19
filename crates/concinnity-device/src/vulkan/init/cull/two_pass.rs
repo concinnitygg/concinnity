@@ -4,6 +4,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::RenderResult;
 
 use super::CullPlan;
@@ -48,7 +49,7 @@ pub(super) fn build_two_pass_cull(
         ..
     } = *gpu;
     let (device, alloc) = (&hw.device, &hw.alloc);
-    let n_frames = frames as u32;
+    let n_frames = u32::saturating_from(frames);
     let (object_buffers, draw_args_buffers, cull_status_buffers) = (
         &bindless.object_buffers,
         &compute.draw_args_buffers,

@@ -13,6 +13,7 @@
 use ash::vk;
 use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::decal::DecalRecord;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::transform::mat4_inverse;
@@ -414,8 +415,8 @@ fn create_decal_descriptor_pool(
     device: &VkDevice,
     frames: usize,
 ) -> RenderResult<OwnedDescriptorPool> {
-    let frames = frames as u32;
-    let max_decals = MAX_DECALS as u32;
+    let frames = u32::saturating_from(frames);
+    let max_decals = u32::saturating_from(MAX_DECALS);
     let sizes = PoolSizes::default()
         .sets(&view_set_bindings(), frames)
         .sets(&source_set_bindings(1), max_decals)
@@ -624,10 +625,12 @@ impl VkContext {
             // This frame's ring slot keeps what an earlier frame wrote, so a
             // decal whose record has not changed since is already uploaded.
             if decal.take_upload(frame_idx) {
-                decals.params_ubos[frame_idx]
-                    .write_val(decal.id * PARAMS_STRIDE as usize, decal.params);
+                decals.params_ubos[frame_idx].write_val(
+                    decal.id * usize::saturating_from(PARAMS_STRIDE),
+                    decal.params,
+                );
             }
-            let dynamic_offset = (decal.id as u64 * PARAMS_STRIDE) as u32;
+            let dynamic_offset = u32::saturating_from(decal.id as u64 * PARAMS_STRIDE);
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {

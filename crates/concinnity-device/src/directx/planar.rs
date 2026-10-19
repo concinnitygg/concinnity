@@ -28,6 +28,7 @@
 //! (the bindless face render omits the skinned tail), exactly like the probe capture.
 
 use concinnity_core::gfx::render_types::ClusterParams;
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::{
     self, MirrorFrame, MirrorShading, MirrorView, PLANAR_CROP_MARGIN, PixelRect, PlanarReflectors,
@@ -393,7 +394,7 @@ impl PlanarReflectionSet {
     // Byte offset to plane `slot`'s region (of `n_cull` commands) in the indirect
     // buffer, for the face render's `ExecuteIndirect`.
     fn region_offset(&self, slot: usize) -> u32 {
-        (slot * self.n_cull * INDIRECT_COMMAND_STRIDE as usize) as u32
+        u32::saturating_from(slot * self.n_cull * INDIRECT_COMMAND_STRIDE as usize)
     }
 
     // RTV plane `slot`'s mirror render draws through: the shared MSAA target, or
@@ -529,7 +530,7 @@ impl DxContext {
         );
         let storage = FaceStorage::mirror(&self.pre_exposure);
         let shading = MirrorShading {
-            elapsed: params.elapsed as f32,
+            elapsed: narrow_f32(params.elapsed),
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
@@ -699,7 +700,7 @@ fn create_rtv_heap(
 ) -> RenderResult<ID3D12DescriptorHeap> {
     let desc = D3D12_DESCRIPTOR_HEAP_DESC {
         Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-        NumDescriptors: plane_count.max(1) as u32,
+        NumDescriptors: u32::saturating_from(plane_count.max(1)),
         Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
         NodeMask: 0,
     };

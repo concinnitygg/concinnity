@@ -39,6 +39,7 @@
 //! to update -- is the shared `AccelBook`.
 
 use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::rt_accel::{
     AccelBook, EmptyHead, FrameRing, HeadRefresh, InstanceBlas, RefreshMode, RefreshStep,
@@ -83,7 +84,7 @@ pub(super) fn raytracing_supported(device: &ID3D12Device) -> bool {
         device.CheckFeatureSupport(
             D3D12_FEATURE_D3D12_OPTIONS5,
             (&raw mut opts5).cast::<std::ffi::c_void>(),
-            size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS5>() as u32,
+            u32::saturating_from(size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS5>()),
         )
     };
     ok.is_ok() && opts5.RaytracingTier.0 >= D3D12_RAYTRACING_TIER_1_1.0
@@ -182,7 +183,7 @@ impl SharedGeometry {
             self.vertex_gva + base_vertex * VERTEX_STRIDE,
             blas_vertex_count(obj.base_vertex, self.vertex_count),
             self.index_gva + obj.index_offset as u64 * 4,
-            obj.index_count as u32,
+            u32::saturating_from(obj.index_count),
         )
     }
 
@@ -192,7 +193,7 @@ impl SharedGeometry {
             self.vertex_gva,
             blas_vertex_count(0, self.vertex_count),
             self.index_gva + cluster.index_offset as u64 * 4,
-            cluster.index_count as u32,
+            u32::saturating_from(cluster.index_count),
         )
     }
 }
@@ -788,7 +789,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry<'_>) -> RenderResult<Optio
     book.fill_instances(draw_objects, None, |model, id, blas| {
         instance_desc(model, id, instance_blas_gva(blas, &[], &[]))
     });
-    let instance_count = book.instances().len() as u32;
+    let instance_count = u32::saturating_from(book.instances().len());
     let instance_buffer = upload_slice(alloc, book.instances(), "RT instance descriptors")?;
     let geom_table = upload_slice(alloc, book.geom_table(), "RT geometry table")?;
 
@@ -1110,7 +1111,7 @@ impl RtAccelData {
             .fill_refresh_instances(&refresh, draw_objects, |model, id, blas| {
                 instance_desc(model, id, instance_blas_gva(blas, &fresh_gvas, &[]))
             });
-        let instance_count = self.book.instances().len() as u32;
+        let instance_count = u32::saturating_from(self.book.instances().len());
         let tlas_pre = prebuild_info(&device5, &tlas_inputs(instance_count, 0));
         max_scratch = max_scratch.max(tlas_pre.ScratchDataSizeInBytes);
         let tlas_needed = tlas_pre.ResultDataMaxSizeInBytes;
@@ -1236,7 +1237,7 @@ impl RtAccelData {
             .fill_instances(draw_objects, None, |model, id, blas| {
                 instance_desc(model, id, instance_blas_gva(blas, &[], &[]))
             });
-        let instance_count = self.book.instances().len() as u32;
+        let instance_count = u32::saturating_from(self.book.instances().len());
 
         // The static instance count is fixed, so the upload buffers + TLAS are
         // reused without growing after warm-up.
@@ -1387,7 +1388,7 @@ impl RtAccelData {
         // the combined shader-read state.
         let deformed_extent = self.book.skinned_vertex_extent(skinned.objects);
         self.book
-            .fill_skinned_shapes(skinned.objects, deformed_extent as u32);
+            .fill_skinned_shapes(skinned.objects, u32::saturating_from(deformed_extent));
         let deformed_bytes = (deformed_extent * VERTEX_STRIDE).max(VERTEX_STRIDE);
         let read_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
             | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
@@ -1446,8 +1447,8 @@ impl RtAccelData {
             // satisfies the root SRVs.
             let params = SkinParams {
                 vertex_base: obj.vertex_base,
-                vertex_count: obj.vertex_count as u32,
-                joint_count: obj.joint_count.max(1) as u32,
+                vertex_count: u32::saturating_from(obj.vertex_count),
+                joint_count: u32::saturating_from(obj.joint_count.max(1)),
                 target_count: 0,
             };
             // SAFETY: the command list is in the recording state, and every resource, descriptor
@@ -1459,7 +1460,7 @@ impl RtAccelData {
                 cmd.SetComputeRootUnorderedAccessView(3, deformed_gva);
                 cmd.SetComputeRootShaderResourceView(4, skinned.vertex_gva);
                 cmd.SetComputeRootShaderResourceView(5, skinned.vertex_gva);
-                cmd.Dispatch((obj.vertex_count as u32).div_ceil(64), 1, 1);
+                cmd.Dispatch(u32::saturating_from(obj.vertex_count).div_ceil(64), 1, 1);
             }
         }
         // Order the skin writes before the BLAS build reads them, then transition
@@ -1490,9 +1491,9 @@ impl RtAccelData {
             let obj = &skinned.objects[i];
             skinned_triangle_geometry(
                 deformed_gva,
-                deformed_extent as u32,
+                u32::saturating_from(deformed_extent),
                 skinned.index_gva + obj.index_offset as u64 * 4,
-                obj.index_count as u32,
+                u32::saturating_from(obj.index_count),
             )
         }));
 
@@ -1534,7 +1535,7 @@ impl RtAccelData {
             .fill_instances(draw_objects, Some(skinned.objects), |model, id, blas| {
                 instance_desc(model, id, instance_blas_gva(blas, &[], skinned_gvas))
             });
-        let instance_count = self.book.instances().len() as u32;
+        let instance_count = u32::saturating_from(self.book.instances().len());
         let instance_buffer = write_upload_ring(
             &mut ring.instance,
             &mut ring.instance_cap,
@@ -1745,8 +1746,8 @@ impl super::context::DxContext {
                 .unwrap_or(0);
             let params = SkinParams {
                 vertex_base: obj.vertex_base,
-                vertex_count: obj.vertex_count as u32,
-                joint_count: obj.joint_count.max(1) as u32,
+                vertex_count: u32::saturating_from(obj.vertex_count),
+                joint_count: u32::saturating_from(obj.joint_count.max(1)),
                 target_count,
             };
             // Real morph deltas + this frame's weights when the object morphs;
@@ -1767,7 +1768,7 @@ impl super::context::DxContext {
                 cmd.SetComputeRootUnorderedAccessView(3, dst_gva);
                 cmd.SetComputeRootShaderResourceView(4, delta_gva);
                 cmd.SetComputeRootShaderResourceView(5, weight_gva);
-                cmd.Dispatch((obj.vertex_count as u32).div_ceil(64), 1, 1);
+                cmd.Dispatch(u32::saturating_from(obj.vertex_count).div_ceil(64), 1, 1);
             }
         }
         // Orders the skin writes before the main pass's vertex fetch and returns
@@ -1935,7 +1936,7 @@ impl super::context::DxContext {
             shared: SharedGeometry::of(&self.scene.geometry),
             draw_objects: &self.state.draw.objects,
             clusters: &self.instanced.clusters,
-            albedo_count: self.scene.textures.len() as u32,
+            albedo_count: u32::saturating_from(self.scene.textures.len()),
             exclude_seethrough: self.seethrough_meshes_enabled(),
             skinned_present,
         })

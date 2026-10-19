@@ -7,6 +7,7 @@
 //! adapter is the last candidate, so a machine whose GPU is below the
 //! renderer's floor gets a picture instead of an exit.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::fmt::Write as _;
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
@@ -118,7 +119,7 @@ pub(super) fn resource_binding_tier(device: &ID3D12Device) -> D3D12_RESOURCE_BIN
         device.CheckFeatureSupport(
             D3D12_FEATURE_D3D12_OPTIONS,
             (&raw mut options).cast::<std::ffi::c_void>(),
-            size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS>() as u32,
+            u32::saturating_from(size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS>()),
         )
     };
     if ok.is_ok() {

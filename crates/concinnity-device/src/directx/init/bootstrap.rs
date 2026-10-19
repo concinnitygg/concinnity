@@ -3,6 +3,7 @@
 //! allocator, and swapchain creation. Returns the context's `DxHardware` group
 //! and the swapchain it presents through.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend_init::SwapchainConfig;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hdr_output;
@@ -131,7 +132,7 @@ pub(super) fn setup(
             ];
             let filter = D3D12_INFO_QUEUE_FILTER {
                 DenyList: D3D12_INFO_QUEUE_FILTER_DESC {
-                    NumIDs: denied.len() as u32,
+                    NumIDs: u32::saturating_from(denied.len()),
                     pIDList: denied.as_mut_ptr(),
                     ..Default::default()
                 },
@@ -213,7 +214,7 @@ pub(super) fn setup(
                 f5.CheckFeatureSupport(
                     DXGI_FEATURE_PRESENT_ALLOW_TEARING,
                     (&raw mut data).cast::<core::ffi::c_void>(),
-                    size_of::<i32>() as u32,
+                    u32::saturating_from(size_of::<i32>()),
                 )
             }
             .is_ok()
@@ -228,9 +229,9 @@ pub(super) fn setup(
             Quality: 0,
         },
         BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-        BufferCount: BACK_BUFFERS as u32,
+        BufferCount: u32::saturating_from(BACK_BUFFERS),
         SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-        Flags: swapchain_flags(allow_tearing).0 as u32,
+        Flags: (swapchain_flags(allow_tearing).0).cast_unsigned(),
         ..Default::default()
     };
     let sc_base: IDXGISwapChain1 =
@@ -460,7 +461,7 @@ pub(super) fn query_msaa_samples(device: &ID3D12Device) -> u32 {
             device.CheckFeatureSupport(
                 D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,
                 (&raw mut data).cast::<std::ffi::c_void>(),
-                size_of::<D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS>() as u32,
+                u32::saturating_from(size_of::<D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS>()),
             )
         }
         .is_ok()

@@ -30,6 +30,7 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::math::SaturatingFrom;
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
@@ -225,12 +226,12 @@ const CHROME_H: f32 = widget::TITLE_H + HEADER_H + STATUS_H;
 // The visible row count for panel height `h`, clamped to the injected pool. At
 // the default height this is exactly `ROW_POOL`.
 pub(crate) fn visible_rows(h: f32) -> usize {
-    (((h - CHROME_H - PAD) / ROW_H).floor() as usize).clamp(ROW_POOL, ROW_POOL_MAX)
+    usize::saturating_from(((h - CHROME_H - PAD) / ROW_H).floor()).clamp(ROW_POOL, ROW_POOL_MAX)
 }
 
 // The asset-name character budget at width `w` (grows past the default with width).
 fn name_budget(w: f32) -> usize {
-    (MAX_NAME_CHARS as f32 + (w - PANEL_W) / CHAR_W).max(6.0) as usize
+    usize::saturating_from((MAX_NAME_CHARS as f32 + (w - PANEL_W) / CHAR_W).max(6.0))
 }
 
 // The picker's name column: wide enough for the longest type name the picker
@@ -241,7 +242,7 @@ const PICKER_SUMMARY_X: f32 = PICKER_NAME_CHARS as f32 * CHAR_W + PAD;
 // The summary character budget at width `w`: what the row has left once the
 // name column and both margins are taken.
 fn picker_summary_budget(w: f32) -> usize {
-    ((w - 2.0 * PAD - PICKER_SUMMARY_X) / CHAR_W).max(0.0) as usize
+    usize::saturating_from(((w - 2.0 * PAD - PICKER_SUMMARY_X) / CHAR_W).max(0.0))
 }
 
 // The tallest the panel resizes to: the injected row pool shown in full (width

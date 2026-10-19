@@ -11,6 +11,7 @@
 
 use crate::animation::pose_scratch::PoseScratch;
 use crate::animation::proportions::ProportionLayer;
+use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -66,7 +67,7 @@ fn pose_world(count: usize) -> World {
         world.insert(
             entity,
             SkeletonPose {
-                mesh_id: SkinnedMeshHandle::new(i as u32),
+                mesh_id: SkinnedMeshHandle::new(u32::saturating_from(i)),
                 skinned_index: SkinnedIndex::from_usize(i),
                 skeleton: skeleton::Skeleton::new(Vec::new()),
                 joint_matrices: vec![model_at(i); JOINTS],

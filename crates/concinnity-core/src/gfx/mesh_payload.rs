@@ -26,6 +26,7 @@
 //! when present and returns the additional LODs alongside LOD0.
 
 use crate::decode::{ByteReader, checked_product};
+use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -111,7 +112,7 @@ pub struct SkinnedPayload {
 /// Each vertex tuple is (pos, normal, tangent, color, uv).
 pub fn serialize(vertices: &[VertTuple], indices: &[u16]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + vertices.len() * 56 + 4 + indices.len() * 2);
-    buf.extend_from_slice(&(vertices.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&u32::saturating_from(vertices.len()).to_le_bytes());
     for (pos, normal, tangent, color, uv) in vertices {
         for x in pos
             .iter()
@@ -123,7 +124,7 @@ pub fn serialize(vertices: &[VertTuple], indices: &[u16]) -> Vec<u8> {
             buf.extend_from_slice(&x.to_le_bytes());
         }
     }
-    buf.extend_from_slice(&(indices.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&u32::saturating_from(indices.len()).to_le_bytes());
     for i in indices {
         buf.extend_from_slice(&i.to_le_bytes());
     }
@@ -149,10 +150,10 @@ pub fn serialize_with_lods(
         return buf;
     }
     buf.extend_from_slice(LODS_MAGIC);
-    buf.extend_from_slice(&(lod_alternates.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&u32::saturating_from(lod_alternates.len()).to_le_bytes());
     for (distance, idx) in lod_alternates {
         buf.extend_from_slice(&distance.to_le_bytes());
-        buf.extend_from_slice(&(idx.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&u32::saturating_from(idx.len()).to_le_bytes());
         for i in idx {
             buf.extend_from_slice(&i.to_le_bytes());
         }
@@ -262,7 +263,7 @@ pub fn serialize_skinned_with_lods(
 ) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + 4 + vertices.len() * 80 + 4 + indices.len() * 2 + 4);
     buf.extend_from_slice(SKINNED_MAGIC);
-    buf.extend_from_slice(&(vertices.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&u32::saturating_from(vertices.len()).to_le_bytes());
     for v in vertices {
         for f in v
             .pos
@@ -281,14 +282,14 @@ pub fn serialize_skinned_with_lods(
             buf.extend_from_slice(&w.to_le_bytes());
         }
     }
-    buf.extend_from_slice(&(indices.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&u32::saturating_from(indices.len()).to_le_bytes());
     for i in indices {
         buf.extend_from_slice(&i.to_le_bytes());
     }
-    buf.extend_from_slice(&(joints.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&u32::saturating_from(joints.len()).to_le_bytes());
     for j in joints {
         let name_bytes = j.name.as_bytes();
-        buf.extend_from_slice(&(name_bytes.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&u32::saturating_from(name_bytes.len()).to_le_bytes());
         buf.extend_from_slice(name_bytes);
         buf.extend_from_slice(&j.parent.to_le_bytes());
         for x in j
@@ -302,13 +303,13 @@ pub fn serialize_skinned_with_lods(
     }
     if !morphs.is_empty() {
         buf.extend_from_slice(MORPH_MAGIC);
-        buf.extend_from_slice(&(morphs.names.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&u32::saturating_from(morphs.names.len()).to_le_bytes());
         for name in &morphs.names {
             let name_bytes = name.as_bytes();
-            buf.extend_from_slice(&(name_bytes.len() as u32).to_le_bytes());
+            buf.extend_from_slice(&u32::saturating_from(name_bytes.len()).to_le_bytes());
             buf.extend_from_slice(name_bytes);
         }
-        buf.extend_from_slice(&(morphs.entries.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&u32::saturating_from(morphs.entries.len()).to_le_bytes());
         for o in &morphs.offsets {
             buf.extend_from_slice(&o.to_le_bytes());
         }
@@ -321,10 +322,10 @@ pub fn serialize_skinned_with_lods(
     }
     if !lod_alternates.is_empty() {
         buf.extend_from_slice(LODS_MAGIC);
-        buf.extend_from_slice(&(lod_alternates.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&u32::saturating_from(lod_alternates.len()).to_le_bytes());
         for (distance, idx) in lod_alternates {
             buf.extend_from_slice(&distance.to_le_bytes());
-            buf.extend_from_slice(&(idx.len() as u32).to_le_bytes());
+            buf.extend_from_slice(&u32::saturating_from(idx.len()).to_le_bytes());
             for i in idx {
                 buf.extend_from_slice(&i.to_le_bytes());
             }

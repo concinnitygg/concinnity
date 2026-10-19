@@ -316,6 +316,7 @@ mod tests {
         ComponentAsset, ComponentStorage, ComponentTag, PayloadLocator, ResourceKind,
     };
     use crate::error::AssetError;
+    use crate::math::SaturatingFrom;
     use alloc::vec::Vec;
 
     // Both halves of the shared list, so the tests below drive the generated
@@ -373,7 +374,11 @@ mod tests {
         for (i, (tag, name)) in STORED.iter().enumerate() {
             assert_eq!(tag.as_str(), *name);
             assert_eq!(ComponentTag::parse(name), Some(*tag));
-            assert_eq!(*tag as u8, i as u8, "{name} is not at its list position");
+            assert_eq!(
+                *tag as u8,
+                u8::saturating_from(i),
+                "{name} is not at its list position"
+            );
         }
     }
 

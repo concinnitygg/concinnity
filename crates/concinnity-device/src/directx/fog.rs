@@ -18,6 +18,7 @@
 //! Mirrors src/metal/fog.rs.
 
 use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::frame_plan::FogBlocks;
 use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
@@ -179,7 +180,7 @@ fn create_fog_froxel_volume(
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE3D,
         Width: u64::from(FOG_FROXEL_X),
         Height: FOG_FROXEL_Y,
-        DepthOrArraySize: FOG_FROXEL_Z as u16,
+        DepthOrArraySize: u16::saturating_from(FOG_FROXEL_Z),
         MipLevels: 1,
         Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
         SampleDesc: DXGI_SAMPLE_DESC {
@@ -549,8 +550,8 @@ impl DxContext {
             let scissor = RECT {
                 left: 0,
                 top: 0,
-                right: w as i32,
-                bottom: h as i32,
+                right: i32::saturating_from(w),
+                bottom: i32::saturating_from(h),
             };
             cmd.RSSetScissorRects(&[scissor]);
             cmd.IASetPrimitiveTopology(

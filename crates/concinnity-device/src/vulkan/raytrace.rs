@@ -57,6 +57,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::fullscreen::align_up;
 use concinnity_core::render::retire_pool::RetirePool;
@@ -638,8 +639,8 @@ impl SharedAddresses {
         BlasParams {
             vertex_address: self.vertex + base_vertex * VERTEX_STRIDE,
             max_vertex: blas_vertex_count(obj.base_vertex, self.vertex_count).saturating_sub(1),
-            index_byte_offset: obj.index_offset as u32 * 4,
-            primitive_count: (obj.index_count / 3) as u32,
+            index_byte_offset: u32::saturating_from(obj.index_offset) * 4,
+            primitive_count: u32::saturating_from(obj.index_count / 3),
         }
     }
 
@@ -648,8 +649,8 @@ impl SharedAddresses {
         BlasParams {
             vertex_address: self.vertex,
             max_vertex: blas_vertex_count(0, self.vertex_count).saturating_sub(1),
-            index_byte_offset: cluster.index_offset as u32 * 4,
-            primitive_count: (cluster.index_count / 3) as u32,
+            index_byte_offset: u32::saturating_from(cluster.index_offset) * 4,
+            primitive_count: u32::saturating_from(cluster.index_count / 3),
         }
     }
 }
@@ -1050,7 +1051,7 @@ pub(in crate::vulkan) fn build_rt_skin(
 fn skin_set() -> [Binding; 5] {
     std::array::from_fn(|b| {
         (
-            b as u32,
+            u32::saturating_from(b),
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::COMPUTE,
         )
@@ -1068,7 +1069,7 @@ pub(super) fn build_skin_pipeline(
     let pc = vk::PushConstantRange::default()
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .offset(0)
-        .size(size_of::<SkinParams>() as u32);
+        .size(u32::saturating_from(size_of::<SkinParams>()));
     let set_layouts = [set_layout.handle()];
     let pipeline_layout = device
         .create_pipeline_layout(
@@ -1249,11 +1250,16 @@ pub(super) fn build_rt_accel(
     }
 
     // Instance descriptors + geometry table, in the book's instance order.
-    let mut book = AccelBook::new(&seed, blas, draw_objects, albedo_count as u32)?;
+    let mut book = AccelBook::new(
+        &seed,
+        blas,
+        draw_objects,
+        u32::saturating_from(albedo_count),
+    )?;
     book.fill_instances(draw_objects, None, |model, id, blas| {
         tlas_instance(model, id, instance_blas_address(blas, &[], &[]))
     });
-    let instance_count = book.instances().len() as u32;
+    let instance_count = u32::saturating_from(book.instances().len());
 
     let instance_buffer = create_host_buffer(
         alloc,
@@ -1621,7 +1627,7 @@ impl RtAccelData {
                     instance_blas_address(blas, &fresh_addresses, &[]),
                 )
             });
-        let instance_count = self.book.instances().len() as u32;
+        let instance_count = u32::saturating_from(self.book.instances().len());
         write_or_recreate_host(
             &mut slot.instance,
             alloc,
@@ -1781,7 +1787,7 @@ impl RtAccelData {
             .fill_instances(draw_objects, None, |model, id, blas| {
                 tlas_instance(model, id, instance_blas_address(blas, &[], &[]))
             });
-        let instance_count = self.book.instances().len() as u32;
+        let instance_count = u32::saturating_from(self.book.instances().len());
 
         // Rebuild this ring slot's buffers in place. The slot was last written a
         // full ring cycle ago, so the frames-in-flight fence has retired every
@@ -1917,7 +1923,7 @@ impl RtAccelData {
         // this slot, rebuilt in place and grown only when a later frame outgrows it.
         let deformed_extent = self.book.skinned_vertex_extent(skinned.objects);
         self.book
-            .fill_skinned_shapes(skinned.objects, deformed_extent as u32);
+            .fill_skinned_shapes(skinned.objects, u32::saturating_from(deformed_extent));
         let deformed_bytes = (deformed_extent * VERTEX_STRIDE).max(VERTEX_STRIDE);
         // A (re)allocated buffer leaves no tree for an update to continue, so it
         // forces this frame's BLAS to be built from scratch.
@@ -1991,8 +1997,8 @@ impl RtAccelData {
             }
             let params = SkinParams {
                 vertex_base: obj.vertex_base,
-                vertex_count: obj.vertex_count as u32,
-                joint_count: obj.joint_count.max(1) as u32,
+                vertex_count: u32::saturating_from(obj.vertex_count),
+                joint_count: u32::saturating_from(obj.joint_count.max(1)),
                 target_count: 0,
             };
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
@@ -2013,7 +2019,12 @@ impl RtAccelData {
                     vk::ShaderStageFlags::COMPUTE,
                     &params,
                 );
-                device.cmd_dispatch(cmd, (obj.vertex_count as u32).div_ceil(64), 1, 1);
+                device.cmd_dispatch(
+                    cmd,
+                    u32::saturating_from(obj.vertex_count).div_ceil(64),
+                    1,
+                    1,
+                );
             }
         }
 
@@ -2045,7 +2056,7 @@ impl RtAccelData {
 
         // Stage 2: one BLAS per skinned object over the deformed buffer.
         let skinned_idx_addr = buffer_address(device, skinned.index_buffer);
-        let max_vertex = deformed_extent.saturating_sub(1) as u32;
+        let max_vertex = u32::saturating_from(deformed_extent.saturating_sub(1));
         let SkinnedScratch {
             params: skinned_params,
             blas_addresses: skinned_blas_addresses,
@@ -2057,8 +2068,8 @@ impl RtAccelData {
                 vertex_address: deformed.address,
                 max_vertex,
                 // u32 indices = 4 bytes each.
-                index_byte_offset: obj.index_offset as u32 * 4,
-                primitive_count: (obj.index_count / 3) as u32,
+                index_byte_offset: u32::saturating_from(obj.index_offset) * 4,
+                primitive_count: u32::saturating_from(obj.index_count / 3),
             }
         }));
 
@@ -2122,7 +2133,7 @@ impl RtAccelData {
                     instance_blas_address(blas, &[], skinned_blas_addresses),
                 )
             });
-        let instance_count = self.book.instances().len() as u32;
+        let instance_count = u32::saturating_from(self.book.instances().len());
 
         // Rewrite this slot's own host buffers in place (re-map + copy) when they
         // still fit, else grow.
@@ -2266,7 +2277,7 @@ pub(super) fn ensure_skin_sets(
     // old pool's sets are only ever bound on the frame's own command buffer, which
     // has completed (the per-frame fence gated the frame at the top of
     // `draw_frame`), so freeing the old pool here is safe.
-    let total = (frames * object_count) as u32;
+    let total = u32::saturating_from(frames * object_count);
     let pool_sizes = PoolSizes::default().sets(&skin_set(), total).build();
     let pool = device
         .create_descriptor_pool(
@@ -2673,8 +2684,8 @@ impl super::context::VkContext {
         {
             let params = SkinParams {
                 vertex_base: obj.vertex_base,
-                vertex_count: obj.vertex_count as u32,
-                joint_count: obj.joint_count.max(1) as u32,
+                vertex_count: u32::saturating_from(obj.vertex_count),
+                joint_count: u32::saturating_from(obj.joint_count.max(1)),
                 target_count: self
                     .skinned
                     .morph_target_counts
@@ -2700,7 +2711,12 @@ impl super::context::VkContext {
                     vk::ShaderStageFlags::COMPUTE,
                     &params,
                 );
-                device.cmd_dispatch(cmd, (obj.vertex_count as u32).div_ceil(64), 1, 1);
+                device.cmd_dispatch(
+                    cmd,
+                    u32::saturating_from(obj.vertex_count).div_ceil(64),
+                    1,
+                    1,
+                );
             }
         }
         // Order the skin writes before the main pass's vertex fetch of the

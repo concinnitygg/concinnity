@@ -4,6 +4,7 @@
 use concinnity_core::blob::{MeshBoundsRecord, SceneGroup};
 use concinnity_core::components::FileKind;
 use concinnity_core::ecs::{BlobAssetDef, ResourceRecord};
+use concinnity_core::math::SaturatingFrom;
 use concinnity_host::thread::asset_id;
 use rayon::prelude::*;
 use std::path::Path;
@@ -159,8 +160,8 @@ fn mesh_bounds_record(handle: u32, bytes: &[u8]) -> Option<MeshBoundsRecord> {
         handle,
         min,
         max,
-        vertex_count: verts.len() as u32,
-        index_count: idxs.len() as u32,
+        vertex_count: u32::saturating_from(verts.len()),
+        index_count: u32::saturating_from(idxs.len()),
     })
 }
 
@@ -237,7 +238,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
     let cache_hits = AtomicUsize::new(0);
     let stage = progress.stage(
         BuildStage::Compile,
-        (jobs.len() + resource_jobs.len()) as u32,
+        u32::saturating_from(jobs.len() + resource_jobs.len()),
     );
     let cook_only_textures = super::cook_only::cook_only_textures(assets);
     let shared = CompileShared {
@@ -955,7 +956,7 @@ mod tests {
             assets.iter().enumerate().filter_map(|(i, a)| {
                 a.asset_type
                     .resource_kind()
-                    .map(|kind| (AssetId(i as u32), kind))
+                    .map(|kind| (AssetId(u32::saturating_from(i)), kind))
             }),
         );
         crate::resource_handles::reset_resource_handles();
@@ -964,7 +965,11 @@ mod tests {
             .map(|i| {
                 let rt = assets[i].asset_type;
                 let kind = rt.resource_kind().unwrap();
-                (i, rt, handles.get(kind, AssetId(i as u32)).unwrap())
+                (
+                    i,
+                    rt,
+                    handles.get(kind, AssetId(u32::saturating_from(i))).unwrap(),
+                )
             })
             .collect();
 
@@ -1005,8 +1010,9 @@ mod tests {
                 assert_eq!(record.data_bytes, payload, "{}", asset.id);
             } else {
                 let loc = record.payload.as_ref().expect("payload locator");
-                let start = loc.offset as usize;
-                let packed = &out.blobs[loc.blob_index as usize][start..start + loc.len as usize];
+                let start = usize::saturating_from(loc.offset);
+                let packed = &out.blobs[loc.blob_index as usize]
+                    [start..start + usize::saturating_from(loc.len)];
                 assert_eq!(packed, payload.as_slice(), "{}", asset.id);
                 assert_eq!(record.data_bytes, extra.unwrap_or_default(), "{}", asset.id);
             }

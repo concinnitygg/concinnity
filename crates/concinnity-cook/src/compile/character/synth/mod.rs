@@ -111,6 +111,7 @@ pub(crate) mod test_support {
     use super::*;
     use crate::compile::character::frame::bone_frames;
     use concinnity_core::components::SkeletonJoint;
+    use concinnity_core::math::SaturatingFrom;
 
     pub(crate) fn joint(name: &str, parent: i32, translation: [f32; 3]) -> SkeletonJoint {
         SkeletonJoint {
@@ -147,26 +148,26 @@ pub(crate) mod test_support {
                 verts.push(vertex([radius * a.cos(), y, radius * a.sin()], 0));
             }
         }
-        let bottom = verts.len() as u16;
+        let bottom = u16::saturating_from(verts.len());
         verts.push(vertex([0.0, 0.0, 0.0], 0));
-        let top = verts.len() as u16;
+        let top = u16::saturating_from(verts.len());
         verts.push(vertex([0.0, height, 0.0], 0));
         let mut idx = Vec::new();
         for r in 0..rings {
             for s in 0..segs {
-                let a = (r * segs + s) as u16;
-                let b = (r * segs + (s + 1) % segs) as u16;
-                let c = ((r + 1) * segs + (s + 1) % segs) as u16;
-                let d = ((r + 1) * segs + s) as u16;
+                let a = u16::saturating_from(r * segs + s);
+                let b = u16::saturating_from(r * segs + (s + 1) % segs);
+                let c = u16::saturating_from((r + 1) * segs + (s + 1) % segs);
+                let d = u16::saturating_from((r + 1) * segs + s);
                 idx.extend_from_slice(&[a, c, b, a, d, c]);
             }
         }
         for s in 0..segs {
-            let a = s as u16;
-            let b = ((s + 1) % segs) as u16;
+            let a = u16::saturating_from(s);
+            let b = u16::saturating_from((s + 1) % segs);
             idx.extend_from_slice(&[bottom, a, b]);
-            let a = (rings * segs + s) as u16;
-            let b = (rings * segs + (s + 1) % segs) as u16;
+            let a = u16::saturating_from(rings * segs + s);
+            let b = u16::saturating_from(rings * segs + (s + 1) % segs);
             idx.extend_from_slice(&[top, b, a]);
         }
         let skeleton = vec![joint("bone", -1, [0.0, 0.0, 0.0])];
@@ -189,10 +190,10 @@ pub(crate) mod test_support {
         let mut idx = Vec::new();
         for r in 0..rings {
             for s in 0..segs {
-                let a = (r * segs + s) as u16;
-                let b = (r * segs + (s + 1) % segs) as u16;
-                let c = ((r + 1) * segs + (s + 1) % segs) as u16;
-                let d = ((r + 1) * segs + s) as u16;
+                let a = u16::saturating_from(r * segs + s);
+                let b = u16::saturating_from(r * segs + (s + 1) % segs);
+                let c = u16::saturating_from((r + 1) * segs + (s + 1) % segs);
+                let d = u16::saturating_from((r + 1) * segs + s);
                 idx.extend_from_slice(&[a, b, c, a, c, d]);
             }
         }

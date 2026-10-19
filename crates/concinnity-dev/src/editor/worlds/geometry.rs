@@ -7,6 +7,7 @@
 use super::{POOL, WorldsAction, WorldsView};
 use crate::editor::widget::{self, point_in};
 use crate::editor::{hud, theme};
+use concinnity_core::math::SaturatingFrom;
 
 // Which presentation of the panel is up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,7 +115,7 @@ impl Metrics {
 
     // How many scaled lines of text fit in a box `h` pixels tall.
     pub(crate) fn lines_in(&self, h: f32) -> u32 {
-        ((h / (2.0 * self.text_half())).floor() as u32).max(1)
+        u32::saturating_from((h / (2.0 * self.text_half())).floor()).max(1)
     }
 }
 
@@ -223,7 +224,7 @@ impl Layout {
     // the element pool.
     pub(crate) fn rows(&self) -> usize {
         let room = self.size()[1] - self.content_offset() - self.chrome_h() - self.m.pad;
-        let fits = (room / self.m.row_h).floor().max(0.0) as usize;
+        let fits = usize::saturating_from((room / self.m.row_h).floor().max(0.0));
         fits.min(self.m.max_rows)
     }
 

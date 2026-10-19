@@ -4,6 +4,7 @@
 //! in when their scene pins, so with streaming off, or no scenes, or a blob
 //! without baked scene groups, everything decodes at init.
 
+use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 use hashbrown::HashSet;
 
@@ -113,7 +114,7 @@ impl ShaderDeferral {
                 if let Some(bucket) = shader_ids.iter().position(|&id| id == Some(def))
                     && bucket > 0
                 {
-                    scenes.push((bucket as u32, group.scene));
+                    scenes.push((u32::saturating_from(bucket), group.scene));
                 }
             }
         }
