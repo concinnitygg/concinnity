@@ -7,13 +7,9 @@ use concinnity_core::ecs::World;
 
 use crate::editor::hook::tests::fixtures::VP;
 use crate::editor::hook::{EditorHook, TOP_BAR_LAYER};
-use crate::editor::hud;
-use crate::editor::modal;
-use crate::editor::notify;
 use crate::editor::panels::asset_tree::{self, TreeGroup};
 use crate::editor::panels::registry::{self, PanelKey};
-use crate::editor::toast_overlay;
-use crate::editor::widget;
+use crate::editor::{hud, modal, notify, toast_overlay, widget};
 use crate::frame_hook::FrameHook;
 
 fn hook() -> EditorHook {

@@ -13,15 +13,11 @@ use concinnity_cook::authoring::spec::{AssetSpec, asset};
 use concinnity_core::components::{
     DebugHud, EngineDefaults, Sprite, TextInput, TextLabel, Window, WindowMode,
 };
-use concinnity_core::ecs::FontHandle;
-use concinnity_core::ecs::PickIndex;
-use concinnity_core::ecs::TransientSaves;
-use concinnity_core::ecs::World;
+use concinnity_core::ecs::{FontHandle, PickIndex, TransientSaves, World};
 
-use super::hud;
 use super::hud_ids::HudIds;
 use super::panels::registry::{self, PanelKey};
-use super::theme;
+use super::{hud, theme};
 
 // Placeholder layout used only for frame 0; the tick re-anchors everything to
 // the true window corner from the first frame's viewport (`hud::layout`).

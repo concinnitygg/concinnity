@@ -1,111 +1,65 @@
 // Persisting the settings-menu choices: core's SettingsSystem edits the
-// `StoredSettings` resource and bumps `SettingsRevision`; this system writes a
-// snapshot to disk on a background thread whenever the revision moves.
+// `StoredSettings` resource and, when its revision moves, writes it through this
+// file store on a background thread.
 
 pub(crate) mod store;
 
-use concinnity_core::ecs::{PipelineContext, StepResult, System};
-use concinnity_core::settings::{SettingsRevision, StoredSettings};
+use concinnity_core::settings::StoredSettings;
+use concinnity_core::settings::system::SettingsStore;
 use concinnity_host::store::paths::StateTree;
+use std::path::PathBuf;
 
 use crate::file_writer::FileWriter;
 
 #[derive(Debug)]
-pub(crate) struct SettingsWriterSystem {
-    // The revision last written; a world starts at zero, unchanged.
-    written: SettingsRevision,
+pub(crate) struct FileStore {
+    path: PathBuf,
     // Its thread starts on the first change, so an unchanged session never
     // starts one. A burst of changes coalesces to the newest.
     writer: FileWriter,
 }
 
-impl SettingsWriterSystem {
-    pub(crate) fn new() -> Self {
+impl FileStore {
+    // The store at `tree`'s settings file.
+    pub(crate) fn new(tree: &StateTree) -> Self {
         Self {
-            written: SettingsRevision::default(),
+            path: tree.settings_path(),
             writer: FileWriter::new("cn-settings-writer"),
         }
     }
 }
 
-impl System for SettingsWriterSystem {
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
-        let Some(&revision) = ctx.resource::<SettingsRevision>() else {
-            return StepResult::Continue;
-        };
-        if revision == self.written {
-            return StepResult::Continue;
-        }
-        let Some(stored) = ctx.resource::<StoredSettings>() else {
-            return StepResult::Continue;
-        };
-        // An app with no state tree has nowhere to persist to; the choices
-        // apply for the rest of the run.
-        if let Some(tree) = ctx.resource::<StateTree>() {
-            self.writer
-                .write_cbor(tree.settings_path(), stored, "settings");
-        }
-        self.written = revision;
-        StepResult::Continue
+impl SettingsStore for FileStore {
+    fn write(&self, stored: &StoredSettings) {
+        self.writer
+            .write_cbor(self.path.clone(), stored, "settings");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::ecs::World;
+    use concinnity_core::ecs::{Phase, PipelineContext, StepResult, System, SystemTable, World};
+    use concinnity_core::settings::system::SettingsSystem;
 
-    fn world_with_store(dir: &concinnity_testing::TempTree) -> (World, StateTree) {
-        let tree = StateTree::at(dir.path());
-        let mut world = World::new();
-        world.insert_resource(tree.clone());
-        (world, tree)
-    }
-
-    // Each new revision writes the store; an unchanged one writes nothing.
+    // A written store reads back from the settings file once the writer drains.
     #[test]
-    fn a_new_revision_writes_the_store() {
+    fn a_write_reaches_the_settings_file() {
         let dir = concinnity_testing::TempTree::new();
-        let (mut world, tree) = world_with_store(&dir);
-        let mut system = SettingsWriterSystem::new();
+        let tree = StateTree::at(dir.path());
+        let store = FileStore::new(&tree);
         let mut stored = StoredSettings::default();
         stored.graphics.vsync = Some(true);
-        world.insert_resource(stored.clone());
-        world.insert_resource(SettingsRevision::default());
-        system.step(&mut world.context());
-        assert!(!tree.settings_path().exists(), "revision zero is unchanged");
-
-        world.resource_mut::<SettingsRevision>().unwrap().bump();
-        system.step(&mut world.context());
-        system.step(&mut world.context());
-        drop(system);
+        store.write(&stored);
+        drop(store);
         assert_eq!(store::load(Some(&tree)), stored);
     }
 
-    // A revision seen before the store is published is written once the
-    // store appears, not skipped.
-    #[test]
-    fn a_revision_waits_for_its_store() {
-        let dir = concinnity_testing::TempTree::new();
-        let (mut world, tree) = world_with_store(&dir);
-        let mut system = SettingsWriterSystem::new();
-        world.insert_resource(SettingsRevision(1));
-        system.step(&mut world.context());
-        let mut stored = StoredSettings::default();
-        stored.graphics.vsync = Some(false);
-        world.insert_resource(stored.clone());
-        system.step(&mut world.context());
-        drop(system);
-        assert_eq!(store::load(Some(&tree)), stored);
-    }
-
-    // A change made on a tick that stops later is still written: the writer
-    // runs right after the settings drain, before the systems that can stop
+    // A change made on a tick that stops later is still written: the settings
+    // system writes in the step that made it, before the systems that can stop
     // the run.
     #[test]
     fn a_change_on_a_stopping_tick_is_written() {
-        use concinnity_core::ecs::{Phase, PipelineContext, StepResult, System};
-
         #[derive(Debug)]
         struct EditThenStop;
         impl System for EditThenStop {
@@ -125,17 +79,16 @@ mod tests {
         }
 
         let dir = concinnity_testing::TempTree::new();
-        let (mut world, tree) = world_with_store(&dir);
+        let tree = StateTree::at(dir.path());
+        let mut world = World::new();
         world.add_system(Phase::PreRender, "EditThenStop", EditThenStop);
         world.add_system(
             Phase::PreRender,
-            "SettingsWriterSystem",
-            SettingsWriterSystem::new(),
+            "SettingsSystem",
+            SettingsSystem::new().with_store(Box::new(FileStore::new(&tree))),
         );
         world.add_system(Phase::PreRender, "Stop", Stop);
-        world
-            .start(&concinnity_core::ecs::SystemTable::EMPTY)
-            .unwrap();
+        world.start(&SystemTable::EMPTY).unwrap();
         assert_eq!(world.step(), StepResult::Stop);
         drop(world);
         assert_eq!(store::load(Some(&tree)).graphics.vsync, Some(false));

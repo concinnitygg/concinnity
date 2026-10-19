@@ -15,8 +15,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16_UINT;
 
 use crate::directx::context::DxContext;
-use crate::directx::descriptor_slot::DescriptorTables;
-use crate::directx::descriptor_slot::SrvSlot;
+use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::graph_exec::{CompositeRenderTarget, CompositeResolution};
 use crate::directx::root_constants::RootConstants;
 use crate::directx::texture::transition_barrier;

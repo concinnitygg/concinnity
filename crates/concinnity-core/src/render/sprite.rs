@@ -412,9 +412,8 @@ fn rounded_rect_geometry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::Ref;
-    use crate::ecs::TextureHandle;
     use crate::ecs::asset_id::AssetId;
+    use crate::ecs::{Ref, TextureHandle};
 
     use alloc::vec;
     fn no_slots() -> TextureSlots {

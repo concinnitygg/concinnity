@@ -24,10 +24,9 @@
 // Magic tagging every compiled 2D texture payload.
 use crate::decode::{ByteReader, checked_product};
 use crate::math::ceil;
-use alloc::format;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 
 /// A u32 dimension bottoms out at 1x1 after at most this many halvings, so a
 /// file or payload declaring more levels than this is malformed rather than
@@ -242,7 +241,7 @@ pub fn serialize(image: &TextureImage) -> Vec<u8> {
 
 /// Deserialize a tagged payload back into a [`TextureImage`].
 ///
-/// Called by GraphicsSystem at runtime to recover texture format, dimensions,
+/// Called by the renderer at runtime to recover texture format, dimensions,
 /// and mip data before uploading to the GPU.
 pub fn deserialize(bytes: &[u8]) -> Result<TextureImage, String> {
     let mut r = ByteReader::open_payload(bytes, TEXTURE_PAYLOAD_MAGIC, HEADER_BYTES, "texture")?;

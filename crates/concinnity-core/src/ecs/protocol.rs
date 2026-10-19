@@ -98,14 +98,14 @@ impl Default for FrameTime {
     }
 }
 
-/// The live frame-rate cap in FPS (0 = unlimited), published by GraphicsSystem
+/// The live frame-rate cap in FPS (0 = unlimited), published by the renderer
 /// (from `FramePacing` at init, refreshed by the settings row's live change)
 /// and read by the runtime-level frame pacer before each world step. Independent of
 /// the quality preset (a user/hardware preference, like vsync).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FrameRateCap(pub u32);
 
-/// Whether the window is minimized, published by InputSystem from each frame's
+/// Whether the window is minimized, published by the input poll from each frame's
 /// sampled window state and read by the runtime-level frame pacer, which holds
 /// a minimized run to a background rate.
 #[derive(Debug, Clone, Copy, Default)]
@@ -115,7 +115,7 @@ pub struct WindowMinimized(pub bool);
 /// "menu active" state through this resource: `Some(true)` frees the cursor and
 /// freezes gameplay/physics/animation (edit mode), `Some(false)` captures the
 /// cursor and lets the world run (play mode), both regardless of whether the
-/// world has its own menu UI. GraphicsSystem also puts the backend in menu mode
+/// world has its own menu UI. The renderer also puts the backend in menu mode
 /// while it is set, so a click frees to a UI action instead of re-capturing the
 /// camera. `None` (the default absence) leaves the world's own menu logic in
 /// charge; a shipped runtime never publishes it.
@@ -249,7 +249,7 @@ pub struct DesiredCursor(pub CursorShape);
 /// by asset id and published by the `cn editor` HUD so its floating panels occlude
 /// cleanly. Overlay draw calls render in two passes (all sprites, then all text),
 /// so two overlapping panels' contents merge -- one panel's text draws over the
-/// other's background. GraphicsSystem stable-sorts the overlay calls by this layer
+/// other's background. The renderer stable-sorts the overlay calls by this layer
 /// (higher draws on top) when the map is non-empty, so the focused panel's whole
 /// content sits above the others'. An id absent from the map is layer 0; an empty /
 /// absent resource (the shipped runtime) leaves draw order at insertion order,
@@ -278,13 +278,13 @@ pub struct ScreenStack {
 
 /// World-space lines to draw this frame (trajectories, tethers, path previews,
 /// the editor's origin axes), republished by their producer every frame:
-/// GraphicsSystem expands whatever it finds into ribbon geometry and hands it
+/// the renderer expands whatever it finds into ribbon geometry and hands it
 /// to the backend, so a stale list would keep drawing. Absent when nothing
 /// draws lines, which keeps the line pass out of the frame graph.
 #[derive(Debug, Clone, Default)]
 pub struct WorldLines(pub alloc::vec::Vec<crate::gfx::lines::Line>);
 
-/// Device-memory pressure signal, published by GraphicsSystem whenever GPU
+/// Device-memory pressure signal, published by the renderer whenever GPU
 /// work fails for lack of device memory. Renderer-free counters so the
 /// streaming valve can react (tighten budgets, evict) without naming the
 /// renderer; nothing consumes it yet.
@@ -297,15 +297,15 @@ pub struct GpuMemoryPressure {
 }
 
 /// The editor's fly-camera state. While true (published only by the `cn
-/// editor` HUD drive), InputSystem keeps the navigation keys and mouse deltas
-/// live and GraphicsSystem captures the cursor even though the world is frozen
+/// editor` HUD drive), the input poll keeps the navigation keys and mouse deltas
+/// live and the renderer captures the cursor even though the world is frozen
 /// behind the editor's menu override -- the editor integrates Camera3D itself,
 /// so the viewport can be flown without running the simulation. Absent / false
 /// in a shipped runtime.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FlyCam(pub bool);
 
-/// Assets suppressed from rendering for this frame. GraphicsSystem collapses
+/// Assets suppressed from rendering for this frame. The renderer collapses
 /// each listed asset's draw slots to a degenerate transform (so it neither
 /// rasterizes nor casts shadows) and drops it from the [PickIndex]. Authored
 /// data is untouched, and the collapse is re-derived every frame, so clearing
@@ -314,7 +314,7 @@ pub struct FlyCam(pub bool);
 #[derive(Debug, Clone, Default)]
 pub struct HiddenAssets(pub alloc::collections::BTreeSet<AssetId>);
 
-/// The viewport's view mode + show flags. GraphicsSystem forwards it to the
+/// The viewport's view mode + show flags. The renderer forwards it to the
 /// backend's FrameParams: the mode selects what the composite presents, the
 /// flags skip feature passes for the frame. Published by the editor each frame
 /// and by the dev tools' `view-set` and `show-set` verbs; absent otherwise,
@@ -340,8 +340,8 @@ pub struct PickEntry {
 }
 
 /// The per-frame viewport-picking index: every renderable prop entity's asset id
-/// and world-space AABB, refreshed by GraphicsSystem from the live transforms.
-/// Opt-in: GraphicsSystem only builds it when the resource is already present at
+/// and world-space AABB, refreshed by the renderer from the live transforms.
+/// Opt-in: the renderer only builds it when the resource is already present at
 /// init (the `cn editor` HUD injection inserts an empty one), so a shipped
 /// runtime never pays for it. Rooms, instanced clusters, and voxel chunks are
 /// not indexed; picking targets authored prop placements.
@@ -367,6 +367,13 @@ pub struct OverlayImage {
     pub rgba: Vec<u8>,
 }
 
+impl OverlayImage {
+    /// Whether the pixels fill exactly `width * height` RGBA8 texels.
+    pub fn is_well_formed(&self) -> bool {
+        self.rgba.len() as u64 == u64::from(self.width) * u64::from(self.height) * 4
+    }
+}
+
 /// Extra images appended to the sprite/text atlas pool at graphics init: a
 /// sprite whose `texture` names one of these handles samples the image like any
 /// compiled texture. Opt-in like [PickIndex]: inserted before start (the `cn
@@ -377,7 +384,7 @@ pub struct OverlayImage {
 pub struct OverlayImages(pub Vec<OverlayImage>);
 
 /// The latest sampled cursor state (window pixels, top-left origin), published
-/// by InputSystem after each poll. GraphicsSystem reads it when building the
+/// by the input poll after each frame. The renderer reads it when building the
 /// next frame's draw list: `follow_cursor` sprites are positioned a frame after
 /// the input that moved them, and the in-engine cursor stops drawing once the
 /// real cursor has left the window (`outside_window` is false in fullscreen,
@@ -391,11 +398,11 @@ pub struct CursorState {
     pub outside_window: bool,
 }
 
-/// Per-frame stats-HUD visibility, published as a resource by GraphicsSystem
+/// Per-frame stats-HUD visibility, published as a resource by the renderer
 /// (which runs first) and read by `StatHudSystem` the same tick. Each field is
 /// the effective on/off for that chip: the master "Display performance stats"
 /// toggle AND the per-readout toggle from the video settings. Absent (a HUD-only
-/// unit test with no GraphicsSystem) is treated as both shown.
+/// unit test with no renderer) is treated as both shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HudPrefs {
     /// Whether the FPS chip is shown.
@@ -407,13 +414,13 @@ pub struct HudPrefs {
 /// A settings dropdown's open floating option list, or `None` when none is open.
 /// `UiInputSystem` owns the interaction state (open on a setting row's `open`
 /// click, close on a pick / outside click / Escape / scroll) and publishes this
-/// each frame; GraphicsSystem reads it the next tick to draw the list on top of
-/// the menu. GraphicsSystem runs first, so the list appears one frame after the
+/// each frame; the renderer reads it the next tick to draw the list on top of
+/// the menu. The renderer runs first, so the list appears one frame after the
 /// row is clicked (the same lag the cursor + cycle labels already carry).
 #[derive(Debug, Clone, Default)]
 pub struct OpenDropdown(pub Option<DropdownView>);
 
-/// What GraphicsSystem needs to draw an open dropdown list: the anchor control
+/// What the renderer needs to draw an open dropdown list: the anchor control
 /// rect (reference space), the option labels top-to-bottom, the selected +
 /// hovered OPTION indices to highlight, the scroll position (`first`, the top
 /// shown option of a list longer than the layout window), and the row value
@@ -496,3 +503,22 @@ pub struct DisabledSettingRows(pub hashbrown::HashSet<crate::settings::SettingKe
 /// row's dropdown list. Ordered as displayed; a pick's `SetIndex` indexes it.
 #[derive(Debug, Clone, Default)]
 pub struct DisplayModes(pub Vec<crate::window::display_mode::DisplayMode>);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+
+    #[test]
+    fn an_overlay_image_is_well_formed_only_at_its_exact_size() {
+        let image = |rgba: Vec<u8>| OverlayImage {
+            handle: crate::ecs::TextureHandle::new(0),
+            width: 2,
+            height: 1,
+            rgba,
+        };
+        assert!(image(vec![0; 8]).is_well_formed());
+        assert!(!image(vec![0; 7]).is_well_formed());
+        assert!(!image(vec![0; 12]).is_well_formed());
+    }
+}

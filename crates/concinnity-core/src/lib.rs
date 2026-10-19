@@ -74,6 +74,8 @@ pub mod decode;
 pub mod defaults;
 pub mod ecs;
 pub mod error;
+pub mod fanout;
+pub mod fnv;
 pub mod frame_report;
 pub mod geometry;
 pub mod gfx;

@@ -25,10 +25,11 @@
 use alloc::format;
 use alloc::vec::Vec;
 
-use super::{Pool, WORKERS};
+use super::{POOL, WORKERS};
+use crate::fanout::Inline;
 use crate::physics::{
-    BodyHandle, CharacterMoveInput, ColliderShape, DynamicParams, Inline, JointMotor, JointSpec,
-    LayerMask, ShapeCast, SimConfig, Simulation,
+    BodyHandle, CharacterMoveInput, ColliderShape, DynamicParams, JointMotor, JointSpec, LayerMask,
+    ShapeCast, SimConfig, Simulation,
 };
 use crate::test_support::{Pace, bench};
 
@@ -455,7 +456,7 @@ fn assert_deterministic(d: Determinism) {
         }
         poses(&sim, &handles)
     };
-    let on_pool = |sim: &mut Simulation| sim.step_with(TICK, &Pool);
+    let on_pool = |sim: &mut Simulation| sim.step_with(TICK, &POOL);
     let alone = |sim: &mut Simulation| sim.step_with(TICK, &Inline);
     assert_eq!(
         stacked(&on_pool),
@@ -495,7 +496,7 @@ fn assert_deterministic(d: Determinism) {
     let hail = || {
         let (mut sim, handles) = hail_world(bodies);
         for _ in 0..hail_steps {
-            sim.step_with(TICK, &Pool);
+            sim.step_with(TICK, &POOL);
         }
         assert_eq!(sim.ccd_overflows(), 0, "the sweep was declined");
         poses(&sim, &handles)
@@ -584,7 +585,7 @@ fn run(pace: Pace) {
             || {
                 let (mut sim, handles) = stacked_world(n, 0.85, 0.0, true, 1);
                 for _ in 0..drop_steps {
-                    sim.step_with(TICK, &Pool);
+                    sim.step_with(TICK, &POOL);
                 }
                 sim.body_pose(handles[0]).expect("live").0[1].to_bits()
             },
@@ -612,7 +613,7 @@ fn run(pace: Pace) {
             || {
                 let (mut sim, handles) = stacked_world(n, 0.85, 0.0, false, 1);
                 for _ in 0..drop_steps {
-                    sim.step_with(TICK, &Pool);
+                    sim.step_with(TICK, &POOL);
                 }
                 sim.body_pose(handles[0]).expect("live").0[1].to_bits()
             },
@@ -639,7 +640,7 @@ fn run(pace: Pace) {
                 let (mut sim, _handles) = hail_world(n);
                 let mut swept = 0usize;
                 for _ in 0..drop_steps {
-                    sim.step_with(TICK, &Pool);
+                    sim.step_with(TICK, &POOL);
                     swept = swept.max(sim.swept_body_count());
                 }
                 assert_eq!(swept, n, "every body has to have been swept");
@@ -660,7 +661,7 @@ fn run(pace: Pace) {
         // allocations per iteration.
         let (mut resting, handles) = stacked_world(n, 0.0, 0.5, true, 1);
         for _ in 0..settle_steps {
-            resting.step_with(TICK, &Pool);
+            resting.step_with(TICK, &POOL);
         }
         let poses_before = poses(&resting, &handles);
         bench(
@@ -668,7 +669,7 @@ fn run(pace: Pace) {
             &format!("physics/step_settled/{label}"),
             n as u64,
             || {
-                resting.step_with(TICK, &Pool);
+                resting.step_with(TICK, &POOL);
                 handles.len()
             },
         );
@@ -697,7 +698,7 @@ fn run(pace: Pace) {
         // finding nothing new to report.
         let (mut regions, handles) = sensor_world(n);
         for _ in 0..settle_steps {
-            regions.step_with(TICK, &Pool);
+            regions.step_with(TICK, &POOL);
         }
         let poses_before = poses(&regions, &handles);
         let mut crossings = Vec::with_capacity(n);
@@ -706,7 +707,7 @@ fn run(pace: Pace) {
             &format!("physics/step_sensors/{label}"),
             n as u64,
             || {
-                regions.step_with(TICK, &Pool);
+                regions.step_with(TICK, &POOL);
                 regions.drain_sensor_crossings_into(&mut crossings);
                 crossings.len()
             },
@@ -745,7 +746,7 @@ fn run(pace: Pace) {
         });
         jostling.set_contact_min_impulse(5.0, TICK);
         for _ in 0..warmup_steps {
-            jostling.step_with(TICK, &Pool);
+            jostling.step_with(TICK, &POOL);
         }
         let mut hits = Vec::with_capacity(n * 4);
         let mut reported = 0usize;
@@ -754,7 +755,7 @@ fn run(pace: Pace) {
             &format!("physics/step_contacts/{label}"),
             n as u64,
             || {
-                jostling.step_with(TICK, &Pool);
+                jostling.step_with(TICK, &POOL);
                 jostling.drain_contact_hits_into(&mut hits);
                 reported += hits.len();
                 hits.len()
@@ -793,7 +794,7 @@ fn run(pace: Pace) {
         let chains = n / 8;
         let (mut jointed, handles) = jointed_world(chains, 8);
         for _ in 0..warmup_steps {
-            jointed.step_with(TICK, &Pool);
+            jointed.step_with(TICK, &POOL);
         }
         assert_eq!(jointed.joint_count(), chains * 8);
         bench(
@@ -801,7 +802,7 @@ fn run(pace: Pace) {
             &format!("physics/step_joints/{label}"),
             handles.len() as u64,
             || {
-                jointed.step_with(TICK, &Pool);
+                jointed.step_with(TICK, &POOL);
                 handles.len()
             },
         );
@@ -820,7 +821,7 @@ fn run(pace: Pace) {
         // pair several manifolds.
         let (mut terrain, handles) = terrain_world(n, terrain_side);
         for _ in 0..settle_steps {
-            terrain.step_with(TICK, &Pool);
+            terrain.step_with(TICK, &POOL);
         }
         let poses_before = poses(&terrain, &handles);
         bench(
@@ -828,7 +829,7 @@ fn run(pace: Pace) {
             &format!("physics/step_terrain/{label}"),
             n as u64,
             || {
-                terrain.step_with(TICK, &Pool);
+                terrain.step_with(TICK, &POOL);
                 handles.len()
             },
         );
@@ -851,7 +852,7 @@ fn run(pace: Pace) {
         // current. A ray walks the grid cell by cell and a sweep clips against
         // the cells its swept box names, so neither allocates.
         let (mut sim, _handles) = terrain_world(terrain_bodies, terrain_side);
-        sim.step_with(TICK, &Pool);
+        sim.step_with(TICK, &POOL);
         let fan = |sim: &Simulation| {
             let mut hits = 0u32;
             for i in 0..rays {
@@ -905,7 +906,7 @@ fn run(pace: Pace) {
         // query is asked in, and it is what makes the traversal a window over
         // the sorted proxies rather than a walk over all of them.
         let (mut sim, _handles) = stacked_world(query_bodies, 0.0, 0.5, true, 1);
-        sim.step_with(TICK, &Pool);
+        sim.step_with(TICK, &POOL);
         let fan = |sim: &Simulation| {
             let mut hits = 0u32;
             for i in 0..rays {
@@ -939,7 +940,7 @@ fn run(pace: Pace) {
         // Stepped again so the sweep order is current with the capsule in it:
         // the driver asks for a move between steps, never on a world whose
         // broad phase has an unsorted body in it.
-        sim.step_with(TICK, &Pool);
+        sim.step_with(TICK, &POOL);
         let shape = Simulation::character_shape(CHARACTER_HALF_HEIGHT, CHARACTER_RADIUS);
         let walk = |sim: &Simulation| {
             sim.move_character(
@@ -966,7 +967,7 @@ fn run(pace: Pace) {
         // hands back the slots it just freed, so an iteration ends where it
         // began and none of it allocates.
         let (mut sim, _handles) = stacked_world(query_bodies, 0.0, 0.5, true, churn);
-        sim.step_with(TICK, &Pool);
+        sim.step_with(TICK, &POOL);
         let mut churned = Vec::with_capacity(churn);
         bench(pace, "physics/body_churn/64", churn as u64, || {
             for i in 0..churn {

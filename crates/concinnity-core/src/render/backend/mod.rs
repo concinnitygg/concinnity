@@ -1,4 +1,4 @@
-//! The seam `GraphicsSystem` drives a graphics backend through, so the
+//! The seam the renderer drives a graphics backend through, so the
 //! per-frame step and the setup logic live in one cfg-free copy instead of
 //! three.
 //!
@@ -278,8 +278,7 @@ impl SceneControl for dyn RenderBackend + '_ {
 
 #[cfg(test)]
 mod tests {
-    use super::NullBackend;
-    use super::*;
+    use super::{NullBackend, *};
 
     use crate::components::ShaderPrograms;
     use crate::gfx::render_types::MaterialUniforms;

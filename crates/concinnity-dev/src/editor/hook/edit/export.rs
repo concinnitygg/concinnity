@@ -3,14 +3,14 @@
 //! named skinned mesh as `<name>.glb` beside the project's world file, and
 //! reports through the log sink and a toast.
 
+use concinnity_core::fanout::Fanout;
 use concinnity_host::thread::jobs::pool;
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 use std::sync::atomic::Ordering;
 
 use crate::editor::entry_list::build_text;
-use crate::editor::gltf_export;
 use crate::editor::hook::EditorHook;
-use crate::editor::notify;
+use crate::editor::{gltf_export, notify};
 
 impl EditorHook {
     // /export: resolve the mesh (an explicit name, or the selection through
@@ -54,7 +54,7 @@ impl EditorHook {
             // The bounded pool keeps the compile off rayon's global pool,
             // like the cook worker.
             let outcome = pool()
-                .install(|| gltf_export::export_world_mesh(&content, &mesh, bake))
+                .scope(|| gltf_export::export_world_mesh(&content, &mesh, bake))
                 .and_then(|bytes| {
                     std::fs::write(&out, &bytes)
                         .map(|_| bytes.len())

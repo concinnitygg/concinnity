@@ -1,8 +1,7 @@
 // Dynamic physics body schema for a companion Prop.
 
 use crate::components::Prop;
-use crate::ecs::AudioClipHandle;
-use crate::ecs::Ref;
+use crate::ecs::{AudioClipHandle, Ref};
 
 /// Makes a companion [Prop](#prop) a dynamic physics body.
 ///

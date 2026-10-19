@@ -1,7 +1,6 @@
 // Physics-joint constraint schema.
 
-use crate::components::Prop;
-use crate::components::{Vocabulary, vocabulary_synonyms};
+use crate::components::{Prop, Vocabulary, vocabulary_synonyms};
 use crate::ecs::Ref;
 
 /// The constraint shape a `PhysicsJoint` declares.

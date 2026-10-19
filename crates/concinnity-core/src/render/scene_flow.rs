@@ -288,6 +288,24 @@ pub struct SceneVisibilityScratch {
     scene_of: hashbrown::HashMap<Entity, AssetId>,
 }
 
+/// Start a world's scene flow, draining its Scene assets: the start scene's
+/// props are shown on `backend` and every other scene's hidden. `None` for a
+/// world that declares no identified Scene.
+pub fn start_flow<B: SceneControl + ?Sized>(
+    ctx: &mut PipelineContext,
+    scratch: &mut SceneVisibilityScratch,
+    backend: Option<&mut B>,
+) -> Option<SceneFlow> {
+    let flow = SceneFlow::starting(ctx);
+    ctx.drain::<Scene>();
+    let flow = flow?;
+    refresh_visibility_snapshot(ctx, scratch);
+    if let Some(backend) = backend {
+        set_scene_visibility(&scratch.visibility, flow.current, backend);
+    }
+    Some(flow)
+}
+
 /// Rebuild the (draw slots, scene) visibility pairs from the per-entity
 /// components: every entity with a RenderHandle contributes its GPU draw
 /// slots, tagged with the SceneMember scene it belongs to (None = always
@@ -472,6 +490,44 @@ mod tests {
             }
         }
         v
+    }
+
+    // The first identified Scene starts: its member is shown, another scene's
+    // hidden, and the Scene assets are drained. A world with none starts no flow.
+    #[test]
+    fn start_flow_shows_the_start_scene_and_drains_the_scenes() {
+        use crate::ecs::World;
+
+        let mut world = World::new();
+        assert!(
+            start_flow::<TestBackend>(&mut world.context(), &mut Default::default(), None)
+                .is_none()
+        );
+
+        world.push_identified(AssetId(1), Scene::default());
+        world.push_identified(AssetId(2), Scene::default());
+        for (draw, scene) in [(5, 1), (6, 2)] {
+            let mut ctx = world.context();
+            let prop = ctx.components.spawn();
+            ctx.insert(
+                prop,
+                RenderHandle {
+                    draws: [DrawIndex(draw)].into(),
+                },
+            );
+            ctx.insert(prop, SceneMember(AssetId(scene)));
+        }
+        let mut backend = TestBackend::default();
+        let flow = start_flow(
+            &mut world.context(),
+            &mut Default::default(),
+            Some(&mut backend),
+        )
+        .expect("a flow");
+        assert_eq!(flow.current, AssetId(1));
+        assert!(backend.visibility.contains(&(DrawIndex(5), true)));
+        assert!(backend.visibility.contains(&(DrawIndex(6), false)));
+        assert_eq!(world.query::<Scene>().count(), 0);
     }
 
     #[test]

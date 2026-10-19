@@ -24,6 +24,7 @@
 //! a `no_std` crate -- so `assemble_with` takes a resolver and the device crate
 //! supplies the one that reads disk first.
 
+use crate::fnv::Fnv1a;
 use alloc::borrow::Cow;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -177,14 +178,7 @@ pub fn assemble(file: &str, platform: Platform, defines: &[(&str, &str)]) -> Str
 /// FNV-1a, because it is over a few kilobytes on a path that then either does
 /// nothing or invokes a compiler; the cost has to disappear next to both.
 pub fn source_digest(source: &str) -> u64 {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x1000_0000_01b3;
-    let mut hash = OFFSET;
-    for byte in source.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(PRIME);
-    }
-    hash
+    Fnv1a::of(source.as_bytes())
 }
 
 /// The same assembly against a caller-supplied resolver, which is how the

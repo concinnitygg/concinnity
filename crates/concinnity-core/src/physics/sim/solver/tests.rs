@@ -1,6 +1,7 @@
 use super::contact::effective_mass;
 use super::*;
-use crate::physics::Inline;
+use crate::fanout::Inline;
+use crate::fanout::test_pools::Reversed;
 use crate::physics::sim::body::Body;
 use crate::physics::sim::contact::ManifoldPoint;
 use crate::physics::sim::math::{Vec3, vec3};
@@ -10,29 +11,6 @@ const TICK: f32 = 1.0 / 60.0;
 
 fn config() -> SimConfig {
     SimConfig::default()
-}
-
-/// A fan-out that reports several workers and runs their chunks back to front.
-///
-/// Nothing about a solve may depend on which chunk went first, so a visit order
-/// no scheduler would ever produce has to leave the world exactly where the
-/// ordinary one does.
-struct Reversed(usize);
-
-impl Fanout for Reversed {
-    fn workers(&self) -> usize {
-        self.0
-    }
-
-    fn for_each<T, F>(&self, items: &mut [T], body: F)
-    where
-        T: Send,
-        F: Fn(&mut T) + Send + Sync,
-    {
-        for item in items.iter_mut().rev() {
-            body(item);
-        }
-    }
 }
 
 /// One step over the given manifolds, on the calling thread.

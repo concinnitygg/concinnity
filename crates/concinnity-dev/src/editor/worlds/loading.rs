@@ -13,8 +13,7 @@ use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
 
 use crate::editor::hud_ids::{Family, family_base, hud_ids};
-use crate::editor::theme;
-use crate::editor::widget;
+use crate::editor::{theme, widget};
 
 hud_ids! {
     base: family_base(Family::Loading);

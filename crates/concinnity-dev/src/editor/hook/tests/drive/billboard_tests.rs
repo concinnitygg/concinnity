@@ -3,15 +3,13 @@
 //! billboard and a mesh overlap, and the session's hide and lock flags applying
 //! to billboards as they do to meshes.
 
-use concinnity_core::components::PointLight;
-use concinnity_core::components::Transform;
+use concinnity_core::components::{PointLight, Transform};
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
 
-use crate::editor::hook::tests::fixtures::{click_at, entry, hook, pick_world};
+use crate::editor::hook::tests::fixtures::{active, click_at, entry, hook, pick_world};
 
-use crate::editor::hook::tests::fixtures::active;
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::viewport::billboards;
 

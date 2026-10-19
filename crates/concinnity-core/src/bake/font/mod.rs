@@ -1,5 +1,5 @@
 //! The compiled font payload: a power-of-two RGBA atlas of signed-distance-field
-//! glyphs plus their metrics, which GraphicsSystem uploads and draws from.
+//! glyphs plus their metrics, which the renderer uploads and draws from.
 //!
 //! [`compile`] rasterizes the printable ASCII glyphs of a TTF face with fontdue
 //! and encodes them; [`deserialize`] reads the encoding back. Both halves live

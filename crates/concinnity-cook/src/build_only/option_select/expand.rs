@@ -12,7 +12,7 @@
 // so generated elements stay scoped to its Screen via the build pipeline's
 // `<screen>_*` rule and never collide with hand-authored assets.
 
-use concinnity_core::components::NamedAction;
+use concinnity_core::components::{NamedAction, SettingVerb};
 use concinnity_core::settings::{SettingKey, SettingKind};
 
 use crate::authoring::registry::RegisteredType;
@@ -22,7 +22,6 @@ use crate::build_only::expand::{asset_name, registered_type, schema_args};
 use crate::build_only::membership::scope_to_screen;
 use crate::build_only::row_setting::row_setting;
 use crate::build_only::ui_spec::{font_sizes, label_value};
-use concinnity_core::components::SettingVerb;
 
 // Whether a setting row expands to a dropdown (more than two options, or a
 // runtime-enumerated option list like `resolution`) rather than a `<`/`>`

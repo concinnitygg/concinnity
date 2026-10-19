@@ -364,8 +364,7 @@ mod tests {
     use super::*;
     use crate::gfx::view_modes::{ShowFlags, ViewMode};
     use crate::render::render_graph::frame::build_frame_graph;
-    use alloc::format;
-    use alloc::vec;
+    use alloc::{format, vec};
 
     // The flags a build configuration carries, i.e. the ones a pool is rebuilt
     // on. Everything else `planning_inputs` forces live.

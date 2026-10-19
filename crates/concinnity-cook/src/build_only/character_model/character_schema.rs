@@ -1,8 +1,7 @@
 //! Character-schema: the declarative contract a body conforms to, read by the
 //! cook (validation, synthesized targets) and the editor (panel layout).
 
-use concinnity_core::components::JointProportion;
-use concinnity_core::components::ShapeSlider;
+use concinnity_core::components::{JointProportion, ShapeSlider};
 
 /// Whether a shape key is one target or a `+` / `-` pair.
 #[derive(

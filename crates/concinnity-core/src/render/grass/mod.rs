@@ -1394,8 +1394,7 @@ mod tests {
     // same frame the field does from the same inputs.
     #[test]
     fn the_frame_state_runs_the_fields_frame() {
-        use crate::render::scene_state::DrawList;
-        use crate::render::scene_state::SceneState;
+        use crate::render::scene_state::{DrawList, SceneState};
         let t = terrain([0.0; 3], [400.0, 400.0], vec![grass(100.0)]);
         let mut f = GrassField::resolve(&[t], None).unwrap();
         resize(&mut f, [1600, 900]);

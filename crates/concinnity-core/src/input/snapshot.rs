@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 /// Accumulated input state since the last poll. Drained and reset every
-/// frame by GraphicsSystem and converted into a FrameInput component for
+/// frame by the renderer and converted into a FrameInput component for
 /// Camera3DSystem to consume.
 #[derive(Default, Debug, Clone)]
 pub struct InputSnapshot {

@@ -8,11 +8,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::bake::{CubeBake, prefilter_mip0};
-use super::schedule::RowScheduler;
 use super::{
     DEFAULT_IRRADIANCE_PHI_SAMPLES, DEFAULT_IRRADIANCE_THETA_SAMPLES, max_mip_count,
     prefilter_roughness, serialize_payload,
 };
+use crate::fanout::Fanout;
 use crate::math::vec3::normalize_clamped;
 use crate::math::{acos, atan2, exp, floor, powi};
 
@@ -109,8 +109,8 @@ fn fetch_wrap(hdr: &HdrImage, x: i32, y: i32) -> [f32; 3] {
 /// pipeline, the editor's hot-reload preview, and a runtime bake, so no path
 /// can diverge from the built asset; `rows` spreads each convolution's
 /// independent output rows over whatever the caller has
-/// ([`super::schedule::Serial`] without a pool).
-pub fn bake_payload<S: RowScheduler>(
+/// ([`Inline`](crate::fanout::Inline) without a pool).
+pub fn bake_payload<S: Fanout>(
     hdr: &HdrImage,
     prefilter_face: u32,
     irradiance_face: u32,
@@ -224,14 +224,14 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::super::deserialize;
-    use super::super::schedule::Serial;
     use super::*;
+    use crate::fanout::Inline;
 
     #[test]
     fn sky_generator_bakes_into_a_full_payload_serially() {
         let hdr = generate_sky_equirect();
         assert_eq!((hdr.width, hdr.height), (256, 128));
-        let payload = bake_payload(&hdr, 16, 8, 32, 12.0, &Serial);
+        let payload = bake_payload(&hdr, 16, 8, 32, 12.0, &Inline);
         let view = deserialize(&payload).expect("deserialize");
         assert_eq!(view.irradiance_face, 8);
         assert_eq!(view.prefilter_face, 16);

@@ -5,9 +5,8 @@ use concinnity_core::gfx::render_types::{
     self, NUM_SHADOW_CASCADES, ShadowUniforms, SpotShadowData,
 };
 use concinnity_core::render::backend_init::ShadowParams;
-use concinnity_core::render::csm;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::spot_shadow;
+use concinnity_core::render::{csm, spot_shadow};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::heap_layout::{DSV_SHADOW_BASE_SLOT, DSV_SPOT_SHADOW_BASE_SLOT};

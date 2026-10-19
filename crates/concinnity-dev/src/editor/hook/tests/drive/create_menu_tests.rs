@@ -9,12 +9,11 @@ use concinnity_host::thread::asset_id;
 
 use crate::frame_hook::FrameHook;
 
-use crate::editor::hook::tests::fixtures::{click_at, hook, pick_world, set_input};
+use crate::editor::hook::tests::fixtures::{active, click_at, hook, pick_world, set_input};
 use crate::editor::hook::{EditorHook, declared_id, entry_type};
 
 use crate::editor::panels::registry::PanelKey;
 
-use crate::editor::hook::tests::fixtures::active;
 use crate::editor::sim;
 
 // A right-press tick at `pos` (the create-menu opener).

@@ -1,10 +1,7 @@
 // Screen-space UI text-label schema.
 
-use crate::components::Screen;
-use crate::components::SpriteFit;
-use crate::components::Vocabulary;
-use crate::ecs::FontHandle;
-use crate::ecs::Ref;
+use crate::components::{Screen, SpriteFit, Vocabulary};
+use crate::ecs::{FontHandle, Ref};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;

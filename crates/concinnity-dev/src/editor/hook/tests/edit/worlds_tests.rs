@@ -8,15 +8,12 @@ use concinnity_cook::authoring::world::parse_world_jsonl;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{
-    VP, button_index, hook_at, open_project, press_modal, prop_entry, set_world_name, world_names,
-    world_row_index, world_with_name_field, write_world,
+    VP, button_index, hook_at, open_project, press_modal, prop_entry, select, selected,
+    set_world_name, world_names, world_row_index, world_with_name_field, write_world,
 };
-use crate::editor::hook::tests::fixtures::{select, selected};
-use crate::editor::modal;
 use crate::editor::panels::registry::{self, PanelKey};
-use crate::editor::session_store;
-use crate::editor::widget;
 use crate::editor::worlds::{self, WorldRow, WorldsAction};
+use crate::editor::{modal, session_store, widget};
 
 // The listing is the project's worlds newest-edited first, the root world
 // included, with the session's own world marked.

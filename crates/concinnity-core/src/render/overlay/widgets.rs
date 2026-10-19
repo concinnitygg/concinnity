@@ -3,8 +3,7 @@
 // fed through the same shapers as the authored overlay elements.
 
 use crate::components::{Sprite, SpriteFit, TextAlign, TextInput, TextLabel};
-use crate::ecs::DropdownView;
-use crate::ecs::Ref;
+use crate::ecs::{DropdownView, Ref};
 use crate::render::text;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -382,9 +381,8 @@ pub(super) fn build_text_input_overlay(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::Ref;
     use crate::ecs::asset_id::AssetId;
-    use crate::ecs::{DropdownView, FontHandle};
+    use crate::ecs::{DropdownView, FontHandle, Ref};
     use crate::gfx::font;
     use alloc::format;
     use alloc::string::ToString;

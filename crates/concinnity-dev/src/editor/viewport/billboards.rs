@@ -20,8 +20,7 @@ use concinnity_core::ecs::asset_id::AssetId;
 
 use crate::editor::hud_ids::{Family, family_base, hud_ids};
 use crate::editor::outlines::shapes::{BOX_EDGES, EDGES};
-use crate::editor::theme;
-use crate::editor::widget;
+use crate::editor::{theme, widget};
 
 // Icon pool size, bounding the per-frame sprite cost; entries past the pool
 // simply draw no icon (they stay pickable through the Assets tree).

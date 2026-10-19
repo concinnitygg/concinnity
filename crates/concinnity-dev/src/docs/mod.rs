@@ -24,9 +24,8 @@ pub(crate) use summary::type_summaries;
 use page::{AUTOGEN_MARKER, IndexEntry, render_index, render_page};
 use reference::AssetDoc;
 use std::collections::BTreeMap;
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 // Where the pages land, relative to the directory given on the command line.
 const PAGES_DIR: &str = "docs/assets";

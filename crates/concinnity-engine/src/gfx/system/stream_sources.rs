@@ -3,8 +3,7 @@
 use hashbrown::HashMap;
 
 use concinnity_core::ecs::PayloadLocator;
-use concinnity_host::store::blob::blob_path;
-use concinnity_host::store::blob::payload_section_start;
+use concinnity_host::store::blob::{blob_path, payload_section_start};
 
 use concinnity_core::render::stream_pools::DeferredMeshPayload;
 

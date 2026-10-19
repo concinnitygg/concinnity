@@ -6,11 +6,11 @@
 //! (runtime-only fields), so the renderer and any reader see the edited text in
 //! place.
 
+use crate::ecs::{Access, Entity, PipelineContext, StepResult, System, World};
 use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::components::{FrameInput, InputKey, KeyEvent, SpriteFit, TextInput};
-use crate::ecs::{Access, Entity, PipelineContext, StepResult, System};
 use crate::gfx::overlay::OverlayTransform;
 
 // One text edit applied at the caret in a single frame.
@@ -117,6 +117,13 @@ fn cursor_in_field(ti: &TextInput, mx: f32, my: f32, viewport: [f32; 2]) -> bool
 pub struct TextInputSystem {
     // This frame's edits, reused across frames.
     edits: Vec<Edit>,
+}
+
+impl TextInputSystem {
+    /// The system for a world that declares any `TextInput`.
+    pub fn for_world(world: &World) -> Option<Self> {
+        world.query::<TextInput>().next().map(|_| Self::default())
+    }
 }
 
 impl System for TextInputSystem {

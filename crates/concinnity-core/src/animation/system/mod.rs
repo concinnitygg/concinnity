@@ -22,16 +22,16 @@ use crate::animation::anim_graph;
 use crate::animation::flat_blend::{self, ClipEntry, FlatState, Transition};
 use crate::animation::pose_blend::PoseBlend;
 use crate::animation::skeleton::AnimationClip;
-use crate::components::Animation;
-use crate::components::AnimationParams;
-use crate::components::CharacterRig;
-use crate::components::GroundProbes;
-use crate::components::RootMotionEvent;
-use crate::components::SkeletonPose;
+use crate::components::{
+    Animation, AnimationParams, CharacterRig, GroundProbes, RootMotionEvent, SkeletonPose,
+};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{
-    Access, FrameTime, MenuActive, PipelineContext, SkinnedMeshHandle, StepResult, System,
+    Access, FrameTime, MenuActive, PipelineContext, ScheduleMode, SkinnedMeshHandle, StepResult,
+    System,
 };
+use crate::fanout::{Fanout, Inline, Lent, Pooled};
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -92,15 +92,6 @@ pub struct AnimationReloadEntry {
     pub looping: bool,
 }
 
-/// Runs `sample` on every `SkeletonPose`, in no defined order, returning once
-/// all are done. Poses are independent, so a host may spread them across
-/// threads.
-pub type PoseFanOut = fn(&mut [SkeletonPose], &(dyn Fn(&mut SkeletonPose) + Send + Sync));
-
-fn serial_poses(poses: &mut [SkeletonPose], sample: &(dyn Fn(&mut SkeletonPose) + Send + Sync)) {
-    poses.iter_mut().for_each(sample);
-}
-
 /// Skeletal animation playback behavior. Constructed internally by
 /// `World::start` when the world declares any `Animation` or `AnimationGraph`;
 /// never a world-declared asset, so it carries no config.
@@ -123,7 +114,9 @@ pub struct AnimationSystem {
     ik_frames: HashMap<SkinnedMeshHandle, ik::IkFrame>,
     // Foot-position scratch for the probe-ray refresh, reused across targets.
     ik_feet_scratch: Vec<[f32; 3]>,
-    fan_out: PoseFanOut,
+    // Where the frame's poses are sampled: the calling thread unless a host
+    // lent a pool.
+    poses: Box<dyn Pooled<SkeletonPose>>,
     // Whether init records each file-backed clip's reload entry.
     capture_sources: bool,
 }
@@ -155,7 +148,7 @@ impl AnimationSystem {
             reload_entries: Vec::new(),
             ik_frames: HashMap::new(),
             ik_feet_scratch: Vec::new(),
-            fan_out: serial_poses,
+            poses: Box::new(Inline),
             capture_sources: false,
         }
     }
@@ -171,9 +164,9 @@ impl AnimationSystem {
         declared.then(Self::new)
     }
 
-    /// Sample the poses on `fan_out`.
-    pub fn with_fan_out(mut self, fan_out: PoseFanOut) -> Self {
-        self.fan_out = fan_out;
+    /// Sample the poses on `pool`.
+    pub fn with_pool<P: Fanout>(mut self, pool: Lent<P>) -> Self {
+        self.poses = Box::new(pool);
         self
     }
 
@@ -241,7 +234,7 @@ impl System for AnimationSystem {
         // decided below (graph if the world declares one, weighted blend
         // otherwise).
         let capture_sources = self.capture_sources;
-        // Interned-name -> handle index published by GraphicsSystem (which
+        // Interned-name -> handle index published by the renderer (which
         // loaded the SkinnedMesh table before this system inits), kept for the
         // animation debug tool calls. The correlation web itself is keyed by
         // the authored `target` handles directly.
@@ -395,8 +388,9 @@ impl System for AnimationSystem {
         // Each `SkeletonPose` is sampled and skinned independently, so the
         // per-pose work fans across the job pool and joins before returning.
         let targets = &self.targets;
+        let mode = ScheduleMode::current(ctx.resources);
         let poses = ctx.query_slice_mut::<SkeletonPose>();
-        (self.fan_out)(poses, &|pose| {
+        self.poses.for_each(mode, poses, &|pose| {
             let Some(state) = targets.get(&pose.mesh_id) else {
                 return;
             };

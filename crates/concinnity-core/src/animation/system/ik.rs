@@ -9,10 +9,9 @@ use crate::animation::ik;
 use crate::animation::ik::TwoBoneChain;
 use crate::animation::pose_scratch::PoseScratch;
 use crate::animation::skeleton::Skeleton;
-use crate::components::AnimationParam;
-use crate::components::SkeletonPose;
 use crate::components::{
-    AnimationIkChain, AnimationParams, CharacterRig, GroundProbe, GroundProbes,
+    AnimationIkChain, AnimationParam, AnimationParams, CharacterRig, GroundProbe, GroundProbes,
+    SkeletonPose,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, SkinnedMeshHandle};

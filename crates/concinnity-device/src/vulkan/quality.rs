@@ -23,8 +23,7 @@
 //! resolved settings never turn RT on for an RT-incapable GPU or beside XeSS.
 
 use ash::vk;
-use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::{auto_exposure, render_types};
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::feature_plan::{BackendFacts, FeatureChange, FeaturePlan};

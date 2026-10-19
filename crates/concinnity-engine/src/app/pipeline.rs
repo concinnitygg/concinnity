@@ -33,8 +33,7 @@ use crate::app::frame_gate::FrameGo;
 use crate::app::runtime::Runtime;
 use crate::ecs::PipelinedFrames;
 use crate::gfx::system::submit::submit;
-use concinnity_core::render::frame_submit::FramePolicy;
-use concinnity_core::render::frame_submit::GoTiming;
+use concinnity_core::render::frame_submit::{FramePolicy, GoTiming};
 use concinnity_core::shutdown::ShutdownToken;
 use concinnity_host::clock::micros_since;
 
@@ -46,7 +45,7 @@ use concinnity_host::clock::micros_since;
 // the process fails the same way a serial panic does. `screenshot` captures
 // the last presented frame on the way out (skipped after a device loss).
 pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
-    let Some(mut backend) = crate::ecs::take_render_backend(runtime.world_mut()) else {
+    let Some(mut backend) = runtime.take_render_backend() else {
         crate::app::runloop::run_loop(&mut runtime, false, |_| {});
         return;
     };

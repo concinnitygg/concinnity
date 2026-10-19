@@ -4,8 +4,7 @@
 use super::PlanetFrame;
 use super::dvec::{self, DVec3};
 use super::shape::PlanetShape;
-use crate::math::Quat;
-use crate::math::dvec3;
+use crate::math::{Quat, dvec3};
 
 // The north pole's direction from the center, in authored coordinates.
 const NORTH: DVec3 = [0.0, 0.0, -1.0];

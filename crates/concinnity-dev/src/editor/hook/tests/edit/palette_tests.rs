@@ -3,19 +3,13 @@
 //! keyboard walk over the matches, and what committing a row does. The ranking
 //! and the providers are tested beside them in `editor/palette/`.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::InputKey;
-use concinnity_core::components::KeyEvent;
-use concinnity_core::components::KeyMods;
-use concinnity_core::components::KeyPress;
-use concinnity_core::components::TextInput;
+use concinnity_core::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, TextInput};
 use concinnity_core::ecs::World;
 
 use crate::editor::hook::EditorHook;
-use crate::editor::palette;
 use crate::editor::palette::{Category, PaletteAction};
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::widget;
+use crate::editor::{palette, widget};
 
 fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
     EditorHook::new("unused.jsonl".to_string(), entries)

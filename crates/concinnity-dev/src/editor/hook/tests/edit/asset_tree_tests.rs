@@ -8,14 +8,12 @@ use concinnity_core::ecs::World;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{
-    click_row, entry, expandable_hook, generated_group, hook, seed_tree, set_field,
-    world_with_fields,
+    active, click_row, entry, entry_target, expandable_hook, generated_group, hook, seed_tree,
+    selected, set_field, world_with_fields,
 };
 
 use crate::editor::panels::asset_tree::{self, TreeRow};
 
-use crate::editor::hook::tests::fixtures::entry_target;
-use crate::editor::hook::tests::fixtures::{active, selected};
 use crate::editor::panels::assets_panel::{self, PanelAction};
 use crate::editor::panels::registry::PanelKey;
 

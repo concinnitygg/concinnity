@@ -205,8 +205,7 @@ mod tests {
         let mut dirty = slot.dirty.get();
         assert!(dirty.take(0), "re-uploaded");
     }
-    use crate::render::decal::decal_model_matrix;
-    use crate::render::decal::invert_decal_model;
+    use crate::render::decal::{decal_model_matrix, invert_decal_model};
 
     fn record_at(position: [f32; 3]) -> DecalRecord {
         let model = decal_model_matrix(position, [0.0; 3], [1.0; 3]);

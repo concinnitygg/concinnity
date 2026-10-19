@@ -15,7 +15,7 @@ use super::chrome::windowed_style;
 use super::input::*;
 
 // The `cn editor` live world-swap drops the old render backend and builds a new
-// one on the same thread (see the client `run_init` `PendingBackend` fallback).
+// one on the same thread (see graphics init's `PendingBackend` fallback).
 // A full rebuild would otherwise call `create_window` again and pop a brand-new
 // OS window every edit, leaking the old one (nothing ever `DestroyWindow`s it).
 // Instead the outgoing `WindowState` parks its HWND here on drop, and the next

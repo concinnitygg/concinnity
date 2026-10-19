@@ -6,10 +6,8 @@
 //! the new ones) where Metal can just read `StorageModeShared` `contents()`.
 
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
-use concinnity_core::render::backend;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::geometry_repack;
-use concinnity_core::render::rt_geom;
+use concinnity_core::render::{backend, geometry_repack, rt_geom};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT;
 

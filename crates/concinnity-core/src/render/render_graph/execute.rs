@@ -1,13 +1,14 @@
 //! Running a compiled graph's passes: every pass but the presenter recorded
 //! into its own command buffer, possibly in parallel, then handed back in
 //! compiled order. A backend supplies the recording ([`PassRecorder`]) and the
-//! host the parallelism ([`PassFanOut`]); the walk itself is written once.
+//! host the parallelism ([`Fanout`]); the walk itself is written once.
 
 use alloc::vec::Vec;
 use core::sync::atomic::AtomicU32;
 
 use super::{CompiledGraph, CompiledPass, PassId};
-use crate::profile::{FanOutClock, FanOutTimer, FanOutTiming, MAX_PASS_TIMINGS};
+use crate::fanout::Fanout;
+use crate::profile::{FanOutTiming, MAX_PASS_TIMINGS};
 use crate::render::error::RenderResult;
 
 /// Records one pass of a compiled graph into a command buffer of its own.
@@ -17,16 +18,6 @@ pub trait PassRecorder: Sync {
     type Recorded: Send;
     /// Record graph pass `index`, its barriers included. Never the presenter.
     fn record(&self, index: usize, pass: &CompiledPass) -> RenderResult<Self::Recorded>;
-}
-
-/// Runs independent jobs, possibly in parallel, returning once all are done.
-pub trait PassFanOut {
-    /// The clock the fan-out is timed against, read from every worker.
-    type Clock: FanOutClock + Sync;
-    /// A clock starting now.
-    fn clock(&self) -> Self::Clock;
-    /// Run `job` on every item, in no defined order.
-    fn for_each<T: Send, F: Fn(&mut T) + Send + Sync>(&self, items: &mut [T], job: F);
 }
 
 /// One pass's slot in a fan-out.
@@ -81,9 +72,9 @@ pub fn presenter_index(graph: &CompiledGraph) -> Option<usize> {
 }
 
 /// Record every pass of `graph` except the presenter through `recorder`, fanned
-/// out over `fan`. The first failure in compiled order is returned and every
+/// out over `fan`, one job per pass. The first failure in compiled order is returned and every
 /// recorded buffer is dropped with it.
-pub fn execute_passes<'s, R: PassRecorder, F: PassFanOut>(
+pub fn execute_passes<'s, R: PassRecorder, F: Fanout>(
     graph: &CompiledGraph,
     recorder: &R,
     fan: &F,
@@ -104,8 +95,8 @@ pub fn execute_passes<'s, R: PassRecorder, F: PassFanOut>(
             }),
     );
     let record_us: [AtomicU32; MAX_PASS_TIMINGS] = [const { AtomicU32::new(0) }; MAX_PASS_TIMINGS];
-    let timer = FanOutTimer::new(fan.clock());
-    fan.for_each(&mut scratch.jobs, |job| {
+    let timer = fan.timer();
+    fan.spawn_each(&mut scratch.jobs, |job| {
         let slot = &record_us[job.id as usize];
         job.result = Some(timer.job_into(slot, || {
             recorder.record(job.index, &graph.passes[job.index])
@@ -134,35 +125,10 @@ pub fn execute_passes<'s, R: PassRecorder, F: PassFanOut>(
     })
 }
 
-/// A fan-out that runs every job on the calling thread, in order.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SerialFanOut;
-
-/// The clock of a [`SerialFanOut`], which reads zero throughout.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct NoClock;
-
-impl FanOutClock for NoClock {
-    fn elapsed_ns(&self) -> u64 {
-        0
-    }
-}
-
-impl PassFanOut for SerialFanOut {
-    type Clock = NoClock;
-
-    fn clock(&self) -> NoClock {
-        NoClock
-    }
-
-    fn for_each<T: Send, F: Fn(&mut T) + Send + Sync>(&self, items: &mut [T], job: F) {
-        items.iter_mut().for_each(job);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fanout::Inline;
     use crate::render::error::RenderError;
     use crate::render::render_graph::{FrameGraphInputs, build_frame_graph};
     use core::sync::atomic::{AtomicUsize, Ordering};
@@ -202,7 +168,7 @@ mod tests {
             calls: AtomicUsize::new(0),
         };
         let mut scratch = PassScratch::default();
-        let mut done = execute_passes(&graph, &recorder, &SerialFanOut, &mut scratch).unwrap();
+        let mut done = execute_passes(&graph, &recorder, &Inline, &mut scratch).unwrap();
         let presenter = done.presenter.unwrap();
         assert_eq!(graph.passes[presenter].id, PassId::Composite);
         let recorded: Vec<(usize, (usize, PassId))> = done.take().collect();
@@ -226,7 +192,7 @@ mod tests {
             calls: AtomicUsize::new(0),
         };
         let mut scratch = PassScratch::default();
-        let result = execute_passes(&graph, &recorder, &SerialFanOut, &mut scratch);
+        let result = execute_passes(&graph, &recorder, &Inline, &mut scratch);
         assert_eq!(
             result.err(),
             Some(RenderError::Other(alloc::format!("{:?}", PassId::Shadow)))
@@ -242,10 +208,10 @@ mod tests {
             calls: AtomicUsize::new(0),
         };
         let mut scratch = PassScratch::default();
-        execute_passes(&graph, &recorder, &SerialFanOut, &mut scratch).unwrap();
+        execute_passes(&graph, &recorder, &Inline, &mut scratch).unwrap();
         let capacity = scratch.jobs.capacity();
         let ptr = scratch.jobs.as_ptr();
-        execute_passes(&graph, &recorder, &SerialFanOut, &mut scratch).unwrap();
+        execute_passes(&graph, &recorder, &Inline, &mut scratch).unwrap();
         assert_eq!(scratch.jobs.capacity(), capacity);
         assert_eq!(scratch.jobs.as_ptr(), ptr);
     }

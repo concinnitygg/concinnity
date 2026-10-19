@@ -6,18 +6,11 @@ use concinnity_cook::WorldSource;
 use concinnity_cook::authoring::registry::RegisteredType;
 pub(crate) use concinnity_cook::build_compiled;
 use concinnity_cook::build_only::LoadedWorld;
-use concinnity_core::ecs::BlobMeshBounds;
-use concinnity_core::ecs::BlobSceneGroups;
-use concinnity_core::ecs::{ComponentAsset, World};
-use concinnity_core::resource::ColorLutSources;
-use concinnity_core::resource::EnvironmentMapSourceInfo;
-use concinnity_core::resource::EnvironmentMapSources;
-use concinnity_core::resource::MaterialNames;
-use concinnity_core::resource::MeshSource;
-use concinnity_core::resource::MeshSources;
-use concinnity_core::resource::TextureSource;
-use concinnity_core::resource::TextureSources;
-use concinnity_engine::resource::install_resource_tables;
+use concinnity_core::ecs::{BlobMeshBounds, BlobSceneGroups, ComponentAsset, World};
+use concinnity_core::resource::{
+    ColorLutSources, EnvironmentMapSourceInfo, EnvironmentMapSources, MaterialNames, MeshSource,
+    MeshSources, TextureSource, TextureSources,
+};
 use concinnity_host::store::blob::BlobData;
 
 use crate::build_status::{BuildStatus, Verbosity};
@@ -130,7 +123,7 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     // Load the compiled resource stream into its per-kind tables, exactly as the
     // shipped runtime's `load_blob` does, so the in-memory `cn debug` world reads
     // audio clips and textures by handle too.
-    install_resource_tables(&mut world, &mut result.resources);
+    concinnity_core::resource::install_tables(&mut world, &mut result.resources);
     world.insert_resource(BlobSceneGroups(result.scene_groups));
     world.insert_resource(BlobMeshBounds(result.mesh_bounds));
     if let Some(budget) = result.physics_budget {

@@ -2,12 +2,11 @@
 // region, with the clicks that need the whole system (group toggles, rebind
 // capture, dropdown opens) returned for the caller to apply.
 
-use crate::ecs::Ref;
+use crate::ecs::{FrameVec, PipelineContext, Ref, StepResult};
 use hashbrown::{HashMap, HashSet};
 
 use crate::components::{FrameInput, SettingVerb, SpriteFit, TextLabel, UiAction};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{FrameVec, PipelineContext, StepResult};
 use crate::gfx::overlay::OverlayTransform;
 use crate::settings::SettingKey;
 

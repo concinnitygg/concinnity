@@ -33,7 +33,7 @@ pub enum SettingOp {
 /// Runtime-only event sent by UiInputSystem when a settings row changes (a
 /// [`UiAction::Setting`](crate::components::UiAction) click, a slider drag, or a
 /// rebind capture).
-/// GraphicsSystem reads these each step: it applies the change to the named
+/// The renderer reads these each step: it applies the change to the named
 /// setting (cycling it or setting it from a fraction), updates the value_label
 /// text, and (when persist is set) writes the new value to the settings store.
 /// World authors never declare this type directly.

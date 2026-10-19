@@ -10,7 +10,7 @@ use crate::ecs::asset_id::AssetId;
 /// reparented) like any authored placement; `None` spawns a transient copy,
 /// like a Spawner's cadence spawns. An optional `lifetime_secs` attaches a
 /// Lifetime so the instance auto-despawns after that many seconds, the churn
-/// that lets freed draw slots be recycled. GraphicsSystem reads these from its
+/// that lets freed draw slots be recycled. The renderer reads these from its
 /// `Events<SpawnRequest>` queue each step. World authors never declare this type
 /// directly.
 #[derive(Debug, Clone, Copy, Default)]

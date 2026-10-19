@@ -3,23 +3,15 @@
 //! literals, and the seeded asset tree the panel rows come from. Nothing here
 //! asserts anything -- each companion brings in what it needs.
 
-use crate::editor::modal;
+use crate::editor::{behavior, modal, widget};
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::write_world_jsonl;
-use concinnity_core::components::Camera3D;
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::InputKey;
-use concinnity_core::components::KeyEvent;
-use concinnity_core::components::TextInput;
-use concinnity_core::components::Transform;
-use concinnity_core::ecs::Entity;
-use concinnity_core::ecs::PickEntry;
-use concinnity_core::ecs::PickIndex;
-use concinnity_core::ecs::World;
+use concinnity_core::components::{Camera3D, FrameInput, InputKey, KeyEvent, TextInput, Transform};
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::ecs::{Entity, PickEntry, PickIndex, World};
+use concinnity_host::store::paths::StateTree;
 use concinnity_host::thread::asset_id;
 
-use crate::editor::behavior;
 use crate::editor::behavior::panel::BehaviorAction;
 use crate::editor::hook::{EditorHook, FormTarget, declared_id, entry_type};
 use crate::frame_hook::FrameHook;
@@ -31,10 +23,7 @@ use crate::editor::panels::form_panel;
 use crate::editor::panels::assets_panel::{self, PanelAction};
 use crate::editor::panels::registry::{self, PanelKey};
 
-use crate::editor::viewport::gizmo;
-use crate::editor::viewport::highlight;
-use crate::editor::viewport::marquee;
-use crate::editor::widget;
+use crate::editor::viewport::{gizmo, highlight, marquee};
 
 pub(in crate::editor::hook) fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
     EditorHook::new("unused.jsonl".to_string(), entries)
@@ -479,9 +468,9 @@ pub(in crate::editor::hook) fn behavior_row(h: &EditorHook, label: &str) -> usiz
 // holds the process lock: this moves the session-wide project.
 pub(in crate::editor::hook) fn open_project(dir: &std::path::Path) {
     crate::project::open(
-        concinnity_host::store::paths::StateTree::at(dir).with_cache(
-            concinnity_testing::shared_cache_dir("concinnity-dev-tests-cache"),
-        ),
+        StateTree::at(dir).with_cache(concinnity_testing::shared_cache_dir(
+            "concinnity-dev-tests-cache",
+        )),
     );
 }
 

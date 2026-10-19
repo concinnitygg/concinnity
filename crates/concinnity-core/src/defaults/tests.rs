@@ -1,4 +1,4 @@
-use crate::ecs::Ref;
+use crate::ecs::{Ref, World};
 use alloc::vec::Vec;
 
 use super::*;
@@ -6,7 +6,6 @@ use crate::components::{
     DebugHud, EngineDefaults, LoadingOverlay, PhysicsConfig, PropBody, Scene, Screen, Sprite,
     StatHud, StreamingConfig, TextLabel, Window,
 };
-use crate::ecs::World;
 use crate::resource::FontTable;
 
 // Run the pass over a world, as `World::start` does.

@@ -9,7 +9,7 @@ use crate::transform::trs_matrix;
 use alloc::vec::Vec;
 
 /// Per-decal data the renderer consumes each frame. Built once at
-/// `GraphicsSystem` init from the world's `Decal` components.
+/// graphics init from the world's `Decal` components.
 ///
 /// `model` is the local→world transform of a unit cube spanning `[-0.5, 0.5]^3`
 /// in local space. `inv_model` is its inverse; the fragment shader uses it to

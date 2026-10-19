@@ -7,9 +7,9 @@ use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;
 
 use crate::editor::hook::EditorHook;
-use crate::editor::hook::tests::fixtures::{entry, hook, key_input};
+use crate::editor::hook::tests::fixtures::{entry, entry_target, hook, key_input};
 
-use crate::editor::inject;
+use crate::editor::{inject, widget};
 
 use crate::editor::panels::import_panel::{self, ImportAction};
 
@@ -17,8 +17,6 @@ use crate::editor::panels::registry::PanelKey;
 use crate::editor::panels::story;
 
 use crate::editor::entry_list::EntryList;
-use crate::editor::hook::tests::fixtures::entry_target;
-use crate::editor::widget;
 
 // Import panel
 

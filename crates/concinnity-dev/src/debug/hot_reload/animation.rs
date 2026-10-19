@@ -135,9 +135,8 @@ mod tests {
     use super::*;
     use crate::test_support;
     use concinnity_core::components::Animation;
-    use concinnity_core::ecs::SkinnedMeshHandle;
-    use concinnity_core::ecs::World;
-    use concinnity_engine::app::run::LaunchRequest;
+    use concinnity_core::ecs::{SkinnedMeshHandle, World};
+    use concinnity_core::launch::LaunchRequest;
     use concinnity_host::thread::asset_id::intern;
 
     // Minimal in-memory GLB fixture: a one-triangle skinned mesh with a

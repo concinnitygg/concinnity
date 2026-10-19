@@ -3,6 +3,7 @@
 //! flushes between them, so a partial report still leads with what matters.
 
 use concinnity_core::utc::UtcTime;
+use concinnity_host::store::blob::SCHEMA_VERSION;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::memory::MemorySnapshot;
@@ -99,10 +100,7 @@ impl CrashReport {
         out.push_str(&format!("kind: {}\n", self.kind.label()));
         out.push_str(&format!("time: {} UTC\n", self.time.display()));
         out.push_str(&format!("engine: {}\n", env!("CARGO_PKG_VERSION")));
-        out.push_str(&format!(
-            "schema: {:#010x}\n",
-            concinnity_host::store::blob::SCHEMA_VERSION
-        ));
+        out.push_str(&format!("schema: {:#010x}\n", SCHEMA_VERSION));
         out.push_str(&format!(
             "os: {} {}\n",
             std::env::consts::OS,

@@ -1,10 +1,7 @@
 // Audio-cue schema.
 
-use crate::components::AudioBus;
-use crate::components::Screen;
-use crate::components::Vocabulary;
-use crate::ecs::AudioClipHandle;
-use crate::ecs::Ref;
+use crate::components::{AudioBus, Screen, Vocabulary};
+use crate::ecs::{AudioClipHandle, Ref};
 
 /// Plays audio when a [Screen](#screen) is shown.
 ///

@@ -3,8 +3,7 @@
 // than by simulating it, so the exchange is a request in and a resolved move
 // out.
 
-use crate::physics::BodyHandle;
-use crate::physics::LayerMask;
+use crate::physics::{BodyHandle, LayerMask};
 
 /// One character-capsule move request.
 #[derive(Debug, Clone, Copy)]

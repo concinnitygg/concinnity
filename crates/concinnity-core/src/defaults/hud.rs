@@ -6,8 +6,7 @@
 use alloc::string::String;
 
 use crate::components::{DebugHud, StatHud, TextLabel};
-use crate::ecs::PipelineContext;
-use crate::ecs::{ComponentSlot, FontHandle, Ref};
+use crate::ecs::{ComponentSlot, FontHandle, PipelineContext, Ref};
 use crate::error::WorldError;
 
 use super::Minter;

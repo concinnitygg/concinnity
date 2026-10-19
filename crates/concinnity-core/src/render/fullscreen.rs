@@ -224,10 +224,9 @@ mod tests {
     use core::cell::RefCell;
 
     use crate::render::error::RenderError;
-    use alloc::format;
     use alloc::string::String;
-    use alloc::vec;
     use alloc::vec::Vec;
+    use alloc::{format, vec};
     #[test]
     fn clip_inside_attachment_passes_through() {
         // Logical units are attachment pixels (Windows, unscaled X11): 1:1.

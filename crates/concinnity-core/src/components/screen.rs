@@ -1,7 +1,6 @@
 // Overlay-screen schema.
 
-use crate::components::TextInput;
-use crate::components::Vocabulary;
+use crate::components::{TextInput, Vocabulary};
 use crate::ecs::Ref;
 use alloc::string::String;
 

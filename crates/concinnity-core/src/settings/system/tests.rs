@@ -3,14 +3,10 @@
 // change is the StoredSettings resource the drain edits and the revision it
 // bumps.
 
-use crate::components::AaMode;
-use crate::components::GamepadAction;
-use crate::components::GamepadButton;
-use crate::components::GamepadMap;
-use crate::components::UpscalerBackend;
 use crate::components::{
-    AudioCommand, ControlsCommand, IndirectTechnique, InputKey, SettingCommand, SettingOp,
-    ShadowUpdate, Sprite, TextLabel, WindowMode,
+    AaMode, AudioCommand, ControlsCommand, GamepadAction, GamepadButton, GamepadMap,
+    IndirectTechnique, InputKey, SettingCommand, SettingOp, ShadowUpdate, Sprite, TextLabel,
+    UpscalerBackend, WindowMode,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{FrameRateCap, HudPrefs, StepResult, System, World};
@@ -653,7 +649,7 @@ fn fov_slider_sends_a_controls_command() {
 }
 
 // A gamepad rebind binds the action to the captured button, hands the new map
-// to InputSystem as a ControlsCommand, persists it, and relabels both the
+// to the input poll as a ControlsCommand, persists it, and relabels both the
 // rebound row and the action it took the button from.
 #[test]
 fn pad_rebind_swaps_the_victim_and_relabels_both_rows() {
@@ -680,7 +676,7 @@ fn pad_rebind_swaps_the_victim_and_relabels_both_rows() {
     assert_eq!(
         sent[0].gamepad_map,
         Some(f.state.gamepad_map),
-        "the live map travels to InputSystem"
+        "the live map travels to the input poll"
     );
     assert_eq!(f.label(PAD_REBIND_LABEL), sprint_button.display_name());
     assert_eq!(f.label(PAD_VICTIM_LABEL), jump_button.display_name());
@@ -757,7 +753,7 @@ fn fps_cap_publishes_the_frame_rate_cap_resource() {
     );
 }
 
-// Volumes are owned by AudioSystem, so each change travels as an
+// Volumes are owned by audio playback, so each change travels as an
 // AudioCommand it drains this same tick, addressed to the row's target.
 #[test]
 fn volume_rows_send_targeted_audio_commands() {

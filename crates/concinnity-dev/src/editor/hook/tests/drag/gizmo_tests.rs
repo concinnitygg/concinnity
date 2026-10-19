@@ -4,27 +4,19 @@
 //! centroid, the mode keys, and a skinned mesh's position surviving the round
 //! trip. Each asserts one undo step per drag.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::InputKey;
-use concinnity_core::components::KeyEvent;
-use concinnity_core::components::KeyMods;
-use concinnity_core::components::KeyPress;
-use concinnity_core::components::Transform;
-use concinnity_core::ecs::Entity;
-use concinnity_core::ecs::World;
+use concinnity_core::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, Transform};
+use concinnity_core::ecs::{Entity, World};
 use concinnity_host::thread::asset_id;
 
 use crate::frame_hook::FrameHook;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{
-    SIDE_A, SIDE_B, click_at, click_at_mod, drag_input, drag_to, hook, pick_world, release_at,
-    set_input, two_prop_rig, world_with_input,
+    SIDE_A, SIDE_B, active, click_at, click_at_mod, drag_input, drag_to, hook, pick_world,
+    release_at, selected, set_input, two_prop_rig, world_with_input,
 };
 
-use crate::editor::hook::tests::fixtures::{active, selected};
-use crate::editor::viewport::gizmo;
-use crate::editor::viewport::snap;
+use crate::editor::viewport::{gizmo, snap};
 
 // The full translate-gizmo loop: pick a prop, grab its X tip handle, drag
 // right, release. The live Transform follows during the drag; release commits

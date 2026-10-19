@@ -6,9 +6,8 @@
 //! backend context.
 
 use concinnity_core::platform::Platform;
-use concinnity_core::render::backend;
-use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::{backend, backend_init};
 
 /// The graphics APIs this build can render with, the target's native one
 /// first. Empty on a target with no window layer.

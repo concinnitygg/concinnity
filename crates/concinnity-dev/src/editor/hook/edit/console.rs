@@ -8,19 +8,17 @@
 //! log sink.
 
 use concinnity_cook::authoring::world::{entry_handle, find_entry, set_entry_id};
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::InputKey;
+use concinnity_core::components::{FrameInput, InputKey};
 use concinnity_core::ecs::World;
 use std::sync::atomic::Ordering;
 
 use crate::editor::entry_list::build_text;
 use crate::editor::hook::{EditorHook, declared_id, entry_type, scroll_step};
-use crate::editor::notify;
 use crate::editor::panels::console;
 use crate::editor::panels::console_panel::{self, ConsoleAction, ConsoleView};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::viewport::snap;
-use crate::editor::widget;
+use crate::editor::{notify, widget};
 
 impl EditorHook {
     // Open / close the console (the View row, the title X, and backtick all

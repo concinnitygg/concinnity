@@ -7,15 +7,12 @@ use concinnity_core::ecs::World;
 use crate::frame_hook::FrameHook;
 
 use crate::editor::hook::tests::fixtures::{
-    click_at, drag_to, hook, release_at, set_input, shape_world_entries,
+    click_at, drag_to, hook, release_at, select, set_input, shape_world_entries,
 };
 
-use crate::editor::inject;
+use crate::editor::{inject, widget_slider};
 
 use crate::editor::panels::registry::PanelKey;
-
-use crate::editor::hook::tests::fixtures::select;
-use crate::editor::widget_slider;
 
 // The full slider loop: select the mesh, press a slider, drag, release. No
 // rebuild is requested while the button is held (the preview re-resolves the

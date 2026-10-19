@@ -7,9 +7,11 @@
 
 mod error;
 mod flags;
+mod request;
 
 pub use error::LaunchArgsError;
 pub use flags::{LAUNCH_FLAGS, LaunchFlag, QUALITY_PRESET_VALUES, flag, usage};
+pub use request::LaunchRequest;
 
 use alloc::string::ToString;
 

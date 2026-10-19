@@ -13,8 +13,7 @@ use super::{EditorHook, short_status};
 use crate::editor::entry_list::EntryList;
 use crate::editor::history::History;
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::session_store;
-use crate::editor::worlds;
+use crate::editor::{session_store, worlds};
 
 impl EditorHook {
     // Everything a frame's input drives while the start screen is up. The panel

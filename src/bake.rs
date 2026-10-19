@@ -159,8 +159,7 @@ pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, crate::Error> {
 /// engine's job pool; without it they run on the calling thread.
 #[cfg(feature = "std")]
 pub fn environment_map(map: &EnvironmentMap) -> Result<EnvironmentMapPayload, crate::Error> {
-    use concinnity_host::thread::jobs;
-    concinnity_core::bake::payload::environment_map(map, &jobs::PoolRows(jobs::pool()))
+    concinnity_core::bake::payload::environment_map(map, concinnity_host::thread::jobs::pool())
         .map(|bytes| EnvironmentMapPayload::new(bytes, map))
         .map_err(crate::Error::Bake)
 }
@@ -170,12 +169,9 @@ pub fn environment_map(map: &EnvironmentMap) -> Result<EnvironmentMapPayload, cr
 /// on the calling thread.
 #[cfg(not(feature = "std"))]
 pub fn environment_map(map: &EnvironmentMap) -> Result<EnvironmentMapPayload, crate::Error> {
-    concinnity_core::bake::payload::environment_map(
-        map,
-        &concinnity_core::bake::environment_map::Serial,
-    )
-    .map(|bytes| EnvironmentMapPayload::new(bytes, map))
-    .map_err(crate::Error::Bake)
+    concinnity_core::bake::payload::environment_map(map, &concinnity_core::fanout::Inline)
+        .map(|bytes| EnvironmentMapPayload::new(bytes, map))
+        .map_err(crate::Error::Bake)
 }
 
 /// Rasterize a [`Font`] into its glyph-atlas payload, for

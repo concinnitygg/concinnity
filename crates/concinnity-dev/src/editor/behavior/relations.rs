@@ -31,8 +31,7 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use serde_json::Value;
 
 use super::graph::{Card, CardKind, Chart, Wire};
-use super::outline;
-use super::palette;
+use super::{outline, palette};
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::entry_list::EntryId;
 

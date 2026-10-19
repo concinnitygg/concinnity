@@ -11,9 +11,8 @@
 
 use concinnity_core::gfx::view_modes::ViewMode;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph::PassId;
-use concinnity_core::render::sky;
+use concinnity_core::render::{pass_timing, sky};
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_QUERY_TYPE_TIMESTAMP, ID3D12Device, ID3D12GraphicsCommandList, ID3D12PipelineState,

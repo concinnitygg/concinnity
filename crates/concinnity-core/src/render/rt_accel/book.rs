@@ -1,6 +1,5 @@
-use alloc::format;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 
 use super::plan::{self, EmptyHead, LiveState, RefreshMode, RtStep, RtUpdatePlan};
 use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject};

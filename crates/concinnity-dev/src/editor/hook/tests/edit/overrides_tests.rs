@@ -12,22 +12,17 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 
-use crate::editor::hook::FormTarget;
-use crate::editor::panels::asset_tree;
+use crate::editor::hook::{EditorHook, FormTarget, declared_id};
 use crate::editor::panels::asset_tree::TreeGroup;
 use crate::editor::panels::assets_panel::PanelAction;
-use crate::editor::panels::form;
-use crate::editor::widget;
+use crate::editor::panels::{asset_tree, form};
+use crate::editor::{overrides, widget};
 use concinnity_core::ecs::World;
 
-use crate::editor::hook::tests::fixtures::entry_target;
-use crate::editor::hook::tests::fixtures::selected;
 use crate::editor::hook::tests::fixtures::{
-    a_promotable_asset, click_row, entry, expandable_hook, hook, row_of, seed_tree,
-    world_with_fields,
+    a_promotable_asset, click_row, entry, entry_target, expandable_hook, hook, row_of, seed_tree,
+    selected, world_with_fields,
 };
-use crate::editor::hook::{EditorHook, declared_id};
-use crate::editor::overrides;
 use crate::editor::panels::form_panel::{self, FormAction};
 use crate::editor::panels::registry::PanelKey;
 use crate::test_support::isolate_state_dir;

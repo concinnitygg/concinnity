@@ -5,8 +5,7 @@
 //! A project keeps its worlds in `worlds/*.jsonl`. A `world.jsonl` at the
 //! project root is a supported location too, listed beside them.
 
-use concinnity_cook::authoring::world::WORLD_JSONL;
-use concinnity_cook::authoring::world::parse_world_jsonl;
+use concinnity_cook::authoring::world::{WORLD_JSONL, parse_world_jsonl};
 use concinnity_cook::build_only::include::with_includes;
 use std::path::{Path, PathBuf};
 

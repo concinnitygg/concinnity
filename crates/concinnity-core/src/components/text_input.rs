@@ -1,9 +1,7 @@
 // Editable single-line text-field schema.
 
-use crate::components::Screen;
-use crate::components::SpriteFit;
-use crate::ecs::FontHandle;
-use crate::ecs::Ref;
+use crate::components::{Screen, SpriteFit};
+use crate::ecs::{FontHandle, Ref};
 use alloc::string::String;
 
 /// An editable single-line text field drawn as a UI overlay.

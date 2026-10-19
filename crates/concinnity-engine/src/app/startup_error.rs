@@ -41,8 +41,7 @@ pub enum StartupError {
 impl StartupError {
     /// Classify a blob-load failure, distinguishing absent data from data that
     /// is present but unusable, since only the first is the user's to fix.
-    /// `blob` is the primary blob's path, passed in rather than resolved here
-    /// so the classification stays a pure function of its inputs.
+    /// `blob` is the primary blob's path, checked for existence on disk.
     pub fn from_blob_failure(blob: PathBuf, cause: WorldLoadError) -> Self {
         if blob.exists() {
             StartupError::UnreadableData { blob, cause }

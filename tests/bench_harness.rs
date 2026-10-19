@@ -5,8 +5,10 @@
 #[path = "../benches/suite/support.rs"]
 mod support;
 
-use support::{Bench, MIN_SAMPLES, Record, Rng, TIME_BUDGET_NS};
-use support::{fmt_bytes, fmt_count, fmt_time, json_report, percentile, samples_for};
+use support::{
+    Bench, MIN_SAMPLES, Record, Rng, TIME_BUDGET_NS, fmt_bytes, fmt_count, fmt_time, json_report,
+    percentile, samples_for,
+};
 
 fn for_test() -> Bench {
     for_test_with_target(10_000)

@@ -16,4 +16,4 @@ pub mod skeleton;
 pub mod skinned_mesh_map;
 mod system;
 
-pub use system::{AnimationReloadEntry, AnimationSystem, GraphStateReport, PoseFanOut};
+pub use system::{AnimationReloadEntry, AnimationSystem, GraphStateReport};

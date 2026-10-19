@@ -9,41 +9,33 @@
 //! interleaving-dependent under the atomic counter and must never be treated
 //! as world state.
 
-use concinnity_core::components::BehaviorQuery;
-use concinnity_core::components::ContactEvent;
 use concinnity_core::components::{
-    Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, BodyDynamics, Collider, PhysicsConfig,
-    Prop, PropCollider, Transform,
+    Behavior, BehaviorExpr, BehaviorNode, BehaviorQuery, BehaviorSource, BodyDynamics, Collider,
+    ContactEvent, PhysicsConfig, Prop, PropCollider, Transform,
 };
 use concinnity_core::ecs::{ScheduleMode, StepResult, World};
 
 use crate::ecs::SYSTEMS;
+use concinnity_core::fnv::Fnv1a;
 
-fn fnv(hash: &mut u64, bytes: &[u8]) {
-    for &b in bytes {
-        *hash ^= b as u64;
-        *hash = hash.wrapping_mul(0x100000001b3);
-    }
-}
-
-fn hash_f32s(hash: &mut u64, values: &[f32]) {
+fn hash_f32s(hash: &mut Fnv1a, values: &[f32]) {
     for v in values {
-        fnv(hash, &v.to_bits().to_le_bytes());
+        hash.write(&v.to_bits().to_le_bytes());
     }
 }
 
 fn hash_world(world: &World) -> u64 {
-    let mut h = 0xcbf29ce484222325u64;
+    let mut h = Fnv1a::new();
     for t in world.query::<Transform>() {
         hash_f32s(&mut h, &t.position);
         hash_f32s(&mut h, &t.rotation_deg);
         hash_f32s(&mut h, &t.scale);
     }
-    fnv(&mut h, &(world.component_count() as u64).to_le_bytes());
+    h.write(&(world.component_count() as u64).to_le_bytes());
     if let Some(events) = world.events::<ContactEvent>() {
-        fnv(&mut h, &(events.len() as u64).to_le_bytes());
+        h.write(&(events.len() as u64).to_le_bytes());
     }
-    h
+    h.finish()
 }
 
 // A world exercising the two heavy sim paths: scoped behaviors that both

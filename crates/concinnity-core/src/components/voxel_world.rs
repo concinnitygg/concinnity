@@ -1,8 +1,7 @@
 // Infinite procedurally generated voxel world schema.
 
 use crate::components::BlockType;
-use crate::ecs::MaterialHandle;
-use crate::ecs::Ref;
+use crate::ecs::{MaterialHandle, Ref};
 use alloc::vec::Vec;
 
 /// An infinite, procedurally generated voxel world.

@@ -14,9 +14,10 @@ use alloc::vec::Vec;
 
 use crate::memory::{Pool, PoolHandle};
 
+use crate::fanout::Fanout;
 use crate::physics::{
     BodyHandle, CharacterMove, CharacterMoveInput, ColliderShape, ContactHit, DynamicParams,
-    Fanout, JointSpec, LayerMask, RayHit, SensorCrossing,
+    JointSpec, LayerMask, RayHit, SensorCrossing,
 };
 
 use super::body::Body;
@@ -1171,7 +1172,7 @@ impl Simulation {
 
     /// Advance the simulation by `dt` seconds on the calling thread.
     pub fn step(&mut self, dt: f32) {
-        self.step_with(dt, &crate::physics::Inline);
+        self.step_with(dt, &crate::fanout::Inline);
     }
 
     /// Advance the simulation by `dt` seconds, offering the step's independent
@@ -1186,7 +1187,8 @@ impl Simulation {
     /// # Examples
     ///
     /// ```
-    /// use concinnity_core::physics::{ColliderShape, DynamicParams, Inline, LayerMask, Simulation};
+    /// use concinnity_core::fanout::Inline;
+    /// use concinnity_core::physics::{ColliderShape, DynamicParams, LayerMask, Simulation};
     ///
     /// let mut sim = Simulation::with_capacity(1);
     /// let ball = sim
@@ -1224,7 +1226,7 @@ impl Simulation {
         if workers > 1 && self.splittable_cost(awake) >= MIN_FANOUT_COST {
             fanout.scope(|| self.advance(dt, fanout, workers));
         } else {
-            self.advance(dt, &crate::physics::Inline, 1);
+            self.advance(dt, &crate::fanout::Inline, 1);
         }
     }
 

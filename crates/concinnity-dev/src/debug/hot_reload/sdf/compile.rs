@@ -3,6 +3,7 @@
 
 use concinnity_cook::compile::sdf_field::CompiledField;
 use concinnity_core::components::ShaderSource;
+use concinnity_core::fanout::Fanout;
 use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
 use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
 use concinnity_engine::live_edit::sdf_field_sources::SdfFieldEntry;
@@ -57,7 +58,7 @@ pub(in crate::debug::hot_reload) fn compile(
 ) -> FieldResult {
     // Inside the bounded job pool, so the compile's rayon fan-out over the
     // entries does not claim every core the frame loop also needs.
-    Ok(concinnity_host::thread::jobs::pool().install(|| {
+    Ok(concinnity_host::thread::jobs::pool().scope(|| {
         concinnity_cook::compile::sdf_field::compile_sdf_field(
             name,
             field.as_file(),

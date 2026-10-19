@@ -36,7 +36,7 @@ impl SettingsState {
     }
 
     // The gamepad counterpart of `apply_key_rebind`. The live map travels to
-    // InputSystem as a ControlsCommand, since the gamepad is polled engine-side.
+    // the input poll as a ControlsCommand, since the host polls the gamepad.
     pub(super) fn apply_pad_rebind(
         &mut self,
         ctx: &mut PipelineContext,

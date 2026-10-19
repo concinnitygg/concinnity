@@ -74,7 +74,7 @@ fn build_from(
         let (after, before) = edges_of(name);
         for a in after {
             if let Some(j) = position(a) {
-                assert!(
+                debug_assert!(
                     j < i,
                     "schedule edge violated: {a} is declared before {name} but the table runs it later",
                 );
@@ -83,7 +83,7 @@ fn build_from(
         }
         for b in before {
             if let Some(j) = position(b) {
-                assert!(
+                debug_assert!(
                     i < j,
                     "schedule edge violated: {name} is declared before {b} but the table runs it later",
                 );
@@ -176,6 +176,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "schedule edge violated")]
     fn edge_contradicting_table_order_panics() {
         let names = ["A", "B"];

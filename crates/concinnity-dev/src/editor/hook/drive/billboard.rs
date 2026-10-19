@@ -8,17 +8,14 @@
 //! uses, so the form, tree, and gizmo all follow for free.
 
 use concinnity_core::components::{Camera3D, FrameInput, Transform};
-use concinnity_core::ecs::Entity;
-use concinnity_core::ecs::PickIndex;
-use concinnity_core::ecs::World;
+use concinnity_core::ecs::{Entity, PickIndex, World};
 use concinnity_core::math::pick::ray_aabb;
 use concinnity_host::thread::asset_id;
 
-use crate::editor::hook::pick;
+use crate::editor::hook::{EditorHook, entry_type, pick};
 use concinnity_cook::authoring::world::{entry_handle, entry_handles};
 
 use crate::editor::asset_handle::AssetHandle;
-use crate::editor::hook::{EditorHook, entry_type};
 use crate::editor::panels::form;
 use crate::editor::viewport::billboards;
 

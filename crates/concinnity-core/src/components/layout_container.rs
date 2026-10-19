@@ -1,7 +1,6 @@
 // Row-based label layout container schema.
 
-use crate::components::TextLabel;
-use crate::components::Vocabulary;
+use crate::components::{TextLabel, Vocabulary};
 use crate::ecs::Ref;
 use crate::ecs::asset_id::AssetId;
 use alloc::vec::Vec;

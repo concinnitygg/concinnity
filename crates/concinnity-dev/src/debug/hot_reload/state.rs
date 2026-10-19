@@ -4,11 +4,12 @@
 //! calls. Built from `HotReloadSources` (captured in the lib at init).
 
 use concinnity_core::animation::skeleton;
-use concinnity_core::components::SkeletonJoint;
-use concinnity_core::components::Story;
+use concinnity_core::bake::texture::TextureImage;
+use concinnity_core::components::{SkeletonJoint, Story};
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::render_types::SkinnedIndex;
 use concinnity_core::render::backend::RenderBackend;
+use concinnity_core::render::world_load::source_maps::*;
 use concinnity_engine::live_edit::hot_reload_sources::*;
 use concinnity_engine::live_edit::parked::PushedFogSettings;
 use std::sync::{Arc, Mutex};
@@ -33,7 +34,7 @@ type Inflight<T> = Mutex<Option<std::sync::mpsc::Receiver<T>>>;
 pub(crate) struct DecodedTexture {
     pub slot: usize,
     // RGBA8 with its mip chain, built on the decode worker.
-    pub image: concinnity_core::bake::texture::TextureImage,
+    pub image: TextureImage,
     // Source path retained for error logging when the GPU upload fails.
     pub source: String,
 }

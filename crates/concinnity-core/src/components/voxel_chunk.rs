@@ -1,8 +1,7 @@
 // Voxel-chunk schema.
 
 use crate::components::BlockType;
-use crate::ecs::PayloadLocator;
-use crate::ecs::Ref;
+use crate::ecs::{PayloadLocator, Ref};
 use alloc::vec::Vec;
 
 /// A voxel grid that compiles into a single mesh.

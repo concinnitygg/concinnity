@@ -11,14 +11,12 @@
 // the next step warm starts from; the impulse it delivered is the whole step's,
 // accumulated as it is applied, which is what an impact is measured by.
 
-use super::bodies::Bodies;
+use super::bodies::{Bodies, SolverBody};
 use crate::math::sqrt;
 use crate::physics::sim::config::{SimConfig, Softness};
 use crate::physics::sim::contact::{MAX_MANIFOLD_POINTS, Manifold};
 use crate::physics::sim::coupling::Coupling;
 use crate::physics::sim::math::Vec3;
-
-use super::bodies::SolverBody;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ConstraintPoint {

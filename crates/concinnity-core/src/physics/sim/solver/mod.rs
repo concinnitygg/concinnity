@@ -40,7 +40,7 @@ mod partition;
 
 use alloc::vec::Vec;
 
-use crate::physics::fanout::Fanout;
+use crate::fanout::Fanout;
 
 use super::config::{SimConfig, Softness};
 use super::contact::Manifold;

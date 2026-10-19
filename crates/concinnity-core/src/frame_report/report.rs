@@ -286,8 +286,7 @@ fn write_row(out: &mut String, phase: &PhaseReport) {
 mod tests {
     use super::*;
     use crate::frame_report::reduce::ReduceOptions;
-    use crate::frame_report::sample::MAX_SYSTEM_TIMINGS;
-    use crate::frame_report::sample::{FrameRun, FrameSample};
+    use crate::frame_report::sample::{FrameRun, FrameSample, MAX_SYSTEM_TIMINGS};
     use crate::profile::{FanOutTiming, MAX_PASS_TIMINGS};
     use crate::render::render_graph::PassId;
     use alloc::string::ToString;

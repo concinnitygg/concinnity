@@ -21,8 +21,7 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::reflection_probe::PrefilterPlan;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::NSRange;
-use objc2_foundation::ns_string;
+use objc2_foundation::{NSRange, ns_string};
 use objc2_metal::{
     MTLCommandBuffer as _, MTLComputeCommandEncoder as _, MTLComputePipelineState, MTLDevice,
     MTLPixelFormat, MTLSize, MTLTexture, MTLTextureType, MTLTextureUsage,

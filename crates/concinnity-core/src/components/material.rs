@@ -1,7 +1,6 @@
 // Surface-material schema.
 
-use crate::ecs::ShaderHandle;
-use crate::ecs::TextureHandle;
+use crate::ecs::{ShaderHandle, TextureHandle};
 use crate::gfx::render_types::MATERIAL_PARAM_COUNT;
 
 /// A Material bundles the surface parameters that control how a [Prop](#prop) is

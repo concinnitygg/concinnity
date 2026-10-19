@@ -5,12 +5,12 @@ use crate::transform::Mat4;
 
 /// Runtime-only link between a skinned mesh and its character capsule.
 ///
-/// `GraphicsSystem` publishes one `CharacterRig` per `SkinnedMesh` that
+/// The renderer publishes one `CharacterRig` per `SkinnedMesh` that
 /// declares a `capsule`, carrying the authored model transform and capsule
 /// dimensions. `PhysicsSystem` creates the kinematic capsule from it, then
 /// each frame consumes the target's `RootMotionEvent` events, resolves the
 /// displacement against the scene, and writes the new `position` back here;
-/// `GraphicsSystem` moves the rendered mesh to follow. The one-frame
+/// The renderer moves the rendered mesh to follow. The one-frame
 /// producer/consumer hand-offs are invisible at animation rates.
 ///
 /// Not authored in world files: it has no `args`.
@@ -45,7 +45,7 @@ pub struct CharacterRig {
     /// Whether the capsule rested on ground after the last move.
     pub grounded: bool,
     /// Set by `PhysicsSystem` when `position` changed and by a controller
-    /// when `yaw` changed; cleared by `GraphicsSystem` once the render
+    /// when `yaw` changed; cleared by the renderer once the render
     /// transform caught up.
     pub moved: bool,
 }

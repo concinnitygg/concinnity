@@ -4,16 +4,12 @@ use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::{ClusterParams, InstancedCluster, NUM_SHADOW_CASCADES};
 use concinnity_core::profile;
-use concinnity_core::render::backend;
-use concinnity_core::render::backend_init;
-use concinnity_core::render::decal;
-use concinnity_core::render::error;
-use concinnity_core::render::hdr_output;
-use concinnity_core::render::particles;
 use concinnity_core::render::probe_book::ProbeBook;
 use concinnity_core::render::scene_state::SceneState;
 use concinnity_core::render::shader_reload::ShaderReload;
-use concinnity_core::render::spot_shadow;
+use concinnity_core::render::{
+    backend, backend_init, decal, error, hdr_output, particles, spot_shadow,
+};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{

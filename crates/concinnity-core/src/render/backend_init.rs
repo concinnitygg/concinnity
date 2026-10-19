@@ -1,6 +1,6 @@
 //! Grouped construction inputs for the render backends, plus the requirements
 //! derivation that trims scene-scoped features when a world has no 3D content.
-//! GraphicsSystem init assembles a `BackendInit` from the drained world assets,
+//! Graphics init assembles a `BackendInit` from the drained world assets,
 //! calls `resolve_requirements()`, and hands it to the constructor of the
 //! backend `platform` names (Metal / DirectX / Vulkan). Every backend receives
 //! the same struct; each reads the fields its feature set consumes.
@@ -174,7 +174,7 @@ pub struct SdfVolumeSource {
 
 /// A native view the host application owns (an `NSView` on macOS, a `UIView`
 /// on iOS) that the backend renders into instead of opening a window. Inserted
-/// as a world resource before start; GraphicsSystem init carries it into
+/// as a world resource before start; graphics init carries it into
 /// [`BackendInit::embedded_surface`].
 #[derive(Clone, Copy, Debug)]
 pub struct EmbeddedSurface {
@@ -190,7 +190,7 @@ pub struct EmbeddedSurface {
 // Moving the pointer between threads as a world resource never touches the view.
 unsafe impl Send for EmbeddedSurface {}
 
-/// Everything a backend constructor needs, assembled once by GraphicsSystem
+/// Everything a backend constructor needs, assembled once by the renderer
 /// init after the world's assets have been drained and settings resolved.
 pub struct BackendInit<'a> {
     /// The graphics API the run renders with, one of the backends the build

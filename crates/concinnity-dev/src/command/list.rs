@@ -296,12 +296,16 @@ mod tests {
         let mut world =
             crate::authoring::build_world_from_str("[\"Window\",{\"$id\":\"gfx\"}]\n").unwrap();
         assert!(
-            !manifest_lines(&mut world).join("\n").contains("DebugHud"),
+            !manifest_lines(&mut world)
+                .join("\n")
+                .contains("DebugHudSystem"),
             "the world declares no DebugHud of its own"
         );
         complete(&mut world).unwrap();
         assert!(
-            manifest_lines(&mut world).join("\n").contains("DebugHud"),
+            manifest_lines(&mut world)
+                .join("\n")
+                .contains("DebugHudSystem"),
             "the injected debug HUD brings its system with it"
         );
     }

@@ -3,23 +3,18 @@
 //! parse, the immediate commit a bool toggle makes, the missing singleton an add
 //! row appends, and the focus it yields when it is not frontmost.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::Sprite;
+use concinnity_core::components::{FrameInput, Sprite};
 use concinnity_core::ecs::World;
 
 use crate::frame_hook::FrameHook;
 
 use crate::editor::hook::tests::fixtures::hook;
 
-use crate::editor::inject;
+use crate::editor::{inject, widget};
 
-use crate::editor::panels::lighting;
-use crate::editor::panels::lighting_panel;
-use crate::editor::panels::list_panel;
+use crate::editor::panels::{lighting, lighting_panel, list_panel};
 
 use crate::editor::panels::registry::PanelKey;
-
-use crate::editor::widget;
 
 // Lighting panel
 

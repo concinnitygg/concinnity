@@ -5,8 +5,7 @@
 
 use concinnity_core::gfx::cull_status::CullStatus;
 use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::lod;
-use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::{lod, render_types};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::shader_programs::metal::bindless_textures;

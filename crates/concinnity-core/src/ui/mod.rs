@@ -13,28 +13,19 @@ mod screen;
 mod scroll_layout;
 mod slider;
 
+use crate::ecs::{
+    Access, DropdownView, EventCursor, FontHandle, OpenDropdown, PipelineContext, Ref, ScreenStack,
+    StepResult, System, World, by_asset_id,
+};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use crate::components::FrameInput;
-use crate::components::Identity;
-use crate::components::SceneCommand;
-use crate::components::ScreenCommand;
-use crate::components::ScreenShown;
-use crate::components::SettingCommand;
-use crate::components::Sprite;
-use crate::components::SpriteFit;
-use crate::components::StoryCommand;
-use crate::components::TextInput;
-use crate::components::TextLabel;
-use crate::components::{HitRegion, KeyBinding, NavDirection, Screen, ScrollPanel, SettingOp};
-use crate::components::{SettingVerb, UiAction};
-use crate::ecs::Ref;
-use crate::ecs::asset_id::AssetId;
-use crate::ecs::{
-    Access, DropdownView, EventCursor, FontHandle, OpenDropdown, PipelineContext, ScreenStack,
-    StepResult, System,
+use crate::components::{
+    FrameInput, HitRegion, Identity, KeyBinding, NavDirection, SceneCommand, Screen, ScreenCommand,
+    ScreenShown, ScrollPanel, SettingCommand, SettingOp, SettingVerb, Sprite, SpriteFit,
+    StoryCommand, TextInput, TextLabel, UiAction,
 };
+use crate::ecs::asset_id::AssetId;
 use crate::gfx::overlay::{OverlayTransform, UI_REFERENCE_SIZE};
 use crate::platform::CompiledPlatforms;
 use hashbrown::HashMap;
@@ -42,7 +33,6 @@ use regions::RegionFrame;
 use screen::{ScreenMeta, ScreenRegistry};
 use scroll_layout::RowSpec;
 
-use crate::ecs::by_asset_id;
 use crate::settings;
 use crate::settings::SettingKey;
 
@@ -175,13 +165,13 @@ struct LayoutScratch {
 // UiInputSystem: while set, the list overlays the menu and consumes the frame's
 // input (a pick sends a SetIndex command; an outside click or Escape dismisses
 // it; the wheel scrolls a list longer than the shown window). Published each
-// frame as an `OpenDropdown` resource so GraphicsSystem can draw the list. The
+// frame as an `OpenDropdown` resource so the renderer can draw the list. The
 // style fields mirror the row's value label so the list text matches it.
 #[derive(Debug)]
 struct OpenDropdownState {
     // The setting the list picks a value for.
     setting: SettingKey,
-    // The row's value label, forwarded on the pick so GraphicsSystem refreshes
+    // The row's value label, forwarded on the pick so the renderer refreshes
     // it.
     value_label: Option<AssetId>,
     // The control button's rect `[x, y, w, h]` the list anchors to (reference
@@ -289,6 +279,15 @@ pub struct UiInputSystem {
 }
 
 impl UiInputSystem {
+    /// The system for a world that declares any `HitRegion`, `Screen` or
+    /// `KeyBinding`.
+    pub fn for_world(world: &World) -> Option<Self> {
+        let needs = world.query::<HitRegion>().next().is_some()
+            || world.query::<Screen>().next().is_some()
+            || world.query::<KeyBinding>().next().is_some();
+        needs.then(Self::new)
+    }
+
     /// Empty dispatch state. The world's `HitRegion` / `Screen` / `KeyBinding`
     /// components are drained into it in [`System::init`].
     pub fn new() -> Self {
@@ -368,7 +367,7 @@ impl System for UiInputSystem {
             // A region SettingsSystem disabled (e.g. a capability-gated settings
             // row grayed out at init) is inert: dropping it here means it never
             // hovers, fires, drags, or reflows. Its labels are styled + reflowed
-            // independently (by GraphicsSystem and the scroll panel).
+            // independently (by the renderer and the scroll panel).
             if region.disabled {
                 continue;
             }
@@ -484,7 +483,7 @@ impl System for UiInputSystem {
         self.apply_pending_screen_commands(ctx);
 
         // Read (not drain) the latest input snapshot: Camera3DSystem queries it
-        // too, and GraphicsSystem clears it before the next push.
+        // too, and the renderer clears it before the next push.
         let Some(input) = ctx.query::<FrameInput>().last().cloned() else {
             return StepResult::Continue;
         };
@@ -715,7 +714,7 @@ impl UiInputSystem {
                 .map(|p| p.label().to_string())
                 .collect()
         } else if crate::settings::is_dynamic_dropdown(req.setting) {
-            // `resolution`'s modes, which GraphicsSystem publishes at init.
+            // `resolution`'s modes, which the renderer publishes at init.
             let modes = ctx.resource::<crate::ecs::DisplayModes>()?;
             if modes.0.is_empty() {
                 return None;
@@ -755,7 +754,7 @@ impl UiInputSystem {
     }
 
     // Publish the current dropdown state as an `OpenDropdown` resource for
-    // GraphicsSystem to draw next tick (`None` while closed). The published
+    // the renderer to draw next tick (`None` while closed). The published
     // view is updated in place: the option labels only change when a list
     // opens, so the steady-state frames of an open list refresh the cheap
     // fields without recloning the options.
@@ -970,7 +969,7 @@ impl UiInputSystem {
     }
 
     // Publish the stack's derived per-frame state (draw layers, world-pause,
-    // input capture) for the overlay build and InputSystem, which read it a
+    // input capture) for the overlay build and the input poll, which read it a
     // frame later, the same one-frame lag the visibility flips have.
     fn publish_screen_stack(&self, ctx: &mut PipelineContext) {
         ctx.insert_resource(ScreenStack {
@@ -1355,7 +1354,7 @@ fn set_label_style(
 // Execute an action. Returns Some(StepResult) when the action produces an
 // engine-level result (e.g. Quit), None otherwise. `label` is the firing
 // region's referenced TextLabel (the value display for a settings row),
-// forwarded so GraphicsSystem can update it.
+// forwarded so the renderer can update it.
 fn fire_action(
     action: &UiAction,
     label: Option<AssetId>,
@@ -1408,16 +1407,11 @@ mod tests {
     // Screen / KeyBinding) before `start`, which runs the system on its own.
     use super::capture::REBIND_PROMPT;
     use super::*;
-    use crate::components::GamepadAction;
-    use crate::components::GamepadButton;
-    use crate::components::InputKey;
-    use crate::components::KeyEvent;
-    use crate::components::KeyMods;
-    use crate::components::KeyPress;
-    use crate::components::TextAlign;
-    use crate::components::{HitRegion, ScrollGroup, ScrollRow, TextLabel};
-    use crate::ecs::Phase;
-    use crate::ecs::World;
+    use crate::components::{
+        GamepadAction, GamepadButton, HitRegion, InputKey, KeyEvent, KeyMods, KeyPress,
+        ScrollGroup, ScrollRow, TextAlign, TextLabel,
+    };
+    use crate::ecs::{Phase, World};
     use crate::input::keymap::Bindable;
     use crate::window::display_mode;
     use alloc::vec;
@@ -1456,7 +1450,7 @@ mod tests {
     }
 
     // Every SettingCommand the system sent, read with a fresh cursor (in send
-    // order). GraphicsSystem applies these, but these tests run UiInputSystem
+    // order). The renderer applies these, but these tests run UiInputSystem
     // alone, so they inspect the queue directly via .first()/.last()/.is_empty().
     fn produced_setting_commands(world: &World) -> Vec<SettingCommand> {
         let mut cursor = EventCursor::default();

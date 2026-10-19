@@ -23,9 +23,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::gbuffer_sky::GbufferSky;
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
-use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
-use crate::directx::com;
 use crate::directx::context::{DxContext, align256, dump_on_err};
 use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::error::map_hresult;
@@ -33,6 +31,7 @@ use crate::directx::pso::{Blend, Depth, GraphicsPso, compute_pso};
 use crate::directx::root_constants::RootConstants;
 use crate::directx::root_sig::{Range, RootSig, Visibility};
 use crate::directx::texture::{create_main_depth_texture, write_format_rtv, write_format_srv};
+use crate::directx::{builtin_shaders, com};
 
 // Normal+depth target: rgb = unit view-space normal, a = positive linear view
 // depth (-view_z). Alpha 0 (cleared background) marks "no geometry". Matches

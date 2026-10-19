@@ -11,9 +11,13 @@
 //! The lattice hash is integer arithmetic and interpolation is a polynomial
 //! smoothstep, so generation involves no transcendentals at all.
 
+use crate::components::BlockType;
+use crate::ecs::Ref;
+use crate::ecs::asset_id::AssetId;
 use crate::gfx::chunk_coord::ChunkCoord;
 use alloc::vec;
 use alloc::vec::Vec;
+use hashbrown::HashMap;
 
 /// One palette entry for the chunk mesher: solidity plus per-face atlas UVs.
 ///
@@ -33,10 +37,10 @@ pub struct ChunkBlockType {
     pub uv_side: [f32; 4],
 }
 
-impl From<&crate::components::BlockType> for ChunkBlockType {
+impl From<&BlockType> for ChunkBlockType {
     /// A `BlockType`'s palette entry: per-face UV overrides fall back to the
     /// `uv_min`/`uv_max` rectangle.
-    fn from(bt: &crate::components::BlockType) -> Self {
+    fn from(bt: &BlockType) -> Self {
         let default_rect = [bt.uv_min[0], bt.uv_min[1], bt.uv_max[0], bt.uv_max[1]];
         ChunkBlockType {
             solid: bt.solid,
@@ -44,6 +48,35 @@ impl From<&crate::components::BlockType> for ChunkBlockType {
             uv_bottom: bt.uv_bottom.unwrap_or(default_rect),
             uv_side: bt.uv_side.unwrap_or(default_rect),
         }
+    }
+}
+
+impl ChunkBlockType {
+    /// Empty space: no geometry, occludes nothing.
+    pub const AIR: Self = Self {
+        solid: false,
+        uv_top: [0.0; 4],
+        uv_bottom: [0.0; 4],
+        uv_side: [0.0; 4],
+    };
+
+    /// A `VoxelWorld` palette resolved against its `BlockType`s, in palette
+    /// order. An entry naming no known `BlockType` is logged and becomes air
+    /// rather than failing the world.
+    pub fn resolve_palette(
+        palette: &[Ref<BlockType>],
+        block_types: &HashMap<AssetId, BlockType>,
+    ) -> Vec<Self> {
+        palette
+            .iter()
+            .map(|id| match block_types.get(&id.id()) {
+                Some(bt) => Self::from(bt),
+                None => {
+                    tracing::warn!("voxel world: palette entry {id} is not a known BlockType");
+                    Self::AIR
+                }
+            })
+            .collect()
     }
 }
 
@@ -236,6 +269,14 @@ mod tests {
         };
         let chunk = ChunkBlockType::from(&bt);
         assert!(chunk.solid);
+        let mut known = HashMap::new();
+        known.insert(AssetId(5), bt.clone());
+        let ids = [Ref::new(AssetId(5)), Ref::new(AssetId(6))];
+        let palette = ChunkBlockType::resolve_palette(&ids, &known);
+        assert!(
+            palette[0].solid && !palette[1].solid,
+            "an unknown entry is air"
+        );
         assert_eq!(chunk.uv_top, [0.0, 0.0, 0.25, 0.25], "override kept");
         let fallback = [0.1, 0.2, 0.6, 0.7];
         assert_eq!(

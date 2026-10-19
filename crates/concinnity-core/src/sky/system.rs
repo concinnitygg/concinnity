@@ -1,7 +1,7 @@
+use crate::ecs::{Entity, MenuActive, PipelineContext, SimTiming, StepResult, System, World};
 use alloc::vec::Vec;
 
 use crate::components::{SkyRotation, Transform};
-use crate::ecs::{Entity, MenuActive, PipelineContext, SimTiming, StepResult, System};
 use crate::sky::{SkyFrame, SkyOrientation};
 
 const FULL_TURN_DEG: f32 = 360.0;
@@ -22,6 +22,11 @@ pub struct SkyRotationSystem {
 }
 
 impl SkyRotationSystem {
+    /// The system for a world that declares a `SkyRotation`.
+    pub fn for_world(world: &World) -> Option<Self> {
+        world.query::<SkyRotation>().next().map(Self::new)
+    }
+
     /// The system for a world's authored rotation.
     pub fn new(rotation: &SkyRotation) -> Self {
         Self {

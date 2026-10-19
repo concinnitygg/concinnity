@@ -164,7 +164,7 @@ impl System for ThirdPersonSystem {
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
-        // Live settings-menu changes sent this tick by GraphicsSystem, which runs
+        // Live settings-menu changes sent this tick by the renderer, which runs
         // first. FOV is written in the camera loop below, which holds the
         // mutable Camera3D borrow.
         let pending_fov = super::look_controls::drain_commands(
@@ -176,7 +176,7 @@ impl System for ThirdPersonSystem {
             },
         );
 
-        // Read (not drain) the input snapshot deposited by GraphicsSystem, so
+        // Read (not drain) the input snapshot deposited by the renderer, so
         // UiInputSystem can read the same snapshot. Movement fields are frozen
         // while a menu is open, which parks the character and the orbit.
         let input = match ctx.query::<FrameInput>().next().cloned() {
@@ -395,7 +395,7 @@ mod tests {
         }
     }
 
-    // A world with a followed rig: a seeded CharacterRig (GraphicsSystem would
+    // A world with a followed rig: a seeded CharacterRig (the renderer would
     // publish it in a rendering world) and an AnimationGraph declaring the
     // speed parameter, which the test seeds the AnimationParams block for.
     fn follow_world(drive: FollowDrive, jump_height: f32, physics: bool) -> World {

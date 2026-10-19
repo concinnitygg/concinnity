@@ -16,12 +16,11 @@ use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
-use super::chart;
 use super::edit::{self, Pick};
-use super::fields;
 use super::graph::{Card, CardKind, Chart};
 use super::outline::{Kind, Row};
 use super::path::{Path, Step};
+use super::{chart, fields};
 use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::theme;

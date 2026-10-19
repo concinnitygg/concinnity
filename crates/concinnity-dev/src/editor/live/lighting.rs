@@ -12,9 +12,7 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::DirectionalLight;
-use concinnity_core::ecs::ComponentAsset;
-use concinnity_core::ecs::Entity;
-use concinnity_core::ecs::World;
+use concinnity_core::ecs::{ComponentAsset, Entity, World};
 use concinnity_core::render::live_preview::lighting as lighting_preview;
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};

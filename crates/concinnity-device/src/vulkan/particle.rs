@@ -26,8 +26,7 @@ use concinnity_core::gfx::render_types::ParticleParams;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleFrame, ParticleSystem};
 use concinnity_core::render::reactive_mask::ReactiveWrite;
-use concinnity_core::render::uniforms::GpuParticle;
-use concinnity_core::render::uniforms::ParticleView;
+use concinnity_core::render::uniforms::{GpuParticle, ParticleView};
 
 use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};

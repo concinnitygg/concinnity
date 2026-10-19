@@ -15,13 +15,9 @@ mod primitives;
 mod room;
 
 use concinnity_core::bake::mesh::{bounding_sphere_radius, vertices_from_data};
-use concinnity_core::components::MorphDelta;
-use concinnity_core::components::SkeletonJoint;
-use concinnity_core::components::SkinnedVertexData;
-use concinnity_core::components::VertexData;
+use concinnity_core::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
 use concinnity_core::geometry::{PaletteSlot, Vert, build_voxel_mesh, compute_tangents};
-use concinnity_core::gfx::lod;
-use concinnity_core::gfx::mesh_payload;
+use concinnity_core::gfx::{lod, mesh_payload};
 use concinnity_core::math::vec3::{vec3_add, vec3_face_normal, vec3_normalize};
 
 // Raw inline vertex form: position, color, uv (inline input, before normals

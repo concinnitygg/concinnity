@@ -12,15 +12,12 @@
 
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::entry_list::{EntryId, EntryList};
-use crate::editor::hook::pick;
-use crate::editor::hook::{EditorHook, declared_id, entry_type};
+use crate::editor::hook::{EditorHook, declared_id, entry_type, pick};
 use crate::editor::panels::form;
 use crate::editor::viewport::gizmo::{self, GizmoMode};
-use crate::editor::viewport::group_transform;
-use crate::editor::viewport::snap;
+use crate::editor::viewport::{group_transform, snap};
 use concinnity_core::components::{Camera3D, FrameInput, GlobalTransform, Parent, Transform};
-use concinnity_core::ecs::Entity;
-use concinnity_core::ecs::World;
+use concinnity_core::ecs::{Entity, World};
 
 // Committed values are rounded so world.jsonl stays readable: positions and
 // scales to 3 decimals, angles to 1.

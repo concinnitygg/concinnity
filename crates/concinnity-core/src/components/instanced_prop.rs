@@ -1,7 +1,6 @@
 // Instanced-prop schema.
 
-use crate::ecs::MaterialHandle;
-use crate::ecs::MeshHandle;
+use crate::ecs::{MaterialHandle, MeshHandle};
 use alloc::vec::Vec;
 
 /// Per-instance transform within an `InstancedProp`.

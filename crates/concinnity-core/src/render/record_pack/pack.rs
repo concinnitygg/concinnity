@@ -222,8 +222,10 @@ mod tests {
     use core::sync::atomic::{AtomicU32, Ordering};
 
     use super::*;
-    use crate::gfx::render_types::DrawIndex;
-    use crate::gfx::render_types::{LodSlice, draw_args_no_history};
+    use crate::gfx::render_types::{
+        DrawArgsFlags, DrawIndex, FarFieldTint, LodSlice, PlanetTileDraw, draw_args_no_history,
+    };
+    use crate::planet::HorizonOccluder;
     use crate::render::model_history::{HistoryMode, ModelHistory};
     use crate::render::record_pack::MAX_PACK_CHUNKS;
     use crate::test_support;
@@ -313,8 +315,6 @@ mod tests {
     // front of it, and an unbounded one anywhere, are not.
     #[test]
     fn a_draw_behind_the_horizon_is_disabled() {
-        use crate::gfx::render_types::DrawArgsFlags;
-        use crate::planet::HorizonOccluder;
         let occluder = HorizonOccluder {
             center: [0.0, -50_000.0, 0.0],
             radius: 50_000.0,
@@ -352,7 +352,6 @@ mod tests {
 
     // A ground draw 100 m wide growing grass.
     fn far_banded(center_z: f32) -> DrawObject {
-        use crate::gfx::render_types::FarFieldTint;
         let mut obj = objects(1).remove(0);
         obj.shader_bucket = 0;
         obj.bb_min = [-50.0, 0.0, center_z - 50.0];
@@ -437,7 +436,6 @@ mod tests {
     // A draw without a band, or under a world Shader, keeps its bucket.
     #[test]
     fn only_default_shader_far_bands_route_to_a_twin() {
-        use crate::gfx::render_types::FarFieldTint;
         let eye = [0.0, 2.0, 0.0];
         let mut plain = far_banded(500.0);
         plain.material.far_field = FarFieldTint::NONE;
@@ -508,7 +506,6 @@ mod tests {
     // The routed bucket is what the record's flags carry.
     #[test]
     fn the_record_carries_the_routed_bucket() {
-        use crate::gfx::render_types::DrawArgsFlags;
         let view = PackView {
             cam_pos: [0.0, 2.0, 0.0],
             grass_route: ROUTE,
@@ -667,7 +664,6 @@ mod tests {
     // every other draw's carries none.
     #[test]
     fn a_planet_tile_record_carries_its_morph() {
-        use crate::gfx::render_types::PlanetTileDraw;
         let morph = TileMorphFrame {
             eye: [1.0, 2.0, 3.0],
             prev_eye: [1.5, 2.0, 3.0],

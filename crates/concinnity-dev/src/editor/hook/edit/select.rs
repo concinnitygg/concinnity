@@ -7,8 +7,7 @@ use concinnity_core::ecs::World;
 
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::EditorHook;
-use crate::editor::panels::asset_tree;
-use crate::editor::panels::console;
+use crate::editor::panels::{asset_tree, console};
 use crate::editor::select_related;
 
 impl EditorHook {

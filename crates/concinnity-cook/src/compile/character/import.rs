@@ -6,11 +6,9 @@
 
 use std::path::Path;
 
-use super::builtin_schema;
 use super::synthesize::{MorphSet, synthesize};
-use super::validate;
-use crate::authoring::registry::build_only::CharacterModel;
-use crate::authoring::registry::build_only::CharacterSchema;
+use super::{builtin_schema, validate};
+use crate::authoring::registry::build_only::{CharacterModel, CharacterSchema};
 use crate::authoring::world::WorldJsonlAsset;
 use crate::import::glb::{ImportedSkinnedMesh, import_skinned_from_doc};
 use crate::import::gltf_source::GltfDoc;
@@ -95,9 +93,7 @@ impl CharacterModelArg {
 mod tests {
     use super::*;
     use crate::authoring::registry::RegisteredType;
-    use crate::authoring::registry::build_only::KeyPolarity;
-    use crate::authoring::registry::build_only::SchemaJoint;
-    use crate::authoring::registry::build_only::SchemaKey;
+    use crate::authoring::registry::build_only::{KeyPolarity, SchemaJoint, SchemaKey};
 
     #[test]
     fn a_non_conforming_source_is_refused_with_the_reasons() {

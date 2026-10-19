@@ -7,8 +7,7 @@
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::CharacterModel;
-use crate::authoring::world::WorldJsonlAsset;
-use crate::authoring::world::args_with_id;
+use crate::authoring::world::{WorldJsonlAsset, args_with_id};
 use crate::build_only::expand::{asset_name, registered_type};
 use crate::compile::character::import::CharacterModelArg;
 

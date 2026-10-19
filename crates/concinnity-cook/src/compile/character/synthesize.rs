@@ -6,8 +6,7 @@ use concinnity_core::components::{MorphDelta, SkeletonJoint, SkinnedVertexData};
 
 use super::frame::{bone_frames, region_joints};
 use super::synth::{self, SynthInput};
-use crate::authoring::registry::build_only::CharacterSchema;
-use crate::authoring::registry::build_only::KeyPolarity;
+use crate::authoring::registry::build_only::{CharacterSchema, KeyPolarity};
 
 // A source's morph set: names and dense target-major deltas.
 pub(crate) struct MorphSet {
@@ -156,9 +155,7 @@ pub(crate) fn synthesize(
 mod tests {
     use super::super::synth::test_support::cylinder;
     use super::*;
-    use crate::authoring::registry::build_only::SchemaRegion;
-    use crate::authoring::registry::build_only::SynthParams;
-    use crate::authoring::registry::build_only::SynthesizedTarget;
+    use crate::authoring::registry::build_only::{SchemaRegion, SynthParams, SynthesizedTarget};
 
     fn target(
         name: &str,

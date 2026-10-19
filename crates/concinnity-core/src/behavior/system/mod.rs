@@ -26,7 +26,6 @@ mod eval;
 mod gate;
 mod instance;
 mod neighbors;
-mod report;
 mod resolve;
 mod state;
 mod trace;
@@ -38,36 +37,34 @@ mod test_world;
 #[cfg(test)]
 mod tests;
 
+use crate::ecs::{
+    Entity, EntityById, EventCursor, FrameContext, MenuActive, PipelineContext, ScheduleMode,
+    SimTiming, StepResult, System, TraceRequest, TransientSaves, World,
+};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use eval::{EvalCtx, Job, Resume, Snapshot, eval_one};
+use eval::{EvalBucket, EvalCtx, Job, Resume, Snapshot, eval_one};
 use gate::EvalGate;
 use instance::Instance;
 use neighbors::Neighbors;
 use resolve::{Resolved, SourceTicks};
 
-pub use eval::{EvalBucket, EvalScheduler};
-pub use report::BehaviorReporter;
 pub use state::{BehaviorState, BehaviorStore, def_hash};
 
 use crate::behavior::{Program, Val, VarTable};
 use crate::components::{
     Behavior, BehaviorSource, Identity, InteractEvent, Variables, VolumeEvent,
 };
-use crate::ecs::{
-    Entity, EntityById, EventCursor, FrameContext, MenuActive, PipelineContext, ScheduleMode,
-    SimTiming, StepResult, System, TraceRequest, TransientSaves,
-};
+use crate::fanout::{Fanout, Lent, Pooled};
 
 /// Runs a world's [`Behavior`] components: their firing rules, their bodies,
 /// and the effects those produce.
 ///
 /// [`new`](BehaviorSystem::new) evaluates every run on the calling thread and
 /// persists nothing; a host lends it a thread pool through
-/// [`with_scheduler`](BehaviorSystem::with_scheduler), somewhere to keep
-/// state through [`with_store`](BehaviorSystem::with_store), and somewhere to
-/// report to through [`with_reporter`](BehaviorSystem::with_reporter).
+/// [`with_pool`](BehaviorSystem::with_pool) and somewhere to keep state
+/// through [`with_store`](BehaviorSystem::with_store).
 #[derive(Debug, Default)]
 pub struct BehaviorSystem {
     programs: Vec<Program>,
@@ -87,7 +84,7 @@ pub struct BehaviorSystem {
     store: Option<Box<dyn BehaviorStore>>,
     // `None` when the host has no thread pool to lend: every run evaluates on
     // the calling thread.
-    scheduler: Option<Box<dyn EvalScheduler>>,
+    scheduler: Option<Box<dyn Pooled<EvalBucket>>>,
     // Sampled from the `TransientSaves` resource at init: while true, stored
     // state is neither read nor written, so a preview session starts fresh and
     // leaves the user's saves untouched.
@@ -120,8 +117,6 @@ pub struct BehaviorSystem {
     tag_scratch: Vec<Entity>,
     // One index per distinct declared query, rebuilt on demand each tick.
     neighbors: Neighbors,
-    // `None` when the host has nowhere to report to: nothing is reported.
-    reporter: Option<Box<dyn BehaviorReporter>>,
     // A behavior wrote a camera another system drives; reported once a world.
     reported_driven_camera: bool,
 }
@@ -145,22 +140,25 @@ impl BehaviorSystem {
         Self::default()
     }
 
+    /// The system for a world that declares any `Behavior`.
+    pub fn for_world(world: &World) -> Option<Self> {
+        world.query::<Behavior>().next().map(|_| Self::new())
+    }
+
     /// Keep this world's variables and `once` flags in `store`.
     pub fn with_store(mut self, store: Box<dyn BehaviorStore>) -> Self {
         self.store = Some(store);
         self
     }
 
-    /// Fan a tick's evaluation out through `scheduler` once its runs cost
-    /// enough to pay for it.
-    pub fn with_scheduler(mut self, scheduler: Box<dyn EvalScheduler>) -> Self {
-        self.scheduler = Some(scheduler);
-        self
+    /// Fan a tick's evaluation out on `pool` once its runs cost enough to pay
+    /// for it.
+    pub fn with_pool<P: Fanout>(self, pool: Lent<P>) -> Self {
+        self.with_scheduler(Box::new(pool))
     }
 
-    /// Report what an author should know about to `reporter`.
-    pub fn with_reporter(mut self, reporter: Box<dyn BehaviorReporter>) -> Self {
-        self.reporter = Some(reporter);
+    fn with_scheduler(mut self, scheduler: Box<dyn Pooled<EvalBucket>>) -> Self {
+        self.scheduler = Some(scheduler);
         self
     }
 }
@@ -462,7 +460,7 @@ impl BehaviorSystem {
             .scheduler
             .as_deref()
             .filter(|_| ScheduleMode::current(ctx.resources) == ScheduleMode::Parallel);
-        let workers = scheduler.map_or(1, |s| s.workers().max(1));
+        let workers = scheduler.map_or(1, |s| s.workers(ScheduleMode::Parallel).max(1));
         let used = if self.gate.fans_out(jobs.len(), workers) {
             workers
         } else {
@@ -508,7 +506,9 @@ impl BehaviorSystem {
                 }
             };
             match scheduler {
-                Some(scheduler) if !jobs.is_empty() => Some(scheduler.run(buckets_used, &eval)),
+                Some(scheduler) if !jobs.is_empty() => {
+                    Some(scheduler.for_each_timed(ScheduleMode::Parallel, buckets_used, &eval))
+                }
                 _ => {
                     eval(&mut buckets_used[0]);
                     None

@@ -2,14 +2,12 @@
 //! residency are `concinnity_host::store::blob`'s, and this turns what it
 //! returns into a `World`.
 
-use concinnity_core::ecs::ComponentAsset;
-use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::ecs::{ComponentAsset, World};
 use concinnity_core::error::AssetError;
-use concinnity_host::store::blob::BlobMeta;
-use concinnity_host::store::blob::ResourceRecord;
-use concinnity_host::store::blob::WorldManifest;
-use concinnity_host::store::blob::{BlobData, BlobLoadError};
+use concinnity_host::store::blob::{
+    BlobData, BlobLoadError, BlobMeta, ResourceRecord, WorldManifest,
+};
 
 /// Why a world could not be loaded from its blob files.
 #[derive(Debug, thiserror::Error)]

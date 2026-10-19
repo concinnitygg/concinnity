@@ -6,14 +6,12 @@
 use concinnity_core::ecs::World;
 
 use crate::editor::hook::declared_id;
-use crate::editor::hook::tests::fixtures::{hook, shape_world_entries};
+use crate::editor::hook::tests::fixtures::{hook, select, shape_world_entries};
 
 use crate::editor::inject;
 
-use crate::editor::hook::tests::fixtures::select;
-use crate::editor::panels::character_shape;
-use crate::editor::panels::character_shape_panel;
 use crate::editor::panels::registry::PanelKey;
+use crate::editor::panels::{character_shape, character_shape_panel};
 
 // A drag released where it started changes nothing and records no step; the
 // header buttons commit through the same path.

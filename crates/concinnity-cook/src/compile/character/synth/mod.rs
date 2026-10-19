@@ -15,8 +15,7 @@ use concinnity_core::components::{MorphDelta, SkinnedVertexData};
 use concinnity_core::math::vec3;
 
 use super::frame::BoneFrame;
-use crate::authoring::registry::build_only::KeyPolarity;
-use crate::authoring::registry::build_only::SynthParams;
+use crate::authoring::registry::build_only::{KeyPolarity, SynthParams};
 
 // What every generator reads.
 pub(crate) struct SynthInput<'a> {

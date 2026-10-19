@@ -37,8 +37,7 @@ pub(crate) use builder::GraphBuilder;
 pub(crate) use compile::GraphError;
 pub use compile::{CompiledGraph, CompiledPass, CompiledResource};
 pub use execute::{
-    ExecutedPasses, NoClock, PassFanOut, PassJob, PassRecorder, PassScratch, SerialFanOut,
-    execute_passes, presenter_index,
+    ExecutedPasses, PassJob, PassRecorder, PassScratch, execute_passes, presenter_index,
 };
 pub use facts::{FrameContent, PlannedFacts, ResidentFeatures, ResidentUpscaler};
 pub(crate) use frame::bloom_top_desc;

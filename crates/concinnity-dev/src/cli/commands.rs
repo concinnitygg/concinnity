@@ -1,7 +1,7 @@
 // The command tree itself: every subcommand `concinnity` accepts and the
 // arguments it takes. Parsing only -- what each command does lives behind
 // `dispatch`.
-use concinnity_engine::app::run::LaunchRequest;
+use concinnity_core::launch::LaunchRequest;
 use std::num::NonZeroU32;
 
 use concinnity_core::gfx::view_modes::ShowFlags;

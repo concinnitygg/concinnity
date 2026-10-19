@@ -7,34 +7,47 @@ use crate::file_writer::FileWriter;
 use concinnity_core::story::{SaveSlot, StorySave, StoryStore};
 use concinnity_host::store::paths::StateTree;
 use std::path::{Path, PathBuf};
+use std::sync::Once;
 
 #[derive(Debug)]
 pub(crate) struct FileStore {
     dir: PathBuf,
     writer: FileWriter,
+    // A preview store's sandbox is emptied on first use rather than when the
+    // store is built: a system manifest builds stores it never uses. First use
+    // is the new world's start, after the host dropped the world before it,
+    // whose store's writer joins on drop, so no earlier write lands after it.
+    empty_first: Option<Once>,
 }
 
 impl FileStore {
     // The store under `tree`. A preview session (`transient`) saves to a
-    // sandbox emptied here, so the save UI works without touching the
+    // sandbox emptied on first use, so the save UI works without touching the
     // player's saves and every session starts fresh.
     pub(crate) fn new(tree: &StateTree, transient: bool) -> FileStore {
         if !transient {
             return FileStore::at(&tree.saves_dir());
         }
-        let preview = tree.preview_saves_dir();
-        let _ = std::fs::remove_dir_all(&preview);
-        FileStore::at(&preview)
+        FileStore {
+            empty_first: Some(Once::new()),
+            ..FileStore::at(&tree.preview_saves_dir())
+        }
     }
 
     fn at(dir: &Path) -> FileStore {
         FileStore {
             dir: dir.to_path_buf(),
             writer: FileWriter::new("cn-story-save"),
+            empty_first: None,
         }
     }
 
     fn path(&self, slot: SaveSlot) -> PathBuf {
+        if let Some(once) = &self.empty_first {
+            once.call_once(|| {
+                let _ = std::fs::remove_dir_all(&self.dir);
+            });
+        }
         match slot {
             SaveSlot::Auto => self.dir.join("auto"),
             SaveSlot::Manual(i) => self.dir.join(format!("save{}", i + 1)),
@@ -105,6 +118,7 @@ mod tests {
         let stale = tree.preview_saves_dir().join("save1");
         crate::file_writer::write_file(&stale, b"stale").unwrap();
         let preview = FileStore::new(&tree, true);
+        assert!(stale.exists(), "building the store touches nothing");
         assert!(!preview.exists(SaveSlot::Manual(0)));
         assert!(preview.read(SaveSlot::Auto).is_none());
         preview.write(SaveSlot::Auto, &save("preview"));
@@ -114,5 +128,21 @@ mod tests {
             FileStore::new(&tree, false).read(SaveSlot::Auto),
             Some(save("real"))
         );
+    }
+
+    // A rebuilt preview world drops the old store (draining its writes) before
+    // the new one's first use empties the sandbox, so nothing from the old
+    // session survives into the new one.
+    #[test]
+    fn a_rebuilt_preview_starts_after_the_old_store_drains() {
+        let dir = concinnity_testing::TempTree::new();
+        let tree = StateTree::at(dir.path());
+        let old = FileStore::new(&tree, true);
+        for slot in 0..8 {
+            old.write(SaveSlot::Manual(slot), &save("old"));
+        }
+        drop(old);
+        let new = FileStore::new(&tree, true);
+        assert!((0..8).all(|slot| !new.exists(SaveSlot::Manual(slot))));
     }
 }

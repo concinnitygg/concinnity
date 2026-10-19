@@ -2,6 +2,7 @@
 
 use concinnity_cook::compile::shader::CompiledShader;
 use concinnity_core::components::{ShaderSource, ShaderStage};
+use concinnity_core::fanout::Fanout;
 use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
 use concinnity_core::render::shader_programs::surface::Sources;
 use concinnity_engine::live_edit::shader_sources::ShaderSourceEntry;
@@ -53,7 +54,7 @@ impl ShaderTexts {
 pub(in crate::debug::hot_reload) fn compile(name: &str, texts: &ShaderTexts) -> CompileResult {
     // Inside the bounded job pool, so the compile's rayon fan-out over the
     // programs does not claim every core the frame loop also needs.
-    Ok(concinnity_host::thread::jobs::pool().install(|| {
+    Ok(concinnity_host::thread::jobs::pool().scope(|| {
         concinnity_cook::compile::shader::compile_world_shader(
             name,
             &texts.sources(),

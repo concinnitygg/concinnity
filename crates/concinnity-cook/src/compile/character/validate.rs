@@ -4,9 +4,7 @@
 
 use concinnity_core::components::SkeletonJoint;
 
-use crate::authoring::registry::build_only::CharacterModel;
-use crate::authoring::registry::build_only::CharacterSchema;
-use crate::authoring::registry::build_only::KeyPolarity;
+use crate::authoring::registry::build_only::{CharacterModel, CharacterSchema, KeyPolarity};
 
 // Problems with `skeleton` and `target_names` against `schema`; empty when
 // the source conforms.
@@ -93,8 +91,7 @@ pub(crate) fn model_errors(model: &CharacterModel) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::authoring::registry::build_only::SchemaJoint;
-    use crate::authoring::registry::build_only::SchemaKey;
+    use crate::authoring::registry::build_only::{SchemaJoint, SchemaKey};
 
     fn joint(name: &str, parent: i32) -> SkeletonJoint {
         SkeletonJoint {

@@ -1,5 +1,4 @@
-use concinnity_core::components::NamedAction;
-use concinnity_core::components::StoryCommand;
+use concinnity_core::components::{NamedAction, StoryCommand};
 
 use super::names::StoryNames;
 use super::stage::DIALOG_BOX;

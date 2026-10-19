@@ -10,8 +10,7 @@ use concinnity_core::components::{
     Collider, PointLight, RectAreaLight, ReflectionProbe, SPOT_MAX_ANGLE_DEG, SpotLight, Transform,
     TriggerVolume,
 };
-use concinnity_core::ecs::Entity;
-use concinnity_core::ecs::World;
+use concinnity_core::ecs::{Entity, World};
 use concinnity_core::gfx::lines::Line;
 
 use concinnity_cook::authoring::world::entry_handles;
@@ -308,8 +307,7 @@ fn anchored_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::Camera3D;
-    use concinnity_core::components::PropCollider;
+    use concinnity_core::components::{Camera3D, PropCollider};
     use concinnity_core::ecs::ComponentSlot;
     use concinnity_host::thread::asset_id;
 

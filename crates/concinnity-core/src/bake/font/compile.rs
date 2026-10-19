@@ -5,10 +5,9 @@
 use super::payload;
 use super::sdf::{EdtScratch, SdfScratch, cell_coverage_to_sdf};
 use crate::gfx::font::GlyphMetrics;
-use alloc::format;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 
 // Pixels of distance gradient on each side of the glyph edge stored in the atlas
 // (in low-resolution / atlas pixels).

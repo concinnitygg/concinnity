@@ -1,10 +1,7 @@
 // Scene-object prop schema.
 
-use crate::components::{Model, Scene};
-use crate::components::{Vocabulary, vocabulary_synonyms};
-use crate::ecs::MaterialHandle;
-use crate::ecs::MeshHandle;
-use crate::ecs::{NameRef, Ref, RefTarget};
+use crate::components::{Model, Scene, Vocabulary, vocabulary_synonyms};
+use crate::ecs::{MaterialHandle, MeshHandle, NameRef, Ref, RefTarget};
 use alloc::string::String;
 
 /// The collision volume a [PropCollider](#propcollider)'s `shape` names. The

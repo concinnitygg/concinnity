@@ -9,11 +9,11 @@ use crate::transform::Mat4;
 
 /// Runtime-only link between a skinned mesh and its animation state.
 ///
-/// `GraphicsSystem` publishes one `SkeletonPose` per `SkinnedMesh` during
+/// The renderer publishes one `SkeletonPose` per `SkinnedMesh` during
 /// init: it carries the resolved bind-pose `Skeleton` and the index of the
 /// mesh's skinned draw object in the backend. `AnimationSystem` then ticks the
 /// matching `Animation` clip each frame and writes the resulting skinning
-/// matrices into `joint_matrices`; `GraphicsSystem` reads them back and
+/// matrices into `joint_matrices`; the renderer reads them back and
 /// uploads them to the GPU. The one-frame producer/consumer hand-off is
 /// invisible at animation rates.
 ///

@@ -5,6 +5,7 @@
 //! else reads its field.
 
 use concinnity_core::ecs::World;
+use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
 use std::path::Path;
 
@@ -127,7 +128,7 @@ fn the_kinds_cycle_through_volumetric_and_back_to_a_shader() {
 // of the view: here on the face of the wall ahead of the camera.
 #[test]
 fn a_new_volume_lands_at_the_middle_of_the_view() {
-    let wall = concinnity_core::ecs::asset_id::AssetId(0x7a11);
+    let wall = AssetId(0x7a11);
     let mut world = pick_world(
         [0.0; 3],
         vec![(wall, [-10.0, -10.0, -3.0], [10.0, 10.0, -2.0])],

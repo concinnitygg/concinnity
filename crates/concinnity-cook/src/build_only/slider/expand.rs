@@ -7,7 +7,7 @@
 // are prefixed with the Slider's own name so generated elements never collide
 // with hand-authored assets, and every element joins the Slider's `screen`.
 
-use concinnity_core::components::NamedAction;
+use concinnity_core::components::{NamedAction, SettingVerb};
 use concinnity_core::settings::{SettingKey, SettingKind};
 
 use crate::authoring::registry::RegisteredType;
@@ -17,7 +17,6 @@ use crate::build_only::expand::{asset_name, registered_type, schema_args};
 use crate::build_only::membership::scope_to_screen;
 use crate::build_only::row_setting::row_setting;
 use crate::build_only::ui_spec::{font_sizes, label_value, sprite};
-use concinnity_core::components::SettingVerb;
 
 // Where the control group (track + value) starts, as a fraction of the row
 // width. The name occupies the left part, the control the right. Matches

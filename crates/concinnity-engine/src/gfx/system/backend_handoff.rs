@@ -6,6 +6,10 @@ use concinnity_core::gfx::render_types::SkinnedIndex;
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_core::render::backend_init::BackendInit;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::overlay::OverlayAssets;
+use concinnity_core::render::queues::{ActiveRenderQueues, RenderQueues};
+use concinnity_core::render::render_slots::RenderSlots;
+use concinnity_core::render::scene_flow::ActiveSceneFlow;
 use concinnity_core::render::volumetric_fog::FogSettings;
 
 use super::GraphicsSystem;
@@ -99,7 +103,7 @@ impl GraphicsSystem {
             .unwrap_or((0.0, 0.0));
         self.extractor.set_viewport(viewport);
         // OverlaySystem shapes the overlay draw list from these each frame.
-        ctx.insert_resource(concinnity_core::render::overlay::OverlayAssets {
+        ctx.insert_resource(OverlayAssets {
             fonts: std::mem::take(&mut self.loaded_fonts),
             sprite_texture_slots: std::mem::take(&mut self.sprite_texture_slots),
             debug_hud_chips: std::mem::take(&mut self.debug_hud_chips),
@@ -113,16 +117,14 @@ impl GraphicsSystem {
         // The op queue backend effects accumulate into, and the slot-allocation
         // authority: the draw-slot free list seeded with the build-time draw
         // count, and the skinned instance pool with the pre-reserved copies.
-        ctx.insert_resource(concinnity_core::render::queues::ActiveRenderQueues::new(
-            concinnity_core::render::queues::RenderQueues {
-                ops: Default::default(),
-                slots: concinnity_core::render::render_slots::RenderSlots::new(
-                    handoff.draw_object_count,
-                    self.caps.reuses_build_slots,
-                    handoff.skinned_pool_reservations,
-                ),
-            },
-        ));
+        ctx.insert_resource(ActiveRenderQueues::new(RenderQueues {
+            ops: Default::default(),
+            slots: RenderSlots::new(
+                handoff.draw_object_count,
+                self.caps.reuses_build_slots,
+                handoff.skinned_pool_reservations,
+            ),
+        }));
 
         ctx.insert_resource(concinnity_core::ecs::Parked(self.backend.take()));
         // Beside it, the state tooling edits the running world through: the fog
@@ -137,8 +139,6 @@ impl GraphicsSystem {
         }
 
         // SettingsSystem jumps the scene flow and this system ticks it.
-        ctx.insert_resource(concinnity_core::render::scene_flow::ActiveSceneFlow::new(
-            self.scene_flow.take(),
-        ));
+        ctx.insert_resource(ActiveSceneFlow::new(self.scene_flow.take()));
     }
 }

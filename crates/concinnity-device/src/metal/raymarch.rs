@@ -33,8 +33,7 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shader_programs::raymarch::{Family, ProxyFaces, VolumeFlags};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::NSString;
-use objc2_foundation::ns_string;
+use objc2_foundation::{NSString, ns_string};
 use objc2_metal::{
     MTLBlendFactor, MTLBlendOperation, MTLBlitCommandEncoder as _, MTLBuffer,
     MTLCommandBuffer as _, MTLCommandEncoder as _, MTLCullMode, MTLDevice, MTLIndexType,

@@ -43,7 +43,7 @@ pub trait ShaderPump {
 
     /// Record this frame's shader work, telling `on_resident` each bucket
     /// whose residency changed.
-    fn pump(&mut self, ops: &mut RenderOps, on_resident: impl FnMut(u32, bool));
+    fn pump(&mut self, ops: &mut RenderOps, on_resident: &mut dyn FnMut(u32, bool));
 }
 
 /// An infinite `VoxelWorld`'s streaming: the chunk pool, the resident
@@ -84,7 +84,7 @@ pub struct StreamingPools {
 
 impl StreamingPools {
     // Block or unblock scene-residency `member` on whatever streams it.
-    fn set_member_blocked<S: ShaderPump>(
+    fn set_member_blocked<S: ShaderPump + ?Sized>(
         &mut self,
         shaders: Option<&mut S>,
         (channel, id): Member,
@@ -238,7 +238,11 @@ impl StreamingState {
 
     /// Block every scene-owned member, then pin `start`, so only it and the
     /// unowned set stream.
-    pub fn pin_start_scene<S: ShaderPump>(&mut self, start: AssetId, mut shaders: Option<&mut S>) {
+    pub fn pin_start_scene<S: ShaderPump + ?Sized>(
+        &mut self,
+        start: AssetId,
+        mut shaders: Option<&mut S>,
+    ) {
         let Some(residency) = &self.pools.scene_residency else {
             return;
         };
@@ -367,7 +371,7 @@ impl StreamingState {
     /// Score, request and apply this frame's streaming for every active pool,
     /// then return the view and camera position the draw should use (absolute
     /// unless a `VoxelWorld` rebases them). Advances the frame clock.
-    pub fn drive<S: ShaderPump>(
+    pub fn drive<S: ShaderPump + ?Sized>(
         &mut self,
         queues: &mut RenderQueues,
         view: DriveView<'_>,
@@ -387,7 +391,7 @@ impl StreamingState {
         // changed, and install the builds that finished.
         if let Some(pump) = shaders {
             let residency = &mut self.pools.scene_residency;
-            pump.pump(&mut queues.ops, |bucket, resident| {
+            pump.pump(&mut queues.ops, &mut |bucket, resident| {
                 note_resident(residency, CHANNEL_SHADER, bucket, resident);
             });
         }
@@ -414,7 +418,7 @@ impl StreamingState {
     // Sync scene pins onto the pools: members of a scene leaving the pin set
     // are blocked (never load, evict next plan), members of a scene entering it
     // unblock and stream in through the normal planning path.
-    fn sync_scene_pins<S: ShaderPump>(
+    fn sync_scene_pins<S: ShaderPump + ?Sized>(
         &mut self,
         pins: Option<&[AssetId]>,
         mut shaders: Option<&mut S>,

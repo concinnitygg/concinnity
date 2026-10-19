@@ -21,18 +21,16 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
-use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
-use crate::directx::com;
 use crate::directx::context::{DxContext, align256, dump_on_err};
-use crate::directx::descriptor_slot::DescriptorTables;
-use crate::directx::descriptor_slot::SrvSlot;
+use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::error::map_hresult;
 use crate::directx::pso::{Blend, GraphicsPso};
 use crate::directx::root_sig::{Range, RootSig, SamplerState, Visibility};
 use crate::directx::texture::{
     HDR_FORMAT, create_rt_target, transition_barrier, write_format_rtv, write_format_srv,
 };
+use crate::directx::{builtin_shaders, com};
 
 // Size of the RT-reflection fragment-shader uniform block. 144 bytes; see
 // `gfx::render_types::RtParams`.

@@ -13,27 +13,22 @@ use hashbrown::HashMap;
 use spin::Mutex;
 
 use crate::bake::texture;
-use crate::components::DirectionalLight;
-use crate::components::WindowMode;
+use crate::components::{DirectionalLight, WindowMode};
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
-use crate::gfx::render_types;
 use crate::gfx::render_types::{
     DrawIndex, DrawObject, MaterialUniforms, SkinnedDrawObject, SkinnedIndex,
 };
-use crate::gfx::view_modes;
+use crate::gfx::{render_types, view_modes};
 use crate::input::keymap;
 use crate::input::snapshot::InputSnapshot;
-use crate::render::backend;
 use crate::render::backend::{
     BackendProbe, ChunkMesh, DeviceCapabilities, DrawStreaming, FrameParams, LiveEdit,
     RenderBackend, RenderTuning, SceneEffects, SkinnedDraws, SkinnedFrame, WindowControl,
 };
 use crate::render::backend_init::{BackendInit, ShadowCadence, ShadowParams, SwapchainConfig};
-use crate::render::draw_slot;
 use crate::render::error::{RenderError, RenderResult};
-use crate::render::reflection_probe;
 use crate::render::scene_state::SceneState;
-use crate::render::volumetric_fog;
+use crate::render::{backend, draw_slot, reflection_probe, volumetric_fog};
 use crate::settings::ResolvedGraphics;
 use crate::settings::apply::{ApplyPlan, SettingsTarget, apply_plan};
 use crate::window::display_mode;

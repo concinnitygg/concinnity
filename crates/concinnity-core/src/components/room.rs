@@ -1,8 +1,7 @@
 //! The `Room` asset: the authored args a world declares, and the runtime
 //! component they bake into.
 
-use crate::ecs::PayloadLocator;
-use crate::ecs::TextureHandle;
+use crate::ecs::{PayloadLocator, TextureHandle};
 use alloc::vec::Vec;
 
 /// A self-contained room (floor, ceiling, four walls), with optional texturing.

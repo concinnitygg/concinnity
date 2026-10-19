@@ -12,9 +12,10 @@
 use alloc::format;
 use alloc::vec::Vec;
 
-use super::{Pool, WORKERS};
+use super::{POOL, WORKERS};
+use crate::fanout::Inline;
 use crate::physics::{
-    BodyHandle, ColliderShape, DynamicParams, Inline, JointSpec, LayerMask, SimConfig, Simulation,
+    BodyHandle, ColliderShape, DynamicParams, JointSpec, LayerMask, SimConfig, Simulation,
 };
 use crate::test_support::{Pace, bench};
 
@@ -254,13 +255,13 @@ pub(super) fn run(pace: Pace) {
             ..*sim.config()
         });
         for _ in 0..warmup_steps {
-            sim.step_with(TICK, &Pool);
+            sim.step_with(TICK, &POOL);
         }
         bench(pace, &format!("physics/{name}/{label}"), bodies, || {
             if serial {
                 sim.step_with(TICK, &Inline);
             } else {
-                sim.step_with(TICK, &Pool);
+                sim.step_with(TICK, &POOL);
             }
             sim.contact_count()
         });
@@ -268,7 +269,7 @@ pub(super) fn run(pace: Pace) {
 
     let (mut resting, handles) = pen_world(&size, DEAD);
     for _ in 0..settle_steps {
-        resting.step_with(TICK, &Pool);
+        resting.step_with(TICK, &POOL);
     }
     if settled {
         assert_eq!(
@@ -282,7 +283,7 @@ pub(super) fn run(pace: Pace) {
         &format!("physics/step_pen_settled/{label}"),
         bodies,
         || {
-            resting.step_with(TICK, &Pool);
+            resting.step_with(TICK, &POOL);
             resting.sensor_overlap_count()
         },
     );

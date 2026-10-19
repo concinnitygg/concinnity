@@ -3,6 +3,7 @@
 
 use concinnity_core::components::GamepadButton;
 use concinnity_core::input::pad::{PadAxis, PadEvent, PadState};
+use concinnity_core::input::system::PadSource;
 
 // The OS-facing gamepad event source. Construction is deferred to the first
 // poll so a world without a step never starts the platform's HID machinery;
@@ -13,9 +14,9 @@ pub(crate) struct GamepadSource {
     tried: bool,
 }
 
-impl GamepadSource {
+impl PadSource for GamepadSource {
     // Drain pending OS gamepad events into `state`.
-    pub(crate) fn poll(&mut self, state: &mut PadState) {
+    fn poll(&mut self, state: &mut PadState) {
         if !self.tried {
             self.tried = true;
             match gilrs::Gilrs::new() {

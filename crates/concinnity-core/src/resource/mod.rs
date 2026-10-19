@@ -162,7 +162,7 @@ macro_rules! resource_tables {
 }
 
 resource_tables! {
-    // Audio clips, indexed by `AudioClipHandle`. `AudioSystem` reads this at init.
+    // Audio clips, indexed by `AudioClipHandle`. Audio playback reads this at init.
     AudioClipTable => AudioClip,
     // Textures, indexed by `TextureHandle`. The renderer reads this at init to
     // build its shared texture pool. Every texture (file or procedural) has a
@@ -224,6 +224,7 @@ impl MaterialTable {
 /// bytes out of the records, so the caller's record slice is spent scaffolding
 /// afterwards.
 pub fn install_tables(world: &mut World, records: &mut [ResourceRecord]) {
+    log_footprint(records);
     world.insert_resource(AudioClipTable::from_records(records));
     world.insert_resource(TextureTable::from_records(records));
     world.insert_resource(ColorLutTable::from_records(records));
@@ -234,9 +235,113 @@ pub fn install_tables(world: &mut World, records: &mut [ResourceRecord]) {
     world.insert_resource(SkinnedMeshTable::from_records(records));
 }
 
+// Log the compiled-resource footprint at load: the payload bytes each record
+// references in the blob plus the data bytes the tables hold directly.
+fn log_footprint(records: &[ResourceRecord]) {
+    if records.is_empty() {
+        return;
+    }
+    let total = records
+        .iter()
+        .map(ResourceRecord::compiled_len)
+        .sum::<u64>();
+    tracing::info!(
+        "Resource tables: {} record(s), {} MiB compiled",
+        records.len(),
+        total / (1024 * 1024)
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Each kind gets a distinct record count, so a table that picked up another
+    // kind's records shows as a wrong length. Order matches `table_lens`.
+    const KIND_COUNTS: [(ResourceKind, u32); 8] = [
+        (ResourceKind::AudioClip, 1),
+        (ResourceKind::Texture, 2),
+        (ResourceKind::ColorLut, 3),
+        (ResourceKind::EnvironmentMap, 4),
+        (ResourceKind::Font, 5),
+        (ResourceKind::Material, 6),
+        (ResourceKind::Mesh, 7),
+        (ResourceKind::SkinnedMesh, 8),
+    ];
+
+    // One record carrying both a payload locator and data bytes, so either
+    // branch of the footprint sum has something to add.
+    fn record(kind: ResourceKind, handle: u32) -> ResourceRecord {
+        ResourceRecord {
+            resource_kind: kind,
+            handle,
+            payload: Some(PayloadLocator {
+                blob_index: 0,
+                offset: handle as u64 * 16,
+                len: 16,
+            }),
+            data_bytes: vec![handle as u8; 4],
+        }
+    }
+
+    fn records() -> Vec<ResourceRecord> {
+        KIND_COUNTS
+            .iter()
+            .flat_map(|&(kind, count)| (0..count).map(move |h| record(kind, h)))
+            .collect()
+    }
+
+    // Every table's length, in `KIND_COUNTS` order. The `expect`s are the
+    // assertion that each kind's table was installed at all.
+    fn table_lens(world: &World) -> [usize; 8] {
+        [
+            world.resource::<AudioClipTable>().expect("audio").0.len(),
+            world.resource::<TextureTable>().expect("texture").0.len(),
+            world
+                .resource::<ColorLutTable>()
+                .expect("color lut")
+                .0
+                .len(),
+            world
+                .resource::<EnvironmentMapTable>()
+                .expect("env map")
+                .0
+                .len(),
+            world.resource::<FontTable>().expect("font").0.len(),
+            world.resource::<MaterialTable>().expect("material").0.len(),
+            world.resource::<MeshTable>().expect("mesh").0.len(),
+            world
+                .resource::<SkinnedMeshTable>()
+                .expect("skinned")
+                .0
+                .len(),
+        ]
+    }
+
+    // Every per-kind table is installed as a world resource, each holding only
+    // its own kind's records, at their handles.
+    #[test]
+    fn install_wires_every_kind_table_into_the_world() {
+        let mut world = World::new();
+        install_tables(&mut world, &mut records());
+
+        assert_eq!(table_lens(&world), [1, 2, 3, 4, 5, 6, 7, 8]);
+
+        // A record lands at its own handle rather than its position in the stream.
+        let mesh = world.resource::<MeshTable>().expect("mesh table installed");
+        assert_eq!(mesh.0[6].data_bytes, vec![6; 4]);
+        assert_eq!(mesh.0[6].payload.as_ref().expect("payload kept").offset, 96);
+    }
+
+    // The empty stream (a world with no compiled resources) still installs all
+    // eight tables, each empty, so a system reading its table by handle finds
+    // one rather than a missing resource.
+    #[test]
+    fn install_with_no_records_installs_empty_tables() {
+        let mut world = World::new();
+        install_tables(&mut world, &mut []);
+        assert_eq!(table_lens(&world), [0; 8]);
+    }
 
     fn rec(kind: ResourceKind, handle: u32, blob_index: u32) -> ResourceRecord {
         ResourceRecord {

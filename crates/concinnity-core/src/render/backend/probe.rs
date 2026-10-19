@@ -244,7 +244,7 @@ pub fn classify_tier(input: &GpuClassInput) -> GpuTier {
 /// query never has to ask whether the backend implements it.
 pub trait BackendProbe {
     /// Device capability flags, queried from the GPU once the backend is built.
-    /// Read by GraphicsSystem to gray out + disable settings rows the device
+    /// Read by the renderer to gray out + disable settings rows the device
     /// cannot honor, and by the editor's live draw seam to choose between an
     /// in-place edit and a world rebuild.
     fn capabilities(&self) -> DeviceCapabilities;

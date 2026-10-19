@@ -13,6 +13,8 @@
 
 pub mod api_trial;
 pub mod apply;
+#[cfg(test)]
+mod equivalence_tests;
 mod key;
 pub mod levels;
 pub mod quality;

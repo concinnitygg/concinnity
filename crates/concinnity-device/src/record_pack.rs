@@ -4,6 +4,7 @@
 
 use std::cell::Cell;
 
+use concinnity_core::fanout::Fanout;
 use concinnity_core::gfx::render_types::{DrawObject, GpuObjectData};
 use concinnity_core::profile::{FanOutJudge, FanOutTiming};
 use concinnity_core::render::record_pack::{
@@ -32,7 +33,7 @@ impl RecordPacker {
     {
         let records = pack.len();
         let jobs = pool();
-        let workers = jobs.thread_count();
+        let workers = jobs.workers();
         let mut judge = self.judge.get();
         let count = match judge.fans_out(records, workers) {
             true => chunk_count(records, workers),
@@ -40,7 +41,7 @@ impl RecordPacker {
         };
         let mut chunks: [Option<PackChunk<'_>>; MAX_PACK_CHUNKS] = Default::default();
         let used = pack.split(count, &mut chunks);
-        let timing = jobs.parallel_for_timed(&mut chunks[..used], |chunk| {
+        let timing = jobs.for_each_timed(&mut chunks[..used], |chunk| {
             if let Some(chunk) = chunk.take() {
                 chunk.pack(view, record);
             }

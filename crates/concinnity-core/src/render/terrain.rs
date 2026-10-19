@@ -45,7 +45,7 @@ pub fn load_terrains(ctx: &mut PipelineContext) -> Option<(Vec<LoadedTerrain>, V
     for (id, terrain) in terrains {
         let Some(locator) = terrain.locator.clone() else {
             tracing::error!(
-                "GraphicsSystem: Terrain {id:?} has no compiled payload; did the build succeed?"
+                "graphics: Terrain {id:?} has no compiled payload; did the build succeed?"
             );
             return None;
         };
@@ -57,7 +57,7 @@ pub fn load_terrains(ctx: &mut PipelineContext) -> Option<(Vec<LoadedTerrain>, V
         {
             Ok(p) => p,
             Err(e) => {
-                tracing::error!("GraphicsSystem: Terrain {id:?} payload: {e}");
+                tracing::error!("graphics: Terrain {id:?} payload: {e}");
                 return None;
             }
         };

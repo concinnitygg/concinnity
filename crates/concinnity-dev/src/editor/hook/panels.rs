@@ -9,33 +9,21 @@ use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
 use super::EditorHook;
-use crate::editor::behavior;
 use crate::editor::behavior::panel::ViewMode;
 use crate::editor::hud_ids::HudIds;
-use crate::editor::map;
-use crate::editor::palette;
-use crate::editor::panels::assets_panel;
-use crate::editor::panels::character_shape_panel;
-use crate::editor::panels::console_panel;
-use crate::editor::panels::content_panel;
 use crate::editor::panels::form_panel::{self, FormAction};
-use crate::editor::panels::health_panel;
-use crate::editor::panels::import_panel;
-use crate::editor::panels::lighting;
-use crate::editor::panels::lighting_panel;
 use crate::editor::panels::preview::{self, PreviewAction};
 use crate::editor::panels::registry::{self, Panel, PanelKey};
-use crate::editor::panels::shader_list_panel;
-use crate::editor::panels::shader_source_panel;
-use crate::editor::panels::story_panel;
 use crate::editor::panels::template::{self, TemplatesAction};
-use crate::editor::panels::template_panel;
-use crate::editor::panels::variables_panel;
 use crate::editor::panels::view::{self, ViewAction};
+use crate::editor::panels::{
+    assets_panel, character_shape_panel, console_panel, content_panel, health_panel, import_panel,
+    lighting, lighting_panel, shader_list_panel, shader_source_panel, story_panel, template_panel,
+    variables_panel,
+};
 use crate::editor::text_area::layout::Metrics;
 use crate::editor::viewport::snap;
-use crate::editor::widget;
-use crate::editor::worlds;
+use crate::editor::{behavior, map, palette, widget, worlds};
 
 // Apply a body press the panel resolved, if it resolved one: whether the press
 // was taken.

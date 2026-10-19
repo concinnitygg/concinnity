@@ -12,9 +12,8 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{ShadowUniforms, SpotShadowData};
-use concinnity_core::render::csm;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::spot_shadow;
+use concinnity_core::render::{csm, spot_shadow};
 
 use super::shadow::ShadowView;
 use crate::vulkan::allocator::{DeviceAllocator, PooledBuffer};

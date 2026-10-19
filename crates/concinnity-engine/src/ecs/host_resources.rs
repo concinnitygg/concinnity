@@ -4,13 +4,15 @@
 // embedder already inserted is kept.
 
 use concinnity_core::budget::ResidentMemory;
-use concinnity_core::ecs::{Clock, PipelineContext};
+use concinnity_core::ecs::{Clock, PipelineContext, ScheduleMode};
 use concinnity_core::platform::CompiledPlatforms;
 use concinnity_core::settings::{SettingsRevision, StoredSettings};
 use concinnity_host::store::paths::StateTree;
 
 pub(crate) fn publish(ctx: &mut PipelineContext) {
     insert_absent(ctx, || Clock(concinnity_host::clock::monotonic_micros));
+    // Systems fan out on the job pool unless the launch chose a serial schedule.
+    insert_absent(ctx, || ScheduleMode::Parallel);
     insert_absent(ctx, || {
         ResidentMemory(crate::app::sysmem::process_resident_bytes)
     });
@@ -50,6 +52,10 @@ mod tests {
         assert!(world.resource::<ResidentMemory>().is_some());
         assert!(world.resource::<Clock>().is_some());
         assert_eq!(
+            world.resource::<ScheduleMode>(),
+            Some(&ScheduleMode::Parallel)
+        );
+        assert_eq!(
             world.resource::<GraphicsApiStatus>().map(|s| s.current),
             Some(crate::platform::current())
         );
@@ -75,7 +81,12 @@ mod tests {
         world.insert_resource(ResidentMemory(none));
         world.insert_resource(CompiledPlatforms(&[]));
         world.insert_resource(chosen.clone());
+        world.insert_resource(ScheduleMode::Serial);
         publish(&mut world.context());
+        assert_eq!(
+            world.resource::<ScheduleMode>(),
+            Some(&ScheduleMode::Serial)
+        );
         assert_eq!(world.resource::<Clock>().map(Clock::read), Some(9));
         assert_eq!(
             world

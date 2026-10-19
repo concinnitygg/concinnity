@@ -6,8 +6,7 @@
 //! exactly one driver, so a reload is never applied twice.
 
 use concinnity_core::animation::{AnimationSystem, skeleton};
-use concinnity_core::components::SkeletonPose;
-use concinnity_core::components::StoryReload;
+use concinnity_core::components::{SkeletonPose, StoryReload};
 use concinnity_core::ecs::World;
 use concinnity_core::gfx::render_types::SkinnedIndex;
 use concinnity_engine::live_edit;
@@ -95,7 +94,9 @@ impl HotReloadDriver {
     // is a cheap no-op.
     pub(crate) fn drive(&mut self, world: &mut World) {
         // Arm (or re-arm after a world rebuild) from the init-parked sources.
-        if let Some(sources) = concinnity_engine::live_edit::take_hot_reload_sources(world) {
+        if let Some(sources) =
+            world.remove_resource::<live_edit::hot_reload_sources::HotReloadSources>()
+        {
             self.arm(sources);
         }
         if let Some(anim) = world.system_mut::<AnimationSystem>() {

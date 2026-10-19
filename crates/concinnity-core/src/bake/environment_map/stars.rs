@@ -184,9 +184,9 @@ fn mix(mut x: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::super::deserialize;
-    use super::super::schedule::Serial;
     use super::super::source::bake_payload;
     use super::*;
+    use crate::fanout::Inline;
 
     // Peak radiance of the faintest star, as the threshold that separates a
     // star's texels from the background beneath them.
@@ -200,7 +200,7 @@ mod tests {
     fn stars_generator_bakes_into_a_full_payload_serially() {
         let hdr = generate_stars_equirect();
         assert_eq!((hdr.width, hdr.height), (WIDTH, HEIGHT));
-        let payload = bake_payload(&hdr, 16, 8, 32, 12.0, &Serial);
+        let payload = bake_payload(&hdr, 16, 8, 32, 12.0, &Inline);
         let view = deserialize(&payload).expect("deserialize");
         assert_eq!(view.irradiance_face, 8);
         assert_eq!(view.prefilter_face, 16);

@@ -67,7 +67,7 @@ pub struct PipelineContext<'a> {
     /// mechanism names no concrete blob store; the runtime passes `BlobData`.
     pub blob: &'a mut dyn PayloadStore,
     /// Per-frame profiling data. `World::step` records each system's CPU step
-    /// time here; `GraphicsSystem` writes the backend `RenderStats` after its
+    /// time here; the renderer writes the backend `RenderStats` after its
     /// draw call, and `StatHud` reads it back to drive the on-screen HUD.
     pub profile: &'a mut FrameProfile,
     /// Type-keyed engine singletons (e.g. the per-frame FrameInput snapshot),

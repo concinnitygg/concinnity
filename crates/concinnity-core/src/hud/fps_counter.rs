@@ -2,13 +2,11 @@
 //! `World::start` constructs one from the world's `FpsCounter` component and it
 //! updates that component's `label` with the current rate once per second.
 
+use crate::ecs::{Access, FrameTime, PipelineContext, Ref, StepResult, System, World};
 use alloc::format;
 
-use crate::components::FpsCounter;
-use crate::components::TextLabel;
-use crate::ecs::Ref;
+use crate::components::{FpsCounter, TextLabel};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Access, FrameTime, PipelineContext, StepResult, System};
 
 use super::rate_window::RateWindow;
 
@@ -23,6 +21,11 @@ pub struct FpsCounterSystem {
 }
 
 impl FpsCounterSystem {
+    /// The system for a world that declares an `FpsCounter`.
+    pub fn for_world(world: &World) -> Option<Self> {
+        world.query::<FpsCounter>().next().cloned().map(Self::new)
+    }
+
     /// Build the counter from a world's `FpsCounter` request component.
     pub fn new(config: FpsCounter) -> Self {
         Self {
@@ -70,7 +73,7 @@ mod tests {
         start_with(
             &mut world,
             Phase::Late,
-            "FpsCounter",
+            "FpsCounterSystem",
             FpsCounterSystem::new(config),
         );
 

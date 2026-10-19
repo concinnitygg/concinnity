@@ -6,6 +6,7 @@
 //! click on it lands.
 
 use concinnity_core::ecs::World;
+use concinnity_core::ecs::asset_id::AssetId;
 
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
@@ -73,9 +74,9 @@ pub(crate) struct Slot {
 // The slot's pooled elements the row draws with.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SlotIds {
-    pub(crate) caption: concinnity_core::ecs::asset_id::AssetId,
-    pub(crate) control: concinnity_core::ecs::asset_id::AssetId,
-    pub(crate) text: concinnity_core::ecs::asset_id::AssetId,
+    pub(crate) caption: AssetId,
+    pub(crate) control: AssetId,
+    pub(crate) text: AssetId,
 }
 
 const PAD: f32 = 10.0;
@@ -161,7 +162,6 @@ pub(crate) fn place(world: &mut World, row: &ExtraRow, slot: &Slot, ids: SlotIds
 mod tests {
     use super::*;
     use concinnity_core::components::{Sprite, TextLabel};
-    use concinnity_core::ecs::asset_id::AssetId;
 
     fn check(on: bool, enabled: bool) -> ExtraRow {
         ExtraRow {

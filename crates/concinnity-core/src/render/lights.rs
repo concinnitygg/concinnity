@@ -12,8 +12,7 @@ use crate::gfx::render_types::{
     PointLightData, SpotShadowData,
 };
 use crate::math::vec3::{length, scale};
-use crate::render::area_light;
-use crate::render::spot_shadow;
+use crate::render::{area_light, spot_shadow};
 use alloc::vec::Vec;
 
 /// The per-scene GPU light data: the storage buffer the clustered forward pass

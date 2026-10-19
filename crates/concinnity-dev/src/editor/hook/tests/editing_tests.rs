@@ -5,9 +5,7 @@
 //! disclosed vector. Also what survives a reinjection, a panel toggle, and a
 //! delete that shifts the open form's index.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::Sprite;
-use concinnity_core::components::TextInput;
+use concinnity_core::components::{FrameInput, Sprite, TextInput};
 use concinnity_core::ecs::World;
 
 use super::fixtures::{
@@ -16,7 +14,7 @@ use super::fixtures::{
 use crate::editor::hook::{EditorHook, FormTarget, declared_id, visible_slot};
 use crate::frame_hook::FrameHook;
 
-use crate::editor::inject;
+use crate::editor::{inject, widget};
 
 use crate::editor::panels::form;
 use crate::editor::panels::form_panel::{self, FormAction};
@@ -25,7 +23,6 @@ use crate::editor::panels::assets_panel::{self, PanelAction};
 use crate::editor::panels::registry::PanelKey;
 
 use crate::editor::hook::tests::fixtures::{active, entry_target, select, selected};
-use crate::editor::widget;
 
 // A live rebuild re-injects a fresh (blank) HUD; the field snapshot carries the
 // editor's typed text (an open form's name, the combo filter) across it so a

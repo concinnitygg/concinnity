@@ -27,10 +27,9 @@ use super::passes::PassId;
 use super::reach::Reachability;
 use super::schedule::{PassQueue, realized_reachability};
 use super::types::{BarrierOp, ReadStages, ResourceState};
-use alloc::format;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 
 // What kind of coverage a pass is missing for one resource.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

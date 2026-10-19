@@ -3,21 +3,19 @@
 //! and it writes live engine stats into that component's `TextLabel` chips.
 //!
 //! The frame-rate and GPU-memory chips are gated by the in-game video setting
-//! "Display performance stats" (published by `GraphicsSystem` as the `HudPrefs`
+//! "Display performance stats" (published by the renderer as the `HudPrefs`
 //! resource); the exposure and HDR chips show whenever their feature is active.
 //! Developer readouts (passes / cursor / camera) live on `DebugHud`.
 
+use crate::ecs::{Access, FrameTime, HudPrefs, PipelineContext, Ref, StepResult, System, World};
 use alloc::format;
 use alloc::string::String;
 
 use crate::benchmark::BenchmarkRun;
 use crate::budget::{MemoryBudget, ResidentMemory};
 use crate::camera_track::CameraTrackStatus;
-use crate::components::StatHud;
-use crate::components::TextLabel;
-use crate::ecs::Ref;
+use crate::components::{StatHud, TextLabel};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Access, FrameTime, HudPrefs, PipelineContext, StepResult, System};
 
 use super::rate_window::RateWindow;
 
@@ -183,6 +181,11 @@ pub struct StatHudSystem {
 }
 
 impl StatHudSystem {
+    /// The system for a world that declares a `StatHud`.
+    pub fn for_world(world: &World) -> Option<Self> {
+        world.query::<StatHud>().next().cloned().map(Self::new)
+    }
+
     /// Build the HUD from a world's `StatHud` request component.
     pub fn new(config: StatHud) -> Self {
         Self {
@@ -317,7 +320,12 @@ mod tests {
 
     fn start(world: &mut World) {
         let config = world.query::<StatHud>().next().cloned().unwrap();
-        start_with(world, Phase::Late, "StatHud", StatHudSystem::new(config));
+        start_with(
+            world,
+            Phase::Late,
+            "StatHudSystem",
+            StatHudSystem::new(config),
+        );
     }
 
     #[test]
@@ -511,7 +519,7 @@ mod tests {
         assert_eq!(chip(&world, 3), "");
     }
 
-    // The HudPrefs resource (published by GraphicsSystem) gates each chip: with
+    // The HudPrefs resource (published by the renderer) gates each chip: with
     // both off, the fps and vram chips blank on the next emit.
     #[test]
     fn hud_prefs_hide_fps_and_vram_chips() {

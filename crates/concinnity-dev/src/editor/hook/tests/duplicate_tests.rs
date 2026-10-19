@@ -2,13 +2,9 @@
 //! and selects, and the Ctrl+D that stands down while the Behavior panel owns
 //! the keyboard.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::InputKey;
-use concinnity_core::components::KeyEvent;
-use concinnity_core::components::KeyMods;
-use concinnity_core::components::KeyPress;
-use concinnity_core::components::TextInput;
+use concinnity_core::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, TextInput};
 use concinnity_core::ecs::World;
+use concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
 
 use super::fixtures::{entry, hook, world_with_input};
 use crate::editor::behavior;
@@ -127,7 +123,7 @@ fn duplicates_own_copies_of_their_files() {
 // A type at its world limit is not duplicated, and says why.
 #[test]
 fn a_shader_is_not_duplicated_past_the_limit() {
-    let max = concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
+    let max = MAX_SHADER_BUCKETS;
     let entries: Vec<serde_json::Value> = (0..max)
         .map(|i| serde_json::json!({"type": "Shader", "args": {"$id": format!("s{i}"), "fragment": "/cn-none/s.hlsl"}}))
         .collect();

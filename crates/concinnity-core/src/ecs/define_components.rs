@@ -7,8 +7,7 @@
 //! comes from [`define_component_storage!`](crate::define_component_storage).
 //!
 //! The authoring `RegisteredType` registry is built from the same list in
-//! concinnity-cook. Systems are registered separately, client-side, by the
-//! `define_systems!` table.
+//! concinnity-cook. Systems are listed separately, in a host's system table.
 
 // Internal helper. Resolves an entry's `consumed` flag into the tag that still
 // holds its entities once the world has started: the entry's own tag when no

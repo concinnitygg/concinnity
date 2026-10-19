@@ -7,6 +7,7 @@
 
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_host::store::paths::StateTree;
 pub(crate) fn lock() -> concinnity_testing::ExclusiveAccess {
     prepare();
     concinnity_testing::exclusive()
@@ -35,12 +36,9 @@ fn prepare() {
 // nothing here excludes the test in the process beside it.
 pub(crate) fn isolate_state_dir() {
     crate::project::open(
-        concinnity_host::store::paths::StateTree::at(concinnity_testing::shared_state_dir(
-            "concinnity-dev-tests",
-        ))
-        .with_cache(concinnity_testing::shared_cache_dir(
-            "concinnity-dev-tests-cache",
-        )),
+        StateTree::at(concinnity_testing::shared_state_dir("concinnity-dev-tests")).with_cache(
+            concinnity_testing::shared_cache_dir("concinnity-dev-tests-cache"),
+        ),
     );
 }
 

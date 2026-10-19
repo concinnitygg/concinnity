@@ -7,11 +7,9 @@
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::ecs::World;
 
-use crate::editor::filter;
 use crate::editor::hook::{EditorHook, scroll_step};
 use crate::editor::panels::content_panel::{self, ContentAction};
-use crate::editor::thumbs;
-use crate::editor::widget;
+use crate::editor::{filter, thumbs, widget};
 
 // The asset types the grid shows, the type-chip cycle order. "All" leads.
 pub(in crate::editor::hook) const VISUAL_TYPES: [RegisteredType; 7] = [

@@ -62,8 +62,7 @@ use super::texture::{
     HDR_FORMAT, create_hdr_color_target, create_hdr_resolve_target, transition_barrier,
 };
 use crate::directx::depth::optimized_clear;
-use crate::directx::descriptor_slot::DescriptorTables;
-use crate::directx::descriptor_slot::SrvSlot;
+use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 
 // What a runtime capture bakes: face size, mip count, GGX sample count and firefly
 // clamp, shared with the Metal and Vulkan backends (and with the build-time CPU

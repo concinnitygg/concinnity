@@ -5,19 +5,17 @@
 //! removing a declaration leaves behind, and the re-check each change runs over
 //! the behaviors reading it.
 
-use concinnity_core::components::InputKey;
-use concinnity_core::components::TextInput;
+use concinnity_core::components::{InputKey, TextInput};
 use concinnity_core::ecs::World;
 
-use crate::editor::behavior;
 use crate::editor::behavior::panel::BehaviorAction;
 use crate::editor::hook::tests::fixtures::{behavior, entry_with_args, hook, key_input};
 use crate::editor::hook::{EditorHook, entry_type};
+use crate::editor::{behavior, widget};
 
 use crate::editor::panels::registry::{self, PanelKey};
 
 use crate::editor::panels::variables_panel::{self, VariablesAction};
-use crate::editor::widget;
 
 fn variables_session(entries: Vec<serde_json::Value>) -> (EditorHook, World) {
     let mut world = World::new();

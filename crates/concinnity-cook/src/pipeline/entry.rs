@@ -359,9 +359,8 @@ mod tests {
     use concinnity_core::components::{
         HitRegion, KeyBinding, Material, Prop, ScreenCommand, Sprite, TextLabel, UiAction,
     };
-    use concinnity_core::ecs::MeshHandle;
-    use concinnity_core::ecs::Ref;
     use concinnity_core::ecs::asset_id::AssetId;
+    use concinnity_core::ecs::{MeshHandle, Ref};
     use concinnity_core::platform::Platform;
 
     #[test]

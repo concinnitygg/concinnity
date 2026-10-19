@@ -6,9 +6,8 @@ use ash::vk;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
 use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::error;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::mipmap;
+use concinnity_core::render::{error, mipmap};
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::depth::SHADOW_SAMPLE_COMPARE;

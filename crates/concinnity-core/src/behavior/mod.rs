@@ -11,8 +11,8 @@
 //! the view, runs the bodies, and applies their effects. Nothing below reads a
 //! clock, a file, or a device, which is why the whole of it sits in the
 //! vocabulary rather than in a host. Where persisted state is kept
-//! ([`BehaviorStore`]) and how a tick's runs fan out ([`EvalScheduler`]) are the
-//! host's to supply; a world with neither runs its behaviors serially and
+//! ([`BehaviorStore`]) and the pool a tick's runs fan out on
+//! ([`Lent`](crate::fanout::Lent)) are the host's to supply; a world with neither runs its behaviors serially and
 //! persists nothing.
 
 mod compile;
@@ -27,8 +27,5 @@ pub use compile::compile;
 pub use position::camera_driver;
 pub use program::{CExpr, CNode, COp, Program, VarTable};
 pub use run::{Effect, Spatial, SpawnEffect, View, exec};
-pub use system::{
-    BehaviorReporter, BehaviorState, BehaviorStore, BehaviorSystem, EvalBucket, EvalScheduler,
-    def_hash,
-};
+pub use system::{BehaviorState, BehaviorStore, BehaviorSystem, def_hash};
 pub use value::{Arith, Cmp, Val};

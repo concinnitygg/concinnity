@@ -6,8 +6,7 @@
 use super::eval::Resume;
 use super::instance::{self, Instance};
 use super::{BehaviorSystem, Deferred};
-use crate::behavior::position;
-use crate::behavior::{Effect, Val};
+use crate::behavior::{Effect, Val, position};
 use crate::components::{
     DespawnRequest, PlayCue, ReparentRequest, SceneCommand, ScreenCommand, SpawnRequest,
     StoryCommand, StoryPlayback, VisibilityRequest, WakeRequest,
@@ -142,12 +141,10 @@ impl BehaviorSystem {
             return;
         };
         self.reported_driven_camera = true;
-        if let Some(reporter) = &self.reporter {
-            reporter.warn(&alloc::format!(
-                "a set_transform moved the camera, but {driver} rewrites its pose every tick, \
-                 so the move lasts one frame"
-            ));
-        }
+        tracing::warn!(
+            "behavior: a set_transform moved the camera, but {driver} rewrites its pose every \
+             tick, so the move lasts one frame"
+        );
     }
 
     fn instance_mut(&mut self, i: usize, entity: Option<Entity>) -> Option<&mut Instance> {
@@ -176,8 +173,7 @@ mod tests {
         Behavior, BehaviorLiteral, BehaviorLocal, BehaviorSource, Camera3D, CueKind, PropInstance,
         Transform,
     };
-    use crate::ecs::World;
-    use crate::ecs::{AudioClipHandle, EventCursor, System, asset_id::AssetId};
+    use crate::ecs::{AudioClipHandle, EventCursor, System, World, asset_id::AssetId};
     use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
@@ -421,22 +417,11 @@ mod tests {
         );
     }
 
-    #[derive(Debug, Default)]
-    struct Recorded(alloc::sync::Arc<spin::Mutex<Vec<String>>>);
-
-    impl crate::behavior::BehaviorReporter for Recorded {
-        fn warn(&self, message: &str) {
-            self.0.lock().push(String::from(message));
-        }
-    }
-
     // A write to a camera the world's CameraTrack drives is undone the next
     // tick: reported, once.
     #[test]
     fn a_write_to_a_driven_camera_is_reported_once() {
-        let (sys, mut world, prop) = started(BehaviorLiteral::Int(0));
-        let warnings = alloc::sync::Arc::new(spin::Mutex::new(Vec::new()));
-        let mut sys = sys.with_reporter(alloc::boxed::Box::new(Recorded(warnings.clone())));
+        let (mut sys, mut world, prop) = started(BehaviorLiteral::Int(0));
         let camera = world.push(Camera3D::bake(Default::default()));
         let write = |sys: &mut BehaviorSystem, world: &mut World| {
             let effect = Effect::SetTransform {
@@ -447,13 +432,12 @@ mod tests {
             apply(sys, world, prop, vec![effect]);
         };
         write(&mut sys, &mut world);
-        assert!(warnings.lock().is_empty(), "a free camera keeps its write");
+        assert!(!sys.reported_driven_camera, "a free camera keeps its write");
         world.push(crate::components::CameraTrack::default());
         write(&mut sys, &mut world);
+        assert!(sys.reported_driven_camera);
         write(&mut sys, &mut world);
-        let warnings = warnings.lock();
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("CameraTrack"), "{warnings:?}");
+        assert!(sys.reported_driven_camera);
     }
 
     // Adding keeps the target's declared type: the delta is read through it

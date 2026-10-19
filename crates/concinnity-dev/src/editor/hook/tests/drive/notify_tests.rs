@@ -8,10 +8,9 @@ use concinnity_core::ecs::World;
 use crate::editor::behavior::panel::Status;
 use crate::editor::hook::tests::fixtures::hook;
 
-use crate::editor::notify;
+use crate::editor::{notify, toast_overlay};
 
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::toast_overlay;
 
 // The toast stack claims only presses on its live cards; everywhere else the
 // press falls through to normal routing. Clicking a card runs its action and

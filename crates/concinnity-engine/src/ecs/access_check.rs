@@ -37,8 +37,7 @@ fn check(touch: &Touch) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::Sprite;
-    use concinnity_core::components::TextLabel;
+    use concinnity_core::components::{Sprite, TextLabel};
     use concinnity_core::ecs::access_check::set_active;
     use concinnity_core::ecs::{Access, MenuActive, World};
     use concinnity_core::{component_mask, resource_mask};

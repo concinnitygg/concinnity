@@ -1,6 +1,6 @@
 //! OverlaySystem: builds the 2D overlay draw list (sprites, text, dropdown,
 //! text-input fields, cursor) from the world's UI components and publishes the
-//! per-frame menu state. Runs first in the schedule, before GraphicsSystem
+//! per-frame menu state. Runs first in the schedule, before the renderer
 //! submits the frame:
 //!   mod.rs        system + the per-frame draw-list build
 //!   widgets.rs    transient dropdown / text-input element synthesis
@@ -9,28 +9,20 @@
 //! The font atlases and texture slots the build measures against are uploaded
 //! by graphics init, which parks them here as the `OverlayAssets`
 //! resource; the build's output is parked as the `OverlayFrame` resource that
-//! GraphicsSystem consumes for this same frame's submit. HUD content is what
+//! the renderer consumes for this same frame's submit. HUD content is what
 //! the HUD systems wrote last tick (they run after the build), so what is
 //! measured is exactly what is drawn.
 
-use crate::components::FrameInput;
-use crate::components::Identity;
-use crate::components::LayoutContainer;
-use crate::components::Sprite;
-use crate::components::TextInput;
-use crate::components::TextLabel;
+use crate::components::{FrameInput, Identity, LayoutContainer, Sprite, TextInput, TextLabel};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{
     Access, CursorState, DesiredCursor, FrameTime, HudLayers, MenuActive, MenuOverride,
-    OpenDropdown, PipelineContext, ScreenStack, StepResult, System,
+    OpenDropdown, PipelineContext, ScreenStack, StepResult, System, World,
 };
 use crate::gfx::render_types;
-use crate::render::call_buffer;
-use crate::render::cursor;
-use crate::render::overlay_maps;
 use crate::render::overlay_maps::Placement;
-use crate::render::sprite as gfx_sprite;
-use crate::render::text;
+use crate::render::render_mode::RenderMode;
+use crate::render::{call_buffer, cursor, overlay_maps, sprite as gfx_sprite, text};
 use alloc::vec::Vec;
 
 mod hud_layout;
@@ -107,6 +99,11 @@ pub struct OverlaySystem {
 }
 
 impl OverlaySystem {
+    /// The system for a world that runs with a window.
+    pub fn for_world(world: &World) -> Option<Self> {
+        RenderMode::renders_in(world).then(Self::new)
+    }
+
     /// A system with empty scratch and a caret clock at zero.
     pub fn new() -> Self {
         Self::default()
@@ -193,14 +190,14 @@ impl OverlaySystem {
         if let Some(spent) = ctx.take_resource::<OverlayRecycle>() {
             self.buffer.recycle(spent.0);
         }
-        // The viewport InputSystem sampled at the end of the previous tick, or
+        // The viewport the input poll sampled at the end of the previous tick, or
         // the init-time size before the first poll. A live resize is picked up
         // one frame later, which is invisible mid-drag.
         let (win_w, win_h) = ctx
             .resource::<FrameInput>()
             .map(|i| (i.viewport[0], i.viewport[1]))
             .unwrap_or(assets.initial_viewport);
-        // The cursor state InputSystem sampled at the end of the previous tick
+        // The cursor state the input poll sampled at the end of the previous tick
         // (`follow_cursor` sprites are positioned a frame after the input that
         // moved them).
         let cursor = ctx.resource::<CursorState>().copied().unwrap_or_default();
@@ -400,10 +397,9 @@ impl OverlaySystem {
 mod tests {
     use super::*;
     use crate::components::{SpriteFit, TextAlign};
-    use crate::ecs::Ref;
     use crate::ecs::{
-        CursorState, DropdownView, FontHandle, HudLayers, MenuOverride, OpenDropdown, ScreenStack,
-        World,
+        CursorState, DropdownView, FontHandle, HudLayers, MenuOverride, OpenDropdown, Ref,
+        ScreenStack, World,
     };
     use crate::gfx::font;
     use alloc::string::ToString;
@@ -632,7 +628,7 @@ mod tests {
         assert!(w.resource::<OverlayFrame>().unwrap().menu_active);
     }
 
-    // The build measures against the viewport InputSystem last sampled, falling
+    // The build measures against the viewport the input poll last sampled, falling
     // back to the init-time size before the first poll. A full-canvas backdrop
     // stretches to exactly that, so its quad reads the viewport back out.
     #[test]

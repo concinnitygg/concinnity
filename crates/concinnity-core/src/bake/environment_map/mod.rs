@@ -37,7 +37,6 @@
 //! Face order matches CubemapTexture: +X, -X, +Y, -Y, +Z, -Z.
 
 pub mod bake;
-pub mod schedule;
 pub mod source;
 pub mod stars;
 
@@ -50,7 +49,6 @@ pub use bake::{
     CubeBake, DEFAULT_IRRADIANCE_PHI_SAMPLES, DEFAULT_IRRADIANCE_THETA_SAMPLES, FaceRow,
     compute_irradiance, compute_prefilter, face_rows, prefilter_mip0, prefilter_roughness,
 };
-pub use schedule::{RowScheduler, Serial};
 
 pub(crate) const ENVMAP_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"ENVM");
 pub(crate) const ENVMAP_FORMAT_RGBA32F: u32 = 0;

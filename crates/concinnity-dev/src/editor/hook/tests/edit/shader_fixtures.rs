@@ -5,6 +5,7 @@
 
 use concinnity_core::components::ShaderStage;
 use concinnity_core::ecs::World;
+use concinnity_host::store::paths::StateTree;
 use std::path::{Path, PathBuf};
 
 use crate::editor::hook::EditorHook;
@@ -141,7 +142,7 @@ pub(super) fn in_project(test: impl FnOnce(&Path)) {
     let old = std::env::current_dir().unwrap();
     std::env::set_current_dir(tree.path()).unwrap();
     let root = std::env::current_dir().unwrap();
-    crate::project::open(concinnity_host::store::paths::StateTree::at(&root));
+    crate::project::open(StateTree::at(&root));
     test(&root);
     std::env::set_current_dir(old).unwrap();
     crate::test_support::isolate_state_dir();

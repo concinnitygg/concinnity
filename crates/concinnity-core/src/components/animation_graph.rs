@@ -7,9 +7,8 @@ use crate::animation::anim_graph::{
     CompiledTransition, ParamSpec, StatePlay,
 };
 use crate::components::Animation;
-use crate::ecs::Ref;
-use crate::ecs::SkinnedMeshHandle;
 use crate::ecs::asset_id::AssetId;
+use crate::ecs::{Ref, SkinnedMeshHandle};
 
 /// A named float parameter driving a graph's transitions. Gameplay systems
 /// write parameter values at runtime; transitions compare against them.

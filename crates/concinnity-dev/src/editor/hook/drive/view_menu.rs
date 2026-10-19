@@ -7,8 +7,7 @@ use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;
 
 use crate::editor::hook::EditorHook;
-use crate::editor::hud;
-use crate::editor::view_menu;
+use crate::editor::{hud, view_menu};
 
 impl EditorHook {
     // The top bar's Display chip.

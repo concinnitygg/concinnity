@@ -1,8 +1,6 @@
 // Screen-space hit-region schema.
 
-use crate::components::SpriteFit;
-use crate::components::UiAction;
-use crate::components::{Screen, Sprite, TextLabel};
+use crate::components::{Screen, Sprite, SpriteFit, TextLabel, UiAction};
 use crate::ecs::Ref;
 
 /// A responsive invisible rectangular region in screen space.

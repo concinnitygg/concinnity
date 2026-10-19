@@ -3,30 +3,23 @@
 // backends identically.
 
 use ash::vk;
-use concinnity_core::components;
-use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::*;
+use concinnity_core::gfx::{auto_exposure, render_types};
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::profile;
-use concinnity_core::render::backend;
 use concinnity_core::render::backend::FrameParams;
-use concinnity_core::render::backend_init;
-use concinnity_core::render::decal;
-use concinnity_core::render::error;
 use concinnity_core::render::frame_plan::drive_frame;
-use concinnity_core::render::hdr_output;
 use concinnity_core::render::lights::LightData;
 use concinnity_core::render::probe_book::ProbeBook;
 use concinnity_core::render::retire_pool::RetirePool;
 use concinnity_core::render::scene_state::SceneState;
 use concinnity_core::render::shader_reload::ShaderReload;
-use concinnity_core::render::slot_rewrites;
-use concinnity_core::render::spot_shadow;
-use concinnity_core::render::volumetric_fog;
+use concinnity_core::render::{
+    backend, backend_init, decal, error, hdr_output, slot_rewrites, spot_shadow, volumetric_fog,
+};
 use concinnity_core::window::display_mode;
+use concinnity_core::{components, profile};
 
 use super::allocator::PooledBuffer;
 use super::geometry_upload::{CopySubmit, GeometryDest, GeometryUploads};

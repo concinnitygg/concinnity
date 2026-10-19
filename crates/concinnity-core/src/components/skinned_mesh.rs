@@ -4,8 +4,7 @@
 //! blob's resource stream, no `Component` impl), so this file keeps only the
 //! skeleton builder and the model matrix, both built through `animation::skeleton`.
 
-use crate::ecs::MaterialHandle;
-use crate::ecs::PayloadLocator;
+use crate::ecs::{MaterialHandle, PayloadLocator};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -224,7 +223,7 @@ mod tests {
 }
 
 /// Build a runtime `Skeleton` from authored joint definitions. Mirrors the
-/// conversion `GraphicsSystem::init` does at world load time: each
+/// conversion graphics init does at world load time: each
 /// `SkeletonJoint.parent` becomes `Some(usize)` for valid indices (negative values
 /// mark roots), and each `SkeletonJoint`'s translation / rotation / scale becomes the
 /// joint's bind `JointPose`. Used at init and by the asset hot-reload's

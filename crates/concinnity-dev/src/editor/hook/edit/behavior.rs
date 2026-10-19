@@ -23,21 +23,14 @@ use concinnity_core::ecs::World;
 use serde_json::Value;
 use std::sync::OnceLock;
 
-use crate::editor::behavior;
-use crate::editor::behavior::clip;
 use crate::editor::behavior::edit::{self, Pick};
-use crate::editor::behavior::fault;
-use crate::editor::behavior::fields;
-use crate::editor::behavior::filter;
 use crate::editor::behavior::graph::{self, CardKind, Chart};
-use crate::editor::behavior::navigate;
 use crate::editor::behavior::outline::{self, Row};
 use crate::editor::behavior::panel::{BehaviorAction, BehaviorView, Status, ViewMode};
-use crate::editor::behavior::pulse;
-use crate::editor::behavior::relations;
+use crate::editor::behavior::{clip, fault, fields, filter, navigate, pulse, relations};
 use crate::editor::hook::{EditorHook, entry_type, scroll_step};
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::widget;
+use crate::editor::{behavior, widget};
 
 // Owned per-tick data backing a `BehaviorView`: the open behavior's outline and
 // the palette its selected row offers.

@@ -1,10 +1,7 @@
 // Branching-story graph schema.
 
-use crate::components::Vocabulary;
-use crate::components::{Screen, Sprite, TextLabel};
-use crate::ecs::AudioClipHandle;
-use crate::ecs::Ref;
-use crate::ecs::TextureHandle;
+use crate::components::{Screen, Sprite, TextLabel, Vocabulary};
+use crate::ecs::{AudioClipHandle, Ref, TextureHandle};
 use alloc::string::String;
 use alloc::vec::Vec;
 

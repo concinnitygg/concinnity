@@ -34,8 +34,7 @@ use super::com;
 use super::context::DxContext;
 use super::probe_set::{CubeResource, create_cube_resource, write_cube_mip_uav};
 use super::pso::compute_pso;
-use crate::directx::descriptor_slot::DescriptorTables;
-use crate::directx::descriptor_slot::SrvSlot;
+use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::root_constants::RootConstants;
 use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
 

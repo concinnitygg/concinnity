@@ -60,7 +60,6 @@ mod event;
 mod event_store;
 mod ext_columns;
 mod frame;
-mod headless;
 mod join;
 mod mask;
 mod parked;
@@ -72,6 +71,7 @@ mod resource;
 mod storage;
 mod system;
 mod system_entry;
+mod systems;
 mod tick;
 mod tick_accumulator;
 mod user_system;
@@ -136,8 +136,7 @@ pub use protocol::{
 
 // The runtime behavior trait every engine system implements + its per-step
 // control signal. Renderer-free (they name only `PipelineContext`), so they live
-// here for the physics / audio subsystem crates; the client's `define_systems!`
-// table names the gate that builds each one.
+// here; each system's table entry names the gate that builds it.
 pub use system::{StepResult, System};
 
 // The asset id -> Entity index every identified entity is registered in.
@@ -153,9 +152,9 @@ pub use payload_store::{NoPayloads, PayloadStore};
 // This crate writes one such table itself, listing the simulation systems it
 // owns, for a world that runs with no host beyond it.
 pub use built_system::BuiltSystem;
-pub use headless::HEADLESS_SYSTEMS;
 pub use phase::Phase;
-pub use system_entry::{CompleteWorld, SystemEntry, SystemTable};
+pub use system_entry::{CompleteWorld, SystemEntry, SystemTable, boxed};
+pub use systems::{CoreSystems, HEADLESS_SYSTEMS, SystemHost};
 pub use world::{ScratchStats, World};
 
 // The host-installed monotonic clock the step loop times systems with.

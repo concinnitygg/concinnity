@@ -6,8 +6,7 @@
 //! through `form::assemble` + `form::validate` and `mark_changed` once; the
 //! per-frame drag preview lives in `drag/shape.rs`.
 
-use concinnity_cook::authoring::registry::build_only::CharacterSchema;
-use concinnity_cook::authoring::registry::build_only::ShapePreset;
+use concinnity_cook::authoring::registry::build_only::{CharacterSchema, ShapePreset};
 use concinnity_cook::authoring::world::replace_args;
 use concinnity_cook::compile::character::builtin_schema;
 use concinnity_core::components::CharacterCapsule;

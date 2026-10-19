@@ -14,10 +14,9 @@ use super::shader_fixtures::{
 };
 use crate::editor::hook::FormTarget;
 use crate::editor::hook::tests::fixtures::{hook, press_modal};
-use crate::editor::panels::form_panel;
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::panels::shader_list::{self, RowKind};
-use crate::editor::panels::shader_templates;
+use crate::editor::panels::{form_panel, shader_templates};
 
 // "+ New Shader" opens the form empty; a blank name blocks it, and Create
 // writes each file from its starter, assigns the Materials picked, and opens

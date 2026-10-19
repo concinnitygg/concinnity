@@ -4,12 +4,10 @@
 //! the selection's world bounds and steps the interpolation.
 
 use concinnity_core::components::{Camera3D, FrameInput, Transform};
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::{FrameTime, PickIndex};
+use concinnity_core::ecs::{FrameTime, PickIndex, World};
 use concinnity_host::thread::asset_id;
 
-use crate::editor::hook::EditorHook;
-use crate::editor::hook::camera_pose;
+use crate::editor::hook::{EditorHook, camera_pose};
 use crate::editor::viewport::framing::{self, CameraPose};
 
 const GLIDE_SECS: f32 = 0.25;

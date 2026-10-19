@@ -1,4 +1,4 @@
-/// Runtime-only event sent by GraphicsSystem when a live camera setting changes,
+/// Runtime-only event sent by the renderer when a live camera setting changes,
 /// read by Camera3DSystem from its `Events<ControlsCommand>` queue.
 ///
 /// These settings (mouse sensitivity, field of view) take effect on the camera,

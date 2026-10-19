@@ -7,17 +7,13 @@
 //! and what hands control back.
 
 use concinnity_core::components::{Camera3D, FrameInput, InputKey, Transform};
-use concinnity_core::ecs::FrameTime;
-use concinnity_core::ecs::PickEntry;
-use concinnity_core::ecs::PickIndex;
-use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::ecs::{FrameTime, PickEntry, PickIndex, World};
 use concinnity_host::thread::asset_id;
 
 use super::fixtures::VP;
-use crate::editor::hook::EditorHook;
-use crate::editor::hook::bookmarks;
 use crate::editor::hook::tests::fixtures::select;
+use crate::editor::hook::{EditorHook, bookmarks};
 use crate::editor::hud;
 use crate::test_support::isolate_state_dir;
 

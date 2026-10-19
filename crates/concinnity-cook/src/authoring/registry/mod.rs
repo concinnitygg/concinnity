@@ -17,15 +17,10 @@ pub mod build_only;
 
 use crate::authoring::AuthoringError;
 pub use build_only::BuildOnlyAsset;
-use concinnity_core::components::AppConfig;
-use concinnity_core::components::Camera3D;
-use concinnity_core::components::CameraTrack;
-use concinnity_core::components::File;
-use concinnity_core::components::Room;
-use concinnity_core::components::Spawner;
-use concinnity_core::ecs::ComponentTag;
-use concinnity_core::ecs::ResourceKind;
-use concinnity_core::ecs::{ActionField, AssetFields, EnumField, FieldTable, RefField};
+use concinnity_core::components::{AppConfig, Camera3D, CameraTrack, File, Room, Spawner};
+use concinnity_core::ecs::{
+    ActionField, AssetFields, ComponentTag, EnumField, FieldTable, RefField, ResourceKind,
+};
 pub use concinnity_core::ecs::{AssetOrigin, AssetPayload};
 use concinnity_host::thread::asset_id;
 use std::sync::OnceLock;

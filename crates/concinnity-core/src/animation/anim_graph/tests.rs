@@ -2,8 +2,7 @@ use super::*;
 use crate::animation::pose_scratch::PoseScratch;
 use crate::animation::skeleton::{AnimationClip, Joint, JointPose, JointTrack, Keyframe, Skeleton};
 use crate::transform::Mat4;
-use alloc::string::String;
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 

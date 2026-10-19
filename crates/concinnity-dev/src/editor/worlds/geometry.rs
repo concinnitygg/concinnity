@@ -5,9 +5,8 @@
 //! hit-tested by the same arithmetic whichever one is up.
 
 use super::{POOL, WorldsAction, WorldsView};
-use crate::editor::hud;
-use crate::editor::theme;
 use crate::editor::widget::{self, point_in};
+use crate::editor::{hud, theme};
 
 // Which presentation of the panel is up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

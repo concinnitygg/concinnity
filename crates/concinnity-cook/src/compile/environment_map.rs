@@ -32,7 +32,7 @@
 //!
 //! Face order matches CubemapTexture: +X, -X, +Y, -Y, +Z, -Z.
 
-use concinnity_core::bake::environment_map::source::generate_sky_equirect;
+use concinnity_core::bake::environment_map::source::{bake_payload, generate_sky_equirect};
 use concinnity_core::bake::environment_map::stars::generate_stars_equirect;
 use concinnity_core::components::{EnvironmentMap, FramePriority};
 use concinnity_host::thread::jobs;
@@ -171,30 +171,8 @@ pub(crate) fn compile_environment_map_payload(
         params.irradiance_face_size,
         params.prefilter_samples,
         params.prefilter_clamp,
-        &jobs::PoolRows(&pool),
+        &pool,
     ))
-}
-
-// Convolve an equirectangular source into the serialized IBL payload (header +
-// irradiance + prefilter mips): the core bake, fanned out over `rows`.
-// The single bake both the build pass and the hot-reload decode run, so a
-// preview can never diverge from the built asset.
-fn bake_payload(
-    hdr: &HdrImage,
-    prefilter_face: u32,
-    irradiance_face: u32,
-    prefilter_samples: u32,
-    prefilter_clamp: f32,
-    rows: &jobs::PoolRows<'_>,
-) -> Vec<u8> {
-    concinnity_core::bake::environment_map::source::bake_payload(
-        hdr,
-        prefilter_face,
-        irradiance_face,
-        prefilter_samples,
-        prefilter_clamp,
-        rows,
-    )
 }
 
 /// Decode the EnvironmentMap source at `path` the same way
@@ -221,7 +199,7 @@ pub fn decode_source(
         irradiance_face,
         prefilter_samples,
         prefilter_clamp,
-        &jobs::PoolRows(jobs::pool()),
+        jobs::pool(),
     ))
 }
 

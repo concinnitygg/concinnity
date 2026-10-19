@@ -13,8 +13,7 @@
 use concinnity_core::bake::texture as texture_payload;
 use concinnity_core::bake::texture::{TextureFormat, downscale_rgba};
 use concinnity_core::blob::{BlobAssetDef, PayloadLocator, ResourceKind, ResourceRecord};
-use concinnity_core::components::Material;
-use concinnity_core::components::Model;
+use concinnity_core::components::{Material, Model};
 use concinnity_core::gfx::raster;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -418,8 +417,7 @@ fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
     use concinnity_core::components::SubMeshRef;
-    use concinnity_core::ecs::MaterialHandle;
-    use concinnity_core::ecs::MeshHandle;
+    use concinnity_core::ecs::{MaterialHandle, MeshHandle};
 
     fn record(kind: ResourceKind, handle: u32, blob: u32, offset: u64, len: u64) -> ResourceRecord {
         ResourceRecord {

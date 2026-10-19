@@ -1,15 +1,13 @@
-use alloc::format;
 use alloc::string::ToString;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 
 use super::*;
 use crate::gfx::mesh_payload::Vertex;
 use crate::render::backend::recording::{Call, RecordingBackend, recording_backend};
 use crate::render::ops::ReplayOutcome;
 use crate::render::render_slots::RenderSlots;
-use crate::render::stream_pools::ChunkRequest;
-use crate::render::stream_pools::LoadPool;
+use crate::render::stream_pools::{ChunkRequest, LoadPool};
 
 const IDENTITY4: [[f32; 4]; 4] = crate::transform::IDENTITY;
 
@@ -46,7 +44,7 @@ struct NoShaderPump;
 impl ShaderPump for NoShaderPump {
     fn set_blocked(&mut self, _bucket: u32, _blocked: bool) {}
 
-    fn pump(&mut self, _ops: &mut RenderOps, _on_resident: impl FnMut(u32, bool)) {}
+    fn pump(&mut self, _ops: &mut RenderOps, _on_resident: &mut dyn FnMut(u32, bool)) {}
 }
 
 fn empty_state() -> StreamingState {
@@ -779,7 +777,7 @@ fn the_shader_pump_follows_the_scene_pins() {
         fn set_blocked(&mut self, bucket: u32, blocked: bool) {
             self.blocked.push((bucket, blocked));
         }
-        fn pump(&mut self, _ops: &mut RenderOps, mut on_resident: impl FnMut(u32, bool)) {
+        fn pump(&mut self, _ops: &mut RenderOps, on_resident: &mut dyn FnMut(u32, bool)) {
             if self.blocked.last() == Some(&(1, false)) {
                 on_resident(1, true);
             }

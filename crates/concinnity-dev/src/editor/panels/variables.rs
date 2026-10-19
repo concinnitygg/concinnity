@@ -9,8 +9,7 @@
 
 use serde_json::Value;
 
-use crate::editor::behavior::outline;
-use crate::editor::behavior::palette;
+use crate::editor::behavior::{outline, palette};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Row {

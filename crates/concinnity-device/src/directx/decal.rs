@@ -23,8 +23,7 @@ use super::com;
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::{DxContext, align256, dump_on_err};
-use crate::directx::descriptor_slot::DescriptorTables;
-use crate::directx::descriptor_slot::SrvSlot;
+use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::error::map_hresult;
 use crate::directx::pso::{Blend, Cull, GraphicsPso, Raster};
 use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
@@ -79,8 +78,7 @@ const CUBE_VERTS: [[f32; 3]; 8] = cube_corners(0.5);
 // `DecalView` (per-frame) and `DecalParams` (per-decal) are GPU-free layout
 // structs that live in `core::render`; re-export them so
 // `crate::directx::decal::{DecalView,DecalParams}` are unchanged.
-pub(in crate::directx) use concinnity_core::render::uniforms::DecalParams;
-pub(in crate::directx) use concinnity_core::render::uniforms::DecalView;
+pub(in crate::directx) use concinnity_core::render::uniforms::{DecalParams, DecalView};
 
 // Root-signature layout (binds 1:1 with the `decal.hlsl` declarations, whose
 // `register()` annotations `DXIL_ENTRY_ABI` in build.rs pins):

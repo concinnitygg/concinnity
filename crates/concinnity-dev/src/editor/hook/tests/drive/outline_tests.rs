@@ -1,19 +1,18 @@
 //! The extent-outline drive (`hook/drive/outline.rs`): the lines a selected
 //! TriggerVolume publishes for its own shape.
 
-use concinnity_core::components::Sprite;
-use concinnity_core::components::TriggerVolume;
+use concinnity_core::components::{Sprite, TriggerVolume};
 use concinnity_core::ecs::WorldLines;
 use concinnity_host::thread::asset_id;
 
 use crate::frame_hook::FrameHook;
 
-use crate::editor::hook::tests::fixtures::{click_at, hook, pick_world, release_at};
+use crate::editor::hook::tests::fixtures::{
+    active, click_at, hook, pick_world, release_at, select,
+};
 
-use crate::editor::outlines;
+use crate::editor::{outlines, view_menu};
 
-use crate::editor::hook::tests::fixtures::{active, select};
-use crate::editor::view_menu;
 use crate::editor::viewport::billboards;
 
 // Selecting a trigger volume publishes its collider outline through the line

@@ -5,8 +5,7 @@
 //! decoders, so these live here in the build crate; the editor's debug server
 //! drives them.
 
-use concinnity_core::components::MorphDelta;
-use concinnity_core::components::SkinnedVertexData;
+use concinnity_core::components::{MorphDelta, SkinnedVertexData};
 use concinnity_core::geometry::payload_joints_to_defs;
 use concinnity_core::gfx::mesh_payload::{deserialize_skinned, deserialize_with_lods};
 

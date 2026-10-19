@@ -6,7 +6,7 @@
 //! `despawn.rs`, show/hide in `visibility.rs`, and copying a placement in
 //! `template.rs`.
 //!
-//! Scheduled before GraphicsSystem so a despawned entity is
+//! Scheduled before the renderer so a despawned entity is
 //! already gone from the GlobalTransform x RenderHandle join when transforms
 //! are pushed (it contributes nothing to any pass this same frame), and so a
 //! spawn reuses slots freed this same frame before the backend grows its draw
@@ -17,10 +17,13 @@ use super::{despawn, template, visibility};
 use crate::components::{
     DespawnRequest, EntityTarget, ReparentRequest, SkeletonPose, SpawnRequest, VisibilityRequest,
 };
-use crate::ecs::{Entity, EventCursor, FrameTime, MenuActive, PipelineContext, StepResult, System};
+use crate::ecs::{
+    Entity, EventCursor, FrameTime, MenuActive, PipelineContext, StepResult, System, World,
+};
 use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
 use crate::render::ops::RenderOps;
 use crate::render::queues::ActiveRenderQueues;
+use crate::render::render_mode::RenderMode;
 use crate::render::render_slots::RenderSlots;
 use crate::transform::propagation;
 
@@ -83,6 +86,11 @@ pub struct SpawnSystem {
 }
 
 impl SpawnSystem {
+    /// The system for a world that runs with a window.
+    pub fn for_world(world: &World) -> Option<Self> {
+        RenderMode::renders_in(world).then(Self::new)
+    }
+
     /// A system with every request cursor at the start of its queue.
     pub fn new() -> Self {
         Self::default()
@@ -136,7 +144,7 @@ impl SpawnSystem {
         // Runtime entity despawn: drain DespawnRequest events, resolve
         // each name to its entity, hide that entity's draw slots, and
         // remove it (and its descendants) from the ECS. Done before
-        // GraphicsSystem's transform push so a despawned entity is already
+        // the renderer's transform push so a despawned entity is already
         // gone from the GlobalTransform x RenderHandle join this frame and
         // contributes nothing to any pass.
         let despawn_targets = match ctx.events::<DespawnRequest>() {

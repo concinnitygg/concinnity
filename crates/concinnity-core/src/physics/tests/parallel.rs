@@ -13,8 +13,10 @@
 //! and it is what makes this file worth running under a thread sanitizer.
 
 use super::fixtures::TICK;
+use crate::fanout::Fanout;
+use crate::fanout::test_pools::Threads;
 use crate::physics::{
-    BodyHandle, ColliderShape, DynamicParams, Fanout, JointMotor, JointSpec, LayerMask, SimConfig,
+    BodyHandle, ColliderShape, DynamicParams, JointMotor, JointSpec, LayerMask, SimConfig,
     Simulation,
 };
 use alloc::vec::Vec;
@@ -24,32 +26,6 @@ const WORKERS: usize = 8;
 const CUBE: ColliderShape = ColliderShape::Cuboid {
     half_extents: [0.4, 0.4, 0.4],
 };
-
-/// A fan-out that gives every unit of work its own thread.
-struct Threads(usize);
-
-impl Fanout for Threads {
-    fn workers(&self) -> usize {
-        self.0
-    }
-
-    fn for_each<T, F>(&self, items: &mut [T], body: F)
-    where
-        T: Send,
-        F: Fn(&mut T) + Send + Sync,
-    {
-        if items.len() < 2 {
-            items.iter_mut().for_each(body);
-            return;
-        }
-        let body = &body;
-        std::thread::scope(|scope| {
-            for item in items.iter_mut() {
-                scope.spawn(move || body(item));
-            }
-        });
-    }
-}
 
 /// [`Threads`] that also counts how many steps gathered it.
 struct Counted {

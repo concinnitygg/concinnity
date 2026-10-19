@@ -9,11 +9,10 @@ use super::form_extras::{self, with_optional_id};
 use super::{
     EditorHook, FormTarget, FormTemplate, declared_id, names_of_types, short_status, visible_slot,
 };
-use crate::editor::overrides;
 use crate::editor::panels::form;
 use crate::editor::panels::form_panel::{self, FormAction, FormFocus};
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::widget;
+use crate::editor::{overrides, widget};
 
 impl EditorHook {
     // Open the add / edit form for `ty`: derive its editable arg fields from the

@@ -11,9 +11,8 @@ use crate::components::{
     ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight, Terrain,
     VolumetricFog, VoxelChunk, WaterShape, WaterSurface, WaterWave, Wind,
 };
-use crate::math::sqrt;
-use crate::math::vec3;
 use crate::math::vec3::length;
+use crate::math::{sqrt, vec3};
 
 /// Normalize an authored volume for the runtime: clamp the raymarch knobs to
 /// sane bounds and force shadows off for translucent volumetrics, which write

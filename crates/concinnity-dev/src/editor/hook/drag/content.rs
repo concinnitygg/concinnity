@@ -10,18 +10,15 @@
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::find_entry;
 use concinnity_core::components::{Camera3D, FrameInput, Transform};
-use concinnity_core::ecs::PickIndex;
-use concinnity_core::ecs::World;
+use concinnity_core::ecs::{PickIndex, World};
+use concinnity_core::math::pick::PickRay;
 
 use crate::editor::asset_handle::AssetHandle;
-use crate::editor::hook::pick;
-use crate::editor::hook::{EditorHook, entry_type};
+use crate::editor::hook::{EditorHook, entry_type, pick};
 use crate::editor::panels::content_panel;
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::theme;
-use crate::editor::viewport::billboards;
-use crate::editor::viewport::snap;
-use crate::editor::widget;
+use crate::editor::viewport::{billboards, snap};
+use crate::editor::{theme, widget};
 
 // Movement below this is a click, not a drag (the marquee's convention).
 const DRAG_START_PX: f32 = 4.0;
@@ -268,11 +265,7 @@ impl EditorHook {
     }
 
     // The names of the pick-index entries the ray strikes, nearest first.
-    fn ray_hit_names(
-        &self,
-        world: &World,
-        ray: &concinnity_core::math::pick::PickRay,
-    ) -> Vec<String> {
+    fn ray_hit_names(&self, world: &World, ray: &PickRay) -> Vec<String> {
         let Some(index) = world.resource::<PickIndex>() else {
             return Vec::new();
         };

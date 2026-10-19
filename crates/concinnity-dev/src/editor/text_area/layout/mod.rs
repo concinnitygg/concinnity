@@ -11,9 +11,8 @@ use super::markers::{GutterMarker, Severity, marker_on};
 use super::pointer::Bar;
 use super::view::{self, ViewSize};
 use super::{Pos, TextArea};
-use crate::editor::code_font;
-use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
+use crate::editor::{code_font, theme};
 
 // The most rows a text area draws; a taller rect leaves the rest blank.
 pub(crate) const ROW_POOL: usize = 64;

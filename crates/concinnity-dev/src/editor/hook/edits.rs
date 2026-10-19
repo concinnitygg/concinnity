@@ -8,16 +8,10 @@ use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
 use super::{EditorHook, EntryId, EntryList, FormTarget, declared_id, entry_type};
-use crate::editor::behavior;
-use crate::editor::build_renderable;
 use crate::editor::entry_list::build_text;
-use crate::editor::live;
-use crate::editor::modal;
-use crate::editor::notify;
-use crate::editor::panels::assets_panel;
-use crate::editor::panels::form_panel;
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::widget;
+use crate::editor::panels::{assets_panel, form_panel};
+use crate::editor::{behavior, build_renderable, live, modal, notify, widget};
 
 impl EditorHook {
     // Whether an entry already declares this `$id`.

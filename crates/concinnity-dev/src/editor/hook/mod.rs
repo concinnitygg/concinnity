@@ -43,14 +43,8 @@ use concinnity_engine::app::runtime::Runtime;
 use concinnity_engine::live_edit::PendingBackend;
 
 use super::asset_handle::AssetHandle;
-use super::behavior;
 use super::entry_list::{EntryId, EntryList};
 use super::history::History;
-use super::hud;
-use super::live;
-use super::notify;
-use super::outlines;
-use super::overrides;
 use super::panels::asset_list::ListRow;
 use super::panels::asset_tree::TreeRow;
 use super::panels::console::ConsoleSink;
@@ -59,16 +53,10 @@ use super::panels::health::HealthState;
 use super::panels::lighting;
 use super::panels::registry::{self, PanelKey, PerPanel};
 use super::selection::Selection;
-use super::session_store;
-use super::sim;
-use super::view_menu;
-use super::viewport::cursor;
-use super::viewport::framing;
-use super::viewport::gizmo;
-use super::viewport::resize;
-use super::viewport::snap;
-use super::widget;
-use super::worlds;
+use super::viewport::{cursor, framing, gizmo, resize, snap};
+use super::{
+    behavior, hud, live, notify, outlines, overrides, session_store, sim, view_menu, widget, worlds,
+};
 use crate::debug::hot_reload::WorldPathHandle;
 use crate::editor::text_area::clipboard::InternalClipboard;
 use crate::frame_hook::FrameHook;
@@ -1009,8 +997,7 @@ impl EditorHook {
             .world_mut()
             .insert_resource(MenuOverride(Some(!self.sim.playing())));
 
-        let Some(backend) = concinnity_engine::live_edit::take_render_backend(runtime.world_mut())
-        else {
+        let Some(backend) = runtime.take_render_backend() else {
             return;
         };
         staged.world_mut().insert_resource(PendingBackend(backend));

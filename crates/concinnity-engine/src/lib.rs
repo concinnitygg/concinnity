@@ -61,21 +61,13 @@ pub(crate) mod error_screen;
 pub mod gfx;
 pub(crate) mod input;
 pub mod live_edit;
-// The rigid-body simulation driver: builds a `concinnity_core::physics::Simulation`
-// from the world's physics content and steps it on the fixed tick.
-pub(crate) mod physics;
 // The thread that builds core PlanetSystem's ground patches.
 pub(crate) mod planet;
 // The user-facing settings registry and the system that applies setting
 // changes.
 pub(crate) mod settings;
-// Declarative logic (Behavior components + the shared world variables
-// store), scheduled before SpawnSystem so its requests apply the same tick.
+// Behavior state saved under the host's save directory.
 pub(crate) mod behavior;
-/// Runtime resource tables (per-kind, handle-indexed views of the blob's resource
-/// stream). `pub` so the editor's in-memory build path can construct the tables it
-/// inserts into the world, mirroring the shipped-runtime loader.
-pub mod resource;
 pub(crate) mod story;
 // Background threads that answer load requests off the frame thread.
 pub(crate) mod worker;

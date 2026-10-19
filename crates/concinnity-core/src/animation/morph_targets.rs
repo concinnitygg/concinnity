@@ -9,11 +9,9 @@
 //!
 //! The GPU consumes both tables through one buffer, see [`PayloadMorphs::packed_words`].
 
-use alloc::format;
-use alloc::string::String;
-use alloc::string::ToString;
-use alloc::vec;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use alloc::{format, vec};
 
 /// One morph-target vertex delta in dense form: position and normal offsets
 /// added to the bind pose before skinning, scaled by the target's weight.

@@ -5,13 +5,10 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::take_entry_id;
-use concinnity_core::components::ProceduralMesh;
-use concinnity_core::components::Story;
-use concinnity_core::components::VolumetricFog;
+use concinnity_core::components::{ProceduralMesh, Story, VolumetricFog};
 use concinnity_core::gfx::mesh_payload;
-use concinnity_core::render::backend;
-use concinnity_core::render::volumetric_fog;
-use concinnity_engine::live_edit::hot_reload_sources::*;
+use concinnity_core::render::world_load::source_maps::*;
+use concinnity_core::render::{backend, volumetric_fog};
 use concinnity_host::thread::asset_id;
 
 // Per-reload tally for the volumetric-fog path. Counts are surfaced separately
@@ -68,8 +65,7 @@ pub(super) fn reload_volumetric_fog(
         }
     };
 
-    // First declared VolumetricFog wins; mirrors the init drain in
-    // `run_init`. A missing entry or one with `enabled = false` resolves to
+    // First declared VolumetricFog wins; mirrors the graphics init drain. A missing entry or one with `enabled = false` resolves to
     // `None`, which disables the pass.
     let mut resolved: Option<volumetric_fog::FogSettings> = None;
     for entry in &entries {

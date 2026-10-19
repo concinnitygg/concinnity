@@ -1372,7 +1372,7 @@ pub struct DrawObject {
     pub resident: bool,
     /// World-space axis-aligned bounding box used for frustum culling.
     /// Baked from the mesh's local bounds and the prop's initial model matrix
-    /// at GraphicsSystem init. Set to a degenerate (NaN) box to disable culling.
+    /// at graphics init. Set to a degenerate (NaN) box to disable culling.
     pub bb_min: [f32; 3],
     /// Upper corner of the world-space culling AABB.
     pub bb_max: [f32; 3],

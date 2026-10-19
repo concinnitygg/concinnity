@@ -12,8 +12,7 @@
 // consumed: it is a stored component now, and the runtime pass drains it.
 
 use crate::authoring::world::args_with_id;
-use concinnity_core::components::NamedAction;
-use concinnity_core::components::{EngineDefaults, StoryCommand};
+use concinnity_core::components::{EngineDefaults, NamedAction, StoryCommand};
 
 use super::expand::{ExpandReport, asset_name, registered_type};
 use crate::authoring::registry::RegisteredType;

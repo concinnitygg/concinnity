@@ -153,8 +153,7 @@ fn position_chip_strip(
 mod tests {
     use super::*;
     use crate::components::{Justify, LayoutRow, SpriteFit, TextAlign};
-    use crate::ecs::Ref;
-    use crate::ecs::{FontHandle, World};
+    use crate::ecs::{FontHandle, Ref, World};
     use crate::gfx::font;
     use alloc::string::ToString;
     use alloc::vec;

@@ -21,7 +21,7 @@ pub(super) struct Capture {
     // The rebind setting.
     setting_key: SettingKey,
     // The value `TextLabel` showing the bound key (set to a prompt while
-    // capturing; GraphicsSystem rewrites it after the bind).
+    // capturing; the renderer rewrites it after the bind).
     value_label: Option<AssetId>,
     // The label's text before capture began, restored if the user cancels.
     prev_text: String,
@@ -55,7 +55,7 @@ impl UiInputSystem {
         } else if let Some(op) = op
             && let Some(cap) = self.capturing.take()
         {
-            // GraphicsSystem rewrites the value label to the new binding when it
+            // The renderer rewrites the value label to the new binding when it
             // reads the command next tick; the prompt shows until then.
             ctx.events_mut::<SettingCommand>().send(SettingCommand {
                 setting: cap.setting_key,

@@ -4,10 +4,8 @@
 
 use ash::vk;
 use concinnity_core::components;
-use concinnity_core::render::backend_init;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::hdr_output;
-use concinnity_core::render::pass_timing;
+use concinnity_core::render::{backend_init, hdr_output, pass_timing};
 use concinnity_core::settings::ResolvedGraphics;
 use std::ffi::{CStr, CString, c_char};
 

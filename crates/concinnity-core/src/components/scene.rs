@@ -1,7 +1,6 @@
 // Scene marker schema.
 
-use crate::components::Camera3D;
-use crate::components::{Vocabulary, vocabulary_synonyms};
+use crate::components::{Camera3D, Vocabulary, vocabulary_synonyms};
 use crate::ecs::Ref;
 
 /// How a scene jump reaches the new scene. The single accepted vocabulary for

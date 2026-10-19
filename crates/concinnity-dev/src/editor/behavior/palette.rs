@@ -518,9 +518,7 @@ fn literal_body(from: &Value, verb: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::BehaviorExpr;
-    use concinnity_core::components::BehaviorNode;
-    use concinnity_core::components::BehaviorSource;
+    use concinnity_core::components::{BehaviorExpr, BehaviorNode, BehaviorSource};
 
     // Every offered verb produces JSON the schema parses back into the type it
     // names, so nothing the palette inserts can be a shape the runtime rejects.

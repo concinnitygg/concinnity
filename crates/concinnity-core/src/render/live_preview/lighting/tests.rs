@@ -1,7 +1,6 @@
-use alloc::format;
 use alloc::string::{String, ToString};
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 
 use super::super::test_support::Fixture;
 use super::*;

@@ -69,7 +69,7 @@ impl FileKind {
     }
 
     /// Returns true for kinds whose build output is a mesh blob compatible with the
-    /// mesh payload format (vertex + index data readable by GraphicsSystem).
+    /// mesh payload format (vertex + index data readable by the renderer).
     pub fn is_mesh(&self) -> bool {
         matches!(self, Self::Obj)
     }

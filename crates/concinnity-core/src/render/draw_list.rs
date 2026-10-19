@@ -1,16 +1,16 @@
 //! Render-prep helpers that consume asset components and produce GPU-ready data.
 //! None of these functions hold or borrow a backend handle.
 
-use crate::components::InstancedProp;
-use crate::components::{File, FileKind, Identity, ProceduralMesh, Room, SubMeshRef, VoxelChunk};
+use crate::components::{
+    File, FileKind, Identity, InstancedProp, ProceduralMesh, Room, SubMeshRef, VoxelChunk,
+};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, MaterialHandle, MeshHandle, PayloadLocator, PipelineContext};
-use crate::gfx::frustum;
-use crate::gfx::mesh_payload;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{
     DrawIndex, DrawObject, InstancedCluster, LodSlice, MaterialUniforms, NO_NORMAL_MAP_SLOT,
 };
+use crate::gfx::{frustum, mesh_payload};
 use crate::render::material_entry::{MaterialEntry, resolve_material_slots};
 use crate::resource::MeshTable;
 use crate::transform::IDENTITY as IDENTITY4;
@@ -327,7 +327,7 @@ pub fn load_mesh_geometry(
     for (id, _) in &baked_meshes {
         if id.is_none_or(|id| baked_payloads.get(id).is_none()) {
             tracing::error!(
-                "GraphicsSystem: ProceduralMesh {id:?} was baked at start but left no payload"
+                "graphics: ProceduralMesh {id:?} was baked at start but left no payload"
             );
             return None;
         }
@@ -347,7 +347,7 @@ pub fn load_mesh_geometry(
     {
         // Room path can carry the scene without any explicit Mesh/ProceduralMesh
         tracing::info!(
-            "GraphicsSystem: no Mesh, ProceduralMesh, VoxelChunk, or mesh-kind File sources found"
+            "graphics: no Mesh, ProceduralMesh, VoxelChunk, or mesh-kind File sources found"
         );
     }
 
@@ -357,7 +357,7 @@ pub fn load_mesh_geometry(
     for (handle, entry) in mesh_table.0.iter().enumerate() {
         let Some(locator) = &entry.payload else {
             tracing::error!(
-                "GraphicsSystem: Mesh handle {} has no compiled payload; did the build succeed?",
+                "graphics: Mesh handle {} has no compiled payload; did the build succeed?",
                 handle
             );
             return None;
@@ -416,7 +416,7 @@ fn decode_loaded(bytes: &[u8], label: &str) -> Option<LoadedMesh> {
             counts: None,
         }),
         Err(e) => {
-            tracing::error!("GraphicsSystem: malformed {label} payload: {e}");
+            tracing::error!("graphics: malformed {label} payload: {e}");
             None
         }
     }
@@ -431,7 +431,7 @@ fn read_payload(
     match ctx.read_payload(locator) {
         Ok(bytes) => Some(bytes.to_vec()),
         Err(e) => {
-            tracing::error!("GraphicsSystem: failed to read {label} payload: {e}");
+            tracing::error!("graphics: failed to read {label} payload: {e}");
             None
         }
     }
@@ -509,7 +509,7 @@ impl<'a> MeshSink<'a> {
     ) -> Option<()> {
         for (i, (id, locator)) in items.enumerate() {
             let (Some(id), Some(locator)) = (id, locator) else {
-                tracing::error!("GraphicsSystem: {label}[{i}] {id:?} has no compiled payload");
+                tracing::error!("graphics: {label}[{i}] {id:?} has no compiled payload");
                 return None;
             };
             let bounds = self.deferred.def_bounds(id, self.geometry.len());
@@ -532,7 +532,7 @@ pub fn load_room_geometry(ctx: &mut PipelineContext) -> Option<(Vec<RoomGeometry
             Some(l) => l.clone(),
             None => {
                 tracing::error!(
-                    "GraphicsSystem: Room[{}] {:?} has no compiled payload; did the build succeed?",
+                    "graphics: Room[{}] {:?} has no compiled payload; did the build succeed?",
                     i,
                     id
                 );
@@ -543,18 +543,14 @@ pub fn load_room_geometry(ctx: &mut PipelineContext) -> Option<(Vec<RoomGeometry
         let bytes = match ctx.read_payload(&locator) {
             Ok(b) => b.to_vec(),
             Err(e) => {
-                tracing::error!(
-                    "GraphicsSystem: failed to read Room {:?} payload: {}",
-                    id,
-                    e
-                );
+                tracing::error!("graphics: failed to read Room {:?} payload: {}", id, e);
                 return None;
             }
         };
         match mesh_payload::deserialize_with_lods(&bytes) {
             Ok((verts, idxs, alternates)) => room_geometry.push((room, verts, idxs, alternates)),
             Err(e) => {
-                tracing::error!("GraphicsSystem: malformed Room payload: {}", e);
+                tracing::error!("graphics: malformed Room payload: {}", e);
                 return None;
             }
         }
@@ -677,7 +673,7 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 Some(s) => s,
                 None => {
                     tracing::error!(
-                        "GraphicsSystem: Prop {:?} references unknown model {}; add a Model asset with that id",
+                        "graphics: Prop {:?} references unknown model {}; add a Model asset with that id",
                         item.asset_id,
                         model_id
                     );
@@ -688,10 +684,7 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 let sub_mesh = match sub.mesh {
                     Some(m) => m.index(),
                     None => {
-                        tracing::error!(
-                            "GraphicsSystem: Model {} has a sub-mesh with no mesh",
-                            model_id
-                        );
+                        tracing::error!("graphics: Model {} has a sub-mesh with no mesh", model_id);
                         return None;
                     }
                 };
@@ -707,7 +700,7 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                     Some(t) => t,
                     None => {
                         tracing::error!(
-                            "GraphicsSystem: Model {} sub-mesh handle {} out of range; add a Mesh or ProceduralMesh asset with that name",
+                            "graphics: Model {} sub-mesh handle {} out of range; add a Mesh or ProceduralMesh asset with that name",
                             model_id,
                             sub_mesh
                         );
@@ -718,7 +711,7 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                     Ok(entry) => entry,
                     Err(mat_id) => {
                         tracing::error!(
-                            "GraphicsSystem: Model {} sub-mesh material {} not found",
+                            "graphics: Model {} sub-mesh material {} not found",
                             model_id,
                             mat_id.index()
                         );
@@ -761,7 +754,7 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 Some(m) => m.index(),
                 None => {
                     tracing::error!(
-                        "GraphicsSystem: Prop {:?} has neither a model nor a mesh",
+                        "graphics: Prop {:?} has neither a model nor a mesh",
                         item.asset_id
                     );
                     return None;
@@ -779,7 +772,7 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 Some(t) => t,
                 None => {
                     tracing::error!(
-                        "GraphicsSystem: Prop {:?} references out-of-range mesh handle {}; add a Mesh or ProceduralMesh asset with that name",
+                        "graphics: Prop {:?} references out-of-range mesh handle {}; add a Mesh or ProceduralMesh asset with that name",
                         item.asset_id,
                         mesh_handle
                     );
@@ -790,7 +783,7 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 Ok(entry) => entry,
                 Err(mat_id) => {
                     tracing::error!(
-                        "GraphicsSystem: Prop {:?} references unknown material {}; add a Material asset with that id",
+                        "graphics: Prop {:?} references unknown material {}; add a Material asset with that id",
                         item.asset_id,
                         mat_id.index()
                     );
@@ -865,7 +858,7 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             Some(t) => t,
             None => {
                 tracing::error!(
-                    "GraphicsSystem: InstancedProp[{}] references out-of-range mesh handle {}",
+                    "graphics: InstancedProp[{}] references out-of-range mesh handle {}",
                     cluster,
                     mesh_handle
                 );
@@ -876,7 +869,7 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             Ok(entry) => entry,
             Err(mat_id) => {
                 tracing::error!(
-                    "GraphicsSystem: InstancedProp[{}] references unknown material {}",
+                    "graphics: InstancedProp[{}] references unknown material {}",
                     cluster,
                     mat_id.index()
                 );
@@ -975,7 +968,7 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             Ok(entry) => entry,
             Err(mat_id) => {
                 tracing::error!(
-                    "GraphicsSystem: a Terrain references unknown material {}; add a Material asset with that id",
+                    "graphics: a Terrain references unknown material {}; add a Material asset with that id",
                     mat_id.index()
                 );
                 return None;
@@ -1004,13 +997,8 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::InstanceTransform;
-    use crate::components::Prop;
-    use crate::ecs::ComponentSlot;
-    use crate::ecs::PayloadStore;
-    use crate::ecs::Ref;
-    use crate::ecs::TextureHandle;
-    use crate::ecs::World;
+    use crate::components::{InstanceTransform, Prop};
+    use crate::ecs::{ComponentSlot, PayloadStore, Ref, TextureHandle, World};
     use crate::error::PayloadError;
     use crate::gfx::render_types::NO_ALBEDO_SLOT;
     use crate::resource::ResourceEntry;
@@ -1643,9 +1631,8 @@ mod tests {
     }
 
     // Accumulates components + a single blob section so load_mesh_geometry /
-    // load_room_geometry can decode in-memory payloads, mirroring the
-    // GraphicsSystem WorldBuilder precedent. The components are added once the
-    // section is sealed into the world's payload store.
+    // load_room_geometry can decode in-memory payloads. The components are
+    // added once the section is sealed into the world's payload store.
     struct BlobWorld {
         section: Vec<u8>,
         pending: Vec<PendingAdd>,

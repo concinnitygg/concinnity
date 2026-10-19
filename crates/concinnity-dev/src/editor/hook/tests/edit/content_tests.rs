@@ -7,9 +7,8 @@ use concinnity_core::components::TextInput;
 use concinnity_core::ecs::World;
 
 use crate::editor::hook::edit::content::VISUAL_TYPES;
-use crate::editor::hook::tests::fixtures::{entry, hook};
+use crate::editor::hook::tests::fixtures::{active, entry, hook};
 
-use crate::editor::hook::tests::fixtures::active;
 use crate::editor::panels::content_panel;
 use crate::editor::panels::registry::PanelKey;
 

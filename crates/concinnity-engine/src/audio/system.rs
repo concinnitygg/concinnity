@@ -6,13 +6,13 @@
 use concinnity_core::audio::EmitterId;
 use concinnity_core::components::{
     AudioBus, AudioCommand, AudioCue, AudioEmitter, AudioOcclusionProbe, AudioTarget, Behavior,
-    BodyDynamics, Camera3D, ContactEvent, CueKind, PlayCue, ScreenShown, Story, Transform,
+    BodyDynamics, Camera3D, ContactEvent, CueKind, PlayCue, PropBody, ScreenShown, Story,
+    Transform,
 };
-use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
-    AudioClipHandle, Entity, EventCursor, PayloadLocator, PipelineContext, SimTiming, StepResult,
-    System,
+    AudioClipHandle, Entity, EventCursor, PayloadLocator, PipelineContext, Ref, SimTiming,
+    StepResult, System, World,
 };
 use concinnity_core::resource::AudioClipTable;
 use concinnity_core::settings::StoredSettings;
@@ -104,6 +104,23 @@ impl std::fmt::Debug for AudioSystem {
 }
 
 impl AudioSystem {
+    // The system for a world with anything to play: an `AudioEmitter`
+    // (positional sound), an `AudioCue` (screen-triggered sound), a `Story`
+    // with page audio, a `Behavior` with a sound node, or a `PropBody` with an
+    // impact sound. Its init opens an audio device, so a world with none of
+    // them stays silent and device-free.
+    pub(crate) fn for_world(world: &World) -> Option<Self> {
+        let needs = world.query::<AudioEmitter>().next().is_some()
+            || world.query::<AudioCue>().next().is_some()
+            || world
+                .query::<Story>()
+                .next()
+                .is_some_and(Story::plays_audio)
+            || world.query::<Behavior>().any(Behavior::plays_sound)
+            || world.query::<PropBody>().any(|b| b.impact_clip.is_some());
+        needs.then(Self::new)
+    }
+
     // Fresh system with no device, live emitters, or cues. The output device is
     // acquired and the emitters / cues are bound from the world's components in
     // `init`, so construction is side-effect-free (required by the

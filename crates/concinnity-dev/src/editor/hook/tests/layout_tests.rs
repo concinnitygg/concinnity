@@ -4,10 +4,7 @@
 //! panel stops answering, each region's scroll, and where the secondary panels
 //! park while a drag is in flight.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::Sprite;
-use concinnity_core::components::TextInput;
-use concinnity_core::components::TextLabel;
+use concinnity_core::components::{FrameInput, Sprite, TextInput, TextLabel};
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
@@ -15,21 +12,16 @@ use super::fixtures::{
     behavior, behavior_session, close_rect_of, entry, hook, seed_tree, select_behavior, set_input,
     title_rect_of, world_with_fields, world_with_input,
 };
-use crate::editor::behavior;
 use crate::editor::behavior::panel::{BehaviorAction, ViewMode};
 use crate::editor::hook::{Drag, FormTarget};
-use crate::editor::hud;
-use crate::editor::inject;
+use crate::editor::{behavior, hud, inject, widget};
 use crate::frame_hook::FrameHook;
 
-use crate::editor::panels::form_panel;
+use crate::editor::panels::{assets_panel, form_panel, preview};
 
-use crate::editor::panels::assets_panel;
-use crate::editor::panels::preview;
 use crate::editor::panels::registry::PanelKey;
 
 use crate::editor::hook::tests::fixtures::entry_target;
-use crate::editor::widget;
 
 // Holding a panel's title bar drags it; the origin follows the cursor by the
 // grab offset and hard-stops at the window edges. Release ends the drag.

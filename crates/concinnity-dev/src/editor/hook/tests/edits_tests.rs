@@ -5,12 +5,9 @@
 //! tracks the saved list across one.
 
 use concinnity_cook::authoring::world::parse_world_jsonl;
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::KeyEvent;
-use concinnity_core::components::KeyMods;
-use concinnity_core::components::KeyPress;
-use concinnity_core::components::TextLabel;
+use concinnity_core::components::{FrameInput, KeyEvent, KeyMods, KeyPress, TextLabel};
 use concinnity_core::ecs::World;
+use concinnity_host::store::paths::StateTree;
 
 use super::fixtures::{entry, hook, set_field, world_with_fields, world_with_input};
 use crate::editor::hook::{EditorHook, FormTarget};
@@ -300,9 +297,7 @@ fn save_writes_the_world_file_and_no_build_output() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     let build_root = dir.path().join(".concinnity");
-    crate::project::open(
-        concinnity_host::store::paths::StateTree::at(dir.path()).with_build(&build_root),
-    );
+    crate::project::open(StateTree::at(dir.path()).with_build(&build_root));
 
     let world_path = dir.path().join("worlds").join("world.jsonl");
     let entries = vec![serde_json::json!({"type":"PhysicsConfig","args":{"$id":"phys"}})];

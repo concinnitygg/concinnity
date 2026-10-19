@@ -12,12 +12,11 @@
 //! [`FramePriority`]. It is process-wide and built once, by whichever of
 //! `configure` and `pool()` is reached first.
 
-use std::sync::OnceLock;
-use std::time::Instant;
-
 use concinnity_core::components::FramePriority;
-use concinnity_core::profile::{FanOutClock, FanOutTimer, FanOutTiming};
+use concinnity_core::ecs::ScheduleMode;
+use concinnity_core::fanout::Fanout;
 use rayon::prelude::*;
+use std::sync::OnceLock;
 
 use super::role::{ThreadRole, set_current_thread_role};
 
@@ -43,110 +42,72 @@ impl JobPool {
         JobPool { pool, priority }
     }
 
-    /// Number of worker threads in this pool.
-    pub fn thread_count(&self) -> usize {
-        self.pool.current_num_threads()
-    }
-
     /// The priority setting the workers were started with.
     pub fn priority(&self) -> FramePriority {
         self.priority
     }
+}
 
-    /// Apply `f` to every item in parallel, blocking until all are done.
-    ///
-    /// Each item must be independent: `f` runs concurrently across items in
-    /// no defined order. Inputs shorter than two items skip the pool and run
-    /// inline to avoid dispatch overhead.
-    pub fn parallel_for<T, F>(&self, items: &mut [T], f: F)
+/// The pool lent to core: physics steps, behavior evaluation, pose sampling,
+/// bake rows and render-graph recording.
+impl Fanout for JobPool {
+    fn workers(&self) -> usize {
+        self.pool.current_num_threads()
+    }
+
+    // Nested rayon calls inside dispatch to this pool's bounded workers
+    // instead of rayon's global pool.
+    fn scope<R, F>(&self, work: F) -> R
+    where
+        F: FnOnce() -> R + Send,
+        R: Send,
+    {
+        self.pool.install(work)
+    }
+
+    // Fewer than two items skip the pool and run on the calling thread.
+    fn for_each<T, F>(&self, items: &mut [T], body: F)
     where
         T: Send,
         F: Fn(&mut T) + Send + Sync,
     {
         if items.len() < 2 {
-            items.iter_mut().for_each(f);
+            items.iter_mut().for_each(body);
             return;
         }
-        self.pool.install(|| items.par_iter_mut().for_each(f));
+        self.pool.install(|| items.par_iter_mut().for_each(body));
     }
 
-    /// [`parallel_for`](Self::parallel_for), reporting how long the calling
-    /// thread waited against how much work the items took.
-    pub fn parallel_for_timed<T, F>(&self, items: &mut [T], f: F) -> FanOutTiming
+    // One spawned job per item, so each starts as soon as a worker is free.
+    // Even a lone item goes to a worker: backends record passes on per-worker
+    // command pools.
+    fn spawn_each<T, F>(&self, items: &mut [T], body: F)
     where
         T: Send,
         F: Fn(&mut T) + Send + Sync,
     {
-        let timer = fan_out_timer();
-        self.parallel_for(items, |item| timer.job(|| f(item)));
-        timer.finish()
-    }
-
-    /// Run a closure inside this pool's scope so any nested rayon
-    /// `par_iter` / `par_iter_mut` calls dispatch to this pool's bounded
-    /// workers instead of rayon's global pool (which defaults to every core
-    /// and would starve the render thread when invoked from a worker that is
-    /// itself competing for CPU).
-    ///
-    /// Used by every backend's parallel command-buffer recording.
-    pub fn install<R, F>(&self, f: F) -> R
-    where
-        F: FnOnce() -> R + Send,
-        R: Send,
-    {
-        self.pool.install(f)
-    }
-}
-
-/// Spreads a bake's independent rows across the given job pool.
-///
-/// The environment-map convolutions decompose into rows that share nothing --
-/// each reads only the immutable source and writes only its own texels -- so
-/// fanning them out buys wall clock without changing a byte. Handed to
-/// `concinnity_core::bake` wherever a build has a pool behind it; a caller
-/// without one uses `Serial` instead.
-pub struct PoolRows<'a>(pub &'a JobPool);
-
-impl concinnity_core::bake::environment_map::RowScheduler for PoolRows<'_> {
-    fn run<T: Send>(&self, items: &mut [T], compute: &(dyn Fn(&mut T) + Send + Sync)) {
-        self.0.parallel_for(items, compute);
-    }
-}
-
-/// Records a frame graph's passes across the pool, one job per pass.
-impl concinnity_core::render::render_graph::PassFanOut for JobPool {
-    type Clock = SinceStart;
-
-    fn clock(&self) -> SinceStart {
-        SinceStart(Instant::now())
-    }
-
-    // One spawned job per pass, so each starts as soon as a worker is free.
-    fn for_each<T: Send, F: Fn(&mut T) + Send + Sync>(&self, items: &mut [T], job: F) {
-        let job = &job;
+        let body = &body;
         self.pool.install(|| {
             rayon::scope(|scope| {
                 for item in items {
-                    scope.spawn(move |_| job(item));
+                    scope.spawn(move |_| body(item));
                 }
             });
         });
     }
-}
 
-/// The wall clock a fan-out is timed against: nanoseconds since it started.
-#[derive(Debug, Clone, Copy)]
-pub struct SinceStart(Instant);
-
-impl FanOutClock for SinceStart {
-    fn elapsed_ns(&self) -> u64 {
-        self.0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
+    fn clock_ns(&self) -> u64 {
+        crate::clock::monotonic_nanos()
     }
 }
 
-/// A timer for a fan-out that starts now.
-pub fn fan_out_timer() -> FanOutTimer<SinceStart> {
-    FanOutTimer::new(SinceStart(Instant::now()))
+/// The pool a schedule mode runs on: [`pool`] under a parallel schedule, its
+/// single-worker twin under a serial one.
+pub fn pool_for(mode: ScheduleMode) -> &'static JobPool {
+    match mode {
+        ScheduleMode::Parallel => pool(),
+        ScheduleMode::Serial => serial_pool(),
+    }
 }
 
 // The process-wide pool, built by whichever of `configure` and `pool` gets
@@ -191,7 +152,7 @@ pub fn pool() -> &'static JobPool {
 /// run one at a time. The serial schedule installs solver work here so the
 /// determinism oracle exercises the identical code path minus the
 /// concurrency.
-pub fn serial_pool() -> &'static JobPool {
+fn serial_pool() -> &'static JobPool {
     static SERIAL: OnceLock<JobPool> = OnceLock::new();
     SERIAL.get_or_init(|| JobPool::new(1, FramePriority::default()))
 }
@@ -210,14 +171,14 @@ mod tests {
         let cell = OnceLock::new();
         assert!(size_pool(&cell, 3, FramePriority::AllThreads));
         let sized = cell.get().expect("the sized pool");
-        assert_eq!(sized.thread_count(), 3);
+        assert_eq!(sized.workers(), 3);
         assert_eq!(sized.priority(), FramePriority::AllThreads);
 
         // The pool is built once, so a later call changes nothing and says so
         // rather than recording a count nobody reads.
         assert!(!size_pool(&cell, 7, FramePriority::Normal));
         let kept = cell.get().expect("the sized pool");
-        assert_eq!(kept.thread_count(), 3);
+        assert_eq!(kept.workers(), 3);
         assert_eq!(kept.priority(), FramePriority::AllThreads);
     }
 
@@ -225,9 +186,9 @@ mod tests {
     fn configure_is_refused_once_the_pool_exists() {
         // Order-independent: reaching `pool()` is what closes configuration,
         // whichever test in this process got there first.
-        let workers = pool().thread_count();
+        let workers = pool().workers();
         assert!(!configure(workers + 1, FramePriority::Normal));
-        assert_eq!(pool().thread_count(), workers);
+        assert_eq!(pool().workers(), workers);
     }
 
     // An explicit worker count is honored (floored at one). Tested via
@@ -236,14 +197,14 @@ mod tests {
     // other tests that also touch it.
     #[test]
     fn new_sets_the_worker_count() {
-        assert_eq!(JobPool::new(3, FramePriority::default()).thread_count(), 3);
-        assert_eq!(JobPool::new(0, FramePriority::default()).thread_count(), 1);
+        assert_eq!(JobPool::new(3, FramePriority::default()).workers(), 3);
+        assert_eq!(JobPool::new(0, FramePriority::default()).workers(), 1);
     }
 
     #[cfg(target_vendor = "apple")]
     #[test]
     fn workers_run_at_the_frame_qos_class() {
-        let class = JobPool::new(1, FramePriority::Normal).install(|| {
+        let class = JobPool::new(1, FramePriority::Normal).scope(|| {
             let mut class = libc::qos_class_t::QOS_CLASS_UNSPECIFIED;
             let mut relative = 0;
             // SAFETY: both out-pointers are live locals, and `pthread_self`
@@ -268,7 +229,7 @@ mod tests {
         };
 
         let worker_priority = |priority| {
-            JobPool::new(1, priority).install(|| {
+            JobPool::new(1, priority).scope(|| {
                 // SAFETY: `GetCurrentThread` is a pseudo-handle valid for the
                 // calling worker.
                 unsafe { GetThreadPriority(GetCurrentThread()) }
@@ -285,13 +246,20 @@ mod tests {
     }
 
     #[test]
-    fn pool_rows_visit_every_row_exactly_once() {
-        use concinnity_core::bake::environment_map::RowScheduler;
-
+    fn every_fanout_entry_visits_each_item_exactly_once() {
         let pool = JobPool::new(2, FramePriority::default());
-        let mut rows = vec![0u32; 257];
-        PoolRows(&pool).run(&mut rows, &|visits| *visits += 1);
-        assert!(rows.iter().all(|&visits| visits == 1));
+        let mut items = vec![0u32; 257];
+        pool.for_each(&mut items, |visits| *visits += 1);
+        pool.spawn_each(&mut items, |visits| *visits += 1);
+        pool.scope(|| pool.for_each(&mut items, |visits| *visits += 1));
+        assert!(items.iter().all(|&visits| visits == 3));
+        assert_eq!(pool.workers(), 2);
+    }
+
+    #[test]
+    fn each_schedule_mode_picks_its_pool() {
+        assert_eq!(pool_for(ScheduleMode::Serial).workers(), 1);
+        assert!(core::ptr::eq(pool_for(ScheduleMode::Parallel), pool()));
     }
 
     // The auto default always leaves at least one worker.
@@ -300,10 +268,22 @@ mod tests {
         assert!(default_threads() >= 1);
     }
 
+    // A lone item runs on the calling thread rather than waking a worker.
+    #[test]
+    fn a_lone_item_runs_on_the_calling_thread() {
+        let pool = JobPool::new(2, FramePriority::default());
+        let caller = std::thread::current().id();
+        let ran_on = std::sync::Mutex::new(None);
+        pool.for_each(&mut [0u32], |_| {
+            *ran_on.lock().unwrap() = Some(std::thread::current().id());
+        });
+        assert_eq!(ran_on.into_inner().unwrap(), Some(caller));
+    }
+
     #[test]
     fn parallel_for_visits_every_item() {
         let mut data: Vec<u32> = (0..10_000).collect();
-        pool().parallel_for(&mut data, |x| *x += 1);
+        pool().for_each(&mut data, |x| *x += 1);
         assert!(data.iter().enumerate().all(|(i, &x)| x == i as u32 + 1));
     }
 
@@ -311,7 +291,7 @@ mod tests {
     fn a_timed_parallel_for_reports_the_work_inside_the_wait() {
         let pool = JobPool::new(2, FramePriority::default());
         let mut items = [0u32; 4];
-        let timing = pool.parallel_for_timed(&mut items, |x| {
+        let timing = pool.for_each_timed(&mut items, |x| {
             std::thread::sleep(std::time::Duration::from_millis(2));
             *x += 1;
         });
@@ -329,11 +309,11 @@ mod tests {
     #[test]
     fn parallel_for_handles_empty_and_single() {
         let mut empty: Vec<u32> = Vec::new();
-        pool().parallel_for(&mut empty, |x| *x += 1);
+        pool().for_each(&mut empty, |x| *x += 1);
         assert!(empty.is_empty());
 
         let mut single = vec![41u32];
-        pool().parallel_for(&mut single, |x| *x += 1);
+        pool().for_each(&mut single, |x| *x += 1);
         assert_eq!(single, vec![42]);
     }
 }

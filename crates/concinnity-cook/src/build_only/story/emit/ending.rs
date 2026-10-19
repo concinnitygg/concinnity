@@ -1,5 +1,4 @@
-use concinnity_core::components::NamedAction;
-use concinnity_core::components::StoryCommand;
+use concinnity_core::components::{NamedAction, StoryCommand};
 use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 
 use super::names::StoryNames;

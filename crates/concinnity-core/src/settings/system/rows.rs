@@ -268,8 +268,7 @@ impl SettingsState {
 mod tests {
     use super::*;
     use crate::components::ScrollRow;
-    use crate::ecs::Ref;
-    use crate::ecs::World;
+    use crate::ecs::{Ref, World};
     use alloc::vec;
     use hashbrown::HashSet;
 

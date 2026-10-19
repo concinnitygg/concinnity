@@ -4,7 +4,7 @@ use concinnity_cook::compile::program::{CompileFailure, Diagnostic, EntryFailure
 use concinnity_cook::compile::shader::CompiledShader;
 use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::components::{ShaderPrograms, ShaderStage};
-use concinnity_core::render::backend::PreparedPipelines;
+use concinnity_core::render::backend::{GeometryEdit, PreparedPipelines, SceneHost};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::scene_state::SceneState;
 use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
@@ -24,17 +24,14 @@ struct ShaderBackend {
     prepared: Vec<Option<FakePipeline>>,
 }
 
-impl concinnity_core::render::backend::SceneHost for ShaderBackend {
+impl SceneHost for ShaderBackend {
     fn scene(&self) -> Option<&SceneState> {
         None
     }
     fn scene_mut(&mut self) -> Option<&mut SceneState> {
         None
     }
-    fn edit_geometry(
-        &mut self,
-        _: concinnity_core::render::backend::GeometryEdit<'_>,
-    ) -> Option<RenderResult<()>> {
+    fn edit_geometry(&mut self, _: GeometryEdit<'_>) -> Option<RenderResult<()>> {
         None
     }
 }

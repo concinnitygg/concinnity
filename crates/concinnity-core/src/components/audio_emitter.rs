@@ -1,10 +1,7 @@
 // Positional audio-emitter schema.
 
-use crate::components::AudioBus;
-use crate::components::Prop;
-use crate::components::Vocabulary;
-use crate::ecs::AudioClipHandle;
-use crate::ecs::Ref;
+use crate::components::{AudioBus, Prop, Vocabulary};
+use crate::ecs::{AudioClipHandle, Ref};
 
 /// A point source of sound in the world.
 ///

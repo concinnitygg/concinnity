@@ -5,8 +5,7 @@
 use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;
 
-use super::EditorHook;
-use super::camera_pose;
+use super::{EditorHook, camera_pose};
 use crate::editor::session_store;
 
 // The bookmark slot a digit key addresses, if any.

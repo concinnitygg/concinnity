@@ -27,12 +27,9 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
-use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
-use crate::directx::com;
 use crate::directx::context::{DxContext, align256, dump_on_err};
-use crate::directx::descriptor_slot::DescriptorTables;
-use crate::directx::descriptor_slot::SrvSlot;
+use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::error::map_hresult;
 use crate::directx::pso::{Blend, GraphicsPso, Raster, compute_pso};
 use crate::directx::reactive_mask::mask_target;
@@ -40,6 +37,7 @@ use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
 use crate::directx::texture::{
     HDR_FORMAT, create_uav_buffer, transition_barrier, write_texture_srv,
 };
+use crate::directx::{builtin_shaders, com};
 
 // GPU-compute particle system. `resources` (compute + render PSOs + per-frame
 // uniform rings) is built lazily either at init (when the world declared >= 1
@@ -61,8 +59,7 @@ pub(in crate::directx) const MAX_EMITTERS: usize = concinnity_core::render::part
 // view cbuffer) are GPU-free layout structs that live in `core::render`;
 // re-export them so `crate::directx::particle::{GpuParticle,ParticleView}` are
 // unchanged.
-pub(in crate::directx) use concinnity_core::render::uniforms::GpuParticle;
-pub(in crate::directx) use concinnity_core::render::uniforms::ParticleView;
+pub(in crate::directx) use concinnity_core::render::uniforms::{GpuParticle, ParticleView};
 
 // Compiled particle kernels: simulate cs, vertex vs, fragment ps bytecode.
 type ParticleShaders = (Vec<u8>, Vec<u8>, Vec<u8>);

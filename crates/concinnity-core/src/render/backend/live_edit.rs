@@ -353,7 +353,7 @@ pub trait LiveEdit: SceneHost {
 
     /// The swapchain-level configuration this live backend can hot-swap a world
     /// onto, or `None` when the backend cannot reload a world in place (it must
-    /// be fully rebuilt instead). Read by GraphicsSystem when a transplanted
+    /// be fully rebuilt instead). Read by the renderer when a transplanted
     /// backend is handed a new world (the `cn editor` live SAVE): the swap reuses
     /// the backend via [`Self::reload_world`] only when this equals the new
     /// world's `BackendInit::swapchain_config`; a `None` or a mismatch routes to a
@@ -366,7 +366,7 @@ pub trait LiveEdit: SceneHost {
     /// Re-upload a new world's GPU content onto this already-constructed backend,
     /// reusing the live device + window + swapchain instead of building a new one.
     /// Driven by the `cn editor` live SAVE: after a structural edit recompiles the
-    /// blobs, GraphicsSystem transplants the running backend into the rebuilt
+    /// blobs, the renderer transplants the running backend into the rebuilt
     /// world and calls this so the edit applies without recreating the OS window
     /// or re-initializing the GPU device. The backend waits for the GPU to idle,
     /// drops the old world's content resources, and rebuilds them from `init` on

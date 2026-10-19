@@ -275,8 +275,7 @@ mod tests {
     // gate, not a silent change.
     #[test]
     fn the_global_set_contract_is_locked_and_gap_free() {
-        use vk::DescriptorType as T;
-        use vk::ShaderStageFlags as S;
+        use vk::{DescriptorType as T, ShaderStageFlags as S};
         let fs = S::FRAGMENT;
         let vs_fs = S::VERTEX | S::FRAGMENT;
         let table = global_set();
@@ -467,8 +466,7 @@ mod tests {
 
     #[test]
     fn shadow_set_contract_is_locked() {
-        use vk::DescriptorType as T;
-        use vk::ShaderStageFlags as S;
+        use vk::{DescriptorType as T, ShaderStageFlags as S};
         assert_eq!(shadow_global_set(), [(0, T::UNIFORM_BUFFER, S::VERTEX)]);
     }
 

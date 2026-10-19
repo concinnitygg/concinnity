@@ -3,10 +3,12 @@
 //! completed work on a later frame and push it through the backend `update_*`
 //! calls. Keeps the (seconds-long) decode off the render thread.
 
+use concinnity_core::bake::texture::TextureImage;
 use concinnity_core::components::build_skeleton_from_joint_defs;
+use concinnity_core::fanout::Fanout;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend;
-use concinnity_engine::live_edit::hot_reload_sources::*;
+use concinnity_core::render::world_load::source_maps::*;
 use concinnity_host::thread::jobs::pool;
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 
@@ -71,7 +73,7 @@ fn spawn_asset_decode_worker(state: &AssetHotReloadState) {
             // dispatches to the bounded `available_parallelism() - 1` pool
             // (mirroring the envmap worker). decode_asset_batch itself uses
             // par_iter to fan textures across cores.
-            let batch = pool().install(|| decode_asset_batch(textures, color_lut, meshes, skinned));
+            let batch = pool().scope(|| decode_asset_batch(textures, color_lut, meshes, skinned));
             // Receiver dropped means the asset state went away before the
             // decode finished; the send fails silently and the worker exits.
             let _ = tx.send(batch);
@@ -124,7 +126,7 @@ fn spawn_envmap_worker(state: &AssetHotReloadState) {
         .name("cn-envmap-reload".into())
         .spawn(move || {
             set_current_thread_role(ThreadRole::Background);
-            let result = pool().install(|| {
+            let result = pool().scope(|| {
                 concinnity_cook::compile::environment_map::decode_source(
                     &env_map_copy.resolved_path,
                     env_map_copy.prefilter_face_size,
@@ -219,9 +221,7 @@ pub(super) fn decode_asset_batch(
                     assets_dir.as_deref(),
                 )
             };
-            let image = decoded.map(|(w, h, px)| {
-                concinnity_core::bake::texture::TextureImage::rgba8(w, h, px).with_mip_chain()
-            });
+            let image = decoded.map(|(w, h, px)| TextureImage::rgba8(w, h, px).with_mip_chain());
             (entry.clone(), image)
         })
         .collect();

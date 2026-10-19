@@ -160,7 +160,7 @@ impl PropBodies {
         }
     }
 
-    // Drop the bodies whose entity was despawned: GraphicsSystem runs before
+    // Drop the bodies whose entity was despawned: the renderer runs before
     // PhysicsSystem and removes the entity from the ECS, so a body left behind
     // would keep simulating - and colliding with live bodies - invisibly.
     // Returns `held` remapped onto the compacted list (None when the carried

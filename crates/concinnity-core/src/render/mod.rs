@@ -44,6 +44,7 @@ pub mod extract;
 pub mod feature_plan;
 pub mod feedback;
 pub mod frame_dirty;
+pub mod frame_outcome;
 pub mod frame_plan;
 pub mod frame_submit;
 pub mod fullscreen;

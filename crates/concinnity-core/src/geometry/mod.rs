@@ -27,10 +27,9 @@ pub use primitives::{build_box, build_cylinder, build_plane, build_sphere};
 pub use room::build_room_geometry;
 
 use crate::math::vec3::{cross, dot, scale, sub, vec3_add, vec3_normalize};
-use alloc::format;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 
 pub use chunk_gen::{ChunkBlockType, ChunkGenerator};
 // Shared with the cook crate's `compile_voxel_chunk_payload`, which builds the

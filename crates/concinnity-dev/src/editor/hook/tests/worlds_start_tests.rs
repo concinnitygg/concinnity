@@ -13,12 +13,9 @@ use super::fixtures::{
 };
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::selected;
-use crate::editor::hud;
-use crate::editor::live;
-use crate::editor::modal;
 use crate::editor::panels::registry::{self, PanelKey};
-use crate::editor::widget;
 use crate::editor::worlds::{self, WorldRow, WorldsAction};
+use crate::editor::{hud, live, modal, widget};
 use crate::frame_hook::FrameHook;
 
 // A start-screen session over `dir`'s worlds, showing `previewing` (by name).

@@ -3,21 +3,17 @@
 //! and it writes diagnostic readouts into that component's `TextLabel` chips.
 //!
 //! The chips are toggled together with F1 (hidden by default) and anchored to
-//! the top-right of the window by `GraphicsSystem` (it owns the font metrics and
+//! the top-right of the window by the renderer (it owns the font metrics and
 //! live window size needed to right-align and stack them).
 
+use crate::ecs::{Access, FrameTime, PipelineContext, Ref, StepResult, System, World};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::budget::{MemoryBudget, ResidentMemory, ThreadBudget};
-use crate::components::Camera3D;
-use crate::components::DebugHud;
-use crate::components::FrameInput;
-use crate::components::TextLabel;
-use crate::ecs::Ref;
+use crate::components::{Camera3D, DebugHud, FrameInput, TextLabel};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Access, FrameTime, PipelineContext, StepResult, System};
 use crate::profile::PassTiming;
 
 // How often the process resident-set size is resampled while the HUD
@@ -163,6 +159,11 @@ pub struct DebugHudSystem {
 }
 
 impl DebugHudSystem {
+    /// The system for a world that declares a `DebugHud`.
+    pub fn for_world(world: &World) -> Option<Self> {
+        world.query::<DebugHud>().next().cloned().map(Self::new)
+    }
+
     /// Build the debug HUD from a world's `DebugHud` request component.
     pub fn new(config: DebugHud) -> Self {
         Self {
@@ -202,7 +203,7 @@ impl System for DebugHudSystem {
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         // F1 toggles the debug HUD. The per-frame input snapshot is read from
-        // the FrameInput resource GraphicsSystem publishes earlier in the frame;
+        // the FrameInput resource the renderer publishes earlier in the frame;
         // it also carries the cursor position for the mouse chip.
         let frame_input = ctx.resource::<FrameInput>();
         let toggled = frame_input.is_some_and(|input| input.hud_toggle);
@@ -291,7 +292,12 @@ mod tests {
 
     fn start(world: &mut World) {
         let config = world.query::<DebugHud>().next().cloned().unwrap();
-        start_with(world, Phase::Late, "DebugHud", DebugHudSystem::new(config));
+        start_with(
+            world,
+            Phase::Late,
+            "DebugHudSystem",
+            DebugHudSystem::new(config),
+        );
     }
 
     // The first read samples, frames short of the interval wait, and the frame

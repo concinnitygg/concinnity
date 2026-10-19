@@ -14,10 +14,9 @@
 //! draws that reach their band, and a ground twin, without the canopy, for
 //! those wholly nearer. The twins share one Shader's place in the budget.
 
-use alloc::format;
 use alloc::string::ToString;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 
 use crate::components::ShaderPrograms;
 use crate::gfx::render_types::MAX_SHADER_BUCKETS;

@@ -380,9 +380,8 @@ fn compile_expr(expr: &BehaviorExpr, names: &mut Names<'_>, vars: &mut VarTable)
 mod tests {
     use super::*;
     use crate::components::{BehaviorLiteral, BehaviorLocal, BehaviorQuery, CueKind};
-    use crate::ecs::AudioClipHandle;
-    use crate::ecs::Ref;
     use crate::ecs::asset_id::AssetId;
+    use crate::ecs::{AudioClipHandle, Ref};
     use alloc::vec;
 
     // A behavior with one local, one query over props, and the given body, so

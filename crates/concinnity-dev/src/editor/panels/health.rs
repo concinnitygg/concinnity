@@ -34,6 +34,8 @@ use concinnity_core::budget::drift::MemoryDrift;
 use concinnity_core::budget::{MemoryBudget, ThreadBudget};
 use concinnity_core::ecs::World;
 use concinnity_core::memory::{LedgerSnapshot, MemStats, MemTag, Realm, SizeClass};
+use concinnity_core::render::backend::GpuProfile;
+use concinnity_core::render::stream_pools::StreamingRuntime;
 use concinnity_engine::app::syscpu::CpuSampler;
 use concinnity_engine::app::sysmem;
 use std::time::{Duration, Instant};
@@ -360,7 +362,8 @@ impl HealthState {
             // A backend that cannot report its allocation reports zero; that is
             // "unknown", not "nothing allocated".
             vram_bytes: (render.vram_bytes > 0).then_some(render.vram_bytes),
-            vram_budget: concinnity_engine::ecs::gpu_profile(world)
+            vram_budget: world
+                .resource::<GpuProfile>()
                 .map(|p| p.memory_budget_bytes)
                 .filter(|&b| b > 0),
             systems_cores,
@@ -369,7 +372,7 @@ impl HealthState {
             total_cores: world.resource::<ThreadBudget>().map(|b| b.total_cores),
             tags: concinnity_core::memory::ledger().snapshot(),
             hot_class: concinnity_core::memory::size_classes().and_then(|c| c.busiest()),
-            drift: concinnity_engine::ecs::memory_drift(world),
+            drift: world.resource::<MemoryDrift>().copied(),
         };
     }
 }
@@ -378,7 +381,7 @@ impl HealthState {
 // explains. `None` when nothing is streaming, so the row reads "--" rather than
 // claiming the engine tracks zero bytes.
 fn pool_bytes(world: &World) -> Option<u64> {
-    let stats = concinnity_engine::ecs::streaming_stats(world)?;
+    let stats = StreamingRuntime::stats_in(world)?;
     [stats.texture_bytes, stats.mesh_bytes, stats.chunk_bytes]
         .into_iter()
         .flatten()

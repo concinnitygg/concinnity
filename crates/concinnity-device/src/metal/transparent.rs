@@ -27,8 +27,7 @@ use concinnity_core::render::transparent;
 use concinnity_core::render::uniforms::TransparentView;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::NSString;
-use objc2_foundation::ns_string;
+use objc2_foundation::{NSString, ns_string};
 use objc2_metal::{
     MTLBlitCommandEncoder as _, MTLBuffer, MTLClearColor, MTLCommandBuffer as _,
     MTLCommandEncoder as _, MTLIndexType, MTLLoadAction, MTLPrimitiveType, MTLRenderCommandEncoder,

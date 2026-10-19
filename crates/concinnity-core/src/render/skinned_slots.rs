@@ -43,7 +43,7 @@ impl SkinnedSlots {
     }
 
     /// Replace the skinning matrices for one slot. Called each frame from
-    /// `GraphicsSystem` with the pose `AnimationSystem` computed. An empty pose
+    /// the renderer with the pose `AnimationSystem` computed. An empty pose
     /// is stored as a single identity joint so the shader always has one
     /// matrix to blend. Out-of-range indices are ignored.
     pub fn update_pose(&mut self, skinned_index: SkinnedIndex, matrices: &[[[f32; 4]; 4]]) {

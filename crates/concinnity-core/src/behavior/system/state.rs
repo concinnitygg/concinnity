@@ -13,6 +13,7 @@
 // all. This module owns the shape and the keying; a `BehaviorStore` owns the
 // medium.
 
+use crate::fnv::Fnv1a;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -49,13 +50,7 @@ pub trait BehaviorStore: core::fmt::Debug + Send {
 /// asset id, so a restored fired flag applies to the behavior it was saved for,
 /// unedited, and to no other.
 pub fn def_hash(def: &Behavior) -> u64 {
-    let bytes = postcard::to_allocvec(def).unwrap_or_default();
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
+    Fnv1a::of(&postcard::to_allocvec(def).unwrap_or_default())
 }
 
 #[cfg(test)]

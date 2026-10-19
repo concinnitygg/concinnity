@@ -2,9 +2,8 @@
 // tracks the cursor, and the release commits the final value.
 
 use crate::components::{FrameInput, SettingCommand, SettingOp};
-use crate::ecs::PipelineContext;
-use crate::ecs::Ref;
 use crate::ecs::asset_id::AssetId;
+use crate::ecs::{PipelineContext, Ref};
 use crate::gfx::overlay::OverlayTransform;
 
 use super::{UiInputSystem, point_in_rect, region_rect};

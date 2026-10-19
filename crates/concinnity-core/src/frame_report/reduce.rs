@@ -782,8 +782,7 @@ mod tests {
     use super::*;
     use crate::frame_report::sample::MAX_SYSTEM_TIMINGS;
     use crate::profile::MAX_PASS_TIMINGS;
-    use alloc::format;
-    use alloc::vec;
+    use alloc::{format, vec};
 
     // A sample with the fields a test cares about and zeroes elsewhere.
     fn sample(run_seconds: f32, phase: Option<u32>, frame_us: u32) -> FrameSample {

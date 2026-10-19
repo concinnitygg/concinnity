@@ -17,8 +17,7 @@ use concinnity_core::components::{
     AudioEmitter, Behavior, EngineDefaults, HitRegion, KeyBinding, PhysicsJoint, Prop, PropBody,
     Screen, ScrollPanel, TriggerVolume,
 };
-use concinnity_core::ecs::ComponentTag;
-use concinnity_core::ecs::World;
+use concinnity_core::ecs::{ComponentTag, World};
 
 use crate::ecs::SYSTEMS;
 

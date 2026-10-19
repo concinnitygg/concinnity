@@ -7,21 +7,18 @@
 //! imports open in the standard edit form for full arg editing.
 
 use concinnity_cook::authoring::world::{entry_handle, entry_handles, set_entry_id};
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::InputKey;
+use concinnity_core::components::{FrameInput, InputKey};
 use concinnity_core::ecs::World;
 use std::path::Path;
 
-use crate::editor::file_dialog;
 use crate::editor::hook::{
     EditorHook, FormTarget, declared_id, entry_type, scroll_step, short_status,
 };
-use crate::editor::notify;
 use crate::editor::panels::import_panel::{
     self, ImportAction, ImportRow, ImportStatus, ImportView,
 };
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::widget;
+use crate::editor::{file_dialog, notify, widget};
 
 impl EditorHook {
     // The world's file-backed entries, in entry order.

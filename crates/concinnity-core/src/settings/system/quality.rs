@@ -10,9 +10,8 @@ use super::apply::RowOptions;
 use super::rows::{set_cached_row_label, set_label_content};
 use crate::platform::CompiledPlatforms;
 use crate::settings::quality::{preset_label, resolve_ceiling};
-use crate::settings::registry;
 use crate::settings::rows::{QUALITY_CYCLES, QUALITY_TOGGLES, QualityCycle, QualityToggle};
-use crate::settings::{self, QualityPreset, SettingKey, StoredSettings, levels};
+use crate::settings::{self, QualityPreset, SettingKey, StoredSettings, levels, registry};
 
 impl SettingsState {
     // A preset is a performance ceiling over the world's authored look (it never

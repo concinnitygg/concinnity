@@ -17,9 +17,8 @@ use concinnity_cook::build_only::prepare_world;
 use concinnity_cook::paths::StateTree;
 use concinnity_cook::platform::{Platform, PlatformSet};
 use concinnity_host::scratch;
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use crate::command::resolve_world_path;
 

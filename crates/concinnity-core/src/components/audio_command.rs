@@ -1,5 +1,5 @@
-/// Runtime-only event sent by GraphicsSystem when a volume setting changes,
-/// read by AudioSystem from its `Events<AudioCommand>` queue.
+/// Runtime-only event sent by the renderer when a volume setting changes,
+/// read by audio playback from its `Events<AudioCommand>` queue.
 ///
 /// Volumes are owned by the audio engine, not the renderer, so a change made in
 /// the settings menu is handed across as this event rather than read from disk

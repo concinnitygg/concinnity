@@ -11,8 +11,9 @@ use concinnity_core::components::{
 };
 use concinnity_core::ecs::World;
 
-use crate::editor::hook::tests::fixtures::select;
-use crate::editor::hook::tests::fixtures::{entry, hook, world_with_fields, world_with_input};
+use crate::editor::hook::tests::fixtures::{
+    entry, hook, select, world_with_fields, world_with_input,
+};
 use crate::editor::hook::{EditorHook, declared_id, entry_type};
 use crate::editor::panels::console;
 use crate::editor::panels::console_panel::{self, ConsoleAction};

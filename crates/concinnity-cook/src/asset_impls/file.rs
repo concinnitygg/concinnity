@@ -1,5 +1,4 @@
-use concinnity_core::components::File;
-use concinnity_core::components::FileKind;
+use concinnity_core::components::{File, FileKind};
 
 impl crate::asset::BuildAsset for File {
     fn compile_payload(

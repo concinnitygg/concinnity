@@ -6,8 +6,7 @@
 use crate::components::{
     AudioCommand, AudioTarget, ControlsCommand, SettingCommand, SettingOp, Sprite, WindowMode,
 };
-use crate::ecs::FrameRateCap;
-use crate::ecs::PipelineContext;
+use crate::ecs::{FrameRateCap, PipelineContext};
 use crate::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
 use crate::render::ops::RenderOps;
 use crate::window::display_mode;
@@ -612,8 +611,8 @@ impl SettingsState {
     }
 }
 
-// Cycle a volume row's gain, persist it, and hand it to AudioSystem as an
-// AudioCommand drained this same tick. A world with no audio has no AudioSystem
+// Cycle a volume row's gain, persist it, and hand it to audio playback as an
+// AudioCommand drained this same tick. A world with no audio has no playback
 // to drain it; the persisted value then applies at the next audio init.
 fn apply_volume(
     ctx: &mut PipelineContext,

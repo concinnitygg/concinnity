@@ -17,8 +17,7 @@ use concinnity_cook::authoring::refs::referenced_names;
 use concinnity_cook::authoring::registry::{self, RegisteredType};
 use concinnity_cook::authoring::world::WorldJsonlAsset;
 use concinnity_core::blob::BlobAssetDef;
-use concinnity_core::ecs::ComponentAsset;
-use concinnity_core::ecs::World;
+use concinnity_core::ecs::{ComponentAsset, World};
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 

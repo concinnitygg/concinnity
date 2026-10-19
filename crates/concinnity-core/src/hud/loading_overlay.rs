@@ -5,15 +5,11 @@
 //! before UiInputSystem (its screen commands apply the same tick); the elements
 //! it writes are drawn by the next overlay build, like every HUD system.
 
+use crate::ecs::{Access, FrameTime, PipelineContext, Ref, ScreenStack, StepResult, System, World};
 use alloc::format;
 
-use crate::components::LoadingOverlay;
-use crate::components::ScreenCommand;
-use crate::components::Sprite;
-use crate::components::TextLabel;
-use crate::ecs::Ref;
+use crate::components::{LoadingOverlay, ScreenCommand, Sprite, TextLabel};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Access, FrameTime, PipelineContext, ScreenStack, StepResult, System};
 use crate::render::scene_flow::{ActiveSceneFlow, FadePhase};
 use crate::render::scene_residency::{SceneLoadState, SceneResidencyStatus};
 
@@ -44,6 +40,15 @@ pub struct LoadingOverlaySystem {
 }
 
 impl LoadingOverlaySystem {
+    /// The system for a world that declares a `LoadingOverlay`.
+    pub fn for_world(world: &World) -> Option<Self> {
+        world
+            .query::<LoadingOverlay>()
+            .next()
+            .cloned()
+            .map(Self::new)
+    }
+
     /// Build the overlay from a world's `LoadingOverlay` request component.
     pub fn new(config: LoadingOverlay) -> Self {
         Self {

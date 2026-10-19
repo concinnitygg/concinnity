@@ -72,7 +72,7 @@ pub(super) fn install_graphs(
                 let params = graph.default_params();
                 ctx.push(AnimationParams::new(target, params.clone()));
                 // IK chains resolve joint names against the target's
-                // skeleton (published by GraphicsSystem init, which ran
+                // skeleton (published by graphics init, which ran
                 // before this one) and get a ground-probe exchange for
                 // PhysicsSystem to answer.
                 let chains = if g.ik_chains.is_empty() {
@@ -150,8 +150,7 @@ mod tests {
     use crate::animation::skeleton;
     use crate::ecs::World;
     use crate::test_support::intern;
-    use alloc::format;
-    use alloc::vec;
+    use alloc::{format, vec};
 
     use super::super::TargetState;
     use crate::animation::flat_blend::{ClipEntry, FlatState};

@@ -9,9 +9,7 @@
 //! spaces, the resolver seams a reference name deserializes through, and the
 //! per-type compile dispatch.
 
-use concinnity_core::components::Material;
-use concinnity_core::components::SkeletonJoint;
-use concinnity_core::components::SkinnedMesh;
+use concinnity_core::components::{Material, SkeletonJoint, SkinnedMesh};
 use concinnity_core::ecs::{HandleKind, set_handle_resolver};
 use concinnity_core::resource::ResourceHandles;
 use concinnity_host::thread::asset_id;
@@ -333,12 +331,10 @@ pub(crate) fn reset_resource_handles() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::authoring::world::WorldJsonlAsset;
     use concinnity_core::blob::ResourceKind;
-    use concinnity_core::components::AudioCue;
-    use concinnity_core::components::AudioEmitter;
-    use concinnity_core::components::Decal;
-    use concinnity_core::components::Prop;
-    use concinnity_core::ecs::MaterialHandle;
+    use concinnity_core::components::{AudioCue, AudioEmitter, Decal, Prop};
+    use concinnity_core::ecs::{AudioClipHandle, MaterialHandle, ShaderHandle, TextureHandle};
 
     // The classification tests (which types are resources, mesh-source blocks)
     // live in `crate::authoring::resource_type` with the classifiers.
@@ -351,9 +347,6 @@ mod tests {
     // a `.mesh` reference resolves to the mesh source the runtime loaded there.
     #[test]
     fn mesh_source_handles_are_block_ordered_across_kinds() {
-        use crate::authoring::world::WorldJsonlAsset;
-        use concinnity_host::thread::asset_id;
-
         let a = |name: &str, asset_type: RegisteredType, args: serde_json::Value| WorldJsonlAsset {
             id: name.to_string(),
             asset_type,
@@ -418,8 +411,6 @@ mod tests {
     // the installed seam.
     #[test]
     fn a_material_reads_no_source_file_and_resolves_by_declaration_order() {
-        use concinnity_host::thread::asset_id;
-
         assert!(
             RegisteredType::Material
                 .source_files(
@@ -465,10 +456,6 @@ mod tests {
     // `assign_shader_handles` over the asset list, not by kind classification.
     #[test]
     fn a_shader_reference_name_bakes_to_its_declaration_order_handle() {
-        use crate::authoring::world::WorldJsonlAsset;
-        use concinnity_core::ecs::ShaderHandle;
-        use concinnity_host::thread::asset_id;
-
         asset_id::reset_interner();
         let world_asset = |name: &str, asset_type: RegisteredType| WorldJsonlAsset {
             id: name.to_string(),
@@ -511,8 +498,6 @@ mod tests {
     // the real cook path (`reserialize_args`), the same call the build uses.
     #[test]
     fn a_texture_reference_name_reserializes_to_its_declaration_order_handle() {
-        use concinnity_host::thread::asset_id;
-
         // Declaration order: tex_a -> Texture handle 0, tex_b -> Texture 1.
         asset_id::reset_interner();
         let a = asset_id::intern("tex_a");
@@ -534,7 +519,6 @@ mod tests {
                 .unwrap();
             postcard::from_bytes(&bytes).unwrap()
         };
-        use concinnity_core::ecs::TextureHandle;
         assert_eq!(
             bake(serde_json::json!({"albedo": "tex_b"})).albedo,
             Some(TextureHandle::new(1))
@@ -557,8 +541,6 @@ mod tests {
     // from textures, so a clip declared after two textures is still clip 0.
     #[test]
     fn an_audio_clip_reference_name_reserializes_to_its_declaration_order_handle() {
-        use concinnity_host::thread::asset_id;
-
         // Declaration order interleaves a texture so the per-kind counting is
         // exercised: clip_a -> AudioClip 0, clip_b -> AudioClip 1 (the texture
         // does not consume an AudioClip handle).
@@ -575,7 +557,6 @@ mod tests {
         ]));
 
         // An AudioEmitter / AudioCue referencing a clip bakes that clip's handle.
-        use concinnity_core::ecs::AudioClipHandle;
         let clip_field = |ct: RegisteredType, name: &str| -> Option<AudioClipHandle> {
             let bytes = ct
                 .reserialize_args(&serde_json::json!({ "clip": name }))

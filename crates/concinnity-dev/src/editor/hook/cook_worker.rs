@@ -3,6 +3,7 @@
 //! by the pipeline's compile progress, on the engine's bounded job pool, under
 //! the one-cook-at-a-time guard.
 
+use concinnity_core::fanout::Fanout;
 use concinnity_host::thread::jobs::pool;
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 
@@ -38,8 +39,8 @@ impl EditorHook {
                 } => op.set(done, total),
                 _ => {}
             };
-            let outcome = pool()
-                .install(|| crate::authoring::build_world_str_to_disk(&content, Some(&report)));
+            let outcome =
+                pool().scope(|| crate::authoring::build_world_str_to_disk(&content, Some(&report)));
             op.finish();
             done(outcome, start.elapsed().as_secs_f32());
             running.store(false, std::sync::atomic::Ordering::SeqCst);

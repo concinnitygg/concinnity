@@ -6,9 +6,11 @@
 pub mod blob_release;
 pub mod draw_geometry;
 pub mod far_band_shaders;
+pub mod media;
 pub mod prop_draws;
 pub mod scene_deferral;
 pub mod skinned;
+pub mod source_maps;
 pub mod stream_seed;
 pub mod tables;
 pub mod texture_payloads;

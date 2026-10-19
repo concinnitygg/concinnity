@@ -13,11 +13,11 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use crate::bake::environment_map::RowScheduler;
 use crate::bake::environment_map::source::{HdrImage, bake_payload, generate_sky_equirect};
 use crate::bake::environment_map::stars::generate_stars_equirect;
 use crate::bake::mesh::{finish_mesh_payload, vertices_from_data};
 use crate::components::{EnvironmentMap, Font, Material, Mesh, ProceduralMesh, validate};
+use crate::fanout::Fanout;
 use crate::geometry::{
     Vert, build_box, build_cylinder, build_extrude, build_plane, build_room_geometry, build_sphere,
     water_grid,
@@ -143,7 +143,7 @@ pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, String> {
 
 /// Bake an `EnvironmentMap`'s IBL cubemaps into its blob payload, spreading
 /// each convolution's rows over `rows`.
-pub fn environment_map<S: RowScheduler>(map: &EnvironmentMap, rows: &S) -> Result<Vec<u8>, String> {
+pub fn environment_map<S: Fanout>(map: &EnvironmentMap, rows: &S) -> Result<Vec<u8>, String> {
     if !map.source.is_empty() {
         return Err(
             "an EnvironmentMap with a `source` reads a panorama file; compile it with the \
@@ -192,7 +192,7 @@ pub fn material(material: Material) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bake::environment_map::Serial;
+    use crate::fanout::Inline;
     use crate::gfx::mesh_payload;
 
     fn mesh(generator: &str) -> ProceduralMesh {
@@ -306,7 +306,7 @@ mod tests {
             prefilter_samples: 4,
             ..Default::default()
         };
-        let payload = environment_map(&map, &Serial).expect("the sky bakes");
+        let payload = environment_map(&map, &Inline).expect("the sky bakes");
         let view =
             crate::bake::environment_map::deserialize(&payload).expect("the payload reads back");
         assert_eq!(view.irradiance_face, 8);
@@ -319,18 +319,18 @@ mod tests {
             source: "studio.hdr".into(),
             ..Default::default()
         };
-        let err = environment_map(&with_source, &Serial).expect_err("a file source");
+        let err = environment_map(&with_source, &Inline).expect_err("a file source");
         assert!(err.contains("cook module"), "{err}");
 
         let blank = EnvironmentMap::default();
-        let err = environment_map(&blank, &Serial).expect_err("nothing to bake");
+        let err = environment_map(&blank, &Inline).expect_err("nothing to bake");
         assert!(err.contains("needs a `source` or a `generator`"), "{err}");
 
         let unknown = EnvironmentMap {
             generator: "swamp".into(),
             ..Default::default()
         };
-        let err = environment_map(&unknown, &Serial).expect_err("unknown generator");
+        let err = environment_map(&unknown, &Inline).expect_err("unknown generator");
         assert!(err.contains("unknown EnvironmentMap generator"), "{err}");
 
         let oversized = EnvironmentMap {
@@ -338,7 +338,7 @@ mod tests {
             prefilter_face_size: 3,
             ..Default::default()
         };
-        let err = environment_map(&oversized, &Serial).expect_err("out of range");
+        let err = environment_map(&oversized, &Inline).expect_err("out of range");
         assert!(err.contains("prefilter_face_size"), "{err}");
     }
 

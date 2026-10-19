@@ -5,8 +5,7 @@
 use crate::authoring::AuthoringError;
 use concinnity_core::ecs::{AssetOrigin, BlobAssetDef};
 
-use crate::authoring::registry::RegisteredType;
-use crate::authoring::registry::Registration;
+use crate::authoring::registry::{RegisteredType, Registration};
 
 /// Incoming request to construct an asset from an external caller
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

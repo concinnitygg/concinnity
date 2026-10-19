@@ -5,7 +5,10 @@
 // restore and write-back semantics, which are the same whatever the state is
 // kept in. A host's own store (a file, say) covers the medium itself.
 
-use crate::ecs::Ref;
+use crate::ecs::{
+    ExecutionTrace, HEADLESS_SYSTEMS, Ref, TraceEvent, TracePaths, TraceStep, TraceVal, World,
+    asset_id::AssetId,
+};
 use crate::profile::FanOutTiming;
 use alloc::string::ToString;
 use alloc::vec;
@@ -17,10 +20,6 @@ use crate::components::{
     Behavior, BehaviorExpr, BehaviorLiteral, BehaviorLocal, BehaviorNode, BehaviorQuery, Collider,
     DespawnRequest, EntityTarget, PropCollider, PropInstance, SpawnRequest, StoryCommand,
     StoryPlayback, Transform, VariableDecl, VisibilityRequest,
-};
-use crate::ecs::{
-    ExecutionTrace, HEADLESS_SYSTEMS, TraceEvent, TracePaths, TraceStep, TraceVal, World,
-    asset_id::AssetId,
 };
 
 use super::test_world::world_with;
@@ -1728,13 +1727,23 @@ impl ThreadedEval {
     }
 }
 
-impl EvalScheduler for ThreadedEval {
-    fn workers(&self) -> usize {
+impl Pooled<EvalBucket> for ThreadedEval {
+    fn workers(&self, _mode: ScheduleMode) -> usize {
         4
     }
 
-    fn run(
+    fn for_each(
         &self,
+        mode: ScheduleMode,
+        buckets: &mut [EvalBucket],
+        eval: &(dyn Fn(&mut EvalBucket) + Send + Sync),
+    ) {
+        self.for_each_timed(mode, buckets, eval);
+    }
+
+    fn for_each_timed(
+        &self,
+        _mode: ScheduleMode,
         buckets: &mut [EvalBucket],
         eval: &(dyn Fn(&mut EvalBucket) + Send + Sync),
     ) -> FanOutTiming {

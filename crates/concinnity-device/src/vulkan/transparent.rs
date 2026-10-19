@@ -37,8 +37,7 @@ pub(in crate::vulkan) use concinnity_core::render::uniforms::TransparentView;
 // view builder can keep naming it through this module.
 use concinnity_core::render::transparent::producer::{self, TransparentProducers, WaterParamsSink};
 use concinnity_core::render::transparent::{SeeThroughMesh, TransparentFramePlan};
-use concinnity_core::render::uniforms::GlassMeshParams;
-use concinnity_core::render::uniforms::WaterParams;
+use concinnity_core::render::uniforms::{GlassMeshParams, WaterParams};
 use std::sync::Mutex;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};

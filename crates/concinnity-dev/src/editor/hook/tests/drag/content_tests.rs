@@ -10,10 +10,11 @@ use concinnity_host::thread::asset_id;
 use crate::frame_hook::FrameHook;
 
 use crate::editor::hook::drag::content::{drag_has_effect, placement_args};
-use crate::editor::hook::tests::fixtures::{click_at, drag_input, hook, pick_world, set_input};
+use crate::editor::hook::tests::fixtures::{
+    active, click_at, drag_input, hook, pick_world, set_input,
+};
 use crate::editor::hook::{declared_id, entry_type};
 
-use crate::editor::hook::tests::fixtures::active;
 use crate::editor::panels::registry::PanelKey;
 
 // Dragging a mesh out of the Content grid places a Prop where the ghost

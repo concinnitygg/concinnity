@@ -10,6 +10,7 @@ use crate::math::{cos, floor, sin, sin_cos, sqrt};
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::fanout::Fanout;
 use crate::gfx::cubemap;
 use crate::math::vec3::{cross as cross3, dot as dot3, normalize_clamped};
 
@@ -286,12 +287,12 @@ impl<'a> CubeBake<'a> {
     }
 
     /// Convolve the source into six output faces, handing the independent rows
-    /// to `scheduler`. A caller with a thread pool gets the fan-out for free;
-    /// one without uses [`Serial`](super::schedule::Serial).
-    pub fn bake<S: super::schedule::RowScheduler>(&self, scheduler: &S) -> [Vec<f32>; 6] {
+    /// to `rows`. A caller with a thread pool gets the fan-out for free; one
+    /// without uses [`Inline`](crate::fanout::Inline).
+    pub fn bake<S: Fanout>(&self, rows: &S) -> [Vec<f32>; 6] {
         let mut faces = self.output_faces();
-        let mut rows = face_rows(&mut faces, self.output_face_size());
-        scheduler.run(&mut rows, &|row| self.compute_row(row));
+        let mut face_rows = face_rows(&mut faces, self.output_face_size());
+        rows.for_each(&mut face_rows, |row| self.compute_row(row));
         faces
     }
 
@@ -504,32 +505,24 @@ pub fn compute_prefilter(
 
 #[cfg(test)]
 mod tests {
-    use super::super::schedule::{RowScheduler, Serial};
     use super::*;
+    use crate::fanout::Inline;
+    use crate::fanout::test_pools::Reversed;
 
-    // A scheduler that walks the rows backwards. The bake's whole claim is that
-    // the rows are independent, so the order it runs them in must not show up in
-    // the output.
-    struct Reversed;
-
-    impl RowScheduler for Reversed {
-        fn run<T: Send>(&self, items: &mut [T], compute: &(dyn Fn(&mut T) + Send + Sync)) {
-            items.iter_mut().rev().for_each(compute);
-        }
-    }
-
+    // The rows are independent, so the order they run in must not show in the
+    // output.
     #[test]
     fn a_bake_does_not_depend_on_the_row_order() {
         let source = solid_cube(8, [0.4, 0.6, 0.9]);
         let bake = CubeBake::ggx(&source, 8, 8, 0.5, 16, 0.0);
-        assert_eq!(bake.bake(&Serial), bake.bake(&Reversed));
+        assert_eq!(bake.bake(&Inline), bake.bake(&Reversed(1)));
     }
 
     #[test]
     fn a_bake_fills_every_output_face() {
         let source = solid_cube(8, [1.0, 1.0, 1.0]);
         let bake = CubeBake::irradiance(&source, 8, 4, 8, 8);
-        let faces = bake.bake(&Serial);
+        let faces = bake.bake(&Inline);
         for face in &faces {
             assert_eq!(face.len(), 4 * 4 * 4);
             assert!(face.chunks_exact(4).all(|px| px[0] > 0.0));

@@ -6,9 +6,10 @@
 
 use concinnity_core::components::Camera3D;
 use concinnity_core::ecs::World;
+use concinnity_core::fanout::Fanout;
+use concinnity_core::render::stream_pools::{StreamingPressure, StreamingRuntime};
 use concinnity_core::shutdown::ShutdownToken;
-use concinnity_host::thread::asset_id;
-use concinnity_host::thread::{ThreadRole, set_current_thread_role};
+use concinnity_host::thread::{ThreadRole, asset_id, set_current_thread_role};
 use std::io::BufReader;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
@@ -151,17 +152,18 @@ impl FrameHook for DebugServer {
         state.frame = self.frame;
 
         // Streaming counts change every frame in the early load-in, so refresh
-        // them every tick -- `streaming_stats` is just a few small count loops
-        // over the parked StreamingState (StreamingSystem owns the pools).
-        state.streaming = concinnity_engine::ecs::streaming_stats(world).unwrap_or_default();
+        // them every tick: a few small count loops over the published pools.
+        state.streaming = StreamingRuntime::stats_in(world).unwrap_or_default();
         state.scratch = world.scratch_stats();
         // Live RAM back-off pressure, refreshed alongside the streaming counts.
         state.streaming_pressure =
-            concinnity_engine::ecs::streaming_pressure(world).map(|p| PressureSnapshot {
-                rss_bytes: p.rss_bytes,
-                budget_bytes: p.budget_bytes,
-                under_pressure: p.under_pressure,
-            });
+            world
+                .resource::<StreamingPressure>()
+                .map(|p| PressureSnapshot {
+                    rss_bytes: p.rss_bytes,
+                    budget_bytes: p.budget_bytes,
+                    under_pressure: p.under_pressure,
+                });
 
         // Process thread + memory budgets (fixed at start) plus the live RSS
         // (one cheap syscall per tick, dev-only), for the `budget` query.
@@ -172,7 +174,7 @@ impl FrameHook for DebugServer {
             state.budget = Some(BudgetSnapshot {
                 threads: BudgetThreads {
                     total_cores: threads.total_cores,
-                    job_threads: concinnity_host::thread::jobs::pool().thread_count(),
+                    job_threads: concinnity_host::thread::jobs::pool().workers(),
                 },
                 memory: BudgetMemory {
                     total_ram_mib: memory.total_ram_bytes.map(|b| b / (1024 * 1024)),

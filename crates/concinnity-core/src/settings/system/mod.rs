@@ -10,32 +10,34 @@
 //!   rebind.rs   the key and gamepad rebind rows
 //!   rows.rs     row helpers shared with the init-time captures
 //!
-//! Runs before GraphicsSystem, so a change's recorded op lands on the backend
+//! Runs before the renderer, so a change's recorded op lands on the backend
 //! before this frame's draw. The state is resolved by graphics init (world
 //! config, persisted overrides, backend capabilities) and parked as the
 //! [`SettingsSlot`] resource; each step takes it and puts it back, so the state
 //! and the `PipelineContext` are never borrowed together.
 
+use crate::ecs::{
+    EventCursor, HudPrefs, Parked, PipelineContext, Resources, StepResult, System, World,
+};
+use crate::render::render_mode::RenderMode;
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use crate::components::{
     GamepadAction, GamepadMap, PlanetDetail, SceneCommand, Window, WindowMode,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{EventCursor, HudPrefs, Parked, PipelineContext, Resources, StepResult, System};
 use crate::input::keymap;
 use crate::platform::GraphicsApiStatus;
-use crate::render::backend;
 use crate::render::error::RenderError;
 use crate::render::ops::RenderOps;
 use crate::render::queues::ActiveRenderQueues;
-use crate::render::scene_flow;
-use crate::render::snapshot;
+use crate::render::{backend, scene_flow, snapshot};
 use crate::settings::apply::{ApplyPlan, plan_apply};
 use crate::settings::quality::resolve_ceiling;
 use crate::settings::{
     GraphicsApiTrial, QualityCeiling, QualityPreset, ResolvedGraphics, ResolvedSettings,
-    SettingKey, SettingsLayers, UserGraphicsSettings, WorldSettings,
+    SettingKey, SettingsLayers, SettingsRevision, UserGraphicsSettings, WorldSettings,
 };
 use crate::window::display_mode;
 
@@ -43,6 +45,7 @@ mod apply;
 mod init;
 #[cfg(any(test, feature = "test-support"))]
 mod inspect;
+mod persist;
 mod quality;
 mod rebind;
 mod rows;
@@ -52,6 +55,7 @@ mod tests;
 pub use init::{DisplayReport, SettingsInit, gate_unavailable_rows};
 #[cfg(any(test, feature = "test-support"))]
 pub use inspect::SliderRow;
+pub use persist::SettingsStore;
 pub use rows::DISABLED_ROW_COLOR;
 
 // One key-rebind row's runtime bookkeeping: the action it rebinds and the value
@@ -90,7 +94,7 @@ pub struct SettingsState {
     pub(crate) keymap: keymap::KeyMap,
     pub(crate) rebind_rows: Vec<RebindViz>,
     // Live gamepad action -> button map (the source of truth for the gamepad
-    // rebind rows), carried to InputSystem via ControlsCommand on each rebind.
+    // rebind rows), carried to the input poll via ControlsCommand on each rebind.
     pub(crate) gamepad_map: GamepadMap,
     pub(crate) pad_rebind_rows: Vec<PadRebindViz>,
     pub(crate) sliders: Vec<SliderViz>,
@@ -144,14 +148,51 @@ pub struct SettingsState {
 }
 
 /// Applies the settings menu's command batches against the parked
-/// [`SettingsState`].
+/// [`SettingsState`], and writes the store through the host's
+/// [`SettingsStore`] whenever it changes.
 #[derive(Debug, Default)]
-pub struct SettingsSystem;
+pub struct SettingsSystem {
+    store: Option<Box<dyn SettingsStore>>,
+    // The revision last written; a world starts at zero, unchanged.
+    written: SettingsRevision,
+}
 
 impl SettingsSystem {
-    /// The system.
+    /// The system for a world that runs with a window.
+    pub fn for_world(world: &World) -> Option<Self> {
+        RenderMode::renders_in(world).then(Self::new)
+    }
+
+    /// The system, persisting nothing.
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// Write the store through `store` whenever it changes.
+    pub fn with_store(mut self, store: Box<dyn SettingsStore>) -> Self {
+        self.store = Some(store);
+        self
+    }
+}
+
+impl SettingsSystem {
+    // Apply this tick's commands against the parked state. With no parked
+    // state (graphics init has not succeeded) or op queue the commands wait
+    // in retention.
+    fn apply(&mut self, ctx: &mut PipelineContext) {
+        let Some(mut state) = SettingsSlot::take(ctx.resources) else {
+            return;
+        };
+        let Some(mut queues) = ActiveRenderQueues::take(ctx.resources) else {
+            SettingsSlot::put(ctx.resources, state);
+            return;
+        };
+        state.apply_scene_commands(ctx, &mut queues.ops);
+        state.apply_setting_commands(ctx, &mut queues.ops);
+        ActiveRenderQueues::put(ctx.resources, queues);
+        state.publish_hud_state(ctx);
+        state.confirm_graphics_api(ctx);
+        SettingsSlot::put(ctx.resources, state);
     }
 }
 
@@ -168,21 +209,10 @@ impl core::fmt::Debug for SettingsState {
 
 impl System for SettingsSystem {
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
-        // No parked state (graphics init has not succeeded) or op queue:
-        // nothing to apply against; the queued commands wait in retention.
-        let Some(mut state) = SettingsSlot::take(ctx.resources) else {
-            return StepResult::Continue;
-        };
-        let Some(mut queues) = ActiveRenderQueues::take(ctx.resources) else {
-            SettingsSlot::put(ctx.resources, state);
-            return StepResult::Continue;
-        };
-        state.apply_scene_commands(ctx, &mut queues.ops);
-        state.apply_setting_commands(ctx, &mut queues.ops);
-        ActiveRenderQueues::put(ctx.resources, queues);
-        state.publish_hud_state(ctx);
-        state.confirm_graphics_api(ctx);
-        SettingsSlot::put(ctx.resources, state);
+        self.apply(ctx);
+        // Written in the same step that made the change, so a tick that stops
+        // the run still persists it.
+        self.persist(ctx);
         StepResult::Continue
     }
 }
@@ -369,7 +399,7 @@ impl SettingsState {
 
     // Apply any imperative scene jumps sent by UiInputSystem last tick, copied
     // out of the event queue so the borrow is released before the jump runs.
-    // The flow lives in the shared `ActiveSceneFlow` resource (GraphicsSystem
+    // The flow lives in the shared `ActiveSceneFlow` resource (the renderer
     // ticks its fades later this same tick, so a jump's fade starts on this
     // frame); the jump's fade / visibility effects are recorded through the
     // same `SceneOp` recorder the fade tick uses, then queued as one op.

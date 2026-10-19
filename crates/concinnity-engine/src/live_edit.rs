@@ -23,10 +23,8 @@ use concinnity_core::ecs::World;
 use concinnity_core::render::backend::RenderBackend;
 
 use crate::ecs::ActiveRenderBackend;
-use crate::gfx::system::hot_reload_sources::HotReloadSources;
 use crate::gfx::system::parked::{PushedFogSettings, TextureNameSlots};
 
-pub use crate::ecs::take_render_backend;
 pub use crate::gfx::system::{hot_reload_sources, parked, sdf_field_sources, shader_sources};
 
 /// A render backend transplanted out of a previous world, inserted into a
@@ -59,12 +57,6 @@ pub fn render_handoff(world: &mut World) -> RenderHandoff<'_> {
     }
 }
 
-/// Take the source catalogs graphics init parked, leaving none behind. `None`
-/// when capture was off, or when the world declared no file-backed asset.
-pub fn take_hot_reload_sources(world: &mut World) -> Option<HotReloadSources> {
-    world.remove_resource::<HotReloadSources>()
-}
-
 /// The parked backend's shader-reload flag, which a host sets to have the
 /// backend recompile its shaders before the next draw. `None` when no backend
 /// is parked or it does not reload shaders.
@@ -85,8 +77,6 @@ mod tests {
     fn accessors_without_a_backend() {
         let mut world = World::new();
         assert!(shader_reload_flag(&world).is_none());
-        assert!(take_render_backend(&mut world).is_none());
-        assert!(take_hot_reload_sources(&mut world).is_none());
 
         let handoff = render_handoff(&mut world);
         assert!(handoff.backend.is_none());
@@ -94,8 +84,7 @@ mod tests {
         assert!(handoff.texture_slots.is_none());
     }
 
-    // The handoff reaches the parked fog and texture-name map together, and the
-    // source catalogs are taken exactly once.
+    // The handoff reaches the parked fog and texture-name map together.
     #[test]
     fn render_handoff_borrows_the_parked_state_together() {
         let mut world = World::new();
@@ -103,8 +92,6 @@ mod tests {
         world.insert_resource(TextureNameSlots(
             [(concinnity_core::ecs::asset_id::AssetId(3), 7)].into(),
         ));
-        world.insert_resource(HotReloadSources::default());
-
         let handoff = render_handoff(&mut world);
         assert!(handoff.backend.is_none());
         let slots = handoff.texture_slots.expect("texture-name map parked");
@@ -117,8 +104,5 @@ mod tests {
         );
         handoff.fog.expect("fog parked").0 = fog;
         assert!(world.resource::<PushedFogSettings>().unwrap().0.is_some());
-
-        assert!(take_hot_reload_sources(&mut world).is_some());
-        assert!(take_hot_reload_sources(&mut world).is_none());
     }
 }

@@ -35,11 +35,10 @@ use std::sync::OnceLock;
 
 use super::asset_tree::{Badge, TreeRow};
 use super::registry::PanelKey;
-use crate::editor::hud;
 use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::selection::SelectedNames;
-use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, place_sprite, point_in};
+use crate::editor::{hud, theme};
 
 // The addable asset types the "+" picker offers for a plain add: every type
 // flagged `useful_blank` in the registry (both the component and resource-asset

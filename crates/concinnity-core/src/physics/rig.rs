@@ -3,7 +3,7 @@
 // capsule moves by the target's `RootMotionEvent` displacement -- mapped through
 // the rig's authored rotation/scale -- plus gravity, sliding against the
 // scene like the player capsule; each frame the blended capsule position is
-// written back to the rig component for GraphicsSystem's render follow.
+// written back to the rig component for the renderer's render follow.
 
 use alloc::vec::Vec;
 

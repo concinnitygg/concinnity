@@ -15,11 +15,9 @@ use crate::editor::entry_list::EntryList;
 use crate::editor::history::History;
 use crate::editor::hook::worlds_start::Adopt;
 use crate::editor::hook::{EditorHook, scroll_step};
-use crate::editor::modal;
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::session_store;
-use crate::editor::worlds;
 use crate::editor::worlds::{WorldRow, WorldTarget, WorldsAction, WorldsConfirm, WorldsView};
+use crate::editor::{modal, session_store, worlds};
 
 impl EditorHook {
     // Re-read the project's worlds. The listing changes only when the panel

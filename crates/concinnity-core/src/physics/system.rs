@@ -28,12 +28,13 @@ use crate::planet::{FrameRebases, PlanetGravity, PlanetGround, RebaseCursor};
 use super::budget::DriverCapacities;
 use super::contacts::{ContactBatch, ContactGate};
 use super::convert::{collider_shape, joint_spec};
-use super::fanout::{PhysicsFanout, SerialFanout};
+use super::fanout::PhysicsFanout;
 use super::index::SortedMap;
 use super::interp::PointInterp;
 use super::layers::{LAYER_CHARACTER, LAYER_PROP, LAYER_TRIGGER, LAYER_WORLD, LayerTable};
 use super::props::{PropBodies, PropCollSnap, STATIC_FRICTION};
 use super::terrain::build_terrain_colliders;
+use crate::fanout::{Fanout, Inline, Lent};
 
 // Reach distance for picking up a Prop, in world units.
 const PICKUP_REACH: f32 = 3.0;
@@ -50,7 +51,7 @@ const THROW_SPEED: f32 = 6.0;
 /// from the world's `PhysicsConfig`; never a declarable asset.
 ///
 /// [`new`](PhysicsSystem::new) steps the simulation on the calling thread; a
-/// host lends it threads through [`with_fanout`](PhysicsSystem::with_fanout).
+/// host lends it threads through [`with_pool`](PhysicsSystem::with_pool).
 #[derive(Debug)]
 pub struct PhysicsSystem {
     // Camera eye Y at spawn; the flat-floor fallback derives nothing from it,
@@ -94,7 +95,7 @@ pub struct PhysicsSystem {
     // spawn past it is refused rather than silently declined by a full pool.
     // Resolved at init, along with the reservation itself.
     body_cap: u32,
-    // Where a step's independent work runs. `SerialFanout` until a host lends
+    // Where a step's independent work runs. `Inline` until a host lends
     // its own.
     fanout: Box<dyn PhysicsFanout>,
     // How far this system has caught up with the moves of a planet world's
@@ -171,7 +172,7 @@ impl PhysicsSystem {
             contact_gate: ContactGate::default(),
             spawn_headroom: config.spawn_headroom,
             body_cap: 0,
-            fanout: Box::new(SerialFanout),
+            fanout: Box::new(Inline),
             rebases: RebaseCursor::default(),
             planet_ground: None,
             off_ground: super::held::HeldBodies::default(),
@@ -179,12 +180,12 @@ impl PhysicsSystem {
         }
     }
 
-    /// Run the step's independent work through `fanout` rather than on the
-    /// calling thread. What a step hands out and the order its results load
-    /// back in are the simulation's; a fan-out decides only where the work
-    /// runs, so this cannot change the state a tick lands on.
-    pub fn with_fanout(mut self, fanout: Box<dyn PhysicsFanout>) -> Self {
-        self.fanout = fanout;
+    /// Run the step's independent work on `pool` rather than on the calling
+    /// thread. What a step hands out and the order its results load back in
+    /// are the simulation's; a pool decides only where the work runs, so this
+    /// cannot change the state a tick lands on.
+    pub fn with_pool<P: Fanout>(mut self, pool: Lent<P>) -> Self {
+        self.fanout = Box::new(pool);
         self
     }
 
@@ -275,12 +276,15 @@ impl PhysicsSystem {
 }
 
 impl PhysicsSystem {
-    /// The config a world's physics runs on, or `None` when it has no physics
-    /// content: a `PhysicsConfig`, `RigidBody`, `PropBody`, `TriggerVolume`, or
-    /// a skinned mesh that bakes a character capsule. A world with content but
-    /// no config (one built directly rather than cooked) gets the flat-floor
-    /// default.
-    pub fn config_for(world: &World) -> Option<PhysicsConfig> {
+    /// The system for a world with physics content: a `PhysicsConfig`,
+    /// `RigidBody`, `PropBody`, `TriggerVolume`, or a skinned mesh that bakes a
+    /// character capsule. A world with content but no config (one built
+    /// directly rather than cooked) gets the flat-floor default.
+    pub fn for_world(world: &World) -> Option<Self> {
+        Self::config_for(world).map(Self::new)
+    }
+
+    fn config_for(world: &World) -> Option<PhysicsConfig> {
         let needs = world.query::<PhysicsConfig>().next().is_some()
             || world.query::<RigidBody>().next().is_some()
             || world.query::<PropBody>().next().is_some()
@@ -553,7 +557,7 @@ impl System for PhysicsSystem {
         }
 
         // Kinematic capsules for the root-motion character rigs published by
-        // GraphicsSystem (which ran init first this tick).
+        // the renderer (which ran init first this tick).
         super::rig::init_rigs(
             &mut world,
             ctx,
@@ -945,17 +949,16 @@ impl System for PhysicsSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::string::ToString;
+    use alloc::string::{String, ToString};
     use alloc::vec;
 
-    use crate::components::{CameraController, CharacterRig, FollowController, PropCollider};
-    use crate::components::{Collider, Pickup, PropColliderShape};
-    use crate::ecs::Ref;
-    use crate::ecs::SkinnedMeshHandle;
-    use crate::ecs::World;
+    use crate::components::{
+        CameraController, CharacterRig, Collider, FollowController, Pickup, PropCollider,
+        PropColliderShape,
+    };
+    use crate::ecs::{Ref, SkinnedMeshHandle, World};
     use crate::physics::LayerMask;
     use crate::physics::budget::{record_of, scan_counts};
-    use alloc::string::String;
 
     // Push a decomposed prop (Transform + Collider, plus the Pickup tag when
     // asked) exactly as the load-time decomposition would, and identify it as
@@ -1303,7 +1306,7 @@ mod tests {
         }
         let before = physics.physics_body_count();
 
-        // Despawn the ball (stand-in for GraphicsSystem) and step: PhysicsSystem
+        // Despawn the ball (stand-in for the renderer) and step: PhysicsSystem
         // reaps the orphaned body.
         world.despawn(ball);
         physics.step(&mut world.context());

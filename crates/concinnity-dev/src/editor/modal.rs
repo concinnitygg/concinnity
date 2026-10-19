@@ -257,8 +257,7 @@ pub(crate) fn hide(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::TextInput;
-    use concinnity_core::components::{Sprite, TextAlign, TextLabel};
+    use concinnity_core::components::{Sprite, TextAlign, TextInput, TextLabel};
     use concinnity_core::ecs::asset_id::AssetId;
 
     const VP: [f32; 2] = [1280.0, 720.0];

@@ -98,8 +98,7 @@ pub(super) fn despawn_subtree(
 mod tests {
     use super::*;
     use crate::components::{Parent, Transform};
-    use crate::ecs::SkinnedMeshHandle;
-    use crate::ecs::World;
+    use crate::ecs::{SkinnedMeshHandle, World};
 
     // Build an isolated PipelineContext over a fresh world, like the draw_list
     // tests, so a despawn cascade can be exercised without a backend.

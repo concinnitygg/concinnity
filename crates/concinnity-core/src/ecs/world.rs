@@ -63,7 +63,7 @@ pub struct World {
     blob: Box<dyn PayloadStore + Send>,
     profile: FrameProfile,
     // Type-keyed engine singletons (e.g. the per-frame FrameInput snapshot
-    // GraphicsSystem publishes) and the event queues.
+    // the renderer publishes) and the event queues.
     resources: Resources,
     // Per-frame scratch, reset at the top of every step. Owned here because
     // `reset` needs `&mut`, which is what proves no system still holds an
@@ -580,8 +580,8 @@ impl World {
         // Every system has inited and cached the payloads it keeps; nothing
         // reads compiled payloads at runtime. Free every blob section still
         // resident: the shipped runtime's blob 0, the audio / SDF / terrain
-        // blobs the GraphicsSystem init sweep held back for their later
-        // consumers, and every blob in a world with no GraphicsSystem to run
+        // blobs the graphics init sweep held back for their later
+        // consumers, and every blob in a world with no renderer to run
         // that sweep at all.
         self.release_payloads();
         // Access declarations are final once every system has inited, so this

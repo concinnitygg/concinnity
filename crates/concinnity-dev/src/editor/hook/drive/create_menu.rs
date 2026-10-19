@@ -10,12 +10,10 @@ use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;
 
 use crate::editor::asset_handle::AssetHandle;
-use crate::editor::create_menu;
-use crate::editor::hook::drag;
-use crate::editor::hook::{EditorHook, names_of_types};
-use crate::editor::hud;
+use crate::editor::hook::{EditorHook, drag, names_of_types};
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::widget::{self, point_in};
+use crate::editor::{create_menu, hud};
 
 // An open "Create here" menu.
 pub(in crate::editor::hook) struct CreateMenu {

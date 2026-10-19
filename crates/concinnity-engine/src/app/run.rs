@@ -12,21 +12,17 @@
 //! nor remotely driven. The interpreted (`cn debug`) path with hot-reload and
 //! the command channel lives in the editor crate.
 
-use concinnity_core::ecs::{ScheduleMode, ViewOverrides};
+use concinnity_core::ecs::ScheduleMode;
 use concinnity_core::error::WorldError;
-use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
-use concinnity_core::render::dlss::DlssPreset;
-use concinnity_core::render::rt_geom::RtDynamicMode;
+use concinnity_core::render::error::RenderError;
 use concinnity_host::store::paths::StateTree;
-use std::num::NonZeroU32;
 use std::path::Path;
 use tracing_subscriber::EnvFilter;
 
 use crate::app::runloop;
 use crate::app::runtime::Runtime;
 use crate::app::startup_error::StartupError;
-use concinnity_core::launch::LaunchArgs;
-use concinnity_core::settings::{QualityPreset, UserGraphicsSettings};
+use concinnity_core::launch::LaunchRequest;
 
 // Default tracing filter applied when RUST_LOG is unset: info for debug
 // builds, warn for release builds. A RUST_LOG value always takes precedence.
@@ -87,92 +83,6 @@ pub struct RunOptions {
     /// What the launch asks the engine to arm (`cn run` only; [`run_from`] and
     /// [`Runtime::run`] keep the runtime's own).
     pub launch: LaunchRequest,
-}
-
-/// What the launch asked the engine to arm, published as a world resource by
-/// [`Runtime::start`]. Build one with [`Runtime::with_launch`]; a runtime built without one
-/// runs the shipping behavior. Each `None` defers to that setting's default.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct LaunchRequest {
-    /// Keep the presented frame blit-readable for an exit screenshot.
-    pub capture: bool,
-    /// Run as a development session: capture hot-reload sources, load shaders
-    /// disk-first, keep frame capture available, and show the debug HUD.
-    pub dev_loop: bool,
-    /// What the launch's flags ask of the run: a benchmark, vsync, a frame-rate
-    /// cap, a quality preset or a frame count. An app's own
-    /// [`LaunchArgs`] resource, published before start, replaces these.
-    pub args: LaunchArgs,
-    /// Force the DirectX / Vulkan debug layers on or off. `None` follows the
-    /// build profile. Metal's layer is set by the process environment instead.
-    pub validation: Option<bool>,
-    /// Force how the ray-tracing acceleration structure tracks moving props.
-    /// `None` is [`RtDynamicMode::Auto`].
-    pub rt_dynamic: Option<RtDynamicMode>,
-    /// Whether skinned meshes join the ray-tracing acceleration structure.
-    /// `None` leaves them in.
-    pub rt_skinned_geometry: Option<bool>,
-    /// Force the DLSS render preset over the persisted choice, unpersisted.
-    pub dlss_preset: Option<DlssPreset>,
-    /// Step the frame clock by exactly `1 / rate` seconds per frame instead of
-    /// the wall time between frames, so a given frame sees the same clock on
-    /// every launch. `None` follows the wall clock.
-    pub fixed_frame_rate: Option<NonZeroU32>,
-    /// The feature passes the run starts with, as the editor's View menu shows
-    /// them. Every flag set is the shipping frame.
-    pub show: ShowFlags,
-}
-
-impl LaunchRequest {
-    /// The view state the run starts with, or `None` for the shipping frame.
-    pub fn view_overrides(&self) -> Option<ViewOverrides> {
-        (self.show != ShowFlags::all()).then_some(ViewOverrides {
-            mode: ViewMode::Lit,
-            show: self.show,
-        })
-    }
-
-    /// Whether the graphics debug layers run: the request, else the build profile.
-    pub fn resolve_validation(&self) -> bool {
-        self.validation.unwrap_or(cfg!(debug_assertions))
-    }
-
-    /// The master quality preset: the request, else `persisted`. `None` means
-    /// neither exists, which is a first launch the caller seeds.
-    pub fn resolve_quality_preset(
-        &self,
-        persisted: Option<QualityPreset>,
-    ) -> Option<QualityPreset> {
-        self.args.quality_preset.or(persisted)
-    }
-
-    /// How the acceleration structure tracks moving props: the request, else `Auto`.
-    pub fn resolve_rt_dynamic(&self) -> RtDynamicMode {
-        self.rt_dynamic.unwrap_or_default()
-    }
-
-    /// The settings this launch overrides for its own run, layered over the
-    /// user's persisted choices and never persisted: vsync, the frame-rate cap
-    /// and the DLSS preset.
-    pub fn session_overrides(&self) -> UserGraphicsSettings {
-        UserGraphicsSettings {
-            vsync: self.args.vsync.then_some(true),
-            fps_cap: self.args.fps_cap,
-            dlss_preset: self.dlss_preset,
-            ..UserGraphicsSettings::default()
-        }
-    }
-
-    /// Whether skinned meshes join the acceleration structure: the request, else in.
-    pub fn resolve_rt_skinned_geometry(&self) -> bool {
-        self.rt_skinned_geometry.unwrap_or(true)
-    }
-
-    /// Whether the presented frame stays readable: always in a dev session, and
-    /// for a launch that asked for an exit screenshot.
-    pub fn frame_capture(&self) -> bool {
-        self.dev_loop || self.capture
-    }
 }
 
 /// Production entry point (`cn run`). Reads the compiled binary blobs from
@@ -334,7 +244,7 @@ pub(crate) fn start_runtime(mut runtime: Runtime, options: RunOptions) -> Result
 //
 // The screen draws through the same backend that just failed, so it may well
 // fail too; that is the console fallback, matching the blob-load path.
-fn report_render_failure(cause: &concinnity_core::render::error::RenderError) {
+fn report_render_failure(cause: &RenderError) {
     let message = format!(
         "This app could not start its renderer.\n\n{cause}\n\n\
          Updating your graphics driver is the usual fix."
@@ -360,7 +270,7 @@ fn finish_frame_captures(runtime: &mut Runtime) {
 // requested. The backend is still parked in the world after the loop ends.
 fn capture_exit_screenshot(runtime: &mut Runtime, path: Option<&str>) {
     let Some(path) = path else { return };
-    let Some(mut backend) = crate::ecs::take_render_backend(runtime.world_mut()) else {
+    let Some(mut backend) = runtime.take_render_backend() else {
         tracing::warn!("screenshot skipped: no live backend at exit");
         return;
     };
@@ -389,144 +299,6 @@ mod tests {
         // The fallback string must parse as an EnvFilter, otherwise log_filter
         // would panic when RUST_LOG is unset.
         EnvFilter::new(default_log_directive());
-    }
-
-    #[test]
-    fn the_validation_request_outranks_the_build_profile() {
-        let request = |validation| LaunchRequest {
-            validation,
-            ..Default::default()
-        };
-        assert_eq!(request(None).resolve_validation(), cfg!(debug_assertions));
-        assert!(!request(Some(false)).resolve_validation());
-        assert!(request(Some(true)).resolve_validation());
-    }
-
-    #[test]
-    fn the_quality_preset_request_outranks_the_persisted_choice() {
-        let unset = LaunchRequest::default();
-        assert_eq!(unset.resolve_quality_preset(None), None);
-        assert_eq!(
-            unset.resolve_quality_preset(Some(QualityPreset::Auto)),
-            Some(QualityPreset::Auto)
-        );
-
-        let forced = LaunchRequest {
-            args: LaunchArgs {
-                quality_preset: Some(QualityPreset::Ultra),
-                ..LaunchArgs::NONE
-            },
-            ..Default::default()
-        };
-        assert_eq!(
-            forced.resolve_quality_preset(Some(QualityPreset::Auto)),
-            Some(QualityPreset::Ultra)
-        );
-        assert_eq!(
-            forced.resolve_quality_preset(None),
-            Some(QualityPreset::Ultra)
-        );
-    }
-
-    #[test]
-    fn an_unset_rt_dynamic_request_is_auto() {
-        assert_eq!(
-            LaunchRequest::default().resolve_rt_dynamic(),
-            RtDynamicMode::Auto
-        );
-        for mode in [
-            RtDynamicMode::Off,
-            RtDynamicMode::Auto,
-            RtDynamicMode::Rebuild,
-            RtDynamicMode::Tlas,
-        ] {
-            let request = LaunchRequest {
-                rt_dynamic: Some(mode),
-                ..Default::default()
-            };
-            assert_eq!(request.resolve_rt_dynamic(), mode);
-        }
-    }
-
-    #[test]
-    fn vsync_and_a_frame_rate_cap_are_session_overrides() {
-        let forced = LaunchRequest {
-            args: LaunchArgs {
-                vsync: true,
-                fps_cap: Some(30),
-                ..LaunchArgs::NONE
-            },
-            ..Default::default()
-        };
-        let user = UserGraphicsSettings {
-            vsync: Some(false),
-            fps_cap: Some(144),
-            ..Default::default()
-        };
-        let merged = user.overlaid_by(&forced.session_overrides());
-        assert_eq!(merged.vsync, Some(true));
-        assert_eq!(merged.fps_cap, Some(30));
-    }
-
-    #[test]
-    fn a_requested_dlss_preset_is_a_session_override() {
-        assert_eq!(
-            LaunchRequest::default().session_overrides(),
-            UserGraphicsSettings::default()
-        );
-        let forced = LaunchRequest {
-            dlss_preset: Some(DlssPreset::M),
-            ..Default::default()
-        };
-        let user = UserGraphicsSettings {
-            dlss_preset: Some(DlssPreset::K),
-            vsync: Some(true),
-            ..Default::default()
-        };
-        let merged = user.overlaid_by(&forced.session_overrides());
-        assert_eq!(merged.dlss_preset, Some(DlssPreset::M));
-        assert_eq!(merged.vsync, Some(true));
-    }
-
-    #[test]
-    fn skinned_rt_geometry_is_in_unless_the_request_clears_it() {
-        let request = |rt_skinned_geometry| LaunchRequest {
-            rt_skinned_geometry,
-            ..Default::default()
-        };
-        assert!(request(None).resolve_rt_skinned_geometry());
-        assert!(request(Some(true)).resolve_rt_skinned_geometry());
-        assert!(!request(Some(false)).resolve_rt_skinned_geometry());
-    }
-
-    // The shipping frame publishes no view state; a hidden pass starts the run
-    // lit with that pass off.
-    #[test]
-    fn a_hidden_pass_starts_the_run_without_it() {
-        assert_eq!(LaunchRequest::default().view_overrides(), None);
-        let hidden = LaunchRequest {
-            show: ShowFlags::all().toggled(ShowFlags::REACTIVE),
-            ..Default::default()
-        };
-        let view = hidden.view_overrides().expect("view state");
-        assert_eq!(view.mode, ViewMode::Lit);
-        assert!(!view.show.contains(ShowFlags::REACTIVE));
-        assert!(view.show.contains(ShowFlags::FOG));
-    }
-
-    #[test]
-    fn frame_capture_is_armed_by_a_dev_loop_or_a_capture_request() {
-        assert!(!LaunchRequest::default().frame_capture());
-        let dev_loop = LaunchRequest {
-            dev_loop: true,
-            ..Default::default()
-        };
-        assert!(dev_loop.frame_capture());
-        let capture = LaunchRequest {
-            capture: true,
-            ..Default::default()
-        };
-        assert!(capture.frame_capture());
     }
 
     // Both forms make the same file blob 0: the file itself, or `0` inside the

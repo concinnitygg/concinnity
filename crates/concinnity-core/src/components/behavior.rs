@@ -5,10 +5,8 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::components::StoryPlayback;
-use crate::components::{Scene, Screen, TriggerVolume};
-use crate::ecs::AudioClipHandle;
-use crate::ecs::{AnyAsset, Ref};
+use crate::components::{Scene, Screen, StoryPlayback, TriggerVolume};
+use crate::ecs::{AnyAsset, AudioClipHandle, Ref};
 
 /// A unit of world logic: an event source, the entities it runs against, its
 /// state, the world it reads, and the nodes it runs.

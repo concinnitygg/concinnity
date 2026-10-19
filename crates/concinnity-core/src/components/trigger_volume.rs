@@ -1,7 +1,6 @@
 // Trigger-volume schema: a spatial sensor region.
 
-use crate::components::PropCollider;
-use crate::components::Vocabulary;
+use crate::components::{PropCollider, Vocabulary};
 
 /// An invisible sensor region that reports when something enters or leaves it.
 ///

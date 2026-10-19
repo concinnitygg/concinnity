@@ -6,8 +6,7 @@
 
 use alloc::vec::Vec;
 
-use crate::ecs::PipelineContext;
-use crate::ecs::WorldLines;
+use crate::ecs::{PipelineContext, WorldLines};
 use crate::gfx::lines::{Line, LineCamera, build_vertices_into};
 use crate::gfx::render_types::LineVertex;
 

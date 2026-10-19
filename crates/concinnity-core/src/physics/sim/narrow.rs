@@ -20,7 +20,7 @@ use alloc::vec::Vec;
 
 use crate::memory::Pool;
 
-use crate::physics::fanout::Fanout;
+use crate::fanout::Fanout;
 
 use super::body::Body;
 use super::broadphase::Pair;

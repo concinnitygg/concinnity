@@ -26,8 +26,7 @@ mod loading;
 mod physics;
 
 use crate::components::{EngineDefaults, Window};
-use crate::ecs::asset_id::AssetIdsExhausted;
-use crate::ecs::asset_id::{AssetId, MintedIds};
+use crate::ecs::asset_id::{AssetId, AssetIdsExhausted, MintedIds};
 use crate::ecs::{FontHandle, PipelineContext};
 use crate::error::WorldError;
 

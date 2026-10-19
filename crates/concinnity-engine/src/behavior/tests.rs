@@ -4,12 +4,11 @@
 // the state a `save` node writes reaches the file store and comes back.
 
 use concinnity_core::components::{
-    Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Prop, PropInstance,
+    Behavior, BehaviorExpr, BehaviorNode, BehaviorQuery, BehaviorSource, Camera3D, Prop,
+    PropInstance, Transform, Variables,
 };
-use concinnity_core::components::{BehaviorQuery, Camera3D, Transform, Variables};
-use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{MeshHandle, World};
+use concinnity_core::ecs::{MeshHandle, Ref, World};
 
 use crate::ecs::SYSTEMS;
 
@@ -136,7 +135,7 @@ fn a_behavior_moves_a_prop_the_simulation_owns() {
 // constructible.
 #[test]
 fn a_saving_world_restores_its_variable_through_the_file_store() {
-    use super::save::FileStore;
+    use super::FileStore;
     use concinnity_core::behavior::{BehaviorStore, BehaviorSystem};
     use concinnity_core::components::{BehaviorLiteral, VariableDecl};
     use concinnity_core::ecs::System;
@@ -281,4 +280,26 @@ fn a_distance_gate_on_the_queried_camera_decides_by_where_the_camera_is() {
         2.0,
         "the near camera opened the gate and the prop stepped toward it",
     );
+}
+
+// A written state reads back from its file.
+#[test]
+fn state_round_trips_through_the_file() {
+    use super::{FileStore, state_file};
+    use concinnity_core::behavior::{BehaviorState, BehaviorStore};
+    use concinnity_core::components::BehaviorLiteral;
+
+    let tree = concinnity_testing::TempTree::new();
+    let dir = tree.join("state");
+    let store = FileStore::at(&dir);
+    assert!(store.read().is_none(), "nothing written yet");
+
+    let mut state = BehaviorState::default();
+    state.vars.insert("score".into(), BehaviorLiteral::Int(12));
+    state.fired.push((3, 0xfeed));
+    store.write(&state);
+    let back = store.read().expect("state readable");
+    assert!(state_file(&dir).exists());
+    assert_eq!(back.vars.get("score"), Some(&BehaviorLiteral::Int(12)));
+    assert_eq!(back.fired, vec![(3, 0xfeed)]);
 }

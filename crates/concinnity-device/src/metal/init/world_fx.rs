@@ -7,8 +7,7 @@
 use concinnity_core::components::GlassPanel;
 use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_core::gfx::render_types::DrawObject;
-use concinnity_core::render::backend_init::PlanarBudget;
-use concinnity_core::render::backend_init::SdfVolumeSource;
+use concinnity_core::render::backend_init::{PlanarBudget, SdfVolumeSource};
 use concinnity_core::render::decal::{DecalRecord, DecalSet};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::particles::{MAX_EMITTERS, ParticleEmitterRecord, ParticleSystem};

@@ -2,18 +2,15 @@
 //! wheel region, title-bar dragging, and click hit-testing across the top bar and
 //! the registered panels (front-to-back).
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::InputKey;
+use concinnity_core::components::{FrameInput, InputKey};
 use concinnity_core::ecs::World;
 
-use super::bookmarks;
-use super::{Drag, EditorHook, scroll_step};
+use super::{Drag, EditorHook, bookmarks, scroll_step};
 use crate::editor::hud::{self, HudState};
 use crate::editor::panels::form_panel::{self, FormFocus};
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::panels::template_panel;
-use crate::editor::viewport::gizmo;
-use crate::editor::viewport::resize;
+use crate::editor::viewport::{gizmo, resize};
 use crate::editor::widget::{self, point_in};
 
 impl EditorHook {

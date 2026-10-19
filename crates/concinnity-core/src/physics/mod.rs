@@ -16,8 +16,8 @@
 //! never one.
 //!
 //! Nothing here reads a clock, a file, or a device. The one thing only a host
-//! can supply is threads, which it lends through [`PhysicsFanout`]; a world
-//! with none steps on the calling thread.
+//! can supply is threads, which it lends through a [`Lent`](crate::fanout::Lent)
+//! pool; a world with none steps on the calling thread.
 
 // What the simulation reserves for a world, derived from the counts the world
 // is measured by, and the ledger row reporting it.
@@ -31,8 +31,7 @@ mod convert;
 pub(crate) mod entity_ray;
 // What a step reports back: contact, ray, and sensor crossings.
 mod events;
-// What a step hands out as independent work, and the seam a host lends its
-// threads through.
+// Where a step's independent work runs.
 mod fanout;
 // The opaque body identity a caller addresses the simulation by.
 mod handle;
@@ -70,7 +69,6 @@ mod tests;
 pub use budget::{PhysicsBudget, PhysicsCounts};
 pub use character::{CharacterMove, CharacterMoveInput};
 pub use events::{ContactHit, RayHit, SensorCrossing};
-pub use fanout::{Fanout, Inline, PhysicsFanout, SerialFanout};
 pub use handle::BodyHandle;
 pub use joints::{JointMotor, JointSpec};
 pub use layers::LayerMask;

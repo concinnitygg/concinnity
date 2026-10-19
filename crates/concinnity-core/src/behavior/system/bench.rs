@@ -18,9 +18,8 @@
 //         --test-threads=1 behavior_tick
 
 use alloc::boxed::Box;
-use alloc::format;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 use std::println;
 
 use super::BehaviorSystem;

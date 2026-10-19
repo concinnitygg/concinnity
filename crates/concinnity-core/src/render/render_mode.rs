@@ -29,6 +29,12 @@ impl RenderMode {
     pub fn renders(self) -> bool {
         self == RenderMode::Rendered
     }
+
+    /// Whether the mode published in `world` builds a renderer. A world with
+    /// none published was never started by a host that renders.
+    pub fn renders_in(world: &World) -> bool {
+        world.resource::<RenderMode>().is_some_and(|m| m.renders())
+    }
 }
 
 /// Why a world resolved headless, for the one log line that says so.

@@ -1,6 +1,10 @@
 // The system a benchmarked run gates in: records one row per frame, and
 // reports what the run cost when it ends.
 
+use crate::ecs::{
+    Clock, FrameCaptureRequest, FrameTime, PipelineContext, StepResult, System, WindowMinimized,
+    World,
+};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -8,9 +12,6 @@ use alloc::vec::Vec;
 use crate::benchmark::BenchmarkRun;
 use crate::camera_track::CameraTrackStatus;
 use crate::components::FrameCapture;
-use crate::ecs::{
-    Clock, FrameCaptureRequest, FrameTime, PipelineContext, StepResult, System, WindowMinimized,
-};
 use crate::math::{round, round_f64};
 use crate::planet::FrameRebases;
 use crate::profile::RenderStats;
@@ -83,6 +84,13 @@ struct PendingFrame {
 }
 
 impl FrameReportSystem {
+    /// The system for a benchmarked run, writing its report through `out`.
+    pub fn for_world(world: &World, out: fn(&str)) -> Option<Self> {
+        world
+            .resource::<BenchmarkRun>()
+            .map(|run| Self::new(run, out))
+    }
+
     /// The system that measures `benchmark` and writes its report to `out`.
     pub fn new(benchmark: &BenchmarkRun, out: fn(&str)) -> Self {
         let config = &benchmark.config;

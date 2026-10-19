@@ -128,7 +128,7 @@ impl Harness {
     fn pump(&mut self) -> RenderOps {
         let mut ops = RenderOps::default();
         let changes = &mut self.changes;
-        self.warmup.pump(&mut ops, |bucket, resident| {
+        self.warmup.pump(&mut ops, &mut |bucket, resident| {
             changes.push((bucket, resident))
         });
         ops
@@ -152,7 +152,7 @@ impl Harness {
     }
 
     fn step_until_idle(&mut self) {
-        self.step_until(|h| h.warmup.entries.iter().all(|e| !e.building));
+        self.step_until(|h| h.warmup.residency.building() == 0);
     }
 
     fn installs(&self) -> Vec<Call> {
@@ -224,7 +224,7 @@ fn every_pinned_bucket_builds_at_once() {
     h.warmup.set_blocked(1, false);
     h.warmup.set_blocked(2, false);
     h.step();
-    assert!(h.warmup.entries.iter().all(|e| e.building));
+    assert_eq!(h.warmup.residency.building(), 2);
     h.step_until(|h| h.changes.len() == 2);
     assert_eq!(h.installs().len(), 2);
 }

@@ -5,8 +5,7 @@ use ash::vk;
 use concinnity_core::profile;
 use concinnity_core::profile::PassTiming;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::hdr_output;
-use concinnity_core::render::pass_timing;
+use concinnity_core::render::{hdr_output, pass_timing};
 
 use crate::gpu_wait::GpuWait;
 use crate::vulkan::context::VkContext;

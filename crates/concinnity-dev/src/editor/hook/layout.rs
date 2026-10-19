@@ -1,23 +1,16 @@
 //! EditorHook: the floating panels' focus stack, published draw layers, and
 //! each panel's on-screen origin -- all derived from the panel registry.
 
-use concinnity_core::ecs::CursorShape;
-use concinnity_core::ecs::HudLayers;
-use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::ecs::{CursorShape, HudLayers, World};
 
 use super::{EditorHook, TOP_BAR_LAYER};
-use crate::editor::create_menu;
-use crate::editor::hud;
-use crate::editor::modal;
 use crate::editor::panels::asset_list::{self, ListRow};
 use crate::editor::panels::list_panel::Row;
 use crate::editor::panels::registry::{self, PanelKey};
-use crate::editor::toast_overlay;
-use crate::editor::view_menu;
 use crate::editor::viewport::resize;
 use crate::editor::widget::{self, point_in};
-use crate::editor::worlds;
+use crate::editor::{create_menu, hud, modal, toast_overlay, view_menu, worlds};
 
 // Layers each panel's rank claims, so an overlay can draw above its own panel
 // without reaching the one in front of it.

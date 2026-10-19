@@ -34,8 +34,8 @@
 
 use alloc::vec::Vec;
 
+use crate::fanout::Fanout;
 use crate::physics::LayerMask;
-use crate::physics::fanout::Fanout;
 
 use super::aabb::Aabb;
 
@@ -496,17 +496,17 @@ mod tests {
             (vec3(0.5, 0.0, 0.0), true),
             (vec3(10.0, 0.0, 0.0), true),
         ]);
-        assert_eq!(sap.sweep(&crate::physics::Inline, 1).contacts, [(0, 1)]);
+        assert_eq!(sap.sweep(&crate::fanout::Inline, 1).contacts, [(0, 1)]);
         assert_eq!(sap.len(), 3);
     }
 
     #[test]
     fn a_pair_of_immovable_bodies_is_never_reported() {
         let mut sap = build(&[(Vec3::ZERO, false), (vec3(0.5, 0.0, 0.0), false)]);
-        assert!(sap.sweep(&crate::physics::Inline, 1).contacts.is_empty());
+        assert!(sap.sweep(&crate::fanout::Inline, 1).contacts.is_empty());
 
         let mut mixed = build(&[(Vec3::ZERO, false), (vec3(0.5, 0.0, 0.0), true)]);
-        assert_eq!(mixed.sweep(&crate::physics::Inline, 1).contacts, [(0, 1)]);
+        assert_eq!(mixed.sweep(&crate::fanout::Inline, 1).contacts, [(0, 1)]);
     }
 
     #[test]
@@ -522,7 +522,7 @@ mod tests {
                 ..proxy(vec3(0.5, 0.0, 0.0), 0.5, Role::Dynamic)
             },
         );
-        assert!(sap.sweep(&crate::physics::Inline, 1).contacts.is_empty());
+        assert!(sap.sweep(&crate::fanout::Inline, 1).contacts.is_empty());
     }
 
     #[test]
@@ -535,7 +535,7 @@ mod tests {
             (vec3(0.0, 0.0, 0.0), true),
             (vec3(0.0, 0.0, 1.5), true),
         ]);
-        let pairs = sap.sweep(&crate::physics::Inline, 1).contacts.to_vec();
+        let pairs = sap.sweep(&crate::fanout::Inline, 1).contacts.to_vec();
         let mut sorted = pairs.clone();
         sorted.sort_unstable();
         assert_eq!(pairs, sorted);
@@ -558,8 +558,8 @@ mod tests {
         let mut sx = build(&along_x);
         let mut sy = build(&along_y);
         assert_eq!(
-            sx.sweep(&crate::physics::Inline, 1).contacts,
-            sy.sweep(&crate::physics::Inline, 1).contacts
+            sx.sweep(&crate::fanout::Inline, 1).contacts,
+            sy.sweep(&crate::fanout::Inline, 1).contacts
         );
         assert_eq!(sx.axis, 0);
         assert_eq!(sy.axis, 1);
@@ -574,18 +574,18 @@ mod tests {
             (vec3(3.0, 0.0, 0.0), true),
             (vec3(6.0, 0.0, 0.0), true),
         ]);
-        sap.sweep(&crate::physics::Inline, 1);
+        sap.sweep(&crate::fanout::Inline, 1);
         // Slot 2 crosses to the far side of both others.
         sap.set_proxy(2, proxy(vec3(-3.2, 0.0, 0.0), 0.5, Role::Dynamic));
         sap.set_proxy(0, proxy(vec3(-2.8, 0.0, 0.0), 0.5, Role::Dynamic));
-        let moved = sap.sweep(&crate::physics::Inline, 1).contacts.to_vec();
+        let moved = sap.sweep(&crate::fanout::Inline, 1).contacts.to_vec();
 
         let mut fresh = build(&[
             (vec3(-2.8, 0.0, 0.0), true),
             (vec3(3.0, 0.0, 0.0), true),
             (vec3(-3.2, 0.0, 0.0), true),
         ]);
-        assert_eq!(moved, fresh.sweep(&crate::physics::Inline, 1).contacts);
+        assert_eq!(moved, fresh.sweep(&crate::fanout::Inline, 1).contacts);
         assert_eq!(moved, [(0, 2)]);
     }
 
@@ -597,13 +597,13 @@ mod tests {
             (vec3(1.2, 0.0, 0.0), true),
         ]);
         assert_eq!(
-            sap.sweep(&crate::physics::Inline, 1).contacts,
+            sap.sweep(&crate::fanout::Inline, 1).contacts,
             [(0, 1), (1, 2)]
         );
         sap.remove(1);
         assert_eq!(sap.len(), 2);
         assert!(
-            sap.sweep(&crate::physics::Inline, 1).contacts.is_empty(),
+            sap.sweep(&crate::fanout::Inline, 1).contacts.is_empty(),
             "the ends never reached each other"
         );
     }
@@ -611,9 +611,9 @@ mod tests {
     #[test]
     fn an_empty_or_single_body_sweep_reports_nothing() {
         let mut empty = SweepPrune::with_capacity(4);
-        assert!(empty.sweep(&crate::physics::Inline, 1).contacts.is_empty());
+        assert!(empty.sweep(&crate::fanout::Inline, 1).contacts.is_empty());
         let mut one = build(&[(Vec3::ZERO, true)]);
-        assert!(one.sweep(&crate::physics::Inline, 1).contacts.is_empty());
+        assert!(one.sweep(&crate::fanout::Inline, 1).contacts.is_empty());
     }
 
     // A world where nothing moved has last step's pairs, and the sweep must
@@ -621,15 +621,15 @@ mod tests {
     #[test]
     fn a_sweep_with_nothing_moved_reuses_its_answer() {
         let mut sap = build(&[(Vec3::ZERO, true), (vec3(0.5, 0.0, 0.0), true)]);
-        assert_eq!(sap.sweep(&crate::physics::Inline, 1).contacts, [(0, 1)]);
+        assert_eq!(sap.sweep(&crate::fanout::Inline, 1).contacts, [(0, 1)]);
         assert!(!sap.dirty);
         // Reaching past the sweep to break the stored answer proves the second
         // call did not recompute it.
         sap.pairs.clear();
-        assert!(sap.sweep(&crate::physics::Inline, 1).contacts.is_empty());
+        assert!(sap.sweep(&crate::fanout::Inline, 1).contacts.is_empty());
         // A proxy that does move brings the sweep back.
         sap.set_proxy(1, proxy(vec3(0.5, 0.0, 0.0), 0.5, Role::Dynamic));
-        assert_eq!(sap.sweep(&crate::physics::Inline, 1).contacts, [(0, 1)]);
+        assert_eq!(sap.sweep(&crate::fanout::Inline, 1).contacts, [(0, 1)]);
     }
 
     // A query must see every proxy that could meet it, and the window is only
@@ -640,7 +640,7 @@ mod tests {
             .map(|i| (vec3(i as f32 * 2.0, 0.0, 0.0), true))
             .collect();
         let mut sap = build(&centers);
-        sap.sweep(&crate::physics::Inline, 1);
+        sap.sweep(&crate::fanout::Inline, 1);
         assert_eq!(sap.axis(), 0);
 
         // Slots 2 and 3 sit at x = 4 and x = 6, each half-extent 0.5.
@@ -666,7 +666,7 @@ mod tests {
         sap.set_proxy(0, proxy(vec3(0.0, 0.0, 0.0), 20.0, Role::Dynamic));
         sap.set_proxy(1, proxy(vec3(10.0, 0.0, 0.0), 0.5, Role::Dynamic));
         sap.set_proxy(2, proxy(vec3(30.0, 0.0, 0.0), 0.5, Role::Dynamic));
-        sap.sweep(&crate::physics::Inline, 1);
+        sap.sweep(&crate::fanout::Inline, 1);
         let window = sap.slab_window(9.0, 11.0);
         assert!(
             window.contains(&0),
@@ -685,7 +685,7 @@ mod tests {
             (vec3(4.0, 0.0, 0.0), true),
             (vec3(8.0, 0.0, 0.0), true),
         ]);
-        sap.sweep(&crate::physics::Inline, 1);
+        sap.sweep(&crate::fanout::Inline, 1);
         assert!(sap.slab_window(-1.0, 1.0).len() < 3);
         sap.set_proxy(2, proxy(vec3(-9.0, 0.0, 0.0), 0.5, Role::Dynamic));
         assert_eq!(sap.slab_window(-1.0, 1.0).len(), 3);
@@ -696,13 +696,13 @@ mod tests {
     #[test]
     fn a_sensor_pairs_with_what_can_cross_it_and_not_with_geometry() {
         let mut sap = touching(&[Role::Sensor, Role::Static]);
-        let swept = sap.sweep(&crate::physics::Inline, 1);
+        let swept = sap.sweep(&crate::fanout::Inline, 1);
         assert!(swept.contacts.is_empty());
         assert!(swept.sensors.is_empty(), "a wall crosses nothing");
 
         for other in [Role::Dynamic, Role::Driven, Role::Sensor] {
             let mut sap = touching(&[Role::Sensor, other]);
-            let swept = sap.sweep(&crate::physics::Inline, 1);
+            let swept = sap.sweep(&crate::fanout::Inline, 1);
             assert_eq!(swept.sensors, [(0, 1)], "{other:?} must be detected");
             assert!(
                 swept.contacts.is_empty(),
@@ -722,12 +722,12 @@ mod tests {
             [Role::Static, Role::Static],
         ] {
             let mut sap = touching(&pair);
-            let swept = sap.sweep(&crate::physics::Inline, 1);
+            let swept = sap.sweep(&crate::fanout::Inline, 1);
             assert!(swept.contacts.is_empty(), "{pair:?}");
             assert!(swept.sensors.is_empty(), "{pair:?}");
         }
         let mut sap = touching(&[Role::Driven, Role::Dynamic]);
-        assert_eq!(sap.sweep(&crate::physics::Inline, 1).contacts, [(0, 1)]);
+        assert_eq!(sap.sweep(&crate::fanout::Inline, 1).contacts, [(0, 1)]);
     }
 
     // The two lists come out of one walk, and each has to be sorted by slot
@@ -741,7 +741,7 @@ mod tests {
             Role::Sensor,
             Role::Dynamic,
         ]);
-        let swept = sap.sweep(&crate::physics::Inline, 1);
+        let swept = sap.sweep(&crate::fanout::Inline, 1);
         assert!(swept.contacts.windows(2).all(|w| w[0] < w[1]));
         assert!(swept.sensors.windows(2).all(|w| w[0] < w[1]));
         assert!(swept.sensors.contains(&(1, 2)), "{:?}", swept.sensors);
@@ -753,7 +753,7 @@ mod tests {
     #[test]
     fn a_layer_filter_hides_a_sensor_pair_too() {
         let mut sap = touching(&[Role::Sensor, Role::Dynamic]);
-        assert_eq!(sap.sweep(&crate::physics::Inline, 1).sensors, [(0, 1)]);
+        assert_eq!(sap.sweep(&crate::fanout::Inline, 1).sensors, [(0, 1)]);
         sap.set_proxy(
             1,
             Proxy {
@@ -774,7 +774,7 @@ mod tests {
                 ..proxy(Vec3::ZERO, 0.5, Role::Sensor)
             },
         );
-        assert!(sap.sweep(&crate::physics::Inline, 1).sensors.is_empty());
+        assert!(sap.sweep(&crate::fanout::Inline, 1).sensors.is_empty());
     }
 
     // Stepping a settled world must not allocate: the pair buffer is reused.
@@ -784,14 +784,14 @@ mod tests {
             .map(|i| (vec3(i as f32 * 0.4, 0.0, 0.0), true))
             .collect();
         let mut sap = build(&centers);
-        sap.sweep(&crate::physics::Inline, 1);
+        sap.sweep(&crate::fanout::Inline, 1);
         let capacity = sap.pairs.capacity();
         for slot in 0..8 {
             sap.set_proxy(
                 slot,
                 proxy(vec3(slot as f32 * 0.4, 0.0, 0.0), 0.5, Role::Dynamic),
             );
-            sap.sweep(&crate::physics::Inline, 1);
+            sap.sweep(&crate::fanout::Inline, 1);
         }
         assert_eq!(sap.pairs.capacity(), capacity);
     }

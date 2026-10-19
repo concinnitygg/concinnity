@@ -125,7 +125,7 @@ impl System for Camera3DSystem {
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
-        // Live settings-menu changes sent this tick by GraphicsSystem, which runs
+        // Live settings-menu changes sent this tick by the renderer, which runs
         // first. FOV is written in the camera loop below, which holds the
         // mutable Camera3D borrow.
         let pending_fov = super::look_controls::drain_commands(
@@ -137,12 +137,12 @@ impl System for Camera3DSystem {
             },
         );
 
-        // Read (not drain) the input snapshot deposited by GraphicsSystem this
+        // Read (not drain) the input snapshot deposited by the renderer this
         // frame, so UiInputSystem can read the same snapshot (e.g. for a pause
-        // menu over this camera). GraphicsSystem clears it before the next push.
+        // menu over this camera). The renderer clears it before the next push.
         let input = match ctx.query::<FrameInput>().next().cloned() {
             Some(i) => i,
-            // No input means GraphicsSystem hasn't run yet or there is no
+            // No input means the renderer hasn't run yet or there is no
             // graphics backend, so there is nothing to do this tick.
             None => return StepResult::Continue,
         };

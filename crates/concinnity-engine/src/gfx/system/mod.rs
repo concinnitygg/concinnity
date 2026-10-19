@@ -4,10 +4,13 @@
 
 use concinnity_core::components::Background;
 use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{PipelineContext, StepResult, System};
+use concinnity_core::ecs::{PipelineContext, StepResult, System, World};
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_core::render::extract::FrameExtractor;
+use concinnity_core::render::frame_outcome::FrameCounter;
 use concinnity_core::render::frame_submit::FramePolicy;
+use concinnity_core::render::render_mode::RenderMode;
+use concinnity_core::render::stream_pools::StreamingPools;
 use concinnity_core::render::{backend, overlay_maps, scene_flow, snapshot, text};
 use concinnity_host::store::paths::StateTree;
 
@@ -17,9 +20,9 @@ pub(crate) struct GraphicsSystem {
     // `None` for a world with no state tree.
     state: Option<StateTree>,
     clear_color: [f32; 4],
-    max_frames: Option<u64>,
     failed: bool,
-    frame_count: u64,
+    // Frames submitted, against the launch's cap.
+    frames: FrameCounter,
     // Per-class recovery for failed frames.
     frame_policy: FramePolicy,
     // The cross-frame state the frame's extraction keeps.
@@ -28,9 +31,8 @@ pub(crate) struct GraphicsSystem {
     // `dyn RenderBackend` so the setup logic in init.rs / streaming.rs /
     // scene.rs runs as one cfg-free path across Metal, DirectX, and Vulkan.
     // At the end of a successful init it is parked in the world's
-    // `ActiveRenderBackend` resource, where every per-step user (this system's
-    // frame encode, InputSystem's poll) takes and returns it; `None` from then
-    // on.
+    // `ActiveRenderBackend` resource, where this system's frame step takes and
+    // returns it; `None` from then on.
     backend: Option<Box<dyn RenderBackend>>,
     // active scene-flow bookkeeping while init builds it; handed to the shared
     // `ActiveSceneFlow` resource at the end of init (SettingsSystem jumps it,
@@ -47,14 +49,11 @@ pub(crate) struct GraphicsSystem {
     stat_hud_chips: Vec<AssetId>,
     // Streaming pools built during init (shared albedo+normal texture pool,
     // mesh geometry, voxel-world chunks, planet tiles) and their load threads,
-    // each present only when the world declares it and the backend supports
-    // it. Init scratch: moved into the parked `StreamingRuntime` resource at
-    // the end of init, where StreamingSystem drives them each frame.
-    stream_pools: concinnity_core::render::stream_pools::StreamingPools,
-    stream_workers: crate::gfx::streaming::system::StreamWorkers,
-    // Shader buckets whose pipeline init deferred, with the payload source the
-    // pump reads when their scene pins. Init scratch like the pools above.
-    shader_warmup: Option<crate::gfx::streaming::shader::ShaderWarmup>,
+    // with the shader buckets whose pipeline init deferred, each present only
+    // when the world declares it and the backend supports it. Init scratch:
+    // moved into the published `StreamingRuntime` resource at the end of init.
+    stream_pools: StreamingPools,
+    stream_workers: crate::gfx::streaming::loaders::StreamWorkers,
     // Which scene exclusively owns each deferred bucket, so scene residency
     // can claim it as a member.
     deferred_shader_scenes: Vec<(u32, AssetId)>,
@@ -75,7 +74,7 @@ pub(crate) struct GraphicsSystem {
     // step.
     snapshot: snapshot::RenderSnapshot,
     // Test-only injection seam: a fabricated GPU profile and a recording
-    // backend factory, so unit tests can drive run_init / run_step without a
+    // backend factory, so unit tests can drive init and run_step without a
     // GPU device.
     #[cfg(test)]
     pub(crate) test_hooks: Option<crate::gfx::test_hooks::TestHooks>,
@@ -84,13 +83,18 @@ pub(crate) struct GraphicsSystem {
 impl std::fmt::Debug for GraphicsSystem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GraphicsSystem")
-            .field("frame_count", &self.frame_count)
+            .field("frame_count", &self.frames.frames())
             .field("failed", &self.failed)
             .finish()
     }
 }
 
 impl GraphicsSystem {
+    // The renderer, for a world that runs with a window.
+    pub(crate) fn for_world(world: &World) -> Option<Self> {
+        RenderMode::renders_in(world).then(|| Self::new(world.resource::<StateTree>()))
+    }
+
     /// Fresh renderer driver with no backend yet, reading and writing under
     /// `tree`. The settings assets (frames in flight, clear color, shadow-map
     /// size, ...) and the launch's frame cap are read in [`System::init`].
@@ -100,9 +104,8 @@ impl GraphicsSystem {
             // The schema's own default, so a world with no Background sees the
             // same color as one that declares an all-default component.
             clear_color: Background::default().color,
-            max_frames: None,
             failed: false,
-            frame_count: 0,
+            frames: FrameCounter::default(),
             frame_policy: FramePolicy::default(),
             extractor: FrameExtractor::default(),
             backend: None,
@@ -113,7 +116,6 @@ impl GraphicsSystem {
             stat_hud_chips: Vec::new(),
             stream_pools: Default::default(),
             stream_workers: Default::default(),
-            shader_warmup: None,
             deferred_shader_scenes: Vec::new(),
             clip_rects: overlay_maps::ClipRects::new(),
             // All-capable until the backend reports otherwise at init.
@@ -154,7 +156,9 @@ impl GraphicsSystem {
 
 impl System for GraphicsSystem {
     fn init(&mut self, ctx: &mut PipelineContext) {
-        self.run_init(ctx);
+        if self.try_init(ctx).is_none() {
+            self.failed = true;
+        }
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
@@ -167,11 +171,8 @@ mod frame;
 pub mod hot_reload_sources;
 mod init;
 pub mod parked;
-pub(crate) mod scene;
 mod screenshot;
 pub mod sdf_field_sources;
-#[cfg(test)]
-mod settings_equivalence_tests;
 pub mod shader_sources;
 mod skinned_templates;
 mod stream_sources;

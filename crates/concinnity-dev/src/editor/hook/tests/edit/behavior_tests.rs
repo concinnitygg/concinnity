@@ -5,11 +5,9 @@
 //! the cards each draws, and the palette's filter. What the keyboard does with
 //! these actions is `tests/behavior_keys_tests.rs`.
 
-use concinnity_core::components::InputKey;
-use concinnity_core::components::TextInput;
+use concinnity_core::components::{InputKey, TextInput};
 use concinnity_core::ecs::World;
 
-use crate::editor::behavior;
 use crate::editor::behavior::graph::CardKind;
 use crate::editor::behavior::panel::{BehaviorAction, Status, ViewMode};
 use crate::editor::behavior::path;
@@ -18,10 +16,9 @@ use crate::editor::hook::tests::fixtures::{
     press_behavior_key, press_remove, select_behavior, selected, type_name,
 };
 use crate::editor::hook::{EditorHook, declared_id};
+use crate::editor::{behavior, widget};
 
 use crate::editor::panels::registry::PanelKey;
-
-use crate::editor::widget;
 
 // The overview card titled `title`, which is how a test reaches one without
 // laying the canvas out.

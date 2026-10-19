@@ -14,8 +14,10 @@ mod mailbox;
 mod planet_tiles;
 mod pressure;
 mod procedural_chunks;
+mod shader_residency;
 mod state;
 mod stats_log;
+pub(crate) mod system;
 
 pub use chunk_pool::{ChunkLoad, ChunkPool, ChunkRequest};
 pub use decoded_mesh::{
@@ -26,7 +28,9 @@ pub use item_pool::{ItemLoad, StreamPool, StreamedItem};
 pub use mailbox::{LoadPool, Mailbox};
 pub use planet_tiles::{PlanetTiles, TileCamera, TileMaterial, tile_mesh_size};
 pub use procedural_chunks::ProceduralChunks;
+pub use shader_residency::{Due, Finished, ShaderResidency};
 pub use state::{
     ChunkStream, DriveView, PlanetView, ShaderPump, StreamingPools, StreamingPressure,
     StreamingState, StreamingStats, chunk_model_matrix,
 };
+pub use system::{StreamLoaders, StreamingRuntime, StreamingSystem};

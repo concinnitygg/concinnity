@@ -12,11 +12,9 @@
 //! reach the world file or the session store.
 
 use concinnity_core::components::Camera3D;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::{FrameTime, PickIndex};
+use concinnity_core::ecs::{FrameTime, PickIndex, World};
 
-use crate::editor::hook::EditorHook;
-use crate::editor::hook::camera_pose;
+use crate::editor::hook::{EditorHook, camera_pose};
 use crate::editor::viewport::framing::CameraPose;
 use crate::editor::worlds;
 use crate::editor::worlds::cinematic::{Cinematic, Framing};

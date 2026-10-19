@@ -7,16 +7,13 @@
 //! empty-space click, which clears. Escape cancels. The fly camera and play
 //! mode capture the cursor, so `left_click` never arms a marquee there.
 
-use concinnity_core::components::Camera3D;
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::PickIndex;
-use concinnity_core::ecs::World;
+use concinnity_core::components::{Camera3D, FrameInput};
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::ecs::{PickIndex, World};
 
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::EditorHook;
-use crate::editor::viewport::highlight;
-use crate::editor::viewport::marquee;
+use crate::editor::viewport::{highlight, marquee};
 
 pub(in crate::editor::hook) struct MarqueeDrag {
     anchor: [f32; 2],

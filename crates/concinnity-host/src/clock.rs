@@ -11,12 +11,20 @@ pub fn monotonic_micros() -> u64 {
     micros_at(Instant::now())
 }
 
+/// Nanoseconds on the [`monotonic_micros`] axis, saturating at `u64::MAX`.
+pub fn monotonic_nanos() -> u64 {
+    u64::try_from(Instant::now().saturating_duration_since(epoch()).as_nanos()).unwrap_or(u64::MAX)
+}
+
 /// `at` on the [`monotonic_micros`] axis; an instant before the first call
 /// reads as zero.
 pub fn micros_at(at: Instant) -> u64 {
+    at.saturating_duration_since(epoch()).as_micros() as u64
+}
+
+fn epoch() -> Instant {
     static EPOCH: OnceLock<Instant> = OnceLock::new();
-    let epoch = *EPOCH.get_or_init(Instant::now);
-    at.saturating_duration_since(epoch).as_micros() as u64
+    *EPOCH.get_or_init(Instant::now)
 }
 
 /// Wall microseconds since `start`, saturating rather than wrapping.
@@ -43,6 +51,13 @@ mod tests {
     fn the_clock_never_goes_backwards() {
         let first = monotonic_micros();
         assert!(monotonic_micros() >= first);
+    }
+
+    #[test]
+    fn nanos_share_the_micros_axis() {
+        let micros = monotonic_micros();
+        let nanos = monotonic_nanos();
+        assert!(nanos / 1_000 >= micros, "{nanos} ns before {micros} us");
     }
 
     #[test]

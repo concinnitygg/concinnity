@@ -19,9 +19,8 @@ use concinnity_core::render::backend::{
     DrawGeometryUpdate, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
 };
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::geometry_repack;
 use concinnity_core::render::range_alloc::RangeAllocator;
-use concinnity_core::render::rt_geom;
+use concinnity_core::render::{geometry_repack, rt_geom};
 
 use super::super::context::VkContext;
 use super::super::texture::one_shot_submit;

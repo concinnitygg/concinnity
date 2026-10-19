@@ -1,7 +1,6 @@
 // Multi-mesh model schema.
 
-use crate::ecs::MaterialHandle;
-use crate::ecs::MeshHandle;
+use crate::ecs::{MaterialHandle, MeshHandle};
 use alloc::vec::Vec;
 
 /// One geometric part of a Model, referencing a mesh and its surface material.

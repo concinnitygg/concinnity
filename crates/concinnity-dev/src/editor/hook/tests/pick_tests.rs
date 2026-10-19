@@ -4,8 +4,7 @@
 //! unpickable.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::components::FrameInput;
-use concinnity_core::components::Sprite;
+use concinnity_core::components::{FrameInput, Sprite};
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id;
 use std::collections::BTreeSet;
@@ -19,8 +18,7 @@ use crate::editor::panels::asset_tree::{self, TreeGroup};
 
 use crate::editor::panels::assets_panel;
 
-use crate::editor::hook::tests::fixtures::entry_target;
-use crate::editor::hook::tests::fixtures::{active, selected};
+use crate::editor::hook::tests::fixtures::{active, entry_target, selected};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::sim;
 use crate::editor::viewport::highlight;

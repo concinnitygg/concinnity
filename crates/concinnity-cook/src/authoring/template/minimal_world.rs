@@ -3,8 +3,7 @@
 // cross-references), so applying the template drops a complete little scene into
 // any fresh world -- something to look at the moment it renders.
 
-use crate::authoring::spec::AssetSpec;
-use crate::authoring::spec::asset;
+use crate::authoring::spec::{AssetSpec, asset};
 
 pub(super) fn assets() -> Vec<AssetSpec> {
     vec![

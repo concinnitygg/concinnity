@@ -23,6 +23,7 @@ use crate::planet::{
 };
 use crate::render::backend::{ChunkMesh, PlanetChunk};
 use crate::render::error;
+use crate::render::grass::CanopyRange;
 use crate::render::material_entry::MaterialEntry;
 use crate::render::ops::{OpFailure, RenderOps};
 use crate::render::render_slots::RenderSlots;
@@ -293,6 +294,16 @@ impl TileMaterial {
                 material: MaterialUniforms::DEFAULT,
             },
         }
+    }
+
+    /// A planet's ground material: its entry, tinted at range by the canopy's
+    /// far field when it has one.
+    pub fn for_planet(entry: Option<MaterialEntry>, far_field: Option<&CanopyRange>) -> Self {
+        let mut material = Self::from_entry(entry);
+        if let Some(far) = far_field {
+            material.material.far_field = render_types::FarFieldTint::of(far.packed());
+        }
+        material
     }
 }
 

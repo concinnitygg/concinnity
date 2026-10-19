@@ -23,8 +23,7 @@
 //! slot; the dynamic `scene_srv_for_post` picks the RT output over SSR each frame,
 //! so no rewire or rebuild is needed.
 
-use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::{auto_exposure, render_types};
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::feature_plan::{BackendFacts, FeaturePlan};

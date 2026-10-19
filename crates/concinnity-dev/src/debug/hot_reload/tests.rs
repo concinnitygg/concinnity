@@ -2,21 +2,15 @@
 //! module). Pull each submodule's items in explicitly.
 
 use concinnity_core::animation::skeleton;
-use concinnity_core::components::ProceduralMesh;
-use concinnity_core::components::SkeletonJoint;
-use concinnity_core::components::Story;
-use concinnity_core::components::StoryReload;
-use concinnity_core::ecs::EventCursor;
-use concinnity_core::ecs::World;
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::gfx::render_types;
+use concinnity_core::bake::texture::TextureImage;
+use concinnity_core::components::{ProceduralMesh, SkeletonJoint, Story, StoryReload};
+use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::ecs::{EventCursor, World};
 use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
+use concinnity_core::gfx::{mesh_payload, render_types};
 use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::render::backend;
-use concinnity_core::render::draw_slot;
-use concinnity_core::render::error;
-use concinnity_core::render::scene_state;
-use concinnity_core::render::volumetric_fog;
+use concinnity_core::render::world_load::source_maps::*;
+use concinnity_core::render::{backend, draw_slot, error, scene_state, volumetric_fog};
 use concinnity_engine::live_edit;
 use concinnity_engine::live_edit::hot_reload_sources::*;
 use notify::{Event, EventKind};
@@ -638,7 +632,7 @@ fn state_with_only_shaders_still_spawns_a_watcher() {
         .into_owned();
     let shaders = ShaderSourceMap {
         entries: vec![ShaderSourceEntry {
-            id: concinnity_core::ecs::asset_id::AssetId(1),
+            id: AssetId(1),
             name: "lit".to_string(),
             bucket: 0,
             files: vec![ShaderFile {
@@ -777,7 +771,7 @@ impl backend::DrawStreaming for RecordingBackend {
     fn update_texture_slot(
         &mut self,
         slot: usize,
-        image: &concinnity_core::bake::texture::TextureImage,
+        image: &TextureImage,
     ) -> error::RenderResult<()> {
         self.texture_updates
             .push((slot, image.width(), image.height()));
@@ -1221,12 +1215,12 @@ fn poll_pending_assets_reloads_every_texture_through_the_shared_pool() {
         textures: vec![
             DecodedTexture {
                 slot: 2,
-                image: concinnity_core::bake::texture::TextureImage::rgba8(4, 4, vec![0; 64]),
+                image: TextureImage::rgba8(4, 4, vec![0; 64]),
                 source: "a.png".to_string(),
             },
             DecodedTexture {
                 slot: 5,
-                image: concinnity_core::bake::texture::TextureImage::rgba8(8, 8, vec![0; 256]),
+                image: TextureImage::rgba8(8, 8, vec![0; 256]),
                 source: "n.png".to_string(),
             },
         ],
@@ -1246,7 +1240,7 @@ fn poll_pending_assets_survives_a_backend_texture_rejection() {
     let batch = DecodedAssetBatch {
         textures: vec![DecodedTexture {
             slot: 0,
-            image: concinnity_core::bake::texture::TextureImage::rgba8(1, 1, vec![0; 4]),
+            image: TextureImage::rgba8(1, 1, vec![0; 4]),
             source: "a.png".to_string(),
         }],
         ..Default::default()

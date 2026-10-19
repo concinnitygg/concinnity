@@ -2,7 +2,7 @@ use crate::components::EntityTarget;
 
 /// Runtime-only event requesting that an authored placement be re-parented at
 /// runtime: `child` is moved under `parent`, or detached to a root when
-/// `parent` is None. GraphicsSystem reads these from its
+/// `parent` is None. The renderer reads these from its
 /// `Events<ReparentRequest>` queue each step, resolves the nameto their entities,
 /// re-points the child's Parent edge, and recomposes world matrices. World
 /// authors never declare this type directly.

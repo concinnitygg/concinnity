@@ -7,21 +7,16 @@
 use concinnity_core::components::{
     Camera3D, CameraController, FollowController, Sprite, TextLabel,
 };
-use concinnity_core::ecs::FrameTime;
-use concinnity_core::ecs::PickEntry;
-use concinnity_core::ecs::PickIndex;
-use concinnity_core::ecs::World;
+use concinnity_core::ecs::{FrameTime, PickEntry, PickIndex, World};
 use concinnity_host::thread::asset_id;
 
-use crate::editor::hook::EditorHook;
-use crate::editor::hook::camera_pose;
 use crate::editor::hook::tests::fixtures::{
     VP, open_project, prop_entry, world_with_name_field, write_world,
 };
+use crate::editor::hook::{EditorHook, camera_pose};
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::viewport::framing::CameraPose;
-use crate::editor::worlds::cinematic;
-use crate::editor::worlds::{self, WorldsAction};
+use crate::editor::worlds::{self, WorldsAction, cinematic};
 
 const AUTHORED: CameraPose = CameraPose {
     position: [0.0, 1.7, 12.0],

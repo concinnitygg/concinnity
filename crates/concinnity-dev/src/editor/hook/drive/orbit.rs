@@ -5,14 +5,12 @@
 //! capture nor the gameplay input gate -- the cursor stays visible and the
 //! world's camera controller stays frozen.
 
-use concinnity_core::components::Camera3D;
-use concinnity_core::components::FrameInput;
+use concinnity_core::components::{Camera3D, FrameInput};
 use concinnity_core::ecs::World;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hud;
-use crate::editor::viewport::framing;
-use crate::editor::viewport::orbit;
+use crate::editor::viewport::{framing, orbit};
 
 pub(in crate::editor::hook) struct OrbitDrag {
     pivot: [f32; 3],

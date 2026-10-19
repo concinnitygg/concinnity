@@ -86,8 +86,7 @@ impl HeldBodies {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physics::{ColliderShape, SimConfig};
-    use crate::physics::{DynamicParams, LayerMask};
+    use crate::physics::{ColliderShape, DynamicParams, LayerMask, SimConfig};
     use crate::terrain::TerrainGrid;
     use alloc::vec;
 

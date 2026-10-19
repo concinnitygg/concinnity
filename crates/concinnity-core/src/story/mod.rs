@@ -6,29 +6,21 @@
 //! and portrait sprite textures, shows the choice menu when a node ends in
 //! one, and asks the audio system to play page music and one-shots.
 
-use crate::components::FrameInput;
-use crate::components::PlayCue;
-use crate::components::ScreenCommand;
-use crate::components::ScreenShown;
-use crate::components::Sprite;
-use crate::components::StoryCommand;
-use crate::components::StoryReload;
-use crate::components::TextLabel;
 use crate::components::{
-    CueKind, InputKey, Story, StoryCompareOp, StoryGate, StoryImage, StoryOp, StoryScaffold,
-    StoryStage,
+    CueKind, FrameInput, InputKey, PlayCue, ScreenCommand, ScreenShown, Sprite, Story,
+    StoryCommand, StoryCompareOp, StoryGate, StoryImage, StoryOp, StoryReload, StoryScaffold,
+    StoryStage, TextLabel,
 };
-use crate::ecs::Ref;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{
-    Access, AudioClipHandle, EventCursor, FrameTime, PipelineContext, StepResult, System,
+    Access, AudioClipHandle, EventCursor, FrameTime, PipelineContext, Ref, StepResult, System,
+    World,
 };
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
-use alloc::format;
 use alloc::string::{String, ToString};
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 
 mod graph;
 mod input;
@@ -263,6 +255,11 @@ impl core::fmt::Debug for StorySystem {
 }
 
 impl StorySystem {
+    /// The system for a world that declares a `Story`.
+    pub fn for_world(world: &World) -> Option<Self> {
+        world.query::<Story>().next().cloned().map(Self::new)
+    }
+
     /// Playback of `story`, with no save store.
     pub fn new(story: Story) -> Self {
         Self {
@@ -466,7 +463,7 @@ impl System for StorySystem {
         }
 
         // The per-frame input snapshot (queried, not drained, like every other
-        // FrameInput reader). GraphicsSystem deposits it before this system runs,
+        // FrameInput reader). The renderer deposits it before this system runs,
         // so it is the current frame's input. Drives the held-Control fast-forward
         // and the slot-overlay scroll.
         let frame = ctx

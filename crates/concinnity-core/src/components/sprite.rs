@@ -1,9 +1,7 @@
 // Screen-space sprite overlay schema.
 
-use crate::components::Screen;
-use crate::components::Vocabulary;
-use crate::ecs::Ref;
-use crate::ecs::TextureHandle;
+use crate::components::{Screen, Vocabulary};
+use crate::ecs::{Ref, TextureHandle};
 
 /// Screen-space 2D rectangle drawn as a UI overlay each frame.
 ///

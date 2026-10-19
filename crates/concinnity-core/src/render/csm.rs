@@ -28,8 +28,7 @@ use crate::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
 use crate::math::vec3::{add, cross, dot, length_sq, normalize_clamped, scale, sub};
 use crate::math::{powf, round, sqrt, tan};
 use crate::render::depth::shadow_ortho;
-use crate::transform::IDENTITY;
-use crate::transform::mat4_mul;
+use crate::transform::{IDENTITY, mat4_mul};
 
 const SPLIT_LAMBDA: f32 = 0.5;
 

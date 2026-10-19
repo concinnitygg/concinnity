@@ -5,8 +5,7 @@
 //! world-free; the hook owns the entries and `character_shape_panel.rs` the
 //! layout.
 
-use concinnity_cook::authoring::registry::build_only::CharacterSchema;
-use concinnity_cook::authoring::registry::build_only::ShapePreset;
+use concinnity_cook::authoring::registry::build_only::{CharacterSchema, ShapePreset};
 use concinnity_core::components::{JointProportion, ShapeSlider};
 
 // The trailing section for keys and groups the schema does not place.

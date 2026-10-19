@@ -1,9 +1,8 @@
 // Screen toggle keys and KeyBindings, matched against the frame's pressed key.
 
 use crate::components::{KeyBinding, KeyMods, ScreenCommand, UiAction};
-use crate::ecs::Ref;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, StepResult};
+use crate::ecs::{PipelineContext, Ref, StepResult};
 
 use super::intent::UiIntent;
 use super::{UiInputSystem, fire_action};

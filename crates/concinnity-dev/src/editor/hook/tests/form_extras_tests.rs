@@ -10,9 +10,8 @@ use std::path::PathBuf;
 
 use super::fixtures::{entry, hook, set_field, world_with_fields};
 use crate::editor::entry_list::EntryList;
-use crate::editor::hook::EditorHook;
-use crate::editor::hook::FormTarget;
 use crate::editor::hook::form_extras::{Committed, ExtrasCx, FormExtras, NewFile};
+use crate::editor::hook::{EditorHook, FormTarget};
 use crate::editor::panels::form_extras::{ExtraControl, ExtraRow};
 use crate::editor::panels::form_panel::{self, FormAction};
 

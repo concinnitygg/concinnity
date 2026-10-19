@@ -12,9 +12,8 @@
 use concinnity_core::ecs::World;
 
 use super::{EditorHook, declared_id};
-use crate::editor::behavior;
 use crate::editor::behavior::panel::Status;
-use crate::editor::widget;
+use crate::editor::{behavior, widget};
 
 impl EditorHook {
     // Arm the removal, then carry it out. Any other press on the panel disarms

@@ -3,19 +3,13 @@ use crate::components::{
     Animation, AnimationGraph, AnimationParams, CharacterRig, PhysicsConfig, Prop, PropCollider,
     RootMotionEvent, SkeletonPose,
 };
-use crate::ecs::ComponentSlot;
-use crate::ecs::EventCursor;
-use crate::ecs::FrameTime;
-use crate::ecs::MenuActive;
-use crate::ecs::SkinnedMeshHandle;
-use crate::ecs::World;
+use crate::ecs::{ComponentSlot, EventCursor, FrameTime, MenuActive, SkinnedMeshHandle, World};
 use crate::gfx::render_types::SkinnedIndex;
 use crate::test_support::intern;
 use crate::transform;
-use alloc::format;
 use alloc::string::{String, ToString};
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 
 use super::AnimationSystem;
 
@@ -454,7 +448,7 @@ fn rig_capsule_follows_root_motion() {
     .unwrap();
     add_named(&mut world, "hero_rig_walk", a);
     world.add_component(PhysicsConfig::default());
-    // GraphicsSystem publishes rigs in a rendering world; this headless test
+    // The renderer publishes rigs in a rendering world; this headless test
     // seeds one directly before start so PhysicsSystem::init sees it.
     world.add_component(CharacterRig::new(
         target,

@@ -9,4 +9,5 @@ pub mod nav;
 pub mod pad;
 pub mod snapshot;
 pub mod stick;
+pub mod system;
 pub mod text_input;

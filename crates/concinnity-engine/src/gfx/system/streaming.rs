@@ -11,9 +11,8 @@ use concinnity_core::components::{BlockType, Planet, StreamingConfig, VoxelWorld
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{MaterialHandle, PayloadLocator, PipelineContext};
 use concinnity_core::geometry::ChunkBlockType;
-use concinnity_core::gfx::chunk_coord;
-use concinnity_core::gfx::mesh_seed;
-use concinnity_core::gfx::render_types::{DrawIndex, FarFieldTint};
+use concinnity_core::gfx::render_types::DrawIndex;
+use concinnity_core::gfx::{chunk_coord, mesh_seed};
 use concinnity_core::planet::{LocalFrame, MAX_RESIDENT_TILES, PlanetFrame};
 use concinnity_core::render::draw_list::DeferredMeshSeed;
 use concinnity_core::render::grass::CanopyRange;
@@ -25,16 +24,14 @@ use concinnity_core::render::stream_pools::budget::{
 };
 use concinnity_core::render::stream_pools::{
     ChunkPool, ChunkStream, DecodedMesh, DeferredMeshPayload, PlanetTiles, ProceduralChunks,
-    StreamPool, StreamingState, TileMaterial,
+    StreamPool, StreamingRuntime, StreamingState, TileMaterial,
 };
 use concinnity_core::render::world_load::stream_seed::StreamSeed;
 
 use super::GraphicsSystem;
 use super::stream_sources::{build_texture_payload_source, disk_mesh_payload};
 use crate::gfx::streaming::mesh::{self, MeshPayloadSource};
-use crate::gfx::streaming::planet as tile_workers;
-use crate::gfx::streaming::system::StreamingRuntime;
-use crate::gfx::streaming::texture;
+use crate::gfx::streaming::{planet as tile_workers, texture};
 use crate::worker::Worker;
 
 // The streaming seed plus the payloads and voxel content the pools stream from.
@@ -59,12 +56,12 @@ pub(super) struct StreamingSetup<'a> {
 // scoring centers, draw mapping, the seed headroom, and the deferred payload
 // refs the worker decodes on demand.
 pub(super) struct MeshStreamSetup {
-    pub payloads: Vec<DecodedMesh>,
-    pub centers: Vec<Vec<[f32; 3]>>,
-    pub draw_indices: Vec<DrawIndex>,
-    pub(crate) disk_backed: bool,
-    pub(crate) seed_region: Option<mesh_seed::MeshSeedRegion>,
-    pub(crate) deferred_payloads: HashMap<usize, DeferredMeshPayload>,
+    pub(super) payloads: Vec<DecodedMesh>,
+    pub(super) centers: Vec<Vec<[f32; 3]>>,
+    pub(super) draw_indices: Vec<DrawIndex>,
+    pub(super) disk_backed: bool,
+    pub(super) seed_region: Option<mesh_seed::MeshSeedRegion>,
+    pub(super) deferred_payloads: HashMap<usize, DeferredMeshPayload>,
 }
 
 // A pool's resident-byte budget, logged.
@@ -163,7 +160,11 @@ impl GraphicsSystem {
                 .mesh
                 .is_some()
                 .then_some(self.stream_pools.mesh_draws.as_slice()),
-            shaders_stream: self.shader_warmup.as_ref().is_some_and(|w| !w.is_empty()),
+            shaders_stream: self
+                .stream_workers
+                .shaders
+                .as_ref()
+                .is_some_and(|w| !w.is_empty()),
             deferred_shaders: &self.deferred_shader_scenes,
         };
         scene_members::scene_residency(ctx, &self.scene_flow.as_ref()?.scenes, content)
@@ -182,15 +183,11 @@ impl GraphicsSystem {
         self.stream_pools.scene_residency = self.build_scene_residency(ctx);
         let mut state =
             StreamingState::new(std::mem::take(&mut self.stream_pools), frames_in_flight);
-        let mut shader_warmup = self.shader_warmup.take();
+        let mut workers = std::mem::take(&mut self.stream_workers);
         if let Some(start) = self.scene_flow.as_ref().map(|flow| flow.current) {
-            state.pin_start_scene(start, shader_warmup.as_mut());
+            state.pin_start_scene(start, workers.shaders.as_mut());
         }
-        ctx.insert_resource(StreamingRuntime::new(
-            state,
-            std::mem::take(&mut self.stream_workers),
-            shader_warmup,
-        ));
+        ctx.insert_resource(StreamingRuntime::new(state, Box::new(workers)));
     }
 
     pub(super) fn setup_texture_streaming(
@@ -355,27 +352,8 @@ impl GraphicsSystem {
     ) {
         let Some(vw) = voxel_world else { return };
 
-        // Resolve the palette: each id is a BlockType; index 0 is air. A
-        // missing entry degrades to air rather than failing the world.
-        let palette: Vec<ChunkBlockType> = vw
-            .palette
-            .iter()
-            .map(|id| match block_types.get(&id.id()) {
-                Some(bt) => ChunkBlockType::from(bt),
-                None => {
-                    tracing::warn!(
-                        "GraphicsSystem: VoxelWorld palette entry {} is not a known BlockType",
-                        id
-                    );
-                    ChunkBlockType {
-                        solid: false,
-                        uv_top: [0.0; 4],
-                        uv_bottom: [0.0; 4],
-                        uv_side: [0.0; 4],
-                    }
-                }
-            })
-            .collect();
+        // Each palette id is a BlockType; index 0 is air.
+        let palette = ChunkBlockType::resolve_palette(&vw.palette, block_types);
         let material =
             TileMaterial::from_entry(vw.material.and_then(|id| material_map.get(&id).copied()));
 
@@ -462,14 +440,12 @@ impl GraphicsSystem {
         far_field: Option<CanopyRange>,
         material_map: &HashMap<MaterialHandle, MaterialEntry>,
     ) {
-        let mut material = TileMaterial::from_entry(
+        let material = TileMaterial::for_planet(
             planet
                 .material
                 .and_then(|id| material_map.get(&id).copied()),
+            far_field.as_ref(),
         );
-        if let Some(far) = &far_field {
-            material.material.far_field = FarFieldTint::of(far.packed());
-        }
         let (vertex_bytes, index_bytes) = budget::planet_tile_headroom();
         let Some(backend) = self.backend.as_deref_mut() else {
             return;

@@ -7,13 +7,11 @@
 //! ONE undo step.
 
 use concinnity_core::components::Transform;
-use concinnity_core::ecs::PickIndex;
-use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::ecs::{PickIndex, World};
 use concinnity_core::math::pick::{PickRay, ray_aabb};
 
-use super::EditorHook;
-use super::drag;
+use super::{EditorHook, drag};
 use crate::editor::viewport::gizmo::GizmoMode;
 
 // A member already resting within this distance of the floor is left alone

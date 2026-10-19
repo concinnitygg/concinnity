@@ -99,7 +99,7 @@ mod tests {
     use alloc::vec;
 
     // A store handing back one fixed payload, standing in for the terrain
-    // blob held resident past GraphicsSystem init for this read.
+    // blob held resident past graphics init for this read.
     struct OnePayload(Vec<u8>);
 
     impl PayloadStore for OnePayload {

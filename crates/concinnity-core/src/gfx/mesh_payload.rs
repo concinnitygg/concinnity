@@ -1,5 +1,5 @@
 //! Canonical vertex type and the binary serialization format shared between
-//! the build step (build_mesh.rs writes) and GraphicsSystem (reads).
+//! the build step (build_mesh.rs writes) and the renderer (reads).
 //!
 //! The layout asserts below stay hand-written. A vertex payload reaches a shader
 //! through a vertex descriptor or a raw pointer, never as a declared buffer
@@ -27,8 +27,7 @@
 
 use crate::decode::{ByteReader, checked_product};
 use alloc::format;
-use alloc::string::String;
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 // The little-endian f32 at byte offset `at` of a fixed-size chunk.

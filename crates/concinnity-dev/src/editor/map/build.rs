@@ -3,8 +3,7 @@
 
 use concinnity_cook::authoring::flow::{FlowEdge, FlowGraph, Move, Place, PlaceKind};
 
-use super::Entries;
-use super::contents;
+use super::{Entries, contents};
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::behavior::chart::LABEL_CHARS;
 use crate::editor::behavior::graph::{Card, CardKind, Chart, Wire};

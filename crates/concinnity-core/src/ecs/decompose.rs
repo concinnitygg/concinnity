@@ -12,10 +12,9 @@
 //! resolves against. Cross-references between placements (a Prop's parent, a
 //! PropBody's owner) resolve through `EntityById`, which the loader filled.
 
-use crate::components::PropBody;
 use crate::components::{
     BodyDynamics, Children, Collider, Held, Interactable, MeshRenderer, ModelRenderer, Parent,
-    Pickup, Prop, PropInstance, SceneMember, Transform,
+    Pickup, Prop, PropBody, PropInstance, SceneMember, Transform,
 };
 use crate::ecs::{Entity, PipelineContext};
 use alloc::collections::BTreeMap;
@@ -128,10 +127,8 @@ pub fn run(ctx: &mut PipelineContext) {
 mod tests {
     use super::*;
     use crate::components::{Prop, PropCollider};
-    use crate::ecs::HEADLESS_SYSTEMS;
-    use crate::ecs::Ref;
     use crate::ecs::asset_id::AssetId;
-    use crate::ecs::{MaterialHandle, MeshHandle, World};
+    use crate::ecs::{HEADLESS_SYSTEMS, MaterialHandle, MeshHandle, Ref, World};
     use alloc::vec;
 
     fn prop() -> Prop {
