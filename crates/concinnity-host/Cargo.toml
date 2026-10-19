@@ -18,15 +18,17 @@ include = [
 [dependencies]
 concinnity-core = { workspace = true }
 
+ciborium = { workspace = true }
 rayon = { workspace = true }
+serde = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }
 tracing = { workspace = true, features = ["std"] }
 
-[target.'cfg(target_vendor = "apple")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 
 [dev-dependencies]
 concinnity-testing = { workspace = true }

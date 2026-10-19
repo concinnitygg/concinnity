@@ -16,7 +16,7 @@ concinnity-core = { path = "crates/concinnity-core", version = "0.20" }
 concinnity-derive = { path = "crates/concinnity-derive", version = "0.20" }
 concinnity-dev = { path = "crates/concinnity-dev", version = "0.20" }
 concinnity-device = { path = "crates/concinnity-device", version = "0.20" }
-concinnity-engine = { path = "crates/concinnity-engine", version = "0.20" }
+concinnity-runtime = { path = "crates/concinnity-runtime", version = "0.20" }
 concinnity-host = { path = "crates/concinnity-host", version = "0.20" }
 concinnity-shader = { path = "crates/concinnity-shader", version = "0.20" }
 concinnity-testing = { path = "crates/concinnity-testing" }
@@ -97,15 +97,15 @@ targets = ["x86_64-apple-darwin", "x86_64-pc-windows-msvc"]
 
 [features]
 default = ["std", "player", "cook"]
-std = ["dep:concinnity-engine", "dep:concinnity-host", "dep:concinnity-toolchain"]
+std = ["dep:concinnity-runtime", "dep:concinnity-host", "dep:concinnity-toolchain"]
 player = ["std"]
 editor = ["player", "cook", "dep:concinnity-dev"]
 cook = ["std", "dep:concinnity-cook"]
-vulkan = ["std", "concinnity-engine/vulkan", "concinnity-dev?/vulkan"]
+vulkan = ["std", "concinnity-runtime/vulkan", "concinnity-dev?/vulkan"]
 
 [dependencies]
 concinnity-core = { workspace = true }
-concinnity-engine = { workspace = true, optional = true }
+concinnity-runtime = { workspace = true, optional = true }
 concinnity-host = { workspace = true, optional = true }
 concinnity-cook = { workspace = true, optional = true }
 concinnity-dev = { workspace = true, optional = true }

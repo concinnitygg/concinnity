@@ -261,7 +261,7 @@ mod tests {
             interact_requested: false,
             controller: Some(CameraController::default()),
         });
-        world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
+        world.start(concinnity_runtime::SYSTEMS).unwrap();
         world
     }
 

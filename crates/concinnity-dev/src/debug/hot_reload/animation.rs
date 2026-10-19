@@ -238,7 +238,7 @@ mod tests {
             dev_loop: true,
             ..Default::default()
         });
-        world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
+        world.start(concinnity_runtime::SYSTEMS).unwrap();
         world
     }
 

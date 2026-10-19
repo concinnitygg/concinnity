@@ -735,7 +735,7 @@ fn profile_dir_walks_up_from_out_dir() {
     // Windows-only. The Unix-style case below runs everywhere.
     #[cfg(windows)]
     {
-        let out = Path::new("C:\\proj\\target\\release\\build\\concinnity-engine-abcd1234\\out");
+        let out = Path::new("C:\\proj\\target\\release\\build\\concinnity-runtime-abcd1234\\out");
         assert_eq!(
             profile_dir_from_out_dir(out),
             Some(Path::new("C:\\proj\\target\\release"))

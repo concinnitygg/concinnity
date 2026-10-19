@@ -80,37 +80,58 @@ pub fn deferred_mesh_sources(ctx: &PipelineContext, streaming: bool) -> Deferred
 }
 
 /// Shader buckets whose payload decode and pipeline build init skips, each
-/// paired with the scene that owns it. `shader_ids` is the world's Shaders in
-/// bucket order. Bucket 0, the world default program, is never deferred.
-pub fn deferred_shader_buckets(
-    ctx: &PipelineContext,
-    streaming: bool,
-    shader_ids: &[Option<AssetId>],
-) -> Vec<(usize, AssetId)> {
-    let mut deferred = Vec::new();
-    if !streaming {
-        return deferred;
-    }
-    let Some(start) = start_scene(ctx) else {
-        return deferred;
-    };
-    let Some(groups) = ctx.resource::<BlobSceneGroups>() else {
-        return deferred;
-    };
-    for group in &groups.0 {
-        if group.scene == start {
-            continue;
+/// paired with the scene that exclusively owns it, in bucket order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShaderDeferral {
+    scenes: Vec<(u32, AssetId)>,
+}
+
+impl ShaderDeferral {
+    /// The buckets a streamed world defers: those a non-start scene owns.
+    /// `shader_ids` is the world's Shaders in bucket order. Bucket 0, the world
+    /// default program, is never deferred.
+    pub fn plan(ctx: &PipelineContext, streaming: bool, shader_ids: &[Option<AssetId>]) -> Self {
+        let mut scenes = Vec::new();
+        if !streaming {
+            return Self { scenes };
         }
-        for &def in &group.defs {
-            if let Some(bucket) = shader_ids.iter().position(|&id| id == Some(def))
-                && bucket > 0
-            {
-                deferred.push((bucket, group.scene));
+        let Some(start) = start_scene(ctx) else {
+            return Self { scenes };
+        };
+        let Some(groups) = ctx.resource::<BlobSceneGroups>() else {
+            return Self { scenes };
+        };
+        for group in &groups.0 {
+            if group.scene == start {
+                continue;
+            }
+            for &def in &group.defs {
+                if let Some(bucket) = shader_ids.iter().position(|&id| id == Some(def))
+                    && bucket > 0
+                {
+                    scenes.push((bucket as u32, group.scene));
+                }
             }
         }
+        scenes.sort_unstable();
+        Self { scenes }
     }
-    deferred.sort_unstable();
-    deferred
+
+    /// Whether init skips `bucket`.
+    pub fn is_deferred(&self, bucket: u32) -> bool {
+        self.scenes.iter().any(|&(b, _)| b == bucket)
+    }
+
+    /// A deferred bucket whose source cannot be kept for later still has to
+    /// render: init builds it, and no scene claims it any more.
+    pub fn build_at_init(&mut self, bucket: u32) {
+        self.scenes.retain(|&(b, _)| b != bucket);
+    }
+
+    /// Each deferred bucket with the scene that owns it.
+    pub fn scenes(&self) -> &[(u32, AssetId)] {
+        &self.scenes
+    }
 }
 
 #[cfg(test)]
@@ -269,8 +290,8 @@ mod tests {
             group(LATER, Vec::new(), vec![SCENE_SHADER, OTHER_DEF]),
         ]));
         assert_eq!(
-            deferred_shader_buckets(&world.context(), true, &shaders),
-            vec![(1, LATER)]
+            ShaderDeferral::plan(&world.context(), true, &shaders).scenes(),
+            [(1, LATER)]
         );
 
         let mut owned_default = residency_world(&[START, LATER]);
@@ -279,7 +300,23 @@ mod tests {
             Vec::new(),
             vec![DEFAULT_SHADER],
         )]));
-        assert!(deferred_shader_buckets(&owned_default.context(), true, &shaders).is_empty());
+        assert!(
+            ShaderDeferral::plan(&owned_default.context(), true, &shaders)
+                .scenes()
+                .is_empty()
+        );
+    }
+
+    // A bucket that cannot stay deferred is built at init and leaves its scene.
+    #[test]
+    fn a_bucket_built_at_init_is_no_longer_deferred() {
+        let mut deferral = ShaderDeferral {
+            scenes: vec![(1, LATER), (2, LATER)],
+        };
+        assert!(deferral.is_deferred(1));
+        deferral.build_at_init(1);
+        assert!(!deferral.is_deferred(1));
+        assert_eq!(deferral.scenes(), [(2, LATER)]);
     }
 
     #[test]
@@ -289,13 +326,25 @@ mod tests {
 
         let mut unstreamed = residency_world(&[START, LATER]);
         unstreamed.insert_resource(BlobSceneGroups(groups.clone()));
-        assert!(deferred_shader_buckets(&unstreamed.context(), false, &shaders).is_empty());
+        assert!(
+            ShaderDeferral::plan(&unstreamed.context(), false, &shaders)
+                .scenes()
+                .is_empty()
+        );
 
         let mut sceneless = residency_world(&[]);
         sceneless.insert_resource(BlobSceneGroups(groups));
-        assert!(deferred_shader_buckets(&sceneless.context(), true, &shaders).is_empty());
+        assert!(
+            ShaderDeferral::plan(&sceneless.context(), true, &shaders)
+                .scenes()
+                .is_empty()
+        );
 
         let mut ungrouped = residency_world(&[START, LATER]);
-        assert!(deferred_shader_buckets(&ungrouped.context(), true, &shaders).is_empty());
+        assert!(
+            ShaderDeferral::plan(&ungrouped.context(), true, &shaders)
+                .scenes()
+                .is_empty()
+        );
     }
 }

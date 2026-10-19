@@ -3,7 +3,7 @@
 
 use concinnity_core::ecs::World;
 use concinnity_core::render::backend::RenderBackend;
-use concinnity_engine::live_edit::parked::TextureNameSlots;
+use concinnity_core::render::world_load::source_maps::TextureNameSlots;
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;

@@ -1,0 +1,153 @@
+//! The system table: core's systems (`CoreSystems`, each entry defined once in
+//! concinnity-core) with this crate's own among them, in run order. Table order
+//! is run order. A core system's phase, edges, gate and description come from
+//! its core entry; this file decides only where this crate's systems sit and
+//! what it lends core's gates (`Host`).
+//!
+//! Entries are in phase order (see core's `Phase` for what each band holds),
+//! so a system registered with `World::add_system` anchors to a phase, never an
+//! entry.
+//!
+//! This crate's edges, and why:
+//!   * Graphics after the overlay, the sky, the drains and streaming: the
+//!     frame it submits shows the tick's input, simulation and cameras. Only
+//!     the frame report follows it.
+//!
+//! Event-carried couplings (RootMotionEvent, GroundProbes, SettingCommand) are
+//! order-robust thanks to the event store's two-frame retention.
+
+use concinnity_core::audio::out::AudioOut;
+use concinnity_core::behavior::BehaviorStore;
+use concinnity_core::ecs::{
+    CoreSystems, Phase, PipelineContext, SystemEntry, SystemHost, SystemTable, TransientSaves,
+    World, boxed,
+};
+use concinnity_core::fanout::Lent;
+use concinnity_core::input::system::PadSource;
+use concinnity_core::planet::StartBuilder;
+use concinnity_core::settings::system::SettingsStore;
+use concinnity_core::story::StoryStore;
+use concinnity_host::store::paths::StateTree;
+use concinnity_host::thread::jobs::{self, JobPool};
+
+use crate::ecs::host_resources;
+use crate::gfx::system::GraphicsSystem;
+
+// What this host lends core's systems: the job pool, file-backed behavior
+// state and story saves, the planet's ground worker, the kira audio output,
+// gilrs gamepads, and stdout for a benchmark's report.
+struct Host;
+
+impl SystemHost for Host {
+    type Pool = JobPool;
+
+    const POOL: Lent<JobPool> = Lent::new(jobs::pool_for);
+
+    const GROUND: StartBuilder = crate::planet::start_ground_worker;
+
+    fn behavior_store(world: &World) -> Option<Box<dyn BehaviorStore>> {
+        let tree = world.resource::<StateTree>()?;
+        Some(Box::new(crate::behavior::FileStore::new(tree)))
+    }
+
+    fn audio_out() -> Option<Box<dyn AudioOut>> {
+        crate::audio::open()
+    }
+
+    fn pads() -> Option<Box<dyn PadSource>> {
+        Some(Box::new(crate::input::gamepad::GamepadSource::default()))
+    }
+
+    fn settings_store(world: &World) -> Option<Box<dyn SettingsStore>> {
+        let tree = world.resource::<StateTree>()?;
+        Some(Box::new(crate::settings::FileStore::new(tree)))
+    }
+
+    fn story_store(world: &World) -> Option<Box<dyn StoryStore>> {
+        let tree = world.resource::<StateTree>()?;
+        let transient = world.resource::<TransientSaves>().is_some_and(|t| t.0);
+        Some(Box::new(crate::story::FileStore::new(tree, transient)))
+    }
+
+    fn report(text: &str) {
+        print!("{text}");
+    }
+}
+
+type Core = CoreSystems<Host>;
+
+const GRAPHICS: SystemEntry = SystemEntry {
+    name: "GraphicsSystem",
+    present_when: "the world runs with a window",
+    phase: Phase::PostRender,
+    gate: |world| boxed(GraphicsSystem::for_world(world)),
+    after: &[
+        "OverlaySystem",
+        "SkyRotationSystem",
+        "SpawnSystem",
+        "SettingsSystem",
+        "StreamingSystem",
+    ],
+    before: &["FrameReportSystem"],
+};
+
+// Runs once at world start, after the gates have built the systems and before
+// their `init`. The defaults the world is completed with land earlier still
+// (`complete_world`), so a Prop one of them injects decomposes here like any
+// other.
+fn before_init(ctx: &mut PipelineContext) {
+    // Every context touch a stepping system makes is asserted against what it
+    // declared; the hook is installed before the first step can happen.
+    #[cfg(debug_assertions)]
+    crate::ecs::access_check::install_hook();
+    host_resources::publish(ctx);
+    concinnity_core::ecs::decompose::run(ctx);
+}
+
+/// The system table a world starts from: one entry per system, in run order,
+/// plus the load-time passes that bracket them.
+pub const SYSTEMS: &SystemTable = &SystemTable {
+    entries: &[
+        Core::OVERLAY,
+        Core::INPUT,
+        Core::SKY_ROTATION,
+        Core::PLANET,
+        Core::BEHAVIOR,
+        Core::PHYSICS,
+        Core::CAMERA3D,
+        Core::THIRD_PERSON,
+        Core::CAMERA_TRACK,
+        Core::ANIMATION,
+        Core::STORY,
+        Core::AUDIO,
+        Core::TEXT_INPUT,
+        Core::STAT_HUD,
+        Core::DEBUG_HUD,
+        Core::FPS_COUNTER,
+        Core::SPAWN,
+        Core::SETTINGS,
+        Core::STREAMING,
+        Core::LOADING_OVERLAY,
+        Core::UI_INPUT,
+        GRAPHICS,
+        Core::FRAME_REPORT,
+    ],
+    // Graphics runs at the tail of the tick, but its init builds the window,
+    // the backend and the payload indexes later inits read: it inits right
+    // after the entries its own init reads.
+    init_first: &[
+        "OverlaySystem",
+        "SkyRotationSystem",
+        "BehaviorSystem",
+        "SpawnSystem",
+        "SettingsSystem",
+        "StreamingSystem",
+        "GraphicsSystem",
+    ],
+    complete_world: Some(concinnity_core::defaults::run),
+    before_init: Some(before_init),
+    prepare_events: Some(concinnity_core::ecs::access_id::prepare_events),
+};
+
+#[cfg(test)]
+mod tests;

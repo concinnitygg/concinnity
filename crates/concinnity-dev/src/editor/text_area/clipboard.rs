@@ -25,7 +25,7 @@ pub(crate) fn system_or<'a>(
     world: &'a mut World,
     fallback: &'a mut InternalClipboard,
 ) -> &'a mut dyn Clipboard {
-    let system = concinnity_engine::live_edit::render_handoff(world)
+    let system = crate::debug::handoff::render_handoff(world)
         .backend
         .and_then(|backend| backend.clipboard());
     match system {

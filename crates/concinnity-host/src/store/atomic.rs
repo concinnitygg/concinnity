@@ -2,7 +2,7 @@
 //!
 //! A cache segment is read by one process while another writes it -- an editor
 //! showing a world while a build cooks it is routine -- so a writer must never
-//! be observed part-way through. The bytes go to a process-unique temp file
+//! be observed part-way through. The bytes go to a temp file unique to the write
 //! beside the target and are renamed over it, which the filesystem publishes
 //! atomically: a reader opens the old file or the new one.
 //!
@@ -12,24 +12,47 @@
 
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// Distinguishes the temps of concurrent writes within this process.
+static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 /// Replace `path` with whatever `write` emits, creating the directory above it
-/// if needed. Reports whether the file was replaced; a failure anywhere leaves
-/// the existing file untouched and no temp behind.
-pub fn replace(path: &Path, write: impl FnOnce(&mut BufWriter<File>) -> io::Result<()>) -> bool {
-    let Some(dir) = path.parent() else {
-        return false;
-    };
-    if fs::create_dir_all(dir).is_err() {
-        return false;
-    }
-    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
-    if emit(&tmp, write).is_err() || fs::rename(&tmp, path).is_err() {
+/// if needed. A failure anywhere leaves the existing file untouched and no temp
+/// behind.
+pub fn replace(
+    path: &Path,
+    write: impl FnOnce(&mut BufWriter<File>) -> io::Result<()>,
+) -> io::Result<()> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
+    fs::create_dir_all(dir)?;
+    let tmp = temp_path(path);
+    let published = emit(&tmp, write).and_then(|()| fs::rename(&tmp, path));
+    if published.is_err() {
         let _ = fs::remove_file(&tmp);
-        return false;
     }
-    true
+    published
+}
+
+// A temp beside `path` no other write uses: `<name>.<pid>.<n>.tmp`.
+fn temp_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    let n = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+    name.push(format!(".{}.{n}.tmp", std::process::id()));
+    path.with_file_name(name)
+}
+
+/// [`replace`] with `bytes`, synced to the device before the rename, so a crash
+/// right after leaves the new file rather than an empty one.
+pub fn replace_durable(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    replace(path, |out| {
+        out.write_all(bytes)?;
+        out.flush()?;
+        out.get_ref().sync_all()
+    })
 }
 
 // The temp file's whole life: created, written through a buffer, flushed, and
@@ -50,10 +73,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested").join("file");
 
-        assert!(replace(&path, |out| out.write_all(b"first")));
+        replace(&path, |out| out.write_all(b"first")).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"first");
 
-        assert!(replace(&path, |out| out.write_all(b"second")));
+        replace(&path, |out| out.write_all(b"second")).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"second");
 
         let leftovers = fs::read_dir(path.parent().unwrap())
@@ -70,12 +93,15 @@ mod tests {
     fn a_failed_write_keeps_the_previous_file_and_no_temp() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("1");
-        assert!(replace(&path, |out| out.write_all(b"kept")));
+        replace(&path, |out| out.write_all(b"kept")).unwrap();
 
-        assert!(!replace(&path, |out| {
-            out.write_all(b"partial")?;
-            Err(io::Error::other("producer gave up"))
-        }));
+        assert!(
+            replace(&path, |out| {
+                out.write_all(b"partial")?;
+                Err(io::Error::other("producer gave up"))
+            })
+            .is_err()
+        );
         assert_eq!(fs::read(&path).unwrap(), b"kept");
         let leftovers = fs::read_dir(dir.path())
             .unwrap()
@@ -85,16 +111,45 @@ mod tests {
         assert_eq!(leftovers, 0, "a failed write leaves no temp behind");
     }
 
-    // Best-effort: a directory that cannot be created drops the write rather
-    // than failing whatever produced the bytes.
     #[test]
-    fn a_directory_that_cannot_be_created_drops_the_write() {
+    fn a_durable_write_replaces_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("state");
+        replace_durable(&path, b"old").unwrap();
+        replace_durable(&path, b"new").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+    }
+
+    // Siblings that differ only by extension, written at once, each land whole.
+    #[test]
+    fn concurrent_writes_to_siblings_differing_by_extension_stay_apart() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("state.cbor");
+        let b = dir.path().join("state.json");
+        std::thread::scope(|scope| {
+            for (path, byte) in [(&a, b'a'), (&b, b'b')] {
+                scope.spawn(move || {
+                    for _ in 0..50 {
+                        replace_durable(path, &[byte; 64]).unwrap();
+                    }
+                });
+            }
+        });
+        assert_eq!(fs::read(&a).unwrap(), [b'a'; 64]);
+        assert_eq!(fs::read(&b).unwrap(), [b'b'; 64]);
+        assert!(temp_path(&a).to_string_lossy().contains("state.cbor."));
+        assert_ne!(temp_path(&a), temp_path(&a));
+    }
+
+    // A directory that cannot be created fails the write and creates nothing.
+    #[test]
+    fn a_directory_that_cannot_be_created_fails_the_write() {
         let dir = tempfile::tempdir().unwrap();
         let blocker = dir.path().join("blocker");
         fs::write(&blocker, b"a file, not a directory").unwrap();
 
         let path = blocker.join("nested").join("file");
-        assert!(!replace(&path, |out| out.write_all(b"bytes")));
+        assert!(replace(&path, |out| out.write_all(b"bytes")).is_err());
         assert!(!path.exists());
     }
 }

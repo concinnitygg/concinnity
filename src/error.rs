@@ -35,7 +35,7 @@ pub enum Error {
         blob: PathBuf,
         /// What the read reported.
         #[source]
-        cause: concinnity_engine::WorldLoadError,
+        cause: concinnity_runtime::WorldLoadError,
     },
 
     /// The world was packaged as one self-contained blob file, but it needs
@@ -118,8 +118,8 @@ impl From<Error> for std::io::Error {
 // hand. A free function rather than a `From` impl, which would put the engine's
 // type on this crate's public surface.
 #[cfg(feature = "std")]
-pub(crate) fn from_startup(error: concinnity_engine::StartupError) -> Error {
-    use concinnity_engine::StartupError as S;
+pub(crate) fn from_startup(error: concinnity_runtime::StartupError) -> Error {
+    use concinnity_runtime::StartupError as S;
     match error {
         S::MissingData { blob } => Error::MissingData { blob },
         S::UnreadableData { blob, cause } => Error::UnreadableData { blob, cause },
@@ -173,8 +173,8 @@ mod tests {
     // A load failure to build errors from. Which one it is does not matter to
     // these tests; that it is a typed cause rather than a message does.
     #[cfg(feature = "std")]
-    fn load_failure() -> concinnity_engine::WorldLoadError {
-        concinnity_engine::WorldLoadError::Asset(
+    fn load_failure() -> concinnity_runtime::WorldLoadError {
+        concinnity_runtime::WorldLoadError::Asset(
             concinnity_core::error::AssetError::UnknownComponent { discriminant: 9 },
         )
     }
@@ -281,7 +281,7 @@ mod tests {
         // it on the way out.
         #[test]
         fn an_engine_startup_failure_maps_variant_for_variant() {
-            use concinnity_engine::StartupError as S;
+            use concinnity_runtime::StartupError as S;
 
             let cases = [
                 (

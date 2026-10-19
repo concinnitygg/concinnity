@@ -66,7 +66,7 @@ class WindowsSdk:
     # No pinned digest yet, so `fetch` reports what it got and unpacks it.
     sha256 = None
     watchers = ("build.rs", "crates/concinnity-device/build.rs",
-                "crates/concinnity-engine/build.rs", "crates/concinnity-dev/build.rs")
+                "crates/concinnity-runtime/build.rs", "crates/concinnity-dev/build.rs")
 
     @classmethod
     def payload(cls, _slug):

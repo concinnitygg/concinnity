@@ -359,17 +359,12 @@ impl EditorHook {
     }
 
     // The file-write tail of `write_jsonl`, for a caller that already
-    // serialized the entries. The directory is created first: a fresh project
-    // saves its first world into a `worlds/` that does not exist yet.
+    // serialized the entries. The directory is created as needed: a fresh
+    // project saves its first world into a `worlds/` that does not exist yet.
     fn write_jsonl_content(&self, content: &str) -> std::io::Result<()> {
-        if let Some(parent) = std::path::Path::new(&self.world_path).parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent)?;
-        }
-        let tmp = format!("{}.tmp", self.world_path);
-        std::fs::write(&tmp, content)?;
-        std::fs::rename(&tmp, &self.world_path)
+        concinnity_host::store::atomic::replace(std::path::Path::new(&self.world_path), |out| {
+            std::io::Write::write_all(out, content.as_bytes())
+        })
     }
 }
 

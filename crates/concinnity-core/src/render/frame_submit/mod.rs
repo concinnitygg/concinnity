@@ -17,7 +17,7 @@ mod pace;
 mod policy;
 
 pub use go_timing::GoTiming;
-pub use pace::{FramePace, frame_cap};
+pub use pace::{FramePace, PaceWait, frame_cap};
 pub use policy::FramePolicy;
 
 use policy::FrameAction;

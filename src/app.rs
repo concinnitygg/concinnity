@@ -58,7 +58,7 @@ impl App {
     /// ```
     #[cfg(feature = "std")]
     pub fn from_blob(path: impl AsRef<Path>) -> Result<Self, Error> {
-        concinnity_engine::Runtime::from_blob(path.as_ref())
+        concinnity_runtime::Runtime::from_blob(path.as_ref())
             .map(|runtime| Self {
                 driver: driver::adopt(runtime),
             })

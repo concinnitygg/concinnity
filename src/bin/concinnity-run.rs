@@ -16,7 +16,7 @@
 //! One file, owning what a process owns -- the tracking allocator, the backend
 //! stamp `cn export` reads back, and the per-user base the writable state falls
 //! back to. Resolving the layout and loading the world live in concinnity-host
-//! and concinnity-engine.
+//! and concinnity-runtime.
 
 use std::path::{Path, PathBuf};
 
@@ -44,11 +44,12 @@ fn main() -> std::io::Result<()> {
 
     let exe = std::env::current_exe()?;
     let exe_dir = exe.parent().unwrap_or_else(|| Path::new("."));
-    let tree = concinnity_engine::paths::tree_for_exe(&exe, exe_dir, per_user_base().as_deref());
+    let tree =
+        concinnity_host::store::paths::tree_for_exe(&exe, exe_dir, per_user_base().as_deref());
 
     // Before anything else can fault: a report written from here on lands
     // beside the app rather than nowhere.
-    concinnity_engine::crash::install(Some(&tree.crashes_dir()));
+    concinnity_runtime::crash::install(Some(&tree.crashes_dir()));
 
     // One positional argument names the world instead of the bundled `data`.
     // It moves only what is read: `saves/` and `settings` stay in the tree
@@ -57,14 +58,14 @@ fn main() -> std::io::Result<()> {
     let requested = std::env::args_os()
         .nth(1)
         .map_or_else(|| tree.data_dir(), PathBuf::from);
-    let blob = concinnity_engine::blob_source(&requested).ok_or_else(|| {
+    let blob = concinnity_runtime::BlobSource::classify(&requested).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("no world data at {}", requested.display()),
         )
     })?;
 
-    concinnity_engine::run_from(&tree, blob.as_source())
+    concinnity_runtime::run_from(&tree, blob)
 }
 
 // The platform base for per-user application state, from the environment the

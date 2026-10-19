@@ -24,7 +24,7 @@ pub(super) fn install() {
         use tracing_subscriber::util::SubscriberInitExt;
         let _ = tracing_subscriber::registry()
             .with(NoteLayer)
-            .with(concinnity_engine::crash::RingLayer)
+            .with(concinnity_runtime::crash::RingLayer)
             .try_init();
     });
 }

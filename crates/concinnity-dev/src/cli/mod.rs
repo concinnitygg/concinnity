@@ -43,7 +43,7 @@ impl Invocation {
     }
 
     /// Run the command the arguments named, against `tree`.
-    pub fn dispatch(&self, tree: &concinnity_engine::StateTree) -> std::io::Result<()> {
+    pub fn dispatch(&self, tree: &concinnity_host::store::paths::StateTree) -> std::io::Result<()> {
         dispatch::dispatch(&self.0, tree)
     }
 }

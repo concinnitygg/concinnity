@@ -10,6 +10,8 @@
 use alloc::boxed::Box;
 
 use crate::animation::AnimationSystem;
+use crate::audio::out::AudioOut;
+use crate::audio::system::AudioSystem;
 use crate::behavior::{BehaviorStore, BehaviorSystem};
 use crate::camera_track::CameraTrackSystem;
 use crate::controller::camera::Camera3DSystem;
@@ -49,6 +51,11 @@ pub trait SystemHost: 'static {
 
     /// Where a world's behavior state is kept, or `None` to persist nothing.
     fn behavior_store(_world: &World) -> Option<Box<dyn BehaviorStore>> {
+        None
+    }
+
+    /// Opens the host's audio output, or `None` when it has no device.
+    fn audio_out() -> Option<Box<dyn AudioOut>> {
         None
     }
 
@@ -212,6 +219,24 @@ impl<H: SystemHost> CoreSystems<H> {
         before: &[],
     };
 
+    /// Positional sound, screen cues, story and behavior plays and impact
+    /// one-shots. The listener reads the camera, and sounds requested this tick
+    /// are heard this tick.
+    pub const AUDIO: SystemEntry = SystemEntry {
+        name: "AudioSystem",
+        present_when: "the world declares any AudioEmitter, AudioCue, a Story page/choice with audio, a Behavior with a sound node, or a PropBody with an impact sound",
+        phase: Phase::Late,
+        gate: |world| boxed(AudioSystem::for_world(world, H::audio_out)),
+        after: &[
+            "BehaviorSystem",
+            "Camera3DSystem",
+            "ThirdPersonSystem",
+            "CameraTrackSystem",
+            "StorySystem",
+        ],
+        before: &[],
+    };
+
     /// Editing of the focused text field.
     pub const TEXT_INPUT: SystemEntry = SystemEntry {
         name: "TextInputSystem",
@@ -338,6 +363,7 @@ impl<H: SystemHost> CoreSystems<H> {
         Self::CAMERA_TRACK,
         Self::ANIMATION,
         Self::STORY,
+        Self::AUDIO,
         Self::TEXT_INPUT,
         Self::STAT_HUD,
         Self::DEBUG_HUD,

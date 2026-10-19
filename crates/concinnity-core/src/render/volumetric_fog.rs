@@ -29,6 +29,11 @@ const MIN_VIEWPORT: f32 = 1.0;
 // Floor on the froxel volume's near plane, so its linear-Z mapping stays finite.
 const MIN_FROXEL_NEAR: f32 = 1e-3;
 
+/// The fog settings last pushed to the backend, `None` while fog is off. A
+/// world reload compares against it and skips an unchanged value.
+#[derive(Debug, Default)]
+pub struct PushedFogSettings(pub Option<FogSettings>);
+
 /// Resolved and clamped fog tunables, threaded into the backend at init.
 /// `None` from `FogSettings::resolve_optional` means the world declared no
 /// `VolumetricFog`: the renderer then skips the fog pass entirely.

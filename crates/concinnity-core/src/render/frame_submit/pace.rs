@@ -80,6 +80,17 @@ pub fn frame_cap(world: &World) -> u32 {
     launch.or(benchmark).or(published).unwrap_or(0)
 }
 
+/// What a paced loop does next while it holds a frame's start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaceWait {
+    /// The deadline is reached: start the frame.
+    Done,
+    /// Sleep this long, stopping the sleep margin short of the deadline.
+    Sleep(Duration),
+    /// Within the sleep margin: spin.
+    Spin,
+}
+
 /// Holds each frame's start to the target interval so a loop runs at most its
 /// cap's frames a second. One per loop, planned once per frame.
 #[derive(Debug, Default)]
@@ -113,9 +124,17 @@ impl FramePace {
         Some(wait_until)
     }
 
-    /// How far ahead of a deadline to stop sleeping and spin.
-    pub fn sleep_margin(&self) -> Duration {
-        self.margin.0
+    /// What to do with `remaining` time left before the deadline: sleep to
+    /// the margin before it, then spin the rest.
+    pub fn next_wait(&self, remaining: Duration) -> PaceWait {
+        let margin = self.margin.0;
+        if remaining.is_zero() {
+            PaceWait::Done
+        } else if remaining > margin {
+            PaceWait::Sleep(remaining - margin)
+        } else {
+            PaceWait::Spin
+        }
     }
 
     /// Record one sleep that asked for `requested` and took `actual`.
@@ -216,7 +235,22 @@ mod tests {
         let mut pace = FramePace::default();
         let asked = Duration::from_millis(2);
         pace.observe_sleep(asked, asked + Duration::from_millis(2));
-        assert_eq!(pace.sleep_margin(), Duration::from_millis(3));
+        assert_eq!(pace.margin.0, Duration::from_millis(3));
+    }
+
+    // Time past the margin is slept, the margin itself spun, and none left
+    // starts the frame.
+    #[test]
+    fn the_wait_sleeps_to_the_margin_then_spins() {
+        let pace = FramePace::default();
+        let margin = pace.margin.0;
+        assert_eq!(pace.next_wait(Duration::ZERO), PaceWait::Done);
+        assert_eq!(pace.next_wait(margin), PaceWait::Spin);
+        let ahead = margin + Duration::from_millis(4);
+        assert_eq!(
+            pace.next_wait(ahead),
+            PaceWait::Sleep(Duration::from_millis(4))
+        );
     }
 
     #[test]

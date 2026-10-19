@@ -389,8 +389,8 @@ dependencies = [
  "concinnity-cook",
  "concinnity-core",
  "concinnity-dev",
- "concinnity-engine",
  "concinnity-host",
+ "concinnity-runtime",
  "concinnity-testing",
  "concinnity-toolchain",
  "serde_json",
@@ -468,8 +468,8 @@ dependencies = [
  "clap",
  "concinnity-cook",
  "concinnity-core",
- "concinnity-engine",
  "concinnity-host",
+ "concinnity-runtime",
  "concinnity-shader",
  "concinnity-testing",
  "concinnity-toolchain",
@@ -523,10 +523,41 @@ dependencies = [
 ]
 
 [[package]]
-name = "concinnity-engine"
+name = "concinnity-ffi"
+version = "0.20.0"
+dependencies = [
+ "cbindgen",
+ "concinnity-core",
+ "concinnity-host",
+ "concinnity-runtime",
+ "concinnity-testing",
+ "concinnity-toolchain",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "concinnity-host"
 version = "0.20.0"
 dependencies = [
  "ciborium",
+ "concinnity-core",
+ "concinnity-testing",
+ "libc",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "windows",
+]
+
+[[package]]
+name = "concinnity-runtime"
+version = "0.20.0"
+dependencies = [
  "concinnity-core",
  "concinnity-device",
  "concinnity-host",
@@ -537,7 +568,6 @@ dependencies = [
  "gilrs",
  "hashbrown 0.17.1",
  "kira",
- "libc",
  "minidump-writer",
  "mint",
  "objc2 0.6.4",
@@ -550,38 +580,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
- "windows",
-]
-
-[[package]]
-name = "concinnity-ffi"
-version = "0.20.0"
-dependencies = [
- "cbindgen",
- "concinnity-core",
- "concinnity-engine",
- "concinnity-host",
- "concinnity-testing",
- "concinnity-toolchain",
- "tempfile",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "concinnity-host"
-version = "0.20.0"
-dependencies = [
- "concinnity-core",
- "concinnity-testing",
- "libc",
- "rayon",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tracing",
- "windows",
 ]
 
 [[package]]

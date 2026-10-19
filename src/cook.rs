@@ -122,7 +122,7 @@ pub fn world() -> WorldBuilder {
     // module can render with, so a world compiled in memory runs in the same
     // process and a blob it writes plays on whichever one a launch selects.
     WorldBuilder(concinnity_cook::world(
-        concinnity_engine::platform::compiled_set(),
+        concinnity_runtime::platform::compiled_set(),
     ))
 }
 

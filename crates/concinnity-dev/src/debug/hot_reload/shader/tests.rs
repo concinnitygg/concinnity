@@ -8,7 +8,7 @@ use concinnity_core::render::backend::{GeometryEdit, PreparedPipelines, SceneHos
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::scene_state::SceneState;
 use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
-use concinnity_engine::live_edit::shader_sources::ShaderFile;
+use concinnity_core::render::world_load::source_maps::ShaderFile;
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;

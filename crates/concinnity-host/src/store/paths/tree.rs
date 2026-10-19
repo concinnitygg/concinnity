@@ -63,6 +63,18 @@ impl StateTree {
         }
     }
 
+    /// The tree a blob named directly implies: the directory holding it,
+    /// stepping out of a `data` directory so the tree matches what a build
+    /// produces (`data/` under the root, with `saves/` and `settings` beside
+    /// it). `None` for a bare file name, which has no directory to anchor to.
+    pub fn for_blob(primary: &Path) -> Option<Self> {
+        let dir = primary.parent().filter(|p| !p.as_os_str().is_empty())?;
+        if dir.file_name() == Some(std::ffi::OsStr::new(DATA_DIR)) {
+            return Some(Self::at(dir.parent().unwrap_or(dir)));
+        }
+        Some(Self::at(dir))
+    }
+
     /// Move what a build produces to `dir`, leaving the authored content where
     /// it is: a dev project keeps `assets/` and `worlds/` in sight and its
     /// blobs, lock, and caches out of the way.
@@ -102,6 +114,18 @@ impl StateTree {
     /// The root holding what the running application writes.
     pub fn writable_root(&self) -> &Path {
         self.writable.as_deref().unwrap_or(&self.content)
+    }
+
+    /// An authored writable `home` resolved against the content root: an
+    /// absolute path is used verbatim, a relative one hangs off the content
+    /// root. `None` when a relative path has no root to hang off, which leaves
+    /// the tree in place rather than resolving against the working directory.
+    pub fn resolve_home(&self, home: &str) -> Option<PathBuf> {
+        let home = Path::new(home);
+        if home.is_absolute() {
+            return Some(home.to_path_buf());
+        }
+        (!self.content.as_os_str().is_empty()).then(|| self.content.join(home))
     }
 
     /// The content root's `assets/` directory, holding authored source files.
@@ -342,6 +366,64 @@ mod tests {
             base.clone().with_build("/b").saves_dir(),
             base.saves_dir(),
             "a build root leaves the writable state alone"
+        );
+    }
+
+    // `home` picks where the running runtime writes. An absolute path is taken
+    // verbatim; a relative one hangs off the content root, which is what puts a
+    // portable install's state in a subfolder of its own bundle.
+    #[test]
+    fn home_resolves_absolute_verbatim_and_relative_against_the_content_root() {
+        // What counts as absolute is platform-specific: Windows wants a drive
+        // prefix, and a rooted `/var/lib` there names the current drive rather
+        // than a whole path, so it takes the relative branch.
+        let (root, absolute) = if cfg!(windows) {
+            (r"C:\apps\MyGame", r"C:\ProgramData\mygame")
+        } else {
+            ("/apps/MyGame", "/var/lib/mygame")
+        };
+        let tree = StateTree::at(root);
+        let state = Path::new(root);
+
+        assert_eq!(tree.resolve_home("state"), Some(state.join("state")));
+        assert_eq!(tree.resolve_home(absolute), Some(PathBuf::from(absolute)));
+        // An absolute home needs no content root behind it.
+        assert_eq!(
+            StateTree::at("").resolve_home(absolute),
+            Some(PathBuf::from(absolute))
+        );
+    }
+
+    // A relative `home` with nothing to resolve against is declined rather than
+    // anchored to the working directory, so the host's own choice stands.
+    #[test]
+    fn a_relative_home_without_a_content_root_resolves_to_nothing() {
+        assert_eq!(StateTree::at("").resolve_home("state"), None);
+    }
+
+    // A blob named directly anchors the tree beside the world it holds,
+    // stepping out of a `data` directory so `saves/` and `settings` end up
+    // where a build would have put them.
+    #[test]
+    fn a_named_blob_anchors_the_state_tree_beside_its_world() {
+        assert_eq!(
+            StateTree::for_blob(Path::new("mygame/data/0")).map(|t| t.content_root().to_path_buf()),
+            Some(PathBuf::from("mygame"))
+        );
+        // A blob directory called anything else is the state dir itself.
+        assert_eq!(
+            StateTree::for_blob(Path::new("out/blobs/0")).map(|t| t.content_root().to_path_buf()),
+            Some(PathBuf::from("out").join("blobs"))
+        );
+        // `data/0` relative to the cwd leaves the tree at the cwd.
+        assert_eq!(
+            StateTree::for_blob(Path::new("data/0")).map(|t| t.content_root().to_path_buf()),
+            Some(PathBuf::new())
+        );
+        // A bare file name has no directory to anchor to.
+        assert_eq!(
+            StateTree::for_blob(Path::new("0")).map(|t| t.content_root().to_path_buf()),
+            None
         );
     }
 }

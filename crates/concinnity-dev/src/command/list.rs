@@ -216,7 +216,7 @@ fn list_systems(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()>
 // gates: a HUD or overlay the engine injects brings its own system with it, so
 // a manifest taken before the pass would be missing them.
 fn complete(world: &mut concinnity_core::ecs::World) -> std::io::Result<()> {
-    let Some(complete) = concinnity_engine::ecs::SYSTEMS.complete_world else {
+    let Some(complete) = concinnity_runtime::SYSTEMS.complete_world else {
         return Ok(());
     };
     complete(&mut world.context())
@@ -235,7 +235,7 @@ fn complete(world: &mut concinnity_core::ecs::World) -> std::io::Result<()> {
 fn manifest_lines(world: &mut concinnity_core::ecs::World) -> Vec<String> {
     let mode = concinnity_core::render::render_mode::from_content(world);
     world.insert_resource(mode);
-    let manifest = world.system_manifest(concinnity_engine::ecs::SYSTEMS);
+    let manifest = world.system_manifest(concinnity_runtime::SYSTEMS);
     let width = manifest.iter().map(|n| n.len()).max().unwrap_or(0);
     let phase_width = concinnity_core::ecs::Phase::ALL
         .iter()
@@ -245,7 +245,7 @@ fn manifest_lines(world: &mut concinnity_core::ecs::World) -> Vec<String> {
     manifest
         .iter()
         .map(|name| {
-            let entry = concinnity_engine::ecs::SYSTEMS
+            let entry = concinnity_runtime::SYSTEMS
                 .entries
                 .iter()
                 .find(|e| e.name == *name);

@@ -35,6 +35,7 @@
 // `crate::mcp`, which are unit-tested without a running process.
 mod call;
 pub(crate) mod catalog;
+pub(crate) mod handoff;
 pub(crate) mod hot_reload;
 mod memory;
 mod queue;

@@ -7,10 +7,12 @@
 
 mod error;
 mod flags;
+mod pipeline;
 mod request;
 
 pub use error::LaunchArgsError;
 pub use flags::{LAUNCH_FLAGS, LaunchFlag, QUALITY_PRESET_VALUES, flag, usage};
+pub use pipeline::PipelineMode;
 pub use request::LaunchRequest;
 
 use alloc::string::ToString;

@@ -4,7 +4,7 @@
 
 use concinnity_cook::authoring::world::parse_entry;
 use concinnity_cook::build_only::include::resolve_includes;
-use concinnity_engine::live_edit::hot_reload_sources::*;
+use concinnity_runtime::live_edit::hot_reload_sources::HotReloadSources;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::signals::ReloadSignals;
+use super::watch_dirs::WatchDirs;
 
 // Spawn the watcher. Mirrors the shader-watcher pattern in
 // `concinnity_device::metal::hot_reload`: 150 ms debounce, only

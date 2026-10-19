@@ -1,7 +1,6 @@
 // Which rows a settings tab shows, and how one row is emitted. The tables pair
 // each `SettingKey` with its label; core's `SettingKey` owns the key vocabulary
-// and the runtime (`concinnity_engine::settings`) knows each key's options and
-// how to apply it.
+// and core's settings system knows each key's options and how to apply it.
 
 use concinnity_core::components::GamepadAction;
 use concinnity_core::input::keymap::Bindable;
@@ -28,9 +27,9 @@ pub(super) fn settings_tabs(profile: SettingsProfile) -> &'static [(&'static str
     }
 }
 
-// Setting rows per tab, top to bottom: (setting, display label). The runtime
-// (`concinnity_engine::settings`) knows each setting's options and how to apply
-// it; this only chooses which rows appear.
+// Setting rows per tab, top to bottom: (setting, display label). Core's settings
+// system knows each setting's options and how to apply it; this only chooses
+// which rows appear.
 const VIDEO_ROWS: [(SettingKey, &str); 7] = [
     (SettingKey::Vsync, "Vsync"),
     (SettingKey::FpsCap, "Frame Rate"),
@@ -78,11 +77,10 @@ const VIDEO_ADVANCED_ROWS: [(SettingKey, &str); 9] = [
     (SettingKey::TextureQuality, "Texture Quality"),
 ];
 // Live post-process sliders in the Advanced group. Each slider's value range,
-// display format, and apply path live in the client (`concinnity_engine::settings` +
-// graphics system); a row here only chooses which sliders appear. All but
-// `AmbientIntensity` are pure `PostProcessParams` fields applied via
-// `update_post_process`; `AmbientIntensity` rides a dedicated backend setter
-// (Metal live; see the client graphics system).
+// display format, and apply path live in core's settings system; a row here
+// only chooses which sliders appear. All but `AmbientIntensity` are pure
+// `PostProcessParams` fields applied via `update_post_process`;
+// `AmbientIntensity` rides a dedicated backend setter.
 const VIDEO_ADVANCED_SLIDERS: [(SettingKey, &str); 8] = [
     (SettingKey::Exposure, "Exposure"),
     (SettingKey::BloomIntensity, "Bloom"),
@@ -95,9 +93,9 @@ const VIDEO_ADVANCED_SLIDERS: [(SettingKey, &str); 8] = [
     (SettingKey::Fov, "Field of View"),
 ];
 // Quality toggles in the Video "Quality" collapsible group (collapsed by
-// default): the heavier render features. Each is an Off/On cycle row. The
-// client (`concinnity_engine::settings` + its system) knows each setting's options and
-// applies it live by rebuilding the affected render resources; on backends
+// default): the heavier render features. Each is an Off/On cycle row. Core's
+// settings system knows each setting's options and applies it live by
+// rebuilding the affected render resources; on backends
 // without a live path the choice persists and applies at the next launch.
 const VIDEO_QUALITY_ROWS: [(SettingKey, &str); 16] = [
     (SettingKey::AaMode, "Anti-Aliasing"),

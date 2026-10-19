@@ -42,8 +42,8 @@ pub fn tree() -> Option<StateTree> {
 /// A runtime that reads and writes under the open project: its blobs, settings,
 /// saves and the caches it warms. Without a project it still runs a world, and
 /// everything it would persist does nothing.
-pub(crate) fn runtime() -> concinnity_engine::Runtime {
-    let runtime = concinnity_engine::Runtime::new();
+pub(crate) fn runtime() -> concinnity_runtime::Runtime {
+    let runtime = concinnity_runtime::Runtime::new();
     match tree() {
         Some(tree) => runtime.in_tree(tree),
         None => runtime,

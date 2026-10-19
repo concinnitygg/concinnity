@@ -131,7 +131,7 @@ pub use concinnity_core::error::{AssetError, PayloadError, WorldError};
 // Why a world's compiled data could not be loaded, carried by
 // [`Error::UnreadableData`].
 #[cfg(feature = "std")]
-pub use concinnity_engine::WorldLoadError;
+pub use concinnity_runtime::WorldLoadError;
 
 // The two macros an application writes against, exported at the crate root
 // because `#[macro_export]` puts them there: the component mask a system's

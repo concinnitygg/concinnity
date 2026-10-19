@@ -12,6 +12,17 @@ use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
 use crate::render::draw_list::MeshSourceMeta;
 use crate::render::world_load::skinned::{SkinnedAssembly, SkinnedGeometry};
 
+mod sdf_fields;
+mod shaders;
+
+pub use sdf_fields::{SdfFieldEntry, SdfFieldMap};
+pub use shaders::{ShaderFile, ShaderSourceEntry, ShaderSourceMap};
+
+/// Texture asset name -> live pool slot, so a runtime decal or emitter spawn can
+/// resolve an authored Texture name. Kept only for a host that reloads sources.
+#[derive(Debug, Default)]
+pub struct TextureNameSlots(pub HashMap<AssetId, usize>);
+
 /// A catalog of reloadable sources, one entry each.
 #[derive(Debug, Clone)]
 pub struct SourceMap<E> {

@@ -186,6 +186,7 @@ pub(super) fn write(
         }
         Ok(())
     })
+    .is_ok()
 }
 
 // Where one payload byte range in the new file comes from.

@@ -73,6 +73,14 @@ pub struct DeviceProbe {
     pub capabilities: DeviceCapabilities,
 }
 
+impl DeviceProbe {
+    /// A GPU that classifies as nothing: it clamps nothing.
+    pub const UNKNOWN: Self = Self {
+        profile: GpuProfile::UNKNOWN,
+        capabilities: DeviceCapabilities::ALL,
+    };
+}
+
 impl Default for DeviceCapabilities {
     fn default() -> Self {
         Self::ALL

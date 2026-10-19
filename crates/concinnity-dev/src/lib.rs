@@ -12,13 +12,13 @@
 /// The shader platform `cn` cooks a world for when it plays in this process:
 /// the backend this process renders with, so a world built here plays here.
 pub fn cook_platform() -> concinnity_core::platform::Platform {
-    concinnity_engine::platform::current()
+    concinnity_runtime::platform::current()
 }
 
 /// The shader platforms `cn` cooks a world's blobs for: every backend this
 /// binary can render with, so the blobs play on whichever one a launch selects.
 pub fn cook_targets() -> concinnity_core::platform::PlatformSet {
-    concinnity_engine::platform::compiled_set()
+    concinnity_runtime::platform::compiled_set()
 }
 
 // Authoring / in-memory build.

@@ -9,6 +9,7 @@
 
 use crate::components::AppConfig;
 use crate::ecs::World;
+use crate::render::error::RenderError;
 
 /// How a world runs: with a window and a renderer, or with neither.
 ///
@@ -101,6 +102,15 @@ impl Resolution {
             Resolution::Headless(_) | Resolution::Unavailable(_) => RenderMode::Headless,
         }
     }
+
+    /// The mode a world starts in, or why it cannot start: it has something
+    /// to draw and nothing here can draw it.
+    pub fn startable(self) -> Result<RenderMode, RenderError> {
+        match self {
+            Resolution::Unavailable(why) => Err(RenderError::Other(why.message().into())),
+            resolved => Ok(resolved.mode()),
+        }
+    }
 }
 
 /// Resolve how `world` runs given whether the build has a render `backend`
@@ -142,6 +152,19 @@ pub fn from_content(world: &World) -> RenderMode {
 mod tests {
     use super::*;
     use crate::components::{PhysicsConfig, Prop, TextLabel};
+
+    #[test]
+    fn only_an_unavailable_renderer_refuses_to_start() {
+        assert_eq!(Resolution::Rendered.startable(), Ok(RenderMode::Rendered));
+        assert_eq!(
+            Resolution::Headless(HeadlessReason::NothingToDraw).startable(),
+            Ok(RenderMode::Headless)
+        );
+        assert!(matches!(
+            Resolution::Unavailable(NoRenderer::NoGpu).startable(),
+            Err(RenderError::Other(_))
+        ));
+    }
 
     // The README case: content alone decides, with no settings asset anywhere.
     #[test]

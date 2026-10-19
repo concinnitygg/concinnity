@@ -9,7 +9,7 @@
 use concinnity_core::components::ParticleEmitter;
 use concinnity_core::render::decal::{self, DecalRecord};
 use concinnity_core::render::particles::ParticleEmitterRecord;
-use concinnity_engine::live_edit::parked::TextureNameSlots;
+use concinnity_core::render::world_load::source_maps::TextureNameSlots;
 use concinnity_host::thread::asset_id;
 use serde_json::{Value, json};
 

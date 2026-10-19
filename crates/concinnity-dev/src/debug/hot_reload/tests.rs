@@ -1,6 +1,7 @@
 //! Unit tests for the hot-reload machinery (moved here from the single-file
 //! module). Pull each submodule's items in explicitly.
 
+use super::watch_dirs::WatchDirs;
 use concinnity_core::animation::skeleton;
 use concinnity_core::bake::texture::TextureImage;
 use concinnity_core::components::{ProceduralMesh, SkeletonJoint, Story, StoryReload};
@@ -11,8 +12,7 @@ use concinnity_core::gfx::{mesh_payload, render_types};
 use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::render::world_load::source_maps::*;
 use concinnity_core::render::{backend, draw_slot, error, scene_state, volumetric_fog};
-use concinnity_engine::live_edit;
-use concinnity_engine::live_edit::hot_reload_sources::*;
+use concinnity_runtime::live_edit::hot_reload_sources::HotReloadSources;
 use notify::{Event, EventKind};
 use std::path::PathBuf;
 
@@ -624,7 +624,7 @@ fn state_with_only_shaders_still_spawns_a_watcher() {
     // A world whose only reloadable sources are Shader files (no textures, no
     // meshes, no LUTs, no IBL, no world.jsonl) still wants the watcher alive
     // so a shader save triggers the recompile.
-    use concinnity_engine::live_edit::shader_sources::{
+    use concinnity_core::render::world_load::source_maps::{
         ShaderFile, ShaderSourceEntry, ShaderSourceMap,
     };
     let path = concinnity_host::scratch::path("asset_hot_reload_shader_only.hlsl")
@@ -2196,7 +2196,7 @@ fn drive_run_frame(
     Option<volumetric_fog::FogSettings>,
 ) {
     let mut backend = RecordingBackend::default();
-    let mut fog = live_edit::parked::PushedFogSettings(None);
+    let mut fog = concinnity_core::render::volumetric_fog::PushedFogSettings(None);
     let effects = run_frame(state, &mut backend, &mut fog, None);
     (effects, backend, fog.0)
 }

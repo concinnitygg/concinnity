@@ -3,7 +3,7 @@
 //! frame's render stats for the profiler, and the frame count a launch's cap
 //! stops the run at.
 
-use crate::ecs::{GpuMemoryPressure, PipelineContext};
+use crate::ecs::{GpuMemoryPressure, PipelineContext, StepResult};
 use crate::profile::RenderStats;
 use crate::render::extract::FrameExtractor;
 use crate::render::ops::ReplayOutcome;
@@ -40,6 +40,19 @@ impl FrameCounter {
             tracing::info!("graphics: max_frames ({max}) reached");
         }
         self.frames >= max
+    }
+
+    /// The result of a step whose frame was submitted with `result`. A
+    /// continuing frame is counted, and the one that reaches the cap ends the
+    /// run with `Stop` rather than `Done` (which only retires the system, so the
+    /// process would spin on with nothing to present). The flag says the cap
+    /// ended it, so the device should drain before the run stops.
+    pub fn end_step(&mut self, result: StepResult) -> (StepResult, bool) {
+        if result == StepResult::Continue && self.count() {
+            (StepResult::Stop, true)
+        } else {
+            (result, false)
+        }
     }
 }
 
@@ -116,6 +129,29 @@ fn note_memory_pressure(ctx: &mut PipelineContext, frame: u64) {
 
 #[cfg(test)]
 mod tests {
+    // Only a continuing frame counts toward the cap, and the frame reaching it
+    // stops the run and asks for a drain.
+    #[test]
+    fn the_capped_frame_stops_the_run_and_drains() {
+        use super::{FrameCounter, StepResult};
+        let mut frames = FrameCounter::new(Some(2));
+        assert_eq!(
+            frames.end_step(StepResult::Continue),
+            (StepResult::Continue, false)
+        );
+        assert_eq!(frames.end_step(StepResult::Done), (StepResult::Done, false));
+        assert_eq!(frames.frames(), 1);
+        assert_eq!(
+            frames.end_step(StepResult::Continue),
+            (StepResult::Stop, true)
+        );
+        let mut uncapped = FrameCounter::new(None);
+        assert_eq!(
+            uncapped.end_step(StepResult::Continue),
+            (StepResult::Continue, false)
+        );
+    }
+
     use super::*;
     use crate::ecs::World;
     use crate::render::ops::OpFailure;

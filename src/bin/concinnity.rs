@@ -26,7 +26,7 @@ fn main() -> std::process::ExitCode {
     // report written from here on lands in the project rather than nowhere,
     // and handed to the dev library, which builds and runs against it.
     let tree = project_tree();
-    concinnity_engine::crash::install(Some(&tree.crashes_dir()));
+    concinnity_runtime::crash::install(Some(&tree.crashes_dir()));
     concinnity_dev::project::open(tree.clone());
 
     // Printed with Display rather than the Debug a returned error gets, so a
@@ -46,10 +46,10 @@ fn main() -> std::process::ExitCode {
 //
 // Falls back to the working directory as a relative path when it cannot be
 // read, which keeps the layout correct for the process already sitting in it.
-fn project_tree() -> concinnity_engine::StateTree {
+fn project_tree() -> concinnity_host::store::paths::StateTree {
     let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let state = root.join(Path::new(STATE_DIR));
-    concinnity_engine::StateTree::at(root)
+    concinnity_host::store::paths::StateTree::at(root)
         .with_writable(&state)
         .with_build(state)
 }

@@ -1,14 +1,18 @@
-//! Audio policy with no mixer behind it: clip decode bookkeeping, the capped
-//! one-shot voice pool, occlusion smoothing, impact gain and attenuation range
-//! sanitizing. Each is generic over the mixer's own handle and payload types,
-//! so the engine's mixer stores its sounds in them.
+//! Audio: the system that decides what plays (`system`), the mixer state that
+//! decides how (`mixer`), and the policy pieces under them: clip decode
+//! bookkeeping, the capped one-shot voice pool, occlusion smoothing, impact gain
+//! and attenuation range sanitizing. The host's mixer is reached through
+//! [`out::AudioOut`].
 
 pub mod clips;
 pub mod distance;
 pub mod impact;
+pub mod mixer;
 pub mod occlusion;
+pub mod out;
+pub mod system;
 pub mod voices;
 
-/// Opaque handle to a spatial emitter inside the engine's mixer.
+/// A spatial emitter's slot in the mixer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EmitterId(pub usize);

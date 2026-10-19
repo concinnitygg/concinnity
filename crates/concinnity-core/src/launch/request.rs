@@ -1,7 +1,7 @@
 use core::num::NonZeroU32;
 
 use super::LaunchArgs;
-use crate::ecs::{Resources, ViewOverrides};
+use crate::ecs::{Resources, ViewOverrides, World};
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
 use crate::render::dlss::DlssPreset;
 use crate::render::rt_geom::RtDynamicMode;
@@ -42,6 +42,22 @@ pub struct LaunchRequest {
 }
 
 impl LaunchRequest {
+    /// Publish the request into `world` before it starts, with what it arms:
+    /// the world's own [`LaunchArgs`] replace the request's, a benchmark run is
+    /// armed, and the view overrides are inserted.
+    pub fn publish(&mut self, world: &mut World) {
+        if let Some(args) = world.remove_resource::<LaunchArgs>() {
+            self.args = args;
+        }
+        world.insert_resource(*self);
+        if self.args.benchmark {
+            crate::benchmark::arm(world);
+        }
+        if let Some(view) = self.view_overrides() {
+            world.insert_resource(view);
+        }
+    }
+
     /// The view state the run starts with, or `None` for the shipping frame.
     pub fn view_overrides(&self) -> Option<ViewOverrides> {
         (self.show != ShowFlags::all()).then_some(ViewOverrides {
@@ -104,6 +120,22 @@ impl LaunchRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The world's own arguments win, and the published request carries them.
+    #[test]
+    fn publishing_adopts_the_worlds_launch_args() {
+        let mut world = World::new();
+        world.insert_resource(LaunchArgs {
+            frames: Some(3),
+            ..Default::default()
+        });
+        let mut request = LaunchRequest::default();
+        request.publish(&mut world);
+        assert_eq!(request.args.frames, Some(3));
+        assert_eq!(world.resource::<LaunchRequest>(), Some(&request));
+        assert!(world.resource::<LaunchArgs>().is_none());
+        assert!(world.resource::<ViewOverrides>().is_none());
+    }
 
     #[test]
     fn the_validation_request_outranks_the_build_profile() {

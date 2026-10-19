@@ -3,7 +3,7 @@
 //! `cn run` path (compiled-blob playback) lives in the runtime crate's `app::run`.
 
 use concinnity_core::launch::LaunchRequest;
-use concinnity_engine::app::runtime::Runtime;
+use concinnity_runtime::Runtime;
 
 use crate::command::resolve_world_path;
 use crate::debug::hot_reload::WorldPathHandle;
@@ -13,7 +13,7 @@ use crate::frame_hook::FrameHook;
 /// then run interpreted with it as the per-frame hook. This is the entry point
 /// the CLI binary calls; the hook assembly stays inside this crate.
 pub fn run_debug(launch: LaunchRequest, json_path: Option<&str>, port: u16) -> std::io::Result<()> {
-    concinnity_engine::app::run::init_logging();
+    concinnity_runtime::init_logging();
     let world_path = resolve_world_path(json_path)?;
     let hook: Box<dyn FrameHook> = match crate::debug::DebugServer::start(port) {
         Ok(srv) => Box::new(srv.with_world_path(WorldPathHandle::new(world_path.as_str()))),
@@ -45,13 +45,13 @@ pub(crate) fn run_interpreted(
 
 // Shared startup and loop entry once the Runtime's world is populated. The world
 // loop itself (and the platform event-pump + window activation) is the shared
-// `concinnity_engine::app::runloop` driver; the interpreted path's only
+// `concinnity_runtime::runloop` driver; the interpreted path's only
 // addition is ticking the frame hook each frame.
 pub(crate) fn start_app(
     mut runtime: Runtime,
     mut hook: Option<Box<dyn FrameHook>>,
 ) -> std::io::Result<()> {
-    use concinnity_engine::app::runloop;
+    use concinnity_runtime::runloop;
 
     let shutdown = runtime.shutdown_token();
     runloop::install_ctrlc_handler(&runtime);

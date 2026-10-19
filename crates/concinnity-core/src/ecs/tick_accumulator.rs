@@ -5,7 +5,9 @@
 //! no catch-up burst by construction. The same delta is published unpaused as
 //! the frame's [`FrameTime`].
 
-use super::{FrameTime, SimTiming};
+use core::num::NonZeroU32;
+
+use super::{FrameTime, MenuActive, SimTiming, World};
 
 /// Accumulates frame time into fixed simulation ticks, advanced once per world
 /// step with that frame's elapsed seconds. The caller owns the time source.
@@ -29,6 +31,24 @@ impl TickAccumulator {
             elapsed: self.elapsed as f32,
         };
         (self.ticks(dt, paused), frame)
+    }
+
+    /// Advance by one world frame and publish its [`SimTiming`] and
+    /// [`FrameTime`] into `world`. At a fixed launch rate a frame lasts exactly
+    /// `1 / rate` seconds whatever the wall clock measured, so every launch at
+    /// that rate sees the same clock on the same frame; otherwise it lasts
+    /// `wall_elapsed`. An open menu ([`MenuActive`]) pauses the ticks.
+    pub fn publish_frame(
+        &mut self,
+        world: &mut World,
+        fixed_rate: Option<NonZeroU32>,
+        wall_elapsed: f32,
+    ) {
+        let elapsed = fixed_rate.map_or(wall_elapsed, |rate| 1.0 / rate.get() as f32);
+        let paused = world.resource::<MenuActive>().is_some_and(|m| m.0);
+        let (timing, frame) = self.advance(elapsed, paused);
+        world.insert_resource(timing);
+        world.insert_resource(frame);
     }
 
     fn ticks(&mut self, dt: f32, paused: bool) -> SimTiming {
@@ -56,6 +76,22 @@ impl TickAccumulator {
 mod tests {
     use super::*;
     use alloc::vec::Vec;
+
+    // A fixed rate ignores the wall clock, and an open menu holds the ticks
+    // while the frame time still runs.
+    #[test]
+    fn a_published_frame_follows_the_fixed_rate_and_the_menu() {
+        let mut world = World::new();
+        let mut ticks = TickAccumulator::default();
+        ticks.publish_frame(&mut world, NonZeroU32::new(60), 5.0);
+        assert_eq!(world.resource::<FrameTime>().unwrap().dt, 1.0 / 60.0);
+        assert_eq!(world.resource::<SimTiming>().unwrap().ticks, 1);
+
+        world.insert_resource(MenuActive(true));
+        ticks.publish_frame(&mut world, None, 0.5);
+        assert_eq!(world.resource::<FrameTime>().unwrap().dt, 0.5);
+        assert_eq!(world.resource::<SimTiming>().unwrap().ticks, 0);
+    }
 
     const DT: f32 = SimTiming::TICK_DT;
 

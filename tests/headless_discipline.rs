@@ -148,7 +148,7 @@ fn the_scan_reads_the_whole_workspace() {
     assert!(
         files
             .iter()
-            .any(|p| p.to_string_lossy().contains("concinnity-engine")),
+            .any(|p| p.to_string_lossy().contains("concinnity-runtime")),
         "the engine crate is in the scan"
     );
 }

@@ -24,7 +24,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use crate::components::{
-    GamepadAction, GamepadMap, PlanetDetail, SceneCommand, Window, WindowMode,
+    GamepadAction, GamepadMap, PlanetDetail, SceneCommand, StreamingConfig, Window, WindowMode,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::input::keymap;
@@ -319,6 +319,19 @@ impl SettingsState {
     /// The window as configured: authored size, persisted mode.
     pub fn window(&self) -> &Window {
         &self.window_args
+    }
+
+    /// The mode a freshly built window switches to. A window opens as a
+    /// standard titled window, so `None` when that is the configured mode.
+    pub fn startup_window_mode(&self) -> Option<WindowMode> {
+        (self.window_args.mode != WindowMode::Windowed).then_some(self.window_args.mode)
+    }
+
+    /// Overwrite `config`'s texture cap and budget with the resolved ones,
+    /// which win over the authored values.
+    pub fn apply_to_streaming(&self, config: &mut StreamingConfig) {
+        config.texture_cap = self.resolved.texture_cap;
+        config.texture_budget = self.resolved.texture_budget;
     }
 
     /// The live master quality preset.

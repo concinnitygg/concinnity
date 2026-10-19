@@ -14,6 +14,7 @@ mod mailbox;
 mod planet_tiles;
 mod pressure;
 mod procedural_chunks;
+mod setup;
 mod shader_residency;
 mod state;
 mod stats_log;
@@ -28,6 +29,7 @@ pub use item_pool::{ItemLoad, StreamPool, StreamedItem};
 pub use mailbox::{LoadPool, Mailbox};
 pub use planet_tiles::{PlanetTiles, TileCamera, TileMaterial, tile_mesh_size};
 pub use procedural_chunks::ProceduralChunks;
+pub use setup::{ChunkSource, PlanetStream, VoxelStream, streamed_texture_slots};
 pub use shader_residency::{Due, Finished, ShaderResidency};
 pub use state::{
     ChunkStream, DriveView, PlanetView, ShaderPump, StreamingPools, StreamingPressure,

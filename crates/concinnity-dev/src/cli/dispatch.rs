@@ -7,7 +7,7 @@ use super::commands::RunArgs;
 use super::{Cli, Commands};
 use crate::command;
 use crate::export::ExportOptions;
-use concinnity_engine::StateTree;
+use concinnity_host::store::paths::StateTree;
 
 pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
     match cli.resolved_command() {
@@ -60,13 +60,13 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
 
 // `cn run`: the built world in `tree`'s `data/`, with this command's options.
 fn run_world(args: &RunArgs, tree: &StateTree) -> std::io::Result<()> {
-    concinnity_engine::app::run(
+    concinnity_runtime::run(
         tree,
-        concinnity_engine::app::run::RunOptions {
+        concinnity_runtime::RunOptions {
             mode: if args.serial {
-                concinnity_engine::app::run::PipelineMode::Serial
+                concinnity_core::launch::PipelineMode::Serial
             } else {
-                concinnity_engine::app::run::PipelineMode::Pipelined
+                concinnity_core::launch::PipelineMode::Pipelined
             },
             schedule: if args.serial_schedule {
                 concinnity_core::ecs::ScheduleMode::Serial

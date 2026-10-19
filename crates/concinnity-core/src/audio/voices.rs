@@ -51,7 +51,7 @@ impl<H> VoiceSlots<H> {
     }
 
     /// Drop every voice whose playback has finished.
-    pub fn reap(&mut self, finished: impl Fn(&H) -> bool) {
+    pub fn reap(&mut self, mut finished: impl FnMut(&H) -> bool) {
         self.voices.retain(|v| !finished(&v.handle));
     }
 

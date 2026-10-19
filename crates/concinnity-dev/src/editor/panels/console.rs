@@ -176,7 +176,7 @@ pub(crate) fn install_tracing(sink: ConsoleSink) {
     let _ = tracing_subscriber::registry()
         .with(fmt)
         .with(mirror)
-        .with(concinnity_engine::crash::RingLayer)
+        .with(concinnity_runtime::crash::RingLayer)
         .try_init();
 }
 

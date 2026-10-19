@@ -4,13 +4,14 @@
 //! per frame from a `FrameHook::tick` (see `driver::HotReloadDriver`). The
 //! passive source catalogs these consume are captured by graphics init and
 //! reached through the engine's live-edit contract
-//! (`concinnity_engine::live_edit::hot_reload_sources`); the per-frame backend
-//! and pushed fog come from `concinnity_engine::live_edit::render_handoff`.
+//! (`concinnity_runtime::live_edit::hot_reload_sources`); the per-frame backend
+//! and pushed fog come from `debug::handoff::render_handoff`.
 //!
 //! Split by responsibility:
 //!   driver     `HotReloadDriver`, the per-frame drive + ECS effect apply
 //!   state      `AssetHotReloadState` + decode result types + `run_frame` entry
 //!   watcher    the `notify` filesystem watcher
+//!   watch_dirs the directories each captured catalog's sources live in
 //!   decode     off-thread payload decode + poll/apply (textures, meshes, IBL)
 //!   passes     world.jsonl / ProceduralMesh / VolumetricFog / story reload
 //!   shader     per-Shader recompile: pipeline swap on the frame thread, and a
@@ -37,6 +38,7 @@ mod sdf;
 mod shader;
 mod signals;
 mod state;
+mod watch_dirs;
 mod watcher;
 mod world_path;
 

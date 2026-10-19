@@ -14,6 +14,7 @@ use crate::gfx::render_types::{
     SpotShadowData,
 };
 use crate::platform::Platform;
+use crate::render::backend::RenderBackend;
 use crate::render::decal::DecalRecord;
 use crate::render::particles::ParticleEmitterRecord;
 use crate::render::rt_geom::RtDynamicMode;
@@ -396,6 +397,16 @@ impl<'a> BackendInit<'a> {
         init
     }
 
+    /// Whether a backend transplanted from another world can reload this one in
+    /// place, keeping its window: only when it hot-swaps onto exactly this
+    /// world's swapchain configuration. Otherwise it is rebuilt.
+    pub fn reloads_into(&self, backend: &dyn RenderBackend) -> bool {
+        backend
+            .live_edit_ref()
+            .and_then(|edit| edit.hot_swap_config())
+            == Some(self.swapchain_config())
+    }
+
     /// The swapchain-level configuration this world needs. Compared against a
     /// transplanted backend's `RenderBackend::hot_swap_config` to decide whether
     /// a live SAVE can reuse the existing window (`reload_world`) or must rebuild.
@@ -485,6 +496,21 @@ mod tests {
 
     // A map that lights the world but is not shown draws nothing on its own, so
     // with no props there is no scene; shown, it is the scene.
+    #[test]
+    fn a_backend_reloads_only_onto_its_own_swapchain_config() {
+        use crate::render::backend::recording::{RecordingBackend, recording_backend};
+        let window = Window::default();
+        let init = BackendInit::minimal(Platform::Metal, &window, Vec::new());
+        let (state, fresh) = recording_backend();
+        assert!(!init.reloads_into(&fresh), "no hot-swap config");
+        let same = RecordingBackend::transplant(state.clone(), Some(init.swapchain_config()));
+        assert!(init.reloads_into(&same));
+        let mut other = init.swapchain_config();
+        other.hdr_display = !other.hdr_display;
+        let other = RecordingBackend::transplant(state, Some(other));
+        assert!(!init.reloads_into(&other));
+    }
+
     #[test]
     fn only_a_shown_environment_resolves_to_a_scene() {
         let window = Window::default();

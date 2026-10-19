@@ -36,8 +36,8 @@ use concinnity_core::ecs::World;
 use concinnity_core::memory::{LedgerSnapshot, MemStats, MemTag, Realm, SizeClass};
 use concinnity_core::render::backend::GpuProfile;
 use concinnity_core::render::stream_pools::StreamingRuntime;
-use concinnity_engine::app::syscpu::CpuSampler;
-use concinnity_engine::app::sysmem;
+use concinnity_host::sys::cpu::CpuSampler;
+use concinnity_host::sys::memory;
 use std::time::{Duration, Instant};
 
 // Matches the StatHud's chip cadence: often enough to feel live, rare enough
@@ -354,7 +354,7 @@ impl HealthState {
         let render = &world.profile().render;
         self.snapshot = HealthSnapshot {
             heap: concinnity_core::memory::stats(),
-            rss: sysmem::process_resident_bytes(),
+            rss: memory::process_resident_bytes(),
             total_ram: world
                 .resource::<MemoryBudget>()
                 .and_then(|b| b.total_ram_bytes),

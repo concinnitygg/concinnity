@@ -13,7 +13,7 @@ use crate::world::Inner;
 // everything above holds the result behind the trait.
 #[cfg(feature = "std")]
 pub(crate) fn select(world: Inner) -> Box<dyn Driver> {
-    adopt(concinnity_engine::Runtime::from_world(world))
+    adopt(concinnity_runtime::Runtime::from_world(world))
 }
 
 #[cfg(not(feature = "std"))]
@@ -26,7 +26,7 @@ pub(crate) fn select(world: Inner) -> Box<dyn Driver> {
 // headless. Anything else keeps the engine's loop, whose start refuses a world
 // with something to draw on a build or machine that cannot draw it.
 #[cfg(feature = "std")]
-pub(crate) fn adopt(mut runtime: concinnity_engine::Runtime) -> Box<dyn Driver> {
+pub(crate) fn adopt(mut runtime: concinnity_runtime::Runtime) -> Box<dyn Driver> {
     use concinnity_core::render::render_mode::Resolution;
     match runtime.render_resolution() {
         Resolution::Headless(_) => headless(runtime.into_world()),

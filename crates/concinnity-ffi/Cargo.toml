@@ -23,11 +23,11 @@ name = "concinnity_ffi"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
-vulkan = ["concinnity-engine/vulkan"]
+vulkan = ["concinnity-runtime/vulkan"]
 
 [dependencies]
 concinnity-core = { workspace = true }
-concinnity-engine = { workspace = true }
+concinnity-runtime = { workspace = true }
 concinnity-host = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, features = ["std"] }

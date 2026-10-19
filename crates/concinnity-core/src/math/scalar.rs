@@ -95,6 +95,11 @@ pub fn log2(x: f32) -> f32 {
     libm::log2f(x)
 }
 
+/// Base-10 logarithm.
+pub fn log10(x: f32) -> f32 {
+    libm::log10f(x)
+}
+
 /// `x` raised to `n`.
 pub fn powf(x: f32, n: f32) -> f32 {
     libm::powf(x, n)

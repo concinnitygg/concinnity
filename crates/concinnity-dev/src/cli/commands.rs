@@ -169,13 +169,13 @@ impl RenderArgs {
     // Fix the graphics API this process renders with: the flag, else the
     // player's settings-menu choice in `tree`. Runs before anything cooks or
     // probes the device.
-    pub(crate) fn select_graphics_api(&self, tree: &concinnity_engine::StateTree) {
+    pub(crate) fn select_graphics_api(&self, tree: &concinnity_host::store::paths::StateTree) {
         match self.graphics_api {
             Some(api) => {
-                concinnity_engine::platform::select(Some(api.into()));
+                concinnity_runtime::platform::select(Some(api.into()));
             }
             None => {
-                concinnity_engine::platform::select_persisted(Some(tree));
+                concinnity_runtime::platform::select_persisted(Some(tree));
             }
         }
     }

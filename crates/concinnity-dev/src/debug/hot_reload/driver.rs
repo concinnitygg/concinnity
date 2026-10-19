@@ -9,7 +9,7 @@ use concinnity_core::animation::{AnimationSystem, skeleton};
 use concinnity_core::components::{SkeletonPose, StoryReload};
 use concinnity_core::ecs::World;
 use concinnity_core::gfx::render_types::SkinnedIndex;
-use concinnity_engine::live_edit;
+use concinnity_runtime::live_edit;
 use std::sync::Arc;
 
 use super::report::ReloadReports;
@@ -105,7 +105,7 @@ impl HotReloadDriver {
         let Some(state) = self.state.as_mut() else {
             return;
         };
-        let handoff = concinnity_engine::live_edit::render_handoff(world);
+        let handoff = crate::debug::handoff::render_handoff(world);
         let (Some(backend), Some(fog)) = (handoff.backend, handoff.fog) else {
             return;
         };

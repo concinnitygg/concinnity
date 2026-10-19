@@ -2,7 +2,16 @@
 // and put back, so the value and the `PipelineContext` are never borrowed
 // together.
 
+use alloc::boxed::Box;
+
 use super::Resources;
+use crate::render::backend::RenderBackend;
+
+/// The world's live render backend, parked between system steps. The graphics
+/// driver's init builds and parks it; its frame step takes it out and puts it
+/// back. `None` while a step has it taken, or once a live edit transplanted it
+/// out.
+pub type ActiveRenderBackend = Parked<Box<dyn RenderBackend>>;
 
 /// One value parked in the world's resources between the steps that use it.
 /// `None` only while a step has it taken.

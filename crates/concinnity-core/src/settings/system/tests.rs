@@ -5,8 +5,8 @@
 
 use crate::components::{
     AaMode, AudioCommand, ControlsCommand, GamepadAction, GamepadButton, GamepadMap,
-    IndirectTechnique, InputKey, SettingCommand, SettingOp, ShadowUpdate, Sprite, TextLabel,
-    UpscalerBackend, WindowMode,
+    IndirectTechnique, InputKey, SettingCommand, SettingOp, ShadowUpdate, Sprite, StreamingConfig,
+    TextLabel, UpscalerBackend, WindowMode,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{FrameRateCap, HudPrefs, StepResult, System, World};
@@ -1488,4 +1488,28 @@ fn a_change_without_a_published_store_applies_live_only() {
     assert_ne!(f.state.resolved.graphics.frame_pacing.vsync, vsync);
     assert_eq!(f.revision(), 0);
     assert!(f.world.resource::<StoredSettings>().is_none());
+}
+
+// A window opens titled, so only another configured mode is applied after it.
+#[test]
+fn only_a_non_windowed_mode_is_applied_at_startup() {
+    let mut state = SettingsState::for_tests();
+    assert_eq!(state.startup_window_mode(), None);
+    state.window_args.mode = WindowMode::Borderless;
+    assert_eq!(state.startup_window_mode(), Some(WindowMode::Borderless));
+}
+
+// The resolved texture cap and budget replace whatever the world authored.
+#[test]
+fn resolved_texture_limits_win_over_the_authored_streaming_config() {
+    let mut state = SettingsState::for_tests();
+    state.resolved.texture_cap = 512;
+    state.resolved.texture_budget = 8;
+    let mut config = StreamingConfig {
+        texture_cap: 64,
+        texture_budget: 2,
+        ..Default::default()
+    };
+    state.apply_to_streaming(&mut config);
+    assert_eq!((config.texture_cap, config.texture_budget), (512, 8));
 }

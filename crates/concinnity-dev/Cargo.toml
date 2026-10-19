@@ -18,13 +18,13 @@ include = [
 ]
 
 [features]
-vulkan = ["concinnity-engine/vulkan"]
+vulkan = ["concinnity-runtime/vulkan"]
 
 [dependencies]
 anstyle-query = "1"
 ciborium = { workspace = true }
 clap = { version = "4", features = ["derive"] }
-concinnity-engine = { workspace = true }
+concinnity-runtime = { workspace = true }
 concinnity-cook = { workspace = true, features = ["schema"] }
 concinnity-core = { workspace = true, features = ["schema"] }
 concinnity-host = { workspace = true }

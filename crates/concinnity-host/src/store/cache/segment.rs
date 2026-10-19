@@ -197,7 +197,7 @@ impl Segment {
         let Ok(image) = encode_cnb(CACHE_SEGMENT_VERSION, &meta, &payload) else {
             return false;
         };
-        if !crate::store::atomic::replace(path, |out| out.write_all(&image)) {
+        if crate::store::atomic::replace(path, |out| out.write_all(&image)).is_err() {
             return false;
         }
         self.dirty = false;

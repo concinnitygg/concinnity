@@ -17,8 +17,8 @@ use std::sync::{Mutex, OnceLock};
 use concinnity_core::ecs::StepResult;
 use concinnity_core::error::WorldError;
 use concinnity_core::render::backend_init::EmbeddedSurface;
-use concinnity_engine::{Runtime, StartupError};
 use concinnity_host::store::paths::StateTree;
+use concinnity_runtime::{Runtime, StartupError};
 
 /// Why a `cn_` call failed, or [`Ok`](CnError::Ok) when it did not.
 ///
@@ -84,7 +84,7 @@ static STATE: OnceLock<Mutex<HostState>> = OnceLock::new();
 /// uses and `RUST_LOG` overrides it.
 #[unsafe(no_mangle)]
 pub extern "C" fn cn_init() {
-    concinnity_engine::app::run::init_logging();
+    concinnity_runtime::init_logging();
     STATE.get_or_init(|| Mutex::new(HostState { world: None }));
 }
 
@@ -378,7 +378,7 @@ mod tests {
         let blob = std::path::PathBuf::from("/apps/MyGame/data/0");
         let unreadable = StartupError::UnreadableData {
             blob: blob.clone(),
-            cause: concinnity_engine::WorldLoadError::Asset(
+            cause: concinnity_runtime::WorldLoadError::Asset(
                 concinnity_core::error::AssetError::UnknownComponent { discriminant: 9 },
             ),
         };

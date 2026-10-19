@@ -113,8 +113,8 @@ fn read_file(path: &str) -> Result<Vec<u8>, BlobLoadError> {
 /// Only blob 0's payload section is read here; overflow blobs (named by the
 /// manifest's `max_blob_index`) start unloaded and `BlobData::read()` pulls
 /// each from disk the first time a locator needs it. Defs are not resolved into
-/// runtime `Asset`s: that resolution depends on the client runtime registry, so
-/// it lives in the client `blob::load` shim.
+/// runtime `Asset`s: that resolution depends on the component registry, so it
+/// lives with the caller that builds the `World` (concinnity-runtime's `blob`).
 pub fn load_raw_at(primary: &Path) -> Result<(BlobMeta, BlobData), BlobLoadError> {
     anchor(primary);
     load_raw_from(blob_path)

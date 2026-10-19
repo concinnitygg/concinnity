@@ -2,13 +2,15 @@
 //! vocabulary and compute layer below them (`concinnity-core`) so that layer
 //! needs no operating system.
 //!
-//! Three of them, sharing nothing but a need for real threads:
+//! Four of them, sharing nothing but a need for real threads:
 //!
 //!   - [`jobs`]: the process-wide worker pool a single system fans its own
 //!     data-parallel work across (pose sampling, particle update, the
 //!     environment-map convolutions).
 //!   - [`role`]: how the operating system schedules a thread, set by whoever
 //!     spawns it.
+//!   - [`worker`]: named background threads that answer requests off the
+//!     frame thread (streaming loads, decodes, ground patches).
 //!   - [`asset_id`]: the build-time name -> dense id interner, whose table is
 //!     per-thread so two concurrent builds cannot see each other's ids.
 //!
@@ -20,5 +22,6 @@ pub mod asset_id;
 pub mod jobs;
 mod name_interner;
 pub mod role;
+pub mod worker;
 
 pub use role::{ThreadRole, set_current_thread_role};

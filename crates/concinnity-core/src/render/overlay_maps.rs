@@ -9,7 +9,8 @@
 
 use crate::components::ScrollPanel;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, TextureHandle};
+use crate::ecs::{FontHandle, OverlayImage, PipelineContext, TextureHandle};
+use alloc::vec::Vec;
 use hashbrown::HashMap;
 
 /// Scissor rectangle per overlay asset, `[x, y, width, height]` in the
@@ -48,6 +49,57 @@ impl Placement {
 /// whose texture is absent falls back to a solid fill.
 pub type TextureSlots = HashMap<TextureHandle, usize>;
 
+/// One RGBA8 atlas in the pool: width, height and row-major pixels.
+pub type Atlas = (u32, u32, Vec<u8>);
+
+/// The shared text / sprite atlas pool graphics init assembles, in slot order:
+/// each Font's atlas at its handle's slot, then the built-in fallback face, then
+/// each sprite texture and overlay image with the slot it landed in.
+#[derive(Debug, Default)]
+pub struct AtlasPool {
+    /// The atlases in slot order.
+    pub atlases: Vec<Atlas>,
+    /// The slot of each sprite texture and overlay image.
+    pub sprite_slots: TextureSlots,
+}
+
+impl AtlasPool {
+    /// The handle the next font face added is named by: its slot.
+    pub fn next_font(&self) -> FontHandle {
+        FontHandle::new(self.atlases.len() as u32)
+    }
+
+    /// Add a font face's atlas, returning the handle that names it. Fonts are
+    /// added first, in handle order.
+    pub fn push_font(&mut self, atlas: Atlas) -> FontHandle {
+        let handle = self.next_font();
+        self.atlases.push(atlas);
+        handle
+    }
+
+    /// Add a sprite texture's pixels under `texture`.
+    pub fn push_sprite(&mut self, texture: TextureHandle, atlas: Atlas) {
+        self.sprite_slots.insert(texture, self.atlases.len());
+        self.atlases.push(atlas);
+    }
+
+    /// Add a tool-provided overlay image under its reserved handle. A malformed
+    /// image is skipped with a warning.
+    pub fn push_overlay(&mut self, image: &OverlayImage) {
+        if !image.is_well_formed() {
+            tracing::warn!(
+                "graphics: overlay image {:?} byte length mismatch; skipped",
+                image.handle
+            );
+            return;
+        }
+        self.push_sprite(
+            image.handle,
+            (image.width, image.height, image.rgba.clone()),
+        );
+    }
+}
+
 /// Every world `ScrollPanel`'s clip band (reference space), keyed by each
 /// element listed in any of its rows, so the draw path scissors scroll content
 /// to its panel and off-band rows do not bleed over the chrome.
@@ -67,6 +119,33 @@ pub fn scroll_clip_rects(ctx: &PipelineContext) -> ClipRects {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
+
+    // Fonts take the leading slots in handle order; sprites and overlay images
+    // follow, each mapped to its slot, and a malformed image takes none.
+    #[test]
+    fn the_atlas_pool_lays_fonts_first_and_maps_each_sprite_to_its_slot() {
+        let mut pool = AtlasPool::default();
+        assert_eq!(pool.push_font((1, 1, vec![0; 4])), FontHandle::new(0));
+        assert_eq!(pool.push_font((1, 1, vec![0; 4])), FontHandle::new(1));
+        pool.push_sprite(TextureHandle::new(7), (2, 1, vec![0; 8]));
+        pool.push_overlay(&OverlayImage {
+            handle: TextureHandle::new(900),
+            width: 2,
+            height: 2,
+            rgba: vec![0; 3],
+        });
+        pool.push_overlay(&OverlayImage {
+            handle: TextureHandle::new(901),
+            width: 1,
+            height: 1,
+            rgba: vec![0; 4],
+        });
+        assert_eq!(pool.atlases.len(), 4);
+        assert_eq!(pool.sprite_slots[&TextureHandle::new(7)], 2);
+        assert_eq!(pool.sprite_slots[&TextureHandle::new(901)], 3);
+        assert!(!pool.sprite_slots.contains_key(&TextureHandle::new(900)));
+    }
     use crate::ecs::World;
 
     // Every element of every row clips to its own panel's band.

@@ -200,7 +200,7 @@ mod tests {
         add(&mut world, anim_clip("idle_clip", 1.0));
         add(&mut world, anim_clip("run_clip", 0.8));
         add(&mut world, hero_graph());
-        world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
+        world.start(concinnity_runtime::SYSTEMS).unwrap();
         world
     }
 
@@ -210,7 +210,7 @@ mod tests {
         let mut world = World::new();
         add(&mut world, anim_clip("wave_clip", 1.0));
         add(&mut world, anim_clip("bow_clip", 0.5));
-        world.start(concinnity_engine::ecs::SYSTEMS).unwrap();
+        world.start(concinnity_runtime::SYSTEMS).unwrap();
         world
     }
 

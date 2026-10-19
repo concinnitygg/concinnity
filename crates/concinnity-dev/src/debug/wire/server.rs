@@ -108,7 +108,7 @@ impl DebugServer {
         let jobs = self.queue.take();
         // Backend jobs wait in the queue until a backend is parked; world jobs
         // never wait on one.
-        let handoff = concinnity_engine::live_edit::render_handoff(world);
+        let handoff = crate::debug::handoff::render_handoff(world);
         match handoff.backend {
             Some(backend) => {
                 for job in jobs.backend {
@@ -180,7 +180,7 @@ impl FrameHook for DebugServer {
                     total_ram_mib: memory.total_ram_bytes.map(|b| b / (1024 * 1024)),
                     budget_mib: memory.budget_mib(),
                     overridden: memory.overridden,
-                    rss_mib: concinnity_engine::app::sysmem::process_resident_bytes()
+                    rss_mib: concinnity_host::sys::memory::process_resident_bytes()
                         .map(|b| b / (1024 * 1024)),
                 },
             });
@@ -190,7 +190,7 @@ impl FrameHook for DebugServer {
         // the `reload-shaders` verb can fire the flag. The backend sits in
         // the world's parked slot between ticks.
         if state.shader_reload.is_none()
-            && let Some(flag) = concinnity_engine::live_edit::shader_reload_flag(world)
+            && let Some(flag) = crate::debug::handoff::shader_reload_flag(world)
         {
             state.shader_reload = Some(flag);
         }

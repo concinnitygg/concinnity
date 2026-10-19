@@ -39,8 +39,8 @@ use concinnity_core::ecs::{
     World, WorldLines,
 };
 use concinnity_core::shutdown::ShutdownToken;
-use concinnity_engine::app::runtime::Runtime;
-use concinnity_engine::live_edit::PendingBackend;
+use concinnity_runtime::Runtime;
+use concinnity_runtime::live_edit::PendingBackend;
 
 use super::asset_handle::AssetHandle;
 use super::entry_list::{EntryId, EntryList};
