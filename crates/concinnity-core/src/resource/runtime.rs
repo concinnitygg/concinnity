@@ -1,6 +1,6 @@
 //! Payloads a running world bakes for itself at start.
 //!
-//! A geometry producer the build compiled carries a [`PayloadLocator`] into a
+//! A geometry producer the build compiled carries a [`PayloadLocator`](crate::ecs::PayloadLocator) into a
 //! blob section. One the world mints at start has no blob behind it, so its
 //! baked bytes live here and the renderer reads them straight out.
 

@@ -31,8 +31,6 @@ pub mod history;
 /// Hardware ray-traced reflection settings, resolved from the authored config.
 pub mod rt_reflections;
 
-/// Which single-source program a post pass runs, and the binding count it
-/// declares.
 pub mod program;
 
 /// The reflection composite: the roughness blur and the blend over the scene,
@@ -48,10 +46,8 @@ pub mod ssao;
 /// Screen-space global illumination: the gather and composite, written once.
 pub mod ssgi;
 
-/// Screen-space reflections: the resolve, written once.
 pub mod ssr;
 
-/// Temporal anti-aliasing: the resolve pass, written once.
 pub mod taa;
 
 #[cfg(test)]

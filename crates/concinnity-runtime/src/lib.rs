@@ -31,10 +31,6 @@ mod heap;
 /// recent-log ring layer into its tracing subscriber.
 pub mod crash;
 pub mod live_edit;
-/// The shader platform this build's rendering backend consumes. The backend is
-/// this crate's own compile-time choice, so the crate that knows it is the one
-/// that states it: the editor and the cook are handed the value rather than
-/// resolving a backend of their own.
 pub mod platform;
 
 // The surface a host embeds: construct a Runtime, populate its world, and drive

@@ -41,8 +41,8 @@ pub struct DeviceCapabilities {
     /// region recycles there. Read by the engine's draw-slot allocator.
     pub reuses_build_slots: bool,
     /// Whether a built draw slot's material and cull distance may be rewritten
-    /// in place ([`LiveEdit::set_draw_material`] /
-    /// [`LiveEdit::set_draw_cull_distance`]). Metal rebuilds its per-object
+    /// in place ([`LiveEdit::set_draw_material`](super::LiveEdit::set_draw_material) /
+    /// [`LiveEdit::set_draw_cull_distance`](super::LiveEdit::set_draw_cull_distance)). Metal rebuilds its per-object
     /// buffer from the draw list every frame, so a rewritten slot draws with the
     /// new material next frame; DirectX / Vulkan bake per-object material state
     /// at build time and would keep drawing the old one. Read by the editor's

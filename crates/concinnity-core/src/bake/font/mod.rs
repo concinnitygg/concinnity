@@ -1,7 +1,7 @@
 //! The compiled font payload: a power-of-two RGBA atlas of signed-distance-field
 //! glyphs plus their metrics, which the renderer uploads and draws from.
 //!
-//! [`compile`] rasterizes the printable ASCII glyphs of a TTF face with fontdue
+//! [`compile()`] rasterizes the printable ASCII glyphs of a TTF face with fontdue
 //! and encodes them; [`deserialize`] reads the encoding back. Both halves live
 //! here so the asset build, the engine's own build script, and the running
 //! engine share one definition of the format: the engine embeds a baked atlas

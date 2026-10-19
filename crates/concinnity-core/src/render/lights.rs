@@ -165,7 +165,7 @@ impl DirectionalLightSet {
 
 /// The `LightUniforms` directional slots and their count for `lights`, padded
 /// with zeroed entries. Shared by the init-time build below and the live
-/// [`crate::render::backend::RenderBackend::update_directional_lights`] seam, so a sun
+/// [`crate::render::backend::RenderTuning::update_directional_lights`] seam, so a sun
 /// edited at runtime packs exactly as a relaunch would pack it.
 pub fn directional_light_data(
     lights: &[DirectionalLight],

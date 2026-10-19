@@ -1,6 +1,10 @@
 //! Which graphics API this process renders with, and so which shader platform
 //! it cooks for and consumes.
 //!
+//! The backend is this crate's own compile-time choice, so the crate that knows
+//! it is the one that states it: the editor and the cook are handed the value
+//! rather than resolving a backend of their own.
+//!
 //! A build compiles in the target's native backend and, with the `vulkan`
 //! feature, Vulkan beside it. One of them is chosen per process, before
 //! anything cooks or renders: [`select`] takes an explicit request,

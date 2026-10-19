@@ -11,7 +11,7 @@ use crate::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
 const FULL_TURN_DEG: f32 = 360.0;
 
 /// Drives the world's [`Camera3D`] along its declared
-/// [`CameraTrack`](crate::components::CameraTrack).
+/// [`CameraTrack`].
 ///
 /// Runs on the fixed simulation clock rather than the frame delta, so the pose
 /// at a given track time is the same on every machine and two runs of one

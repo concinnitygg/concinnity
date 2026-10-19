@@ -1,7 +1,7 @@
 //! The editor's Template detail panel: a floating preview of one engine-owned
 //! world template, spawned by clicking a row in the Templates list (`templates.rs`).
 //! It mirrors the edit-form panel's shape -- a draggable title bar ("Template
-//! <name>") with an "X" close button, a header row carrying the template's
+//! `<name>`") with an "X" close button, a header row carrying the template's
 //! description on the left and an "Apply" button pinned to the top-right, then a
 //! scrollable list of the template's assets underneath. Applying layers the
 //! template's assets into the world (the hook owns that, idempotently).

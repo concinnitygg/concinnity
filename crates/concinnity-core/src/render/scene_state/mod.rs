@@ -131,7 +131,7 @@ impl SceneState {
 /// runtime reserve, then the skinned tail.
 pub struct DrawList {
     /// One entry per renderable object, indexed by
-    /// [`DrawIndex`](crate::gfx::render_types::DrawIndex).
+    /// [`DrawIndex`].
     pub objects: Vec<DrawObject>,
     /// The build-time object count. Streamed chunks and runtime clones land
     /// past it.

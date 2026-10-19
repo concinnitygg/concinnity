@@ -5,7 +5,7 @@
 //! before systems init.
 //!
 //! It then drains the Prop column: every renderer and gameplay system reads the
-//! per-instance components, so the source Props are no longer needed. drain<Prop>
+//! per-instance components, so the source Props are no longer needed. `drain<Prop>`
 //! clears only the Prop component, so each entity survives on its Transform /
 //! renderer / tag components. A `PropInstance` marker among them keeps the
 //! entity identifiable as a prop, which is what a behavior scoped to "Prop"

@@ -26,7 +26,7 @@ use crate::frame_report::shown::ShownFrames;
 
 const MICROS_PER_MILLI: f32 = 1_000.0;
 
-/// Records one [`FrameSample`] per frame and writes what the run cost to its
+/// Records one `FrameSample` per frame and writes what the run cost to its
 /// output when it ends.
 ///
 /// The fallback clocks read the host's [`Clock`] resource; a world without one

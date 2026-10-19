@@ -36,7 +36,6 @@ mod pipeline_builder;
 // What the backend reports about itself: capabilities, GPU class, counters,
 // and the CPU-side readbacks.
 mod probe;
-/// A backend that records every call made on it, for tests.
 #[cfg(any(test, feature = "test-support"))]
 pub mod recording;
 // The scene a backend lends to the defaults that only edit it.

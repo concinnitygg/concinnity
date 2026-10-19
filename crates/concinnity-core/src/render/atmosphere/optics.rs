@@ -37,7 +37,7 @@ pub(super) fn ray_hits_ground(r: f32, mu: f32, bottom: f32) -> bool {
 
 /// Optical depth (extinction integrated over distance) from radius `r` with
 /// cosine `mu` to the top of the air, midpoint-sampled in
-/// [`TRANSMITTANCE_STEPS`] steps exactly as the transmittance kernel takes it.
+/// `TRANSMITTANCE_STEPS` steps exactly as the transmittance kernel takes it.
 /// From above the air the path is sampled from where it enters it.
 pub fn optical_depth(s: &AtmosphereSettings, r: f32, mu: f32) -> [f32; 3] {
     let enter = ray_enter(r, mu, s.top_radius);

@@ -3,7 +3,7 @@
 //! reads only the pre-pass's view block, through its own root signature, so it
 //! draws whether or not the world has cull records.
 //!
-//! Root signature: [0] root CBV b1, the pre-pass `GbView` (the DirectX register
+//! Root signature: `[0]` root CBV b1, the pre-pass `GbView` (the DirectX register
 //! `gbuffer_sky.hlsl` gives it).
 
 use concinnity_core::render::error::RenderResult;

@@ -1,4 +1,4 @@
-//! Metal rendering backend. Gated by #[`cfg(backend_metal)`] on the mod
+//! Metal rendering backend. Gated by `#[cfg(backend_metal)]` on the mod
 //! declaration in lib.rs; compiled on macOS only.
 
 mod allocator;

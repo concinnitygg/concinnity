@@ -9,7 +9,7 @@
 //! The bindless main pair's `CN_BACKEND_DIRECTX` branch reproduces the bindless
 //! main root signature in `init/pipelines.rs` slot for slot: that layout is a
 //! contract, since a world Shader asset builds its own PSO against the same root
-//! signature (see world_shaders.rs). `assert_dxil_abi` in the device build
+//! signature (see `world_shaders.rs`). `assert_dxil_abi` in the device build
 //! script locks every program's registers.
 //!
 //! A program's stage comes from its entry's `[shader("...")]` attribute, so the

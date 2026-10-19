@@ -1,7 +1,7 @@
 //! The editor's add / edit form, in its own floating panel (separate from the
 //! Assets browse panel, which stays on its list while this is open). Spawned by
 //! clicking an asset in the browse list (or picking a type from the "+" picker):
-//! a draggable title bar ("Edit <type>" / "New <type>") with an "X" close button
+//! a draggable title bar ("Edit `<type>`" / "New `<type>`") with an "X" close button
 //! in its top-right corner, then a header row with the asset's editable NAME as a
 //! large heading and the Apply button pinned to the panel's top-right, then the
 //! scrollable arg-field area. Like the rest of the editor HUD it is plain

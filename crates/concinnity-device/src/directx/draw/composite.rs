@@ -3,7 +3,7 @@
 //! The composite pass samples `scene_srv` (the post-TAA image when TAA is on,
 //! the HDR scene SRV otherwise) plus the bloom top octave; the text pass appends each
 //! label's vertex / index geometry into this frame slot's persistent upload
-//! buffer (see [`TextUploadRing`]) and binds sub-views into it, so no per-frame
+//! buffer (see [`UploadRing`](crate::directx::upload_ring::UploadRing)) and binds sub-views into it, so no per-frame
 //! GPU buffers are allocated.
 
 use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms, TextVertex};

@@ -1,7 +1,7 @@
 //! The behavior virtual machine: an authored [`Behavior`](crate::components::Behavior)
 //! compiled to slot-resolved form, and the evaluator that runs it.
 //!
-//! [`compile`] resolves every authored name to a dense slot once, producing a
+//! [`compile()`] resolves every authored name to a dense slot once, producing a
 //! [`Program`]; [`exec`] runs a program's body against a [`View`] of what the
 //! body may read this tick. Evaluation mutates nothing: it appends [`Effect`]s
 //! the caller applies afterwards, which is what lets bodies run concurrently

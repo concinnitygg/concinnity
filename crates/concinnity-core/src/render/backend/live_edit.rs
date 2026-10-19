@@ -152,7 +152,7 @@ pub trait LiveEdit: SceneHost {
     /// Replace a `SkinnedMesh` draw slot's vertex + index data in place.
     /// Driven by asset hot-reload (`cn debug` only). Reuses the slot's
     /// existing vertex region + index region in the shared skinned vertex /
-    /// index buffers (created once by [`SkinnedDraws::upload_skinned`]), so the new
+    /// index buffers (created once by [`SkinnedDraws::upload_skinned`](super::SkinnedDraws::upload_skinned)), so the new
     /// geometry must match the slot's init-time vertex count + index count
     /// and the new skeleton must keep the same joint count; pipelines stay
     /// untouched, only the bytes change. `vertex_base` is the init-time
@@ -267,7 +267,7 @@ pub trait LiveEdit: SceneHost {
     /// Rewrite a draw slot's material parameters + texture/normal-map pool
     /// indices in place. Driven by the editor's live draw seam when a Prop edits
     /// its `material` arg. The caller gates on
-    /// [`DeviceCapabilities::rewrites_draws`], which a backend reports once its
+    /// [`DeviceCapabilities::rewrites_draws`](super::DeviceCapabilities::rewrites_draws), which a backend reports once its
     /// GPU records and ray-tracing geometry table follow the rewritten slot.
     fn set_draw_material(
         &mut self,
@@ -292,7 +292,7 @@ pub trait LiveEdit: SceneHost {
 
     /// Rewrite a draw slot's `cull_distance` in place. Driven by the editor's
     /// live draw seam when a Prop edits its `cull_distance` arg. Gated by the
-    /// same [`DeviceCapabilities::rewrites_draws`] flag.
+    /// same [`DeviceCapabilities::rewrites_draws`](super::DeviceCapabilities::rewrites_draws) flag.
     fn set_draw_cull_distance(&mut self, draw_idx: DrawIndex, cull_distance: f32) {
         if let Some(scene) = self.scene_mut() {
             scene.set_draw_cull_distance(draw_idx, cull_distance);

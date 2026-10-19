@@ -100,7 +100,7 @@ pub(crate) fn reversed_ortho_rh(
 /// Right-handed perspective projection with reversed depth and no far plane:
 /// near maps to device depth 1 and depth falls toward 0 as distance goes to
 /// infinity, reaching it only there. Its x, y and w rows are
-/// [`perspective_rh`]'s.
+/// `perspective_rh`'s.
 pub(crate) fn reversed_infinite_perspective_rh(fov_y_radians: f32, aspect: f32, near: f32) -> Mat4 {
     let ys = 1.0 / tan(fov_y_radians * 0.5).max(MIN_HALF_FOV_TAN);
     let xs = ys / aspect;

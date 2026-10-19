@@ -73,8 +73,8 @@ struct PendingCut {
 /// signal. It lands on the first frame the camera moves off the path its
 /// recent motion predicts, which may come after the frame it was raised for
 /// when the system raising it runs before the one that moves the camera. It
-/// lands anyway once [`MAX_PENDING_TICKS`] more ticks run without a move (or
-/// [`MAX_PENDING_FRAMES`] frames, in a world that is not simulating), and any
+/// lands anyway once `MAX_PENDING_TICKS` more ticks run without a move (or
+/// `MAX_PENDING_FRAMES` frames, in a world that is not simulating), and any
 /// reset in the meantime satisfies it.
 ///
 /// Without one, a frame is still a cut when its step strays from the

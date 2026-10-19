@@ -1,5 +1,8 @@
 //! The project a dev session works on.
 //!
+//! It is the one state tree its builds, runs, and editor sessions address, opened
+//! by the binary at startup.
+//!
 //! Every tier below this one takes its paths as arguments: the cook is handed
 //! the tree it builds into, the engine's `Runtime` carries the one it runs against,
 //! and the two content-addressed caches are told which files they are. What
