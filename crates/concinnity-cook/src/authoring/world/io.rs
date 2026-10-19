@@ -41,7 +41,7 @@ impl WorldJsonlAsset {
         };
         let asset_type = RegisteredType::parse(type_str)
             .ok_or_else(|| format!("'{id}': unknown type '{type_str}'"))?;
-        Ok(WorldJsonlAsset {
+        Ok(Self {
             id,
             asset_type,
             args,
@@ -73,8 +73,8 @@ fn take_entry_id_from_args(args: &mut serde_json::Value) -> Option<String> {
     }
 }
 
-/// Read src_path, apply a fallible mutation to the asset list, and write
-/// the result to dst_path. src and dst may be the same path or different.
+/// Read `src_path`, apply a fallible mutation to the asset list, and write
+/// the result to `dst_path`. src and dst may be the same path or different.
 pub fn patch_world_jsonl_to<F>(src_path: &str, dst_path: &str, f: F) -> std::io::Result<()>
 where
     F: FnOnce(&mut Vec<serde_json::Value>) -> std::io::Result<()>,
@@ -87,7 +87,7 @@ where
     let mut assets = parse_world_jsonl(&content).map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("Failed to parse {}: {}", src_path, e),
+            format!("Failed to parse {src_path}: {e}"),
         )
     })?;
 
@@ -96,7 +96,7 @@ where
     std::fs::write(dst_path, write_world_jsonl(&assets)?)
 }
 
-/// Read world.jsonl at json_path, mutate the asset list in-place, write back.
+/// Read world.jsonl at `json_path`, mutate the asset list in-place, write back.
 pub fn patch_world_jsonl<F>(json_path: &str, f: F) -> std::io::Result<()>
 where
     F: FnOnce(&mut Vec<serde_json::Value>),

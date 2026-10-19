@@ -23,7 +23,7 @@ pub(in crate::directx) struct TaaResources {
 impl TaaResources {
     // Build the resolve at `width` x `height` render resolution.
     pub(in crate::directx) fn new(
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         width: u32,
         height: u32,
     ) -> RenderResult<Self> {
@@ -50,7 +50,7 @@ impl TaaResources {
     // the next frame as the first, and the jitter sequence restarts with it.
     pub(in crate::directx) fn resize_to(
         &mut self,
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         width: u32,
         height: u32,
     ) -> RenderResult<()> {

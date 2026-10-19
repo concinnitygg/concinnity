@@ -98,7 +98,7 @@ impl PhysicsJointKind {
 )]
 #[serde(default)]
 pub struct PhysicsJoint {
-    /// Constraint shape; defaults to `fixed`. See [PhysicsJointKind].
+    /// Constraint shape; defaults to `fixed`. See [`PhysicsJointKind`].
     pub kind: PhysicsJointKind,
     /// First body: a [Prop](#prop) name. Required.
     pub body_a: Option<Ref<Prop>>,

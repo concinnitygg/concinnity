@@ -23,9 +23,8 @@ pub(crate) fn apply_app_config(
         let name = asset_name(v);
         if let Some(prev) = &first {
             return Err(format!(
-                "AppConfig '{}': the world already declares AppConfig '{}'; \
-                 declare at most one",
-                name, prev
+                "AppConfig '{name}': the world already declares AppConfig '{prev}'; \
+                 declare at most one"
             ));
         }
         first = Some(name);
@@ -54,7 +53,7 @@ pub(crate) fn apply_app_config(
             let args = v
                 .get_mut("args")
                 .and_then(|a| a.as_object_mut())
-                .ok_or_else(|| format!("Window '{}': args must be an object", name))?;
+                .ok_or_else(|| format!("Window '{name}': args must be an object"))?;
             if args.contains_key("title") {
                 continue;
             }

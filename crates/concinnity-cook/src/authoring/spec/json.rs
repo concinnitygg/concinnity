@@ -15,9 +15,7 @@ pub fn arg_value_to_json(v: &ArgValue) -> Value {
         ArgValue::Null => Value::Null,
         ArgValue::Bool(b) => Value::Bool(*b),
         ArgValue::Int(i) => Value::Number(Number::from(*i)),
-        ArgValue::Float(f) => Number::from_f64(*f)
-            .map(Value::Number)
-            .unwrap_or(Value::Null),
+        ArgValue::Float(f) => Number::from_f64(*f).map_or(Value::Null, Value::Number),
         ArgValue::Str(s) => Value::String(s.clone()),
         ArgValue::Array(items) => Value::Array(items.iter().map(arg_value_to_json).collect()),
         ArgValue::Object(fields) => Value::Object(object_map(fields)),

@@ -144,7 +144,7 @@ impl StoryParser {
             Event::Html(_) | Event::InlineHtml(_) | Event::Start(Tag::HtmlBlock) => {
                 "raw HTML is not supported".to_string()
             }
-            other => format!("unsupported Markdown construct: {:?}", other),
+            other => format!("unsupported Markdown construct: {other:?}"),
         };
         self.err(range, msg)
     }
@@ -152,9 +152,8 @@ impl StoryParser {
     pub(super) fn finish(mut self) -> Result<Story, String> {
         if let Some(line) = self.pending.unconsumed_directive {
             return Err(format!(
-                "line {}: a media directive needs a following paragraph or choice list to \
-                 attach to",
-                line
+                "line {line}: a media directive needs a following paragraph or choice list to \
+                 attach to"
             ));
         }
         if let Some(node) = self.cur_node.take() {

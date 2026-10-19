@@ -50,7 +50,7 @@ pub struct SystemEntry {
 
 /// A host's completion pass: it runs over the world before the gates read it,
 /// and fails the start when the world cannot be completed.
-pub type CompleteWorld = fn(&mut PipelineContext) -> Result<(), WorldError>;
+pub type CompleteWorld = fn(&mut PipelineContext<'_>) -> Result<(), WorldError>;
 
 /// A host's system table and the load-time passes only the host can supply.
 ///
@@ -72,7 +72,7 @@ pub struct SystemTable {
     pub complete_world: Option<CompleteWorld>,
     /// Runs over the world once its systems are built and before their `init`.
     /// Absent leaves the loaded content exactly as it was added.
-    pub before_init: Option<fn(&mut PipelineContext)>,
+    pub before_init: Option<fn(&mut PipelineContext<'_>)>,
     /// Pre-creates the event queues a scheduled system's declared access can
     /// touch, so its `events_mut` never grows the store's map mid-tick. Absent
     /// leaves every queue to be created on first use.
@@ -275,7 +275,7 @@ mod tests {
         struct Inert;
 
         impl System for Inert {
-            fn step(&mut self, _ctx: &mut PipelineContext) -> crate::ecs::StepResult {
+            fn step(&mut self, _ctx: &mut PipelineContext<'_>) -> crate::ecs::StepResult {
                 crate::ecs::StepResult::Continue
             }
         }

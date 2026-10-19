@@ -147,10 +147,10 @@ impl ShaderForm {
             VERTEX => self.vertex = !self.vertex,
             FRAGMENT_STARTER => {
                 self.fragment_starter =
-                    (self.fragment_starter + 1) % shader_templates::FRAGMENT.len()
+                    (self.fragment_starter + 1) % shader_templates::FRAGMENT.len();
             }
             VERTEX_STARTER => {
-                self.vertex_starter = (self.vertex_starter + 1) % shader_templates::VERTEX.len()
+                self.vertex_starter = (self.vertex_starter + 1) % shader_templates::VERTEX.len();
             }
             DEFAULT => self.default = !self.default,
             _ => {
@@ -414,7 +414,7 @@ mod tests {
     }
 
     fn names(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| s.to_string()).collect()
+        list.iter().map(ToString::to_string).collect()
     }
 
     fn row<'a>(rows: &'a [ExtraRow], caption: &str) -> &'a ExtraRow {
@@ -585,7 +585,7 @@ mod tests {
             },
         ]);
         let mut form = ShaderForm::open(&entries, None);
-        for _ in 0..shader_templates::FRAGMENT.len() + 1 {
+        for _ in 0..=shader_templates::FRAGMENT.len() {
             form.press(FRAGMENT_STARTER);
         }
         assert_eq!(form.fragment_starter, 1);

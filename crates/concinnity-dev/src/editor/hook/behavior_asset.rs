@@ -1,4 +1,4 @@
-//! EditorHook: the open Behavior as a whole asset -- naming it and taking it out
+//! `EditorHook`: the open Behavior as a whole asset -- naming it and taking it out
 //! of the world. Editing what a behavior does lives in `edit/behavior.rs`; these
 //! act on the authored line itself, so both go through `mark_changed` and land in
 //! the undo history like any other entry edit.
@@ -54,7 +54,7 @@ impl EditorHook {
         self.seed_behavior_name(world);
     }
 
-    pub(super) fn seed_behavior_name(&mut self, world: &mut World) {
+    pub(super) fn seed_behavior_name(&self, world: &mut World) {
         let name = self
             .behavior_entry()
             .and_then(|i| declared_id(&self.entries[i]))

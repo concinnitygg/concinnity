@@ -73,7 +73,7 @@ pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResu
     } else {
         spot_shadows.to_vec()
     };
-    let data_size = std::mem::size_of_val(data.as_slice()) as u64;
+    let data_size = size_of_val(data.as_slice()) as u64;
     let data_buffer = alloc.create_buffer(
         data_size,
         vk::BufferUsageFlags::STORAGE_BUFFER,

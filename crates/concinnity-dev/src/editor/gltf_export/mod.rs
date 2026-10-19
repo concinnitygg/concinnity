@@ -165,7 +165,7 @@ pub(crate) mod test_fixtures {
                     position: [0.1, 0.0, 0.0],
                     normal: [0.0; 3],
                 },
-                (1, 2) | (1, 3) => MorphDelta {
+                (1, 2 | 3) => MorphDelta {
                     position: [0.0, 0.2, 0.0],
                     normal: [0.0, 0.1, 0.0],
                 },
@@ -318,7 +318,12 @@ mod tests {
         {
             assert_eq!(
                 b.joints,
-                [j[0] as u32, j[1] as u32, j[2] as u32, j[3] as u32]
+                [
+                    u32::from(j[0]),
+                    u32::from(j[1]),
+                    u32::from(j[2]),
+                    u32::from(j[3])
+                ]
             );
             assert_eq!(b.weights, *w);
         }

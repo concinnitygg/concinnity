@@ -124,10 +124,7 @@ fn a_lost_device_stops_with_its_detail() {
 
 // The capture each drawn frame asked the backend for, after a draw that
 // fails with `fail` when one is given.
-fn captured(
-    capture: Option<&str>,
-    fail: Option<RenderError>,
-) -> Vec<Option<alloc::string::String>> {
+fn captured(capture: Option<&str>, fail: Option<RenderError>) -> Vec<Option<String>> {
     let (state, mut backend) = recording_backend();
     state.lock().fail_draw = fail;
     let mut snap = RenderSnapshot {

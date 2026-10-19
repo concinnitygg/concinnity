@@ -1,4 +1,4 @@
-//! EditorHook: the gizmo drive over the whole selection. One handle skeleton,
+//! `EditorHook`: the gizmo drive over the whole selection. One handle skeleton,
 //! three modes (T/R/S keys), anchored at the selection centroid: translate
 //! applies one shared world-space delta to every member; rotate orbits member
 //! positions about the centroid while spinning each member the same amount
@@ -90,10 +90,15 @@ impl EditorHook {
         let key = self.entries.key_at(idx)?;
         let ty = entry_type(self.entries.get(idx)?)?;
         let merged = form::working_args(ty, Some(&self.entry_args(idx)));
-        if !merged.get(mode.arg_key()).is_some_and(|p| p.is_array()) {
+        if !merged
+            .get(mode.arg_key())
+            .is_some_and(serde_json::Value::is_array)
+        {
             return None;
         }
-        let has_position = merged.get("position").is_some_and(|p| p.is_array());
+        let has_position = merged
+            .get("position")
+            .is_some_and(serde_json::Value::is_array);
         let id = self.handle_asset_id(handle)?;
         let entity = world.entity_of(id)?;
         if world.get::<Parent>(entity).is_some() {
@@ -153,7 +158,7 @@ impl EditorHook {
         &mut self,
         input: &FrameInput,
         vp: [f32; 2],
-        world: &mut World,
+        world: &World,
     ) -> bool {
         let mouse = [input.mouse_x, input.mouse_y];
         let mode = self.gizmo_mode;
@@ -283,15 +288,13 @@ impl EditorHook {
                 // rotation; toward the viewer it is negative.
                 let sign = {
                     let cam = world.query::<Camera3D>().next();
-                    let fwd = cam
-                        .map(|c| {
-                            [
-                                -c.view_matrix[0][2],
-                                -c.view_matrix[1][2],
-                                -c.view_matrix[2][2],
-                            ]
-                        })
-                        .unwrap_or([0.0, 0.0, -1.0]);
+                    let fwd = cam.map_or([0.0, 0.0, -1.0], |c| {
+                        [
+                            -c.view_matrix[0][2],
+                            -c.view_matrix[1][2],
+                            -c.view_matrix[2][2],
+                        ]
+                    });
                     let a = gizmo::AXES[drag.axis];
                     let d = a[0] * fwd[0] + a[1] * fwd[1] + a[2] * fwd[2];
                     if d >= 0.0 { 1.0 } else { -1.0 }
@@ -386,7 +389,7 @@ impl EditorHook {
             let Some(target) = self.member_target(world, drag.mode, &s.handle) else {
                 continue;
             };
-            let Some(tr) = world.get::<Transform>(target.entity).cloned() else {
+            let Some(tr) = world.get::<Transform>(target.entity).copied() else {
                 continue;
             };
             let (value, start) = match drag.mode {

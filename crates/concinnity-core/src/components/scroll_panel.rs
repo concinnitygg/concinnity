@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 /// the band are clipped.
 ///
 /// All pixel fields are in the same reference-space coordinates as the Screen's
-/// other UI (see the overlay scaling notes on [MainMenu](#mainmenu)).
+/// other UI (see the overlay scaling notes on [`MainMenu`](#mainmenu)).
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct ScrollPanel {
@@ -35,7 +35,7 @@ pub struct ScrollPanel {
     pub height: f32,
     /// The rows in the band, top to bottom.
     pub rows: Vec<ScrollRow>,
-    /// Collapsible groups, referenced by index from [ScrollRow::group].
+    /// Collapsible groups, referenced by index from [`ScrollRow::group`].
     pub groups: Vec<ScrollGroup>,
     /// Scrollbar thumb [Sprite](#sprite) the UI moves and resizes. `None` for a
     /// panel with no scrollbar.
@@ -54,7 +54,7 @@ pub struct ScrollPanel {
     pub track_h: f32,
 }
 
-/// One row inside a [ScrollPanel](#scrollpanel): the elements that move
+/// One row inside a [`ScrollPanel`](#scrollpanel): the elements that move
 /// together, the row's height, and the collapsible group it belongs to.
 #[derive(
     Debug,
@@ -66,7 +66,7 @@ pub struct ScrollPanel {
 )]
 #[serde(default)]
 pub struct ScrollRow {
-    /// The [Sprite](#sprite)/[TextLabel](#textlabel) ids that make up this row
+    /// The [Sprite](#sprite)/[`TextLabel`](#textlabel) ids that make up this row
     /// and move (and clip) together. Click regions are matched to their row by
     /// position, so they are not listed here.
     pub elements: Vec<Ref<ScrollElement>>,
@@ -75,15 +75,15 @@ pub struct ScrollRow {
     pub base_y: f32,
     /// The row's height in reference pixels (its vertical pitch in the stack).
     pub height: f32,
-    /// Index into [ScrollPanel::groups] of the group whose collapsed state
+    /// Index into [`ScrollPanel::groups`] of the group whose collapsed state
     /// hides this row, or `-1` for a row that is always shown (a group header
     /// or an ungrouped row).
     #[asset(default = -1)]
     pub group: i32,
 }
 
-/// What a [ScrollRow](#scrollrow) element may name: a [Sprite](#sprite) or a
-/// [TextLabel](#textlabel).
+/// What a [`ScrollRow`](#scrollrow) element may name: a [Sprite](#sprite) or a
+/// [`TextLabel`](#textlabel).
 #[derive(Debug, Clone, Copy)]
 pub struct ScrollElement;
 
@@ -91,13 +91,13 @@ impl RefTarget for ScrollElement {
     const TYPES: &'static [&'static str] = &["Sprite", "TextLabel"];
 }
 
-/// A collapsible group of rows inside a [ScrollPanel](#scrollpanel).
+/// A collapsible group of rows inside a [`ScrollPanel`](#scrollpanel).
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct ScrollGroup {
     /// Whether the group starts collapsed (its body rows hidden).
     pub collapsed: bool,
-    /// The header [TextLabel](#textlabel) whose text gets a `+`/`-` prefix to
+    /// The header [`TextLabel`](#textlabel) whose text gets a `+`/`-` prefix to
     /// reflect the collapsed state. `None` leaves the header text unchanged.
     pub header: Option<Ref<TextLabel>>,
     /// The header's base title (e.g. `"Advanced"`); the UI shows `"+ Advanced"`

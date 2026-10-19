@@ -1,9 +1,9 @@
 //! Camera-shot preset schema.
 
-/// A reusable [Camera3D](#camera3d) preset: reference it from a
+/// A reusable [`Camera3D`](#camera3d) preset: reference it from a
 /// [Scene](#scene)'s `camera_shot`, or use it standalone.
 ///
-/// Used standalone, it expands into a [Camera3D](#camera3d) with the same
+/// Used standalone, it expands into a [`Camera3D`](#camera3d) with the same
 /// parameters.
 ///
 /// **Examples**
@@ -24,7 +24,7 @@
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
 #[serde(default)]
 pub struct CameraShot {
-    /// Name of a built-in or file-backed preset (e.g. "shot_eye_level").
+    /// Name of a built-in or file-backed preset (e.g. "`shot_eye_level`").
     /// Preset values are used as defaults; any inline fields override them.
     pub preset: String,
     /// Vertical field of view in degrees.

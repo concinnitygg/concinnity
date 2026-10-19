@@ -32,12 +32,12 @@ pub(super) enum Refusal {
 impl Refusal {
     fn status(self) -> (u16, &'static str) {
         match self {
-            Refusal::Malformed => (400, "Bad Request"),
-            Refusal::ForeignOrigin => (403, "Forbidden"),
-            Refusal::UnknownPath => (404, "Not Found"),
-            Refusal::WrongMethod => (405, "Method Not Allowed"),
-            Refusal::NoLength => (411, "Length Required"),
-            Refusal::TooLarge => (413, "Payload Too Large"),
+            Self::Malformed => (400, "Bad Request"),
+            Self::ForeignOrigin => (403, "Forbidden"),
+            Self::UnknownPath => (404, "Not Found"),
+            Self::WrongMethod => (405, "Method Not Allowed"),
+            Self::NoLength => (411, "Length Required"),
+            Self::TooLarge => (413, "Payload Too Large"),
         }
     }
 }
@@ -71,18 +71,17 @@ where
             write_head(output, code, reason, None)?;
             output.flush()
         }
-        Incoming::Body(body) => match server.handle(&body) {
-            Some(reply) => {
+        Incoming::Body(body) => {
+            if let Some(reply) = server.handle(&body) {
                 let text = reply.to_string();
                 write_head(output, 200, "OK", Some(text.len()))?;
                 output.write_all(text.as_bytes())?;
                 output.flush()
-            }
-            None => {
+            } else {
                 write_head(output, 202, "Accepted", None)?;
                 output.flush()
             }
-        },
+        }
     }
 }
 

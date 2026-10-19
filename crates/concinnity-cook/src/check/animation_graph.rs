@@ -13,8 +13,8 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
     let states = args
         .get("states")
         .and_then(|v| v.as_array())
-        .map(|a| a.as_slice())
-        .unwrap_or(&[]);
+        .map(Vec::as_slice)
+        .unwrap_or_default();
     if states.is_empty() {
         return err("`states` must declare at least one state".into());
     }
@@ -23,8 +23,8 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
     for param in args
         .get("parameters")
         .and_then(|v| v.as_array())
-        .map(|a| a.as_slice())
-        .unwrap_or(&[])
+        .map(Vec::as_slice)
+        .unwrap_or_default()
     {
         if let Some(param_name) = param.get("name").and_then(|v| v.as_str()) {
             param_names_owned.push(param_name);
@@ -42,7 +42,7 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
             return err(format!("duplicate state name '{state_name}'"));
         }
         state_names.push(state_name);
-        if let Some(rate) = state.get("rate").and_then(|v| v.as_f64())
+        if let Some(rate) = state.get("rate").and_then(Value::as_f64)
             && rate <= 0.0
         {
             return err(format!("state '{state_name}': `rate` must be positive"));
@@ -71,8 +71,8 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
     for (i, param) in args
         .get("parameters")
         .and_then(|v| v.as_array())
-        .map(|a| a.as_slice())
-        .unwrap_or(&[])
+        .map(Vec::as_slice)
+        .unwrap_or_default()
         .iter()
         .enumerate()
     {
@@ -98,8 +98,8 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
     for (i, tr) in args
         .get("transitions")
         .and_then(|v| v.as_array())
-        .map(|a| a.as_slice())
-        .unwrap_or(&[])
+        .map(Vec::as_slice)
+        .unwrap_or_default()
         .iter()
         .enumerate()
     {
@@ -114,14 +114,14 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
                 ));
             }
         }
-        if let Some(d) = tr.get("duration_secs").and_then(|v| v.as_f64())
+        if let Some(d) = tr.get("duration_secs").and_then(Value::as_f64)
             && d < 0.0
         {
             return err(format!(
                 "transition #{i}: `duration_secs` must not be negative"
             ));
         }
-        if let Some(e) = tr.get("exit_time").and_then(|v| v.as_f64())
+        if let Some(e) = tr.get("exit_time").and_then(Value::as_f64)
             && !(0.0..=1.0).contains(&e)
         {
             return err(format!(
@@ -131,8 +131,8 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
         for (j, cond) in tr
             .get("conditions")
             .and_then(|v| v.as_array())
-            .map(|a| a.as_slice())
-            .unwrap_or(&[])
+            .map(Vec::as_slice)
+            .unwrap_or_default()
             .iter()
             .enumerate()
         {
@@ -159,16 +159,16 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
     for (i, chain) in args
         .get("ik_chains")
         .and_then(|v| v.as_array())
-        .map(|a| a.as_slice())
-        .unwrap_or(&[])
+        .map(Vec::as_slice)
+        .unwrap_or_default()
         .iter()
         .enumerate()
     {
         let joints = chain
             .get("joints")
             .and_then(|v| v.as_array())
-            .map(|a| a.as_slice())
-            .unwrap_or(&[]);
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         if joints.len() != 3 {
             return err(format!(
                 "ik_chains[{i}]: `joints` must name exactly three joints (root, middle, end), \
@@ -177,12 +177,12 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
             ));
         }
         for (j, joint) in joints.iter().enumerate() {
-            if joint.as_str().is_none_or(|s| s.is_empty()) {
+            if joint.as_str().is_none_or(str::is_empty) {
                 return err(format!("ik_chains[{i}]: joints[{j}] must be a joint name"));
             }
         }
         if let Some(pole) = chain.get("pole").and_then(|v| v.as_array()) {
-            let mag: f64 = pole.iter().filter_map(|v| v.as_f64()).map(|v| v * v).sum();
+            let mag: f64 = pole.iter().filter_map(Value::as_f64).map(|v| v * v).sum();
             if pole.len() != 3 || mag < 1.0e-8 {
                 return err(format!(
                     "ik_chains[{i}]: `pole` must be a non-zero [x, y, z] bend direction"
@@ -231,7 +231,7 @@ fn check_blend(
         let values: Vec<f64> = blend
             .get(field)
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_f64()).collect())
+            .map(|a| a.iter().filter_map(Value::as_f64).collect())
             .unwrap_or_default();
         if values.is_empty() {
             return Err(format!(
@@ -254,14 +254,14 @@ fn check_blend(
             let points = blend
                 .get("points")
                 .and_then(|v| v.as_array())
-                .map(|a| a.as_slice())
-                .unwrap_or(&[]);
+                .map(Vec::as_slice)
+                .unwrap_or_default();
             if points.is_empty() {
                 return err("blend has no `points`".into());
             }
             let mut values = Vec::with_capacity(points.len());
             for (j, point) in points.iter().enumerate() {
-                let Some(value) = point.get("value").and_then(|v| v.as_f64()) else {
+                let Some(value) = point.get("value").and_then(Value::as_f64) else {
                     return err(format!("blend point #{j} has no numeric `value`"));
                 };
                 values.push(value);
@@ -287,8 +287,8 @@ fn check_blend(
             let rows = blend
                 .get("rows")
                 .and_then(|v| v.as_array())
-                .map(|a| a.as_slice())
-                .unwrap_or(&[]);
+                .map(Vec::as_slice)
+                .unwrap_or_default();
             if rows.len() != y_values.len() {
                 return err(format!(
                     "blend `rows` must have {} row(s), one per y value",
@@ -296,7 +296,7 @@ fn check_blend(
                 ));
             }
             for (j, row) in rows.iter().enumerate() {
-                let cells = row.as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+                let cells = row.as_array().map(Vec::as_slice).unwrap_or_default();
                 if cells.len() != x_values.len() {
                     return err(format!(
                         "blend `rows` row #{j} must have {} clip(s), one per x value",

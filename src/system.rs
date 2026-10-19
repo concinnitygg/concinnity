@@ -140,7 +140,7 @@ pub use concinnity_core::ecs::{
 
 /// Mark this tick's move of the camera, or of what it follows, as a cut: the
 /// first frame drawn from the moved camera starts its temporal history afresh.
-pub fn raise_camera_cut(ctx: &mut PipelineContext) {
+pub fn raise_camera_cut(ctx: &mut PipelineContext<'_>) {
     use concinnity_core::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
     PendingHistoryReset::raise(ctx, HistoryResetCauses::CAMERA_CUT);
 }
@@ -165,7 +165,7 @@ mod tests {
     }
 
     impl System for Counting {
-        fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+        fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
             let seen = self.steps.fetch_add(1, Ordering::Relaxed) + 1;
             for label in ctx.query_mut::<TextLabel>() {
                 label.content = alloc::format!("step {seen}");
@@ -242,7 +242,7 @@ mod tests {
         }
 
         impl System for Tick {
-            fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+            fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
                 let live: Vec<_> = ctx
                     .join2::<Countdown, Transform>()
                     .filter(|(_, c, _)| c.0 > 0)

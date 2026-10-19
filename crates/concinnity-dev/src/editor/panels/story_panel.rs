@@ -155,7 +155,7 @@ pub(crate) fn cursor_over_area(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bo
 // means the click missed the panel. Title-bar presses never reach this: the
 // shared routing intercepts them first.
 pub(crate) fn hit_test(
-    view: &StoryView,
+    view: &StoryView<'_>,
     mx: f32,
     my: f32,
     o: [f32; 2],
@@ -177,7 +177,7 @@ pub(crate) fn hit_test(
 // element (`None`).
 pub(crate) fn place(
     world: &mut World,
-    view: Option<&StoryView>,
+    view: Option<&StoryView<'_>>,
     o: [f32; 2],
     s: [f32; 2],
     m: Metrics,
@@ -243,7 +243,7 @@ pub(crate) fn place(
 
 // The source path on the left and Apply on the right, both hidden in create
 // mode, where there is nothing to write yet.
-fn place_header(world: &mut World, view: &StoryView, o: [f32; 2], w: f32) {
+fn place_header(world: &mut World, view: &StoryView<'_>, o: [f32; 2], w: f32) {
     if let Some(l) = widget::label_mut(world, PATH_LABEL) {
         l.x = o[0] + PAD;
         l.y = o[1] + widget::TITLE_H + HEADER_H * 0.5 - theme::TEXT_HALF;

@@ -457,7 +457,7 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry
         gaps.is_empty(),
         "render graph (vulkan): uncovered accesses on graph-driven resources: {}",
         gaps.iter()
-            .map(|g| g.to_string())
+            .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ")
     );
@@ -628,7 +628,7 @@ impl VkContext {
         // The raw device, not the owning handle: a worker records through it and
         // must never create or retire an owned object, so it is handed the
         // dispatch table alone.
-        let device = ash::Device::clone(&self.hw.device);
+        let device = Device::clone(&self.hw.device);
 
         // Resolve every graph-driven resource's barrier target and every pass's
         // aliasing barriers once, on the main thread, then share the tables
@@ -970,7 +970,7 @@ impl VkContext {
         pass_id: PassId,
         rec: &Recorder<'_>,
         params: &GraphFrameParams<'_>,
-        particle_frame: Option<&concinnity_core::render::particles::ParticleFrame>,
+        particle_frame: Option<&ParticleFrame>,
         grass_frame: Option<&super::grass::GrassFrame>,
     ) -> RenderResult<()> {
         let cmd = rec.raw();
@@ -1130,7 +1130,7 @@ impl VkContext {
                 // still records it in the compiled order. The per-frame particle
                 // state was advanced on `&mut self` before the fan-out by `prepare_particle_pass`.
                 if let Some(frame) = particle_frame {
-                    self.encode_particles_sim(cmd, frame);
+                    self.encode_particles_sim(cmd, *frame);
                 }
             }
             PassId::ParticlesDraw => {
@@ -1139,7 +1139,7 @@ impl VkContext {
                     self.encode_particles_draw(
                         cmd,
                         params.frame_idx,
-                        frame,
+                        *frame,
                         params.vp_mat,
                         params.frustum,
                         write,

@@ -1,4 +1,4 @@
-//! EditorHook: the start screen. A session that named no world on the command
+//! `EditorHook`: the start screen. A session that named no world on the command
 //! line opens on the Worlds panel alone, and picking a row there previews that
 //! world live -- compiled in memory and swapped under the running backend by the
 //! same rebuild every edit takes, but without retargeting the session or leaving
@@ -57,9 +57,10 @@ impl EditorHook {
 
     // Which presentation the panel draws and hit-tests in this frame.
     pub(super) fn worlds_mode(&self) -> worlds::Mode {
-        match self.start_mode {
-            true => worlds::Mode::Start,
-            false => worlds::Mode::Session,
+        if self.start_mode {
+            worlds::Mode::Start
+        } else {
+            worlds::Mode::Session
         }
     }
 
@@ -245,13 +246,14 @@ impl EditorHook {
     // or hide it. The sidebar itself is never covered: the listing stays
     // readable and clickable through the wait.
     pub(super) fn drive_loading_draw(&self, world: &mut World, shown: bool) {
-        match shown && self.loading_preview() {
-            true => worlds::loading::place(
+        if shown && self.loading_preview() {
+            worlds::loading::place(
                 world,
                 self.worlds_layout().preview_rect(),
                 self.loading_name().as_deref(),
-            ),
-            false => worlds::loading::hide(world),
+            );
+        } else {
+            worlds::loading::hide(world);
         }
     }
 }

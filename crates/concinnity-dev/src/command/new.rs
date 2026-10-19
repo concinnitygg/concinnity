@@ -23,7 +23,7 @@ pub fn new(path: &str) -> std::io::Result<()> {
         ));
     }
     std::fs::create_dir_all(path)?;
-    println!("Created directory '{}'", path);
+    println!("Created directory '{path}'");
     init_in_dir(path)
 }
 

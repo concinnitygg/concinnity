@@ -31,7 +31,7 @@ pub(crate) struct Overlap {
 
 impl Overlap {
     /// Whether both slots hold the same bodies they held in `other`.
-    fn same_bodies(&self, other: &Overlap) -> bool {
+    fn same_bodies(&self, other: &Self) -> bool {
         self.a == other.a && self.b == other.b
     }
 }

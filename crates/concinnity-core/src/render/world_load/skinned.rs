@@ -50,11 +50,11 @@ pub struct SkinnedGeometry {
     pub lod_alternates: Vec<(f32, Vec<u16>)>,
 }
 
-/// Decode every SkinnedMesh in the world's table, with the blob each payload
+/// Decode every `SkinnedMesh` in the world's table, with the blob each payload
 /// came from, and publish the name, skin and morph-name indices animation reads
 /// at init. The first mesh that fails to decode fails the load.
 pub fn decode_skinned(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
 ) -> Result<(Vec<SkinnedGeometry>, Vec<u32>), String> {
     let table = ctx
         .resource::<SkinnedMeshTable>()
@@ -168,7 +168,7 @@ impl SkinnedAssembly {
         entry: &MaterialEntry,
         joint_count: usize,
         bounds: ([f32; 3], [f32; 3]),
-        morphs: &Option<Arc<PayloadMorphs>>,
+        morphs: Option<&Arc<PayloadMorphs>>,
         visible: bool,
     ) -> SkinnedIndex {
         let base = self.vertices.len() as u32;
@@ -180,7 +180,7 @@ impl SkinnedAssembly {
         // same `base` as LOD0.
         let lod_alternates = append_lod_slices(&mut self.indices, &g.lod_alternates, base);
         let slot = SkinnedIndex::from_usize(self.draw_objects.len());
-        self.morphs.push(morphs.clone());
+        self.morphs.push(morphs.cloned());
         self.draw_objects.push(SkinnedDrawObject {
             vertex_base: base,
             vertex_count: g.vertices.len(),
@@ -230,9 +230,9 @@ pub fn assemble_skinned(
         let joint_count = skeleton.len().min(MAX_JOINTS);
         let bounds = bind_pose_bounds(&g.vertices);
         let morphs = (!g.morphs.is_empty()).then(|| Arc::new(g.morphs.clone()));
-        let template = out.push_slot(g, &entry, joint_count, bounds, &morphs, true);
+        let template = out.push_slot(g, &entry, joint_count, bounds, morphs.as_ref(), true);
         for _ in 0..g.mesh.max_instances {
-            let copy = out.push_slot(g, &entry, joint_count, bounds, &morphs, false);
+            let copy = out.push_slot(g, &entry, joint_count, bounds, morphs.as_ref(), false);
             out.pool_reservations.push((template, copy));
         }
         out.templates.push(SkinnedTemplate {
@@ -255,11 +255,11 @@ pub fn assemble_skinned(
 }
 
 /// Spawn one posed template entity per skinned mesh, identified by its mesh's
-/// id so a runtime SpawnRequest can clone it, with a character rig when it
+/// id so a runtime `SpawnRequest` can clone it, with a character rig when it
 /// declares a capsule. With a `PickIndex` published, each template is also
 /// placed by a Transform and joins `picks`.
 pub fn spawn_skinned_templates(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     templates: Vec<SkinnedTemplate>,
     picks: &mut Vec<PickCandidate>,
 ) {

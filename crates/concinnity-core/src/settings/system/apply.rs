@@ -106,7 +106,7 @@ pub(super) enum SystemRow {
 impl SettingsState {
     pub(super) fn apply_setting_commands(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         ops: &mut RenderOps,
     ) {
         // Clone the commands out of the queue so the ctx borrow is released
@@ -146,8 +146,8 @@ impl SettingsState {
     // write. A host that published no store gets the change live only.
     pub(super) fn edit_stored(
         &mut self,
-        ctx: &mut PipelineContext,
-        edit: impl FnOnce(&mut Self, &mut PipelineContext, &mut StoredSettings) -> bool,
+        ctx: &mut PipelineContext<'_>,
+        edit: impl FnOnce(&mut Self, &mut PipelineContext<'_>, &mut StoredSettings) -> bool,
     ) {
         let published = ctx.take_resource::<StoredSettings>();
         debug_assert!(published.is_some(), "the host publishes StoredSettings");
@@ -175,7 +175,7 @@ impl SettingsState {
     // drag sends. The handle's position carries the current fraction: it is placed
     // from the persisted value at init and moved on every change since. Returns
     // false when the slider has no captured track, so the command is skipped.
-    fn slider_step_fraction(&self, ctx: &PipelineContext, cmd: &mut SettingCommand) -> bool {
+    fn slider_step_fraction(&self, ctx: &PipelineContext<'_>, cmd: &mut SettingCommand) -> bool {
         if !matches!(cmd.op, SettingOp::Next | SettingOp::Prev)
             || registry::slider(cmd.setting).is_none()
         {
@@ -206,7 +206,7 @@ impl SettingsState {
     // command changed the batch's settings snapshot.
     fn apply_setting_command(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         ops: &mut RenderOps,
         cfg: &mut StoredSettings,
         cmd: &SettingCommand,
@@ -332,7 +332,7 @@ impl SettingsState {
     // only on the commit frame (drag release).
     fn apply_slider(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         cfg: &mut StoredSettings,
         cmd: &SettingCommand,
         slider: &SliderSetting,
@@ -368,7 +368,7 @@ impl SettingsState {
     // quality preset.
     fn apply_resolution(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         ops: &mut RenderOps,
         cfg: &mut StoredSettings,
         cmd: &SettingCommand,
@@ -392,8 +392,8 @@ impl SettingsState {
     // Restart-required: the choice is persisted and tried on the next launch,
     // while this one keeps the backend it built.
     fn apply_graphics_api(
-        &mut self,
-        ctx: &mut PipelineContext,
+        &self,
+        ctx: &mut PipelineContext<'_>,
         cfg: &mut StoredSettings,
         cmd: &SettingCommand,
     ) -> bool {
@@ -417,13 +417,13 @@ impl SettingsState {
 
     fn apply_bool_row(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         cfg: &mut StoredSettings,
         row: &BoolRow,
         opts: RowOptions,
         op: SettingOp,
     ) -> &'static str {
-        let next = registry::cycle(*(row.state)(self) as usize, opts.len(), op);
+        let next = registry::cycle(usize::from(*(row.state)(self)), opts.len(), op);
         let on = next == 1;
         *(row.state)(self) = on;
         *(row.persisted)(&mut cfg.graphics) = Some(on);
@@ -440,7 +440,7 @@ impl SettingsState {
     // also push live. Every change opts the preset out to Custom.
     fn apply_shadow_row(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         cfg: &mut StoredSettings,
         row: ShadowRow,
         opts: RowOptions,
@@ -497,7 +497,7 @@ impl SettingsState {
     // once at init). Only render scale is governed by the quality preset.
     fn apply_display_row(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         ops: &mut RenderOps,
         cfg: &mut StoredSettings,
         row: DisplayRow,
@@ -615,7 +615,7 @@ impl SettingsState {
 // AudioCommand drained this same tick. A world with no audio has no playback
 // to drain it; the persisted value then applies at the next audio init.
 fn apply_volume(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     cfg: &mut StoredSettings,
     target: AudioTarget,
     opts: RowOptions,

@@ -9,6 +9,7 @@
 //! Rendering allocates and runs later, with the report's other sections.
 
 use concinnity_core::memory::MemStats;
+use std::fmt::Write as _;
 
 // The tracked heap and process RSS at crash time. Either half is `None` when
 // its source is unavailable: no binary installed the tracking allocator, or the
@@ -33,17 +34,20 @@ impl MemorySnapshot {
     pub(crate) fn write_into(&self, out: &mut String) {
         match self.heap {
             Some(h) => {
-                out.push_str(&format!("heap-live: {}\n", bytes(h.live_bytes)));
-                out.push_str(&format!("heap-peak: {}\n", bytes(h.peak_bytes)));
-                out.push_str(&format!(
-                    "heap-churn: {} alloc / {} free\n",
+                let _ = writeln!(out, "heap-live: {}", bytes(h.live_bytes));
+                let _ = writeln!(out, "heap-peak: {}", bytes(h.peak_bytes));
+                let _ = writeln!(
+                    out,
+                    "heap-churn: {} alloc / {} free",
                     h.alloc_count, h.free_count
-                ));
+                );
             }
             None => out.push_str("heap: <unavailable>\n"),
         }
         match self.rss_bytes {
-            Some(rss) => out.push_str(&format!("rss: {}\n", bytes(rss))),
+            Some(rss) => {
+                let _ = writeln!(out, "rss: {}", bytes(rss));
+            }
             None => out.push_str("rss: <unavailable>\n"),
         }
     }

@@ -29,8 +29,8 @@ use crate::test_support::{Pace, bench};
 struct Rng(u64);
 
 impl Rng {
-    fn new(seed: u64) -> Rng {
-        Rng(seed)
+    fn new(seed: u64) -> Self {
+        Self(seed)
     }
 
     fn next_u64(&mut self) -> u64 {
@@ -57,8 +57,8 @@ pub(crate) struct Transform {
 }
 
 impl Transform {
-    fn keyed(i: usize) -> Transform {
-        Transform { m: [i as f32; 16] }
+    fn keyed(i: usize) -> Self {
+        Self { m: [i as f32; 16] }
     }
 }
 
@@ -221,9 +221,9 @@ fn run(pace: Pace) {
                 let mut acc = 0u64;
                 for (e, t, r) in world.join2::<Transform, Renderer>() {
                     acc = acc
-                        .wrapping_add(t.m[0].to_bits() as u64)
-                        .wrapping_add(r.mesh as u64)
-                        .wrapping_add(e.index() as u64);
+                        .wrapping_add(u64::from(t.m[0].to_bits()))
+                        .wrapping_add(u64::from(r.mesh))
+                        .wrapping_add(u64::from(e.index()));
                 }
                 acc
             },
@@ -237,10 +237,10 @@ fn run(pace: Pace) {
                 let mut acc = 0u64;
                 for (e, t, r, m) in world.join3::<Transform, Renderer, Motion>() {
                     acc = acc
-                        .wrapping_add(t.m[0].to_bits() as u64)
-                        .wrapping_add(r.material as u64)
-                        .wrapping_add(m.velocity[1].to_bits() as u64)
-                        .wrapping_add(e.index() as u64);
+                        .wrapping_add(u64::from(t.m[0].to_bits()))
+                        .wrapping_add(u64::from(r.material))
+                        .wrapping_add(u64::from(m.velocity[1].to_bits()))
+                        .wrapping_add(u64::from(e.index()));
                 }
                 acc
             },

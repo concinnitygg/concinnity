@@ -19,7 +19,7 @@ pub struct Tick(
 
 impl Tick {
     /// The tick a freshly created column starts at.
-    pub const ZERO: Tick = Tick(0);
+    pub const ZERO: Self = Self(0);
 
     /// The raw counter value.
     pub fn get(self) -> u32 {
@@ -27,7 +27,8 @@ impl Tick {
     }
 
     /// Advance to the next tick (wrapping) and return the new value.
-    pub fn bump(&mut self) -> Tick {
+    #[must_use]
+    pub fn bump(&mut self) -> Self {
         self.0 = self.0.wrapping_add(1);
         *self
     }
@@ -35,16 +36,17 @@ impl Tick {
     // Whether `self` is strictly newer than `other`, robust to u32 wraparound.
     // The difference is interpreted as signed: positive means ahead, within the
     // half-range window the clamp guarantees.
-    pub(crate) fn is_newer_than(self, other: Tick) -> bool {
+    pub(crate) fn is_newer_than(self, other: Self) -> bool {
         (self.0.wrapping_sub(other.0) as i32) > 0
     }
 
-    /// Pull a stored tick forward if it has fallen more than MAX_CHANGE_AGE
+    /// Pull a stored tick forward if it has fallen more than `MAX_CHANGE_AGE`
     /// behind `now`, so the signed-window comparison stays valid no matter how
     /// long the world runs. Recent ticks are returned unchanged.
-    pub fn clamp_to(self, now: Tick) -> Tick {
+    #[must_use]
+    pub fn clamp_to(self, now: Self) -> Self {
         if now.0.wrapping_sub(self.0) > MAX_CHANGE_AGE {
-            Tick(now.0.wrapping_sub(MAX_CHANGE_AGE))
+            Self(now.0.wrapping_sub(MAX_CHANGE_AGE))
         } else {
             self
         }

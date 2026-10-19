@@ -1,15 +1,13 @@
-//! Structural validation for VoxelChunk args. Cross-asset palette lookups are
-//! handled by crate::check::cross_reference::validate_cross_references; this check
+//! Structural validation for `VoxelChunk` args. Cross-asset palette lookups are
+//! handled by `crate::check::cross_reference::validate_cross_references`; this check
 //! only catches problems we can see from the chunk's own args alone.
 
 /// Check a `VoxelChunk`'s authored args.
 pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
-    let dim = args.get("dim").and_then(|v| v.as_array()).ok_or_else(|| {
-        format!(
-            "Asset '{}': VoxelChunk `dim` must be a [dx, dy, dz] array",
-            name
-        )
-    })?;
+    let dim = args
+        .get("dim")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| format!("Asset '{name}': VoxelChunk `dim` must be a [dx, dy, dz] array"))?;
     if dim.len() < 3 {
         return Err(format!(
             "Asset '{}': VoxelChunk `dim` must have 3 elements, got {}",
@@ -19,22 +17,13 @@ pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> 
     }
     let dims: [u64; 3] = [
         dim[0].as_u64().ok_or_else(|| {
-            format!(
-                "Asset '{}': VoxelChunk dim[0] must be a non-negative integer",
-                name
-            )
+            format!("Asset '{name}': VoxelChunk dim[0] must be a non-negative integer")
         })?,
         dim[1].as_u64().ok_or_else(|| {
-            format!(
-                "Asset '{}': VoxelChunk dim[1] must be a non-negative integer",
-                name
-            )
+            format!("Asset '{name}': VoxelChunk dim[1] must be a non-negative integer")
         })?,
         dim[2].as_u64().ok_or_else(|| {
-            format!(
-                "Asset '{}': VoxelChunk dim[2] must be a non-negative integer",
-                name
-            )
+            format!("Asset '{name}': VoxelChunk dim[2] must be a non-negative integer")
         })?,
     ];
     let expected = dims[0].saturating_mul(dims[1]).saturating_mul(dims[2]);
@@ -43,10 +32,7 @@ pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> 
         .get("blocks")
         .and_then(|v| v.as_array())
         .ok_or_else(|| {
-            format!(
-                "Asset '{}': VoxelChunk `blocks` must be an array of palette indices",
-                name
-            )
+            format!("Asset '{name}': VoxelChunk `blocks` must be an array of palette indices")
         })?;
     if (blocks.len() as u64) != expected {
         return Err(format!(
@@ -63,19 +49,14 @@ pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> 
     let palette_len = args
         .get("palette")
         .and_then(|v| v.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
+        .map_or(0, Vec::len);
     for (i, entry) in blocks.iter().enumerate() {
         let idx = entry.as_u64().ok_or_else(|| {
-            format!(
-                "Asset '{}': VoxelChunk blocks[{}] must be a non-negative integer",
-                name, i
-            )
+            format!("Asset '{name}': VoxelChunk blocks[{i}] must be a non-negative integer")
         })?;
         if palette_len == 0 || (idx as usize) >= palette_len {
             return Err(format!(
-                "Asset '{}': VoxelChunk blocks[{}] = {} out of palette range (len {})",
-                name, i, idx, palette_len
+                "Asset '{name}': VoxelChunk blocks[{i}] = {idx} out of palette range (len {palette_len})"
             ));
         }
     }

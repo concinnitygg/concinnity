@@ -1,4 +1,4 @@
-//! EditorHook: the add / edit form's session state, beside its lifecycle in
+//! `EditorHook`: the add / edit form's session state, beside its lifecycle in
 //! `editing.rs`. The form's layout half (`panels/form_panel.rs`) stays
 //! stateless; it draws from a view built over this.
 
@@ -135,7 +135,7 @@ impl FormTarget {
     // The authored entry the form updates in place, if any.
     pub(in crate::editor::hook) fn entry(&self) -> Option<EntryId> {
         match self {
-            FormTarget::Entry(key) => Some(*key),
+            Self::Entry(key) => Some(*key),
             _ => None,
         }
     }
@@ -143,7 +143,7 @@ impl FormTarget {
     // Whether the form is editing an asset that already exists (in the world or
     // in the build), rather than adding a brand-new one.
     pub(in crate::editor::hook) fn is_edit(&self) -> bool {
-        !matches!(self, FormTarget::New)
+        !matches!(self, Self::New)
     }
 }
 

@@ -101,7 +101,7 @@ mod tests {
         history.rebase(&rebase);
         let prev = history.prev_or(EARLIER);
         let p = [905.0, -3.0, -12.0];
-        let clip = |m: crate::transform::Mat4, p: [f32; 3]| -> [f32; 4] {
+        let clip = |m: Mat4, p: [f32; 3]| -> [f32; 4] {
             core::array::from_fn(|i| m[0][i] * p[0] + m[1][i] * p[1] + m[2][i] * p[2] + m[3][i])
         };
         let before = clip(CUR.vp, p);

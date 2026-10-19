@@ -1,11 +1,11 @@
 //! The runtime player path. Loads compiled blob data and drives the system
 //! loop. Fully synchronous -- no Tokio runtime here. Systems that need async
-//! (HttpServerSystem, LlmSystem, etc.) spin up their own runtimes internally.
+//! (`HttpServerSystem`, `LlmSystem`, etc.) spin up their own runtimes internally.
 //!
-//! On macOS the world loop is driven by CFRunLoopRunInMode so that AppKit
+//! On macOS the world loop is driven by `CFRunLoopRunInMode` so that `AppKit`
 //! (GLFW window creation, Metal pipeline compilation, event dispatch) can
 //! process its callbacks on the main thread each tick. On all other platforms
-//! a tight Rust loop is used, which is what VulkanRenderer expects.
+//! a tight Rust loop is used, which is what `VulkanRenderer` expects.
 //!
 //! This is the `cn run` path only: no debug server, no remote command
 //! channel, no in-memory rebuild. A shipped run is neither remotely inspectable
@@ -42,7 +42,7 @@ fn log_filter() -> EnvFilter {
 
 /// Install the global tracing subscriber. The single place the log level is
 /// configured: the CLI entry points call it directly, and the FFI entry point
-/// (cn_init) calls it for the macOS app. Safe to call once per process. The
+/// (`cn_init`) calls it for the macOS app. Safe to call once per process. The
 /// crash ring layer rides along so crash reports carry the recent log lines.
 pub fn init_logging() {
     use tracing_subscriber::Layer;
@@ -84,7 +84,7 @@ pub fn run(tree: &StateTree, options: RunOptions) -> std::io::Result<()> {
         .in_tree(tree.clone())
         .with_launch(options.launch);
     let data_dir = tree.data_dir();
-    if let Err(error) = load_world(&mut runtime, &BlobSource::Directory(data_dir.clone())) {
+    if let Err(error) = load_world(&mut runtime, &BlobSource::Directory(data_dir)) {
         return Err(report_startup_error(error));
     }
     start_runtime(runtime, options).map_err(start_failure)

@@ -26,8 +26,8 @@ pub struct Entity {
 }
 
 impl Entity {
-    pub(crate) fn new(index: u32, generation: NonZeroU32) -> Entity {
-        Entity { index, generation }
+    pub(crate) fn new(index: u32, generation: NonZeroU32) -> Self {
+        Self { index, generation }
     }
 
     /// The entity's slot index.
@@ -43,15 +43,15 @@ impl Entity {
     /// Pack into a single u64 (index in the high half, generation in the low
     /// half). Stable representation for an FFI / scripting boundary.
     pub fn to_bits(self) -> u64 {
-        ((self.index as u64) << 32) | self.generation.get() as u64
+        (u64::from(self.index) << 32) | u64::from(self.generation.get())
     }
 
     /// Inverse of `to_bits`. Returns `None` when the generation half is zero,
     /// which no live handle ever has, so a zeroed or truncated value is rejected
     /// instead of forged into a valid-looking entity.
-    pub fn from_bits(bits: u64) -> Option<Entity> {
+    pub fn from_bits(bits: u64) -> Option<Self> {
         let generation = NonZeroU32::new(bits as u32)?;
-        Some(Entity {
+        Some(Self {
             index: (bits >> 32) as u32,
             generation,
         })
@@ -61,8 +61,8 @@ impl Entity {
     /// practice). For a runtime-only component that has to name an Entity field
     /// but is never built from serialized args -- its real value is inserted at
     /// runtime, so this placeholder is never observed by any system.
-    pub fn dangling() -> Entity {
-        Entity {
+    pub fn dangling() -> Self {
+        Self {
             index: u32::MAX,
             generation: FIRST_GEN,
         }
@@ -90,8 +90,8 @@ pub struct Entities {
 
 impl Entities {
     /// An allocator with no slots.
-    pub fn new() -> Entities {
-        Entities::default()
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Allocate an entity, recycling a freed slot when one is available. The

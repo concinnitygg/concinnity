@@ -13,6 +13,7 @@ pub enum PipelineMode {
 impl PipelineMode {
     /// The mode a run takes: a world that `renders` nothing has no render half
     /// to overlap with, so it steps serially.
+    #[must_use]
     pub fn effective(self, renders: bool) -> Self {
         if renders { self } else { Self::Serial }
     }

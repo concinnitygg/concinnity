@@ -31,7 +31,7 @@ fn system(world: &mut World) -> BehaviorSystem {
 }
 
 // Resolve one tag set through the production fill-in-place path.
-fn entities_matching(ctx: &PipelineContext, tags: &[u8]) -> Vec<Entity> {
+fn entities_matching(ctx: &PipelineContext<'_>, tags: &[u8]) -> Vec<Entity> {
     let mut scratch = Vec::new();
     let mut out = Vec::new();
     BehaviorSystem::entities_matching_into(ctx, tags, &mut scratch, &mut out);
@@ -92,8 +92,7 @@ fn count<E: 'static>(world: &mut World, cursor: &mut EventCursor) -> usize {
     world
         .context()
         .events::<E>()
-        .map(|e| e.read(cursor).count())
-        .unwrap_or(0)
+        .map_or(0, |e| e.read(cursor).count())
 }
 
 #[test]
@@ -1510,7 +1509,11 @@ fn behavior_gates_the_system_and_a_menu_freezes_it() {
         ..Default::default()
     });
     world.start(HEADLESS_SYSTEMS).unwrap();
-    let names: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+    let names: Vec<&str> = world
+        .systems()
+        .iter()
+        .map(crate::ecs::BuiltSystem::name)
+        .collect();
     assert_eq!(names, ["BehaviorSystem"]);
 
     let mut cursor = EventCursor::default();
@@ -1518,8 +1521,7 @@ fn behavior_gates_the_system_and_a_menu_freezes_it() {
     world.step();
     let fired = world
         .events::<StoryCommand>()
-        .map(|e| e.read(&mut cursor).count())
-        .unwrap_or(0);
+        .map_or(0, |e| e.read(&mut cursor).count());
     assert_eq!(fired, 0, "a paused world fires nothing");
 
     world.insert_resource(MenuActive(false));

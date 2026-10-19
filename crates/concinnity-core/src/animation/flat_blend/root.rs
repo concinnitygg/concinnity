@@ -14,12 +14,9 @@ use crate::math::vec3::{add, scale};
 pub fn root_delta(clips: &[ClipEntry], weights: &[f32], t0: f32, t1: f32) -> [f32; 3] {
     match clips {
         [] => [0.0; 3],
-        [single] => single
-            .clip
-            .root
-            .as_ref()
-            .map(|root| root.delta(t0, t1, single.clip.duration, single.clip.looping))
-            .unwrap_or([0.0; 3]),
+        [single] => single.clip.root.as_ref().map_or([0.0; 3], |root| {
+            root.delta(t0, t1, single.clip.duration, single.clip.looping)
+        }),
         many => {
             let total: f32 = weights.iter().map(|w| w.max(0.0)).sum();
             if total <= 1e-6 {

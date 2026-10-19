@@ -155,7 +155,7 @@ unsafe fn get_ui(params: *mut c_void, name: &[u8]) -> Option<u32> {
     let mut value: u32 = 0;
     // SAFETY: the caller guarantees the bag, the name is a NUL-terminated constant, and `value`
     // is a live local.
-    let rc = unsafe { NVSDK_NGX_Parameter_GetUI(params, name.as_ptr(), &mut value) };
+    let rc = unsafe { NVSDK_NGX_Parameter_GetUI(params, name.as_ptr(), &raw mut value) };
     ngx_succeeded(rc).then_some(value)
 }
 
@@ -401,8 +401,14 @@ fn loaded_feature_version() -> Option<DlssVersion> {
     let mut fixed_len: u32 = 0;
     // SAFETY: `block` holds the version resource just read, and `\` names its root, whose value
     // is a pointer into `block`.
-    let found =
-        unsafe { VerQueryValueW(block.as_ptr().cast(), w!("\\"), &mut fixed, &mut fixed_len) };
+    let found = unsafe {
+        VerQueryValueW(
+            block.as_ptr().cast(),
+            w!("\\"),
+            &raw mut fixed,
+            &raw mut fixed_len,
+        )
+    };
     if !found.as_bool() || fixed.is_null() || (fixed_len as usize) < size_of::<VS_FIXEDFILEINFO>() {
         return None;
     }

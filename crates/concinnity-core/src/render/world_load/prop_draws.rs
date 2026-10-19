@@ -31,11 +31,11 @@ pub struct PropDrawInputs<'a> {
     pub material_map: &'a HashMap<MaterialHandle, MaterialEntry>,
 }
 
-/// Build the draw list, attach a RenderHandle and GlobalTransform to every
-/// prop entity, and (under a PickIndex, the editor's opt-in) refill
-/// `pick_candidates`. Drains InstancedProp: every instance becomes a baked draw.
+/// Build the draw list, attach a `RenderHandle` and `GlobalTransform` to every
+/// prop entity, and (under a `PickIndex`, the editor's opt-in) refill
+/// `pick_candidates`. Drains `InstancedProp`: every instance becomes a baked draw.
 pub fn assemble_prop_draws(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     inputs: PropDrawInputs<'_>,
     pick_candidates: &mut Vec<PickCandidate>,
 ) -> Option<DrawListData> {

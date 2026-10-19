@@ -95,6 +95,7 @@ impl TileId {
 
     /// The tile at the same level across `side`, on this face or, past its
     /// edge, the next.
+    #[must_use]
     pub fn neighbor(self, side: TileSide) -> Self {
         let last = (1u32 << self.level) - 1;
         let within = match side {

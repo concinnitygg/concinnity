@@ -1,4 +1,4 @@
-//! SdfVolume field hot reload. A save marks every volume whose field is the
+//! `SdfVolume` field hot reload. A save marks every volume whose field is the
 //! file; the marked volumes are grouped by field and flags, since the flags
 //! decide which entries compile, and each group's field is read on the frame
 //! thread and compiled once on a worker (see `compile`), which also builds each
@@ -105,7 +105,7 @@ impl SdfReload {
 
     // Swap every compile that finished since the last call into each volume
     // it was compiled for.
-    pub(crate) fn poll(&mut self, backend: &mut dyn LiveEdit) -> Vec<ReloadReport> {
+    pub(crate) fn poll(&self, backend: &mut dyn LiveEdit) -> Vec<ReloadReport> {
         let mut reports = Vec::new();
         for (key, result) in self.compiles.drain() {
             let volumes = self

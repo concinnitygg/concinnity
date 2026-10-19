@@ -1,12 +1,12 @@
 //! The Vulkan backend's macOS window: a thin adapter over the shared native
-//! AppKit layer (crate::appkit) the Metal backend also uses, so the two
+//! `AppKit` layer (`crate::appkit`) the Metal backend also uses, so the two
 //! NSView-rendering backends share one window/input/display-mode implementation
 //! with identical behavior (event pump, cursor capture/confinement, window modes,
 //! Resolution-row mode switching). GLFW (window/glfw.rs) remains the windowing layer
 //! on Linux only.
 //!
 //! Metal renders through an `MTKView`, which owns its `CAMetalLayer` and sizes
-//! the drawable itself. Vulkan has no MTKView: it hosts a bare `CAMetalLayer` on
+//! the drawable itself. Vulkan has no `MTKView`: it hosts a bare `CAMetalLayer` on
 //! a plain `NSView` and hands that layer to `vkCreateMetalSurfaceEXT`. The layer
 //! is therefore ours to size, which `framebuffer_size` does from the view bounds
 //! and the window's backing scale each time the swapchain asks.
@@ -41,7 +41,7 @@ impl AppKitVkWindow {
         title: &str,
         width: u32,
         height: u32,
-        mode: &WindowMode,
+        mode: WindowMode,
         _resizable: bool,
         title_bar: bool,
     ) -> RenderResult<Self> {
@@ -79,7 +79,7 @@ impl AppKitVkWindow {
             layer,
         };
         this.sync_drawable_size();
-        this.set_window_mode(*mode);
+        this.set_window_mode(mode);
         Ok(this)
     }
 
@@ -93,7 +93,11 @@ impl AppKitVkWindow {
         let bounds = view.bounds().size;
         // The window's backing scale, or the layer's current one before the view
         // is attached (during init the window is not on a screen yet).
-        let scale = match self.win.window().map(|w| w.backingScaleFactor()) {
+        let scale = match self
+            .win
+            .window()
+            .map(objc2_app_kit::NSWindow::backingScaleFactor)
+        {
             Some(s) if s > 0.0 => s,
             _ => self.layer.contentsScale(),
         };
@@ -147,7 +151,7 @@ impl AppKitVkWindow {
         self.win.window_minimized()
     }
 
-    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
+    pub(crate) fn set_keymap(&mut self, keymap: KeyMap) {
         self.win.set_keymap(keymap);
     }
 
@@ -195,6 +199,10 @@ impl AppKitVkWindow {
 
     // Create the presentation surface from the hosted CAMetalLayer.
     // `_entry` keeps the signature shared with the GLFW / Win32 windows.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "same receiver as the GLFW and Win32 windows the shared Vulkan code calls"
+    )]
     pub(crate) fn create_surface(
         &mut self,
         entry: &ash::Entry,

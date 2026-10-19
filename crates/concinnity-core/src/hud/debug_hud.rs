@@ -10,6 +10,7 @@ use crate::ecs::{Access, FrameTime, PipelineContext, Ref, StepResult, System, Wo
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::fmt::Write as _;
 
 use crate::budget::{MemoryBudget, ResidentMemory, ThreadBudget};
 use crate::components::{Camera3D, DebugHud, FrameInput, TextLabel};
@@ -60,9 +61,9 @@ fn passes_text(slots: &[PassTiming]) -> String {
         // reads as a single-decimal millisecond figure ("1.2 ms"). Keeps
         // the column width steady across the typical 50 µs to 5 ms band.
         if micros < 1000 {
-            out.push_str(&format!("{micros} us"));
+            let _ = write!(out, "{micros} us");
         } else {
-            out.push_str(&format!("{:.1} ms", micros as f32 / 1000.0));
+            let _ = write!(out, "{:.1} ms", micros as f32 / 1000.0);
         }
     }
     out
@@ -181,7 +182,7 @@ impl DebugHudSystem {
     }
 
     // Write `text` into the TextLabel with the given id, if it exists.
-    fn write_chip(ctx: &mut PipelineContext, id: Option<AssetId>, text: String) {
+    fn write_chip(ctx: &mut PipelineContext<'_>, id: Option<AssetId>, text: String) {
         crate::ecs::by_asset_id::update::<TextLabel>(ctx, id, |l| l.content = text);
     }
 }
@@ -201,7 +202,7 @@ impl System for DebugHudSystem {
             ])
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         // F1 toggles the debug HUD. The per-frame input snapshot is read from
         // the FrameInput resource the renderer publishes earlier in the frame;
         // it also carries the cursor position for the mouse chip.
@@ -246,7 +247,7 @@ impl System for DebugHudSystem {
         let threads = ctx
             .resource::<ThreadBudget>()
             .map(|t| (t.job_threads, t.total_cores));
-        let budget_mib = ctx.resource::<MemoryBudget>().map(|b| b.budget_mib());
+        let budget_mib = ctx.resource::<MemoryBudget>().map(MemoryBudget::budget_mib);
         let dt = ctx.resource::<FrameTime>().copied().unwrap_or_default().dt;
         if rss_due(&mut self.rss_age, dt) {
             self.rss = ctx
@@ -364,8 +365,8 @@ mod tests {
         ];
         let out = passes_text(&slots);
         // Header line + exactly PASSES_CHIP_TOP_N entries.
-        let lines: Vec<&str> = out.lines().collect();
-        assert_eq!(lines.len(), 1 + PASSES_CHIP_TOP_N);
+
+        assert_eq!(out.lines().count(), 1 + PASSES_CHIP_TOP_N);
         // The two smallest passes are dropped: never appear in the chip.
         assert!(!out.contains("g "));
         assert!(!out.contains("h "));

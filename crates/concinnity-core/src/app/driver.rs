@@ -40,11 +40,11 @@ pub trait Driver {
 
 impl Driver for App {
     fn start(&mut self) -> Result<(), WorldError> {
-        App::start(self)
+        Self::start(self)
     }
 
     fn run(mut self: Box<Self>) -> Result<(), WorldError> {
-        App::run(&mut self).map(|_| ())
+        Self::run(&mut self).map(|_| ())
     }
 
     fn into_world(self: Box<Self>) -> World {
@@ -52,6 +52,6 @@ impl Driver for App {
     }
 
     fn world_mut(&mut self) -> &mut World {
-        App::world_mut(self)
+        Self::world_mut(self)
     }
 }

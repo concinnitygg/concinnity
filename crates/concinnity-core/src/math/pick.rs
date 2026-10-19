@@ -16,7 +16,7 @@ pub struct PickRay {
 
 /// The world-space ray through window pixel `mouse` (top-left origin, logical
 /// pixels, as sampled into `FrameInput`), for a camera described by its
-/// world-to-view matrix (the [view_matrix](#method.view_matrix) convention:
+/// world-to-view matrix (the [`view_matrix`](#method.view_matrix) convention:
 /// column-major, right-handed, view-space forward is -Z), its world position,
 /// and its vertical field of view. Uses the un-jittered projection: TAA jitter
 /// is a backend concern and must never skew a pick.
@@ -76,7 +76,7 @@ pub struct AabbFace {
     pub sign: f32,
 }
 
-/// [ray_aabb](#method.ray_aabb) keeping the entered face. For a ray starting
+/// [`ray_aabb`](#method.ray_aabb) keeping the entered face. For a ray starting
 /// inside the box `t` is 0 and the face is the last slab that bounded the
 /// entry interval; a degenerate all-zero direction inside the box reports
 /// `sign` 0 (no face was crossed).

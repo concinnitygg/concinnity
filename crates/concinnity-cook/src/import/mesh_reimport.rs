@@ -1,6 +1,6 @@
 //! Asset hot-reload (`cn debug`) decode helpers: re-import a file-backed Mesh /
-//! SkinnedMesh from a pre-parsed glTF document into the runtime Vertex /
-//! SkinnedVertex form, mirroring the build pipeline so a hot-reloaded mesh is
+//! `SkinnedMesh` from a pre-parsed glTF document into the runtime Vertex /
+//! `SkinnedVertex` form, mirroring the build pipeline so a hot-reloaded mesh is
 //! byte-identical to a fresh `cn build`. The runtime crate links no image / glTF
 //! decoders, so these live here in the build crate; the editor's debug server
 //! drives them.

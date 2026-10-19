@@ -18,9 +18,9 @@ pub(crate) enum GraphicsApiArg {
 impl From<GraphicsApiArg> for Platform {
     fn from(api: GraphicsApiArg) -> Self {
         match api {
-            GraphicsApiArg::Metal => Platform::Metal,
-            GraphicsApiArg::Directx => Platform::DirectX,
-            GraphicsApiArg::Vulkan => Platform::Vulkan,
+            GraphicsApiArg::Metal => Self::Metal,
+            GraphicsApiArg::Directx => Self::DirectX,
+            GraphicsApiArg::Vulkan => Self::Vulkan,
         }
     }
 }
@@ -35,8 +35,8 @@ pub(crate) enum BundleFormatArg {
 impl From<BundleFormatArg> for BundleFormat {
     fn from(f: BundleFormatArg) -> Self {
         match f {
-            BundleFormatArg::Zip => BundleFormat::Zip,
-            BundleFormatArg::Dir => BundleFormat::Dir,
+            BundleFormatArg::Zip => Self::Zip,
+            BundleFormatArg::Dir => Self::Dir,
         }
     }
 }
@@ -53,10 +53,10 @@ pub(crate) enum RtDynamicArg {
 impl From<RtDynamicArg> for RtDynamicMode {
     fn from(m: RtDynamicArg) -> Self {
         match m {
-            RtDynamicArg::Off => RtDynamicMode::Off,
-            RtDynamicArg::Auto => RtDynamicMode::Auto,
-            RtDynamicArg::Rebuild => RtDynamicMode::Rebuild,
-            RtDynamicArg::Tlas => RtDynamicMode::Tlas,
+            RtDynamicArg::Off => Self::Off,
+            RtDynamicArg::Auto => Self::Auto,
+            RtDynamicArg::Rebuild => Self::Rebuild,
+            RtDynamicArg::Tlas => Self::Tlas,
         }
     }
 }
@@ -73,10 +73,10 @@ pub(crate) enum DlssPresetArg {
 impl From<DlssPresetArg> for DlssPreset {
     fn from(p: DlssPresetArg) -> Self {
         match p {
-            DlssPresetArg::Default => DlssPreset::Default,
-            DlssPresetArg::K => DlssPreset::K,
-            DlssPresetArg::L => DlssPreset::L,
-            DlssPresetArg::M => DlssPreset::M,
+            DlssPresetArg::Default => Self::Default,
+            DlssPresetArg::K => Self::K,
+            DlssPresetArg::L => Self::L,
+            DlssPresetArg::M => Self::M,
         }
     }
 }
@@ -110,7 +110,7 @@ impl clap::ValueEnum for ShowFlagArg {
 
 impl From<ShowFlagArg> for ShowFlags {
     fn from(f: ShowFlagArg) -> Self {
-        ShowFlags::NAMED[f.0].0
+        Self::NAMED[f.0].0
     }
 }
 

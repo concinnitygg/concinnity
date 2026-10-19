@@ -64,9 +64,8 @@ fn scan_environment_map_source(
     let u32_arg = |key: &str, default: u32| {
         a.args
             .get(key)
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32)
-            .unwrap_or(default)
+            .and_then(serde_json::Value::as_u64)
+            .map_or(default, |v| v as u32)
     };
     Some(EnvironmentMapSourceInfo {
         source: source.to_string(),
@@ -76,9 +75,8 @@ fn scan_environment_map_source(
         prefilter_clamp: a
             .args
             .get("prefilter_clamp")
-            .and_then(|v| v.as_f64())
-            .map(|v| v as f32)
-            .unwrap_or(12.0),
+            .and_then(serde_json::Value::as_f64)
+            .map_or(12.0, |v| v as f32),
     })
 }
 

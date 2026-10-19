@@ -1,4 +1,4 @@
-//! EditorHook: the macOS menu bar. The bar is installed once, for a session
+//! `EditorHook`: the macOS menu bar. The bar is installed once, for a session
 //! that really has a window, and from then on this is the frame's two-way
 //! exchange with it: choices made in the menu are drained and applied, and the
 //! panel state they edit is pushed back so the checkmarks follow.
@@ -13,7 +13,7 @@ use crate::editor::hook::EditorHook;
 
 impl EditorHook {
     /// Install the session's menu bar. Called only from the `cn editor` run
-    /// path, so a hook built for a test never reaches AppKit.
+    /// path, so a hook built for a test never reaches `AppKit`.
     #[cfg(target_os = "macos")]
     pub(crate) fn with_app_menu(self) -> Self {
         crate::editor::app_menu::install(self.panel_marks());
@@ -45,6 +45,10 @@ impl EditorHook {
     }
 
     #[cfg(not(target_os = "macos"))]
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "same signature as the macOS menu driver"
+    )]
     pub(in crate::editor::hook) fn drive_app_menu(&mut self, _world: &mut World) {}
 
     // Which of the View panel's panels are open, for the menu bar's checkmarks.

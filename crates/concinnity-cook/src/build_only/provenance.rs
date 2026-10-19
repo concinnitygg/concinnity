@@ -36,19 +36,15 @@ impl Provenance {
     /// source. `None` for a plain authored line and the unattributed expansions.
     pub fn source(&self) -> Option<&str> {
         match self {
-            Provenance::AuthoredShadowing { generated_by } => Some(generated_by),
-            Provenance::Injected { by } => Some(by),
-            Provenance::Generated { by } => Some(by),
-            Provenance::Authored | Provenance::Expanded => None,
+            Self::AuthoredShadowing { generated_by } => Some(generated_by),
+            Self::Injected { by } | Self::Generated { by } => Some(by),
+            Self::Authored | Self::Expanded => None,
         }
     }
 
     /// Whether the asset has a world.jsonl line of its own.
     pub fn is_authored(&self) -> bool {
-        matches!(
-            self,
-            Provenance::Authored | Provenance::AuthoredShadowing { .. }
-        )
+        matches!(self, Self::Authored | Self::AuthoredShadowing { .. })
     }
 
     /// Whether copying this asset's entry into world.jsonl overrides it rather
@@ -57,23 +53,20 @@ impl Provenance {
     /// expansions emit their primitives unconditionally, so a copy of one would
     /// land beside the generated asset, not replace it.
     pub fn is_overridable(&self) -> bool {
-        matches!(
-            self,
-            Provenance::Injected { .. } | Provenance::Generated { .. }
-        )
+        matches!(self, Self::Injected { .. } | Self::Generated { .. })
     }
 }
 
 impl std::fmt::Display for Provenance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Provenance::Authored => write!(f, "authored"),
-            Provenance::AuthoredShadowing { generated_by } => {
-                write!(f, "authored (shadows {})", generated_by)
+            Self::Authored => write!(f, "authored"),
+            Self::AuthoredShadowing { generated_by } => {
+                write!(f, "authored (shadows {generated_by})")
             }
-            Provenance::Injected { by } => write!(f, "injected:{}", by),
-            Provenance::Generated { by } => write!(f, "generated:{}", by),
-            Provenance::Expanded => write!(f, "expanded"),
+            Self::Injected { by } => write!(f, "injected:{by}"),
+            Self::Generated { by } => write!(f, "generated:{by}"),
+            Self::Expanded => write!(f, "expanded"),
         }
     }
 }

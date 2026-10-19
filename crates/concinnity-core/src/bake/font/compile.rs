@@ -60,7 +60,7 @@ pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, 
         ..Default::default()
     };
     let font = fontdue::Font::from_bytes(ttf_bytes, settings)
-        .map_err(|e| format!("Font: failed to parse '{}': {}", source, e))?;
+        .map_err(|e| format!("Font: failed to parse '{source}': {e}"))?;
 
     // Rasterize every printable ASCII character (32-126) at OVERSAMPLE × the
     // target size. The SDF is computed at this high resolution and box-filtered
@@ -101,16 +101,16 @@ pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, 
     // Compute the atlas layout in u32: at larger font sizes the high-res glyph
     // stride times the glyph count overflows u16 (a debug-only multiply panic),
     // even though the packed atlas width is then clamped to <= 2048 logical px.
-    let ideal_w_hi = (max_glyph_w_hi as u32 + pad_hi as u32) * glyph_count as u32;
+    let ideal_w_hi = (u32::from(max_glyph_w_hi) + u32::from(pad_hi)) * u32::from(glyph_count);
     let atlas_w_hi = u32::next_power_of_two(ideal_w_hi.max(64)).min(2048 * OVERSAMPLE) as u16;
     let glyphs_per_row = (atlas_w_hi / (max_glyph_w_hi + pad_hi)).max(1);
     let rows = glyph_count.div_ceil(glyphs_per_row);
     let atlas_h_hi = u32::next_power_of_two(
-        (max_glyph_h_hi as u32 + pad_hi as u32) * rows as u32 + pad_hi as u32,
+        (u32::from(max_glyph_h_hi) + u32::from(pad_hi)) * u32::from(rows) + u32::from(pad_hi),
     ) as u16;
 
-    let atlas_w_hi = atlas_w_hi as u32;
-    let atlas_h_hi = atlas_h_hi as u32;
+    let atlas_w_hi = u32::from(atlas_w_hi);
+    let atlas_h_hi = u32::from(atlas_h_hi);
     debug_assert_eq!(atlas_w_hi % OVERSAMPLE, 0);
     debug_assert_eq!(atlas_h_hi % OVERSAMPLE, 0);
 
@@ -118,8 +118,8 @@ pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, 
     // high-res atlas. This keeps the EDT and box-filter working on a small
     // region (~cell_w×cell_h pixels) instead of the full atlas (~33M pixels),
     // which makes a large difference in unoptimized (debug) builds.
-    let cell_w_hi = max_glyph_w_hi as u32; // includes 2×pad_hi on each axis
-    let cell_h_hi = max_glyph_h_hi as u32;
+    let cell_w_hi = u32::from(max_glyph_w_hi); // includes 2×pad_hi on each axis
+    let cell_h_hi = u32::from(max_glyph_h_hi);
     let cell_w_lo = cell_w_hi / OVERSAMPLE;
     let cell_h_lo = cell_h_hi / OVERSAMPLE;
     let cell_n = (cell_w_hi * cell_h_hi) as usize;
@@ -166,8 +166,9 @@ pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, 
         for py in 0..gh_raw {
             for px in 0..gw_raw {
                 let src = (py as usize) * (gw_raw as usize) + px as usize;
-                let dst = ((pad_hi as u32 + py as u32) * cell_w_hi + pad_hi as u32 + px as u32)
-                    as usize
+                let dst = ((u32::from(pad_hi) + u32::from(py)) * cell_w_hi
+                    + u32::from(pad_hi)
+                    + u32::from(px)) as usize
                     * 4;
                 cell_hi[dst] = bitmap[src];
             }
@@ -184,8 +185,8 @@ pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, 
 
         // Box-filter the high-res cell into the final low-res atlas.
         // Cell origin in the low-res atlas matches the original layout.
-        let cell_ax_lo = col as u32 * (cell_w_lo + PAD_LO as u32);
-        let cell_ay_lo = row as u32 * (cell_h_lo + PAD_LO as u32);
+        let cell_ax_lo = u32::from(col) * (cell_w_lo + u32::from(PAD_LO));
+        let cell_ay_lo = u32::from(row) * (cell_h_lo + u32::from(PAD_LO));
         for ly in 0..cell_h_lo {
             for lx in 0..cell_w_lo {
                 let mut sum = [0u32; 1];
@@ -196,7 +197,7 @@ pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, 
                         // All four channels are identical after SDF conversion;
                         // sample only the R channel and replicate on write.
                         let hi_idx = ((hy * cell_w_hi + hx) * 4) as usize;
-                        sum[0] += cell_hi[hi_idx] as u32;
+                        sum[0] += u32::from(cell_hi[hi_idx]);
                     }
                 }
                 let ax = cell_ax_lo + lx;
@@ -227,7 +228,7 @@ pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, 
             atlas_h: gh_hi / oversample_u16,
             advance_px: metrics.advance_width / oversample_f / ss_f,
             bearing_x: metrics.xmin as f32 / oversample_f / ss_f,
-            bearing_y: (metrics.ymin as f32 + gh_raw as f32) / oversample_f / ss_f,
+            bearing_y: (metrics.ymin as f32 + f32::from(gh_raw)) / oversample_f / ss_f,
         });
     }
 

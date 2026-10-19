@@ -173,7 +173,7 @@ fn parse_color(text: &str) -> [f32; 4] {
 // the click missed the panel. Title-bar presses never reach this: the shared
 // routing intercepts them first.
 pub(crate) fn hit_test(
-    view: &LightingView,
+    view: &LightingView<'_>,
     mx: f32,
     my: f32,
     o: [f32; 2],
@@ -201,7 +201,7 @@ pub(crate) fn hit_test(
 }
 
 // Position + show the panel at effective size `s`.
-pub(crate) fn place(world: &mut World, view: &LightingView, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: &LightingView<'_>, o: [f32; 2], s: [f32; 2]) {
     let w = s[0];
     let n = view.rows.len();
     widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
@@ -346,10 +346,7 @@ mod tests {
         ids().test_world()
     }
 
-    fn all_present_view<'a>(
-        rows: &'a [Row],
-        fields: &'a [Option<super::FormField>],
-    ) -> LightingView<'a> {
+    fn all_present_view<'a>(rows: &'a [Row], fields: &'a [Option<FormField>]) -> LightingView<'a> {
         LightingView {
             rows,
             fields,
@@ -360,7 +357,7 @@ mod tests {
         }
     }
 
-    fn derived_fields() -> Vec<Option<super::FormField>> {
+    fn derived_fields() -> Vec<Option<FormField>> {
         lighting::SECTIONS
             .iter()
             .flat_map(|s| lighting::section_fields(s, None).into_iter().map(Some))

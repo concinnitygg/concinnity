@@ -16,7 +16,7 @@ impl SettingsState {
     // victim's.
     pub(super) fn apply_key_rebind(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         ops: &mut RenderOps,
         cfg: &mut StoredSettings,
         action: Bindable,
@@ -25,7 +25,7 @@ impl SettingsState {
         let victim = self.keymap.action_for_key(key).filter(|&a| a != action);
         self.keymap.rebind(action, key);
         let keymap = self.keymap;
-        ops.record(move |backend| backend.set_keymap(&keymap));
+        ops.record(move |backend| backend.set_keymap(keymap));
         cfg.controls.keymap = Some(self.keymap);
         for act in [Some(action), victim].into_iter().flatten() {
             if let Some(row) = self.rebind_rows.iter().find(|r| r.action == act) {
@@ -39,7 +39,7 @@ impl SettingsState {
     // the input poll as a ControlsCommand, since the host polls the gamepad.
     pub(super) fn apply_pad_rebind(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         cfg: &mut StoredSettings,
         action: GamepadAction,
         button: GamepadButton,

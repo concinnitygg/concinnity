@@ -79,7 +79,7 @@ pub struct SimConfig {
 
 impl Default for SimConfig {
     fn default() -> Self {
-        SimConfig {
+        Self {
             gravity: GRAVITY,
             gravity_center: None,
             substeps: 4,
@@ -137,7 +137,7 @@ pub(crate) struct Softness {
 impl Softness {
     pub(crate) fn new(hertz: f32, damping_ratio: f32, h: f32) -> Self {
         if hertz <= 0.0 || h <= 0.0 {
-            return Softness {
+            return Self {
                 bias_rate: 0.0,
                 mass_scale: 1.0,
                 impulse_scale: 0.0,
@@ -147,7 +147,7 @@ impl Softness {
         let a1 = 2.0 * damping_ratio + h * omega;
         let a2 = h * omega * a1;
         let a3 = 1.0 / (1.0 + a2);
-        Softness {
+        Self {
             bias_rate: omega / a1,
             mass_scale: a2 * a3,
             impulse_scale: a3,
@@ -156,7 +156,7 @@ impl Softness {
 
     /// A constraint solved with no bias at all: the relax pass, which removes
     /// the velocity the biased pass added without reopening the penetration.
-    pub(crate) const RIGID: Softness = Softness {
+    pub(crate) const RIGID: Self = Self {
         bias_rate: 0.0,
         mass_scale: 1.0,
         impulse_scale: 0.0,

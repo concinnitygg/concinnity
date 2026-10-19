@@ -17,7 +17,7 @@ use alloc::vec::Vec;
 /// same to load whatever its size.
 ///
 /// Gravity points at the center from wherever a body is, `gravity` meters per
-/// second squared, so a first-person camera with a [RigidBody](#rigidbody)
+/// second squared, so a first-person camera with a [`RigidBody`](#rigidbody)
 /// walks all the way around. Up is always away from the center: looking
 /// around turns about it, and the horizon stays level.
 ///
@@ -32,7 +32,7 @@ use alloc::vec::Vec;
 /// longitude grows eastward, toward `+X`. Altitude is measured above
 /// `radius`, height above the ground above the hills.
 ///
-/// A [WaterSurface](#watersurface) whose `shape` is `planet_sea` floods the
+/// A [`WaterSurface`](#watersurface) whose `shape` is `planet_sea` floods the
 /// planet to its `sea_level`.
 ///
 /// ```rust

@@ -26,7 +26,7 @@ pub struct TriggerVolume {
     /// Euler rotation of the volume in degrees.
     pub rotation_deg: [f32; 3],
     /// The sensed region, in the same shape vocabulary as a
-    /// [PropCollider](#propcollider): a `cuboid` with `half_extents`, a `ball`
+    /// [`PropCollider`](#propcollider): a `cuboid` with `half_extents`, a `ball`
     /// with `radius`, or a `capsule`.
     pub collider: PropCollider,
     /// What sets the volume off: the `player` character, dynamic `props`, or
@@ -34,7 +34,7 @@ pub struct TriggerVolume {
     pub detects: TriggerFilter,
 }
 
-/// What a [TriggerVolume](#triggervolume) senses.
+/// What a [`TriggerVolume`](#triggervolume) senses.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, Vocabulary,
 )]

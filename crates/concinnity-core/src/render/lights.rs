@@ -1,7 +1,7 @@
-//! Converts drained DirectionalLight, PointLight, SpotLight, and RectAreaLight
+//! Converts drained `DirectionalLight`, `PointLight`, `SpotLight`, and `RectAreaLight`
 //! asset components into the GPU data the renderer consumes: the fixed
-//! LightUniforms uniform (directional lights, ambient, and the fixed point array
-//! world Shader hooks read as `LIGHTS.pt` / `num_pt`), the GpuLight storage
+//! `LightUniforms` uniform (directional lights, ambient, and the fixed point array
+//! world Shader hooks read as `LIGHTS.pt` / `num_pt`), the `GpuLight` storage
 //! buffer the clustered forward pass iterates, the per-slice spot shadow
 //! projections, and the rect area-light extents.
 
@@ -29,10 +29,10 @@ pub struct LightData {
     pub area_lights: Vec<AreaLightData>,
 }
 
-/// Packs point, spot, and rect area lights into the GpuLight storage buffer and
-/// assigns their side-table slots. All three share the MAX_LOCAL_LIGHTS budget
-/// (not the 8-entry LightUniforms array); extras past the cap are dropped with a
-/// warning. Unused fields stay at their neutral GpuLight::ZERO values, so a point
+/// Packs point, spot, and rect area lights into the `GpuLight` storage buffer and
+/// assigns their side-table slots. All three share the `MAX_LOCAL_LIGHTS` budget
+/// (not the 8-entry `LightUniforms` array); extras past the cap are dropped with a
+/// warning. Unused fields stay at their neutral `GpuLight::ZERO` values, so a point
 /// light carries no cone, shadow, or area data.
 pub fn build_light_data(
     pt_lights: &[PointLight],

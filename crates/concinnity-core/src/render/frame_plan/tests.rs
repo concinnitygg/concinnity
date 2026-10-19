@@ -28,7 +28,7 @@ fn lights() -> LightState {
     LightState::new(LightUniforms::DEFAULT, &[], 2)
 }
 
-fn inputs<'a>(lights: &'a LightState, resident: ResidentFeatures) -> PlanInputs<'a> {
+fn inputs(lights: &LightState, resident: ResidentFeatures) -> PlanInputs<'_> {
     PlanInputs {
         camera: CameraInputs {
             view: IDENTITY,

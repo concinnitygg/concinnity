@@ -88,7 +88,7 @@ mod tests {
         let regions: Vec<_> = out.iter().filter(|e| e["type"] == "HitRegion").collect();
         assert_eq!(regions.len(), VISIBLE_SLOTS);
         for (i, region) in regions.iter().enumerate() {
-            assert_eq!(region["args"]["$id"], format!("s_stage_slot{}_btn", i));
+            assert_eq!(region["args"]["$id"], format!("s_stage_slot{i}_btn"));
             assert_eq!(
                 region["args"]["action"],
                 serde_json::json!({"story": {"slot": i}})

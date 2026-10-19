@@ -39,7 +39,7 @@ impl SkyRotationSystem {
     }
 
     // Publish the current orientation and carry it onto every pivot entity.
-    fn publish(&self, ctx: &mut PipelineContext) {
+    fn publish(&self, ctx: &mut PipelineContext<'_>) {
         let mut sky = SkyOrientation::new(self.axis, self.angle_deg).with_turns(self.turns);
         if let Some(frame) = ctx.resource::<SkyFrame>() {
             sky = sky.in_frame(&frame.0);
@@ -64,7 +64,7 @@ impl SkyRotationSystem {
 }
 
 impl System for SkyRotationSystem {
-    fn init(&mut self, ctx: &mut PipelineContext) {
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
         self.pivots = ctx
             .query_with_entity::<SkyRotation>()
             .map(|(entity, _)| entity)
@@ -72,7 +72,7 @@ impl System for SkyRotationSystem {
         self.publish(ctx);
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         if ctx.resource::<MenuActive>().is_some_and(|m| m.0) {
             return StepResult::Continue;
         }

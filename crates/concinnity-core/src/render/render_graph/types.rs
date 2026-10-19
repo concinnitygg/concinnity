@@ -19,6 +19,7 @@ macro_rules! flag_set_ops {
             }
 
             #[doc = concat!("Every ", $noun, " in either set.")]
+            #[must_use]
             pub const fn union(self, other: Self) -> Self {
                 Self(self.0 | other.0)
             }
@@ -41,7 +42,7 @@ macro_rules! flag_set_ops {
 /// One side of a `PassBuilder::read_*` / `write_*` declaration. The
 /// resource is a small dense index into the graph's resource arena; the
 /// `version` increments on every write so a read-after-write chain
-/// (`main → decals → fog` writing the same hdr_resolve) is an unambiguous
+/// (`main → decals → fog` writing the same `hdr_resolve`) is an unambiguous
 /// DAG.
 ///
 /// Each `TextureHandle` / `BufferHandle` pairs the resource id with the
@@ -177,7 +178,7 @@ pub enum GraphResourceClass {
     /// Sampled depth-stencil render target (e.g. the CSM `shadow_map`).
     DepthTarget,
     /// Compute-written, shader-sampled storage image (e.g. the volumetric-fog
-    /// `fog_froxel_volume`): a compute pass writes it (DirectX UNORDERED_ACCESS /
+    /// `fog_froxel_volume`): a compute pass writes it (DirectX `UNORDERED_ACCESS` /
     /// Vulkan GENERAL) and a later fragment pass samples it. Unlike the two
     /// target classes its `Write` happens in the compute stage, so the translated
     /// state pairs a storage-write layout with the compute pipeline stage.
@@ -209,11 +210,11 @@ impl GraphResourceClass {
     /// target declaring several is used in the most constrained of them.
     pub(crate) const fn for_texture_usage(usage: TextureUsage) -> Self {
         if usage.contains(TextureUsage::DEPTH_STENCIL) {
-            GraphResourceClass::DepthTarget
+            Self::DepthTarget
         } else if usage.contains(TextureUsage::STORAGE) {
-            GraphResourceClass::StorageImage
+            Self::StorageImage
         } else {
-            GraphResourceClass::ColorTarget
+            Self::ColorTarget
         }
     }
 
@@ -222,11 +223,11 @@ impl GraphResourceClass {
     /// binding, since a buffer declaring both is consumed as draw arguments.
     pub(crate) const fn for_buffer_usage(usage: BufferUsage) -> Self {
         if usage.contains(BufferUsage::INDIRECT) {
-            GraphResourceClass::IndirectBuffer
+            Self::IndirectBuffer
         } else if usage.contains(BufferUsage::UNORDERED) {
-            GraphResourceClass::UnorderedBuffer
+            Self::UnorderedBuffer
         } else {
-            GraphResourceClass::StorageBuffer
+            Self::StorageBuffer
         }
     }
 
@@ -236,9 +237,7 @@ impl GraphResourceClass {
     pub const fn is_buffer(self) -> bool {
         matches!(
             self,
-            GraphResourceClass::IndirectBuffer
-                | GraphResourceClass::StorageBuffer
-                | GraphResourceClass::UnorderedBuffer
+            Self::IndirectBuffer | Self::StorageBuffer | Self::UnorderedBuffer
         )
     }
 }
@@ -260,14 +259,14 @@ pub struct ReadStages(u32);
 flag_set_ops!(ReadStages, "stage");
 
 impl ReadStages {
-    /// A render pass's sampled read (DirectX PIXEL_SHADER_RESOURCE / Vulkan
-    /// FRAGMENT_SHADER stage).
+    /// A render pass's sampled read (DirectX `PIXEL_SHADER_RESOURCE` / Vulkan
+    /// `FRAGMENT_SHADER` stage).
     pub const FRAGMENT: Self = Self(1 << 0);
-    /// A compute pass's read (DirectX NON_PIXEL_SHADER_RESOURCE / Vulkan
-    /// COMPUTE_SHADER stage).
+    /// A compute pass's read (DirectX `NON_PIXEL_SHADER_RESOURCE` / Vulkan
+    /// `COMPUTE_SHADER` stage).
     pub const COMPUTE: Self = Self(1 << 1);
-    /// A vertex-stage read (DirectX NON_PIXEL_SHADER_RESOURCE / Vulkan
-    /// VERTEX_SHADER stage). A pass names this per resource: the particle draw
+    /// A vertex-stage read (DirectX `NON_PIXEL_SHADER_RESOURCE` / Vulkan
+    /// `VERTEX_SHADER` stage). A pass names this per resource: the particle draw
     /// pulls each live particle out of the simulation pool in its vertex shader
     /// while sampling its albedo in the fragment shader, so the two reads of one
     /// render pass are in different stages and the pass kind cannot tell them
@@ -461,14 +460,14 @@ impl PixelFormat {
     /// power-of-two formats, so this is one byte count per variant.
     pub(crate) const fn bytes_per_texel(self) -> u32 {
         match self {
-            PixelFormat::Rgba16Float | PixelFormat::Rg32Float => 8,
-            PixelFormat::Rgba8Unorm
-            | PixelFormat::Rg16Float
-            | PixelFormat::R32Float
-            | PixelFormat::Depth32Float
-            | PixelFormat::BgraSwapchain => 4,
-            PixelFormat::R16Float | PixelFormat::R16Unorm => 2,
-            PixelFormat::R8Unorm => 1,
+            Self::Rgba16Float | Self::Rg32Float => 8,
+            Self::Rgba8Unorm
+            | Self::Rg16Float
+            | Self::R32Float
+            | Self::Depth32Float
+            | Self::BgraSwapchain => 4,
+            Self::R16Float | Self::R16Unorm => 2,
+            Self::R8Unorm => 1,
         }
     }
 
@@ -477,7 +476,7 @@ impl PixelFormat {
     /// requirements (heap flags / memory type) differ; the finer per-usage
     /// compatibility is the backend's concern when it realizes the plan.
     pub const fn is_depth(self) -> bool {
-        matches!(self, PixelFormat::Depth32Float)
+        matches!(self, Self::Depth32Float)
     }
 }
 
@@ -487,9 +486,9 @@ impl TextureSize {
     // to zero.
     pub fn resolve(self, drawable: u32) -> u32 {
         match self {
-            TextureSize::Absolute(n) => n.max(1),
-            TextureSize::Drawable => drawable.max(1),
-            TextureSize::DrawableScaled(f) => (floor(drawable as f32 * f) as u32).max(1),
+            Self::Absolute(n) => n.max(1),
+            Self::Drawable => drawable.max(1),
+            Self::DrawableScaled(f) => (floor(drawable as f32 * f) as u32).max(1),
         }
     }
 }
@@ -597,13 +596,13 @@ impl TextureDesc {
         let (w, h, d) = self.extent(drawable_w, drawable_h);
         let mut texels: u64 = 0;
         for level in 0..self.mip_levels.max(1) {
-            let at = |n: u32| n.checked_shr(level).unwrap_or(0).max(1) as u64;
+            let at = |n: u32| u64::from(n.checked_shr(level).unwrap_or(0).max(1));
             texels += at(w) * at(h) * at(d);
         }
         texels
-            * self.format.bytes_per_texel() as u64
-            * self.sample_count.max(1) as u64
-            * self.array_layers.max(1) as u64
+            * u64::from(self.format.bytes_per_texel())
+            * u64::from(self.sample_count.max(1))
+            * u64::from(self.array_layers.max(1))
     }
 }
 

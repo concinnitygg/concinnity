@@ -39,9 +39,10 @@ impl ScenePartition {
 fn merge(a: Option<Owner>, b: Owner) -> Owner {
     match (a, b) {
         (None, next) => next,
-        (Some(Owner::Global), _) | (_, Owner::Global) => Owner::Global,
         (Some(Owner::Scene(s)), Owner::Scene(n)) if s == n => Owner::Scene(s),
-        (Some(Owner::Scene(_)), Owner::Scene(_)) => Owner::Global,
+        (Some(Owner::Global), _)
+        | (_, Owner::Global)
+        | (Some(Owner::Scene(_)), Owner::Scene(_)) => Owner::Global,
     }
 }
 

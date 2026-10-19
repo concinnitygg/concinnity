@@ -70,17 +70,13 @@ pub(crate) fn expand_stories(assets: &mut Vec<serde_json::Value>) -> Result<(), 
             text_speed,
         } = schema_args(RegisteredType::StoryImport, &import_name, value.get("args"))?;
         if source.is_empty() {
-            return Err(format!("StoryImport '{}': missing `source`", import_name));
+            return Err(format!("StoryImport '{import_name}': missing `source`"));
         }
 
-        let content = std::fs::read_to_string(&source).map_err(|e| {
-            format!(
-                "StoryImport '{}': cannot read '{}': {}",
-                import_name, source, e
-            )
-        })?;
+        let content = std::fs::read_to_string(&source)
+            .map_err(|e| format!("StoryImport '{import_name}': cannot read '{source}': {e}"))?;
         let story = parse_story(&content)
-            .map_err(|e| format!("StoryImport '{}' ({}): {}", import_name, source, e))?;
+            .map_err(|e| format!("StoryImport '{import_name}' ({source}): {e}"))?;
         let entries = emit_story(
             &sanitize_name(&import_name),
             &story,
@@ -88,15 +84,14 @@ pub(crate) fn expand_stories(assets: &mut Vec<serde_json::Value>) -> Result<(), 
             text_speed,
             &probe_image_dims,
         )
-        .map_err(|e| format!("StoryImport '{}' ({}): {}", import_name, source, e))?;
+        .map_err(|e| format!("StoryImport '{import_name}' ({source}): {e}"))?;
 
         for entry in entries {
             let name = asset_name(&entry);
             if !name.is_empty() && !taken.insert(name.clone()) {
                 return Err(format!(
-                    "StoryImport '{}': generated asset name '{}' collides with an existing \
-                     asset; rename the import or the conflicting asset",
-                    import_name, name
+                    "StoryImport '{import_name}': generated asset name '{name}' collides with an existing \
+                     asset; rename the import or the conflicting asset"
                 ));
             }
             result.push(entry);

@@ -1,17 +1,17 @@
-//! SpawnSystem: the per-frame entity churn. Ticks Lifetime countdowns and
-//! Spawner cadences, and drains the runtime DespawnRequest / ReparentRequest /
-//! SpawnRequest events. GPU slot decisions come from the `RenderSlots`
+//! `SpawnSystem`: the per-frame entity churn. Ticks Lifetime countdowns and
+//! Spawner cadences, and drains the runtime `DespawnRequest` / `ReparentRequest` /
+//! `SpawnRequest` events. GPU slot decisions come from the `RenderSlots`
 //! allocator; the backend effects are recorded into the frame's op queue and
 //! replayed at submission. Subtree removal and draw-slot retirement live in
 //! `despawn.rs`, show/hide in `visibility.rs`, and copying a placement in
 //! `template.rs`.
 //!
 //! Scheduled before the renderer so a despawned entity is
-//! already gone from the GlobalTransform x RenderHandle join when transforms
+//! already gone from the `GlobalTransform` x `RenderHandle` join when transforms
 //! are pushed (it contributes nothing to any pass this same frame), and so a
 //! spawn reuses slots freed this same frame before the backend grows its draw
 //! list. The world clock (Lifetime + Spawner) freezes while a menu is open
-//! (`MenuActive`, published by OverlaySystem earlier this tick).
+//! (`MenuActive`, published by `OverlaySystem` earlier this tick).
 
 use super::{despawn, template, visibility};
 use crate::components::{
@@ -30,7 +30,7 @@ use crate::transform::propagation;
 // Resolve a request target to a live entity. A named target goes through the
 // world's name index; an entity-addressed one is already what the caller means,
 // including entities that never had a name.
-fn resolve_target(ctx: &PipelineContext, target: EntityTarget) -> Option<Entity> {
+fn resolve_target(ctx: &PipelineContext<'_>, target: EntityTarget) -> Option<Entity> {
     match target {
         EntityTarget::Name(name) => ctx.entity_of(name),
         EntityTarget::Entity(entity) => Some(entity),
@@ -98,7 +98,7 @@ impl SpawnSystem {
 }
 
 impl System for SpawnSystem {
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         // The recording surfaces graphics init published; absent means
         // graphics never inited, so there are no draw slots to churn. Taken
         // out for the drain (see `ActiveRenderQueues`) so `ctx` stays freely
@@ -113,7 +113,12 @@ impl System for SpawnSystem {
 }
 
 impl SpawnSystem {
-    fn drain(&mut self, ctx: &mut PipelineContext, ops: &mut RenderOps, slots: &mut RenderSlots) {
+    fn drain(
+        &mut self,
+        ctx: &mut PipelineContext<'_>,
+        ops: &mut RenderOps,
+        slots: &mut RenderSlots,
+    ) {
         // Per-frame delta for the time-based ticks. Clamped to non-negative so
         // a clock reset never rushes an expiry.
         let dt = ctx
@@ -126,7 +131,7 @@ impl SpawnSystem {
         // while the cascades they feed take `ctx` mutably.
         let frame = ctx.frame;
         // The menu state OverlaySystem published earlier this tick.
-        let menu_active = ctx.resource::<MenuActive>().map(|m| m.0).unwrap_or(false);
+        let menu_active = ctx.resource::<MenuActive>().is_some_and(|m| m.0);
 
         // Timed despawn: decrement every Lifetime by this frame's dt and
         // despawn the entities whose countdown reached zero, through the
@@ -136,7 +141,7 @@ impl SpawnSystem {
         // (timed despawns + cadence spawns below) truly pauses.
         if !menu_active {
             let expired = template::tick_lifetimes(ctx, dt);
-            for &entity in expired.iter() {
+            for &entity in &expired {
                 despawn::despawn_subtree(ctx, ops, slots, entity);
             }
         }
@@ -206,7 +211,7 @@ impl SpawnSystem {
             Some(events) => frame.collect(events.read(&mut self.spawn_cmd_cursor).copied()),
             None => frame.collect([]),
         };
-        for &req in spawn_reqs.iter() {
+        for &req in &spawn_reqs {
             let Some(template) = ctx.entity_of(req.template) else {
                 continue;
             };
@@ -246,7 +251,7 @@ impl SpawnSystem {
         } else {
             template::tick_spawners(ctx, dt)
         };
-        for &due in due_spawns.iter() {
+        for &due in &due_spawns {
             let Some(template) = ctx.entity_of(due.template) else {
                 continue;
             };
@@ -280,7 +285,7 @@ mod tests {
     use crate::ecs::asset_id::AssetId;
 
     // Build an isolated PipelineContext over a fresh world, with no backend.
-    fn run<R>(body: impl FnOnce(&mut PipelineContext) -> R) -> R {
+    fn run<R>(body: impl FnOnce(&mut PipelineContext<'_>) -> R) -> R {
         body(&mut World::new().context())
     }
 

@@ -89,14 +89,14 @@ fn no_test_starts_a_graphics_world_on_the_windowed_loop() {
 // The scan is only worth as much as its ability to see the shape it forbids.
 #[test]
 fn the_scan_recognizes_the_shape_it_forbids() {
-    let offending = r#"
+    let offending = r"
 #[test]
 fn opens_a_window() {
     let mut world = World::new();
     world.add_component(Window::default());
     world.start(SYSTEMS).unwrap();
 }
-"#;
+";
     let bodies = source::test_bodies(offending);
     assert_eq!(bodies.len(), 1, "one test found");
     let body = &bodies[0].text;
@@ -115,14 +115,14 @@ fn opens_a_window() {
 // A commented-out call is not a call.
 #[test]
 fn the_scan_ignores_commented_lines() {
-    let commented = r#"
+    let commented = r"
 #[test]
 fn only_talks_about_it() {
     // world.add_component(Window::default());
     // world.start(SYSTEMS).unwrap();
     assert!(true);
 }
-"#;
+";
     let body = &source::test_bodies(commented)[0].text;
     assert!(!declares_window(body), "comments are stripped");
 }

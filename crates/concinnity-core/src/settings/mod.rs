@@ -82,8 +82,10 @@ pub fn options(key: SettingKey) -> Option<&'static [&'static str]> {
             Some(&OFF_ON_OPTIONS)
         }
         // Stats-HUD display toggles: a master and one per readout (Off/On).
-        K::PerfStats | K::ShowFps | K::ShowVram => Some(&OFF_ON_OPTIONS),
-        K::Ssao
+        K::PerfStats
+        | K::ShowFps
+        | K::ShowVram
+        | K::Ssao
         | K::Ssr
         | K::RayTracedReflections
         | K::RtReflectionShadows

@@ -123,7 +123,7 @@ pub(crate) fn reversed_infinite_perspective_rh(fov_y_radians: f32, aspect: f32, 
 /// C). Depth must stay non-negative over the whole frustum, and the direction
 /// that bounds it is the far frustum corner the plane faces, taken at infinity:
 /// the point q = (sgn(Cx) / xs, sgn(Cy) / ys, -1, 0). Requiring depth 0 there
-/// gives alpha = (w_row . q) / (C . q) = 1 / (C . q), the limit of the finite
+/// gives alpha = (`w_row` . q) / (C . q) = 1 / (C . q), the limit of the finite
 /// derivation as the far plane recedes.
 pub(crate) fn reversed_infinite_oblique_rh(proj: Mat4, clip_plane: [f32; 4]) -> Mat4 {
     let xs = proj[0][0];

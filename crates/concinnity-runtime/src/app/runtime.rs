@@ -414,7 +414,7 @@ impl Runtime {
             .and_then(|slot| slot.0.take())
     }
 
-    /// Replace the current world and reset to Created so start() can be called again.
+    /// Replace the current world and reset to Created so `start()` can be called again.
     /// Used to load a new scene at runtime.
     pub fn load_world(&mut self, world: World) {
         self.world = world;

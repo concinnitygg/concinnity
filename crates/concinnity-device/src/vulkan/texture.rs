@@ -7,7 +7,7 @@ use concinnity_core::gfx::render_types;
 use concinnity_core::render::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
 use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::{error, mipmap};
+use concinnity_core::render::mipmap;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::depth::SHADOW_SAMPLE_COMPARE;
@@ -74,7 +74,7 @@ pub(super) fn find_memory_type(
             return Ok(i);
         }
     }
-    Err(error::RenderError::Other(
+    Err(RenderError::Other(
         "no suitable memory type found".to_string(),
     ))
 }
@@ -92,10 +92,7 @@ pub(super) struct ImageSpec {
 }
 
 // Allocate a pooled VkImage from `spec`.
-pub(super) fn create_image(
-    alloc: &DeviceAllocator,
-    spec: &ImageSpec,
-) -> error::RenderResult<PooledImage> {
+pub(super) fn create_image(alloc: &DeviceAllocator, spec: &ImageSpec) -> RenderResult<PooledImage> {
     let &ImageSpec {
         width,
         height,
@@ -460,11 +457,11 @@ impl StreamedUploadRetire {
 // the backend's own init-time textures (fallbacks, text atlases); scene textures
 // arrive with their chain cooked and go through `upload_texture_image_deferred`.
 pub(super) fn upload_texture_deferred(
-    ctx: &GpuUploadContext,
+    ctx: &GpuUploadContext<'_>,
     width: u32,
     height: u32,
     pixels: &[u8],
-) -> error::RenderResult<(GpuImage, UploadInFlight)> {
+) -> RenderResult<(GpuImage, UploadInFlight)> {
     let base = (width as usize) * (height as usize) * 4;
     if pixels.len() < base {
         return Err(RenderError::Other(format!(
@@ -514,9 +511,9 @@ fn vk_texture_format(format: concinnity_core::bake::texture::TextureFormat) -> v
 // carries them: RGBA8 with its cooked chain, or a block-compressed
 // (BC1/BC3/BC5/BC7) container chain.
 pub(super) fn upload_texture_image_deferred(
-    ctx: &GpuUploadContext,
+    ctx: &GpuUploadContext<'_>,
     image: &concinnity_core::bake::texture::TextureImage,
-) -> error::RenderResult<(GpuImage, UploadInFlight)> {
+) -> RenderResult<(GpuImage, UploadInFlight)> {
     image.validate().map_err(RenderError::Other)?;
     let levels: Vec<TextureLevel<'_>> = image
         .mips
@@ -532,9 +529,9 @@ pub(super) fn upload_texture_image_deferred(
 
 // Synchronous `upload_texture_image_deferred`.
 pub(super) fn upload_texture_image(
-    ctx: &GpuUploadContext,
+    ctx: &GpuUploadContext<'_>,
     image: &concinnity_core::bake::texture::TextureImage,
-) -> error::RenderResult<GpuImage> {
+) -> RenderResult<GpuImage> {
     let (img, in_flight) = upload_texture_image_deferred(ctx, image)?;
     finish_upload(ctx, in_flight)?;
     Ok(img)
@@ -544,7 +541,10 @@ pub(super) fn upload_texture_image(
 // idles, the command buffer returns to the pool, and the dropped staging
 // retires immediately so an upload loop reuses one staging range instead of
 // accumulating every upload's.
-pub(super) fn finish_upload(ctx: &GpuUploadContext, in_flight: UploadInFlight) -> RenderResult<()> {
+pub(super) fn finish_upload(
+    ctx: &GpuUploadContext<'_>,
+    in_flight: UploadInFlight,
+) -> RenderResult<()> {
     // SAFETY: `ctx.queue` belongs to `ctx.device`; the wait takes no borrowed state.
     unsafe { ctx.device.queue_wait_idle(ctx.queue) }
         .map_err(|e| map_vk_result(e, "upload wait"))?;
@@ -564,10 +564,10 @@ pub(super) fn finish_upload(ctx: &GpuUploadContext, in_flight: UploadInFlight) -
 // tightly packed, which for block-compressed formats means one row of 4x4
 // blocks per image row.
 fn upload_texture_levels_deferred(
-    ctx: &GpuUploadContext,
+    ctx: &GpuUploadContext<'_>,
     format: vk::Format,
     levels: &[TextureLevel<'_>],
-) -> error::RenderResult<(GpuImage, UploadInFlight)> {
+) -> RenderResult<(GpuImage, UploadInFlight)> {
     let &GpuUploadContext {
         alloc,
         device,
@@ -699,7 +699,7 @@ fn upload_texture_levels_deferred(
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         unsafe { device.create_image_view(&info, None) }
-            .map_err(|e| super::error::map_vk_result(e, "create_image_view"))?
+            .map_err(|e| map_vk_result(e, "create_image_view"))?
     };
 
     Ok((
@@ -711,7 +711,7 @@ fn upload_texture_levels_deferred(
 // Synchronous `upload_texture_deferred`: waits for the copy, then frees the
 // transient upload resources. The init-time upload paths use this.
 pub(super) fn upload_texture(
-    ctx: &GpuUploadContext,
+    ctx: &GpuUploadContext<'_>,
     width: u32,
     height: u32,
     pixels: &[u8],
@@ -722,12 +722,12 @@ pub(super) fn upload_texture(
 }
 
 // Create a 1x1 opaque white RGBA texture (fallback when no albedo asset is present).
-pub(super) fn create_fallback_white(ctx: &GpuUploadContext) -> RenderResult<GpuImage> {
+pub(super) fn create_fallback_white(ctx: &GpuUploadContext<'_>) -> RenderResult<GpuImage> {
     upload_texture(ctx, 1, 1, &[255u8, 255, 255, 255])
 }
 
 // Create a 1x1 flat-normal RGBA texture (tangent-space (0,0,1) = no perturbation).
-pub(super) fn create_fallback_flat_normal(ctx: &GpuUploadContext) -> RenderResult<GpuImage> {
+pub(super) fn create_fallback_flat_normal(ctx: &GpuUploadContext<'_>) -> RenderResult<GpuImage> {
     upload_texture(ctx, 1, 1, &[128u8, 128, 255, 255])
 }
 
@@ -738,7 +738,7 @@ pub(super) fn create_fallback_flat_normal(ctx: &GpuUploadContext) -> RenderResul
 // `VK_IMAGE_VIEW_TYPE_3D` view left in `SHADER_READ_ONLY_OPTIMAL`, ready for
 // the composite pass to sample as a `sampler3D`.
 pub(super) fn upload_color_lut(
-    ctx: &GpuUploadContext,
+    ctx: &GpuUploadContext<'_>,
     size: u32,
     data: &[u8],
 ) -> RenderResult<GpuImage> {
@@ -851,7 +851,7 @@ pub(super) fn upload_color_lut(
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
     let view = unsafe { device.create_image_view(&view_info, None) }
-        .map_err(|e| super::error::map_vk_result(e, "create_image_view (LUT)"))?;
+        .map_err(|e| map_vk_result(e, "create_image_view (LUT)"))?;
 
     Ok(GpuImage::from_pooled(pooled, view))
 }
@@ -889,7 +889,7 @@ pub(super) fn upload_float_lut(
         }
     };
 
-    let byte_size = (needed * std::mem::size_of::<f32>()) as vk::DeviceSize;
+    let byte_size = (needed * size_of::<f32>()) as vk::DeviceSize;
     let staging = alloc.create_buffer(
         byte_size,
         vk::BufferUsageFlags::TRANSFER_SRC,
@@ -979,14 +979,14 @@ pub(super) fn upload_float_lut(
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
     let view = unsafe { device.create_image_view(&view_info, None) }
-        .map_err(|e| super::error::map_vk_result(e, "create_image_view (float LUT)"))?;
+        .map_err(|e| map_vk_result(e, "create_image_view (float LUT)"))?;
 
     Ok(GpuImage::from_pooled(pooled, view))
 }
 
 // Upload the identity color LUT, so the `sampler3D` binding stays valid even
 // when the world declares no `ColorLut`.
-pub(super) fn create_fallback_color_lut(ctx: &GpuUploadContext) -> RenderResult<GpuImage> {
+pub(super) fn create_fallback_color_lut(ctx: &GpuUploadContext<'_>) -> RenderResult<GpuImage> {
     upload_color_lut(ctx, IDENTITY_LUT_SIZE, &IDENTITY_LUT)
 }
 
@@ -1049,7 +1049,7 @@ fn clear_shadow_fallback(
 // array layer because the shader's cascade selection falls back to cascade 0
 // when `cascade_splits == +inf`, so layer 0 is the only one ever sampled.
 pub(super) fn create_shadow_map_array(
-    ctx: &GpuUploadContext,
+    ctx: &GpuUploadContext<'_>,
     size: u32,
     layers: u32,
 ) -> RenderResult<GpuImage> {
@@ -1130,7 +1130,7 @@ pub(super) fn create_shadow_map_array(
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         unsafe { device.create_image_view(&info, None) }
-            .map_err(|e| super::error::map_vk_result(e, "shadow array view"))?
+            .map_err(|e| map_vk_result(e, "shadow array view"))?
     };
 
     // Per-slice attachment views (one per cascade).
@@ -1151,7 +1151,7 @@ pub(super) fn create_shadow_map_array(
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         let v = unsafe { device.create_image_view(&info, None) }
-            .map_err(|e| super::error::map_vk_result(e, &format!("shadow slice view {i}")))?;
+            .map_err(|e| map_vk_result(e, &format!("shadow slice view {i}")))?;
         aux_views.push(v);
     }
 
@@ -1164,7 +1164,7 @@ pub(super) fn create_shadow_map_array(
 
 // Create a device-local depth image for the main render pass.
 pub(super) fn create_depth_image(
-    ctx: &GpuUploadContext,
+    ctx: &GpuUploadContext<'_>,
     width: u32,
     height: u32,
     samples: vk::SampleCountFlags,
@@ -1214,7 +1214,7 @@ pub(super) fn create_depth_image(
 
 // Create a multisampled color image for the MSAA resolve target.
 pub(super) fn create_msaa_color_image(
-    ctx: &GpuUploadContext,
+    ctx: &GpuUploadContext<'_>,
     width: u32,
     height: u32,
     format: vk::Format,
@@ -1313,7 +1313,7 @@ pub(super) fn create_sampler_linear_repeat(
         .max_lod(vk::LOD_CLAMP_NONE);
     device
         .create_sampler(&info)
-        .map_err(|e| super::error::map_vk_result(e, "linear repeat sampler"))
+        .map_err(|e| map_vk_result(e, "linear repeat sampler"))
 }
 
 // Compare sampler for PCF shadow sampling, lit where the reference depth is no
@@ -1333,7 +1333,7 @@ pub(super) fn create_sampler_shadow(device: &VkDevice) -> RenderResult<OwnedSamp
         .mipmap_mode(vk::SamplerMipmapMode::LINEAR);
     device
         .create_sampler(&info)
-        .map_err(|e| super::error::map_vk_result(e, "shadow sampler"))
+        .map_err(|e| map_vk_result(e, "shadow sampler"))
 }
 
 // Linear clamp sampler for text atlas lookups.
@@ -1351,7 +1351,7 @@ pub(super) fn create_sampler_linear_clamp(device: &VkDevice) -> RenderResult<Own
         .mipmap_mode(vk::SamplerMipmapMode::LINEAR);
     device
         .create_sampler(&info)
-        .map_err(|e| super::error::map_vk_result(e, "linear clamp sampler"))
+        .map_err(|e| map_vk_result(e, "linear clamp sampler"))
 }
 
 // IBL textures produced by a single `EnvironmentMap` asset. Mirrors the Metal
@@ -1370,7 +1370,7 @@ pub(super) struct EnvironmentMapTextures {
 // (+X, -X, +Y, -Y, +Z, -Z). Returns a `GpuImage` whose `view` is a
 // `VK_IMAGE_VIEW_TYPE_CUBE` view spanning every mip.
 fn create_cube_image(
-    ctx: &GpuUploadContext,
+    ctx: &GpuUploadContext<'_>,
     face_size: u32,
     mip_bytes: &[&[u8]],
 ) -> RenderResult<GpuImage> {
@@ -1464,7 +1464,7 @@ fn create_cube_image(
         let mut off = 0u64;
         for m in 0..mip_count as usize {
             let s = face_size >> m;
-            let face_bytes = (s as u64) * (s as u64) * 16;
+            let face_bytes = u64::from(s) * u64::from(s) * 16;
             for face in 0..6u32 {
                 regions.push(
                     vk::BufferImageCopy::default()
@@ -1535,7 +1535,7 @@ fn create_cube_image(
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         unsafe { device.create_image_view(&info, None) }
-            .map_err(|e| super::error::map_vk_result(e, "cube view"))?
+            .map_err(|e| map_vk_result(e, "cube view"))?
     };
 
     Ok(GpuImage::from_pooled(pooled, view))
@@ -1546,7 +1546,7 @@ fn create_cube_image(
 // `prefilter_mip_count == 0` and skips IBL math, but the cube binding must
 // still resolve to a valid texture.
 pub(super) fn create_fallback_cubemap(
-    ctx: &GpuUploadContext,
+    ctx: &GpuUploadContext<'_>,
     value: [f32; 4],
 ) -> RenderResult<GpuImage> {
     let mut face_bytes = Vec::with_capacity(6 * 16);
@@ -1562,7 +1562,7 @@ pub(super) fn create_fallback_cubemap(
 // irradiance cube and a multi-mip prefiltered radiance cube. Mirrors the
 // Metal and DirectX upload paths.
 pub(super) fn upload_environment_map(
-    ctx: &GpuUploadContext,
+    ctx: &GpuUploadContext<'_>,
     irradiance_face: u32,
     irradiance_bytes: &[u8],
     prefilter_face: u32,
@@ -1602,5 +1602,5 @@ pub(super) fn create_sampler_cube_linear(device: &VkDevice) -> RenderResult<Owne
         .max_lod(vk::LOD_CLAMP_NONE);
     device
         .create_sampler(&info)
-        .map_err(|e| super::error::map_vk_result(e, "cube sampler"))
+        .map_err(|e| map_vk_result(e, "cube sampler"))
 }

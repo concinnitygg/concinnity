@@ -20,7 +20,7 @@ pub struct MaterialEntry {
     pub normal_map_slot: usize,
     /// The GPU uniforms.
     pub uniforms: MaterialUniforms,
-    /// Dense ShaderHandle value of the material's `shader` reference; 0 (the
+    /// Dense `ShaderHandle` value of the material's `shader` reference; 0 (the
     /// world default) when the material names none.
     pub shader_bucket: u32,
 }
@@ -28,7 +28,7 @@ pub struct MaterialEntry {
 impl MaterialEntry {
     /// The entry a draw with no material of its own binds: the default
     /// uniforms over the reserved albedo and normal-map fallbacks.
-    pub const UNTEXTURED: MaterialEntry = MaterialEntry {
+    pub const UNTEXTURED: Self = Self {
         albedo_slot: NO_ALBEDO_SLOT,
         normal_map_slot: NO_NORMAL_MAP_SLOT,
         uniforms: MaterialUniforms::DEFAULT,

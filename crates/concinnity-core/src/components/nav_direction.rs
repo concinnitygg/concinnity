@@ -1,5 +1,5 @@
 /// A directional UI-navigation pulse, carried by
-/// [FrameInput::nav](#structfield.nav) for one frame.
+/// [`FrameInput::nav`](#structfield.nav) for one frame.
 ///
 /// Produced from d-pad presses (with hold auto-repeat) and deliberate
 /// left-stick deflections; menu focus movement consumes it while a screen is

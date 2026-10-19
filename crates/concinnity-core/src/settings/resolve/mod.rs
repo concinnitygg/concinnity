@@ -161,7 +161,7 @@ impl<'a> SettingsLayers<'a> {
         let world = self.world_layer();
         let user = self.user_layer();
         let mut resolved = resolve_settings(&world, &user, self.ceiling);
-        clamp_to(&mut resolved.graphics, self.capabilities);
+        clamp_to(&mut resolved.graphics, *self.capabilities);
         resolved
     }
 
@@ -170,7 +170,7 @@ impl<'a> SettingsLayers<'a> {
     /// takes them.
     pub fn resolve_quality(&self) -> ResolvedGraphics {
         let mut quality = resolve_quality(&self.world_layer(), &self.user_layer(), self.ceiling);
-        clamp_to(&mut quality, self.capabilities);
+        clamp_to(&mut quality, *self.capabilities);
         quality
     }
 
@@ -192,7 +192,7 @@ impl<'a> SettingsLayers<'a> {
 // No setting resolves on that the device cannot run: ray tracing on a device
 // without it, or beside XeSS where the two cannot share the device, and an
 // upscaler choice where there is none to make.
-fn clamp_to(graphics: &mut ResolvedGraphics, capabilities: &DeviceCapabilities) {
+fn clamp_to(graphics: &mut ResolvedGraphics, capabilities: DeviceCapabilities) {
     if !capabilities.selectable_upscaler {
         graphics.anti_aliasing.upscaler = UpscalerBackend::Auto;
     }
@@ -306,22 +306,22 @@ fn resolve_quality(
     let shadows = &mut g.shadows;
     shadows.map_size = user
         .shadow_map_size
-        .unwrap_or(authored.shadows.map_size.min(ceiling.shadow_map_size));
+        .unwrap_or_else(|| authored.shadows.map_size.min(ceiling.shadow_map_size));
     shadows.update = user
         .shadow_update
         .unwrap_or_else(|| clamp_shadow_update(authored.shadows.update, ceiling));
     shadows.distance = user
         .shadow_distance
-        .unwrap_or(authored.shadows.distance.min(ceiling.shadow_distance));
+        .unwrap_or_else(|| authored.shadows.distance.min(ceiling.shadow_distance));
     shadows.cascades = user
         .shadow_cascades
-        .unwrap_or(authored.shadows.cascades.min(ceiling.shadow_cascades));
-    g.texture_filtering.anisotropy = user.anisotropy.unwrap_or(
+        .unwrap_or_else(|| authored.shadows.cascades.min(ceiling.shadow_cascades));
+    g.texture_filtering.anisotropy = user.anisotropy.unwrap_or_else(|| {
         authored
             .texture_filtering
             .anisotropy
-            .min(ceiling.anisotropy),
-    );
+            .min(ceiling.anisotropy)
+    });
     g.planet_detail.finest_cell_size = authored
         .planet_detail
         .finest_cell_size

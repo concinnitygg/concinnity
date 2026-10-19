@@ -50,16 +50,14 @@ pub(crate) fn detect(doc: &GltfDoc) -> Result<PanoramaSphere, String> {
     let mesh_count = document.meshes().count();
     if mesh_count != 1 {
         return Err(format!(
-            "a panorama sphere has exactly one mesh, this has {}",
-            mesh_count
+            "a panorama sphere has exactly one mesh, this has {mesh_count}"
         ));
     }
     let mesh = document.meshes().next().expect("one mesh");
     let primitive_count = mesh.primitives().count();
     if primitive_count != 1 {
         return Err(format!(
-            "a panorama sphere has exactly one primitive, this has {}",
-            primitive_count
+            "a panorama sphere has exactly one primitive, this has {primitive_count}"
         ));
     }
     let primitive = mesh.primitives().next().expect("one primitive");
@@ -76,15 +74,13 @@ pub(crate) fn detect(doc: &GltfDoc) -> Result<PanoramaSphere, String> {
     let image_count = document.images().count();
     if image_count != 1 {
         return Err(format!(
-            "a panorama sphere carries exactly one image, this has {}",
-            image_count
+            "a panorama sphere carries exactly one image, this has {image_count}"
         ));
     }
     let material_count = document.materials().count();
     if material_count != 1 {
         return Err(format!(
-            "a panorama sphere has exactly one material, this has {}",
-            material_count
+            "a panorama sphere has exactly one material, this has {material_count}"
         ));
     }
     let material = document.materials().next().expect("one material");
@@ -178,8 +174,7 @@ fn check_spherical(positions: &[[f32; 3]]) -> Result<(), String> {
         .find(|r| ((*r - mean) / mean).abs() > RADIUS_TOLERANCE)
     {
         return Err(format!(
-            "mesh is not a sphere: a vertex sits at radius {:.4} against a mean of {:.4}",
-            off, mean
+            "mesh is not a sphere: a vertex sits at radius {off:.4} against a mean of {mean:.4}"
         ));
     }
     Ok(())
@@ -201,14 +196,12 @@ fn check_equirect_uvs(uvs: &[[f32; 2]], vertex_count: usize) -> Result<(), Strin
         let name = if axis == 0 { "U" } else { "V" };
         if min > UV_EDGE_TOLERANCE || max < 1.0 - UV_EDGE_TOLERANCE {
             return Err(format!(
-                "{} spans {:.3}..{:.3}, not the full image a panorama wraps",
-                name, min, max
+                "{name} spans {min:.3}..{max:.3}, not the full image a panorama wraps"
             ));
         }
         if min < -UV_EDGE_TOLERANCE || max > 1.0 + UV_EDGE_TOLERANCE {
             return Err(format!(
-                "{} spans {:.3}..{:.3}, so the image tiles rather than wrapping once",
-                name, min, max
+                "{name} spans {min:.3}..{max:.3}, so the image tiles rather than wrapping once"
             ));
         }
     }
@@ -222,8 +215,7 @@ fn check_panorama_aspect(width: u32, height: u32) -> Result<(), String> {
     let aspect = width as f32 / height as f32;
     if !(MIN_IMAGE_ASPECT..=MAX_IMAGE_ASPECT).contains(&aspect) {
         return Err(format!(
-            "image is {}x{} ({:.2}:1), not the landscape shape of an equirectangular panorama",
-            width, height, aspect
+            "image is {width}x{height} ({aspect:.2}:1), not the landscape shape of an equirectangular panorama"
         ));
     }
     Ok(())

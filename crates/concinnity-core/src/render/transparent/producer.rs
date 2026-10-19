@@ -51,6 +51,10 @@ impl<P> ShapePipelines<P> {
     /// under an incompatible layout. The pass is gated on
     /// [`TransparentProducers::traces`] for every live producer first, so a
     /// shape is never asked for a variant it lacks.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `rt_live` asks for a variant this producer was not built with.
     pub fn pick(&self, rt_live: bool, textured: bool) -> &P {
         match (rt_live, textured) {
             (true, true) => self
@@ -67,9 +71,10 @@ impl<P> ShapePipelines<P> {
 
     /// Whether this shape built the trace variant `textured` names.
     pub fn traces(&self, textured: bool) -> bool {
-        match textured {
-            true => self.textured_rt.is_some(),
-            false => self.flat_rt.is_some(),
+        if textured {
+            self.textured_rt.is_some()
+        } else {
+            self.flat_rt.is_some()
         }
     }
 }
@@ -115,9 +120,10 @@ impl<P, R> TransparentProducer<P, R> {
     /// This producer's reflection pre-pass pipeline, or `None` when it traces in
     /// place.
     pub fn reflection_pipeline(&self, textured: bool) -> Option<&P> {
-        match textured {
-            true => self.reflection_textured.as_ref(),
-            false => self.reflection_flat.as_ref(),
+        if textured {
+            self.reflection_textured.as_ref()
+        } else {
+            self.reflection_flat.as_ref()
         }
     }
 
@@ -181,15 +187,22 @@ impl<P, R> TransparentProducers<P, R> {
 
     /// Whether any record of either producer draws.
     pub fn any_visible(&self) -> bool {
-        self.glass.as_ref().is_some_and(|p| p.any_visible())
-            || self.water.as_ref().is_some_and(|p| p.any_visible())
+        self.glass
+            .as_ref()
+            .is_some_and(TransparentProducer::any_visible)
+            || self
+                .water
+                .as_ref()
+                .is_some_and(TransparentProducer::any_visible)
     }
 
     /// Whether a visible water surface holds a planar slot, so the mirror
     /// re-render has a consumer even while the trace is live. Glass is not
     /// counted: it takes the trace over the mirror.
     pub fn water_planar_slot_live(&self) -> bool {
-        self.water.as_ref().is_some_and(|p| p.planar_slot_live())
+        self.water
+            .as_ref()
+            .is_some_and(TransparentProducer::planar_slot_live)
     }
 
     /// The record-holding producer `kind` names, or `None` for the mesh

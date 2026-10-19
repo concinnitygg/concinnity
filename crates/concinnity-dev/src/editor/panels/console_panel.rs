@@ -1,6 +1,6 @@
 //! The Console panel's layout half: a terminal-style floating panel with a
 //! scrollable log window filling the body and a single command line pinned to
-//! the bottom (the panel's one TextInput, which also carries the /del name
+//! the bottom (the panel's one `TextInput`, which also carries the /del name
 //! autocomplete as ghost text). Log lines color by severity (`theme::LOG_*`).
 //! The log model and command dispatch live in `console.rs` and
 //! `hook/edit/console.rs`.
@@ -166,7 +166,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<Con
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank every
 // element (`None`).
-pub(crate) fn place(world: &mut World, view: Option<&ConsoleView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&ConsoleView<'_>>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         hide_all(world);
         return;
@@ -204,7 +204,7 @@ pub(crate) fn place(world: &mut World, view: Option<&ConsoleView>, o: [f32; 2], 
 }
 
 // The log window's scrollbar: shown only when the log overflows the window.
-fn layout_scrollbar(world: &mut World, view: &ConsoleView, o: [f32; 2], w: f32, shown: usize) {
+fn layout_scrollbar(world: &mut World, view: &ConsoleView<'_>, o: [f32; 2], w: f32, shown: usize) {
     let total = view.total;
     if total <= shown {
         widget::set_sprite_visible(world, LOG_TRACK, false);
@@ -262,7 +262,7 @@ mod tests {
             .collect()
     }
 
-    fn view<'a>(lines: &'a [ConsoleLine], total: usize, first: usize) -> ConsoleView<'a> {
+    fn view(lines: &[ConsoleLine], total: usize, first: usize) -> ConsoleView<'_> {
         ConsoleView {
             lines,
             total,

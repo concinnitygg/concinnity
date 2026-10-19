@@ -68,7 +68,7 @@ mod tests {
         assert_eq!(path[1], Step::Index(1));
         assert!(matches(&at, &path));
         assert!(!matches(&at, &path[..4]), "a prefix is a different node");
-        let mut other = path.clone();
+        let mut other = path;
         other[1] = Step::Index(2);
         assert!(!matches(&at, &other));
     }

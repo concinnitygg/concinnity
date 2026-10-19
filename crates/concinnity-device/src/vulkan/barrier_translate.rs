@@ -2,19 +2,19 @@
 //! class, into the concrete Vulkan (layout, access, stage) triple the executor
 //! feeds into an image memory barrier. The graph tracks only Undefined / Read /
 //! Write; the resource class (assigned by the executor's resolver) disambiguates
-//! what a `Write` means: a color target writes COLOR_ATTACHMENT, a depth target
-//! writes DEPTH_STENCIL_ATTACHMENT. Both are sampled (SHADER_READ_ONLY) when
+//! what a `Write` means: a color target writes `COLOR_ATTACHMENT`, a depth target
+//! writes `DEPTH_STENCIL_ATTACHMENT`. Both are sampled (`SHADER_READ_ONLY`) when
 //! read.
 //!
 //! For a barrier `from -> to`, the executor uses `from`'s triple for the source
 //! and `to`'s triple for the destination, and skips the barrier when the two
 //! layouts match (a no-op).
 //!
-//! A `Read`'s layout is SHADER_READ_ONLY either way, but its pipeline stage
+//! A `Read`'s layout is `SHADER_READ_ONLY` either way, but its pipeline stage
 //! follows the consuming-stage union (`ReadStages`) carried on the barrier: a
-//! fragment consumer waits in FRAGMENT_SHADER, a compute consumer in
-//! COMPUTE_SHADER, a vertex consumer (the particle billboards pulling their
-//! particle out of the simulated pool) in VERTEX_SHADER, and a resource read in
+//! fragment consumer waits in `FRAGMENT_SHADER`, a compute consumer in
+//! `COMPUTE_SHADER`, a vertex consumer (the particle billboards pulling their
+//! particle out of the simulated pool) in `VERTEX_SHADER`, and a resource read in
 //! several stages on one version waits in all of them so the single transition
 //! makes the producing write visible to each.
 //!
@@ -25,8 +25,8 @@
 //! really in. Resting is per-resource because class does not determine it:
 //! `shadow_map` and `hdr_depth` are both depth targets, but the first rests
 //! sampled between frames -- its staggered cascades keep the depth they were last
-//! rendered with, and its producer barrier is the real SHADER_READ_ONLY ->
-//! DEPTH_STENCIL_ATTACHMENT reset -- while main depth carries nothing across the
+//! rendered with, and its producer barrier is the real `SHADER_READ_ONLY` ->
+//! `DEPTH_STENCIL_ATTACHMENT` reset -- while main depth carries nothing across the
 //! frame boundary and its first use discards.
 //!
 //! The reverse direction is `vk_restore`: a frame that leaves a resource somewhere
@@ -75,7 +75,7 @@ impl VkResting {
     // barrier's `read_stages` asks for.
     fn triple(self) -> (vk::ImageLayout, vk::AccessFlags, vk::PipelineStageFlags) {
         match self {
-            VkResting::Discarded => (
+            Self::Discarded => (
                 vk::ImageLayout::UNDEFINED,
                 vk::AccessFlags::empty(),
                 vk::PipelineStageFlags::TOP_OF_PIPE,
@@ -86,19 +86,19 @@ impl VkResting {
             // both (Main samples it, the fog froxel kernel taps it), so a producer
             // that named only the fragment stage would leave the compute read
             // unordered against next frame's write.
-            VkResting::Sampled => (
+            Self::Sampled => (
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 vk::AccessFlags::SHADER_READ,
                 vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER,
             ),
             // Several frames are in flight, so the frame fence does not retire
             // the last frame's accesses; the first use waits on them here.
-            VkResting::Carried => (
+            Self::Carried => (
                 vk::ImageLayout::UNDEFINED,
                 vk::AccessFlags::SHADER_WRITE,
                 vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::VERTEX_SHADER,
             ),
-            VkResting::Rewritten => (
+            Self::Rewritten => (
                 vk::ImageLayout::UNDEFINED,
                 vk::AccessFlags::SHADER_READ,
                 vk::PipelineStageFlags::FRAGMENT_SHADER,

@@ -58,7 +58,7 @@ impl JointPose {
     /// Slerps the poses' own Euler rotations rather than going through
     /// [`blend_matrices`](crate::transform::blend_matrices), which would
     /// have to recover them from the composed matrices first.
-    pub fn blend_matrix(&self, other: &JointPose, f: f32) -> Mat4 {
+    pub fn blend_matrix(&self, other: &Self, f: f32) -> Mat4 {
         let mix = |a: [f32; 3], b: [f32; 3]| {
             [
                 a[0] + (b[0] - a[0]) * f,
@@ -286,7 +286,7 @@ impl AnimationClip {
     /// matrix per joint into `out` (cleared first, so its capacity is
     /// reused). Joints with no track keep their bind transform.
     pub fn sample_into(&self, t: f32, skeleton: &Skeleton, out: &mut Vec<Mat4>) {
-        self.sample_looped_into(t, self.looping, skeleton, out)
+        self.sample_looped_into(t, self.looping, skeleton, out);
     }
 
     /// `sample_into` with the loop mode supplied by the caller instead of the
@@ -491,7 +491,7 @@ mod tests {
         clip.sample_into(1.0, &sk, &mut locals);
         // Recover yaw: for a pure yaw the first column is (cos, 0, -sin).
         let yaw = atan2(-locals[1][0][2], locals[1][0][0]).to_degrees();
-        assert!(approx(yaw, 45.0), "yaw was {}", yaw);
+        assert!(approx(yaw, 45.0), "yaw was {yaw}");
     }
 
     #[test]
@@ -604,8 +604,8 @@ mod tests {
         let mb = b.to_matrix();
         for c in 0..4 {
             for row in 0..4 {
-                assert!(approx(at0[c][row], ma[c][row]), "f=0 [{}][{}]", c, row);
-                assert!(approx(at1[c][row], mb[c][row]), "f=1 [{}][{}]", c, row);
+                assert!(approx(at0[c][row], ma[c][row]), "f=0 [{c}][{row}]");
+                assert!(approx(at1[c][row], mb[c][row]), "f=1 [{c}][{row}]");
             }
         }
     }

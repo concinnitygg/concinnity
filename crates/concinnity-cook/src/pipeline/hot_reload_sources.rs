@@ -54,8 +54,8 @@ fn str_arg(args: &serde_json::Value, key: &str) -> String {
 
 fn u32_arg(args: &serde_json::Value, key: &str, default: u32) -> u32 {
     args.get(key)
-        .and_then(|v| v.as_u64())
-        .unwrap_or(default as u64) as u32
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_else(|| u64::from(default)) as u32
 }
 
 fn texture_source(asset: &WorldJsonlAsset) -> TextureSourceInfo {
@@ -86,7 +86,7 @@ fn mesh_source(asset: &WorldJsonlAsset) -> MeshSourceInfo {
             .and_then(|v| v.as_array())
             .map(|a| {
                 a.iter()
-                    .filter_map(|d| d.as_f64())
+                    .filter_map(serde_json::Value::as_f64)
                     .map(|d| d as f32)
                     .collect()
             })

@@ -1,10 +1,10 @@
 //! Metal-side executor for the render graph. `MtlContext::execute_graph`
 //! walks a `CompiledGraph` and dispatches each pass by `PassId` to the
 //! existing `encode_*` method. Every Metal pass that ever ran inline is
-//! now in the graph. Composite plus Shadow, Main, Cull, AutoExposure,
-//! Bloom, Velocity, TaaResolve, SsrResolve, ParticlesSim, ParticlesDraw,
-//! Fog, Decals, GBufferPrepass, and SsaoBlur are the dispatchable PassIds.
-//! PassIds `SsaoDepth` and `SsaoKernel` are timing-only: their per-pass
+//! now in the graph. Composite plus Shadow, Main, Cull, `AutoExposure`,
+//! Bloom, Velocity, `TaaResolve`, `SsrResolve`, `ParticlesSim`, `ParticlesDraw`,
+//! Fog, Decals, `GBufferPrepass`, and `SsaoBlur` are the dispatchable `PassIds`.
+//! `PassIds` `SsaoDepth` and `SsaoKernel` are timing-only: their per-pass
 //! timing slots fire from `diagnostics.pass_timing.attach_*` calls inside
 //! the bundled `encode_ssao` Rust function, but they must never appear as
 //! graph nodes (the executor rejects them with a clear error if mis-added).
@@ -18,7 +18,7 @@
 //! pairs the schedule derived, laid out by `metal/graph_events.rs` and carried
 //! by `metal/graph_queues.rs`.
 //!
-//! The `Composite` pass keeps using the outer cmd_buf that `draw_frame` owns (so
+//! The `Composite` pass keeps using the outer `cmd_buf` that `draw_frame` owns (so
 //! `presentDrawable` + the completion handler stay attached to the cmd buf that
 //! actually writes to the drawable). It is the last graphics pass, so it also
 //! carries that queue's frame terminal signal, and `draw_frame` records the
@@ -72,7 +72,7 @@
 //!      not model (the bindless texture pool, the env maps, the accel BLAS). So
 //!      it stays inline and comprehensive at each indirect-access encoder: the
 //!      ICB write residency + the bindless main pass `use_bindless_textures`
-//!      (cull.rs), and the RT trace (rt_reflections.rs / raytrace.rs).
+//!      (cull.rs), and the RT trace (`rt_reflections.rs` / raytrace.rs).
 //!
 //! The Vulkan / DirectX executors consume the same `BarrierOp` list; Metal reads
 //! the graph for ordering + resource lifetimes only. (If untracked / heap
@@ -231,9 +231,9 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
 // exclusively on the main thread (Composite + present + completion
 // handler); every worker spawned by `execute_graph` mints its own cmd buf.
 // All other fields are Sync (POD or thread-safe Apple Metal handles).
-unsafe impl<'a> Send for GraphFrameParams<'a> {}
+unsafe impl Send for GraphFrameParams<'_> {}
 // SAFETY: as for `Send` above.
-unsafe impl<'a> Sync for GraphFrameParams<'a> {}
+unsafe impl Sync for GraphFrameParams<'_> {}
 
 fn pass_input<T>(value: Option<T>, pass: PassId, input: &str) -> RenderResult<T> {
     value.ok_or_else(|| {
@@ -519,7 +519,7 @@ impl MtlContext {
         pass_id: PassId,
         cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
         params: &GraphFrameParams<'_>,
-        particle_frame: Option<&concinnity_core::render::particles::ParticleFrame>,
+        particle_frame: Option<&ParticleFrame>,
     ) -> RenderResult<u32> {
         Ok(match pass_id {
             PassId::Cull => {
@@ -814,14 +814,14 @@ impl MtlContext {
                 // `&mut self` before the fan-out via `prepare_particle_pass`;
                 // both read-only halves consume the precomputed frame.
                 if let Some(frame) = particle_frame {
-                    self.encode_particles_sim(cmd_buf, frame)?;
+                    self.encode_particles_sim(cmd_buf, *frame)?;
                 }
                 0
             }
             PassId::ParticlesDraw => {
                 let write = params.reactive.particles;
                 let draws = if let Some(frame) = particle_frame {
-                    self.encode_particles_draw(cmd_buf, frame, params.vp, params.frustum, write)?
+                    self.encode_particles_draw(cmd_buf, *frame, params.vp, params.frustum, write)?
                 } else {
                     0
                 };

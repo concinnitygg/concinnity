@@ -90,7 +90,7 @@ pub(crate) struct Solver {
 
 impl Solver {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
-        Solver {
+        Self {
             bodies: alloc::vec![SolverBody::IMMOVABLE; capacity],
             taken: alloc::vec![false; capacity],
             active: Vec::with_capacity(capacity),

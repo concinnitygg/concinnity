@@ -1,7 +1,7 @@
 //! Semantic validation of an expanded world: per-asset arg checks, cross-asset
-//! reference checks, and world-shape rules (crate::check::shape). Structural
+//! reference checks, and world-shape rules (`crate::check::shape`). Structural
 //! validation (name/type present, known type, unique names) happens earlier in
-//! crate::authoring::world::load_world.
+//! `crate::authoring::world::load_world`.
 //!
 //! Most checks here are pure JSON-shape validation. A few asset types validate
 //! by running their compiler (mesh generators, texture generators,
@@ -29,6 +29,7 @@ pub(crate) mod sdf_volume;
 pub(crate) mod shader;
 
 pub use shader::is_shader_extension;
+use std::collections::HashSet;
 pub(crate) mod shape;
 /// `TextLabel` argument checks.
 pub(crate) mod text_label;
@@ -101,7 +102,7 @@ pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>>
     // Names must still be unique after expansion and injection: a duplicate
     // here means a generated or injected asset silently aliased another (the
     // authored world's uniqueness was already checked before expansion).
-    let mut seen_names: std::collections::HashSet<&str> = Default::default();
+    let mut seen_names: HashSet<&str> = HashSet::default();
     for asset in assets {
         if !seen_names.insert(asset.id.as_str()) {
             errors.push(format!(

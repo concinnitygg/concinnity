@@ -156,8 +156,8 @@ mod tests {
         let at1 = blend_locals(&a, &b, 1.0);
         for c in 0..4 {
             for row in 0..4 {
-                assert!(approx(at0[0][c][row], a[0][c][row]), "f=0 [{}][{}]", c, row);
-                assert!(approx(at1[0][c][row], b[0][c][row]), "f=1 [{}][{}]", c, row);
+                assert!(approx(at0[0][c][row], a[0][c][row]), "f=0 [{c}][{row}]");
+                assert!(approx(at1[0][c][row], b[0][c][row]), "f=1 [{c}][{row}]");
             }
         }
     }
@@ -171,7 +171,7 @@ mod tests {
         let mid = blend_locals(&a, &b, 0.5);
         // For a pure yaw the first column is (cos, 0, -sin).
         let yaw = (-mid[0][0][2]).atan2(mid[0][0][0]).to_degrees();
-        assert!(approx(yaw, 45.0), "yaw was {}", yaw);
+        assert!(approx(yaw, 45.0), "yaw was {yaw}");
     }
 
     #[test]
@@ -228,9 +228,9 @@ mod tests {
         // in-place accumulator must reproduce the Vec-returning reference
         // exactly (same operations in the same order), so the rewrite cannot
         // have drifted the animation output.
-        let mut seed = 0x12345678u32;
+        let mut seed = 0x1234_5678_u32;
         let mut next = move || {
-            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             (seed >> 8) as f32 / (1 << 24) as f32
         };
         for case in 0..20 {

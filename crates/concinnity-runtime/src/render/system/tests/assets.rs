@@ -19,7 +19,7 @@ fn font_payload(w: u32, h: u32) -> Vec<u8> {
     bytes.extend(vec![0xFFu8; (w * h * 4) as usize]);
     // One glyph: 'H', whose height drives `derive_cap_px`.
     bytes.extend_from_slice(&1u32.to_le_bytes());
-    bytes.extend_from_slice(&(b'H' as u32).to_le_bytes());
+    bytes.extend_from_slice(&u32::from(b'H').to_le_bytes());
     for v in [0u16, 0, 16, 22] {
         bytes.extend_from_slice(&v.to_le_bytes());
     }
@@ -32,7 +32,7 @@ fn font_payload(w: u32, h: u32) -> Vec<u8> {
 impl WorldBuilder {
     // Register a resource record of `kind` at the next handle for that kind,
     // with `bytes` as its compiled payload, and return the handle.
-    fn push_resource(&mut self, kind: concinnity_core::ecs::ResourceKind, bytes: &[u8]) -> u32 {
+    fn push_resource(&mut self, kind: ResourceKind, bytes: &[u8]) -> u32 {
         let locator = self.payload(bytes);
         let handle = self.kind_records(kind).len() as u32;
         self.kind_records(kind)
@@ -49,7 +49,7 @@ impl WorldBuilder {
     // below author are routed; the quad builder owns mesh / texture / material.
     fn kind_records(
         &mut self,
-        kind: concinnity_core::ecs::ResourceKind,
+        kind: ResourceKind,
     ) -> &mut Vec<concinnity_core::ecs::ResourceRecord> {
         use concinnity_core::ecs::ResourceKind;
         match kind {
@@ -299,7 +299,7 @@ fn an_unreadable_environment_map_payload_fails_init() {
     // A locator past the end of the blob's only section.
     b.env_map_records
         .push(concinnity_core::ecs::ResourceRecord {
-            resource_kind: concinnity_core::ecs::ResourceKind::EnvironmentMap,
+            resource_kind: ResourceKind::EnvironmentMap,
             handle: 0,
             payload: Some(PayloadLocator {
                 blob_index: 0,
@@ -426,7 +426,7 @@ fn one_shot_world_fx_reach_the_backend_at_init() {
         extent: [8.0, 8.0],
         resolution: 4,
         layers: vec![TerrainLayer {
-            grass: concinnity_core::ecs::Ref::new(AssetId(834)),
+            grass: Ref::new(AssetId(834)),
             density_mask: None,
         }],
         locator: Some(ground),
@@ -510,7 +510,7 @@ impl WorldBuilder {
         let handle = self.material_records.len() as u32;
         self.material_records
             .push(concinnity_core::ecs::ResourceRecord {
-                resource_kind: concinnity_core::ecs::ResourceKind::Material,
+                resource_kind: ResourceKind::Material,
                 handle,
                 payload: None,
                 data_bytes: postcard::to_allocvec(&mat).unwrap(),
@@ -542,7 +542,7 @@ fn an_undecodable_material_record_fails_init() {
     let mut b = scene_builder();
     b.material_records
         .push(concinnity_core::ecs::ResourceRecord {
-            resource_kind: concinnity_core::ecs::ResourceKind::Material,
+            resource_kind: ResourceKind::Material,
             handle: 1,
             payload: None,
             data_bytes: vec![0xFF; 2],

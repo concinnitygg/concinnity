@@ -38,19 +38,19 @@ pub(super) enum ResourceDecl {
 impl ResourceDecl {
     pub(super) fn label(&self) -> &'static str {
         match self {
-            ResourceDecl::Texture { label, .. } | ResourceDecl::Buffer { label, .. } => label,
+            Self::Texture { label, .. } | Self::Buffer { label, .. } => label,
         }
     }
 
     pub(super) fn origin(&self) -> ResourceOrigin {
         match self {
-            ResourceDecl::Texture { origin, .. } | ResourceDecl::Buffer { origin, .. } => *origin,
+            Self::Texture { origin, .. } | Self::Buffer { origin, .. } => *origin,
         }
     }
 
     pub(super) fn bump_version(&mut self) -> u32 {
         match self {
-            ResourceDecl::Texture { version, .. } | ResourceDecl::Buffer { version, .. } => {
+            Self::Texture { version, .. } | Self::Buffer { version, .. } => {
                 *version += 1;
                 *version
             }
@@ -62,8 +62,8 @@ impl ResourceDecl {
     // aliasing planner can size each transient resource.
     pub(super) fn texture_desc(&self) -> Option<TextureDesc> {
         match self {
-            ResourceDecl::Texture { desc, .. } => Some(*desc),
-            ResourceDecl::Buffer { .. } => None,
+            Self::Texture { desc, .. } => Some(*desc),
+            Self::Buffer { .. } => None,
         }
     }
 
@@ -72,8 +72,8 @@ impl ResourceDecl {
     // resource's barrier class from its declared usage.
     pub(super) fn buffer_desc(&self) -> Option<BufferDesc> {
         match self {
-            ResourceDecl::Buffer { desc, .. } => Some(*desc),
-            ResourceDecl::Texture { .. } => None,
+            Self::Buffer { desc, .. } => Some(*desc),
+            Self::Texture { .. } => None,
         }
     }
 }
@@ -307,7 +307,7 @@ impl PassBuilder<'_> {
     ) -> &mut Self {
         if valid {
             let pass = &mut self.builder.passes[self.pass_idx];
-            let stage = stage.unwrap_or(ReadStages::for_pass_kind(pass.kind));
+            let stage = stage.unwrap_or_else(|| ReadStages::for_pass_kind(pass.kind));
             pass.reads.push(ResourceRead {
                 version: ResourceVersion { resource, version },
                 stage,

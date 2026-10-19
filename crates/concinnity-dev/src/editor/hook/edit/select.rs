@@ -1,4 +1,4 @@
-//! EditorHook: the /select console command. Resolution is pure
+//! `EditorHook`: the /select console command. Resolution is pure
 //! (`editor/select_related.rs`); this dispatch feeds it the working entries
 //! (or, for origin, a fresh cook so the grouping matches the outliner) and
 //! replaces the selection with what comes back.
@@ -21,15 +21,12 @@ impl EditorHook {
                 match self.cook_working_entries() {
                     Ok(loaded) => {
                         let groups = asset_tree::groups_from(&loaded);
-                        match select_related::same_group(&groups, &active) {
-                            Some(names) => {
-                                names.iter().map(|n| self.handle_for(n)).collect::<Vec<_>>()
-                            }
-                            None => {
-                                self.console_sink
-                                    .error(&format!("no origin group lists {active}"));
-                                return;
-                            }
+                        if let Some(names) = select_related::same_group(&groups, &active) {
+                            names.iter().map(|n| self.handle_for(n)).collect::<Vec<_>>()
+                        } else {
+                            self.console_sink
+                                .error(&format!("no origin group lists {active}"));
+                            return;
                         }
                     }
                     Err(e) => {

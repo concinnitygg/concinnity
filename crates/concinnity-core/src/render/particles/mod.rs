@@ -186,7 +186,7 @@ pub fn build_particle_records(
 
 fn sanitized_color(c: [f32; 4]) -> [f32; 4] {
     let mut out = c;
-    for x in out.iter_mut() {
+    for x in &mut out {
         if !x.is_finite() {
             *x = 0.0;
         }

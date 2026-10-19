@@ -1,4 +1,4 @@
-//! Compiles a ColorLut component's args into the binary payload the renderer
+//! Compiles a `ColorLut` component's args into the binary payload the renderer
 //! uploads as a 3D color-grading LUT. The runtime samples this LUT in the
 //! composite (post-process) pass with the display-referred sRGB color as the
 //! texture coordinate, blending the graded result by the `ColorLut`'s
@@ -63,14 +63,17 @@ pub(crate) fn compile_color_lut_payload(
 
 // The blend `strength` a `ColorLut`'s args declare, clamped into its range.
 fn color_lut_strength(args: &serde_json::Value) -> f32 {
-    let strength = args.get("strength").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+    let strength = args
+        .get("strength")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(1.0) as f32;
     if !(0.0..=1.0).contains(&strength) {
         tracing::warn!("ColorLut.strength: {strength} is outside its range, clamped");
     }
     strength.clamp(0.0, 1.0)
 }
 
-/// Decode the ColorLut source at `path` the same way `compile_color_lut_payload`
+/// Decode the `ColorLut` source at `path` the same way `compile_color_lut_payload`
 /// does at build time. Dispatches between `.cube` text parse and PNG-strip parse
 /// based on the file extension. Exposed for the runtime asset hot-reload path
 /// (`cn debug` only); production reads the compiled payload via
@@ -87,7 +90,7 @@ fn decode(path: &str) -> Result<(u32, Vec<u8>), String> {
     match classify_source(path)? {
         LutFormat::Cube => {
             let text = std::fs::read_to_string(path)
-                .map_err(|e| format!("failed to read LUT source '{}': {}", path, e))?;
+                .map_err(|e| format!("failed to read LUT source '{path}': {e}"))?;
             parse_cube(&text)
         }
         LutFormat::Png => parse_png_strip(path),
@@ -134,11 +137,11 @@ pub(crate) fn parse_png_strip(path: &str) -> Result<(u32, Vec<u8>), String> {
 fn load_png_rgba8(path: &str) -> Result<(u32, u32, Vec<u8>), String> {
     use png::ColorType;
     let file = std::fs::File::open(path)
-        .map_err(|e| format!("failed to open LUT source '{}': {}", path, e))?;
+        .map_err(|e| format!("failed to open LUT source '{path}': {e}"))?;
     let decoder = png::Decoder::new(std::io::BufReader::new(file));
     let mut reader = decoder
         .read_info()
-        .map_err(|e| format!("failed to read PNG info for '{}': {}", path, e))?;
+        .map_err(|e| format!("failed to read PNG info for '{path}': {e}"))?;
     let mut buf = vec![
         0u8;
         reader
@@ -147,7 +150,7 @@ fn load_png_rgba8(path: &str) -> Result<(u32, u32, Vec<u8>), String> {
     ];
     let info = reader
         .next_frame(&mut buf)
-        .map_err(|e| format!("failed to decode PNG frame for '{}': {}", path, e))?;
+        .map_err(|e| format!("failed to decode PNG frame for '{path}': {e}"))?;
     let raw = &buf[..info.buffer_size()];
     let pixels = match info.color_type {
         ColorType::Rgba => raw.to_vec(),
@@ -160,8 +163,7 @@ fn load_png_rgba8(path: &str) -> Result<(u32, u32, Vec<u8>), String> {
         }
         other => {
             return Err(format!(
-                "ColorLut strip '{}' has unsupported PNG color type {:?} (need RGB/RGBA)",
-                path, other
+                "ColorLut strip '{path}' has unsupported PNG color type {other:?} (need RGB/RGBA)"
             ));
         }
     };
@@ -304,7 +306,7 @@ LUT_3D_SIZE 2
         let payload =
             compile_color_lut_payload(&serde_json::json!({"source": src}), None).expect("compile");
         // Header: magic "LUT3", size, format 0 (RGBA8), strength, then 2^3 texels.
-        assert_eq!(&payload[0..4], &0x3354554cu32.to_le_bytes());
+        assert_eq!(&payload[0..4], &0x3354_554c_u32.to_le_bytes());
         assert_eq!(&payload[4..8], &2u32.to_le_bytes());
         assert_eq!(&payload[8..12], &0u32.to_le_bytes());
         assert_eq!(&payload[12..16], &1.0f32.to_le_bytes());
@@ -353,7 +355,7 @@ LUT_3D_SIZE 2
         let src = write_png(&dir, "s.png", 4, 2, png::ColorType::Rgba, &strip2_pixels());
         let payload =
             compile_color_lut_payload(&serde_json::json!({"source": src}), None).expect("compile");
-        assert_eq!(&payload[0..4], &0x3354554cu32.to_le_bytes());
+        assert_eq!(&payload[0..4], &0x3354_554c_u32.to_le_bytes());
         assert_eq!(&payload[4..8], &2u32.to_le_bytes());
         assert_eq!(payload.len(), 16 + 8 * 4);
         // Texel (r=0, g=0, b=0) is strip pixel (0, 0).

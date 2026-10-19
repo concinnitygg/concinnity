@@ -30,7 +30,7 @@ pub struct DeviceCapabilities {
     pub ray_tracing_with_xess: bool,
     /// Whether the upscaler implementation is a choice (FSR3 / DLSS / XeSS)
     /// rather than fixed. DirectX and Vulkan offer the selection; Metal always
-    /// upscales through MetalFX, so the row has nothing to pick.
+    /// upscales through `MetalFX`, so the row has nothing to pick.
     pub selectable_upscaler: bool,
     /// The vendor upscalers this build can try, in the shared fallback order.
     pub upscalers: UpscalerAvailability,

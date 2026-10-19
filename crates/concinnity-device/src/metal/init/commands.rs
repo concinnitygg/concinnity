@@ -62,7 +62,7 @@ pub(super) fn build_diagnostics(gpu: &InitGpu<'_>) -> Diagnostics {
         pass_times_us: Arc::new(std::array::from_fn(|_| AtomicU32::new(0))),
         pass_async_mask: Arc::new(AtomicU64::new(0)),
         gpu_overlap_us: Arc::new(AtomicU32::new(0)),
-        gpu_done: Arc::new(std::sync::Mutex::new(None)),
+        gpu_done: Arc::new(Mutex::new(None)),
         gpu_span_end_ns: Arc::new(AtomicU64::new(0)),
         draw_calls_accum: AtomicU32::new(0),
     }

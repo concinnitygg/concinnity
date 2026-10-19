@@ -110,7 +110,7 @@ pub const DEFAULT_MOUSE_SENSITIVITY: f32 = 0.0015;
 pub const DEFAULT_GAMEPAD_DEADZONE: f32 = 0.15;
 
 /// Effective vertical FOV in degrees when the user has never chosen one.
-/// Matches Camera3D's authored default.
+/// Matches `Camera3D`'s authored default.
 pub const DEFAULT_FOV: f32 = 75.0;
 
 /// Fraction of a slider's range one focused Left/Right pulse steps.

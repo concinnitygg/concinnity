@@ -38,7 +38,7 @@ pub(super) fn emit_menu_screen(
 
     if style.dim[3] > 0.0 {
         out.push(sprite(
-            &format!("{}_dim", screen),
+            &format!("{screen}_dim"),
             0.0,
             0.0,
             win_w,
@@ -64,7 +64,7 @@ pub(super) fn emit_menu_screen(
     if has_title {
         let title_scale = style.text_scale * 1.4;
         out.push(centered_label(
-            &format!("{}_title", screen),
+            &format!("{screen}_title"),
             title,
             font,
             center_x,
@@ -77,7 +77,7 @@ pub(super) fn emit_menu_screen(
 
     for (i, (label, action)) in items.iter().enumerate() {
         let row_y = start_y + row as f32 * pitch;
-        let label_name = format!("{}_label_{}", screen, i);
+        let label_name = format!("{screen}_label_{i}");
 
         out.push(centered_label(
             &label_name,
@@ -91,7 +91,7 @@ pub(super) fn emit_menu_screen(
 
         out.push(spec_to_value(
             &asset::hit_region(
-                format!("{}_btn_{}", screen, i),
+                format!("{screen}_btn_{i}"),
                 [
                     center_x - style.button_width / 2.0,
                     row_y,
@@ -108,7 +108,7 @@ pub(super) fn emit_menu_screen(
     }
 
     if style.cursor {
-        out.push(cursor_sprite(&format!("{}_cursor", screen), style));
+        out.push(cursor_sprite(&format!("{screen}_cursor"), style));
     }
 
     scope_to_screen(&mut out, screen);

@@ -24,7 +24,7 @@ use crate::directx::transparent::TransparentResources;
 // composite); its targets come from the post block, so a live reflection
 // enable builds it the same way.
 pub(super) fn build_reflection_composite(
-    device: &DxPostDevice,
+    device: &DxPostDevice<'_>,
     targets: &DxTargets,
     graphics: &ResolvedGraphics,
 ) -> RenderResult<Option<DxReflectionCompositePass>> {
@@ -115,7 +115,7 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> DxRa
             // here rather than through `seethrough_meshes_enabled` because
             // the context does not exist yet; the two agree because both read
             // "a material opted in AND the mesh pipelines built".
-            exclude_seethrough: transparent.is_some_and(|t| t.mesh_pipelines_ready()),
+            exclude_seethrough: transparent.is_some_and(TransparentResources::mesh_pipelines_ready),
             skinned_present: false,
         }) {
             Ok(accel) => accel,

@@ -605,45 +605,42 @@ impl GrassField {
             tiles.push(lod::tile_capacity(field, views, tile));
         };
         let wind = self.wind.strength;
-        let limit = match &self.planet {
-            Some(planet) => {
-                // A planet's ground is unbounded, and its grass tiles are
-                // narrowest where the face is stretched least.
-                let ground = tiles::GroundRect::centered([0.0, 0.0], [1.0e7, 1.0e7]);
-                let tile = (planet.grid.tile_size() / libm::sqrt(planet.grid.max_stretch)) as f32;
-                for layer in &planet.layers {
-                    // Its blades stand at most at the layer's density, with a
-                    // margin for slopes holding more ground than their
-                    // footprint.
-                    if let Some(grid) = GrassGrid::for_density(layer.density * 1.15) {
-                        let reach = planet_layer_gpu(layer, wind, self.lod_height).reach;
-                        add(
-                            &CapacityField {
-                                ground: &ground,
-                                grid: &grid,
-                                width: layer.look.width,
-                                blade_height: self.lod_height,
-                            },
-                            [tile, reach],
-                        );
-                    }
-                }
-                MAX_PLANET_GRASS_REACH
-            }
-            None => {
-                for layer in &self.layers {
+        let limit = if let Some(planet) = &self.planet {
+            // A planet's ground is unbounded, and its grass tiles are
+            // narrowest where the face is stretched least.
+            let ground = tiles::GroundRect::centered([0.0, 0.0], [1.0e7, 1.0e7]);
+            let tile = (planet.grid.tile_size() / libm::sqrt(planet.grid.max_stretch)) as f32;
+            for layer in &planet.layers {
+                // Its blades stand at most at the layer's density, with a
+                // margin for slopes holding more ground than their
+                // footprint.
+                if let Some(grid) = GrassGrid::for_density(layer.density * 1.15) {
+                    let reach = planet_layer_gpu(layer, wind, self.lod_height).reach;
                     add(
                         &CapacityField {
-                            ground: &layer.ground.rect,
-                            grid: &layer.grid,
+                            ground: &ground,
+                            grid: &grid,
                             width: layer.look.width,
                             blade_height: self.lod_height,
                         },
-                        [GRASS_TILE_SIZE, blade_reach(&layer.look, self.lod_height)],
+                        [tile, reach],
                     );
                 }
-                f32::INFINITY
             }
+            MAX_PLANET_GRASS_REACH
+        } else {
+            for layer in &self.layers {
+                add(
+                    &CapacityField {
+                        ground: &layer.ground.rect,
+                        grid: &layer.grid,
+                        width: layer.look.width,
+                        blade_height: self.lod_height,
+                    },
+                    [GRASS_TILE_SIZE, blade_reach(&layer.look, self.lod_height)],
+                );
+            }
+            f32::INFINITY
         };
         // A run holds the tiles of at most so many layers, whichever are in
         // reach.
@@ -701,7 +698,7 @@ impl GrassField {
             .shadow
             .filter(|_| self.shadow_capacity() > 0)
             .map(|light| {
-                let params = self.shadow_params(&light, inputs.elapsed, params);
+                let params = self.shadow_params(&light, inputs.elapsed, &params);
                 self.place(
                     planet.as_ref(),
                     camera.position,
@@ -827,7 +824,7 @@ impl GrassField {
         &self,
         light: &GrassShadowView,
         elapsed: f32,
-        view: GrassParams,
+        view: &GrassParams,
     ) -> GrassParams {
         let coarsest = GRASS_LOD_COUNT - 1;
         let cap = self.shadow_capacity();
@@ -855,7 +852,7 @@ impl GrassField {
                 light.to_light[2],
                 elapsed,
             ],
-            ..view
+            ..*view
         }
     }
 
@@ -1441,7 +1438,7 @@ mod tests {
         let under: hashbrown::HashSet<u32> = frame
             .tiles
             .iter()
-            .filter(|t| t.level_layer & 0xff == 0 && t.tile == [0, 0])
+            .filter(|t| t.level_layer.trailing_zeros() >= 8 && t.tile == [0, 0])
             .map(|t| t.level_layer >> 8)
             .collect();
         assert_eq!(under.len(), MAX_GRASS_LAYERS);
@@ -1484,7 +1481,7 @@ mod tests {
         seen
     }
 
-    fn run_tiles<'a>(frame: &'a GrassFrame, pass: &GrassPass) -> &'a [GrassTileGpu] {
+    fn run_tiles<'a>(frame: &'a GrassFrame<'_>, pass: &GrassPass) -> &'a [GrassTileGpu] {
         let p = &pass.params;
         &frame.tiles[p.tile_base as usize..(p.tile_base + p.tile_count) as usize]
     }
@@ -1524,11 +1521,14 @@ mod tests {
         // x in [-10, 30) is tiles -3..=7; z in [-12, 4) is tiles -3..=0, each
         // visited once.
         let tiles = run_tiles(&whole, &frame);
-        let on_ground: Vec<_> = spanned(tiles)
-            .into_iter()
-            .filter(|(_, t)| (-3..=7).contains(&t[0]) && (-3..=0).contains(&t[1]))
-            .collect();
-        assert_eq!(on_ground.len(), 44);
+
+        assert_eq!(
+            spanned(tiles)
+                .into_iter()
+                .filter(|(_, t)| (-3..=7).contains(&t[0]) && (-3..=0).contains(&t[1]))
+                .count(),
+            44
+        );
         assert!(tiles.iter().all(|t| t.level_layer >> 8 == 0));
         assert_eq!(p.tile_base, 0);
         assert!(p.tile_count > 0 && p.tile_count <= 44);

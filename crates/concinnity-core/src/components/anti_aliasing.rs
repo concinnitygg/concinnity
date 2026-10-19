@@ -4,7 +4,7 @@ use crate::components::Vocabulary;
 
 /// Anti-aliasing and temporal upscaling: how edges are smoothed, and whether
 /// the scene renders below native resolution and is reconstructed to full. The
-/// `anti_aliasing` section of [GraphicsConfig](#graphicsconfig); a field left
+/// `anti_aliasing` section of [`GraphicsConfig`](#graphicsconfig); a field left
 /// unset takes the default below.
 ///
 /// Temporal anti-aliasing is the default, which is the look on capable
@@ -51,7 +51,7 @@ pub struct AntiAliasing {
     /// available at runtime (DLSS on NVIDIA RTX, else XeSS, else FSR3); `fsr3` /
     /// `dlss` / `xess` request a specific one and fall back when it is
     /// unavailable on the current GPU or build. No effect when `upscaling` is
-    /// off. Metal treats every value as MetalFX.
+    /// off. Metal treats every value as `MetalFX`.
     #[asset(apply = restart)]
     pub upscaler: UpscalerBackend,
 }
@@ -84,10 +84,10 @@ impl UpscaleQuality {
     /// `(output_w * scale(), output_h * scale())`.
     pub fn scale(self) -> f32 {
         match self {
-            UpscaleQuality::Quality => 2.0 / 3.0,
-            UpscaleQuality::Balanced => 0.587,
-            UpscaleQuality::Performance => 0.5,
-            UpscaleQuality::UltraPerformance => 1.0 / 3.0,
+            Self::Quality => 2.0 / 3.0,
+            Self::Balanced => 0.587,
+            Self::Performance => 0.5,
+            Self::UltraPerformance => 1.0 / 3.0,
         }
     }
 
@@ -97,13 +97,13 @@ impl UpscaleQuality {
         if scale >= 0.99 {
             None
         } else if scale >= 0.62 {
-            Some(UpscaleQuality::Quality)
+            Some(Self::Quality)
         } else if scale >= 0.55 {
-            Some(UpscaleQuality::Balanced)
+            Some(Self::Balanced)
         } else if scale >= 0.42 {
-            Some(UpscaleQuality::Performance)
+            Some(Self::Performance)
         } else {
-            Some(UpscaleQuality::UltraPerformance)
+            Some(Self::UltraPerformance)
         }
     }
 }
@@ -112,7 +112,7 @@ impl UpscaleQuality {
 /// to the best available (DLSS, then XeSS, then FSR3); the explicit variants
 /// request a specific upscaler and fall back when it is unavailable. DirectX
 /// and Vulkan both resolve all three, each from the vendor SDK staged beside
-/// the binary; Metal uses MetalFX and treats any value as its native path.
+/// the binary; Metal uses `MetalFX` and treats any value as its native path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default, Vocabulary)]
@@ -163,14 +163,14 @@ impl AaMode {
     /// it needs the velocity pre-pass and the history buffer the other modes
     /// skip.
     pub fn taa_enabled(self) -> bool {
-        matches!(self, AaMode::Taa)
+        matches!(self, Self::Taa)
     }
 
     // Whether the composite's FXAA edge filter runs. Every mode except `Off`
     // does (so `Taa` keeps FXAA as a cheap spatial cleanup on top of the
     // temporal resolve).
     fn fxaa_enabled(self) -> bool {
-        !matches!(self, AaMode::Off)
+        !matches!(self, Self::Off)
     }
 
     /// The composite's FXAA gate as the `0.0` / `1.0` flag `PostProcessParams`

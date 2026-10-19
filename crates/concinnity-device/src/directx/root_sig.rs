@@ -23,9 +23,9 @@ pub(in crate::directx) enum Visibility {
 impl Visibility {
     fn raw(self) -> D3D12_SHADER_VISIBILITY {
         match self {
-            Visibility::All => D3D12_SHADER_VISIBILITY_ALL,
-            Visibility::Vertex => D3D12_SHADER_VISIBILITY_VERTEX,
-            Visibility::Pixel => D3D12_SHADER_VISIBILITY_PIXEL,
+            Self::All => D3D12_SHADER_VISIBILITY_ALL,
+            Self::Vertex => D3D12_SHADER_VISIBILITY_VERTEX,
+            Self::Pixel => D3D12_SHADER_VISIBILITY_PIXEL,
         }
     }
 }
@@ -40,9 +40,9 @@ pub(in crate::directx) enum RangeKind {
 impl RangeKind {
     fn raw(self) -> D3D12_DESCRIPTOR_RANGE_TYPE {
         match self {
-            RangeKind::Srv => D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-            RangeKind::Uav => D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
-            RangeKind::Sampler => D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
+            Self::Srv => D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+            Self::Uav => D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
+            Self::Sampler => D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
         }
     }
 }
@@ -439,11 +439,11 @@ fn serialize_desc_and_create(
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
     unsafe {
-        windows::Win32::Graphics::Direct3D12::D3D12SerializeRootSignature(
+        D3D12SerializeRootSignature(
             desc,
-            windows::Win32::Graphics::Direct3D12::D3D_ROOT_SIGNATURE_VERSION_1,
-            &mut blob,
-            Some(&mut error),
+            D3D_ROOT_SIGNATURE_VERSION_1,
+            &raw mut blob,
+            Some(&raw mut error),
         )
     }
     .map_err(|e| {
@@ -557,7 +557,7 @@ mod tests {
         for (i, table) in tables.iter().enumerate() {
             assert_eq!(table.NumDescriptorRanges, expected_len[i], "table {i}");
             assert_eq!(
-                table.pDescriptorRanges, &sig.ranges[expected_first[i]] as *const _,
+                table.pDescriptorRanges, &raw const sig.ranges[expected_first[i]],
                 "table {i}"
             );
         }

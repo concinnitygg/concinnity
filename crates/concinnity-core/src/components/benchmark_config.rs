@@ -25,7 +25,7 @@ const DEFAULT_PHASE_NAME: &str = "run";
 ///
 /// A benchmarked run takes the camera away from the player: it holds still
 /// through the warm-up, then follows `travel` and `turn` from where it stood.
-/// The legs are the same ones a [CameraTrack](#cameratrack) takes, and played
+/// The legs are the same ones a [`CameraTrack`](#cameratrack) takes, and played
 /// on the same fixed simulation clock, so a slower machine visits the same
 /// poses at the same times and simply samples fewer of them.
 ///
@@ -121,7 +121,7 @@ impl BenchmarkConfig {
     }
 }
 
-/// One named stretch of a [BenchmarkConfig](#benchmarkconfig)'s run.
+/// One named stretch of a [`BenchmarkConfig`](#benchmarkconfig)'s run.
 ///
 /// ```rust
 /// # use concinnity_core::components::BenchmarkPhase;
@@ -138,7 +138,7 @@ pub struct BenchmarkPhase {
     pub seconds: f32,
 }
 
-/// Where a [BenchmarkConfig](#benchmarkconfig) starts the camera.
+/// Where a [`BenchmarkConfig`](#benchmarkconfig) starts the camera.
 ///
 /// ```rust
 /// # use concinnity_core::components::CameraPose;
@@ -168,7 +168,7 @@ pub struct CameraPose {
     pub pitch_deg: f32,
 }
 
-/// One frame a [BenchmarkConfig](#benchmarkconfig) saves as an image.
+/// One frame a [`BenchmarkConfig`](#benchmarkconfig) saves as an image.
 ///
 /// ```rust
 /// # use concinnity_core::components::{BenchmarkConfig, FrameCapture};

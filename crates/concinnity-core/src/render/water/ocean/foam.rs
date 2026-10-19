@@ -98,7 +98,7 @@ impl FoamCalibration {
             return out;
         }
         for c in 0..foaming {
-            let band = BandJacobian::of(&shape, cascades, c);
+            let band = BandJacobian::of(shape, cascades, c);
             if band.sigma <= 0.0 {
                 continue;
             }
@@ -120,7 +120,7 @@ struct BandJacobian {
 impl BandJacobian {
     // From the spectral moments of cascade `c`'s band: the slope variance
     // `int k^2 S(w) dw` and its rate of change `int k^2 w^2 S(w) dw`.
-    fn of(shape: &SeaShape, cascades: &Cascades, c: usize) -> Self {
+    fn of(shape: SeaShape, cascades: &Cascades, c: usize) -> Self {
         const STEPS: usize = 256;
         let [lo, hi] = cascades.band(c);
         let lo = lo.max(TAU / cascades.lengths()[c]);
@@ -148,7 +148,7 @@ impl BandJacobian {
 
     // The mean foam with the threshold `z` deviations below one: what the
     // ramp injects at any moment, plus the fading wake of each crossing.
-    fn mean_foam(&self, z: f32) -> f32 {
+    fn mean_foam(self, z: f32) -> f32 {
         const SAMPLES: usize = 16;
         let injected = (0..SAMPLES)
             .map(|i| below(z + FOAM_RAMP_SIGMAS * (i as f32 + 0.5) / SAMPLES as f32))
@@ -160,7 +160,7 @@ impl BandJacobian {
     }
 
     // The threshold depth, in deviations, whose mean foam is `target`.
-    fn depth_for(&self, target: f32) -> f32 {
+    fn depth_for(self, target: f32) -> f32 {
         let (mut lo, mut hi) = (-4.0f32, 12.0f32);
         for _ in 0..40 {
             let mid = 0.5 * (lo + hi);

@@ -1,4 +1,4 @@
-//! EditorHook: drag-out placement from the Content panel. A press on a grid
+//! `EditorHook`: drag-out placement from the Content panel. A press on a grid
 //! cell arms a drag; once the cursor travels past the slop and leaves the
 //! panel, a dotted ghost box follows the surface under the cursor (nearest
 //! pick-index hit, else the ground plane); release commits one authored entry
@@ -109,7 +109,7 @@ impl EditorHook {
         &mut self,
         input: &FrameInput,
         vp: [f32; 2],
-        world: &mut World,
+        world: &World,
     ) {
         if input.escape {
             self.content.drag = None;
@@ -196,14 +196,17 @@ impl EditorHook {
             .flat_map(|index| index.entries.iter())
             .filter_map(|e| concinnity_core::math::pick::ray_aabb_face(&ray, e.bb_min, e.bb_max))
             .min_by(|a, b| a.t.total_cmp(&b.t));
-        let t = hit.map(|f| f.t).unwrap_or_else(|| {
-            // The ground plane y = 0, when the ray descends toward it.
-            if ray.dir[1] < -1e-4 && ray.origin[1] > 0.0 {
-                -ray.origin[1] / ray.dir[1]
-            } else {
-                FREE_DROP_DISTANCE
-            }
-        });
+        let t = hit.map_or_else(
+            || {
+                // The ground plane y = 0, when the ray descends toward it.
+                if ray.dir[1] < -1e-4 && ray.origin[1] > 0.0 {
+                    -ray.origin[1] / ray.dir[1]
+                } else {
+                    FREE_DROP_DISTANCE
+                }
+            },
+            |f| f.t,
+        );
         let mut position = [
             ray.origin[0] + ray.dir[0] * t,
             ray.origin[1] + ray.dir[1] * t,
@@ -233,7 +236,7 @@ impl EditorHook {
     // Assign the dragged Material to the Prop entry under the cursor.
     fn assign_material_under_cursor(
         &mut self,
-        world: &mut World,
+        world: &World,
         vp: [f32; 2],
         mouse: [f32; 2],
         material: &str,

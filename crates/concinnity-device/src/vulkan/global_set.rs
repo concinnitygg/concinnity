@@ -179,7 +179,10 @@ impl VkContext {
             scene: &self.scene,
             targets: &self.targets,
             probes: &self.probe.gpu,
-            ssgi_indirect: self.ssgi.as_ref().map(|s| s.indirect_view()),
+            ssgi_indirect: self
+                .ssgi
+                .as_ref()
+                .map(super::post::ssgi::SsgiResources::indirect_view),
         }
     }
 }

@@ -96,7 +96,7 @@ pub(crate) fn run(chunk: &mut Chunk<'_>, tuning: &Tuning<'_>) {
 
 fn integrate_velocities(chunk: &mut Chunk<'_>, config: &SimConfig, h: f32) {
     let Chunk { bodies, active, .. } = chunk;
-    for &slot in active.iter() {
+    for &slot in *active {
         let body = bodies.get_mut(slot);
         let pull = config.gravity_at(body.position);
         body.linear_velocity += pull * (body.gravity_scale * h);
@@ -110,7 +110,7 @@ fn integrate_velocities(chunk: &mut Chunk<'_>, config: &SimConfig, h: f32) {
 
 fn integrate_positions(chunk: &mut Chunk<'_>, h: f32) {
     let Chunk { bodies, active, .. } = chunk;
-    for &slot in active.iter() {
+    for &slot in *active {
         bodies.get_mut(slot).integrate_position(h);
     }
 }

@@ -25,7 +25,7 @@ use crate::render::{decal, particles, volumetric_fog};
 /// emitter tunables): the runtime keeps no per-frame update path for them.
 /// `name_of` labels an SDF volume by its asset's name.
 pub fn drain_world_fx(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     name_of: fn(AssetId) -> Option<String>,
     texture_count: usize,
     terrains: &[LoadedTerrain],
@@ -111,7 +111,7 @@ pub fn drain_world_fx(
 /// rather than failing the world build. `name_of` labels each by its asset's
 /// name.
 pub fn drain_sdf_volumes(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     name_of: fn(AssetId) -> Option<String>,
 ) -> Vec<SdfVolumeSource> {
     let raw: Vec<(Option<AssetId>, SdfVolume)> = ctx.drain_with_ids::<SdfVolume>();

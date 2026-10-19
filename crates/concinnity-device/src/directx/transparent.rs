@@ -153,7 +153,7 @@ impl RecordBuffers {
         let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&vertex_buffer),
             SizeInBytes: vbytes.len() as u32,
-            StrideInBytes: std::mem::size_of::<Vertex>() as u32,
+            StrideInBytes: size_of::<Vertex>() as u32,
         };
         let index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&index_buffer),
@@ -171,9 +171,9 @@ impl RecordBuffers {
         let mut p = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
-        unsafe { params_cbuffer.Map(0, None, Some(&mut p)) }
+        unsafe { params_cbuffer.Map(0, None, Some(&raw mut p)) }
             .map_err(|e| map_hresult(e.code(), "map transparent params cb"))?;
-        let params_ptr = p as *mut u8;
+        let params_ptr = p.cast::<u8>();
         for frame in 0..frames {
             // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold one block per
             // frame slot, `frame`'s block holds the payload, and the source is a separate
@@ -183,7 +183,7 @@ impl RecordBuffers {
                     upload.params.as_ptr(),
                     params_ptr.add(frame * params_block as usize),
                     upload.params.len(),
-                )
+                );
             };
         }
         let params_cbuffer_gva = com::gpu_va(&params_cbuffer);
@@ -218,7 +218,7 @@ impl WaterParamsSink for RecordBuffers {
         // water record's upload sized (256-aligned) for one `WaterParams`, and the source is a
         // separate live value, so the ranges cannot overlap.
         unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.params_ptr.add(offset), bytes.len())
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.params_ptr.add(offset), bytes.len());
         };
     }
 }
@@ -279,7 +279,7 @@ impl GlassMeshProducer {
         psos: TracedGlassPsos,
         object_indices: Vec<usize>,
     ) -> RenderResult<Self> {
-        let block = align256(std::mem::size_of::<GlassMeshParams>() as u64);
+        let block = align256(size_of::<GlassMeshParams>() as u64);
         let ring_size = block * object_indices.len().max(1) as u64;
         let frames = alloc.frames_in_flight();
         let mut params_ring: Vec<PooledBuffer> = Vec::with_capacity(frames);
@@ -293,9 +293,9 @@ impl GlassMeshProducer {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map glass mesh params ring"))?;
-            params_ptrs.push(ptr as *mut u8);
+            params_ptrs.push(ptr.cast::<u8>());
             params_ring.push(buf);
         }
         Ok(Self {
@@ -313,20 +313,21 @@ impl GlassMeshProducer {
     // producers: `rt_textured_ready` requires every live producer's textured
     // pipeline, so this is never asked for one it lacks.
     fn pipeline(&self, textured: bool) -> &ID3D12PipelineState {
-        match textured {
-            true => self
-                .textured_rt_pso
+        if textured {
+            self.textured_rt_pso
                 .as_ref()
-                .expect("rt_textured_ready gated the frame on every producer's textured PSO"),
-            false => &self.flat_rt_pso,
+                .expect("rt_textured_ready gated the frame on every producer's textured PSO")
+        } else {
+            &self.flat_rt_pso
         }
     }
 
     // The reflection pre-pass PSO, under the same gate as `pipeline`.
     fn reflection_pipeline(&self, textured: bool) -> &ID3D12PipelineState {
-        match textured {
-            true => &self.reflection_textured_pso,
-            false => &self.reflection_flat_pso,
+        if textured {
+            &self.reflection_textured_pso
+        } else {
+            &self.reflection_flat_pso
         }
     }
 }
@@ -625,9 +626,9 @@ fn build_rt_params_ring(alloc: &DeviceAllocator) -> RenderResult<RtParamsRing> {
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
-        unsafe { buf.Map(0, None, Some(&mut ptr)) }
+        unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
             .map_err(|e| map_hresult(e.code(), "map transparent rt params ubo"))?;
-        ptrs.push(ptr as *mut u8);
+        ptrs.push(ptr.cast::<u8>());
         resources.push(buf);
     }
     Ok((resources, ptrs))
@@ -655,7 +656,7 @@ fn write_scene_copy_srv(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(scene_copy, Some(&desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(scene_copy, Some(&raw const desc), srv_cpu) };
 }
 
 // The glass reflection pre-pass's fixed descriptor slots: an RTV per layer, the
@@ -728,7 +729,7 @@ fn write_reflection_windows(
         // SAFETY: the view descriptor and the resource it names (or none, for a null view) are
         // live for the call, and the destination handle addresses a slot this context reserved
         // for the view in a heap it owns.
-        unsafe { device.CreateShaderResourceView(resource, Some(&desc), cpu) };
+        unsafe { device.CreateShaderResourceView(resource, Some(&raw const desc), cpu) };
     }
 }
 
@@ -782,10 +783,10 @@ impl TransparentResources {
     // the per-frame view ring, and the scene snapshot. Called from
     // `DxContext::new` when the world declares any `GlassPanel` or `WaterSurface`.
     pub(in crate::directx) fn new(
-        device_ctx: TransparentDeviceCtx,
+        device_ctx: TransparentDeviceCtx<'_>,
         config: TransparentBuildConfig,
         scene: TransparentSceneTargets,
-        content: TransparentContent,
+        content: TransparentContent<'_>,
         info_queue: Option<&ID3D12InfoQueue>,
     ) -> RenderResult<Self> {
         let TransparentDeviceCtx { alloc } = device_ctx;
@@ -892,7 +893,7 @@ impl TransparentResources {
         };
 
         // Per-frame view UBO ring.
-        let view_size = align256(std::mem::size_of::<TransparentView>() as u64);
+        let view_size = align256(size_of::<TransparentView>() as u64);
         let frames = alloc.frames_in_flight();
         let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
         let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
@@ -905,9 +906,9 @@ impl TransparentResources {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map transparent view ubo"))?;
-            view_ubo_ptrs.push(ptr as *mut u8);
+            view_ubo_ptrs.push(ptr.cast::<u8>());
             view_ubo_resources.push(buf);
         }
 
@@ -1114,7 +1115,7 @@ impl DxContext {
         let Some(producer) = transparent.glass_mesh.as_ref() else {
             return;
         };
-        let block = align256(std::mem::size_of::<GlassMeshParams>() as u64);
+        let block = align256(size_of::<GlassMeshParams>() as u64);
         let ring_base = com::gpu_va(&producer.params_ring[frame_idx]);
         let ring_ptr = producer.params_ptrs[frame_idx];
         let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
@@ -1136,9 +1137,9 @@ impl DxContext {
             // separate live local, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &mesh.params as *const GlassMeshParams as *const u8,
+                    (&raw const mesh.params).cast::<u8>(),
                     ring_ptr.add(offset as usize),
-                    std::mem::size_of::<GlassMeshParams>(),
+                    size_of::<GlassMeshParams>(),
                 );
             }
             draws.push(GlassMeshDraw {
@@ -1198,12 +1199,14 @@ impl DxContext {
     // True when a visible surface samples a simulated ocean, so `WaterSim` has
     // a reader this frame.
     pub(in crate::directx) fn water_sim_live(&self) -> bool {
-        self.water_sim.as_ref().is_some_and(|o| o.simulates())
+        self.water_sim
+            .as_ref()
+            .is_some_and(super::water_sim::DxOceanSim::simulates)
             && self
                 .transparent
                 .as_ref()
                 .and_then(|t| t.producers.water.as_ref())
-                .is_some_and(|w| w.samples_ocean())
+                .is_some_and(TransparentProducer::samples_ocean)
     }
 
     pub(in crate::directx) fn encode_transparent(
@@ -1216,9 +1219,8 @@ impl DxContext {
         rt_params: Option<&RtParams>,
         reactive: ReactiveWrite,
     ) -> RenderResult<()> {
-        let transparent = match &self.transparent {
-            Some(t) => t,
-            None => return Ok(()),
+        let Some(transparent) = &self.transparent else {
+            return Ok(());
         };
         let cam = [view.camera_pos[0], view.camera_pos[1], view.camera_pos[2]];
 
@@ -1263,9 +1265,9 @@ impl DxContext {
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                view as *const TransparentView as *const u8,
+                std::ptr::from_ref::<TransparentView>(view).cast::<u8>(),
                 transparent.view_ubo_ptrs[frame_idx],
-                std::mem::size_of::<TransparentView>(),
+                size_of::<TransparentView>(),
             );
         }
         let view_gva = com::gpu_va(&transparent.view_ubo_resources[frame_idx]);
@@ -1292,9 +1294,9 @@ impl DxContext {
             // ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &params as *const RtParams as *const u8,
+                    (&raw const params).cast::<u8>(),
                     transparent.rt_params_ubo_ptrs[frame_idx],
-                    std::mem::size_of::<RtParams>(),
+                    size_of::<RtParams>(),
                 );
             }
             Some(com::gpu_va(&transparent.rt_params_ubo_resources[frame_idx]))
@@ -1510,7 +1512,7 @@ impl DxContext {
         &self,
         transparent: &TransparentResources,
         layers: &GlassReflectionLayers,
-        frame: &TransparentFrame,
+        frame: &TransparentFrame<'_>,
         order: &[(Producer, usize)],
     ) {
         let cmd = frame.cmd;
@@ -1525,7 +1527,12 @@ impl DxContext {
                     D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                     D3D12_RESOURCE_STATE_RENDER_TARGET,
                 )]);
-                cmd.OMSetRenderTargets(1, Some(&slots.rtv[layer]), false, Some(&slots.dsv));
+                cmd.OMSetRenderTargets(
+                    1,
+                    Some(&raw const slots.rtv[layer]),
+                    false,
+                    Some(&raw const slots.dsv),
+                );
                 cmd.ClearRenderTargetView(slots.rtv[layer], &[0.0; 4], None);
                 cmd.ClearDepthStencilView(slots.dsv, D3D12_CLEAR_FLAG_DEPTH, DEPTH_CLEAR, 0, None);
                 set_viewport(cmd, layers.extent);
@@ -1568,7 +1575,7 @@ impl DxContext {
     fn draw_transparent_entry(
         &self,
         transparent: &TransparentResources,
-        frame: &TransparentFrame,
+        frame: &TransparentFrame<'_>,
         kind: Producer,
         i: usize,
     ) {
@@ -1579,7 +1586,7 @@ impl DxContext {
             // and slice these commands name is live for the call.
             unsafe {
                 cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
-                cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
+                cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view));
                 cmd.SetGraphicsRootConstantBufferView(1, d.params_gva);
                 cmd.DrawIndexedInstanced(d.index_count, 1, d.index_offset, d.base_vertex, 0);
             }
@@ -1597,7 +1604,7 @@ impl DxContext {
             // and slice these commands name is live for the call.
             unsafe {
                 cmd.IASetVertexBuffers(0, Some(&[r.gpu.vertex_buffer_view]));
-                cmd.IASetIndexBuffer(Some(&r.gpu.index_buffer_view));
+                cmd.IASetIndexBuffer(Some(&raw const r.gpu.index_buffer_view));
                 cmd.SetGraphicsRootConstantBufferView(1, r.gpu.params_gva(frame.frame_idx));
                 cmd.set_graphics_srv_table(frame.planar_root, planar_srv);
                 cmd.DrawIndexedInstanced(r.gpu.index_count, 1, 0, 0, 0);

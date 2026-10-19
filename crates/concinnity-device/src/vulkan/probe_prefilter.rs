@@ -8,7 +8,7 @@
 //! carries a mip chain the `probe_downsample` kernel fills; the probe cube is
 //! the result, one cube of the probe cube array: mip 0 a firefly-clamped copy
 //! of the capture and every mip after it a GGX convolution at that mip's
-//! roughness. Both are R16G16B16A16_SFLOAT: the faces are rendered as halfs,
+//! roughness. Both are `R16G16B16A16_SFLOAT`: the faces are rendered as halfs,
 //! the clamp caps luminance well inside the format's range, and it halves what
 //! a probe costs against an R32G32B32A32 cube.
 //!
@@ -17,8 +17,8 @@
 //! wrote it by submission order alone.
 //!
 //! Layouts, which the barriers below are the whole of: the capture arrives in
-//! TRANSFER_DST (the per-face copies write it), moves to GENERAL for the pyramid
-//! build, then to SHADER_READ_ONLY_OPTIMAL for the GGX dispatches that sample it.
+//! `TRANSFER_DST` (the per-face copies write it), moves to GENERAL for the pyramid
+//! build, then to `SHADER_READ_ONLY_OPTIMAL` for the GGX dispatches that sample it.
 //! The probe cube array never leaves GENERAL (see `probe_set`), so its cube only
 //! takes memory barriers: one ordering the writes after whatever read the cube
 //! before, and one making them visible to the fragment reads after install.
@@ -174,14 +174,14 @@ impl PrefilterGpu {
     /// Allocate the capture, its views and every descriptor set the
     /// convolution's dispatches bind, writing into `target`, whose views must
     /// cover the plan's mips. The capture starts undefined; a bake's per-face
-    /// copies move it to TRANSFER_DST before writing it.
+    /// copies move it to `TRANSFER_DST` before writing it.
     pub(super) fn new(
         device: &VkDevice,
         alloc: &DeviceAllocator,
         pipelines: &ProbePrefilterPipelines,
         plan: &PrefilterPlan,
         target: PrefilterTarget<'_>,
-    ) -> RenderResult<PrefilterGpu> {
+    ) -> RenderResult<Self> {
         let mips = plan.mips();
         let capture = probe_set::create_image(
             alloc,
@@ -244,7 +244,7 @@ impl PrefilterGpu {
                 .apply(device);
         }
 
-        Ok(PrefilterGpu {
+        Ok(Self {
             capture_top: capture_mip_views[0],
             capture,
             probe_image: target.image,
@@ -276,9 +276,9 @@ impl PrefilterGpu {
 
 impl super::context::VkContext {
     /// Record the cheap half of the convolution: the capture moves from the
-    /// per-face copies' TRANSFER_DST into GENERAL, the mirror mip is copied
+    /// per-face copies' `TRANSFER_DST` into GENERAL, the mirror mip is copied
     /// through with the firefly clamp, the source pyramid is reduced level by
-    /// level, and the capture ends in SHADER_READ_ONLY_OPTIMAL for the GGX
+    /// level, and the capture ends in `SHADER_READ_ONLY_OPTIMAL` for the GGX
     /// dispatches that follow. The probe's cube is ordered after whatever read it
     /// last first; it stays in GENERAL throughout.
     ///
@@ -406,7 +406,7 @@ impl super::context::VkContext {
     }
 
     /// Record the GGX convolution producing destination mip `dst_mip`, the
-    /// capture in SHADER_READ_ONLY_OPTIMAL and the destination in GENERAL.
+    /// capture in `SHADER_READ_ONLY_OPTIMAL` and the destination in GENERAL.
     pub(in crate::vulkan) fn record_prefilter_ggx(
         &self,
         cmd: vk::CommandBuffer,

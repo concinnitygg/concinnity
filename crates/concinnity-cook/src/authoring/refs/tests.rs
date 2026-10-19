@@ -1,4 +1,5 @@
 use super::*;
+use std::fmt::Write as _;
 
 fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
     WorldJsonlAsset {
@@ -263,8 +264,7 @@ fn a_rename_follows_every_build_only_reference() {
         world
             .iter()
             .find(|e| e["args"]["$id"] == id)
-            .map(|e| e["args"].clone())
-            .unwrap_or_else(|| panic!("no entry declares {id}"))
+            .map_or_else(|| panic!("no entry declares {id}"), |e| e["args"].clone())
     };
     let card = args("card");
     assert_eq!(
@@ -431,10 +431,10 @@ fn a_renamed_world_still_builds() {
     ] {
         rename_in(&mut world, from, to);
     }
-    let text: String = world
-        .iter()
-        .map(|e| format!("{}\n", serde_json::json!([e["type"], e["args"]])))
-        .collect();
+    let text = world.iter().fold(String::new(), |mut text, e| {
+        let _ = writeln!(text, "{}", serde_json::json!([e["type"], e["args"]]));
+        text
+    });
     let loaded = crate::build_only::prepare_world(text.as_str(), None)
         .unwrap_or_else(|e| panic!("the renamed world builds: {e:?}"));
     let args = |id: &str| {

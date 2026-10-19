@@ -1,7 +1,7 @@
 //! Baked asset thumbnails: small PNG previews of a compiled world's visual
 //! resources (textures, materials, meshes, environment maps), rendered on the
 //! CPU from the compiled payloads and held in the build cache segment. Runs in
-//! the disk-build tail (write_build_outputs), so the editor's per-edit preview
+//! the disk-build tail (`write_build_outputs`), so the editor's per-edit preview
 //! rebuilds never pay for it; content addressing makes a re-bake of unchanged
 //! content an index lookup.
 //!
@@ -63,15 +63,13 @@ fn candidates(result: &PipelineResult) -> u32 {
     .into_iter()
     .map(|kind| records_of(result, kind).count())
     .sum();
-    let models = model_discriminant()
-        .map(|disc| {
-            result
-                .defs
-                .iter()
-                .filter(|d| d.discriminant == disc)
-                .count()
-        })
-        .unwrap_or(0);
+    let models = model_discriminant().map_or(0, |disc| {
+        result
+            .defs
+            .iter()
+            .filter(|d| d.discriminant == disc)
+            .count()
+    });
     (resources + models) as u32
 }
 
@@ -210,7 +208,7 @@ impl Collector<'_> {
 fn collect_models(
     result: &PipelineResult,
     material_colors: &HashMap<u32, [f32; 3]>,
-    out: &mut Collector,
+    out: &mut Collector<'_>,
 ) {
     let mut mesh_payloads: HashMap<u32, &[u8]> = HashMap::new();
     for (record, _) in records_of(result, ResourceKind::Mesh) {
@@ -266,7 +264,7 @@ fn collect_models(
             out.skip(name);
             continue;
         }
-        let parts: Vec<raster::MeshPart> = decoded
+        let parts: Vec<raster::MeshPart<'_>> = decoded
             .iter()
             .map(|(verts, indices, color)| raster::MeshPart {
                 verts,
@@ -275,13 +273,14 @@ fn collect_models(
             })
             .collect();
         let img = raster::shade_parts(&parts, THUMB_SIZE);
-        let inputs: Vec<&[u8]> = key_inputs.iter().map(|v| v.as_slice()).collect();
+        let inputs: Vec<&[u8]> = key_inputs.iter().map(Vec::as_slice).collect();
         out.add(name, key_of(&inputs), img.width, img.height, &img.rgba);
     }
 }
 
 fn model_discriminant() -> Option<u8> {
-    crate::authoring::registry::RegisteredType::parse("Model").and_then(|t| t.discriminant())
+    crate::authoring::registry::RegisteredType::parse("Model")
+        .and_then(super::super::authoring::registry::RegisteredType::discriminant)
 }
 
 // The payload bytes a component def's locator points at.
@@ -372,7 +371,7 @@ fn average_color(rgba: &[u8]) -> [f32; 3] {
             continue;
         }
         for c in 0..3 {
-            acc[c] += p[c] as f64;
+            acc[c] += f64::from(p[c]);
         }
         n += 1;
     }
@@ -499,8 +498,7 @@ mod tests {
         bake.names
             .iter()
             .find(|(n, _)| n == name)
-            .map(|(_, key)| key.clone())
-            .unwrap_or_else(|| panic!("{name} indexed"))
+            .map_or_else(|| panic!("{name} indexed"), |(_, key)| key.clone())
     }
 
     fn image_for(bake: &ThumbBake, name: &str) -> Vec<u8> {

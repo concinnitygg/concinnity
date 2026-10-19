@@ -1,4 +1,4 @@
-//! EditorHook: the Lighting panel's session state: which text binding holds
+//! `EditorHook`: the Lighting panel's session state: which text binding holds
 //! keyboard focus, the message from the last rejected Apply, and whether typed
 //! or clicked control state is waiting on Apply (the heading's "*").
 

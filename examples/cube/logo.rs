@@ -166,7 +166,7 @@ impl FaceSheet {
         let first = self.vertices.len() as u16;
         let height = self.half_extent + self.lift;
         for [u, v] in &points {
-            let pos = std::array::from_fn(|k| {
+            let pos = core::array::from_fn(|k| {
                 face.normal[k] * height + face.right[k] * u + face.up[k] * v
             });
             self.vertices.push(VertexData {

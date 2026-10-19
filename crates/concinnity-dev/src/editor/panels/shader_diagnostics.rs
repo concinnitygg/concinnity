@@ -113,9 +113,10 @@ fn error_status(first: &Diagnostic, file: &str, hint: &str) -> Status {
     } else {
         let at = file_name(&first.path);
         let hint = hint.trim();
-        match hint.is_empty() {
-            true => format!("{at}:{}: {}", first.line, first.message),
-            false => format!("{at}:{}: {} {hint}", first.line, first.message),
+        if hint.is_empty() {
+            format!("{at}:{}: {}", first.line, first.message)
+        } else {
+            format!("{at}:{}: {} {hint}", first.line, first.message)
         }
     };
     Status::new(text, Tone::Error)

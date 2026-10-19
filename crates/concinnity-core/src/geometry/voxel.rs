@@ -1,12 +1,12 @@
-//! Hidden-face mesher for VoxelChunk assets.
+//! Hidden-face mesher for `VoxelChunk` assets.
 //!
 //! For each block whose palette entry has solid=true, emit a quad for any of
 //! its six faces whose neighbor is either outside the chunk or non-solid.
 //! Faces between two solid blocks are skipped entirely, so the interior of a
 //! filled volume contributes no triangles.
 //!
-//! UVs come from the BlockType palette: per-face overrides (uv_top, uv_bottom,
-//! uv_side) fall back to uv_min/uv_max when None.
+//! UVs come from the `BlockType` palette: per-face overrides (`uv_top`, `uv_bottom`,
+//! `uv_side`) fall back to `uv_min/uv_max` when None.
 //!
 //! Greedy merging of adjacent same-block faces into larger quads is a future
 //! optimization; this pass only does hidden-face culling.
@@ -15,7 +15,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// One entry resolved from a VoxelChunk palette.  `None` slots are
+/// One entry resolved from a `VoxelChunk` palette.  `None` slots are
 /// non-solid (air) and emit no geometry; their neighbors treat them as empty.
 /// Public so the cook crate's `compile_voxel_chunk_payload` (build-time mesher)
 /// can build the palette this crate's runtime `build_chunk_mesh` also consumes.
@@ -98,9 +98,8 @@ pub fn build_voxel_mesh(
     for z in 0..dz {
         for y in 0..dy {
             for x in 0..dx {
-                let slot = match at(x as i32, y as i32, z as i32) {
-                    Some(s) => s,
-                    None => continue,
+                let Some(slot) = at(x as i32, y as i32, z as i32) else {
+                    continue;
                 };
                 let x0 = x as f32 * bs;
                 let y0 = y as f32 * bs;

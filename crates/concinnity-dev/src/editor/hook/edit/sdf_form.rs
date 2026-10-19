@@ -1,4 +1,4 @@
-//! EditorHook: an SdfVolume form's extras (`panels/sdf_form.rs`) on the generic
+//! `EditorHook`: an `SdfVolume` form's extras (`panels/sdf_form.rs`) on the generic
 //! add / edit form. Creating writes the new field file from its starter once
 //! the entry edit is known to stand, and opens it in the source panel; editing
 //! shows which other volumes read the same file.
@@ -51,7 +51,7 @@ impl FormExtras for SdfExtras {
         self.form.hidden_fields()
     }
 
-    fn rows(&self, cx: &ExtrasCx) -> Vec<ExtraRow> {
+    fn rows(&self, cx: &ExtrasCx<'_>) -> Vec<ExtraRow> {
         let declared = self.new_file(cx.name).map(|(_, d)| d).unwrap_or_default();
         self.form.rows(&declared)
     }
@@ -64,13 +64,13 @@ impl FormExtras for SdfExtras {
         self.form.switch_type()
     }
 
-    fn blocked(&self, cx: &ExtrasCx) -> Option<String> {
+    fn blocked(&self, cx: &ExtrasCx<'_>) -> Option<String> {
         self.form.blocked(cx.name, cx.name_taken(cx.name))
     }
 
     fn fill_args(
         &self,
-        cx: &ExtrasCx,
+        cx: &ExtrasCx<'_>,
         args: &mut serde_json::Map<String, serde_json::Value>,
     ) -> Vec<NewFile> {
         let Some((file, declared)) = self.new_file(cx.name) else {

@@ -6,7 +6,7 @@ use crate::math::exp2;
 /// Scene exposure: a fixed offset in photographic stops, or auto-exposure that
 /// measures the scene's average brightness each frame and adapts toward a
 /// balanced mid-tone. The `exposure` section of
-/// [GraphicsConfig](#graphicsconfig); a field left unset takes the default
+/// [`GraphicsConfig`](#graphicsconfig); a field left unset takes the default
 /// below.
 ///
 /// When `auto` is on, `ev` acts as an additive bias (in stops) on top of the
@@ -47,7 +47,7 @@ pub struct Exposure {
     #[asset(default = -8.0, min = -EV_LIMIT, max = EV_LIMIT, apply = live)]
     pub auto_min_ev: f32,
     /// Upper bound on the adapted exposure (EV): how far a dark scene is
-    /// brightened, at most 24. A night under a [NightSky](#nightsky) adapts
+    /// brightened, at most 24. A night under a [`NightSky`](#nightsky) adapts
     /// at around 19 to 20, so wants 24.
     #[asset(default = 8.0, min = -EV_LIMIT, max = EV_LIMIT, apply = live)]
     pub auto_max_ev: f32,
@@ -70,7 +70,7 @@ pub struct Exposure {
     /// slight blue cast. Through twilight levels, up to about 3 cd/m2, it
     /// blends in from full color. The level is the scene's mean luminance the
     /// exposure has adapted to, read in cd/m2 by taking the world's sun (its
-    /// first [DirectionalLight](#directionallight)) as 100000 lux of
+    /// first [`DirectionalLight`](#directionallight)) as 100000 lux of
     /// sunlight, so a day stays in full color whatever the sun's intensity.
     /// 0 keeps full color at any level.
     #[asset(min = 0.0, max = 1.0, apply = live)]

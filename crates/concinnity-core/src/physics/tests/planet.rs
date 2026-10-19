@@ -4,6 +4,7 @@
 
 use super::fixtures::{TICK, add_floor, awake, drop_ball, position, step_for};
 use crate::math::{quat_from_axis_angle, quat_rotate};
+use crate::physics::SimConfig;
 use crate::physics::{BodyHandle, DynamicParams, GRAVITY, LayerMask, Simulation};
 use alloc::vec;
 
@@ -109,7 +110,7 @@ fn a_rebase_carries_sensor_regions() {
         r[2] + translation[2],
     ];
     drop_ball(&mut sim, [carried[0], carried[1] + 3.0, carried[2]], ball());
-    let mut crossings: alloc::vec::Vec<SensorCrossing> = alloc::vec::Vec::new();
+    let mut crossings: vec::Vec<SensorCrossing> = vec::Vec::new();
     let mut entered = false;
     for _ in 0..60 {
         sim.step(TICK);
@@ -134,7 +135,7 @@ fn grid(sim: &mut Simulation, y: f32) -> BodyHandle {
 // A resting ball wakes when its ground is replaced and settles on the new one.
 #[test]
 fn a_replaced_grid_carries_what_rests_on_it() {
-    let mut sim = Simulation::new(Default::default(), 2);
+    let mut sim = Simulation::new(SimConfig::default(), 2);
     let ground = grid(&mut sim, 0.0);
     let b = drop_ball(&mut sim, [0.0, 0.6, 0.0], ball());
     step_for(&mut sim, 120);

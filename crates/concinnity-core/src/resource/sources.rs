@@ -24,12 +24,12 @@ pub struct TextureSource {
 #[derive(Debug, Clone, Default)]
 pub struct TextureSources(pub Vec<TextureSource>);
 
-/// Source catalog for the singleton ColorLut: the raw authored source path of
-/// the first declared ColorLut, or `None`.
+/// Source catalog for the singleton `ColorLut`: the raw authored source path of
+/// the first declared `ColorLut`, or `None`.
 #[derive(Debug, Clone, Default)]
 pub struct ColorLutSources(pub Option<String>);
 
-/// One file-backed EnvironmentMap's re-bake inputs, so a re-bake runs the IBL
+/// One file-backed `EnvironmentMap`'s re-bake inputs, so a re-bake runs the IBL
 /// convolution with the same dimensions the build used (a size change would
 /// invalidate the shader's prefilter-mip assumptions).
 #[derive(Debug, Clone, Default)]
@@ -46,7 +46,7 @@ pub struct EnvironmentMapSourceInfo {
     pub prefilter_clamp: f32,
 }
 
-/// Source catalog for the singleton EnvironmentMap. `Some` only for a
+/// Source catalog for the singleton `EnvironmentMap`. `Some` only for a
 /// file-backed map (a procedural `generator` has nothing to watch).
 #[derive(Debug, Clone, Default)]
 pub struct EnvironmentMapSources(pub Option<EnvironmentMapSourceInfo>);

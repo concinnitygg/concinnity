@@ -12,7 +12,7 @@ use super::bindless::BindlessPass;
 use crate::vulkan::context::{VkCullKernels, VkDescriptors, VkSceneAssets, VkTargets};
 use crate::vulkan::descriptor_layout::Binding;
 use crate::vulkan::init::InitGpu;
-use crate::vulkan::pipeline::*;
+use crate::vulkan::pipeline::{CULL_PUSH_CONSTANT_BYTES, compile_cull_shader};
 use crate::vulkan::pipeline_desc::compute_pipeline;
 use crate::vulkan::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use crate::vulkan::set_writes::SetWrites;
@@ -95,7 +95,7 @@ pub(super) fn build_compute_cull(
     // with TRANSFER_SRC so `cull_readback` can copy one back to the host.
     // Mirrors `directx/cull.rs`.
     let cull_status_buffers = if bindless_active {
-        let status_size = n_cull as u64 * std::mem::size_of::<u32>() as u64;
+        let status_size = n_cull as u64 * size_of::<u32>() as u64;
         let mut bufs = Vec::with_capacity(frames);
         for _ in 0..frames {
             bufs.push(alloc.create_buffer(
@@ -171,14 +171,13 @@ pub(super) fn build_compute_cull(
             // indirect-command buffers (device-local, GPU-written). `n_cull`
             // covers the static objects plus the merged instances.
             let n = n_cull as u64;
-            let object_buffer_size = n * std::mem::size_of::<render_types::GpuObjectData>() as u64;
-            let draw_args_size = n * std::mem::size_of::<render_types::GpuDrawArgs>() as u64;
+            let object_buffer_size = n * size_of::<render_types::GpuObjectData>() as u64;
+            let draw_args_size = n * size_of::<render_types::GpuDrawArgs>() as u64;
             // One `n_cull`-command region per shader bucket: the cull kernel writes
             // every record's slot in each region and the main pass issues one
             // indirect draw per region under that bucket's pipeline.
-            let indirect_size = shader_bucket_count as u64
-                * n
-                * std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u64;
+            let indirect_size =
+                shader_bucket_count as u64 * n * size_of::<vk::DrawIndexedIndirectCommand>() as u64;
             let mut da_buffers = Vec::with_capacity(frames);
             let mut ind_buffers = Vec::with_capacity(frames);
             for _ in 0..frames {
@@ -207,7 +206,7 @@ pub(super) fn build_compute_cull(
                     .storage_buffer(
                         3,
                         cull_status_buffers[i].buffer(),
-                        n * std::mem::size_of::<u32>() as u64,
+                        n * size_of::<u32>() as u64,
                     )
                     .apply(device);
             }
@@ -255,8 +254,8 @@ pub(super) fn build_compute_cull(
             }
         }
         let n_objects = world.draw_objects.len();
-        let obj_stride = std::mem::size_of::<GpuObjectData>();
-        let da_stride = std::mem::size_of::<GpuDrawArgs>();
+        let obj_stride = size_of::<GpuObjectData>();
+        let da_stride = size_of::<GpuDrawArgs>();
         for (obj_buf, da_buf) in object_buffers.iter().zip(draw_args_buffers.iter()) {
             obj_buf.write_slice(n_objects * obj_stride, &records);
             da_buf.write_slice(n_objects * da_stride, &draw_args);

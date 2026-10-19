@@ -135,7 +135,7 @@ struct Story {
     option: usize,
 }
 
-fn despawn(call: &Call, args: Args) -> Reply {
+fn despawn(call: &Call<'_>, args: Args) -> Reply {
     let Despawn { target } = args.parse()?;
     call.on_world(move |world, _| {
         let id = asset_id::lookup(&target)
@@ -150,7 +150,7 @@ fn despawn(call: &Call, args: Args) -> Reply {
 
 // An empty or whitespace parent detaches the target to a root, like an omitted
 // one.
-fn reparent(call: &Call, args: Args) -> Reply {
+fn reparent(call: &Call<'_>, args: Args) -> Reply {
     let Reparent { target, parent } = args.parse()?;
     let parent = parent.filter(|p| !p.trim().is_empty());
     call.on_world(move |world, _| reparent_by_name(world, &target, parent.as_deref()))?;
@@ -159,7 +159,7 @@ fn reparent(call: &Call, args: Args) -> Reply {
 
 // A non-null `lifetime` makes the instance despawn itself after that many
 // seconds, which is what exercises draw-slot recycling.
-fn spawn(call: &Call, args: Args) -> Reply {
+fn spawn(call: &Call<'_>, args: Args) -> Reply {
     let request: Spawn = args.parse()?;
     call.on_world(move |world, _| {
         let template = spawn_template(&request.template, &request.name)?;
@@ -183,7 +183,7 @@ fn spawn(call: &Call, args: Args) -> Reply {
     queued()
 }
 
-fn story(call: &Call, args: Args) -> Reply {
+fn story(call: &Call<'_>, args: Args) -> Reply {
     let Story { action, option } = args.parse()?;
     let command = StoryCommand::from_verb(&action, Some(option))
         .ok_or_else(|| format!("story: unknown action '{action}'"))?;
@@ -274,7 +274,12 @@ mod tests {
         assert_eq!(engine.call("reparent", call), queued_reply());
         let seen = sent::<ReparentRequest>(&engine.world, &mut cursor);
         assert_eq!(seen[0].child.name(), Some(AssetId(0)));
-        assert_eq!(seen[0].parent.and_then(|p| p.name()), Some(AssetId(1)));
+        assert_eq!(
+            seen[0]
+                .parent
+                .and_then(concinnity_core::components::EntityTarget::name),
+            Some(AssetId(1))
+        );
 
         for detach in [
             json!({ "target": "box_a" }),

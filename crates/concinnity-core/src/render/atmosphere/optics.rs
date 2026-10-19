@@ -8,7 +8,7 @@ use crate::math::{acos, asin, cos, exp, sqrt};
 
 /// Distance from radius `r` along a ray whose cosine to the local up is `mu`
 /// to where it leaves the sphere of `radius`, or 0 when it starts outside and
-/// misses. Mirrors `ray_exit` in atmosphere_common.hlsl.
+/// misses. Mirrors `ray_exit` in `atmosphere_common.hlsl`.
 pub(super) fn ray_exit(r: f32, mu: f32, radius: f32) -> f32 {
     let disc = r * r * (mu * mu - 1.0) + radius * radius;
     (-r * mu + sqrt(disc.max(0.0))).max(0.0)
@@ -17,7 +17,7 @@ pub(super) fn ray_exit(r: f32, mu: f32, radius: f32) -> f32 {
 /// Distance from radius `r` along a ray whose cosine to the local up is `mu`
 /// to where it enters the sphere of `radius`: 0 from inside it, negative
 /// when it starts outside and misses. Mirrors `ray_enter` in
-/// atmosphere_common.hlsl.
+/// `atmosphere_common.hlsl`.
 pub(super) fn ray_enter(r: f32, mu: f32, radius: f32) -> f32 {
     if r <= radius {
         return 0.0;
@@ -30,7 +30,7 @@ pub(super) fn ray_enter(r: f32, mu: f32, radius: f32) -> f32 {
 }
 
 /// Whether a ray from radius `r` with cosine `mu` hits the ground sphere.
-/// Mirrors `ray_hits_ground` in atmosphere_common.hlsl.
+/// Mirrors `ray_hits_ground` in `atmosphere_common.hlsl`.
 pub(super) fn ray_hits_ground(r: f32, mu: f32, bottom: f32) -> bool {
     mu < 0.0 && r * r * (mu * mu - 1.0) + bottom * bottom >= 0.0
 }
@@ -220,7 +220,7 @@ mod tests {
     fn the_sun_fades_out_across_the_horizon() {
         let s = earth();
         let r = s.bottom_radius;
-        let radius = crate::math::acos(s.sun_cos_radius);
+        let radius = acos(s.sun_cos_radius);
         assert_eq!(
             sun_visible_fraction(&s, r, crate::math::sin(radius * 2.0)),
             1.0
@@ -241,7 +241,7 @@ mod tests {
     fn a_disc_sinks_below_the_horizon_by_its_set_depth() {
         let s = earth();
         let r = s.bottom_radius;
-        let radius = crate::math::acos(s.sun_cos_radius);
+        let radius = acos(s.sun_cos_radius);
         let depth =
             |deg: f32| disc_set_depth(&s, r, crate::math::sin(deg.to_radians()), s.sun_cos_radius);
         assert!((depth(-radius.to_degrees())).abs() < 1e-5);
@@ -252,7 +252,7 @@ mod tests {
             0.0
         );
         // A wider disc takes longer to set.
-        let moon = crate::math::cos(1.0_f32.to_radians());
+        let moon = cos(1.0_f32.to_radians());
         assert!(disc_visible_fraction(&s, r, crate::math::sin(-0.6_f32.to_radians()), moon) > 0.0);
     }
 
@@ -294,7 +294,7 @@ mod tests {
     fn the_limb_dims_the_sun_seen_from_above_the_air() {
         let s = earth();
         let r = s.top_radius + 3000.0;
-        let below = |grazing: f32| -crate::math::sqrt(1.0 - (grazing / r) * (grazing / r));
+        let below = |grazing: f32| -sqrt(1.0 - (grazing / r) * (grazing / r));
         let through = transmittance(&s, r, below(s.bottom_radius + 15.0));
         assert!(
             through[0] < 0.9 && through[2] < 0.5 * through[0],

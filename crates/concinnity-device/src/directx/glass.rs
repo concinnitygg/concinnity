@@ -109,7 +109,7 @@ pub(in crate::directx) struct GlassBuild<'a> {
 // pipeline rebuild); a compile failure leaves it absent and the base
 // probe/planar path runs.
 pub(in crate::directx) fn build_glass_producer(
-    build: GlassBuild,
+    build: GlassBuild<'_>,
     panels: &[GlassPanel],
     // Per-pane planar resolve slot (aligned with `panels`); `None` panes keep the
     // probe/sky reflection. From `assign_planar_slots`.
@@ -284,7 +284,7 @@ fn compile_glass_mesh_shaders(msaa_samples: u32, hot_reload: bool) -> RenderResu
 // shared scene buffers and its params change per frame, so the encoder rebuilds
 // its draw list each frame (see `collect_mesh_draws`).
 pub(in crate::directx) fn build_glass_mesh_producer(
-    build: GlassMeshBuild,
+    build: GlassMeshBuild<'_>,
     object_indices: &[usize],
 ) -> RenderResult<GlassMeshProducer> {
     let GlassMeshBuild {

@@ -294,7 +294,7 @@ mod tests {
             .iter()
             .position(|r| r.label == "hdr_depth")
             .expect("declared");
-        let queues: Vec<PassQueue> = g.passes.iter().map(|p| p.queue).collect();
+
         let runs = read_runs(&g.passes, g.resources.len());
         assert!(runs.iter().all(|r| r.resource != depth));
         assert!(
@@ -305,7 +305,7 @@ mod tests {
                 .any(|op| op.resource_index() == depth)
         );
         assert!(g.passes.iter().all(|p| p.barriers_after.is_empty()));
-        assert!(!queues.is_empty());
+        assert!(g.passes.iter().map(|p| p.queue).next().is_some());
     }
 
     #[test]

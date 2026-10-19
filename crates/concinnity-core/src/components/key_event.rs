@@ -29,7 +29,7 @@ pub struct KeyMods {
 
 impl KeyMods {
     /// No modifier held.
-    pub const NONE: KeyMods = KeyMods {
+    pub const NONE: Self = Self {
         shift: false,
         ctrl: false,
         alt: false,
@@ -37,40 +37,41 @@ impl KeyMods {
     };
 
     /// Only Shift held.
-    pub const SHIFT: KeyMods = KeyMods {
+    pub const SHIFT: Self = Self {
         shift: true,
-        ..KeyMods::NONE
+        ..Self::NONE
     };
 
     /// Only Control held.
-    pub const CTRL: KeyMods = KeyMods {
+    pub const CTRL: Self = Self {
         ctrl: true,
-        ..KeyMods::NONE
+        ..Self::NONE
     };
 
     /// Only Alt held.
-    pub const ALT: KeyMods = KeyMods {
+    pub const ALT: Self = Self {
         alt: true,
-        ..KeyMods::NONE
+        ..Self::NONE
     };
 
     /// Only Command held.
-    pub const CMD: KeyMods = KeyMods {
+    pub const CMD: Self = Self {
         cmd: true,
-        ..KeyMods::NONE
+        ..Self::NONE
     };
 
     /// These modifiers with Shift added.
-    pub const fn with_shift(self) -> KeyMods {
-        KeyMods {
+    #[must_use]
+    pub const fn with_shift(self) -> Self {
+        Self {
             shift: true,
             ..self
         }
     }
 }
 
-/// One key press, carried by [FrameInput](#frameinput) in its
-/// [key_events](#structfield.key_events).
+/// One key press, carried by [`FrameInput`](#frameinput) in its
+/// [`key_events`](#structfield.key_events).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct KeyPress {
     /// The key pressed.
@@ -84,8 +85,8 @@ pub struct KeyPress {
 
 impl KeyPress {
     /// A fresh press of `key` with `mods` held.
-    pub const fn new(key: InputKey, mods: KeyMods) -> KeyPress {
-        KeyPress {
+    pub const fn new(key: InputKey, mods: KeyMods) -> Self {
+        Self {
             key,
             mods,
             repeat: false,
@@ -110,8 +111,8 @@ pub enum KeyEvent {
 
 impl KeyEvent {
     /// A fresh press of `key` with no modifier held.
-    pub const fn press(key: InputKey) -> KeyEvent {
-        KeyEvent::Press(KeyPress::new(key, KeyMods::NONE))
+    pub const fn press(key: InputKey) -> Self {
+        Self::Press(KeyPress::new(key, KeyMods::NONE))
     }
 }
 

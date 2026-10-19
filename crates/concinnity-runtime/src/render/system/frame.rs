@@ -13,17 +13,17 @@ use concinnity_core::render::snapshot::RenderSnapshot;
 use concinnity_host::clock::micros_since;
 use std::time::Instant;
 
-use super::*;
+use super::{GraphicsSystem, backend, screenshot, submit};
 
 // Deposit a sampled input packet for the next tick's InputSystem, merging onto
 // an unconsumed one so no edge is lost.
-fn deposit_input(ctx: &mut PipelineContext, packet: InputPacket) {
+fn deposit_input(ctx: &mut PipelineContext<'_>, packet: InputPacket) {
     let sampled_us = ctx.resource::<Clock>().map_or(0, Clock::read);
     InputMailbox::deposit_in(ctx.resources, packet, sampled_us);
 }
 
 impl GraphicsSystem {
-    pub(super) fn run_step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    pub(super) fn run_step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         if self.failed {
             return StepResult::Stop;
         }
@@ -43,8 +43,7 @@ impl GraphicsSystem {
         let mut snapshot = std::mem::take(&mut self.snapshot);
         self.extract(ctx, &mut snapshot);
         let submitted = Instant::now();
-        let outcome =
-            super::submit::submit(&mut self.frame_policy, &mut snapshot, backend.as_mut());
+        let outcome = submit::submit(&mut self.frame_policy, &mut snapshot, backend.as_mut());
         ctx.profile.record_render_handoff(micros_since(submitted));
         frame_outcome::settle(
             ctx,
@@ -80,7 +79,7 @@ impl GraphicsSystem {
     // apply the feedback the render half produced for the previous frame,
     // which the completed send guarantees has already arrived. A closed
     // channel in either direction means the render half stopped.
-    fn run_step_pipelined(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn run_step_pipelined(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         let Some(pipe) = PipelinedFrames::take(ctx.resources) else {
             return StepResult::Done;
         };
@@ -129,15 +128,15 @@ impl GraphicsSystem {
 
     // Fill `snap` with everything this frame's draw consumes: a requested
     // screenshot burst starts, then core extracts the frame.
-    pub(crate) fn extract(&mut self, ctx: &mut PipelineContext, snap: &mut RenderSnapshot) {
-        super::screenshot::start_requested(ctx, &mut self.extractor);
+    pub(crate) fn extract(&mut self, ctx: &mut PipelineContext<'_>, snap: &mut RenderSnapshot) {
+        screenshot::start_requested(ctx, &mut self.extractor);
         self.extractor.extract(ctx, snap, self.frames.frames());
     }
 
     // Gray out and disable every settings row whose feature the device cannot
     // provide. Runs once at init after the backend reports `self.caps`, while
     // the HitRegions / TextLabels / ScrollPanels are still present.
-    pub(super) fn apply_capability_gating(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn apply_capability_gating(&self, ctx: &mut PipelineContext<'_>) {
         let vendor = ctx
             .resource::<backend::GpuProfile>()
             .map_or(backend::GpuVendor::Other, |g| g.vendor);

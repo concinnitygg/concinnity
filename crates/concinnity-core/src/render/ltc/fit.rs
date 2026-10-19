@@ -50,7 +50,7 @@ struct Mat3 {
 }
 
 impl Mat3 {
-    const IDENTITY: Mat3 = Mat3 {
+    const IDENTITY: Self = Self {
         m: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
     };
 
@@ -62,14 +62,14 @@ impl Mat3 {
         out
     }
 
-    fn mul(&self, other: &Mat3) -> Mat3 {
+    fn mul(&self, other: &Self) -> Self {
         let mut m = [[0.0_f32; 3]; 3];
         for (row, r) in m.iter_mut().enumerate() {
             for (col, c) in r.iter_mut().enumerate() {
                 *c = (0..3).map(|k| self.m[row][k] * other.m[k][col]).sum();
             }
         }
-        Mat3 { m }
+        Self { m }
     }
 }
 
@@ -164,8 +164,8 @@ struct Ltc {
 }
 
 impl Ltc {
-    fn new() -> Ltc {
-        let mut ltc = Ltc {
+    fn new() -> Self {
+        let mut ltc = Self {
             m11: 1.0,
             m22: 1.0,
             m13: 0.0,
@@ -294,9 +294,9 @@ fn compute_error(ltc: &Ltc, v: Vec3, alpha: f32) -> f32 {
                 } else {
                     0.0
                 };
-                let denom = (pdf_ltc + pdf_brdf) as f64;
+                let denom = f64::from(pdf_ltc + pdf_brdf);
                 if denom > 0.0 {
-                    let d = (value_brdf - value_ltc).abs() as f64;
+                    let d = f64::from((value_brdf - value_ltc).abs());
                     error += d * d * d / denom;
                 }
             }
@@ -310,9 +310,9 @@ fn compute_error(ltc: &Ltc, v: Vec3, alpha: f32) -> f32 {
                 } else {
                     0.0
                 };
-                let denom = (pdf_ltc + pdf_brdf) as f64;
+                let denom = f64::from(pdf_ltc + pdf_brdf);
                 if denom > 0.0 {
-                    let d = (value_brdf - value_ltc).abs() as f64;
+                    let d = f64::from((value_brdf - value_ltc).abs());
                     error += d * d * d / denom;
                 }
             }
@@ -343,7 +343,7 @@ fn nelder_mead<F: FnMut(&[f32]) -> f32>(
     for _ in 0..max_iters {
         // Order worst-last.
         let mut order: Vec<usize> = (0..simplex.len()).collect();
-        order.sort_by(|a, b| values[*a].partial_cmp(&values[*b]).unwrap());
+        order.sort_by(|a, b| values[*a].total_cmp(&values[*b]));
         let best = order[0];
         let worst = order[order.len() - 1];
         let second_worst = order[order.len() - 2];
@@ -357,7 +357,7 @@ fn nelder_mead<F: FnMut(&[f32]) -> f32>(
                 }
             }
         }
-        for c in centroid.iter_mut() {
+        for c in &mut centroid {
             *c /= dim as f32;
         }
 
@@ -410,8 +410,8 @@ fn nelder_mead<F: FnMut(&[f32]) -> f32>(
     }
 
     let best = (0..simplex.len())
-        .min_by(|a, b| values[*a].partial_cmp(&values[*b]).unwrap())
-        .unwrap();
+        .min_by(|a, b| values[*a].total_cmp(&values[*b]))
+        .unwrap_or_default();
     simplex[best].clone()
 }
 
@@ -563,7 +563,7 @@ mod tests {
                     let d_omega = (core::f32::consts::FRAC_PI_2 / n as f32)
                         * (2.0 * core::f32::consts::PI / n as f32)
                         * theta.sin();
-                    total += (d * h[2] * d_omega) as f64;
+                    total += f64::from(d * h[2] * d_omega);
                 }
             }
             assert!(

@@ -40,7 +40,7 @@ pub(super) fn build_gbuffer_pass(
     let hot_reload = gpu.hot_reload;
     let (mhrs, mhpso) =
         crate::directx::post::gbuffer::build_model_history(device, info_queue, hot_reload)?;
-    let prev_model_size = align256((plan.n_cull * std::mem::size_of::<[[f32; 4]; 4]>()) as u64);
+    let prev_model_size = align256((plan.n_cull * size_of::<[[f32; 4]; 4]>()) as u64);
     let mut prev_model_buffers: Vec<ID3D12Resource> = Vec::with_capacity(gpu.hw.frames());
     for _ in 0..gpu.hw.frames() {
         prev_model_buffers.push(create_uav_buffer(

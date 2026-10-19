@@ -40,16 +40,12 @@ pub(crate) fn expand_panels(assets: &mut Vec<serde_json::Value>) -> Result<(), S
 
 fn expand_one(name: &str, p: &Panel) -> Vec<serde_json::Value> {
     let mut out = vec![spec_to_value(
-        &asset::sprite(
-            format!("{}_bg", name),
-            [p.x, p.y, p.width, p.height],
-            p.color,
-        )
-        .set("corner_radius", p.corner_radius),
+        &asset::sprite(format!("{name}_bg"), [p.x, p.y, p.width, p.height], p.color)
+            .set("corner_radius", p.corner_radius),
     )];
     if !p.title.is_empty() {
         out.push(label_value(
-            &format!("{}_title", name),
+            &format!("{name}_title"),
             &p.title,
             &p.title_font,
             p.x + p.padding,

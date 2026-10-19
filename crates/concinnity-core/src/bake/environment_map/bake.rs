@@ -475,7 +475,7 @@ pub fn compute_irradiance(
 
 /// Build a prefiltered radiance cube mip chain. Mip 0 is the unmodified
 /// source (roughness=0 → Dirac lobe). Mip N is the GGX convolution at
-/// roughness = N / (mip_count - 1). The serial form of [`prefilter_mip0`]
+/// roughness = N / (`mip_count` - 1). The serial form of [`prefilter_mip0`]
 /// followed by one [`CubeBake::ggx`] per remaining mip.
 pub fn compute_prefilter(
     source: &[Vec<f32>; 6],
@@ -565,7 +565,7 @@ mod tests {
     // stand-in for a sun disk or a blown highlight in a probe capture.
     fn firefly_cube(face: usize) -> [Vec<f32>; 6] {
         let mut s: [Vec<f32>; 6] = core::array::from_fn(|_| vec![0.0; face * face * 4]);
-        for fd in s.iter_mut() {
+        for fd in &mut s {
             for p in fd.chunks_exact_mut(4) {
                 p[0] = 1.0;
                 p[1] = 1.0;
@@ -733,7 +733,7 @@ mod tests {
         // Last mip should still be ~0.5 gray since input is uniform.
         let mean = face_mean(&mips[3][0]);
         for (c, m) in mean.iter().enumerate() {
-            assert!((m - 0.5).abs() < 0.02, "channel {} mean {}", c, m);
+            assert!((m - 0.5).abs() < 0.02, "channel {c} mean {m}");
         }
     }
 
@@ -750,7 +750,7 @@ mod tests {
         // should spread it across the face so the variance drops vs the input.
         let face = 16usize;
         let mut source: [Vec<f32>; 6] = core::array::from_fn(|_| vec![0.0; face * face * 4]);
-        for face_data in source.iter_mut() {
+        for face_data in &mut source {
             for p in face_data.chunks_exact_mut(4) {
                 p[3] = 1.0;
             }
@@ -766,9 +766,7 @@ mod tests {
         let v2 = face_variance_red(&mips[2][4]);
         assert!(
             v2 < v0 * 0.5,
-            "prefilter did not blur: mip 0 var={}, mip 2 var={}",
-            v0,
-            v2
+            "prefilter did not blur: mip 0 var={v0}, mip 2 var={v2}"
         );
     }
 
@@ -783,7 +781,7 @@ mod tests {
         // Above the cap: luminance is pulled to the cap, hue preserved.
         let capped = clamp_radiance(hot, 10.0);
         let lum = 0.2126 * capped[0] + 0.7152 * capped[1] + 0.0722 * capped[2];
-        assert!((lum - 10.0).abs() < 1e-3, "luminance {} != cap 10", lum);
+        assert!((lum - 10.0).abs() < 1e-3, "luminance {lum} != cap 10");
         assert!((capped[0] / capped[1] - hot[0] / hot[1]).abs() < 1e-4);
         assert!((capped[1] / capped[2] - hot[1] / hot[2]).abs() < 1e-4);
     }
@@ -801,14 +799,11 @@ mod tests {
         let p_clamped = peak(&clamped[1][4]);
         assert!(
             p_clamped < p_unclamped * 0.5,
-            "clamp did not suppress the firefly: unclamped {}, clamped {}",
-            p_unclamped,
-            p_clamped
+            "clamp did not suppress the firefly: unclamped {p_unclamped}, clamped {p_clamped}"
         );
         assert!(
             p_clamped >= 0.9,
-            "clamp crushed the background: clamped peak {}",
-            p_clamped
+            "clamp crushed the background: clamped peak {p_clamped}"
         );
     }
 

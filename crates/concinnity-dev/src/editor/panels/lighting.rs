@@ -87,6 +87,7 @@ pub(crate) const fn binding_count() -> usize {
 }
 
 // Binding `i` as `(section index, arg path, row caption)`.
+#[expect(clippy::panic, reason = "callers index within `binding_count()`")]
 pub(crate) fn binding(i: usize) -> (usize, &'static str, &'static str) {
     let mut base = 0;
     for (s, section) in SECTIONS.iter().enumerate() {
@@ -111,7 +112,7 @@ pub(crate) fn section_base(s: usize) -> usize {
 // change) is simply dropped from the panel rather than erroring.
 pub(crate) fn section_fields(s: &Section, args: Option<&Map<String, Value>>) -> Vec<FormField> {
     let expanded: std::collections::HashSet<String> =
-        s.expand.iter().map(|p| p.to_string()).collect();
+        s.expand.iter().map(ToString::to_string).collect();
     let all = form::fields_for_with(s.ty, args, &expanded);
     s.fields
         .iter()

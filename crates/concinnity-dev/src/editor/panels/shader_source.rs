@@ -1,5 +1,5 @@
 //! The data half of the Shader source panel: which file it edits (one of a
-//! Shader's, or an SdfVolume's distance field), where that file is on disk and
+//! Shader's, or an `SdfVolume`'s distance field), where that file is on disk and
 //! where a new one goes, and the rules for leaving a file with unsaved edits
 //! and for a file that changed on disk while open. What a reload outcome shows
 //! is `shader_diagnostics`; what a new file starts as is `shader_templates`
@@ -22,7 +22,7 @@ pub(crate) enum SourceKey {
 
 impl SourceKey {
     pub(crate) fn shader(name: &str, stage: ShaderStage) -> Self {
-        SourceKey::Shader {
+        Self::Shader {
             name: name.to_string(),
             stage,
         }

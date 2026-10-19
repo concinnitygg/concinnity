@@ -18,7 +18,7 @@ impl BehaviorSystem {
     // Land one body's effects. Returns whether a `save` was requested.
     pub(super) fn apply(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         i: usize,
         entity: Option<Entity>,
         effects: impl Iterator<Item = Effect>,
@@ -133,7 +133,7 @@ impl BehaviorSystem {
 
     // A camera another system rewrites every tick keeps a behavior's write for
     // one frame only; say so once a world.
-    fn report_driven_camera(&mut self, ctx: &PipelineContext, camera: Entity) {
+    fn report_driven_camera(&mut self, ctx: &PipelineContext<'_>, camera: Entity) {
         if self.reported_driven_camera {
             return;
         }
@@ -217,8 +217,7 @@ mod tests {
         world
             .context()
             .events::<E>()
-            .map(|e| e.read(&mut cursor).count())
-            .unwrap_or(0)
+            .map_or(0, |e| e.read(&mut cursor).count())
     }
 
     #[test]

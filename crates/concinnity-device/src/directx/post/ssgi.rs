@@ -29,7 +29,7 @@ impl SsgiResources {
     // Build every pipeline and target for a render resolution of `width` x
     // `height`.
     pub(in crate::directx) fn new(
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         width: u32,
         height: u32,
         settings: SsgiSettings,
@@ -44,7 +44,7 @@ impl SsgiResources {
     // descriptors per frame, so the slots they land on are free to move.
     pub(in crate::directx) fn resize_to(
         &mut self,
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         width: u32,
         height: u32,
     ) -> RenderResult<()> {

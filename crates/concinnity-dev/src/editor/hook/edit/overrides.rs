@@ -1,4 +1,4 @@
-//! EditorHook: the override loop for template-derived assets. Field state is
+//! `EditorHook`: the override loop for template-derived assets. Field state is
 //! derived from the committed patch (`editor/overrides/`); the actions here
 //! mutate the working entries -- remove a patch key (revert), write a value
 //! back into the authored Prefab definition (apply-to-template), or both in
@@ -360,7 +360,7 @@ impl EditorHook {
         let next = marked
             .iter()
             .find(|&&i| i > self.form.scroll)
-            .or(marked.first())
+            .or_else(|| marked.first())
             .copied()
             .unwrap_or(0);
         let max = self.form.fields.len().saturating_sub(self.form_window());
@@ -395,7 +395,7 @@ impl EditorHook {
             .form
             .selected_type
             .as_deref()
-            .ok_or("no form type".to_string())?;
+            .ok_or_else(|| "no form type".to_string())?;
         let ty = RegisteredType::parse(ty).ok_or_else(|| format!("unknown type '{ty}'"))?;
         let root = covered.split('.').next().unwrap_or(covered);
         let map = prefab_map::map_field(ty, root)?;

@@ -1,7 +1,7 @@
 //! Foot-pinning IK for graph targets. At install time each authored
 //! `AnimationIkChain` resolves its joint names against the target's skeleton and
 //! its weight parameter against the graph's declaration order; per frame the
-//! chain's ground probe (answered by PhysicsSystem, one frame behind) turns
+//! chain's ground probe (answered by `PhysicsSystem`, one frame behind) turns
 //! into a mesh-space target for the analytic two-bone solve, applied to the
 //! sampled locals just before the skinning matrices.
 
@@ -124,7 +124,7 @@ pub(super) struct IkFrame {
 // allocates nothing in steady state.
 pub(super) fn frame_inputs(
     targets: &BTreeMap<SkinnedMeshHandle, super::TargetState>,
-    ctx: &PipelineContext,
+    ctx: &PipelineContext<'_>,
     out: &mut HashMap<SkinnedMeshHandle, IkFrame>,
 ) {
     out.retain(|target, _| targets.contains_key(target));
@@ -141,7 +141,7 @@ pub(super) fn frame_inputs(
 fn refresh_target(
     target: SkinnedMeshHandle,
     state: &super::TargetState,
-    ctx: &PipelineContext,
+    ctx: &PipelineContext<'_>,
     out: &mut HashMap<SkinnedMeshHandle, IkFrame>,
 ) -> bool {
     let super::TargetMode::Graph(g) = &state.mode else {
@@ -230,7 +230,7 @@ pub(super) fn apply_chains(
 // per-target foot list reuses one buffer across targets and frames.
 pub(super) fn refresh_rays(
     targets: &BTreeMap<SkinnedMeshHandle, super::TargetState>,
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     feet_scratch: &mut Vec<[f32; 3]>,
 ) {
     for (&target, state) in targets {
@@ -243,7 +243,7 @@ pub(super) fn refresh_rays(
         let Some(model) = ctx
             .query::<CharacterRig>()
             .find(|r| r.target == target)
-            .map(|r| r.model())
+            .map(CharacterRig::model)
         else {
             continue;
         };
@@ -254,11 +254,9 @@ pub(super) fn refresh_rays(
             feet_scratch.clear();
             feet_scratch.extend(g.chains.iter().map(|c| {
                 let end = c.chain.end;
-                let mesh = pose
-                    .joint_matrices
-                    .get(end)
-                    .map(|m| mat4_transform_point(m, pose.skeleton.bind_position(end)))
-                    .unwrap_or([0.0; 3]);
+                let mesh = pose.joint_matrices.get(end).map_or([0.0; 3], |m| {
+                    mat4_transform_point(m, pose.skeleton.bind_position(end))
+                });
                 mat4_transform_point(&model, mesh)
             }));
         }
@@ -302,7 +300,7 @@ mod tests {
 
     fn chain(joints: &[&str], weight_parameter: &str) -> AnimationIkChain {
         AnimationIkChain {
-            joints: joints.iter().map(|s| s.to_string()).collect(),
+            joints: joints.iter().map(ToString::to_string).collect(),
             pole: [0.0, 0.0, 1.0],
             weight_parameter: weight_parameter.to_string(),
             foot_height: 0.05,

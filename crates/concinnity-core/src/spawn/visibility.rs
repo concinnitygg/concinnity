@@ -1,5 +1,5 @@
 //! Runtime show/hide: switch a subtree's draw slots off and on without
-//! despawning anything. Driven by the VisibilityRequest events SpawnSystem
+//! despawning anything. Driven by the `VisibilityRequest` events `SpawnSystem`
 //! drains each step. The Hidden tag records the state, and the scene-switch
 //! visibility snapshot skips tagged entities, so a scene jump never relights
 //! a hidden entity.
@@ -10,7 +10,7 @@ use crate::gfx::render_types::DrawIndex;
 use crate::render::ops::RenderOps;
 
 pub(super) fn set_subtree_visibility(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     ops: &mut RenderOps,
     root: Entity,
     visible: bool,

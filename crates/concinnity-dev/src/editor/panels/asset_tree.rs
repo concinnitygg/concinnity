@@ -406,7 +406,7 @@ mod tests {
             .iter()
             .filter_map(|r| match r {
                 TreeRow::Header { label, .. } => Some(label.as_str()),
-                _ => None,
+                TreeRow::Asset { .. } => None,
             })
             .collect();
         assert_eq!(headers, vec!["fox"]);
@@ -415,7 +415,7 @@ mod tests {
                 .iter()
                 .filter_map(|r| match r {
                     TreeRow::Header { open, count, .. } => Some((*open, *count)),
-                    _ => None,
+                    TreeRow::Asset { .. } => None,
                 })
                 .all(|(open, count)| open && count > 0),
             "matching groups auto-unfold and count what they list"
@@ -424,7 +424,7 @@ mod tests {
             .iter()
             .filter_map(|r| match r {
                 TreeRow::Asset { name, .. } => Some(name.as_str()),
-                _ => None,
+                TreeRow::Header { .. } => None,
             })
             .collect();
         assert_eq!(names, vec!["fox_mat_a", "fox_mat_b", "fox_mat_wood"]);

@@ -167,7 +167,7 @@ mod tests {
 
         let moved = FrameInput {
             mouse_x: 10.0,
-            ..input.clone()
+            ..input
         };
         let moved = frame_intent(&moved, false, true, true, Some((0.0, 0.0)));
         assert!(moved.enter_pressed);

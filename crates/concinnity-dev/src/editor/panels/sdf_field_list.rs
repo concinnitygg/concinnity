@@ -1,5 +1,5 @@
 //! The Shaders panel's SDF fields: every distance-field file the world's
-//! SdfVolumes declare, once per file, with the volumes reading it, and the rows
+//! `SdfVolumes` declare, once per file, with the volumes reading it, and the rows
 //! the panel lists them as. A field's status is the worst of its volumes'
 //! latest reload outcomes as they bear on that file.
 
@@ -20,9 +20,10 @@ pub(crate) struct FieldVolume {
 
 impl FieldVolume {
     pub(crate) fn mode(&self) -> &'static str {
-        match self.volumetric {
-            true => "volumetric",
-            false => "surface",
+        if self.volumetric {
+            "volumetric"
+        } else {
+            "surface"
         }
     }
 }
@@ -72,7 +73,7 @@ pub(crate) fn declared_fields(
             name,
             volumetric: args
                 .and_then(|a| a.get("volumetric"))
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false),
         };
         let path = resolve(declared);

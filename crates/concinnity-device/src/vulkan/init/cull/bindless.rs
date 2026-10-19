@@ -16,7 +16,10 @@ use crate::vulkan::material_params::{
     MATERIAL_PARAMS_BINDING, MESH_VERTICES_BINDING, VkMaterialParams,
 };
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout};
-use crate::vulkan::pipeline::*;
+use crate::vulkan::pipeline::{
+    BindlessSpv, BucketPipelineTargets, BucketPipelines, PrepassTargets, build_bucket_pipeline,
+    compile_bindless_shaders,
+};
 use crate::vulkan::post::gbuffer::{PrepassLayout, build_prepass_layout};
 use crate::vulkan::resources::alloc_descriptor_sets;
 use crate::vulkan::set_writes::SetWrites;
@@ -186,8 +189,7 @@ pub(super) fn build_bindless_pass(
         // Per-frame GpuObjectData storage buffers, persistently mapped.
         // Sized for `n_cull` so the instanced merge's records fit past the
         // `n_objects` static prefix.
-        let object_buffer_size =
-            (n_cull * std::mem::size_of::<render_types::GpuObjectData>()) as u64;
+        let object_buffer_size = (n_cull * size_of::<render_types::GpuObjectData>()) as u64;
         let mut buffers = Vec::with_capacity(frames);
         for _ in 0..frames {
             buffers.push(alloc.create_buffer(

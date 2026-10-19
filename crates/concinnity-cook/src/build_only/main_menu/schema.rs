@@ -9,15 +9,15 @@ use concinnity_core::ecs::{AssetFields, FieldTable, NameRef};
 ///
 /// `MainMenu` is a build-time shorthand. It expands into the assets a menu is
 /// built from: a [Screen](#screen) layer, a dim backdrop [Sprite](#sprite), a
-/// [TextLabel](#textlabel) and [HitRegion](#hitregion) for each item, an
-/// optional [KeyBinding](#keybinding) that toggles the menu, and an optional
+/// [`TextLabel`](#textlabel) and [`HitRegion`](#hitregion) for each item, an
+/// optional [`KeyBinding`](#keybinding) that toggles the menu, and an optional
 /// in-engine mouse cursor [Sprite](#sprite). So `world.jsonl` stays small.
 ///
 /// The bare form gives a centered Resume / Settings / Quit menu that starts
 /// closed, with Escape opening it, so the scene itself shows first. Set
 /// `"initial": true` to show the menu as soon as the world loads:
 ///
-/// Declaring a `MainMenu` also injects the [StatHud](#stathud) (and its chip
+/// Declaring a `MainMenu` also injects the [`StatHud`](#stathud) (and its chip
 /// labels) at build time when the world declares none, so the menu's
 /// performance-stats toggles have chips to drive.
 ///
@@ -38,7 +38,7 @@ pub struct MainMenu {
     /// Show the menu as soon as the world loads. Off by default: the scene
     /// shows first and the toggle key opens the menu.
     pub initial: bool,
-    /// InputKey that toggles the menu while the cursor is free. Empty binds no key.
+    /// `InputKey` that toggles the menu while the cursor is free. Empty binds no key.
     /// Only `"Escape"` is currently recognized by the runtime.
     pub toggle_key: String,
     /// RGBA fill drawn across the whole window behind the items. Defaults to
@@ -107,7 +107,7 @@ pub struct MainMenu {
     pub settings_back_action: Option<NamedAction>,
 }
 
-/// Which settings screen a [MainMenu](#mainmenu)'s `"settings"` item builds.
+/// Which settings screen a [`MainMenu`](#mainmenu)'s `"settings"` item builds.
 #[derive(
     Debug,
     Clone,
@@ -133,7 +133,7 @@ pub enum SettingsProfile {
     Minimal,
 }
 
-/// One entry in a [MainMenu](#mainmenu).
+/// One entry in a [`MainMenu`](#mainmenu).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
 pub struct MainMenuItem {
     /// Button text.
@@ -143,7 +143,7 @@ pub struct MainMenuItem {
     pub action: MenuItemAction,
 }
 
-/// What a [MainMenu](#mainmenu) item does when clicked.
+/// What a [`MainMenu`](#mainmenu) item does when clicked.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MenuItemAction {
@@ -160,7 +160,7 @@ impl<'de> serde::Deserialize<'de> for MenuItemAction {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let value = serde_json::Value::deserialize(d)?;
         if value == "settings" {
-            return Ok(MenuItemAction::Settings);
+            return Ok(Self::Settings);
         }
         NamedAction::deserialize(value)
             .map(MenuItemAction::Action)

@@ -48,7 +48,7 @@ pub(crate) struct Narrow {
 
 impl Narrow {
     pub(crate) fn new() -> Self {
-        Narrow { shares: Vec::new() }
+        Self { shares: Vec::new() }
     }
 
     /// Reserve a manifold buffer per worker. Called while the world is built;

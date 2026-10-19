@@ -1,7 +1,7 @@
 use crate::components::SceneTransition;
 use crate::ecs::asset_id::AssetId;
 
-/// Runtime-only event sent by UiInputSystem when a scene-jump HitRegion fires.
+/// Runtime-only event sent by `UiInputSystem` when a scene-jump `HitRegion` fires.
 /// The renderer reads these from its `Events<SceneCommand>` queue each step and
 /// applies the scene jump. World authors never declare this type directly.
 #[derive(Debug, Clone, Default)]

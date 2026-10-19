@@ -2,7 +2,7 @@
 //! cube around the celestial sphere, kept with a probability that makes them
 //! uniform over the sky, with magnitudes drawn so faint stars far outnumber
 //! bright ones, and colored by their temperature. Mirrors the star half of
-//! night_sky.hlsl.
+//! `night_sky.hlsl`.
 //!
 //! A star is drawn as a small Gaussian integrated over each pixel's square,
 //! so the light it puts into the image is the same wherever it falls within

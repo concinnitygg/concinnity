@@ -330,7 +330,7 @@ impl FrameProfile {
 mod tests {
     #[test]
     fn gpu_done_latency_runs_from_the_input_sample_to_the_end_of_the_gpu_work() {
-        let done = super::GpuDone {
+        let done = GpuDone {
             input_sampled_us: 1_000,
             done_us: 46_000,
         };
@@ -339,7 +339,7 @@ mod tests {
 
     #[test]
     fn gpu_done_before_its_sample_reads_as_no_latency() {
-        let done = super::GpuDone {
+        let done = GpuDone {
             input_sampled_us: 2_000,
             done_us: 1_000,
         };

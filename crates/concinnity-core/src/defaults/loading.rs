@@ -23,7 +23,7 @@ const BAR_WIDTH: f32 = 480.0;
 const BAR_HEIGHT: f32 = 8.0;
 const BAR_CORNER: f32 = 4.0;
 
-pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(), WorldError> {
+pub(super) fn inject(ctx: &mut PipelineContext<'_>, minter: &mut Minter) -> Result<(), WorldError> {
     let declared = ctx.query::<LoadingOverlay>().next().is_some();
     if !declared && !streams_scenes(ctx) {
         return Ok(());
@@ -36,20 +36,19 @@ pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(
 
     // The screen first: every piece minted below belongs to it, whether it was
     // authored or minted here.
-    let screen = match overlay.screen {
-        Some(screen) => screen.id(),
-        None => {
-            let id = minter.id()?;
-            ctx.push_identified(
-                id,
-                Screen {
-                    fade_in_secs: 0.15,
-                    ..Default::default()
-                },
-            );
-            overlay.screen = Some(Ref::new(id));
-            id
-        }
+    let screen = if let Some(screen) = overlay.screen {
+        screen.id()
+    } else {
+        let id = minter.id()?;
+        ctx.push_identified(
+            id,
+            Screen {
+                fade_in_secs: 0.15,
+                ..Default::default()
+            },
+        );
+        overlay.screen = Some(Ref::new(id));
+        id
     };
 
     if overlay.backdrop.is_none() {
@@ -129,13 +128,13 @@ pub(super) fn inject(ctx: &mut PipelineContext, minter: &mut Minter) -> Result<(
 
 // A world with streamed scenes to wait for: without both there is nothing the
 // overlay would cover.
-fn streams_scenes(ctx: &PipelineContext) -> bool {
+fn streams_scenes(ctx: &PipelineContext<'_>) -> bool {
     ctx.query::<Scene>().next().is_some() && ctx.query::<StreamingConfig>().next().is_some()
 }
 
 // Push one overlay sprite onto the overlay's screen and return its name.
 fn sprite(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     minter: &mut Minter,
     screen: AssetId,
     sprite: Sprite,

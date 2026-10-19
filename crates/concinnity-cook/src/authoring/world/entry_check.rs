@@ -11,12 +11,10 @@ use super::identity::{ID_KEY, check_declared_id, entry_id};
 use crate::authoring::registry::RegisteredType;
 
 /// Every structural problem with the entry at `index`: a registered type that
-/// is not RuntimeOnly, and at most a well-formed `$id` among the `$` keys of its
+/// is not `RuntimeOnly`, and at most a well-formed `$id` among the `$` keys of its
 /// args. Uniqueness is a whole-world rule and not checked here.
 pub fn entry_errors(value: &Value, index: usize) -> Vec<String> {
-    let label = entry_id(value)
-        .map(|id| format!("'{id}'"))
-        .unwrap_or_else(|| format!("asset[{index}]"));
+    let label = entry_id(value).map_or_else(|| format!("asset[{index}]"), |id| format!("'{id}'"));
     let mut errors = Vec::new();
     if let Some(args) = value.get("args").and_then(Value::as_object) {
         if let Some(Err(e)) = args.get(ID_KEY).map(check_declared_id) {

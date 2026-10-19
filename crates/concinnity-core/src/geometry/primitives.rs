@@ -232,8 +232,7 @@ pub fn build_sphere(
     let vert_count = (rings + 1) * (segments + 1) + 2;
     if vert_count > 65536 {
         return Err(format!(
-            "sphere rings={} segments={} produces {} vertices, exceeding the u16 limit",
-            rings, segments, vert_count
+            "sphere rings={rings} segments={segments} produces {vert_count} vertices, exceeding the u16 limit"
         ));
     }
 

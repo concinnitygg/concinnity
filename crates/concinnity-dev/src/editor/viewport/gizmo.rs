@@ -55,26 +55,26 @@ impl GizmoMode {
     // The authored arg (and `Transform` field) this mode edits.
     pub(crate) fn arg_key(self) -> &'static str {
         match self {
-            GizmoMode::Translate => "position",
-            GizmoMode::Rotate => "rotation_deg",
-            GizmoMode::Scale => "scale",
+            Self::Translate => "position",
+            Self::Rotate => "rotation_deg",
+            Self::Scale => "scale",
         }
     }
 
     pub(crate) fn caption(self) -> &'static str {
         match self {
-            GizmoMode::Translate => "move",
-            GizmoMode::Rotate => "rotate",
-            GizmoMode::Scale => "scale",
+            Self::Translate => "move",
+            Self::Rotate => "rotate",
+            Self::Scale => "scale",
         }
     }
 
     // Tip shape per mode: soft square, circle, hard square.
     fn tip_radius(self) -> f32 {
         match self {
-            GizmoMode::Translate => 2.0,
-            GizmoMode::Rotate => TIP_PX * 0.5,
-            GizmoMode::Scale => 0.0,
+            Self::Translate => 2.0,
+            Self::Rotate => TIP_PX * 0.5,
+            Self::Scale => 0.0,
         }
     }
 }

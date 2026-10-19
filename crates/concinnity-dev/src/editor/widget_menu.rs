@@ -60,9 +60,10 @@ pub(crate) fn menu_rects(
 ) -> ([f32; 4], Vec<[f32; 4]>) {
     let h = count as f32 * ITEM_H;
     let below = row[1] + row[3];
-    let top = match below + h <= bottom {
-        true => below,
-        false => row[1] - h,
+    let top = if below + h <= bottom {
+        below
+    } else {
+        row[1] - h
     };
     let x = right - MENU_W;
     let items = (0..count)
@@ -79,16 +80,17 @@ pub(crate) fn hit_item(mx: f32, my: f32, items: &[[f32; 4]]) -> Option<usize> {
 // The three dots; the backing box shows only while `boxed` (hovered, or their
 // menu is open).
 pub(crate) fn place_dots(world: &mut World, ids: &MenuIds, d: [f32; 4], boxed: bool) {
-    match boxed {
-        true => place_rounded(
+    if boxed {
+        place_rounded(
             world,
             ids.dot_bg,
             d,
             DOT_BG_TINT,
             theme::CONTROL_RADIUS,
             true,
-        ),
-        false => widget::set_sprite_visible(world, ids.dot_bg, false),
+        );
+    } else {
+        widget::set_sprite_visible(world, ids.dot_bg, false);
     }
     let (cx, cy) = (d[0] + d[2] * 0.5, d[1] + d[3] * 0.5);
     let (s, gap) = (3.5, 3.5);
@@ -131,14 +133,16 @@ pub(crate) fn place_menu(
             widget::set_label_visible(world, label_id, false);
             continue;
         };
-        let tint = match point_in(mouse[0], mouse[1], r) {
-            true => theme::HOVER_TINT,
-            false => ITEM_TINT,
+        let tint = if point_in(mouse[0], mouse[1], r) {
+            theme::HOVER_TINT
+        } else {
+            ITEM_TINT
         };
         place_rounded(world, bg_id, r, tint, theme::CONTROL_RADIUS, true);
-        let color = match item.danger {
-            true => DANGER_LABEL,
-            false => theme::LABEL,
+        let color = if item.danger {
+            DANGER_LABEL
+        } else {
+            theme::LABEL
         };
         widget::place_left_label(
             world,

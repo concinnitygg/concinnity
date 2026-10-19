@@ -1,5 +1,5 @@
 //! The typed error vocabulary of the `RenderBackend` boundary. Backends map
-//! their native failure codes (VkResult, HRESULT, MTLCommandBuffer status) into
+//! their native failure codes (`VkResult`, HRESULT, `MTLCommandBuffer` status) into
 //! these classes at the detection sites; the frame loop dispatches recovery
 //! policy on the class, never on prose. `Other` is the unclassified bucket: a
 //! failure no detection site classified.
@@ -72,26 +72,22 @@ impl RenderError {
     /// memory exhaustion. A caller that tolerates a failed step must still
     /// propagate these so the frame loop's recovery policy sees them.
     pub fn is_device_failure(&self) -> bool {
-        matches!(
-            self,
-            RenderError::DeviceLost { .. } | RenderError::OutOfDeviceMemory(_)
-        )
+        matches!(self, Self::DeviceLost { .. } | Self::OutOfDeviceMemory(_))
     }
 
     /// Prefix the message with `what` (the resource or step that failed),
     /// keeping the class so recovery policy still sees it.
+    #[must_use]
     pub fn context(self, what: impl core::fmt::Display) -> Self {
         match self {
-            RenderError::DeviceLost { reason, detail } => RenderError::DeviceLost {
+            Self::DeviceLost { reason, detail } => Self::DeviceLost {
                 reason,
                 detail: format!("{what}: {detail}"),
             },
-            RenderError::OutOfDeviceMemory(m) => {
-                RenderError::OutOfDeviceMemory(format!("{what}: {m}"))
-            }
-            RenderError::ShaderCompile(m) => RenderError::ShaderCompile(format!("{what}: {m}")),
-            RenderError::Other(m) => RenderError::Other(format!("{what}: {m}")),
-            e @ (RenderError::SwapchainOutOfDate | RenderError::Unsupported { .. }) => e,
+            Self::OutOfDeviceMemory(m) => Self::OutOfDeviceMemory(format!("{what}: {m}")),
+            Self::ShaderCompile(m) => Self::ShaderCompile(format!("{what}: {m}")),
+            Self::Other(m) => Self::Other(format!("{what}: {m}")),
+            e @ (Self::SwapchainOutOfDate | Self::Unsupported { .. }) => e,
         }
     }
 }

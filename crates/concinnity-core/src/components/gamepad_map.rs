@@ -16,27 +16,23 @@ pub enum GamepadAction {
 
 impl GamepadAction {
     /// Every rebindable action, in Controls-tab row order.
-    pub const ALL: [GamepadAction; 3] = [
-        GamepadAction::Sprint,
-        GamepadAction::Jump,
-        GamepadAction::Interact,
-    ];
+    pub const ALL: [Self; 3] = [Self::Sprint, Self::Jump, Self::Interact];
 
     /// The settings key string used in rebind actions and the
     /// engine settings registry. The `pad_` prefix distinguishes a button
     /// capture row from a `key_*` keyboard capture row.
     pub const fn setting_key(self) -> &'static str {
         match self {
-            GamepadAction::Sprint => "pad_sprint",
-            GamepadAction::Jump => "pad_jump",
-            GamepadAction::Interact => "pad_interact",
+            Self::Sprint => "pad_sprint",
+            Self::Jump => "pad_jump",
+            Self::Interact => "pad_interact",
         }
     }
 }
 
 /// The canonical action -> gamepad button map. Persisted in the engine's
 /// controls settings and applied by the input sampling; carried live to
-/// consumers via [ControlsCommand](#controlscommand) on a rebind. Each field is
+/// consumers via [`ControlsCommand`](#controlscommand) on a rebind. Each field is
 /// `#[serde(default)]` so adding an action in a future build never invalidates
 /// an existing settings file.
 #[derive(
@@ -57,7 +53,7 @@ pub struct GamepadMap {
 impl GamepadMap {
     /// The default bindings: sprint on the left-stick click, jump on the bottom
     /// face button, interact on the left face button.
-    pub const DEFAULT: GamepadMap = GamepadMap {
+    pub const DEFAULT: Self = Self {
         sprint: GamepadButton::LeftStick,
         jump: GamepadButton::South,
         interact: GamepadButton::West,

@@ -2,7 +2,7 @@ use concinnity_core::components::sdf_volume::SDF_PARAMS_LEN;
 
 /// Check an `SdfVolume`'s authored args.
 pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
-    check_args(args).map_err(|e| format!("Asset '{}': {}", name, e))
+    check_args(args).map_err(|e| format!("Asset '{name}': {e}"))
 }
 
 // Validate SdfVolume args without compiling.

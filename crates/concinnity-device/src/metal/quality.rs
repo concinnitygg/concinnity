@@ -65,6 +65,10 @@ impl MtlContext {
     // (no swapchain rebuild on Metal), so a redundant call is cheap. Backend
     // specific: Vulkan reaches the same end by rebuilding the swapchain with a
     // different present mode, so this does not live on the shared window layer.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "`forward!` reaches it from the trait's `&mut self` method of the same name"
+    )]
     pub(crate) fn set_vsync(&mut self, on: bool) {
         super::init::set_display_sync(&self.window().view, on);
     }
@@ -294,7 +298,7 @@ impl MtlContext {
             ssr: build_ssr(&post_device, settings, render)?,
             gbuffer: build_gbuffer(device, gbuffer_enabled, render, hot_reload)?,
             ssgi: build_ssgi(&post_device, settings, render)?,
-            rt: build_rt_pipelines(device, &settings.rt_reflection, hot_reload)?,
+            rt: build_rt_pipelines(device, settings.rt_reflection.as_ref(), hot_reload)?,
             auto_exposure: build_auto_exposure(
                 device,
                 settings,

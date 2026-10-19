@@ -17,7 +17,7 @@ use crate::vulkan::pipeline_desc::{Blend, Depth, DepthBias, GraphicsPipelineDesc
 
 #[cfg(test)]
 pub(super) fn is_spirv(bytes: &[u8]) -> bool {
-    bytes.len() >= 4 && u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) == 0x07230203
+    bytes.len() >= 4 && u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) == 0x0723_0203
 }
 
 // The engine's compiled bindless main-pass and G-buffer pre-pass SPIR-V,
@@ -213,8 +213,8 @@ pub(super) fn world_entry(
         platform: concinnity_core::platform::Platform::Vulkan,
         hot_reload,
     };
-    crate::shader::surface_source::artifact(world, program, &req, crate::shader::compile::cooked)
-        .map(|c| c.into_owned())
+    crate::shader::surface_source::artifact(world, program, req, crate::shader::compile::cooked)
+        .map(std::borrow::Cow::into_owned)
 }
 
 pub(super) fn compile_text_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
@@ -337,27 +337,24 @@ pub(super) fn build_bucket_pipeline(
     source: &BucketSource<'_>,
     engine_default: &BindlessSpv,
 ) -> RenderResult<BucketPipelines> {
-    match source.programs {
-        Some(programs) => {
-            build_world_shader_pipeline(device, targets, bucket, programs, source.grass)
-        }
-        None => {
-            let frag = engine_default.main_frag(source.grass);
-            let main = create_bucket_main(device, targets, bucket, &engine_default.vert, frag)?;
-            let prepass = targets.prepass.and_then(|prepass| {
-                let stages = (
-                    &engine_default.prepass_vert[..],
-                    &engine_default.prepass_frag[..],
-                );
-                build_bucket_prepass(device, prepass, bucket, stages)
-            });
-            Ok(BucketPipelines {
-                main,
-                prepass,
-                programs: None,
-                grass: source.grass,
-            })
-        }
+    if let Some(programs) = source.programs {
+        build_world_shader_pipeline(device, targets, bucket, programs, source.grass)
+    } else {
+        let frag = engine_default.main_frag(source.grass);
+        let main = create_bucket_main(device, targets, bucket, &engine_default.vert, frag)?;
+        let prepass = targets.prepass.and_then(|prepass| {
+            let stages = (
+                &engine_default.prepass_vert[..],
+                &engine_default.prepass_frag[..],
+            );
+            build_bucket_prepass(device, prepass, bucket, stages)
+        });
+        Ok(BucketPipelines {
+            main,
+            prepass,
+            programs: None,
+            grass: source.grass,
+        })
     }
 }
 
@@ -428,7 +425,7 @@ pub(super) fn build_bucket_prepass(
     );
     built
         .map_err(|e| {
-            tracing::warn!("shader bucket {bucket}'s G-buffer pre-pass did not build: {e}")
+            tracing::warn!("shader bucket {bucket}'s G-buffer pre-pass did not build: {e}");
         })
         .ok()
 }

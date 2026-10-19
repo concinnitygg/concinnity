@@ -6,7 +6,7 @@
 //! ahead of anything submitted later: the frame's own buffers, the probe
 //! bakes, a one-shot RT build. An opening barrier holds the copies until every
 //! earlier read of the buffers is done, and a closing one makes the writes
-//! visible to every later read on the queue, the pair D3D12's COPY_DEST
+//! visible to every later read on the queue, the pair D3D12's `COPY_DEST`
 //! transitions give its backend. `draw_frame` flushes right after its
 //! frame-slot wait, and `wait_idle` flushes before it waits, so an idle device
 //! has applied every staged write.
@@ -34,8 +34,8 @@ pub(in crate::vulkan) enum GeometryTarget {
 impl GeometryTarget {
     fn pick(self, dest: GeometryDest) -> vk::Buffer {
         match self {
-            GeometryTarget::Vertex => dest.vertex,
-            GeometryTarget::Index => dest.index,
+            Self::Vertex => dest.vertex,
+            Self::Index => dest.index,
         }
     }
 }
@@ -145,20 +145,19 @@ impl GeometryUploads {
         if self.queued.is_empty() {
             return Ok(());
         }
-        let cmd = match self
+        let cmd = if let Some(cmd) = self
             .command_buffers
             .pop_due(self.staging.tick(), self.staging.depth())
         {
-            Some(cmd) => cmd,
-            None => {
-                let info = vk::CommandBufferAllocateInfo::default()
-                    .command_pool(submit_on.command_pool)
-                    .level(vk::CommandBufferLevel::PRIMARY)
-                    .command_buffer_count(1);
-                // SAFETY: the allocate-info names this device's own pool and is live for the call.
-                unsafe { device.allocate_command_buffers(&info) }
-                    .map_err(|e| map_vk_result(e, "geometry copy allocate"))?[0]
-            }
+            cmd
+        } else {
+            let info = vk::CommandBufferAllocateInfo::default()
+                .command_pool(submit_on.command_pool)
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_buffer_count(1);
+            // SAFETY: the allocate-info names this device's own pool and is live for the call.
+            unsafe { device.allocate_command_buffers(&info) }
+                .map_err(|e| map_vk_result(e, "geometry copy allocate"))?[0]
         };
         let begin = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);

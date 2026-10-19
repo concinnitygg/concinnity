@@ -16,6 +16,7 @@
 // Panics when the constant is missing or unparsable, because a renamed constant
 // is exactly the drift this check exists to catch -- silently skipping it would
 // leave the mirror unguarded.
+#[expect(clippy::panic, reason = "a test helper fails the test that called it")]
 pub(super) fn shader_const(source: &str, name: &str) -> usize {
     let decl = format!("static const uint {name} = ");
     let rest = source

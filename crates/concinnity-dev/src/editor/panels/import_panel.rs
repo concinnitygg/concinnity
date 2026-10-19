@@ -258,7 +258,7 @@ pub(crate) fn cursor_over_list(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bo
 // the click missed the panel. Title-bar presses never reach this: the shared
 // routing intercepts them first.
 pub(crate) fn hit_test(
-    view: &ImportView,
+    view: &ImportView<'_>,
     mx: f32,
     my: f32,
     o: [f32; 2],
@@ -290,7 +290,7 @@ pub(crate) fn hit_test(
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank every
 // element (`None`).
-pub(crate) fn place(world: &mut World, view: Option<&ImportView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&ImportView<'_>>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         ids().hide(world);
         return;
@@ -354,7 +354,7 @@ pub(crate) fn place(world: &mut World, view: Option<&ImportView>, o: [f32; 2], s
             (w - 2.0 * PAD).max(0.0),
             STATUS_H - 4.0,
         ],
-        view.status.map(ImportStatus::text).unwrap_or(""),
+        view.status.map_or("", ImportStatus::text),
         view.status.map_or(ERROR_LABEL, ImportStatus::color),
         view.status.is_some(),
     );
@@ -402,7 +402,13 @@ pub(crate) fn place(world: &mut World, view: Option<&ImportView>, o: [f32; 2], s
     layout_scrollbar(world, view, o, w, rows_shown);
 }
 
-fn layout_scrollbar(world: &mut World, view: &ImportView, o: [f32; 2], w: f32, rows_shown: usize) {
+fn layout_scrollbar(
+    world: &mut World,
+    view: &ImportView<'_>,
+    o: [f32; 2],
+    w: f32,
+    rows_shown: usize,
+) {
     let total = view.rows.len();
     if total <= rows_shown {
         widget::set_sprite_visible(world, LIST_TRACK, false);
@@ -451,7 +457,7 @@ mod tests {
             .collect()
     }
 
-    fn view<'a>(rows: &'a [ImportRow], scroll: usize) -> ImportView<'a> {
+    fn view(rows: &[ImportRow], scroll: usize) -> ImportView<'_> {
         ImportView {
             rows,
             scroll,

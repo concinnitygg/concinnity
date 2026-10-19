@@ -1,5 +1,5 @@
-//! EditorHook: the Shaders panel's actions. The panel lists every Shader the
-//! working entries declare, then every distance field their SdfVolumes read; a
+//! `EditorHook`: the Shaders panel's actions. The panel lists every Shader the
+//! working entries declare, then every distance field their `SdfVolumes` read; a
 //! heading or its menu's Edit opens the Shader's form and "+ New Shader" an
 //! empty one (`shader_form.rs`, or `sdf_form.rs` for a field kind), a file row
 //! opens the source panel on that file (`shader_source.rs`), a Materials row
@@ -140,7 +140,7 @@ impl EditorHook {
             (MenuItem::Duplicate, RowKind::Header(i)) => self.duplicate_shader(i),
             (MenuItem::Delete, RowKind::Header(i)) => self.confirm_delete_shader(i),
             (MenuItem::RemoveVertex, RowKind::File(SourceKey::Shader { name, .. })) => {
-                self.remove_vertex_file(&name)
+                self.remove_vertex_file(&name);
             }
             (MenuItem::Open, RowKind::Field(i)) => self.open_field(i),
             (MenuItem::SelectVolumes, RowKind::Field(i)) => self.select_field_volumes(i, world),

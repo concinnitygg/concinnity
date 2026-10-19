@@ -29,7 +29,7 @@ pub enum ConsumedReset {
 impl ConsumedReset {
     /// Whether this dispatch discards the history.
     pub const fn discards(self) -> bool {
-        !matches!(self, ConsumedReset::None)
+        !matches!(self, Self::None)
     }
 }
 

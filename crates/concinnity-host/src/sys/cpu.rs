@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 /// The cores this process may run on, at least one.
 pub fn available_cores() -> usize {
-    std::thread::available_parallelism().map_or(1, |n| n.get())
+    std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
 }
 
 // Total CPU time consumed by this process since it started, summed over every
@@ -64,7 +64,7 @@ mod imp {
         let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
         // SAFETY: `usage` is a correctly sized rusage output buffer and
         // RUSAGE_SELF is a valid `who` value.
-        let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+        let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, &raw mut usage) };
         (rc == 0).then(|| timeval(usage.ru_utime) + timeval(usage.ru_stime))
     }
 
@@ -93,10 +93,10 @@ mod imp {
         unsafe {
             GetProcessTimes(
                 GetCurrentProcess(),
-                &mut creation,
-                &mut exit,
-                &mut kernel,
-                &mut user,
+                &raw mut creation,
+                &raw mut exit,
+                &raw mut kernel,
+                &raw mut user,
             )
         }
         .ok()?;
@@ -105,7 +105,7 @@ mod imp {
 
     // FILETIME counts 100-nanosecond ticks.
     fn filetime(ft: FILETIME) -> Duration {
-        let ticks = ((ft.dwHighDateTime as u64) << 32) | ft.dwLowDateTime as u64;
+        let ticks = (u64::from(ft.dwHighDateTime) << 32) | u64::from(ft.dwLowDateTime);
         Duration::from_nanos(ticks.saturating_mul(100))
     }
 }

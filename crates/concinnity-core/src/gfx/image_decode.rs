@@ -1,9 +1,9 @@
 //! GPU-free pixel-decode math shared by the backends' frame-capture paths.
 //! Turns the raw bytes read back from a GPU texture into tightly-packed opaque
-//! RGBA8. The backend classifies its own format enum (MTLPixelFormat /
-//! vk::Format / DXGI_FORMAT) into a `PixelLayout` and calls `decode_to_rgba8`;
+//! RGBA8. The backend classifies its own format enum (`MTLPixelFormat` /
+//! `vk::Format` / `DXGI_FORMAT`) into a `PixelLayout` and calls `decode_to_rgba8`;
 //! the per-channel math here is identical across backends. PNG encoding + file
-//! I/O stay in the backends (debug-only, and would pull std::fs / the png crate
+//! I/O stay in the backends (debug-only, and would pull `std::fs` / the png crate
 //! into core).
 
 use crate::math::{powf, powi};
@@ -34,8 +34,8 @@ impl PixelLayout {
     /// Bytes one texel of this layout occupies in the read-back.
     pub fn bytes_per_pixel(self) -> usize {
         match self {
-            PixelLayout::Rgba16F { .. } => 8,
-            PixelLayout::Bgra8 | PixelLayout::Rgba8 | PixelLayout::A2b10g10r10 => 4,
+            Self::Rgba16F { .. } => 8,
+            Self::Bgra8 | Self::Rgba8 | Self::A2b10g10r10 => 4,
         }
     }
 }
@@ -110,7 +110,7 @@ fn decode_a2b10g10r10(raw: &[u8]) -> Vec<u8> {
 fn f16_to_f32(h: u16) -> f32 {
     let sign = if (h >> 15) & 1 == 1 { -1.0 } else { 1.0 };
     let exp = (h >> 10) & 0x1f;
-    let mant = (h & 0x3ff) as f32;
+    let mant = f32::from(h & 0x3ff);
     let val = match exp {
         0 => mant * powi(2.0, -24),
         0x1f => {
@@ -120,7 +120,7 @@ fn f16_to_f32(h: u16) -> f32 {
                 f32::NAN
             }
         }
-        _ => (1.0 + mant / 1024.0) * powi(2.0, exp as i32 - 15),
+        _ => (1.0 + mant / 1024.0) * powi(2.0, i32::from(exp) - 15),
     };
     sign * val
 }
@@ -131,7 +131,7 @@ fn linear_to_srgb8(c: f32) -> u8 {
         return 0;
     }
     let c = c.clamp(0.0, 1.0);
-    let s = if c <= 0.0031308 {
+    let s = if c <= 0.003_130_8 {
         12.92 * c
     } else {
         1.055 * powf(c, 1.0 / 2.4) - 0.055
@@ -201,7 +201,7 @@ mod tests {
         }
         let out = decode_to_rgba8(&raw, PixelLayout::Rgba16F { scrgb: true });
         assert_eq!(out[0], 255); // r = linear 1.0
-        assert!((out[1] as i32 - 188).abs() <= 1); // g = linear 0.5
+        assert!((i32::from(out[1]) - 188).abs() <= 1); // g = linear 0.5
         assert_eq!(out[2], 0); // b = linear 0.0
         assert_eq!(out[3], 255); // forced opaque
     }

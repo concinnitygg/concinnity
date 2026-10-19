@@ -39,7 +39,7 @@ pub struct CullParams {
 
 /// Cull-side Hi-Z uniforms (cull.hlsl, 80 bytes): the previous frame's
 /// un-jittered view-projection, the Hi-Z mip-0 dimensions, the mip count, and an
-/// enable flag. Mirrors the Metal / DirectX CullUniforms tail.
+/// enable flag. Mirrors the Metal / DirectX `CullUniforms` tail.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct CullHizParams {

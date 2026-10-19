@@ -38,6 +38,7 @@ impl ChunkCoord {
     }
 
     /// This coordinate shifted by `(dx, dz)` chunks.
+    #[must_use]
     pub fn offset(self, dx: i32, dz: i32) -> Self {
         Self::new(self.x + dx, self.z + dz)
     }
@@ -47,7 +48,7 @@ impl ChunkCoord {
     /// This is the metric the streaming window uses for radius membership: a
     /// chunk is "in view" when its Chebyshev distance to the camera chunk is
     /// `<= view_radius`, which selects a square block of chunks.
-    pub fn chebyshev_distance(self, other: ChunkCoord) -> i32 {
+    pub fn chebyshev_distance(self, other: Self) -> i32 {
         let dx = (self.x - other.x).abs();
         let dz = (self.z - other.z).abs();
         if dx > dz { dx } else { dz }
@@ -57,9 +58,9 @@ impl ChunkCoord {
     ///
     /// Used to prioritize loads (nearest chunk first). Squared keeps the math
     /// `sqrt`-free; `i64` so a far-apart pair cannot overflow.
-    pub fn sq_distance(self, other: ChunkCoord) -> i64 {
-        let dx = (self.x - other.x) as i64;
-        let dz = (self.z - other.z) as i64;
+    pub fn sq_distance(self, other: Self) -> i64 {
+        let dx = i64::from(self.x - other.x);
+        let dz = i64::from(self.z - other.z);
         dx * dx + dz * dz
     }
 }

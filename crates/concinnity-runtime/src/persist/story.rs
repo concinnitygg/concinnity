@@ -24,18 +24,18 @@ impl FileStore {
     // The store under `tree`. A preview session (`transient`) saves to a
     // sandbox emptied on first use, so the save UI works without touching the
     // player's saves and every session starts fresh.
-    pub(crate) fn new(tree: &StateTree, transient: bool) -> FileStore {
+    pub(crate) fn new(tree: &StateTree, transient: bool) -> Self {
         if !transient {
-            return FileStore::at(&tree.saves_dir());
+            return Self::at(&tree.saves_dir());
         }
-        FileStore {
+        Self {
             empty_first: Some(Once::new()),
-            ..FileStore::at(&tree.preview_saves_dir())
+            ..Self::at(&tree.preview_saves_dir())
         }
     }
 
-    fn at(dir: &Path) -> FileStore {
-        FileStore {
+    fn at(dir: &Path) -> Self {
+        Self {
             dir: dir.to_path_buf(),
             writer: FileWriter::new("cn-story-save"),
             empty_first: None,

@@ -1,7 +1,7 @@
 use crate::components::EntityTarget;
 
 /// Runtime-only event requesting that an entity (and its descendants)
-/// be hidden or shown without despawning it. SpawnSystem drains these each
+/// be hidden or shown without despawning it. `SpawnSystem` drains these each
 /// step, toggling the subtree's Hidden tags and its draw slots' visibility.
 /// World authors never declare this type directly.
 #[derive(Debug, Clone, Copy)]

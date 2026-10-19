@@ -62,7 +62,7 @@ pub(super) struct AssetEntry {
     pub(super) schema: &'static TypeSchema,
 }
 
-/// Every authorable asset in the authoring registry. A RuntimeOnly component
+/// Every authorable asset in the authoring registry. A `RuntimeOnly` component
 /// is engine-internal, never declared in a world, so it gets no page.
 pub(super) fn registry_assets() -> Vec<AssetEntry> {
     use concinnity_cook::authoring::registry::{AssetOrigin, RegisteredType};
@@ -290,13 +290,14 @@ fn resolve_type(ty: schema::FieldType, ctx: &mut Ctx) -> FieldType {
             elem: Box::new(resolve_type(elem(), ctx)),
             len,
         },
-        schema::FieldType::Nested(s) => match ctx.asset_by_schema.get(s.name) {
-            Some(asset) => FieldType::Named(asset.to_string()),
-            None => {
+        schema::FieldType::Nested(s) => {
+            if let Some(asset) = ctx.asset_by_schema.get(s.name) {
+                FieldType::Named(asset.to_string())
+            } else {
                 ctx.value_types.entry(s.name).or_insert(s);
                 FieldType::Named(s.name.to_string())
             }
-        },
+        }
         schema::FieldType::Enum(s) if matches!(s.body, Body::Variants(_)) => {
             if !ctx.enums.contains_key(s.name) {
                 ctx.enums.insert(s.name, s);

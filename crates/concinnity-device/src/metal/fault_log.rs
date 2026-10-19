@@ -87,7 +87,7 @@ pub(super) fn report_fault(cb: &ProtocolObject<dyn MTLCommandBuffer>, what: impl
     match role {
         FaultRole::Cause => tracing::error!("{what} command buffer faulted: {description}"),
         FaultRole::Victim => {
-            tracing::error!("{what} command buffer discarded by GPU recovery: {description}")
+            tracing::error!("{what} command buffer discarded by GPU recovery: {description}");
         }
     }
 }

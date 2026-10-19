@@ -25,7 +25,7 @@ pub(super) fn build_uniforms(
     // param [11] (written per frame with the live probe count), plus a static count-0 CBV
     // the asynchronous capture binds so a probe face samples the sky, not other
     // probes (and never reads the live ring while `record_frame` rewrites it).
-    let probe_set_size = align256(std::mem::size_of::<ProbeSet>() as u64);
+    let probe_set_size = align256(size_of::<ProbeSet>() as u64);
     let mut probe_set_cbvs: Vec<PooledBuffer> = Vec::with_capacity(frames);
     let mut probe_set_cbv_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
     for _ in 0..frames {
@@ -37,7 +37,7 @@ pub(super) fn build_uniforms(
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
         // local that receives the mapping.
-        unsafe { buf.Map(0, None, Some(&mut ptr)) }
+        unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
             .map_err(|e| map_hresult(e.code(), "map probe set cbv"))?;
         // Initialize to the empty set (count 0) until the first frame writes it.
         let empty = ProbeSet::EMPTY;
@@ -45,12 +45,12 @@ pub(super) fn build_uniforms(
         // the source is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &empty as *const ProbeSet as *const u8,
-                ptr as *mut u8,
-                std::mem::size_of::<ProbeSet>(),
+                (&raw const empty).cast::<u8>(),
+                ptr.cast::<u8>(),
+                size_of::<ProbeSet>(),
             );
         }
-        probe_set_cbv_ptrs.push(ptr as *mut u8);
+        probe_set_cbv_ptrs.push(ptr.cast::<u8>());
         probe_set_cbvs.push(buf);
     }
     let probe_set_empty_cbv = {
@@ -62,16 +62,16 @@ pub(super) fn build_uniforms(
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
         // local that receives the mapping.
-        unsafe { buf.Map(0, None, Some(&mut ptr)) }
+        unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
             .map_err(|e| map_hresult(e.code(), "map probe empty cbv"))?;
         let empty = ProbeSet::EMPTY;
         // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
         // the source is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &empty as *const ProbeSet as *const u8,
-                ptr as *mut u8,
-                std::mem::size_of::<ProbeSet>(),
+                (&raw const empty).cast::<u8>(),
+                ptr.cast::<u8>(),
+                size_of::<ProbeSet>(),
             );
             buf.Unmap(0, None);
         }
@@ -79,9 +79,9 @@ pub(super) fn build_uniforms(
     };
 
     // Constant buffers
-    let view_ubo_size = align256(std::mem::size_of::<ViewUniforms>() as u64);
-    let light_ubo_size = align256(std::mem::size_of::<LightUniforms>() as u64);
-    let shadow_ubo_size = align256(std::mem::size_of::<ShadowUniforms>() as u64);
+    let view_ubo_size = align256(size_of::<ViewUniforms>() as u64);
+    let light_ubo_size = align256(size_of::<LightUniforms>() as u64);
+    let shadow_ubo_size = align256(size_of::<ShadowUniforms>() as u64);
 
     let mut view_ubo_resources = Vec::with_capacity(frames);
     let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
@@ -94,9 +94,9 @@ pub(super) fn build_uniforms(
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
         // local that receives the mapping.
-        unsafe { buf.Map(0, None, Some(&mut ptr)) }
+        unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
             .map_err(|e| map_hresult(e.code(), "map view ubo"))?;
-        view_ubo_ptrs.push(ptr as *mut u8);
+        view_ubo_ptrs.push(ptr.cast::<u8>());
         view_ubo_resources.push(buf);
     }
 
@@ -115,9 +115,9 @@ pub(super) fn build_uniforms(
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
         // local that receives the mapping.
-        unsafe { buf.Map(0, None, Some(&mut ptr)) }
+        unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
             .map_err(|e| map_hresult(e.code(), "map light ubo"))?;
-        light_ubo_ptrs.push(ptr as *mut u8);
+        light_ubo_ptrs.push(ptr.cast::<u8>());
         light_ubo_resources.push(buf);
     }
 
@@ -134,9 +134,9 @@ pub(super) fn build_uniforms(
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
         // local that receives the mapping.
-        unsafe { buf.Map(0, None, Some(&mut ptr)) }
+        unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
             .map_err(|e| map_hresult(e.code(), "map shadow ubo"))?;
-        shadow_ubo_ptrs.push(ptr as *mut u8);
+        shadow_ubo_ptrs.push(ptr.cast::<u8>());
         shadow_ubo_resources.push(buf);
     }
 
@@ -148,9 +148,9 @@ pub(super) fn build_uniforms(
         // the source is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &shadow_uniforms as *const ShadowUniforms as *const u8,
+                (&raw const shadow_uniforms).cast::<u8>(),
                 *ptr,
-                std::mem::size_of::<ShadowUniforms>(),
+                size_of::<ShadowUniforms>(),
             );
         }
     }
@@ -163,7 +163,7 @@ pub(super) fn build_uniforms(
     // still allocates a one-element placeholder; the shader's
     // `num_local_lights == 0` guard keeps it from being read.
     let local_light_buffer = {
-        let size = align256((local_lights.len().max(1) * std::mem::size_of::<GpuLight>()) as u64);
+        let size = align256((local_lights.len().max(1) * size_of::<GpuLight>()) as u64);
         let buf = hw.alloc.alloc_buffer(
             size,
             D3D12_HEAP_TYPE_UPLOAD,

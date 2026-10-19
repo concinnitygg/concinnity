@@ -168,10 +168,7 @@ fn barrier_targets<'a>(code: &'a str, markers: &[&str]) -> Vec<&'a str> {
         let mut from = 0;
         while let Some(rel) = code[from..].find(marker) {
             let start = from + rel;
-            let end = code[start..]
-                .find(';')
-                .map(|e| start + e)
-                .unwrap_or(code.len());
+            let end = code[start..].find(';').map_or(code.len(), |e| start + e);
             out.push(&code[start..end]);
             from = start + marker.len();
         }
@@ -225,8 +222,7 @@ mod tests {
                     .fields
                     .iter()
                     .find(|(_, f)| f == field)
-                    .map(|(l, _)| *l)
-                    .unwrap_or("?");
+                    .map_or("?", |(l, _)| *l);
                 failures.push(format!(
                     "{}/{file}: emits a barrier targeting `{field}`, which the graph executor \
                      already drives as `{label}`. Both will run every frame and the second will \

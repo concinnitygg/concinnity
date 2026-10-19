@@ -70,13 +70,14 @@ fn preview_world(controller: Option<CameraController>, bounds: bool) -> World {
     for &id in &worlds::loading::ids().labels {
         world.push_identified(id, TextLabel::default());
     }
-    let entries = match bounds {
-        true => vec![PickEntry {
+    let entries = if bounds {
+        vec![PickEntry {
             asset_id: asset_id::intern("box"),
             bb_min: [-3.0, 0.0, -3.0],
             bb_max: [3.0, 2.0, 3.0],
-        }],
-        false => Vec::new(),
+        }]
+    } else {
+        Vec::new()
     };
     world.insert_resource(PickIndex { entries });
     world

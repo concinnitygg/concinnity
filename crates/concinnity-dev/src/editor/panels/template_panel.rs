@@ -183,7 +183,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<Tem
 
 // Position + show the panel's elements for this frame at origin `o`, effective
 // size `s`.
-pub(crate) fn place(world: &mut World, view: &TemplateView, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: &TemplateView<'_>, o: [f32; 2], s: [f32; 2]) {
     // Blank everything, then re-show what this frame needs.
     ids().hide(world);
 

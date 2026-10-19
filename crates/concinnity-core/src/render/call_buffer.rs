@@ -90,7 +90,7 @@ impl core::fmt::Debug for TextCallBuffer {
         f.debug_struct("TextCallBuffer")
             .field("calls", &self.calls.len())
             .field("spare", &self.spare.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

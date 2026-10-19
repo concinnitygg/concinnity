@@ -8,9 +8,9 @@ use concinnity_core::ecs::NameRef;
 ///
 /// `Slider` is a build-time shorthand for one row of a settings menu: a
 /// left-aligned name, a draggable track with a handle, and a right-aligned
-/// current value. It expands into a [TextLabel](#textlabel) for the name, a
-/// [TextLabel](#textlabel) for the value, two [Sprite](#sprite)s (the track and
-/// the handle), and a [HitRegion](#hitregion) covering the track whose action
+/// current value. It expands into a [`TextLabel`](#textlabel) for the name, a
+/// [`TextLabel`](#textlabel) for the value, two [Sprite](#sprite)s (the track and
+/// the handle), and a [`HitRegion`](#hitregion) covering the track whose action
 /// drags `setting`. While the region is pressed the handle
 /// follows the cursor and the value updates live.
 ///

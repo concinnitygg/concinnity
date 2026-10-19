@@ -1,4 +1,4 @@
-//! Compiles a ColorLut component's args into the binary payload the renderer
+//! Compiles a `ColorLut` component's args into the binary payload the renderer
 //! uploads as a 3D color-grading LUT. The runtime samples this LUT in the
 //! composite (post-process) pass with the display-referred sRGB color as the
 //! texture coordinate, blending the graded result by the `ColorLut`'s
@@ -15,7 +15,7 @@
 //! Payload format (little-endian):
 //!   u32  magic     = b"LUT3" = 0x3354554c
 //!   u32  size      LUT edge length n; the runtime texture is n x n x n
-//!   u32  format_id = 0  (RGBA8)
+//!   u32  `format_id` = 0  (RGBA8)
 //!   f32  strength  blend of the graded color over the ungraded, in [0, 1]
 //!   n*n*n*4 bytes  raw RGBA8, x(red) fastest, then y(green), then z(blue)
 //!
@@ -54,16 +54,15 @@ pub enum LutFormat {
 
 /// Classify a `ColorLut` source path by extension.
 pub fn classify_source(source: &str) -> Result<LutFormat, String> {
-    let lower = source.to_ascii_lowercase();
-    if lower.ends_with(".cube") {
-        Ok(LutFormat::Cube)
-    } else if lower.ends_with(".png") {
-        Ok(LutFormat::Png)
-    } else {
-        Err(format!(
-            "ColorLut source '{}' must be a .cube or .png file",
-            source
-        ))
+    let ext = source
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("cube") => Ok(LutFormat::Cube),
+        Some("png") => Ok(LutFormat::Png),
+        _ => Err(format!(
+            "ColorLut source '{source}' must be a .cube or .png file"
+        )),
     }
 }
 
@@ -73,8 +72,7 @@ pub fn classify_source(source: &str) -> Result<LutFormat, String> {
 pub fn validate_size(size: u32) -> Result<(), String> {
     if !(MIN_LUT_SIZE..=MAX_LUT_SIZE).contains(&size) {
         return Err(format!(
-            "ColorLut size {} out of range ({}..={})",
-            size, MIN_LUT_SIZE, MAX_LUT_SIZE
+            "ColorLut size {size} out of range ({MIN_LUT_SIZE}..={MAX_LUT_SIZE})"
         ));
     }
     Ok(())
@@ -116,10 +114,10 @@ pub fn parse_cube(text: &str) -> Result<(u32, Vec<u8>), String> {
         let mut next_channel = |label: &str| -> Result<u8, String> {
             let tok = it
                 .next()
-                .ok_or_else(|| format!("ColorLut .cube data line missing {} channel", label))?;
+                .ok_or_else(|| format!("ColorLut .cube data line missing {label} channel"))?;
             let v: f32 = tok
                 .parse()
-                .map_err(|e| format!("bad {} value {:?} in .cube: {}", label, tok, e))?;
+                .map_err(|e| format!("bad {label} value {tok:?} in .cube: {e}"))?;
             Ok((v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)
         };
         let r = next_channel("red")?;
@@ -186,8 +184,7 @@ pub fn deserialize(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
     let format_id = r.u32()?;
     if format_id != LUT_FORMAT_RGBA8 {
         return Err(format!(
-            "ColorLut payload format_id {} unsupported (only RGBA8)",
-            format_id
+            "ColorLut payload format_id {format_id} unsupported (only RGBA8)"
         ));
     }
     // Bounds `size` well below the point where the cube footprint could
@@ -212,21 +209,17 @@ pub fn deserialize(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
 mod tests {
     use super::*;
     use alloc::string::ToString;
+    use core::fmt::Write as _;
 
     // Build the identity .cube text of edge length `n`: each entry maps a
     // coordinate straight back to itself.
     fn identity_cube(n: u32) -> String {
-        let mut s = format!("TITLE \"identity\"\nLUT_3D_SIZE {}\n", n);
+        let mut s = format!("TITLE \"identity\"\nLUT_3D_SIZE {n}\n");
         for b in 0..n {
             for g in 0..n {
                 for r in 0..n {
                     let d = (n - 1) as f32;
-                    s.push_str(&format!(
-                        "{} {} {}\n",
-                        r as f32 / d,
-                        g as f32 / d,
-                        b as f32 / d
-                    ));
+                    let _ = writeln!(s, "{} {} {}", r as f32 / d, g as f32 / d, b as f32 / d);
                 }
             }
         }
@@ -264,13 +257,13 @@ mod tests {
     fn parse_cube_rejects_wrong_entry_count() {
         let text = "LUT_3D_SIZE 2\n0 0 0\n1 1 1\n";
         let err = parse_cube(text).unwrap_err();
-        assert!(err.contains("entries"), "got: {}", err);
+        assert!(err.contains("entries"), "got: {err}");
     }
 
     #[test]
     fn parse_cube_rejects_missing_size() {
         let err = parse_cube("0 0 0\n").unwrap_err();
-        assert!(err.contains("LUT_3D_SIZE"), "got: {}", err);
+        assert!(err.contains("LUT_3D_SIZE"), "got: {err}");
     }
 
     #[test]

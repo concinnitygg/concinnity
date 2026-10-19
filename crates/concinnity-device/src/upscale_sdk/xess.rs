@@ -5,7 +5,7 @@
 //! fields of its API.
 //!
 //! Layouts match `inc/xess/{xess.h,xess_d3d12.h,xess_vk.h}` of XeSS SDK 3.0.1.
-//! `XESS_PACK_B()` is `pack(8)`, a no-op on x86_64 where no field is aligned
+//! `XESS_PACK_B()` is `pack(8)`, a no-op on `x86_64` where no field is aligned
 //! wider than 8, so `#[repr(C)]` matches byte for byte; the tests pin it.
 #![expect(
     non_camel_case_types,

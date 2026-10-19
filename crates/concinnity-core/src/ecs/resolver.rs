@@ -42,6 +42,10 @@ impl NameResolverSlot {
         Self(AtomicUsize::new(0))
     }
 
+    #[expect(
+        clippy::fn_to_numeric_cast_any,
+        reason = "the atomic holds the function's address"
+    )]
     fn set(&self, f: ResolveFn) {
         self.0.store(f as usize, Ordering::Release);
     }
@@ -68,6 +72,10 @@ impl HandleResolverSlot {
         Self(AtomicUsize::new(0))
     }
 
+    #[expect(
+        clippy::fn_to_numeric_cast_any,
+        reason = "the atomic holds the function's address"
+    )]
     fn set(&self, f: HandleResolveFn) {
         self.0.store(f as usize, Ordering::Release);
     }

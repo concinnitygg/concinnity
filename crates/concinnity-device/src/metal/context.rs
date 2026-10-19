@@ -845,9 +845,7 @@ impl MtlContext {
     // for records at/after `skinned_base`, which equals `cull_count()` (so the
     // skinned branch never fires) whenever the skinned buffer is absent; Metal
     // still requires a referenced buffer to be bound, hence the placeholder.
-    pub(super) fn skinned_index_or_placeholder(
-        &self,
-    ) -> &ProtocolObject<dyn objc2_metal::MTLBuffer> {
+    pub(super) fn skinned_index_or_placeholder(&self) -> &ProtocolObject<dyn MTLBuffer> {
         match self.skinned.index_buffer.as_ref() {
             Some(b) => b.as_ref(),
             None => self.scene.index_buffer.as_ref(),
@@ -917,7 +915,7 @@ impl MtlContext {
             .hw
             .device
             .newBufferWithLength_options(
-                new_cap * std::mem::size_of::<u32>(),
+                new_cap * size_of::<u32>(),
                 MTLResourceOptions::StorageModePrivate,
             )
             .ok_or_else(|| super::error::allocation_failed("cull status buffer"))?;
@@ -1002,17 +1000,14 @@ impl MtlContext {
         }
         let new_cap = needed.next_power_of_two().max(64);
         let icb = self.build_cull_icb(new_cap)?;
-        let arg_buf = match set.arg_buffer.take() {
-            Some(buf) => buf,
-            None => {
-                let len = arg_encoder.encodedLength().max(16);
-                self.hw
-                    .device
-                    .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-                    .ok_or_else(|| {
-                        super::error::allocation_failed("shadow view ICB argument buffer")
-                    })?
-            }
+        let arg_buf = if let Some(buf) = set.arg_buffer.take() {
+            buf
+        } else {
+            let len = arg_encoder.encodedLength().max(16);
+            self.hw
+                .device
+                .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
+                .ok_or_else(|| super::error::allocation_failed("shadow view ICB argument buffer"))?
         };
         // SAFETY: the argument buffer was sized to `encodedLength()`, and the ICB
         // is encoded at slot 0 (the single `[[id(0)]]` member of the kernel's
@@ -1027,7 +1022,7 @@ impl MtlContext {
             .hw
             .device
             .newBufferWithLength_options(
-                new_cap * std::mem::size_of::<u32>(),
+                new_cap * size_of::<u32>(),
                 MTLResourceOptions::StorageModePrivate,
             )
             .ok_or_else(|| super::error::allocation_failed("shadow view cull status buffer"))?;
@@ -1095,7 +1090,7 @@ impl MtlContext {
             .hw
             .device
             .newBufferWithLength_options(
-                new_cap * std::mem::size_of::<u32>(),
+                new_cap * size_of::<u32>(),
                 MTLResourceOptions::StorageModePrivate,
             )
             .ok_or_else(|| super::error::allocation_failed("mirror cull status buffer"))?;
@@ -1181,7 +1176,7 @@ impl MtlContext {
             .auto_exposure
             .adaptation
             .as_ref()
-            .map(|a| a.current_ev());
+            .map(concinnity_core::gfx::auto_exposure::ExposureAdaptation::current_ev);
         // Surface the active panel's EDR headroom. `None` on SDR: both the
         // world-opt-out case and the request-on-an-SDR-display fallback case
         // map to the same blank chip.
@@ -1342,7 +1337,7 @@ pub(super) fn copy_buffer_prefix(
     // They are distinct allocations, so the ranges cannot overlap.
     unsafe {
         let s = src.contents().as_ptr() as *const u8;
-        let d = dst.contents().as_ptr() as *mut u8;
+        let d = dst.contents().as_ptr().cast::<u8>();
         std::ptr::copy_nonoverlapping(s, d, len);
     }
 }
@@ -1357,7 +1352,7 @@ pub(super) fn write_buffer_slice<T: Copy>(
     buffer: &ProtocolObject<dyn MTLBuffer>,
     data: &[T],
 ) -> error::RenderResult<()> {
-    let bytes = std::mem::size_of_val(data);
+    let bytes = size_of_val(data);
     if bytes == 0 {
         return Ok(());
     }
@@ -1399,7 +1394,7 @@ pub(super) fn write_buffer_region(
     if src.is_empty() {
         return Ok(());
     }
-    let dst = buffer.contents().as_ptr() as *mut u8;
+    let dst = buffer.contents().as_ptr().cast::<u8>();
     // SAFETY: `buffer` is shared storage so `contents()` is a live CPU mapping, and the bounds
     // check above proved `offset + src.len()` is within its length. `src` is a separate borrow, so
     // the ranges cannot overlap.
@@ -1428,7 +1423,7 @@ pub(super) fn zero_buffer_region(
     if len == 0 {
         return Ok(());
     }
-    let dst = buffer.contents().as_ptr() as *mut u8;
+    let dst = buffer.contents().as_ptr().cast::<u8>();
     // SAFETY: `buffer` is shared storage so `contents()` is a live CPU mapping, and the bounds
     // check above proved `offset + len` is within its length.
     unsafe {

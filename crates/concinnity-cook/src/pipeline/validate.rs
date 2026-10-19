@@ -9,7 +9,7 @@ use crate::asset_api::{self, AssetRequest};
 use crate::authoring::registry::{AssetOrigin, RegisteredType};
 
 /// Validate a single asset's type and generator without running the full build
-/// pipeline. Called by the server on each world_add so the LLM gets per-asset
+/// pipeline. Called by the server on each `world_add` so the LLM gets per-asset
 /// feedback without waiting for a debug-server round-trip.
 ///
 /// Checks:
@@ -17,7 +17,7 @@ use crate::authoring::registry::{AssetOrigin, RegisteredType};
 /// - asset type is registered (via `asset_api::create_asset_def`)
 /// - per-type structural checks via `crate::check`
 ///
-/// Shader assets are not compiled here; use the validate_shader tool for that.
+/// Shader assets are not compiled here; use the `validate_shader` tool for that.
 pub fn validate_asset(
     asset_type: &str,
     name: &str,
@@ -49,7 +49,7 @@ pub fn validate_asset(
         asset_type: asset_type.to_string(),
         args: Some(args.clone()),
     };
-    asset_api::create_asset_def(&req).map_err(|e| format!("Asset '{}': {}", name, e))?;
+    asset_api::create_asset_def(&req).map_err(|e| format!("Asset '{name}': {e}"))?;
 
     if let Some(registered) = registered {
         crate::check::check_asset(registered, name, args)?;

@@ -30,12 +30,12 @@ impl CmpOp {
     /// Evaluate `lhs <op> rhs`.
     pub fn eval(self, lhs: f32, rhs: f32) -> bool {
         match self {
-            CmpOp::Lt => lhs < rhs,
-            CmpOp::Le => lhs <= rhs,
-            CmpOp::Gt => lhs > rhs,
-            CmpOp::Ge => lhs >= rhs,
-            CmpOp::Eq => lhs == rhs,
-            CmpOp::Ne => lhs != rhs,
+            Self::Lt => lhs < rhs,
+            Self::Le => lhs <= rhs,
+            Self::Gt => lhs > rhs,
+            Self::Ge => lhs >= rhs,
+            Self::Eq => lhs == rhs,
+            Self::Ne => lhs != rhs,
         }
     }
 }

@@ -1,6 +1,6 @@
-//! EditorHook: the billboard drive. Assets with a world position but no
+//! `EditorHook`: the billboard drive. Assets with a world position but no
 //! rendered geometry (lights, trigger volumes, probes, cameras) have no mesh
-//! AABB, so the PickIndex never sees them; each frame this drive seeds a
+//! AABB, so the `PickIndex` never sees them; each frame this drive seeds a
 //! Transform onto every eligible entity (the gizmo's edit surface -- these
 //! types otherwise never get one), projects each position to a screen-space
 //! icon, and offers the icons to the click router ahead of the mesh pick.

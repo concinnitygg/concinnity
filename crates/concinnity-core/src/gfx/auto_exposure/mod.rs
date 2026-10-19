@@ -117,6 +117,7 @@ impl AutoExposureSettings {
 
     /// These settings with `highlight_headroom_ev` as the highlight headroom,
     /// clamped to `[0, EV_LIMIT]`.
+    #[must_use]
     pub fn with_highlight_headroom(self, highlight_headroom_ev: f32) -> Self {
         Self {
             highlight_headroom_ev: if highlight_headroom_ev.is_nan() {
@@ -136,6 +137,7 @@ impl AutoExposureSettings {
 
     /// These settings with `night_bias_ev` as the dark-scene bias, clamped to
     /// the exposure range.
+    #[must_use]
     pub fn with_night_bias(self, night_bias_ev: f32) -> Self {
         Self {
             night_bias_ev: night_bias_ev.clamp(-EV_LIMIT, EV_LIMIT),
@@ -145,6 +147,7 @@ impl AutoExposureSettings {
 
     /// These settings with `night_vision` as the night-vision strength,
     /// clamped to `[0, 1]`.
+    #[must_use]
     pub fn with_night_vision(self, night_vision: f32) -> Self {
         Self {
             night_vision: if night_vision.is_nan() {

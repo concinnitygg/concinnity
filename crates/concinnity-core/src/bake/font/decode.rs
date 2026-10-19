@@ -125,15 +125,15 @@ mod tests {
     // decode, so the round trip pins every field to its own value.
     #[test]
     fn decodes_a_well_formed_payload() {
-        let glyphs = [glyph(b'A' as u32), glyph(b'B' as u32)];
+        let glyphs = [glyph(u32::from(b'A')), glyph(u32::from(b'B'))];
         let bytes = payload(4, 2, &glyphs);
         let (w, h, ss, size_px, rgba, metrics) = deserialize(&bytes).unwrap();
         assert_eq!((w, h, ss, size_px), (4, 2, 2, 32));
         assert_eq!(rgba.len(), 4 * 2 * 4);
         assert!(rgba.iter().all(|b| *b == 0xAB));
         assert_eq!(metrics.len(), 2);
-        assert_eq!(metrics[0].char_code, b'A' as u32);
-        assert_eq!(metrics[1].char_code, b'B' as u32);
+        assert_eq!(metrics[0].char_code, u32::from(b'A'));
+        assert_eq!(metrics[1].char_code, u32::from(b'B'));
         assert_eq!(metrics[1].atlas_x, 1);
         assert_eq!(metrics[1].advance_px, 5.5);
         assert_eq!(metrics[1].bearing_y, 7.5);
@@ -149,13 +149,13 @@ mod tests {
     fn rejects_a_payload_shorter_than_the_header() {
         for len in 0..16 {
             let bytes = vec![0u8; len];
-            assert!(deserialize(&bytes).is_err(), "len {} decoded", len);
+            assert!(deserialize(&bytes).is_err(), "len {len} decoded");
         }
     }
 
     #[test]
     fn rejects_a_payload_truncated_mid_atlas() {
-        let mut bytes = payload(8, 8, &[glyph(b'x' as u32)]);
+        let mut bytes = payload(8, 8, &[glyph(u32::from(b'x'))]);
         bytes.truncate(16 + 40);
         assert!(deserialize(&bytes).is_err());
     }
@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn rejects_a_payload_truncated_mid_metrics() {
-        let mut bytes = payload(2, 2, &[glyph(b'q' as u32), glyph(b'r' as u32)]);
+        let mut bytes = payload(2, 2, &[glyph(u32::from(b'q')), glyph(u32::from(b'r'))]);
         bytes.truncate(bytes.len() - 5);
         let err = deserialize(&bytes).unwrap_err();
         assert!(err.contains("truncated"), "{}", err);

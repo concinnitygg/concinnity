@@ -72,7 +72,7 @@ pub struct Submitted<'a> {
 /// the next frame `extractor` extracts, and the replay outcome and stats are
 /// applied to the world at frame `frame`.
 pub fn settle(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     extractor: &mut FrameExtractor,
     frame: u64,
     submitted: Submitted<'_>,
@@ -86,7 +86,12 @@ pub fn settle(
 // Apply frame `frame`'s replay outcome and render stats to the world. A backend
 // without GPU-timed stats reports the default (all zeros), which the profiler
 // shows as "--".
-fn apply(ctx: &mut PipelineContext, frame: u64, replay: ReplayOutcome, stats: Option<RenderStats>) {
+fn apply(
+    ctx: &mut PipelineContext<'_>,
+    frame: u64,
+    replay: ReplayOutcome,
+    stats: Option<RenderStats>,
+) {
     if replay.memory_pressure {
         note_memory_pressure(ctx, frame);
     }
@@ -105,14 +110,14 @@ fn apply(ctx: &mut PipelineContext, frame: u64, replay: ReplayOutcome, stats: Op
 }
 
 // The skinned instance pool's free count, for the profiler's pool chip.
-fn skinned_pool_free(ctx: &PipelineContext) -> u32 {
+fn skinned_pool_free(ctx: &PipelineContext<'_>) -> u32 {
     ctx.resource::<ActiveRenderQueues>()
         .and_then(|slot| slot.0.as_ref())
         .map_or(0, |queues| queues.slots.skinned_free() as u32)
 }
 
 // Count a device-memory failure where the streaming valve observes it.
-fn note_memory_pressure(ctx: &mut PipelineContext, frame: u64) {
+fn note_memory_pressure(ctx: &mut PipelineContext<'_>, frame: u64) {
     match ctx.resource_mut::<GpuMemoryPressure>() {
         Some(pressure) => {
             pressure.events += 1;

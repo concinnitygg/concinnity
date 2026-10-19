@@ -62,6 +62,7 @@ impl InputSystem {
     }
 
     /// Merge the gamepads `pads` reports.
+    #[must_use]
     pub fn with_pads(mut self, pads: Box<dyn PadSource>) -> Self {
         self.pads = Some(pads);
         self
@@ -88,7 +89,7 @@ impl System for InputSystem {
             ])
     }
 
-    fn init(&mut self, ctx: &mut PipelineContext) {
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
         // Stored settings-menu choices override the engine defaults.
         if let Some(stored) = ctx.resource::<StoredSettings>() {
             let controls = stored.controls_command();
@@ -106,7 +107,7 @@ impl System for InputSystem {
         }
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         // No deposited packet (graphics failed, the editor transplanted the
         // backend away, or the frame stopped before sampling): nothing to
         // consume; consumers keep the last snapshot.
@@ -169,7 +170,7 @@ impl System for InputSystem {
         // position, clicks, and Escape. A non-pausing screen that captures
         // input (a live console) also suppresses gameplay keys -- the world
         // keeps simulating, but keystrokes belong to the screen.
-        let menu_active = ctx.resource::<MenuActive>().map(|m| m.0).unwrap_or(false);
+        let menu_active = ctx.resource::<MenuActive>().is_some_and(|m| m.0);
         let screen_captures = ctx
             .resource::<ScreenStack>()
             .is_some_and(|s| s.captures_input);

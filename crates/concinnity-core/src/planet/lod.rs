@@ -663,7 +663,7 @@ mod tests {
         for widths in [MIN_RANGE_WIDTHS, MAX_RANGE_WIDTHS] {
             for height in [2.0, 62.0, 900.0, 20_000.0] {
                 for i in 0..6 {
-                    let a = 0.2 + i as f64 * 0.31;
+                    let a = 0.2 + f64::from(i) * 0.31;
                     let up = dvec3::normalize_or([libm::sin(a), 2.0, libm::cos(a * 1.7)], [0.0; 3]);
                     let eye = dvec3::add(l.shape.center, dvec3::scale(up, 50_000.0 + height));
                     let v = view(eye, widths);
@@ -739,7 +739,7 @@ mod tests {
         let l = lod();
         let mut most = 0;
         for i in 0..24 {
-            let a = i as f64 * 0.27;
+            let a = f64::from(i) * 0.27;
             let up =
                 dvec3::normalize_or([libm::sin(a), libm::cos(a), libm::sin(a * 3.1)], [0.0; 3]);
             for height in [2.0, 62.0, 500.0, 5_000.0] {

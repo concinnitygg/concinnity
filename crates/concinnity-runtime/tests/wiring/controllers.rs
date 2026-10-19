@@ -31,7 +31,11 @@ fn camera(controller: Option<CameraController>) -> Camera3D {
 }
 
 fn system_names(world: &World) -> Vec<&'static str> {
-    world.systems().iter().map(|s| s.name()).collect()
+    world
+        .systems()
+        .iter()
+        .map(concinnity_core::ecs::BuiltSystem::name)
+        .collect()
 }
 
 fn follow_camera() -> Camera3D {

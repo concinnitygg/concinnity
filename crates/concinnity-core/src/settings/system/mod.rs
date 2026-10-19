@@ -1,11 +1,11 @@
-//! SettingsSystem: applies the runtime command batches UiInputSystem produces
-//! (SettingCommand for settings-menu changes, SceneCommand for imperative scene
+//! `SettingsSystem`: applies the runtime command batches `UiInputSystem` produces
+//! (`SettingCommand` for settings-menu changes, `SceneCommand` for imperative scene
 //! jumps), recording their backend effects into the frame's op queue, edits
 //! the [`StoredSettings`](crate::settings::StoredSettings) resource the host
 //! persists, and publishes the per-frame HUD-preference state:
 //!   mod.rs      system + state + scene jumps + HUD-state publish
 //!   init.rs     the state graphics init resolves, and its init-time captures
-//!   apply.rs    the SettingCommand drain and its per-family row handlers
+//!   apply.rs    the `SettingCommand` drain and its per-family row handlers
 //!   quality.rs  the quality preset, feature toggle, and quality knob rows
 //!   rebind.rs   the key and gamepad rebind rows
 //!   rows.rs     row helpers shared with the init-time captures
@@ -173,6 +173,7 @@ impl SettingsSystem {
     }
 
     /// Write the store through `store` whenever it changes.
+    #[must_use]
     pub fn with_store(mut self, store: Box<dyn SettingsStore>) -> Self {
         self.store = Some(store);
         self
@@ -183,7 +184,7 @@ impl SettingsSystem {
     // Apply this tick's commands against the parked state. With no parked
     // state (graphics init has not succeeded) or op queue the commands wait
     // in retention.
-    fn apply(&mut self, ctx: &mut PipelineContext) {
+    fn apply(&self, ctx: &mut PipelineContext<'_>) {
         let Some(mut state) = SettingsSlot::take(ctx.resources) else {
             return;
         };
@@ -207,12 +208,12 @@ impl core::fmt::Debug for SettingsState {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SettingsState")
             .field("quality_preset", &self.quality_preset)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl System for SettingsSystem {
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         self.apply(ctx);
         // Written in the same step that made the change, so a tick that stops
         // the run still persists it.
@@ -224,9 +225,10 @@ impl System for SettingsSystem {
 /// How wide a planet's finest terrain cells get, in meters: the resolved
 /// setting once graphics init has parked the state, else the section default.
 pub fn planet_finest_cell_size(resources: &Resources) -> u32 {
-    SettingsSlot::get(resources).map_or(PlanetDetail::default().finest_cell_size, |state| {
-        state.resolved.graphics.planet_detail.finest_cell_size
-    })
+    SettingsSlot::get(resources).map_or_else(
+        || PlanetDetail::default().finest_cell_size,
+        |state| state.resolved.graphics.planet_detail.finest_cell_size,
+    )
 }
 
 // Record `plan` against `graphics` when it reaches the renderer. A failed
@@ -420,7 +422,7 @@ impl SettingsState {
     // ticks its fades later this same tick, so a jump's fade starts on this
     // frame); the jump's fade / visibility effects are recorded through the
     // same `SceneOp` recorder the fade tick uses, then queued as one op.
-    fn apply_scene_commands(&mut self, ctx: &mut PipelineContext, ops: &mut RenderOps) {
+    fn apply_scene_commands(&mut self, ctx: &mut PipelineContext<'_>, ops: &mut RenderOps) {
         let scene_cmds: Vec<SceneCommand> = match ctx.events::<SceneCommand>() {
             Some(events) => events.read(&mut self.scene_cmd_cursor).cloned().collect(),
             None => Vec::new(),
@@ -462,7 +464,7 @@ impl SettingsState {
                     match op {
                         snapshot::SceneOp::SetFade(fade) => backend.set_fade(fade),
                         snapshot::SceneOp::Visibility { draw_idx, visible } => {
-                            backend.update_visibility(draw_idx, visible)
+                            backend.update_visibility(draw_idx, visible);
                         }
                     }
                 }
@@ -476,7 +478,7 @@ impl SettingsState {
     // (StatHudSystem reads HudPrefs) and the inert/grayed sub-rows
     // (UiInputSystem reads DisabledSettingRows) stay in lockstep with the
     // gray-out applied in the drain.
-    fn publish_hud_state(&mut self, ctx: &mut PipelineContext) {
+    fn publish_hud_state(&mut self, ctx: &mut PipelineContext<'_>) {
         // Both resources are pure functions of a few settings fields and persist
         // in the resource map once inserted, so republish only when the inputs
         // change: steady-state frames skip the HashSet allocation the
@@ -516,7 +518,7 @@ const GRAPHICS_API_CONFIRM_STEPS: u32 = 2;
 impl SettingsState {
     // Clear the persisted trial on a newly chosen graphics API once a frame has
     // drawn on it, so the next launch keeps the choice.
-    fn confirm_graphics_api(&mut self, ctx: &mut PipelineContext) {
+    fn confirm_graphics_api(&mut self, ctx: &mut PipelineContext<'_>) {
         if self.graphics_api_settled {
             return;
         }

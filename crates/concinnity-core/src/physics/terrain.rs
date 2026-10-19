@@ -19,7 +19,7 @@ use crate::terrain::payload::TerrainPayload;
 pub(super) fn build_terrain_colliders(
     world: &mut Simulation,
     mask: LayerMask,
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
 ) -> usize {
     let terrains: Vec<Terrain> = ctx.query::<Terrain>().cloned().collect();
     terrains
@@ -33,7 +33,7 @@ pub(super) fn build_terrain_colliders(
 }
 
 // The cooked height grid of `terrain`.
-fn terrain_grid(terrain: &Terrain, ctx: &mut PipelineContext) -> Result<TerrainGrid, String> {
+fn terrain_grid(terrain: &Terrain, ctx: &mut PipelineContext<'_>) -> Result<TerrainGrid, String> {
     let locator = terrain.locator.as_ref().ok_or("no compiled payload")?;
     let bytes = ctx
         .read_payload(locator)

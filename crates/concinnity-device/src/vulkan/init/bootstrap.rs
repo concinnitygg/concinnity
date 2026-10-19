@@ -10,8 +10,11 @@ use concinnity_core::settings::ResolvedGraphics;
 use std::ffi::{CStr, CString, c_char};
 
 use crate::vulkan::context::{SwapchainState, VkHardware};
-use crate::vulkan::device::*;
-use crate::vulkan::swapchain::*;
+use crate::vulkan::device::{LogicalDevice, create_logical_device, pick_physical_device};
+use crate::vulkan::swapchain::{
+    SwapchainConfig, SwapchainQueueFamilies, SwapchainSurface, create_swapchain_image_views,
+    create_swapchain_inner,
+};
 
 // The backend inputs the hardware is acquired or adopted with.
 pub(super) struct HardwareRequest<'a> {
@@ -79,7 +82,7 @@ pub(super) fn acquire_hardware(
         title,
         width,
         height,
-        &components::WindowMode::Windowed,
+        components::WindowMode::Windowed,
         true,
         title_bar,
     )?;
@@ -97,7 +100,7 @@ pub(super) fn acquire_hardware(
     let upscale_sdk = crate::vulkan::post::UpscaleSdk::prepare(temporal_upscaling, upscale_backend);
 
     let app_name = CString::new(title).unwrap_or_default();
-    let engine_name = CString::new("Concinnity").unwrap();
+    let engine_name = c"Concinnity";
     // Vulkan 1.2 baseline: FidelityFX FSR's precompiled shaders are SPIR-V
     // 1.5, valid only under a 1.2+ instance. XeSS 3.x raises the floor to
     // 1.3 (its shaders use SPV_KHR_integer_dot_product, a 1.3 capability),
@@ -117,7 +120,7 @@ pub(super) fn acquire_hardware(
     let app_info = vk::ApplicationInfo::default()
         .application_name(&app_name)
         .application_version(vk::make_api_version(0, 0, 1, 0))
-        .engine_name(&engine_name)
+        .engine_name(engine_name)
         .engine_version(vk::make_api_version(0, 0, 1, 0))
         .api_version(api_version);
 
@@ -128,7 +131,7 @@ pub(super) fn acquire_hardware(
     let instance_ext_cstrings: Vec<CString> = window
         .required_instance_extensions()
         .iter()
-        .map(|s| CString::new(s.as_str()).unwrap())
+        .filter_map(|s| CString::new(s.as_str()).ok())
         .collect();
     let mut ext_names_raw: Vec<*const c_char> =
         instance_ext_cstrings.iter().map(|c| c.as_ptr()).collect();
@@ -168,9 +171,7 @@ pub(super) fn acquire_hardware(
     }
 
     let layer_names_raw: Vec<*const c_char> = if validation {
-        // Leaked: the instance borrows the name for its whole lifetime.
-        let layer = CString::new("VK_LAYER_KHRONOS_validation").unwrap();
-        vec![layer.into_raw().cast_const()]
+        vec![c"VK_LAYER_KHRONOS_validation".as_ptr()]
     } else {
         vec![]
     };
@@ -203,10 +204,9 @@ pub(super) fn acquire_hardware(
         validation.then(|| Box::new(std::sync::atomic::AtomicU32::new(0)));
     let (debug_utils, debug_messenger) = if validation {
         let du = ash::ext::debug_utils::Instance::new(&entry, &instance);
-        let user_data = debug_filter
-            .as_ref()
-            .map(|b| &**b as *const std::sync::atomic::AtomicU32 as *mut std::ffi::c_void)
-            .unwrap_or(std::ptr::null_mut());
+        let user_data = debug_filter.as_ref().map_or(std::ptr::null_mut(), |b| {
+            &raw const **b as *mut std::ffi::c_void
+        });
         let info = vk::DebugUtilsMessengerCreateInfoEXT::default()
             .message_severity(
                 vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
@@ -241,7 +241,7 @@ pub(super) fn acquire_hardware(
     // acceleration-structure build + RT pass below are gated on
     // `rt_settings.is_some() && rt_capable` (everything falls back to SSR
     // when RT is off or the device is incapable).
-    let crate::vulkan::device::LogicalDevice {
+    let LogicalDevice {
         device,
         memory_budget: memory_budget_supported,
         calibrated_timestamps,
@@ -297,8 +297,7 @@ pub(super) fn acquire_hardware(
     let timestamp_period = device_props.limits.timestamp_period;
     let timestamp_valid_bits = queue_family_props
         .get(graphics_family as usize)
-        .map(|f| f.timestamp_valid_bits)
-        .unwrap_or(0);
+        .map_or(0, |f| f.timestamp_valid_bits);
     let timestamps_supported = timestamp_period > 0.0 && timestamp_valid_bits > 0;
     let timestamp_query_pool = if timestamps_supported {
         // One per-frame block of `SLOTS_PER_FRAME` slots (whole-frame pair +
@@ -415,7 +414,7 @@ pub(super) fn acquire_hardware(
             vsync,
             swapchain_config: req.swapchain_config(),
             window: Some(window),
-            _entry: entry,
+            entry,
         },
         SwapchainState {
             loader: swapchain_loader,
@@ -544,7 +543,7 @@ fn drop_benign_dlss_layout_error(message_id: &[u8], budget: &std::sync::atomic::
 unsafe extern "system" fn debug_callback(
     severity: vk::DebugUtilsMessageSeverityFlagsEXT,
     _msg_type: vk::DebugUtilsMessageTypeFlagsEXT,
-    data: *const vk::DebugUtilsMessengerCallbackDataEXT,
+    data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
     user: *mut std::ffi::c_void,
 ) -> vk::Bool32 {
     if data.is_null() {

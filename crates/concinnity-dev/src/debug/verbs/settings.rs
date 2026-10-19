@@ -144,7 +144,7 @@ struct Rebind {
     key: String,
 }
 
-fn quality_set(call: &Call, args: Args) -> Reply {
+fn quality_set(call: &Call<'_>, args: Args) -> Reply {
     let QualitySet { setting, op } = args.parse()?;
     let setting = SettingKey::parse(&setting)
         .ok_or_else(|| format!("quality-set: '{setting}' is not a quality setting"))?;
@@ -161,7 +161,7 @@ fn quality_set(call: &Call, args: Args) -> Reply {
 
 // `setting` names a movement action (`key_forward`, `key_jump`, ...); `key` is
 // a canonical `InputKey` variant name, which is how the key serializes.
-fn rebind(call: &Call, args: Args) -> Reply {
+fn rebind(call: &Call<'_>, args: Args) -> Reply {
     let Rebind { setting, key } = args.parse()?;
     let Some(SettingKey::KeyRebind(action)) = SettingKey::parse(&setting) else {
         return Err(format!(
@@ -193,7 +193,7 @@ struct ViewSet {
     mode: String,
 }
 
-fn view_set(call: &Call, args: Args) -> Reply {
+fn view_set(call: &Call<'_>, args: Args) -> Reply {
     let ViewSet { mode } = args.parse()?;
     let mode = view_mode(&mode).ok_or_else(|| format!("view-set: unknown mode '{mode}'"))?;
     call.on_world(move |world, _| {
@@ -213,7 +213,7 @@ struct ShowSet {
     state: String,
 }
 
-fn show_set(call: &Call, args: Args) -> Reply {
+fn show_set(call: &Call<'_>, args: Args) -> Reply {
     let ShowSet { flag, state } = args.parse()?;
     let flag = show_flag(&flag).ok_or_else(|| format!("show-set: unknown flag '{flag}'"))?;
     let on = match state.as_str() {

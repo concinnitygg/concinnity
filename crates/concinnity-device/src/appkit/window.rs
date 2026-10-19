@@ -1,4 +1,4 @@
-//! The AppKit window + input state every macOS backend owns, extracted from what
+//! The `AppKit` window + input state every macOS backend owns, extracted from what
 //! used to be a block of `MtlContext` fields plus `metal/input.rs`. It works
 //! entirely through `NSView`, never the concrete view subclass, so the Metal
 //! backend can hand it its `MTKView` (kept for drawable acquisition) and the
@@ -380,6 +380,10 @@ impl AppKitWindow {
     // tab or a host-owned window) this is a no-op so we never restyle a host
     // window. The change flows through the backend's per-frame resize
     // detection, so no render targets are rebuilt here.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "same receiver as the GLFW and Win32 windows the shared Vulkan code calls"
+    )]
     pub(crate) fn set_window_mode(&mut self, mode: WindowMode) {
         let Some(window) = self.window.as_ref() else {
             return;
@@ -475,6 +479,10 @@ impl AppKitWindow {
 
     // Resize the engine-created window's content area (windowed mode only).
     // No-op in embedded mode or while in native fullscreen.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "same receiver as the GLFW and Win32 windows the shared Vulkan code calls"
+    )]
     pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
         // Resizing the content area is meaningless while in native fullscreen;
         // read the delegate-tracked flag (not the lagging style-mask bit).
@@ -484,7 +492,7 @@ impl AppKitWindow {
         let Some(window) = self.window.as_ref() else {
             return;
         };
-        window.setContentSize(NSSize::new(width as f64, height as f64));
+        window.setContentSize(NSSize::new(f64::from(width), f64::from(height)));
     }
 
     // Snapshot the current input state for this frame.
@@ -540,10 +548,7 @@ impl AppKitWindow {
                 objc2_foundation::ns_string!("kCFRunLoopDefaultMode"),
                 true,
             );
-            let event = match event {
-                Some(e) => e,
-                None => break,
-            };
+            let Some(event) = event else { break };
 
             match event.r#type() {
                 NSEventType::KeyDown => {
@@ -694,8 +699,8 @@ impl AppKitWindow {
 
     // Replace the runtime movement key map. `handle_key` decodes events through
     // it, so a settings-menu rebind takes effect on the next key event.
-    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
-        self.keymap = *keymap;
+    pub(crate) fn set_keymap(&mut self, keymap: KeyMap) {
+        self.keymap = keymap;
     }
 
     // Apply a key transition to whichever gameplay actions are bound to `key`.

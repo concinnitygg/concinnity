@@ -139,7 +139,7 @@ impl<G> ParticleSystem<G> {
     ) -> impl Iterator<Item = ActiveEmitter<'a, G>> + 'a {
         self.emitters
             .iter()
-            .map(move |(id, e)| ActiveEmitter::new(id, e, frame))
+            .map(move |(id, e)| ActiveEmitter::new(id, e, *frame))
     }
 
     /// The live emitters whose spawn bounds meet `frustum`, in id order. Each
@@ -153,7 +153,7 @@ impl<G> ParticleSystem<G> {
         self.emitters
             .iter()
             .filter(|(_, e)| frustum.intersects_aabb(e.aabb_min, e.aabb_max))
-            .map(move |(id, e)| ActiveEmitter::new(id, e, frame))
+            .map(move |(id, e)| ActiveEmitter::new(id, e, *frame))
     }
 
     /// Every live emitter's GPU state, in id order.
@@ -183,7 +183,7 @@ pub struct ActiveEmitter<'a, G> {
 }
 
 impl<'a, G> ActiveEmitter<'a, G> {
-    fn new(id: usize, e: &'a Emitter<G>, frame: &ParticleFrame) -> Self {
+    fn new(id: usize, e: &'a Emitter<G>, frame: ParticleFrame) -> Self {
         Self {
             id,
             record: &e.record,

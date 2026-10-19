@@ -3,8 +3,9 @@
 // drive all three backends identically.
 
 use crate::gpu_wait::GpuWait;
-use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::render_types::*;
+use concinnity_core::gfx::render_types::{
+    InstancedCluster, LightUniforms, PostProcessParams, PostProcessTunables,
+};
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::render::backend::FrameParams;
@@ -16,7 +17,7 @@ use concinnity_core::render::retire_pool::RetirePool;
 use concinnity_core::render::scene_state::SceneState;
 use concinnity_core::render::shader_reload::ShaderReload;
 use concinnity_core::render::{
-    backend, backend_init, error, hdr_output, lights, pass_timing, slot_rewrites,
+    backend, backend_init, hdr_output, lights, pass_timing, slot_rewrites,
 };
 use concinnity_core::window::display_mode;
 use concinnity_core::{components, profile};
@@ -30,20 +31,20 @@ use windows::Win32::System::Threading::{GetCurrentThreadId, WaitForSingleObject}
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use super::auto_exposure::AutoExposureState;
 use super::cull::CullState;
-use super::decal::*;
+use super::decal::DecalState;
 use super::draw::shadow::ShadowState;
 use super::draw::spot_shadow::SpotShadowState;
-use super::fog::*;
+use super::fog::FogState;
 use super::geometry_upload::{GeometryDest, GeometryUploads};
 use super::particle::ParticleState;
 use super::post::bloom::BloomResources;
 use super::post::gbuffer::GbufferResources;
-use super::post::ssao::*;
-use super::post::ssr::*;
-use super::post::taa::*;
+use super::post::ssao::SsaoState;
+use super::post::ssr::SsrResources;
+use super::post::taa::TaaResources;
 use super::post::upscale::UpscaleState;
 use super::resources::skinning::SkinnedState;
-use super::texture::*;
+use super::texture::{EnvironmentMapTextures, GpuResource, StreamedUploadRetire};
 use crate::directx::descriptor_slot::{SamplerSlot, SrvSlot};
 use crate::win32::window;
 use crate::win32::window::{WindowState, frame_tick, take_input_snapshot};
@@ -98,7 +99,7 @@ pub(super) fn build_timestamp_resources(
     let mut heap: Option<ID3D12QueryHeap> = None;
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    if let Err(e) = unsafe { device.CreateQueryHeap(&heap_desc, &mut heap) } {
+    if let Err(e) = unsafe { device.CreateQueryHeap(&raw const heap_desc, &raw mut heap) } {
         tracing::warn!("timestamp query heap create failed: {e}");
         return (None, None, std::ptr::null(), 0);
     }
@@ -116,7 +117,7 @@ pub(super) fn build_timestamp_resources(
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    if let Err(e) = unsafe { readback.Map(0, None, Some(&mut ptr)) } {
+    if let Err(e) = unsafe { readback.Map(0, None, Some(&raw mut ptr)) } {
         tracing::warn!("timestamp readback map failed: {e}");
         return (None, None, std::ptr::null(), 0);
     }
@@ -278,7 +279,7 @@ pub(super) struct DxFrameSync {
     // submission across all slots, otherwise the wait-before-reuse check can
     // be satisfied by another slot's signal of the same value. `Cell` because
     // `wait_idle` advances it through `&self` (trait-imposed signature).
-    pub next_fence_value: std::cell::Cell<u64>,
+    pub next_fence_value: Cell<u64>,
     pub fence_event: windows::Win32::Foundation::HANDLE,
 }
 
@@ -388,7 +389,7 @@ impl ProbeState {
 pub(super) struct StreamState {
     pub pool_rewrites: slot_rewrites::SlotRewriteQueue,
     pub frame: u64,
-    pub retires: RetirePool<super::texture::StreamedUploadRetire>,
+    pub retires: RetirePool<StreamedUploadRetire>,
     // `frames + 1`: a swap lands between frames, after the previous frame's
     // submit, so the first frame fence that covers the upload submission is the
     // one signaled by the NEXT draw, waited `frames` ticks after that draw's tick.
@@ -415,7 +416,7 @@ pub(super) struct SwapchainState {
     // Swapchain RTV format captured at init. Stored so the composite + text PSO
     // rebuilds during shader hot-reload can target the same format the PSOs were
     // originally created against.
-    pub format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT,
+    pub format: Common::DXGI_FORMAT,
     // 1 (vsync, lock to refresh) or 0 (uncapped).
     pub present_sync_interval: u32,
     // True when the swapchain was created with
@@ -492,7 +493,7 @@ pub(super) struct Diagnostics {
     // (filled by `draw_frame`) plus VRAM bytes pulled from the adapter. Lives in
     // a `Cell` because the per-pass increments happen through the `&self`
     // `record_frame` path. Surfaced to the profiler overlay via `render_stats`.
-    pub frame_stats: std::cell::Cell<profile::RenderStats>,
+    pub frame_stats: Cell<profile::RenderStats>,
     // CPU-side accumulator for this frame's draw calls. The Metal + Vulkan
     // executors use the same pattern: encoders (which may run in parallel) bump
     // this atomic via `inc_draw_calls`; the main thread drains it into
@@ -726,7 +727,7 @@ pub(crate) struct DxContext {
     pub(super) bloom: Option<BloomResources>,
     // Post-process tunables (bloom / exposure / vignette). Drives whether the
     // bloom chain runs and feeds the bloom-prefilter + composite root constants.
-    pub(super) post_process: render_types::PostProcessParams,
+    pub(super) post_process: PostProcessParams,
     // The scale the frame's HDR chain is written at, advanced once per frame.
     pub(super) pre_exposure: concinnity_core::gfx::auto_exposure::PreExposure,
 
@@ -836,7 +837,7 @@ pub(crate) struct DxContext {
     pub(super) grass: Option<super::grass::GrassResources>,
     // How this frame's view resolves the grass: where it coarsens, thins and
     // hands over to the canopy. `None` without grass.
-    pub(super) grass_lod: std::cell::Cell<Option<concinnity_core::render::grass::GrassLodView>>,
+    pub(super) grass_lod: Cell<Option<concinnity_core::render::grass::GrassLodView>>,
     // The far field's canopy block, one copy per frame in flight. See
     // [`super::canopy`].
     pub(super) canopy: super::canopy::DxCanopy,
@@ -876,7 +877,7 @@ pub(crate) struct DxContext {
     // The world default Shader's compiled programs, `None` for the engine's
     // own. Kept past init so the built-in shader reload rebuilds bucket 0 from
     // the world's pair rather than the engine's.
-    pub(super) world_shader: Option<concinnity_core::components::ShaderPrograms>,
+    pub(super) world_shader: Option<components::ShaderPrograms>,
 
     // Fixed descriptor-heap slots for the live-toggleable Quality effects (TAA /
     // SSAO / SSR / SSGI / RT-reflection output). Minted once at init (the slots
@@ -940,7 +941,7 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 }
 
 impl DxContext {
-    pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
+    pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()> {
         drive_frame(self, params)
     }
 
@@ -969,17 +970,11 @@ impl DxContext {
         let Some(adapter) = self.hw.adapter.as_ref() else {
             return 0;
         };
-        let mut info = windows::Win32::Graphics::Dxgi::DXGI_QUERY_VIDEO_MEMORY_INFO::default();
+        let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
         // SAFETY: a query on a live COM object; the descriptor it reads and the out-
         // parameters it fills are live locals that outlive the call.
-        unsafe {
-            adapter.QueryVideoMemoryInfo(
-                0,
-                windows::Win32::Graphics::Dxgi::DXGI_MEMORY_SEGMENT_GROUP_LOCAL,
-                &mut info,
-            )
-        }
-        .map_or(0, |_| info.CurrentUsage)
+        unsafe { adapter.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &raw mut info) }
+            .map_or(0, |()| info.CurrentUsage)
     }
 
     // Shared atomic clone of the shader-reload flag, or `None` when the
@@ -993,8 +988,7 @@ impl DxContext {
     pub(super) fn raymarch_enabled(&self) -> bool {
         self.raymarch
             .as_ref()
-            .map(|r| r.any_visible())
-            .unwrap_or(false)
+            .is_some_and(super::raymarch::RaymarchResources::any_visible)
     }
 
     // True when the render graph should include `PassId::RtReflections` (and
@@ -1065,7 +1059,7 @@ impl DxContext {
             && self
                 .transparent
                 .as_ref()
-                .is_some_and(|t| t.rt_pipelines_ready())
+                .is_some_and(super::transparent::TransparentResources::rt_pipelines_ready)
     }
 
     // Whether a material opted into Layer 2 see-through glass AND the device can
@@ -1079,7 +1073,7 @@ impl DxContext {
     pub(super) fn seethrough_meshes_enabled(&self) -> bool {
         self.transparent
             .as_ref()
-            .is_some_and(|t| t.mesh_pipelines_ready())
+            .is_some_and(super::transparent::TransparentResources::mesh_pipelines_ready)
     }
 
     // Whether the see-through mesh (Layer 2) path is live this frame: the
@@ -1159,7 +1153,7 @@ impl DxContext {
 
     // Submit every staged geometry write. Queue order puts the copies ahead of
     // any later submission, so nothing waits on them.
-    pub(super) fn flush_geometry_uploads(&self) -> error::RenderResult<()> {
+    pub(super) fn flush_geometry_uploads(&self) -> RenderResult<()> {
         self.geometry_uploads.borrow_mut().flush(
             &self.hw.device,
             &self.hw.command_queue,
@@ -1186,11 +1180,12 @@ impl DxContext {
             && unsafe { self.frame_sync.fence.GetCompletedValue() } < val
             // SAFETY: the fence and the event were created from this device and are live for the
             // call.
-            && let Ok(()) = unsafe {
+            && unsafe {
                 self.frame_sync
                     .fence
                     .SetEventOnCompletion(val, self.frame_sync.fence_event)
             }
+            .is_ok()
         {
             // SAFETY: the event handle was created in `DxContext::new` and lives as long as the
             // context, and the wait borrows nothing else.
@@ -1260,7 +1255,7 @@ impl DxContext {
     // presents uncapped (interval 0) but without the tearing flag if the
     // swapchain lacks it.
     pub(crate) fn set_vsync(&mut self, on: bool) {
-        self.swapchain.present_sync_interval = if on { 1 } else { 0 };
+        self.swapchain.present_sync_interval = u32::from(on);
     }
 
     // Switch window mode / resize at runtime (windowed / borderless / fullscreen
@@ -1297,7 +1292,7 @@ impl DxContext {
     // Replace the live post-process tunables, pushed to the bloom + composite
     // shaders each frame. The composite's display-output flags are not part of
     // the payload, so the EDR path negotiated at init survives every push.
-    pub(crate) fn update_post_process(&mut self, tunables: render_types::PostProcessTunables) {
+    pub(crate) fn update_post_process(&mut self, tunables: PostProcessTunables) {
         self.post_process.set_tunables(tunables);
     }
 
@@ -1319,11 +1314,11 @@ impl DxContext {
         &mut self,
         data: &lights::LightData,
         uniforms: &LightUniforms,
-    ) -> error::RenderResult<()> {
+    ) -> RenderResult<()> {
         if !self.uniforms.lights.same_local_count(&data.lights)
             || data.spot_shadows.len() != self.spot_shadow.count() as usize
         {
-            return Err(error::RenderError::Other(
+            return Err(RenderError::Other(
                 "move_local_lights: the light count changed since init".into(),
             ));
         }
@@ -1411,7 +1406,7 @@ impl DxContext {
 
     // Replace the runtime movement key map. The window message loop decodes
     // key events through it, so a settings-menu rebind takes effect immediately.
-    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
+    pub(crate) fn set_keymap(&mut self, keymap: KeyMap) {
         self.win_mut().key.set_keymap(keymap);
     }
 
@@ -1471,7 +1466,7 @@ impl FrameDevice for DxContext {
         self.atmosphere.is_some()
     }
 
-    fn prepare(&mut self, params: &FrameParams<'_>) -> error::RenderResult<()> {
+    fn prepare(&mut self, params: &FrameParams<'_>) -> RenderResult<()> {
         self.frame_capture.arm(params.capture);
         if let Some(atmo) = self.atmosphere.as_mut() {
             atmo.frame = params.atmosphere;
@@ -1500,7 +1495,7 @@ impl FrameDevice for DxContext {
         }
     }
 
-    fn begin(&mut self, params: &FrameParams<'_>) -> error::RenderResult<Option<DxFrame>> {
+    fn begin(&mut self, params: &FrameParams<'_>) -> RenderResult<Option<DxFrame>> {
         // Nothing a minimized window draws can be seen; park the frame until
         // it is restored. `window_closed` keeps pumping messages meanwhile.
         if self.window_minimized() {
@@ -1519,7 +1514,7 @@ impl FrameDevice for DxContext {
         let timings = self.read_gpu_timings(frame);
         let gpu_done = self.read_gpu_done(frame);
         self.timestamps.input_sampled_us[frame] = params.input_sampled_us;
-        self.begin_frame_stats(&gpu_wait, timings, gpu_done);
+        self.begin_frame_stats(gpu_wait, timings, gpu_done);
 
         // Flush any D3D12 validation messages from the previous frame.
         self.flush_validation();
@@ -1550,7 +1545,7 @@ impl FrameDevice for DxContext {
         }))
     }
 
-    fn plan(&mut self, _: &DxFrame, params: &FrameParams<'_>) -> error::RenderResult<FramePlan> {
+    fn plan(&mut self, _: &DxFrame, params: &FrameParams<'_>) -> RenderResult<FramePlan> {
         self.plan_frame(crate::directx::draw::PlanArgs {
             camera: camera_inputs(&self.state, params),
             elapsed: params.elapsed as f32,
@@ -1568,7 +1563,7 @@ impl FrameDevice for DxContext {
         frame: DxFrame,
         plan: &FramePlan,
         frame_params: &FrameParams<'_>,
-    ) -> error::RenderResult<()> {
+    ) -> RenderResult<()> {
         let FrameParams {
             elapsed: elapsed_f64,
             fov_y_radians,
@@ -1741,20 +1736,20 @@ pub(super) fn drain_info_queue(iq: &ID3D12InfoQueue) {
         let mut len = 0usize;
         // SAFETY: `iq` is live and a null message pointer asks for the message
         // size alone, which lands in the live local `len`.
-        if unsafe { iq.GetMessage(i, None, &mut len) }.is_err() {
+        if unsafe { iq.GetMessage(i, None, &raw mut len) }.is_err() {
             continue;
         }
         // A D3D12_MESSAGE is variable length: the fixed header followed by the
         // description text it points into. Back it with u64s rather than bytes so
         // the header lands on the alignment the struct needs.
-        if len < std::mem::size_of::<D3D12_MESSAGE>() {
+        if len < size_of::<D3D12_MESSAGE>() {
             continue;
         }
-        let mut buf = vec![0u64; len.div_ceil(std::mem::size_of::<u64>())];
-        let msg_ptr = buf.as_mut_ptr() as *mut D3D12_MESSAGE;
+        let mut buf = vec![0u64; len.div_ceil(size_of::<u64>())];
+        let msg_ptr = buf.as_mut_ptr().cast::<D3D12_MESSAGE>();
         // SAFETY: `iq` is live, `len` is the size it just reported, and `msg_ptr`
         // addresses a live allocation of at least that many bytes.
-        if unsafe { iq.GetMessage(i, Some(msg_ptr), &mut len) }.is_err() {
+        if unsafe { iq.GetMessage(i, Some(msg_ptr), &raw mut len) }.is_err() {
             continue;
         }
         // SAFETY: `GetMessage` filled `buf` with a message at least as long as the
@@ -1767,7 +1762,7 @@ pub(super) fn drain_info_queue(iq: &ID3D12InfoQueue) {
             // SAFETY: `pDescription` is the non-null, NUL-terminated description
             // D3D12 wrote into `buf` alongside the header, so it stays live for
             // the copy this makes.
-            unsafe { std::ffi::CStr::from_ptr(msg.pDescription as *const i8) }
+            unsafe { std::ffi::CStr::from_ptr(msg.pDescription.cast::<i8>()) }
                 .to_string_lossy()
                 .into_owned()
         };

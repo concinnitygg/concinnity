@@ -74,7 +74,7 @@ mod tests {
         let words = module();
         assert_eq!(input_locations(&words[..HEADER_WORDS]), Vec::<u32>::new());
         // A zero word count still advances, so a malformed stream terminates.
-        let mut zero = words.clone();
+        let mut zero = words;
         zero.push(0);
         assert_eq!(input_locations(&zero), [0, 4]);
     }

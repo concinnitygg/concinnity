@@ -29,11 +29,11 @@ pub enum CExpr {
     /// Seconds of simulated time so far.
     Elapsed,
     /// An entity's world position.
-    Position(Box<CExpr>),
+    Position(Box<Self>),
     /// Distance between two entities.
-    Distance(Box<CExpr>, Box<CExpr>),
+    Distance(Box<Self>, Box<Self>),
     /// Whether an entity still exists.
-    Alive(Box<CExpr>),
+    Alive(Box<Self>),
     /// The first entity a declared query selects, by slot.
     First(u16),
     /// How many entities a declared query selects, by slot.
@@ -43,40 +43,40 @@ pub enum CExpr {
         /// The query's slot.
         query: u16,
         /// The point searched around.
-        of: Box<CExpr>,
+        of: Box<Self>,
     },
     /// How many of a declared query's entities lie within a radius of a point.
     CountWithin {
         /// The query's slot.
         query: u16,
         /// The point searched around.
-        of: Box<CExpr>,
+        of: Box<Self>,
         /// How far from it to search.
-        radius: Box<CExpr>,
+        radius: Box<Self>,
     },
     /// The nearest entity of a declared query a ray meets.
     Raycast {
         /// The query's slot.
         query: u16,
         /// Where the ray starts.
-        from: Box<CExpr>,
+        from: Box<Self>,
         /// Which way it points.
-        dir: Box<CExpr>,
+        dir: Box<Self>,
         /// How far it reaches.
-        distance: Box<CExpr>,
+        distance: Box<Self>,
     },
     /// Two numbers combined.
-    Arith(Arith, Box<CExpr>, Box<CExpr>),
+    Arith(Arith, Box<Self>, Box<Self>),
     /// A vector scaled to unit length.
-    Normalize(Box<CExpr>),
+    Normalize(Box<Self>),
     /// Two values compared.
-    Compare(Cmp, Box<CExpr>, Box<CExpr>),
+    Compare(Cmp, Box<Self>, Box<Self>),
     /// True when every operand is true.
-    All(Vec<CExpr>),
+    All(Vec<Self>),
     /// True when any operand is true.
-    Any(Vec<CExpr>),
+    Any(Vec<Self>),
     /// Logical negation.
-    Not(Box<CExpr>),
+    Not(Box<Self>),
     /// An expression the checker should have rejected. Evaluates to nothing.
     Never,
 }
@@ -254,11 +254,10 @@ impl Program {
             for n in nodes {
                 let found = match &n.op {
                     COp::After { body, .. } if n.id == node => return Some(body),
-                    COp::After { body, .. } => find(body, node),
+                    COp::After { body, .. } | COp::ForEach { body, .. } => find(body, node),
                     COp::If {
                         then, otherwise, ..
                     } => find(then, node).or_else(|| find(otherwise, node)),
-                    COp::ForEach { body, .. } => find(body, node),
                     _ => None,
                 };
                 if found.is_some() {
@@ -329,6 +328,7 @@ impl VarTable {
 mod tests {
     use super::{CExpr, CNode, COp, Program};
     use crate::behavior::Val;
+    use crate::components::Behavior;
     use alloc::vec;
     use alloc::vec::Vec;
 
@@ -349,7 +349,7 @@ mod tests {
     fn program(body: Vec<CNode>) -> Program {
         Program {
             id: None,
-            def: Default::default(),
+            def: Behavior::default(),
             scope: Vec::new(),
             local_inits: Vec::new(),
             queries: Vec::new(),

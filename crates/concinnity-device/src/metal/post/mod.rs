@@ -5,7 +5,7 @@
 //!   gbuffer.rs              unified normal+depth / roughness / velocity G-buffer pre-pass
 //!   ssao.rs                 the SSAO settings + white fallback over the shared kernel + blur
 //!   ssr.rs                  the reflection target, and the inputs to the shared resolve
-//!   reflection_composite.rs the inputs to the shared roughness blur + composite
+//!   `reflection_composite.rs` the inputs to the shared roughness blur + composite
 //!   ssgi.rs                 the inputs to the shared trace + composite
 //!   taa.rs                  the TAA toggle + jitter counter over the shared resolve
 //!   bloom.rs                the inputs to the shared bloom chain

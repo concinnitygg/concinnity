@@ -1,7 +1,7 @@
 // Scene texture-filtering schema.
 
 /// How the scene's surface textures (albedo and normal maps) are filtered. The
-/// `texture_filtering` section of [GraphicsConfig](#graphicsconfig); a field
+/// `texture_filtering` section of [`GraphicsConfig`](#graphicsconfig); a field
 /// left unset takes the default below, capped by the quality tier.
 ///
 /// The default describes the quality capable hardware runs: the `Auto`

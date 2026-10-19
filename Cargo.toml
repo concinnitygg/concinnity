@@ -131,13 +131,75 @@ required-features = ["cook"]
 workspace = true
 
 [workspace.lints.rust]
+future_incompatible = { level = "warn", priority = -1 }
+rust_2018_idioms = { level = "warn", priority = -1 }
 unreachable_pub = "warn"
 missing_docs = "warn"
 trivial_numeric_casts = "warn"
-future_incompatible = "warn"
+unused_qualifications = "warn"
+unused_lifetimes = "warn"
+redundant_lifetimes = "warn"
+unused_import_braces = "warn"
+meta_variable_misuse = "warn"
+unit_bindings = "warn"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "warn"
+private_intra_doc_links = "warn"
+unescaped_backticks = "warn"
+bare_urls = "warn"
+redundant_explicit_links = "warn"
+invalid_html_tags = "warn"
+invalid_rust_codeblocks = "warn"
 
 [workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Pedantic lints that fight the domain: GPU math, padded repr(C) fields, settings structs.
+cast_precision_loss = "allow"
+similar_names = "allow"
+many_single_char_names = "allow"
+pub_underscore_fields = "allow"
+struct_excessive_bools = "allow"
+fn_params_excessive_bools = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+# Large values here are usually consumed, where a move beats a borrow and copy.
+large_types_passed_by_value = "allow"
+# Local items read best beside their only use; `Default::default()` fills fields whose type is plain.
+items_after_statements = "allow"
+default_trait_access = "allow"
+# Handlers and callbacks keep the signature their caller expects.
+unnecessary_wraps = "allow"
+unused_self = "allow"
+# Unit suffixes like `_us` name what a field holds; unbounded ranges here end in `find`.
+struct_field_names = "allow"
+maybe_infinite_iter = "allow"
+# Exact float compares here are change detection, tie-breaks and sentinels; an epsilon changes behavior.
+float_cmp = "allow"
+# Not yet enforced: each call site needs a decision, not a mechanical fix.
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+too_many_lines = "allow"
+needless_pass_by_value = "allow"
+# Nursery and restriction lints adopted one by one.
+use_self = "warn"
+redundant_clone = "warn"
+or_fun_call = "warn"
+needless_collect = "warn"
+needless_pass_by_ref_mut = "warn"
+equatable_if_let = "warn"
+iter_over_hash_type = "warn"
+clone_on_ref_ptr = "warn"
+get_unwrap = "warn"
+try_err = "warn"
+fn_to_numeric_cast_any = "warn"
+# No runtime panics; clippy.toml exempts tests.
+unwrap_used = "warn"
+panic = "warn"
 undocumented_unsafe_blocks = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
 # Suppressions state why, and stop compiling once they stop being needed:
 # `expect` reports an allowance the code has outgrown, `allow` never does.
 allow_attributes = "warn"

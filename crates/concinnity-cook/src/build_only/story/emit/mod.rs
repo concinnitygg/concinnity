@@ -48,7 +48,7 @@ pub(crate) fn emit_story(
     story: &Story,
     title_screen: bool,
     text_speed: f32,
-    image_dims: ImageDims,
+    image_dims: ImageDims<'_>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let max_choices = story
         .nodes

@@ -7,7 +7,7 @@ use crate::settings::SettingKey;
 /// position in [0, 1] (for a slider row's drag), or bind a key (for a key-rebind
 /// row).
 ///
-/// Eq is intentionally not derived: SetFraction carries an f32.
+/// Eq is intentionally not derived: `SetFraction` carries an f32.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum SettingOp {
     /// Step the value one option forward.
@@ -30,11 +30,11 @@ pub enum SettingOp {
     RebindButton(crate::components::GamepadButton),
 }
 
-/// Runtime-only event sent by UiInputSystem when a settings row changes (a
+/// Runtime-only event sent by `UiInputSystem` when a settings row changes (a
 /// [`UiAction::Setting`](crate::components::UiAction) click, a slider drag, or a
 /// rebind capture).
 /// The renderer reads these each step: it applies the change to the named
-/// setting (cycling it or setting it from a fraction), updates the value_label
+/// setting (cycling it or setting it from a fraction), updates the `value_label`
 /// text, and (when persist is set) writes the new value to the settings store.
 /// World authors never declare this type directly.
 #[derive(Debug, Clone)]
@@ -43,7 +43,7 @@ pub struct SettingCommand {
     pub setting: SettingKey,
     /// How to change the value.
     pub op: SettingOp,
-    /// The value TextLabel to update with the new value, when known.
+    /// The value `TextLabel` to update with the new value, when known.
     pub value_label: Option<AssetId>,
     /// Whether to write the new value to the settings store. A cycle is one
     /// discrete change and always persists; a slider drag persists only on

@@ -64,7 +64,7 @@ impl VkContext {
         // acquire in `acquire_frame`, into the frame's `gpu_wait_us`: both block
         // the CPU on the GPU inside `draw_frame`, which the engine times its
         // graphics system around.
-        let mut gpu_wait = crate::gpu_wait::GpuWait::none();
+        let mut gpu_wait = GpuWait::none();
         gpu_wait
             .measure(|| {
                 // SAFETY: the fence belongs to this frame slot and was created from this device; the
@@ -203,8 +203,8 @@ impl VkContext {
                     let [s_val, s_avail] = results[start_slot];
                     let [e_val, e_avail] = results[end_slot];
                     if s_avail != 0 && e_avail != 0 && e_val > s_val && period > 0.0 {
-                        let nanos = (e_val - s_val) as f64 * period as f64;
-                        ((nanos / 1000.0) as u64).min(u32::MAX as u64) as u32
+                        let nanos = (e_val - s_val) as f64 * f64::from(period);
+                        ((nanos / 1000.0) as u64).min(u64::from(u32::MAX)) as u32
                     } else {
                         0
                     }
@@ -221,7 +221,7 @@ impl VkContext {
     // Publishes this frame's stats before recording; draw calls fill in after.
     pub(in crate::vulkan) fn begin_frame_stats(
         &self,
-        gpu_wait: &GpuWait,
+        gpu_wait: GpuWait,
         (gpu_frame_us, pass_times_us): (u32, [PassTiming; profile::MAX_PASS_TIMINGS]),
         gpu_done: Option<profile::GpuDone>,
     ) {
@@ -262,7 +262,7 @@ impl VkContext {
                 .auto_exposure
                 .adaptation
                 .as_ref()
-                .map(|a| a.current_ev()),
+                .map(concinnity_core::gfx::auto_exposure::ExposureAdaptation::current_ev),
             // EDR headroom for the StatHud `EDR x.X` chip, taken from the
             // `HdrOutputMode` resolved at init. `Some` only on the HDR path
             // (Vulkan has no portable max-EDR query, so the value is the

@@ -92,7 +92,7 @@ impl TemplateIndex {
                 },
             );
         }
-        TemplateIndex { map }
+        Self { map }
     }
 
     pub(crate) fn get(&self, name: &str) -> Option<&TemplateInfo> {
@@ -170,7 +170,7 @@ pub(crate) fn remove_at_path(patch: &mut Value, path: &str) -> bool {
                 return false;
             };
             let removed = remove_at_path(child, rest);
-            if removed && child.as_object().is_some_and(|o| o.is_empty()) {
+            if removed && child.as_object().is_some_and(serde_json::Map::is_empty) {
                 map.remove(head);
             }
             removed
@@ -444,7 +444,7 @@ mod tests {
         let loaded = LoadedWorld {
             assets: vec![WorldJsonlAsset {
                 id: "i1_a".into(),
-                asset_type: concinnity_cook::authoring::registry::RegisteredType::Prop,
+                asset_type: RegisteredType::Prop,
                 args: json!({"mesh": "box"}),
             }],
             injected: vec![InjectedAsset {

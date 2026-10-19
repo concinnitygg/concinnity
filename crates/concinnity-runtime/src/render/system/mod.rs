@@ -1,4 +1,4 @@
-//! GraphicsSystem: the 3D renderer driver. An internal system (not a declarable
+//! `GraphicsSystem`: the 3D renderer driver. An internal system (not a declarable
 //! asset); `World::start` constructs one when the run resolved to a windowed
 //! one.
 
@@ -16,7 +16,7 @@ use concinnity_core::render::world_load::scene_deferral::ShaderDeferral;
 use concinnity_core::render::{backend, overlay_maps, scene_flow, snapshot, text};
 use concinnity_host::store::paths::StateTree;
 
-/// Why the renderer could not be built, left by GraphicsSystem's init for
+/// Why the renderer could not be built, left by `GraphicsSystem`'s init for
 /// `Runtime::start` to pick up and report.
 ///
 /// Only a world that already resolved to a windowed run can leave one, so this
@@ -95,7 +95,7 @@ impl std::fmt::Debug for GraphicsSystem {
         f.debug_struct("GraphicsSystem")
             .field("frame_count", &self.frames.frames())
             .field("failed", &self.failed)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -124,7 +124,7 @@ impl GraphicsSystem {
             sprite_texture_slots: overlay_maps::TextureSlots::new(),
             debug_hud_chips: Vec::new(),
             stat_hud_chips: Vec::new(),
-            stream_pools: Default::default(),
+            stream_pools: StreamingPools::default(),
             stream_workers: Default::default(),
             shader_deferral: ShaderDeferral::default(),
             clip_rects: overlay_maps::ClipRects::new(),
@@ -161,13 +161,13 @@ impl GraphicsSystem {
 }
 
 impl System for GraphicsSystem {
-    fn init(&mut self, ctx: &mut PipelineContext) {
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
         if self.try_init(ctx).is_none() {
             self.failed = true;
         }
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         self.run_step(ctx)
     }
 }

@@ -1,5 +1,5 @@
 //! World-space line pass for the D3D12 backend. Runs at the tail of the
-//! hdr_resolve decoration chain, after the main pass resolved color into the
+//! `hdr_resolve` decoration chain, after the main pass resolved color into the
 //! HDR scene target and depth into the main depth buffer, so the lines layer
 //! over the lit scene and SSR / TAA treat them like any other scene content.
 //!
@@ -88,7 +88,7 @@ impl LineResources {
         let root_sig = dump_on_err(info_queue, create_line_root_signature(device))?;
         let pso = dump_on_err(info_queue, create_line_pso(device, &root_sig, &vs, &ps))?;
 
-        let view_size = align256(std::mem::size_of::<LineView>() as u64);
+        let view_size = align256(size_of::<LineView>() as u64);
         let frames = alloc.frames_in_flight();
         let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
         let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
@@ -101,9 +101,9 @@ impl LineResources {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map line view ubo"))?;
-            view_ubo_ptrs.push(ptr as *mut u8);
+            view_ubo_ptrs.push(ptr.cast::<u8>());
             view_ubo_resources.push(buf);
         }
 
@@ -218,7 +218,7 @@ fn create_line_pso(
 // view carries. Errors rather than truncating a frame too large to bind.
 fn line_vertex_bytes(vertex_count: usize) -> RenderResult<u32> {
     vertex_count
-        .checked_mul(std::mem::size_of::<LineVertex>())
+        .checked_mul(size_of::<LineVertex>())
         .and_then(|bytes| u32::try_from(bytes).ok())
         .ok_or_else(|| {
             RenderError::Other(format!(
@@ -242,14 +242,14 @@ impl LineUpload {
     }
 
     fn vertex_count(&self) -> u32 {
-        self.byte_len / std::mem::size_of::<LineVertex>() as u32
+        self.byte_len / size_of::<LineVertex>() as u32
     }
 
     fn vertex_buffer_view(&self) -> D3D12_VERTEX_BUFFER_VIEW {
         D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: self.gpu_va,
             SizeInBytes: self.byte_len,
-            StrideInBytes: std::mem::size_of::<LineVertex>() as u32,
+            StrideInBytes: size_of::<LineVertex>() as u32,
         }
     }
 }
@@ -336,9 +336,9 @@ impl DxContext {
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &view_uni as *const LineView as *const u8,
+                (&raw const view_uni).cast::<u8>(),
                 lines.view_ubo_ptrs[frame_idx],
-                std::mem::size_of::<LineView>(),
+                size_of::<LineView>(),
             );
         }
         let view_gva = com::gpu_va(&lines.view_ubo_resources[frame_idx]);
@@ -357,7 +357,7 @@ impl DxContext {
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&scene_rtv), false, None);
+            cmd.OMSetRenderTargets(1, Some(&raw const scene_rtv), false, None);
             cmd.RSSetViewports(&[D3D12_VIEWPORT {
                 TopLeftX: 0.0,
                 TopLeftY: 0.0,
@@ -392,7 +392,7 @@ impl DxContext {
 mod tests {
     use super::*;
 
-    const STRIDE: u32 = std::mem::size_of::<LineVertex>() as u32;
+    const STRIDE: u32 = size_of::<LineVertex>() as u32;
 
     #[test]
     fn line_vertex_bytes_is_count_times_stride() {

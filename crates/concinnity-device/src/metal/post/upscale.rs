@@ -1,4 +1,4 @@
-//! MetalFX temporal upscaling: the engine renders the 3D scene at a fraction
+//! `MetalFX` temporal upscaling: the engine renders the 3D scene at a fraction
 //! of drawable size and this pass reconstructs a drawable-resolution image
 //! the bloom + composite stack consumes. Lives in `metal/post/` next to TAA +
 //! bloom + SSAO + SSR; the scaler descriptor, the output texture, and the
@@ -223,7 +223,7 @@ impl MetalFXUpscaler {
             );
         }
 
-        Ok(MetalFXUpscaler {
+        Ok(Self {
             scaler,
             output,
             input_width,
@@ -349,7 +349,7 @@ pub(crate) struct UpscaleJitter(std::sync::atomic::AtomicU64);
 
 impl UpscaleJitter {
     pub(crate) fn store(&self, jx: f32, jy: f32, ordering: std::sync::atomic::Ordering) {
-        let packed = (jx.to_bits() as u64) | ((jy.to_bits() as u64) << 32);
+        let packed = u64::from(jx.to_bits()) | (u64::from(jy.to_bits()) << 32);
         self.0.store(packed, ordering);
     }
 

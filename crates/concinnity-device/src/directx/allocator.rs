@@ -388,6 +388,10 @@ impl DeviceAllocator {
     // Advance the frame tick, make retired frees placeable again, release any
     // heap that now holds nothing, and drop the activation lists and retired
     // objects the GPU has finished with.
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each pool is visited on its own, so the order cannot show"
+    )]
     pub(super) fn begin_frame(&self) {
         let mut inner = self.inner.borrow_mut();
         inner.frame += 1;
@@ -400,6 +404,10 @@ impl DeviceAllocator {
         inner.parked.collect(frame, depth);
     }
 
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each pool is visited on its own, so the order cannot show"
+    )]
     pub(super) fn stats(&self) -> AllocatorStats {
         let inner = self.inner.borrow();
         let mut stats = AllocatorStats::default();
@@ -433,10 +441,10 @@ impl DeviceAllocator {
             self.device.CreatePlacedResource(
                 &reservation.heap,
                 reservation.placement.offset,
-                &desc,
+                &raw const desc,
                 initial_state,
                 None,
-                &mut placed,
+                &raw mut placed,
             )
         };
         let resource = match result.map(|()| placed) {
@@ -486,11 +494,11 @@ impl DeviceAllocator {
         // says so at length, so the standard size is the gate.
         if small_alignment_eligible(desc) && info.SizeInBytes <= HEAP_GRANULARITY {
             let mut small = *desc;
-            small.Alignment = D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT as u64;
+            small.Alignment = u64::from(D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT);
             // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters
             // it fills are live locals that outlive the call.
             let small_info = unsafe { self.device.GetResourceAllocationInfo(0, &[small]) };
-            if small_info.Alignment == D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT as u64
+            if small_info.Alignment == u64::from(D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT)
                 && small_info.SizeInBytes != u64::MAX
             {
                 return Ok((small, small_info));
@@ -617,8 +625,8 @@ fn resource_heap_tier(device: &ID3D12Device) -> D3D12_RESOURCE_HEAP_TIER {
     let ok = unsafe {
         device.CheckFeatureSupport(
             D3D12_FEATURE_D3D12_OPTIONS,
-            &mut options as *mut _ as *mut std::ffi::c_void,
-            std::mem::size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS>() as u32,
+            (&raw mut options).cast::<std::ffi::c_void>(),
+            size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS>() as u32,
         )
     };
     if ok.is_ok() {
@@ -642,7 +650,7 @@ fn new_heap(device: &ID3D12Device, key: PoolKey, size: u64) -> RenderResult<ID3D
     let mut heap: Option<ID3D12Heap> = None;
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    unsafe { device.CreateHeap(&desc, &mut heap) }.map_err(|e| {
+    unsafe { device.CreateHeap(&raw const desc, &raw mut heap) }.map_err(|e| {
         super::error::map_hresult(e.code(), &format!("allocator: create a {size}-byte heap"))
     })?;
     heap.ok_or_else(|| RenderError::Other("allocator: CreateHeap returned None".to_string()))
@@ -657,7 +665,7 @@ mod tests {
         let mut device: Option<ID3D12Device> = None;
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
-        unsafe { D3D12CreateDevice(None, D3D_FEATURE_LEVEL_11_0, &mut device) }.ok()?;
+        unsafe { D3D12CreateDevice(None, D3D_FEATURE_LEVEL_11_0, &raw mut device) }.ok()?;
         device
     }
 
@@ -669,14 +677,15 @@ mod tests {
         };
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
-        let queue: ID3D12CommandQueue = unsafe { device.CreateCommandQueue(&queue_desc) }.ok()?;
+        let queue: ID3D12CommandQueue =
+            unsafe { device.CreateCommandQueue(&raw const queue_desc) }.ok()?;
         Some(DeviceAllocator::new(&device, &queue, 3))
     }
 
     fn texture_desc(width: u32) -> D3D12_RESOURCE_DESC {
         D3D12_RESOURCE_DESC {
             Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-            Width: width as u64,
+            Width: u64::from(width),
             Height: width,
             DepthOrArraySize: 1,
             MipLevels: 1,
@@ -810,7 +819,7 @@ mod tests {
             .expect("small texture sizes");
         assert_eq!(
             info.Alignment,
-            D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT as u64
+            u64::from(D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT)
         );
         assert_eq!(desc.Alignment, info.Alignment, "placement must match");
 
@@ -859,15 +868,15 @@ mod tests {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buffer.Map(0, None, Some(&mut ptr)) }.expect("upload buffer maps");
+            unsafe { buffer.Map(0, None, Some(&raw mut ptr)) }.expect("upload buffer maps");
             // SAFETY: the map covers the whole 256-byte buffer.
-            unsafe { std::ptr::write_bytes(ptr as *mut u8, byte, 256) };
+            unsafe { std::ptr::write_bytes(ptr.cast::<u8>(), byte, 256) };
         };
         let read = |buffer: &PooledBuffer| {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buffer.Map(0, None, Some(&mut ptr)) }.expect("upload buffer maps");
+            unsafe { buffer.Map(0, None, Some(&raw mut ptr)) }.expect("upload buffer maps");
             // SAFETY: as above.
             unsafe { std::slice::from_raw_parts(ptr as *const u8, 256).to_vec() }
         };

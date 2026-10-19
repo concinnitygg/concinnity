@@ -65,7 +65,7 @@ impl SpotShadowState {
     pub(crate) fn slice_ubo_gva(&self, slice: u32) -> u64 {
         debug_assert!(slice < self.count());
         let base = com::gpu_va(&self.ubo);
-        base + slice as u64 * self.ubo_stride
+        base + u64::from(slice) * self.ubo_stride
     }
 }
 

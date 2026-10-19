@@ -75,7 +75,7 @@ fn world_msl<'a>(
         platform: concinnity_core::platform::Platform::Metal,
         hot_reload,
     };
-    crate::shader::surface_source::artifact(programs, program, &req, crate::shader::compile::cooked)
+    crate::shader::surface_source::artifact(programs, program, req, crate::shader::compile::cooked)
 }
 
 fn world_label(program: &surface::Program) -> String {
@@ -238,7 +238,7 @@ mod tests {
                     .strip_prefix("constant uint ")?
                     .split_once('=')?;
                 (decl.trim() == name)
-                    .then(|| value.trim().trim_end_matches(";").trim_end_matches('u'))
+                    .then(|| value.trim().trim_end_matches(';').trim_end_matches('u'))
             })
             .and_then(|v| v.parse().ok())
             .unwrap_or_else(|| panic!("cull_encode.metal declares no `{name}`"))

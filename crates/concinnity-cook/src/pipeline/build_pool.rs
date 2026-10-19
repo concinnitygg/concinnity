@@ -3,7 +3,7 @@
 //!
 //! The name interner and the resource-handle map are per-thread, so concurrent
 //! builds cannot see each other's ids. A compile that resolves a reference (a
-//! Material's texture, a SkinnedMesh's own name) on a shared pool worker would
+//! Material's texture, a `SkinnedMesh`'s own name) on a shared pool worker would
 //! read that worker's stale or empty tables instead of this build's. Every
 //! thread of this pool starts with a copy of the caller's.
 

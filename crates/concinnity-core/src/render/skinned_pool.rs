@@ -1,5 +1,5 @@
 //! Free pool for pre-reserved skinned instance slots. A skinned mesh that opts
-//! into runtime spawning (SkinnedMesh.max_instances > 0) has that many hidden
+//! into runtime spawning (`SkinnedMesh.max_instances` > 0) has that many hidden
 //! bind-pose copies appended to the skinned geometry at load. Each copy is its
 //! own skinned draw object with its own vertex region in the shared skinned
 //! buffer, which is required because the GPU skin fold writes the deformed
@@ -43,7 +43,7 @@ impl SkinnedInstancePool {
     /// Claim a free instance slot for `template`, or `None` when the reserve is
     /// exhausted (more live copies than were pre-reserved).
     pub fn acquire(&mut self, template: SkinnedIndex) -> Option<SkinnedIndex> {
-        self.free.get_mut(&template).and_then(|slots| slots.pop())
+        self.free.get_mut(&template).and_then(Vec::pop)
     }
 
     /// Return a live instance slot to its template's free list. Returns false if

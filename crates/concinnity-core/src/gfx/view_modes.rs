@@ -38,22 +38,22 @@ pub enum ViewMode {
 
 impl ViewMode {
     /// Every mode, in the cycling/UI order.
-    pub const ALL: [ViewMode; 9] = [
-        ViewMode::Lit,
-        ViewMode::Unlit,
-        ViewMode::Wireframe,
-        ViewMode::Normals,
-        ViewMode::Roughness,
-        ViewMode::Occlusion,
-        ViewMode::Depth,
-        ViewMode::Motion,
-        ViewMode::Reactive,
+    pub const ALL: [Self; 9] = [
+        Self::Lit,
+        Self::Unlit,
+        Self::Wireframe,
+        Self::Normals,
+        Self::Roughness,
+        Self::Occlusion,
+        Self::Depth,
+        Self::Motion,
+        Self::Reactive,
     ];
 
     /// True for the flat-shaded modes (Unlit, Wireframe), which drop the
     /// surface-effect passes for a clean readable image.
     pub fn is_flat(self) -> bool {
-        matches!(self, ViewMode::Unlit | ViewMode::Wireframe)
+        matches!(self, Self::Unlit | Self::Wireframe)
     }
 
     /// True for the modes whose image is one channel of the frame sampled by
@@ -62,27 +62,27 @@ impl ViewMode {
     pub fn is_gbuffer_channel(self) -> bool {
         matches!(
             self,
-            ViewMode::Normals
-                | ViewMode::Roughness
-                | ViewMode::Occlusion
-                | ViewMode::Depth
-                | ViewMode::Motion
-                | ViewMode::Reactive
+            Self::Normals
+                | Self::Roughness
+                | Self::Occlusion
+                | Self::Depth
+                | Self::Motion
+                | Self::Reactive
         )
     }
 
     /// Short display label for menus.
     pub fn label(self) -> &'static str {
         match self {
-            ViewMode::Lit => "Lit",
-            ViewMode::Unlit => "Unlit",
-            ViewMode::Wireframe => "Wireframe",
-            ViewMode::Normals => "Normals",
-            ViewMode::Roughness => "Roughness",
-            ViewMode::Occlusion => "Occlusion",
-            ViewMode::Depth => "Depth",
-            ViewMode::Motion => "Motion",
-            ViewMode::Reactive => "Reactive",
+            Self::Lit => "Lit",
+            Self::Unlit => "Unlit",
+            Self::Wireframe => "Wireframe",
+            Self::Normals => "Normals",
+            Self::Roughness => "Roughness",
+            Self::Occlusion => "Occlusion",
+            Self::Depth => "Depth",
+            Self::Motion => "Motion",
+            Self::Reactive => "Reactive",
         }
     }
 }
@@ -96,82 +96,82 @@ pub struct ShowFlags(pub u32);
 
 impl ShowFlags {
     /// Directional and local shadow passes.
-    pub const SHADOWS: ShowFlags = ShowFlags(1 << 0);
+    pub const SHADOWS: Self = Self(1 << 0);
     /// Volumetric fog.
-    pub const FOG: ShowFlags = ShowFlags(1 << 1);
+    pub const FOG: Self = Self(1 << 1);
     /// Bloom.
-    pub const BLOOM: ShowFlags = ShowFlags(1 << 2);
+    pub const BLOOM: Self = Self(1 << 2);
     /// Screen-space global illumination.
-    pub const SSGI: ShowFlags = ShowFlags(1 << 3);
+    pub const SSGI: Self = Self(1 << 3);
     /// Screen-space reflections.
-    pub const SSR: ShowFlags = ShowFlags(1 << 4);
+    pub const SSR: Self = Self(1 << 4);
     /// The debug line pass.
-    pub const LINES: ShowFlags = ShowFlags(1 << 5);
+    pub const LINES: Self = Self(1 << 5);
     /// The reactive mask the particle and transparent passes hand the temporal
     /// passes. Cleared, TAA and the upscalers see no mask.
-    pub const REACTIVE: ShowFlags = ShowFlags(1 << 6);
+    pub const REACTIVE: Self = Self(1 << 6);
 
     /// Every flag, paired with its display label, in UI order.
-    pub const LABELED: [(ShowFlags, &'static str); 7] = [
-        (ShowFlags::SHADOWS, "Shadows"),
-        (ShowFlags::FOG, "Fog"),
-        (ShowFlags::BLOOM, "Bloom"),
-        (ShowFlags::SSGI, "SSGI"),
-        (ShowFlags::SSR, "Reflections"),
-        (ShowFlags::LINES, "Lines"),
-        (ShowFlags::REACTIVE, "Reactive mask"),
+    pub const LABELED: [(Self, &'static str); 7] = [
+        (Self::SHADOWS, "Shadows"),
+        (Self::FOG, "Fog"),
+        (Self::BLOOM, "Bloom"),
+        (Self::SSGI, "SSGI"),
+        (Self::SSR, "Reflections"),
+        (Self::LINES, "Lines"),
+        (Self::REACTIVE, "Reactive mask"),
     ];
 
     /// Every flag, paired with the name a command line or debug verb gives it,
     /// in `LABELED` order.
-    pub const NAMED: [(ShowFlags, &'static str); 7] = [
-        (ShowFlags::SHADOWS, "shadows"),
-        (ShowFlags::FOG, "fog"),
-        (ShowFlags::BLOOM, "bloom"),
-        (ShowFlags::SSGI, "ssgi"),
-        (ShowFlags::SSR, "reflections"),
-        (ShowFlags::LINES, "lines"),
-        (ShowFlags::REACTIVE, "reactive"),
+    pub const NAMED: [(Self, &'static str); 7] = [
+        (Self::SHADOWS, "shadows"),
+        (Self::FOG, "fog"),
+        (Self::BLOOM, "bloom"),
+        (Self::SSGI, "ssgi"),
+        (Self::SSR, "reflections"),
+        (Self::LINES, "lines"),
+        (Self::REACTIVE, "reactive"),
     ];
 
     /// Every flag set.
-    pub const fn all() -> ShowFlags {
-        ShowFlags(
-            ShowFlags::SHADOWS.0
-                | ShowFlags::FOG.0
-                | ShowFlags::BLOOM.0
-                | ShowFlags::SSGI.0
-                | ShowFlags::SSR.0
-                | ShowFlags::LINES.0
-                | ShowFlags::REACTIVE.0,
+    pub const fn all() -> Self {
+        Self(
+            Self::SHADOWS.0
+                | Self::FOG.0
+                | Self::BLOOM.0
+                | Self::SSGI.0
+                | Self::SSR.0
+                | Self::LINES.0
+                | Self::REACTIVE.0,
         )
     }
 
     /// Whether every bit in `other` is set here.
-    pub const fn contains(self, other: ShowFlags) -> bool {
+    pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
 
     #[must_use]
     /// This set with `other`'s bits flipped.
-    pub const fn toggled(self, other: ShowFlags) -> ShowFlags {
-        ShowFlags(self.0 ^ other.0)
+    pub const fn toggled(self, other: Self) -> Self {
+        Self(self.0 ^ other.0)
     }
 
     #[must_use]
     /// This set with `other`'s bits set when `on`, else cleared.
-    pub const fn with(self, other: ShowFlags, on: bool) -> ShowFlags {
+    pub const fn with(self, other: Self, on: bool) -> Self {
         if on {
-            ShowFlags(self.0 | other.0)
+            Self(self.0 | other.0)
         } else {
-            ShowFlags(self.0 & !other.0)
+            Self(self.0 & !other.0)
         }
     }
 }
 
 impl Default for ShowFlags {
     fn default() -> Self {
-        ShowFlags::all()
+        Self::all()
     }
 }
 

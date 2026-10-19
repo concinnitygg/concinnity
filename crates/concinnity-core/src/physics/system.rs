@@ -139,14 +139,14 @@ impl PhysicsSystem {
     // the body-reaping path.
     #[cfg(test)]
     fn physics_body_count(&self) -> usize {
-        self.world.as_ref().map_or(0, |w| w.body_count())
+        self.world.as_ref().map_or(0, Simulation::body_count)
     }
 
     // Number of colliders the physics world holds. Test-only observable for
     // the spawn/despawn leak checks.
     #[cfg(test)]
     fn physics_collider_count(&self) -> usize {
-        self.world.as_ref().map_or(0, |w| w.collider_count())
+        self.world.as_ref().map_or(0, Simulation::collider_count)
     }
 
     /// Build the simulation from the world's `PhysicsConfig`. Bodies,
@@ -184,6 +184,7 @@ impl PhysicsSystem {
     /// thread. What a step hands out and the order its results load back in
     /// are the simulation's; a pool decides only where the work runs, so this
     /// cannot change the state a tick lands on.
+    #[must_use]
     pub fn with_pool<P: Fanout>(mut self, pool: Lent<P>) -> Self {
         self.fanout = Box::new(pool);
         self
@@ -202,7 +203,7 @@ impl PhysicsSystem {
     // Whichever it came from, the budget is the whole reservation: the
     // simulation is sized from it and never grows, so its cap is the ceiling
     // spawns are refused against.
-    fn resolve_budget(&self, ctx: &PipelineContext) -> PhysicsBudget {
+    fn resolve_budget(&self, ctx: &PipelineContext<'_>) -> PhysicsBudget {
         let scan = super::budget::scan_counts(ctx);
         let Some(record) = ctx.resource::<WorldPhysicsBudget>().map(|b| b.0) else {
             return PhysicsBudget::derive(&scan, self.spawn_headroom);
@@ -238,7 +239,7 @@ impl PhysicsSystem {
     // so the joint wiring resolves.
     fn build_prop_bodies(
         &mut self,
-        ctx: &PipelineContext,
+        ctx: &PipelineContext<'_>,
         world: &mut Simulation,
         body_handles: &mut BTreeMap<AssetId, BodyHandle>,
     ) {
@@ -291,7 +292,7 @@ impl PhysicsSystem {
             || world.query::<TriggerVolume>().next().is_some()
             || world
                 .resource::<crate::resource::SkinnedMeshTable>()
-                .is_some_and(|t| t.has_capsule());
+                .is_some_and(super::super::resource::SkinnedMeshTable::has_capsule);
         needs.then(|| {
             world
                 .query::<PhysicsConfig>()
@@ -304,7 +305,7 @@ impl PhysicsSystem {
     // Catch up with a planet world: carry the bodies through every move of
     // the simulated frame this system has not yet seen, swap in a newer
     // ground patch, and aim gravity at the planet's center in this frame.
-    fn follow_planet(&mut self, ctx: &mut PipelineContext) {
+    fn follow_planet(&mut self, ctx: &mut PipelineContext<'_>) {
         let Some(world) = self.world.as_mut() else {
             return;
         };
@@ -369,7 +370,7 @@ fn up_at(world: &Simulation, p: [f32; 3]) -> [f32; 3] {
 }
 
 impl System for PhysicsSystem {
-    fn init(&mut self, ctx: &mut PipelineContext) {
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
         // Before anything is built, and before the joint wiring below drains
         // the column the scan counts.
         let budget = self.resolve_budget(ctx);
@@ -493,15 +494,13 @@ impl System for PhysicsSystem {
             } else {
                 [0.0, 0.0, 0.0]
             };
-            if !world.add_joint(
+            world.add_joint(
                 handle_a,
                 handle_b,
                 joint.anchor_a,
                 anchor_b,
                 joint_spec(&joint),
-            ) {
-                continue;
-            }
+            );
         }
         // player capsule for the Camera3D
         // Every first-person camera is collided as a capsule. A RigidBody
@@ -571,7 +570,7 @@ impl System for PhysicsSystem {
         self.world = Some(world);
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         // Freeze while a menu is open: skip the solve and the write-back so the
         // world truly pauses (and an external editor's edits to simulated
         // Transforms are not stomped by a stale blend). The simulation clock
@@ -596,20 +595,20 @@ impl System for PhysicsSystem {
         self.follow_planet(ctx);
 
         // snapshot reads (released before any query_mut below)
-        let (cam_pos, cam_yaw, cam_pitch, desired_move, jump_req, interact_req) = ctx
-            .query::<Camera3D>()
-            .next()
-            .map(|c| {
-                (
-                    c.position,
-                    c.yaw,
-                    c.pitch,
-                    c.desired_move,
-                    c.jump_requested,
-                    c.interact_requested,
-                )
-            })
-            .unwrap_or(([0.0, self.floor_y, 0.0], 0.0, 0.0, [0.0; 3], false, false));
+        let (cam_pos, cam_yaw, cam_pitch, desired_move, jump_req, interact_req) =
+            ctx.query::<Camera3D>().next().map_or(
+                ([0.0, self.floor_y, 0.0], 0.0, 0.0, [0.0; 3], false, false),
+                |c| {
+                    (
+                        c.position,
+                        c.yaw,
+                        c.pitch,
+                        c.desired_move,
+                        c.jump_requested,
+                        c.interact_requested,
+                    )
+                },
+            );
 
         // camera-space basis vectors
         let fwd_flat = [-sin(cam_yaw), 0.0, -cos(cam_yaw)];
@@ -1651,7 +1650,7 @@ mod tests {
                 position: [0.0, 3.0, 0.0],
                 rotation_deg: [0.0; 3],
                 collider: PropCollider {
-                    shape: crate::components::PropColliderShape::Cuboid,
+                    shape: PropColliderShape::Cuboid,
                     half_extents: [1.0, 0.5, 1.0],
                     ..Default::default()
                 },
@@ -1868,7 +1867,7 @@ mod tests {
                 position: [0.0, 3.0, 0.0],
                 rotation_deg: [0.0; 3],
                 collider: PropCollider {
-                    shape: crate::components::PropColliderShape::Cuboid,
+                    shape: PropColliderShape::Cuboid,
                     half_extents: [1.0, 0.5, 1.0],
                     ..Default::default()
                 },
@@ -1913,7 +1912,7 @@ mod tests {
             TriggerVolume {
                 position: [0.0, 5.0, -10.0],
                 collider: PropCollider {
-                    shape: crate::components::PropColliderShape::Cuboid,
+                    shape: PropColliderShape::Cuboid,
                     half_extents: [2.0; 3],
                     ..Default::default()
                 },

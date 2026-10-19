@@ -16,30 +16,26 @@ pub(crate) enum ShaderKind {
 }
 
 impl ShaderKind {
-    pub(crate) const ALL: [ShaderKind; 3] = [
-        ShaderKind::Surface,
-        ShaderKind::SdfField,
-        ShaderKind::VolumetricField,
-    ];
+    pub(crate) const ALL: [Self; 3] = [Self::Surface, Self::SdfField, Self::VolumetricField];
 
     pub(crate) fn caption(self) -> &'static str {
         match self {
-            ShaderKind::Surface => "Surface Shader",
-            ShaderKind::SdfField => "SDF field",
-            ShaderKind::VolumetricField => "Volumetric SDF field",
+            Self::Surface => "Surface Shader",
+            Self::SdfField => "SDF field",
+            Self::VolumetricField => "Volumetric SDF field",
         }
     }
 
     // The type an entry of this kind is.
     pub(crate) fn ty(self) -> &'static str {
         match self {
-            ShaderKind::Surface => "Shader",
-            ShaderKind::SdfField | ShaderKind::VolumetricField => "SdfVolume",
+            Self::Surface => "Shader",
+            Self::SdfField | Self::VolumetricField => "SdfVolume",
         }
     }
 
     pub(crate) fn volumetric(self) -> bool {
-        self == ShaderKind::VolumetricField
+        self == Self::VolumetricField
     }
 
     // The kind a press on the row moves to.

@@ -150,7 +150,9 @@ fn by_handle(world: &World, handle: MaterialHandle) -> Option<DrawMaterial> {
         .resource::<MaterialTable>()?
         .data_bytes(handle.index())?;
     let mat: Material = postcard::from_bytes(bytes).ok()?;
-    let textures = world.resource::<TextureTable>().map_or(0, |t| t.len());
+    let textures = world
+        .resource::<TextureTable>()
+        .map_or(0, TextureTable::len);
     Some(DrawMaterial {
         handle: Some(handle),
         entry: material_entry::of(handle, &mat, textures).ok()?,

@@ -105,7 +105,7 @@ impl<D: PostPassDevice + ?Sized> Copy for PostBind<'_, D> {}
 
 /// Everything one fullscreen post draw needs: where it writes, what it runs,
 /// what it binds, and where it sits in the GPU-timing span.
-pub struct PostDraw<'a, 't, D: PostPassDevice + ?Sized + 't> {
+pub struct PostDraw<'a, 't, D: PostPassDevice + ?Sized> {
     /// The color target the draw writes.
     pub target: D::Attachment<'t>,
     /// Who transitions that target around the draw.
@@ -160,6 +160,7 @@ pub struct PostExtent {
 impl PostExtent {
     /// The extent, with both axes floored to at least one pixel so a minimized
     /// or mid-resize window never asks a backend for a zero-sized texture.
+    #[must_use]
     pub fn clamped(self) -> Self {
         Self {
             width: self.width.max(1),

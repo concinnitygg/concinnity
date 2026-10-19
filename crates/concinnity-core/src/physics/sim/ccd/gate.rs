@@ -19,10 +19,11 @@ use crate::physics::sim::math::Vec3;
 /// behind on the way past something.
 pub(crate) fn min_extent(shape: &ColliderShape) -> f32 {
     match *shape {
-        ColliderShape::Ball { radius } => 2.0 * radius.abs(),
         // The caps are as wide as the cylinder, so the thin way across a
         // capsule is the same whichever end is leading.
-        ColliderShape::Capsule { radius, .. } => 2.0 * radius.abs(),
+        ColliderShape::Ball { radius } | ColliderShape::Capsule { radius, .. } => {
+            2.0 * radius.abs()
+        }
         ColliderShape::Cuboid { half_extents } => {
             let thinnest = half_extents
                 .iter()

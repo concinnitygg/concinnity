@@ -7,8 +7,8 @@ use concinnity_core::ecs::NameRef;
 ///
 /// `OptionSelect` is a build-time shorthand for one row of a settings menu: a
 /// left-aligned name, a right-aligned current value, and a clickable region
-/// that advances the value. It expands into a [TextLabel](#textlabel) for the
-/// name, a `TextLabel` for the value, and a [HitRegion](#hitregion) whose
+/// that advances the value. It expands into a [`TextLabel`](#textlabel) for the
+/// name, a `TextLabel` for the value, and a [`HitRegion`](#hitregion) whose
 /// action advances `setting`.
 ///
 /// The `setting` field names an engine setting the runtime knows how to read,

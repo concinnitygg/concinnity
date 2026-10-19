@@ -6,7 +6,7 @@
 //! 32-bit constant block at b0 when the program declares constants, and N
 //! static samplers at s0..sN-1. A probe-reading program adds the
 //! reflection-probe cube array at tN with its one static sampler at sN, the
-//! ProbeSet at b1, the probe records at tN+1, and the main camera's cluster
+//! `ProbeSet` at b1, the probe records at tN+1, and the main camera's cluster
 //! grid binning them: its params at b2 and its lists at tN+2. The tables are
 //! single-SRV and separate because each source's texture and sampler sit at
 //! their own register, and because a pass's sources come from unrelated owners,
@@ -397,7 +397,7 @@ impl PostPassDevice for DxPostDevice<'_> {
                     D3D12_RESOURCE_STATE_RENDER_TARGET,
                 )]);
             }
-            cmd.OMSetRenderTargets(1, Some(&target.rtv), false, None);
+            cmd.OMSetRenderTargets(1, Some(&raw const target.rtv), false, None);
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
                 TopLeftY: 0.0,

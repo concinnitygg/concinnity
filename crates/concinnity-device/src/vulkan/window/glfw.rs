@@ -2,13 +2,14 @@
 //! backend uses the shared native Win32 layer instead -- see window/win32.rs;
 //! this module is compiled only off-Windows.)
 //!
-//! Input design mirrors the AppKit layer (appkit/input.rs): events accumulate into an InputSnapshot between
-//! poll() calls; GraphicsSystem drains the state each step via take_input()
-//! and deposits it as a FrameInput component for Camera3DSystem to consume.
+//! Input design mirrors the `AppKit` layer (`appkit/input.rs`): events accumulate
+//! into an `InputSnapshot` between `poll()` calls; `GraphicsSystem` drains the
+//! state each step via `take_input()` and deposits it as a `FrameInput`
+//! component for `Camera3DSystem` to consume.
 //!
-//! Cursor capture is enabled by GraphicsSystem::init() when a Camera3D
-//! component is present. GLFW's CursorDisabled mode delivers raw relative
-//! deltas directly via CursorPos events, so no manual warping is needed.
+//! Cursor capture is enabled by `GraphicsSystem::init()` when a `Camera3D`
+//! component is present. GLFW's `CursorDisabled` mode delivers raw relative
+//! deltas directly via `CursorPos` events, so no manual warping is needed.
 
 use concinnity_core::components::{InputKey, KeyEvent, KeyMods, KeyPress, WindowMode};
 use concinnity_core::input::keymap::KeyMap;
@@ -214,7 +215,7 @@ impl GlfwWindow {
         title: &str,
         width: u32,
         height: u32,
-        mode: &WindowMode,
+        mode: WindowMode,
         resizable: bool,
         title_bar: bool,
     ) -> RenderResult<Self> {
@@ -308,7 +309,7 @@ impl GlfwWindow {
             cursor_captured: false,
             ui_cursor_hidden: false,
             menu_mode: false,
-            window_mode: *mode,
+            window_mode: mode,
             cursor_outside_window: false,
             keymap: KeyMap::default(),
             display_modes,
@@ -433,8 +434,8 @@ impl GlfwWindow {
         let (w, h) = self.window.get_size();
         if self.window.is_focused() && w > 0 && h > 0 {
             let (cx, cy) = self.window.get_cursor_pos();
-            let clamped_x = cx.clamp(0.0, (w - 1) as f64);
-            let clamped_y = cy.clamp(0.0, (h - 1) as f64);
+            let clamped_x = cx.clamp(0.0, f64::from(w - 1));
+            let clamped_y = cy.clamp(0.0, f64::from(h - 1));
             if clamped_x != cx || clamped_y != cy {
                 self.window.set_cursor_pos(clamped_x, clamped_y);
             }
@@ -571,8 +572,8 @@ impl GlfwWindow {
 
     // Replace the runtime movement key map. `poll` decodes key events through
     // it, so a settings-menu rebind takes effect immediately.
-    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
-        self.keymap = *keymap;
+    pub(crate) fn set_keymap(&mut self, keymap: KeyMap) {
+        self.keymap = keymap;
     }
 
     // Drain all pending GLFW events, update input state, and return true if
@@ -782,7 +783,7 @@ impl GlfwWindow {
             self.window.create_window_surface(
                 instance.handle().as_raw() as usize as *mut _,
                 std::ptr::null(),
-                &mut raw_surface as *mut usize as *mut *mut _,
+                (&raw mut raw_surface).cast::<*mut _>(),
             )
         };
         if result != 0 {

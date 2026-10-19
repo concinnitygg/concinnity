@@ -141,7 +141,10 @@ mod tests {
             .completed(done(44_100, 89_100))
             .expect("a new completion");
         assert_eq!(spanned.interval_us, 44_000);
-        assert!((spanned.step_us as i64 - 44_000).abs() <= 1, "{spanned:?}");
+        assert!(
+            (i64::from(spanned.step_us) - 44_000).abs() <= 1,
+            "{spanned:?}"
+        );
     }
 
     #[test]

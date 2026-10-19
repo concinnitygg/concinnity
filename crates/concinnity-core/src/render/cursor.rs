@@ -113,9 +113,8 @@ pub fn build_cursor_calls_into(
     default_atlas_slot: Option<usize>,
     viewport: [f32; 2],
 ) {
-    let atlas_slot = match default_atlas_slot {
-        Some(s) => s,
-        None => return,
+    let Some(atlas_slot) = default_atlas_slot else {
+        return;
     };
     let overlay_scale = OverlayTransform::from_viewport(viewport).scale();
     let sil = cursor_geometry(shape);

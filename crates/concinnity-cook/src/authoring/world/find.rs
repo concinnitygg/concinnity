@@ -13,7 +13,7 @@ pub fn find_world_jsonl(
     name: Option<&str>,
 ) -> std::io::Result<String> {
     if let Some(n) = name {
-        let path = worlds_dir.map(|d| d.join(format!("{}.jsonl", n)));
+        let path = worlds_dir.map(|d| d.join(format!("{n}.jsonl")));
         if let Some(path) = &path
             && path.exists()
         {
@@ -33,7 +33,7 @@ pub fn find_world_jsonl(
                 }
                 if let Ok(meta) = std::fs::metadata(&path) {
                     let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-                    if best.as_ref().map(|(t, _)| mtime > *t).unwrap_or(true) {
+                    if best.as_ref().is_none_or(|(t, _)| mtime > *t) {
                         best = Some((mtime, path));
                     }
                 }
@@ -56,10 +56,7 @@ pub fn find_world_jsonl(
             None => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
-                    format!(
-                        "no world found: run `cn init` or create `worlds/{}`",
-                        WORLD_JSONL,
-                    ),
+                    format!("no world found: run `cn init` or create `worlds/{WORLD_JSONL}`"),
                 ));
             }
         }
@@ -72,7 +69,7 @@ pub fn find_world_jsonl(
 fn named_world_not_found(name: &str, path: Option<&std::path::Path>) -> std::io::Error {
     let message = match path {
         Some(p) => format!("world '{}' not found at {}", name, p.display()),
-        None => format!("world '{}' not found: no worlds directory", name),
+        None => format!("world '{name}' not found: no worlds directory"),
     };
     std::io::Error::new(std::io::ErrorKind::NotFound, message)
 }
@@ -134,7 +131,7 @@ mod tests {
         // set them explicitly so the pick is the one under test.
         let base = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
         set_mtime(&older, base);
-        set_mtime(&newer, base + std::time::Duration::from_secs(60));
+        set_mtime(&newer, base + std::time::Duration::from_mins(1));
 
         let found = find_world_jsonl(Some(tree.path()), None).unwrap();
         assert_eq!(std::path::Path::new(&found), newer);

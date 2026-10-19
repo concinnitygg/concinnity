@@ -1,4 +1,4 @@
-/// Runtime-only event sent by UiInputSystem when a
+/// Runtime-only event sent by `UiInputSystem` when a
 /// [`UiAction::Story`](crate::components::UiAction) action fires (a stage click,
 /// a Space press, a choice button, a Start / Restart button). The story system
 /// reads these and moves through the story graph. World authors never declare
@@ -68,21 +68,21 @@ impl StoryCommand {
 
     /// The command a verb names. `choose` and `slot` require an `index`; every
     /// other verb ignores it. `None` for an unknown verb or a missing index.
-    pub fn from_verb(verb: &str, index: Option<usize>) -> Option<StoryCommand> {
+    pub fn from_verb(verb: &str, index: Option<usize>) -> Option<Self> {
         Some(match verb {
-            "start" => StoryCommand::Start,
-            "continue" => StoryCommand::Continue,
-            "advance" => StoryCommand::Advance,
-            "choose" => StoryCommand::Choose(index?),
-            "slot" => StoryCommand::Slot(index?),
-            "auto" => StoryCommand::ToggleAuto,
-            "skip" => StoryCommand::ToggleSkip,
-            "log" => StoryCommand::ToggleLog,
-            "save" => StoryCommand::OpenSave,
-            "load" => StoryCommand::OpenLoad,
-            "pause" => StoryCommand::TogglePause,
-            "settings" => StoryCommand::OpenSettings,
-            "settings_back" => StoryCommand::CloseSettings,
+            "start" => Self::Start,
+            "continue" => Self::Continue,
+            "advance" => Self::Advance,
+            "choose" => Self::Choose(index?),
+            "slot" => Self::Slot(index?),
+            "auto" => Self::ToggleAuto,
+            "skip" => Self::ToggleSkip,
+            "log" => Self::ToggleLog,
+            "save" => Self::OpenSave,
+            "load" => Self::OpenLoad,
+            "pause" => Self::TogglePause,
+            "settings" => Self::OpenSettings,
+            "settings_back" => Self::CloseSettings,
             _ => return None,
         })
     }
@@ -90,26 +90,26 @@ impl StoryCommand {
     /// The verb naming this command, the inverse of [`from_verb`](Self::from_verb).
     pub const fn verb(&self) -> &'static str {
         match self {
-            StoryCommand::Start => "start",
-            StoryCommand::Continue => "continue",
-            StoryCommand::Advance => "advance",
-            StoryCommand::Choose(_) => "choose",
-            StoryCommand::Slot(_) => "slot",
-            StoryCommand::ToggleAuto => "auto",
-            StoryCommand::ToggleSkip => "skip",
-            StoryCommand::ToggleLog => "log",
-            StoryCommand::OpenSave => "save",
-            StoryCommand::OpenLoad => "load",
-            StoryCommand::TogglePause => "pause",
-            StoryCommand::OpenSettings => "settings",
-            StoryCommand::CloseSettings => "settings_back",
+            Self::Start => "start",
+            Self::Continue => "continue",
+            Self::Advance => "advance",
+            Self::Choose(_) => "choose",
+            Self::Slot(_) => "slot",
+            Self::ToggleAuto => "auto",
+            Self::ToggleSkip => "skip",
+            Self::ToggleLog => "log",
+            Self::OpenSave => "save",
+            Self::OpenLoad => "load",
+            Self::TogglePause => "pause",
+            Self::OpenSettings => "settings",
+            Self::CloseSettings => "settings_back",
         }
     }
 
     /// The option index a `choose` or `slot` command carries.
     pub const fn index(&self) -> Option<usize> {
         match self {
-            StoryCommand::Choose(i) | StoryCommand::Slot(i) => Some(*i),
+            Self::Choose(i) | Self::Slot(i) => Some(*i),
             _ => None,
         }
     }

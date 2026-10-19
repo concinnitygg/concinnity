@@ -214,7 +214,7 @@ impl RenderSnapshot {
 // The snapshot must stay owned data so a later render thread can take it.
 const _: () = {
     const fn require_send<T: Send + 'static>() {}
-    require_send::<RenderSnapshot>()
+    require_send::<RenderSnapshot>();
 };
 
 #[cfg(test)]

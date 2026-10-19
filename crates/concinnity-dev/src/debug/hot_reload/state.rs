@@ -10,7 +10,10 @@ use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::render_types::SkinnedIndex;
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_core::render::volumetric_fog::PushedFogSettings;
-use concinnity_core::render::world_load::source_maps::*;
+use concinnity_core::render::world_load::source_maps::{
+    ColorLutSource, EnvironmentMapSource, MeshSourceMap, ProceduralMeshSourceMap,
+    SkinnedMeshSourceMap, TextureSourceMap,
+};
 use concinnity_runtime::live_edit::hot_reload_sources::HotReloadSources;
 use std::sync::{Arc, Mutex};
 
@@ -189,16 +192,11 @@ pub(crate) struct PendingSkeletonUpdate {
 
 impl std::fmt::Debug for AssetHotReloadState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let env_inflight = self
-            .env_map_inflight
-            .try_lock()
-            .map(|g| g.is_some())
-            .unwrap_or(false);
+        let env_inflight = self.env_map_inflight.try_lock().is_ok_and(|g| g.is_some());
         let batch_inflight = self
             .asset_batch_inflight
             .try_lock()
-            .map(|g| g.is_some())
-            .unwrap_or(false);
+            .is_ok_and(|g| g.is_some());
         f.debug_struct("AssetHotReloadState")
             .field("entries", &self.map.entries.len())
             .field("color_lut", &self.color_lut.is_some())
@@ -213,7 +211,7 @@ impl std::fmt::Debug for AssetHotReloadState {
             .field("env_map_inflight", &env_inflight)
             .field("asset_batch_inflight", &batch_inflight)
             .field("watcher", &self.watcher.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

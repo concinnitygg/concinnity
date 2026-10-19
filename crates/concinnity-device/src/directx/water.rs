@@ -1,4 +1,4 @@
-//! WaterSurface: one producer of the engine's transparent pass on the D3D12
+//! `WaterSurface`: one producer of the engine's transparent pass on the D3D12
 //! backend (`transparent.rs` owns the pass itself, the scene snapshot, the shared
 //! root signatures and the combined back-to-front draw order; `glass.rs` is the
 //! other producer). Each surface is a flat tessellated XZ grid built once at init
@@ -122,7 +122,7 @@ pub(in crate::directx) struct WaterBuild<'a> {
 // pipeline rebuild); a compile failure leaves it absent and the base
 // probe/planar path runs.
 pub(in crate::directx) fn build_water_producer(
-    build: WaterBuild,
+    build: WaterBuild<'_>,
     surfaces: &[WaterBody],
     // Per-surface planar resolve slot (aligned with `surfaces`); `None` surfaces
     // keep the probe/sky reflection. From `assign_planar_slots`.

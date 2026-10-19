@@ -3,6 +3,7 @@
 //! The host builds the payload sources and load threads and makes the device
 //! calls.
 
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
 
@@ -21,7 +22,7 @@ use crate::planet::{LocalFrame, PlanetFrame};
 use crate::render::grass::CanopyRange;
 use crate::render::material_entry::MaterialEntry;
 
-/// The chunk content a world streams: a VoxelWorld or a Planet, never both.
+/// The chunk content a world streams: a `VoxelWorld` or a Planet, never both.
 #[derive(Debug, Clone)]
 pub enum ChunkSource {
     /// No chunk streaming.
@@ -95,7 +96,7 @@ impl<T: StreamedItem> StreamPool<T> {
     }
 }
 
-/// A VoxelWorld's chunk streaming: the pool, the generator its load thread
+/// A `VoxelWorld`'s chunk streaming: the pool, the generator its load thread
 /// runs and the vertex / index headroom its chunk window needs.
 pub struct VoxelStream {
     /// The chunk pool with its draw bookkeeping.
@@ -107,8 +108,8 @@ pub struct VoxelStream {
 }
 
 impl VoxelStream {
-    /// The streaming `voxel_world` asks for. Each palette id is a BlockType
-    /// (index 0 is air); a VoxelWorld takes no byte-budget override, so its
+    /// The streaming `voxel_world` asks for. Each palette id is a `BlockType`
+    /// (index 0 is air); a `VoxelWorld` takes no byte-budget override, so its
     /// budget is a share of `device_memory_bytes`.
     pub fn plan(
         voxel_world: &VoxelWorld,
@@ -154,7 +155,7 @@ impl VoxelStream {
         Self {
             stream: ChunkStream {
                 pool,
-                draws: Default::default(),
+                draws: BTreeMap::default(),
                 chunk_w,
                 chunk_d,
                 // Seeded at the world origin; the first drive rebases onto the

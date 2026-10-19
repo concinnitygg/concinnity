@@ -95,9 +95,9 @@ fn test_gpu_impl(device_address: bool) -> Option<TestGpu> {
     }
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
     // it names belongs to this device.
-    let device = match unsafe { instance.create_device(physical_device, &device_info, None) } {
-        Ok(device) => device,
-        Err(_) => return destroy_instance(instance),
+    let Ok(device) = (unsafe { instance.create_device(physical_device, &device_info, None) })
+    else {
+        return destroy_instance(instance);
     };
     Some(TestGpu {
         device,

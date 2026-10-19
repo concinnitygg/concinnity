@@ -55,9 +55,8 @@ fn plan_text_upload(text_calls: &[TextDrawCall], out: &mut Vec<TextRange>) -> us
     let mut cursor = 0usize;
     for call in text_calls {
         let vertex_offset = align_up(cursor);
-        let index_offset =
-            align_up(vertex_offset + std::mem::size_of_val(call.vertices.as_slice()));
-        cursor = index_offset + std::mem::size_of_val(call.indices.as_slice());
+        let index_offset = align_up(vertex_offset + size_of_val(call.vertices.as_slice()));
+        cursor = index_offset + size_of_val(call.indices.as_slice());
         out.push(TextRange {
             vertex_offset,
             index_offset,
@@ -197,9 +196,9 @@ mod tests {
             assert_eq!(range.index_offset % align, 0);
             // Blocks never overlap the previous one, and stay inside the total.
             assert!(range.vertex_offset >= prev_end);
-            let vertex_end = range.vertex_offset + std::mem::size_of_val(call.vertices.as_slice());
+            let vertex_end = range.vertex_offset + size_of_val(call.vertices.as_slice());
             assert!(range.index_offset >= vertex_end);
-            prev_end = range.index_offset + std::mem::size_of_val(call.indices.as_slice());
+            prev_end = range.index_offset + size_of_val(call.indices.as_slice());
             assert!(prev_end <= total);
         }
     }

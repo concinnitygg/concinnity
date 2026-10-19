@@ -108,7 +108,7 @@ impl AnimationSystem {
         name: &str,
         value: f32,
     ) -> Result<(), String> {
-        let g = self.graph_target_mut(&target, "anim-param")?;
+        let g = self.graph_target_mut(target, "anim-param")?;
         let Some(index) = g.graph.param_index(name) else {
             return Err(format!(
                 "anim-param: graph for target {target:?} declares no parameter '{name}'"
@@ -123,7 +123,7 @@ impl AnimationSystem {
         &mut self,
         target: SkinnedMeshHandle,
     ) -> Result<GraphStateReport, String> {
-        let g = self.graph_target_mut(&target, "anim-state")?;
+        let g = self.graph_target_mut(target, "anim-state")?;
         let state = &g.graph.states[g.cursor.state];
         let fade = g.cursor.fade.as_ref();
         let weights = state.play.weights(&g.params);
@@ -132,7 +132,7 @@ impl AnimationSystem {
             state: state.name.clone(),
             clock_secs: normalized_time(state, g.cursor.clock, &g.params) * effective_duration,
             fading_from: fade.map(|f| g.graph.states[f.from_state].name.clone()),
-            fade_progress: fade.map(|f| f.progress()),
+            fade_progress: fade.map(crate::animation::anim_graph::StateFade::progress),
             // Only meaningful for blendspace states; a single clip is
             // always [1.0], reported as None to keep the JSON quiet.
             blend_weights: (weights.len() > 1).then_some(weights),
@@ -148,10 +148,10 @@ impl AnimationSystem {
 
     fn graph_target_mut(
         &mut self,
-        target: &SkinnedMeshHandle,
+        target: SkinnedMeshHandle,
         cmd: &str,
     ) -> Result<&mut GraphTarget, String> {
-        let Some(state) = self.targets.get_mut(target) else {
+        let Some(state) = self.targets.get_mut(&target) else {
             return Err(format!(
                 "{cmd}: no animation registered for target {target:?}"
             ));
@@ -257,7 +257,7 @@ mod tests {
     }
 
     // Reach into a flat bucket's in-flight ramp.
-    fn transition(sys: &mut AnimationSystem) -> Option<&Transition> {
+    fn transition(sys: &AnimationSystem) -> Option<&Transition> {
         match &sys.targets.get(&TARGET)?.mode {
             TargetMode::Flat(f) => f.transition.as_ref(),
             TargetMode::Graph(_) => None,
@@ -300,7 +300,7 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("weight count 1"), "{err}");
         assert!(err.contains("clip count 2"), "{err}");
-        assert!(transition(&mut sys).is_none(), "no ramp was installed");
+        assert!(transition(&sys).is_none(), "no ramp was installed");
     }
 
     // An accepted crossfade ramps from the bucket's live weights to the
@@ -310,7 +310,7 @@ mod tests {
         let mut sys = flat_system(2);
         sys.apply_crossfade(TARGET, vec![0.0, 1.0], 0.5, 3.0)
             .unwrap();
-        let tr = transition(&mut sys).expect("ramp installed");
+        let tr = transition(&sys).expect("ramp installed");
         assert_eq!(tr.source_weights, vec![1.0, 1.0]);
         assert_eq!(tr.target_weights, vec![0.0, 1.0]);
         assert_eq!(tr.start_secs, 3.0);
@@ -323,7 +323,7 @@ mod tests {
     fn apply_crossfade_clamps_a_negative_duration_to_a_snap() {
         let mut sys = flat_system(1);
         sys.apply_crossfade(TARGET, vec![0.5], -1.0, 0.0).unwrap();
-        assert_eq!(transition(&mut sys).unwrap().duration_secs, 0.0);
+        assert_eq!(transition(&sys).unwrap().duration_secs, 0.0);
     }
 
     // A later crossfade for the same target supersedes the one in flight.
@@ -332,7 +332,7 @@ mod tests {
         let mut sys = flat_system(1);
         sys.apply_crossfade(TARGET, vec![0.0], 1.0, 0.0).unwrap();
         sys.apply_crossfade(TARGET, vec![0.25], 2.0, 4.0).unwrap();
-        let tr = transition(&mut sys).unwrap();
+        let tr = transition(&sys).unwrap();
         assert_eq!(tr.target_weights, vec![0.25]);
         assert_eq!(tr.start_secs, 4.0);
     }
@@ -446,7 +446,7 @@ mod tests {
         let mut sys = flat_system(2);
         sys.name_index = name_index();
         sys.crossfade(NAME, vec![0.0, 1.0], 0.25).unwrap();
-        let tr = transition(&mut sys).expect("the named target's bucket ramped");
+        let tr = transition(&sys).expect("the named target's bucket ramped");
         assert_eq!(tr.target_weights, vec![0.0, 1.0]);
         assert_eq!(tr.duration_secs, 0.25);
     }
@@ -459,7 +459,7 @@ mod tests {
         sys.name_index = name_index();
         sys.clip_secs = 7.5;
         sys.crossfade(NAME, vec![0.0, 1.0], 1.0).unwrap();
-        assert_eq!(transition(&mut sys).unwrap().start_secs, 7.5);
+        assert_eq!(transition(&sys).unwrap().start_secs, 7.5);
     }
 
     // A parameter write and a state query take the same name translation.

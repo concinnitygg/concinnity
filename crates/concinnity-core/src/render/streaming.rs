@@ -248,6 +248,10 @@ impl StreamPlanner {
     /// This method mutates planner state: scheduled items become `Pending` and
     /// evicted items become `Unloaded`, so a later `plan` call in the same
     /// frame (or the next frame) will not re-pick them.
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "the scratch arena is sized for every item"
+    )]
     pub fn plan(&mut self) -> StreamPlan {
         let mut plan = StreamPlan::default();
 
@@ -884,8 +888,8 @@ mod tests {
         let mut seed: u64 = 0x1234_5678_9abc_def0;
         let mut next = || {
             seed = seed
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
             (seed >> 33) as u32
         };
 
@@ -902,8 +906,8 @@ mod tests {
                         state,
                         // Small ranges so scores and last_touch tie often.
                         score: (next() % 6) as f32,
-                        last_touch: (next() % 4) as u64,
-                        bytes: (next() % 20) as u64,
+                        last_touch: u64::from(next() % 4),
+                        bytes: u64::from(next() % 20),
                         blocked: false,
                     }
                 })
@@ -913,7 +917,7 @@ mod tests {
             let byte_budget = if next() % 2 == 0 {
                 None
             } else {
-                Some((next() % 60) as u64)
+                Some(u64::from(next() % 60))
             };
 
             let mut ref_items = items.clone();

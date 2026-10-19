@@ -2,7 +2,7 @@
 
 /// How the finished frame is encoded for the display: standard dynamic range,
 /// extended-range HDR, or PQ (HDR10). The `display` section of
-/// [GraphicsConfig](#graphicsconfig); left unset, the output is standard
+/// [`GraphicsConfig`](#graphicsconfig); left unset, the output is standard
 /// dynamic range.
 ///
 /// ```rust

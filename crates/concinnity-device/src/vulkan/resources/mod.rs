@@ -1,14 +1,14 @@
-//! Runtime GPU resource management for VkContext, split per-category to mirror
+//! Runtime GPU resource management for `VkContext`, split per-category to mirror
 //! the Metal reference shape (`metal/resources/`):
 //!
 //!   textures.rs   Texture-pool slot updates + descriptor rewires (`update_*`,
 //!                 `evict_*`, `write_object_image`, `write_pool_image`)
 //!   geometry.rs   The scene lent to the `SceneHost` defaults, its staging
 //!                 geometry writer, and the shared `write_geometry_region` helper
-//!   streaming.rs  VoxelWorld chunk headroom (`setup_chunk_streaming`)
+//!   streaming.rs  `VoxelWorld` chunk headroom (`setup_chunk_streaming`)
 //!   skinning.rs   Skinned-mesh upload + per-frame joint upload
 //!                 (`upload_skinned`, `upload_joint_matrices`)
-//!   geometry_rebuild.rs  Size-changing static + skinned VB/IB rebuilds
+//!   `geometry_rebuild.rs`  Size-changing static + skinned VB/IB rebuilds
 //!                 driven by asset hot-reload (`rebuild_static_geometry`,
 //!                 `rebuild_skinned_geometry`)
 //!
@@ -178,7 +178,7 @@ pub(in crate::vulkan) fn upload_geometry_buffer_raw(
                 staging.buffer(),
                 buf.buffer(),
                 std::slice::from_ref(&copy),
-            )
+            );
         };
     })?;
     Ok(buf)

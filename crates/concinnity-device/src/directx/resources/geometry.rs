@@ -1,4 +1,4 @@
-//! The scene DxContext lends to the `SceneHost` defaults, and the writer that
+//! The scene `DxContext` lends to the `SceneHost` defaults, and the writer that
 //! stages its streamed geometry for the shared vertex / index buffers: each
 //! write is copied by the next geometry submit (see `geometry_upload`), so none
 //! waits on the GPU. Also the blocking `write_geometry_region` helper for the
@@ -10,7 +10,7 @@ use concinnity_core::render::scene_state::{GeometryBuffer, GeometryWriter, Scene
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::super::allocator::DeviceAllocator;
-use super::super::context::*;
+use super::super::context::{DxContext, debug_assert_main_thread};
 use super::super::geometry_upload::{GeometryTarget, GeometryUploads};
 use super::super::texture::{one_shot_submit, transition_barrier};
 use crate::directx::error::map_hresult;
@@ -85,12 +85,12 @@ impl DxContext {
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
-        unsafe { upload.Map(0, None, Some(&mut ptr)) }
+        unsafe { upload.Map(0, None, Some(&raw mut ptr)) }
             .map_err(|e| map_hresult(e.code(), "mesh region map"))?;
         // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
         // source is a separate allocation, so the ranges cannot overlap.
         unsafe {
-            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len());
+            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.cast::<u8>(), data.len());
             upload.Unmap(0, None);
         }
         // SAFETY: the command list is in the recording state, and every resource, descriptor and

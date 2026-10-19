@@ -82,9 +82,10 @@ impl Build<'_> {
     fn place(&mut self, place: &Place, start: bool) -> usize {
         let held = contents::held_by(self.entries.assets(), &place.id);
         let kind = noun(place.kind);
-        let detail = match held.is_empty() {
-            true => kind.to_string(),
-            false => format!("{kind}, {held}"),
+        let detail = if held.is_empty() {
+            kind.to_string()
+        } else {
+            format!("{kind}, {held}")
         };
         let handle = self.entries.handle(place);
         let at = self.push(card(&place.id, detail, CardKind::Asset, handle), start);

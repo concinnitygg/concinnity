@@ -2,7 +2,7 @@
 //! the per-frame uniform rings and clustered-light binning.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{self, AreaLightData, GpuLight, LightUniforms};
+use concinnity_core::gfx::render_types::{AreaLightData, GpuLight, LightUniforms};
 use concinnity_core::render::backend_init::SceneData;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::ltc;
@@ -12,7 +12,7 @@ use crate::vulkan::context::{VkAreaLight, VkGeometry, VkUniforms};
 use crate::vulkan::draw::{upload_light_uniforms, upload_static_records};
 use crate::vulkan::light_cull::VkLightCull;
 use crate::vulkan::resources::upload_geometry_buffer;
-use crate::vulkan::texture::*;
+use crate::vulkan::texture::upload_float_lut;
 
 // Rectangular area lights: the edge vectors that do not fit in
 // `GpuLight`, indexed by its `data_index`, plus the two LTC tables the
@@ -26,11 +26,11 @@ pub(super) fn build_area_lights(
 ) -> RenderResult<VkAreaLight> {
     let hw = gpu.hw;
     let area_light_data = if area_lights.is_empty() {
-        vec![render_types::AreaLightData::ZERO]
+        vec![AreaLightData::ZERO]
     } else {
         area_lights.to_vec()
     };
-    let area_light_size = std::mem::size_of_val(area_light_data.as_slice()) as u64;
+    let area_light_size = size_of_val(area_light_data.as_slice()) as u64;
     let buffer = hw.alloc.create_buffer(
         area_light_size,
         vk::BufferUsageFlags::STORAGE_BUFFER,
@@ -96,17 +96,17 @@ pub(super) fn build_scene_resources(
     // Empty geometry still allocates a 4-byte buffer (see
     // `upload_geometry_buffer_raw`); track the real allocation size so
     // `setup_chunk_streaming` copies the right prefix when it grows them.
-    let vertex_buffer_bytes = (std::mem::size_of_val(vertices) as u64).max(4);
-    let index_buffer_bytes = (std::mem::size_of_val(indices) as u64).max(4);
+    let vertex_buffer_bytes = (size_of_val(vertices) as u64).max(4);
+    let index_buffer_bytes = (size_of_val(indices) as u64).max(4);
 
-    let view_ubo_size = std::mem::size_of::<crate::vulkan::draw::ViewUniforms>() as u64;
-    let light_ubo_size = std::mem::size_of::<LightUniforms>() as u64;
+    let view_ubo_size = size_of::<crate::vulkan::draw::ViewUniforms>() as u64;
+    let light_ubo_size = size_of::<LightUniforms>() as u64;
     // Per-scene local-light SSBO (global set 0 binding 9): created once from
     // `local_lights` and never updated per-frame. A zero-length buffer is
     // invalid, so an empty scene gets a 1-element placeholder;
     // `num_local_lights == 0` keeps the shader from reading it. Mirrors the
     // Metal `local_light_buffer`.
-    let local_light_size = (local_lights.len().max(1) * std::mem::size_of::<GpuLight>()) as u64;
+    let local_light_size = (local_lights.len().max(1) * size_of::<GpuLight>()) as u64;
 
     let mut view_ubo_buffers = Vec::with_capacity(frames);
     for _ in 0..frames {
@@ -120,8 +120,7 @@ pub(super) fn build_scene_resources(
     // Per-frame `ProbeSet` UBO ring (global set 0 binding 7): the
     // reflection-probe count + per-probe parallax boxes. Persistently mapped;
     // `record_frame` writes `self.probe.set` here each frame.
-    let probe_set_ubo_size =
-        std::mem::size_of::<concinnity_core::render::uniforms::ProbeSet>() as u64;
+    let probe_set_ubo_size = size_of::<concinnity_core::render::uniforms::ProbeSet>() as u64;
     let mut probe_set_ubo_buffers = Vec::with_capacity(frames);
     for _ in 0..frames {
         probe_set_ubo_buffers.push(alloc.create_buffer(
@@ -149,7 +148,7 @@ pub(super) fn build_scene_resources(
     let mut canopy_buffers = Vec::with_capacity(frames);
     for _ in 0..frames {
         let ubo = alloc.create_buffer(
-            std::mem::size_of_val(&canopy) as u64,
+            size_of_val(&canopy) as u64,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;

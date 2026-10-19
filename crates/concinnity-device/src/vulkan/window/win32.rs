@@ -1,10 +1,10 @@
 //! The Vulkan backend's Windows window: a thin adapter over the shared native
-//! Win32 layer (crate::win32) the DirectX backend also uses, so the two
+//! Win32 layer (`crate::win32`) the DirectX backend also uses, so the two
 //! HWND-rendering backends share one window/input/display-mode implementation
-//! with identical behavior (wnd_proc, raw-input camera deltas, cursor
+//! with identical behavior (`wnd_proc`, raw-input camera deltas, cursor
 //! capture/confinement, window modes, Resolution-row mode switching). GLFW
 //! (window/glfw.rs) remains the windowing layer on Linux only; the surface is
-//! created directly through VK_KHR_win32_surface.
+//! created directly through `VK_KHR_win32_surface`.
 
 use ash::vk;
 use concinnity_core::components::WindowMode;
@@ -35,7 +35,7 @@ impl Win32Window {
         title: &str,
         width: u32,
         height: u32,
-        mode: &WindowMode,
+        mode: WindowMode,
         _resizable: bool,
         title_bar: bool,
     ) -> RenderResult<Self> {
@@ -46,7 +46,7 @@ impl Win32Window {
             fullscreen_display: FullscreenDisplayMode::new(),
         };
         if !matches!(mode, WindowMode::Windowed) {
-            this.set_window_mode(*mode);
+            this.set_window_mode(mode);
         }
         Ok(this)
     }
@@ -116,7 +116,7 @@ impl Win32Window {
     }
 
     // Replace the runtime movement key map; takes effect on the next message.
-    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
+    pub(crate) fn set_keymap(&mut self, keymap: KeyMap) {
         self.win_state.key.set_keymap(keymap);
     }
 
@@ -171,6 +171,10 @@ impl Win32Window {
 
     // Create the presentation surface for this window via
     // VK_KHR_win32_surface.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "same receiver as the GLFW and AppKit windows the shared Vulkan code calls"
+    )]
     pub(crate) fn create_surface(
         &mut self,
         entry: &ash::Entry,

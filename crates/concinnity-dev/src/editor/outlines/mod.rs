@@ -42,12 +42,12 @@ pub(crate) enum Category {
 
 impl Category {
     // Every category with its Display-menu label, in UI order.
-    pub(crate) const LABELED: [(Category, &'static str); 5] = [
-        (Category::Volumes, "Volumes"),
-        (Category::Lights, "Lights"),
-        (Category::Cameras, "Cameras"),
-        (Category::Probes, "Probes"),
-        (Category::Colliders, "Colliders"),
+    pub(crate) const LABELED: [(Self, &'static str); 5] = [
+        (Self::Volumes, "Volumes"),
+        (Self::Lights, "Lights"),
+        (Self::Cameras, "Cameras"),
+        (Self::Probes, "Probes"),
+        (Self::Colliders, "Colliders"),
     ];
 
     const fn bit(self) -> u32 {
@@ -66,8 +66,8 @@ impl CategorySet {
     }
 
     #[must_use]
-    pub(crate) const fn toggled(self, c: Category) -> CategorySet {
-        CategorySet(self.0 ^ c.bit())
+    pub(crate) const fn toggled(self, c: Category) -> Self {
+        Self(self.0 ^ c.bit())
     }
 
     pub(crate) const fn any(self) -> bool {

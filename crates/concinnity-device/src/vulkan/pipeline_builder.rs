@@ -168,7 +168,7 @@ mod tests {
     fn a_closed_gate_refuses_every_later_build() {
         let gate = PipelineGate::default();
         assert!(gate.enter().is_ok());
-        gate.clone().close();
+        gate.close();
         assert!(gate.enter().is_err());
     }
 

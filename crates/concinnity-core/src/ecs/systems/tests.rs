@@ -190,7 +190,11 @@ fn system_manifest_matches_started_systems() {
 
     let manifest = world.system_manifest(ALL);
     world.start(ALL).unwrap();
-    let built: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+    let built: Vec<&str> = world
+        .systems()
+        .iter()
+        .map(super::super::built_system::BuiltSystem::name)
+        .collect();
     assert_eq!(manifest, built);
 }
 
@@ -202,7 +206,7 @@ fn a_registration_lands_in_the_phase_it_named() {
     struct Inert;
 
     impl System for Inert {
-        fn step(&mut self, _ctx: &mut PipelineContext) -> StepResult {
+        fn step(&mut self, _ctx: &mut PipelineContext<'_>) -> StepResult {
             StepResult::Continue
         }
     }

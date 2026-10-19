@@ -31,7 +31,7 @@ impl SsgiResources {
 
     // Build every pipeline and target for a render resolution of `extent`.
     pub(in crate::vulkan) fn new(
-        device: &VkPostDevice,
+        device: &VkPostDevice<'_>,
         settings: SsgiSettings,
         extent: vk::Extent2D,
     ) -> RenderResult<Self> {
@@ -45,7 +45,7 @@ impl SsgiResources {
     // the device and dropped the framebuffers naming the old views.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        device: &VkPostDevice,
+        device: &VkPostDevice<'_>,
         extent: vk::Extent2D,
     ) -> RenderResult<()> {
         self.pass.resize(device, post_extent(extent))

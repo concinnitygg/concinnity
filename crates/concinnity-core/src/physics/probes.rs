@@ -25,7 +25,7 @@ const CAMERA_MIN_DISTANCE: f32 = 0.3;
 // register as ground or as a camera obstruction.
 pub(crate) fn step_probes(
     world: &Simulation,
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     rigs: &[RigPhysics],
     mask: LayerMask,
 ) {

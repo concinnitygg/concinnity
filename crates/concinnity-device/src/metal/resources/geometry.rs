@@ -1,4 +1,4 @@
-//! The scene MtlContext lends to the `SceneHost` defaults, and the writer that
+//! The scene `MtlContext` lends to the `SceneHost` defaults, and the writer that
 //! lands its streamed geometry in the shared vertex + index buffers.
 //!
 //! Both buffers are shared storage, so a write is a CPU copy into a region no

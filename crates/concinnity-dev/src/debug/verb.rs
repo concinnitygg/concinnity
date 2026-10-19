@@ -26,7 +26,7 @@ pub(crate) enum Access {
 
 impl Access {
     pub(crate) fn is_read_only(self) -> bool {
-        matches!(self, Access::ReadOnly)
+        matches!(self, Self::ReadOnly)
     }
 }
 
@@ -60,44 +60,44 @@ impl Kind {
             })
         };
         match self {
-            Kind::Text => json!({ "type": "string" }),
-            Kind::Name => json!({ "type": "string", "pattern": "\\S" }),
-            Kind::TextOrNull => json!({ "type": ["string", "null"] }),
-            Kind::Number => json!({ "type": "number" }),
-            Kind::NumberOrNull => json!({ "type": ["number", "null"] }),
-            Kind::Count => json!({ "type": "integer", "minimum": 0 }),
-            Kind::Vec3 => numbers(3),
-            Kind::Vec4 => numbers(4),
-            Kind::NumberList => json!({ "type": "array", "items": { "type": "number" } }),
-            Kind::Choice(values) => json!({ "type": "string", "enum": values }),
+            Self::Text => json!({ "type": "string" }),
+            Self::Name => json!({ "type": "string", "pattern": "\\S" }),
+            Self::TextOrNull => json!({ "type": ["string", "null"] }),
+            Self::Number => json!({ "type": "number" }),
+            Self::NumberOrNull => json!({ "type": ["number", "null"] }),
+            Self::Count => json!({ "type": "integer", "minimum": 0 }),
+            Self::Vec3 => numbers(3),
+            Self::Vec4 => numbers(4),
+            Self::NumberList => json!({ "type": "array", "items": { "type": "number" } }),
+            Self::Choice(values) => json!({ "type": "string", "enum": values }),
         }
     }
 
     fn accepts(self, value: &Value) -> bool {
         match self {
-            Kind::Text | Kind::Name => value.is_string(),
-            Kind::TextOrNull => value.is_string() || value.is_null(),
-            Kind::Number => value.is_number(),
-            Kind::NumberOrNull => value.is_number() || value.is_null(),
-            Kind::Count => value.is_u64(),
-            Kind::Vec3 => is_numbers(value, Some(3)),
-            Kind::Vec4 => is_numbers(value, Some(4)),
-            Kind::NumberList => is_numbers(value, None),
-            Kind::Choice(values) => value.as_str().is_some_and(|v| values.contains(&v)),
+            Self::Text | Self::Name => value.is_string(),
+            Self::TextOrNull => value.is_string() || value.is_null(),
+            Self::Number => value.is_number(),
+            Self::NumberOrNull => value.is_number() || value.is_null(),
+            Self::Count => value.is_u64(),
+            Self::Vec3 => is_numbers(value, Some(3)),
+            Self::Vec4 => is_numbers(value, Some(4)),
+            Self::NumberList => is_numbers(value, None),
+            Self::Choice(values) => value.as_str().is_some_and(|v| values.contains(&v)),
         }
     }
 
     fn expected(self) -> String {
         match self {
-            Kind::Text | Kind::Name => "a string".into(),
-            Kind::TextOrNull => "a string or null".into(),
-            Kind::Number => "a number".into(),
-            Kind::NumberOrNull => "a number or null".into(),
-            Kind::Count => "a non-negative integer".into(),
-            Kind::Vec3 => "an array of 3 numbers".into(),
-            Kind::Vec4 => "an array of 4 numbers".into(),
-            Kind::NumberList => "an array of numbers".into(),
-            Kind::Choice(values) => format!("one of {}", values.join(" | ")),
+            Self::Text | Self::Name => "a string".into(),
+            Self::TextOrNull => "a string or null".into(),
+            Self::Number => "a number".into(),
+            Self::NumberOrNull => "a number or null".into(),
+            Self::Count => "a non-negative integer".into(),
+            Self::Vec3 => "an array of 3 numbers".into(),
+            Self::Vec4 => "an array of 4 numbers".into(),
+            Self::NumberList => "an array of numbers".into(),
+            Self::Choice(values) => format!("one of {}", values.join(" | ")),
         }
     }
 }
@@ -153,7 +153,7 @@ pub(crate) struct Verb {
     pub(crate) description: &'static str,
     pub(crate) access: Access,
     pub(super) params: &'static [Param],
-    pub(super) run: fn(&Call, Args) -> Reply,
+    pub(super) run: fn(&Call<'_>, Args) -> Reply,
 }
 
 impl Verb {
@@ -264,7 +264,7 @@ impl Args {
 mod tests {
     use super::*;
 
-    fn nothing(_: &Call, _: Args) -> Reply {
+    fn nothing(_: &Call<'_>, _: Args) -> Reply {
         Ok(json!({}))
     }
 

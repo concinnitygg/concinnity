@@ -62,9 +62,10 @@ pub fn draw_bucket(obj: &DrawObject, cam_pos: [f32; 3], route: GrassRoute) -> u3
         return obj.shader_bucket;
     }
     let twins = route.twins;
-    let twin = match reaches_far_band(obj, cam_pos, route.far_start) {
-        true => twins.canopy,
-        false => twins.ground.or(twins.canopy),
+    let twin = if reaches_far_band(obj, cam_pos, route.far_start) {
+        twins.canopy
+    } else {
+        twins.ground.or(twins.canopy)
     };
     twin.unwrap_or(obj.shader_bucket)
 }

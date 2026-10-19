@@ -61,25 +61,24 @@ pub enum GraphError {
 impl core::fmt::Display for GraphError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            GraphError::MissingPresenter => {
+            Self::MissingPresenter => {
                 write!(
                     f,
                     "no pass declared presents(); the graph has no terminal node"
                 )
             }
-            GraphError::MultiplePresenters(n) => {
-                write!(f, "{} passes declared presents(); only one is allowed", n)
+            Self::MultiplePresenters(n) => {
+                write!(f, "{n} passes declared presents(); only one is allowed")
             }
-            GraphError::MissingProducer {
+            Self::MissingProducer {
                 pass,
                 resource_label,
                 version,
             } => write!(
                 f,
-                "pass {:?} reads {} v{} but no pass writes that version",
-                pass, resource_label, version
+                "pass {pass:?} reads {resource_label} v{version} but no pass writes that version"
             ),
-            GraphError::Cycle => write!(f, "cycle in render-graph read/write edges"),
+            Self::Cycle => write!(f, "cycle in render-graph read/write edges"),
         }
     }
 }
@@ -302,7 +301,7 @@ impl GraphBuilder {
     // declare exactly one `presents()` pass: the terminal swapchain
     // write that ends the frame.
     pub(crate) fn compile(self) -> Result<CompiledGraph, GraphError> {
-        let GraphBuilder {
+        let Self {
             resources,
             mut passes,
         } = self;
@@ -310,13 +309,8 @@ impl GraphBuilder {
         let n_resources = resources.len();
 
         // Step 1: presenter validation
-        let presenters: Vec<usize> = passes
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| p.presents)
-            .map(|(i, _)| i)
-            .collect();
-        match presenters.len() {
+
+        match passes.iter().filter(|p| p.presents).count() {
             0 => return Err(GraphError::MissingPresenter),
             1 => {}
             n => return Err(GraphError::MultiplePresenters(n)),
@@ -339,7 +333,7 @@ impl GraphBuilder {
         // are therefore always legal even though no graph pass writes
         // them. Reads of (transient, v0) and reads at any version > 0
         // still need a real producer in the same graph.
-        for pass in passes.iter() {
+        for pass in &passes {
             for r in &pass.reads {
                 let r = r.resource_version();
                 if writer_of.contains_key(&(r.resource, r.version)) {
@@ -455,7 +449,7 @@ impl GraphBuilder {
                 dag[position[orig_from]].push(position[orig_to]);
             }
         }
-        for row in dag.iter_mut() {
+        for row in &mut dag {
             row.sort_unstable();
             row.dedup();
         }
@@ -637,7 +631,7 @@ fn derive_barriers(passes: &mut [CompiledPass], n_resources: usize) {
                         // First read of a new run: union the contiguous run's
                         // stages so the one producer barrier covers them all.
                         let mut run = ReadStages::empty();
-                        for &(_, e) in entries[k..].iter() {
+                        for &(_, e) in &entries[k..] {
                             match e {
                                 Eff::Read(s) => run = run.union(s),
                                 Eff::Write => break,
@@ -818,7 +812,7 @@ mod tests {
 
         match b.compile() {
             Err(GraphError::Cycle) => {}
-            other => panic!("expected Cycle, got {:?}", other),
+            other => panic!("expected Cycle, got {other:?}"),
         }
     }
 
@@ -862,7 +856,7 @@ mod tests {
 
         match b.compile() {
             Err(GraphError::Cycle) => {}
-            other => panic!("expected Cycle, got {:?}", other),
+            other => panic!("expected Cycle, got {other:?}"),
         }
     }
 
@@ -954,7 +948,7 @@ mod tests {
                 resource_label: "scratch",
                 version: 0,
             }) => {}
-            other => panic!("expected MissingProducer for transient v0, got {:?}", other),
+            other => panic!("expected MissingProducer for transient v0, got {other:?}"),
         }
     }
 
@@ -980,7 +974,7 @@ mod tests {
                 resource_label: "t",
                 version: 1,
             }) => {}
-            other => panic!("expected MissingProducer, got {:?}", other),
+            other => panic!("expected MissingProducer, got {other:?}"),
         }
     }
 
@@ -992,7 +986,7 @@ mod tests {
         // No presents()!
         match b.compile() {
             Err(GraphError::MissingPresenter) => {}
-            other => panic!("expected MissingPresenter, got {:?}", other),
+            other => panic!("expected MissingPresenter, got {other:?}"),
         }
     }
 
@@ -1008,7 +1002,7 @@ mod tests {
         b.add_pass(PassId::Composite, PassKind::Render).presents();
         match b.compile() {
             Err(GraphError::MultiplePresenters(2)) => {}
-            other => panic!("expected MultiplePresenters(2), got {:?}", other),
+            other => panic!("expected MultiplePresenters(2), got {other:?}"),
         }
     }
 

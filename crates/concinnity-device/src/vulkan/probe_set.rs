@@ -41,14 +41,14 @@ impl ProbeCubeArray {
         upload: &GpuUploadContext<'_>,
         plan: &PrefilterPlan,
         capacity: usize,
-    ) -> RenderResult<ProbeCubeArray> {
+    ) -> RenderResult<Self> {
         Self::create(upload, plan.face_size(), plan.mips(), capacity)
     }
 
     // A one-texel array holding one cube, bound by sets whose probe count is 0
     // (captures, planar mirrors) and by the global sets until a world places a
     // probe. No shader samples it.
-    pub(super) fn stand_in(upload: &GpuUploadContext<'_>) -> RenderResult<ProbeCubeArray> {
+    pub(super) fn stand_in(upload: &GpuUploadContext<'_>) -> RenderResult<Self> {
         let mut array = Self::create(upload, 1, 1, 1)?;
         array.capacity = 0;
         Ok(array)
@@ -59,7 +59,7 @@ impl ProbeCubeArray {
         face_size: u32,
         mips: u32,
         cubes: usize,
-    ) -> RenderResult<ProbeCubeArray> {
+    ) -> RenderResult<Self> {
         let layers = 6 * cubes as u32;
         let image = create_image(
             upload.alloc,
@@ -106,7 +106,7 @@ impl ProbeCubeArray {
                 );
             }
         })?;
-        Ok(ProbeCubeArray {
+        Ok(Self {
             image,
             view,
             mip_views,
@@ -115,8 +115,8 @@ impl ProbeCubeArray {
     }
 
     // A placeholder naming no image, left behind when the context tears down.
-    fn null() -> ProbeCubeArray {
-        ProbeCubeArray {
+    fn null() -> Self {
+        Self {
             image: PooledImage::null(),
             view: vk::ImageView::null(),
             mip_views: Vec::new(),
@@ -236,7 +236,7 @@ pub(super) struct ProbeRecords {
 }
 
 impl ProbeRecords {
-    pub(super) fn new(alloc: &DeviceAllocator, capacity: usize) -> RenderResult<ProbeRecords> {
+    pub(super) fn new(alloc: &DeviceAllocator, capacity: usize) -> RenderResult<Self> {
         let capacity = capacity.max(1);
         let buffer = alloc.create_buffer(
             (capacity * size_of::<ProbeUniforms>()) as u64,
@@ -247,7 +247,7 @@ impl ProbeRecords {
             0,
             &vec![<ProbeUniforms as bytemuck::Zeroable>::zeroed(); capacity],
         );
-        Ok(ProbeRecords { buffer, capacity })
+        Ok(Self { buffer, capacity })
     }
 
     pub(super) fn buffer(&self) -> vk::Buffer {
@@ -277,7 +277,7 @@ pub(super) struct ProbeSetGpu {
 }
 
 impl ProbeSetGpu {
-    pub(super) fn new(upload: &GpuUploadContext<'_>, frames: usize) -> RenderResult<ProbeSetGpu> {
+    pub(super) fn new(upload: &GpuUploadContext<'_>, frames: usize) -> RenderResult<Self> {
         let capacity = concinnity_core::render::uniforms::DEFAULT_PROBE_RECORD_CAPACITY;
         let stand_in_set = upload.alloc.create_buffer(
             size_of::<ProbeSet>() as u64,
@@ -285,7 +285,7 @@ impl ProbeSetGpu {
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
         stand_in_set.write_val(0, &ProbeSet::EMPTY);
-        Ok(ProbeSetGpu {
+        Ok(Self {
             cubes: None,
             stand_in: ProbeCubeArray::stand_in(upload)?,
             records: (0..frames)

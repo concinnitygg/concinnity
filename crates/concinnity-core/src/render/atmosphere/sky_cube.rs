@@ -65,7 +65,7 @@ impl SkyCubeKey {
     }
 
     // Whether the sky has moved far enough from `last` to redraw the cube.
-    fn moved_from(&self, last: &SkyCubeKey) -> bool {
+    fn moved_from(&self, last: &Self) -> bool {
         let turn = crate::math::cos(SKY_CUBE_TURN_DEG.to_radians());
         let tolerance = SKY_CUBE_HEIGHT_KM + SKY_CUBE_HEIGHT_FRACTION * last.height.abs();
         dot(self.sun, last.sun) < turn

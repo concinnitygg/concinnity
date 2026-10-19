@@ -67,7 +67,7 @@ impl fullscreen::CompositeEncoder for DxContext {
         // slice these commands name is live for the call.
         unsafe {
             cmd.ResourceBarrier(&[to_rt]);
-            cmd.OMSetRenderTargets(1, Some(&args.back_buffer_rtv), false, None);
+            cmd.OMSetRenderTargets(1, Some(&raw const args.back_buffer_rtv), false, None);
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
                 TopLeftY: 0.0,
@@ -105,10 +105,10 @@ impl fullscreen::CompositeEncoder for DxContext {
             cmd.set_graphics_srv_table(0, args.scene_srv);
             // Root param [1]: the bloom chain's top octave (t1). The shader
             // skips the sample while bloom is off, but the table must be valid.
-            let bloom = self
-                .bloom
-                .as_ref()
-                .map_or(self.ssao.white_srv_gpu, |b| b.top_srv_gpu());
+            let bloom = self.bloom.as_ref().map_or(
+                self.ssao.white_srv_gpu,
+                super::super::post::bloom::BloomResources::top_srv_gpu,
+            );
             cmd.set_graphics_srv_table(1, bloom);
             // Root param [2]: CompositeParams (the post-process tunables plus
             // the scene-transition fade, matching the root-sig declaration).
@@ -233,7 +233,7 @@ impl fullscreen::CompositeEncoder for DxContext {
         let vbv = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: vert_va,
             SizeInBytes: vert_bytes.len() as u32,
-            StrideInBytes: std::mem::size_of::<TextVertex>() as u32,
+            StrideInBytes: size_of::<TextVertex>() as u32,
         };
         let ibv = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: idx_va,
@@ -257,7 +257,7 @@ impl fullscreen::CompositeEncoder for DxContext {
                 cmd.set_graphics_srv_table(1, self.text.atlas_srv_gpus[atlas_idx]);
             }
             cmd.IASetVertexBuffers(0, Some(&[vbv]));
-            cmd.IASetIndexBuffer(Some(&ibv));
+            cmd.IASetIndexBuffer(Some(&raw const ibv));
             cmd.DrawIndexedInstanced(call.indices.len() as u32, 1, 0, 0, 0);
         }
         self.inc_draw_calls(1);

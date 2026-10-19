@@ -1,11 +1,11 @@
-use super::*;
+use super::{Overlay, PipelineContext, ScreenCommand, StageIds, Story, StorySystem};
 
 impl StorySystem {
     // Swap in a freshly compiled graph (the editor re-expands the story when
     // its Markdown source is saved), keeping the current position and raised
     // flags so the edit lands in place in the running game. Position is
     // matched by node slug; a deleted node restarts the story.
-    pub(super) fn reload(&mut self, new: Story, ctx: &mut PipelineContext) {
+    pub(super) fn reload(&mut self, new: Story, ctx: &mut PipelineContext<'_>) {
         // A multi-story world reloads every story; only ours applies.
         if new.scaffold.screen != self.story.scaffold.screen {
             return;
@@ -53,7 +53,7 @@ impl StorySystem {
         self.persist_position();
     }
 
-    pub(super) fn show_ending(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn show_ending(&mut self, ctx: &mut PipelineContext<'_>) {
         self.clear_save();
         self.auto = false;
         self.skip = false;

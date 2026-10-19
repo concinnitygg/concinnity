@@ -314,7 +314,7 @@ pub(crate) fn hovered_marker<'a>(
 pub(crate) fn place(
     world: &mut World,
     ids: TextAreaIds,
-    view: Option<&TextAreaView>,
+    view: Option<&TextAreaView<'_>>,
     g: &Geometry,
 ) {
     let Some(view) = view else {
@@ -361,7 +361,7 @@ pub(crate) fn place(
 fn place_row(
     world: &mut World,
     ids: TextAreaIds,
-    view: &TextAreaView,
+    view: &TextAreaView<'_>,
     g: &Geometry,
     row: usize,
     line: usize,
@@ -457,7 +457,7 @@ fn selected_cells(area: &TextArea, line: usize) -> Option<(usize, usize)> {
 fn place_caret(
     world: &mut World,
     ids: TextAreaIds,
-    view: &TextAreaView,
+    view: &TextAreaView<'_>,
     g: &Geometry,
     caret_row: Option<usize>,
 ) {

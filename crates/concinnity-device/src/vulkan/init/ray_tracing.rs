@@ -112,7 +112,7 @@ pub(super) fn build_rt_reflections(
             .expect("RT forces the unified G-buffer pre-pass to exist");
         let nd_views = gb.normal_depth_views();
         let rough_views = gb.roughness_views();
-        match crate::vulkan::post::rt_reflections::RtReflectionsResources::new(
+        match RtReflectionsResources::new(
             crate::vulkan::post::rt_reflections::RtBuild {
                 alloc,
                 device,
@@ -131,7 +131,10 @@ pub(super) fn build_rt_reflections(
                 roughness_views: &rough_views,
             },
             crate::vulkan::post::rt_reflections::RtLayoutConfig {
-                bindless_set_layout: cull.bindless_set_layout.as_ref().map(|l| l.handle()),
+                bindless_set_layout: cull
+                    .bindless_set_layout
+                    .as_ref()
+                    .map(super::super::owned::OwnedSetLayout::handle),
                 global_set_layout: descriptors.global_set_layout.handle(),
                 pool_size: cull.bindless_pool_size,
                 hot_reload,

@@ -111,13 +111,13 @@ fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<
     let handle_h = (s.height * 0.7).max(16.0);
     let handle_y = s.y + (s.height - handle_h) / 2.0;
 
-    let value_name = format!("{}_value", name);
-    let handle_name = format!("{}_handle", name);
+    let value_name = format!("{name}_value");
+    let handle_name = format!("{name}_handle");
 
     vec![
         // Name (left).
         label_value(
-            &format!("{}_label", name),
+            &format!("{name}_label"),
             &s.label,
             &s.font,
             s.x,
@@ -127,7 +127,7 @@ fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<
         ),
         // Track bar (static background).
         sprite(
-            &format!("{}_track", name),
+            &format!("{name}_track"),
             track_x,
             track_y,
             track_w,
@@ -159,7 +159,7 @@ fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<
         // points at the handle sprite (the runtime moves it).
         spec_to_value(
             &asset::hit_region(
-                format!("{}_drag", name),
+                format!("{name}_drag"),
                 [track_x, s.y, track_w, s.height],
                 NamedAction::Setting {
                     key: setting,

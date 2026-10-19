@@ -563,11 +563,11 @@ mod tests {
         for e in [[90.0, 35.0, 0.0], [-90.0, -110.0, 0.0]] {
             let r = rotation_mat3(e);
             let e2 = euler_yxz_from_quat(quat_from_mat3(r));
-            assert!(e2.iter().all(|v| v.is_finite()), "non-finite for {:?}", e);
+            assert!(e2.iter().all(|v| v.is_finite()), "non-finite for {e:?}");
             let r2 = rotation_mat3(e2);
             for c in 0..3 {
                 for row in 0..3 {
-                    assert!(approx(r[c][row], r2[c][row]), "e={:?} [{}][{}]", e, c, row);
+                    assert!(approx(r[c][row], r2[c][row]), "e={e:?} [{c}][{row}]");
                 }
             }
         }

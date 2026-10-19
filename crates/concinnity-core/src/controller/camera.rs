@@ -98,7 +98,7 @@ impl System for Camera3DSystem {
             .writes_resources(crate::resource_mask![InteractEvent])
     }
 
-    fn init(&mut self, ctx: &mut PipelineContext) {
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
         super::look_controls::apply_persisted(
             ctx,
             super::look_controls::Look {
@@ -124,7 +124,7 @@ impl System for Camera3DSystem {
         }
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         // Live settings-menu changes sent this tick by the renderer, which runs
         // first. FOV is written in the camera loop below, which holds the
         // mutable Camera3D borrow.
@@ -140,11 +140,8 @@ impl System for Camera3DSystem {
         // Read (not drain) the input snapshot deposited by the renderer this
         // frame, so UiInputSystem can read the same snapshot (e.g. for a pause
         // menu over this camera). The renderer clears it before the next push.
-        let input = match ctx.query::<FrameInput>().next().cloned() {
-            Some(i) => i,
-            // No input means the renderer hasn't run yet or there is no
-            // graphics backend, so there is nothing to do this tick.
-            None => return StepResult::Continue,
+        let Some(input) = ctx.query::<FrameInput>().next().cloned() else {
+            return StepResult::Continue;
         };
 
         // The velocity is a direction in the simulated frame, so it turns with
@@ -280,8 +277,7 @@ impl System for Camera3DSystem {
             let (cam_pos, cam_yaw) = ctx
                 .query::<Camera3D>()
                 .next()
-                .map(|c| (c.position, c.yaw))
-                .unwrap_or(([0.0; 3], 0.0));
+                .map_or(([0.0; 3], 0.0), |c| (c.position, c.yaw));
             let fwd = math::flat_forward(cam_yaw);
 
             // nearest interactable entity within reach the player faces
@@ -367,7 +363,7 @@ mod tests {
             mouse_sensitivity: 0.001,
             ..CameraController::default()
         };
-        world.add_component(camera(Some(ctrl.clone())));
+        world.add_component(camera(Some(ctrl)));
         start(&mut world);
 
         // A mouse delta in the same frame must rotate by the NEW sensitivity
@@ -398,7 +394,7 @@ mod tests {
             free_fly: true,
             ..CameraController::default()
         };
-        world.add_component(camera(Some(ctrl.clone())));
+        world.add_component(camera(Some(ctrl)));
         start(&mut world);
         let fov = |world: &World| world.query::<Camera3D>().next().map(|c| c.fov_y_degrees);
         assert_eq!(fov(&world), Some(75.0));
@@ -439,7 +435,7 @@ mod tests {
             bounds_max: [10.0, 10.0, 10.0],
             ..CameraController::default()
         };
-        let mut cam = camera(Some(ctrl.clone()));
+        let mut cam = camera(Some(ctrl));
         // Well outside the +X wall so the containment clamp is observable.
         cam.position = [100.0, 2.0, 0.0];
         world.add_component(cam);

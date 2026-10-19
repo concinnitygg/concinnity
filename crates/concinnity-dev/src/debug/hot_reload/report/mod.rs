@@ -24,24 +24,24 @@ impl SubjectKind {
     // The asset type, as a message names one of it.
     pub(crate) fn label(self) -> &'static str {
         match self {
-            SubjectKind::Shader => "Shader",
-            SubjectKind::SdfVolume => "SdfVolume",
+            Self::Shader => "Shader",
+            Self::SdfVolume => "SdfVolume",
         }
     }
 
     // The asset type, as a message names several.
     fn plural(self) -> &'static str {
         match self {
-            SubjectKind::Shader => "Shaders",
-            SubjectKind::SdfVolume => "SdfVolumes",
+            Self::Shader => "Shaders",
+            Self::SdfVolume => "SdfVolumes",
         }
     }
 
     // What a swap rebuilt.
     fn rebuilt(self) -> &'static str {
         match self {
-            SubjectKind::Shader => "pipeline",
-            SubjectKind::SdfVolume => "pipelines",
+            Self::Shader => "pipeline",
+            Self::SdfVolume => "pipelines",
         }
     }
 
@@ -49,8 +49,8 @@ impl SubjectKind {
     // lands instead.
     fn not_resident(self) -> &'static str {
         match self {
-            SubjectKind::Shader => "its scene is not loaded, so the edit installs when it loads",
-            SubjectKind::SdfVolume => {
+            Self::Shader => "its scene is not loaded, so the edit installs when it loads",
+            Self::SdfVolume => {
                 "it has no live pipeline, so the edit applies when the world is next built"
             }
         }
@@ -59,8 +59,8 @@ impl SubjectKind {
     // The same, short enough for a toast.
     fn applies_when(self) -> &'static str {
         match self {
-            SubjectKind::Shader => "applies when its scene loads",
-            SubjectKind::SdfVolume => "applies when the world is next built",
+            Self::Shader => "applies when its scene loads",
+            Self::SdfVolume => "applies when the world is next built",
         }
     }
 }

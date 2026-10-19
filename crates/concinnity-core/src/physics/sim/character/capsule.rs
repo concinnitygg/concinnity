@@ -18,7 +18,7 @@ impl CharacterCapsule {
     /// Build the capsule for a cylinder of `2 * half_height` capped by
     /// hemispheres of `radius`.
     pub fn new(half_height: f32, radius: f32) -> Self {
-        CharacterCapsule {
+        Self {
             half_height,
             radius,
         }
@@ -42,7 +42,7 @@ impl CharacterCapsule {
 
     /// The capsule as a collider shape, which is what a sweep is asked in
     /// terms of.
-    pub(crate) fn shape(&self) -> ColliderShape {
+    pub(crate) fn shape(self) -> ColliderShape {
         ColliderShape::Capsule {
             half_height: self.half_height,
             radius: self.radius,

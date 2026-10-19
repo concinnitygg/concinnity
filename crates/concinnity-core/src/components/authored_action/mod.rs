@@ -12,7 +12,7 @@ use crate::ecs::asset_fields::{
 };
 use crate::settings::SettingKey;
 
-/// What a [HitRegion](#hitregion) click or a [KeyBinding](#keybinding) press
+/// What a [`HitRegion`](#hitregion) click or a [`KeyBinding`](#keybinding) press
 /// does, as a world authors it.
 ///
 /// An action that names nothing is a bare string; one that does is an object

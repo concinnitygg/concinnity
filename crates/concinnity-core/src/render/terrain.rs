@@ -35,7 +35,7 @@ pub struct LoadedTerrain {
 /// Decode every terrain's payload, plus the blobs they live in for the
 /// release step. `None` (with the error logged) when one is missing or
 /// malformed, which only a failed build leaves behind.
-pub fn load_terrains(ctx: &mut PipelineContext) -> Option<(Vec<LoadedTerrain>, Vec<u32>)> {
+pub fn load_terrains(ctx: &mut PipelineContext<'_>) -> Option<(Vec<LoadedTerrain>, Vec<u32>)> {
     let terrains: Vec<(Option<AssetId>, Terrain)> = ctx
         .query_with_entity::<Terrain>()
         .map(|(entity, t)| (ctx.get::<Identity>(entity).map(|i| i.id()), t.clone()))
@@ -76,7 +76,7 @@ pub fn load_terrains(ctx: &mut PipelineContext) -> Option<(Vec<LoadedTerrain>, V
 
 /// Every `Grass` in the world by id, read in place: the effects drain them
 /// later.
-pub fn grass_by_id(ctx: &PipelineContext) -> HashMap<AssetId, Grass> {
+pub fn grass_by_id(ctx: &PipelineContext<'_>) -> HashMap<AssetId, Grass> {
     ctx.query_with_entity::<Grass>()
         .filter_map(|(entity, g)| Some((ctx.get::<Identity>(entity)?.id(), g.clone())))
         .collect()
@@ -125,7 +125,7 @@ pub fn append_terrain_draws(
         None => terrain_chunks(grid),
     };
     for chunk in chunks {
-        let vertex_offset = vertices.len() * core::mem::size_of::<Vertex>();
+        let vertex_offset = vertices.len() * size_of::<Vertex>();
         let index_offset = indices.len();
         let base = vertices.len() as u32;
         vertices.extend_from_slice(&chunk.vertices);
@@ -214,7 +214,7 @@ mod tests {
         for d in &draws {
             assert!(d.cullable(), "terrain chunks are frustum-culled");
             assert_eq!(d.model[3][..3], [3.0, 1.0, -2.0]);
-            let first = d.vertex_offset / core::mem::size_of::<Vertex>();
+            let first = d.vertex_offset / size_of::<Vertex>();
             let slice = &indices[d.index_offset..d.index_offset + d.index_count];
             assert!(slice.iter().all(|&i| (i as usize) >= first));
             assert!(slice.iter().all(|&i| (i as usize) < first + d.vertex_count));

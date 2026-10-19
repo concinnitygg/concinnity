@@ -218,7 +218,7 @@ impl DecalResources {
         };
 
         // Per-frame view UBO.
-        let view_size = align256(std::mem::size_of::<DecalView>() as u64);
+        let view_size = align256(size_of::<DecalView>() as u64);
         let frames = alloc.frames_in_flight();
         let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
         let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
@@ -231,15 +231,15 @@ impl DecalResources {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map decal view ubo"))?;
-            view_ubo_ptrs.push(ptr as *mut u8);
+            view_ubo_ptrs.push(ptr.cast::<u8>());
             view_ubo_resources.push(buf);
         }
 
         // Per-frame per-decal params ring. One CBV is 256-aligned, so size
         // each slot to align256(sizeof(DecalParams)).
-        let params_stride = align256(std::mem::size_of::<DecalParams>() as u64);
+        let params_stride = align256(size_of::<DecalParams>() as u64);
         let params_total = params_stride * MAX_DECALS as u64;
         let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
         let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
@@ -252,9 +252,9 @@ impl DecalResources {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map decal params ubo"))?;
-            params_ubo_ptrs.push(ptr as *mut u8);
+            params_ubo_ptrs.push(ptr.cast::<u8>());
             params_ubo_resources.push(buf);
         }
 
@@ -314,7 +314,7 @@ pub(in crate::directx) fn write_main_depth_srv(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(depth, Some(&srv_desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(depth, Some(&raw const srv_desc), srv_cpu) };
 }
 
 // Encoder
@@ -334,9 +334,8 @@ impl DxContext {
         vp: [[f32; 4]; 4],
         frustum: &Frustum,
     ) {
-        let decals = match &self.decal.state {
-            Some(s) => s,
-            None => return,
+        let Some(decals) = &self.decal.state else {
+            return;
         };
         // Frustum-cull first so a frame where every live decal lands
         // off-screen skips the pass, including the depth-transition
@@ -364,9 +363,9 @@ impl DxContext {
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &view_uni as *const DecalView as *const u8,
+                (&raw const view_uni).cast::<u8>(),
                 decals.view_ubo_ptrs[frame_idx],
-                std::mem::size_of::<DecalView>(),
+                size_of::<DecalView>(),
             );
         }
         let view_gva = com::gpu_va(&decals.view_ubo_resources[frame_idx]);
@@ -386,7 +385,7 @@ impl DxContext {
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&scene_rtv), false, None);
+            cmd.OMSetRenderTargets(1, Some(&raw const scene_rtv), false, None);
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
                 TopLeftY: 0.0,
@@ -407,7 +406,7 @@ impl DxContext {
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
             cmd.IASetVertexBuffers(0, Some(&[decals.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&decals.index_buffer_view));
+            cmd.IASetIndexBuffer(Some(&raw const decals.index_buffer_view));
 
             cmd.SetPipelineState(&decals.pso);
             cmd.SetGraphicsRootSignature(&decals.root_sig);
@@ -441,9 +440,9 @@ impl DxContext {
                 // and the source is a separate allocation, so the ranges cannot overlap.
                 unsafe {
                     std::ptr::copy_nonoverlapping(
-                        decal.params as *const DecalParams as *const u8,
+                        std::ptr::from_ref::<DecalParams>(decal.params).cast::<u8>(),
                         dst,
-                        std::mem::size_of::<DecalParams>(),
+                        size_of::<DecalParams>(),
                     );
                 }
             }

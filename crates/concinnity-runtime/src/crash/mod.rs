@@ -37,7 +37,9 @@ static REPORT_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 /// accumulate, but nothing is written: an embedder that has chosen no place for
 /// them gets no files.
 pub fn install(dir: Option<&Path>) {
-    *REPORT_DIR.lock().unwrap_or_else(|p| p.into_inner()) = dir.map(Path::to_path_buf);
+    *REPORT_DIR
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = dir.map(Path::to_path_buf);
     hook::install();
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     native::install();
@@ -57,7 +59,9 @@ static NOTES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 pub fn note(key: &str, value: &str) {
     let key = key[..key.floor_char_boundary(MAX_NOTE_KEY_BYTES)].to_string();
     let value = value[..value.floor_char_boundary(MAX_NOTE_VALUE_BYTES)].to_string();
-    let mut notes = NOTES.lock().unwrap_or_else(|p| p.into_inner());
+    let mut notes = NOTES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(slot) = notes.iter_mut().find(|(k, _)| *k == key) {
         slot.1 = value;
     } else if notes.len() < MAX_NOTES {
@@ -81,7 +85,10 @@ pub(crate) fn report_dir() -> Option<PathBuf> {
 }
 
 pub(crate) fn notes_snapshot() -> Vec<(String, String)> {
-    NOTES.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    NOTES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
 // Snapshot that gives up instead of blocking, for the native fault path.

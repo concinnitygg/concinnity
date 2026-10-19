@@ -279,7 +279,7 @@ mod tests {
             &WaterSurface {
                 waves: Vec::new(),
                 roughness: 0.0,
-                ..surface.clone()
+                ..surface
             },
             &WindField::STILL,
         );

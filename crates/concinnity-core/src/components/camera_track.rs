@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 
 use crate::math::vec3;
 
-/// How a [CameraTrack](#cameratrack) leg paces the run between its start and
+/// How a [`CameraTrack`](#cameratrack) leg paces the run between its start and
 /// its end.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, Vocabulary,
@@ -34,15 +34,15 @@ impl Ease {
     pub fn eval(self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
         match self {
-            Ease::Linear => t,
-            Ease::In => t * t,
-            Ease::Out => t * (2.0 - t),
-            Ease::InOut => t * t * (3.0 - 2.0 * t),
+            Self::Linear => t,
+            Self::In => t * t,
+            Self::Out => t * (2.0 - t),
+            Self::InOut => t * t * (3.0 - 2.0 * t),
         }
     }
 }
 
-/// One straight run on a [CameraTrack](#cameratrack)'s travel track.
+/// One straight run on a [`CameraTrack`](#cameratrack)'s travel track.
 ///
 /// The direction is world space rather than camera relative, so a turn running
 /// over the same span does not bend the path: the two tracks stay independent,
@@ -73,7 +73,7 @@ pub struct CameraTravel {
     pub cut: bool,
 }
 
-/// One turn on a [CameraTrack](#cameratrack)'s turn track.
+/// One turn on a [`CameraTrack`](#cameratrack)'s turn track.
 ///
 /// The angles are absolute headings rather than deltas, so a leg reads as the
 /// direction the camera ends up looking. Yaw takes the shorter way round.
@@ -109,7 +109,7 @@ pub struct CameraTurn {
     pub cut: bool,
 }
 
-/// Drives the world's [Camera3D](#camera3d) along a scripted path, so a
+/// Drives the world's [`Camera3D`](#camera3d) along a scripted path, so a
 /// fly-through visits the same poses on every machine that runs it.
 ///
 /// One per world, and its presence takes the camera away from the input
@@ -163,7 +163,7 @@ pub struct CameraTrackArgs {
 }
 
 /// A point the travel track reaches, baked from a
-/// [CameraTravel](#cameratravel) leg.
+/// [`CameraTravel`](#cameratravel) leg.
 #[derive(
     Debug,
     Clone,
@@ -189,7 +189,7 @@ pub struct CameraTravelKey {
     pub cut: bool,
 }
 
-/// A heading the turn track reaches, baked from a [CameraTurn](#cameraturn)
+/// A heading the turn track reaches, baked from a [`CameraTurn`](#cameraturn)
 /// leg. Its duration is resolved at world start rather than here, because the
 /// first leg's turn is measured from the camera's authored heading.
 #[derive(

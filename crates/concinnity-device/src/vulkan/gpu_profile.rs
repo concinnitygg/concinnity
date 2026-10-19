@@ -4,7 +4,7 @@
 //! all WITHOUT a surface, swapchain, logical device, or validation layer, so the
 //! auto-config quality ceiling can be resolved before the backend (and its render
 //! targets) are built. Mirrors `VkContext::gpu_profile` exactly (vendor id, device
-//! type, summed DEVICE_LOCAL heaps) and the standalone `metal/gpu_profile.rs`
+//! type, summed `DEVICE_LOCAL` heaps) and the standalone `metal/gpu_profile.rs`
 //! pattern. Returns `None` on any failure (no loader, instance-create fails, no
 //! physical device), which resolves the run to headless.
 

@@ -131,7 +131,7 @@ pub(crate) fn place(world: &mut World, row: &ExtraRow, slot: &Slot, ids: SlotIds
                 theme::BUTTON_TINT
             };
             place_rounded(world, ids.control, c, tint, theme::CONTROL_RADIUS, true);
-            let value = options.get(*selected).map(String::as_str).unwrap_or("");
+            let value = options.get(*selected).map_or("", String::as_str);
             widget::place_left_label(
                 world,
                 ids.text,

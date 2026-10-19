@@ -8,7 +8,11 @@ use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
 use super::geometry::{Metrics, Mode};
-use super::*;
+use super::{
+    CLOSE_BG, CLOSE_LABEL, DOT_BG, DOT1, DOT2, DOT3, LIST_HEADER, LIST_THUMB, LIST_TRACK, MENU_BG,
+    MENU_DELETE_BG, MENU_DELETE_LABEL, MENU_OPEN_BG, MENU_OPEN_LABEL, NEW_BG, NEW_LABEL, PANEL_BG,
+    POOL, STATUS_LABEL, TITLE_LABEL, WorldsView, ids, row_bg, row_label,
+};
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
 
@@ -28,7 +32,7 @@ const DELETE_LABEL: [f32; 3] = [0.95, 0.60, 0.58];
 
 // Position + show the panel (`Some(view)`) at origin `o`, or blank every
 // element (`None`).
-pub(crate) fn place(world: &mut World, view: Option<&WorldsView>, o: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&WorldsView<'_>>, o: [f32; 2]) {
     let Some(view) = view else {
         ids().hide(world);
         return;
@@ -45,7 +49,7 @@ pub(crate) fn place(world: &mut World, view: Option<&WorldsView>, o: [f32; 2]) {
 }
 
 // The title bar (where there is one), the name field, and New.
-fn header(world: &mut World, view: &WorldsView, m: &Metrics, o: [f32; 2]) {
+fn header(world: &mut World, view: &WorldsView<'_>, m: &Metrics, o: [f32; 2]) {
     let l = &view.layout;
     if m.has_title_bar() {
         let title = l.title_rect(o);
@@ -81,7 +85,7 @@ fn header(world: &mut World, view: &WorldsView, m: &Metrics, o: [f32; 2]) {
 // The caption above the rows: the listing's size, or what to do about an empty
 // one. The sidebar's column is narrow, so it says the same thing in fewer
 // words.
-fn list_header(world: &mut World, view: &WorldsView, m: &Metrics, o: [f32; 2]) {
+fn list_header(world: &mut World, view: &WorldsView<'_>, m: &Metrics, o: [f32; 2]) {
     let content = match (view.rows.is_empty(), view.layout.mode) {
         (true, Mode::Start) => "No worlds yet".to_string(),
         (true, Mode::Session) => "No worlds yet - press + to start one".to_string(),
@@ -95,7 +99,7 @@ fn list_header(world: &mut World, view: &WorldsView, m: &Metrics, o: [f32; 2]) {
 // One row slot: the world's name over its highlight. Slots past the listing
 // draw nothing. The triple-dot and its menu float over the rows and are laid
 // out afterwards (`row_affordances`), so they cannot be covered.
-fn row(world: &mut World, view: &WorldsView, m: &Metrics, o: [f32; 2], slot: usize) {
+fn row(world: &mut World, view: &WorldsView<'_>, m: &Metrics, o: [f32; 2], slot: usize) {
     let l = &view.layout;
     let i = view.scroll + slot;
     let listed = (slot < l.rows()).then(|| view.rows.get(i)).flatten();
@@ -139,7 +143,7 @@ fn row(world: &mut World, view: &WorldsView, m: &Metrics, o: [f32; 2], slot: usi
 
 // The triple-dot on the row offering it, and the menu it opened. The dots go to
 // the row whose menu is up, or to the hovered one; nothing else carries them.
-fn row_affordances(world: &mut World, view: &WorldsView, m: &Metrics, o: [f32; 2]) {
+fn row_affordances(world: &mut World, view: &WorldsView<'_>, m: &Metrics, o: [f32; 2]) {
     let l = &view.layout;
     let hovered = (0..l.rows())
         .find(|&slot| {
@@ -169,9 +173,10 @@ fn row_affordances(world: &mut World, view: &WorldsView, m: &Metrics, o: [f32; 2
 // The three stacked dots. The backing box shows only while the dots are hovered
 // or their menu is open; a plain row-hover shows the bare dots.
 fn place_dot(world: &mut World, d: [f32; 4], boxed: bool) {
-    match boxed {
-        true => place_rounded(world, DOT_BG, d, DOT_BG_TINT, theme::CONTROL_RADIUS, true),
-        false => widget::set_sprite_visible(world, DOT_BG, false),
+    if boxed {
+        place_rounded(world, DOT_BG, d, DOT_BG_TINT, theme::CONTROL_RADIUS, true);
+    } else {
+        widget::set_sprite_visible(world, DOT_BG, false);
     }
     let (cx, cy) = (d[0] + d[2] * 0.5, d[1] + d[3] * 0.5);
     let (s, gap) = (3.5, 3.5);
@@ -180,7 +185,7 @@ fn place_dot(world: &mut World, d: [f32; 4], boxed: bool) {
     }
 }
 
-fn row_menu(world: &mut World, view: &WorldsView, m: &Metrics, o: [f32; 2], slot: usize) {
+fn row_menu(world: &mut World, view: &WorldsView<'_>, m: &Metrics, o: [f32; 2], slot: usize) {
     let (bg, open, delete) = view.layout.menu_rects(o, slot);
     // Blank the captions the menu floats over: every TextLabel draws after
     // every Sprite, so its opaque backing cannot cover them. The menu's own row
@@ -229,7 +234,7 @@ fn menu_row(
     world: &mut World,
     ids: (AssetId, AssetId),
     rect: [f32; 4],
-    view: &WorldsView,
+    view: &WorldsView<'_>,
     caption: &str,
     color: [f32; 3],
 ) {
@@ -265,7 +270,7 @@ fn hide_row_menu(world: &mut World) {
     }
 }
 
-fn scrollbar(world: &mut World, view: &WorldsView, o: [f32; 2]) {
+fn scrollbar(world: &mut World, view: &WorldsView<'_>, o: [f32; 2]) {
     let Some(bar) = view.layout.scrollbar(o, view.rows.len(), view.scroll) else {
         widget::set_sprite_visible(world, LIST_TRACK, false);
         widget::set_sprite_visible(world, LIST_THUMB, false);
@@ -322,7 +327,7 @@ fn scale_label(world: &mut World, id: AssetId, scale: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::worlds::Layout;
+    use crate::editor::worlds::{Layout, WorldRow};
     use concinnity_core::components::{Sprite, TextLabel};
 
     const VP: [f32; 2] = [1280.0, 720.0];
@@ -347,7 +352,7 @@ mod tests {
         Layout::new(mode, VP, 0.0)
     }
 
-    fn view<'a>(l: Layout, rows: &'a [WorldRow], mouse: [f32; 2]) -> WorldsView<'a> {
+    fn view(l: Layout, rows: &[WorldRow], mouse: [f32; 2]) -> WorldsView<'_> {
         WorldsView {
             rows,
             scroll: 0,

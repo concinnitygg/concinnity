@@ -22,18 +22,18 @@ impl Stage {
     #[must_use]
     pub fn profile(self, major: u32, minor: u32) -> String {
         let prefix = match self {
-            Stage::Vertex => "vs",
-            Stage::Pixel => "ps",
-            Stage::Compute => "cs",
+            Self::Vertex => "vs",
+            Self::Pixel => "ps",
+            Self::Compute => "cs",
         };
         format!("{prefix}_{major}_{minor}")
     }
 
     fn parse(word: &str) -> Option<Self> {
         match word {
-            "vertex" => Some(Stage::Vertex),
-            "pixel" => Some(Stage::Pixel),
-            "compute" => Some(Stage::Compute),
+            "vertex" => Some(Self::Vertex),
+            "pixel" => Some(Self::Pixel),
+            "compute" => Some(Self::Compute),
             _ => None,
         }
     }

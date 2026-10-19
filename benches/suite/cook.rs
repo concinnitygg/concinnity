@@ -13,6 +13,7 @@
 
 use concinnity_cook::{build_pipeline_from_str, prepare_world};
 use concinnity_core::blob::{BlobMeta, WorldManifest, encode_cnb, parse_cnb};
+use std::fmt::Write as _;
 
 use crate::support::Bench;
 
@@ -34,10 +35,11 @@ fn world_jsonl(props: usize) -> String {
     for i in 0..props {
         let x = (i % 100) as f32 * 1.2;
         let z = (i / 100) as f32 * 1.2;
-        out.push_str(&format!(
+        let _ = writeln!(
+            out,
             "[\"Prop\",{{\"mesh\":\"bench_mesh\",\"material\":\"bench_mat\",\
-             \"position\":[{x},0.45,{z}]}}]\n"
-        ));
+             \"position\":[{x},0.45,{z}]}}]"
+        );
     }
     out
 }
@@ -109,7 +111,11 @@ pub(crate) fn benches(bench: &mut Bench) {
             mesh_bounds: result.mesh_bounds,
             physics_budget: result.physics_budget,
         };
-        let payload = result.payloads.first().map(Vec::as_slice).unwrap_or(&[]);
+        let payload = result
+            .payloads
+            .first()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let image =
             encode_cnb(concinnity_core::SCHEMA_VERSION, &meta, payload).expect("blob encodes");
 

@@ -15,13 +15,13 @@ use commands::{EditorArgs, RenderArgs};
 
 pub(crate) use commands::Commands;
 
-const BANNER: &str = r#"
+const BANNER: &str = r"
    ______                                
   / ____/___  ____  ___________  ____  __________  __
  / /   / __ \/ __ \/ ___/ / __ \/ __ \/ /_  __/ / / /
 / /___/ /_/ / / / / /__/ / / / / / / / / / / / /_/ /
 \____/\____/_/ /_/\___/_/_/ /_/_/ /_/_/ /_/  \__, /
-                                            /____/"#;
+                                            /____/";
 
 /// One run of the `concinnity` command line: the arguments it was given, and
 /// the command they name.

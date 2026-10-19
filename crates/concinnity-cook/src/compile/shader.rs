@@ -98,7 +98,7 @@ pub fn read_shader_source(source_path: &str) -> Result<String, std::io::Error> {
     std::fs::read_to_string(source_path).map_err(|e| {
         std::io::Error::new(
             e.kind(),
-            format!("Failed to read shader source '{}': {}", source_path, e),
+            format!("Failed to read shader source '{source_path}': {e}"),
         )
     })
 }

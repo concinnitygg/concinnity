@@ -43,7 +43,7 @@ const PARENT: &str = "concinnity-test-cache";
 // How long a state root is left alone before another run may reclaim it. Well
 // past any test's runtime, so a sweep never reaches a root still in use, and
 // short enough that a day of runs does not accumulate.
-const STALE_AFTER: Duration = Duration::from_secs(60 * 60);
+const STALE_AFTER: Duration = Duration::from_hours(1);
 
 // The parent every shared root lives under, so a machine clearing them has one
 // place to look: `<system temp>/concinnity-test-cache`.
@@ -125,6 +125,10 @@ fn resolve(parent: &Path, name: &str) -> PathBuf {
 }
 
 // Create `dir` and its parents.
+#[expect(
+    clippy::panic,
+    reason = "a test fixture that cannot be set up fails the test that asked for it"
+)]
 fn create(dir: &Path) {
     std::fs::create_dir_all(dir)
         .unwrap_or_else(|e| panic!("create the shared root {}: {e}", dir.display()));

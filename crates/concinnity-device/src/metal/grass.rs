@@ -238,7 +238,7 @@ impl GrassState {
         hot_reload: bool,
     ) -> RenderResult<Self> {
         let blades = blade_buffer(device, field.capacity().total(), "grass blade buffer")?;
-        let records = [PlanetGrassTileGpu::default(); FRAME_PLANET_TILE_RECORDS];
+        let records = vec![PlanetGrassTileGpu::default(); FRAME_PLANET_TILE_RECORDS];
         let planet_tiles = (0..frames_in_flight.max(1))
             .map(|_| buffer_with(device, &records, "grass planet tiles"))
             .collect::<RenderResult<Vec<_>>>()?;

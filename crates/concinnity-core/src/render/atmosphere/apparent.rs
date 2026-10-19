@@ -67,7 +67,7 @@ impl ApparentGround {
 /// nadir map onto their own, and the angles between them stretch linearly.
 /// `view_horizon` and `table_horizon` are the zenith-to-horizon angles of the
 /// view's planet and the table's. Mirrors `atmo_table_view_angle` in
-/// atmosphere_common.hlsl.
+/// `atmosphere_common.hlsl`.
 pub fn table_view_angle(view_angle: f32, view_horizon: f32, table_horizon: f32) -> f32 {
     use core::f32::consts::PI;
     if view_horizon == table_horizon {

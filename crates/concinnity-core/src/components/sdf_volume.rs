@@ -1,4 +1,4 @@
-//! The SdfVolume asset: the authored schema (the struct, its `Default`,
+//! The `SdfVolume` asset: the authored schema (the struct, its `Default`,
 //! `cone_ratio`, and `SDF_PARAMS_LEN`), the blob-residency helper the engine
 //! init uses, and the runtime step-count clamp bounds. The
 //! JSON-args source selection, validation, and the bake-time clamp live in
@@ -176,12 +176,12 @@ pub const SDF_MAX_STEPS_FLOOR: u32 = 8;
 /// an SDF payload would be freed before being read. (When the world
 /// has other small assets, the SDF shader bytes typically share a blob
 /// with a kept asset and survive by accident; a world whose SDF shader
-/// ends up alone in its blob exposes the bug as "SdfVolume payload
-/// FileIo, skipping" with no surface drawn.) This helper lets the
+/// ends up alone in its blob exposes the bug as "`SdfVolume` payload
+/// `FileIo`, skipping" with no surface drawn.) This helper lets the
 /// release sweep keep SDF blobs resident, matching the
 /// `audio_clip_blob_indices` pattern.
 pub fn sdf_volume_blob_indices(
-    ctx: &crate::ecs::PipelineContext,
+    ctx: &crate::ecs::PipelineContext<'_>,
 ) -> alloc::collections::BTreeSet<u32> {
     ctx.query::<SdfVolume>()
         .filter_map(|v| v.locator.as_ref().map(|l| l.blob_index))

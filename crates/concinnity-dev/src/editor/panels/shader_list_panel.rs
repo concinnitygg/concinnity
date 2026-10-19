@@ -143,13 +143,13 @@ fn dot_rect(o: [f32; 2], w: f32, r: usize) -> [f32; 4] {
     widget_menu::dot_rect(row_rect(o, w, r), DOT_INSET)
 }
 
-fn first_shown(view: &ShadersView, window: usize) -> usize {
+fn first_shown(view: &ShadersView<'_>, window: usize) -> usize {
     view.scroll.min(view.rows.len().saturating_sub(window))
 }
 
 // The open menu's backing and item rects, while its row is on screen.
 fn open_menu_rects(
-    view: &ShadersView,
+    view: &ShadersView<'_>,
     o: [f32; 2],
     s: [f32; 2],
 ) -> Option<(usize, [f32; 4], Vec<[f32; 4]>)> {
@@ -172,7 +172,7 @@ pub(crate) fn cursor_over(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
 // Resolve a click against the panel at origin `o`, size `s`. `None` means the
 // click missed the panel.
 pub(crate) fn hit_test(
-    view: &ShadersView,
+    view: &ShadersView<'_>,
     mx: f32,
     my: f32,
     o: [f32; 2],
@@ -212,7 +212,7 @@ pub(crate) fn hit_test(
 }
 
 // Position + show the panel at origin `o`, effective size `s`, or hide it all.
-pub(crate) fn place(world: &mut World, view: Option<&ShadersView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&ShadersView<'_>>, o: [f32; 2], s: [f32; 2]) {
     ids().hide(world);
     let Some(view) = view else {
         return;
@@ -249,7 +249,7 @@ pub(crate) fn place(world: &mut World, view: Option<&ShadersView>, o: [f32; 2], 
 // menu, and the open menu over the rows below it.
 fn place_menu(
     world: &mut World,
-    view: &ShadersView,
+    view: &ShadersView<'_>,
     o: [f32; 2],
     s: [f32; 2],
     scroll: usize,
@@ -347,7 +347,7 @@ fn place_row(world: &mut World, slot: usize, row: &Row, rect: [f32; 4], mouse: [
         l.visible = true;
         l.wrap_width = BADGE_W;
         l.max_lines = 1;
-        l.content = badge.clone();
+        l.content.clone_from(badge);
     }
 }
 

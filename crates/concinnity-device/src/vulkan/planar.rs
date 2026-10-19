@@ -6,7 +6,7 @@
 //! scene-correct reflection instead of the box-projected probe cube.
 //!
 //! One mirror render per DISTINCT plane: near-coplanar reflectors (one wall of
-//! windows) share a render, and reflectors past the budget (MAX_PLANAR_PLANES)
+//! windows) share a render, and reflectors past the budget (`MAX_PLANAR_PLANES`)
 //! fall back to the probe cube. The layout, the per-frame plan and the mirror
 //! matrices come from the pure, unit-tested `planar_reflection`.
 //!
@@ -14,7 +14,7 @@
 //! `PlanarFramePlan` crops every mirror render to the rectangle its reflectors
 //! cover and skips a plane whose reflectors are all off screen. Each rendered
 //! plane gets a DEDICATED reflected-frustum cull (the shared probe-bake
-//! encode_probe_cull), narrowed to that rectangle: the GPU cull re-runs against
+//! `encode_probe_cull`), narrowed to that rectangle: the GPU cull re-runs against
 //! it into that plane's own indirect buffer, reading the FRAME's
 //! camera-independent object + draw-args SSBOs. So geometry visible only in the
 //! reflection (behind / beside the main camera) is captured; the reflected
@@ -420,7 +420,7 @@ impl PlanarReflectionSet {
 
         let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         // Per-(plane, frame) reflected-view UBO ring.
-        let view_size = std::mem::size_of::<ViewUniforms>() as u64;
+        let view_size = size_of::<ViewUniforms>() as u64;
         let ring = plane_count * frames;
         let mut view_bufs = Vec::with_capacity(ring);
         for _ in 0..ring {
@@ -432,7 +432,7 @@ impl PlanarReflectionSet {
         }
 
         // Per-(plane, frame) cluster params ring and per-plane cluster lists.
-        let cluster_params_size = std::mem::size_of::<ClusterParams>() as u64;
+        let cluster_params_size = size_of::<ClusterParams>() as u64;
         let mut cluster_params_bufs = Vec::with_capacity(ring);
         for _ in 0..ring {
             cluster_params_bufs.push(alloc.create_buffer(
@@ -454,11 +454,11 @@ impl PlanarReflectionSet {
         // status SSBO each, sized by the build-time object count (resize never
         // touches them).
         use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
-        let object_range = (cull.cull_count * std::mem::size_of::<GpuObjectData>()).max(4) as u64;
-        let args_range = (cull.cull_count * std::mem::size_of::<GpuDrawArgs>()).max(4) as u64;
+        let object_range = (cull.cull_count * size_of::<GpuObjectData>()).max(4) as u64;
+        let args_range = (cull.cull_count * size_of::<GpuDrawArgs>()).max(4) as u64;
         let indirect_size =
-            (cull.cull_count * std::mem::size_of::<vk::DrawIndexedIndirectCommand>()).max(4) as u64;
-        let status_size = (cull.cull_count * std::mem::size_of::<u32>()).max(4) as u64;
+            (cull.cull_count * size_of::<vk::DrawIndexedIndirectCommand>()).max(4) as u64;
+        let status_size = (cull.cull_count * size_of::<u32>()).max(4) as u64;
         let mut cull_indirect_bufs = Vec::with_capacity(ring);
         let mut cull_status_bufs = Vec::with_capacity(ring);
         for _ in 0..ring {

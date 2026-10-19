@@ -25,18 +25,25 @@ fn opened() -> &'static Mutex<Option<StateTree>> {
 /// build resolves no `assets/`, has nowhere to write blobs, and warms nothing.
 pub fn open(tree: StateTree) {
     concinnity_cook::cache::anchor(&tree.build_cache_path());
-    *opened().lock().unwrap() = Some(tree);
+    *opened()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tree);
 }
 
 /// Close the session's project, leaving it with none.
 pub fn close() {
     concinnity_cook::cache::clear_anchor();
-    *opened().lock().unwrap() = None;
+    *opened()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 }
 
 /// The session's project, or `None` when nothing opened one.
 pub fn tree() -> Option<StateTree> {
-    opened().lock().unwrap().clone()
+    opened()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
 /// A runtime that reads and writes under the open project: its blobs, settings,

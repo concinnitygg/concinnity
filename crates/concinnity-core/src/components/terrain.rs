@@ -113,7 +113,7 @@ pub struct Terrain {
 /// blobs: the physics system inits after it and builds each terrain's collider
 /// from the same payload.
 pub fn terrain_blob_indices(
-    ctx: &crate::ecs::PipelineContext,
+    ctx: &crate::ecs::PipelineContext<'_>,
 ) -> alloc::collections::BTreeSet<u32> {
     ctx.query::<Terrain>()
         .filter_map(|t| t.locator.as_ref().map(|l| l.blob_index))

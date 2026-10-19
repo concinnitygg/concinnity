@@ -157,9 +157,10 @@ mod tests {
         }
 
         fn step(&self, label: &str) -> RenderResult<()> {
-            match self.fail_step {
-                true => Err(RenderError::Other(String::from(label))),
-                false => Ok(()),
+            if self.fail_step {
+                Err(RenderError::Other(String::from(label)))
+            } else {
+                Ok(())
             }
         }
     }
@@ -174,9 +175,10 @@ mod tests {
 
         fn refresh_topology(&mut self, refresh: RefreshStep) -> RenderResult<()> {
             self.calls.push(Call::Refresh(refresh));
-            match self.fail_refresh {
-                true => Err(RenderError::Other(String::from("refresh"))),
-                false => Ok(()),
+            if self.fail_refresh {
+                Err(RenderError::Other(String::from("refresh")))
+            } else {
+                Ok(())
             }
         }
 

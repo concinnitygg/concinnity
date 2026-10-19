@@ -1,4 +1,4 @@
-//! Drives editable TextInput fields: click-to-focus, character entry from the
+//! Drives editable `TextInput` fields: click-to-focus, character entry from the
 //! frame's typed characters, and caret editing / movement from the Backspace /
 //! Delete / Left / Right / Home / End keys, every event of the frame applied in
 //! the order it arrived. Present whenever the world has any `TextInput`
@@ -40,9 +40,9 @@ fn command_from_key(key: InputKey) -> Option<Edit> {
 }
 
 // The edit one keyboard event requests, if any.
-fn edit_from_event(event: &KeyEvent) -> Option<Edit> {
+fn edit_from_event(event: KeyEvent) -> Option<Edit> {
     match event {
-        KeyEvent::Text(ch) => Some(Edit::Insert(*ch)),
+        KeyEvent::Text(ch) => Some(Edit::Insert(ch)),
         KeyEvent::Press(press) => command_from_key(press.key),
     }
 }
@@ -50,10 +50,7 @@ fn edit_from_event(event: &KeyEvent) -> Option<Edit> {
 // Byte offset of the character at `char_idx`, or the string length when the
 // index is at (or past) the end. Keeps all edits on a UTF-8 char boundary.
 fn char_byte(s: &str, char_idx: usize) -> usize {
-    s.char_indices()
-        .nth(char_idx)
-        .map(|(b, _)| b)
-        .unwrap_or(s.len())
+    s.char_indices().nth(char_idx).map_or(s.len(), |(b, _)| b)
 }
 
 // Apply one edit to `content` at the caret (a character index). `max_len` of 0
@@ -133,7 +130,7 @@ impl System for TextInputSystem {
             .writes_components(crate::component_mask![TextInput])
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         let Some(input) = ctx.query::<FrameInput>().last() else {
             return StepResult::Continue;
         };
@@ -148,7 +145,7 @@ impl System for TextInputSystem {
         // so fast typing at a low frame rate loses nothing.
         self.edits.clear();
         self.edits
-            .extend(input.key_events.iter().filter_map(edit_from_event));
+            .extend(input.key_events.iter().copied().filter_map(edit_from_event));
 
         // On a click, focus moves to the top-most visible field under the cursor
         // (last one wins, matching draw order); a click that misses every field

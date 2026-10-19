@@ -181,19 +181,19 @@ impl BlobData {
 // adapter over the inherent API so the pure ECS mechanism names no blob type.
 impl concinnity_core::ecs::PayloadStore for BlobData {
     fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], PayloadError> {
-        BlobData::read(self, locator)
+        Self::read(self, locator)
     }
 
     fn release(&mut self, blob_index: u32) {
-        BlobData::release(self, blob_index)
+        Self::release(self, blob_index);
     }
 
     fn disk_backed(&self) -> bool {
-        BlobData::disk_backed(self)
+        Self::disk_backed(self)
     }
 
     fn release_all_resident(&mut self) -> usize {
-        BlobData::release_all_resident(self)
+        Self::release_all_resident(self)
     }
 }
 

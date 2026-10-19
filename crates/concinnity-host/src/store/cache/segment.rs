@@ -152,7 +152,7 @@ impl Segment {
         if discarded {
             self.items.clear();
         }
-        self.toolchain = id.to_owned();
+        id.clone_into(&mut self.toolchain);
         self.dirty = true;
         discarded
     }

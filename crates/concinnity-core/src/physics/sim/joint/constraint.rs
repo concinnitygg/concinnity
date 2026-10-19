@@ -81,7 +81,7 @@ pub(crate) struct JointSolver {
 
 impl JointSolver {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
-        JointSolver {
+        Self {
             prepared: Vec::with_capacity(capacity),
         }
     }

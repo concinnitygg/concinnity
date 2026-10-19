@@ -56,8 +56,8 @@ pub enum ResourceKind {
 }
 
 impl From<ResourceKind> for u8 {
-    fn from(kind: ResourceKind) -> u8 {
-        kind as u8
+    fn from(kind: ResourceKind) -> Self {
+        kind as Self
     }
 }
 
@@ -87,7 +87,7 @@ impl TryFrom<u8> for ResourceKind {
 /// resource (mesh, texture, audio clip) carries a `PayloadLocator` into the blob
 /// payload section; a data resource (a baked Material) carries its runtime bytes
 /// in `data_bytes`. Both fields are present so either shape round-trips; a given
-/// kind uses one branch (AudioClip uses `payload`).
+/// kind uses one branch (`AudioClip` uses `payload`).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ResourceRecord {
     /// Which per-kind table this record belongs to.
@@ -147,7 +147,7 @@ impl WorldManifest {
             .map(|p| p.blob_index)
             .max()
             .unwrap_or(0);
-        WorldManifest {
+        Self {
             component_counts,
             max_blob_index,
         }
@@ -231,7 +231,7 @@ pub struct MeshBoundsRecord {
 pub struct SceneGroup {
     /// The scene that exclusively owns this content.
     pub scene: AssetId,
-    /// (resource_kind, handle) pairs from the resource stream.
+    /// (`resource_kind`, handle) pairs from the resource stream.
     pub resources: Vec<(ResourceKind, u32)>,
     /// Names of payload-carrying component defs.
     pub defs: Vec<AssetId>,

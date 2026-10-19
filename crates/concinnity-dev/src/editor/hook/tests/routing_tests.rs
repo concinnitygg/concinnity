@@ -166,9 +166,9 @@ fn apply_panel_pick_option_opens_the_add_form() {
 
 #[test]
 fn confirm_form_without_a_selected_type_just_closes() {
-    let mut world = world_with_fields();
+    let world = world_with_fields();
     let mut h = hook(Vec::new());
     h.form.selected_type = None;
-    h.confirm_form(&mut world);
+    h.confirm_form(&world);
     assert!(!h.form_open());
 }

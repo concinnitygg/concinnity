@@ -103,10 +103,10 @@ pub fn tally(raw: &[u32]) -> CullStatusCounts {
 /// last resize left there, so the caller's live cull count is the length that
 /// matters. Returns `Err` when the mapping is too short for `count`.
 pub fn decode(bytes: &[u8], count: usize) -> Result<Vec<u32>, &'static str> {
-    if bytes.len() < count * core::mem::size_of::<u32>() {
+    if bytes.len() < count * size_of::<u32>() {
         return Err("cull-status readback is shorter than the live object count");
     }
-    Ok(bytes[..count * core::mem::size_of::<u32>()]
+    Ok(bytes[..count * size_of::<u32>()]
         .chunks_exact(4)
         .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
         .collect())

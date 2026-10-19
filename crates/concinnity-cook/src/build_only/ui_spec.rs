@@ -84,8 +84,8 @@ pub(crate) fn font_sizes(assets: &[serde_json::Value]) -> HashMap<String, f32> {
         let px = v
             .get("args")
             .and_then(|a| a.get("size_px"))
-            .and_then(|x| x.as_u64())
-            .unwrap_or_else(|| Font::default().size_px as u64) as f32;
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_else(|| u64::from(Font::default().size_px)) as f32;
         out.insert(name, px);
     }
     out

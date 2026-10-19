@@ -38,7 +38,11 @@ pub(super) fn spawn_watcher(
     let shader_files = super::shader::file_index(shaders);
     let sdf_files = super::sdf::file_index(sdf_fields);
     let debounce = Duration::from_millis(150);
-    let last_fire = Mutex::new(Instant::now() - debounce);
+    let last_fire = Mutex::new(
+        Instant::now()
+            .checked_sub(debounce)
+            .unwrap_or_else(Instant::now),
+    );
     let mut watcher = match notify::recommended_watcher(move |res: notify::Result<Event>| {
         let event = match res {
             Ok(e) => e,
@@ -192,12 +196,10 @@ pub(super) fn classify_event(event: &Event) -> Option<ReloadKind> {
         return None;
     }
     let has_ext = |matches: fn(&str) -> bool| {
-        event.paths.iter().any(|p| {
-            p.extension()
-                .and_then(|e| e.to_str())
-                .map(matches)
-                .unwrap_or(false)
-        })
+        event
+            .paths
+            .iter()
+            .any(|p| p.extension().and_then(|e| e.to_str()).is_some_and(matches))
     };
     Some(if has_ext(is_shader_extension) {
         ReloadKind::Shaders
@@ -249,7 +251,7 @@ pub(super) fn story_source_dirs(world_jsonl_path: &str) -> BTreeSet<PathBuf> {
         else {
             continue;
         };
-        let parent = Path::new(source).parent().unwrap_or(Path::new(""));
+        let parent = Path::new(source).parent().unwrap_or_else(|| Path::new(""));
         dirs.insert(if parent.as_os_str().is_empty() {
             PathBuf::from(".")
         } else {

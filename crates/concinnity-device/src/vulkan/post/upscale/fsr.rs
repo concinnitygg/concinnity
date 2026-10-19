@@ -61,6 +61,10 @@ unsafe impl Send for FsrUpscaler {}
 impl FsrUpscaler {
     // `Ok(None)` when FFX is unavailable: the library or one of its entry
     // points is missing, or the context could not be created.
+    #[expect(
+        clippy::fn_to_numeric_cast_any,
+        reason = "the SDK takes the loader's address as an integer"
+    )]
     pub(super) fn try_new(
         gpu: UpscalerGpu<'_>,
         extent: UpscaleExtent,

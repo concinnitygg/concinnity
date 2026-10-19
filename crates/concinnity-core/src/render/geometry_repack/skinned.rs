@@ -146,44 +146,41 @@ pub fn repack_skinned_geometry(
         let skinned_index = SkinnedIndex::from_usize(i);
         let vertex_base = vertices.len() as u32;
         let index_offset = indices.len();
-        let (vertex_count, index_count) = match change_map.remove(&skinned_index) {
-            Some(change) => {
-                vertices.extend_from_slice(&change.vertices);
-                indices.extend(change.indices.iter().map(|&i| u32::from(i) + vertex_base));
-                (change.vertices.len(), change.indices.len())
-            }
-            None => {
-                let v_start = obj.vertex_base as usize;
-                let v_end = v_start + obj.vertex_count;
-                let src = old_vertices.get(v_start..v_end).ok_or_else(|| {
+        let (vertex_count, index_count) = if let Some(change) = change_map.remove(&skinned_index) {
+            vertices.extend_from_slice(&change.vertices);
+            indices.extend(change.indices.iter().map(|&i| u32::from(i) + vertex_base));
+            (change.vertices.len(), change.indices.len())
+        } else {
+            let v_start = obj.vertex_base as usize;
+            let v_end = v_start + obj.vertex_count;
+            let src = old_vertices.get(v_start..v_end).ok_or_else(|| {
+                RenderError::Other(format!(
+                    "rebuild_skinned_geometry: slot {skinned_index} vertex region \
+                     [{v_start}, {v_end}) out of bounds (buffer has {} vertices)",
+                    old_vertices.len()
+                ))
+            })?;
+            vertices.extend_from_slice(src);
+            let i_end = obj.index_offset + obj.index_count;
+            let src = old_indices.get(obj.index_offset..i_end).ok_or_else(|| {
+                RenderError::Other(format!(
+                    "rebuild_skinned_geometry: slot {skinned_index} index region \
+                     [{}, {i_end}) out of bounds (buffer has {} indices)",
+                    obj.index_offset,
+                    old_indices.len()
+                ))
+            })?;
+            let old_base = obj.vertex_base;
+            for &abs in src {
+                let local = abs.checked_sub(old_base).ok_or_else(|| {
                     RenderError::Other(format!(
-                        "rebuild_skinned_geometry: slot {skinned_index} vertex region \
-                         [{v_start}, {v_end}) out of bounds (buffer has {} vertices)",
-                        old_vertices.len()
+                        "rebuild_skinned_geometry: stale index {abs} below \
+                         vertex_base {old_base} on slot {skinned_index}"
                     ))
                 })?;
-                vertices.extend_from_slice(src);
-                let i_end = obj.index_offset + obj.index_count;
-                let src = old_indices.get(obj.index_offset..i_end).ok_or_else(|| {
-                    RenderError::Other(format!(
-                        "rebuild_skinned_geometry: slot {skinned_index} index region \
-                         [{}, {i_end}) out of bounds (buffer has {} indices)",
-                        obj.index_offset,
-                        old_indices.len()
-                    ))
-                })?;
-                let old_base = obj.vertex_base;
-                for &abs in src {
-                    let local = abs.checked_sub(old_base).ok_or_else(|| {
-                        RenderError::Other(format!(
-                            "rebuild_skinned_geometry: stale index {abs} below \
-                             vertex_base {old_base} on slot {skinned_index}"
-                        ))
-                    })?;
-                    indices.push(local + vertex_base);
-                }
-                (obj.vertex_count, obj.index_count)
+                indices.push(local + vertex_base);
             }
+            (obj.vertex_count, obj.index_count)
         };
         regions.push(SkinnedRegion {
             vertex_base,

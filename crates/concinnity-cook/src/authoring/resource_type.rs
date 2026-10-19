@@ -28,8 +28,7 @@ fn file_is_mesh(args: &serde_json::Value) -> bool {
     args.get("kind")
         .and_then(|k| k.as_str())
         .and_then(FileKind::from_ext)
-        .map(|fk| fk.is_mesh())
-        .unwrap_or(false)
+        .is_some_and(|fk| fk.is_mesh())
 }
 
 /// The mesh-source block an asset belongs to, or `None` if it is not a geometry

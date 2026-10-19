@@ -129,9 +129,8 @@ pub fn build_decal_records(decals: &[&Decal], texture_count: usize) -> Vec<Decal
             }
         };
         let model = decal_model_matrix(d.position, d.rotation_deg, d.size);
-        let inv_model = match invert_decal_model(model) {
-            Some(m) => m,
-            None => continue,
+        let Some(inv_model) = invert_decal_model(model) else {
+            continue;
         };
         out.push(DecalRecord {
             model,

@@ -148,7 +148,7 @@ pub(crate) struct ContentView<'a> {
     pub mouse: [f32; 2],
 }
 
-pub(crate) fn place(world: &mut World, view: &ContentView, o: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: &ContentView<'_>, o: [f32; 2]) {
     widget::place_panel(world, PANEL_BG, panel_rect(o));
     let title = widget::title_rect(o, size()[0]);
     widget::place_heading(world, TITLE_LABEL, title, "Content");
@@ -217,34 +217,31 @@ fn place_cell(world: &mut World, slot: usize, cell: &CellView, o: [f32; 2], mous
         true,
     );
     let area = thumb_rect(rect);
-    match cell.thumb {
-        Some(thumb) => {
-            let fitted = thumbs::fit_rect(area, thumb.width, thumb.height);
-            if let Some(s) = widget::sprite_mut(world, cell_thumb(slot)) {
-                s.x = fitted[0];
-                s.y = fitted[1];
-                s.width = fitted[2];
-                s.height = fitted[3];
-                s.texture = Some(thumb.handle);
-                s.tint = [1.0, 1.0, 1.0, 1.0];
-                s.corner_radius = 0.0;
-                s.border_width = 0.0;
-                s.visible = true;
-            }
-            widget::set_label_visible(world, cell_glyph(slot), false);
+    if let Some(thumb) = cell.thumb {
+        let fitted = thumbs::fit_rect(area, thumb.width, thumb.height);
+        if let Some(s) = widget::sprite_mut(world, cell_thumb(slot)) {
+            s.x = fitted[0];
+            s.y = fitted[1];
+            s.width = fitted[2];
+            s.height = fitted[3];
+            s.texture = Some(thumb.handle);
+            s.tint = [1.0, 1.0, 1.0, 1.0];
+            s.corner_radius = 0.0;
+            s.border_width = 0.0;
+            s.visible = true;
         }
-        None => {
-            // The typed icon chip: the billboard glyph + hue for the type.
-            widget::set_sprite_visible(world, cell_thumb(slot), false);
-            if let Some(l) = widget::label_mut(world, cell_glyph(slot)) {
-                let tint = billboards::tint(cell.asset_type.as_str());
-                l.content = billboards::glyph(cell.asset_type.as_str());
-                l.color = [tint[0], tint[1], tint[2]];
-                l.x = area[0] + area[2] * 0.5;
-                l.y = area[1] + (area[3] - widget::LINE_H) * 0.5;
-                l.align = TextAlign::Center;
-                l.visible = true;
-            }
+        widget::set_label_visible(world, cell_glyph(slot), false);
+    } else {
+        // The typed icon chip: the billboard glyph + hue for the type.
+        widget::set_sprite_visible(world, cell_thumb(slot), false);
+        if let Some(l) = widget::label_mut(world, cell_glyph(slot)) {
+            let tint = billboards::tint(cell.asset_type.as_str());
+            l.content = billboards::glyph(cell.asset_type.as_str());
+            l.color = [tint[0], tint[1], tint[2]];
+            l.x = area[0] + area[2] * 0.5;
+            l.y = area[1] + (area[3] - widget::LINE_H) * 0.5;
+            l.align = TextAlign::Center;
+            l.visible = true;
         }
     }
     widget::place_message(

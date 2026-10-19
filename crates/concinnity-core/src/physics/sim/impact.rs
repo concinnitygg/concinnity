@@ -49,7 +49,7 @@ pub(crate) struct Impacts {
 
 impl Impacts {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
-        Impacts {
+        Self {
             hits: Vec::with_capacity(capacity),
             force_threshold: DEFAULT_FORCE_THRESHOLD,
             overflows: 0,

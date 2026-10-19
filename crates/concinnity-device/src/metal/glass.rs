@@ -1,4 +1,4 @@
-//! GlassPanel: the simplest producer for the engine's transparent pass. Each
+//! `GlassPanel`: the simplest producer for the engine's transparent pass. Each
 //! panel is a flat world-space quad (built once at init) that contributes one
 //! [`TransparentDraw`] per frame. The shared `encode_transparent` encoder sorts
 //! it back-to-front against water + other panels and draws it; the fragment
@@ -71,8 +71,8 @@ pub(in crate::metal) fn build_glass_panel_record(
             uv,
         });
     }
-    let vb_bytes = packed.len() * std::mem::size_of::<Vertex>();
-    let ib_bytes = idxs.len() * std::mem::size_of::<u16>();
+    let vb_bytes = packed.len() * size_of::<Vertex>();
+    let ib_bytes = idxs.len() * size_of::<u16>();
 
     // SAFETY: the pointer and length describe the live `packed` allocation, and Metal copies those
     // bytes into the new buffer before the call returns.
@@ -343,7 +343,7 @@ fn transparent_pipeline(
         ],
         &[VertexLayout {
             buffer_index: 1,
-            stride: std::mem::size_of::<Vertex>(),
+            stride: size_of::<Vertex>(),
             step: MTLVertexStepFunction::PerVertex,
         }],
     );
@@ -405,8 +405,7 @@ impl MtlContext {
             rt_on,
             &self.glass.pipeline_rt,
         ) {
-            (true, Some(p), _, _) => Some(p),
-            (_, _, true, Some(p)) => Some(p),
+            (true, Some(p), _, _) | (_, _, true, Some(p)) => Some(p),
             _ => None,
         };
         let (pipeline, reflection_pipeline) = match traced {
@@ -584,7 +583,7 @@ impl MtlContext {
                 index_buffer: self.scene.index_buffer.retained(),
                 index_count: mesh.index_count as u32,
                 index_type: objc2_metal::MTLIndexType::UInt32,
-                index_offset_bytes: mesh.index_offset * std::mem::size_of::<u32>(),
+                index_offset_bytes: mesh.index_offset * size_of::<u32>(),
                 base_vertex: mesh.base_vertex,
                 params: bytes_of(&mesh.params),
                 fragment_textures: vec![

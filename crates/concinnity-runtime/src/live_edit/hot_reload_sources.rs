@@ -62,7 +62,7 @@ impl HotReloadSources {
 // drains them. A world.jsonl reload diffs a freshly parsed entry against this
 // and regenerates the mesh when they differ, logging it by name.
 pub(crate) fn procedural_mesh_snapshot(
-    ctx: &PipelineContext,
+    ctx: &PipelineContext<'_>,
 ) -> HashMap<AssetId, (String, ProceduralMesh)> {
     ctx.join2::<ProceduralMesh, Identity>()
         .filter_map(|(_, pm, identity)| {
@@ -136,7 +136,7 @@ mod tests {
             |s| {
                 s.color_lut = Some(ColorLutSource {
                     resolved_path: "assets/grade.cube".to_string(),
-                })
+                });
             },
             |s| {
                 s.environment_map = Some(EnvironmentMapSource {
@@ -145,20 +145,20 @@ mod tests {
                     irradiance_face_size: 16,
                     prefilter_samples: 32,
                     prefilter_clamp: 10.0,
-                })
+                });
             },
             |s| s.meshes.entries.push(mesh_entry("assets/prop.glb")),
             |s| {
                 s.skinned_meshes
                     .entries
-                    .push(skinned_entry("assets/fox.glb"))
+                    .push(skinned_entry("assets/fox.glb"));
             },
             |s| {
                 s.procedural_meshes.entries.push(ProceduralMeshSourceEntry {
                     name: "ground".to_string(),
-                    args: Default::default(),
+                    args: ProceduralMesh::default(),
                     draw_indices: vec![DrawIndex(0)],
-                })
+                });
             },
             |s| {
                 s.shaders.entries.push(ShaderSourceEntry {
@@ -166,7 +166,7 @@ mod tests {
                     name: "scene".to_string(),
                     bucket: 0,
                     files: Vec::new(),
-                })
+                });
             },
         ];
         for (i, populate) in populated.iter().enumerate() {

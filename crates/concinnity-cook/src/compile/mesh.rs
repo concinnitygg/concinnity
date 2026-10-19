@@ -1,7 +1,7 @@
 //! Build-time mesh payload entry point. Every generator is pure geometry, so
 //! this delegates straight to `crate::compile::geometry`.
 
-/// Compile a Mesh / ProceduralMesh component's JSON args into a packed binary
+/// Compile a Mesh / `ProceduralMesh` component's JSON args into a packed binary
 /// payload.
 pub fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     crate::compile::geometry::compile_mesh_payload(args)

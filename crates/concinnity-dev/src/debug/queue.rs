@@ -75,7 +75,7 @@ impl RuntimeQueue {
     fn jobs(&self) -> MutexGuard<'_, Jobs> {
         self.jobs
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 

@@ -1,4 +1,4 @@
-//! EditorHook: reading and writing the live world's camera pose. The first
+//! `EditorHook`: reading and writing the live world's camera pose. The first
 //! `Camera3D` is the one the renderer draws, so every editor drive that moves
 //! the view (the glide, a bookmark recall, the start screen's attract camera)
 //! goes through this one seam -- and writes the view matrix with the pose, as

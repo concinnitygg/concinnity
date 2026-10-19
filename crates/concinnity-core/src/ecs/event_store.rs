@@ -20,7 +20,7 @@ trait AnyEventQueue: Send {
 
 impl<E: Send + 'static> AnyEventQueue for Events<E> {
     fn update(&mut self) {
-        Events::update(self);
+        Self::update(self);
     }
     fn as_any(&self) -> &dyn Any {
         self
@@ -38,8 +38,8 @@ pub struct EventStore {
 
 impl EventStore {
     /// An empty store.
-    pub fn new() -> EventStore {
-        EventStore::default()
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Borrow the queue for event type E, if one has been created.
@@ -51,6 +51,10 @@ impl EventStore {
 
     /// Mutably borrow the queue for event type E, creating an empty one on
     /// first access so writers and readers never miss it.
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "queues are stored only under their own type's id"
+    )]
     pub fn get_mut_or_create<E: Send + 'static>(&mut self) -> &mut Events<E> {
         self.queues
             .entry(TypeId::of::<E>())

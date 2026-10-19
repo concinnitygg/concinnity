@@ -88,12 +88,7 @@ fn edt_2d(w: usize, h: usize, out: &mut [f32], edt: &mut EdtScratch) {
     } = edt;
     // Row pass
     for y in 0..h {
-        edt_1d(
-            &out[y * w..(y + 1) * w],
-            row_tmp,
-            &mut v[..w],
-            &mut z[..w + 1],
-        );
+        edt_1d(&out[y * w..(y + 1) * w], row_tmp, &mut v[..w], &mut z[..=w]);
         out[y * w..(y + 1) * w].copy_from_slice(&row_tmp[..w]);
     }
 
@@ -102,7 +97,7 @@ fn edt_2d(w: usize, h: usize, out: &mut [f32], edt: &mut EdtScratch) {
         for y in 0..h {
             col_src[y] = out[y * w + x];
         }
-        edt_1d(col_src, col_dst, &mut v[..h], &mut z[..h + 1]);
+        edt_1d(col_src, col_dst, &mut v[..h], &mut z[..=h]);
         for y in 0..h {
             out[y * w + x] = col_dst[y];
         }

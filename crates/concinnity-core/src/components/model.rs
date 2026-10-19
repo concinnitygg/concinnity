@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 /// One geometric part of a Model, referencing a mesh and its surface material.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 pub struct SubMeshRef {
-    /// A [Mesh](#mesh) or [ProceduralMesh](#proceduralmesh) asset.
+    /// A [Mesh](#mesh) or [`ProceduralMesh`](#proceduralmesh) asset.
     #[serde(default)]
     pub mesh: Option<MeshHandle>,
     /// A [Material](#material) asset.  `None` uses the default material.
@@ -19,7 +19,7 @@ pub struct SubMeshRef {
 /// Use via the `model` field on a [Prop](#prop) instead of `mesh`. Each
 /// sub-mesh is drawn with its own material, all sharing the prop's transform.
 ///
-/// Each `mesh` must name a [Mesh](#mesh) or [ProceduralMesh](#proceduralmesh)
+/// Each `mesh` must name a [Mesh](#mesh) or [`ProceduralMesh`](#proceduralmesh)
 /// asset present in the scene. `material` may be empty to use the default
 /// material.
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]

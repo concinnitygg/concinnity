@@ -281,15 +281,14 @@ impl DeviceAllocator {
                 reservation.placement.offset as usize,
             )
         };
-        match placed {
-            Some(buffer) => Ok(PooledBuffer {
+        if let Some(buffer) = placed {
+            Ok(PooledBuffer {
                 buffer,
                 _lease: self.lease(reservation),
-            }),
-            None => {
-                self.release(reservation);
-                Err(allocation_failed(format_args!("{len}-byte pooled buffer")))
-            }
+            })
+        } else {
+            self.release(reservation);
+            Err(allocation_failed(format_args!("{len}-byte pooled buffer")))
         }
     }
 
@@ -332,18 +331,17 @@ impl DeviceAllocator {
                 .heap
                 .newTextureWithDescriptor_offset(desc, reservation.placement.offset as usize)
         };
-        match placed {
-            Some(texture) => Ok(PooledTexture {
+        if let Some(texture) = placed {
+            Ok(PooledTexture {
                 texture,
                 _lease: self.lease(reservation),
-            }),
-            None => {
-                self.release(reservation);
-                Err(allocation_failed(format_args!(
-                    "{}-byte pooled texture",
-                    sizing.size
-                )))
-            }
+            })
+        } else {
+            self.release(reservation);
+            Err(allocation_failed(format_args!(
+                "{}-byte pooled texture",
+                sizing.size
+            )))
         }
     }
 
@@ -351,6 +349,10 @@ impl DeviceAllocator {
     // heap that now holds nothing. A heap a still-live resource was placed on
     // outlives this: Metal reference counts, and a placed resource holds its
     // heap.
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each pool is visited on its own, so the order cannot show"
+    )]
     pub(in crate::metal) fn begin_frame(&self) {
         let mut inner = self.inner.borrow_mut();
         inner.frame += 1;
@@ -361,6 +363,10 @@ impl DeviceAllocator {
         }
     }
 
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each pool is visited on its own, so the order cannot show"
+    )]
     pub(in crate::metal) fn stats(&self) -> AllocatorStats {
         let inner = self.inner.borrow();
         let mut stats = AllocatorStats::default();

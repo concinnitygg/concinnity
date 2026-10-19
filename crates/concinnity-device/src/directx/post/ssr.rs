@@ -4,7 +4,7 @@
 //! run. The resolve itself -- its pipeline and its draw -- is written once in
 //! `concinnity_core::render::post::ssr` and reaches D3D12 through
 //! `DxPostDevice`, which also binds the probe cube table and the frame's
-//! ProbeSet a missed ray falls back to.
+//! `ProbeSet` a missed ray falls back to.
 
 use concinnity_core::gfx::render_types::SsrParams;
 use concinnity_core::render::error::RenderResult;
@@ -41,7 +41,7 @@ impl SsrResources {
     // Build the resolve pipeline and its reflection target when
     // `resolve_settings` is `Some`; a SSGI-only or RT-only build holds neither.
     pub(in crate::directx) fn new(
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         width: u32,
         height: u32,
         resolve_settings: Option<SsrSettings>,
@@ -66,7 +66,7 @@ impl SsrResources {
     // to move.
     pub(in crate::directx) fn resize_to(
         &mut self,
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         width: u32,
         height: u32,
     ) -> RenderResult<()> {

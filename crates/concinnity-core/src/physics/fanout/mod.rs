@@ -30,7 +30,7 @@ impl PhysicsFanout for Inline {
     }
 
     fn step(&self, sim: &mut Simulation, dt: f32, _mode: ScheduleMode) {
-        sim.step_with(dt, &Inline);
+        sim.step_with(dt, &Self);
     }
 }
 

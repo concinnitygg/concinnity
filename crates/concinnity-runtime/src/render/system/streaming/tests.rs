@@ -43,7 +43,7 @@ fn mesh_setup(payloads: usize, draws: Vec<DrawIndex>) -> MeshStreamSetup {
         draw_indices: draws,
         disk_backed: false,
         seed_region: None,
-        deferred_payloads: Default::default(),
+        deferred_payloads: HashMap::default(),
     }
 }
 
@@ -60,7 +60,10 @@ fn texture_setup_evicts_every_slot_and_builds_the_pool() {
         centers(2),
     );
 
-    assert_eq!(gs.stream_pools.texture.as_ref().map(|s| s.len()), Some(2));
+    assert_eq!(
+        gs.stream_pools.texture.as_ref().map(StreamPool::len),
+        Some(2)
+    );
     assert!(gs.stream_workers.texture.is_some());
     let s = recorded.lock();
     assert!(s.saw(&Call::EvictTextureSlot(0)));
@@ -190,7 +193,7 @@ fn mesh_setup_frees_each_build_time_region_without_a_seed() {
         mesh_setup(2, vec![DrawIndex(4), DrawIndex(7)]),
     );
 
-    assert_eq!(gs.stream_pools.mesh.as_ref().map(|s| s.len()), Some(2));
+    assert_eq!(gs.stream_pools.mesh.as_ref().map(StreamPool::len), Some(2));
     assert_eq!(gs.stream_pools.mesh_draws, vec![DrawIndex(4), DrawIndex(7)]);
     let s = recorded.lock();
     assert!(s.saw(&Call::EvictMesh(DrawIndex(4))));

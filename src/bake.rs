@@ -128,7 +128,7 @@ impl core::fmt::Debug for EnvironmentMapPayload {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("EnvironmentMapPayload")
             .field("len", &self.bytes.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -243,7 +243,7 @@ mod tests {
         let mut world = crate::World::new();
         world.add_mesh(payload).expect("the first mint");
 
-        let meshes: alloc::vec::Vec<_> = world.inner().query::<ProceduralMesh>().collect();
+        let meshes: Vec<_> = world.inner().query::<ProceduralMesh>().collect();
         assert_eq!(meshes.len(), 1);
         assert_eq!(meshes[0], &sphere);
     }

@@ -140,7 +140,7 @@ pub(crate) fn scan(
         if impact.started_touching || impact.toi >= 1.0 {
             continue;
         }
-        if nearer(&best, slot, impact.toi) {
+        if nearer(best.as_ref(), slot, impact.toi) {
             best = Some(Blocked {
                 target: slot,
                 toi: impact.toi,
@@ -184,7 +184,7 @@ pub(crate) fn still_crossed(
 /// Whether a fresh impact beats the one held. Time decides; the body slot
 /// breaks a tie, so the answer does not depend on the order the window
 /// happened to arrive in.
-fn nearer(best: &Option<Blocked>, slot: u32, toi: f32) -> bool {
+fn nearer(best: Option<&Blocked>, slot: u32, toi: f32) -> bool {
     match best {
         None => true,
         Some(held) => toi < held.toi || (toi == held.toi && slot < held.target),
@@ -214,10 +214,13 @@ mod tests {
 
     #[test]
     fn the_earliest_impact_wins_and_the_slot_breaks_a_tie() {
-        assert!(nearer(&None, 9, 0.9));
-        assert!(nearer(&blocked(3, 0.5), 7, 0.4));
-        assert!(!nearer(&blocked(3, 0.5), 7, 0.6));
-        assert!(nearer(&blocked(7, 0.5), 3, 0.5), "the lower slot holds it");
-        assert!(!nearer(&blocked(3, 0.5), 7, 0.5));
+        assert!(nearer(None, 9, 0.9));
+        assert!(nearer(blocked(3, 0.5).as_ref(), 7, 0.4));
+        assert!(!nearer(blocked(3, 0.5).as_ref(), 7, 0.6));
+        assert!(
+            nearer(blocked(7, 0.5).as_ref(), 3, 0.5),
+            "the lower slot holds it"
+        );
+        assert!(!nearer(blocked(3, 0.5).as_ref(), 7, 0.5));
     }
 }

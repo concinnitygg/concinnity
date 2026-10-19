@@ -15,9 +15,9 @@
 //!
 //! `meta_len` is the byte length of the postcard-serialized metadata that
 //! follows: for `BlobMeta`, the component defs stream and the resource records
-//! stream. Everything after meta_len + meta_bytes is the raw payload section,
-//! addressed by the (blob_index, offset, length) fields inside each
-//! BlobAssetDef / ResourceRecord.
+//! stream. Everything after `meta_len` + `meta_bytes` is the raw payload section,
+//! addressed by the (`blob_index`, offset, length) fields inside each
+//! `BlobAssetDef` / `ResourceRecord`.
 //!
 //! Blob 0 is the primary blob. It always holds the full metadata and may also
 //! hold payload bytes for assets packed before the size ceiling. Overflow
@@ -30,7 +30,7 @@
 //! blob files live or which of them are resident. Callers own both:
 //! `concinnity_host::store` reads the state root's `data/` layout into `BlobData`,
 //! concinnity-cook writes what `encode_cnb` returns. Being I/O-free is what
-//! lets a no_std client runtime decode blobs with its own byte source.
+//! lets a `no_std` client runtime decode blobs with its own byte source.
 //!
 //! Nothing here needs to change when a new asset type is added.
 

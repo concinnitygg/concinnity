@@ -1,4 +1,4 @@
-//! An SdfVolume's field as a save left it, the key a compile of it runs under,
+//! An `SdfVolume`'s field as a save left it, the key a compile of it runs under,
 //! and the compile and pipeline builds a worker runs.
 
 use concinnity_cook::compile::sdf_field::CompiledField;

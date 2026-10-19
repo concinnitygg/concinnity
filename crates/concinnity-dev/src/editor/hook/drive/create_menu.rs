@@ -1,8 +1,8 @@
-//! EditorHook: the right-click "Create here" menu flow. An unclaimed viewport
+//! `EditorHook`: the right-click "Create here" menu flow. An unclaimed viewport
 //! right press opens the menu at the cursor, capturing the world position under
 //! it (surface hit, ground-plane fallback -- the drag-out landing rules) at
 //! open time; picking a row creates one entry at that point through the shared
-//! entries + mark_changed path (one undo step) and selects it; any other press,
+//! entries + `mark_changed` path (one undo step) and selects it; any other press,
 //! Escape, or a history jump dismisses it.
 
 use concinnity_cook::authoring::registry::RegisteredType;

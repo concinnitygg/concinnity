@@ -34,9 +34,16 @@ impl GraphicsSystem {
     // swapchain config (pixel format, frames in flight, EDR) is unchanged.
     // Otherwise it is idled and dropped, and a new backend is built (a rare
     // one-frame flash). DirectX and Vulkan report no hot-swap config.
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::needless_pass_by_ref_mut,
+            reason = "test builds swap in a hook through `self`"
+        )
+    )]
     pub(super) fn build_backend(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         backend_init: BackendInit<'_>,
     ) -> RenderResult<Box<dyn RenderBackend>> {
         let reuse_backend = match ctx
@@ -69,9 +76,7 @@ impl GraphicsSystem {
                 Some(hooks) => (hooks.backend_factory)(backend_init),
                 // A test builds no real device: one that forgets its hooks
                 // fails its own assertions instead of opening a window.
-                None => Err(concinnity_core::render::error::RenderError::Other(
-                    "no test backend factory".into(),
-                )),
+                None => Err(RenderError::Other("no test backend factory".into())),
             }
         }
         #[cfg(not(test))]
@@ -84,7 +89,7 @@ impl GraphicsSystem {
     // resources, where each per-step user takes and returns them.
     pub(super) fn park_runtime_state(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         handoff: RuntimeHandoff<'_>,
     ) {
         // Seed the frame extraction's viewport from the live backend;
@@ -92,8 +97,7 @@ impl GraphicsSystem {
         let viewport = self
             .backend
             .as_ref()
-            .map(|b| b.logical_size())
-            .unwrap_or((0.0, 0.0));
+            .map_or((0.0, 0.0), |b| b.logical_size());
         self.extractor.set_viewport(viewport);
         // OverlaySystem shapes the overlay draw list from these each frame.
         ctx.insert_resource(OverlayAssets {

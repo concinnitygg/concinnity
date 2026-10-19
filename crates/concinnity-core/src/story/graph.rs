@@ -1,4 +1,4 @@
-use super::*;
+use super::{PipelineContext, StoryCompareOp, StoryGate, StoryOp, StorySystem, Vec};
 
 impl StorySystem {
     // Apply a run of variable operations.
@@ -45,7 +45,7 @@ impl StorySystem {
     // order; running past the last node ends the story. Gates on the arrived
     // page (or menu) redirect first; the hop budget stops a gate cycle from
     // spinning forever.
-    pub(super) fn enter_node(&mut self, index: usize, ctx: &mut PipelineContext) {
+    pub(super) fn enter_node(&mut self, index: usize, ctx: &mut PipelineContext<'_>) {
         let mut index = index;
         let mut hops = 0;
         loop {

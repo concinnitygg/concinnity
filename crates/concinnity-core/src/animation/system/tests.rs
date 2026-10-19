@@ -94,9 +94,9 @@ fn hero() -> SkinnedMeshHandle {
 }
 
 // Match the system back out of the world for report assertions.
-fn with_anim<R>(world: &mut World, f: impl FnOnce(&mut super::AnimationSystem) -> R) -> R {
+fn with_anim<R>(world: &mut World, f: impl FnOnce(&mut AnimationSystem) -> R) -> R {
     f(world
-        .system_mut::<super::AnimationSystem>()
+        .system_mut::<AnimationSystem>()
         .expect("AnimationSystem constructed"))
 }
 
@@ -415,10 +415,8 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
     }
 
     let pose = world.query::<SkeletonPose>().next().expect("pose survives");
-    let foot_mesh = crate::transform::mat4_transform_point(
-        &pose.joint_matrices[2],
-        pose.skeleton.bind_position(2),
-    );
+    let foot_mesh =
+        transform::mat4_transform_point(&pose.joint_matrices[2], pose.skeleton.bind_position(2));
     let rig_y = world.query::<CharacterRig>().next().unwrap().position[1];
     // The ledge top is at world 0.25; the foot's mesh-space height plus the
     // rig's world height must land there (the animated pose kept it at ~0).

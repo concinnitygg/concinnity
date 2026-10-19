@@ -26,7 +26,7 @@ const WARMUP_FRAMES: usize = 64;
 // purpose: the whole suite runs in about a second, so a real steady state is
 // found in the first few frames once the concurrent noise drains, and only a
 // genuine regression spends the full window.
-const QUIET_FRAME_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+const QUIET_FRAME_DEADLINE: core::time::Duration = core::time::Duration::from_secs(10);
 
 // The pinned steady-state heap cost of one `World::step` of the static world
 // below. Zero: every system reserves its working memory at init and reuses it,

@@ -107,7 +107,7 @@ fn thumb_height(list_h: f32, count: usize) -> f32 {
 /// The scrollbar-thumb rectangle for a scrolled list (drawn inside the list's
 /// right edge), or `None` when every option fits and no scrollbar is needed.
 /// The thumb's position mirrors the shown window's scroll position, like the
-/// settings ScrollPanel's thumb.
+/// settings `ScrollPanel`'s thumb.
 pub fn thumb_rect(layout: &DropdownLayout, first: usize, count: usize) -> Option<[f32; 4]> {
     let visible = visible_count(count);
     if count <= visible {

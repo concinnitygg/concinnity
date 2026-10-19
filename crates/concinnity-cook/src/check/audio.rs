@@ -5,7 +5,7 @@ const BUS_NAMES: [&str; 3] = ["music", "sfx", "voice"];
 const ROLLOFF_NAMES: [&str; 3] = ["logarithmic", "linear", "none"];
 
 fn check_volume(name: &str, args: &serde_json::Value) -> Result<(), String> {
-    let Some(volume) = args.get("volume").and_then(|v| v.as_f64()) else {
+    let Some(volume) = args.get("volume").and_then(serde_json::Value::as_f64) else {
         return Ok(());
     };
     if volume.is_finite() && volume >= 0.0 {
@@ -46,7 +46,7 @@ pub(crate) fn check_emitter(name: &str, args: &serde_json::Value) -> Result<(), 
             ROLLOFF_NAMES.join(", ")
         ));
     }
-    let field = |key: &str| args.get(key).and_then(|v| v.as_f64());
+    let field = |key: &str| args.get(key).and_then(serde_json::Value::as_f64);
     let min = field("min_distance");
     let max = field("max_distance");
     for (key, value) in [("min_distance", min), ("max_distance", max)] {
@@ -77,7 +77,10 @@ pub(crate) fn check_cue(name: &str, args: &serde_json::Value) -> Result<(), Stri
 
 // PropBody: the impact gain must be a non-negative finite number.
 pub(crate) fn check_prop_body(name: &str, args: &serde_json::Value) -> Result<(), String> {
-    let Some(volume) = args.get("impact_volume").and_then(|v| v.as_f64()) else {
+    let Some(volume) = args
+        .get("impact_volume")
+        .and_then(serde_json::Value::as_f64)
+    else {
         return Ok(());
     };
     if volume.is_finite() && volume >= 0.0 {

@@ -7,6 +7,7 @@
 // instead, where the message can still name what to install.
 
 /// Ends the build unless dxc resolves.
+#[expect(clippy::panic, reason = "a build script reports failure by panicking")]
 pub(crate) fn require_dxc() {
     if let Some(reason) = concinnity_shader::unavailable_reason() {
         panic!("{}", absent_message(reason));
@@ -23,15 +24,17 @@ pub(crate) fn require_dxc() {
 /// does, and it never runs anything.
 pub(crate) fn cannot_embed(reason: &str) {
     let message = unembeddable_message(reason);
-    if building_for_this_host() {
-        panic!("{message}");
-    }
+    assert!(!building_for_this_host(), "{message}");
     println!("cargo:warning={message}");
 }
 
 // Whether the binary this build produces runs on the machine producing it.
 // Cargo names the target for every build script; the host is whatever this one
 // was compiled for.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 fn building_for_this_host() -> bool {
     is_native(
         std::env::consts::OS,

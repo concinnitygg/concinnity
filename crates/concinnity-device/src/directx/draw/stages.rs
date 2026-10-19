@@ -76,7 +76,7 @@ impl DxContext {
         if self.window_minimized() {
             return;
         }
-        let mut gpu_wait = crate::gpu_wait::GpuWait::none();
+        let mut gpu_wait = GpuWait::none();
         if self
             .block_on_frame_slot(self.current_frame, &mut gpu_wait)
             .is_ok()
@@ -116,7 +116,7 @@ impl DxContext {
                     self.frame_sync.fence_event,
                 )
             }
-            .map_err(|e| error::map_hresult(e.code(), "SetEventOnCompletion"))?;
+            .map_err(|e| map_hresult(e.code(), "SetEventOnCompletion"))?;
             gpu_wait.measure(|| {
                 // SAFETY: the event handle was created in `DxContext::new` and lives as long as
                 // the context, and the wait borrows nothing else.
@@ -132,7 +132,7 @@ impl DxContext {
         // Measured, with the `Present` in `submit_and_present`, into the frame's `gpu_wait_us`:
         // both block the CPU on the GPU inside `draw_frame`, which the engine
         // times its graphics system around.
-        let mut gpu_wait = crate::gpu_wait::GpuWait::none();
+        let mut gpu_wait = GpuWait::none();
         self.block_on_frame_slot(frame, &mut gpu_wait)?;
 
         // Streamed texture swaps: re-point this frame's flat-pool SRV copy at
@@ -198,7 +198,7 @@ impl DxContext {
             };
             let frequency = self.timestamps.frequency;
             let ticks_to_micros = |ticks: u64| -> u32 {
-                (ticks.saturating_mul(1_000_000) / frequency).min(u32::MAX as u64) as u32
+                (ticks.saturating_mul(1_000_000) / frequency).min(u64::from(u32::MAX)) as u32
             };
             pass_timing::decode_frame_block(|start_slot, end_slot| {
                 // SAFETY: `decode_frame_block` only passes slots below `SLOTS_PER_FRAME`, so
@@ -244,7 +244,7 @@ impl DxContext {
             self.hw
                 .alloc
                 .queue()
-                .GetClockCalibration(&mut gpu_now, &mut cpu_now)
+                .GetClockCalibration(&raw mut gpu_now, &raw mut cpu_now)
         }
         .is_err()
         {
@@ -264,7 +264,7 @@ impl DxContext {
     // Publishes this frame's stats before recording; draw calls fill in after.
     pub(in crate::directx) fn begin_frame_stats(
         &self,
-        gpu_wait: &GpuWait,
+        gpu_wait: GpuWait,
         (gpu_frame_us, pass_times_us): (u32, [PassTiming; profile::MAX_PASS_TIMINGS]),
         gpu_done: Option<profile::GpuDone>,
     ) {
@@ -304,7 +304,7 @@ impl DxContext {
                 .auto_exposure
                 .adaptation
                 .as_ref()
-                .map(|a| a.current_ev()),
+                .map(concinnity_core::gfx::auto_exposure::ExposureAdaptation::current_ev),
             // Captured from the resolved `HdrOutputMode` at init. `None` on
             // the SDR path (chip blanks). Mirrors `MtlContext::render_stats`.
             max_edr: self.hw.max_edr(),
@@ -353,7 +353,7 @@ impl DxContext {
 
         // SAFETY: the command list is live and in the recording state, which is what `Close`
         // requires.
-        unsafe { end_cmd.Close() }.map_err(|e| error::map_hresult(e.code(), "end cmd close"))?;
+        unsafe { end_cmd.Close() }.map_err(|e| map_hresult(e.code(), "end cmd close"))?;
         Ok(())
     }
 
@@ -428,10 +428,7 @@ impl DxContext {
             let reason = unsafe { self.hw.device.GetDeviceRemovedReason() };
             return Err(error::classify_present_failure(
                 e.code(),
-                reason
-                    .err()
-                    .map(|r| r.code())
-                    .unwrap_or(windows::core::HRESULT(0)),
+                reason.err().map_or(windows::core::HRESULT(0), |r| r.code()),
             ));
         }
         // Record the buffer just shown so a headless `screenshot` captures the
@@ -451,7 +448,7 @@ impl DxContext {
                 .command_queue
                 .Signal(&self.frame_sync.fence, next_val)
         }
-        .map_err(|e| error::map_hresult(e.code(), "Signal"))?;
+        .map_err(|e| map_hresult(e.code(), "Signal"))?;
 
         self.current_frame = (self.current_frame + 1) % self.hw.frames();
         Ok(())
@@ -482,7 +479,7 @@ impl DxContext {
             rt_transparent: self
                 .transparent
                 .as_ref()
-                .is_some_and(|t| t.rt_pipelines_ready()),
+                .is_some_and(super::super::transparent::TransparentResources::rt_pipelines_ready),
             taa: self.taa.is_some(),
             model_history: self.gbuffer.is_some() && self.cull.model_history_pso.is_some(),
             reflection_composite: self.reflection_composite.is_some(),
@@ -500,16 +497,18 @@ impl DxContext {
             emitters: !self.particle.system.is_empty(),
             fog: self.fog.settings.is_some_and(|s| s.contributes()),
             decals: !self.decal.set.is_empty(),
-            visible_surfaces: self.transparent.as_ref().is_some_and(|t| t.any_visible()),
+            visible_surfaces: self
+                .transparent
+                .as_ref()
+                .is_some_and(super::super::transparent::TransparentResources::any_visible),
             visible_see_through: self.see_through_mesh_visible(),
             planar_targets: self
                 .planar_reflection
                 .as_ref()
-                .is_some_and(|s| s.has_targets()),
-            water_planar_slot: self
-                .transparent
-                .as_ref()
-                .is_some_and(|t| t.water_planar_slot_live()),
+                .is_some_and(super::super::planar::PlanarReflectionSet::has_targets),
+            water_planar_slot: self.transparent.as_ref().is_some_and(
+                super::super::transparent::TransparentResources::water_planar_slot_live,
+            ),
             lines: !lines.is_empty(),
             visible_volumes: self.raymarch_enabled(),
             atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),

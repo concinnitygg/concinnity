@@ -1,4 +1,4 @@
-//! The data half of the CharacterShape panel: the slider rows a schema lays
+//! The data half of the `CharacterShape` panel: the slider rows a schema lays
 //! out over what the target mesh exposes (its morph-target and joint names),
 //! the panel sections, and the value mapping between a row and the
 //! `ShapeSlider` / `JointProportion` entries it reads and writes. Pure and
@@ -31,7 +31,7 @@ impl RowKind {
     // The slider's value range.
     pub(crate) fn range(&self) -> (f32, f32) {
         match self {
-            RowKind::Unipolar => (0.0, 1.0),
+            Self::Unipolar => (0.0, 1.0),
             _ => (-1.0, 1.0),
         }
     }
@@ -288,8 +288,8 @@ impl ShapeValues {
 
     // The preset's slider vector, replacing every value.
     pub(crate) fn apply_preset(&mut self, preset: &ShapePreset) {
-        self.sliders = preset.sliders.clone();
-        self.proportions = preset.proportions.clone();
+        self.sliders.clone_from(&preset.sliders);
+        self.proportions.clone_from(&preset.proportions);
     }
 }
 
@@ -322,7 +322,7 @@ impl SplitMix64 {
     // A draw in `lo..=hi`, from the top 53 bits mapped onto [0, 1].
     fn next_in(&mut self, lo: f32, hi: f32) -> f32 {
         let unit = (self.next_u64() >> 11) as f64 / ((1u64 << 53) - 1) as f64;
-        (lo as f64 + (hi as f64 - lo as f64) * unit) as f32
+        (f64::from(lo) + (f64::from(hi) - f64::from(lo)) * unit) as f32
     }
 }
 
@@ -381,7 +381,7 @@ mod tests {
     use concinnity_cook::compile::character::builtin_schema;
 
     fn names(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| s.to_string()).collect()
+        list.iter().map(ToString::to_string).collect()
     }
 
     // The bundled humanoid's bones and keys (phase 2).

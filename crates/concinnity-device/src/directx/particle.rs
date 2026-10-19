@@ -8,7 +8,7 @@
 //!      cursor names).
 //!   2. Dispatches the `particle_simulate` compute kernel to age + integrate +
 //!      respawn each pool.
-//!   3. Transitions visible pools to NON_PIXEL_SHADER_RESOURCE and rasterizes
+//!   3. Transitions visible pools to `NON_PIXEL_SHADER_RESOURCE` and rasterizes
 //!      one alpha-blended billboard quad per live particle into `hdr_resolve`.
 //!
 //! The render pass alpha-blends into the resolved HDR target after the
@@ -198,7 +198,7 @@ impl ParticleResources {
         )?;
 
         // Per-frame view UBO.
-        let view_size = align256(std::mem::size_of::<ParticleView>() as u64);
+        let view_size = align256(size_of::<ParticleView>() as u64);
         let frames = alloc.frames_in_flight();
         let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
         let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
@@ -211,15 +211,15 @@ impl ParticleResources {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map particle view ubo"))?;
-            view_ubo_ptrs.push(ptr as *mut u8);
+            view_ubo_ptrs.push(ptr.cast::<u8>());
             view_ubo_resources.push(buf);
         }
 
         // Per-frame, per-emitter params ring. One CBV is 256-aligned, so size
         // each slot to align256(sizeof(ParticleParams)).
-        let params_stride = align256(std::mem::size_of::<ParticleParams>() as u64);
+        let params_stride = align256(size_of::<ParticleParams>() as u64);
         let params_total = params_stride * MAX_EMITTERS as u64;
         let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
         let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
@@ -232,9 +232,9 @@ impl ParticleResources {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map particle params ubo"))?;
-            params_ubo_ptrs.push(ptr as *mut u8);
+            params_ubo_ptrs.push(ptr.cast::<u8>());
             params_ubo_resources.push(buf);
         }
 
@@ -261,8 +261,8 @@ pub(in crate::directx) fn build_emitter_gpu_state(
     record: &ParticleEmitterRecord,
 ) -> RenderResult<ParticleEmitterGpuState> {
     let device = alloc.device();
-    let slots = record.max_particles as u64;
-    let pool_bytes = slots * std::mem::size_of::<GpuParticle>() as u64;
+    let slots = u64::from(record.max_particles);
+    let pool_bytes = slots * size_of::<GpuParticle>() as u64;
 
     // Default-heap UAV buffer for the pool. Created in COMMON (D3D12 always makes
     // committed buffers in COMMON regardless of the requested state); zero_default_
@@ -293,11 +293,11 @@ pub(in crate::directx) fn zero_default_buffer(
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { upload.Map(0, None, Some(&mut ptr)) }
+    unsafe { upload.Map(0, None, Some(&raw mut ptr)) }
         .map_err(|e| map_hresult(e.code(), "zero_default_buffer: map upload"))?;
     // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
     // is a separate allocation, so the ranges cannot overlap.
-    unsafe { std::ptr::write_bytes(ptr as *mut u8, 0, bytes as usize) };
+    unsafe { std::ptr::write_bytes(ptr.cast::<u8>(), 0, bytes as usize) };
     // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past this
     // call.
     unsafe { upload.Unmap(0, None) };
@@ -377,8 +377,7 @@ impl DxContext {
             .particle
             .resources
             .as_ref()
-            .map(|s| s.emitter_srv_base_slot)
-            .unwrap_or(0);
+            .map_or(0, |s| s.emitter_srv_base_slot);
         SrvSlot::at(
             &self.descriptors.srv_heap,
             self.descriptors.srv_descriptor_size,
@@ -416,9 +415,9 @@ impl DxContext {
                 let dst = resources.params_ubo_ptrs[frame_idx]
                     .add((emitter.id as u64 * resources.params_stride) as usize);
                 std::ptr::copy_nonoverlapping(
-                    &emitter.params as *const ParticleParams as *const u8,
+                    (&raw const emitter.params).cast::<u8>(),
                     dst,
-                    std::mem::size_of::<ParticleParams>(),
+                    size_of::<ParticleParams>(),
                 );
             }
         }
@@ -439,7 +438,7 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        frame: &ParticleFrame,
+        frame: ParticleFrame,
     ) {
         let Some(resources) = self.particle.resources.as_ref() else {
             return;
@@ -455,7 +454,7 @@ impl DxContext {
             cmd.SetComputeRootSignature(&resources.simulate_root_sig);
             cmd.SetPipelineState(&resources.simulate_pso);
         }
-        for emitter in self.particle.system.emitters(frame) {
+        for emitter in self.particle.system.emitters(&frame) {
             let params_gva = Self::particle_params_gva(resources, frame_idx, emitter.id);
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
@@ -513,9 +512,9 @@ impl DxContext {
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &view_uni as *const ParticleView as *const u8,
+                (&raw const view_uni).cast::<u8>(),
                 resources.view_ubo_ptrs[frame_idx],
-                std::mem::size_of::<ParticleView>(),
+                size_of::<ParticleView>(),
             );
         }
         let view_gva = com::gpu_va(&resources.view_ubo_resources[frame_idx]);

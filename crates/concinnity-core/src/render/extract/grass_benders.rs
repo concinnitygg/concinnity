@@ -14,7 +14,7 @@ use crate::gfx::frustum::transform_aabb;
 use crate::render::grass::GrassBender;
 
 // Refill `out` with this frame's benders.
-pub(super) fn gather_into(ctx: &PipelineContext, out: &mut Vec<GrassBender>) {
+pub(super) fn gather_into(ctx: &PipelineContext<'_>, out: &mut Vec<GrassBender>) {
     out.clear();
     out.extend(ctx.query::<CharacterRig>().map(of_rig));
     if let (Some(camera), Some(body)) = (
@@ -86,6 +86,7 @@ fn of_body(collider: &PropCollider, model: [[f32; 4]; 4]) -> GrassBender {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::Handle;
 
     fn translated(scale: f32, at: [f32; 3]) -> [[f32; 4]; 4] {
         [
@@ -99,7 +100,7 @@ mod tests {
     #[test]
     fn a_character_stands_its_capsule_on_its_origin() {
         let mut rig = CharacterRig::new(
-            Default::default(),
+            Handle::default(),
             crate::gfx::render_types::SkinnedIndex(0),
             translated(1.0, [1.0, 2.0, 3.0]),
             0.6,

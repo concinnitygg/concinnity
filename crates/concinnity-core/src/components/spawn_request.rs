@@ -2,7 +2,7 @@ use crate::components::Transform;
 use crate::ecs::asset_id::AssetId;
 
 /// Runtime-only event requesting that a copy of an existing placement be created
-/// in the world at runtime. The symmetric counterpart to DespawnRequest.
+/// in the world at runtime. The symmetric counterpart to `DespawnRequest`.
 ///
 /// `template` names a placement already present in the world; the new instance
 /// reuses that placement's geometry and material at a fresh `transform`. A

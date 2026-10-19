@@ -1,4 +1,4 @@
-//! Bootstrap for DxContext: Win32 window registration, DXGI factory, adapter
+//! Bootstrap for `DxContext`: Win32 window registration, DXGI factory, adapter
 //! selection, D3D12 device + (optional) debug info-queue, command queue,
 //! allocator, and swapchain creation. Returns the context's `DxHardware` group
 //! and the swapchain it presents through.
@@ -41,7 +41,7 @@ pub(super) struct WindowConfig<'a> {
 }
 
 pub(super) fn setup(
-    config: WindowConfig,
+    config: WindowConfig<'_>,
     validation: bool,
     vsync: bool,
     swapchain_config: SwapchainConfig,
@@ -62,19 +62,18 @@ pub(super) fn setup(
         // available.
         let debug = unsafe {
             let mut d: Option<ID3D12Debug> = None;
-            D3D12GetDebugInterface(&mut d).ok().and(d)
+            D3D12GetDebugInterface(&raw mut d).ok().and(d)
         };
-        match debug {
-            Some(d) => {
-                // SAFETY: `d` is the live debug interface the query above produced, and enabling
-                // the layer borrows nothing.
-                unsafe { d.EnableDebugLayer() };
-                tracing::info!("d3d12 debug layer: enabled");
-            }
-            None => tracing::warn!(
+        if let Some(d) = debug {
+            // SAFETY: `d` is the live debug interface the query above produced, and enabling
+            // the layer borrows nothing.
+            unsafe { d.EnableDebugLayer() };
+            tracing::info!("d3d12 debug layer: enabled");
+        } else {
+            tracing::warn!(
                 "d3d12 debug layer: requested but unavailable (install the Windows \
                  \"Graphics Tools\" optional feature); running unvalidated"
-            ),
+            );
         }
     }
 
@@ -138,7 +137,7 @@ pub(super) fn setup(
                 },
                 ..Default::default()
             };
-            let _ = iq.AddStorageFilterEntries(&filter);
+            let _ = iq.AddStorageFilterEntries(&raw const filter);
         });
         if iq.is_none() {
             tracing::warn!("d3d12 info queue: unavailable; layer messages will not be logged");
@@ -155,8 +154,9 @@ pub(super) fn setup(
     };
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    let command_queue: ID3D12CommandQueue = unsafe { device.CreateCommandQueue(&queue_desc) }
-        .map_err(|e| map_hresult(e.code(), "CreateCommandQueue"))?;
+    let command_queue: ID3D12CommandQueue =
+        unsafe { device.CreateCommandQueue(&raw const queue_desc) }
+            .map_err(|e| map_hresult(e.code(), "CreateCommandQueue"))?;
 
     // HDR-output detection. Walk the adapter's outputs, find the highest
     // max-EDR multiplier reported by any HDR-capable output, and feed it
@@ -203,26 +203,22 @@ pub(super) fn setup(
     // or the factory / hardware doesn't support tearing, create the swapchain
     // without the flag (refresh-paced fallback).
     let allow_tearing = !vsync
-        && factory
-            .cast::<IDXGIFactory5>()
-            .ok()
-            .map(|f5| {
-                // CheckFeatureSupport writes a 4-byte Win32 BOOL; an i32 matches
-                // its layout without pulling in the BOOL type.
-                let mut data: i32 = 0;
-                // SAFETY: a query on a live COM object; the descriptor it reads and the out-
-                // parameters it fills are live locals that outlive the call.
-                unsafe {
-                    f5.CheckFeatureSupport(
-                        DXGI_FEATURE_PRESENT_ALLOW_TEARING,
-                        &mut data as *mut _ as *mut core::ffi::c_void,
-                        std::mem::size_of::<i32>() as u32,
-                    )
-                }
-                .is_ok()
-                    && data != 0
-            })
-            .unwrap_or(false);
+        && factory.cast::<IDXGIFactory5>().ok().is_some_and(|f5| {
+            // CheckFeatureSupport writes a 4-byte Win32 BOOL; an i32 matches
+            // its layout without pulling in the BOOL type.
+            let mut data: i32 = 0;
+            // SAFETY: a query on a live COM object; the descriptor it reads and the out-
+            // parameters it fills are live locals that outlive the call.
+            unsafe {
+                f5.CheckFeatureSupport(
+                    DXGI_FEATURE_PRESENT_ALLOW_TEARING,
+                    (&raw mut data).cast::<core::ffi::c_void>(),
+                    size_of::<i32>() as u32,
+                )
+            }
+            .is_ok()
+                && data != 0
+        });
     let sc_desc = DXGI_SWAP_CHAIN_DESC1 {
         Width: width,
         Height: height,
@@ -240,7 +236,7 @@ pub(super) fn setup(
     let sc_base: IDXGISwapChain1 =
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
-        unsafe { factory.CreateSwapChainForHwnd(&command_queue, hwnd, &sc_desc, None, None) }
+        unsafe { factory.CreateSwapChainForHwnd(&command_queue, hwnd, &raw const sc_desc, None, None) }
             .map_err(|e| map_hresult(e.code(), "CreateSwapChain"))?;
     let swapchain: IDXGISwapChain3 = sc_base
         .cast()
@@ -428,9 +424,8 @@ fn measure_max_edr(adapter: &IDXGIAdapter1) -> f32 {
             Err(_) => continue, // pre-Windows-10 output, no HDR info
         };
         // SAFETY: a property query on a live COM object; it only reads.
-        let desc1 = match unsafe { output6.GetDesc1() } {
-            Ok(d) => d,
-            Err(_) => continue,
+        let Ok(desc1) = (unsafe { output6.GetDesc1() }) else {
+            continue;
         };
         // The color-space field is the canonical "HDR available" signal:
         // PQ here means the output is wired to an HDR-capable display.
@@ -464,8 +459,8 @@ pub(super) fn query_msaa_samples(device: &ID3D12Device) -> u32 {
         if unsafe {
             device.CheckFeatureSupport(
                 D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,
-                &mut data as *mut _ as *mut std::ffi::c_void,
-                std::mem::size_of::<D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS>() as u32,
+                (&raw mut data).cast::<std::ffi::c_void>(),
+                size_of::<D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS>() as u32,
             )
         }
         .is_ok()

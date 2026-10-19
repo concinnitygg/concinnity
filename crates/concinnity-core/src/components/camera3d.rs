@@ -11,7 +11,7 @@ use alloc::string::String;
 pub enum FollowDrive {
     /// The controller only writes the speed parameter and the facing; the
     /// character moves by the displacement its animation clips carry (clips
-    /// baked with [root_motion](animation.md)). Clips must travel along
+    /// baked with [`root_motion`](animation.md)). Clips must travel along
     /// local -Z so the facing yaw and the travel direction agree.
     #[vocab("root_motion")]
     RootMotion,
@@ -23,12 +23,12 @@ pub enum FollowDrive {
     Direct,
 }
 
-/// Third-person follow settings carried on a [CameraController](#cameracontroller).
+/// Third-person follow settings carried on a [`CameraController`](#cameracontroller).
 ///
 /// When `follow` is set the camera becomes a third-person orbit camera: the
 /// mouse orbits around the followed character, and WASD steers the character
 /// itself (camera-relative). The character must be a
-/// [SkinnedMesh](skinned_mesh.md) with a `capsule`, so it has a kinematic
+/// [`SkinnedMesh`](skinned_mesh.md) with a `capsule`, so it has a kinematic
 /// character capsule to move.
 #[derive(
     Debug,
@@ -40,7 +40,7 @@ pub enum FollowDrive {
 )]
 #[serde(default)]
 pub struct FollowController {
-    /// Name of the followed [SkinnedMesh](skinned_mesh.md). It must declare a
+    /// Name of the followed [`SkinnedMesh`](skinned_mesh.md). It must declare a
     /// `capsule`.
     pub target: Option<SkinnedMeshHandle>,
     /// Orbit distance from the pivot to the camera, in world units.
@@ -49,13 +49,13 @@ pub struct FollowController {
     /// Pivot height above the character's feet, in world units.
     #[asset(default = 1.5)]
     pub height: f32,
-    /// How the character moves; see [FollowDrive](#followdrive).
+    /// How the character moves; see [`FollowDrive`](#followdrive).
     #[asset(default = FollowDrive::RootMotion)]
     pub drive: FollowDrive,
     /// Character turn rate toward the input heading, in radians per second.
     #[asset(default = 10.0)]
     pub turn_speed: f32,
-    /// Name of the character's [AnimationGraph](anim_graph.md) float parameter
+    /// Name of the character's [`AnimationGraph`](anim_graph.md) float parameter
     /// that receives the current travel speed in world units per second
     /// (drives a locomotion blendspace). Empty disables parameter writes,
     /// leaving the graph externally driven.
@@ -84,7 +84,7 @@ pub struct FollowController {
 pub struct CameraController {
     /// Direct 6-DoF flight mode. WASD moves along the camera's full forward
     /// vector (yaw + pitch) and jump rises along world +Y; the controller
-    /// writes the new position straight onto Camera3D, bypassing the physics
+    /// writes the new position straight onto `Camera3D`, bypassing the physics
     /// step and the bounds box. Used for inspector / fly-through cameras (the
     /// default, e.g. the `cn add foo.glb` scaffold). Set `false` for the
     /// FPS-style ground walker.
@@ -109,7 +109,7 @@ pub struct CameraController {
     /// AABB maximum corner the camera center must stay inside [x, y, z].
     #[asset(default = [1.0e9; 3])]
     pub bounds_max: [f32; 3],
-    /// Third-person follow settings; see [FollowController](#followcontroller).
+    /// Third-person follow settings; see [`FollowController`](#followcontroller).
     /// When set, the camera orbits the followed character and WASD steers the
     /// character instead of the camera (`free_fly` and the bounds box are
     /// ignored). `null` (the default) keeps the first-person / fly modes.
@@ -127,7 +127,7 @@ fn default_controller() -> Option<CameraController> {
 /// A camera that jumps rather than travels, as at a shot change or a
 /// teleport, draws its first frame from the new pose afresh instead of
 /// blending it with the frames before the jump. Mark the jump where it is
-/// made: a [CameraTrack](#cameratrack) leg or a [Behavior](#behavior)
+/// made: a [`CameraTrack`](#cameratrack) leg or a [Behavior](#behavior)
 /// `set_transform` with `cut` set. An unmarked jump is still recognized when it
 /// moves, turns or zooms the view far beyond the camera's own recent motion.
 ///
@@ -170,7 +170,7 @@ pub struct Camera3DArgs {
     /// Initial pitch in radians.
     pub pitch: f32,
     /// Input controller settings, or `null` to leave the camera uncontrolled
-    /// (driven by a [CameraShot](#camerashot) / [Scene](#scene)
+    /// (driven by a [`CameraShot`](#camerashot) / [Scene](#scene)
     /// cutscene). Omitted defaults to a free-fly inspector controller.
     #[asset(default = default_controller())]
     pub controller: Option<CameraController>,
@@ -259,7 +259,7 @@ pub struct Camera3D {
     /// Current view matrix, written each step by the active camera system.
     /// Column-major, matching the GLSL mat4 convention.
     pub view_matrix: [[f32; 4]; 4],
-    /// Current world-space eye position, kept in sync with view_matrix.
+    /// Current world-space eye position, kept in sync with `view_matrix`.
     pub position: [f32; 3],
     /// Current yaw in radians.
     pub yaw: f32,
@@ -270,7 +270,7 @@ pub struct Camera3D {
     #[serde(default = "plus_y")]
     pub up: [f32; 3],
     /// World-space horizontal movement intent (units/second). Written by
-    /// Camera3DSystem each frame, consumed by PhysicsSystem. Runtime-only.
+    /// `Camera3DSystem` each frame, consumed by `PhysicsSystem`. Runtime-only.
     pub desired_move: [f32; 3],
     /// Set for one frame when the jump key is pressed. Runtime-only.
     pub jump_requested: bool,

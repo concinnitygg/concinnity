@@ -5,7 +5,7 @@
 //!
 //! Algorithm (per-frame, called from each backend's draw loop):
 //!
-//!   1. Split the camera's [near, shadow_distance] depth range into N cascade
+//!   1. Split the camera's [near, `shadow_distance`] depth range into N cascade
 //!      sub-ranges using the practical PSSM blend
 //!      (lambda * logarithmic + (1 - lambda) * linear).
 //!   2. For each cascade, compute the 8 frustum corners at its near/far depths,
@@ -15,7 +15,7 @@
 //!   3. Snap the sphere center, in world space along the light's right/up axes,
 //!      to a per-cascade texel grid so the grid stays anchored in the world and
 //!      individual texels don't crawl as the camera translates.
-//!   4. Build a RH look_at from outside the sphere along the light direction
+//!   4. Build a RH `look_at` from outside the sphere along the light direction
 //!      and an ortho projection that exactly encloses the sphere.
 //!
 //! The math is shared across all three backends: Metal, Vulkan, and DirectX
@@ -48,7 +48,7 @@ pub fn empty_shadow_uniforms() -> ShadowUniforms {
 /// [`compute_shadow_uniforms`].
 #[derive(Clone, Copy)]
 pub struct ShadowUniformInputs {
-    /// Camera view matrix (column-major, RH, same convention as look_at).
+    /// Camera view matrix (column-major, RH, same convention as `look_at`).
     pub view: [[f32; 4]; 4],
     /// World-space camera position.
     pub cam_pos: [f32; 3],
@@ -58,7 +58,7 @@ pub struct ShadowUniformInputs {
     pub aspect: f32,
     /// Camera near plane.
     pub near: f32,
-    /// Far end of the last cascade. Cascades cover [near, shadow_distance].
+    /// Far end of the last cascade. Cascades cover [near, `shadow_distance`].
     pub shadow_distance: f32,
     /// Unit vector pointing TOWARD the light. Same convention as
     /// `DirectionalLight.direction`; renormalized internally.

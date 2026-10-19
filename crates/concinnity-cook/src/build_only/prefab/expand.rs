@@ -76,14 +76,10 @@ pub(crate) fn expand_prefabs(
         let inst_rot = f32_arr3(&args, "rotation_deg", [0.0, 0.0, 0.0]);
         let inst_scale = f32_arr3(&args, "scale", [1.0, 1.0, 1.0]);
 
-        let prefab_def = match lookup_prefab(prefab_ref, &prefab_defs, assets_dir)? {
-            Some(def) => def,
-            None => {
-                return Err(format!(
-                    "Prop '{}': prefab '{}' not found, declare a Prefab asset with that `$id`",
-                    instance_name, prefab_ref
-                ));
-            }
+        let Some(prefab_def) = lookup_prefab(prefab_ref, &prefab_defs, assets_dir)? else {
+            return Err(format!(
+                "Prop '{instance_name}': prefab '{prefab_ref}' not found, declare a Prefab asset with that `$id`"
+            ));
         };
 
         // The instance's own scene carries to every prop it expands into.
@@ -165,9 +161,8 @@ fn resolve_generated(
 
     if !taken.insert(name.clone()) {
         return Err(format!(
-            "Prop '{}': generated asset name '{}' collides with another asset; rename the \
-             instance or the prefab entry",
-            instance_name, name
+            "Prop '{instance_name}': generated asset name '{name}' collides with another asset; rename the \
+             instance or the prefab entry"
         ));
     }
     report.record_generated(&name, &entry_type, instance_name);
@@ -247,8 +242,7 @@ fn expand_prefab_entries(
                 let nested_ref = entry.prefab.as_str();
                 if nested_ref.is_empty() {
                     return Err(format!(
-                        "Prefab entry '{}': kind=prefab but 'prefab' field is empty",
-                        expanded_name
+                        "Prefab entry '{expanded_name}': kind=prefab but 'prefab' field is empty"
                     ));
                 }
                 if call_stack.iter().any(|c| c == nested_ref) {
@@ -259,8 +253,7 @@ fn expand_prefab_entries(
                 }
                 let Some(nested_def) = lookup_prefab(nested_ref, prefab_defs, assets_dir)? else {
                     return Err(format!(
-                        "Prefab entry '{}': nested prefab '{}' not found",
-                        expanded_name, nested_ref
+                        "Prefab entry '{expanded_name}': nested prefab '{nested_ref}' not found"
                     ));
                 };
                 call_stack.push(nested_ref.to_string());
@@ -348,9 +341,9 @@ fn f32_arr3(v: &serde_json::Value, key: &str, default: [f32; 3]) -> [f32; 3] {
         .and_then(|a| {
             if a.len() == 3 {
                 Some([
-                    a[0].as_f64().unwrap_or(default[0] as f64) as f32,
-                    a[1].as_f64().unwrap_or(default[1] as f64) as f32,
-                    a[2].as_f64().unwrap_or(default[2] as f64) as f32,
+                    a[0].as_f64().unwrap_or_else(|| f64::from(default[0])) as f32,
+                    a[1].as_f64().unwrap_or_else(|| f64::from(default[1])) as f32,
+                    a[2].as_f64().unwrap_or_else(|| f64::from(default[2])) as f32,
                 ])
             } else {
                 None
@@ -448,11 +441,14 @@ mod tests {
             serde_json::json!({"type":"Prop","args":{"$id":"i2","prefab":"pair","position":[10,0,0],"rotation_deg":[0,90,0]}}),
         ];
         expand(&mut assets).unwrap();
-        let props: Vec<_> = assets
-            .iter()
-            .filter(|v| registered_type(v) == Some(RegisteredType::Prop))
-            .collect();
-        assert_eq!(props.len(), 4);
+
+        assert_eq!(
+            assets
+                .iter()
+                .filter(|v| registered_type(v) == Some(RegisteredType::Prop))
+                .count(),
+            4
+        );
     }
 
     #[test]

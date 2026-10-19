@@ -106,7 +106,7 @@ impl AtmosphereState {
     pub(super) fn build(
         device: &ProtocolObject<dyn MTLDevice>,
         allocator: &DeviceAllocator,
-        settings: AtmosphereSettings,
+        settings: &AtmosphereSettings,
         hdr_samples: u32,
         hot_reload: bool,
     ) -> RenderResult<(Self, AtmosphereCubes)> {
@@ -217,7 +217,7 @@ impl AtmosphereState {
             hot_reload,
         )?;
         let state = Self {
-            settings,
+            settings: *settings,
             params: None,
             transmittance,
             multiscatter,

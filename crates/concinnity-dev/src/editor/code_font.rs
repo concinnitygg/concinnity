@@ -1,4 +1,4 @@
-//! The monospace face code text draws with: JetBrains Mono Regular, under the
+//! The monospace face code text draws with: `JetBrains` Mono Regular, under the
 //! SIL Open Font License 1.1 shipped beside the font file. It lives in this
 //! crate, so only the editor carries it; the atlas is baked once for the
 //! process and appended to each world the editor injects, like the HUD face.

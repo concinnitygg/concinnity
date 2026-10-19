@@ -77,6 +77,7 @@ impl SkeletonPose {
 
     /// Install the static shape layers and re-seed the rest pose through them,
     /// so a mesh with no clip renders shaped.
+    #[must_use]
     pub fn with_shape(mut self, morph_base: Vec<f32>, proportions: ProportionLayer) -> Self {
         self.set_shape(morph_base, proportions);
         self
@@ -101,6 +102,7 @@ impl SkeletonPose {
 
     /// A fresh pose sharing this one's skeleton and shape layers, for a
     /// runtime-spawned copy of the mesh at draw slot `skinned_index`.
+    #[must_use]
     pub fn clone_for_slot(&self, skinned_index: SkinnedIndex) -> Self {
         Self::new(self.mesh_id, skinned_index, self.skeleton.clone())
             .with_shape(self.morph_base.clone(), self.proportions.clone())

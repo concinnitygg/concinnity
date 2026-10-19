@@ -1,5 +1,5 @@
 //! Sprite quad assembly. Piggybacks on the text render pass: a plain Sprite is
-//! emitted as a TextDrawCall containing a single quad with the sentinel UV
+//! emitted as a `TextDrawCall` containing a single quad with the sentinel UV
 //! (u < 0) the text shader interprets as a solid-colored fill (alpha carried
 //! in v); a Sprite with a `texture` is emitted with real 0..1 UVs and a
 //! positive vertex `mode` so the shader samples the sprite's texture, which
@@ -66,9 +66,8 @@ pub fn build_sprite_calls_into<'a>(
     texture_slots: &TextureSlots,
     viewport: [f32; 2],
 ) {
-    let fill_slot = match default_atlas_slot {
-        Some(s) => s,
-        None => return,
+    let Some(fill_slot) = default_atlas_slot else {
+        return;
     };
     let overlay = OverlayTransform::from_viewport(viewport);
     let cover = OverlayTransform::cover_from_viewport(viewport);
@@ -255,9 +254,10 @@ fn stroke_geometry(
     alpha: f32,
     v: impl FnMut(f32, f32, f32) -> TextVertex,
 ) {
-    match radius > 0.5 {
-        true => rounded_ring_geometry(vertices, indices, rect, radius, width, alpha, v),
-        false => ring_geometry(vertices, indices, rect, width, alpha, v),
+    if radius > 0.5 {
+        rounded_ring_geometry(vertices, indices, rect, radius, width, alpha, v);
+    } else {
+        ring_geometry(vertices, indices, rect, width, alpha, v);
     }
 }
 

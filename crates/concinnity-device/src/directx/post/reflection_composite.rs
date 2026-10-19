@@ -28,7 +28,7 @@ pub(in crate::directx) type DxReflectionCompositePass =
 // Build the composite at render resolution `width` x `height`, its blur divided
 // by `blur_scale`.
 pub(in crate::directx) fn build_reflection_composite(
-    device: &DxPostDevice,
+    device: &DxPostDevice<'_>,
     blur_scale: u32,
     width: u32,
     height: u32,

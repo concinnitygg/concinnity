@@ -28,9 +28,9 @@ impl PassResolution {
     /// Per-axis render-resolution divisor the pass target is scaled by.
     pub fn scale_divisor(self) -> u32 {
         match self {
-            PassResolution::Full => 1,
-            PassResolution::Half => 2,
-            PassResolution::Quarter => 4,
+            Self::Full => 1,
+            Self::Half => 2,
+            Self::Quarter => 4,
         }
     }
 }

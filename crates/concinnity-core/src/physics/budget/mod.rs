@@ -67,7 +67,7 @@ pub(crate) fn record_of(budget: &PhysicsBudget) -> PhysicsBudgetRecord {
 /// [`PhysicsSystem`](super::PhysicsSystem)'s init goes on to build.
 ///
 /// Must run before init drains the `PhysicsJoint` column.
-pub(crate) fn scan_counts(ctx: &PipelineContext) -> PhysicsCounts {
+pub(crate) fn scan_counts(ctx: &PipelineContext<'_>) -> PhysicsCounts {
     // A body is built per collider-bearing entity that also has a transform to
     // place it at, and it simulates freely when the entity carries dynamics.
     let bodies: BTreeSet<Entity> = ctx
@@ -99,7 +99,7 @@ pub(crate) fn scan_counts(ctx: &PipelineContext) -> PhysicsCounts {
         }
         match joint.body_b {
             Some(body_b) if has_body(body_b) => counts.joints += 1,
-            Some(_) => continue,
+            Some(_) => {}
             None => {
                 counts.joints += 1;
                 counts.world_anchored_joints += 1;

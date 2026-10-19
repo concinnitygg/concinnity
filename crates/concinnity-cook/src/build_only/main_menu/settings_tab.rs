@@ -68,14 +68,14 @@ pub(super) fn emit_settings_tab(
     win_h: f32,
     font_px: f32,
 ) -> Vec<serde_json::Value> {
-    let screen = format!("{}_settings_{}", menu_name, active);
+    let screen = format!("{menu_name}_settings_{active}");
     let mut out = Vec::new();
 
     out.push(spec_to_value(&asset::screen(&screen, false)));
 
     if style.dim[3] > 0.0 {
         out.push(sprite(
-            &format!("{}_dim", screen),
+            &format!("{screen}_dim"),
             0.0,
             0.0,
             win_w,
@@ -142,7 +142,7 @@ pub(super) fn emit_settings_tab(
         } else {
             style.text_color
         };
-        let label_name = format!("{}_tab_{}", screen, suffix);
+        let label_name = format!("{screen}_tab_{suffix}");
         out.push(label_value(
             &label_name,
             label,
@@ -156,7 +156,7 @@ pub(super) fn emit_settings_tab(
             // Underline marker just below the active tab's text.
             let mark_h = (font_px * tab_scale * 0.08).max(2.0);
             out.push(sprite(
-                &format!("{}_tabmark", screen),
+                &format!("{screen}_tabmark"),
                 tab_x,
                 tab_text_y + font_px * tab_scale + mark_h,
                 *w,
@@ -166,9 +166,9 @@ pub(super) fn emit_settings_tab(
         } else {
             out.push(spec_to_value(
                 &asset::hit_region(
-                    format!("{}_tabbtn_{}", screen, suffix),
+                    format!("{screen}_tabbtn_{suffix}"),
                     [tab_x, row_y(0), *w, style.button_height],
-                    NamedAction::Show((format!("{}_settings_{}", menu_name, suffix)).into()),
+                    NamedAction::Show((format!("{menu_name}_settings_{suffix}")).into()),
                 )
                 .set("label", label_name)
                 .set("hover_color", style.hover_color)
@@ -197,7 +197,7 @@ pub(super) fn emit_settings_tab(
         // row's content and listed first in the row's elements, so it sits behind
         // the row and reflows / clips / hides with it when scrolled or collapsed.
         let is_header = matches!(*row, BodyRow::GroupHeader(..));
-        let bg_name = format!("{}_bg_{}", screen, j);
+        let bg_name = format!("{screen}_bg_{j}");
         out.push(sprite(
             &bg_name,
             row_x,
@@ -245,8 +245,8 @@ pub(super) fn emit_settings_tab(
                 (super::super::slider::expand::element_names(&name), group)
             }
             BodyRow::Key(action_label, key, idx, group) => {
-                let name = format!("{}_keyname_{}", screen, idx);
-                let val = format!("{}_keyval_{}", screen, idx);
+                let name = format!("{screen}_keyname_{idx}");
+                let val = format!("{screen}_keyval_{idx}");
                 out.push(label_value(
                     &name,
                     action_label,
@@ -268,8 +268,8 @@ pub(super) fn emit_settings_tab(
                 (vec![name, val], group)
             }
             BodyRow::Rebind(action_label, setting, idx, group) => {
-                let name = format!("{}_rebind_name_{}", screen, idx);
-                let val = format!("{}_rebind_val_{}", screen, idx);
+                let name = format!("{screen}_rebind_name_{idx}");
+                let val = format!("{screen}_rebind_val_{idx}");
                 out.push(label_value(
                     &name,
                     action_label,
@@ -297,7 +297,7 @@ pub(super) fn emit_settings_tab(
                 let ctrl_w = (content_x + content_w - control_x).max(0.0);
                 out.push(spec_to_value(
                     &asset::hit_region(
-                        format!("{}_rebind_btn_{}", screen, idx),
+                        format!("{screen}_rebind_btn_{idx}"),
                         [control_x, base_y, ctrl_w, style.button_height],
                         NamedAction::Setting {
                             key: setting,
@@ -312,7 +312,7 @@ pub(super) fn emit_settings_tab(
             }
             BodyRow::GroupHeader(gid, title) => {
                 let collapsed = groups.iter().any(|g| g.gid == gid && g.collapsed);
-                let header = format!("{}_grphdr_{}", screen, gid);
+                let header = format!("{screen}_grphdr_{gid}");
                 let header_scale = row_scale * 1.05;
                 out.push(label_value(
                     &header,
@@ -325,7 +325,7 @@ pub(super) fn emit_settings_tab(
                 ));
                 out.push(spec_to_value(
                     &asset::hit_region(
-                        format!("{}_grpbtn_{}", screen, gid),
+                        format!("{screen}_grpbtn_{gid}"),
                         [row_x, base_y, row_width, style.button_height],
                         NamedAction::GroupToggle(gid),
                     )
@@ -356,7 +356,7 @@ pub(super) fn emit_settings_tab(
         0.25,
     ];
     out.push(sprite(
-        &format!("{}_scrolltrack", screen),
+        &format!("{screen}_scrolltrack"),
         track_x,
         band_top,
         SCROLLBAR_WIDTH,
@@ -364,7 +364,7 @@ pub(super) fn emit_settings_tab(
         track_tint,
     ));
     out.push(sprite(
-        &format!("{}_scrollthumb", screen),
+        &format!("{screen}_scrollthumb"),
         track_x,
         band_top,
         SCROLLBAR_WIDTH,
@@ -400,7 +400,7 @@ pub(super) fn emit_settings_tab(
     // default, or fires the menu's Back-action override (so a caller that owns
     // the settings navigation, e.g. a story, can route it).
     let back_y = band_top + band_h + BACK_GAP;
-    let back_label = format!("{}_label_back", screen);
+    let back_label = format!("{screen}_label_back");
     let back_action = style
         .settings_back_action
         .clone()
@@ -416,7 +416,7 @@ pub(super) fn emit_settings_tab(
     ));
     out.push(spec_to_value(
         &asset::hit_region(
-            format!("{}_btn_back", screen),
+            format!("{screen}_btn_back"),
             [
                 center_x - style.button_width / 2.0,
                 back_y,
@@ -431,7 +431,7 @@ pub(super) fn emit_settings_tab(
     ));
 
     if style.cursor {
-        out.push(cursor_sprite(&format!("{}_cursor", screen), style));
+        out.push(cursor_sprite(&format!("{screen}_cursor"), style));
     }
 
     scope_to_screen(&mut out, &screen);

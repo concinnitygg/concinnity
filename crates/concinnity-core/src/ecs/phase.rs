@@ -49,22 +49,22 @@ pub enum Phase {
 
 impl Phase {
     /// Every phase, in run order.
-    pub const ALL: [Phase; 5] = [
-        Phase::Early,
-        Phase::Logic,
-        Phase::Late,
-        Phase::PreRender,
-        Phase::PostRender,
+    pub const ALL: [Self; 5] = [
+        Self::Early,
+        Self::Logic,
+        Self::Late,
+        Self::PreRender,
+        Self::PostRender,
     ];
 
     /// The phase name, for schedule reporting.
     pub fn as_str(self) -> &'static str {
         match self {
-            Phase::Early => "Early",
-            Phase::Logic => "Logic",
-            Phase::Late => "Late",
-            Phase::PreRender => "PreRender",
-            Phase::PostRender => "PostRender",
+            Self::Early => "Early",
+            Self::Logic => "Logic",
+            Self::Late => "Late",
+            Self::PreRender => "PreRender",
+            Self::PostRender => "PostRender",
         }
     }
 }

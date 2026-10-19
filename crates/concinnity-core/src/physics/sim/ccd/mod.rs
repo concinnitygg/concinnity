@@ -102,7 +102,7 @@ impl Ccd {
     /// the honest worst case, and a reservation that could not hold it would
     /// decline exactly when the sweep is most needed.
     pub(crate) fn with_capacity(capacity: usize) -> Self {
-        Ccd {
+        Self {
             movers: Vec::with_capacity(capacity),
             crossings: Vec::with_capacity(capacity),
             max_motion_sq: 0.0,
@@ -163,7 +163,7 @@ impl Ccd {
         if self.movers.is_empty() {
             return;
         }
-        let Ccd {
+        let Self {
             movers,
             crossings,
             max_motion_sq,

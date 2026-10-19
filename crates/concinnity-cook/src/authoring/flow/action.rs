@@ -34,23 +34,23 @@ impl Move {
     /// The place the move names, or `None` for one that names none.
     pub fn target(&self) -> Option<&str> {
         match self {
-            Move::Scene(name) | Move::Show(name) | Move::Push(name) | Move::Toggle(name) => {
+            Self::Scene(name) | Self::Show(name) | Self::Push(name) | Self::Toggle(name) => {
                 Some(name)
             }
-            Move::Back | Move::Story | Move::Quit => None,
+            Self::Back | Self::Story | Self::Quit => None,
         }
     }
 
     /// The move as one word, short enough to label a wire between two places.
     pub fn verb(&self) -> &'static str {
         match self {
-            Move::Scene(_) => "scene",
-            Move::Show(_) => "show",
-            Move::Push(_) => "push",
-            Move::Toggle(_) => "toggle",
-            Move::Back => "back",
-            Move::Story => "story",
-            Move::Quit => "quit",
+            Self::Scene(_) => "scene",
+            Self::Show(_) => "show",
+            Self::Push(_) => "push",
+            Self::Toggle(_) => "toggle",
+            Self::Back => "back",
+            Self::Story => "story",
+            Self::Quit => "quit",
         }
     }
 }
@@ -59,16 +59,16 @@ impl Move {
     /// The move `action` makes, or `None` when it makes none: a settings row,
     /// group toggle, or screenshot, which change no place, or a target left empty, which the
     /// build rejects and which would put a nameless place on a map.
-    pub fn of(action: &NamedAction) -> Option<Move> {
+    pub fn of(action: &NamedAction) -> Option<Self> {
         let named = |name: &str| (!name.is_empty()).then(|| name.to_string());
         match action {
-            AuthoredAction::Quit => Some(Move::Quit),
+            AuthoredAction::Quit => Some(Self::Quit),
             AuthoredAction::Scene(name) => named(name).map(Move::Scene),
             AuthoredAction::Show(name) => named(name).map(Move::Show),
             AuthoredAction::Push(name) => named(name).map(Move::Push),
             AuthoredAction::Toggle(name) => named(name).map(Move::Toggle),
-            AuthoredAction::Hide => Some(Move::Back),
-            AuthoredAction::Story(_) => Some(Move::Story),
+            AuthoredAction::Hide => Some(Self::Back),
+            AuthoredAction::Story(_) => Some(Self::Story),
             AuthoredAction::GroupToggle(_)
             | AuthoredAction::Setting { .. }
             | AuthoredAction::Screenshot(_) => None,

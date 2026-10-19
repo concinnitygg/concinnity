@@ -49,14 +49,13 @@ impl ExecSchedule {
 
 // Build the schedule for the world's gated systems, in their table order.
 pub(crate) fn build(systems: &[BuiltSystem], entries: &[SystemEntry]) -> ExecSchedule {
-    let names: Vec<&'static str> = systems.iter().map(|s| s.name()).collect();
-    let accesses: Vec<Access> = systems.iter().map(|s| s.access()).collect();
+    let names: Vec<&'static str> = systems.iter().map(BuiltSystem::name).collect();
+    let accesses: Vec<Access> = systems.iter().map(BuiltSystem::access).collect();
     build_from(&names, &accesses, |name| {
         entries
             .iter()
             .find(|e| e.name == name)
-            .map(|e| (e.after, e.before))
-            .unwrap_or((&[], &[]))
+            .map_or((&[], &[]), |e| (e.after, e.before))
     })
 }
 

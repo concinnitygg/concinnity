@@ -140,7 +140,7 @@ impl StreamingSystem {
 
     // The throttled (~2x/sec) RAM back-off and drift sample, skipped when no
     // `MemoryBudget` is published.
-    fn sample_memory(ctx: &mut PipelineContext) {
+    fn sample_memory(ctx: &mut PipelineContext<'_>) {
         let budget = ctx.resource::<MemoryBudget>().map(|b| b.budget_bytes);
         let rss = ctx.resource::<ResidentMemory>().copied();
         let now_us = ctx.resource::<Clock>().map_or(0, Clock::read);
@@ -163,7 +163,7 @@ impl StreamingSystem {
 
     // Republish the per-scene load status when it changed, so menus and
     // loading screens read scene progress without touching the pools.
-    fn publish_scene_status(&self, ctx: &mut PipelineContext) {
+    fn publish_scene_status(&self, ctx: &mut PipelineContext<'_>) {
         match ctx.resource_mut::<SceneResidencyStatus>() {
             Some(published) => {
                 if published.scenes != self.scene_status_scratch {
@@ -180,7 +180,7 @@ impl StreamingSystem {
 }
 
 impl System for StreamingSystem {
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         // No runtime (graphics init has not succeeded): nothing to drive, and
         // nothing is drawn either, so no view to publish.
         if !ctx.resources.contains::<StreamingRuntime>() {
@@ -192,8 +192,9 @@ impl System for StreamingSystem {
         let (view_matrix, cam_pos, fov_y_degrees) = ctx
             .query::<Camera3D>()
             .next()
-            .map(|c| (c.view_matrix, c.position, c.fov_y_degrees))
-            .unwrap_or((IDENTITY, [0.0; 3], 0.0));
+            .map_or((IDENTITY, [0.0; 3], 0.0), |c| {
+                (c.view_matrix, c.position, c.fov_y_degrees)
+            });
         let planet = ctx
             .resource::<PlanetFrame>()
             .copied()

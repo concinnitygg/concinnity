@@ -2,7 +2,7 @@
 //! land, and what the merge refuses.
 //!
 //! The table under test is synthetic -- one entry per phase, each gated on the
-//! world holding a TextLabel -- so the placement rule is read off the run order
+//! world holding a `TextLabel` -- so the placement rule is read off the run order
 //! directly rather than through the engine's twenty-entry schedule.
 
 use alloc::boxed::Box;
@@ -19,7 +19,7 @@ use crate::error::WorldError;
 struct Inert;
 
 impl System for Inert {
-    fn step(&mut self, _ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, _ctx: &mut PipelineContext<'_>) -> StepResult {
         StepResult::Continue
     }
 }
@@ -65,7 +65,11 @@ fn seeded() -> World {
 }
 
 fn names(world: &World) -> Vec<&'static str> {
-    world.systems().iter().map(|s| s.name()).collect()
+    world
+        .systems()
+        .iter()
+        .map(super::super::built_system::BuiltSystem::name)
+        .collect()
 }
 
 // The placement rule, whole: phases run in order, and within a phase the
@@ -148,7 +152,7 @@ fn a_registered_system_steps() {
     struct Counting(u32);
 
     impl System for Counting {
-        fn step(&mut self, _ctx: &mut PipelineContext) -> StepResult {
+        fn step(&mut self, _ctx: &mut PipelineContext<'_>) -> StepResult {
             self.0 += 1;
             StepResult::Continue
         }

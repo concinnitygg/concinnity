@@ -2,6 +2,7 @@
 // examples read.
 
 use concinnity_cook::authoring::world::{entry_line, parse_entry};
+use std::fmt::Write as _;
 
 // Collapse a multi-line doc to a single line, for somewhere with room for one.
 pub(super) fn collapse_doc(doc: &str) -> String {
@@ -63,7 +64,7 @@ pub(super) fn entry_examples_as_lines(doc: &str) -> String {
                 let body = std::mem::take(body).join("\n");
                 let entry = parse_entry(&body).ok();
                 let text = entry.and_then(|e| entry_line(&e).ok()).unwrap_or(body);
-                out.push_str(&format!("```json\n{text}\n```\n"));
+                let _ = write!(out, "```json\n{text}\n```\n");
                 block = None;
             }
             Some(body) => body.push(line),

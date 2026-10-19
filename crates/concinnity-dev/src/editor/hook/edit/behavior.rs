@@ -1,4 +1,4 @@
-//! EditorHook: the Behavior panel's actions. The panel opens one `Behavior`
+//! `EditorHook`: the Behavior panel's actions. The panel opens one `Behavior`
 //! entry at a time and edits its authored args directly, so every change is an
 //! ordinary world edit -- the live preview rebuilds from the in-memory entries
 //! and SAVE persists them, like any other panel. What the keyboard does with
@@ -102,8 +102,7 @@ impl EditorHook {
             .and_then(|i| self.entries[i].get("args"))
             .filter(|a| a.is_object())
             .cloned()
-            .map(args_without_id)
-            .unwrap_or_else(|| Value::Object(serde_json::Map::new()))
+            .map_or_else(|| Value::Object(serde_json::Map::new()), args_without_id)
     }
 
     pub(in crate::editor::hook) fn behavior_rows(&self) -> Vec<Row> {
@@ -312,7 +311,7 @@ impl EditorHook {
 
     // Seed the value field from the selected row (blank when the row carries no
     // typed value).
-    pub(super) fn seed_behavior_value(&mut self, world: &mut World) {
+    pub(super) fn seed_behavior_value(&self, world: &mut World) {
         let args = self.behavior_args();
         let text = self
             .behavior

@@ -27,6 +27,10 @@ fn write_f32s(path: std::path::PathBuf, values: impl Iterator<Item = f32>) {
     std::fs::write(path, bytes).expect("failed to write the generated LTC table");
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 fn generate_ltc_tables() {
     println!("cargo::rerun-if-changed=src/render/ltc/fit.rs");
     println!("cargo::rerun-if-changed=src/render/ltc/size.rs");

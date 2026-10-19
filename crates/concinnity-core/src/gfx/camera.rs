@@ -1,6 +1,6 @@
 //! Pure math for a right-handed first-person camera. All functions are
 //! stateless -- callers own position, yaw, and pitch directly (e.g. on
-//! Camera3D) and pass them in as needed.
+//! `Camera3D`) and pass them in as needed.
 
 use crate::math::vec3::{cross, normalize_or};
 use crate::math::{forward, tan};

@@ -148,7 +148,7 @@ pub fn decimate_by_qem(
     // 4. Rewrite the original triangle list through `remap`, dropping
     //    triangles whose corners collapsed onto each other.
     let mut out: Vec<u16> = Vec::with_capacity(indices.len());
-    let max_idx = u16::MAX as u32;
+    let max_idx = u32::from(u16::MAX);
     for tri in &tris {
         let a = resolve_remap(&mut remap, tri[0]);
         let b = resolve_remap(&mut remap, tri[1]);
@@ -393,16 +393,13 @@ mod tests {
         let out_tris = out.len() / 3;
         assert!(
             out_tris < lod0_tris,
-            "expected fewer triangles after QEM: lod0={}, out={}",
-            lod0_tris,
-            out_tris
+            "expected fewer triangles after QEM: lod0={lod0_tris}, out={out_tris}"
         );
         // Co-planar geometry: the algorithm should collapse aggressively
         // without losing any triangles to degeneracy beyond the target.
         assert!(
             out_tris >= 2,
-            "should produce at least one quad worth: {}",
-            out_tris
+            "should produce at least one quad worth: {out_tris}"
         );
     }
 
@@ -468,15 +465,11 @@ mod tests {
         assert!(d1 > 0.0);
         assert!(
             (d2 - 2.0 * d1).abs() < 1e-3,
-            "LOD2 should be 2× LOD1: {} vs {}",
-            d1,
-            d2
+            "LOD2 should be 2× LOD1: {d1} vs {d2}"
         );
         assert!(
             (d3 - 4.0 * d1).abs() < 1e-3,
-            "LOD3 should be 4× LOD1: {} vs {}",
-            d1,
-            d3
+            "LOD3 should be 4× LOD1: {d1} vs {d3}"
         );
     }
 }

@@ -6,7 +6,7 @@
 use crate::math::{cos, sin, sqrt};
 
 /// Directions the irradiance kernel samples the sky in. `IRRADIANCE_SAMPLES`
-/// in atmosphere_types.hlsl.
+/// in `atmosphere_types.hlsl`.
 #[cfg(test)]
 const IRRADIANCE_SAMPLES: u32 = 512;
 
@@ -19,7 +19,7 @@ const BAND_LOBE: [f32; 3] = [
 ];
 
 /// The nine real spherical-harmonic basis functions at unit direction `d`,
-/// ordered by band. `sh9_basis` in atmosphere_common.hlsl.
+/// ordered by band. `sh9_basis` in `atmosphere_common.hlsl`.
 pub fn sh9_basis(d: [f32; 3]) -> [f32; 9] {
     let [x, y, z] = d;
     [
@@ -39,7 +39,7 @@ pub fn sh9_basis(d: [f32; 3]) -> [f32; 9] {
 const BAND: [usize; 9] = [0, 1, 1, 1, 2, 2, 2, 2, 2];
 
 /// Sample `i` of `n` spread evenly over the sphere on a Fibonacci spiral.
-/// `fibonacci_direction` in atmosphere_common.hlsl.
+/// `fibonacci_direction` in `atmosphere_common.hlsl`.
 pub fn fibonacci_direction(i: u32, n: u32) -> [f32; 3] {
     const GOLDEN_ANGLE: f32 = 2.399_963;
     let z = 1.0 - (2.0 * i as f32 + 1.0) / n as f32;
@@ -74,7 +74,7 @@ impl Sh9 {
     }
 
     /// Irradiance on a surface whose normal is the unit `n`, never negative.
-    /// `sh9_irradiance` in atmosphere_common.hlsl.
+    /// `sh9_irradiance` in `atmosphere_common.hlsl`.
     pub fn irradiance(&self, n: [f32; 3]) -> [f32; 3] {
         let basis = sh9_basis(n);
         let mut e = [0.0_f32; 3];

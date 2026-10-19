@@ -12,7 +12,7 @@ use crate::ecs::{ComponentSlot, PipelineContext};
 /// Mutate the `C` of the entity the asset `id` was loaded into. An unset
 /// reference or an asset with no `C` is a silent no-op.
 pub fn update<C: ComponentSlot>(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     id: Option<AssetId>,
     apply: impl FnOnce(&mut C),
 ) {
@@ -21,7 +21,7 @@ pub fn update<C: ComponentSlot>(
     }
 }
 
-/// Overwrite the text of the TextLabel asset `id`, if present.
-pub fn set_text(ctx: &mut PipelineContext, id: AssetId, text: &str) {
+/// Overwrite the text of the `TextLabel` asset `id`, if present.
+pub fn set_text(ctx: &mut PipelineContext<'_>, id: AssetId, text: &str) {
     update::<TextLabel>(ctx, Some(id), |l| l.content = text.to_string());
 }

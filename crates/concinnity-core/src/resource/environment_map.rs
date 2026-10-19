@@ -49,11 +49,10 @@ impl EnvironmentMapTable {
     /// The runtime fields of the map at `handle`; the defaults when there is
     /// no such map.
     pub fn record(&self, handle: usize) -> Result<EnvironmentMapRecord, FrameError> {
-        self.0
-            .get(handle)
-            .map_or(Ok(EnvironmentMapRecord::default()), |e| {
-                EnvironmentMapRecord::from_bytes(&e.data_bytes)
-            })
+        self.0.get(handle).map_or_else(
+            || Ok(EnvironmentMapRecord::default()),
+            |e| EnvironmentMapRecord::from_bytes(&e.data_bytes),
+        )
     }
 }
 

@@ -1,4 +1,4 @@
-//! Frame-loop recovery policy for a failed draw_frame. Each RenderError class
+//! Frame-loop recovery policy for a failed `draw_frame`. Each `RenderError` class
 //! resolves to an action, and consecutive failures are bounded per class so no
 //! error can skip frames forever: any successful frame resets the streaks, and
 //! an exhausted bound escalates to a controlled stop naming the class.

@@ -12,6 +12,6 @@ impl Default for Parent {
     fn default() -> Self {
         // Never observed: Parent is inserted at runtime with a real parent, not
         // built from serialized args.
-        Parent(Entity::dangling())
+        Self(Entity::dangling())
     }
 }

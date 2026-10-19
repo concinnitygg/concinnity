@@ -109,7 +109,7 @@ pub(super) fn build_targets(
                 ..Default::default()
             };
             hw.device
-                .CreateRenderTargetView(resolve, Some(&rtv_desc), rtv_handle);
+                .CreateRenderTargetView(resolve, Some(&raw const rtv_desc), rtv_handle);
         }
         Some(rtv_handle)
     } else {

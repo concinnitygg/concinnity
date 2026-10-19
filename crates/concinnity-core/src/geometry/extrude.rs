@@ -228,7 +228,7 @@ fn ear_clip(profile: &[[f32; 2]]) -> Result<Vec<[usize; 3]>, String> {
                 continue;
             }
             let mut contains = false;
-            for &j in indices.iter() {
+            for &j in &indices {
                 if j == i0 || j == i1 || j == i2 {
                     continue;
                 }

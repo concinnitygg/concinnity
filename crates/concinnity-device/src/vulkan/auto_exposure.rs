@@ -3,8 +3,8 @@
 //! adapted EV, and the histogram build + average compute dispatches that
 //! produce next frame's average. The compute passes are encoded after the
 //! main HDR resolve (where `hdr_resolve_images[frame_idx]` carries this
-//! frame's scene color in SHADER_READ_ONLY_OPTIMAL) and the result is
-//! copied into a per-frame HOST_VISIBLE readback buffer that the CPU reads
+//! frame's scene color in `SHADER_READ_ONLY_OPTIMAL`) and the result is
+//! copied into a per-frame `HOST_VISIBLE` readback buffer that the CPU reads
 //! at the top of a later frame, so there is `frames_in_flight` frames of
 //! latency between the scene's actual luminance and the exposure applied,
 //! invisible at human-scale eye-adaptation rates. Mirrors
@@ -116,13 +116,13 @@ impl AutoExposureResources {
         )?;
 
         // Histogram + output buffers (device-local).
-        let histogram_bytes = (HISTOGRAM_BINS * std::mem::size_of::<u32>()) as vk::DeviceSize;
+        let histogram_bytes = (HISTOGRAM_BINS * size_of::<u32>()) as vk::DeviceSize;
         let histogram_buffer = alloc.create_buffer(
             histogram_bytes,
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let output_bytes = std::mem::size_of::<ExposureMeasurement>() as vk::DeviceSize;
+        let output_bytes = size_of::<ExposureMeasurement>() as vk::DeviceSize;
         let output_buffer = alloc.create_buffer(
             output_bytes,
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
@@ -221,7 +221,7 @@ impl AutoExposureResources {
     // untouched; only binding 0 of each build set needs to point at the
     // new view.
     pub(in crate::vulkan) fn rebuild(
-        &mut self,
+        &self,
         device: &VkDevice,
         hdr_resolve_views: &[vk::ImageView],
     ) {
@@ -300,6 +300,10 @@ impl VkContext {
     // committed GPU result (one or two frames stale, smoothed by the EMA).
     // `elapsed` is the total elapsed seconds since startup; the per-call
     // diff drives `dt` for the EMA.
+    #[expect(
+        clippy::cast_ptr_alignment,
+        reason = "mapped memory is aligned to at least `minMemoryMapAlignment`"
+    )]
     pub(in crate::vulkan) fn update_auto_exposure(&mut self, elapsed: f32, frame_idx: usize) {
         let Some(adaptation) = self.auto_exposure.adaptation.as_mut() else {
             return;
@@ -437,7 +441,7 @@ impl VkContext {
         let copy = vk::BufferCopy {
             src_offset: 0,
             dst_offset: 0,
-            size: std::mem::size_of::<ExposureMeasurement>() as vk::DeviceSize,
+            size: size_of::<ExposureMeasurement>() as vk::DeviceSize,
         };
         rec.copy_buffer(
             resources.output_buffer.buffer(),

@@ -103,7 +103,7 @@ impl AtlasPool {
 /// Every world `ScrollPanel`'s clip band (reference space), keyed by each
 /// element listed in any of its rows, so the draw path scissors scroll content
 /// to its panel and off-band rows do not bleed over the chrome.
-pub fn scroll_clip_rects(ctx: &PipelineContext) -> ClipRects {
+pub fn scroll_clip_rects(ctx: &PipelineContext<'_>) -> ClipRects {
     let mut clips = ClipRects::new();
     for panel in ctx.query::<ScrollPanel>() {
         let band = [panel.x, panel.y, panel.width, panel.height];

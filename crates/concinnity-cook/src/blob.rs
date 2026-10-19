@@ -71,7 +71,7 @@ pub struct LockedAsset {
     pub kind: String,
     /// The component type's registry tag.
     pub discriminant: u8,
-    /// sha-256 of the asset's serialized args_bytes
+    /// sha-256 of the asset's serialized `args_bytes`
     pub args_hash: String,
     /// which blob holds this asset's payload, if any
     pub payload_blob: Option<u32>,
@@ -140,7 +140,7 @@ pub struct LockedResource {
     /// which blob holds this resource's payload, if any
     pub payload_blob: Option<u32>,
     /// Dev source info mirrored from the build's hot-reload catalogs, so a
-    /// blob boot can reconstruct them without the asset's args (a SceneImport
+    /// blob boot can reconstruct them without the asset's args (a `SceneImport`
     /// product has none the boot can see). Present for every Texture / Mesh
     /// resource; an empty `source` means nothing to watch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -182,7 +182,7 @@ pub struct PackResult {
 // the write lives here alongside the rest of the build's file output.
 fn write_cnb(meta: &BlobMeta, payload: &[u8], path: &str) -> std::io::Result<()> {
     let image = encode_cnb(concinnity_core::SCHEMA_VERSION, meta, payload)
-        .map_err(|e| std::io::Error::other(format!("encoding {}: {:?}", path, e)))?;
+        .map_err(|e| std::io::Error::other(format!("encoding {path}: {e:?}")))?;
     fs::write(path, image)
 }
 
@@ -462,7 +462,7 @@ mod tests {
 
     fn component_def(discriminant: u8, payload: Option<PayloadLocator>) -> BlobAssetDef {
         BlobAssetDef {
-            name: Some(AssetId(discriminant as u32)),
+            name: Some(AssetId(u32::from(discriminant))),
             discriminant,
             args_bytes: vec![discriminant, 0xAA],
             payload,
@@ -578,8 +578,8 @@ mod tests {
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(second.len(), 1);
-        assert!(!std::path::Path::new(&first[1]).exists(), "stale blob 1");
-        assert!(!std::path::Path::new(&first[2]).exists(), "stale blob 2");
+        assert!(!Path::new(&first[1]).exists(), "stale blob 1");
+        assert!(!Path::new(&first[2]).exists(), "stale blob 2");
     }
 
     #[test]

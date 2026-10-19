@@ -44,19 +44,17 @@ impl StartupError {
     /// `blob` is the primary blob's path, checked for existence on disk.
     pub fn from_blob_failure(blob: PathBuf, cause: WorldLoadError) -> Self {
         if blob.exists() {
-            StartupError::UnreadableData { blob, cause }
+            Self::UnreadableData { blob, cause }
         } else {
-            StartupError::MissingData { blob }
+            Self::MissingData { blob }
         }
     }
 
     // How the failure surfaces to the process's exit status.
     pub(crate) fn io_kind(&self) -> std::io::ErrorKind {
         match self {
-            StartupError::MissingData { .. } | StartupError::NoStateRoot => {
-                std::io::ErrorKind::NotFound
-            }
-            StartupError::UnreadableData { .. } | StartupError::OverflowUnsupported { .. } => {
+            Self::MissingData { .. } | Self::NoStateRoot => std::io::ErrorKind::NotFound,
+            Self::UnreadableData { .. } | Self::OverflowUnsupported { .. } => {
                 std::io::ErrorKind::InvalidData
             }
         }
@@ -66,16 +64,16 @@ impl StartupError {
     // path is the actionable part, and stays free of internal vocabulary.
     pub(crate) fn user_message(&self) -> String {
         match self {
-            StartupError::MissingData { blob } => {
+            Self::MissingData { blob } => {
                 format!("Failed to find the data blob:\n{}", blob.display())
             }
-            StartupError::UnreadableData { blob, .. } => {
+            Self::UnreadableData { blob, .. } => {
                 format!("Failed to read the data blob:\n{}", blob.display())
             }
-            StartupError::OverflowUnsupported { blob, .. } => {
+            Self::OverflowUnsupported { blob, .. } => {
                 format!("This app's data is incomplete:\n{}", blob.display())
             }
-            StartupError::NoStateRoot => "Failed to find this app's data.".to_string(),
+            Self::NoStateRoot => "Failed to find this app's data.".to_string(),
         }
     }
 }
@@ -84,24 +82,24 @@ impl StartupError {
 impl fmt::Display for StartupError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            StartupError::MissingData { blob } => write!(
+            Self::MissingData { blob } => write!(
                 f,
                 "no compiled world data at {} -- run `concinnity build` first",
                 blob.display()
             ),
-            StartupError::UnreadableData { blob, cause } => write!(
+            Self::UnreadableData { blob, cause } => write!(
                 f,
                 "compiled world data at {} failed to load: {cause}",
                 blob.display()
             ),
-            StartupError::OverflowUnsupported { blob, needed } => write!(
+            Self::OverflowUnsupported { blob, needed } => write!(
                 f,
                 "{} is a single blob file, but this world spans {} more; \
                  re-export it so the player ships a `data/` directory",
                 blob.display(),
                 needed
             ),
-            StartupError::NoStateRoot => f.write_str(
+            Self::NoStateRoot => f.write_str(
                 "no state directory was installed, so there is nowhere to read world data from",
             ),
         }
@@ -113,10 +111,8 @@ impl fmt::Display for StartupError {
 impl std::error::Error for StartupError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            StartupError::UnreadableData { cause, .. } => Some(cause),
-            StartupError::MissingData { .. }
-            | StartupError::OverflowUnsupported { .. }
-            | StartupError::NoStateRoot => None,
+            Self::UnreadableData { cause, .. } => Some(cause),
+            Self::MissingData { .. } | Self::OverflowUnsupported { .. } | Self::NoStateRoot => None,
         }
     }
 }

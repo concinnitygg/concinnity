@@ -38,14 +38,12 @@ pub(crate) fn deserialize(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
     let format_id = r.u32()?;
     if mip_count != 1 {
         return Err(format!(
-            "cubemap payload mip_count {} unsupported (only single-mip supported today)",
-            mip_count
+            "cubemap payload mip_count {mip_count} unsupported (only single-mip supported today)"
         ));
     }
     if format_id != CUBE_FORMAT_RGBA32F {
         return Err(format!(
-            "cubemap payload format_id {} unsupported (only RGBA32F supported today)",
-            format_id
+            "cubemap payload format_id {format_id} unsupported (only RGBA32F supported today)"
         ));
     }
     // `face_size` comes from the payload, so the six-face footprint is checked
@@ -70,11 +68,11 @@ pub(crate) fn deserialize(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
 pub(crate) fn load_file(path: &str) -> Result<HdrImage, String> {
     use std::io::Read;
     let mut file = std::fs::File::open(path)
-        .map_err(|e| format!("failed to open HDR source '{}': {}", path, e))?;
+        .map_err(|e| format!("failed to open HDR source '{path}': {e}"))?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
-        .map_err(|e| format!("failed to read HDR source '{}': {}", path, e))?;
-    decode_hdr(&bytes).map_err(|e| format!("failed to decode HDR '{}': {}", path, e))
+        .map_err(|e| format!("failed to read HDR source '{path}': {e}"))?;
+    decode_hdr(&bytes).map_err(|e| format!("failed to decode HDR '{path}': {e}"))
 }
 
 // HDR (Radiance RGBE) decoder
@@ -91,7 +89,7 @@ pub(crate) fn decode_hdr(bytes: &[u8]) -> Result<HdrImage, String> {
     let mut cursor = 0usize;
     let magic = read_line(bytes, &mut cursor)?;
     if !(magic.starts_with("#?RADIANCE") || magic.starts_with("#?RGBE")) {
-        return Err(format!("missing Radiance magic header, got {:?}", magic));
+        return Err(format!("missing Radiance magic header, got {magic:?}"));
     }
     let mut format_seen = false;
     loop {
@@ -102,7 +100,7 @@ pub(crate) fn decode_hdr(bytes: &[u8]) -> Result<HdrImage, String> {
         if let Some(rest) = line.strip_prefix("FORMAT=") {
             format_seen = true;
             if rest.trim() != "32-bit_rle_rgbe" {
-                return Err(format!("unsupported Radiance FORMAT {:?}", rest));
+                return Err(format!("unsupported Radiance FORMAT {rest:?}"));
             }
         }
     }
@@ -159,19 +157,19 @@ fn parse_resolution(line: &str) -> Result<(u32, u32, bool, bool), String> {
     // Examples: "-Y 512 +X 1024", "+Y 512 +X 1024"
     let parts: Vec<&str> = line.split_whitespace().collect();
     if parts.len() != 4 {
-        return Err(format!("malformed Radiance resolution line {:?}", line));
+        return Err(format!("malformed Radiance resolution line {line:?}"));
     }
     let parse_axis = |tag: &str, val: &str| -> Result<u32, String> {
         if tag.len() != 2 {
-            return Err(format!("bad axis tag {:?}", tag));
+            return Err(format!("bad axis tag {tag:?}"));
         }
         val.parse::<u32>()
-            .map_err(|e| format!("bad axis value {:?}: {}", val, e))
+            .map_err(|e| format!("bad axis value {val:?}: {e}"))
     };
     // Y always comes first per the Radiance spec for the supported orientations.
     let (y_tag, y_val, x_tag, x_val) = (parts[0], parts[1], parts[2], parts[3]);
     if !(y_tag.ends_with('Y') && x_tag.ends_with('X')) {
-        return Err(format!("unsupported Radiance orientation {:?}", line));
+        return Err(format!("unsupported Radiance orientation {line:?}"));
     }
     let height = parse_axis(y_tag, y_val)?;
     let width = parse_axis(x_tag, x_val)?;
@@ -201,7 +199,7 @@ fn read_scanline(
     let rle_marker =
         bytes[*cursor] == 0x02 && bytes[*cursor + 1] == 0x02 && (bytes[*cursor + 2] & 0x80) == 0;
     let rle_width = if rle_marker {
-        ((bytes[*cursor + 2] as u32) << 8) | bytes[*cursor + 3] as u32
+        (u32::from(bytes[*cursor + 2]) << 8) | u32::from(bytes[*cursor + 3])
     } else {
         0
     };
@@ -265,11 +263,11 @@ fn rgbe_to_float(r: u8, g: u8, b: u8, e: u8) -> [f32; 3] {
     }
     // f = ((mantissa + 0.5) / 256) * 2^(e - 128). We use the standard ldexp
     // formulation: scale = 2^(e - 128 - 8).
-    let scale = (2.0f32).powi(e as i32 - 128 - 8);
+    let scale = (2.0f32).powi(i32::from(e) - 128 - 8);
     [
-        (r as f32 + 0.5) * scale,
-        (g as f32 + 0.5) * scale,
-        (b as f32 + 0.5) * scale,
+        (f32::from(r) + 0.5) * scale,
+        (f32::from(g) + 0.5) * scale,
+        (f32::from(b) + 0.5) * scale,
     ]
 }
 
@@ -291,7 +289,7 @@ pub(crate) mod test_fixtures {
         ];
         let mut blob = Vec::new();
         blob.extend_from_slice(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n");
-        blob.extend_from_slice(format!("-Y {} +X {}\n", height, width).as_bytes());
+        blob.extend_from_slice(format!("-Y {height} +X {width}\n").as_bytes());
         for _ in 0..(width * height) {
             blob.extend_from_slice(&pixel);
         }
@@ -335,7 +333,7 @@ mod tests {
         let mut blob = Vec::new();
         blob.extend_from_slice(b"#?RADIANCE\n");
         blob.extend_from_slice(b"FORMAT=32-bit_rle_rgbe\n\n");
-        blob.extend_from_slice(format!("-Y {} +X {}\n", height, width).as_bytes());
+        blob.extend_from_slice(format!("-Y {height} +X {width}\n").as_bytes());
         for p in pixels {
             blob.extend_from_slice(p);
         }
@@ -362,7 +360,7 @@ mod tests {
     fn decode_hdr_rejects_bad_magic() {
         let blob = b"#?NOTHDR\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 1\n\x00\x00\x00\x00".to_vec();
         let err = decode_hdr(&blob).unwrap_err();
-        assert!(err.contains("magic"), "got: {}", err);
+        assert!(err.contains("magic"), "got: {err}");
     }
 
     // Cube payload deserialize
@@ -553,7 +551,7 @@ mod tests {
     fn rle_hdr_blob(width: u32, channels: [Vec<u8>; 4]) -> Vec<u8> {
         let mut blob = Vec::new();
         blob.extend_from_slice(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n");
-        blob.extend_from_slice(format!("-Y 1 +X {}\n", width).as_bytes());
+        blob.extend_from_slice(format!("-Y 1 +X {width}\n").as_bytes());
         blob.extend_from_slice(&[0x02, 0x02, (width >> 8) as u8, (width & 0xFF) as u8]);
         for packets in channels {
             blob.extend_from_slice(&packets);

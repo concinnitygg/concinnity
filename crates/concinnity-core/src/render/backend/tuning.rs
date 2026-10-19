@@ -42,11 +42,12 @@ pub trait RenderTuning {
         plan: &ApplyPlan,
     ) -> RenderResult<()> {
         let _ = graphics;
-        match plan.rebuild.is_empty() {
-            true => Ok(()),
-            false => Err(RenderError::Unsupported {
+        if plan.rebuild.is_empty() {
+            Ok(())
+        } else {
+            Err(RenderError::Unsupported {
                 op: "apply_settings",
-            }),
+            })
         }
     }
 

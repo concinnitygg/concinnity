@@ -14,11 +14,11 @@
 //! an argv-less run (which is `cn editor`) stand up a renderer + window and are
 //! verified by screenshot probes instead.
 
+use core::time::Duration;
 use std::io::{ErrorKind, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
-use std::time::Duration;
 
 // Path to the freshly built binary, provided by Cargo to integration tests.
 const BIN: &str = env!("CARGO_BIN_EXE_concinnity");
@@ -94,14 +94,14 @@ impl Project {
     // A project with no world at all, so discovery fails and each subcommand
     // takes its not-found path.
     fn empty() -> Self {
-        Project {
+        Self {
             dir: tempfile::tempdir().expect("create temp project dir"),
         }
     }
 
     // A project whose discovered world holds `content`.
     fn with_world(content: &str) -> Self {
-        let project = Project::empty();
+        let project = Self::empty();
         let worlds = project.path().join("worlds");
         std::fs::create_dir_all(&worlds).expect("create worlds dir");
         std::fs::write(worlds.join("main.jsonl"), content).expect("write world");
@@ -191,11 +191,10 @@ fn every_version_spelling_prints_the_same_line() {
 #[test]
 fn the_version_carries_a_build_stamp() {
     let line = stdout(&run(&["version"]));
-    let stamp = line
-        .trim()
-        .split_once(" (")
-        .map(|(_, stamp)| stamp.trim_end_matches(')').to_string())
-        .unwrap_or_else(|| panic!("no build stamp in {line:?}"));
+    let stamp = line.trim().split_once(" (").map_or_else(
+        || panic!("no build stamp in {line:?}"),
+        |(_, stamp)| stamp.trim_end_matches(')').to_string(),
+    );
     let date = stamp.rsplit(' ').next().expect("a stamp has a last field");
     assert_eq!(date.split('-').count(), 3, "{date} is not a date");
 }

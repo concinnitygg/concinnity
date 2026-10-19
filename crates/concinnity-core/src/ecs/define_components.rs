@@ -320,7 +320,7 @@ macro_rules! define_components {
             }
 
             /// Every entity carrying the component with this tag, in column
-            /// order. Serves the declared-query resolution in BehaviorSystem,
+            /// order. Serves the declared-query resolution in `BehaviorSystem`,
             /// which selects components by authored name rather than by type.
             pub fn entities_with_tag(&self, tag: u8) -> &[$crate::ecs::Entity] {
                 $(

@@ -72,7 +72,7 @@ impl Shot {
     // How long this shot holds before the cycle hands over.
     const fn secs(self) -> f32 {
         match self {
-            Shot::Spin => SPIN_SECS,
+            Self::Spin => SPIN_SECS,
             _ => SHOT_SECS,
         }
     }
@@ -104,7 +104,7 @@ impl Framing {
         fov_y_radians: f32,
         aspect: f32,
         home: CameraPose,
-    ) -> Option<Framing> {
+    ) -> Option<Self> {
         if !mn.iter().chain(mx.iter()).all(|c| c.is_finite()) {
             return None;
         }
@@ -121,11 +121,12 @@ impl Framing {
         // faces rather than on the middle of its bounds: the center of a
         // street (or of a sky dome that inflated the bounds) is a point in the
         // air with nothing at it, while the author's view is of something.
-        let center = match extent > MAX_FRAMED_RADIUS {
-            true => ahead_of(&home, distance),
-            false => bounds_center,
+        let center = if extent > MAX_FRAMED_RADIUS {
+            ahead_of(&home, distance)
+        } else {
+            bounds_center
         };
-        Some(Framing {
+        Some(Self {
             center,
             radius,
             distance,
@@ -144,7 +145,7 @@ pub(crate) struct Cinematic {
 impl Cinematic {
     // A fresh cycle, at the first shot's opening black.
     pub(crate) fn new() -> Self {
-        Cinematic {
+        Self {
             shot: 0,
             elapsed: 0.0,
         }

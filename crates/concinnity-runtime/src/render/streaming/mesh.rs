@@ -41,7 +41,7 @@ impl MeshPayloadSource for MemMeshSource {
         self.meshes
             .get(id)
             .cloned()
-            .ok_or_else(|| format!("no payload for streamed mesh {}", id))
+            .ok_or_else(|| format!("no payload for streamed mesh {id}"))
     }
 }
 
@@ -68,7 +68,7 @@ impl MeshPayloadSource for DiskMeshSource {
         let loc = self
             .locators
             .get(id)
-            .ok_or_else(|| format!("no disk locator for streamed mesh {}", id))?;
+            .ok_or_else(|| format!("no disk locator for streamed mesh {id}"))?;
         let bytes = super::file_range::read_at(&self.path, loc.file_offset, loc.len)?;
         decode_mesh(&bytes)
     }
@@ -116,20 +116,20 @@ pub(crate) fn write_mesh_scratch(
     path: String,
     meshes: &[DecodedMesh],
 ) -> Result<DiskMeshSource, String> {
-    let mut file = File::create(&path).map_err(|e| format!("create {}: {}", path, e))?;
+    let mut file = File::create(&path).map_err(|e| format!("create {path}: {e}"))?;
     let mut locators = Vec::with_capacity(meshes.len());
     let mut offset: u64 = 0;
     for mesh in meshes {
         let bytes = encode_mesh(mesh);
         file.write_all(&bytes)
-            .map_err(|e| format!("write {}: {}", path, e))?;
+            .map_err(|e| format!("write {path}: {e}"))?;
         locators.push(DiskMeshLocator {
             file_offset: offset,
             len: bytes.len() as u64,
         });
         offset += bytes.len() as u64;
     }
-    file.flush().map_err(|e| format!("flush {}: {}", path, e))?;
+    file.flush().map_err(|e| format!("flush {path}: {e}"))?;
     Ok(DiskMeshSource { path, locators })
 }
 

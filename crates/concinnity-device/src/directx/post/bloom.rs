@@ -24,7 +24,7 @@ pub(in crate::directx) struct BloomResources {
 impl BloomResources {
     // Build the chain for an output of `output`, over the pool's `top`.
     pub(in crate::directx) fn new(
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         output: PostExtent,
         top: &ID3D12Resource,
     ) -> RenderResult<Self> {
@@ -38,7 +38,7 @@ impl BloomResources {
     // The caller has already idled the device.
     pub(in crate::directx) fn resize(
         &mut self,
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         output: PostExtent,
         top: &ID3D12Resource,
     ) -> RenderResult<()> {
@@ -49,7 +49,7 @@ impl BloomResources {
     // View the pool's `top` after a rebuild relocated it.
     pub(in crate::directx) fn repoint_top(
         &mut self,
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         output: PostExtent,
         top: &ID3D12Resource,
     ) -> RenderResult<()> {
@@ -68,7 +68,7 @@ impl BloomResources {
 }
 
 fn view_top(
-    device: &DxPostDevice,
+    device: &DxPostDevice<'_>,
     output: PostExtent,
     top: &ID3D12Resource,
 ) -> RenderResult<PooledTarget> {
@@ -106,12 +106,12 @@ impl DxContext {
         // SAFETY: the command list is in the recording state and the pooled
         // resource is live for the frame it records.
         unsafe {
-            cmd.ResourceBarrier(&[transition_barrier(bloom_top.resource(), target, sampled)])
+            cmd.ResourceBarrier(&[transition_barrier(bloom_top.resource(), target, sampled)]);
         };
         pass.encode_chain(&device, cmd, bloom_top.srv_gpu())?;
         // SAFETY: as above.
         unsafe {
-            cmd.ResourceBarrier(&[transition_barrier(bloom_top.resource(), sampled, target)])
+            cmd.ResourceBarrier(&[transition_barrier(bloom_top.resource(), sampled, target)]);
         };
         pass.encode_last_upsample(&device, cmd, bloom_top.attachment())
     }

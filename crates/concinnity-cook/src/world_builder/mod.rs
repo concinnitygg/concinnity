@@ -80,7 +80,7 @@ impl WorldBuilder {
                 self.declared.push((id, T::TYPE));
             }
             Err(e) => {
-                self.error.get_or_insert((e.kind(), e.to_string()));
+                self.error.get_or_insert_with(|| (e.kind(), e.to_string()));
             }
         }
         self
@@ -94,7 +94,7 @@ impl WorldBuilder {
             Ok(entries) => entries,
             Err(e) => {
                 self.error
-                    .get_or_insert((std::io::ErrorKind::InvalidData, e.to_string()));
+                    .get_or_insert_with(|| (std::io::ErrorKind::InvalidData, e.to_string()));
                 return self;
             }
         };
@@ -116,7 +116,7 @@ impl WorldBuilder {
             Ok(entries) => entries,
             Err(e) => {
                 self.error
-                    .get_or_insert((std::io::ErrorKind::InvalidData, e.to_string()));
+                    .get_or_insert_with(|| (std::io::ErrorKind::InvalidData, e.to_string()));
                 return self;
             }
         };
@@ -131,10 +131,14 @@ impl WorldBuilder {
             };
             let target = &mut self.entries[index];
             if target.get("type") != entry.get("type") {
-                self.error.get_or_insert((
-                    std::io::ErrorKind::InvalidData,
-                    format!("overlay of \"{handle}\" as a {ty}: it is declared as another type"),
-                ));
+                self.error.get_or_insert_with(|| {
+                    (
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "overlay of \"{handle}\" as a {ty}: it is declared as another type"
+                        ),
+                    )
+                });
                 break;
             }
             let args = merge_args(&target["args"], &entry["args"]);
@@ -154,10 +158,12 @@ impl WorldBuilder {
     fn push_entry(&mut self, entry: serde_json::Value) -> bool {
         let ty = entry.get("type").and_then(|t| t.as_str()).unwrap_or("");
         let Some(registered) = RegisteredType::parse(ty) else {
-            self.error.get_or_insert((
-                std::io::ErrorKind::InvalidData,
-                format!("unknown asset type '{ty}'"),
-            ));
+            self.error.get_or_insert_with(|| {
+                (
+                    std::io::ErrorKind::InvalidData,
+                    format!("unknown asset type '{ty}'"),
+                )
+            });
             return false;
         };
         self.entries.push(entry);
@@ -171,10 +177,12 @@ impl WorldBuilder {
     /// at compile.
     pub fn remove(&mut self, handle: &str) -> &mut Self {
         let Some(index) = find_entry(&self.entries, handle) else {
-            self.error.get_or_insert((
-                std::io::ErrorKind::NotFound,
-                format!("remove(\"{handle}\"): no asset by that name"),
-            ));
+            self.error.get_or_insert_with(|| {
+                (
+                    std::io::ErrorKind::NotFound,
+                    format!("remove(\"{handle}\"): no asset by that name"),
+                )
+            });
             return self;
         };
         self.entries.remove(index);
@@ -204,14 +212,16 @@ impl WorldBuilder {
     /// numeric step into a list, such as a planet's `layers.0.grass`.
     pub fn reference(&mut self, field: &str, target: impl Into<String>) -> &mut Self {
         let Some(entry) = self.entries.last_mut() else {
-            self.error.get_or_insert((
-                std::io::ErrorKind::InvalidInput,
-                format!("reference(\"{field}\") before any asset was added"),
-            ));
+            self.error.get_or_insert_with(|| {
+                (
+                    std::io::ErrorKind::InvalidInput,
+                    format!("reference(\"{field}\") before any asset was added"),
+                )
+            });
             return self;
         };
         if let Err(e) = set_reference(entry, field, &target.into()) {
-            self.error.get_or_insert((e.kind(), e.to_string()));
+            self.error.get_or_insert_with(|| (e.kind(), e.to_string()));
         }
         self
     }
@@ -462,8 +472,11 @@ mod tests {
             .expect("the prop compiled into a component");
         // The handle types are not part of the public surface (a reference
         // is only ever named), so compare the resolved indices.
-        assert_eq!(prop.mesh.map(|h| h.index()), Some(0));
-        assert_eq!(prop.material.map(|h| h.index()), Some(0));
+        assert_eq!(prop.mesh.map(concinnity_core::ecs::Handle::index), Some(0));
+        assert_eq!(
+            prop.material.map(concinnity_core::ecs::Handle::index),
+            Some(0)
+        );
     }
 
     // `declared` reports names and types in declaration order, which is what

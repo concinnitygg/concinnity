@@ -177,7 +177,7 @@ impl OceanKernels {
         )?;
         let foam = create_uav_buffer(
             device,
-            (texels.len() * std::mem::size_of::<f32>()) as u64,
+            (texels.len() * size_of::<f32>()) as u64,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
         )?;
         let sig = RootSig::new()
@@ -220,7 +220,7 @@ fn cascade_array(
 ) -> RenderResult<ID3D12Resource> {
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: size as u64,
+        Width: u64::from(size),
         Height: size,
         DepthOrArraySize: layers as u16,
         MipLevels: mips as u16,
@@ -241,12 +241,12 @@ fn cascade_array(
     // new COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
-            &heap_props,
+            &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
-            &desc,
+            &raw const desc,
             RESTING,
             None,
-            &mut resource,
+            &raw mut resource,
         )
     }
     .map_err(|e| map_hresult(e.code(), &format!("create {label}")))?;
@@ -277,7 +277,7 @@ fn write_array_srv(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(resource, Some(&desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(resource, Some(&raw const desc), srv_cpu) };
 }
 
 // A read-only view of mip `mip` of every layer.
@@ -305,7 +305,7 @@ fn write_mip_srv(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(resource, Some(&desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(resource, Some(&raw const desc), srv_cpu) };
 }
 
 fn write_mip_uav(
@@ -329,7 +329,7 @@ fn write_mip_uav(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateUnorderedAccessView(resource, None, Some(&desc), uav_cpu) };
+    unsafe { device.CreateUnorderedAccessView(resource, None, Some(&raw const desc), uav_cpu) };
 }
 
 impl DxContext {

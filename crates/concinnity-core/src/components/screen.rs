@@ -11,7 +11,7 @@ use alloc::string::String;
 #[serde(rename_all = "lowercase")]
 pub enum ScreenInput {
     /// The screen owns input while it is the topmost capturing screen:
-    /// gameplay input is suppressed and lower screens' [HitRegion](#hitregion)s
+    /// gameplay input is suppressed and lower screens' [`HitRegion`](#hitregion)s
     /// stop firing.
     #[default]
     #[vocab("capture")]
@@ -24,11 +24,11 @@ pub enum ScreenInput {
 /// A named full-screen layer of UI drawn over the world: a pause menu, a
 /// settings page, a console, a score overlay.
 ///
-/// A UI element ([Sprite](#sprite), [TextLabel](#textlabel),
-/// [TextInput](#textinput), [HitRegion](#hitregion)) belongs to a screen by
+/// A UI element ([Sprite](#sprite), [`TextLabel`](#textlabel),
+/// [`TextInput`](#textinput), [`HitRegion`](#hitregion)) belongs to a screen by
 /// naming it in the element's `screen`, mirroring the [Scene](#scene) →
 /// [Prop](#prop) relationship. Active screens form a stack; each is shown /
-/// hidden via [HitRegion](#hitregion) or [KeyBinding](#keybinding) actions:
+/// hidden via [`HitRegion`](#hitregion) or [`KeyBinding`](#keybinding) actions:
 /// - `{"show": "<name>"}` replaces the top of the stack (menu navigation)
 /// - `{"push": "<name>"}` opens on top of what is already showing
 /// - `"hide"` closes the top screen, revealing what was beneath
@@ -38,7 +38,7 @@ pub enum ScreenInput {
 /// against the always-on HUD and other screens independent of stack position.
 /// While any active screen has `pauses_world` set, the world freezes exactly
 /// as today's pause menu does. A `toggle_key` opens and closes the screen from
-/// anywhere. `focus` names a [TextInput](#textinput) that receives keyboard
+/// anywhere. `focus` names a [`TextInput`](#textinput) that receives keyboard
 /// focus whenever the screen reaches the top of the stack. Worlds that need no
 /// menus simply declare no screens.
 ///
@@ -63,8 +63,8 @@ pub struct Screen {
     pub initial: bool,
     /// Seconds to fade the screen in when it's shown. 0 shows it instantly.
     pub fade_in_secs: f32,
-    /// InputKey that toggles this screen open / closed from anywhere, by the same
-    /// canonical key names a [KeyBinding](#keybinding) uses (e.g. "Escape",
+    /// `InputKey` that toggles this screen open / closed from anywhere, by the same
+    /// canonical key names a [`KeyBinding`](#keybinding) uses (e.g. "Escape",
     /// "Backtick"). Empty leaves the screen action-driven only.
     pub toggle_key: String,
     /// Input policy while the screen is active.
@@ -73,7 +73,7 @@ pub struct Screen {
     /// is active: gameplay input, physics, and animation freeze.
     #[asset(default = true)]
     pub pauses_world: bool,
-    /// [TextInput](#textinput) that receives keyboard focus whenever this
+    /// [`TextInput`](#textinput) that receives keyboard focus whenever this
     /// screen reaches the top of the stack.
     pub focus: Option<Ref<TextInput>>,
     /// Draw-order bias against the always-on HUD and other screens. Screens

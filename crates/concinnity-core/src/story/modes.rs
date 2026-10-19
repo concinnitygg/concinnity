@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    AUTO_BASE_SECS, AUTO_PER_CHAR_SECS, FrameInput, Overlay, PipelineContext, SKIP_PAGE_SECS,
+    StorySystem, set_label, set_sprite,
+};
 
 impl StorySystem {
     // Ordinary page mode: mid-story, no menu, no overlay, stage in front.
@@ -9,7 +12,7 @@ impl StorySystem {
             && self.active_screen == self.ids.as_ref().map(|i| i.screen)
     }
 
-    pub(super) fn toggle_auto(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn toggle_auto(&mut self, ctx: &mut PipelineContext<'_>) {
         if !self.page_mode() {
             return;
         }
@@ -18,7 +21,7 @@ impl StorySystem {
         self.render_quick_row(ctx);
     }
 
-    pub(super) fn toggle_skip(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn toggle_skip(&mut self, ctx: &mut PipelineContext<'_>) {
         if !self.page_mode() {
             return;
         }
@@ -34,7 +37,7 @@ impl StorySystem {
     // mode: behaves like the Skip toggle, but only for as long as the key is
     // down. A choice menu or overlay leaves page mode, so it stops there ("until
     // a choice") and resumes if the key is still held once page mode returns.
-    pub(super) fn update_hold_skip(&mut self, frame: &FrameInput, ctx: &mut PipelineContext) {
+    pub(super) fn update_hold_skip(&mut self, frame: &FrameInput, ctx: &mut PipelineContext<'_>) {
         let want = frame.ctrl && self.page_mode();
         if want == self.hold_skip {
             return;
@@ -59,7 +62,7 @@ impl StorySystem {
 
     // Per-frame reader-assist work: the waiting marker pulse and the auto /
     // skip page pacing.
-    pub(super) fn tick_modes(&mut self, ctx: &mut PipelineContext, dt: f32) {
+    pub(super) fn tick_modes(&mut self, ctx: &mut PipelineContext<'_>, dt: f32) {
         if !self.page_mode() {
             return;
         }
@@ -91,7 +94,7 @@ impl StorySystem {
     }
 
     // Reveal more of the current page at the story's characters-per-second.
-    pub(super) fn tick_typewriter(&mut self, ctx: &mut PipelineContext, dt: f32) {
+    pub(super) fn tick_typewriter(&mut self, ctx: &mut PipelineContext<'_>, dt: f32) {
         if self.typewriter.done() || !self.started || self.in_choice {
             return;
         }

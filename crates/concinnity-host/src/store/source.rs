@@ -66,8 +66,7 @@ pub fn find_existing(source: &str, assets_dir: Option<&Path>) -> Option<String> 
 fn is_bare(source: &str) -> bool {
     Path::new(source)
         .parent()
-        .map(|d| d.as_os_str().is_empty())
-        .unwrap_or(true)
+        .is_none_or(|d| d.as_os_str().is_empty())
 }
 
 fn walk(dir: &Path, filename: &str) -> Option<PathBuf> {

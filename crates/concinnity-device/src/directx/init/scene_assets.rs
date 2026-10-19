@@ -15,7 +15,12 @@ use crate::directx::allocator::PooledTexture;
 use crate::directx::com;
 use crate::directx::context::{AreaLightState, DxDescriptors, DxGeometry, DxSceneAssets, align256};
 use crate::directx::draw::upload_static_records;
-use crate::directx::texture::*;
+use crate::directx::texture::{
+    EnvironmentMapDescriptors, EnvironmentMapPayload, EnvironmentMapTextures,
+    create_fallback_color_lut, create_fallback_cubemap, create_fallback_flat_normal_resource,
+    create_fallback_white_resource, upload_buffer, upload_color_lut, upload_environment_map,
+    upload_float_lut, upload_texture_image, write_texture_srv,
+};
 
 pub(super) fn build_scene_assets(
     gpu: &InitGpu<'_>,
@@ -37,13 +42,13 @@ pub(super) fn build_scene_assets(
             .map_err(|e| RenderError::Other(format!("EnvironmentMap payload malformed: {e}")))?;
         upload_environment_map(
             &hw.alloc,
-            crate::directx::texture::EnvironmentMapPayload {
+            EnvironmentMapPayload {
                 irradiance_face: view.irradiance_face,
                 irradiance_bytes: view.irradiance_bytes,
                 prefilter_face: view.prefilter_face,
                 mip_bytes: &view.prefilter_mip_bytes,
             },
-            crate::directx::texture::EnvironmentMapDescriptors {
+            EnvironmentMapDescriptors {
                 irr_srv_cpu: descriptors.slot_cpu(1),
                 irr_srv_gpu: descriptors.slot_gpu(1),
                 pre_srv_cpu: descriptors.slot_cpu(2),
@@ -227,7 +232,7 @@ fn build_geometry(gpu: &InitGpu<'_>, world: &SceneData<'_>) -> RenderResult<DxGe
     let vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
         BufferLocation: com::gpu_va(&vertex_buffer),
         SizeInBytes: vert_bytes_raw.len().max(4) as u32,
-        StrideInBytes: std::mem::size_of::<Vertex>() as u32,
+        StrideInBytes: size_of::<Vertex>() as u32,
     };
     let index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
         BufferLocation: com::gpu_va(&index_buffer),

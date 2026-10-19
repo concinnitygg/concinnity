@@ -81,8 +81,8 @@ pub fn text_upload_bytes(text_calls: &[TextDrawCall], align: u64) -> u64 {
     text_calls
         .iter()
         .map(|c| {
-            let v = core::mem::size_of_val(c.vertices.as_slice()) as u64;
-            let i = core::mem::size_of_val(c.indices.as_slice()) as u64;
+            let v = size_of_val(c.vertices.as_slice()) as u64;
+            let i = size_of_val(c.indices.as_slice()) as u64;
             align_up(v, align) + align_up(i, align)
         })
         .sum()
@@ -150,7 +150,7 @@ pub trait CompositeEncoder {
     type Args;
 
     /// Begin the pass: target the swapchain image (DX transitions it to
-    /// RENDER_TARGET + binds the RTV; VK begins the composite render pass) and set
+    /// `RENDER_TARGET` + binds the RTV; VK begins the composite render pass) and set
     /// the full-window viewport / scissor. Nothing to do on a backend whose
     /// recorder is itself the open pass, which is how Metal reaches the chain.
     fn begin_composite(&self, rec: &Self::Rec, args: &Self::Args);
@@ -367,8 +367,8 @@ mod tests {
             let mut cursor = 0u64;
             for c in &calls {
                 for block in [
-                    core::mem::size_of_val(c.vertices.as_slice()) as u64,
-                    core::mem::size_of_val(c.indices.as_slice()) as u64,
+                    size_of_val(c.vertices.as_slice()) as u64,
+                    size_of_val(c.indices.as_slice()) as u64,
                 ] {
                     cursor = align_up(cursor, align) + block;
                     assert!(cursor <= total, "cursor {cursor} exceeded reserved {total}");

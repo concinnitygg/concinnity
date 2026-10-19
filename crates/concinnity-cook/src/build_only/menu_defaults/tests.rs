@@ -201,9 +201,12 @@ fn a_story_without_a_title_screen_quits_to_desktop() {
         .expect("pause menu injected");
     let items = menu["args"]["items"].as_array().unwrap();
     assert_eq!(items.last().unwrap()["action"], "quit");
-    let labels: Vec<&str> = items.iter().map(|i| i["label"].as_str().unwrap()).collect();
+
     assert!(
-        !labels.contains(&"Main Menu"),
+        !items
+            .iter()
+            .map(|i| i["label"].as_str().unwrap())
+            .any(|x| x == "Main Menu"),
         "no title screen -> no Main Menu item"
     );
 }

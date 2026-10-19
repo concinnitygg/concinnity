@@ -34,7 +34,7 @@ pub struct SubmitOutcome {
     /// memory pressure from an upload or the draw.
     pub replay: ReplayOutcome,
     /// The stop was a device loss, with its detail: the queue can never
-    /// signal, so no caller may wait_idle on the way out.
+    /// signal, so no caller may `wait_idle` on the way out.
     pub device_lost: Option<String>,
     /// The frame policy dropped the draw, so nothing this snapshot carried
     /// reached the GPU.
@@ -100,7 +100,7 @@ pub fn submit(
         match *op {
             SceneOp::SetFade(fade) => backend.set_fade(fade),
             SceneOp::Visibility { draw_idx, visible } => {
-                backend.update_visibility(draw_idx, visible)
+                backend.update_visibility(draw_idx, visible);
             }
         }
     }

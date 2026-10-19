@@ -186,7 +186,7 @@ impl BehaviorSystem {
     // would make a body's effects depend on unrelated despawns. `scratch`
     // holds each extra tag's sorted set; both buffers keep their capacity.
     pub(super) fn entities_matching_into(
-        ctx: &PipelineContext,
+        ctx: &PipelineContext<'_>,
         tags: &[u8],
         scratch: &mut Vec<Entity>,
         out: &mut Vec<Entity>,
@@ -212,7 +212,7 @@ impl BehaviorSystem {
     // Refill the reused snapshot with this tick's entity sets. The shape
     // (programs and their query counts) is fixed after `init`, so in steady
     // state every vector here just refills in place.
-    pub(super) fn gather(&mut self, ctx: &PipelineContext, snapshot: &mut Snapshot) {
+    pub(super) fn gather(&mut self, ctx: &PipelineContext<'_>, snapshot: &mut Snapshot) {
         snapshot.queries.resize_with(self.programs.len(), Vec::new);
         snapshot.scoped.resize_with(self.programs.len(), Vec::new);
         for (i, p) in self.programs.iter().enumerate() {

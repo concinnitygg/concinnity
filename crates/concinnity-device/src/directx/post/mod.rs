@@ -6,7 +6,7 @@
 //!   taa.rs                  the jitter counter + inputs of the shared TAA resolve
 //!   ssao.rs                 the settings + pooled output of the shared SSAO kernel and blur
 //!   ssr.rs                  the reflection target + inputs of the shared SSR resolve
-//!   reflection_composite.rs the inputs of the shared roughness blur + composite
+//!   `reflection_composite.rs` the inputs of the shared roughness blur + composite
 //!   ssgi.rs                 the settings + inputs of the shared SSGI trace and composite
 //!
 //! Mirrors src/metal/post/ (same per-effect file shape).

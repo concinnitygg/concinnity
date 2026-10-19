@@ -22,7 +22,7 @@ pub(crate) const RT_SKINNED_FLAG: u32 = 0x8000_0000;
 /// `index_count` indices. One index per word, so the only rounding left is the
 /// floor: no backend accepts a zero-length buffer.
 pub fn skinned_index_buffer_bytes(index_count: usize) -> usize {
-    (index_count * core::mem::size_of::<u32>()).max(4)
+    (index_count * size_of::<u32>()).max(4)
 }
 
 /// How the scene acceleration structure is kept current when props move.
@@ -114,7 +114,7 @@ pub fn geom_entry(obj: &DrawObject, texture_count: u32) -> RtGeomEntry {
 
 /// Build the geometry-table entry for one instance of an instanced cluster: the
 /// cluster's shared mesh slice + material, with this instance's transform. Cluster
-/// geometry uses base_vertex 0 (its indices are already absolute).
+/// geometry uses `base_vertex` 0 (its indices are already absolute).
 pub fn cluster_geom_entry(
     cluster: &InstancedCluster,
     model: [[f32; 4]; 4],
@@ -298,7 +298,7 @@ mod tests {
         }
         // Realistic bindless pool indices never reach the flag bit, so a static
         // entry's normal index is never misread as skinned.
-        assert_eq!(96u32 & RT_SKINNED_FLAG, 0);
+        assert_eq!(0x60_u32 & RT_SKINNED_FLAG, 0);
     }
 
     #[test]

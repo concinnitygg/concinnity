@@ -152,7 +152,7 @@ impl StageDescriptors {
 
     // Whether a plain pipeline layout declaring this much exceeds `limits` in
     // either class.
-    fn exceeds(self, limits: StageDescriptors) -> bool {
+    fn exceeds(self, limits: Self) -> bool {
         self.samplers > limits.samplers || self.sampled_images > limits.sampled_images
     }
 }

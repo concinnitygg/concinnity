@@ -1,4 +1,4 @@
-//! EditorHook: the extent-outline drive. Each frame it appends the wireframes
+//! `EditorHook`: the extent-outline drive. Each frame it appends the wireframes
 //! of the selection's spatial extents (and any category the Display menu keeps
 //! always-on) to the frame's world-space line buffer: trigger-volume colliders,
 //! light ranges and cones, camera frusta, probe bounds, prop colliders. Shapes
@@ -34,7 +34,7 @@ struct ShapeCtx<'a> {
     stroke: Stroke,
 }
 
-type ShapeFn = fn(&ShapeCtx, &mut Vec<Line>);
+type ShapeFn = fn(&ShapeCtx<'_>, &mut Vec<Line>);
 
 // Every outlineable component type with its display category and shape. One
 // row per type keeps the category map and the shape dispatch from drifting
@@ -129,7 +129,7 @@ impl EditorHook {
     }
 }
 
-fn push_trigger(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+fn push_trigger(ctx: &ShapeCtx<'_>, out: &mut Vec<Line>) {
     let Some(volume) = ctx.world.get::<TriggerVolume>(ctx.entity) else {
         return;
     };
@@ -145,7 +145,7 @@ fn push_trigger(ctx: &ShapeCtx, out: &mut Vec<Line>) {
     }
 }
 
-fn push_point_light(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+fn push_point_light(ctx: &ShapeCtx<'_>, out: &mut Vec<Line>) {
     let Some(light) = ctx.world.get::<PointLight>(ctx.entity) else {
         return;
     };
@@ -153,7 +153,7 @@ fn push_point_light(ctx: &ShapeCtx, out: &mut Vec<Line>) {
     shapes::push_sphere(out, center, light.range, ctx.stroke);
 }
 
-fn push_spot_light(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+fn push_spot_light(ctx: &ShapeCtx<'_>, out: &mut Vec<Line>) {
     let Some(light) = ctx.world.get::<SpotLight>(ctx.entity) else {
         return;
     };
@@ -182,7 +182,7 @@ fn push_spot_light(ctx: &ShapeCtx, out: &mut Vec<Line>) {
     );
 }
 
-fn push_rect_light(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+fn push_rect_light(ctx: &ShapeCtx<'_>, out: &mut Vec<Line>) {
     let Some(light) = ctx.world.get::<RectAreaLight>(ctx.entity) else {
         return;
     };
@@ -197,7 +197,7 @@ fn push_rect_light(ctx: &ShapeCtx, out: &mut Vec<Line>) {
     );
 }
 
-fn push_probe(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+fn push_probe(ctx: &ShapeCtx<'_>, out: &mut Vec<Line>) {
     let Some(probe) = ctx.world.get::<ReflectionProbe>(ctx.entity) else {
         return;
     };
@@ -219,13 +219,12 @@ fn push_probe(ctx: &ShapeCtx, out: &mut Vec<Line>) {
 // a gizmo drag carries it. Each projection key carries a usable fallback: an
 // authored value that is not a number would otherwise collapse the frustum
 // and the outline would silently disappear.
-fn push_camera(ctx: &ShapeCtx, out: &mut Vec<Line>) {
+fn push_camera(ctx: &ShapeCtx<'_>, out: &mut Vec<Line>) {
     let args = form::working_args(ctx.ty, ctx.entry.get("args").and_then(|v| v.as_object()));
     let num = |key: &str, default: f32| {
         args.get(key)
-            .and_then(|v| v.as_f64())
-            .map(|v| v as f32)
-            .unwrap_or(default)
+            .and_then(serde_json::Value::as_f64)
+            .map_or(default, |v| v as f32)
     };
     let authored = billboards::position_of(&args).unwrap_or([0.0; 3]);
     let origin = anchored_position(ctx.world, ctx.entity, authored);
@@ -272,7 +271,7 @@ fn push_collider_outline(world: &World, entity: Entity, out: &mut Vec<Line>) {
             shapes::push_sphere(out, transform.position, c.radius * scale, s);
         }
         "capsule" => {
-            shapes::push_capsule(out, &transform.model_matrix(), c.radius, c.half_height, s)
+            shapes::push_capsule(out, &transform.model_matrix(), c.radius, c.half_height, s);
         }
         _ => shapes::push_box(out, &transform.model_matrix(), c.half_extents, s),
     }
@@ -283,8 +282,7 @@ fn push_collider_outline(world: &World, entity: Entity, out: &mut Vec<Line>) {
 fn anchored_position(world: &World, entity: Entity, authored: [f32; 3]) -> [f32; 3] {
     world
         .get::<Transform>(entity)
-        .map(|t| t.position)
-        .unwrap_or(authored)
+        .map_or(authored, |t| t.position)
 }
 
 // The entity's full pose, preferring the live Transform.
@@ -296,7 +294,7 @@ fn anchored_transform(
 ) -> Transform {
     world
         .get::<Transform>(entity)
-        .cloned()
+        .copied()
         .unwrap_or(Transform {
             position,
             rotation_deg,

@@ -28,12 +28,12 @@ impl SampleLog {
     }
 
     /// Record one frame after the others.
-    pub(super) fn push(&mut self, sample: FrameSample) {
+    pub(super) fn push(&mut self, sample: &FrameSample) {
         match self.blocks.last_mut() {
-            Some(block) if block.len() < BLOCK_SAMPLES => block.push(sample),
+            Some(block) if block.len() < BLOCK_SAMPLES => block.push(*sample),
             _ => {
                 let mut block = Vec::with_capacity(BLOCK_SAMPLES);
-                block.push(sample);
+                block.push(*sample);
                 self.blocks.push(block);
             }
         }
@@ -69,7 +69,7 @@ impl FromIterator<FrameSample> for SampleLog {
     fn from_iter<I: IntoIterator<Item = FrameSample>>(samples: I) -> Self {
         let mut log = Self::new();
         for sample in samples {
-            log.push(sample);
+            log.push(&sample);
         }
         log
     }
@@ -117,10 +117,10 @@ mod tests {
     #[test]
     fn a_recorded_frame_never_moves() {
         let mut log = SampleLog::new();
-        log.push(frame(0));
+        log.push(&frame(0));
         let first: *const FrameSample = log.get(0).unwrap();
         for n in 1..BLOCK_SAMPLES * 3 {
-            log.push(frame(n));
+            log.push(&frame(n));
         }
         assert!(core::ptr::eq(first, log.get(0).unwrap()));
         assert_eq!(log.blocks.len(), 3);

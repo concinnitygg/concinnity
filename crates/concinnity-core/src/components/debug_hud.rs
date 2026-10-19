@@ -3,7 +3,7 @@
 use crate::components::TextLabel;
 use crate::ecs::Ref;
 
-/// Requests the developer debug HUD: a set of [TextLabel](#textlabel) chips
+/// Requests the developer debug HUD: a set of [`TextLabel`](#textlabel) chips
 /// with diagnostic readouts, anchored to the top-right of the window and
 /// toggled with F1 (hidden by default).
 ///
@@ -20,24 +20,24 @@ use crate::ecs::Ref;
 /// rather than the authored coordinates.
 ///
 /// The always-on frame-rate and GPU-memory readouts live on the separate
-/// [StatHud](#stathud).
+/// [`StatHud`](#stathud).
 ///
 /// Every rendering world receives a `DebugHud` at start when it declares none,
 /// and any label field left unset receives a chip, so the example below is
 /// only needed to restyle them. The HUD only activates in developer contexts:
 /// a debug build of the host binary, or a world launched through `cn debug`;
 /// release builds leave it inert even when declared. Declare an
-/// [EngineDefaults](#enginedefaults) with `"debug_hud": false` to leave the
+/// [`EngineDefaults`](#enginedefaults) with `"debug_hud": false` to leave the
 /// world without one.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct DebugHud {
-    /// [TextLabel](#textlabel) that receives the per-step GPU-timing chip text.
+    /// [`TextLabel`](#textlabel) that receives the per-step GPU-timing chip text.
     pub passes_label: Option<Ref<TextLabel>>,
-    /// [TextLabel](#textlabel) that receives the cursor-position chip text.
+    /// [`TextLabel`](#textlabel) that receives the cursor-position chip text.
     pub mouse_label: Option<Ref<TextLabel>>,
-    /// [TextLabel](#textlabel) that receives the live camera-pose chip text.
+    /// [`TextLabel`](#textlabel) that receives the live camera-pose chip text.
     pub camera_label: Option<Ref<TextLabel>>,
-    /// [TextLabel](#textlabel) that receives the thread / memory budget chip text.
+    /// [`TextLabel`](#textlabel) that receives the thread / memory budget chip text.
     pub sys_label: Option<Ref<TextLabel>>,
 }

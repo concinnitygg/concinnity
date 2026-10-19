@@ -79,7 +79,7 @@ impl Grid {
     }
 }
 
-pub(crate) fn displace(input: &SynthInput, source: &[MorphDelta]) -> Vec<[f32; 3]> {
+pub(crate) fn displace(input: &SynthInput<'_>, source: &[MorphDelta]) -> Vec<[f32; 3]> {
     let positions: Vec<[f32; 3]> = input.vertices.iter().map(|v| v.pos).collect();
     let grid = Grid::new(&positions);
     positions

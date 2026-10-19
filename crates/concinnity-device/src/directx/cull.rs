@@ -235,7 +235,7 @@ pub(in crate::directx) fn create_cull_command_signature(
     let mut sig: Option<ID3D12CommandSignature> = None;
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    unsafe { device.CreateCommandSignature(&desc, bindless_root_sig, &mut sig) }
+    unsafe { device.CreateCommandSignature(&raw const desc, bindless_root_sig, &raw mut sig) }
         .map_err(|e| map_hresult(e.code(), "create cull command signature"))?;
     sig.ok_or_else(|| {
         RenderError::Other("create cull command signature: returned None".to_string())
@@ -312,7 +312,7 @@ impl DxContext {
 
     // Byte offset of shader bucket `b`'s command region in an indirect buffer.
     pub(in crate::directx) fn bucket_region_offset(&self, bucket: usize) -> u64 {
-        (bucket * self.cull.bucket_stride) as u64 * INDIRECT_COMMAND_STRIDE as u64
+        (bucket * self.cull.bucket_stride) as u64 * u64::from(INDIRECT_COMMAND_STRIDE)
     }
 
     // Pack ring slot `slot`'s `StructuredBuffer<GpuObjectData>` and

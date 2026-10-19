@@ -85,21 +85,21 @@ impl Error {
     // not-found, present-but-unusable data is invalid.
     fn io_kind(&self) -> std::io::ErrorKind {
         match self {
-            Error::MissingData { .. } | Error::NoStateRoot => std::io::ErrorKind::NotFound,
-            Error::UnreadableData { .. } | Error::OverflowUnsupported { .. } => {
+            Self::MissingData { .. } | Self::NoStateRoot => std::io::ErrorKind::NotFound,
+            Self::UnreadableData { .. } | Self::OverflowUnsupported { .. } => {
                 std::io::ErrorKind::InvalidData
             }
             // A world that could not read its own data is the runtime half of
             // the same failure the load variants above report.
-            Error::Runtime(WorldError::Asset(_) | WorldError::Payload(_)) => {
+            Self::Runtime(WorldError::Asset(_) | WorldError::Payload(_)) => {
                 std::io::ErrorKind::InvalidData
             }
-            Error::Bake(_) => std::io::ErrorKind::InvalidInput,
+            Self::Bake(_) => std::io::ErrorKind::InvalidInput,
             #[cfg(feature = "cook")]
-            Error::Validation(_) => std::io::ErrorKind::InvalidData,
+            Self::Validation(_) => std::io::ErrorKind::InvalidData,
             #[cfg(feature = "cook")]
-            Error::Build { kind, .. } => *kind,
-            Error::Runtime(_) => std::io::ErrorKind::Other,
+            Self::Build { kind, .. } => *kind,
+            Self::Runtime(_) => std::io::ErrorKind::Other,
         }
     }
 }
@@ -110,7 +110,7 @@ impl Error {
 #[cfg(feature = "std")]
 impl From<Error> for std::io::Error {
     fn from(error: Error) -> Self {
-        std::io::Error::new(error.io_kind(), error.to_string())
+        Self::new(error.io_kind(), error.to_string())
     }
 }
 

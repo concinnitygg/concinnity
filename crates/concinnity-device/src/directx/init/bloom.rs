@@ -9,7 +9,7 @@ use crate::directx::post::bloom::BloomResources;
 use crate::directx::post::post_device::DxPostDevice;
 
 pub(super) fn build_bloom(
-    device: &DxPostDevice,
+    device: &DxPostDevice<'_>,
     targets: &DxTargets,
     output: (u32, u32),
 ) -> RenderResult<BloomResources> {

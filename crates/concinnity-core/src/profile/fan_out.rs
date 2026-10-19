@@ -38,6 +38,7 @@ pub struct FanOutTiming {
 impl FanOutTiming {
     /// Two fan-outs the same thread waited on in turn, as one: the waits and
     /// the work add, and the longest job is the longer of the two.
+    #[must_use]
     pub fn merge(self, other: Self) -> Self {
         Self {
             wall_us: self.wall_us.saturating_add(other.wall_us),

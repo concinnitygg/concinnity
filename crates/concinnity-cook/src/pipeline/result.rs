@@ -106,7 +106,7 @@ impl PipelineResult {
     /// The compiled payload bytes of the resource of `kind` declared under
     /// `name`, sliced out of the in-memory blob sections. `None` when no such
     /// resource was compiled or it carries no payload. The editor's glTF
-    /// export reads a SkinnedMesh's composed geometry through this.
+    /// export reads a `SkinnedMesh`'s composed geometry through this.
     pub fn resource_payload(&self, kind: ResourceKind, name: &str) -> Option<&[u8]> {
         let record = self
             .resources

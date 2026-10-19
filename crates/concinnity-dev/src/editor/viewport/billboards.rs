@@ -309,7 +309,7 @@ pub(crate) fn place_icons(world: &mut World, icons: &[Icon]) {
         match placed {
             Some(icon) => {
                 if let Some(l) = widget::label_mut(world, glyph_id(i)) {
-                    l.content = icon.glyph.clone();
+                    l.content.clone_from(&icon.glyph);
                     l.x = icon.screen[0];
                     l.y = icon.screen[1] - GLYPH_HALF;
                     l.scale = GLYPH_SCALE;

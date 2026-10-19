@@ -1,4 +1,4 @@
-//! EditorHook: the toast stack's per-frame drive and click routing. The queue
+//! `EditorHook`: the toast stack's per-frame drive and click routing. The queue
 //! and lifetime policy live in `editor/notify.rs`, the card geometry in
 //! `editor/toast_overlay.rs`; here the hook draws the live stack each frame and
 //! resolves presses (a card runs its action and dismisses, the overflow row
@@ -95,7 +95,7 @@ impl EditorHook {
     // already shows it; the toast covers the panel being closed or buried.
     // Keyed on the message so per-keystroke re-checks of the same fault stay
     // quiet.
-    pub(in crate::editor::hook) fn notify_behavior_fault(&mut self, prev_fault: Option<String>) {
+    pub(in crate::editor::hook) fn notify_behavior_fault(&self, prev_fault: Option<String>) {
         let Some(message) = self.behavior.status.as_ref().and_then(|s| s.error()) else {
             return;
         };

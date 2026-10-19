@@ -1,5 +1,5 @@
 //! Display-mode enumeration and fullscreen mode switching via the Win32
-//! ChangeDisplaySettings family. `enumerate` lists the modes (resolution +
+//! `ChangeDisplaySettings` family. `enumerate` lists the modes (resolution +
 //! refresh rate) of the monitor the window sits on, feeding the Resolution
 //! settings row. While the window is in (borderless) fullscreen,
 //! `FullscreenDisplayMode` holds the monitor to the user's chosen mode with
@@ -27,10 +27,10 @@ fn device_name(hwnd: HWND) -> Option<[u16; 32]> {
     let mut info = MONITORINFOEXW::default();
     // GetMonitorInfoW fills the extended struct (device name included) when
     // cbSize says the buffer is the EXW size; the two structs share a prefix.
-    info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
     // SAFETY: `mon` comes from the query above, and `info` is a live local whose `cbSize` was set
     // to the extended size the call fills.
-    unsafe { GetMonitorInfoW(mon, &mut info.monitorInfo) }
+    unsafe { GetMonitorInfoW(mon, &raw mut info.monitorInfo) }
         .as_bool()
         .then_some(info.szDevice)
 }
@@ -39,12 +39,12 @@ fn device_name(hwnd: HWND) -> Option<[u16; 32]> {
 // the monitor is running), or None past the end of the mode list.
 fn enum_mode(device: &[u16; 32], index: ENUM_DISPLAY_SETTINGS_MODE) -> Option<DEVMODEW> {
     let mut dm = DEVMODEW {
-        dmSize: std::mem::size_of::<DEVMODEW>() as u16,
+        dmSize: size_of::<DEVMODEW>() as u16,
         ..Default::default()
     };
     // SAFETY: `device` is the OS-written, NUL-terminated device name held by the caller, and `dm`
     // is a live local whose `dmSize` tells the call how much to fill.
-    unsafe { EnumDisplaySettingsW(PCWSTR(device.as_ptr()), index, &mut dm) }
+    unsafe { EnumDisplaySettingsW(PCWSTR(device.as_ptr()), index, &raw mut dm) }
         .as_bool()
         .then_some(dm)
 }

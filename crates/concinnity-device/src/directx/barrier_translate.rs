@@ -42,7 +42,7 @@ fn read_state(stages: ReadStages) -> D3D12_RESOURCE_STATES {
         (false, true) => D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
         // FRAGMENT-only and the empty-union fallback both map to the
         // pixel-shader state.
-        (true, false) | (false, false) => D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        (_, false) => D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
     }
 }
 
@@ -167,9 +167,10 @@ pub(super) fn d3d12_barrier(
     }
     let orders_a_write = matches!(
         (from, to),
-        (ResourceState::Write, ResourceState::Write)
-            | (ResourceState::Write, ResourceState::Read)
-            | (ResourceState::Read, ResourceState::Write)
+        (
+            ResourceState::Write,
+            ResourceState::Write | ResourceState::Read
+        ) | (ResourceState::Read, ResourceState::Write)
     );
     let unordered = matches!(
         class,

@@ -3,7 +3,7 @@
 //! force fields). It runs after `SsrResolve` (so translucents see the resolved
 //! opaque scene + SSR reflections) and before `TaaResolve` / `Upscale` (so they
 //! pick up temporal accumulation). Output blends over `scene_pre_taa` with
-//! SRC_ALPHA / ONE_MINUS_SRC_ALPHA.
+//! `SRC_ALPHA` / `ONE_MINUS_SRC_ALPHA`.
 //!
 //! The pass owns no pipeline of its own. Each translucent subsystem contributes
 //! a list of [`TransparentDraw`]s (a bound pipeline + buffers + per-draw
@@ -110,8 +110,7 @@ const WATER_SHADOW_SAMPLER_INDEX: usize = 5;
 pub(in crate::metal) struct TransparentFrame<'a> {
     pub(in crate::metal) view: &'a TransparentView,
     pub(in crate::metal) rt_params: Option<&'a render_types::RtParams>,
-    pub(in crate::metal) bindless_tex_args:
-        Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    pub(in crate::metal) bindless_tex_args: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub(in crate::metal) reactive: ReactiveWrite,
 }
 
@@ -119,7 +118,7 @@ pub(in crate::metal) struct TransparentFrame<'a> {
 struct TransparentInputs<'a> {
     view: &'a TransparentView,
     rt_params: Option<&'a render_types::RtParams>,
-    bindless_tex_args: Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    bindless_tex_args: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
 }
 
 // Issue one transparent draw with `pipeline`: its vertex buffer at buffer(1), its
@@ -193,7 +192,7 @@ impl MtlContext {
     fn bind_transparent_inputs(
         &self,
         enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
-        inputs: &TransparentInputs,
+        inputs: &TransparentInputs<'_>,
     ) {
         // Shared per-frame view at buffer(5) for both stages. The pass has no
         // depth attachment (translucents are not hardware depth-tested;
@@ -339,7 +338,7 @@ impl MtlContext {
     pub(in crate::metal) fn encode_transparent(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        scene_pre_taa: &Retained<ProtocolObject<dyn objc2_metal::MTLTexture>>,
+        scene_pre_taa: &Retained<ProtocolObject<dyn MTLTexture>>,
         draws: &[TransparentDraw],
         frame: TransparentFrame<'_>,
     ) -> RenderResult<u32> {

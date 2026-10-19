@@ -326,7 +326,7 @@ impl<B, I> AccelBook<B, I> {
             moved: models_current && models_dirty(&self.cached_models, &self.scratch.models),
             has_skinned: self.has_skinned,
         };
-        plan::next_step(mode, plan, live)
+        plan::next_step(mode, *plan, live)
     }
 
     /// The vertex count the deformed buffer spans: up to the highest vertex any
@@ -336,7 +336,7 @@ impl<B, I> AccelBook<B, I> {
             .skinned
             .iter()
             .filter_map(|&i| objects.get(i))
-            .map(|o| o.vertex_base as u64 + o.vertex_count as u64)
+            .map(|o| u64::from(o.vertex_base) + o.vertex_count as u64)
             .max()
             .unwrap_or(0)
     }

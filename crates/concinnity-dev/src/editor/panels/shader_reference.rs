@@ -20,37 +20,37 @@ pub(crate) enum Group {
 }
 
 impl Group {
-    pub(crate) const ALL: [Group; 7] = [
-        Group::Hooks,
-        Group::Helpers,
-        Group::Types,
-        Group::Returns,
-        Group::Blocks,
-        Group::Record,
-        Group::Varyings,
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Hooks,
+        Self::Helpers,
+        Self::Types,
+        Self::Returns,
+        Self::Blocks,
+        Self::Record,
+        Self::Varyings,
     ];
 
-    fn of(kind: Kind) -> Group {
+    fn of(kind: Kind) -> Self {
         match kind {
-            Kind::Hook => Group::Hooks,
-            Kind::Helper => Group::Helpers,
-            Kind::Type => Group::Types,
-            Kind::ReturnField(_) => Group::Returns,
-            Kind::BlockField(_) => Group::Blocks,
-            Kind::RecordField => Group::Record,
-            Kind::Varying => Group::Varyings,
+            Kind::Hook => Self::Hooks,
+            Kind::Helper => Self::Helpers,
+            Kind::Type => Self::Types,
+            Kind::ReturnField(_) => Self::Returns,
+            Kind::BlockField(_) => Self::Blocks,
+            Kind::RecordField => Self::Record,
+            Kind::Varying => Self::Varyings,
         }
     }
 
     pub(crate) fn title(self) -> &'static str {
         match self {
-            Group::Hooks => "Functions to define",
-            Group::Helpers => "Helpers",
-            Group::Types => "Types",
-            Group::Returns => "Returned fields",
-            Group::Blocks => "VIEW and LIGHTS",
-            Group::Record => "Material record (od)",
-            Group::Varyings => "Varyings (v)",
+            Self::Hooks => "Functions to define",
+            Self::Helpers => "Helpers",
+            Self::Types => "Types",
+            Self::Returns => "Returned fields",
+            Self::Blocks => "VIEW and LIGHTS",
+            Self::Record => "Material record (od)",
+            Self::Varyings => "Varyings (v)",
         }
     }
 
@@ -107,7 +107,7 @@ pub(crate) enum RefClick {
     Insert(String),
 }
 
-pub(crate) fn click(row: &RefRow) -> RefClick {
+pub(crate) fn click(row: &RefRow<'_>) -> RefClick {
     match row {
         RefRow::Heading { group, .. } => RefClick::Fold(*group),
         RefRow::Name(e) => RefClick::Insert(e.usage()),
@@ -179,7 +179,7 @@ mod tests {
     use super::*;
     use concinnity_core::render::shader_programs::vocabulary::{ENTRIES, sdf};
 
-    fn names<'a>(rows: &[RefRow<'a>]) -> Vec<String> {
+    fn names(rows: &[RefRow<'_>]) -> Vec<String> {
         rows.iter().map(RefRow::text).collect()
     }
 

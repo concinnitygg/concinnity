@@ -28,7 +28,7 @@ pub(in crate::vulkan) type VkReflectionCompositePass =
 
 // Build the composite at `extent` with its blur divided by `blur_scale`.
 pub(in crate::vulkan) fn build_reflection_composite(
-    device: &VkPostDevice,
+    device: &VkPostDevice<'_>,
     blur_scale: u32,
     extent: vk::Extent2D,
 ) -> RenderResult<VkReflectionCompositePass> {

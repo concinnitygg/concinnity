@@ -39,7 +39,7 @@ pub struct WaterWave {
     pub steepness: f32,
 }
 
-/// What a [WaterSurface](#watersurface) covers.
+/// What a [`WaterSurface`](#watersurface) covers.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, Vocabulary,
 )]

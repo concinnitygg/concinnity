@@ -1,9 +1,9 @@
 //! Compile stage of the build pipeline. The world is loaded, expanded, and
-//! validated upstream by crate::build_only::prepare_world; this module takes the
-//! resulting WorldJsonlAsset list and:
-//! - Resolves each asset to a BlobAssetDef via asset_api::create_asset_def()
+//! validated upstream by `crate::build_only::prepare_world`; this module takes the
+//! resulting `WorldJsonlAsset` list and:
+//! - Resolves each asset to a `BlobAssetDef` via `asset_api::create_asset_def()`
 //! - Compiles payloads for assets that need compilation
-//! - Packs all payloads into blobs using PayloadPacker (fills locators)
+//! - Packs all payloads into blobs using `PayloadPacker` (fills locators)
 //! - Sorts: components first, then systems in declared order
 //!
 //! The submodules follow that order: `desugar` rewrites source-backed assets

@@ -56,7 +56,7 @@ pub(crate) struct Sensors {
 
 impl Sensors {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
-        Sensors {
+        Self {
             overlaps: Vec::with_capacity(capacity),
             previous: Vec::with_capacity(capacity),
             moved: alloc::vec![true; capacity],
@@ -76,7 +76,7 @@ impl Sensors {
         core::mem::swap(&mut self.overlaps, &mut self.previous);
         self.overlaps.clear();
 
-        let Sensors {
+        let Self {
             overlaps,
             previous,
             moved,

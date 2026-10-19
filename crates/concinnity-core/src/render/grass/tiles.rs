@@ -91,6 +91,7 @@ impl GroundRect {
     }
 
     /// The overlap of the two rectangles, empty when they do not meet.
+    #[must_use]
     pub fn intersect(&self, other: &Self) -> Self {
         Self {
             min: [self.min[0].max(other.min[0]), self.min[1].max(other.min[1])],

@@ -76,8 +76,7 @@ fn the_registry_agrees_with_what_start_drains() {
         let held = census
             .iter()
             .find(|(t, _)| *t == tag as u8)
-            .map(|(_, n)| *n)
-            .unwrap_or(0);
+            .map_or(0, |(_, n)| *n);
         let survives = tag.surviving_tag() == Some(tag);
         assert_eq!(
             held > 0,
@@ -109,7 +108,6 @@ fn a_drained_prop_leaves_the_tag_it_promises() {
         .component_census()
         .iter()
         .find(|(t, _)| *t == surviving as u8)
-        .map(|(_, n)| *n)
-        .unwrap_or(0);
+        .map_or(0, |(_, n)| *n);
     assert_eq!(held, 1, "{} holds the drained prop", surviving.as_str());
 }

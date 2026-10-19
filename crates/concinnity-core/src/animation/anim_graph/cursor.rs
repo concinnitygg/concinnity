@@ -26,7 +26,7 @@ impl StateFade {
 }
 
 /// The live position in a graph: current state, its clock, and any in-flight
-/// crossfade. One per graph target, owned by the client's AnimationSystem.
+/// crossfade. One per graph target, owned by the client's `AnimationSystem`.
 ///
 /// Clock units depend on the state's play: seconds (scaled by `rate`) for
 /// single clips and non-sync blendspaces, normalized phase (one full pass of

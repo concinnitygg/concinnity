@@ -18,7 +18,7 @@ fn a_first_launch_persists_the_auto_preset_into_the_state_tree() {
     {
         let mut ctx = world.context();
         concinnity_core::ecs::decompose::run(&mut ctx);
-        concinnity_core::ecs::System::init(&mut gs, &mut ctx);
+        System::init(&mut gs, &mut ctx);
         settings.step(&mut ctx);
     }
     // Dropping the store's writer waits for its queued save.
@@ -28,7 +28,7 @@ fn a_first_launch_persists_the_auto_preset_into_the_state_tree() {
         crate::persist::settings::load(Some(&tree))
             .graphics
             .quality_preset,
-        Some(concinnity_core::settings::quality::QualityPreset::Auto)
+        Some(QualityPreset::Auto)
     );
 }
 

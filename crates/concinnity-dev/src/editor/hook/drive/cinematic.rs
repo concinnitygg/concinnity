@@ -1,4 +1,4 @@
-//! EditorHook: the start screen's attract camera. While the sidebar is
+//! `EditorHook`: the start screen's attract camera. While the sidebar is
 //! previewing a world, a cycle of slow shots (`editor/worlds/cinematic.rs`)
 //! takes the view: it frames the previewed world's renderable bounds, writes a
 //! pose onto the live `Camera3D` each frame, and draws the black fade its shots
@@ -74,7 +74,7 @@ impl EditorHook {
         // the listing through a compile.
         match self.cinematic {
             Some(cine) if shown && !self.loading_preview() => {
-                worlds::cinematic::place(world, vp, cine.fade_alpha())
+                worlds::cinematic::place(world, vp, cine.fade_alpha());
             }
             _ => worlds::cinematic::hide(world),
         }

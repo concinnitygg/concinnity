@@ -1,5 +1,5 @@
 //! Raymarched SDF volume pass for the Vulkan backend. Runs at `PassId::Raymarch`
-//! between `AutoExposure` and `Decals` on the hdr_resolve RMW chain. Each
+//! between `AutoExposure` and `Decals` on the `hdr_resolve` RMW chain. Each
 //! `SdfVolume` rasterizes the back faces of its world-space bounding box and runs
 //! a user-authored GLSL fragment shader that sphere-traces the SDF inside the
 //! box. GLSL/Vulkan port of `src/directx/raymarch.rs`: same shader interface,
@@ -83,7 +83,7 @@ pub(in crate::vulkan) fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUn
         cone_ratio: v.cone_ratio(),
         max_distance: v.max_distance,
         max_steps: v.max_steps as i32,
-        receive_shadows: if v.receive_shadows { 1 } else { 0 },
+        receive_shadows: i32::from(v.receive_shadows),
         params: v.params,
     }
 }
@@ -303,8 +303,8 @@ fn build_cube_buffers(alloc: &DeviceAllocator) -> RenderResult<CubeBuffers> {
     let corners: [Vertex; 8] = cube_corners(1.0).map(cube_vertex);
     let indices = CUBE_INDICES;
 
-    let vb_bytes = std::mem::size_of_val(&corners) as u64;
-    let ib_bytes = std::mem::size_of_val(&indices) as u64;
+    let vb_bytes = size_of_val(&corners) as u64;
+    let ib_bytes = size_of_val(&indices) as u64;
     let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
 
     let vb = alloc.create_buffer(vb_bytes, vk::BufferUsageFlags::VERTEX_BUFFER, host)?;
@@ -944,9 +944,9 @@ impl RaymarchResources {
     // Build every raymarch resource + the per-volume records. Returns
     // `Ok(None)` when `sdf_volumes` is empty so the engine omits the pass.
     pub(in crate::vulkan) fn try_new(
-        ctx: RaymarchDeviceContext,
+        ctx: RaymarchDeviceContext<'_>,
         target: RaymarchTargetConfig,
-        bindings: RaymarchSharedBindings,
+        bindings: RaymarchSharedBindings<'_>,
         sdf_volumes: &[SdfVolumeSource],
         hot_reload: bool,
     ) -> RenderResult<Option<Self>> {
@@ -1010,7 +1010,7 @@ impl RaymarchResources {
         let snapshot = create_snapshot(alloc, device, command_pool, queue, width, height)?;
 
         // Per-frame view UBO ring (HOST_VISIBLE | HOST_COHERENT, mapped).
-        let view_size = std::mem::size_of::<RaymarchView>() as u64;
+        let view_size = size_of::<RaymarchView>() as u64;
         let mut view_ubos = Vec::with_capacity(frames);
         for _ in 0..frames {
             view_ubos.push(alloc.create_buffer(
@@ -1064,7 +1064,7 @@ impl RaymarchResources {
             let push = vk::PushConstantRange::default()
                 .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
                 .offset(0)
-                .size(std::mem::size_of::<RaymarchShadowCascade>() as u32);
+                .size(size_of::<RaymarchShadowCascade>() as u32);
             let info = vk::PipelineLayoutCreateInfo::default()
                 .set_layouts(&set_layouts)
                 .push_constant_ranges(std::slice::from_ref(&push));
@@ -1140,7 +1140,7 @@ impl RaymarchResources {
 
             let uniforms = volume_uniforms_from(vol);
             let volume_ubo = alloc.create_buffer(
-                std::mem::size_of::<RaymarchVolumeUniforms>() as u64,
+                size_of::<RaymarchVolumeUniforms>() as u64,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )?;
@@ -1220,7 +1220,7 @@ impl RaymarchResources {
     // pipelines, layouts, UBOs, cube buffers, and render passes all survive.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        ctx: RaymarchDeviceContext,
+        ctx: RaymarchDeviceContext<'_>,
         width: u32,
         height: u32,
     ) -> RenderResult<()> {

@@ -95,7 +95,7 @@ pub(crate) fn config_types() -> impl Iterator<Item = &'static str> {
 
 // Whether `ty` is a world-config singleton (edit-or-add rather than blind append).
 pub(crate) fn is_singleton(ty: &str) -> bool {
-    RegisteredType::parse(ty).is_some_and(|t| t.singleton())
+    RegisteredType::parse(ty).is_some_and(RegisteredType::singleton)
 }
 
 // Why a world holding `entries` cannot take another `ty`, for a type with a
@@ -518,7 +518,7 @@ impl PanelView<'_> {
 // system focuses the field from the same input). Title-bar presses never reach
 // this: the hook intercepts them first to start a drag.
 pub(crate) fn hit_test(
-    view: &PanelView,
+    view: &PanelView<'_>,
     mx: f32,
     my: f32,
     o: [f32; 2],
@@ -610,7 +610,7 @@ pub(crate) fn hit_test(
 }
 
 // Position + show the panel's elements for this frame at origin `o`.
-pub(crate) fn place(world: &mut World, view: &PanelView, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: &PanelView<'_>, o: [f32; 2], s: [f32; 2]) {
     // Blank everything, then re-show what this frame needs.
     ids().hide(world);
 
@@ -650,7 +650,7 @@ pub(crate) fn place(world: &mut World, view: &PanelView, o: [f32; 2], s: [f32; 2
 }
 
 // The status line: the asset count, or a cook failure in its place.
-fn layout_status(world: &mut World, view: &PanelView, o: [f32; 2]) {
+fn layout_status(world: &mut World, view: &PanelView<'_>, o: [f32; 2]) {
     let (color, text) = match view.status {
         Some(e) => (ERROR_LABEL, e.to_string()),
         None => (LABEL_DIM, format!("Assets ({})", view.total)),
@@ -670,7 +670,7 @@ fn layout_status(world: &mut World, view: &PanelView, o: [f32; 2]) {
     );
 }
 
-fn layout_tree(world: &mut World, view: &PanelView, o: [f32; 2], s: [f32; 2]) {
+fn layout_tree(world: &mut World, view: &PanelView<'_>, o: [f32; 2], s: [f32; 2]) {
     let w = s[0];
     let rows = visible_rows(s[1]);
     if view.rows.is_empty() {
@@ -770,11 +770,11 @@ struct AssetRow<'a> {
 
 fn layout_asset_row(
     world: &mut World,
-    view: &PanelView,
+    view: &PanelView<'_>,
     o: [f32; 2],
     w: f32,
     slot: usize,
-    asset: &AssetRow,
+    asset: &AssetRow<'_>,
 ) {
     let AssetRow {
         name,
@@ -928,7 +928,7 @@ fn place_lock(world: &mut World, region: [f32; 4], slot: usize, locked: bool, ho
 // The floating type-picker list, over the tree body.
 fn layout_picker(
     world: &mut World,
-    view: &PanelView,
+    view: &PanelView<'_>,
     options: &[PickerOption],
     o: [f32; 2],
     s: [f32; 2],
@@ -1026,7 +1026,7 @@ fn place_dot(world: &mut World, o: [f32; 2], w: f32, slot: usize, show_box: bool
 
 fn layout_row_menu(
     world: &mut World,
-    view: &PanelView,
+    view: &PanelView<'_>,
     o: [f32; 2],
     w: f32,
     rows: usize,
@@ -1198,7 +1198,7 @@ mod tests {
                 asset_type,
                 badge: Badge::Authored,
             },
-            row => row,
+            row @ TreeRow::Header { .. } => row,
         }
     }
 
@@ -1939,7 +1939,7 @@ mod tests {
         let _guard = crate::test_support::lock();
         crate::test_support::isolate_state_dir();
         for ty in picker_types() {
-            let ct = concinnity_cook::authoring::registry::RegisteredType::parse(ty)
+            let ct = RegisteredType::parse(ty)
                 .unwrap_or_else(|| panic!("{ty} must be a known asset type"));
             assert!(ct.addable(), "{ty} must be External / addable");
             cook_blank(ty).unwrap_or_else(|e| panic!("{ty} must cook with default args: {e}"));

@@ -23,19 +23,18 @@ pub struct ShapeLayers {
 
 /// Every `CharacterShape` in the world, keyed by its target. The components
 /// stay in the world so an editor can keep editing them.
-pub fn collect(ctx: &PipelineContext) -> HashMap<SkinnedMeshHandle, CharacterShape> {
+pub fn collect(ctx: &PipelineContext<'_>) -> HashMap<SkinnedMeshHandle, CharacterShape> {
     let mut map = HashMap::new();
     for (entity, shape) in ctx.query_with_entity::<CharacterShape>() {
         let id = ctx.get::<Identity>(entity).map(|i| i.id());
-        match shape.target {
-            Some(target) => {
-                if map.insert(target, shape.clone()).is_some() {
-                    tracing::warn!(
-                        "CharacterShape {id:?}: its target already has a shape; the later one wins"
-                    );
-                }
+        if let Some(target) = shape.target {
+            if map.insert(target, shape.clone()).is_some() {
+                tracing::warn!(
+                    "CharacterShape {id:?}: its target already has a shape; the later one wins"
+                );
             }
-            None => tracing::warn!("CharacterShape {id:?} has no target SkinnedMesh, ignored"),
+        } else {
+            tracing::warn!("CharacterShape {id:?} has no target SkinnedMesh, ignored");
         }
     }
     map
@@ -47,14 +46,14 @@ pub fn resolve(shape: &CharacterShape, skeleton: &Skeleton, morph_names: &[Strin
     for name in &shape.resolve_sliders(morph_names).unresolved {
         tracing::warn!(
             "CharacterShape on mesh {:?}: slider '{}' matches no morph target of it",
-            shape.target.map(|t| t.index()),
+            shape.target.map(super::super::ecs::handle::Handle::index),
             name
         );
     }
     for joint in shape.unresolved_joints(|name| skeleton.joint_index(name).is_some()) {
         tracing::warn!(
             "CharacterShape on mesh {:?}: joint '{}' is not in its skeleton",
-            shape.target.map(|t| t.index()),
+            shape.target.map(super::super::ecs::handle::Handle::index),
             joint
         );
     }

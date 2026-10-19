@@ -385,7 +385,7 @@ pub(crate) struct ExportArgs {
     #[arg(long)]
     pub(crate) version: Option<String>,
 
-    /// EntityTarget platform
+    /// `EntityTarget` platform
     #[arg(long)]
     pub(crate) platform: Option<String>,
 

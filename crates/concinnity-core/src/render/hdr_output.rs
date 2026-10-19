@@ -4,9 +4,9 @@
 //! capability; this module is pure CPU). The result drives:
 //!
 //!   1. the swapchain pixel format + color space chosen at window setup
-//!      (BGRA8Unorm for SDR; RGBA16Float + extendedLinearDisplayP3 for HDR);
+//!      (`BGRA8Unorm` for SDR; `RGBA16Float` + extendedLinearDisplayP3 for HDR);
 //!   2. whether `PostProcessParams.hdr_output` ships to the shader as `1.0`
-//!      so the composite pass skips ACES + gamma + FXAA + ColorLut and emits
+//!      so the composite pass skips ACES + gamma + FXAA + `ColorLut` and emits
 //!      linear extended-range values directly.
 //!
 //! Those two flags only ever enter `PostProcessParams` through
@@ -23,7 +23,7 @@ use crate::gfx::render_types::{PostProcessParams, PostProcessTunables};
 pub(crate) const HDR_MAX_EDR_FLOOR: f32 = 1.001;
 
 /// HDR encoding the composite shader emits on the EDR path. Drives both
-/// the swapchain color-space choice (CAMetalLayer on Metal,
+/// the swapchain color-space choice (`CAMetalLayer` on Metal,
 /// `SetColorSpace1` on DirectX) and the shader's per-pixel encode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HdrEncoding {
@@ -47,8 +47,8 @@ pub enum HdrEncoding {
 /// headroom.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum HdrOutputMode {
-    /// Tone-map + gamma-encode the HDR scene into the standard BGRA8Unorm
-    /// swapchain. FXAA + ColorLut run.
+    /// Tone-map + gamma-encode the HDR scene into the standard `BGRA8Unorm`
+    /// swapchain. FXAA + `ColorLut` run.
     Sdr,
     /// Drive an EDR-capable swapchain (`RGBA16Float`, Display P3 family
     /// color space, `wantsExtendedDynamicRangeContent = true`). The
@@ -56,7 +56,7 @@ pub enum HdrOutputMode {
     /// encode, FXAA, and LUT. `encoding` picks between scRGB-linear
     /// passthrough and PQ-encoded output. `max_edr` is the panel-reported
     /// headroom (e.g. 2.0 on an HDR400 panel, 8.0+ on HDR1000), surfaced
-    /// via the StatHud `EDR` chip.
+    /// via the `StatHud` `EDR` chip.
     Hdr {
         /// Reported maximum extended-range color-component multiplier; SDR
         /// reference white is 1.0, so values above that drive HDR.
@@ -103,13 +103,13 @@ impl HdrOutputMode {
     /// reads it inside its `hdr_output > 0.5` branch and switches between
     /// linear-passthrough and PQ-encode. Always `0.0` on the SDR path.
     pub fn pq_flag(&self) -> f32 {
-        matches!(
+        i32::from(matches!(
             self,
             Self::Hdr {
                 encoding: HdrEncoding::Pq,
                 ..
             }
-        ) as i32 as f32
+        )) as f32
     }
 
     /// True when the renderer is on the HDR path. Cheap predicate for log
@@ -170,7 +170,7 @@ mod tests {
                 assert!((max_edr - 2.0).abs() < 1e-6);
                 assert_eq!(encoding, HdrEncoding::ExtendedLinear);
             }
-            other => panic!("expected Hdr, got {:?}", other),
+            other @ HdrOutputMode::Sdr => panic!("expected Hdr, got {other:?}"),
         }
         assert!(HdrOutputMode::resolve(true, false, 8.0).is_hdr());
     }
@@ -182,7 +182,7 @@ mod tests {
                 assert!((max_edr - 8.0).abs() < 1e-6);
                 assert_eq!(encoding, HdrEncoding::Pq);
             }
-            other => panic!("expected Hdr/Pq, got {:?}", other),
+            other @ HdrOutputMode::Sdr => panic!("expected Hdr/Pq, got {other:?}"),
         }
     }
 

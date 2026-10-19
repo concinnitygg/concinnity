@@ -3,6 +3,8 @@
 
 mod layout;
 
+use crate::gfx::view_modes::ShowFlags;
+use crate::gfx::view_modes::ViewMode;
 pub use layout::{Layout, build};
 
 use crate::components::{InputKey, KeyEvent};
@@ -25,8 +27,8 @@ pub fn frame_params(
         text_calls,
         lines: &[],
         world_hidden: true,
-        view_mode: Default::default(),
-        show: Default::default(),
+        view_mode: ViewMode::default(),
+        show: ShowFlags::default(),
         sky_rot: crate::sky::SkyOrientation::IDENTITY_ROWS,
         history_reset: false,
         rebase: None,

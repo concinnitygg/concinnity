@@ -65,7 +65,7 @@ impl MaterialParamTable {
 
     /// The table's size in bytes, which a copy of it is allocated at.
     pub fn byte_len(&self) -> usize {
-        core::mem::size_of_val(self.rows.as_slice())
+        size_of_val(self.rows.as_slice())
     }
 
     /// Replace row `row` with `values`. False when the row is the zero row or

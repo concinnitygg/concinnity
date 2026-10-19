@@ -53,8 +53,8 @@ pub struct UserGraphicsSettings {
     /// `Window.mode`. Applied live.
     #[serde(default, deserialize_with = "lenient")]
     pub window_mode: Option<WindowMode>,
-    /// Chosen fullscreen display mode [width, height, refresh_hz] in pixels
-    /// (refresh_hz 0 = unknown / keep the display's rate). `None` means never
+    /// Chosen fullscreen display mode [width, height, `refresh_hz`] in pixels
+    /// (`refresh_hz` 0 = unknown / keep the display's rate). `None` means never
     /// chosen: the display keeps its own mode and the Resolution row shows it.
     /// Fullscreen-only (the row is grayed in windowed / borderless, where the
     /// window itself defines the size); applied live while fullscreen.
@@ -78,7 +78,7 @@ pub struct UserGraphicsSettings {
     /// Upscaler backend (`AntiAliasing.upscaler`: Auto / FSR3 / DLSS /
     /// XeSS). `None` uses the world's value. Applied at next launch (the upscaler
     /// is selected + built once at init); DirectX / Vulkan only (Metal uses
-    /// MetalFX). A user/hardware preference, independent of the quality preset.
+    /// `MetalFX`). A user/hardware preference, independent of the quality preset.
     #[serde(default, deserialize_with = "lenient")]
     pub upscale_backend: Option<UpscalerBackend>,
     /// The DLSS render preset. `None` leaves DLSS's own default. Applied at next
@@ -116,8 +116,8 @@ pub struct UserGraphicsSettings {
     #[serde(default)]
     pub ambient_intensity: Option<f32>,
     /// Camera vertical field of view in degrees. `None` uses the world's authored
-    /// `Camera3D.fov_y_degrees`. Applied live (Camera3DSystem updates the camera
-    /// from a ControlsCommand; the projection rebuilds from it each frame) and
+    /// `Camera3D.fov_y_degrees`. Applied live (`Camera3DSystem` updates the camera
+    /// from a `ControlsCommand`; the projection rebuilds from it each frame) and
     /// re-applied at init. A user preference, independent of the quality preset.
     #[serde(default)]
     pub fov: Option<f32>,
@@ -279,6 +279,7 @@ pub enum GraphicsApiTrial {
 impl UserGraphicsSettings {
     /// These overrides with each one `top` sets in place of this one's: how a
     /// session override layers over the user's persisted choices.
+    #[must_use]
     pub fn overlaid_by(&self, top: &Self) -> Self {
         let Self {
             quality_preset,

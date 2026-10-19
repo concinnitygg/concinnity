@@ -16,6 +16,7 @@ mod ik;
 #[cfg(test)]
 mod tests;
 
+use crate::animation::skinned_mesh_map::SkinnedMeshNameIndex;
 pub use commands::GraphStateReport;
 
 use crate::animation::anim_graph;
@@ -64,7 +65,7 @@ enum TargetMode {
 /// `AnimationSystem::apply_reloaded_clip`; this crate only stores the catalog.
 #[derive(Debug, Clone)]
 pub struct AnimationReloadEntry {
-    /// EntityTarget `SkinnedMesh` handle, also the key into
+    /// `EntityTarget` `SkinnedMesh` handle, also the key into
     /// `AnimationSystem::targets` where this clip lives.
     pub target: SkinnedMeshHandle,
     /// Position in the target bucket's `clips`. Set at init when the clip is
@@ -102,7 +103,7 @@ pub struct AnimationSystem {
     targets: BTreeMap<SkinnedMeshHandle, TargetState>,
     // Interned-name -> handle index snapshotted at init, so the animation
     // debug tool calls (which address a mesh by name) can find the bucket.
-    name_index: crate::animation::skinned_mesh_map::SkinnedMeshNameIndex,
+    name_index: SkinnedMeshNameIndex,
     // Clip time `t` in seconds: the frame time of every unpaused step, so
     // playback freezes on its pose behind a menu and resumes from it.
     clip_secs: f32,
@@ -126,7 +127,7 @@ impl core::fmt::Debug for AnimationSystem {
         f.debug_struct("AnimationSystem")
             .field("targets", &self.targets.len())
             .field("reload_entries", &self.reload_entries.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -143,7 +144,7 @@ impl AnimationSystem {
     pub fn new() -> Self {
         Self {
             targets: BTreeMap::new(),
-            name_index: Default::default(),
+            name_index: SkinnedMeshNameIndex::default(),
             clip_secs: 0.0,
             reload_entries: Vec::new(),
             ik_frames: HashMap::new(),
@@ -165,6 +166,7 @@ impl AnimationSystem {
     }
 
     /// Sample the poses on `pool`.
+    #[must_use]
     pub fn with_pool<P: Fanout>(mut self, pool: Lent<P>) -> Self {
         self.poses = Box::new(pool);
         self
@@ -172,6 +174,7 @@ impl AnimationSystem {
 
     /// Record each file-backed clip's [`AnimationReloadEntry`] at init, for a
     /// host that reloads clips from source.
+    #[must_use]
     pub fn capturing_sources(mut self) -> Self {
         self.capture_sources = true;
         self
@@ -229,7 +232,7 @@ impl System for AnimationSystem {
             .writes_resources(crate::resource_mask![RootMotionEvent])
     }
 
-    fn init(&mut self, ctx: &mut PipelineContext) {
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
         // Clips accumulate per target mesh; how a bucket's clips combine is
         // decided below (graph if the world declares one, weighted blend
         // otherwise).
@@ -239,7 +242,7 @@ impl System for AnimationSystem {
         // animation debug tool calls. The correlation web itself is keyed by
         // the authored `target` handles directly.
         self.name_index = ctx
-            .resource::<crate::animation::skinned_mesh_map::SkinnedMeshNameIndex>()
+            .resource::<SkinnedMeshNameIndex>()
             .cloned()
             .unwrap_or_default();
         let skin_index = ctx
@@ -332,7 +335,7 @@ impl System for AnimationSystem {
         );
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         // Freeze while a menu is open: skip all sampling so animation stops
         // consuming CPU/GPU behind the menu, and let none of the paused frames'
         // time reach the clip clock, so resuming continues from the frozen pose.
@@ -412,7 +415,7 @@ impl System for AnimationSystem {
                     [single] => {
                         // One-clip buckets ignore weight and play at full
                         // strength; the blend would be a no-op anyway.
-                        single.clip.sample_into(t, skeleton, &mut scratch.locals)
+                        single.clip.sample_into(t, skeleton, &mut scratch.locals);
                     }
                     many => {
                         // Incremental normalized fold: the first clip seeds

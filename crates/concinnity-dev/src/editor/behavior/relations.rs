@@ -85,20 +85,20 @@ impl Ref {
     // The type the world has to declare the name as, or `None` when any does.
     fn asset_type(self) -> Option<RegisteredType> {
         match self {
-            Ref::Volume => Some(RegisteredType::TriggerVolume),
-            Ref::Scene => Some(RegisteredType::Scene),
-            Ref::Screen => Some(RegisteredType::Screen),
-            Ref::Entity => None,
+            Self::Volume => Some(RegisteredType::TriggerVolume),
+            Self::Scene => Some(RegisteredType::Scene),
+            Self::Screen => Some(RegisteredType::Screen),
+            Self::Entity => None,
         }
     }
 
     // What the card says the reference wanted, when the world has no such name.
     fn noun(self) -> &'static str {
         match self {
-            Ref::Volume => "volume",
-            Ref::Scene => "scene",
-            Ref::Screen => "screen",
-            Ref::Entity => "entity",
+            Self::Volume => "volume",
+            Self::Scene => "scene",
+            Self::Screen => "screen",
+            Self::Entity => "entity",
         }
     }
 }
@@ -491,9 +491,10 @@ fn scope_summary(args: &Value) -> String {
         .iter()
         .filter_map(Value::as_str)
         .collect();
-    match scope.is_empty() {
-        true => "world-scoped".to_string(),
-        false => format!("per {}", scope.join(", ")),
+    if scope.is_empty() {
+        "world-scoped".to_string()
+    } else {
+        format!("per {}", scope.join(", "))
     }
 }
 
@@ -622,7 +623,7 @@ fn array(value: Option<&Value>) -> &[Value] {
     value
         .and_then(Value::as_array)
         .map(Vec::as_slice)
-        .unwrap_or(&[])
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

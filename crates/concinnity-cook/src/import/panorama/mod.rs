@@ -36,8 +36,7 @@ use crate::import::gltf_source::GltfDoc;
 pub fn file_is_panorama_sphere(path: &str) -> bool {
     GltfDoc::parse_file(path)
         .ok()
-        .map(|doc| detect(&doc).is_ok())
-        .unwrap_or(false)
+        .is_some_and(|doc| detect(&doc).is_ok())
 }
 
 // Decode the panorama image embedded in the `.glb` / `.gltf` at `path` into a
@@ -46,7 +45,7 @@ pub fn file_is_panorama_sphere(path: &str) -> bool {
 // sphere, naming the criterion it missed.
 pub(crate) fn load_panorama_file(path: &str) -> Result<crate::codec::hdr::HdrImage, String> {
     let doc = GltfDoc::parse_file(path)?;
-    let panorama = detect(&doc).map_err(|e| format!("'{}': {}", path, e))?;
+    let panorama = detect(&doc).map_err(|e| format!("'{path}': {e}"))?;
     load_equirect(&doc, path, panorama.image_index)
 }
 

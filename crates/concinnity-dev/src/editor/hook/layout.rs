@@ -1,4 +1,4 @@
-//! EditorHook: the floating panels' focus stack, published draw layers, and
+//! `EditorHook`: the floating panels' focus stack, published draw layers, and
 //! each panel's on-screen origin -- all derived from the panel registry.
 
 use concinnity_core::ecs::asset_id::AssetId;

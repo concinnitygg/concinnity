@@ -3,6 +3,7 @@
 // handle has to be printed or typed.
 
 use serde_json::Value;
+use std::collections::HashMap;
 
 /// The args key an entry declares its identity under. The `$` keeps it apart
 /// from every schema field, so no asset type can ever collide with it.
@@ -91,7 +92,7 @@ pub fn is_label_of(handle: &str, ty: &str) -> bool {
 /// Every entry's handle, in order: its `$id`, else its anonymous label. An
 /// entry with no type string has none.
 pub fn entry_handles(entries: &[Value]) -> Vec<Option<String>> {
-    let mut ordinals: std::collections::HashMap<&str, usize> = Default::default();
+    let mut ordinals: HashMap<&str, usize> = HashMap::default();
     entries
         .iter()
         .map(|entry| {

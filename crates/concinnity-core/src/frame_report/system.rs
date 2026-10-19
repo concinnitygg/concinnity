@@ -8,6 +8,7 @@ use crate::ecs::{
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::fmt::Write as _;
 
 use crate::benchmark::BenchmarkRun;
 use crate::camera_track::CameraTrackStatus;
@@ -146,34 +147,37 @@ impl FrameReportSystem {
                 .by_phase()
                 .map(|(phase, count)| format!("{} {count}", self.run.phase_name(phase)))
                 .collect();
-            text.push_str(&format!(
-                "frame report: the window was hidden, so {} frame(s) past the warm-up ({}) were left out of the measurement\n",
+            let _ = writeln!(
+                text,
+                "frame report: the window was hidden, so {} frame(s) past the warm-up ({}) were left out of the measurement",
                 self.hidden.total(),
                 phases.join(", "),
-            ));
+            );
         }
         for skipped in &self.hidden_captures {
-            text.push_str(&format!(
-                "frame report: the window was hidden {:.1}s after the warm-up, so {} was not captured\n",
+            let _ = writeln!(
+                text,
+                "frame report: the window was hidden {:.1}s after the warm-up, so {} was not captured",
                 skipped.seconds, skipped.path,
-            ));
+            );
         }
         for missed in self.captures.missed() {
-            text.push_str(&format!(
-                "frame report: the run ended before {:.1}s after the warm-up, so {} was not captured\n",
+            let _ = writeln!(
+                text,
+                "frame report: the run ended before {:.1}s after the warm-up, so {} was not captured",
                 missed.seconds, missed.path,
-            ));
+            );
         }
         text
     }
 }
 
 impl System for FrameReportSystem {
-    fn init(&mut self, _ctx: &mut PipelineContext) {
+    fn init(&mut self, _ctx: &mut PipelineContext<'_>) {
         self.run.phases = self.benchmark.phase_names().to_vec();
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         let now = ctx.resource::<Clock>().map_or(0, Clock::read);
         let started = *self.started.get_or_insert(now);
         let status = ctx.resource::<CameraTrackStatus>().copied();
@@ -231,7 +235,7 @@ impl System for FrameReportSystem {
         if let Some(frame) = core::mem::replace(&mut self.pending, recorded) {
             let systems = ctx.profile.system_timings();
             self.run.capture_system_names(systems);
-            self.run.samples.push(FrameSample::new(
+            self.run.samples.push(&FrameSample::new(
                 frame.timing,
                 &frame.render,
                 systems,
@@ -291,7 +295,7 @@ mod tests {
     }
 
     fn report(run: &BenchmarkRun) -> FrameReportSystem {
-        super::FrameReportSystem::new(run, counted)
+        FrameReportSystem::new(run, counted)
     }
 
     fn track(travel: Vec<CameraTravel>) -> CameraTrack {
@@ -468,7 +472,7 @@ mod tests {
         assert_eq!(last.input_latency_us, 48_000);
         assert_eq!(last.shown_us, 25_000);
         assert!(
-            (last.shown_step_us as i64 - 22_000).abs() <= 1,
+            (i64::from(last.shown_step_us) - 22_000).abs() <= 1,
             "{}",
             last.shown_step_us
         );

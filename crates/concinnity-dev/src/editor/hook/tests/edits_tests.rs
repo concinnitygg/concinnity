@@ -301,7 +301,7 @@ fn save_writes_the_world_file_and_no_build_output() {
 
     let world_path = dir.path().join("worlds").join("world.jsonl");
     let entries = vec![serde_json::json!({"type":"PhysicsConfig","args":{"$id":"phys"}})];
-    let mut h = EditorHook::new(world_path.to_string_lossy().into_owned(), entries.clone());
+    let mut h = EditorHook::new(world_path.to_string_lossy().into_owned(), entries);
     h.entries
         .push(serde_json::json!({"type":"TextLabel","args":{"$id":"hint"}}));
     h.mark_changed();
@@ -320,7 +320,7 @@ fn save_writes_the_world_file_and_no_build_output() {
         "no blobs, no lock, no build root at all"
     );
 
-    crate::test_support::isolate_state_dir();
+    isolate_state_dir();
 }
 
 // A save that cannot write leaves the world dirty for the next attempt.

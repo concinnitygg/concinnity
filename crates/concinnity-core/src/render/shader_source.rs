@@ -36,11 +36,11 @@ use crate::render::shaders;
 /// named file's text spliced in at that point.
 ///
 /// Several come in pairs, because a shader's resource bindings sit between the
-/// halves: MAIN_TYPES / PROBE_TYPES / RT_TYPES / RAYMARCH_TYPES declare the
-/// records a binding names, and MAIN_SHADING / PROBE_COMMON / RT_TRACE /
-/// RAYMARCH_COMMON the code that reads the bound resources.
+/// halves: `MAIN_TYPES` / `PROBE_TYPES` / `RT_TYPES` / `RAYMARCH_TYPES` declare the
+/// records a binding names, and `MAIN_SHADING` / `PROBE_COMMON` / `RT_TRACE` /
+/// `RAYMARCH_COMMON` the code that reads the bound resources.
 ///
-/// PARTICLE_TYPES is the one shared by two halves of a *system* rather than of
+/// `PARTICLE_TYPES` is the one shared by two halves of a *system* rather than of
 /// a shader: the simulation kernel writes the pool the render pair reads.
 ///
 /// The order is load-bearing where one fragment carries another's marker: the

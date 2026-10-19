@@ -33,9 +33,9 @@ pub(in crate::vulkan) enum Blend {
 impl From<PostBlend> for Blend {
     fn from(blend: PostBlend) -> Self {
         match blend {
-            PostBlend::Replace => Blend::Opaque,
-            PostBlend::Additive => Blend::Additive,
-            PostBlend::PremultipliedOver => Blend::PremultipliedOver,
+            PostBlend::Replace => Self::Opaque,
+            PostBlend::Additive => Self::Additive,
+            PostBlend::PremultipliedOver => Self::PremultipliedOver,
         }
     }
 }
@@ -45,19 +45,16 @@ impl Blend {
         let base = vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA);
         let (src, dst) = match self {
-            Blend::Opaque => return base.blend_enable(false),
-            Blend::Additive => (vk::BlendFactor::ONE, vk::BlendFactor::ONE),
-            Blend::PremultipliedOver => {
-                (vk::BlendFactor::ONE, vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-            }
-            Blend::AlphaOver => (
+            Self::Opaque => return base.blend_enable(false),
+            Self::Additive | Self::Max => (vk::BlendFactor::ONE, vk::BlendFactor::ONE),
+            Self::PremultipliedOver => (vk::BlendFactor::ONE, vk::BlendFactor::ONE_MINUS_SRC_ALPHA),
+            Self::AlphaOver => (
                 vk::BlendFactor::SRC_ALPHA,
                 vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
             ),
-            Blend::Max => (vk::BlendFactor::ONE, vk::BlendFactor::ONE),
         };
         let op = match self {
-            Blend::Max => vk::BlendOp::MAX,
+            Self::Max => vk::BlendOp::MAX,
             _ => vk::BlendOp::ADD,
         };
         base.blend_enable(true)
@@ -79,8 +76,8 @@ pub(in crate::vulkan) enum Depth {
 impl Depth {
     // The opaque-geometry test: nearer fragments pass and write. The camera's
     // opaque passes and every shadow caster draw with it.
-    pub(in crate::vulkan) const fn write() -> Depth {
-        Depth::Test {
+    pub(in crate::vulkan) const fn write() -> Self {
+        Self::Test {
             compare: compare_op(DEPTH_WRITE_COMPARE),
             write: true,
         }
@@ -88,16 +85,16 @@ impl Depth {
 
     // A pass whose shader writes a depth no farther than the rasterized one:
     // equal depth passes too.
-    pub(in crate::vulkan) const fn write_inclusive() -> Depth {
-        Depth::Test {
+    pub(in crate::vulkan) const fn write_inclusive() -> Self {
+        Self::Test {
             compare: compare_op(DEPTH_INCLUSIVE_COMPARE),
             write: true,
         }
     }
 
     // Tested against depth another pass wrote, without writing it.
-    pub(in crate::vulkan) const fn read_only() -> Depth {
-        Depth::Test {
+    pub(in crate::vulkan) const fn read_only() -> Self {
+        Self::Test {
             compare: compare_op(DEPTH_INCLUSIVE_COMPARE),
             write: false,
         }
@@ -105,8 +102,8 @@ impl Depth {
 
     pub(in crate::vulkan) fn raw(self) -> vk::PipelineDepthStencilStateCreateInfo<'static> {
         let (test, compare, write) = match self {
-            Depth::Off => (false, vk::CompareOp::ALWAYS, false),
-            Depth::Test { compare, write } => (true, compare, write),
+            Self::Off => (false, vk::CompareOp::ALWAYS, false),
+            Self::Test { compare, write } => (true, compare, write),
         };
         vk::PipelineDepthStencilStateCreateInfo::default()
             .depth_test_enable(test)

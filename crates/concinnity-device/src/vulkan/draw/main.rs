@@ -71,11 +71,11 @@ impl VkContext {
             },
         };
         let clear_depth = depth::CLEAR_VALUE;
-        let clears: &[vk::ClearValue] = if self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1
+        let clears: &[vk::ClearValue] = if self.targets.msaa_samples == vk::SampleCountFlags::TYPE_1
         {
-            &[clear_color, clear_depth, vk::ClearValue::default()]
-        } else {
             &[clear_color, clear_depth]
+        } else {
+            &[clear_color, clear_depth, vk::ClearValue::default()]
         };
 
         // Under two-pass occlusion, phase 1 renders into a variant render pass
@@ -206,7 +206,7 @@ impl VkContext {
                     self.cull.indirect_buffers[frame_idx].buffer(),
                     0,
                     self.state.draw.skinned_record_base() as u32,
-                    std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
+                    size_of::<vk::DrawIndexedIndirectCommand>() as u32,
                 );
             }
             // GPU expands the indirect buffer to up to `draw.n_objects` draw
@@ -227,7 +227,7 @@ impl VkContext {
                         cmd,
                         vk::PipelineBindPoint::GRAPHICS,
                         pipeline.handle(),
-                    )
+                    );
                 };
             }
         }
@@ -283,7 +283,7 @@ impl VkContext {
                 // Indirect draw #2: the skinned tail
                 // `[skinned_record_base(), record_count())`, byte-offset into the
                 // same indirect command buffer.
-                let cmd_stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>();
+                let cmd_stride = size_of::<vk::DrawIndexedIndirectCommand>();
                 device.cmd_draw_indexed_indirect(
                     cmd,
                     self.cull.indirect_buffers[frame_idx].buffer(),
@@ -437,7 +437,7 @@ impl VkContext {
                 self.cull.indirect_buffers2[frame_idx].buffer(),
                 0,
                 self.state.draw.skinned_record_base() as u32,
-                std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
+                size_of::<vk::DrawIndexedIndirectCommand>() as u32,
             );
         }
         self.inc_draw_calls(1);
@@ -454,7 +454,7 @@ impl VkContext {
         if self.state.draw.n_skinned > 0
             && let Some(deformed) = self.skinned.deformed.get(frame_idx)
         {
-            let cmd_stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>();
+            let cmd_stride = size_of::<vk::DrawIndexedIndirectCommand>();
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {

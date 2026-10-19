@@ -1,6 +1,6 @@
 //! Font atlas data and text draw-call assembly. No backend ownership; the
 //! renderer uploads the atlas textures; this module only builds the quad
-//! geometry from TextLabel components each frame.
+//! geometry from `TextLabel` components each frame.
 
 use crate::components::{LabelBox, SpriteFit, TextAlign, TextLabel};
 use crate::ecs::FontHandle;
@@ -19,7 +19,7 @@ use runs::RunColors;
 /// One face's per-glyph metrics, keyed by Unicode code point.
 pub type FontMetrics = HashMap<u32, crate::gfx::font::GlyphMetrics>;
 
-/// Per-font data kept in memory after init() so step() can build text quads each frame.
+/// Per-font data kept in memory after `init()` so `step()` can build text quads each frame.
 pub struct LoadedFont {
     /// Index into the backend's text atlas texture array.
     pub atlas_slot: usize,
@@ -138,15 +138,14 @@ pub fn text_advance_width(content: &str, font: &LoadedFont, scale: f32) -> f32 {
 // One glyph's advance in scaled pixels, substituting the space glyph's advance
 // for a missing metric.
 fn advance_px(ch: char, font: &LoadedFont, scale: f32) -> f32 {
-    font.metrics
-        .get(&(ch as u32))
-        .map(|m| m.advance_px * scale)
-        .unwrap_or_else(|| {
+    font.metrics.get(&(ch as u32)).map_or_else(
+        || {
             font.metrics
-                .get(&(b' ' as u32))
-                .map(|m| m.advance_px * scale)
-                .unwrap_or(0.0)
-        })
+                .get(&u32::from(b' '))
+                .map_or(0.0, |m| m.advance_px * scale)
+        },
+        |m| m.advance_px * scale,
+    )
 }
 
 // Baseline position relative to a label's top-left `y`, so the cap-height band
@@ -155,7 +154,7 @@ fn advance_px(ch: char, font: &LoadedFont, scale: f32) -> f32 {
 // glyphs; centering the cap band makes short UI text sit centered in its box.
 fn baseline_offset(font: &LoadedFont, scale: f32) -> f32 {
     let line_height = font.size_px * scale;
-    (line_height + font.cap_px * scale) / 2.0
+    f32::midpoint(line_height, font.cap_px * scale)
 }
 
 // The visible glyphs' vertical extent above and below the first line's baseline,
@@ -175,7 +174,8 @@ fn content_v_extent(content: &str, font: &LoadedFont, scale: f32) -> (f32, f32) 
                 continue;
             }
             top_above = top_above.max(m.bearing_y * scale);
-            bot_below = bot_below.max((m.atlas_h as f32 / font.supersample - m.bearing_y) * scale);
+            bot_below =
+                bot_below.max((f32::from(m.atlas_h) / font.supersample - m.bearing_y) * scale);
         }
     }
     (top_above, bot_below)
@@ -211,7 +211,7 @@ pub fn measure_label_box(label: &TextLabel, loaded_fonts: &FontSet) -> Option<La
     })
 }
 
-/// Build one TextDrawCall per TextLabel, laying out character quads using the
+/// Build one `TextDrawCall` per `TextLabel`, laying out character quads using the
 /// loaded font metrics. When both `viewport` dimensions are > 0.0, labels with
 /// `centered = true` are repositioned to the center of the viewport. `clips`
 /// maps an element id to a reference-space clip band; a label found there has
@@ -253,9 +253,8 @@ pub fn build_text_calls_into<'a>(
         if !label.visible {
             continue;
         }
-        let font = match loaded_fonts.resolve(label.font) {
-            Some(f) => f,
-            None => continue,
+        let Some(font) = loaded_fonts.resolve(label.font) else {
+            continue;
         };
         // Everything below reads the laid-out content, not the authored string,
         // so alignment, the background box, and the glyph run agree on the lines
@@ -373,14 +372,11 @@ pub fn build_text_calls_into<'a>(
                 baseline += line_height;
                 continue;
             }
-            let m = match font.metrics.get(&(ch as u32)) {
-                Some(m) => m,
-                None => {
-                    if let Some(sp) = font.metrics.get(&(b' ' as u32)) {
-                        x_cursor += sp.advance_px * scale;
-                    }
-                    continue;
+            let Some(m) = font.metrics.get(&(ch as u32)) else {
+                if let Some(sp) = font.metrics.get(&u32::from(b' ')) {
+                    x_cursor += sp.advance_px * scale;
                 }
+                continue;
             };
             if m.atlas_w == 0 || m.atlas_h == 0 {
                 x_cursor += m.advance_px * scale;
@@ -389,14 +385,14 @@ pub fn build_text_calls_into<'a>(
             // atlas_w/atlas_h are in supersampled atlas texels; divide by the
             // supersample factor to get the glyph's logical size before scaling
             // to the screen. The UVs below still address the full texel extent.
-            let gw = m.atlas_w as f32 / font.supersample * scale;
-            let gh = m.atlas_h as f32 / font.supersample * scale;
+            let gw = f32::from(m.atlas_w) / font.supersample * scale;
+            let gh = f32::from(m.atlas_h) / font.supersample * scale;
             let gx = x_cursor + m.bearing_x * scale;
             let gy = baseline - m.bearing_y * scale;
-            let u0 = m.atlas_x as f32 / aw;
-            let v0 = m.atlas_y as f32 / ah;
-            let u1 = (m.atlas_x as f32 + m.atlas_w as f32) / aw;
-            let v1 = (m.atlas_y as f32 + m.atlas_h as f32) / ah;
+            let u0 = f32::from(m.atlas_x) / aw;
+            let v0 = f32::from(m.atlas_y) / ah;
+            let u1 = (f32::from(m.atlas_x) + f32::from(m.atlas_w)) / aw;
+            let v1 = (f32::from(m.atlas_y) + f32::from(m.atlas_h)) / ah;
             let color = colors.at(laid.source(i));
             let base = vertices.len() as u16;
             vertices.extend_from_slice(&[
@@ -467,7 +463,7 @@ mod tests {
             atlas_h,
             advance_px,
             bearing_x: 0.0,
-            bearing_y: atlas_h as f32,
+            bearing_y: f32::from(atlas_h),
         }
     }
 
@@ -496,8 +492,8 @@ mod tests {
             color_runs: Vec::new(),
             scale: 1.0,
             centered: false,
-            align: crate::components::TextAlign::Left,
-            fit: crate::components::SpriteFit::Fit,
+            align: TextAlign::Left,
+            fit: SpriteFit::Fit,
             background: [0.0, 0.0, 0.0, 0.0],
             padding: 0.0,
             wrap_width: 0.0,
@@ -764,7 +760,7 @@ mod tests {
     fn zero_size_glyph_advances_cursor_without_quad() {
         // A glyph whose atlas dimensions are 0×0 is invisible but still advances x.
         let zero = GlyphMetrics {
-            char_code: b'X' as u32,
+            char_code: u32::from(b'X'),
             atlas_x: 0,
             atlas_y: 0,
             atlas_w: 0,

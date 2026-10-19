@@ -15,6 +15,10 @@ use super::Cli;
 // expensive and its memory footprint climbs over a long run, so it stays an
 // explicit manual opt-in rather than riding a flag that defaults on in debug
 // builds.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Metal's debug layer is switched on by its own environment variable"
+)]
 #[cfg(target_os = "macos")]
 pub(super) fn reexec_with_metal_validation(cli: &Cli) {
     use super::Commands;

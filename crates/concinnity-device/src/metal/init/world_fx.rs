@@ -45,12 +45,12 @@ pub(super) fn build_decals(
     gpu: &InitGpu<'_>,
     decals: Vec<DecalRecord>,
 ) -> RenderResult<DecalState> {
-    let (pipeline, cube_vertex_buffer, cube_index_buffer, sampler) = if !decals.is_empty() {
+    let (pipeline, cube_vertex_buffer, cube_index_buffer, sampler) = if decals.is_empty() {
+        (None, None, None, None)
+    } else {
         let (ps, vbuf, ibuf, samp) =
             build_decal_resources_for_runtime(&gpu.hw.device, gpu.hot_reload)?;
         (Some(ps), Some(vbuf), Some(ibuf), Some(samp))
-    } else {
-        (None, None, None, None)
     };
     let mut set = DecalSet::new(usize::MAX, gpu.frames_in_flight);
     for record in decals {
@@ -94,7 +94,7 @@ pub(in crate::metal) fn build_decal_resources_for_runtime(
         device
             .newBufferWithBytes_length_options(
                 ptr,
-                std::mem::size_of_val(&CUBE_VERTS),
+                size_of_val(&CUBE_VERTS),
                 MTLResourceOptions::StorageModeShared,
             )
             .ok_or_else(|| allocation_failed("decal cube vertex buffer"))?
@@ -107,7 +107,7 @@ pub(in crate::metal) fn build_decal_resources_for_runtime(
         device
             .newBufferWithBytes_length_options(
                 ptr,
-                std::mem::size_of_val(&CUBE_INDICES),
+                size_of_val(&CUBE_INDICES),
                 MTLResourceOptions::StorageModeShared,
             )
             .ok_or_else(|| allocation_failed("decal cube index buffer"))?

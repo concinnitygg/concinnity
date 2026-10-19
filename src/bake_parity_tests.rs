@@ -119,6 +119,7 @@ fn mesh_payload(world: &mut World) -> Vec<u8> {
 }
 
 // The compiled image-based lighting behind a world's environment map.
+#[expect(clippy::panic, reason = "a test helper fails the test that called it")]
 fn environment_payload(world: &mut World) -> Vec<u8> {
     let entry = world
         .inner()
@@ -188,8 +189,8 @@ fn the_resolved_handles_match() {
     let handles = |world: &World| {
         let prop = world.inner().query::<Prop>().next().expect("the cube prop");
         (
-            prop.mesh.map(|h| h.index()),
-            prop.material.map(|h| h.index()),
+            prop.mesh.map(concinnity_core::ecs::Handle::index),
+            prop.material.map(concinnity_core::ecs::Handle::index),
         )
     };
     assert_eq!(handles(&raw_world()), handles(&cooked_world()));
@@ -214,7 +215,7 @@ fn the_baked_camera_matches_the_cooked_one() {
 // Both worlds start: the raw one's data is not just byte-equal but runnable.
 #[test]
 fn both_worlds_start() {
-    for world in [raw_world(), cooked_world()] {
-        crate::test_support::assert_starts_headless(crate::App::from_world(world));
+    for world in [raw_world as fn() -> World, cooked_world] {
+        crate::test_support::assert_starts_headless(crate::App::from_world(world()));
     }
 }

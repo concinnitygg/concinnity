@@ -90,9 +90,10 @@ pub(crate) fn place(
         (true, false, false) => theme::CHECK_OFF_TINT,
     };
     place_rounded(world, ids.box_bg, box_rect(rect), tint, 4.0, true);
-    let color = match check.enabled {
-        true => theme::LABEL,
-        false => theme::LABEL_DIM,
+    let color = if check.enabled {
+        theme::LABEL
+    } else {
+        theme::LABEL_DIM
     };
     let text_x = rect[0] + LABEL_INSET;
     let text_w = (rect[2] - LABEL_INSET).max(0.0);

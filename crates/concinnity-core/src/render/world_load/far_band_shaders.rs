@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 use crate::gfx::render_types::FarFieldTint;
 
-/// Per ShaderHandle value (`shader_count` of them, the default at 0): whether
+/// Per `ShaderHandle` value (`shader_count` of them, the default at 0): whether
 /// one of `draws` (each its shader bucket and far band) has a band under that
 /// Shader. A planet with grass streams its tiles under the default.
 pub fn far_band_shaders(
@@ -33,9 +33,10 @@ mod tests {
     use super::*;
 
     fn draw(bucket: u32, far: bool) -> (u32, FarFieldTint) {
-        let band = match far {
-            true => FarFieldTint::of(1 << 8),
-            false => FarFieldTint::NONE,
+        let band = if far {
+            FarFieldTint::of(1 << 8)
+        } else {
+            FarFieldTint::NONE
         };
         (bucket, band)
     }

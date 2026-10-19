@@ -23,11 +23,11 @@ struct Marker {
 }
 
 impl System for Marker {
-    fn init(&mut self, ctx: &mut PipelineContext) {
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
         mark(ctx, "init");
     }
 
-    fn step(&mut self, _ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, _ctx: &mut PipelineContext<'_>) -> StepResult {
         self.steps += 1;
         match self.stop_after {
             Some(n) if self.steps >= n => StepResult::Done,
@@ -36,7 +36,7 @@ impl System for Marker {
     }
 }
 
-fn mark(ctx: &mut PipelineContext, what: &str) {
+fn mark(ctx: &mut PipelineContext<'_>, what: &str) {
     ctx.push(TextLabel {
         content: what.to_string(),
         ..Default::default()
@@ -61,7 +61,7 @@ fn finishing_gate(world: &World) -> Option<Box<dyn System>> {
     }))
 }
 
-fn before_init(ctx: &mut PipelineContext) {
+fn before_init(ctx: &mut PipelineContext<'_>) {
     mark(ctx, "before_init");
 }
 
@@ -131,7 +131,11 @@ fn the_manifest_matches_what_start_builds() {
     let mut world = seeded();
     let manifest = world.system_manifest(&TABLE);
     world.start(&TABLE).expect("the world starts");
-    let built: Vec<&str> = world.systems().iter().map(|s| s.name()).collect();
+    let built: Vec<&str> = world
+        .systems()
+        .iter()
+        .map(super::super::built_system::BuiltSystem::name)
+        .collect();
     assert_eq!(manifest, built);
 }
 

@@ -3,9 +3,9 @@
 //! host measures the machine (core count, physical RAM, resident set) and
 //! hands the numbers in; the policy that turns them into budgets lives here.
 //!
-//!   ThreadBudget  how many worker threads the shared job pool runs, and
+//!   `ThreadBudget`  how many worker threads the shared job pool runs, and
 //!                 which frame threads run above normal priority.
-//!   MemoryBudget  a soft ceiling on host memory the runtime aims to stay under.
+//!   `MemoryBudget`  a soft ceiling on host memory the runtime aims to stay under.
 //!   cpu           process CPU utilization from successive clock readings.
 //!   drift         whether long-session growth came from the Rust heap or from
 //!                 outside it.
@@ -87,7 +87,7 @@ impl MemoryBudget {
     /// hard ceiling and an override passes through.
     pub fn compute(total_ram_bytes: Option<u64>, max_memory_mb_override: u32) -> Self {
         let override_bytes =
-            (max_memory_mb_override > 0).then(|| (max_memory_mb_override as u64) * 1024 * 1024);
+            (max_memory_mb_override > 0).then(|| u64::from(max_memory_mb_override) * 1024 * 1024);
         let budget_bytes = match (total_ram_bytes, override_bytes) {
             (Some(ram), Some(want)) => want.min(ram * MAX_FRACTION_PCT / 100),
             (Some(ram), None) => HARD_CEILING_BYTES.min(ram * DEFAULT_FRACTION_PCT / 100),

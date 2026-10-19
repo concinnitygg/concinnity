@@ -98,7 +98,7 @@ pub struct World {
 // system, component, or resource breaks the pipelined driver's thread handoff.
 const _: () = {
     const fn require_send<T: Send>() {}
-    require_send::<World>()
+    require_send::<World>();
 };
 
 impl core::fmt::Debug for World {
@@ -106,7 +106,7 @@ impl core::fmt::Debug for World {
         f.debug_struct("World")
             .field("components", &self.components.len())
             .field("systems", &self.systems.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -399,6 +399,10 @@ impl World {
     /// The `EventStore` resource, created on first use. Every queue
     /// `events_mut` ever handed out (here or on a `PipelineContext`) lives in
     /// this one resource, so no per-type rotation list can fall out of sync.
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "the expect follows the insert that guarantees it"
+    )]
     pub fn event_store(&mut self) -> &mut EventStore {
         if !self.resources.contains::<EventStore>() {
             self.resources.insert(EventStore::new());
@@ -667,14 +671,14 @@ impl World {
             #[cfg(debug_assertions)]
             crate::ecs::access_check::set_active(None);
             let micros = clock.map_or(0, |c| {
-                c.read().saturating_sub(started).min(u32::MAX as u64) as u32
+                c.read().saturating_sub(started).min(u64::from(u32::MAX)) as u32
             });
             ctx.profile.record_system(name, micros);
             #[cfg(debug_assertions)]
             if let (Some(start), Some(end)) = (alloc_start, crate::memory::alloc_count()) {
                 ctx.profile.record_system_allocs(
                     name,
-                    end.saturating_sub(start).min(u32::MAX as u64) as u32,
+                    end.saturating_sub(start).min(u64::from(u32::MAX)) as u32,
                 );
             }
             match result {
@@ -695,7 +699,7 @@ impl World {
         #[cfg(debug_assertions)]
         if let (Some(start), Some(end)) = (frame_alloc_start, crate::memory::alloc_count()) {
             self.profile
-                .set_frame_allocs(end.saturating_sub(start).min(u32::MAX as u64) as u32);
+                .set_frame_allocs(end.saturating_sub(start).min(u64::from(u32::MAX)) as u32);
         }
         if self.systems.is_empty() {
             StepResult::Done
@@ -712,7 +716,7 @@ impl World {
         let overflows = self.scratch.overflows();
         if overflows > 0 {
             self.scratch.clear_overflows();
-            self.scratch_overflows = self.scratch_overflows.saturating_add(overflows as u64);
+            self.scratch_overflows = self.scratch_overflows.saturating_add(u64::from(overflows));
         }
         overflows
     }

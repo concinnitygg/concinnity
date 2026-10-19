@@ -12,7 +12,7 @@
 //! the Assets, Preview, and Templates panels. The simulation transport
 //! (Play / Pause, Step, Stop -- `editor/sim.rs`) sits centered in the bar.
 //! Running in the tick (before the world step) means the layout applies the
-//! same frame GraphicsSystem draws it. The whole HUD toggles with F1 (see
+//! same frame `GraphicsSystem` draws it. The whole HUD toggles with F1 (see
 //! `hook.rs`).
 
 use concinnity_core::components::{FrameInput, TextAlign};

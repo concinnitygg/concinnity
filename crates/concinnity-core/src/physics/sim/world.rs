@@ -10,6 +10,7 @@
 // is reserved when the simulation is built and reused, which is what lets the
 // step run inside a frame budget rather than at the allocator's convenience.
 
+use crate::physics::sim::joint::JointImpulses;
 use alloc::vec::Vec;
 
 use crate::memory::{Pool, PoolHandle};
@@ -132,7 +133,7 @@ impl core::fmt::Debug for Simulation {
             .field("bodies", &self.bodies.len())
             .field("capacity", &self.bodies.capacity())
             .field("joints", &self.joints.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -144,7 +145,7 @@ impl Simulation {
 
     /// Reserve room for `capacity` bodies, tuned by `config`.
     pub fn new(config: SimConfig, capacity: usize) -> Self {
-        Simulation {
+        Self {
             config,
             character: CharacterConfig::default(),
             bodies: Pool::with_capacity(capacity),
@@ -584,7 +585,7 @@ impl Simulation {
 
     #[cfg(test)]
     /// Reset the count of terrain queries that gave up.
-    pub(crate) fn clear_heightfield_overflows(&mut self) {
+    pub(crate) fn clear_heightfield_overflows(&self) {
         self.fields.clear_overflows();
     }
 
@@ -715,7 +716,7 @@ impl Simulation {
             anchor_a,
             anchor_b,
             frame,
-            impulses: Default::default(),
+            impulses: JointImpulses::default(),
         });
         // A joint arriving on a settled body has to be able to disturb it.
         for slot in [slot_a, slot_b] {
@@ -831,7 +832,7 @@ impl Simulation {
         let t = Vec3::from_array(translation);
         let center = self.config.gravity_center;
         let margin = self.config.bounds_margin;
-        let Simulation {
+        let Self {
             bodies, broadphase, ..
         } = self;
         for (handle, body) in bodies.iter_mut() {
@@ -894,7 +895,7 @@ impl Simulation {
     /// mass it was authored with. Returns whether the handle named a live
     /// body.
     pub fn make_kinematic(&mut self, handle: BodyHandle) -> bool {
-        self.reclassify(handle, |body| body.make_kinematic())
+        self.reclassify(handle, Body::make_kinematic)
     }
 
     /// Hand a body back to the solver with a launch velocity, restoring the
@@ -1054,7 +1055,7 @@ impl Simulation {
         shape: &CharacterCapsule,
         input: &CharacterMoveInput,
     ) -> CharacterMove {
-        character::resolve(self.scene(), &self.character, shape, input)
+        character::resolve(self.scene(), &self.character, *shape, input)
     }
 
     /// Remove a body, along with every joint it was in. Returns whether the
@@ -1264,7 +1265,7 @@ impl Simulation {
     /// Everything a step does once the bounds are current and the workers, if
     /// any, have been gathered.
     fn advance(&mut self, dt: f32, fanout: &impl Fanout, workers: usize) {
-        let Simulation {
+        let Self {
             config,
             bodies,
             broadphase,
@@ -1408,7 +1409,7 @@ impl Simulation {
     /// Wake whatever the given slot was in contact with or jointed to, so a
     /// change at one body reaches the island it belonged to.
     fn wake_neighbors(&mut self, slot: u32) {
-        let Simulation {
+        let Self {
             bodies,
             contacts,
             joints,
@@ -1440,7 +1441,7 @@ impl Simulation {
     /// about the ones whose bounds actually changed.
     fn refresh_bounds(&mut self) -> usize {
         let margin = self.config.bounds_margin;
-        let Simulation {
+        let Self {
             bodies, broadphase, ..
         } = self;
         let mut awake = 0;
@@ -1478,11 +1479,7 @@ fn gather(bodies: &Pool<Body>, solver: &mut Solver, manifolds: &[Manifold], join
 /// Take the immovable half of a constraint, so the moving half has something
 /// to lean on.
 fn gather_partner(bodies: &Pool<Body>, solver: &mut Solver, a: u32, b: u32) {
-    let simulated = |slot: u32| {
-        bodies
-            .get_at(slot as usize)
-            .is_some_and(|body| body.is_simulated())
-    };
+    let simulated = |slot: u32| bodies.get_at(slot as usize).is_some_and(Body::is_simulated);
     let (moves_a, moves_b) = (simulated(a), simulated(b));
     if moves_a == moves_b {
         // Both moving: already taken. Neither moving: the constraint is
@@ -1582,11 +1579,7 @@ fn update_sleep(
     }
 
     islands.clear();
-    let movable = |slot: u32| {
-        bodies
-            .get_at(slot as usize)
-            .is_some_and(|body| body.is_dynamic())
-    };
+    let movable = |slot: u32| bodies.get_at(slot as usize).is_some_and(Body::is_dynamic);
     for manifold in manifolds {
         if movable(manifold.a) && movable(manifold.b) {
             islands.union(manifold.a, manifold.b);

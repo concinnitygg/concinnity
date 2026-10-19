@@ -1,4 +1,4 @@
-//! JSON-args source selection for the SdfVolume. The build pipeline and the
+//! JSON-args source selection for the `SdfVolume`. The build pipeline and the
 //! world checks read the field straight from the raw args JSON; the runtime
 //! reads the typed struct instead, so the runtime tier carries no JSON parsing.
 

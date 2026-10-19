@@ -33,7 +33,7 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
         launch,
     } = inputs;
     let device = &*gpu.hw.device;
-    let pipelines = build_rt_pipelines(device, &rt_reflections, gpu.hot_reload)?;
+    let pipelines = build_rt_pipelines(device, rt_reflections.as_ref(), gpu.hot_reload)?;
 
     // The Layer 2 path is enabled when at least one material opts into
     // see-through AND the mesh pipeline built (RT-capable device). Mirrors
@@ -50,7 +50,7 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
     // geometry buffers + draw list; resolution-independent, so untouched on
     // resize. A wholesale rebuild on geometry change is the current update path.
     let accel = if rt_reflections.is_some() && raytracing_supported(device) {
-        match build_rt_accel(
+        if let Some(a) = build_rt_accel(
             RtGpu {
                 device,
                 command_queue: &gpu.hw.command_queue,
@@ -73,19 +73,16 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
             None,
             seethrough_enabled,
         )? {
-            Some(a) => {
-                tracing::info!(
-                    "ray-traced reflections: built BVH over {} static objects",
-                    a.blas().len()
-                );
-                Some(a)
-            }
-            None => {
-                tracing::warn!(
-                    "ray-traced reflections requested but the scene has no static geometry to build a BVH from; reflections disabled"
-                );
-                None
-            }
+            tracing::info!(
+                "ray-traced reflections: built BVH over {} static objects",
+                a.blas().len()
+            );
+            Some(a)
+        } else {
+            tracing::warn!(
+                "ray-traced reflections requested but the scene has no static geometry to build a BVH from; reflections disabled"
+            );
+            None
         }
     } else {
         if rt_reflections.is_some() {
@@ -123,7 +120,7 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
 // same gate on a ray-tracing device, unused when the world has no SkinnedMesh.
 pub(in crate::metal) fn build_rt_pipelines(
     device: &ProtocolObject<dyn MTLDevice>,
-    settings: &Option<RtReflectionSettings>,
+    settings: Option<&RtReflectionSettings>,
     hot_reload: bool,
 ) -> RenderResult<RtPipelines> {
     let (resolve, resolve_textured) = if settings.is_some() {

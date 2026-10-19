@@ -1,4 +1,4 @@
-//! EditorHook: the Import panel's actions. Adding resolves the typed path
+//! `EditorHook`: the Import panel's actions. Adding resolves the typed path
 //! through `authoring::add::entry_from_path` -- the exact dispatch `cn add
 //! <file>` runs -- so a panel import and a CLI import produce identical
 //! entries; resolution failures (missing file, unknown extension, invalid
@@ -125,7 +125,7 @@ impl EditorHook {
         }
         // Scene entries defer reading their file to the cook, which would
         // surface a typo only as a preview-rebuild log; catch it here instead.
-        if !std::path::Path::new(&path).is_file() {
+        if !Path::new(&path).is_file() {
             let msg = format!("{path}: no such file");
             self.console_sink.error(&format!("import: {msg}"));
             self.import.status = Some(ImportStatus::Error(short_status(&msg)));

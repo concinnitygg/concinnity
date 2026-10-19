@@ -177,6 +177,10 @@ impl PipelineContext<'_> {
     /// Remove and return every `C`, each paired with its entity's asset id, in
     /// column order (see [`drain`](Self::drain)).
     pub fn drain_with_ids<C: ComponentSlot>(&mut self) -> Vec<(Option<AssetId>, C)> {
+        #[expect(
+            clippy::needless_collect,
+            reason = "the ids borrow self, which the drain takes mutably"
+        )]
         let ids: Vec<Option<AssetId>> = self
             .query_with_entity::<C>()
             .map(|(entity, _)| self.get::<Identity>(entity).map(|i| i.id()))

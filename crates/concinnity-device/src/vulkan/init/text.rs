@@ -54,7 +54,9 @@ pub(super) fn build_text(
 
     // Text renders in the composite pass (post-tonemap, single-sample), so
     // its pipeline targets the composite render pass.
-    let pipeline = if !atlas_textures.is_empty() {
+    let pipeline = if atlas_textures.is_empty() {
+        None
+    } else {
         let (tv, tf) = compile_text_shaders(hot_reload)?;
         let tp = create_text_pipeline(
             device,
@@ -65,8 +67,6 @@ pub(super) fn build_text(
             vk::SampleCountFlags::TYPE_1,
         )?;
         Some(tp)
-    } else {
-        None
     };
 
     // Text atlas sets.

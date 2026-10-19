@@ -1,6 +1,6 @@
 //! Hot-reload rebuild of the shared static + skinned vertex / index buffers
 //! when a re-imported `.glb` no longer fits in its init-time slot. Mirrors
-//! metal/resources/geometry_rebuild.rs + metal/resources/skinning.rs's
+//! `metal/resources/geometry_rebuild.rs` + metal/resources/skinning.rs's
 //! `rebuild_skinned_geometry`; the DEFAULT-heap buffers force a CPU
 //! round-trip (READBACK staging for the old contents, UPLOAD staging for
 //! the new ones) where Metal can just read `StorageModeShared` `contents()`.
@@ -43,8 +43,8 @@ impl DxContext {
         // matching staging buffer, then transitions back; `wait_idle` above
         // gates the source side; the one-shot's internal fence wait gates
         // the destination.
-        let old_v_bytes = self.scene.geometry.vertex_buffer_view.SizeInBytes as u64;
-        let old_i_bytes = self.scene.geometry.index_buffer_view.SizeInBytes as u64;
+        let old_v_bytes = u64::from(self.scene.geometry.vertex_buffer_view.SizeInBytes);
+        let old_i_bytes = u64::from(self.scene.geometry.index_buffer_view.SizeInBytes);
         let v_readback = self.hw.alloc.alloc_buffer(
             old_v_bytes,
             D3D12_HEAP_TYPE_READBACK,
@@ -99,8 +99,8 @@ impl DxContext {
         // Map the readback staging buffers and copy into typed CPU Vecs.
         // The static IB is `u32` (set when the buffer was created in
         // init/mod.rs); the VB stride is `size_of::<Vertex>()`.
-        let old_v_count = (old_v_bytes as usize) / std::mem::size_of::<Vertex>();
-        let old_i_count = (old_i_bytes as usize) / std::mem::size_of::<u32>();
+        let old_v_count = (old_v_bytes as usize) / size_of::<Vertex>();
+        let old_i_count = (old_i_bytes as usize) / size_of::<u32>();
         let old_vertices: Vec<Vertex> = read_typed_vec(&v_readback, old_v_count)?;
         let old_indices: Vec<u32> = read_typed_vec(&i_readback, old_i_count)?;
 
@@ -124,8 +124,8 @@ impl DxContext {
         // and ship the rebuilt contents in a single one-shot submit. The new
         // resources start in COMMON; CopyBufferRegion promotes them to
         // COPY_DEST implicitly, then a barrier puts each into its read state.
-        let new_v_bytes = std::mem::size_of_val(new_vertices.as_slice()) as u64;
-        let new_i_bytes = std::mem::size_of_val(new_indices.as_slice()) as u64;
+        let new_v_bytes = size_of_val(new_vertices.as_slice()) as u64;
+        let new_i_bytes = size_of_val(new_indices.as_slice()) as u64;
         let new_vbuf = self.hw.alloc.alloc_buffer(
             new_v_bytes,
             D3D12_HEAP_TYPE_DEFAULT,
@@ -181,7 +181,7 @@ impl DxContext {
         self.scene.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_vbuf),
             SizeInBytes: new_v_bytes as u32,
-            StrideInBytes: std::mem::size_of::<Vertex>() as u32,
+            StrideInBytes: size_of::<Vertex>() as u32,
         };
         self.scene.geometry.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_ibuf),
@@ -244,8 +244,8 @@ impl DxContext {
 
         // Read the live skinned buffers back to CPU memory via READBACK
         // staging. Same one-shot pattern as `rebuild_static_geometry`.
-        let old_v_bytes = self.skinned.vertex_buffer_view.SizeInBytes as u64;
-        let old_i_bytes = self.skinned.index_buffer_view.SizeInBytes as u64;
+        let old_v_bytes = u64::from(self.skinned.vertex_buffer_view.SizeInBytes);
+        let old_i_bytes = u64::from(self.skinned.index_buffer_view.SizeInBytes);
         let v_readback = self.hw.alloc.alloc_buffer(
             old_v_bytes,
             D3D12_HEAP_TYPE_READBACK,
@@ -287,8 +287,8 @@ impl DxContext {
 
         // Skinned VB stride is `size_of::<SkinnedVertex>()`; skinned IB is
         // `u32` (matches the format set in `upload_skinned`).
-        let old_v_count = (old_v_bytes as usize) / std::mem::size_of::<SkinnedVertex>();
-        let old_i_count = (old_i_bytes as usize) / std::mem::size_of::<u32>();
+        let old_v_count = (old_v_bytes as usize) / size_of::<SkinnedVertex>();
+        let old_i_count = (old_i_bytes as usize) / size_of::<u32>();
         let old_vertices: Vec<SkinnedVertex> = read_typed_vec(&v_readback, old_v_count)?;
         let old_indices: Vec<u32> = read_typed_vec(&i_readback, old_i_count)?;
 
@@ -310,8 +310,8 @@ impl DxContext {
 
         // Allocate new DEFAULT-heap buffers + UPLOAD staging copies and ship
         // the rebuilt contents in a single one-shot submit.
-        let new_v_bytes = std::mem::size_of_val(new_vertices.as_slice()) as u64;
-        let new_i_bytes = std::mem::size_of_val(new_indices.as_slice()) as u64;
+        let new_v_bytes = size_of_val(new_vertices.as_slice()) as u64;
+        let new_i_bytes = size_of_val(new_indices.as_slice()) as u64;
         // Whole u32 words for the index buffer; see `upload_skinned`.
         let ibuf_bytes = rt_geom::skinned_index_buffer_bytes(new_indices.len()) as u64;
         let new_vbuf = self.hw.alloc.alloc_buffer(
@@ -360,7 +360,7 @@ impl DxContext {
         self.skinned.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_vbuf),
             SizeInBytes: new_v_bytes as u32,
-            StrideInBytes: std::mem::size_of::<SkinnedVertex>() as u32,
+            StrideInBytes: size_of::<SkinnedVertex>() as u32,
         };
         self.skinned.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_ibuf),
@@ -384,7 +384,7 @@ fn buffer_bytes(res: &ID3D12Resource) -> u64 {
 // fence wait), so the memcpy sees fully committed bytes. `T` must match the
 // buffer's stride exactly.
 fn read_typed_vec<T: Copy>(src: &ID3D12Resource, count: usize) -> RenderResult<Vec<T>> {
-    let want = (count * std::mem::size_of::<T>()) as u64;
+    let want = (count * size_of::<T>()) as u64;
     let have = buffer_bytes(src);
     assert!(
         want <= have,
@@ -393,7 +393,7 @@ fn read_typed_vec<T: Copy>(src: &ID3D12Resource, count: usize) -> RenderResult<V
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { src.Map(0, None, Some(&mut ptr)) }
+    unsafe { src.Map(0, None, Some(&raw mut ptr)) }
         .map_err(|e| map_hresult(e.code(), "rebuild readback map"))?;
     let mut out: Vec<T> = Vec::with_capacity(count);
     // SAFETY: `Map` returned the live mapping of a READBACK buffer the assert above proved holds at
@@ -419,13 +419,13 @@ fn write_upload_buffer(dest: &ID3D12Resource, bytes: &[u8]) -> RenderResult<()> 
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { dest.Map(0, None, Some(&mut ptr)) }
+    unsafe { dest.Map(0, None, Some(&raw mut ptr)) }
         .map_err(|e| map_hresult(e.code(), "rebuild upload map"))?;
     // SAFETY: `Map` returned the live mapping of an UPLOAD buffer the assert above proved is at
     // least `bytes.len()` long, and the source is a separate allocation, so the ranges cannot
     // overlap.
     unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast::<u8>(), bytes.len());
         dest.Unmap(0, None);
     }
     Ok(())

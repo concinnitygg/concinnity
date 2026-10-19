@@ -52,7 +52,7 @@ fn expand_light_rig_preset(
         .map(|light| {
             let kind = light.get("kind").and_then(|v| v.as_str()).unwrap_or("directional");
             let lname = light.get("name").and_then(|v| v.as_str()).unwrap_or("light");
-            let expanded = format!("{}_{}", rig_name, lname);
+            let expanded = format!("{rig_name}_{lname}");
             match kind {
                 "point" => serde_json::json!({
                     "type": "PointLight",
@@ -60,8 +60,8 @@ fn expand_light_rig_preset(
                         "$id": expanded,
                         "position": light.get("position").cloned().unwrap_or(serde_json::json!([0.0, 2.5, 0.0])),
                         "color":    light.get("color").cloned().unwrap_or(serde_json::json!([1.0, 1.0, 1.0])),
-                        "intensity": light.get("intensity").and_then(|v| v.as_f64()).unwrap_or(8.0),
-                        "range":     light.get("range").and_then(|v| v.as_f64()).unwrap_or(6.0)
+                        "intensity": light.get("intensity").and_then(serde_json::Value::as_f64).unwrap_or(8.0),
+                        "range":     light.get("range").and_then(serde_json::Value::as_f64).unwrap_or(6.0)
                     }
                 }),
                 _ => serde_json::json!({
@@ -70,7 +70,7 @@ fn expand_light_rig_preset(
                         "$id": expanded,
                         "direction": light.get("direction").cloned().unwrap_or(serde_json::json!([-0.3, 0.85, 0.4])),
                         "color":     light.get("color").cloned().unwrap_or(serde_json::json!([1.0, 1.0, 1.0])),
-                        "intensity": light.get("intensity").and_then(|v| v.as_f64()).unwrap_or(1.0)
+                        "intensity": light.get("intensity").and_then(serde_json::Value::as_f64).unwrap_or(1.0)
                     }
                 }),
             }

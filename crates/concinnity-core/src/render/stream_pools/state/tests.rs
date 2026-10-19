@@ -95,7 +95,7 @@ fn serve(state: &mut StreamingState, workers: Workers) {
     if let Some(pool) = state.texture_mut() {
         let ids: Vec<usize> = pool.mailbox().take_requests().collect();
         for id in ids {
-            let image = crate::bake::texture::TextureImage::rgba8(1, 1, vec![1, 2, 3, 4]);
+            let image = TextureImage::rgba8(1, 1, vec![1, 2, 3, 4]);
             pool.mailbox().deliver((id, Ok(image)));
         }
     }
@@ -141,10 +141,10 @@ fn frame_with(
     state: &mut StreamingState,
     backend: &mut RecordingBackend,
     queues: &mut RenderQueues,
-    drive: DriveView<'_>,
+    drive: &DriveView<'_>,
     workers: Workers,
 ) -> (([[f32; 4]; 4], [f32; 3]), ReplayOutcome) {
-    let out = state.drive(queues, drive, None::<&mut NoShaderPump>);
+    let out = state.drive(queues, *drive, None::<&mut NoShaderPump>);
     let mut ops = RenderOps::default();
     queues.ops.drain_into(&mut ops);
     let outcome = ops.replay(backend);
@@ -155,7 +155,7 @@ fn frame_with(
 fn drive_once(
     state: &mut StreamingState,
     backend: &mut RecordingBackend,
-    drive: DriveView<'_>,
+    drive: &DriveView<'_>,
 ) -> ([[f32; 4]; 4], [f32; 3]) {
     let mut q = queues();
     let (out, outcome) = frame_with(state, backend, &mut q, drive, WORKING);
@@ -175,7 +175,7 @@ fn drive_until(
             state,
             backend,
             &mut q,
-            view([0.0; 3], IDENTITY4, false),
+            &view([0.0; 3], IDENTITY4, false),
             workers,
         );
         state.apply_op_failures(&outcome.failures, &mut q.slots);
@@ -195,7 +195,13 @@ fn replay_until_failure(
     wanted: impl Fn(&OpFailure) -> bool,
 ) -> ReplayOutcome {
     for _ in 0..MAX_FRAMES {
-        let (_, outcome) = frame_with(state, backend, q, view([0.0; 3], IDENTITY4, false), WORKING);
+        let (_, outcome) = frame_with(
+            state,
+            backend,
+            q,
+            &view([0.0; 3], IDENTITY4, false),
+            WORKING,
+        );
         if outcome.failures.iter().any(&wanted) {
             return outcome;
         }
@@ -263,7 +269,7 @@ fn the_pressure_sample_runs_on_its_cadence() {
     let mut s = empty_state();
     assert!(s.pressure_due());
     let (_, mut backend) = recording_backend();
-    drive_once(&mut s, &mut backend, view([0.0; 3], IDENTITY4, false));
+    drive_once(&mut s, &mut backend, &view([0.0; 3], IDENTITY4, false));
     assert!(!s.pressure_due());
 }
 
@@ -399,8 +405,8 @@ fn debug_reports_the_active_pools_and_the_frame_clock() {
 fn drive_advances_the_frame_clock() {
     let (_, mut backend) = recording_backend();
     let mut state = empty_state();
-    drive_once(&mut state, &mut backend, view([0.0; 3], IDENTITY4, false));
-    drive_once(&mut state, &mut backend, view([0.0; 3], IDENTITY4, false));
+    drive_once(&mut state, &mut backend, &view([0.0; 3], IDENTITY4, false));
+    drive_once(&mut state, &mut backend, &view([0.0; 3], IDENTITY4, false));
     assert_eq!(state.frame_count(), 2);
 }
 
@@ -409,7 +415,7 @@ fn drive_advances_the_frame_clock() {
 fn a_hidden_world_requests_no_loads() {
     let (_, mut backend) = recording_backend();
     let mut state = pooled_state(8);
-    drive_once(&mut state, &mut backend, view([0.0; 3], IDENTITY4, true));
+    drive_once(&mut state, &mut backend, &view([0.0; 3], IDENTITY4, true));
     assert_eq!(texture(&state).stats(), (0, 0, 2));
     assert_eq!(mesh(&state).stats(), (0, 0, 2));
 }
@@ -519,7 +525,7 @@ fn scene_residency_streams_only_the_pinned_scene_and_swaps_on_switch() {
             drive_once(
                 state,
                 backend,
-                DriveView {
+                &DriveView {
                     scene_pins: Some(pins),
                     ..view([0.0; 3], IDENTITY4, false)
                 },
@@ -562,7 +568,7 @@ fn the_gate_stage_freezes_new_loads() {
     let mut state = pooled_state(8);
     state.pools.chunks = Some(chunk_stream(0, 0));
     state.pressure_stage = StreamPressureStage::Gate;
-    drive_once(&mut state, &mut backend, view([0.0; 3], IDENTITY4, false));
+    drive_once(&mut state, &mut backend, &view([0.0; 3], IDENTITY4, false));
     assert_eq!(texture(&state).stats(), (0, 0, 2));
     assert_eq!(mesh(&state).stats(), (0, 0, 2));
     assert_eq!(state.pools.chunks.as_ref().unwrap().pool.stats(), (0, 0));
@@ -575,7 +581,7 @@ fn the_evict_stage_keeps_planning() {
     let (_, mut backend) = recording_backend();
     let mut state = pooled_state(8);
     state.pressure_stage = StreamPressureStage::Evict;
-    drive_once(&mut state, &mut backend, view([0.0; 3], IDENTITY4, false));
+    drive_once(&mut state, &mut backend, &view([0.0; 3], IDENTITY4, false));
     assert!(texture(&state).stats().2 < 2);
     assert!(mesh(&state).stats().2 < 2);
 }
@@ -633,7 +639,7 @@ fn moving_the_camera_evicts_the_now_distant_item_over_the_cap() {
     drive_once(
         &mut state,
         &mut backend,
-        view([100.0, 0.0, 0.0], IDENTITY4, false),
+        &view([100.0, 0.0, 0.0], IDENTITY4, false),
     );
     let s = recorded.lock();
     assert!(s.saw(&Call::EvictTextureSlot(0)), "{:?}", s.calls);
@@ -647,7 +653,7 @@ fn without_chunk_streaming_the_view_and_camera_stay_absolute() {
     let v = translation_view(-40.0, -5.0, 40.0);
     let cam = [40.0, 5.0, -40.0];
     assert_eq!(
-        drive_once(&mut state, &mut backend, view(cam, v, false)),
+        drive_once(&mut state, &mut backend, &view(cam, v, false)),
         (v, cam)
     );
 }
@@ -662,7 +668,7 @@ fn chunk_streaming_rebases_the_view_onto_the_camera_chunk() {
     // 16-unit chunks: floor(40/16) = 2, floor(-40/16) = -3.
     let cam = [40.0, 5.0, -40.0];
     let v = translation_view(-40.0, -5.0, 40.0);
-    let (out_view, out_cam) = drive_once(&mut state, &mut backend, view(cam, v, false));
+    let (out_view, out_cam) = drive_once(&mut state, &mut backend, &view(cam, v, false));
     assert_eq!(out_cam, [8.0, 5.0, 8.0]);
     assert_eq!(
         out_view,
@@ -691,7 +697,7 @@ fn crossing_into_a_new_chunk_rebases_resident_chunk_models() {
         &mut state,
         &mut backend,
         &mut q,
-        view([20.0, 0.0, 0.0], IDENTITY4, false),
+        &view([20.0, 0.0, 0.0], IDENTITY4, false),
         failing,
     );
     {
@@ -708,7 +714,7 @@ fn crossing_into_a_new_chunk_rebases_resident_chunk_models() {
         &mut state,
         &mut backend,
         &mut q,
-        view([21.0, 0.0, 0.0], IDENTITY4, false),
+        &view([21.0, 0.0, 0.0], IDENTITY4, false),
         failing,
     );
     assert!(
@@ -736,7 +742,7 @@ fn chunks_leaving_the_view_window_are_removed_from_the_backend() {
         &mut state,
         &mut backend,
         &mut q,
-        view([800.0, 0.0, 0.0], IDENTITY4, false),
+        &view([800.0, 0.0, 0.0], IDENTITY4, false),
         WORKING,
     );
     assert!(recorded.lock().saw(&Call::RemoveChunkMesh(draw)));
@@ -864,7 +870,7 @@ fn a_failed_load_is_requested_once_and_its_scene_still_loads() {
                     pool.request_refused(2);
                 }
                 _ => {
-                    let image = crate::bake::texture::TextureImage::rgba8(1, 1, vec![1, 2, 3, 4]);
+                    let image = TextureImage::rgba8(1, 1, vec![1, 2, 3, 4]);
                     pool.mailbox().deliver((id, Ok(image)));
                 }
             }

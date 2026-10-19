@@ -140,7 +140,7 @@ impl PassTimingResources {
         // this borrow.
         let target_name = unsafe { MTLCommonCounterSetTimestamp };
         let mut timestamp_set: Option<Retained<ProtocolObject<dyn MTLCounterSet>>> = None;
-        for set in sets.iter() {
+        for set in &sets {
             let name: Retained<NSString> = set.name();
             if &*name == target_name {
                 timestamp_set = Some(set);
@@ -349,12 +349,12 @@ pub(crate) enum PassTimer {
 
 impl PassTimer {
     // The timer for encoder `index` of `count` encoders timed as `pass`.
-    pub(crate) fn span(pass: PassId, index: usize, count: usize) -> PassTimer {
+    pub(crate) fn span(pass: PassId, index: usize, count: usize) -> Self {
         match (index == 0, index + 1 == count) {
-            (true, true) => PassTimer::Whole(pass),
-            (true, false) => PassTimer::First(pass),
-            (false, true) => PassTimer::Last(pass),
-            (false, false) => PassTimer::None,
+            (true, true) => Self::Whole(pass),
+            (true, false) => Self::First(pass),
+            (false, true) => Self::Last(pass),
+            (false, false) => Self::None,
         }
     }
 }
@@ -380,6 +380,10 @@ fn slot_pair(pass: PassId) -> (usize, usize) {
 // Read a frame's sample buffer back as raw timestamps, or `None` when the
 // driver cannot resolve the range or hands back a short buffer. The two
 // readers below share it so the buffer geometry is asserted in one place.
+#[expect(
+    clippy::cast_ptr_alignment,
+    reason = "Metal resolves counter samples into 8-byte aligned storage"
+)]
 fn read_samples(
     buffer: &ProtocolObject<dyn MTLCounterSampleBuffer>,
 ) -> Option<[u64; SAMPLE_COUNT]> {
@@ -387,7 +391,7 @@ fn read_samples(
     // SAFETY: `range` starts at 0 and the buffer was created with `SAMPLE_COUNT` sample slots, so
     // the range is in bounds; a driver that cannot resolve it returns None rather than faulting.
     let data = unsafe { buffer.resolveCounterRange(range) }?;
-    let needed = std::mem::size_of::<MTLCounterResultTimestamp>() * SAMPLE_COUNT;
+    let needed = size_of::<MTLCounterResultTimestamp>() * SAMPLE_COUNT;
     if data.len() < needed {
         return None;
     }
@@ -395,7 +399,9 @@ fn read_samples(
     // `MTLCounterResultTimestamp` (one u64 per slot).
     let timestamps: &[MTLCounterResultTimestamp] = unsafe {
         std::slice::from_raw_parts(
-            data.as_bytes_unchecked().as_ptr() as *const MTLCounterResultTimestamp,
+            data.as_bytes_unchecked()
+                .as_ptr()
+                .cast::<MTLCounterResultTimestamp>(),
             SAMPLE_COUNT,
         )
     };
@@ -422,7 +428,7 @@ fn durations_us(samples: &[u64; SAMPLE_COUNT], attached: u64) -> [u32; PASS_COUN
             continue;
         }
         let (start, end) = (samples[i * 2], samples[i * 2 + 1]);
-        *slot = ((end - start) / 1000).min(u32::MAX as u64) as u32;
+        *slot = ((end - start) / 1000).min(u64::from(u32::MAX)) as u32;
     }
     out
 }
@@ -449,7 +455,7 @@ fn ran_this_frame(samples: &[u64; SAMPLE_COUNT], attached: u64, i: usize) -> boo
 #[cfg(test)]
 fn span_us(samples: &[u64; SAMPLE_COUNT], attached: u64) -> Option<u32> {
     let (start, end) = span_bounds(samples, attached)?;
-    Some(((end - start) / 1000).min(u32::MAX as u64) as u32)
+    Some(((end - start) / 1000).min(u64::from(u32::MAX)) as u32)
 }
 
 // The earliest sampled start and latest sampled end, in GPU nanoseconds, with
@@ -575,7 +581,10 @@ mod tests {
     ];
 
     fn sum_us(durations: &[u32; PASS_COUNT], passes: &[PassId]) -> u64 {
-        passes.iter().map(|p| durations[*p as usize] as u64).sum()
+        passes
+            .iter()
+            .map(|p| u64::from(durations[*p as usize]))
+            .sum()
     }
 
     #[test]
@@ -605,7 +614,7 @@ mod tests {
         let samples = serial_frame();
         let d = durations_us(&samples, serial_mask());
         let graphics = serial_mask() & !(1u64 << (PassId::Cull as usize));
-        let span = span_us(&samples, graphics).expect("a written frame has a span") as u64;
+        let span = u64::from(span_us(&samples, graphics).expect("a written frame has a span"));
         let sum = sum_us(&d, &GRAPHICS);
         assert!(
             sum <= span,
@@ -688,7 +697,10 @@ mod tests {
         for _ in 0..3 {
             let slot = timing.begin_frame();
             let resolved = timing.buffer_for(slot);
-            assert!(std::ptr::eq(timing.active(), &*resolved), "slot {slot}");
+            assert!(
+                std::ptr::eq(timing.active(), &raw const *resolved),
+                "slot {slot}"
+            );
         }
     }
 

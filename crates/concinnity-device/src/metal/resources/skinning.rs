@@ -142,7 +142,7 @@ impl MtlContext {
         // `cn debug` and only when the source `.glb` size actually changed.
         self.wait_idle();
 
-        let old_v_len = v_buf.length() / std::mem::size_of::<SkinnedVertex>();
+        let old_v_len = v_buf.length() / size_of::<SkinnedVertex>();
         // SAFETY: the buffer is `StorageModeShared`, so `contents()` is a live CPU mapping of its
         // bytes, and the length was derived from that buffer's own byte length divided by the
         // element size. The preceding `wait_idle` means the GPU is not writing it.
@@ -150,7 +150,7 @@ impl MtlContext {
             let ptr = v_buf.contents().as_ptr() as *const SkinnedVertex;
             std::slice::from_raw_parts(ptr, old_v_len)
         };
-        let old_i_len = i_buf.length() / std::mem::size_of::<u32>();
+        let old_i_len = i_buf.length() / size_of::<u32>();
         // SAFETY: the buffer is `StorageModeShared`, so `contents()` is a live CPU mapping of its
         // bytes, and the length was derived from that buffer's own byte length divided by the
         // element size. The preceding `wait_idle` means the GPU is not writing it.
@@ -179,7 +179,7 @@ impl MtlContext {
         // SAFETY: the pointer and length describe the live `new_vertices` allocation, and Metal
         // copies those bytes into the new buffer before the call returns.
         let new_vertex_buffer = unsafe {
-            let v_bytes = std::mem::size_of_val(new_vertices.as_slice());
+            let v_bytes = size_of_val(new_vertices.as_slice());
             let ptr = std::ptr::NonNull::new(new_vertices.as_ptr() as *mut _).ok_or_else(|| {
                 RenderError::Other(
                     "rebuild_skinned_geometry: vertex slice pointer is null".to_string(),
@@ -227,6 +227,10 @@ impl MtlContext {
     // libraries + pipelines stay untouched on every skinned reload path;
     // joint-count changes resize the per-slot joint-matrix buffers via
     // [`Self::update_skinned_skeleton`].
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "`forward!` reaches it from the trait's `&mut self` method of the same name"
+    )]
     pub(crate) fn update_skinned_mesh_geometry(
         &mut self,
         skinned_index: SkinnedIndex,
@@ -293,7 +297,7 @@ impl MtlContext {
                 .device
                 .newBufferWithBytes_length_options(
                     ptr,
-                    std::mem::size_of_val(vertices),
+                    size_of_val(vertices),
                     MTLResourceOptions::StorageModeShared,
                 )
                 .ok_or_else(|| allocation_failed("skinned vertex buffer"))?
@@ -378,35 +382,33 @@ impl MtlContext {
                 None => None,
                 Some(data) => {
                     let key = std::sync::Arc::as_ptr(data) as usize;
-                    let entry = match by_source.get(&key) {
-                        Some(b) => b.clone(),
-                        None => {
-                            let words = data.packed_words();
-                            let bytes = bytes_of_slice(&words);
-                            // SAFETY: the pointer and length describe the live `bytes` allocation,
-                            // and Metal copies those bytes into the new buffer before the call
-                            // returns.
-                            let buffer = unsafe {
-                                let ptr = std::ptr::NonNull::new(bytes.as_ptr() as *mut _)
-                                    .ok_or_else(|| {
-                                        RenderError::Other("morph entry slice is empty".to_string())
-                                    })?;
-                                self.hw
-                                    .device
-                                    .newBufferWithBytes_length_options(
-                                        ptr,
-                                        bytes.len(),
-                                        MTLResourceOptions::StorageModeShared,
-                                    )
-                                    .ok_or_else(|| allocation_failed("morph entry buffer"))?
-                            };
-                            let b = MorphBinding {
-                                buffer,
-                                target_count: data.target_count() as u32,
-                            };
-                            by_source.insert(key, b.clone());
-                            b
-                        }
+                    let entry = if let Some(b) = by_source.get(&key) {
+                        b.clone()
+                    } else {
+                        let words = data.packed_words();
+                        let bytes = bytes_of_slice(&words);
+                        // SAFETY: the pointer and length describe the live `bytes` allocation,
+                        // and Metal copies those bytes into the new buffer before the call
+                        // returns.
+                        let buffer = unsafe {
+                            let ptr = std::ptr::NonNull::new(bytes.as_ptr() as *mut _).ok_or_else(
+                                || RenderError::Other("morph entry slice is empty".to_string()),
+                            )?;
+                            self.hw
+                                .device
+                                .newBufferWithBytes_length_options(
+                                    ptr,
+                                    bytes.len(),
+                                    MTLResourceOptions::StorageModeShared,
+                                )
+                                .ok_or_else(|| allocation_failed("morph entry buffer"))?
+                        };
+                        let b = MorphBinding {
+                            buffer,
+                            target_count: data.target_count() as u32,
+                        };
+                        by_source.insert(key, b.clone());
+                        b
                     };
                     Some(entry)
                 }

@@ -83,7 +83,7 @@ struct Target {
     target: String,
 }
 
-fn anim_crossfade(call: &Call, args: Args) -> Reply {
+fn anim_crossfade(call: &Call<'_>, args: Args) -> Reply {
     let Crossfade {
         target,
         weights,
@@ -97,7 +97,7 @@ fn anim_crossfade(call: &Call, args: Args) -> Reply {
     queued()
 }
 
-fn anim_param(call: &Call, args: Args) -> Reply {
+fn anim_param(call: &Call<'_>, args: Args) -> Reply {
     let Param {
         target,
         name,
@@ -111,7 +111,7 @@ fn anim_param(call: &Call, args: Args) -> Reply {
     queued()
 }
 
-fn anim_state(call: &Call, args: Args) -> Reply {
+fn anim_state(call: &Call<'_>, args: Args) -> Reply {
     let Target { target } = args.parse()?;
     let report = call.on_world(move |world, _| {
         on_target(world, "anim-state", &target, |anim, id| {

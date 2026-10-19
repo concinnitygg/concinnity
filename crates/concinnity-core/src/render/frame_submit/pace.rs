@@ -56,7 +56,7 @@ impl SleepMargin {
         self.0 = if wanted >= self.0 {
             wanted
         } else {
-            self.0 - (self.0 - wanted) / 16
+            self.0.saturating_sub(self.0.saturating_sub(wanted) / 16)
         };
     }
 }
@@ -131,7 +131,7 @@ impl FramePace {
         if remaining.is_zero() {
             PaceWait::Done
         } else if remaining > margin {
-            PaceWait::Sleep(remaining - margin)
+            PaceWait::Sleep(remaining.saturating_sub(margin))
         } else {
             PaceWait::Spin
         }
@@ -170,7 +170,7 @@ mod tests {
     // A frame that overran re-bases to `now`: no wait, and no catch-up burst.
     #[test]
     fn pace_deadline_resets_after_overrun_without_burst() {
-        let past = NOW - Duration::from_millis(5);
+        let past = NOW.checked_sub(Duration::from_millis(5)).unwrap();
         let (wait_until, next) = pace_deadline(NOW, Some(past), TARGET);
         assert_eq!(wait_until, NOW);
         assert_eq!(next, NOW + TARGET);
@@ -266,7 +266,7 @@ mod tests {
         for _ in 0..500 {
             margin.observe(asked, asked);
         }
-        assert!(margin.0 - SleepMargin::MIN < Duration::from_micros(1));
+        assert!(margin.0.checked_sub(SleepMargin::MIN).unwrap() < Duration::from_micros(1));
     }
 
     #[test]

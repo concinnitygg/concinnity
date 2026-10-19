@@ -303,7 +303,7 @@ mod tests {
         let mut lo = f64::INFINITY;
         let mut hi = f64::NEG_INFINITY;
         for i in 0..400 {
-            let a = i as f64 * 0.0137;
+            let a = f64::from(i) * 0.0137;
             let dir = dvec3::normalize_or([libm::sin(a), libm::cos(a * 0.7), 0.3], [0.0; 3]);
             let h = s.height(dir);
             assert!((0.0..=60.0).contains(&h), "{h}");
@@ -329,7 +329,7 @@ mod tests {
         let s = shape();
         let step = 1.0 / 50_000.0;
         for i in 0..200 {
-            let a = 0.3 + i as f64 * step;
+            let a = 0.3 + f64::from(i) * step;
             let d0 = dvec3::normalize_or([libm::sin(a), 1.0, 0.2], [0.0; 3]);
             let d1 = dvec3::normalize_or([libm::sin(a + step), 1.0, 0.2], [0.0; 3]);
             assert!((s.height(d0) - s.height(d1)).abs() < 0.5);
@@ -355,7 +355,7 @@ mod tests {
     fn faces_agree_along_shared_edges() {
         // +X at s = -1 is the edge with +Z; +Z at s = 1 is the same edge.
         for i in 0..=8 {
-            let t = -1.0 + i as f64 * 0.25;
+            let t = -1.0 + f64::from(i) * 0.25;
             let a = CubeFace(0).direction(-1.0, t);
             let b = CubeFace(4).direction(1.0, t);
             assert!(dvec3::length(dvec3::sub(a, b)) < 1e-14, "{a:?} {b:?}");
@@ -379,7 +379,7 @@ mod tests {
         let s = shape();
         let e = 1e-7;
         for i in 0..50 {
-            let a = 0.3 + i as f64 * 0.0011;
+            let a = 0.3 + f64::from(i) * 0.0011;
             let dir = dvec3::normalize_or([libm::sin(a), 1.0, libm::cos(a * 3.0) * 0.4], [0.0; 3]);
             let (_, g) = s.height_gradient(dir);
             for axis in 0..3 {
@@ -407,7 +407,7 @@ mod tests {
         let face = CubeFace(2);
         let mut steepest: f64 = 0.0;
         for i in 0..2_000 {
-            let (fs, ft) = (-0.4 + i as f64 * 3.7e-4, 0.1 + i as f64 * 1.3e-4);
+            let (fs, ft) = (-0.4 + f64::from(i) * 3.7e-4, 0.1 + f64::from(i) * 1.3e-4);
             let a = face.direction(fs, ft);
             let b = face.direction(fs + 2e-5, ft - 1e-5);
             let run = 50_000.0 * libm::acos(dvec3::dot(a, b).min(1.0));
@@ -447,7 +447,7 @@ mod tests {
         let face = CubeFace(2);
         let e = 1e-6;
         for i in 0..40 {
-            let (fs, ft) = (-0.3 + i as f64 * 0.013, 0.2 - i as f64 * 0.007);
+            let (fs, ft) = (-0.3 + f64::from(i) * 0.013, 0.2 - f64::from(i) * 0.007);
             let n = s.normal(face.direction(fs, ft));
             let ds = dvec3::sub(
                 s.surface(face.direction(fs + e, ft)),
@@ -466,7 +466,7 @@ mod tests {
     fn surface_and_normal_match_their_separate_forms() {
         let s = shape();
         for i in 0..20 {
-            let dir = CubeFace(2).direction(-0.4 + i as f64 * 0.03, 0.1);
+            let dir = CubeFace(2).direction(-0.4 + f64::from(i) * 0.03, 0.1);
             let (p, n) = s.surface_and_normal(dir);
             assert_eq!(p, s.surface(dir));
             assert_eq!(n, s.normal(dir));
@@ -483,7 +483,12 @@ mod tests {
             let dir = dvec3::normalize_or([x / 50_000.0, 1.0, z / 50_000.0], [0.0; 3]);
             s.height_gradient(dir).1[0].abs()
         };
-        let mean = |x: f64| (0..200).map(|i| across(x, -20.0 * i as f64)).sum::<f64>() / 200.0;
+        let mean = |x: f64| {
+            (0..200)
+                .map(|i| across(x, -20.0 * f64::from(i)))
+                .sum::<f64>()
+                / 200.0
+        };
         let on = mean(0.0);
         let off = (mean(37.0) + mean(-61.0)) * 0.5;
         assert!(

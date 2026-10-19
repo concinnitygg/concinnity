@@ -96,6 +96,10 @@ fn per_user_base() -> Option<PathBuf> {
 // An environment variable's value when set and non-empty. Keeps the base
 // resolvers from returning a base rooted at "" (which would place per-user
 // state at the filesystem root).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the platform's per-user directories are published as environment variables"
+)]
 #[cfg(any(windows, unix))]
 fn non_empty_env(key: &str) -> Option<std::ffi::OsString> {
     std::env::var_os(key).filter(|v| !v.is_empty())

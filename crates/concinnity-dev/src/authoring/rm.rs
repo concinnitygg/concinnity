@@ -36,10 +36,7 @@ pub(crate) fn rm_at_path(world_path: &str, name: &str) -> std::io::Result<()> {
         if known.is_empty() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!(
-                    "no asset named '{}' in {} (no assets declared)",
-                    name, WORLD_JSONL
-                ),
+                format!("no asset named '{name}' in {WORLD_JSONL} (no assets declared)"),
             ));
         }
         return Err(std::io::Error::new(

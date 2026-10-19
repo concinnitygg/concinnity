@@ -60,12 +60,12 @@ pub fn import_fbx_animation(
 
     // Object indexes. Layers and curve nodes also carry their declaration
     // rank, which orders channel assignment below.
-    let mut stacks: Vec<(i64, NodeHandle)> = Vec::new();
+    let mut stacks: Vec<(i64, NodeHandle<'_>)> = Vec::new();
     let mut layer_rank: HashMap<i64, usize> = HashMap::new();
-    let mut curve_node_by_id: HashMap<i64, NodeHandle> = HashMap::new();
+    let mut curve_node_by_id: HashMap<i64, NodeHandle<'_>> = HashMap::new();
     let mut curve_node_rank: HashMap<i64, usize> = HashMap::new();
-    let mut curve_by_id: HashMap<i64, NodeHandle> = HashMap::new();
-    let mut model_by_id: HashMap<i64, NodeHandle> = HashMap::new();
+    let mut curve_by_id: HashMap<i64, NodeHandle<'_>> = HashMap::new();
+    let mut model_by_id: HashMap<i64, NodeHandle<'_>> = HashMap::new();
     for c in objects.children() {
         let Some(id) = object_id(&c) else { continue };
         match c.name() {
@@ -93,7 +93,19 @@ pub fn import_fbx_animation(
     }
 
     // Select the stack.
-    let stack_idx = if !animation_name.is_empty() {
+    let stack_idx = if animation_name.is_empty() {
+        let i = animation_index as usize;
+        if i >= stacks.len() {
+            return Err(format!(
+                "'{}': animation_index {} out of range (file has {} animation{})",
+                path,
+                animation_index,
+                stacks.len(),
+                if stacks.len() == 1 { "" } else { "s" }
+            ));
+        }
+        i
+    } else {
         stacks
             .iter()
             .position(|(_, n)| object_name(n) == animation_name)
@@ -106,18 +118,6 @@ pub fn import_fbx_animation(
                     if stacks.len() == 1 { "" } else { "s" }
                 )
             })?
-    } else {
-        let i = animation_index as usize;
-        if i >= stacks.len() {
-            return Err(format!(
-                "'{}': animation_index {} out of range (file has {} animation{})",
-                path,
-                animation_index,
-                stacks.len(),
-                if stacks.len() == 1 { "" } else { "s" }
-            ));
-        }
-        i
     };
     let (stack_id, stack_node) = stacks[stack_idx];
 
@@ -255,7 +255,7 @@ pub fn import_fbx_animation(
         let pre_rotation_mat = rot_ordered_xyz([pre_rotation[0], pre_rotation[1], pre_rotation[2]]);
         for s in 0..samples {
             let time = (s as f32 / rate).min(duration);
-            let kt = start_kt + (time as f64) * KTIME_PER_SEC;
+            let kt = start_kt + f64::from(time) * KTIME_PER_SEC;
             let mut pose = skeleton::JointPose {
                 translation: bind.translation,
                 rotation_deg: bind.rotation_deg,
@@ -269,7 +269,11 @@ pub fn import_fbx_animation(
                 let m = mat4_mul(
                     pre_rotation_mat,
                     rot_ordered(
-                        [euler[0] as f64, euler[1] as f64, euler[2] as f64],
+                        [
+                            f64::from(euler[0]),
+                            f64::from(euler[1]),
+                            f64::from(euler[2]),
+                        ],
                         rotation_order,
                     ),
                 );
@@ -399,9 +403,13 @@ impl<'a> Curve<'a> {
 
 // Widest key-time range across every referenced curve, used when a stack
 // declares no LocalStart/LocalStop window.
+#[expect(
+    clippy::iter_over_hash_type,
+    reason = "a min and max over the keys do not depend on their order"
+)]
 fn key_time_range(
     node_axis_curves: &HashMap<i64, [Option<i64>; 3]>,
-    curves: &HashMap<i64, NodeHandle>,
+    curves: &HashMap<i64, NodeHandle<'_>>,
 ) -> (f64, f64) {
     let mut lo = f64::MAX;
     let mut hi = f64::MIN;
@@ -426,7 +434,7 @@ fn key_time_range(
 
 // Transform features outside the supported envelope: warn instead of
 // silently mis-posing the joint.
-fn warn_unsupported_transform_props(model: &NodeHandle, path: &str) {
+fn warn_unsupported_transform_props(model: &NodeHandle<'_>, path: &str) {
     let Some(p70) = model.first_child_by_name("Properties70") else {
         return;
     };

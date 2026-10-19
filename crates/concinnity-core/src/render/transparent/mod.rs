@@ -3,7 +3,7 @@
 //! policy so it can be unit-tested without a GPU and so the three backends
 //! cannot disagree about draw order.
 //!
-//! Transparent fragments use SRC_ALPHA / ONE_MINUS_SRC_ALPHA blending, which is
+//! Transparent fragments use `SRC_ALPHA` / `ONE_MINUS_SRC_ALPHA` blending, which is
 //! order-dependent: a draw must be composited after everything behind it.
 //! [`back_to_front_order`] returns the draw indices sorted farthest-first by
 //! camera distance so the blend resolves correctly. This is a single fixed

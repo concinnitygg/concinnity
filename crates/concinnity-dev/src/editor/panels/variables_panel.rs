@@ -228,7 +228,7 @@ pub(crate) enum VariablesAction {
 }
 
 pub(crate) fn hit_test(
-    view: &VariablesView,
+    view: &VariablesView<'_>,
     mx: f32,
     my: f32,
     o: [f32; 2],
@@ -248,9 +248,10 @@ pub(crate) fn hit_test(
         // table's to declare, so the toolbar stands down on it (the filter
         // above).
         if point_in(mx, my, type_rect(o)) {
-            return Some(match row.declared() {
-                true => VariablesAction::Retype,
-                false => VariablesAction::Declare,
+            return Some(if row.declared() {
+                VariablesAction::Retype
+            } else {
+                VariablesAction::Declare
             });
         }
         if row.declared() && point_in(mx, my, delete_rect(o)) {
@@ -273,7 +274,7 @@ pub(crate) fn hit_test(
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank every
 // element (`None`).
-pub(crate) fn place(world: &mut World, view: Option<&VariablesView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&VariablesView<'_>>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         ids().hide(world);
         return;
@@ -293,7 +294,7 @@ pub(crate) fn place(world: &mut World, view: Option<&VariablesView>, o: [f32; 2]
     layout_status(world, view, o, s);
 }
 
-fn layout_header(world: &mut World, view: &VariablesView, o: [f32; 2], w: f32) {
+fn layout_header(world: &mut World, view: &VariablesView<'_>, o: [f32; 2], w: f32) {
     let new = new_rect(o, w);
     let new_hover = point_in(view.mouse[0], view.mouse[1], new);
     place_rounded(
@@ -315,32 +316,29 @@ fn layout_header(world: &mut World, view: &VariablesView, o: [f32; 2], w: f32) {
     // The name field belongs to the selected declaration; with nothing selected
     // the header says what the table is instead.
     let field = name_rect(o, w);
-    match view.selected_row().filter(|r| r.declared()) {
-        Some(row) => {
-            widget::set_label_visible(world, MODE_LABEL, false);
-            if !view.name_focus {
-                widget::seed_field(world, NAME_INPUT, &row.name);
-            }
-            widget::show_field(world, NAME_INPUT, field, view.name_focus);
+    if let Some(row) = view.selected_row().filter(|r| r.declared()) {
+        widget::set_label_visible(world, MODE_LABEL, false);
+        if !view.name_focus {
+            widget::seed_field(world, NAME_INPUT, &row.name);
         }
-        None => {
-            widget::hide_field(world, NAME_INPUT);
-            let (text, color) = table_caption(view);
-            widget::place_left_label(
-                world,
-                MODE_LABEL,
-                [field[0], field[1] + CTRL_H * 0.5 - theme::TEXT_HALF],
-                &widget::clip_text(&text, (field[2] / CHAR_W) as usize),
-                color,
-                true,
-            );
-        }
+        widget::show_field(world, NAME_INPUT, field, view.name_focus);
+    } else {
+        widget::hide_field(world, NAME_INPUT);
+        let (text, color) = table_caption(view);
+        widget::place_left_label(
+            world,
+            MODE_LABEL,
+            [field[0], field[1] + CTRL_H * 0.5 - theme::TEXT_HALF],
+            &widget::clip_text(&text, (field[2] / CHAR_W) as usize),
+            color,
+            true,
+        );
     }
 }
 
 // What the header says about the table as a whole. A declared table is held to
 // every name its behaviors use, so what it is missing is the thing worth saying.
-fn table_caption(view: &VariablesView) -> (String, [f32; 3]) {
+fn table_caption(view: &VariablesView<'_>) -> (String, [f32; 3]) {
     let missing = view.missing();
     match (view.authoritative, missing) {
         (false, 0) => (
@@ -363,7 +361,7 @@ fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
 
-fn layout_toolbar(world: &mut World, view: &VariablesView, o: [f32; 2], w: f32) {
+fn layout_toolbar(world: &mut World, view: &VariablesView<'_>, o: [f32; 2], w: f32) {
     let row = view.selected_row();
     let declared = row.is_some_and(Row::declared);
     let type_caption = match row {
@@ -399,9 +397,10 @@ fn layout_toolbar(world: &mut World, view: &VariablesView, o: [f32; 2], w: f32) 
             true,
         );
     }
-    match declared {
-        true => widget::show_field(world, VALUE_INPUT, value_rect(o, w), view.value_focus),
-        false => widget::hide_field(world, VALUE_INPUT),
+    if declared {
+        widget::show_field(world, VALUE_INPUT, value_rect(o, w), view.value_focus);
+    } else {
+        widget::hide_field(world, VALUE_INPUT);
     }
 }
 
@@ -409,7 +408,7 @@ fn layout_toolbar(world: &mut World, view: &VariablesView, o: [f32; 2], w: f32) 
 // font is proportional, so padding a single string out to the column would not
 // line up with anything. While a session runs, the value column shows what
 // each variable holds now rather than what it starts at.
-fn layout_columns(world: &mut World, view: &VariablesView, o: [f32; 2], _w: f32) {
+fn layout_columns(world: &mut World, view: &VariablesView<'_>, o: [f32; 2], _w: f32) {
     let y = head_row_y(o) + HEAD_ROW_H * 0.5 - theme::TEXT_HALF;
     let left = o[0] + PAD;
     let value_caption = if view.live { "now" } else { "starts at" };
@@ -422,7 +421,7 @@ fn layout_columns(world: &mut World, view: &VariablesView, o: [f32; 2], _w: f32)
     }
 }
 
-fn layout_rows(world: &mut World, view: &VariablesView, o: [f32; 2], s: [f32; 2]) {
+fn layout_rows(world: &mut World, view: &VariablesView<'_>, o: [f32; 2], s: [f32; 2]) {
     let shown = visible_rows(s[1]);
     let budget = |from: f32, to: f32| (((to - from) / CHAR_W) as usize).max(4);
     for slot in 0..ROW_POOL_MAX {
@@ -489,7 +488,13 @@ fn layout_rows(world: &mut World, view: &VariablesView, o: [f32; 2], s: [f32; 2]
     }
 }
 
-fn layout_scrollbar(world: &mut World, view: &VariablesView, o: [f32; 2], w: f32, shown: usize) {
+fn layout_scrollbar(
+    world: &mut World,
+    view: &VariablesView<'_>,
+    o: [f32; 2],
+    w: f32,
+    shown: usize,
+) {
     let total = view.rows.len();
     if total <= shown {
         widget::set_sprite_visible(world, LIST_TRACK, false);
@@ -519,7 +524,7 @@ fn layout_scrollbar(world: &mut World, view: &VariablesView, o: [f32; 2], w: f32
     );
 }
 
-fn layout_status(world: &mut World, view: &VariablesView, o: [f32; 2], s: [f32; 2]) {
+fn layout_status(world: &mut World, view: &VariablesView<'_>, o: [f32; 2], s: [f32; 2]) {
     let Some(text) = view.status else {
         widget::set_sprite_visible(world, STATUS_BG, false);
         widget::set_label_visible(world, STATUS_LABEL, false);
@@ -670,7 +675,7 @@ mod tests {
         let rows = vec![declared("visits", "int", "3"), undeclared("score")];
         let o = [20.0, 20.0];
         place(&mut world, Some(&view(&rows)), o, size());
-        let held = label(&world, MODE_LABEL).content.clone();
+        let held = label(&world, MODE_LABEL).content;
         assert!(held.contains("1 variable used but not declared"), "{held}");
 
         let implicit = VariablesView {
@@ -678,7 +683,7 @@ mod tests {
             ..view(&rows)
         };
         place(&mut world, Some(&implicit), o, size());
-        let loose = label(&world, MODE_LABEL).content.clone();
+        let loose = label(&world, MODE_LABEL).content;
         assert!(loose.contains("no table"), "{loose}");
         assert!(!field(&world, NAME_INPUT).visible, "and no name to edit");
     }

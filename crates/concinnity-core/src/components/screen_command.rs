@@ -1,8 +1,8 @@
 use crate::ecs::asset_id::AssetId;
 
-/// Runtime-only event sent by UiInputSystem when a [`UiAction::Screen`](crate::components::UiAction)
+/// Runtime-only event sent by `UiInputSystem` when a [`UiAction::Screen`](crate::components::UiAction)
 /// action fires, or with `Clear` when a scene changes.
-/// UiInputSystem reads these from its `Events<ScreenCommand>` queue on the next
+/// `UiInputSystem` reads these from its `Events<ScreenCommand>` queue on the next
 /// step and applies the stack transition. World authors never declare this type
 /// directly.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

@@ -5,8 +5,8 @@
 //! ambient * material tint) or the IBL prefilter cube on a miss, and composites
 //! the result over the scene with the same Fresnel/gloss weighting SSR uses.
 //!
-//! It occupies the SSR-resolve slot in the frame graph (reads hdr_resolve, writes
-//! scene_pre_taa, the reflection composite's output) and is mutually exclusive
+//! It occupies the SSR-resolve slot in the frame graph (reads `hdr_resolve`, writes
+//! `scene_pre_taa`, the reflection composite's output) and is mutually exclusive
 //! with SSR resolve. Like SSGI it relies on the SSR pre-pass G-buffer, so the
 //! pre-pass is forced on whenever RT reflections are enabled.
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -73,16 +73,13 @@ impl MtlContext {
         rt_params: &render_types::RtParams,
         bindless_tex_args: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     ) -> RenderResult<u32> {
-        let (reflection, accel, gb_normal_depth, gb_roughness) = match (
+        let (Some(reflection), Some(accel), Some(gb_normal_depth), Some(gb_roughness)) = (
             &self.ssr.reflection,
             &self.rt.accel,
             self.gbuffer_normal_depth(),
             self.gbuffer_roughness(),
-        ) {
-            (Some(t), Some(a), Some(n), Some(r)) => (t, a, n, r),
-            // No G-buffer or acceleration structure (unsupported GPU / empty
-            // scene): skip, leaving the base scene.
-            _ => return Ok(0),
+        ) else {
+            return Ok(0);
         };
 
         // The BVH this pass reads (TLAS, skinned BLAS, deformed-vertex buffer)
@@ -96,14 +93,12 @@ impl MtlContext {
         // available (the standard GPU-cull path); otherwise fall back to the
         // flat-tint pipeline so non-bindless worlds still get RT reflections.
         let textured = bindless_tex_args.is_some() && self.rt.pipelines.resolve_textured.is_some();
-        let pipeline = match (
+        let ((true, Some(pipeline), _) | (_, _, Some(pipeline))) = (
             textured,
             &self.rt.pipelines.resolve_textured,
             &self.rt.pipelines.resolve,
-        ) {
-            (true, Some(p), _) => p,
-            (_, _, Some(p)) => p,
-            _ => return Ok(0),
+        ) else {
+            return Ok(0);
         };
 
         let desc = MTLRenderPassDescriptor::new();

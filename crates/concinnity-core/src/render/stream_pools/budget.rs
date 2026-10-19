@@ -61,8 +61,8 @@ pub fn planet_tile_headroom() -> (usize, usize) {
         usize::try_from(tiles * count as u64 * size as u64).unwrap_or(usize::MAX)
     };
     (
-        bytes(vertices, core::mem::size_of::<Vertex>()),
-        bytes(indices, core::mem::size_of::<u32>()),
+        bytes(vertices, size_of::<Vertex>()),
+        bytes(indices, size_of::<u32>()),
     )
 }
 
@@ -85,8 +85,8 @@ pub struct ChunkWindowShape {
 pub fn chunk_headroom(shape: ChunkWindowShape) -> (usize, usize) {
     let near_chunks = max_full_detail_chunks(shape.near_radius);
     let far_chunks = max_resident_chunks(shape.far_radius).saturating_sub(near_chunks);
-    let vertex = core::mem::size_of::<Vertex>() as u64;
-    let index = core::mem::size_of::<u32>() as u64;
+    let vertex = size_of::<Vertex>() as u64;
+    let index = size_of::<u32>() as u64;
     let [bx, _, bz] = shape.chunk_blocks.map(u64::from);
 
     // A generous face count for rolling terrain; an over-budget chunk fails
@@ -159,10 +159,7 @@ mod tests {
     fn the_planet_headroom_holds_every_resident_tile_at_full_size() {
         let (vertices, indices) = tile_mesh_size();
         let (vtx, idx) = planet_tile_headroom();
-        assert_eq!(
-            vtx,
-            MAX_RESIDENT_TILES * vertices * core::mem::size_of::<Vertex>()
-        );
+        assert_eq!(vtx, MAX_RESIDENT_TILES * vertices * size_of::<Vertex>());
         assert_eq!(idx / MAX_RESIDENT_TILES, indices * 4);
     }
 

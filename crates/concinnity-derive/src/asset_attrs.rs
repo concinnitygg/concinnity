@@ -49,21 +49,23 @@ impl AssetAttrs {
     /// The field's `ParamMeta` as a const expression.
     pub(crate) fn meta_expr(&self) -> TokenStream {
         let fields = quote!(::concinnity_core::ecs::asset_fields);
-        let bound = |expr: &Option<Expr>| match expr {
-            Some(expr) => quote!(::core::option::Option::Some((#expr) as f64)),
-            None => quote!(::core::option::Option::None),
+        let bound = |expr: &Option<Expr>| {
+            if let Some(expr) = expr {
+                quote!(::core::option::Option::Some((#expr) as f64))
+            } else {
+                quote!(::core::option::Option::None)
+            }
         };
         let (min, max) = (bound(&self.min), bound(&self.max));
-        let apply = match &self.apply {
-            Some(class) => {
-                let variant = APPLY_CLASSES
-                    .iter()
-                    .find(|(name, _)| class == name)
-                    .map(|(_, variant)| Ident::new(variant, class.span()))
-                    .expect("parsing accepts only a known apply class");
-                quote!(::core::option::Option::Some(#fields::ApplyClass::#variant))
-            }
-            None => quote!(::core::option::Option::None),
+        let apply = if let Some(class) = &self.apply {
+            let variant = APPLY_CLASSES
+                .iter()
+                .find(|(name, _)| class == name)
+                .map(|(_, variant)| Ident::new(variant, class.span()))
+                .expect("parsing accepts only a known apply class");
+            quote!(::core::option::Option::Some(#fields::ApplyClass::#variant))
+        } else {
+            quote!(::core::option::Option::None)
         };
         quote! {
             #fields::ParamMeta {
@@ -80,9 +82,12 @@ pub(crate) fn asset_attrs(attrs: &[Attribute]) -> syn::Result<AssetAttrs> {
     let mut out = AssetAttrs::default();
     for attr in attrs.iter().filter(|a| a.path().is_ident("asset")) {
         attr.parse_nested_meta(|meta| {
-            let once = |taken: bool, key: &str| match taken {
-                true => Err(meta.error(format!("a field states one `{key}`"))),
-                false => Ok(()),
+            let once = |taken: bool, key: &str| {
+                if taken {
+                    Err(meta.error(format!("a field states one `{key}`")))
+                } else {
+                    Ok(())
+                }
             };
             if meta.path.is_ident("owned_file") {
                 out.owned_file = true;

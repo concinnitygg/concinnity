@@ -72,7 +72,7 @@ impl ShaderPump for ShaderWarmup {
         }
         let (overrides, done) = (&self.overrides, &self.built_tx);
         self.residency.sweep(|due| match due {
-            Due::Build(bucket, source) => dispatch(bucket, source, overrides, done, ops),
+            Due::Build(bucket, source) => dispatch(bucket, source, overrides.as_ref(), done, ops),
             Due::Evict(bucket) => {
                 ops.record(move |backend| {
                     backend.evict_world_shader(bucket);
@@ -88,14 +88,14 @@ impl ShaderPump for ShaderWarmup {
 fn dispatch(
     bucket: u32,
     source: &Arc<ShaderPayloadSource>,
-    overrides: &Option<ShaderOverrides>,
+    overrides: Option<&ShaderOverrides>,
     done: &Sender<Built>,
     ops: &mut RenderOps,
 ) {
     let request = BuildRequest {
         bucket,
         source: Arc::clone(source),
-        overrides: overrides.clone(),
+        overrides: overrides.cloned(),
         done: done.clone(),
     };
     ops.record(move |backend| request.spawn(backend.pipeline_builder()));
@@ -114,7 +114,7 @@ impl ShaderWarmup {
         match self.residency.finish(bucket, stale) {
             Finished::Dropped => None,
             Finished::Rebuild(source) => {
-                dispatch(bucket, source, &self.overrides, &self.built_tx, ops);
+                dispatch(bucket, source, self.overrides.as_ref(), &self.built_tx, ops);
                 None
             }
             Finished::Resident => {
@@ -123,7 +123,11 @@ impl ShaderWarmup {
                     Ok(shader) => match shader.ready() {
                         Ok(ready) => ops.record(move |backend| ready.install(backend)),
                         Err(e) => {
-                            tracing::error!("shader bucket {} pipeline build failed: {}", bucket, e)
+                            tracing::error!(
+                                "shader bucket {} pipeline build failed: {}",
+                                bucket,
+                                e
+                            );
                         }
                     },
                 }

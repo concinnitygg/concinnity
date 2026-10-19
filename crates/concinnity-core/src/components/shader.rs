@@ -1,5 +1,5 @@
-//! The Shader asset: the authored schema (Shader, ShaderStage, and the
-//! ShaderPrograms container the cook fills). The compile lives in
+//! The Shader asset: the authored schema (Shader, `ShaderStage`, and the
+//! `ShaderPrograms` container the cook fills). The compile lives in
 //! concinnity-cook (`compile::shader`); which programs a world shader compiles
 //! to is `render::shader_programs::surface`.
 
@@ -67,8 +67,8 @@ pub enum ShaderStage {
 /// `emissive_metallic`, `albedo_index`, `normal_index`, `emissive_map_index`,
 /// `orm_map_index` and `bb_max_alpha_cutoff.w` are the fields a surface
 /// reads. `transform` receives the model matrix and the model-space
-/// attributes, after skinning for a [SkinnedMesh](#skinnedmesh) and per
-/// instance for an [InstancedProp](#instancedprop), and returns the projected
+/// attributes, after skinning for a [`SkinnedMesh`](#skinnedmesh) and per
+/// instance for an [`InstancedProp`](#instancedprop), and returns the projected
 /// vertex; the engine's own is `project_vertex`, so a displacement is
 /// `return project_vertex(model, pos + offset, normal, tangent, color, uv);`.
 /// The same `transform` places the surface's depth, normal and motion for the
@@ -139,8 +139,8 @@ pub enum ShaderStage {
 ///
 /// - **Instanced, skinned, and voxel-chunk draws always use the world default.**
 ///   A Material naming a Shader cannot be used by an
-///   [InstancedProp](#instancedprop), a [SkinnedMesh](#skinnedmesh), or a
-///   [VoxelWorld](#voxelworld); give those a Material without one.
+///   [`InstancedProp`](#instancedprop), a [`SkinnedMesh`](#skinnedmesh), or a
+///   [`VoxelWorld`](#voxelworld); give those a Material without one.
 /// - **At most 8 Shaders**, the world default included, or 7 when grass draws
 ///   a far field over ground shaded by the world default, which takes a slot of
 ///   its own.
@@ -172,7 +172,7 @@ pub struct Shader {
     #[serde(default)]
     #[asset(owned_file)]
     pub vertex: Option<String>,
-    /// Injected at load time from BlobAssetDef::payload.
+    /// Injected at load time from `BlobAssetDef::payload`.
     #[serde(skip)]
     pub locator: Option<PayloadLocator>,
 }

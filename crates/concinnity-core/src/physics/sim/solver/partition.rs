@@ -105,7 +105,7 @@ pub(crate) struct Partition {
 
 impl Partition {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
-        Partition {
+        Self {
             island_of_root: alloc::vec![UNOWNED; capacity],
             roots: Vec::with_capacity(capacity),
             bodies_at: alloc::vec![0; capacity],
@@ -271,7 +271,7 @@ impl Partition {
     /// and cut the islands into chunks of about equal cost along the way.
     fn share_out(&mut self, workers: usize) {
         let cost = |bodies: u32, contacts: u32, joints: u32| {
-            bodies as u64 + (contacts as u64 + joints as u64) * CONTACT_WEIGHT
+            u64::from(bodies) + (u64::from(contacts) + u64::from(joints)) * CONTACT_WEIGHT
         };
         let mut spread = Spread::default();
         for i in 0..self.islands {
@@ -376,8 +376,8 @@ mod tests {
     }
 
     struct Fixture {
-        bodies: alloc::vec::Vec<SolverBody>,
-        taken: alloc::vec::Vec<bool>,
+        bodies: Vec<SolverBody>,
+        taken: Vec<bool>,
         islands: Islands,
     }
 
@@ -393,7 +393,7 @@ mod tests {
         }
     }
 
-    fn active_of(simulated: &[bool]) -> alloc::vec::Vec<u32> {
+    fn active_of(simulated: &[bool]) -> Vec<u32> {
         simulated
             .iter()
             .enumerate()
@@ -494,8 +494,7 @@ mod tests {
         let simulated = alloc::vec![true; 32];
         let mut fixture = fixture(&simulated);
         let mut partition = Partition::with_capacity(32);
-        let manifolds: alloc::vec::Vec<Manifold> =
-            (0..31).step_by(2).map(|i| manifold(i, i + 1)).collect();
+        let manifolds: Vec<Manifold> = (0..31).step_by(2).map(|i| manifold(i, i + 1)).collect();
         build(&mut partition, &mut fixture, &simulated, &manifolds, 4);
         let mut seen = alloc::vec![0u32; 32];
         let mut from = 0usize;

@@ -38,7 +38,7 @@ impl DxContext {
     // success. Distinct name from the `RenderBackend::screenshot` trait method
     // so the backend forwarder is unambiguous. Reached through the
     // `RenderBackend` vtable (bin-only `cn debug`).
-    pub(crate) fn capture_screenshot(&mut self, path: &str) -> RenderResult<String> {
+    pub(crate) fn capture_screenshot(&self, path: &str) -> RenderResult<String> {
         let Some(back_idx) = self.swapchain.last_present_index else {
             return Err(RenderError::Other(
                 "screenshot: no frame has been presented yet".into(),
@@ -190,7 +190,7 @@ fn encode_copy(
             D3D12_RESOURCE_STATE_PRESENT,
             D3D12_RESOURCE_STATE_COPY_SOURCE,
         )]);
-        cmd.CopyTextureRegion(&dst, 0, 0, 0, &src, None);
+        cmd.CopyTextureRegion(&raw const dst, 0, 0, 0, &raw const src, None);
         cmd.ResourceBarrier(&[transition_barrier(
             back_buffer,
             D3D12_RESOURCE_STATE_COPY_SOURCE,
@@ -216,7 +216,7 @@ fn readback_buffer(alloc: &DeviceAllocator, len: usize) -> RenderResult<Mapped<P
     let mut mapped = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
     // that receives the mapping. A READBACK buffer may stay mapped while the GPU writes it.
-    unsafe { buffer.Map(0, None, Some(&mut mapped)) }
+    unsafe { buffer.Map(0, None, Some(&raw mut mapped)) }
         .map_err(|e| map_hresult(e.code(), "frame capture: map readback"))?;
     Ok(Mapped {
         buffer,

@@ -12,10 +12,7 @@ pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> 
         .get("instances")
         .and_then(|v| v.as_array())
         .ok_or_else(|| {
-            format!(
-                "Asset '{}': InstancedProp `instances` must be an array of transforms",
-                name
-            )
+            format!("Asset '{name}': InstancedProp `instances` must be an array of transforms")
         })?;
     if instances.len() > MAX_INSTANCES_PER_CLUSTER {
         return Err(format!(
@@ -28,21 +25,17 @@ pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> 
     for (i, entry) in instances.iter().enumerate() {
         if !entry.is_object() {
             return Err(format!(
-                "Asset '{}': InstancedProp instances[{}] must be an object",
-                name, i
+                "Asset '{name}': InstancedProp instances[{i}] must be an object"
             ));
         }
         if let Some(p) = entry.get("position") {
-            check_f32x3(p, &format!("Asset '{}': instances[{}].position", name, i))?;
+            check_f32x3(p, &format!("Asset '{name}': instances[{i}].position"))?;
         }
         if let Some(r) = entry.get("rotation_deg") {
-            check_f32x3(
-                r,
-                &format!("Asset '{}': instances[{}].rotation_deg", name, i),
-            )?;
+            check_f32x3(r, &format!("Asset '{name}': instances[{i}].rotation_deg"))?;
         }
         if let Some(s) = entry.get("scale") {
-            check_f32x3(s, &format!("Asset '{}': instances[{}].scale", name, i))?;
+            check_f32x3(s, &format!("Asset '{name}': instances[{i}].scale"))?;
         }
     }
     Ok(())
@@ -90,9 +83,8 @@ mod tests {
 
     #[test]
     fn instances_over_the_cap_error() {
-        let entries: Vec<serde_json::Value> = (0..MAX_INSTANCES_PER_CLUSTER + 1)
-            .map(|_| json!({}))
-            .collect();
+        let entries: Vec<serde_json::Value> =
+            (0..=MAX_INSTANCES_PER_CLUSTER).map(|_| json!({})).collect();
         let err = check("p", &json!({"instances": entries})).unwrap_err();
         assert!(err.contains("16385 instances"), "got: {err}");
         assert!(err.contains("cap is 16384"), "got: {err}");

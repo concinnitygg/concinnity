@@ -144,7 +144,7 @@ mod tests {
             ty: ty.to_string(),
             before: serde_json::Map::new(),
             args: args.as_object().cloned().unwrap(),
-            keys: keys.iter().map(|k| k.to_string()).collect(),
+            keys: keys.iter().map(ToString::to_string).collect(),
         }
     }
 

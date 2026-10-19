@@ -250,7 +250,7 @@ impl core::fmt::Debug for StorySystem {
             .field("node", &self.node)
             .field("page", &self.page)
             .field("started", &self.started)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -291,6 +291,7 @@ impl StorySystem {
     }
 
     /// Keep saves in `store`.
+    #[must_use]
     pub fn with_store(mut self, store: Box<dyn StoryStore>) -> Self {
         self.store = Some(store);
         self
@@ -312,7 +313,7 @@ impl System for StorySystem {
             .writes_resources(crate::resource_mask![PlayCue, ScreenCommand])
     }
 
-    fn init(&mut self, _ctx: &mut PipelineContext) {
+    fn init(&mut self, _ctx: &mut PipelineContext<'_>) {
         // The scaffold references were resolved to ids at build time, like
         // every other cross-reference, so this works identically for a
         // compiled blob (`cn run`) and the interpreted debug path.
@@ -345,7 +346,7 @@ impl System for StorySystem {
         );
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         let dt = ctx
             .resource::<FrameTime>()
             .copied()
@@ -444,16 +445,16 @@ impl System for StorySystem {
                 StoryCommand::OpenSettings => self.open_settings(ctx),
                 StoryCommand::CloseSettings => self.close_settings(ctx),
                 StoryCommand::Advance if !mode_flipped && !button_tick => {
-                    if self.overlay != Overlay::None {
-                        // Any plain click dismisses an overlay.
-                        self.close_overlay(ctx);
-                    } else {
+                    if self.overlay == Overlay::None {
                         // Manual input ends a skip run.
                         if self.skip {
                             self.skip = false;
                             self.render_quick_row(ctx);
                         }
                         self.advance(ctx);
+                    } else {
+                        // Any plain click dismisses an overlay.
+                        self.close_overlay(ctx);
                     }
                 }
                 StoryCommand::Choose(i) if !mode_flipped && !button_tick => self.choose(i, ctx),
@@ -482,7 +483,7 @@ impl System for StorySystem {
 
 impl StorySystem {
     // Finish the current page's reveal immediately and repaint its text.
-    pub(super) fn reveal_all(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn reveal_all(&mut self, ctx: &mut PipelineContext<'_>) {
         self.typewriter.shown = self.typewriter.full.len();
         let text = self.typewriter.text();
         let text_id = self.ids.as_ref().and_then(|i| i.text);
@@ -492,17 +493,21 @@ impl StorySystem {
 
 // Mutate the stage component with the given asset id; an unset reference or a
 // component the world never declared is a silent no-op.
-fn set_label(ctx: &mut PipelineContext, id: Option<AssetId>, apply: impl FnOnce(&mut TextLabel)) {
+fn set_label(
+    ctx: &mut PipelineContext<'_>,
+    id: Option<AssetId>,
+    apply: impl FnOnce(&mut TextLabel),
+) {
     crate::ecs::by_asset_id::update(ctx, id, apply);
 }
 
-fn set_sprite(ctx: &mut PipelineContext, id: Option<AssetId>, apply: impl FnOnce(&mut Sprite)) {
+fn set_sprite(ctx: &mut PipelineContext<'_>, id: Option<AssetId>, apply: impl FnOnce(&mut Sprite)) {
     crate::ecs::by_asset_id::update(ctx, id, apply);
 }
 
 // Apply a page's stage dressing: the backdrop keeps its dark fill when the
 // page has no image; portraits hide when their slot is empty.
-fn apply_stage(ctx: &mut PipelineContext, ids: &StageIds, stage: &StoryStage) {
+fn apply_stage(ctx: &mut PipelineContext<'_>, ids: &StageIds, stage: &StoryStage) {
     match &stage.bg {
         Some(image) => {
             let texture = image.texture;
@@ -525,7 +530,11 @@ fn apply_stage(ctx: &mut PipelineContext, ids: &StageIds, stage: &StoryStage) {
     }
 }
 
-fn apply_portrait(ctx: &mut PipelineContext, slot: Option<AssetId>, image: Option<&StoryImage>) {
+fn apply_portrait(
+    ctx: &mut PipelineContext<'_>,
+    slot: Option<AssetId>,
+    image: Option<&StoryImage>,
+) {
     match image {
         Some(image) => {
             let (texture, x, y, w, h) =
@@ -546,7 +555,7 @@ fn apply_portrait(ctx: &mut PipelineContext, slot: Option<AssetId>, image: Optio
     }
 }
 
-fn play(ctx: &mut PipelineContext, clip: Option<AudioClipHandle>, kind: CueKind) {
+fn play(ctx: &mut PipelineContext<'_>, clip: Option<AudioClipHandle>, kind: CueKind) {
     let Some(clip) = clip else { return };
     ctx.events_mut::<PlayCue>().send(PlayCue {
         clip,

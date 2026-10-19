@@ -1,4 +1,4 @@
-//! VoxelWorld chunk streaming for MtlContext: growing the shared buffers by the
+//! `VoxelWorld` chunk streaming for `MtlContext`: growing the shared buffers by the
 //! chunk headroom and seeding the chunk allocators with it. Placing, moving and
 //! removing chunks is scene bookkeeping, done in `SceneState`.
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -6,7 +6,7 @@
 use concinnity_core::render::error::RenderResult;
 use objc2_metal::{MTLBuffer, MTLResourceOptions};
 
-use crate::metal::context::*;
+use crate::metal::context::{MtlContext, copy_buffer_prefix};
 
 impl MtlContext {
     // `VoxelWorld` chunks and seed the chunk sub-allocators with it.

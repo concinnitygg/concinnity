@@ -78,12 +78,12 @@ impl FieldKind {
     pub(crate) fn has_text_input(self) -> bool {
         !matches!(
             self,
-            FieldKind::Bool
-                | FieldKind::Enum
-                | FieldKind::Ref { .. }
-                | FieldKind::Action { .. }
-                | FieldKind::Array
-                | FieldKind::Vec { color: false, .. }
+            Self::Bool
+                | Self::Enum
+                | Self::Ref { .. }
+                | Self::Action { .. }
+                | Self::Array
+                | Self::Vec { color: false, .. }
         )
     }
 }
@@ -184,9 +184,9 @@ impl TypeMeta {
     // the registry derives from the type's schema, whichever group it is in.
     fn of(ty: &str) -> Self {
         let ct = RegisteredType::parse(ty);
-        let refs = ct.map(|c| c.ref_fields()).unwrap_or(&[]);
-        let actions = ct.map(|c| c.action_fields()).unwrap_or(&[]);
-        TypeMeta {
+        let refs = ct.map(RegisteredType::ref_fields).unwrap_or_default();
+        let actions = ct.map(RegisteredType::action_fields).unwrap_or_default();
+        Self {
             ct,
             sparse: sparse_defaults(ty).is_some(),
             refs,
@@ -353,7 +353,7 @@ pub(crate) fn number_text(n: &serde_json::Number) -> String {
     match n.as_f64() {
         // `{:?}` on an f32 is the shortest decimal that round-trips, keeping a
         // decimal point (`1.0`, not `1`) so a float still reads as a float.
-        Some(v) if (v as f32) as f64 == v => format!("{:?}", v as f32),
+        Some(v) if f64::from(v as f32) == v => format!("{:?}", v as f32),
         _ => n.to_string(),
     }
 }
@@ -512,7 +512,7 @@ fn collect_value(
                 .as_str()
                 .and_then(|s| v.iter().position(|x| x == &s))
                 .unwrap_or(0);
-            variants = v.iter().map(|s| s.to_string()).collect();
+            variants = v.iter().map(ToString::to_string).collect();
             kind = FieldKind::Enum;
         }
         let authored = root_seed.and_then(|s| get_at_path(s, path));
@@ -702,22 +702,19 @@ fn coerce(field: &FormField, text: &str, default: &Value) -> Value {
         FieldKind::Int => text
             .trim()
             .parse::<i64>()
-            .map(Value::from)
-            .unwrap_or_else(|_| default.clone()),
+            .map_or_else(|_| default.clone(), Value::from),
         FieldKind::Float => text
             .trim()
             .parse::<f64>()
             .ok()
             .and_then(serde_json::Number::from_f64)
-            .map(Value::Number)
-            .unwrap_or_else(|| default.clone()),
+            .map_or_else(|| default.clone(), Value::Number),
         FieldKind::Bool => Value::Bool(field.boolval),
         FieldKind::Vec { len, .. } => coerce_array(text, len, default),
         FieldKind::Enum => field
             .variants
             .get(field.variant_idx)
-            .map(|v| Value::String(v.clone()))
-            .unwrap_or_else(|| default.clone()),
+            .map_or_else(|| default.clone(), |v| Value::String(v.clone())),
         // An action emits the selected option's value (null for `(none)`), or
         // keeps its value when no options were filled in.
         FieldKind::Action { .. } => field
@@ -753,8 +750,7 @@ fn coerce_array(text: &str, len: usize, default: &Value) -> Value {
     for (i, p) in parts.iter().enumerate() {
         let want_int = default_elems
             .and_then(|a| a.get(i))
-            .map(|e| e.is_i64() || e.is_u64())
-            .unwrap_or(false);
+            .is_some_and(|e| e.is_i64() || e.is_u64());
         if want_int {
             match p.parse::<i64>() {
                 Ok(n) => out.push(Value::from(n)),
@@ -784,7 +780,7 @@ pub(crate) fn assemble(
         return assemble_sparse(ty, editing_args, fields, texts);
     }
     let defaults = base_args(ty);
-    let mut out = defaults.clone();
+    let mut out = defaults;
     if let Some(existing) = editing_args {
         for (k, v) in existing {
             out.insert(k.clone(), v.clone());
@@ -807,7 +803,7 @@ pub(crate) fn assemble(
         let fallback = get_at_path(&out, &field.key)
             .cloned()
             .unwrap_or(Value::Null);
-        let text = texts.get(i).map(String::as_str).unwrap_or("");
+        let text = texts.get(i).map_or("", String::as_str);
         set_at_path(&mut out, &field.key, coerce(field, text, &fallback));
     }
     out
@@ -833,7 +829,7 @@ fn assemble_sparse(
         let default = get_at_path(&defaults, &field.key)
             .cloned()
             .unwrap_or(Value::Null);
-        let text = texts.get(i).map(String::as_str).unwrap_or("");
+        let text = texts.get(i).map_or("", String::as_str);
         let cleared = match field.kind {
             FieldKind::Enum => field.variant_idx == 0,
             kind if kind.has_text_input() => text.trim().is_empty(),
@@ -1751,7 +1747,7 @@ mod tests {
         assert_eq!(
             get_at_path(&args, "position")
                 .and_then(Value::as_array)
-                .map(|a| a.len()),
+                .map(Vec::len),
             Some(3),
             "the vector keeps its length"
         );
@@ -1777,12 +1773,14 @@ mod tests {
         );
         let expanded = HashSet::from(["params".to_string()]);
         let fields = fields_for_with("Material", None, &expanded);
-        let leaves: Vec<&str> = fields
-            .iter()
-            .filter(|f| f.key.starts_with("params."))
-            .map(|f| f.key.as_str())
-            .collect();
-        assert_eq!(leaves.len(), 8);
+
+        assert_eq!(
+            fields
+                .iter()
+                .filter(|f| f.key.starts_with("params."))
+                .count(),
+            8
+        );
         let idx = fields
             .iter()
             .position(|f| f.key == "params.5")
@@ -1805,11 +1803,11 @@ mod tests {
     fn floats_display_shortened_but_round_trip() {
         let num = |v: f64| serde_json::Number::from_f64(v).unwrap();
         // 0.05_f32 widened to f64 prints long via serde; number_text shortens it.
-        let long = num(0.05_f32 as f64).to_string();
+        let long = num(f64::from(0.05_f32)).to_string();
         assert!(long.len() > 6, "serde prints the long expansion: {long}");
-        assert_eq!(number_text(&num(0.05_f32 as f64)), "0.05");
+        assert_eq!(number_text(&num(f64::from(0.05_f32))), "0.05");
         // A whole float keeps its decimal point so it still reads as a float.
-        assert_eq!(number_text(&num(1.0_f32 as f64)), "1.0");
+        assert_eq!(number_text(&num(f64::from(1.0_f32))), "1.0");
         // An integer prints as itself.
         assert_eq!(number_text(&serde_json::Number::from(42)), "42");
         // A genuine f64 that does not round-trip through f32 keeps full precision.

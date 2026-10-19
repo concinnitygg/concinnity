@@ -1,4 +1,4 @@
-//! EditorHook: drop the selection to the floor (Ctrl+Down, /floor, Preview
+//! `EditorHook`: drop the selection to the floor (Ctrl+Down, /floor, Preview
 //! panel row). Each eligible member casts a ray straight down from its bounds'
 //! bottom-center (its position, for types without indexed bounds) against the
 //! pick index -- excluding the selection itself, so stacked members never rest

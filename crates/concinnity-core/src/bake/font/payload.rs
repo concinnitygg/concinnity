@@ -44,7 +44,7 @@ mod tests {
     fn round_trip_serialize() {
         let metrics = vec![
             GlyphMetrics {
-                char_code: b'A' as u32,
+                char_code: u32::from(b'A'),
                 atlas_x: 1,
                 atlas_y: 1,
                 atlas_w: 10,
@@ -54,7 +54,7 @@ mod tests {
                 bearing_y: 12.0,
             },
             GlyphMetrics {
-                char_code: b' ' as u32,
+                char_code: u32::from(b' '),
                 atlas_x: 15,
                 atlas_y: 1,
                 atlas_w: 0,
@@ -73,8 +73,8 @@ mod tests {
         assert_eq!(size_px, 20);
         assert_eq!(out_rgba, rgba);
         assert_eq!(out_metrics.len(), 2);
-        assert_eq!(out_metrics[0].char_code, b'A' as u32);
+        assert_eq!(out_metrics[0].char_code, u32::from(b'A'));
         assert!((out_metrics[0].advance_px - 11.5).abs() < 1e-5);
-        assert_eq!(out_metrics[1].char_code, b' ' as u32);
+        assert_eq!(out_metrics[1].char_code, u32::from(b' '));
     }
 }

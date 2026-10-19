@@ -306,14 +306,13 @@ fn f32_arr3(v: &Value, key: &str, default: [f32; 3]) -> [f32; 3] {
     v.get(key)
         .and_then(|a| a.as_array())
         .filter(|a| a.len() == 3)
-        .map(|a| {
+        .map_or(default, |a| {
             [
-                a[0].as_f64().unwrap_or(default[0] as f64) as f32,
-                a[1].as_f64().unwrap_or(default[1] as f64) as f32,
-                a[2].as_f64().unwrap_or(default[2] as f64) as f32,
+                a[0].as_f64().unwrap_or_else(|| f64::from(default[0])) as f32,
+                a[1].as_f64().unwrap_or_else(|| f64::from(default[1])) as f32,
+                a[2].as_f64().unwrap_or_else(|| f64::from(default[2])) as f32,
             ]
         })
-        .unwrap_or(default)
 }
 
 fn set_at_path(v: &mut Value, path: &str, value: Value) {
@@ -322,7 +321,7 @@ fn set_at_path(v: &mut Value, path: &str, value: Value) {
             v[path] = value;
         }
         Some((head, rest)) => {
-            if !v.get(head).is_some_and(|c| c.is_object()) {
+            if !v.get(head).is_some_and(Value::is_object) {
                 v[head] = serde_json::json!({});
             }
             set_at_path(&mut v[head], rest, value);

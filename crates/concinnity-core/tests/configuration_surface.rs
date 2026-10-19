@@ -20,6 +20,7 @@ fn crate_sources() -> Vec<PathBuf> {
     files
 }
 
+#[expect(clippy::panic, reason = "a test helper fails the test that called it")]
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
     for entry in entries {
@@ -32,6 +33,7 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+#[expect(clippy::panic, reason = "a test helper fails the test that called it")]
 fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }

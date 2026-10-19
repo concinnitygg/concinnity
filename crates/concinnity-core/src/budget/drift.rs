@@ -58,10 +58,10 @@ impl DriftVerdict {
     /// How a readout names the verdict.
     pub fn label(self) -> &'static str {
         match self {
-            DriftVerdict::Settled => "settled",
-            DriftVerdict::Heap => "heap",
-            DriftVerdict::OutsideHeap => "outside-heap",
-            DriftVerdict::Both => "heap and outside-heap",
+            Self::Settled => "settled",
+            Self::Heap => "heap",
+            Self::OutsideHeap => "outside-heap",
+            Self::Both => "heap and outside-heap",
         }
     }
 }
@@ -158,7 +158,7 @@ impl DriftTracker {
 // Signed movement from `base` to `now`, saturating rather than wrapping at the
 // extremes a bogus platform reading could produce.
 fn growth(now: u64, base: u64) -> i64 {
-    (now as i128 - base as i128).clamp(i64::MIN as i128, i64::MAX as i128) as i64
+    (i128::from(now) - i128::from(base)).clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
 
 // Whether one term counts as drifting, given whether it already did. A term

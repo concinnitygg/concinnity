@@ -37,8 +37,7 @@ impl FileStamp {
                 .modified()
                 .ok()
                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(0),
+                .map_or(0, |d| d.as_nanos() as u64),
             len: meta.len(),
         })
     }
@@ -47,8 +46,7 @@ impl FileStamp {
     pub(crate) fn settled(&self) -> bool {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_nanos() as u64);
         self.settled_at(now)
     }
 

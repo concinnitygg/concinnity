@@ -60,7 +60,7 @@ mod tests {
     use super::*;
 
     fn point(i: u32) -> [f32; 3] {
-        let a = i as f32 * 0.6180339;
+        let a = i as f32 * 0.618_033_9;
         let r = 37.0 * i as f32;
         [r * a.cos(), 0.0, r * a.sin()]
     }

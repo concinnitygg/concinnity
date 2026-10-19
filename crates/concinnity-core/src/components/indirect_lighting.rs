@@ -28,7 +28,7 @@ pub const DEFAULT_SSGI_RAYS: u32 = 1;
 /// Indirect (ambient) lighting: how strong the environment's ambient term is,
 /// and whether a screen-space bounce lets nearby lit surfaces bleed color onto
 /// one another. The `indirect_lighting` section of
-/// [GraphicsConfig](#graphicsconfig); a field left unset takes the default
+/// [`GraphicsConfig`](#graphicsconfig); a field left unset takes the default
 /// below.
 ///
 /// The screen-space bounce is on by default, which is the look on capable

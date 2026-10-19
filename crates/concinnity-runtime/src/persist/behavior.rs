@@ -17,12 +17,12 @@ pub(crate) struct FileStore {
 
 impl FileStore {
     // The store in `tree`'s save directory.
-    pub(crate) fn new(tree: &StateTree) -> FileStore {
-        FileStore::at(&tree.saves_dir())
+    pub(crate) fn new(tree: &StateTree) -> Self {
+        Self::at(&tree.saves_dir())
     }
 
-    pub(crate) fn at(dir: &Path) -> FileStore {
-        FileStore {
+    pub(crate) fn at(dir: &Path) -> Self {
+        Self {
             dir: dir.to_path_buf(),
             writer: FileWriter::new("cn-behav-save"),
         }

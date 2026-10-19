@@ -1,4 +1,4 @@
-//! EditorHook: duplicate the selection in place (Ctrl+D, /dup). Each selected
+//! `EditorHook`: duplicate the selection in place (Ctrl+D, /dup). Each selected
 //! authored entry is cloned with all its args -- position included, so the copy
 //! sits exactly on the original until it is dragged away -- under a unique
 //! `$id`, or anonymous when the original is. A file the entry's type owns is
@@ -66,11 +66,11 @@ impl EditorHook {
         }
         if let Some(message) = owned_files::copied_message(&copied) {
             let failed = copied.iter().any(|c| matches!(c, Copied::Failed { .. }));
-            match failed {
-                true => self
-                    .notifier
-                    .error_with(&message, notify::Action::OpenConsole),
-                false => self.notifier.success(&message),
+            if failed {
+                self.notifier
+                    .error_with(&message, notify::Action::OpenConsole);
+            } else {
+                self.notifier.success(&message);
             }
         }
         if copies.is_empty() {

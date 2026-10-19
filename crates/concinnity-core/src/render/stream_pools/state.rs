@@ -143,7 +143,7 @@ pub struct StreamingStats {
     pub texture_bytes: Option<(u64, u64)>,
     /// `(resident_bytes, byte_budget)` for the mesh pool when streaming.
     pub mesh_bytes: Option<(u64, u64)>,
-    /// `(resident_bytes, byte_budget)` for the chunk pool when a VoxelWorld is
+    /// `(resident_bytes, byte_budget)` for the chunk pool when a `VoxelWorld` is
     /// streaming; `byte_budget` is 0 when the GPU reported no memory figure.
     pub chunk_bytes: Option<(u64, u64)>,
 }
@@ -214,7 +214,7 @@ impl core::fmt::Debug for StreamingState {
             .field("mesh", &self.pools.mesh.is_some())
             .field("chunk", &self.pools.chunks.is_some())
             .field("pressure", &self.pressure_stage)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -410,7 +410,7 @@ impl StreamingState {
             self.drive_textures(&mut queues.ops, view.cam_pos, loads_frozen);
             self.drive_meshes(&mut queues.ops, view.cam_pos, loads_frozen);
         }
-        let out = self.drive_chunks(queues, view, loads_frozen);
+        let out = self.drive_chunks(queues, &view, loads_frozen);
         self.frame_count += 1;
         out
     }
@@ -544,7 +544,7 @@ impl StreamingState {
     fn drive_chunks(
         &mut self,
         queues: &mut RenderQueues,
-        view: DriveView<'_>,
+        view: &DriveView<'_>,
         loads_frozen: bool,
     ) -> ([[f32; 4]; 4], [f32; 3]) {
         let retire_frame = self.retire_frame();

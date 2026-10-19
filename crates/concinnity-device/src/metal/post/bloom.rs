@@ -18,7 +18,7 @@ pub(crate) type MtlBloomPass = BloomPass<MtlPostPipeline, MtlPostTarget>;
 
 // Build the chain for an output of `width` x `height`.
 pub(crate) fn build_bloom_pass(
-    device: &MtlPostDevice,
+    device: &MtlPostDevice<'_>,
     width: u32,
     height: u32,
 ) -> RenderResult<MtlBloomPass> {

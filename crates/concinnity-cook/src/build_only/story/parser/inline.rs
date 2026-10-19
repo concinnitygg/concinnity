@@ -25,7 +25,7 @@ impl StoryParser {
     pub(super) fn on_link_end(&mut self, range: &Range<usize>) -> Result<(), String> {
         let (target, title, label) = self.inline.link.take().unwrap_or_default();
         if label.trim().is_empty() {
-            return self.err(range, format!("link to '{}' has no label text", target));
+            return self.err(range, format!("link to '{target}' has no label text"));
         }
         if self.list.active {
             let Some(anchor) = target.strip_prefix('#') else {
@@ -95,10 +95,7 @@ impl StoryParser {
         if !self.story.characters.contains_key(&id) {
             return self.err(
                 range,
-                format!(
-                    "speaker '{}' is not declared in the frontmatter `characters`",
-                    id
-                ),
+                format!("speaker '{id}' is not declared in the frontmatter `characters`"),
             );
         }
         self.inline

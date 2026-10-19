@@ -1,4 +1,4 @@
-//! Classify D3D12 / DXGI HRESULTs into the RenderError boundary vocabulary.
+//! Classify D3D12 / DXGI HRESULTs into the `RenderError` boundary vocabulary.
 //! Device removal is detected at Present; `classify_present_failure` refines
 //! the loss class with the device's own `GetDeviceRemovedReason` verdict.
 

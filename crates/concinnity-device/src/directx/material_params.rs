@@ -45,7 +45,7 @@ impl DxMaterialParams {
                 let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
                 // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a
                 // live local that receives the mapping.
-                unsafe { buffer.Map(0, None, Some(&mut ptr)) }
+                unsafe { buffer.Map(0, None, Some(&raw mut ptr)) }
                     .map_err(|e| map_hresult(e.code(), "map material parameter table"))?;
                 Ok(MappedCopy {
                     buffer,
@@ -67,7 +67,7 @@ impl DxMaterialParams {
             return;
         };
         if let Some(rows) = self.table.take_upload(slot) {
-            let bytes = std::mem::size_of_val(rows);
+            let bytes = size_of_val(rows);
             // SAFETY: the copy was allocated at the table's byte length, which the
             // table never changes, and stays mapped for the buffer's lifetime.
             unsafe {

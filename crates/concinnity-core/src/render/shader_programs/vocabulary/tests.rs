@@ -33,8 +33,12 @@ fn usage_reaches_a_field_through_its_owner_and_calls_a_helper() {
 #[test]
 fn every_signature_names_its_entry() {
     for e in ENTRIES {
-        let names: Vec<&str> = identifiers(e.signature).collect();
-        assert!(names.contains(&e.name), "{}: {}", e.name, e.signature);
+        assert!(
+            identifiers(e.signature).any(|x| x == e.name),
+            "{}: {}",
+            e.name,
+            e.signature
+        );
     }
 }
 

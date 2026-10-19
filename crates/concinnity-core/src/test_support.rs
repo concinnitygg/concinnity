@@ -98,12 +98,11 @@ std::thread_local! {
 fn resolve(name: &str) -> u32 {
     NAMES.with(|names| {
         let mut names = names.borrow_mut();
-        match names.iter().position(|n| n == name) {
-            Some(id) => id as u32,
-            None => {
-                names.push(name.to_string());
-                (names.len() - 1) as u32
-            }
+        if let Some(id) = names.iter().position(|n| n == name) {
+            id as u32
+        } else {
+            names.push(name.to_string());
+            (names.len() - 1) as u32
         }
     })
 }

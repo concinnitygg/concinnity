@@ -1,4 +1,4 @@
-//! EditorHook: the Templates panel's session state: the template whose detail
+//! `EditorHook`: the Templates panel's session state: the template whose detail
 //! panel is open (an index into the templates registry; `None` means the
 //! detail panel is closed) and the first visible row of its asset list.
 

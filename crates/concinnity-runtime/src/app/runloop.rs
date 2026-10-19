@@ -6,7 +6,7 @@
 //! per entry point.
 //!
 //! On macOS the world loop must pump the Cocoa run loop on the main thread each
-//! tick so AppKit (GLFW window creation, Metal pipeline compilation, event
+//! tick so `AppKit` (GLFW window creation, Metal pipeline compilation, event
 //! dispatch) can process its callbacks and Metal drawable presentation fires. On
 //! all other platforms a tight Rust loop is used, which is what the Vulkan /
 //! DirectX renderers expect.
@@ -34,8 +34,8 @@ pub fn install_ctrlc_handler(runtime: &Runtime) {
     }
 }
 
-/// Activate NSApplication so AppKit windows can be displayed. Must be called
-/// before any NSWindow is created (i.e. before GraphicsSystem::init()), on the
+/// Activate `NSApplication` so `AppKit` windows can be displayed. Must be called
+/// before any `NSWindow` is created (i.e. before `GraphicsSystem::init()`), on the
 /// main thread; off it, nothing is activated and no window will show.
 #[cfg(target_os = "macos")]
 pub fn activate_app_macos() {

@@ -35,8 +35,12 @@ fn usage_writes_a_hook_whole_calls_a_helper_and_names_the_rest() {
 #[test]
 fn every_signature_names_its_entry() {
     for e in ENTRIES {
-        let names: Vec<&str> = identifiers(e.signature).collect();
-        assert!(names.contains(&e.name), "{}: {}", e.name, e.signature);
+        assert!(
+            identifiers(e.signature).any(|x| x == e.name),
+            "{}: {}",
+            e.name,
+            e.signature
+        );
     }
 }
 

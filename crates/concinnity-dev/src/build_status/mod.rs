@@ -7,6 +7,7 @@ mod capture;
 mod render;
 mod terminal;
 
+use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -43,7 +44,9 @@ struct Shared {
 
 impl Shared {
     fn board(&self) -> MutexGuard<'_, Board> {
-        self.board.lock().unwrap_or_else(|e| e.into_inner())
+        self.board
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn note(&self, level: NoteLevel, text: String) {
@@ -52,7 +55,10 @@ impl Shared {
 
     // Write whatever changed since the last frame.
     fn draw(&self, tick: usize, last: bool) {
-        let mut surface = self.surface.lock().unwrap_or_else(|e| e.into_inner());
+        let mut surface = self
+            .surface
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let frame = {
             let mut board = self.board();
             surface.frame(&mut board, Instant::now(), tick, terminal::width(), last)
@@ -92,19 +98,19 @@ impl BuildStatus {
             Verbosity::Normal => tracing::Level::WARN,
             Verbosity::Verbose => tracing::Level::INFO,
         };
-        capture::attach(shared.clone(), shown);
+        capture::attach(Arc::clone(&shared), shown);
 
         // A stream has nothing to animate, so it redraws less often: only
         // closed steps and new notes reach it.
         let period = if live { FRAME } else { FRAME * 4 };
         let (stop, stopped) = mpsc::channel::<()>();
-        let thread_shared = shared.clone();
+        let thread_shared = Arc::clone(&shared);
         let redraw = std::thread::Builder::new()
             .name("build-status".into())
             .spawn(move || {
                 set_current_thread_role(ThreadRole::Background);
                 let mut tick = 0;
-                while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(period) {
+                while stopped.recv_timeout(period) == Err(RecvTimeoutError::Timeout) {
                     tick += 1;
                     thread_shared.draw(tick, false);
                 }
@@ -196,7 +202,7 @@ fn load_summary(authored: usize, assets: usize, injected: usize) -> String {
     };
     if injected > 0 {
         let added = render::counted(injected as u32, "default");
-        summary.push_str(&format!(" · {added} added"));
+        let _ = write!(summary, " · {added} added");
     }
     summary
 }

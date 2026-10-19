@@ -14,7 +14,7 @@ use crate::render::scene_flow::start_scene;
 
 /// Texture slots (below `slot_count`) whose payloads init skips.
 pub fn deferred_texture_slots(
-    ctx: &PipelineContext,
+    ctx: &PipelineContext<'_>,
     streaming: bool,
     slot_count: usize,
 ) -> HashSet<usize> {
@@ -44,7 +44,7 @@ pub fn deferred_texture_slots(
 /// Mesh sources whose payload decode init defers, with the baked bounds and
 /// counts their draw records are built from. Sources without a baked bounds
 /// record fall out (they decode eagerly).
-pub fn deferred_mesh_sources(ctx: &PipelineContext, streaming: bool) -> DeferredMeshSources {
+pub fn deferred_mesh_sources(ctx: &PipelineContext<'_>, streaming: bool) -> DeferredMeshSources {
     let mut out = DeferredMeshSources::default();
     if !streaming {
         return out;
@@ -90,7 +90,11 @@ impl ShaderDeferral {
     /// The buckets a streamed world defers: those a non-start scene owns.
     /// `shader_ids` is the world's Shaders in bucket order. Bucket 0, the world
     /// default program, is never deferred.
-    pub fn plan(ctx: &PipelineContext, streaming: bool, shader_ids: &[Option<AssetId>]) -> Self {
+    pub fn plan(
+        ctx: &PipelineContext<'_>,
+        streaming: bool,
+        shader_ids: &[Option<AssetId>],
+    ) -> Self {
         let mut scenes = Vec::new();
         if !streaming {
             return Self { scenes };

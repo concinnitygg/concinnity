@@ -1,4 +1,4 @@
-//! EditorHook: resolving an `AssetHandle` against the world as it stands this
+//! `EditorHook`: resolving an `AssetHandle` against the world as it stands this
 //! frame. Everything the editor addresses -- the selection, the open form, the
 //! gizmo, the panels that follow the active member -- holds handles, and passes
 //! through here to reach an authored entry, a live `AssetId`, or the name a row

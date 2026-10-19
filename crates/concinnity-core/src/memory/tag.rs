@@ -23,7 +23,7 @@ impl Realm {
     /// Number of realms.
     pub const COUNT: usize = 2;
     /// Every realm, in readout order.
-    pub const ALL: [Realm; Self::COUNT] = [Realm::Host, Realm::Device];
+    pub const ALL: [Self; Self::COUNT] = [Self::Host, Self::Device];
 
     /// The realm's position in a per-realm table.
     pub const fn index(self) -> usize {
@@ -33,8 +33,8 @@ impl Realm {
     /// How a readout names the realm.
     pub const fn name(self) -> &'static str {
         match self {
-            Realm::Host => "RAM",
-            Realm::Device => "VRAM",
+            Self::Host => "RAM",
+            Self::Device => "VRAM",
         }
     }
 }
@@ -70,16 +70,16 @@ impl MemTag {
     pub const COUNT: usize = 9;
     /// Every tag, in the order a readout lists them. Fixed, so rows never
     /// reorder under a reader as the numbers move.
-    pub const ALL: [MemTag; Self::COUNT] = [
-        MemTag::Textures,
-        MemTag::Meshes,
-        MemTag::Chunks,
-        MemTag::Shaders,
-        MemTag::Audio,
-        MemTag::Physics,
-        MemTag::Ui,
-        MemTag::Scratch,
-        MemTag::Other,
+    pub const ALL: [Self; Self::COUNT] = [
+        Self::Textures,
+        Self::Meshes,
+        Self::Chunks,
+        Self::Shaders,
+        Self::Audio,
+        Self::Physics,
+        Self::Ui,
+        Self::Scratch,
+        Self::Other,
     ];
 
     /// The tag's position in a per-tag table.
@@ -90,15 +90,15 @@ impl MemTag {
     /// How a readout names the tag.
     pub const fn name(self) -> &'static str {
         match self {
-            MemTag::Textures => "Textures",
-            MemTag::Meshes => "Meshes",
-            MemTag::Chunks => "Chunks",
-            MemTag::Shaders => "Shaders",
-            MemTag::Audio => "Audio",
-            MemTag::Physics => "Physics",
-            MemTag::Ui => "UI",
-            MemTag::Scratch => "Scratch",
-            MemTag::Other => "Other",
+            Self::Textures => "Textures",
+            Self::Meshes => "Meshes",
+            Self::Chunks => "Chunks",
+            Self::Shaders => "Shaders",
+            Self::Audio => "Audio",
+            Self::Physics => "Physics",
+            Self::Ui => "UI",
+            Self::Scratch => "Scratch",
+            Self::Other => "Other",
         }
     }
 }

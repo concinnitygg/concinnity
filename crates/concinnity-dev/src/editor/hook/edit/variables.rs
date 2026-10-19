@@ -1,4 +1,4 @@
-//! EditorHook: the Variables panel's actions. The panel edits the world's one
+//! `EditorHook`: the Variables panel's actions. The panel edits the world's one
 //! `Variables` entry the way the Behavior panel edits one behavior -- its authored
 //! args directly, committing as each change is made, so the live preview rebuilds
 //! and SAVE persists it like any other panel edit.
@@ -231,35 +231,32 @@ impl EditorHook {
     // table when the world has none, then select what landed.
     fn declare(&mut self, name: &str, verb: &str, world: &mut World) {
         let decl = serde_json::json!({"name": name, "value": palette::literal_default(verb)});
-        match self.variables_entry() {
-            Some(idx) => {
-                let mut args = self
-                    .variables_args()
-                    .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
-                let vars = args
-                    .as_object_mut()
-                    .and_then(|m| {
-                        m.entry("vars")
-                            .or_insert_with(|| Value::Array(Vec::new()))
-                            .as_array_mut()
-                    })
-                    .map(|a| {
-                        a.push(decl);
-                        a.len() - 1
-                    });
-                if vars.is_none() {
-                    return;
-                }
-                self.write_variables(idx, args);
+        if let Some(idx) = self.variables_entry() {
+            let mut args = self
+                .variables_args()
+                .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+            let vars = args
+                .as_object_mut()
+                .and_then(|m| {
+                    m.entry("vars")
+                        .or_insert_with(|| Value::Array(Vec::new()))
+                        .as_array_mut()
+                })
+                .map(|a| {
+                    a.push(decl);
+                    a.len() - 1
+                });
+            if vars.is_none() {
+                return;
             }
-            None => {
-                let asset = self.unique_name("world_vars");
-                self.entries.push(serde_json::json!({
-                    "type": "Variables", "args": {"$id": asset, "vars": [decl]},
-                }));
-                self.mark_changed();
-                self.after_variables_change();
-            }
+            self.write_variables(idx, args);
+        } else {
+            let asset = self.unique_name("world_vars");
+            self.entries.push(serde_json::json!({
+                "type": "Variables", "args": {"$id": asset, "vars": [decl]},
+            }));
+            self.mark_changed();
+            self.after_variables_change();
         }
         self.variables.row = self
             .variables_data()
@@ -285,8 +282,7 @@ impl EditorHook {
         let next = verbs
             .iter()
             .position(|v| *v == palette::verb_of(&current))
-            .map(|i| (i + 1) % verbs.len())
-            .unwrap_or(0);
+            .map_or(0, |i| (i + 1) % verbs.len());
         let value = palette::swap_literal(&current, verbs[next]);
         let Some(map) = slot.as_object_mut() else {
             return;
@@ -417,7 +413,7 @@ impl EditorHook {
         self.notify_behavior_fault(prev_fault);
     }
 
-    fn seed_variables_fields(&mut self, world: &mut World) {
+    fn seed_variables_fields(&self, world: &mut World) {
         let row = self
             .variables
             .row

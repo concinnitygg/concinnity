@@ -1,11 +1,11 @@
-//! VoxelWorld chunk streaming for VkContext: appends a headroom region to the
+//! `VoxelWorld` chunk streaming for `VkContext`: appends a headroom region to the
 //! shared vertex/index buffers and seeds the chunk allocators with it. Placing,
 //! moving and removing chunks is scene bookkeeping, done in `SceneState`.
 
 use ash::vk;
 use concinnity_core::render::error;
 
-use super::super::context::*;
+use super::super::context::VkContext;
 use super::super::texture;
 
 impl VkContext {

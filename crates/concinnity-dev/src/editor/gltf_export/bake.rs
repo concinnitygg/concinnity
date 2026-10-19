@@ -1,4 +1,4 @@
-//! Baking a CharacterShape into an ExportMesh before writing: slider weights
+//! Baking a `CharacterShape` into an `ExportMesh` before writing: slider weights
 //! are folded into the vertex positions and normals, the morph targets dropped,
 //! and the bind pose rewritten through the proportion layer with the vertices
 //! re-skinned onto it. Mirrors the cook's bake pass (character/bake.rs) on the

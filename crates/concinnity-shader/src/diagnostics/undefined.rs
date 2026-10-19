@@ -34,7 +34,11 @@ fn called_at_caret(context: &str) -> Option<String> {
     let mut lines = context.lines();
     let excerpt = lines.next()?;
     let at = lines.next()?.chars().position(|c| c == '^')?;
-    let name: String = excerpt.chars().skip(at).take_while(is_ident).collect();
+    let name: String = excerpt
+        .chars()
+        .skip(at)
+        .take_while(|&c| is_ident(c))
+        .collect();
     (!name.is_empty()).then_some(name)
 }
 
@@ -44,13 +48,13 @@ fn demangled_name(symbol: &str) -> Option<String> {
     let symbol = symbol.strip_prefix("\\01").unwrap_or(symbol);
     let name: String = match symbol.strip_prefix('?') {
         Some(mangled) => mangled.chars().take_while(|&c| c != '@').collect(),
-        None => symbol.chars().take_while(is_ident).collect(),
+        None => symbol.chars().take_while(|&c| is_ident(c)).collect(),
     };
-    (!name.is_empty() && name.chars().all(|c| is_ident(&c))).then_some(name)
+    (!name.is_empty() && name.chars().all(is_ident)).then_some(name)
 }
 
-fn is_ident(c: &char) -> bool {
-    c.is_ascii_alphanumeric() || *c == '_'
+fn is_ident(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
 }
 
 #[cfg(test)]

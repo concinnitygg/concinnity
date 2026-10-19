@@ -1,4 +1,4 @@
-//! EditorHook: the Shader form's extras (`panels/shader_form.rs`) on the
+//! `EditorHook`: the Shader form's extras (`panels/shader_form.rs`) on the
 //! generic add / edit form. Creating writes each file from its starter once
 //! the entry edit is known to stand; editing adds or drops the vertex file,
 //! renames with every reference following, and in both the Materials and the
@@ -40,7 +40,7 @@ impl ShaderExtras {
     // The files the rows show and a commit writes, under `name`: a new
     // Shader's planned paths, or an edited one's declared paths with the vertex
     // file it would add.
-    fn paths(&self, cx: &ExtrasCx) -> (Paths, Vec<NewFile>) {
+    fn paths(&self, cx: &ExtrasCx<'_>) -> (Paths, Vec<NewFile>) {
         let edited = cx
             .target
             .entry()
@@ -117,7 +117,7 @@ impl FormExtras for ShaderExtras {
         &["fragment", "vertex"]
     }
 
-    fn rows(&self, cx: &ExtrasCx) -> Vec<ExtraRow> {
+    fn rows(&self, cx: &ExtrasCx<'_>) -> Vec<ExtraRow> {
         let (paths, _) = self.paths(cx);
         self.form.rows(&shader_names(cx.entries), &paths)
     }
@@ -130,14 +130,14 @@ impl FormExtras for ShaderExtras {
         self.form.switch_type()
     }
 
-    fn blocked(&self, cx: &ExtrasCx) -> Option<String> {
+    fn blocked(&self, cx: &ExtrasCx<'_>) -> Option<String> {
         let shaders = shader_names(cx.entries).len();
         self.form.blocked(cx.name, cx.name_taken(cx.name), shaders)
     }
 
     fn fill_args(
         &self,
-        cx: &ExtrasCx,
+        cx: &ExtrasCx<'_>,
         args: &mut serde_json::Map<String, serde_json::Value>,
     ) -> Vec<NewFile> {
         let (paths, files) = self.paths(cx);
@@ -209,7 +209,7 @@ impl FormExtras for ShaderExtras {
             && let SourceKey::Shader { name: open, .. } = &mut src.key
             && c.before.as_deref() == Some(open.as_str())
         {
-            *open = name.clone();
+            open.clone_from(&name);
         }
         let mut message = match c.before.as_deref().filter(|b| *b != name) {
             Some(before) => format!("Renamed Shader '{before}' to '{name}'"),

@@ -127,14 +127,15 @@ pub struct UvRect {
 
 impl UvRect {
     /// The whole screen.
-    pub const FULL: UvRect = UvRect {
+    pub const FULL: Self = Self {
         min: [0.0, 0.0],
         max: [1.0, 1.0],
     };
 
     /// The smallest rectangle covering both.
-    pub fn union(self, other: UvRect) -> UvRect {
-        UvRect {
+    #[must_use]
+    pub fn union(self, other: Self) -> Self {
+        Self {
             min: [self.min[0].min(other.min[0]), self.min[1].min(other.min[1])],
             max: [self.max[0].max(other.max[0]), self.max[1].max(other.max[1])],
         }
@@ -143,10 +144,10 @@ impl UvRect {
     // Intersected with the screen; `None` when it misses the screen (or holds a
     // NaN). A zero-width rectangle on screen is kept, so a reflector seen
     // edge-on still renders the few texels its rasterized edge could touch.
-    fn clamped(self) -> Option<UvRect> {
+    fn clamped(self) -> Option<Self> {
         let min = [self.min[0].max(0.0), self.min[1].max(0.0)];
         let max = [self.max[0].min(1.0), self.max[1].min(1.0)];
-        (max[0] >= min[0] && max[1] >= min[1]).then_some(UvRect { min, max })
+        (max[0] >= min[0] && max[1] >= min[1]).then_some(Self { min, max })
     }
 
     /// The texels of a `width` x `height` target this rectangle touches, grown
@@ -199,7 +200,7 @@ impl PixelRect {
         let sy = 2.0 / (top - bottom).max(f32::EPSILON);
         let oy = -(top + bottom) / (top - bottom).max(f32::EPSILON);
         let mut out = view_proj;
-        for col in out.iter_mut() {
+        for col in &mut out {
             col[0] = sx * col[0] + ox * col[3];
             col[1] = sy * col[1] + oy * col[3];
         }

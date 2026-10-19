@@ -318,6 +318,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "the test checks the padding stays zero"
+    )]
     fn params_zero_padding_words_are_zero() {
         let s = FogSettings::resolve([0.7; 3], 0.05, 0.2, 0.0, 50.0, 0.4, 0.15);
         let p = s.params(

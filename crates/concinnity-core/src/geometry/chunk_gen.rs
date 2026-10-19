@@ -42,7 +42,7 @@ impl From<&BlockType> for ChunkBlockType {
     /// `uv_min`/`uv_max` rectangle.
     fn from(bt: &BlockType) -> Self {
         let default_rect = [bt.uv_min[0], bt.uv_min[1], bt.uv_max[0], bt.uv_max[1]];
-        ChunkBlockType {
+        Self {
             solid: bt.solid,
             uv_top: bt.uv_top.unwrap_or(default_rect),
             uv_bottom: bt.uv_bottom.unwrap_or(default_rect),
@@ -69,9 +69,10 @@ impl ChunkBlockType {
     ) -> Vec<Self> {
         palette
             .iter()
-            .map(|id| match block_types.get(&id.id()) {
-                Some(bt) => Self::from(bt),
-                None => {
+            .map(|id| {
+                if let Some(bt) = block_types.get(&id.id()) {
+                    Self::from(bt)
+                } else {
                     tracing::warn!("voxel world: palette entry {id} is not a known BlockType");
                     Self::AIR
                 }
@@ -106,7 +107,7 @@ impl ChunkGenerator {
     /// block, and 2 (when the palette has it) the subsurface block; a
     /// shorter palette falls back to index 1 for subsurface.
     pub fn new(seed: u64, chunk_blocks: [u32; 3], palette_len: u32) -> Self {
-        let surface_idx = if palette_len > 1 { 1 } else { 0 };
+        let surface_idx = u32::from(palette_len > 1);
         let subsurface_idx = if palette_len > 2 { 2 } else { surface_idx };
         Self {
             seed,
@@ -143,12 +144,10 @@ impl ChunkGenerator {
                 let height = self.surface_height(wx, wz, dy as i32);
                 for y in 0..dy {
                     let yi = y as i32;
-                    let id = if yi > height {
-                        0 // air
-                    } else if yi == height {
-                        self.surface_idx
-                    } else {
-                        self.subsurface_idx
+                    let id = match yi.cmp(&height) {
+                        core::cmp::Ordering::Greater => 0, // air
+                        core::cmp::Ordering::Equal => self.surface_idx,
+                        core::cmp::Ordering::Less => self.subsurface_idx,
                     };
                     blocks[x + y * dx + z * dx * dy] = id;
                 }
@@ -241,9 +240,9 @@ fn smoothstep(t: f32) -> f32 {
 // is deterministic and reproducible across platforms.
 fn hash01(seed: u64, x: i32, z: i32) -> f32 {
     let mut h = seed;
-    h ^= (x as i64 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    h ^= (i64::from(x) as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    h ^= (z as i64 as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+    h ^= (i64::from(z) as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
     h ^= h >> 31;
     h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
     h ^= h >> 31;
@@ -259,7 +258,7 @@ mod tests {
     // uv_min/uv_max rectangle.
     #[test]
     fn block_type_to_chunk_overrides_then_falls_back() {
-        let bt = crate::components::BlockType {
+        let bt = BlockType {
             solid: true,
             uv_min: [0.1, 0.2],
             uv_max: [0.6, 0.7],
@@ -270,7 +269,7 @@ mod tests {
         let chunk = ChunkBlockType::from(&bt);
         assert!(chunk.solid);
         let mut known = HashMap::new();
-        known.insert(AssetId(5), bt.clone());
+        known.insert(AssetId(5), bt);
         let ids = [Ref::new(AssetId(5)), Ref::new(AssetId(6))];
         let palette = ChunkBlockType::resolve_palette(&ids, &known);
         assert!(
@@ -288,7 +287,7 @@ mod tests {
 
     #[test]
     fn block_type_to_chunk_air_is_not_solid() {
-        let bt = crate::components::BlockType {
+        let bt = BlockType {
             solid: false,
             ..Default::default()
         };

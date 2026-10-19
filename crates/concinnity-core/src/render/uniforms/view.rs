@@ -53,13 +53,13 @@ pub struct ViewUniforms {
     /// the same probe set), so a glossy surface does not show both the
     /// parallax-approximate forward probe reflection and the exact resolved one.
     pub reflections_enabled: f32,
-    /// World-space camera position (packed_float3 in the MSL contract, alignment 4).
+    /// World-space camera position (`packed_float3` in the MSL contract, alignment 4).
     pub cam_pos: [f32; 3],
     /// Number of mip levels in the bound IBL prefilter cubemap. 0 means
-    /// "no EnvironmentMap bound": the fragment shader uses this as the IBL
+    /// "no `EnvironmentMap` bound": the fragment shader uses this as the IBL
     /// enable flag and falls back to a flat ambient placeholder.
     pub prefilter_mip_count: f32,
-    /// 1.0 while the unlit view mode is active: shade_surface returns the base
+    /// 1.0 while the unlit view mode is active: `shade_surface` returns the base
     /// color before lighting. Occupies what was pad space, so the offsets in
     /// the user-shader binding contract are unchanged.
     pub shade_mode: f32,
@@ -297,6 +297,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "the test checks the padding stays zero"
+    )]
     fn gbuffer_view_takes_the_previous_frame_from_its_history() {
         use crate::render::view_history::ViewFrame;
         let m = |k: f32| [[k; 4]; 4];

@@ -18,7 +18,7 @@ pub enum StepResult {
     Stop,
 }
 
-/// System -- has behavior, receives a PipelineContext each tick. `init` runs
+/// System -- has behavior, receives a `PipelineContext` each tick. `init` runs
 /// once at `World::start`; `step` runs every tick.
 ///
 /// A system is code, never data: it has no declarable asset and is never loaded
@@ -35,10 +35,10 @@ pub enum StepResult {
 /// (the `cn debug` / `cn editor` hot-reload drive).
 pub trait System: core::any::Any + core::fmt::Debug + Send {
     /// Run once at `World::start`, before the first step.
-    fn init(&mut self, _ctx: &mut PipelineContext) {}
+    fn init(&mut self, _ctx: &mut PipelineContext<'_>) {}
 
     /// Run once per tick.
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult;
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult;
 
     /// The data `step` may touch, consulted once when the schedule is built
     /// (after `init`, so a data-dependent system can compute it from its

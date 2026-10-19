@@ -3,7 +3,7 @@
 //!
 //! Two tables, both `LTC_LUT_SIZE` square and indexed the same way:
 //!   u = roughness in [0, 1]
-//!   v = sqrt(1 - cos(theta_view)), which spends more of the axis on the grazing
+//!   v = sqrt(1 - `cos(theta_view)`), which spends more of the axis on the grazing
 //!       angles where the lobe changes fastest
 //!
 //! `matrix_texels` holds 4 floats per cell: the non-trivial entries of the inverse
@@ -42,12 +42,12 @@ static MAGNITUDE: &Aligned<[u8]> = &Aligned(*include_bytes!(concat!(
     "/ltc_magnitude.bin"
 )));
 
-/// RGBA32Float texels, `LTC_LUT_SIZE` square. The backend uploads these once.
+/// `RGBA32Float` texels, `LTC_LUT_SIZE` square. The backend uploads these once.
 pub fn matrix_texels() -> &'static [f32] {
     bytemuck::cast_slice(&MATRIX.0)
 }
 
-/// RG32Float texels, `LTC_LUT_SIZE` square.
+/// `RG32Float` texels, `LTC_LUT_SIZE` square.
 pub fn magnitude_texels() -> &'static [f32] {
     bytemuck::cast_slice(&MAGNITUDE.0)
 }

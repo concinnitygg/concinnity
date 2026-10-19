@@ -233,26 +233,23 @@ impl<C, P> ProbeBake<C, P> {
             return BakeReport::default();
         }
         let prefilter_in_flight = self.prefilter.is_some();
-        let (phase, signals) = match &self.capture {
-            Some(slot) => {
-                let more_faces = (slot.next as usize) < CAPTURE_FACES;
-                let signals = BakeSignals {
-                    more_faces,
-                    faces_done: !more_faces
-                        && !prefilter_in_flight
-                        && device.capture_retired(&slot.gpu),
-                    ..BakeSignals::default()
-                };
-                (BakePhase::Rendering, signals)
-            }
-            None => {
-                let signals = BakeSignals {
-                    queue_pending: device.book().pending(),
-                    eligible: device.capture_ready(prefilter_in_flight),
-                    ..BakeSignals::default()
-                };
-                (BakePhase::Idle, signals)
-            }
+        let (phase, signals) = if let Some(slot) = &self.capture {
+            let more_faces = (slot.next as usize) < CAPTURE_FACES;
+            let signals = BakeSignals {
+                more_faces,
+                faces_done: !more_faces
+                    && !prefilter_in_flight
+                    && device.capture_retired(&slot.gpu),
+                ..BakeSignals::default()
+            };
+            (BakePhase::Rendering, signals)
+        } else {
+            let signals = BakeSignals {
+                queue_pending: device.book().pending(),
+                eligible: device.capture_ready(prefilter_in_flight),
+                ..BakeSignals::default()
+            };
+            (BakePhase::Idle, signals)
         };
         match next_bake_action(phase, signals) {
             BakeAction::RenderFace => self.render_next_face(device, frame),
@@ -267,7 +264,7 @@ impl<C, P> ProbeBake<C, P> {
     where
         D: ProbeBakeDevice<Capture = C, Prefilter = P>,
     {
-        if let (None, None) = (&self.capture, &self.prefilter) {
+        if matches!((&self.capture, &self.prefilter), (None, None)) {
             return;
         }
         let (capture, prefilter) = self.take();

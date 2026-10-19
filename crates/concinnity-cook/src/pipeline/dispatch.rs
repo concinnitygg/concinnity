@@ -87,8 +87,8 @@ mod tests {
         let _ = world; // keeps the inline jsonl reference for documentation
     }
 
-    fn ctx() -> crate::asset::BuildCtx<'static> {
-        crate::asset::BuildCtx {
+    fn ctx() -> BuildCtx<'static> {
+        BuildCtx {
             targets: concinnity_core::platform::PlatformSet::single(
                 concinnity_core::platform::Platform::Metal,
             ),
@@ -278,7 +278,7 @@ mod tests {
     fn compile_entry_dispatches_deterministic_arms() {
         // Mesh is a resource asset now: it compiles through
         // `RegisteredType::compile_payload`, not the RegisteredType dispatch.
-        let mesh_bytes = crate::authoring::registry::RegisteredType::Mesh
+        let mesh_bytes = RegisteredType::Mesh
             .compile_payload(
                 &serde_json::json!({"generator": "box", "half_extents": [1, 1, 1]}),
                 None,
@@ -369,7 +369,7 @@ mod tests {
                 &serde_json::json!({
                     "vertices": [{"pos": [0.0, 0.0, 0.0]}],
                     "scale": [0.0, 0.0, 0.0],
-                    "max_instances": 999999,
+                    "max_instances": 999_999,
                     "capsule": {"half_height": 0.6, "radius": 0.2},
                 }),
             )
@@ -399,7 +399,7 @@ mod tests {
                 serde_json::json!({"uv_min": [0, 0], "uv_max": [1, 1]}),
             ),
         ];
-        let vctx = crate::asset::BuildCtx {
+        let vctx = BuildCtx {
             targets: concinnity_core::platform::PlatformSet::single(
                 concinnity_core::platform::Platform::Metal,
             ),

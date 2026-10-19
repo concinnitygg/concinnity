@@ -91,7 +91,7 @@ impl PadState {
             }
             PadEvent::Disconnected { pad } => {
                 if self.active == Some(pad) {
-                    *self = PadState::default();
+                    *self = Self::default();
                 }
             }
             PadEvent::Button {
@@ -136,7 +136,7 @@ impl PadState {
     // Make `pad` the active gamepad, dropping the previous pad's state so its
     // held buttons and deflections do not leak across the switch.
     fn switch_to(&mut self, pad: u32) {
-        *self = PadState::default();
+        *self = Self::default();
         self.active = Some(pad);
     }
 

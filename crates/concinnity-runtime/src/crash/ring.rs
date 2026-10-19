@@ -28,7 +28,9 @@ impl LogRing {
     fn lock(&self) -> MutexGuard<'_, VecDeque<String>> {
         // A panic while the lock was held leaves at worst a garbled line;
         // recent logs are still worth reporting.
-        self.lines.lock().unwrap_or_else(|p| p.into_inner())
+        self.lines
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     // Append one line, evicting the oldest at capacity and recycling its
@@ -45,7 +47,12 @@ impl LogRing {
         lines.push_back(buf);
     }
 
-    pub(crate) fn push_event(&self, level: &tracing::Level, target: &str, event: &tracing::Event) {
+    pub(crate) fn push_event(
+        &self,
+        level: tracing::Level,
+        target: &str,
+        event: &tracing::Event<'_>,
+    ) {
         let elapsed = self.started.elapsed().as_secs_f64();
         self.push_with(|line| {
             let _ = write!(line, "+{elapsed:.3}s {level} {target}: ");
@@ -129,7 +136,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for RingLayer {
         if *meta.level() > tracing::Level::INFO {
             return;
         }
-        global().push_event(meta.level(), meta.target(), event);
+        global().push_event(*meta.level(), meta.target(), event);
     }
 }
 
@@ -173,7 +180,7 @@ mod tests {
         let ring = std::sync::Arc::new(LogRing::new());
         let threads: Vec<_> = (0..8)
             .map(|t| {
-                let ring = ring.clone();
+                let ring = std::sync::Arc::clone(&ring);
                 std::thread::spawn(move || {
                     for i in 0..200 {
                         push_line(&ring, &format!("t{t} line {i}"));

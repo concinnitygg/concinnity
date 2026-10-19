@@ -916,7 +916,7 @@ mod tests {
     fn survivors_mostly_stand_full_height() {
         let keep = 0.2;
         let n = 20_000;
-        let survivors: alloc::vec::Vec<f32> = (0..n)
+        let survivors: Vec<f32> = (0..n)
             .map(|i| (i as f32 + 0.5) / n as f32)
             .filter(|&u| survives(keep, u))
             .map(|u| shrink(keep, u))
@@ -993,7 +993,7 @@ mod tests {
     // The mean blades `view` keeps per region within `shot`'s frustum: the
     // ground in polar rings around the camera's foot, each patch weighted by
     // the fraction alive at its distance.
-    fn kept(view: &GrassLodView, grid: &GrassGrid, shot: &Shot) -> [f32; GRASS_REGION_COUNT] {
+    fn kept(view: &GrassLodView, grid: GrassGrid, shot: &Shot) -> [f32; GRASS_REGION_COUNT] {
         let (sp, cp) = (sin(shot.pitch), cos(shot.pitch));
         let forward = [0.0, -sp, cp];
         let up0 = [0.0, cp, sp];
@@ -1050,7 +1050,7 @@ mod tests {
                                 pitch,
                                 roll,
                             };
-                            let kept = kept(&view, &grid, &shot);
+                            let kept = kept(&view, grid, &shot);
                             let spans = [kept[0], kept[1], kept[2] + kept[GRASS_BAND_REGION]];
                             for r in 0..GRASS_SPAN_COUNT {
                                 assert!(

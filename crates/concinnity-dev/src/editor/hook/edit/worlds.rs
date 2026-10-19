@@ -1,4 +1,4 @@
-//! EditorHook: the Worlds panel's actions. Opening a world retargets the whole
+//! `EditorHook`: the Worlds panel's actions. Opening a world retargets the whole
 //! session -- the path SAVE writes, the working entries and their history, the
 //! hot-reload watcher, and the per-world session state -- then asks for the
 //! preview rebuild that swaps the compiled world under the live backend, the
@@ -47,10 +47,7 @@ impl EditorHook {
         self.refresh_worlds();
     }
 
-    pub(in crate::editor::hook) fn make_worlds_view<'a>(
-        &'a self,
-        mouse: [f32; 2],
-    ) -> WorldsView<'a> {
+    pub(in crate::editor::hook) fn make_worlds_view(&self, mouse: [f32; 2]) -> WorldsView<'_> {
         WorldsView {
             rows: &self.worlds.rows,
             // The window follows the viewport, so a listing scrolled to its end

@@ -11,13 +11,13 @@ use serde::Deserialize;
 // instead of reading from disk, so no external file is required.
 pub(crate) fn compile_font_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     let font: Font =
-        Deserialize::deserialize(args).map_err(|e| format!("Font: invalid args: {}", e))?;
+        Deserialize::deserialize(args).map_err(|e| format!("Font: invalid args: {e}"))?;
     let path = font.path.as_str();
 
     let ttf_bytes: Vec<u8> = if path.is_empty() {
         concinnity_core::bake::font::BUILTIN_FONT_BYTES.to_vec()
     } else {
-        std::fs::read(path).map_err(|e| format!("Font: could not read '{}': {}", path, e))?
+        std::fs::read(path).map_err(|e| format!("Font: could not read '{path}': {e}"))?
     };
     let source = if path.is_empty() { "<built-in>" } else { path };
 

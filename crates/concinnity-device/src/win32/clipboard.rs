@@ -71,7 +71,7 @@ impl Clipboard for WindowState {
             let Ok(mem) = GlobalAlloc(GMEM_MOVEABLE, units.len() * 2) else {
                 return;
             };
-            let ptr = GlobalLock(mem) as *mut u16;
+            let ptr = GlobalLock(mem).cast::<u16>();
             if ptr.is_null() {
                 let _ = GlobalFree(Some(mem));
                 return;

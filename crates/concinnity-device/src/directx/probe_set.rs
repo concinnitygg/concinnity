@@ -65,7 +65,7 @@ pub(in crate::directx) fn create_cube_resource(
     } = shape;
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: face_size as u64,
+        Width: u64::from(face_size),
         Height: face_size,
         DepthOrArraySize: u16::try_from(6 * cubes)
             .map_err(|_| RenderError::Other(format!("{label}: {cubes} cubes exceed an array")))?,
@@ -87,12 +87,12 @@ pub(in crate::directx) fn create_cube_resource(
     // new COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
-            &heap_props,
+            &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
-            &desc,
+            &raw const desc,
             state,
             None,
-            &mut resource,
+            &raw mut resource,
         )
     }
     .map_err(|e| map_hresult(e.code(), &format!("create {label}")))?;
@@ -123,7 +123,7 @@ pub(in crate::directx) fn write_cube_mip_uav(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateUnorderedAccessView(resource, None, Some(&desc), uav_cpu) };
+    unsafe { device.CreateUnorderedAccessView(resource, None, Some(&raw const desc), uav_cpu) };
 }
 
 // A committed cube-map array, `capacity` cubes of `mips` levels.
@@ -138,13 +138,13 @@ impl ProbeCubeArray {
         device: &ID3D12Device,
         plan: &PrefilterPlan,
         capacity: usize,
-    ) -> RenderResult<ProbeCubeArray> {
+    ) -> RenderResult<Self> {
         Self::create(device, plan.face_size(), plan.mips(), capacity)
     }
 
     // A one-texel array holding one cube, bound until a world places a probe. No
     // shader samples it: the probe count is 0.
-    pub(in crate::directx) fn stand_in(device: &ID3D12Device) -> RenderResult<ProbeCubeArray> {
+    pub(in crate::directx) fn stand_in(device: &ID3D12Device) -> RenderResult<Self> {
         let mut array = Self::create(device, 1, 1, 1)?;
         array.capacity = 0;
         Ok(array)
@@ -155,7 +155,7 @@ impl ProbeCubeArray {
         face_size: u32,
         mips: u32,
         cubes: usize,
-    ) -> RenderResult<ProbeCubeArray> {
+    ) -> RenderResult<Self> {
         let resource = create_cube_resource(
             device,
             CubeResource {
@@ -166,7 +166,7 @@ impl ProbeCubeArray {
                 label: "probe cube array",
             },
         )?;
-        Ok(ProbeCubeArray {
+        Ok(Self {
             resource,
             capacity: cubes,
             mips,
@@ -200,7 +200,7 @@ impl ProbeCubeArray {
         // SAFETY: the view descriptor and the resource it names are live for the call,
         // and the destination handle addresses a slot this context reserved for the
         // view in a heap it owns.
-        unsafe { device.CreateShaderResourceView(&self.resource, Some(&desc), srv_cpu) };
+        unsafe { device.CreateShaderResourceView(&self.resource, Some(&raw const desc), srv_cpu) };
     }
 
     // A single-mip TEXTURE2DARRAY UAV over cube `cube`'s six faces, the
@@ -257,7 +257,7 @@ impl ProbeRecords {
     pub(in crate::directx) fn new(
         ctx_alloc: &super::allocator::DeviceAllocator,
         capacity: usize,
-    ) -> RenderResult<ProbeRecords> {
+    ) -> RenderResult<Self> {
         let capacity = capacity.max(1);
         let buffer = ctx_alloc.alloc_buffer(
             (capacity * size_of::<ProbeUniforms>()) as u64,
@@ -267,9 +267,9 @@ impl ProbeRecords {
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is
         // a live local that receives the mapping.
-        unsafe { buffer.Map(0, None, Some(&mut ptr)) }
+        unsafe { buffer.Map(0, None, Some(&raw mut ptr)) }
             .map_err(|e| map_hresult(e.code(), "map probe records"))?;
-        let records = ProbeRecords {
+        let records = Self {
             buffer,
             mapped: ptr.cast(),
             capacity,
@@ -316,9 +316,9 @@ impl ProbeSetGpu {
         device: &ID3D12Device,
         alloc: &super::allocator::DeviceAllocator,
         frames: usize,
-    ) -> RenderResult<ProbeSetGpu> {
+    ) -> RenderResult<Self> {
         let capacity = concinnity_core::render::uniforms::DEFAULT_PROBE_RECORD_CAPACITY;
-        Ok(ProbeSetGpu {
+        Ok(Self {
             cubes: None,
             stand_in: ProbeCubeArray::stand_in(device)?,
             records: (0..frames)

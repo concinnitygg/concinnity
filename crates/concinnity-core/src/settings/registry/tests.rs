@@ -8,8 +8,8 @@ use alloc::vec::Vec;
 
 const BOTH: [Platform; 2] = [Platform::DirectX, Platform::Vulkan];
 
-fn available(key: SettingKey, caps: &DeviceCapabilities, vendor: GpuVendor) -> bool {
-    setting_available(key, caps, vendor, &BOTH)
+fn available(key: SettingKey, caps: DeviceCapabilities, vendor: GpuVendor) -> bool {
+    setting_available(key, &caps, vendor, &BOTH)
 }
 
 #[test]
@@ -25,7 +25,7 @@ fn stats_hud_toggles_are_off_then_on_and_never_gated() {
         SettingKey::Vsync,
     ] {
         assert_eq!(options(key), Some(&["Off", "On"][..]), "{key:?}");
-        assert!(available(key, &caps, GpuVendor::Nvidia), "{key:?}");
+        assert!(available(key, caps, GpuVendor::Nvidia), "{key:?}");
     }
 }
 
@@ -78,8 +78,8 @@ fn rt_rows_gated_on_ray_tracing_capability() {
         SettingKey::RtReflectionResolution,
         SettingKey::RtReflectionShadows,
     ] {
-        assert!(available(key, &capable, GpuVendor::Nvidia));
-        assert!(!available(key, &incapable, GpuVendor::Nvidia));
+        assert!(available(key, capable, GpuVendor::Nvidia));
+        assert!(!available(key, incapable, GpuVendor::Nvidia));
     }
     for key in [
         SettingKey::AaMode,
@@ -88,11 +88,11 @@ fn rt_rows_gated_on_ray_tracing_capability() {
         SettingKey::Ssgi,
         SettingKey::AutoExposure,
     ] {
-        assert!(available(key, &incapable, GpuVendor::Nvidia), "{key:?}");
+        assert!(available(key, incapable, GpuVendor::Nvidia), "{key:?}");
     }
     assert!(available(
         SettingKey::RayTracedReflections,
-        &DeviceCapabilities::default(),
+        DeviceCapabilities::default(),
         GpuVendor::Nvidia
     ));
 }
@@ -185,16 +185,16 @@ fn known_settings_have_options() {
         SettingKey::ReflectionBlurResolution,
     ] {
         assert_eq!(
-            options(key).map(|o| o.len()),
+            options(key).map(<[&str]>::len),
             Some(PassResolution::ALL.len())
         );
     }
     assert_eq!(
-        options(SettingKey::SsgiRays).map(|o| o.len()),
+        options(SettingKey::SsgiRays).map(<[&str]>::len),
         Some(SSGI_RAYS.values().len())
     );
     assert_eq!(
-        options(SettingKey::TextureQuality).map(|o| o.len()),
+        options(SettingKey::TextureQuality).map(<[&str]>::len),
         Some(TEXTURE_QUALITY.values().len())
     );
     assert_eq!(
@@ -278,23 +278,19 @@ fn upscalers_are_vendor_gated_and_the_row_capability_gated() {
     };
     assert!(available(
         SettingKey::UpscaleBackend,
-        &DeviceCapabilities::ALL,
+        DeviceCapabilities::ALL,
         GpuVendor::Nvidia
     ));
     assert!(!available(
         SettingKey::UpscaleBackend,
-        &fixed,
+        fixed,
         GpuVendor::Nvidia
     ));
     // The DLSS preset is live wherever the upscaler row can pick DLSS.
     let caps = DeviceCapabilities::ALL;
-    assert!(available(SettingKey::DlssPreset, &caps, GpuVendor::Nvidia));
-    assert!(!available(SettingKey::DlssPreset, &caps, GpuVendor::Amd));
-    assert!(!available(
-        SettingKey::DlssPreset,
-        &fixed,
-        GpuVendor::Nvidia
-    ));
+    assert!(available(SettingKey::DlssPreset, caps, GpuVendor::Nvidia));
+    assert!(!available(SettingKey::DlssPreset, caps, GpuVendor::Amd));
+    assert!(!available(SettingKey::DlssPreset, fixed, GpuVendor::Nvidia));
 }
 
 #[test]

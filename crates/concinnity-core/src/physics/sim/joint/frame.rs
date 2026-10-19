@@ -33,7 +33,7 @@ impl JointKind {
     /// Whether the joint measures a limit and drives a motor along its axis
     /// rather than about it.
     pub(crate) fn is_linear_axis(self) -> bool {
-        self == JointKind::Prismatic
+        self == Self::Prismatic
     }
 }
 
@@ -73,7 +73,7 @@ impl JointFrame {
             } => (JointKind::Prismatic, axis, limits, motor),
         };
         let axis = normalize_axis(axis);
-        JointFrame {
+        Self {
             kind,
             axis_a: axis,
             axis_b: axis,

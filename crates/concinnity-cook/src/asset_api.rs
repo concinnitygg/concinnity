@@ -1,6 +1,6 @@
 //! Shared asset construction API.
 //!
-//! This module is the single place where "type name + JSON args → BlobAssetDef"
+//! This module is the single place where "type name + JSON args → `BlobAssetDef`"
 //! is implemented.
 use crate::authoring::AuthoringError;
 use concinnity_core::ecs::{AssetOrigin, BlobAssetDef};
@@ -13,12 +13,12 @@ pub struct AssetRequest {
     /// type name as it appears in the world declaration ("Mesh", "Material", ...)
     /// case-insensitive; underscores ignored
     pub asset_type: String,
-    /// constructor args. If None, the type's default_args are used
+    /// constructor args. If None, the type's `default_args` are used
     #[serde(default)]
     pub args: Option<serde_json::Value>,
 }
 
-/// Validate an AssetRequest and produce a BlobAssetDef
+/// Validate an `AssetRequest` and produce a `BlobAssetDef`
 ///
 /// Returns Err if:
 /// - The type name is unknown
@@ -43,7 +43,7 @@ pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, AuthoringErr
         let discriminant = ct
             .discriminant()
             .ok_or(AuthoringError::NotAComponent { asset: ct.as_str() })?;
-        let args = resolve_args(&reg, &req.args);
+        let args = resolve_args(&reg, req.args.as_ref());
         // Every record is baked. For a pass-through type the baked component is
         // its reserialized args (the component IS its args); a divergent type
         // (`Args != Self`) bakes the translated component instead.
@@ -67,7 +67,7 @@ pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, AuthoringErr
 // Merges supplied args over the type's defaults so that missing keys are filled
 // in automatically. This lets callers supply partial args (including `{}`) and
 // still get sensible values for any fields they omit.
-fn resolve_args(reg: &Registration, supplied: &Option<serde_json::Value>) -> serde_json::Value {
+fn resolve_args(reg: &Registration, supplied: Option<&serde_json::Value>) -> serde_json::Value {
     let mut base = reg
         .default_args
         .clone()
@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn resolve_args_none_uses_default() {
         let reg = shader_reg();
-        let result = resolve_args(&reg, &None);
+        let result = resolve_args(&reg, None);
         assert_eq!(result["source"], "user.metal");
     }
 
@@ -112,7 +112,7 @@ mod tests {
     fn resolve_args_empty_object_fills_from_default() {
         let reg = shader_reg();
         let supplied = Some(serde_json::json!({}));
-        let result = resolve_args(&reg, &supplied);
+        let result = resolve_args(&reg, supplied.as_ref());
         assert_eq!(result["source"], "user.metal");
     }
 
@@ -120,7 +120,7 @@ mod tests {
     fn resolve_args_supplied_value_wins() {
         let reg = shader_reg();
         let supplied = Some(serde_json::json!({ "source": "custom.metal" }));
-        let result = resolve_args(&reg, &supplied);
+        let result = resolve_args(&reg, supplied.as_ref());
         assert_eq!(result["source"], "custom.metal");
     }
 
@@ -133,7 +133,7 @@ mod tests {
             default_args: Some(serde_json::json!({ "a": 1, "b": 2 })),
         };
         let supplied = Some(serde_json::json!({ "b": 99 }));
-        let result = resolve_args(&reg, &supplied);
+        let result = resolve_args(&reg, supplied.as_ref());
         assert_eq!(result["a"], 1);
         assert_eq!(result["b"], 99);
     }
@@ -142,7 +142,7 @@ mod tests {
     fn resolve_args_non_object_supplied_replaces_the_default() {
         let reg = shader_reg();
         let supplied = Some(serde_json::json!([1, 2, 3]));
-        let result = resolve_args(&reg, &supplied);
+        let result = resolve_args(&reg, supplied.as_ref());
         assert_eq!(result, serde_json::json!([1, 2, 3]));
     }
 
@@ -157,7 +157,10 @@ mod tests {
             default_args: Some(serde_json::json!([1, 2, 3])),
         };
         let supplied = Some(serde_json::json!({ "a": 1 }));
-        assert_eq!(resolve_args(&reg, &supplied), serde_json::json!([1, 2, 3]));
+        assert_eq!(
+            resolve_args(&reg, supplied.as_ref()),
+            serde_json::json!([1, 2, 3])
+        );
     }
 
     #[test]

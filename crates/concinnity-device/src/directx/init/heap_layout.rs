@@ -9,43 +9,43 @@
 //! with no compile-time signal).
 //!
 //! Heap order:
-//!   [0]                            shadow map array SRV (Texture2DArray)
+//!   [0]                            shadow map array SRV (`Texture2DArray`)
 //!   [1]                            IBL irradiance cube SRV
 //!   [2]                            IBL prefilter cube SRV
-//!   [atlas_base_slot..]            text atlas SRVs
-//!   [hdr_srv_slot]                 HDR scene target SRV (composite pass)
-//!   [lut_srv_slot]                 3D color-grading LUT SRV
-//!   [post_srv_base_slot..]         POST_TARGET_SLOTS shared post-pass target SRVs
-//!   [ssao_white_srv_slot]          1x1 white occlusion fallback (always)
-//!   [decal_depth_srv_slot]         main-depth SRV (decal + glass + line passes)
-//!   [decal_srv_base_slot..]        MAX_DECALS per-decal albedo SRVs
-//!   [particle_srv_base_slot..]     MAX_EMITTERS emitter albedo SRVs
-//!   [fog_froxel_uav_slot]          froxel-volume UAV
-//!   [fog_froxel_srv_slot]          froxel-volume SRV
-//!   [upscale_uav_slot]             temporal-upscale output UAV
-//!   [upscale_srv_slot]             temporal-upscale output SRV
-//!   [raymarch_srv_base_slot..+4]   raymarch t0..t3 (shadow, irr, prefilter, scene)
-//!   [hiz_srv_slot]                 Hi-Z pyramid SRV (covers every mip)
-//!   [hiz_uav_base_slot..]          HIZ_MAX_MIPS per-mip UAVs
-//!   [probe_capture_srv_slot]       reflection-probe capture pyramid SRV
-//!   [probe_capture_uav_base_slot..] PROBE_MAX_MIPS capture per-mip UAVs
-//!   [probe_cube_uav_base_slot..]   PROBE_MAX_MIPS probe-cube per-mip UAVs
-//!   [probe_mip0_pair_slot..+2]     the mirror copy's (capture mip 0, probe mip 0)
-//!   [transparent_scene_copy_srv_slot] pre-transparent scene snapshot SRV
-//!   [glass_reflection_srv_base_slot..] GLASS_REFLECTION_SRV_SLOTS glass reflection layer windows
-//!   [gbuffer_srv_base_slot..]      (G-buffer) normal+depth, roughness, velocity
-//!   [rt_output_srv_slot]           (RT) reflection output
-//!   [planar_resolve_srv_base_slot..] planar reflector resolves
-//!   [flat_pool_base_slot..]        bindless albedo + normal pool, per frame
-//!   [probe_cubes_srv_slot]         the reflection-probe cube array
-//!   [spot_shadow_srv_slot]         spot shadow depth array SRV (Texture2DArray)
-//!   [ltc_srv_base_slot..+2]        area-light LTC tables (matrix, magnitude)
-//!   [reactive_mask_srv_slot]       reactive mask SRV (TAA, upscalers, composite)
-//!   [atmosphere_srv_base_slot..]   ATMOSPHERE_SRV_SLOTS atmosphere table SRVs
-//!   [atmosphere_uav_base_slot..]   ATMOSPHERE_UAV_SLOTS atmosphere table + cube UAVs
-//!   [sky_cube_base_slot..]         SKY_CUBE_SLOTS the atmosphere's sky-cube prefilter
-//!   [ocean_base_slot..]            OCEAN_SLOTS the simulated ocean's arrays and mip UAVs
-//!   srv_slots                      total descriptor count (heap size)
+//!   [`atlas_base_slot`..]            text atlas SRVs
+//!   [`hdr_srv_slot`]                 HDR scene target SRV (composite pass)
+//!   [`lut_srv_slot`]                 3D color-grading LUT SRV
+//!   [`post_srv_base_slot`..]         `POST_TARGET_SLOTS` shared post-pass target SRVs
+//!   [`ssao_white_srv_slot`]          1x1 white occlusion fallback (always)
+//!   [`decal_depth_srv_slot`]         main-depth SRV (decal + glass + line passes)
+//!   [`decal_srv_base_slot`..]        `MAX_DECALS` per-decal albedo SRVs
+//!   [`particle_srv_base_slot`..]     `MAX_EMITTERS` emitter albedo SRVs
+//!   [`fog_froxel_uav_slot`]          froxel-volume UAV
+//!   [`fog_froxel_srv_slot`]          froxel-volume SRV
+//!   [`upscale_uav_slot`]             temporal-upscale output UAV
+//!   [`upscale_srv_slot`]             temporal-upscale output SRV
+//!   [`raymarch_srv_base_slot..+4`]   raymarch t0..t3 (shadow, irr, prefilter, scene)
+//!   [`hiz_srv_slot`]                 Hi-Z pyramid SRV (covers every mip)
+//!   [`hiz_uav_base_slot`..]          `HIZ_MAX_MIPS` per-mip UAVs
+//!   [`probe_capture_srv_slot`]       reflection-probe capture pyramid SRV
+//!   [`probe_capture_uav_base_slot`..] `PROBE_MAX_MIPS` capture per-mip UAVs
+//!   [`probe_cube_uav_base_slot`..]   `PROBE_MAX_MIPS` probe-cube per-mip UAVs
+//!   [`probe_mip0_pair_slot..+2`]     the mirror copy's (capture mip 0, probe mip 0)
+//!   [`transparent_scene_copy_srv_slot`] pre-transparent scene snapshot SRV
+//!   [`glass_reflection_srv_base_slot`..] `GLASS_REFLECTION_SRV_SLOTS` glass reflection layer windows
+//!   [`gbuffer_srv_base_slot`..]      (G-buffer) normal+depth, roughness, velocity
+//!   [`rt_output_srv_slot`]           (RT) reflection output
+//!   [`planar_resolve_srv_base_slot`..] planar reflector resolves
+//!   [`flat_pool_base_slot`..]        bindless albedo + normal pool, per frame
+//!   [`probe_cubes_srv_slot`]         the reflection-probe cube array
+//!   [`spot_shadow_srv_slot`]         spot shadow depth array SRV (`Texture2DArray`)
+//!   [`ltc_srv_base_slot..+2`]        area-light LTC tables (matrix, magnitude)
+//!   [`reactive_mask_srv_slot`]       reactive mask SRV (TAA, upscalers, composite)
+//!   [`atmosphere_srv_base_slot`..]   `ATMOSPHERE_SRV_SLOTS` atmosphere table SRVs
+//!   [`atmosphere_uav_base_slot`..]   `ATMOSPHERE_UAV_SLOTS` atmosphere table + cube UAVs
+//!   [`sky_cube_base_slot`..]         `SKY_CUBE_SLOTS` the atmosphere's sky-cube prefilter
+//!   [`ocean_base_slot`..]            `OCEAN_SLOTS` the simulated ocean's arrays and mip UAVs
+//!   `srv_slots`                      total descriptor count (heap size)
 //!
 //! The RTV heap follows the same cascade in `RtvHeapLayout`, and the DSV heap's
 //! fixed slots are the `DSV_*` constants.
@@ -493,7 +493,7 @@ mod tests {
     // `compute` so an offset slip there fails the assert.
     fn assert_rtv_gap_free(msaa_samples: u32) {
         let l = RtvHeapLayout::compute(msaa_samples);
-        let decal_resolve = if msaa_samples > 1 { 1 } else { 0 };
+        let decal_resolve = usize::from(msaa_samples > 1);
         let blocks: [(usize, usize); 7] = [
             (l.hdr_slot, 1),
             (l.post_base_slot, POST_TARGET_SLOTS),

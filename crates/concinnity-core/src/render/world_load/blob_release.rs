@@ -8,11 +8,11 @@ use crate::ecs::PipelineContext;
 use crate::resource::AudioClipTable;
 
 /// Blobs another consumer still reads after graphics has consumed its own payloads.
-pub fn retained_blobs(ctx: &PipelineContext) -> BTreeSet<u32> {
+pub fn retained_blobs(ctx: &PipelineContext<'_>) -> BTreeSet<u32> {
     // Audio reads clip payloads from the table after graphics init.
     let mut retained = ctx
         .resource::<AudioClipTable>()
-        .map(|table| table.blob_indices())
+        .map(AudioClipTable::blob_indices)
         .unwrap_or_default();
     // SdfVolume payloads are drained later in this same init.
     retained.extend(sdf_volume::sdf_volume_blob_indices(ctx));

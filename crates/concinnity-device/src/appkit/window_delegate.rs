@@ -1,7 +1,7 @@
-//! NSWindowDelegate that tracks native-fullscreen state and the window's close.
+//! `NSWindowDelegate` that tracks native-fullscreen state and the window's close.
 //!
 //! macOS native fullscreen is an animated, asynchronous transition: the
-//! NSWindow `FullScreen` style-mask bit lags it, so reading the bit right after
+//! `NSWindow` `FullScreen` style-mask bit lags it, so reading the bit right after
 //! issuing `toggleFullScreen:` (or stepping the settings menu's Window Mode row
 //! faster than the ~1s animation) can momentarily report the wrong state and
 //! toggle in the wrong direction. This delegate observes the will / did enter /

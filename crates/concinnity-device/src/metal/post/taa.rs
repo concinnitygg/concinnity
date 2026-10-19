@@ -42,7 +42,7 @@ impl TaaState {
 
 // Build the resolve at `width` x `height` render resolution.
 pub(crate) fn build_taa_pass(
-    device: &MtlPostDevice,
+    device: &MtlPostDevice<'_>,
     width: u32,
     height: u32,
 ) -> RenderResult<MtlTaaPass> {
@@ -72,7 +72,7 @@ impl MtlContext {
     pub(in crate::metal) fn encode_taa(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        scene_input: &ProtocolObject<dyn objc2_metal::MTLTexture>,
+        scene_input: &ProtocolObject<dyn MTLTexture>,
         reactive_written: bool,
     ) -> RenderResult<u32> {
         let pass =

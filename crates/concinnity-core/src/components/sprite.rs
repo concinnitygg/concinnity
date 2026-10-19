@@ -6,7 +6,7 @@ use crate::ecs::{Ref, TextureHandle};
 /// Screen-space 2D rectangle drawn as a UI overlay each frame.
 ///
 /// Sprites are pixel-anchored quads with an RGBA tint. They draw alongside
-/// [TextLabel](#textlabel)s, ordered behind labels so text sits on top.
+/// [`TextLabel`](#textlabel)s, ordered behind labels so text sits on top.
 ///
 /// A sprite with a `texture` draws that image, multiplied by the tint (use a
 /// white tint to show the image unchanged; the tint's alpha fades it).
@@ -84,8 +84,8 @@ pub struct Sprite {
     pub border_color: [f32; 4],
 }
 
-/// How a screen-owned overlay element (a [Sprite](#sprite), [TextLabel](#textlabel),
-/// or [HitRegion](#hitregion)) maps from the 1280x720 reference canvas to the
+/// How a screen-owned overlay element (a [Sprite](#sprite), [`TextLabel`](#textlabel),
+/// or [`HitRegion`](#hitregion)) maps from the 1280x720 reference canvas to the
 /// live window when their aspect ratios differ.
 ///
 /// Screen-owned UI is authored against a fixed reference canvas and uniformly

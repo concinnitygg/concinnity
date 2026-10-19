@@ -38,8 +38,8 @@ struct Mock {
 }
 
 impl Mock {
-    fn new() -> Mock {
-        Mock {
+    fn new() -> Self {
+        Self {
             book: ProbeBook::new(),
             events: Vec::new(),
             supported: true,
@@ -91,13 +91,13 @@ impl ProbeBakeDevice for Mock {
         }
     }
 
-    fn start_capture(&mut self, _: &(), index: usize, _: ProbePlacement) -> RenderResult<usize> {
+    fn start_capture(&mut self, (): &(), index: usize, _: ProbePlacement) -> RenderResult<usize> {
         self.fails(Fault::Start)?;
         self.events.push(Event::Start(index));
         Ok(index)
     }
 
-    fn render_face(&mut self, _: &(), capture: &mut usize, face: usize) -> RenderResult<()> {
+    fn render_face(&mut self, (): &(), capture: &mut usize, face: usize) -> RenderResult<()> {
         self.fails(Fault::Face(face))?;
         self.events.push(Event::Face(*capture, face));
         Ok(())

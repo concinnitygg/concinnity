@@ -4,7 +4,7 @@
 //! per-cluster probe masks, over a screen-tiled, exponential-depth froxel grid.
 //! The forward, SSR and transparent passes then shade from only a fragment's
 //! cluster's lights and blend only its cluster's probes. Mirrors
-//! src/metal/light_cull.rs.
+//! `src/metal/light_cull.rs`.
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterParams};
@@ -25,7 +25,7 @@ use crate::vulkan::record::Recorder;
 // Byte size of the per-cluster list buffer: CLUSTER_LIST_LEN u32, every
 // cluster's light list and then every cluster's probe mask.
 pub(in crate::vulkan) fn cluster_list_size() -> vk::DeviceSize {
-    CLUSTER_LIST_LEN as vk::DeviceSize * std::mem::size_of::<u32>() as vk::DeviceSize
+    vk::DeviceSize::from(CLUSTER_LIST_LEN) * size_of::<u32>() as vk::DeviceSize
 }
 
 // Binding of the probe records in the kernel's set.
@@ -154,7 +154,7 @@ pub(in crate::vulkan) fn build_light_cull(
     )?;
 
     // Per-frame `ClusterParams` UBOs, persistently mapped.
-    let params_size = std::mem::size_of::<ClusterParams>() as vk::DeviceSize;
+    let params_size = size_of::<ClusterParams>() as vk::DeviceSize;
     let mut params_buffers = Vec::with_capacity(frames);
     for _ in 0..frames {
         params_buffers.push(alloc.create_buffer(
@@ -261,6 +261,9 @@ mod tests {
 
     #[test]
     fn cluster_list_size_covers_every_list() {
-        assert_eq!(cluster_list_size(), CLUSTER_LIST_LEN as vk::DeviceSize * 4);
+        assert_eq!(
+            cluster_list_size(),
+            vk::DeviceSize::from(CLUSTER_LIST_LEN) * 4
+        );
     }
 }

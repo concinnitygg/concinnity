@@ -26,13 +26,12 @@ impl InputMailbox {
     /// Deposit into the mailbox in `resources`, publishing one on the first
     /// deposit.
     pub fn deposit_in(resources: &mut Resources, packet: InputPacket, sampled_us: u64) {
-        match resources.get_mut::<InputMailbox>() {
-            Some(mailbox) => mailbox.deposit(packet, sampled_us),
-            None => {
-                let mut mailbox = InputMailbox::default();
-                mailbox.deposit(packet, sampled_us);
-                resources.insert(mailbox);
-            }
+        if let Some(mailbox) = resources.get_mut::<Self>() {
+            mailbox.deposit(packet, sampled_us);
+        } else {
+            let mut mailbox = Self::default();
+            mailbox.deposit(packet, sampled_us);
+            resources.insert(mailbox);
         }
     }
 

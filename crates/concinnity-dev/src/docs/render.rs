@@ -7,6 +7,7 @@
 
 use concinnity_core::ecs::asset_fields::{ApplyClass, ParamMeta};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 // A JSON-shaped description of a field's type. `Enum` carries the accepted
 // string values; `Named`/`NamedEnum` carry a documented type's name, which is
@@ -35,10 +36,7 @@ pub(super) enum FieldType {
     // or an object with the name as its only key.
     Tagged(String),
     // `Some(n)` for a fixed-size `[T; n]` array, `None` for a variable `Vec<T>`.
-    Array {
-        elem: Box<FieldType>,
-        len: Option<usize>,
-    },
+    Array { elem: Box<Self>, len: Option<usize> },
 }
 
 // A single documented field of an asset or value type.
@@ -176,7 +174,7 @@ pub(super) fn render_field_bullet(f: &FieldEntry) -> String {
     let lower = doc.to_lowercase();
     match &f.default {
         Some(def) if def != "null" && !doc_states_default(&lower) => {
-            s.push_str(&format!(" Defaults to `{def}`."));
+            let _ = write!(s, " Defaults to `{def}`.");
         }
         _ if f.optional && !doc_states_optional(&lower) => {
             s.push_str(" Optional.");
@@ -228,7 +226,7 @@ pub(super) fn render_values(values: &[EnumValue]) -> String {
     }
     let mut s = String::from("## Values\n\n");
     for v in values {
-        s.push_str(&format!("- `{}`", v.value));
+        let _ = write!(s, "- `{}`", v.value);
         let doc = v.doc.trim();
         if !doc.is_empty() {
             s.push_str(": ");
@@ -290,8 +288,8 @@ fn rewrite_shortcut_links(doc: &str, names: &std::collections::HashSet<&str>) ->
     let mut prev = '\0';
     while let Some(pos) = rest.find('[') {
         out.push_str(&rest[..pos]);
-        if pos > 0 {
-            prev = rest[..pos].chars().next_back().unwrap();
+        if let Some(last) = rest[..pos].chars().next_back() {
+            prev = last;
         }
         let after_open = &rest[pos + 1..];
         let handled = match after_open.find(']') {

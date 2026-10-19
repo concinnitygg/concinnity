@@ -1,5 +1,5 @@
 //! The typed vocabulary of every user-facing setting: cycle rows, sliders, and
-//! the keyboard and gamepad rebind rows. The snake_case strings a world authors
+//! the keyboard and gamepad rebind rows. The `snake_case` strings a world authors
 //! (and a settings row's action carries) are parsed into a [`SettingKey`] once,
 //! at the edge that reads them.
 
@@ -52,7 +52,7 @@ macro_rules! setting_keys {
                 SettingKey::PadRebind(GamepadAction::Interact),
             ];
 
-            /// The snake_case key string worlds and settings-row actions use.
+            /// The `snake_case` key string worlds and settings-row actions use.
             pub const fn as_str(self) -> &'static str {
                 match self {
                     $(SettingKey::$cycle => $cycle_str,)*
@@ -201,32 +201,32 @@ setting_keys! {
 impl SettingKey {
     /// The quality-feature toggles (Video "Quality" group). Each gates render
     /// work the backend sets up when effects are built, so a change rebuilds them.
-    pub const QUALITY_TOGGLES: [SettingKey; 6] = [
-        SettingKey::Ssao,
-        SettingKey::Ssr,
-        SettingKey::RayTracedReflections,
-        SettingKey::RtReflectionShadows,
-        SettingKey::Ssgi,
-        SettingKey::AutoExposure,
+    pub const QUALITY_TOGGLES: [Self; 6] = [
+        Self::Ssao,
+        Self::Ssr,
+        Self::RayTracedReflections,
+        Self::RtReflectionShadows,
+        Self::Ssgi,
+        Self::AutoExposure,
     ];
 
     /// The quality cycle knobs (Video "Quality" group). Each picks how a feature
     /// the backend builds runs, so a change rebuilds it.
-    pub const QUALITY_CYCLES: [SettingKey; 5] = [
-        SettingKey::AaMode,
-        SettingKey::SsgiResolution,
-        SettingKey::SsgiRays,
-        SettingKey::RtReflectionResolution,
-        SettingKey::ReflectionBlurResolution,
+    pub const QUALITY_CYCLES: [Self; 5] = [
+        Self::AaMode,
+        Self::SsgiResolution,
+        Self::SsgiRays,
+        Self::RtReflectionResolution,
+        Self::ReflectionBlurResolution,
     ];
 
     /// The setting named by `key`, or `None` if no setting has that name.
-    pub fn parse(key: &str) -> Option<SettingKey> {
-        SettingKey::ALL.into_iter().find(|k| k.as_str() == key)
+    pub fn parse(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.as_str() == key)
     }
 
     /// The key strings for a list of settings, in order.
-    pub const fn names<const N: usize>(keys: [SettingKey; N]) -> [&'static str; N] {
+    pub const fn names<const N: usize>(keys: [Self; N]) -> [&'static str; N] {
         let mut names = [""; N];
         let mut i = 0;
         while i < N {
@@ -256,7 +256,7 @@ impl serde::Serialize for SettingKey {
 impl<'de> serde::Deserialize<'de> for SettingKey {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let key = alloc::string::String::deserialize(d)?;
-        SettingKey::parse(&key)
+        Self::parse(&key)
             .ok_or_else(|| serde::de::Error::custom(format_args!("unknown setting {key:?}")))
     }
 }

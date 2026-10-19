@@ -57,7 +57,7 @@ pub struct BucketPlan<'a> {
 }
 
 impl<'a> BucketPlan<'a> {
-    /// The plan for `shaders`, indexed by ShaderHandle value with the world
+    /// The plan for `shaders`, indexed by `ShaderHandle` value with the world
     /// default at 0. Fails when the buckets exceed what a cull dispatch can
     /// route between: [`MAX_SHADER_BUCKETS`], the default's two twins counted
     /// as one.
@@ -68,9 +68,10 @@ impl<'a> BucketPlan<'a> {
             .map(|(bucket, s)| BucketSource {
                 programs: s.programs,
                 deferred: s.deferred,
-                grass: match bucket > 0 && s.canopy {
-                    true => GrassShading::Canopy,
-                    false => GrassShading::None,
+                grass: if bucket > 0 && s.canopy {
+                    GrassShading::Canopy
+                } else {
+                    GrassShading::None
                 },
             })
             .collect();
@@ -144,9 +145,10 @@ impl<P> WorldPipelines<P> {
     ) -> Result<Self, E> {
         let mut slots = Vec::with_capacity(plan.extra().len());
         for (i, source) in plan.extra().iter().enumerate() {
-            slots.push(match source.deferred {
-                true => None,
-                false => Some(build(i + 1, source)?),
+            slots.push(if source.deferred {
+                None
+            } else {
+                Some(build(i + 1, source)?)
             });
         }
         Ok(Self {
@@ -247,11 +249,12 @@ impl<P> WorldPipelines<P> {
 /// that would drop a pre-pass the bucket draws with is refused, so the caller
 /// keeps the live pair.
 pub fn check_rebuild(bucket: usize, live_prepass: bool, fresh_prepass: bool) -> RenderResult<()> {
-    match fresh_prepass || !live_prepass {
-        true => Ok(()),
-        false => Err(RenderError::ShaderCompile(format!(
+    if fresh_prepass || !live_prepass {
+        Ok(())
+    } else {
+        Err(RenderError::ShaderCompile(format!(
             "shader bucket {bucket}'s G-buffer pre-pass did not build; keeping its live pipelines"
-        ))),
+        )))
     }
 }
 

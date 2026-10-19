@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 /// [Prop](#prop)'s `mesh` field. Hidden faces between two solid blocks are
 /// dropped, so a fully filled chunk contributes zero triangles to its interior.
 ///
-/// The palette must contain at least one entry whose [BlockType](#blocktype) has
+/// The palette must contain at least one entry whose [`BlockType`](#blocktype) has
 /// `solid: false` (typically named `air`); cells whose palette entry is
 /// non-solid emit no faces. Faces are only emitted between a solid block and
 /// either an empty neighbor or the outside of the chunk.
@@ -25,7 +25,7 @@ use alloc::vec::Vec;
 )]
 #[serde(default)]
 pub struct VoxelChunk {
-    /// [BlockType](#blocktype) asset names. `blocks[i]` is an index into this list.
+    /// [`BlockType`](#blocktype) asset names. `blocks[i]` is an index into this list.
     pub palette: Vec<Ref<BlockType>>,
     /// Chunk dimensions `[dx, dy, dz]` in blocks.
     pub dim: [u32; 3],

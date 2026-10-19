@@ -154,7 +154,7 @@ mod tests {
             Ok(self.acquire.then_some(()))
         }
 
-        fn plan(&mut self, _: &(), params: &FrameParams<'_>) -> RenderResult<FramePlan> {
+        fn plan(&mut self, (): &(), params: &FrameParams<'_>) -> RenderResult<FramePlan> {
             self.steps.push(Step::Plan);
             let inputs = PlanInputs {
                 camera: camera_inputs(&self.scene, params),
@@ -178,7 +178,7 @@ mod tests {
             self.scene.planner.plan(&self.scene.view, &inputs)
         }
 
-        fn execute(&mut self, _: (), _: &FramePlan, _: &FrameParams<'_>) -> RenderResult<()> {
+        fn execute(&mut self, (): (), _: &FramePlan, _: &FrameParams<'_>) -> RenderResult<()> {
             self.steps.push(Step::Execute);
             Ok(())
         }

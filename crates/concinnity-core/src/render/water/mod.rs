@@ -145,12 +145,11 @@ impl WaterBody {
             .map_or(1.0, |s| s.peak_wavelength());
         let body = SeaBody::new(SeaSphere::new(planet, surface.sea_level), peak);
         let shared = sea.and_then(|sea| Some((sea, plan.share(sea, surface.whitecaps > 0.0)?)));
-        let mut water = match shared {
-            Some((sea, index)) => Self::resolve_ocean(surface, wind, &sea, plan, index),
-            None => {
-                let cell = body.grid.inner_cell;
-                Self::with_sea(surface, wind, &[], STILL_RIPPLE_WAVELENGTH, cell, None)
-            }
+        let mut water = if let Some((sea, index)) = shared {
+            Self::resolve_ocean(surface, wind, &sea, plan, index)
+        } else {
+            let cell = body.grid.inner_cell;
+            Self::with_sea(surface, wind, &[], STILL_RIPPLE_WAVELENGTH, cell, None)
         };
         if let Some(ocean) = water.ocean.as_mut() {
             ocean.grid = body.grid;

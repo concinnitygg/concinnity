@@ -112,9 +112,10 @@ impl<const MIN_WORK_NS: u64> FanOutJudge<MIN_WORK_NS> {
         }
         let sample = Cost::per_unit(units, timing);
         let streak = self.last_fanned == Some(fanned);
-        let estimate = match fanned {
-            true => &mut self.fanned,
-            false => &mut self.inline,
+        let estimate = if fanned {
+            &mut self.fanned
+        } else {
+            &mut self.inline
         };
         *estimate = Some(match (*estimate, streak) {
             (Some(old), true) => old.blend(sample),

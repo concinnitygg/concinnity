@@ -419,6 +419,10 @@ mod tests {
         }
     }
 
+    #[expect(
+        clippy::unnecessary_box_returns,
+        reason = "builds the boxed child an expression node holds"
+    )]
     fn int(i: i32) -> Box<BehaviorExpr> {
         Box::new(BehaviorExpr::Int(i))
     }

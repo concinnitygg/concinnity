@@ -80,7 +80,7 @@ pub(super) fn build_spot_shadow(
     };
     let buffer = if spot_shadows.is_empty() {
         gpu.hw.allocator.alloc_buffer(
-            std::mem::size_of::<SpotShadowData>(),
+            size_of::<SpotShadowData>(),
             MTLResourceOptions::StorageModeShared,
         )
     } else {

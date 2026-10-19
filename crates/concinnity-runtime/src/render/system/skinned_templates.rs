@@ -27,7 +27,7 @@ fn upload_skinned_geometry(
     upload: SkinnedUpload,
 ) -> RenderResult<()> {
     backend.upload_skinned(&upload.vertices, &upload.indices, upload.draw_objects)?;
-    if upload.morphs.iter().any(|m| m.is_some()) {
+    if upload.morphs.iter().any(Option::is_some) {
         backend.upload_skinned_morphs(upload.morphs)?;
     }
     Ok(())
@@ -38,7 +38,7 @@ impl GraphicsSystem {
     // poses are published whatever the backend, so the system graph is identical.
     pub(super) fn install_skinned_templates(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         upload: SkinnedUpload,
         templates: Vec<SkinnedTemplate>,
     ) -> RenderResult<()> {

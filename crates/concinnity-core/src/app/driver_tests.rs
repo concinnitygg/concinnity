@@ -17,7 +17,7 @@ const STOP_AT: f32 = 3.0;
 struct Counter;
 
 impl System for Counter {
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         for transform in ctx.query_mut::<Transform>() {
             transform.position[0] += 1.0;
             if transform.position[0] >= STOP_AT {
@@ -35,7 +35,7 @@ fn counter(world: &World) -> Option<Box<dyn System>> {
 
 // A completion pass that refuses the world, which is what a start failure looks
 // like from outside the loop.
-fn refuse(_: &mut PipelineContext) -> Result<(), WorldError> {
+fn refuse(_: &mut PipelineContext<'_>) -> Result<(), WorldError> {
     Err(WorldError::RepeatedEngineDefaults { count: 2 })
 }
 

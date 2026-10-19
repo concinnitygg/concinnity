@@ -5,11 +5,11 @@ use crate::ecs::{AudioClipHandle, Ref};
 
 /// Plays audio when a [Screen](#screen) is shown.
 ///
-/// A cue links a [Screen](#screen) to an [AudioClip](#audioclip): whenever UI
+/// A cue links a [Screen](#screen) to an [`AudioClip`](#audioclip): whenever UI
 /// navigation makes the screen active (a `show` or `toggle` action, a
-/// [KeyBinding](#keybinding), dismissing an overlay back to it, or being the
+/// [`KeyBinding`](#keybinding), dismissing an overlay back to it, or being the
 /// world's initial screen), the clip plays. Cues play flat on the main mix with
-/// no 3D position; use an [AudioEmitter](#audioemitter) for positional sound.
+/// no 3D position; use an [`AudioEmitter`](#audioemitter) for positional sound.
 ///
 /// The `kind` decides the playback behavior:
 ///
@@ -30,7 +30,7 @@ use crate::ecs::{AudioClipHandle, Ref};
 pub struct AudioCue {
     /// The [Screen](#screen) whose activation triggers this cue.
     pub screen: Option<Ref<Screen>>,
-    /// The [AudioClip](#audioclip) to play.
+    /// The [`AudioClip`](#audioclip) to play.
     pub clip: Option<AudioClipHandle>,
     /// Playback behavior: a looping `music` track or a one-shot `sound`.
     pub kind: CueKind,
@@ -46,7 +46,7 @@ pub struct AudioCue {
     pub priority: i32,
 }
 
-/// How an [AudioCue](#audiocue) plays its clip.
+/// How an [`AudioCue`](#audiocue) plays its clip.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default, Vocabulary,
 )]

@@ -38,14 +38,14 @@ impl SceneTransition {
 /// prop that names no scene is visible in every scene.
 ///
 /// The first declared Scene is active at world start. Scene changes are driven
-/// by actions: a UI `{"scene": "<name>"}` action ([HitRegion](#hitregion) /
-/// [KeyBinding](#keybinding)) or a [Behavior](#behavior) scene node jumps to
-/// the named scene, with the transition ("Cut" or "FadeBlack") declared on the
+/// by actions: a UI `{"scene": "<name>"}` action ([`HitRegion`](#hitregion) /
+/// [`KeyBinding`](#keybinding)) or a [Behavior](#behavior) scene node jumps to
+/// the named scene, with the transition ("Cut" or "`FadeBlack`") declared on the
 /// jump.
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Scene {
-    /// A [CameraShot](#camerashot) or [Camera3D](#camera3d) to activate when
+    /// A [`CameraShot`](#camerashot) or [`Camera3D`](#camera3d) to activate when
     /// this scene becomes active. `None` keeps the current camera unchanged.
     pub camera_shot: Option<Ref<Camera3D>>,
 }

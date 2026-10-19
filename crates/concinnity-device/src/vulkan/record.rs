@@ -112,7 +112,7 @@ impl<'a> Recorder<'a> {
         // for the call because this borrows its owner.
         unsafe {
             self.device
-                .cmd_bind_pipeline(self.cmd, bind_point, pipeline.handle())
+                .cmd_bind_pipeline(self.cmd, bind_point, pipeline.handle());
         };
     }
 
@@ -135,7 +135,7 @@ impl<'a> Recorder<'a> {
                 first_set,
                 sets,
                 dynamic_offsets,
-            )
+            );
         };
     }
 
@@ -164,7 +164,7 @@ impl<'a> Recorder<'a> {
         // this borrows its owner, and `bytes` is live for the call.
         unsafe {
             self.device
-                .cmd_push_constants(self.cmd, layout.handle(), stages, offset, bytes)
+                .cmd_push_constants(self.cmd, layout.handle(), stages, offset, bytes);
         };
     }
 
@@ -187,7 +187,7 @@ impl<'a> Recorder<'a> {
         // call.
         unsafe {
             self.device
-                .cmd_begin_render_pass(self.cmd, &info, vk::SubpassContents::INLINE)
+                .cmd_begin_render_pass(self.cmd, &info, vk::SubpassContents::INLINE);
         };
     }
 
@@ -201,7 +201,7 @@ impl<'a> Recorder<'a> {
         // the call.
         unsafe {
             self.device
-                .cmd_set_viewport(self.cmd, 0, std::slice::from_ref(viewport))
+                .cmd_set_viewport(self.cmd, 0, std::slice::from_ref(viewport));
         };
     }
 
@@ -210,7 +210,7 @@ impl<'a> Recorder<'a> {
         // the call.
         unsafe {
             self.device
-                .cmd_set_scissor(self.cmd, 0, std::slice::from_ref(scissor))
+                .cmd_set_scissor(self.cmd, 0, std::slice::from_ref(scissor));
         };
     }
 
@@ -229,7 +229,7 @@ impl<'a> Recorder<'a> {
                 instance_count,
                 first_vertex,
                 first_instance,
-            )
+            );
         };
     }
 
@@ -243,9 +243,9 @@ impl<'a> Recorder<'a> {
         &self,
         src_stage: vk::PipelineStageFlags,
         dst_stage: vk::PipelineStageFlags,
-        memory: &[vk::MemoryBarrier],
-        buffers: &[vk::BufferMemoryBarrier],
-        images: &[vk::ImageMemoryBarrier],
+        memory: &[vk::MemoryBarrier<'_>],
+        buffers: &[vk::BufferMemoryBarrier<'_>],
+        images: &[vk::ImageMemoryBarrier<'_>],
     ) {
         // SAFETY: `self.cmd` is in the recording state by construction, and the barriers and the
         // handles they name are live for the call.
@@ -258,7 +258,7 @@ impl<'a> Recorder<'a> {
                 memory,
                 buffers,
                 images,
-            )
+            );
         };
     }
 
@@ -272,7 +272,7 @@ impl<'a> Recorder<'a> {
         // slices naming them are live for the call.
         unsafe {
             self.device
-                .cmd_bind_vertex_buffers(self.cmd, first_binding, buffers, offsets)
+                .cmd_bind_vertex_buffers(self.cmd, first_binding, buffers, offsets);
         };
     }
 
@@ -297,7 +297,7 @@ impl<'a> Recorder<'a> {
         // for the call.
         unsafe {
             self.device
-                .cmd_write_timestamp(self.cmd, stage, pool, query)
+                .cmd_write_timestamp(self.cmd, stage, pool, query);
         };
     }
 }

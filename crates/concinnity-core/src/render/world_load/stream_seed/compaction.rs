@@ -46,8 +46,8 @@ pub(super) fn plan_mesh_seed_bytes(
     mesh_cap: usize,
     has_deferred_seeds: bool,
 ) -> Option<(u64, u64)> {
-    let vertex_bytes = core::mem::size_of::<Vertex>() as u64;
-    let index_bytes = core::mem::size_of::<u32>() as u64;
+    let vertex_bytes = size_of::<Vertex>() as u64;
+    let index_bytes = size_of::<u32>() as u64;
     let sizes: Vec<(u64, u64)> = mesh_payloads
         .iter()
         .zip(stream_draw_indices)
@@ -61,8 +61,9 @@ pub(super) fn plan_mesh_seed_bytes(
             draw_to_handle
                 .get(draw_idx)
                 .and_then(|h| deferred_counts.get(&(*h as u32)))
-                .map(|&(vc, ic)| (vc as u64 * vertex_bytes, ic as u64 * index_bytes))
-                .unwrap_or((0, 0))
+                .map_or((0, 0), |&(vc, ic)| {
+                    (u64::from(vc) * vertex_bytes, u64::from(ic) * index_bytes)
+                })
         })
         .collect();
     // Deferred meshes have no baked region for the full-set evict path to free,
@@ -134,8 +135,8 @@ mod tests {
     use super::*;
     use crate::gfx::render_types::{LodSlice, MaterialUniforms, NO_NORMAL_MAP_SLOT};
 
-    const VERTEX_BYTES: u64 = core::mem::size_of::<Vertex>() as u64;
-    const INDEX_BYTES: u64 = core::mem::size_of::<u32>() as u64;
+    const VERTEX_BYTES: u64 = size_of::<Vertex>() as u64;
+    const INDEX_BYTES: u64 = size_of::<u32>() as u64;
 
     // A draw over `vertex_count` vertices starting at vertex `first_vertex` and
     // `index_count` indices starting at `index_offset`.

@@ -11,7 +11,7 @@ use crate::sky::SkyOrientation;
 
 /// Carry everything the world positions itself into the frame `rebase` moves
 /// it to, `frame` being the frame after the move.
-pub fn carry_world(ctx: &mut PipelineContext, rebase: &Rebase, frame: &PlanetFrame) {
+pub fn carry_world(ctx: &mut PipelineContext<'_>, rebase: &Rebase, frame: &PlanetFrame) {
     let roots: Vec<_> = ctx
         .query_with_entity::<Transform>()
         .map(|(entity, _)| entity)

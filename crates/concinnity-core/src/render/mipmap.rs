@@ -28,6 +28,10 @@ pub struct MipLevel {
 /// input copied verbatim; each subsequent level halves both axes (floored, min 1)
 /// and box-filters the level above it. `rgba8` must hold at least
 /// `width * height * 4` bytes (the backend uploads validate this before calling).
+///
+/// # Panics
+///
+/// Panics if `rgba8` holds fewer than `width * height * 4` bytes.
 pub fn generate_mip_chain(width: u32, height: u32, rgba8: &[u8]) -> Vec<MipLevel> {
     let count = full_mip_levels(width, height);
     let base_len = width as usize * height as usize * 4;
@@ -70,10 +74,10 @@ fn downsample_box(src: &MipLevel, dw: u32, dh: u32, dst: &mut [u8]) {
             let i11 = (sy1 * sw + sx1) * 4;
             let d = (y * dw as usize + x) * 4;
             for c in 0..4 {
-                let sum = src.pixels[i00 + c] as u32
-                    + src.pixels[i01 + c] as u32
-                    + src.pixels[i10 + c] as u32
-                    + src.pixels[i11 + c] as u32;
+                let sum = u32::from(src.pixels[i00 + c])
+                    + u32::from(src.pixels[i01 + c])
+                    + u32::from(src.pixels[i10 + c])
+                    + u32::from(src.pixels[i11 + c]);
                 // +2 rounds to nearest before the divide by 4.
                 dst[d + c] = ((sum + 2) / 4) as u8;
             }

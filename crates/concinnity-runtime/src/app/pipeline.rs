@@ -1,8 +1,8 @@
 //! Pipelined frame driver: simulation and rendering on separate threads. The
 //! main thread keeps everything the OS and GPU pin to it -- the event pumps
-//! (which run inside draw_frame / window_closed / pump_events), the backend,
+//! (which run inside `draw_frame` / `window_closed` / `pump_events`), the backend,
 //! frame submission, and swapchain recreation -- while a "sim" thread owns the
-//! Runtime (pacer, fixed-tick clock, World::step) and produces RenderSnapshots.
+//! Runtime (pacer, fixed-tick clock, `World::step`) and produces `RenderSnapshots`.
 //!
 //! Each step waits for the render half's go-ahead, which carries the input it
 //! reads (`frame_gate`). While frames wait on the GPU, the render half reserves
@@ -46,7 +46,7 @@ pub(crate) type PipelinedFrames = Parked<PipelineChannels>;
 
 pub(crate) struct PipelineChannels {
     pub(crate) snapshot_tx: std::sync::mpsc::SyncSender<RenderSnapshot>,
-    pub(crate) feedback_rx: std::sync::mpsc::Receiver<FrameFeedback>,
+    pub(crate) feedback_rx: Receiver<FrameFeedback>,
 }
 
 // Drive a started Runtime with pipelined frames until it stops. Evicts the

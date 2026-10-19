@@ -1,5 +1,5 @@
 //! Per-frame encoder for the world-space line pass. Runs at the tail of
-//! the hdr_resolve decoration chain, after the main pass resolved color into
+//! the `hdr_resolve` decoration chain, after the main pass resolved color into
 //! `targets.hdr.hdr_resolve` and depth into `targets.hdr.depth_resolve`, so the
 //! lines layer over the lit scene and SSR / TAA treat them like any other scene
 //! content.
@@ -209,7 +209,7 @@ fn build_line_pipeline(
         ],
         &[VertexLayout {
             buffer_index: VERTEX_BUFFER_INDEX,
-            stride: std::mem::size_of::<LineVertex>(),
+            stride: size_of::<LineVertex>(),
             step: MTLVertexStepFunction::PerVertex,
         }],
     );

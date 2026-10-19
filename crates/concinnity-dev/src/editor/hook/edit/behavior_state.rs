@@ -1,4 +1,4 @@
-//! EditorHook: the Behavior panel's session state. The actions that read the
+//! `EditorHook`: the Behavior panel's session state. The actions that read the
 //! world or the entry list live in `behavior.rs`; this holds what the panel
 //! remembers between frames and the resets that touch nothing else.
 

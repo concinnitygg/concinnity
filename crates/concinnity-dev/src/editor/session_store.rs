@@ -31,10 +31,10 @@ pub(crate) fn default_path() -> Option<PathBuf> {
 // The store key for a world file: its stem, so `world.jsonl` and a sibling
 // `arena.jsonl` don't share bookmarks.
 pub(crate) fn world_key(world_path: &str) -> String {
-    Path::new(world_path)
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| world_path.to_string())
+    Path::new(world_path).file_stem().map_or_else(
+        || world_path.to_string(),
+        |s| s.to_string_lossy().into_owned(),
+    )
 }
 
 pub(crate) fn load(path: &Path) -> SessionStore {

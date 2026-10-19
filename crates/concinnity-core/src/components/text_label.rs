@@ -6,7 +6,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
-/// Horizontal alignment of a [TextLabel](#textlabel) relative to its `x`.
+/// Horizontal alignment of a [`TextLabel`](#textlabel) relative to its `x`.
 ///
 /// `Center` and `Right` measure the rendered text with the real font metrics
 /// each frame, so a label stays visually centered (or right-aligned) at any
@@ -34,7 +34,7 @@ pub enum TextAlign {
 /// draws with the engine's built-in face at 24px, which costs the build nothing
 /// (the face ships inside the binary) and renders the same whether the world was
 /// compiled or assembled in code. The `content` field can be updated every frame
-/// (e.g. by an [FpsCounter](#fpscounter)).
+/// (e.g. by an [`FpsCounter`](#fpscounter)).
 ///
 /// A `\n` in `content` starts a new line. When `background` has an alpha > 0, a
 /// box is filled behind the glyphs, extended outward by `padding` pixels,
@@ -144,7 +144,7 @@ pub struct TextLabel {
     pub screen: Option<Ref<Screen>>,
 }
 
-/// A span of a [TextLabel](#textlabel)'s `content` drawn in a color of its
+/// A span of a [`TextLabel`](#textlabel)'s `content` drawn in a color of its
 /// own.
 #[derive(
     Debug,

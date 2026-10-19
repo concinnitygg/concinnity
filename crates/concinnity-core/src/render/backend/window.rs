@@ -40,7 +40,7 @@ pub trait WindowControl {
         0.0
     }
 
-    /// Show or hide the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
+    /// Show or hide the OS cursor for an in-engine UI cursor (e.g. a `MainMenu`),
     /// independent of camera capture. Edge-triggered by the backend, so calling
     /// it every frame with the same value is cheap. Default no-op: a backend
     /// without a free-mode cursor hide leaves the system cursor visible.
@@ -64,7 +64,7 @@ pub trait WindowControl {
         false
     }
 
-    /// Tell the backend a togglable menu (a Screen toggled by an Escape KeyBinding)
+    /// Tell the backend a togglable menu (a Screen toggled by an Escape `KeyBinding`)
     /// coexists with a captured camera. In this mode Escape routes to the ECS
     /// (so the menu shows/hides) instead of releasing the cursor inline, and a
     /// click never recaptures the cursor (it fires a UI action). Set once at
@@ -134,7 +134,7 @@ pub trait WindowControl {
     /// the next key event. Pushed once after the backend is built and again on
     /// each rebind. Default no-op: a backend without keymap decode keeps its
     /// built-in defaults.
-    fn set_keymap(&mut self, keymap: &KeyMap) {
+    fn set_keymap(&mut self, keymap: KeyMap) {
         let _ = keymap;
     }
 

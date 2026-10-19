@@ -591,7 +591,7 @@ impl Panel for CharacterShapePanel {
             character_shape_panel::hit_test(&view, mx, my, o, s)
         };
         handled(action, |a| {
-            hook.apply_shape_action(a, &data, [mx, my], world)
+            hook.apply_shape_action(a, &data, [mx, my], world);
         })
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {

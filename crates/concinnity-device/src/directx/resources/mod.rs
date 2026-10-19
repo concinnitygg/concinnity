@@ -8,7 +8,7 @@
 //!                 geometry replacement
 //!   streaming.rs  `VoxelWorld` chunk streaming
 //!   skinning.rs   Skinned pipelines + upload, per-frame pose and morph uploads
-//!   geometry_rebuild.rs  Size-changing static + skinned VB/IB rebuilds driven
+//!   `geometry_rebuild.rs`  Size-changing static + skinned VB/IB rebuilds driven
 //!                 by asset hot-reload
 //!
 //! Each file is a single `impl DxContext` block; nothing is re-exported here --

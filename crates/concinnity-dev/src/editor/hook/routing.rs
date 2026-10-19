@@ -1,4 +1,4 @@
-//! EditorHook: per-frame pointer routing -- the scroll steps behind each panel's
+//! `EditorHook`: per-frame pointer routing -- the scroll steps behind each panel's
 //! wheel region, title-bar dragging, and click hit-testing across the top bar and
 //! the registered panels (front-to-back).
 

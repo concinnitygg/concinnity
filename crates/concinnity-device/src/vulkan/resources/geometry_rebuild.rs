@@ -3,10 +3,10 @@
 //! `directx/resources/geometry_rebuild.rs` and `metal/resources/geometry_rebuild.rs +
 //! metal/resources/skinning.rs`'s rebuild paths.
 //!
-//! Vulkan's DEVICE_LOCAL buffers are not host-visible, so the rebuild forces
+//! Vulkan's `DEVICE_LOCAL` buffers are not host-visible, so the rebuild forces
 //! a CPU round-trip: a one-shot `cmd_copy_buffer` reads the live VB/IB into
-//! HOST_VISIBLE staging, the new contents are spliced CPU-side, fresh
-//! DEVICE_LOCAL buffers are allocated at the post-rebuild size, and the
+//! `HOST_VISIBLE` staging, the new contents are spliced CPU-side, fresh
+//! `DEVICE_LOCAL` buffers are allocated at the post-rebuild size, and the
 //! rebuilt data is uploaded via the existing `write_geometry_region` helper.
 //! The scene's streamed-mesh placement allocators are **not** preserved: the
 //! rebuilt buffer is sized exactly for the current draws, so any subsequent
@@ -65,8 +65,8 @@ impl VkContext {
 
         // Allocate new DEVICE_LOCAL buffers + ship the rebuilt contents
         // through staging (write_geometry_region's one-shot pattern).
-        let new_v_bytes = std::mem::size_of_val(new_vertices.as_slice()) as u64;
-        let new_i_bytes = std::mem::size_of_val(new_indices.as_slice()) as u64;
+        let new_v_bytes = size_of_val(new_vertices.as_slice()) as u64;
+        let new_i_bytes = size_of_val(new_indices.as_slice()) as u64;
         let shared = super::shared_geometry_usage(self.hw.rt_capable);
         let new_vbuf = self.hw.alloc.create_buffer(
             new_v_bytes,
@@ -172,8 +172,8 @@ impl VkContext {
         // the skinning paths lose their inputs after a size-changing skinned
         // reload (the RT-only IB flags ride along whenever the device is capable
         // so a live RT toggle keeps working across reloads).
-        let new_v_bytes = std::mem::size_of_val(new_vertices.as_slice()) as u64;
-        let new_i_bytes = std::mem::size_of_val(new_indices.as_slice()) as u64;
+        let new_v_bytes = size_of_val(new_vertices.as_slice()) as u64;
+        let new_i_bytes = size_of_val(new_indices.as_slice()) as u64;
         let skinned_ib_rt = if self.hw.rt_capable {
             vk::BufferUsageFlags::STORAGE_BUFFER
                 | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
@@ -225,11 +225,10 @@ fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> Rend
     if bytes == 0 {
         return Ok(Vec::new());
     }
-    let stride = std::mem::size_of::<T>() as u64;
+    let stride = size_of::<T>() as u64;
     if !bytes.is_multiple_of(stride) {
         return Err(RenderError::Other(format!(
-            "readback_typed: buffer size {} not a multiple of T stride {}",
-            bytes, stride
+            "readback_typed: buffer size {bytes} not a multiple of T stride {stride}"
         )));
     }
     let count = (bytes / stride) as usize;
@@ -255,7 +254,7 @@ fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> Rend
                     src,
                     staging.buffer(),
                     std::slice::from_ref(&copy),
-                )
+                );
             };
         },
     )?;

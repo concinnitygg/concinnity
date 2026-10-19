@@ -1,36 +1,36 @@
-//! Compiles an EnvironmentMap component's args into a payload bundling two
+//! Compiles an `EnvironmentMap` component's args into a payload bundling two
 //! precomputed IBL cubemaps:
 //!
 //!   - **Irradiance cubemap.** Low-resolution (8x8 per face by default)
 //!     cosine-weighted hemisphere integral of the source. Used by the shader's
 //!     diffuse ambient term: `diffuse = (1-F)(1-metallic) * irradiance * albedo / π`.
 //!   - **Prefiltered radiance cubemap.** A mip chain where mip 0 = source and
-//!     mip N = source convolved with the GGX lobe at roughness = N / (mip_count - 1).
+//!     mip N = source convolved with the GGX lobe at roughness = N / (`mip_count` - 1).
 //!     Used with the Karis env-BRDF analytic fit (already in every fragment shader
 //!     as `env_brdf_approx`) for the specular ambient term.
 //!
 //! A BRDF LUT is deliberately NOT shipped: the Karis polynomial fit
-//! (`env_brdf_approx` in main_shading.hlsl) replaces
+//! (`env_brdf_approx` in `main_shading.hlsl`) replaces
 //! it analytically. That keeps one binding slot free and dodges a build step.
 //!
-//! Source format: equirectangular Radiance HDR (.hdr), same as CubemapTexture.
+//! Source format: equirectangular Radiance HDR (.hdr), same as `CubemapTexture`.
 //! Sampling: Hammersley QMC + GGX importance sampling for prefilter, uniform
 //! (phi, theta) grid for irradiance.
 //!
 //! Payload format (little-endian):
 //!   u32  magic              = b"ENVM" = 0x4D564E45
-//!   u32  format_id          = 0  (RGBA32F)
-//!   u32  irradiance_face    (e.g. 8)
-//!   u32  prefilter_face     (mip 0 size, e.g. 512)
-//!   u32  prefilter_mips     (e.g. 5)
+//!   u32  `format_id`          = 0  (RGBA32F)
+//!   u32  `irradiance_face`    (e.g. 8)
+//!   u32  `prefilter_face`     (mip 0 size, e.g. 512)
+//!   u32  `prefilter_mips`     (e.g. 5)
 //!   u32  _pad
-//!   ... irradiance cube         (6 * irradiance_face² * 16 bytes)
-//!   ... prefilter mip 0         (6 * prefilter_face² * 16 bytes)
-//!   ... prefilter mip 1         (6 * (prefilter_face/2)² * 16 bytes)
+//!   ... irradiance cube         (6 * `irradiance_face²` * 16 bytes)
+//!   ... prefilter mip 0         (6 * `prefilter_face²` * 16 bytes)
+//!   ... prefilter mip 1         (6 * (`prefilter_face/2)²` * 16 bytes)
 //!   ...
-//!   ... prefilter mip (mips-1)  (6 * (prefilter_face >> (mips-1))² * 16 bytes)
+//!   ... prefilter mip (mips-1)  (6 * (`prefilter_face` >> (mips-1))² * 16 bytes)
 //!
-//! Face order matches CubemapTexture: +X, -X, +Y, -Y, +Z, -Z.
+//! Face order matches `CubemapTexture`: +X, -X, +Y, -Y, +Z, -Z.
 
 use concinnity_core::bake::environment_map::source::{bake_payload, generate_sky_equirect};
 use concinnity_core::bake::environment_map::stars::generate_stars_equirect;
@@ -49,8 +49,8 @@ use crate::codec::hdr::HdrImage;
 // from the JSONL inherits that default instead of a constant duplicated here.
 
 fn resolve_args(args: &serde_json::Value) -> Result<EnvironmentMap, String> {
-    let params: EnvironmentMap = Deserialize::deserialize(args)
-        .map_err(|e| format!("invalid EnvironmentMap args: {}", e))?;
+    let params: EnvironmentMap =
+        Deserialize::deserialize(args).map_err(|e| format!("invalid EnvironmentMap args: {e}"))?;
     match (params.source.is_empty(), params.generator.is_empty()) {
         (true, true) => return Err("EnvironmentMap requires either `source` or `generator`".into()),
         (false, false) => {
@@ -67,7 +67,7 @@ fn resolve_args(args: &serde_json::Value) -> Result<EnvironmentMap, String> {
         }
         (true, false) => match params.generator.as_str() {
             "sky" | "stars" => {}
-            other => return Err(format!("unknown EnvironmentMap generator '{}'", other)),
+            other => return Err(format!("unknown EnvironmentMap generator '{other}'")),
         },
     }
     // The baked dimensions are checked by the bake itself, so an authored map
@@ -133,7 +133,13 @@ fn is_supported_source(source: &str) -> bool {
 // for the range an LDR panorama implies for the baked lighting).
 fn load_equirect_source(resolved: &str) -> Result<HdrImage, String> {
     let lower = resolved.to_ascii_lowercase();
-    if lower.ends_with(".glb") || lower.ends_with(".gltf") {
+    if Path::new(&lower)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("glb"))
+        || Path::new(&lower)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("gltf"))
+    {
         crate::import::panorama::load_panorama_file(resolved)
     } else {
         crate::codec::hdr::load_file(resolved)
@@ -147,7 +153,13 @@ pub(crate) fn compile_environment_map_payload(
     let map = resolve_args(args)?;
     let params = BakeInputs::of(&map);
 
-    let hdr = if !params.source.is_empty() {
+    let hdr = if params.source.is_empty() {
+        match params.generator {
+            "sky" => generate_sky_equirect(),
+            "stars" => generate_stars_equirect(),
+            other => return Err(format!("unknown EnvironmentMap generator '{other}'")),
+        }
+    } else {
         // A bare filename (no directory component) is resolved via the same
         // asset-search the build pipeline uses for shader sources: search the
         // asset root recursively, falling back to the raw path so an absolute
@@ -155,12 +167,6 @@ pub(crate) fn compile_environment_map_payload(
         let resolved =
             concinnity_host::store::source::resolve_source_path(params.source, assets_dir);
         load_equirect_source(&resolved)?
-    } else {
-        match params.generator {
-            "sky" => generate_sky_equirect(),
-            "stars" => generate_stars_equirect(),
-            other => return Err(format!("unknown EnvironmentMap generator '{}'", other)),
-        }
     };
     // A build-scoped pool, so a build never sizes the process-wide one before
     // the runtime configures it.
@@ -175,7 +181,7 @@ pub(crate) fn compile_environment_map_payload(
     ))
 }
 
-/// Decode the EnvironmentMap source at `path` the same way
+/// Decode the `EnvironmentMap` source at `path` the same way
 /// `compile_environment_map_payload` does at build time, returning the
 /// serialized payload (header + irradiance + prefilter mips). Exposed for the
 /// asset hot-reload path (`cn debug` only), which the editor drives; production
@@ -434,7 +440,7 @@ mod tests {
         let mut blob = Vec::new();
         blob.extend_from_slice(b"#?RADIANCE\n");
         blob.extend_from_slice(b"FORMAT=32-bit_rle_rgbe\n\n");
-        blob.extend_from_slice(format!("-Y {} +X {}\n", height, width).as_bytes());
+        blob.extend_from_slice(format!("-Y {height} +X {width}\n").as_bytes());
         for _ in 0..(width * height) {
             blob.extend_from_slice(&pixel);
         }
@@ -447,8 +453,7 @@ mod tests {
             .expect_err("should fail");
         assert!(
             err.contains("failed to open") || err.contains("No such file"),
-            "got: {}",
-            err
+            "got: {err}"
         );
     }
 

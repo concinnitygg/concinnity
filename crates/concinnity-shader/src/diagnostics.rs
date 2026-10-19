@@ -24,8 +24,8 @@ impl Severity {
     /// The word dxc prints for it.
     pub fn as_str(self) -> &'static str {
         match self {
-            Severity::Error => "error",
-            Severity::Warning => "warning",
+            Self::Error => "error",
+            Self::Warning => "warning",
         }
     }
 }
@@ -57,7 +57,7 @@ pub struct Diagnostic {
 impl Diagnostic {
     /// Whether two diagnostics report the same thing at the same place, which
     /// is what one error compiled into several programs looks like.
-    pub fn same_as(&self, other: &Diagnostic) -> bool {
+    pub fn same_as(&self, other: &Self) -> bool {
         self.key() == other.key()
     }
 
@@ -101,7 +101,10 @@ pub fn parse(output: &str) -> Vec<Diagnostic> {
                 open = false;
             }
             None if open => {
-                let context = &mut out.last_mut().expect("an open diagnostic").context;
+                let Some(last) = out.last_mut() else {
+                    continue;
+                };
+                let context = &mut last.context;
                 if !context.is_empty() {
                     context.push('\n');
                 }

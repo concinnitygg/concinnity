@@ -44,7 +44,7 @@ impl MtlContext {
     // success. Distinct name from the `RenderBackend::screenshot` trait method
     // so the backend forwarder is unambiguous. Reached through the
     // `RenderBackend` vtable (bin-only `cn debug`).
-    pub(in crate::metal) fn capture_screenshot(&mut self, path: &str) -> RenderResult<String> {
+    pub(in crate::metal) fn capture_screenshot(&self, path: &str) -> RenderResult<String> {
         // `None` both before the first present and in production (capture is a
         // `cn debug`-only feature; see `last_present_texture`). The retained
         // texture keeps the drawable's color surface alive for the read-back.
@@ -132,7 +132,7 @@ impl MtlContext {
         // the blit completed (`waitUntilCompleted` above), so the copy is valid.
         unsafe {
             staging.getBytes_bytesPerRow_fromRegion_mipmapLevel(
-                std::ptr::NonNull::new(raw.as_mut_ptr() as *mut std::ffi::c_void).ok_or_else(
+                std::ptr::NonNull::new(raw.as_mut_ptr().cast::<std::ffi::c_void>()).ok_or_else(
                     || RenderError::Other("screenshot: null readback pointer".to_string()),
                 )?,
                 bytes_per_row,

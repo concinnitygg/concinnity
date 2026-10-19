@@ -149,7 +149,7 @@ fn hover_and_fire(
 impl UiInputSystem {
     // Refresh the owned copy of `DisabledSettingRows` only when the published
     // set changed, so the region pass reads it without a per-frame clone.
-    pub(super) fn refresh_disabled_rows(&mut self, ctx: &PipelineContext) {
+    pub(super) fn refresh_disabled_rows(&mut self, ctx: &PipelineContext<'_>) {
         let changed = match ctx.resource::<crate::ecs::DisabledSettingRows>() {
             Some(d) => d.0 != self.disabled_rows_cache,
             None => !self.disabled_rows_cache.is_empty(),
@@ -164,7 +164,7 @@ impl UiInputSystem {
 
     // Resolve each followed label's (y, is-empty) once, so the region pass
     // reads a map instead of looking a label up per region.
-    fn resolve_follow_labels(&mut self, ctx: &PipelineContext) {
+    fn resolve_follow_labels(&mut self, ctx: &PipelineContext<'_>) {
         self.follow_labels.clear();
         for &id in &self.follow_label_ids {
             if let Some(l) = ctx.get_by_id::<TextLabel>(id) {
@@ -181,8 +181,8 @@ impl UiInputSystem {
         &mut self,
         input: &FrameInput,
         intent: &UiIntent,
-        frame: RegionFrame,
-        ctx: &mut PipelineContext,
+        frame: RegionFrame<'_>,
+        ctx: &mut PipelineContext<'_>,
     ) -> RegionOutcome {
         self.resolve_follow_labels(ctx);
         let (mx, my) = (input.mouse_x, input.mouse_y);

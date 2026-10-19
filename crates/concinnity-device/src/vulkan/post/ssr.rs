@@ -34,7 +34,7 @@ pub(in crate::vulkan) struct SsrResources {
 impl SsrResources {
     // Build the resolve pipeline and the reflection target at `extent`.
     pub(in crate::vulkan) fn new(
-        device: &VkPostDevice,
+        device: &VkPostDevice<'_>,
         settings: Option<SsrSettings>,
         extent: vk::Extent2D,
     ) -> RenderResult<Self> {
@@ -49,7 +49,7 @@ impl SsrResources {
     // already idled the device and dropped the framebuffers naming the old view.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        device: &VkPostDevice,
+        device: &VkPostDevice<'_>,
         extent: vk::Extent2D,
     ) -> RenderResult<()> {
         self.output = device.create_target(TARGET_LABEL, &target_desc(), post_extent(extent))?;

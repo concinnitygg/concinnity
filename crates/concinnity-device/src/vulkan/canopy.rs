@@ -19,7 +19,7 @@ pub(in crate::vulkan) struct VkCanopyTables {
 impl VkCanopyTables {
     // `frames` slots with room for every layer's table.
     pub(in crate::vulkan) fn new(alloc: &DeviceAllocator, frames: usize) -> RenderResult<Self> {
-        let size = (MAX_CANOPY_TABLE_ROWS * std::mem::size_of::<[f32; 4]>()) as u64;
+        let size = (MAX_CANOPY_TABLE_ROWS * size_of::<[f32; 4]>()) as u64;
         let copies = (0..frames)
             .map(|_| {
                 let buffer = alloc.create_buffer(

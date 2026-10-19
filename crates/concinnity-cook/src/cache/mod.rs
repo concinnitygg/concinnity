@@ -1,7 +1,7 @@
 //! The build cache: what a cook produced for its own later runs, all of it in
 //! the one segment a host anchors.
 //!
-//! Some assets are expensive to compile -- the EnvironmentMap IBL convolution
+//! Some assets are expensive to compile -- the `EnvironmentMap` IBL convolution
 //! alone is hundreds of millions of float ops per build -- and a scene import
 //! re-parses a source file that may run to gigabytes. Both are deterministic
 //! functions of a small set of inputs, so the inputs are hashed into a key
@@ -154,7 +154,7 @@ fn anchor_lock() -> MutexGuard<'static, Option<PathBuf>> {
     ANCHOR
         .get_or_init(|| Mutex::new(None))
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Point the build cache at `segment` for the rest of the process, or until
@@ -206,7 +206,9 @@ fn open_at(held: &mut Option<Loaded>, path: PathBuf, token: u32) -> &mut Loaded 
 // across the index lookup and the store, never across the file read a hit does.
 fn lock() -> MutexGuard<'static, Option<Loaded>> {
     static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
-    LOADED.lock().unwrap_or_else(|e| e.into_inner())
+    LOADED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]
@@ -216,7 +218,7 @@ mod tests {
     use super::*;
 
     const PAYLOAD: CacheEntryKind = CacheEntryKind::Payload;
-    const TOKEN: u32 = 0xC0FFEE;
+    const TOKEN: u32 = 0x00C0_FFEE;
 
     fn store_into(loaded: &mut Loaded, key: &str, bytes: &[u8]) {
         loaded

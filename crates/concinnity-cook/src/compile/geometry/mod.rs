@@ -50,15 +50,15 @@ pub(crate) fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
         "water_grid" => {
             let half_width = args
                 .get("half_width")
-                .and_then(|v| v.as_f64())
+                .and_then(serde_json::Value::as_f64)
                 .unwrap_or(10.0) as f32;
             let half_depth = args
                 .get("half_depth")
-                .and_then(|v| v.as_f64())
+                .and_then(serde_json::Value::as_f64)
                 .unwrap_or(10.0) as f32;
             let subdivisions = args
                 .get("subdivisions")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .unwrap_or(64) as u32;
             concinnity_core::geometry::water_grid::build_water_grid(
                 half_width,
@@ -87,9 +87,8 @@ fn finish_mesh_payload(
 ) -> Result<Vec<u8>, String> {
     let lod_levels = args
         .get("lod_levels")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32)
-        .unwrap_or(1);
+        .and_then(serde_json::Value::as_u64)
+        .map_or(1, |v| v as u32);
     let lod_distances: Vec<f32> = args
         .get("lod_distances")
         .and_then(|v| v.as_array())
@@ -138,7 +137,7 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
     skeleton: &[SkeletonJoint],
     morph_target_names: &[String],
     morph_deltas: &[MorphDelta],
-    lods: &SkinnedLods,
+    lods: &SkinnedLods<'_>,
 ) -> Result<Vec<u8>, String> {
     let lod_levels = lods.levels.clamp(1, 8);
     let lod_distances = lods.distances;
@@ -286,7 +285,7 @@ where
     let dim = parse_u32x3(args.get("dim"), "dim")?;
     let block_size = args
         .get("block_size")
-        .and_then(|v| v.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .unwrap_or(1.0) as f32;
     let palette_names: Vec<String> = args
         .get("palette")
@@ -327,7 +326,7 @@ where
 fn resolve_block_type(bt_args: &serde_json::Value) -> Option<PaletteSlot> {
     let solid = bt_args
         .get("solid")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(true);
     if !solid {
         return None;
@@ -391,15 +390,15 @@ pub(crate) fn compile_room_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
     } else {
         let hw = args
             .get("half_width")
-            .and_then(|v| v.as_f64())
+            .and_then(serde_json::Value::as_f64)
             .unwrap_or(8.0) as f32;
         let hd = args
             .get("half_depth")
-            .and_then(|v| v.as_f64())
+            .and_then(serde_json::Value::as_f64)
             .unwrap_or(10.0) as f32;
         let ch = args
             .get("ceiling_height")
-            .and_then(|v| v.as_f64())
+            .and_then(serde_json::Value::as_f64)
             .unwrap_or(3.5) as f32;
         (hw, hd, ch)
     };

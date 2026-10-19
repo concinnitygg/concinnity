@@ -104,7 +104,7 @@ impl TransientImagePool {
     // `UNDEFINED` while the masked Composite samples it, which is 1110 layout
     // errors over a 1036-frame `depth_consumers_masked` run.
     pub(super) fn build(
-        ctx: &TransientPoolGpu,
+        ctx: &TransientPoolGpu<'_>,
         frames: usize,
         slots: &[TransientSlot],
     ) -> RenderResult<Self> {
@@ -294,7 +294,7 @@ impl TransientImagePool {
     // the caller afterward.
     pub(super) fn rebuild(
         &mut self,
-        ctx: &TransientPoolGpu,
+        ctx: &TransientPoolGpu<'_>,
         frames: usize,
         slots: &[TransientSlot],
     ) -> RenderResult<()> {

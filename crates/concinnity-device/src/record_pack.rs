@@ -35,9 +35,10 @@ impl RecordPacker {
         let jobs = pool();
         let workers = jobs.workers();
         let mut judge = self.judge.get();
-        let count = match judge.fans_out(records, workers) {
-            true => chunk_count(records, workers),
-            false => 1,
+        let count = if judge.fans_out(records, workers) {
+            chunk_count(records, workers)
+        } else {
+            1
         };
         let mut chunks: [Option<PackChunk<'_>>; MAX_PACK_CHUNKS] = Default::default();
         let used = pack.split(count, &mut chunks);

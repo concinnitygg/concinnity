@@ -52,42 +52,39 @@ pub(crate) fn bone_frames(
         .collect();
     let mut frames: Vec<BoneFrame> = Vec::with_capacity(n);
     for j in 0..n {
-        let (axis, length) = match first_child[j] {
-            Some(c) => {
-                let d = vec3::sub(origins[c], origins[j]);
+        let (axis, length) = if let Some(c) = first_child[j] {
+            let d = vec3::sub(origins[c], origins[j]);
+            let len = vec3::length(d);
+            if len > 1e-6 {
+                (vec3::scale(d, 1.0 / len), len)
+            } else {
+                ([0.0, 1.0, 0.0], 0.0)
+            }
+        } else {
+            let parent = skeleton[j].parent;
+            let axis = if parent >= 0 {
+                let p = &frames[parent as usize];
+                let d = vec3::sub(origins[j], p.origin);
                 let len = vec3::length(d);
                 if len > 1e-6 {
-                    (vec3::scale(d, 1.0 / len), len)
+                    vec3::scale(d, 1.0 / len)
                 } else {
-                    ([0.0, 1.0, 0.0], 0.0)
+                    p.axis
                 }
-            }
-            None => {
-                let parent = skeleton[j].parent;
-                let axis = if parent >= 0 {
-                    let p = &frames[parent as usize];
-                    let d = vec3::sub(origins[j], p.origin);
-                    let len = vec3::length(d);
-                    if len > 1e-6 {
-                        vec3::scale(d, 1.0 / len)
-                    } else {
-                        p.axis
-                    }
-                } else {
-                    [0.0, 1.0, 0.0]
-                };
-                let reach = vertices
-                    .iter()
-                    .filter(|v| dominant_joint(v) == j)
-                    .map(|v| vec3::dot(vec3::sub(v.pos, origins[j]), axis))
-                    .fold(0.0_f32, f32::max);
-                let fallback = if parent >= 0 {
-                    frames[parent as usize].length
-                } else {
-                    0.0
-                };
-                (axis, if reach > 1e-4 { reach } else { fallback })
-            }
+            } else {
+                [0.0, 1.0, 0.0]
+            };
+            let reach = vertices
+                .iter()
+                .filter(|v| dominant_joint(v) == j)
+                .map(|v| vec3::dot(vec3::sub(v.pos, origins[j]), axis))
+                .fold(0.0_f32, f32::max);
+            let fallback = if parent >= 0 {
+                frames[parent as usize].length
+            } else {
+                0.0
+            };
+            (axis, if reach > 1e-4 { reach } else { fallback })
         };
         frames.push(BoneFrame {
             origin: origins[j],

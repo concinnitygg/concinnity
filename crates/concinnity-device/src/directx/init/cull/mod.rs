@@ -169,12 +169,13 @@ pub(super) fn build_probe_prefilter(
             "reflection probes: device lacks TypedUAVLoadAdditionalFormats, skipping probe baking"
         );
     }
-    let probe_prefilter = match cull.cull_kernels.is_some() && typed_uav_load {
-        true => Some(ProbePrefilterPipelines::new(
+    let probe_prefilter = if cull.cull_kernels.is_some() && typed_uav_load {
+        Some(ProbePrefilterPipelines::new(
             &gpu.hw.device,
             gpu.hot_reload,
-        )?),
-        false => None,
+        )?)
+    } else {
+        None
     };
     Ok(probe_prefilter)
 }
@@ -218,8 +219,8 @@ fn write_instance_records(
             });
         }
     }
-    let obj_stride = std::mem::size_of::<GpuObjectData>();
-    let da_stride = std::mem::size_of::<GpuDrawArgs>();
+    let obj_stride = size_of::<GpuObjectData>();
+    let da_stride = size_of::<GpuDrawArgs>();
     for (obj_ptr, da_ptr) in bindless
         .object_ptrs
         .iter()
@@ -230,12 +231,12 @@ fn write_instance_records(
         // stays in bounds.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                records.as_ptr() as *const u8,
+                records.as_ptr().cast::<u8>(),
                 obj_ptr.add(n_objects * obj_stride),
                 records.len() * obj_stride,
             );
             std::ptr::copy_nonoverlapping(
-                draw_args.as_ptr() as *const u8,
+                draw_args.as_ptr().cast::<u8>(),
                 da_ptr.add(n_objects * da_stride),
                 draw_args.len() * da_stride,
             );

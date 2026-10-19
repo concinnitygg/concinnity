@@ -152,17 +152,17 @@ fn build(n: usize, renderable_permil: u32, seed: u64) -> Bench {
     }
 }
 
-fn combine(acc: u64, t: &Transform, m: &MeshRenderer) -> u64 {
-    acc.wrapping_add(t.m[0].to_bits() as u64)
-        .wrapping_add(m.mesh as u64)
-        .wrapping_add(m.material as u64)
+fn combine(acc: u64, t: &Transform, m: MeshRenderer) -> u64 {
+    acc.wrapping_add(u64::from(t.m[0].to_bits()))
+        .wrapping_add(u64::from(m.mesh))
+        .wrapping_add(u64::from(m.material))
 }
 
 fn run_hashmap(b: &Bench) -> u64 {
     let mut acc = 0u64;
     for (e, t) in b.transforms.iter_with_entities() {
         if let Some(&row) = b.mesh_row_by_index.get(&e.index()) {
-            acc = combine(acc, t, &b.meshes[row as usize]);
+            acc = combine(acc, t, b.meshes[row as usize]);
         }
     }
     acc
@@ -176,7 +176,7 @@ fn run_probe(b: &Bench) -> u64 {
                 .join
                 .row(e, mesh_id())
                 .expect("a matched entity has a mesh row");
-            acc = combine(acc, t, &b.meshes[row as usize]);
+            acc = combine(acc, t, b.meshes[row as usize]);
         }
     }
     acc
@@ -185,7 +185,7 @@ fn run_probe(b: &Bench) -> u64 {
 fn run_dense(b: &Bench) -> u64 {
     let mut acc = 0u64;
     for (t, m) in b.dense_t.iter().zip(b.dense_m.iter()) {
-        acc = combine(acc, t, m);
+        acc = combine(acc, t, *m);
     }
     acc
 }
@@ -242,7 +242,7 @@ fn run(pace: Pace) {
         let elapsed = start.elapsed();
         assert_eq!(last, warm, "{name} is not deterministic");
         if pace == Pace::Timed {
-            let per_ns = elapsed.as_secs_f64() * 1e9 / (reps as f64 * renderable as f64);
+            let per_ns = elapsed.as_secs_f64() * 1e9 / (f64::from(reps) * renderable as f64);
             let ms = elapsed.as_secs_f64() * 1e3;
             println!("  {name:30} {ms:8.2} ms   {per_ns:6.2} ns/entity");
         }

@@ -5,9 +5,9 @@ use crate::ecs::{AudioClipHandle, Ref};
 
 /// Makes a companion [Prop](#prop) a dynamic physics body.
 ///
-/// Attach a PropBody to give a [Prop](#prop) real physics: it falls, collides,
+/// Attach a `PropBody` to give a [Prop](#prop) real physics: it falls, collides,
 /// stacks, tumbles, and (with `pickup: true` on the prop) can be carried and
-/// thrown. A Prop with a `collider` but no PropBody is a static, immovable
+/// thrown. A Prop with a `collider` but no `PropBody` is a static, immovable
 /// obstacle.
 ///
 /// ```json
@@ -40,9 +40,9 @@ pub struct PropBody {
     /// Linear velocity damping, modeling air drag.
     #[asset(default = 0.05)]
     pub linear_damping: f32,
-    /// Optional [AudioClip](#audioclip) played at the contact point when this
+    /// Optional [`AudioClip`](#audioclip) played at the contact point when this
     /// body collides hard enough to pass the world's `contact_min_impulse`
-    /// (see [PhysicsConfig](#physicsconfig)). Louder impacts play louder.
+    /// (see [`PhysicsConfig`](#physicsconfig)). Louder impacts play louder.
     pub impact_clip: Option<AudioClipHandle>,
     /// Linear gain applied to the impact clip at full impulse.
     #[asset(default = 1.0)]

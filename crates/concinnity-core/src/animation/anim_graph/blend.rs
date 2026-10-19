@@ -65,26 +65,26 @@ impl StatePlay {
     /// alignment). Single clips have nothing to sync against.
     pub fn sync(&self) -> bool {
         match self {
-            StatePlay::Clip(_) => false,
-            StatePlay::Blend1D(b) => b.sync,
-            StatePlay::Blend2D(b) => b.sync,
+            Self::Clip(_) => false,
+            Self::Blend1D(b) => b.sync,
+            Self::Blend2D(b) => b.sync,
         }
     }
 
     /// The playable members, in weight order.
     pub fn members(&self) -> &[ClipPlay] {
         match self {
-            StatePlay::Clip(play) => core::slice::from_ref(play),
-            StatePlay::Blend1D(b) => &b.plays,
-            StatePlay::Blend2D(b) => &b.plays,
+            Self::Clip(play) => core::slice::from_ref(play),
+            Self::Blend1D(b) => &b.plays,
+            Self::Blend2D(b) => &b.plays,
         }
     }
 
     pub(crate) fn members_mut(&mut self) -> &mut [ClipPlay] {
         match self {
-            StatePlay::Clip(play) => core::slice::from_mut(play),
-            StatePlay::Blend1D(b) => &mut b.plays,
-            StatePlay::Blend2D(b) => &mut b.plays,
+            Self::Clip(play) => core::slice::from_mut(play),
+            Self::Blend1D(b) => &mut b.plays,
+            Self::Blend2D(b) => &mut b.plays,
         }
     }
 
@@ -103,10 +103,10 @@ impl StatePlay {
         let at = |i: usize| params.get(i).copied().unwrap_or(0.0);
         out.clear();
         match self {
-            StatePlay::Clip(_) => out.push(1.0),
-            StatePlay::Blend1D(b) => blend1d_weights_into(&b.thresholds, at(b.param), out),
-            StatePlay::Blend2D(b) => {
-                blend2d_weights_into(&b.x_values, &b.y_values, at(b.param_x), at(b.param_y), out)
+            Self::Clip(_) => out.push(1.0),
+            Self::Blend1D(b) => blend1d_weights_into(&b.thresholds, at(b.param), out),
+            Self::Blend2D(b) => {
+                blend2d_weights_into(&b.x_values, &b.y_values, at(b.param_x), at(b.param_y), out);
             }
         }
     }
@@ -124,7 +124,7 @@ impl StatePlay {
             total_w += w;
         }
         if total_w <= 1e-6 {
-            members.first().map(|m| m.duration_secs).unwrap_or(0.0)
+            members.first().map_or(0.0, |m| m.duration_secs)
         } else {
             acc / total_w
         }

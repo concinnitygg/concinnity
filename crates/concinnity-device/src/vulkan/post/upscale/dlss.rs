@@ -113,10 +113,10 @@ pub(super) fn required_extensions() -> Option<(Vec<CString>, Vec<CString>)> {
     // every pointer it is handed points at a live local that outlives the call.
     let rc = unsafe {
         NVSDK_NGX_VULKAN_RequiredExtensions(
-            &mut inst_count,
-            &mut inst_exts,
-            &mut dev_count,
-            &mut dev_exts,
+            &raw mut inst_count,
+            &raw mut inst_exts,
+            &raw mut dev_count,
+            &raw mut dev_exts,
         )
     };
     if !ngx_succeeded(rc) {
@@ -192,7 +192,7 @@ impl NgxSession {
                     cmd,
                     NVSDK_NGX_FEATURE_SUPERSAMPLING,
                     self.params,
-                    &mut self.feature,
+                    &raw mut self.feature,
                 )
             };
         })?;
@@ -274,7 +274,7 @@ impl DlssUpscaler {
         };
 
         // SAFETY: NGX is initialized, and `ngx.params` is a live field that receives the bag.
-        let rc = unsafe { NVSDK_NGX_VULKAN_GetCapabilityParameters(&mut ngx.params) };
+        let rc = unsafe { NVSDK_NGX_VULKAN_GetCapabilityParameters(&raw mut ngx.params) };
         if !ngx_succeeded(rc) || ngx.params.is_null() {
             tracing::warn!(
                 "DLSS (Vulkan): GetCapabilityParameters returned {rc:#x}; trying the next backend"

@@ -6,14 +6,14 @@ use alloc::vec::Vec;
 
 /// An infinite, procedurally generated voxel world.
 ///
-/// Where a [VoxelChunk](#voxelchunk) is one authored chunk compiled to a fixed
+/// Where a [`VoxelChunk`](#voxelchunk) is one authored chunk compiled to a fixed
 /// mesh at build time, a `VoxelWorld` describes an *unbounded* world: chunks are
 /// generated on demand from `seed` as the camera moves and streamed in and out
 /// around it. The grid is infinite on X/Z and a single chunk tall on Y.
 /// Declaring one opts the world into chunk streaming; with no `VoxelWorld`
 /// present nothing changes.
 ///
-/// The `palette` lists [BlockType](#blocktype) assets; the generator uses index
+/// The `palette` lists [`BlockType`](#blocktype) assets; the generator uses index
 /// 0 as air, index 1 as the surface block, and index 2 (when present) as the
 /// subsurface block. `material` supplies the textures and lighting shared by
 /// every chunk.
@@ -51,7 +51,7 @@ pub struct VoxelWorld {
     /// Maximum number of chunks generated and loaded per frame.
     #[asset(default = 3)]
     pub load_budget: u32,
-    /// [BlockType](#blocktype) asset names. Index 0 is air; 1 is the surface
+    /// [`BlockType`](#blocktype) asset names. Index 0 is air; 1 is the surface
     /// block; 2, when present, is the subsurface block.
     pub palette: Vec<Ref<BlockType>>,
     /// [Material](#material) shared by every chunk: textures and lighting.

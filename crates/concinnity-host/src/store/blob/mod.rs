@@ -33,7 +33,9 @@ fn anchored_primary() -> &'static Mutex<Option<PathBuf>> {
 // siblings named by index are the overflow payload blobs. Reached only through
 // `load_raw_at`, so a process addresses the blobs it actually opened.
 fn anchor(primary: &Path) {
-    *anchored_primary().lock().unwrap() = Some(primary.to_path_buf());
+    *anchored_primary()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(primary.to_path_buf());
 }
 
 // Blob 0 is the primary blob; every other index names an overflow sibling.
@@ -53,7 +55,10 @@ pub fn primary_in(data_dir: &Path) -> PathBuf {
 ///
 /// `None` before any load, so there is no layout to resolve against.
 pub fn blob_path(index: u32) -> Option<String> {
-    let primary = anchored_primary().lock().unwrap().clone();
+    let primary = anchored_primary()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
     resolve_blob_path(primary.as_deref(), index)
 }
 
@@ -73,7 +78,7 @@ fn resolve_blob_path(primary: Option<&Path>, index: u32) -> Option<String> {
 }
 
 /// Read and deserialize a blob's metadata section (component defs + resource
-/// records). Returns (meta, payload_start_offset).
+/// records). Returns (meta, `payload_start_offset`).
 pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), BlobLoadError> {
     let data = read_file(path)?;
     parse_cnb::<BlobMeta>(SCHEMA_VERSION, &data)
@@ -203,7 +208,7 @@ mod tests {
     fn a_format_failure_names_the_file_and_keeps_its_cause() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("0").to_string_lossy().into_owned();
-        std::fs::write(&path, vec![0xabu8; HEADER_SIZE * 2]).unwrap();
+        fs::write(&path, vec![0xabu8; HEADER_SIZE * 2]).unwrap();
 
         let error = read_cnb(&path).unwrap_err();
         assert!(
@@ -238,7 +243,7 @@ mod tests {
     fn read_payload_section_returns_empty_for_a_short_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("short").to_string_lossy().into_owned();
-        std::fs::write(&path, vec![0u8; HEADER_SIZE - 1]).unwrap();
+        fs::write(&path, vec![0u8; HEADER_SIZE - 1]).unwrap();
         assert!(read_payload_section(&path).unwrap().is_empty());
     }
 
@@ -247,7 +252,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("0").to_string_lossy().into_owned();
         let image = encode_cnb(SCHEMA_VERSION, &BlobMeta::default(), b"payloadbytes").unwrap();
-        std::fs::write(&path, &image).unwrap();
+        fs::write(&path, &image).unwrap();
 
         let start = payload_section_start(&path).expect("section start");
         assert_eq!(&image[start as usize..], b"payloadbytes");
@@ -257,7 +262,7 @@ mod tests {
     fn payload_section_start_rejects_bad_magic() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bad").to_string_lossy().into_owned();
-        std::fs::write(&path, vec![0u8; HEADER_SIZE]).unwrap();
+        fs::write(&path, vec![0u8; HEADER_SIZE]).unwrap();
         assert!(matches!(
             payload_section_start(&path),
             Err(BlobLoadError::Format {
@@ -302,12 +307,12 @@ mod tests {
             mesh_bounds: Vec::new(),
             physics_budget: None,
         };
-        std::fs::write(
+        fs::write(
             path_for(0).unwrap(),
             encode_cnb(SCHEMA_VERSION, &meta, b"primary").unwrap(),
         )
         .unwrap();
-        std::fs::write(
+        fs::write(
             path_for(1).unwrap(),
             encode_cnb(SCHEMA_VERSION, &BlobMeta::default(), b"overflow").unwrap(),
         )

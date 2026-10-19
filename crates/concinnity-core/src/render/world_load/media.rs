@@ -10,7 +10,7 @@ use crate::resource::{ColorLutTable, EnvironmentMapTable, ResourceEntry};
 
 /// The environment map's payload: `Some(None)` with none declared, `None`
 /// (failing the load) when it cannot be read.
-pub fn environment_map_payload(ctx: &mut PipelineContext) -> Option<Option<Vec<u8>>> {
+pub fn environment_map_payload(ctx: &mut PipelineContext<'_>) -> Option<Option<Vec<u8>>> {
     let first = ctx
         .resource::<EnvironmentMapTable>()
         .map(|t| (t.len(), t.0.first().cloned()));
@@ -18,7 +18,7 @@ pub fn environment_map_payload(ctx: &mut PipelineContext) -> Option<Option<Vec<u
 }
 
 /// The color LUT's payload, as [`environment_map_payload`].
-pub fn color_lut_payload(ctx: &mut PipelineContext) -> Option<Option<Vec<u8>>> {
+pub fn color_lut_payload(ctx: &mut PipelineContext<'_>) -> Option<Option<Vec<u8>>> {
     let first = ctx
         .resource::<ColorLutTable>()
         .map(|t| (t.len(), t.0.first().cloned()));
@@ -28,8 +28,12 @@ pub fn color_lut_payload(ctx: &mut PipelineContext) -> Option<Option<Vec<u8>>> {
 // The payload of the sole resource of its kind, from `first` (the table's
 // length and its first entry): the bytes a world baked for itself, else read
 // through its locator. Extra declarations are logged and ignored.
+#[expect(
+    clippy::option_option,
+    reason = "`None` fails the load through `?`; `Some(None)` is a world without one"
+)]
 fn first_payload(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     first: Option<(usize, Option<ResourceEntry>)>,
     what: &str,
 ) -> Option<Option<Vec<u8>>> {
@@ -56,7 +60,7 @@ fn first_payload(
 
 /// Whether the environment map draws as the background: yes with none
 /// declared. `None` (failing the load) when its record cannot be decoded.
-pub fn environment_background(ctx: &PipelineContext) -> Option<bool> {
+pub fn environment_background(ctx: &PipelineContext<'_>) -> Option<bool> {
     match ctx.resource::<EnvironmentMapTable>().map(|t| t.record(0)) {
         None => Some(true),
         Some(Ok(record)) => Some(record.background),
@@ -73,7 +77,7 @@ pub fn environment_background(ctx: &PipelineContext) -> Option<bool> {
 /// one a Sprite draws, and each image a Story's stages show. The story swaps
 /// its images onto the stage sprites at runtime, so they are resident before
 /// any sprite names them.
-pub fn sprite_texture_handles(ctx: &PipelineContext) -> Vec<TextureHandle> {
+pub fn sprite_texture_handles(ctx: &PipelineContext<'_>) -> Vec<TextureHandle> {
     let mut ids: Vec<TextureHandle> = ctx.query::<Sprite>().filter_map(|s| s.texture).collect();
     for story in ctx.query::<Story>() {
         let stages = story.nodes.iter().flat_map(|n| {

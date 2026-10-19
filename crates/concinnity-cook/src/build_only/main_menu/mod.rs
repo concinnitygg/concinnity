@@ -129,9 +129,8 @@ pub(crate) fn expand_main_menus(assets: &mut Vec<serde_json::Value>) -> Result<(
             let name = asset_name(&entry);
             if !name.is_empty() && !taken.insert(name.clone()) {
                 return Err(format!(
-                    "MainMenu '{}': generated asset name '{}' collides with an existing \
-                     asset; rename the menu or the conflicting asset",
-                    menu_name, name
+                    "MainMenu '{menu_name}': generated asset name '{name}' collides with an existing \
+                     asset; rename the menu or the conflicting asset"
                 ));
             }
             result.push(entry);
@@ -161,7 +160,7 @@ fn expand_one(
     // would draw them at the built-in face's own size instead, inside buttons
     // measured for this one.
     let font_name = if menu.font.is_empty() {
-        let name = format!("{}_font", menu_name);
+        let name = format!("{menu_name}_font");
         out.push(spec_to_value(&asset::font(&name, font_px as u32)));
         name
     } else {

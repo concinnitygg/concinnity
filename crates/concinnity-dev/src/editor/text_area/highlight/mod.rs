@@ -34,17 +34,17 @@ pub(crate) enum Token {
 impl Token {
     pub(crate) fn color(self) -> [f32; 3] {
         match self {
-            Token::Keyword => theme::CODE_KEYWORD,
-            Token::Type => theme::CODE_TYPE,
-            Token::Number => theme::CODE_NUMBER,
-            Token::String => theme::CODE_STRING,
-            Token::Comment => theme::CODE_COMMENT,
-            Token::Preprocessor => theme::CODE_PREPROCESSOR,
-            Token::Engine => theme::CODE_ENGINE,
-            Token::Heading => theme::CODE_HEADING,
-            Token::Emphasis => theme::CODE_EMPHASIS,
-            Token::Link => theme::CODE_LINK,
-            Token::Code => theme::CODE_LITERAL,
+            Self::Keyword => theme::CODE_KEYWORD,
+            Self::Type => theme::CODE_TYPE,
+            Self::Number => theme::CODE_NUMBER,
+            Self::String => theme::CODE_STRING,
+            Self::Comment => theme::CODE_COMMENT,
+            Self::Preprocessor => theme::CODE_PREPROCESSOR,
+            Self::Engine => theme::CODE_ENGINE,
+            Self::Heading => theme::CODE_HEADING,
+            Self::Emphasis => theme::CODE_EMPHASIS,
+            Self::Link => theme::CODE_LINK,
+            Self::Code => theme::CODE_LITERAL,
         }
     }
 }

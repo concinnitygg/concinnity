@@ -12,7 +12,7 @@ pub fn checked_product(label: &str, factors: &[usize]) -> Result<usize, String> 
     for f in factors {
         acc = acc
             .checked_mul(*f)
-            .ok_or_else(|| format!("{} size overflow in {:?}", label, factors))?;
+            .ok_or_else(|| format!("{label} size overflow in {factors:?}"))?;
     }
     Ok(acc)
 }
@@ -24,7 +24,7 @@ pub(crate) fn checked_sum(label: &str, terms: &[usize]) -> Result<usize, String>
     for t in terms {
         acc = acc
             .checked_add(*t)
-            .ok_or_else(|| format!("{} offset overflow in {:?}", label, terms))?;
+            .ok_or_else(|| format!("{label} offset overflow in {terms:?}"))?;
     }
     Ok(acc)
 }

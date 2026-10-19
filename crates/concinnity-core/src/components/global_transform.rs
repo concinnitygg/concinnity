@@ -8,7 +8,7 @@ pub struct GlobalTransform(pub [[f32; 4]; 4]);
 
 impl Default for GlobalTransform {
     fn default() -> Self {
-        GlobalTransform([
+        Self([
             [1.0, 0.0, 0.0, 0.0],
             [0.0, 1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0, 0.0],

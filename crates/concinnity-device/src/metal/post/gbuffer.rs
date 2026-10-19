@@ -1,7 +1,7 @@
 //! The unified geometry G-buffer pre-pass. One jittered traversal of the cull
 //! records (static + instanced + skinned) writes the view-space normal + linear
 //! depth, perceptual roughness, and screen-space motion vector that SSR, SSAO,
-//! SSGI, RT reflections, TAA, and the MetalFX upscaler all consume, replacing
+//! SSGI, RT reflections, TAA, and the `MetalFX` upscaler all consume, replacing
 //! the three separate SSR / SSAO / velocity pre-passes that each re-rasterized
 //! the same geometry. Pipeline, targets, and the encoder live together so the
 //! effect is a single unit the other backends can mirror.
@@ -118,7 +118,7 @@ fn gbuffer_prepass_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
     };
     let layout = |buffer_index| VertexLayout {
         buffer_index,
-        stride: std::mem::size_of::<Vertex>(),
+        stride: size_of::<Vertex>(),
         step: MTLVertexStepFunction::PerVertex,
     };
     vertex_descriptor(
@@ -228,7 +228,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         views: GbufferPrepassViews<'_>,
-        gpu: GbufferGpuBuffers,
+        gpu: GbufferGpuBuffers<'_>,
         velocity_active: bool,
     ) -> RenderResult<u32> {
         let Some(targets) = &self.gbuffer.targets else {
@@ -238,19 +238,16 @@ impl MtlContext {
         // gate as `targets`, so all three are present whenever it is. A missing
         // one means the pool and the feature disagree about that gate, which
         // would otherwise show up as a pre-pass rendering into nothing.
-        let (normal_depth, roughness, velocity) = match (
+        let (Some(normal_depth), Some(roughness), Some(velocity)) = (
             self.gbuffer_normal_depth(),
             self.gbuffer_roughness(),
             self.gbuffer_velocity(),
-        ) {
-            (Some(n), Some(r), Some(v)) => (n, r, v),
-            _ => {
-                return Err(RenderError::Other(
-                    "G-buffer pre-pass: the transient pool is missing a color channel; \
+        ) else {
+            return Err(RenderError::Other(
+                "G-buffer pre-pass: the transient pool is missing a color channel; \
                      its build gate disagrees with the pre-pass's"
-                        .to_string(),
-                ));
-            }
+                    .to_string(),
+            ));
         };
 
         let desc = MTLRenderPassDescriptor::new();
@@ -356,7 +353,7 @@ impl MtlContext {
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
         views: GbufferPrepassViews<'_>,
-        gpu: GbufferGpuBuffers,
+        gpu: GbufferGpuBuffers<'_>,
         velocity_active: bool,
     ) -> u32 {
         use objc2_metal::{MTLRenderStages, MTLResourceUsage};

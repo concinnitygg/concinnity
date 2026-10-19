@@ -43,7 +43,7 @@ pub enum FramePriority {
 impl FramePriority {
     /// Whether the frame threads run above normal priority.
     pub fn raises_frame_threads(self) -> bool {
-        matches!(self, FramePriority::AllThreads)
+        matches!(self, Self::AllThreads)
     }
 }
 
@@ -75,7 +75,7 @@ impl FramePriority {
 /// to what the machine can safely give.
 ///
 /// `frame_priority` decides which frame threads run ahead of the other
-/// applications on the machine; see [FramePriority].
+/// applications on the machine; see [`FramePriority`].
 ///
 /// `headless` keeps a world that could draw from opening a window. A world
 /// that draws nothing runs that way already.
@@ -165,7 +165,7 @@ mod tests {
     }
 }
 
-/// Runtime half of the AppConfig asset: where the application keeps what it
+/// Runtime half of the `AppConfig` asset: where the application keeps what it
 /// writes, and its process resource budgets.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct AppConfig {

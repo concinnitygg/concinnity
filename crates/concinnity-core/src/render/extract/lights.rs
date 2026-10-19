@@ -13,8 +13,11 @@ use crate::sky::SkyOrientation;
 /// Pack every light into the local-light buffers and the shared uniforms, whose
 /// `ambient_intensity` scales each backend's IBL / flat-fallback ambient. Lights
 /// are read, not drained, so editor tooling can still address them by name.
-pub fn gather_lights(ctx: &PipelineContext, ambient_intensity: f32) -> (LightData, LightUniforms) {
-    let dir_lights: Vec<DirectionalLight> = ctx.query::<DirectionalLight>().cloned().collect();
+pub fn gather_lights(
+    ctx: &PipelineContext<'_>,
+    ambient_intensity: f32,
+) -> (LightData, LightUniforms) {
+    let dir_lights: Vec<DirectionalLight> = ctx.query::<DirectionalLight>().copied().collect();
     let pt_lights: Vec<PointLight> = ctx.query::<PointLight>().cloned().collect();
     let spot_lights: Vec<SpotLight> = ctx.query::<SpotLight>().cloned().collect();
     let rect_lights: Vec<RectAreaLight> = ctx.query::<RectAreaLight>().cloned().collect();
@@ -29,7 +32,7 @@ pub fn gather_lights(ctx: &PipelineContext, ambient_intensity: f32) -> (LightDat
 // no local light. The ambient scale rides `LightUniforms` but is not part of
 // what moves, so it is left at zero here.
 pub(super) fn carry_local_lights(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     rebase: &Rebase,
 ) -> Option<(LightData, LightUniforms)> {
     let mut any = false;
@@ -66,7 +69,7 @@ pub(super) fn lights_under_sky<'a>(
 
 // The authored intensity of the world's sun: its first directional light, or
 // the neutral sun a world with none is lit by.
-pub(super) fn sunlight(ctx: &PipelineContext) -> f32 {
+pub(super) fn sunlight(ctx: &PipelineContext<'_>) -> f32 {
     ctx.query::<DirectionalLight>()
         .next()
         .map_or(LightUniforms::DEFAULT.directional[0].intensity, |l| {

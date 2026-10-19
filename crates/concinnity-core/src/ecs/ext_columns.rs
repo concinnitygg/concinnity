@@ -101,10 +101,10 @@ impl ExtColumns {
             };
             let row = row as usize;
             let last = column.len() - 1;
-            let moved = if row != last {
-                column.entity_at(last)
-            } else {
+            let moved = if row == last {
                 None
+            } else {
+                column.entity_at(last)
             };
             column.remove_row(row, tick);
             if let Some(moved) = moved {
@@ -136,6 +136,10 @@ impl ExtColumns {
 // A discriminant claimed by two different component types. Nothing can pick a
 // winner: both would read each other's rows, so the storage refuses rather than
 // handing one of them the wrong column.
+#[expect(
+    clippy::panic,
+    reason = "two types on one discriminant cannot share storage; there is no safe fallback"
+)]
 fn mismatch(id: u8) -> ! {
     panic!(
         "two component types are declared with discriminant {id}: a component's \

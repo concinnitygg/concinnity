@@ -4,7 +4,7 @@
 //!
 //!   target 0  RGBA16F  view-space normal (rgb) + positive linear view depth (a)
 //!   target 1  R8       perceptual roughness
-//!   target 2  RG16F    screen-space motion (prev_uv - cur_uv)
+//!   target 2  RG16F    screen-space motion (`prev_uv` - `cur_uv`)
 //!
 //! plus a private single-sample depth buffer. Every screen-space consumer (SSR
 //! resolve, SSAO, SSGI, TAA, FSR) reads this one output instead of
@@ -34,7 +34,7 @@ use super::super::pipeline_desc::{Blend, Depth, GraphicsPipelineDesc, compute_pi
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::set_writes::SetWrites;
 use super::super::spirv_inputs::input_locations;
-use super::super::texture::*;
+use super::super::texture::{GpuImage, GpuUploadContext, create_depth_image};
 use super::gbuffer_sky::GbufferSky;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::depth;
@@ -61,7 +61,7 @@ pub(in crate::vulkan) const GBUFFER_VELOCITY_FORMAT: vk::Format = vk::Format::R1
 // Size of the per-frame view UBO: jittered_vp + cur_vp + prev_vp + view_mat and
 // the previous clock. Matches the `GbView` UBO in `gbuffer_common.hlsl`.
 pub(in crate::vulkan) const GBUFFER_VIEW_UBO_SIZE: vk::DeviceSize =
-    std::mem::size_of::<GBufferView>() as vk::DeviceSize;
+    size_of::<GBufferView>() as vk::DeviceSize;
 
 // `GBufferView` (the std140 `GbView` UBO) is a GPU-free layout struct that
 // lives in `core::render` (imported above).
@@ -340,9 +340,9 @@ pub(in crate::vulkan) struct GbufferBindlessScene {
 // the G-buffer view UBO, the previous frame's history slot and this frame's
 // draw args.
 pub(in crate::vulkan) fn build_gbuffer_bindless(
-    ctx: GbufferDeviceCtx,
+    ctx: GbufferDeviceCtx<'_>,
     descriptors: GbufferBindlessDescriptors,
-    records: GbufferBindlessRecords,
+    records: GbufferBindlessRecords<'_>,
     gb: &GbufferResources,
     scene: GbufferBindlessScene,
     hot_reload: bool,
@@ -362,7 +362,7 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
     // records, parallel to the object buffer. Device-local: only the snapshot
     // kernel writes them and only the pre-pass reads them, so the host never
     // touches their bytes.
-    let buf_size = (n_cull * std::mem::size_of::<[[f32; 4]; 4]>()) as u64;
+    let buf_size = (n_cull * size_of::<[[f32; 4]; 4]>()) as u64;
     let mut prev_model_buffers = Vec::with_capacity(frames);
     for _ in 0..frames {
         prev_model_buffers.push(alloc.create_buffer(
@@ -376,7 +376,7 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
     // history slot the PREVIOUS frame filled, binding 2 = that frame's draw
     // args. The frame index cycles, so the previous slot is a fixed offset and
     // every set can be written once here.
-    let draw_args_size = (n_cull * std::mem::size_of::<GpuDrawArgs>()) as u64;
+    let draw_args_size = (n_cull * size_of::<GpuDrawArgs>()) as u64;
     let set_layouts: Vec<_> = (0..frames).map(|_| prepass_set_layout).collect();
     let sets = alloc_descriptor_sets(device, descriptor_pool, &set_layouts)?;
     for (f, &set) in sets.iter().enumerate() {
@@ -429,7 +429,7 @@ struct ModelHistoryScene {
 // binding 0, the frame's object buffer at 1 and the frame's history slot at 2,
 // which is the declaration order `model_history.hlsl` fixes.
 fn build_model_history(
-    ctx: GbufferDeviceCtx,
+    ctx: GbufferDeviceCtx<'_>,
     descriptor_pool: vk::DescriptorPool,
     history_buffers: &[PooledBuffer],
     object_buffers: &[PooledBuffer],
@@ -454,7 +454,7 @@ fn build_model_history(
         record_count: n_cull as u32,
         _pad: [0; 3],
     };
-    let params_size = std::mem::size_of::<ModelHistoryParams>() as u64;
+    let params_size = size_of::<ModelHistoryParams>() as u64;
     let params_buf = alloc.create_buffer(
         params_size,
         vk::BufferUsageFlags::UNIFORM_BUFFER,
@@ -462,8 +462,8 @@ fn build_model_history(
     )?;
     params_buf.write_val(0, &params);
 
-    let object_size = (n_cull * std::mem::size_of::<GpuObjectData>()) as u64;
-    let history_size = (n_cull * std::mem::size_of::<[[f32; 4]; 4]>()) as u64;
+    let object_size = (n_cull * size_of::<GpuObjectData>()) as u64;
+    let history_size = (n_cull * size_of::<[[f32; 4]; 4]>()) as u64;
     let set_layouts: Vec<_> = (0..frames * frames).map(|_| set_layout.handle()).collect();
     let sets = alloc_descriptor_sets(device, descriptor_pool, &set_layouts)?;
     for (i, &set) in sets.iter().enumerate() {
@@ -567,7 +567,7 @@ impl GbufferResources {
     // Build every G-buffer pre-pass resource. The pipeline that rasterizes into
     // them is built separately by [`build_gbuffer_bindless`].
     pub(in crate::vulkan) fn new(
-        ctx: GbufferDeviceCtx,
+        ctx: GbufferDeviceCtx<'_>,
         queue: GbufferQueueCtx,
         extent: GbufferExtent,
         pooled: &GbufferPooled,
@@ -615,7 +615,7 @@ impl GbufferResources {
     // given extent. One slot per frame in flight.
     fn build_targets(
         &mut self,
-        ctx: GbufferDeviceCtx,
+        ctx: GbufferDeviceCtx<'_>,
         queue: GbufferQueueCtx,
         extent: GbufferExtent,
         pooled: &GbufferPooled,
@@ -735,7 +735,7 @@ impl GbufferResources {
     // rebuild succeeds.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        ctx: GbufferDeviceCtx,
+        ctx: GbufferDeviceCtx<'_>,
         queue: GbufferQueueCtx,
         extent: GbufferExtent,
         pooled: &GbufferPooled,
@@ -935,12 +935,13 @@ impl VkContext {
         // priming frame fills every slot rather than only its own: the instance
         // region is the one the draw args cannot flag, being init-written.
         let frames = self.cull.prev_model_buffers.len();
-        let slots = match history
+        let slots = if history
             .prime
             .swap(false, std::sync::atomic::Ordering::Relaxed)
         {
-            true => 0..frames,
-            false => frame_idx..frame_idx + 1,
+            0..frames
+        } else {
+            frame_idx..frame_idx + 1
         };
         let device = &self.hw.device;
         let groups = records.div_ceil(MODEL_HISTORY_THREADGROUP) as u32;
@@ -1026,7 +1027,7 @@ impl VkContext {
                 &[],
                 std::slice::from_ref(&barrier),
                 &[],
-            )
+            );
         };
     }
 
@@ -1059,14 +1060,14 @@ impl VkContext {
             .cull
             .indirect_buffers
             .get(frame_idx)
-            .map(|b| b.buffer())
+            .map(PooledBuffer::buffer)
         else {
             return;
         };
         let Some(&gset) = self.cull.gbuffer_sets.get(frame_idx) else {
             return;
         };
-        let stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32;
+        let stride = size_of::<vk::DrawIndexedIndirectCommand>() as u32;
         let prefix = self.state.draw.skinned_record_base() as u32;
 
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice

@@ -40,7 +40,7 @@ pub fn parse_cnb<K: BlobKind>(validity: u32, data: &[u8]) -> Result<(K, usize), 
 }
 
 /// Payload-section offset read from the header alone, so a caller holding only
-/// the first HEADER_SIZE bytes can turn a `PayloadLocator` offset into an
+/// the first `HEADER_SIZE` bytes can turn a `PayloadLocator` offset into an
 /// absolute file offset without loading the image.
 pub fn parse_payload_section_start<K: BlobKind>(header: &[u8]) -> Result<u64, BlobError> {
     Ok(HEADER_SIZE as u64 + parse_header::<K>(header)?)
@@ -228,7 +228,7 @@ mod tests {
         let image = encode_cnb(TEST_SCHEMA_VERSION, &meta(), &[]).unwrap();
         let meta_len = u64::from_le_bytes(image[8..16].try_into().unwrap());
 
-        let mut widened = image.clone();
+        let mut widened = image;
         widened[8..16].copy_from_slice(&(meta_len + 2).to_le_bytes());
         widened.extend_from_slice(&[0, 0]);
 

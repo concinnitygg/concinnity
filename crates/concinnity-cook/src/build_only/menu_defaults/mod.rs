@@ -126,7 +126,7 @@ fn inject_story_pause_menu(
         return Ok(());
     };
 
-    let name = format!("{}_pause", prefix);
+    let name = format!("{prefix}_pause");
     // No MainMenu exists (checked above), so this can only flag a same-name
     // collision with an unrelated asset, which is a hard error rather than a
     // silent skip.
@@ -144,7 +144,7 @@ fn inject_story_pause_menu(
     // when the story has one (a story built without a title screen has nowhere
     // to return to, so its pause menu skips the item). Quit always exits to
     // desktop.
-    let title_screen = format!("{}_title", prefix);
+    let title_screen = format!("{prefix}_title");
     let has_title = assets.iter().any(|v| {
         registered_type(v) == Some(RegisteredType::Screen) && asset_name(v) == title_screen
     });
@@ -184,7 +184,7 @@ fn inject_story_pause_menu(
         assets,
         report,
         "story_pause_menu",
-        &format!("{}_key", name),
+        &format!("{name}_key"),
         "KeyBinding",
         serde_json::json!({ "key": "Escape", "action": NamedAction::Story(StoryCommand::TogglePause) }),
     );
@@ -201,7 +201,7 @@ fn inject_story_pause_menu(
 // resolves them like every other stage reference.
 fn patch_story_scaffold(assets: &mut [serde_json::Value], story_name: &str, menu_name: &str) {
     let pause_screen = menu_name.to_string();
-    let settings_screen = format!("{}_settings_video", menu_name);
+    let settings_screen = format!("{menu_name}_settings_video");
     for v in assets.iter_mut() {
         if registered_type(v) != Some(RegisteredType::Story) || asset_name(v) != story_name {
             continue;
@@ -232,7 +232,7 @@ fn patch_story_scaffold(assets: &mut [serde_json::Value], story_name: &str, menu
 // the default cannot be injected and silently skipping it would hide the
 // conflict.
 fn name_claimed(
-    assets: &mut [serde_json::Value],
+    assets: &[serde_json::Value],
     report: &mut ExpandReport,
     injected_by: &'static str,
     name: &str,

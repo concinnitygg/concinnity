@@ -70,7 +70,7 @@ impl DxContext {
             unsafe {
                 self.hw
                     .device
-                    .CreateRenderTargetView(&buf, None, rtv_handle)
+                    .CreateRenderTargetView(&buf, None, rtv_handle);
             };
             self.swapchain.back_buffers.push(buf);
         }
@@ -164,7 +164,7 @@ impl DxContext {
             // an empty `swapchain.back_buffers` (a panic) on the next frame; the resize
             // poll retries on the following frame.
             self.populate_back_buffers()?;
-            return Err(super::error::map_hresult(e.code(), "ResizeBuffers"));
+            return Err(map_hresult(e.code(), "ResizeBuffers"));
         }
         self.populate_back_buffers()?;
         // The recreated back buffers invalidate any previously captured present
@@ -202,7 +202,7 @@ impl DxContext {
                 unsafe {
                     self.hw
                         .device
-                        .CreateRenderTargetView(&resolve, Some(&rtv_desc), rtv)
+                        .CreateRenderTargetView(&resolve, Some(&raw const rtv_desc), rtv);
                 };
             }
             self.targets.hdr.resolve = Some(resolve);

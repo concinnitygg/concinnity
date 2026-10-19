@@ -177,7 +177,7 @@ fn create_fog_froxel_volume(
     };
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE3D,
-        Width: FOG_FROXEL_X as u64,
+        Width: u64::from(FOG_FROXEL_X),
         Height: FOG_FROXEL_Y,
         DepthOrArraySize: FOG_FROXEL_Z as u16,
         MipLevels: 1,
@@ -194,13 +194,13 @@ fn create_fog_froxel_volume(
     // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
-            &heap_props,
+            &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
-            &desc,
+            &raw const desc,
             // Rest sampled; the graph drives both transitions (see the fn doc).
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             None,
-            &mut tex_opt,
+            &raw mut tex_opt,
         )
     }
     .map_err(|e| map_hresult(e.code(), "create fog froxel volume"))?;
@@ -221,7 +221,7 @@ fn create_fog_froxel_volume(
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe {
-        device.CreateUnorderedAccessView(&resource, None, Some(&uav_desc), uav_cpu);
+        device.CreateUnorderedAccessView(&resource, None, Some(&raw const uav_desc), uav_cpu);
     }
 
     let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
@@ -238,7 +238,7 @@ fn create_fog_froxel_volume(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(&resource, Some(&srv_desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(&resource, Some(&raw const srv_desc), srv_cpu) };
 
     Ok(resource)
 }
@@ -355,7 +355,7 @@ impl FogResources {
         let volume_resource = create_fog_froxel_volume(device, volume_uav_cpu, volume_srv_cpu)?;
 
         // Per-frame FogParams ring.
-        let params_ubo_size = align256(std::mem::size_of::<FogParams>() as u64);
+        let params_ubo_size = align256(size_of::<FogParams>() as u64);
         let frames = alloc.frames_in_flight();
         let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
         let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
@@ -368,14 +368,14 @@ impl FogResources {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map fog params ubo"))?;
-            params_ubo_ptrs.push(ptr as *mut u8);
+            params_ubo_ptrs.push(ptr.cast::<u8>());
             params_ubo_resources.push(buf);
         }
 
         // Per-frame FogFroxelParams ring.
-        let froxel_ubo_size = align256(std::mem::size_of::<FogFroxelParams>() as u64);
+        let froxel_ubo_size = align256(size_of::<FogFroxelParams>() as u64);
         let mut froxel_params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
         let mut froxel_params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
         for _ in 0..frames {
@@ -387,9 +387,9 @@ impl FogResources {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map fog froxel params ubo"))?;
-            froxel_params_ubo_ptrs.push(ptr as *mut u8);
+            froxel_params_ubo_ptrs.push(ptr.cast::<u8>());
             froxel_params_ubo_resources.push(buf);
         }
 
@@ -449,9 +449,8 @@ impl DxContext {
         blocks: &FogBlocks,
         shadow_ubo_gva: u64,
     ) {
-        let fog = match &self.fog.resources {
-            Some(f) => f,
-            None => return,
+        let Some(fog) = &self.fog.resources else {
+            return;
         };
         let FogBlocks {
             params,
@@ -465,14 +464,14 @@ impl DxContext {
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                params as *const FogParams as *const u8,
+                std::ptr::from_ref::<FogParams>(params).cast::<u8>(),
                 fog.params_ubo_ptrs[frame_idx],
-                std::mem::size_of::<FogParams>(),
+                size_of::<FogParams>(),
             );
             std::ptr::copy_nonoverlapping(
-                froxel_params as *const FogFroxelParams as *const u8,
+                std::ptr::from_ref::<FogFroxelParams>(froxel_params).cast::<u8>(),
                 fog.froxel_params_ubo_ptrs[frame_idx],
-                std::mem::size_of::<FogFroxelParams>(),
+                size_of::<FogFroxelParams>(),
             );
         }
         let params_gva = com::gpu_va(&fog.params_ubo_resources[frame_idx]);
@@ -514,9 +513,8 @@ impl DxContext {
     // The pass alpha-blends `(scattered, 1 - T)` over the resolved HDR
     // target.
     pub(in crate::directx) fn encode_fog(&self, cmd: &ID3D12GraphicsCommandList, frame_idx: usize) {
-        let fog = match &self.fog.resources {
-            Some(f) => f,
-            None => return,
+        let Some(fog) = &self.fog.resources else {
+            return;
         };
 
         // `FogParams` / `FogFroxelParams` were uploaded by `encode_fog_froxel`
@@ -538,7 +536,7 @@ impl DxContext {
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&scene_rtv), false, None);
+            cmd.OMSetRenderTargets(1, Some(&raw const scene_rtv), false, None);
             let vp_state = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
                 TopLeftY: 0.0,

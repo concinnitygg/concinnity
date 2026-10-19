@@ -71,7 +71,7 @@ pub(crate) fn prune(dir: &Path, keep: usize) {
     for entry in entries.flatten() {
         let path = entry.path();
         let ext = path.extension().and_then(|e| e.to_str());
-        if !matches!(ext, Some("txt") | Some("dmp")) {
+        if !matches!(ext, Some("txt" | "dmp")) {
             continue;
         }
         if let Some(stem) = path.file_stem().and_then(|s| s.to_str())

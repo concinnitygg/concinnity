@@ -68,10 +68,10 @@ impl RegisteredType {
     /// never reads, which keys on its bake inputs alone so editing one of those
     /// fields reuses the payload. Args that do not resolve key as authored; the
     /// compile refuses them with the real error.
-    pub(crate) fn payload_key_args<'a>(
+    pub(crate) fn payload_key_args(
         self,
-        args: &'a serde_json::Value,
-    ) -> std::borrow::Cow<'a, serde_json::Value> {
+        args: &serde_json::Value,
+    ) -> std::borrow::Cow<'_, serde_json::Value> {
         match self {
             Self::EnvironmentMap => {
                 crate::compile::environment_map::environment_map_payload_key_args(args)
@@ -141,8 +141,8 @@ impl RegisteredType {
 
     /// The baked runtime data that rides the resource record's `data_bytes`
     /// ALONGSIDE a compiled payload, or `None`. Two kinds are such hybrids: a
-    /// SkinnedMesh's geometry compiles into a blob payload while its authored
-    /// placement/material/capsule fields bake here, and an EnvironmentMap's
+    /// `SkinnedMesh`'s geometry compiles into a blob payload while its authored
+    /// placement/material/capsule fields bake here, and an `EnvironmentMap`'s
     /// cubemaps compile while its display fields (`background`) bake here, so
     /// changing one never re-runs the convolution. (Material, a pure data
     /// resource, routes its bytes through `compile_payload` + `is_data`

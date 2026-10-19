@@ -1,7 +1,7 @@
 //! Distant galaxies: a few small spiral and elliptical smudges at hashed
 //! places on the celestial sphere. Placed here, on the CPU, and handed to the
 //! sky's shaders in the atmosphere's constant block; their light profiles are
-//! mirrored from night_sky.hlsl.
+//! mirrored from `night_sky.hlsl`.
 
 use super::hash::{night_hash, night_unit};
 use crate::math::vec3::{cross, dot, normalize_or, scale};

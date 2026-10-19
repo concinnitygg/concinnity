@@ -243,9 +243,10 @@ struct Recorder {
 impl SettingsTarget for Recorder {
     fn rebuild_features(&mut self, _: &ResolvedGraphics) -> RenderResult<()> {
         self.calls.push("rebuild".into());
-        match self.fail_rebuild {
-            true => Err(crate::render::error::RenderError::Other("no".into())),
-            false => Ok(()),
+        if self.fail_rebuild {
+            Err(crate::render::error::RenderError::Other("no".into()))
+        } else {
+            Ok(())
         }
     }
     fn push_feature_params(&mut self, _: &ResolvedGraphics) {

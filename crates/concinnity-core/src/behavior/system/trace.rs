@@ -19,7 +19,7 @@ impl BehaviorSystem {
     // ids by program index, in run order.
     pub(super) fn publish_trace(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         request: &TraceRequest,
         fired: &[(usize, Vec<u32>)],
     ) {

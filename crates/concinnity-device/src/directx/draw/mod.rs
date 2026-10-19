@@ -204,9 +204,9 @@ impl DxContext {
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &self.state.planner.shadow.uniforms as *const ShadowUniforms as *const u8,
+                (&raw const self.state.planner.shadow.uniforms).cast::<u8>(),
                 self.uniforms.shadow_ubo_ptrs[frame_idx],
-                std::mem::size_of::<ShadowUniforms>(),
+                size_of::<ShadowUniforms>(),
             );
         }
         let shadow_ubo_gva = com::gpu_va(&self.uniforms.shadow_ubo_resources[frame_idx]);
@@ -256,9 +256,9 @@ impl DxContext {
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &plan.view as *const ViewUniforms as *const u8,
+                (&raw const plan.view).cast::<u8>(),
                 self.uniforms.view_ubo_ptrs[frame_idx],
-                std::mem::size_of::<ViewUniforms>(),
+                size_of::<ViewUniforms>(),
             );
         }
 
@@ -366,9 +366,9 @@ pub(super) fn upload_light_uniforms(slot: *mut u8, lu: &LightUniforms) {
     // is a separate live value, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(
-            lu as *const LightUniforms as *const u8,
+            std::ptr::from_ref::<LightUniforms>(lu).cast::<u8>(),
             slot,
-            std::mem::size_of::<LightUniforms>(),
+            size_of::<LightUniforms>(),
         );
     }
 }
@@ -439,16 +439,16 @@ pub(super) fn upload_static_records<T: Copy>(
     records: &[T],
     label: &str,
 ) -> RenderResult<()> {
-    let bytes = std::mem::size_of_val(records);
+    let bytes = size_of_val(records);
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { buffer.Map(0, None, Some(&mut ptr)) }
+    unsafe { buffer.Map(0, None, Some(&raw mut ptr)) }
         .map_err(|e| map_hresult(e.code(), &format!("map {label} buffer")))?;
     // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
     // is a separate allocation, so the ranges cannot overlap.
     unsafe {
-        std::ptr::copy_nonoverlapping(records.as_ptr() as *const u8, ptr as *mut u8, bytes);
+        std::ptr::copy_nonoverlapping(records.as_ptr().cast::<u8>(), ptr.cast::<u8>(), bytes);
         buffer.Unmap(0, None);
     }
     Ok(())

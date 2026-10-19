@@ -38,7 +38,7 @@ impl SsaoSettings {
     pub fn from_config(cfg: &AmbientOcclusion) -> Option<Self> {
         cfg.enabled
             .then(|| Self::resolve(cfg.radius, cfg.intensity))
-            .filter(|s| s.contributes())
+            .filter(Self::contributes)
     }
 
     /// Clamp the authored radius / intensity into a safe range.
@@ -84,7 +84,7 @@ impl SsaoSettings {
 
     // The view depth at which the radius spans `px` pixels of a `height_px`
     // tall render: the viewport spans `2 * tan_half_fov_y * depth` there.
-    fn depth_at_radius_px(&self, tan_half_fov_y: f32, height_px: u32, px: f32) -> f32 {
+    fn depth_at_radius_px(self, tan_half_fov_y: f32, height_px: u32, px: f32) -> f32 {
         self.radius * height_px.max(1) as f32 / (2.0 * tan_half_fov_y.max(1.0e-6) * px)
     }
 }

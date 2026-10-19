@@ -8,18 +8,18 @@
 //!
 //! One tagged format serves every 2D texture (little-endian):
 //!   u32  magic      = b"TEX2"
-//!   u32  format_id  (0 RGBA8, 1 BC1, 2 BC3, 3 BC5, 4 BC7)
-//!   u32  mip_count  (>= 1)
+//!   u32  `format_id`  (0 RGBA8, 1 BC1, 2 BC3, 3 BC5, 4 BC7)
+//!   u32  `mip_count`  (>= 1)
 //!   per mip, level 0 first (largest):
 //!     u32  width
 //!     u32  height
-//!     u32  byte_len
-//!     byte_len bytes of level data
+//!     u32  `byte_len`
+//!     `byte_len` bytes of level data
 //!
 //! RGBA8 sources (PNG / JPEG / procedural generators) carry a single mip; the
 //! backend upload generates the minification chain (`crate::render::mipmap`).
 //! Block-compressed sources (KTX2 / DDS) carry the container's full mip chain and
-//! upload it verbatim, since no runtime BCn encoder exists.
+//! upload it verbatim, since no runtime `BCn` encoder exists.
 
 // Magic tagging every compiled 2D texture payload.
 use crate::decode::{ByteReader, checked_product};
@@ -57,21 +57,21 @@ impl TextureFormat {
     /// Stable on-disk identifier written into the payload header.
     pub fn id(self) -> u32 {
         match self {
-            TextureFormat::Rgba8 => 0,
-            TextureFormat::Bc1 => 1,
-            TextureFormat::Bc3 => 2,
-            TextureFormat::Bc5 => 3,
-            TextureFormat::Bc7 => 4,
+            Self::Rgba8 => 0,
+            Self::Bc1 => 1,
+            Self::Bc3 => 2,
+            Self::Bc5 => 3,
+            Self::Bc7 => 4,
         }
     }
 
     pub(crate) fn from_id(id: u32) -> Option<Self> {
         match id {
-            0 => Some(TextureFormat::Rgba8),
-            1 => Some(TextureFormat::Bc1),
-            2 => Some(TextureFormat::Bc3),
-            3 => Some(TextureFormat::Bc5),
-            4 => Some(TextureFormat::Bc7),
+            0 => Some(Self::Rgba8),
+            1 => Some(Self::Bc1),
+            2 => Some(Self::Bc3),
+            3 => Some(Self::Bc5),
+            4 => Some(Self::Bc7),
             _ => None,
         }
     }
@@ -80,9 +80,9 @@ impl TextureFormat {
     /// sized per pixel rather than per block.
     pub fn block_bytes(self) -> Option<usize> {
         match self {
-            TextureFormat::Rgba8 => None,
-            TextureFormat::Bc1 => Some(8),
-            TextureFormat::Bc3 | TextureFormat::Bc5 | TextureFormat::Bc7 => Some(16),
+            Self::Rgba8 => None,
+            Self::Bc1 => Some(8),
+            Self::Bc3 | Self::Bc5 | Self::Bc7 => Some(16),
         }
     }
 
@@ -131,7 +131,7 @@ pub struct TextureImage {
 impl TextureImage {
     /// Wrap a single RGBA8 level (the PNG / JPEG / procedural path).
     pub fn rgba8(width: u32, height: u32, pixels: Vec<u8>) -> Self {
-        TextureImage {
+        Self {
             format: TextureFormat::Rgba8,
             mips: vec![TextureMip {
                 width,
@@ -144,6 +144,7 @@ impl TextureImage {
     /// A single-level RGBA8 image with its full box-filtered mip chain
     /// ([`generate_mip_chain`](crate::render::mipmap::generate_mip_chain)) appended.
     /// Every other image, already chained or block compressed, is returned as is.
+    #[must_use]
     pub fn with_mip_chain(self) -> Self {
         if self.format != TextureFormat::Rgba8 || self.mips.len() != 1 {
             return self;
@@ -160,7 +161,7 @@ impl TextureImage {
                 data: level.pixels,
             })
             .collect();
-        TextureImage {
+        Self {
             format: TextureFormat::Rgba8,
             mips,
         }
@@ -168,12 +169,12 @@ impl TextureImage {
 
     /// Base (level 0) dimensions.
     pub fn width(&self) -> u32 {
-        self.mips.first().map(|m| m.width).unwrap_or(0)
+        self.mips.first().map_or(0, |m| m.width)
     }
 
     /// Base (level 0) height in pixels.
     pub fn height(&self) -> u32 {
-        self.mips.first().map(|m| m.height).unwrap_or(0)
+        self.mips.first().map_or(0, |m| m.height)
     }
 
     /// Check the image is uploadable: at least one level, and every level holds
@@ -247,14 +248,13 @@ pub fn deserialize(bytes: &[u8]) -> Result<TextureImage, String> {
     let mut r = ByteReader::open_payload(bytes, TEXTURE_PAYLOAD_MAGIC, HEADER_BYTES, "texture")?;
     let format_id = r.u32()?;
     let format = TextureFormat::from_id(format_id)
-        .ok_or_else(|| format!("texture payload has unknown format_id {}", format_id))?;
+        .ok_or_else(|| format!("texture payload has unknown format_id {format_id}"))?;
     // Bounded before it reaches `with_capacity`: the count is payload-supplied
     // and reserving for a u32 of them would abort on the allocation alone.
     let mip_count = r.u32()? as usize;
     if mip_count == 0 || mip_count > MAX_MIP_LEVELS {
         return Err(format!(
-            "texture payload declares {} mip levels (expected 1..={})",
-            mip_count, MAX_MIP_LEVELS
+            "texture payload declares {mip_count} mip levels (expected 1..={MAX_MIP_LEVELS})"
         ));
     }
 
@@ -267,8 +267,7 @@ pub fn deserialize(bytes: &[u8]) -> Result<TextureImage, String> {
         let expected = format.mip_byte_len(width, height)?;
         if byte_len != expected {
             return Err(format!(
-                "texture payload mip {} ({}x{} {:?}) declares {} bytes, format needs {}",
-                level, width, height, format, byte_len, expected
+                "texture payload mip {level} ({width}x{height} {format:?}) declares {byte_len} bytes, format needs {expected}"
             ));
         }
         mips.push(TextureMip {
@@ -316,7 +315,7 @@ pub fn downscale_rgba(
                     }
                     let si = ((src_y * width + src_x) * 4) as usize;
                     for c in 0..4 {
-                        acc[c] += pixels[si + c] as u32;
+                        acc[c] += u32::from(pixels[si + c]);
                     }
                     n += 1;
                 }
@@ -461,7 +460,7 @@ mod tests {
     fn deserialize_rejects_a_payload_shorter_than_the_header() {
         let full = serialize(&TextureImage::rgba8(1, 1, vec![0; 4]));
         for len in 0..HEADER_BYTES {
-            assert!(deserialize(&full[..len]).is_err(), "len {} decoded", len);
+            assert!(deserialize(&full[..len]).is_err(), "len {len} decoded");
         }
     }
 

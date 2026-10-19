@@ -77,7 +77,7 @@ pub(crate) struct JointSet {
 
 impl JointSet {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
-        JointSet {
+        Self {
             joints: Vec::with_capacity(capacity),
         }
     }

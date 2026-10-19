@@ -16,8 +16,8 @@ pub(crate) fn decode_tga(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let id_len = bytes[0] as usize;
     let color_map_type = bytes[1];
     let image_type = bytes[2];
-    let width = u16::from_le_bytes([bytes[12], bytes[13]]) as u32;
-    let height = u16::from_le_bytes([bytes[14], bytes[15]]) as u32;
+    let width = u32::from(u16::from_le_bytes([bytes[12], bytes[13]]));
+    let height = u32::from(u16::from_le_bytes([bytes[14], bytes[15]]));
     let bpp = bytes[16];
     let descriptor = bytes[17];
     let top_origin = descriptor & 0x20 != 0;
@@ -26,14 +26,14 @@ pub(crate) fn decode_tga(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
         return Err("color-mapped TGA images are not supported".to_string());
     }
     if width == 0 || height == 0 {
-        return Err(format!("TGA has zero dimension {}x{}", width, height));
+        return Err(format!("TGA has zero dimension {width}x{height}"));
     }
 
     let channels = match bpp {
         32 => 4usize,
         24 => 3,
         8 => 1,
-        other => return Err(format!("unsupported TGA bit depth {}", other)),
+        other => return Err(format!("unsupported TGA bit depth {other}")),
     };
 
     let pixel_count = checked_product("TGA", &[width as usize, height as usize])?;
@@ -47,7 +47,7 @@ pub(crate) fn decode_tga(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let raw = match image_type {
         2 | 3 => decode_raw(data, pixel_count, channels)?,
         10 | 11 => decode_rle(data, pixel_count, channels)?,
-        other => return Err(format!("unsupported TGA image type {}", other)),
+        other => return Err(format!("unsupported TGA image type {other}")),
     };
 
     // Convert source channel order to RGBA, then flip rows if the origin is at

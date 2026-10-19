@@ -81,9 +81,9 @@ pub struct FrameGraphInputs {
     /// the world declared `Exposure.auto`). The graph
     /// appends an `AutoExposure` compute pass that reads the Main pass's
     /// `hdr_resolve_v1` (pre-decoration) and writes the histogram +
-    /// readback buffer. The compile pass's WAR step pins AutoExposure
-    /// before the first hdr_resolve post-Main writer (Decals or Fog or
-    /// ParticlesDraw) so AutoExposure samples the un-decorated scene.
+    /// readback buffer. The compile pass's WAR step pins `AutoExposure`
+    /// before the first `hdr_resolve` post-Main writer (Decals or Fog or
+    /// `ParticlesDraw`) so `AutoExposure` samples the un-decorated scene.
     pub auto_exposure_enabled: bool,
     /// `true` when `Bloom.intensity > 0.0`. The graph
     /// adds a `Bloom` pass that thresholds / downsamples / upsamples the
@@ -92,17 +92,17 @@ pub struct FrameGraphInputs {
     pub bloom_enabled: bool,
     /// `true` when TAA is on (the velocity pre-pass only runs as part of
     /// the TAA stack). The graph adds a `Velocity` render pass that
-    /// writes the per-pixel motion-vector buffer TaaResolve consumes;
-    /// TaaResolve declares the read so Velocity → TaaResolve is explicit.
+    /// writes the per-pixel motion-vector buffer `TaaResolve` consumes;
+    /// `TaaResolve` declares the read so Velocity → `TaaResolve` is explicit.
     pub velocity_enabled: bool,
     /// `true` when TAA is on. The graph adds a `TaaResolve` render pass
-    /// that reads the pre-TAA scene (SSR resolve output or hdr_resolve)
+    /// that reads the pre-TAA scene (SSR resolve output or `hdr_resolve`)
     /// and writes the imported `scene_color` Bloom + Composite consume.
     pub taa_enabled: bool,
     /// `true` when SSR is on. The graph adds an `SsrResolve` render pass
     /// that reads the post-decoration `hdr_resolve` and writes the
     /// imported `scene_pre_taa` texture, which only exists when this or
-    /// `rt_reflections_enabled` is set. When TAA is also on, TaaResolve
+    /// `rt_reflections_enabled` is set. When TAA is also on, `TaaResolve`
     /// reads the post-SsrResolve version; with TAA off, Bloom +
     /// Composite read that version directly.
     pub ssr_enabled: bool,
@@ -116,26 +116,26 @@ pub struct FrameGraphInputs {
     /// alongside the raster front.
     pub particles_enabled: bool,
     /// `true` when a `VolumetricFog` is in the world. The graph adds a
-    /// `Fog` render pass between Decals and ParticlesDraw on the
-    /// hdr_resolve RMW chain.
+    /// `Fog` render pass between Decals and `ParticlesDraw` on the
+    /// `hdr_resolve` RMW chain.
     pub fog_enabled: bool,
     /// `true` when at least one `Decal` is in the world AND the decal
     /// pipeline is built. The graph adds a `Decals` render pass at the
-    /// head of the hdr_resolve post-Main RMW chain.
+    /// head of the `hdr_resolve` post-Main RMW chain.
     pub decals_enabled: bool,
     /// `true` when SSR needs the geometry pre-pass; matches
     /// `self.ssr_settings.is_some()`. One of the three consumer gates that make
     /// the graph emit `GBufferPrepass`; SSR then marches against its
-    /// normal+depth output, which SsaoBlur reads as well.
+    /// normal+depth output, which `SsaoBlur` reads as well.
     pub ssr_prepass_enabled: bool,
     /// `true` when SSAO should run; matches
     /// `self.ssao_settings.is_some()`. The graph adds an `SsaoBlur`
     /// render pass that dispatches the bundled `encode_ssao` (which
-    /// internally encodes SsaoDepth + SsaoKernel + SsaoBlur). SsaoBlur
-    /// writes `ao_output`; Main reads it. SsaoDepth + SsaoKernel
-    /// stay as timing-only PassIds.
+    /// internally encodes `SsaoDepth` + `SsaoKernel` + `SsaoBlur`). `SsaoBlur`
+    /// writes `ao_output`; Main reads it. `SsaoDepth` + `SsaoKernel`
+    /// stay as timing-only `PassIds`.
     pub ssao_enabled: bool,
-    /// `true` when temporal upscaling is on (e.g. MetalFX on Metal). The
+    /// `true` when temporal upscaling is on (e.g. `MetalFX` on Metal). The
     /// graph adds an `Upscale` pass between the post-SSR scene and the
     /// Bloom + Composite stack that reads `scene_pre_taa` + `velocity`
     /// and writes the imported `scene_color` at output resolution. When
@@ -165,15 +165,15 @@ pub struct FrameGraphInputs {
     pub planar_reflection_enabled: bool,
     /// `true` when a system submitted world-space lines this frame AND the
     /// backend's line pipeline is live. The graph adds a `Lines` render pass at
-    /// the tail of the hdr_resolve RMW chain: it blend-writes the scene color
+    /// the tail of the `hdr_resolve` RMW chain: it blend-writes the scene color
     /// and samples the resolved scene depth so a line behind geometry is
     /// occluded by it. A frame with no lines omits the node entirely.
     pub lines_enabled: bool,
     /// `true` when at least one visible `SdfVolume` is in the world AND
     /// the backend's raymarch pipeline is live. The graph adds a
     /// `Raymarch` render pass between `AutoExposure` and `Decals` on the
-    /// hdr_resolve RMW chain: it reads the head of the chain (so
-    /// AutoExposure samples the pre-raymarch scene) and writes the next
+    /// `hdr_resolve` RMW chain: it reads the head of the chain (so
+    /// `AutoExposure` samples the pre-raymarch scene) and writes the next
     /// version that Decals then bumps further. The pass also RMWs the
     /// main depth attachment so subsequent passes see raymarched
     /// surfaces' depth, and that read-modify-write is declared, which is
@@ -189,8 +189,8 @@ pub struct FrameGraphInputs {
     /// → `Main2` between `Main` and the post-decoration chain: `HizBuild`
     /// rebuilds the Hi-Z pyramid from phase-1 depth, `Cull2` re-tests the
     /// objects phase-1 cull marked occluded, and `Main2` redraws the
-    /// disoccluded survivors. `Main2`'s hdr_resolve write becomes the head
-    /// of the post chain so AutoExposure / Decals / Fog / SSR see the
+    /// disoccluded survivors. `Main2`'s `hdr_resolve` write becomes the head
+    /// of the post chain so `AutoExposure` / Decals / Fog / SSR see the
     /// combined two-pass result.
     pub two_pass_occlusion_enabled: bool,
     /// `true` when screen-space global illumination is on
@@ -236,7 +236,7 @@ pub struct FrameGraphInputs {
     pub world_hidden: bool,
     /// `true` when the scene has local lights or reflection probes to cluster.
     /// The graph adds a `LightCull` compute pass before Main that bins both into
-    /// per-cluster lists, which Main, SsrResolve, RtReflections and Transparent
+    /// per-cluster lists, which Main, `SsrResolve`, `RtReflections` and Transparent
     /// read (RAW edges). While false, every reader iterates the whole light and
     /// probe set.
     pub clustering_enabled: bool,
@@ -255,7 +255,7 @@ pub struct FrameGraphInputs {
     /// a frame with a writer declares it even with TAA and the upscaler off.
     pub composite_reads_reactive: bool,
     /// Number of spot shadow map slices to render, i.e. how many spot lights cast
-    /// shadows. Zero skips the SpotShadow pass and its imported array entirely.
+    /// shadows. Zero skips the `SpotShadow` pass and its imported array entirely.
     pub shadowed_spot_count: u32,
     /// Per-slice edge of the spot shadow map array, so the imported resource
     /// carries its real dimensions.
@@ -295,7 +295,7 @@ pub struct FrameGraphInputs {
     /// `true` when the world declares an `Atmosphere` and the backend built
     /// its tables. The graph adds an `Atmosphere` compute pass ahead of `Main`
     /// (which draws the sky from its tables and lights with its irradiance)
-    /// and an `AerialPerspective` render pass on the hdr_resolve chain ahead
+    /// and an `AerialPerspective` render pass on the `hdr_resolve` chain ahead
     /// of `Fog`.
     pub atmosphere_enabled: bool,
     /// `true` when a water surface takes its sea from a simulated ocean and
@@ -335,7 +335,7 @@ impl FrameGraphInputs {
     /// must cover every per-frame graph, not just the current frame's active
     /// passes), or to build a representative graph for a backend's own tests.
     pub fn all_off() -> Self {
-        FrameGraphInputs {
+        Self {
             shadow_enabled: false,
             shadow_map_size: 2048,
             hdr_width: 1280,
@@ -404,12 +404,12 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
     ("transparent", |i| i.transparent_enabled = true),
     ("planar_reflection", |i| {
         i.transparent_enabled = true;
-        i.planar_reflection_enabled = true
+        i.planar_reflection_enabled = true;
     }),
     ("lines", |i| i.lines_enabled = true),
     ("raymarch", |i| i.raymarch_enabled = true),
     ("two_pass_occlusion", |i| {
-        i.two_pass_occlusion_enabled = true
+        i.two_pass_occlusion_enabled = true;
     }),
     ("ssgi", |i| i.ssgi_enabled = true),
     ("ssgi_resolve", |i| i.ssgi_resolve_enabled = true),
@@ -419,16 +419,16 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
     ("clustered_lighting", |i| i.clustering_enabled = true),
     ("composite_reads_ao", |i| i.composite_reads_ao = true),
     ("composite_reads_motion", |i| {
-        i.composite_reads_motion = true
+        i.composite_reads_motion = true;
     }),
     ("composite_reads_reactive", |i| {
-        i.composite_reads_reactive = true
+        i.composite_reads_reactive = true;
     }),
     ("shadowed_spots", |i| i.shadowed_spot_count = 2),
     ("hiz_build", |i| i.hiz_build_enabled = true),
     ("reactive_mask", |i| i.reactive_mask_enabled = true),
     ("upscale_reads_reactive", |i| {
-        i.upscale_reads_reactive = true
+        i.upscale_reads_reactive = true;
     }),
     ("grass", |i| i.grass_enabled = true),
     ("atmosphere", |i| i.atmosphere_enabled = true),
@@ -1790,8 +1790,8 @@ mod tests {
         // nor the resource may appear (an imported resource with no pass would
         // still take a registry entry in every backend).
         let g = build_frame_graph(&all_off()).expect("compiles");
-        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
-        assert!(!order.contains(&PassId::HizFinal));
+
+        assert!(!g.passes.iter().map(|p| p.id).any(|x| x == PassId::HizFinal));
         assert!(!g.resources.iter().any(|r| r.label == "hiz_pyramid"));
     }
 
@@ -2103,8 +2103,13 @@ mod tests {
         i.velocity_enabled = true;
         i.taa_enabled = true;
         let g = build_frame_graph(&i).expect("compiles");
-        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
-        assert!(order.contains(&PassId::GBufferPrepass));
+
+        assert!(
+            g.passes
+                .iter()
+                .map(|p| p.id)
+                .any(|x| x == PassId::GBufferPrepass)
+        );
     }
 
     #[test]
@@ -2545,8 +2550,13 @@ mod tests {
         i.velocity_enabled = true;
         // transparent_enabled left at false.
         let g = build_frame_graph(&i).expect("compiles");
-        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
-        assert!(!order.contains(&PassId::Transparent));
+
+        assert!(
+            !g.passes
+                .iter()
+                .map(|p| p.id)
+                .any(|x| x == PassId::Transparent)
+        );
     }
 
     #[test]
@@ -2589,16 +2599,21 @@ mod tests {
     fn ssgi_off_means_no_slot() {
         // IBL-only indirect lighting: the pass is omitted entirely.
         let g = build_frame_graph(&all_off()).expect("compiles");
-        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
-        assert!(!order.contains(&PassId::Ssgi));
+
+        assert!(!g.passes.iter().map(|p| p.id).any(|x| x == PassId::Ssgi));
     }
 
     #[test]
     fn rt_reflections_off_means_no_slot() {
         // No ray tracing requested: the pass is omitted entirely.
         let g = build_frame_graph(&all_off()).expect("compiles");
-        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
-        assert!(!order.contains(&PassId::RtReflections));
+
+        assert!(
+            !g.passes
+                .iter()
+                .map(|p| p.id)
+                .any(|x| x == PassId::RtReflections)
+        );
     }
 
     #[test]
@@ -2753,8 +2768,8 @@ mod tests {
         // No `SdfVolume` in the world: pass is omitted, no executor stub
         // ever fires.
         let g = build_frame_graph(&all_off()).expect("compiles");
-        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
-        assert!(!order.contains(&PassId::Raymarch));
+
+        assert!(!g.passes.iter().map(|p| p.id).any(|x| x == PassId::Raymarch));
     }
 
     #[test]

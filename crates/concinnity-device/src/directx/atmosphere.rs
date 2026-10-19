@@ -152,7 +152,7 @@ impl DxSkyCube {
         let cube = cube_resource("atmosphere sky cube")?;
         let mips = SKY_CUBE_PLAN.mips();
         write_prefilter_views(device, slots, cpu, &capture, mips, |mip, handle| {
-            write_cube_mip_uav(device, &cube, 0, mip, handle)
+            write_cube_mip_uav(device, &cube, 0, mip, handle);
         });
         write_mips_cube_srv(device, &cube, mips, prefilter_srv_cpu);
         let kernel_root_sig = kernel_root_sig(device)?;
@@ -182,7 +182,14 @@ fn create_texture(
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
     // new COM object lands in a binding that owns it.
     unsafe {
-        device.CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, desc, RESTING, None, &mut out)
+        device.CreateCommittedResource(
+            &raw const heap,
+            D3D12_HEAP_FLAG_NONE,
+            desc,
+            RESTING,
+            None,
+            &raw mut out,
+        )
     }
     .map_err(|e| map_hresult(e.code(), &format!("create atmosphere {label}")))?;
     out.ok_or_else(|| RenderError::Other(format!("create atmosphere {label} returned None")))
@@ -195,7 +202,7 @@ fn table_desc(extent: [u32; 3]) -> D3D12_RESOURCE_DESC {
         } else {
             D3D12_RESOURCE_DIMENSION_TEXTURE2D
         },
-        Width: extent[0] as u64,
+        Width: u64::from(extent[0]),
         Height: extent[1],
         DepthOrArraySize: extent[2] as u16,
         MipLevels: 1,
@@ -272,8 +279,8 @@ fn write_table_views(
     // SAFETY: the view descriptors and the resource they name are live for the calls, and the
     // destination handles address slots this context reserved in a heap it owns.
     unsafe {
-        device.CreateShaderResourceView(resource, Some(&srv), srv_cpu);
-        device.CreateUnorderedAccessView(resource, None, Some(&uav), uav_cpu);
+        device.CreateShaderResourceView(resource, Some(&raw const srv), srv_cpu);
+        device.CreateUnorderedAccessView(resource, None, Some(&raw const uav), uav_cpu);
     }
 }
 
@@ -297,7 +304,7 @@ fn write_cube_srv(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved in a heap it owns.
-    unsafe { device.CreateShaderResourceView(resource, Some(&srv), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(resource, Some(&raw const srv), srv_cpu) };
 }
 
 // The irradiance cube: its cube SRV in the environment's slot and a UAV over
@@ -322,7 +329,7 @@ fn write_cube_views(
         },
     };
     // SAFETY: as `write_cube_srv`.
-    unsafe { device.CreateUnorderedAccessView(resource, None, Some(&uav), uav_cpu) };
+    unsafe { device.CreateUnorderedAccessView(resource, None, Some(&raw const uav), uav_cpu) };
 }
 
 // The kernels' root signature:
@@ -457,7 +464,7 @@ impl DxAtmosphere {
             device,
             &D3D12_RESOURCE_DESC {
                 Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-                Width: IRRADIANCE_FACE as u64,
+                Width: u64::from(IRRADIANCE_FACE),
                 Height: IRRADIANCE_FACE,
                 DepthOrArraySize: 6,
                 MipLevels: 1,
@@ -478,7 +485,7 @@ impl DxAtmosphere {
             slots.uav_cpu[4],
         );
 
-        let size = align256(std::mem::size_of::<AtmosphereParams>() as u64);
+        let size = align256(size_of::<AtmosphereParams>() as u64);
         let mut params_buffers = Vec::new();
         let mut params_ptrs = Vec::new();
         for _ in 0..alloc.frames_in_flight() {
@@ -490,9 +497,9 @@ impl DxAtmosphere {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map atmosphere params"))?;
-            params_ptrs.push(ptr as *mut u8);
+            params_ptrs.push(ptr.cast::<u8>());
             params_buffers.push(buf);
         }
 
@@ -609,9 +616,9 @@ impl DxContext {
             // init sized for this block, and the source is a separate live value.
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &params as *const AtmosphereParams as *const u8,
+                    (&raw const params).cast::<u8>(),
                     ptr,
-                    std::mem::size_of::<AtmosphereParams>(),
+                    size_of::<AtmosphereParams>(),
                 );
             }
         }
@@ -765,7 +772,7 @@ impl DxContext {
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&scene_rtv), false, None);
+            cmd.OMSetRenderTargets(1, Some(&raw const scene_rtv), false, None);
             cmd.RSSetViewports(&[D3D12_VIEWPORT {
                 TopLeftX: 0.0,
                 TopLeftY: 0.0,
@@ -802,7 +809,7 @@ impl DxContext {
         let Some(atmo) = self.atmosphere.as_ref() else {
             return false;
         };
-        let Some(params_gva) = atmo.params.get().and(atmo.params_gva(frame_idx)) else {
+        let Some(params_gva) = atmo.params.get().and_then(|_| atmo.params_gva(frame_idx)) else {
             return false;
         };
         // SAFETY: the command list is in the recording state with the CBV/SRV/UAV heap set, and

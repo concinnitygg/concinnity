@@ -83,7 +83,7 @@ pub(super) fn mesh_stream_data(
             });
             continue;
         }
-        let vstart = obj.vertex_offset / core::mem::size_of::<Vertex>();
+        let vstart = obj.vertex_offset / size_of::<Vertex>();
         let vend = vstart + obj.vertex_count;
         let iend = obj.index_offset + obj.index_count;
         if vend > all_vertices.len() || iend > all_indices.len() {
@@ -228,9 +228,9 @@ mod tests {
         // Global indices into a mesh whose vertex region starts at vertex 2.
         let indices: Vec<u32> = vec![2, 3, 2];
         // vertex_offset is a BYTE offset; vertex 2 => 2 * size_of::<Vertex>().
-        let vbyte = 2 * core::mem::size_of::<Vertex>();
+        let vbyte = 2 * size_of::<Vertex>();
         let objs = vec![draw(vbyte, 2, 0, 3, 0, NO_NORMAL_MAP_SLOT, true)];
-        let data = mesh_stream_data(&objs, &verts, &indices, &Default::default());
+        let data = mesh_stream_data(&objs, &verts, &indices, &HashSet::default());
         assert_eq!(data.draw_indices, vec![DrawIndex(0)]);
         assert_eq!(data.payloads.len(), 1);
         assert_eq!(data.payloads[0].vertices.len(), 2);
@@ -248,7 +248,7 @@ mod tests {
             // Cullable but vertex_count overruns the 2-vertex buffer: skipped.
             draw(0, 5, 0, 2, 0, NO_NORMAL_MAP_SLOT, true),
         ];
-        let data = mesh_stream_data(&objs, &verts, &indices, &Default::default());
+        let data = mesh_stream_data(&objs, &verts, &indices, &HashSet::default());
         assert!(data.draw_indices.is_empty());
         assert!(data.payloads.is_empty());
     }

@@ -79,17 +79,15 @@ impl MtlContext {
     // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
     pub(in crate::metal) fn encode_fog(
         &self,
-        cmd_buf: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+        cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         params: &FogParams,
         froxel_params: &FogFroxelParams,
     ) -> RenderResult<u32> {
-        let pipeline = match &self.fog.pipeline {
-            Some(p) => p,
-            None => return Ok(0),
+        let Some(pipeline) = &self.fog.pipeline else {
+            return Ok(0);
         };
-        let volume = match &self.fog.froxel_volume {
-            Some(v) => v,
-            None => return Ok(0),
+        let Some(volume) = &self.fog.froxel_volume else {
+            return Ok(0);
         };
 
         let pass_desc = MTLRenderPassDescriptor::new();
@@ -143,17 +141,15 @@ impl MtlContext {
     // `encode_fog`, which samples the same volume.
     pub(in crate::metal) fn encode_fog_froxel(
         &self,
-        cmd_buf: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+        cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         params: &FogParams,
         froxel_params: &FogFroxelParams,
     ) -> RenderResult<u32> {
-        let pipeline = match &self.fog.froxel_pipeline {
-            Some(p) => p,
-            None => return Ok(0),
+        let Some(pipeline) = &self.fog.froxel_pipeline else {
+            return Ok(0);
         };
-        let volume = match &self.fog.froxel_volume {
-            Some(v) => v,
-            None => return Ok(0),
+        let Some(volume) = &self.fog.froxel_volume else {
+            return Ok(0);
         };
 
         let cmd_buf_dyn: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer> = cmd_buf;

@@ -41,7 +41,7 @@ pub struct JointProportion {
     pub length: f32,
 }
 
-/// Shape sliders and joint proportions applied to one [SkinnedMesh](#skinnedmesh).
+/// Shape sliders and joint proportions applied to one [`SkinnedMesh`](#skinnedmesh).
 ///
 /// Every characteristic of the shape is data on the mesh, not code: a slider
 /// drives one or two of the mesh's morph targets, and a proportion scales or
@@ -66,7 +66,7 @@ pub struct JointProportion {
 /// declares a `capsule`, the capsule's half-height follows the skeleton's
 /// height change and its radius follows the root joint's scale.
 ///
-/// `target` may name a [CharacterModel](#charactermodel) as well as a
+/// `target` may name a [`CharacterModel`](#charactermodel) as well as a
 /// `SkinnedMesh`; the model's emitted mesh is what the shape deforms.
 ///
 /// **Baking.** With `bake` set, the build flattens the shape into its target:
@@ -86,7 +86,7 @@ pub struct JointProportion {
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct CharacterShape {
-    /// The [SkinnedMesh](#skinnedmesh) this shape deforms.
+    /// The [`SkinnedMesh`](#skinnedmesh) this shape deforms.
     pub target: Option<SkinnedMeshHandle>,
     /// Named shape values, each resolved to the mesh's morph targets.
     pub sliders: Vec<ShapeSlider>,

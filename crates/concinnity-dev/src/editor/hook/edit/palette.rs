@@ -1,4 +1,4 @@
-//! EditorHook: the command palette's drive. Ctrl+K toggles it (with a one-frame
+//! `EditorHook`: the command palette's drive. Ctrl+K toggles it (with a one-frame
 //! focus blur so the opening press never types into the query); the item list
 //! is built from the providers on open; the query is mirrored off the field
 //! once a frame, re-ranking through `palette::matches`. A committed row acts

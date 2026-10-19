@@ -37,7 +37,7 @@ fn tree_rows_group_by_origin_and_narrow_by_search() {
             .iter()
             .filter_map(|r| match r {
                 TreeRow::Asset { name, .. } => Some(name.clone()),
-                _ => None,
+                TreeRow::Header { .. } => None,
             })
             .collect()
     };
@@ -47,7 +47,7 @@ fn tree_rows_group_by_origin_and_narrow_by_search() {
         .iter()
         .filter_map(|r| match r {
             TreeRow::Header { label, .. } => Some(label.clone()),
-            _ => None,
+            TreeRow::Asset { .. } => None,
         })
         .collect();
     assert_eq!(headers, [asset_tree::WORLD_GROUP, "fox"]);

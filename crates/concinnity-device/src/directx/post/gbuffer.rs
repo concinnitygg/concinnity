@@ -3,7 +3,7 @@
 //!
 //!   target 0  RGBA16F  view-space normal (rgb) + positive linear view depth (a)
 //!   target 1  R8       perceptual roughness
-//!   target 2  RG16F    screen-space motion (prev_uv - cur_uv)
+//!   target 2  RG16F    screen-space motion (`prev_uv` - `cur_uv`)
 //!
 //! plus a private single-sample depth buffer. Every screen-space consumer (SSR
 //! resolve, SSAO kernel/blur, SSGI trace/composite, TAA resolve, FSR upscaler)
@@ -54,7 +54,7 @@ pub(in crate::directx) const GBUFFER_ROUGHNESS_CLEAR: [f32; 4] = [1.0, 0.0, 0.0,
 // Size of the per-frame view UBO: jittered_vp + cur_vp + prev_vp + view_mat,
 // the previous clock and camera position, and the motion flag. Matches the
 // `GbView` cbuffer in `gbuffer_common.hlsl`.
-const GBUFFER_VIEW_UBO_SIZE: u64 = std::mem::size_of::<GBufferView>() as u64;
+const GBUFFER_VIEW_UBO_SIZE: u64 = size_of::<GBufferView>() as u64;
 
 // `GBufferView` (the `GbView` cbuffer) is a GPU-free layout struct that lives in
 // `core::render`; re-export it so
@@ -308,7 +308,7 @@ fn write_pooled_views(
 
 impl GbufferResources {
     pub(in crate::directx) fn new(
-        ctx: GbufferDeviceCtx,
+        ctx: GbufferDeviceCtx<'_>,
         extent: GbufferExtent,
         slots: GbufferSlots,
         pooled: &GbufferPooled,
@@ -348,9 +348,9 @@ impl GbufferResources {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map gbuffer view ubo"))?;
-            view_ubo_ptrs.push(ptr as *mut u8);
+            view_ubo_ptrs.push(ptr.cast::<u8>());
             view_ubo_resources.push(buf);
         }
 
@@ -457,8 +457,7 @@ impl DxContext {
             let device = self.hw.alloc.device();
             let (root_sig, pso) =
                 build_model_history(device, self.hw.info_queue.as_ref(), self.hot_reload.enabled)?;
-            let size =
-                align256((self.cull.bucket_stride * std::mem::size_of::<[[f32; 4]; 4]>()) as u64);
+            let size = align256((self.cull.bucket_stride * size_of::<[[f32; 4]; 4]>()) as u64);
             let mut ring = Vec::with_capacity(self.hw.frames());
             for _ in 0..self.hw.frames() {
                 ring.push(crate::directx::texture::create_uav_buffer(
@@ -493,9 +492,8 @@ impl DxContext {
             grass,
         } = frame;
         let velocity_active = block.motion != 0;
-        let gb = match &self.gbuffer {
-            Some(g) => g,
-            None => return,
+        let Some(gb) = &self.gbuffer else {
+            return;
         };
 
         let view_uni = *block;
@@ -504,9 +502,9 @@ impl DxContext {
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &view_uni as *const GBufferView as *const u8,
+                (&raw const view_uni).cast::<u8>(),
                 gb.view_ubo_ptrs[frame_idx],
-                std::mem::size_of::<GBufferView>(),
+                size_of::<GBufferView>(),
             );
         }
         let view_gva = com::gpu_va(&gb.view_ubo_resources[frame_idx]);
@@ -522,7 +520,7 @@ impl DxContext {
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.OMSetRenderTargets(3, Some(rtvs.as_ptr()), false, Some(&gb.depth_dsv));
+            cmd.OMSetRenderTargets(3, Some(rtvs.as_ptr()), false, Some(&raw const gb.depth_dsv));
             // Cleared alpha 0 marks "no geometry"; roughness 1.0 = non-reflective
             // background; velocity 0 = no motion.
             cmd.ClearRenderTargetView(gb.normal_depth_rtv, &[0.0_f32; 4], None);
@@ -592,9 +590,10 @@ impl DxContext {
         // A rebuilt ring holds nothing these records were written for, so the
         // priming frame fills every slot rather than only its own: the instance
         // region is the one the draw args cannot flag, being init-written.
-        let slots = match prime {
-            true => 0..self.cull.prev_model_buffers.len(),
-            false => frame_idx..frame_idx + 1,
+        let slots = if prime {
+            0..self.cull.prev_model_buffers.len()
+        } else {
+            frame_idx..frame_idx + 1
         };
         let params = ModelHistoryParams {
             record_count: records as u32,
@@ -680,7 +679,7 @@ impl DxContext {
                     self.scene.geometry.vertex_buffer_view,
                 ]),
             );
-            cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
+            cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view));
             cmd.SetGraphicsRootConstantBufferView(PREPASS_VIEW_PARAM, main_view_gva);
             cmd.SetGraphicsRootConstantBufferView(PREPASS_GB_VIEW_PARAM, view_gva);
             cmd.SetGraphicsRootShaderResourceView(PREPASS_OBJECTS_PARAM, object_gva);
@@ -770,7 +769,7 @@ impl DxContext {
                 // Skinned records are always bucket 0.
                 cmd.SetPipelineState(pso);
                 cmd.IASetVertexBuffers(0, Some(&[*cur_vbv, prev_vbv]));
-                cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
+                cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view));
                 cmd.ExecuteIndirect(
                     cmd_sig,
                     self.state.draw.n_skinned as u32,

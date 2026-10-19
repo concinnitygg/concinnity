@@ -180,10 +180,10 @@ impl RtReflectionsResources {
     // fails (DXC absent / shader error) so the caller can fall back to SSR; the
     // accel-structure build + DXR capability are gated separately by the caller.
     pub(in crate::directx) fn new(
-        ctx: RtBuildContext,
+        ctx: RtBuildContext<'_>,
         settings: RtReflectionSettings,
         descriptors: RtOutputDescriptors,
-        init: RtBuildInit,
+        init: RtBuildInit<'_>,
     ) -> RenderResult<Self> {
         let RtBuildContext {
             alloc,
@@ -217,9 +217,9 @@ impl RtReflectionsResources {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map rt params ubo"))?;
-            params_ubo_ptrs.push(ptr as *mut u8);
+            params_ubo_ptrs.push(ptr.cast::<u8>());
             params_ubo_resources.push(buf);
         }
 
@@ -313,11 +313,11 @@ impl DxContext {
         frame_idx: usize,
         params: Option<&RtParams>,
     ) {
-        let (rt, accel, gbuffer, params) =
-            match (&self.rt_reflections, &self.rt.accel, &self.gbuffer, params) {
-                (Some(r), Some(a), Some(g), Some(p)) => (r, a, g, p),
-                _ => return,
-            };
+        let (Some(rt), Some(accel), Some(gbuffer), Some(params)) =
+            (&self.rt_reflections, &self.rt.accel, &self.gbuffer, params)
+        else {
+            return;
+        };
         // The trace writes reflected radiance + weight into `rt.output`; the
         // reflection composite (below) blurs + composites it over the scene.
         let reflection_srv = rt.output_srv_gpu;
@@ -328,9 +328,9 @@ impl DxContext {
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                params as *const RtParams as *const u8,
+                std::ptr::from_ref::<RtParams>(params).cast::<u8>(),
                 rt.params_ubo_ptrs[frame_idx],
-                std::mem::size_of::<RtParams>(),
+                size_of::<RtParams>(),
             );
         }
         let params_gva = com::gpu_va(&rt.params_ubo_resources[frame_idx]);
@@ -358,7 +358,7 @@ impl DxContext {
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&rt.output_rtv), false, None);
+            cmd.OMSetRenderTargets(1, Some(&raw const rt.output_rtv), false, None);
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
                 TopLeftY: 0.0,

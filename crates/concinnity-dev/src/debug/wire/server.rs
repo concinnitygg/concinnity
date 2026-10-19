@@ -65,7 +65,7 @@ impl DebugServer {
             .name("debug-server".to_string())
             .spawn(move || {
                 set_current_thread_role(ThreadRole::Background);
-                serve(listener, shared_for_thread)
+                serve(listener, shared_for_thread);
             })?;
 
         tracing::info!("debug server listening on http://127.0.0.1:{port}/mcp");
@@ -251,7 +251,7 @@ impl FrameHook for DebugServer {
             // The AssetId -> name table is the build interner snapshot; it is
             // stable once the world is built, so capture it just once.
             if state.names.is_empty() {
-                state.names = std::sync::Arc::new(asset_id::name_table());
+                state.names = Arc::new(asset_id::name_table());
             }
         }
     }

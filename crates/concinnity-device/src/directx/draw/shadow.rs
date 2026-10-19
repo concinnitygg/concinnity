@@ -185,7 +185,7 @@ impl DxContext {
     ) {
         // SAFETY: the command list is in the recording state, and the DSV names a live slice.
         unsafe {
-            cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
+            cmd.OMSetRenderTargets(0, None, false, Some(&raw const dsv));
             cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, DEPTH_CLEAR, 0, None);
         }
     }
@@ -241,17 +241,17 @@ impl DxContext {
             return;
         };
         let prefix = self.state.draw.skinned_record_base();
-        let stride = crate::directx::cull::INDIRECT_COMMAND_STRIDE as u64;
+        let stride = u64::from(crate::directx::cull::INDIRECT_COMMAND_STRIDE);
         let byte_off = |first: usize| first as u64 * stride;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.OMSetRenderTargets(0, None, false, Some(&view.dsv));
+            cmd.OMSetRenderTargets(0, None, false, Some(&raw const view.dsv));
             // [1] the view's light_vps, [2] the slot of it this view projects through.
             cmd.SetGraphicsRootConstantBufferView(1, view.ubo_gva);
             cmd.set_graphics_root_constants(2, &view.vp_index);
             cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
+            cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view));
             cmd.ExecuteIndirect(
                 cmd_sig,
                 prefix as u32,
@@ -272,7 +272,7 @@ impl DxContext {
             // descriptor and slice these commands name is live for the call.
             unsafe {
                 cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv]));
-                cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
+                cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view));
                 cmd.ExecuteIndirect(
                     cmd_sig,
                     self.state.draw.n_skinned as u32,

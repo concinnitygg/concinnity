@@ -1,7 +1,7 @@
 //! Packs authored `RectAreaLight`s into the per-scene `AreaLightData` table the
 //! forward pass reads alongside the `GpuLight` buffer.
 //!
-//! The GpuLight record carries the panel's center (`position`), emitting
+//! The `GpuLight` record carries the panel's center (`position`), emitting
 //! direction (`direction`), color, intensity, and range; only the two in-plane
 //! edge vectors and the sidedness flag need the parallel table, indexed by
 //! `GpuLight.data_index`. The edge vectors are pre-scaled by the half-extents, so

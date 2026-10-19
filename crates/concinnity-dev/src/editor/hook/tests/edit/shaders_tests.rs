@@ -90,7 +90,7 @@ fn leaving_unsaved_edits_asks_first() {
 
     // Discard: water opens and lit's file is untouched.
     h.modal = None;
-    h.answer_leave_shader_source(false, Leave::Open(key("water")), &mut World::new());
+    h.answer_leave_shader_source(false, Leave::Open(key("water")), &World::new());
     assert_eq!(open_shader(&h).as_deref(), Some("water"));
     assert_eq!(
         std::fs::read_to_string(dir.path().join("lit.hlsl")).unwrap(),
@@ -99,7 +99,7 @@ fn leaving_unsaved_edits_asks_first() {
 
     // Save: the edits are written, then lit opens.
     h.shaders.source.as_mut().unwrap().area.type_char('y');
-    h.answer_leave_shader_source(true, Leave::Open(key("lit")), &mut World::new());
+    h.answer_leave_shader_source(true, Leave::Open(key("lit")), &World::new());
     assert_eq!(
         std::fs::read_to_string(dir.path().join("water.hlsl")).unwrap(),
         "ywater"
@@ -138,7 +138,7 @@ fn closing_asks_only_over_unsaved_edits() {
         }
     );
     h.modal = None;
-    h.answer_leave_shader_source(false, Leave::Close, &mut world);
+    h.answer_leave_shader_source(false, Leave::Close, &world);
     assert!(!panel.is_open(&h));
 
     h.open_shader_file(key("lit"));

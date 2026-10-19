@@ -18,9 +18,9 @@ use super::{
 /// Record `payload` as `id`'s geometry and return the handle it lands on.
 ///
 /// A mesh installed here trails the build's four compiled blocks (the build
-/// assigns Mesh, ProceduralMesh, VoxelChunk, and File blocks in that order),
+/// assigns Mesh, `ProceduralMesh`, `VoxelChunk`, and File blocks in that order),
 /// so it moves no handle a compiled world baked into a Prop.
-pub fn append_mesh(ctx: &mut PipelineContext, id: AssetId, payload: Vec<u8>) -> MeshHandle {
+pub fn append_mesh(ctx: &mut PipelineContext<'_>, id: AssetId, payload: Vec<u8>) -> MeshHandle {
     let handle = build_assigned(ctx) + runtime_count(ctx);
     if ctx.resource::<RuntimeMeshPayloads>().is_none() {
         ctx.insert_resource(RuntimeMeshPayloads::default());
@@ -33,7 +33,11 @@ pub fn append_mesh(ctx: &mut PipelineContext, id: AssetId, payload: Vec<u8>) -> 
 
 /// Install `material` into the world's material table and return its handle.
 /// A material is a data resource: its clamped parameters are the whole entry.
-pub fn append_material(ctx: &mut PipelineContext, material: Material) -> MaterialHandle {
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "the expects cover a plain-struct encode and the insert just before them"
+)]
+pub fn append_material(ctx: &mut PipelineContext<'_>, material: Material) -> MaterialHandle {
     let bytes = postcard::to_allocvec(&validate::material(material))
         .expect("a Material is a plain struct; postcard cannot fail on one");
     if ctx.resource::<MaterialTable>().is_none() {
@@ -51,8 +55,12 @@ pub fn append_material(ctx: &mut PipelineContext, material: Material) -> Materia
 /// Install a baked IBL `payload` into the world's environment-map table with
 /// its runtime fields `record` and return its handle. The renderer lights with
 /// the map at handle 0.
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "the expect follows the insert that guarantees it"
+)]
 pub fn append_environment_map(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     payload: Vec<u8>,
     record: EnvironmentMapRecord,
 ) -> EnvironmentMapHandle {
@@ -70,7 +78,11 @@ pub fn append_environment_map(
 
 /// Install a baked glyph-atlas `payload` into the world's font table and
 /// return the handle a text component references it by.
-pub fn append_font(ctx: &mut PipelineContext, payload: Vec<u8>) -> FontHandle {
+#[expect(
+    clippy::missing_panics_doc,
+    reason = "the expect follows the insert that guarantees it"
+)]
+pub fn append_font(ctx: &mut PipelineContext<'_>, payload: Vec<u8>) -> FontHandle {
     if ctx.resource::<FontTable>().is_none() {
         ctx.insert_resource(FontTable::default());
     }
@@ -82,7 +94,7 @@ pub fn append_font(ctx: &mut PipelineContext, payload: Vec<u8>) -> FontHandle {
 
 // How many mesh handles the build handed out: the four compiled blocks,
 // counted the way the renderer enumerates them.
-fn build_assigned(ctx: &PipelineContext) -> usize {
+fn build_assigned(ctx: &PipelineContext<'_>) -> usize {
     let meshes = ctx.resource::<MeshTable>().map_or(0, MeshTable::len);
     let procedural = ctx
         .query::<ProceduralMesh>()
@@ -98,7 +110,7 @@ fn build_assigned(ctx: &PipelineContext) -> usize {
 
 // Geometry already installed at runtime, which the trailing block counts
 // before it.
-fn runtime_count(ctx: &PipelineContext) -> usize {
+fn runtime_count(ctx: &PipelineContext<'_>) -> usize {
     ctx.resource::<RuntimeMeshPayloads>()
         .map_or(0, RuntimeMeshPayloads::len)
 }
@@ -117,7 +129,7 @@ mod tests {
         let second = append_material(&mut ctx, Material::default());
         assert_eq!((first.0, second.0), (0, 1));
 
-        let map = append_environment_map(&mut ctx, vec![1, 2, 3], Default::default());
+        let map = append_environment_map(&mut ctx, vec![1, 2, 3], EnvironmentMapRecord::default());
         assert_eq!(map.0, 0);
         let table = ctx
             .resource::<EnvironmentMapTable>()

@@ -8,6 +8,7 @@
 //! renderer's floor gets a picture instead of an exit.
 
 use concinnity_core::render::error::{RenderError, RenderResult};
+use std::fmt::Write as _;
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
@@ -82,7 +83,7 @@ fn consider(adapter: &IDXGIAdapter1) -> RenderResult<Selection> {
     let mut device_opt: Option<ID3D12Device> = None;
     // SAFETY: the adapter is live for the call, and the new COM object lands in a binding that
     // owns it.
-    unsafe { D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, &mut device_opt) }.map_err(
+    unsafe { D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, &raw mut device_opt) }.map_err(
         |e| {
             map_hresult(
                 e.code(),
@@ -116,8 +117,8 @@ pub(super) fn resource_binding_tier(device: &ID3D12Device) -> D3D12_RESOURCE_BIN
     let ok = unsafe {
         device.CheckFeatureSupport(
             D3D12_FEATURE_D3D12_OPTIONS,
-            &mut options as *mut _ as *mut std::ffi::c_void,
-            std::mem::size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS>() as u32,
+            (&raw mut options).cast::<std::ffi::c_void>(),
+            size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS>() as u32,
         )
     };
     if ok.is_ok() {
@@ -180,7 +181,8 @@ fn compose_refusal(
         format!("no usable D3D12 adapter: {}", rejections.join("; "))
     };
     if agility_bundled {
-        message.push_str(&format!(
+        let _ = write!(
+            message,
             ". This binary was built with CN_ENABLE_AGILITY_SDK=1, so it bundles \
              Microsoft's Agility SDK and needs D3D12Core.dll in {}; without it \
              D3D12 fails to start and every adapter reports unsupported. Copy \
@@ -188,7 +190,7 @@ fn compose_refusal(
              opt-in to use the OS D3D12 runtime",
             agility_dir()
                 .unwrap_or_else(|| "a `D3D12` directory beside the executable".to_string())
-        ));
+        );
     }
     message
 }

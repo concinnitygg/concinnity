@@ -4,7 +4,7 @@
 //! per-cluster probe masks, over a screen-tiled, exponential-depth froxel grid.
 //! The forward, SSR and transparent passes then shade from only a fragment's
 //! cluster's lights and blend only its cluster's probes. Mirrors
-//! src/metal/light_cull.rs.
+//! `src/metal/light_cull.rs`.
 
 use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterParams};
 use concinnity_core::render::error::RenderResult;
@@ -105,7 +105,7 @@ pub(in crate::directx) fn create_light_cull_pso(
 pub(in crate::directx) fn build_cluster_light_buffer(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12Resource> {
-    let len = CLUSTER_LIST_LEN as u64 * std::mem::size_of::<u32>() as u64;
+    let len = u64::from(CLUSTER_LIST_LEN) * size_of::<u32>() as u64;
     create_uav_buffer(device, len, D3D12_RESOURCE_STATE_COMMON)
 }
 
@@ -129,18 +129,18 @@ pub(in crate::directx) fn build_cluster_params_buffers(
         let mut ptr = std::ptr::null_mut();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
-        unsafe { res.Map(0, None, Some(&mut ptr)) }
+        unsafe { res.Map(0, None, Some(&raw mut ptr)) }
             .map_err(|e| map_hresult(e.code(), "map cluster params buffer"))?;
-        let ptr = ptr as *mut u8;
+        let ptr = ptr.cast::<u8>();
         // Slot 1: the `use_clusters = 0` copy. Static for the context's life.
         let unclustered = ClusterParams::ZERO;
         // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
         // source is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &unclustered as *const ClusterParams as *const u8,
+                (&raw const unclustered).cast::<u8>(),
                 ptr.add((CLUSTER_SLOT_UNCLUSTERED * CLUSTER_PARAMS_SLOT_STRIDE) as usize),
-                std::mem::size_of::<ClusterParams>(),
+                size_of::<ClusterParams>(),
             );
         }
         resources.push(res);
@@ -180,9 +180,9 @@ impl DxContext {
         // source is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                params as *const ClusterParams as *const u8,
+                std::ptr::from_ref::<ClusterParams>(params).cast::<u8>(),
                 dst.add((CLUSTER_SLOT_CLUSTERED * CLUSTER_PARAMS_SLOT_STRIDE) as usize),
-                std::mem::size_of::<ClusterParams>(),
+                size_of::<ClusterParams>(),
             );
         }
     }

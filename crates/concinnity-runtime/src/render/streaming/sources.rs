@@ -36,13 +36,12 @@ pub(crate) fn build_texture_payload_source(
     let mut sections: HashMap<u32, (String, u64)> = HashMap::new();
     let mut disk_locators = Vec::with_capacity(locators.len());
     for loc in locators {
-        let (path, start) = match sections.get(&loc.blob_index) {
-            Some(section) => section.clone(),
-            None => {
-                let section = blob_payload_section(loc.blob_index)?;
-                sections.insert(loc.blob_index, section.clone());
-                section
-            }
+        let (path, start) = if let Some(section) = sections.get(&loc.blob_index) {
+            section.clone()
+        } else {
+            let section = blob_payload_section(loc.blob_index)?;
+            sections.insert(loc.blob_index, section.clone());
+            section
         };
         disk_locators.push(super::texture::DiskTextureLocator {
             path,

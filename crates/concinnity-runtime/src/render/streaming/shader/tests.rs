@@ -46,7 +46,7 @@ fn deferred(bucket: u32, source: ShaderPayloadSource) -> DeferredBucket {
 // for one release per build; a rejecting one fails every build.
 #[derive(Default)]
 struct TestBuilder {
-    gate: Option<Mutex<std::sync::mpsc::Receiver<()>>>,
+    gate: Option<Mutex<Receiver<()>>>,
     reject: bool,
 }
 
@@ -129,7 +129,7 @@ impl Harness {
         let mut ops = RenderOps::default();
         let changes = &mut self.changes;
         self.warmup.pump(&mut ops, &mut |bucket, resident| {
-            changes.push((bucket, resident))
+            changes.push((bucket, resident));
         });
         ops
     }

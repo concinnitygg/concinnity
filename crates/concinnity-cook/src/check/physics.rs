@@ -1,5 +1,5 @@
 //! Physics authoring checks: collider shape strings, and the collision-layer
-//! names a world's PhysicsConfig declares against every reference to them.
+//! names a world's `PhysicsConfig` declares against every reference to them.
 //! Also the authored shape the build sizes a world's spawn reservation from:
 //! which of its assets can create collider-bearing props while it runs.
 
@@ -52,7 +52,7 @@ pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>)
         .iter()
         .find(|a| a.asset_type == RegisteredType::PhysicsConfig);
 
-    let mut known: Vec<String> = BUILTIN_LAYERS.iter().map(|s| s.to_string()).collect();
+    let mut known: Vec<String> = BUILTIN_LAYERS.iter().map(ToString::to_string).collect();
     if let Some(config) = config {
         let declared: Vec<&str> = config
             .args
@@ -105,7 +105,7 @@ pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>)
         if let Some(min) = config
             .args
             .get("contact_min_impulse")
-            .and_then(|v| v.as_f64())
+            .and_then(serde_json::Value::as_f64)
             && min < 0.0
         {
             errors.push(format!(
@@ -192,7 +192,7 @@ pub(crate) fn collider_spawn_sources(assets: &[WorldJsonlAsset]) -> ColliderSpaw
                     asset
                         .args
                         .get(field)
-                        .and_then(|v| v.as_f64())
+                        .and_then(serde_json::Value::as_f64)
                         .map_or(fallback, |v| v as f32)
                 };
                 sources.spawners.push(ColliderSpawner {

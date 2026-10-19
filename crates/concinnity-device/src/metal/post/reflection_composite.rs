@@ -22,7 +22,7 @@ pub(crate) type MtlReflectionCompositePass =
 // Build the composite at `render` resolution with its blur divided by
 // `blur_scale`.
 pub(crate) fn build_reflection_composite(
-    device: &MtlPostDevice,
+    device: &MtlPostDevice<'_>,
     blur_scale: u32,
     render: (u32, u32),
 ) -> RenderResult<MtlReflectionCompositePass> {

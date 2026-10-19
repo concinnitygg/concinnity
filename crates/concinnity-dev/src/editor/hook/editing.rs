@@ -1,4 +1,4 @@
-//! EditorHook: the add / edit form lifecycle -- open, refresh from the working
+//! `EditorHook`: the add / edit form lifecycle -- open, refresh from the working
 //! args, capture the live controls, and validate / commit on confirm.
 
 use concinnity_cook::authoring::registry::RegisteredType;
@@ -345,7 +345,7 @@ impl EditorHook {
     // Capture the form's controls into the working args, validate, and commit (add
     // a new entry or update the edited one). On a validation error the form stays
     // open with the message shown, so nothing invalid ever reaches world.jsonl.
-    pub(super) fn confirm_form(&mut self, world: &mut World) {
+    pub(super) fn confirm_form(&mut self, world: &World) {
         self.form.error = None;
         let Some(ty) = self.form.selected_type.clone() else {
             self.form.close();
@@ -412,29 +412,22 @@ impl EditorHook {
             self.form.close();
             return;
         }
-        match self.form.target.entry() {
-            Some(key) => {
-                let renamed = self.rename_entry(key, &typed);
-                if let Some(obj) = self.entries.by_key_mut(key).and_then(|e| e.as_object_mut()) {
-                    obj.insert(
-                        "args".to_string(),
-                        with_optional_id(args_val, renamed.name.as_deref()),
-                    );
-                }
-                if let Some(message) = renamed.message(&ty) {
-                    self.notifier.success(&message);
-                }
+        if let Some(key) = self.form.target.entry() {
+            let renamed = self.rename_entry(key, &typed);
+            if let Some(obj) = self.entries.by_key_mut(key).and_then(|e| e.as_object_mut()) {
+                obj.insert(
+                    "args".to_string(),
+                    with_optional_id(args_val, renamed.name.as_deref()),
+                );
             }
-            // A new asset, or the promotion of a generated one: both append. A
-            // promotion keeps the generated name (nothing in `entries` holds it,
-            // so `finalize_name` leaves it alone), and that identity is what
-            // makes the new line override the expansion.
-            None => {
-                let id = self.finalize_name(&typed);
-                self.entries.push(serde_json::json!({
-                    "type": ty, "args": with_optional_id(args_val, id.as_deref()),
-                }));
+            if let Some(message) = renamed.message(&ty) {
+                self.notifier.success(&message);
             }
+        } else {
+            let id = self.finalize_name(&typed);
+            self.entries.push(serde_json::json!({
+                "type": ty, "args": with_optional_id(args_val, id.as_deref()),
+            }));
         }
         self.mark_changed();
         self.form.close();

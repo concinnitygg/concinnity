@@ -91,7 +91,7 @@ pub(crate) fn finish(
 pub(crate) fn polarized(
     name: &str,
     polarity: KeyPolarity,
-    input: &SynthInput,
+    input: &SynthInput<'_>,
     displacement: Vec<[f32; 3]>,
 ) -> Vec<(String, Vec<MorphDelta>)> {
     let plus = finish(input.vertices, input.indices, input.normals, &displacement);

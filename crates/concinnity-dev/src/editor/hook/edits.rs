@@ -1,4 +1,4 @@
-//! EditorHook: unique-name generation and edit persistence (SAVE, the atomic
+//! `EditorHook`: unique-name generation and edit persistence (SAVE, the atomic
 //! world.jsonl write, and the in-memory live-preview world rebuild).
 
 use concinnity_cook::authoring::refs::{count_references, rename_references};
@@ -109,7 +109,7 @@ impl EditorHook {
                     notify::Level::Error,
                     &format!("'{old}' keeps its `$id`: {}", naming_note(naming)),
                 );
-                name = before.clone();
+                name.clone_from(&before);
             }
         }
         match &name {
@@ -337,7 +337,7 @@ impl EditorHook {
             modal::ids(),
         ]
         .into_iter()
-        .flat_map(|ids| ids.field_ids())
+        .flat_map(super::super::hud_ids::HudIds::field_ids)
         .map(|id| (id, widget::field_text(world, id)))
         .collect()
     }

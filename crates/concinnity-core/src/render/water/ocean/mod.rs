@@ -72,10 +72,11 @@ impl OceanQuality {
 
     /// `self` held to what the simulation supports: the size rounded down to
     /// a power of two within its range, the cascades within theirs.
+    #[must_use]
     pub fn clamped(self) -> Self {
         let size = self.size.clamp(Self::MIN_SIZE, Self::MAX_SIZE);
         Self {
-            size: 1 << (31 - size.leading_zeros()),
+            size: 1 << size.ilog2(),
             cascades: self.cascades.clamp(1, MAX_OCEAN_CASCADES as u32),
         }
     }

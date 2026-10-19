@@ -20,8 +20,8 @@ fn geometry(handle: u32, max_instances: u32, material: Option<MaterialHandle>) -
         handle: SkinnedMeshHandle::new(handle),
         name_id: AssetId(100 + handle),
         mesh: SkinnedMesh {
-            max_instances,
             material,
+            max_instances,
             ..Default::default()
         },
         vertices: vec![

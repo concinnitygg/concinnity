@@ -98,67 +98,67 @@ pub struct PostProgramBindings {
 
 impl PostProgram {
     /// Every post program, in declaration order.
-    pub const ALL: [PostProgram; 16] = [
-        PostProgram::TaaResolve,
-        PostProgram::SsrResolve,
-        PostProgram::SsgiDepth,
-        PostProgram::SsgiReduce,
-        PostProgram::SsgiAge,
-        PostProgram::SsgiTrace,
-        PostProgram::SsgiAccumulate,
-        PostProgram::SsgiResolve,
-        PostProgram::BloomPrefilter,
-        PostProgram::BloomDownsample,
-        PostProgram::BloomUpsample,
-        PostProgram::ReflectionBlur,
-        PostProgram::ReflectionComposite,
-        PostProgram::SsaoDepth,
-        PostProgram::SsaoKernel,
-        PostProgram::SsaoBlur,
+    pub const ALL: [Self; 16] = [
+        Self::TaaResolve,
+        Self::SsrResolve,
+        Self::SsgiDepth,
+        Self::SsgiReduce,
+        Self::SsgiAge,
+        Self::SsgiTrace,
+        Self::SsgiAccumulate,
+        Self::SsgiResolve,
+        Self::BloomPrefilter,
+        Self::BloomDownsample,
+        Self::BloomUpsample,
+        Self::ReflectionBlur,
+        Self::ReflectionComposite,
+        Self::SsaoDepth,
+        Self::SsaoKernel,
+        Self::SsaoBlur,
     ];
 
     /// The pass name a backend reports when this program's pipeline fails to
     /// build.
     pub const fn label(self) -> &'static str {
         match self {
-            PostProgram::TaaResolve => "taa resolve",
-            PostProgram::SsrResolve => "ssr resolve",
-            PostProgram::SsgiDepth => "ssgi depth",
-            PostProgram::SsgiReduce => "ssgi reduce",
-            PostProgram::SsgiAge => "ssgi age",
-            PostProgram::SsgiTrace => "ssgi trace",
-            PostProgram::SsgiAccumulate => "ssgi accumulate",
-            PostProgram::SsgiResolve => "ssgi resolve",
-            PostProgram::BloomPrefilter => "bloom prefilter",
-            PostProgram::BloomDownsample => "bloom downsample",
-            PostProgram::BloomUpsample => "bloom upsample",
-            PostProgram::ReflectionBlur => "reflection blur",
-            PostProgram::ReflectionComposite => "reflection composite",
-            PostProgram::SsaoDepth => "ssao depth",
-            PostProgram::SsaoKernel => "ssao kernel",
-            PostProgram::SsaoBlur => "ssao blur",
+            Self::TaaResolve => "taa resolve",
+            Self::SsrResolve => "ssr resolve",
+            Self::SsgiDepth => "ssgi depth",
+            Self::SsgiReduce => "ssgi reduce",
+            Self::SsgiAge => "ssgi age",
+            Self::SsgiTrace => "ssgi trace",
+            Self::SsgiAccumulate => "ssgi accumulate",
+            Self::SsgiResolve => "ssgi resolve",
+            Self::BloomPrefilter => "bloom prefilter",
+            Self::BloomDownsample => "bloom downsample",
+            Self::BloomUpsample => "bloom upsample",
+            Self::ReflectionBlur => "reflection blur",
+            Self::ReflectionComposite => "reflection composite",
+            Self::SsaoDepth => "ssao depth",
+            Self::SsaoKernel => "ssao kernel",
+            Self::SsaoBlur => "ssao blur",
         }
     }
 
     /// The shared declaration this program's fragment compiles from.
     pub const fn program(self) -> &'static ShaderProgram {
         match self {
-            PostProgram::TaaResolve => &TAA_FRAG,
-            PostProgram::SsrResolve => &SSR_RESOLVE,
-            PostProgram::SsgiDepth => &SSGI_DEPTH,
-            PostProgram::SsgiReduce => &SSGI_REDUCE,
-            PostProgram::SsgiAge => &SSGI_AGE,
-            PostProgram::SsgiTrace => &SSGI_TRACE,
-            PostProgram::SsgiAccumulate => &SSGI_ACCUMULATE,
-            PostProgram::SsgiResolve => &SSGI_RESOLVE,
-            PostProgram::BloomPrefilter => &BLOOM_PREFILTER,
-            PostProgram::BloomDownsample => &BLOOM_DOWNSAMPLE,
-            PostProgram::BloomUpsample => &BLOOM_UPSAMPLE,
-            PostProgram::ReflectionBlur => &REFLECTION_BLUR,
-            PostProgram::ReflectionComposite => &REFLECTION_COMPOSITE,
-            PostProgram::SsaoDepth => &SSAO_DEPTH,
-            PostProgram::SsaoKernel => &SSAO_KERNEL,
-            PostProgram::SsaoBlur => &SSAO_BLUR,
+            Self::TaaResolve => &TAA_FRAG,
+            Self::SsrResolve => &SSR_RESOLVE,
+            Self::SsgiDepth => &SSGI_DEPTH,
+            Self::SsgiReduce => &SSGI_REDUCE,
+            Self::SsgiAge => &SSGI_AGE,
+            Self::SsgiTrace => &SSGI_TRACE,
+            Self::SsgiAccumulate => &SSGI_ACCUMULATE,
+            Self::SsgiResolve => &SSGI_RESOLVE,
+            Self::BloomPrefilter => &BLOOM_PREFILTER,
+            Self::BloomDownsample => &BLOOM_DOWNSAMPLE,
+            Self::BloomUpsample => &BLOOM_UPSAMPLE,
+            Self::ReflectionBlur => &REFLECTION_BLUR,
+            Self::ReflectionComposite => &REFLECTION_COMPOSITE,
+            Self::SsaoDepth => &SSAO_DEPTH,
+            Self::SsaoKernel => &SSAO_KERNEL,
+            Self::SsaoBlur => &SSAO_BLUR,
         }
     }
 
@@ -166,64 +166,56 @@ impl PostProgram {
     pub const fn bindings(self) -> PostProgramBindings {
         match self {
             // scene, velocity, history, reactive mask; `TaaParams`.
-            PostProgram::TaaResolve => PostProgramBindings {
+            Self::TaaResolve => PostProgramBindings {
                 textures: 4,
                 constants: 16,
                 probes: false,
             },
             // scene, normal+depth, roughness, prefilter cube; `SsrParams`.
-            PostProgram::SsrResolve => PostProgramBindings {
+            Self::SsrResolve => PostProgramBindings {
                 textures: 4,
                 constants: 144,
                 probes: true,
             },
             // The G-buffer; `SsgiParams`.
-            PostProgram::SsgiDepth => ssgi(1),
+            Self::SsgiDepth => ssgi(1),
             // The level below; no constants.
-            PostProgram::SsgiReduce => PostProgramBindings {
+            Self::SsgiReduce => PostProgramBindings {
                 textures: 1,
                 constants: 0,
                 probes: false,
             },
             // G-buffer, velocity, pyramid, previous pyramid, previous age;
             // `SsgiParams`.
-            PostProgram::SsgiAge => ssgi(5),
+            Self::SsgiAge => ssgi(5),
             // scene, G-buffer, velocity, pyramid, previous pyramid, history,
             // age; `SsgiParams`.
-            PostProgram::SsgiTrace => ssgi(7),
+            Self::SsgiTrace | Self::SsgiAccumulate => ssgi(7),
             // fast accumulation, G-buffer, velocity, pyramid, previous pyramid,
             // history, age; `SsgiParams`.
-            PostProgram::SsgiAccumulate => ssgi(7),
             // previous accumulation, previous pyramid, previous age, G-buffer,
             // velocity, occlusion; `SsgiParams`.
-            PostProgram::SsgiResolve => ssgi(6),
+            Self::SsgiResolve => ssgi(6),
             // The scene; `PostProcessParams`.
-            PostProgram::BloomPrefilter => sources(1, BLOOM_PREFILTER_CONSTANTS),
+            Self::BloomPrefilter => sources(1, BLOOM_PREFILTER_CONSTANTS),
             // The octave it reduces or expands; no constants.
-            PostProgram::BloomDownsample | PostProgram::BloomUpsample => sources(1, 0),
+            Self::BloomDownsample | Self::BloomUpsample => sources(1, 0),
             // reflection, roughness.
-            PostProgram::ReflectionBlur => sources(2, 0),
+            Self::ReflectionBlur | Self::SsaoBlur => sources(2, 0),
             // reflection, scene, normal+depth, roughness, blur.
-            PostProgram::ReflectionComposite => sources(5, 0),
+            Self::ReflectionComposite => sources(5, 0),
             // The G-buffer; `SsaoParams`.
-            PostProgram::SsaoDepth => sources(
-                1,
-                core::mem::size_of::<crate::gfx::render_types::SsaoParams>(),
-            ),
+            Self::SsaoDepth => sources(1, size_of::<crate::gfx::render_types::SsaoParams>()),
             // G-buffer, depth copy; `SsaoParams`.
-            PostProgram::SsaoKernel => sources(
-                2,
-                core::mem::size_of::<crate::gfx::render_types::SsaoParams>(),
-            ),
+            Self::SsaoKernel => sources(2, size_of::<crate::gfx::render_types::SsaoParams>()),
             // raw occlusion, depth copy; no constants.
-            PostProgram::SsaoBlur => sources(2, 0),
         }
     }
 }
 
 /// Bytes of `PostProcessParams` the bloom prefilter declares: all of it.
 pub const BLOOM_PREFILTER_CONSTANTS: usize =
-    core::mem::size_of::<crate::gfx::render_types::PostProcessParams>();
+    size_of::<crate::gfx::render_types::PostProcessParams>();
 
 // A program reading `textures` sources and `constants` bytes, without the
 // probe set.
@@ -237,10 +229,7 @@ const fn sources(textures: usize, constants: usize) -> PostProgramBindings {
 
 // An SSGI program's bindings: `textures` sources and the `SsgiParams` block.
 const fn ssgi(textures: usize) -> PostProgramBindings {
-    sources(
-        textures,
-        core::mem::size_of::<crate::gfx::render_types::SsgiParams>(),
-    )
+    sources(textures, size_of::<crate::gfx::render_types::SsgiParams>())
 }
 
 #[cfg(test)]

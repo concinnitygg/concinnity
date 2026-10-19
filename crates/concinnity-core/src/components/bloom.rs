@@ -1,7 +1,7 @@
 // Bloom schema.
 
 /// Bloom: light from the brightest parts of the image spilling softly into
-/// their surroundings. The `bloom` section of [GraphicsConfig](#graphicsconfig);
+/// their surroundings. The `bloom` section of [`GraphicsConfig`](#graphicsconfig);
 /// a field left unset takes the default below.
 ///
 /// ```rust

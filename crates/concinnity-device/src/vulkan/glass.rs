@@ -1,4 +1,4 @@
-//! GlassPanel: one producer of the engine's transparent pass on the Vulkan
+//! `GlassPanel`: one producer of the engine's transparent pass on the Vulkan
 //! backend (`transparent.rs` owns the render pass itself, the scene snapshot, the
 //! shared descriptor / pipeline layouts and the combined back-to-front draw
 //! order; `water.rs` is the other producer). Each panel is a flat world-space
@@ -90,7 +90,7 @@ fn compile_glass_rt_shaders(
 // Upload one panel's static quad VB + IB and its per-panel `GlassParams` UBO,
 // then allocate + write the panel's descriptor set.
 fn build_panel_record(
-    ctx: &ProducerCtx,
+    ctx: &ProducerCtx<'_>,
     panel: &GlassPanel,
     planar_slot: Option<usize>,
 ) -> RenderResult<TransparentRecord> {
@@ -131,7 +131,7 @@ fn build_panel_record(
 // pipeline rebuild); a compile failure leaves it absent and the base
 // probe/planar path runs.
 pub(in crate::vulkan) fn build_glass_producer(
-    ctx: ProducerCtx,
+    ctx: ProducerCtx<'_>,
     panels: &[GlassPanel],
     // Per-pane planar resolve slot (aligned with `panels`); `None` panes keep the
     // probe/sky reflection. From `assign_planar_slots`.
@@ -194,7 +194,7 @@ pub(in crate::vulkan) fn build_glass_producer(
 // pool is absent or the device could not spare a fifth descriptor set, leaving
 // the flat trace.
 fn build_glass_rt_pipelines(
-    ctx: &ProducerCtx,
+    ctx: &ProducerCtx<'_>,
     flat_layout: vk::PipelineLayout,
 ) -> RenderResult<TracedGlassPipelines> {
     let shaders = compile_glass_rt_shaders(ctx.hot_reload, ctx.msaa, ctx.bindless_pool_size)?;
@@ -204,7 +204,7 @@ fn build_glass_rt_pipelines(
 // Both traced pairs over one vertex stage: the shading pipelines target the
 // transparent pass, the reflection ones the glass reflection pre-pass.
 fn build_traced_pipelines(
-    ctx: &ProducerCtx,
+    ctx: &ProducerCtx<'_>,
     flat_layout: vk::PipelineLayout,
     shaders: &GlassRtShaders,
     vertex_input: TransparentVertexInput,
@@ -293,7 +293,7 @@ fn compile_glass_mesh_shaders(
 // its draw list each frame (see `collect_mesh_draws`). Only called when the pass
 // has RT pipeline layouts.
 pub(in crate::vulkan) fn build_glass_mesh_producer(
-    ctx: ProducerCtx,
+    ctx: ProducerCtx<'_>,
     flat_layout: vk::PipelineLayout,
     object_indices: &[usize],
 ) -> RenderResult<GlassMeshProducer> {

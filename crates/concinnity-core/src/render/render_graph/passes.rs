@@ -76,13 +76,13 @@ pass_ids! {
     /// `(scattered, transmittance)` texture once per frame, sampled by the
     /// fullscreen `Fog` render pass instead of an inline ray-march. Every
     /// backend implements the path; the `Fog` pass trilinear-samples the
-    /// volume by (screen_uv, view_z).
+    /// volume by (`screen_uv`, `view_z`).
     FogFroxel => "fog_froxel",
     /// Temporal upscaling pass. When the world's `AntiAliasing` enables
     /// `upscaling`, the renderer draws the 3D scene at a
     /// fraction of drawable size and inserts this pass between the post-SSR
     /// scene and the Bloom + Composite stack. The backend runs its
-    /// platform-native temporal upscaler (MetalFX on macOS; FSR / DLSS /
+    /// platform-native temporal upscaler (`MetalFX` on macOS; FSR / DLSS /
     /// XeSS slots on the Windows backends are placeholders today) to
     /// reconstruct a drawable-resolution image. Replaces `TaaResolve`:
     /// the upscaler does temporal accumulation itself, so adding both
@@ -93,7 +93,7 @@ pass_ids! {
     /// `TaaResolve` / `Upscale` (so translucents pick up temporal
     /// accumulation). Reads the latest scene-pre-taa color + main
     /// depth as sampled textures; writes scene-pre-taa blended
-    /// (SRC_ALPHA / ONE_MINUS_SRC_ALPHA). Each transparent draw owns
+    /// (`SRC_ALPHA` / `ONE_MINUS_SRC_ALPHA`). Each transparent draw owns
     /// its own pipeline + descriptor set; the pass aggregates them as
     /// a back-to-front sorted list at encode time. Gated on
     /// `FrameGraphInputs::transparent_enabled`; when no consumer is
@@ -132,8 +132,8 @@ pass_ids! {
     /// indirect draw through `Cull2`'s command buffer, depth-compositing the
     /// disoccluded geometry with phase 1. Instanced + skinned geometry is not
     /// Hi-Z-culled, so it is fully drawn in phase 1 and not repeated here.
-    /// Becomes the new head of the hdr_resolve post-decoration chain (so
-    /// AutoExposure / Decals / Fog / SSR see the combined result). Gated on
+    /// Becomes the new head of the `hdr_resolve` post-decoration chain (so
+    /// `AutoExposure` / Decals / Fog / SSR see the combined result). Gated on
     /// `FrameGraphInputs::two_pass_occlusion_enabled`.
     Main2 => "main2",
     /// Screen-space global illumination. A refinement of SSR: it reuses the
@@ -178,7 +178,7 @@ pass_ids! {
     /// sub-passes.
     ReflectionComposite => "reflection_composite",
     /// Clustered light-binning compute pass. Once per frame, before Main: bins the
-    /// scene's local lights (the GpuLight buffer) into a per-cluster index list
+    /// scene's local lights (the `GpuLight` buffer) into a per-cluster index list
     /// over a screen-tiled, exponential-depth froxel grid, which the forward pass
     /// reads to shade each fragment from only its cluster's lights instead of
     /// iterating every light. Runs when the world has local lights. Writes a
@@ -264,7 +264,7 @@ pass_ids! {
     Atmosphere => "atmosphere",
     /// Aerial perspective: the air between the camera and each opaque surface,
     /// blended over the scene from the atmosphere's volume. Sits on the
-    /// hdr_resolve RMW chain just before `Fog`, so a volumetric fog stays the
+    /// `hdr_resolve` RMW chain just before `Fog`, so a volumetric fog stays the
     /// nearer layer. Gated on `FrameGraphInputs::atmosphere_enabled`.
     AerialPerspective => "aerial_perspective",
     /// The simulated ocean: a compute pass that evolves every large water
@@ -284,18 +284,18 @@ impl PassId {
     }
 
     /// The pass with this stable name.
-    pub fn from_name(name: &str) -> Option<PassId> {
-        PassId::ALL.into_iter().find(|p| p.name() == name)
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.name() == name)
     }
 
     /// The pass whose timing span contains this one's, for a pass timed inside
     /// another: its time is already part of the enclosing pass's, so a
     /// breakdown of the frame lists it under that pass rather than beside it.
-    pub const fn enclosing(self) -> Option<PassId> {
+    pub const fn enclosing(self) -> Option<Self> {
         match self {
-            PassId::Sky | PassId::GrassDraw => Some(PassId::Main),
-            PassId::GrassPrepass => Some(PassId::GBufferPrepass),
-            PassId::GrassShadowDraw => Some(PassId::Shadow),
+            Self::Sky | Self::GrassDraw => Some(Self::Main),
+            Self::GrassPrepass => Some(Self::GBufferPrepass),
+            Self::GrassShadowDraw => Some(Self::Shadow),
             _ => None,
         }
     }
@@ -352,7 +352,7 @@ mod tests {
     fn pass_names_are_unique() {
         // A copy-pasted name would silently merge two passes in the profiler.
         let mut seen = hashbrown::HashSet::new();
-        for &name in PASS_NAMES.iter() {
+        for &name in &PASS_NAMES {
             assert!(seen.insert(name), "duplicate pass name {name:?}");
         }
     }

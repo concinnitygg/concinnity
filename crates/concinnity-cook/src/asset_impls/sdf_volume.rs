@@ -37,10 +37,7 @@ fn field_programs(
 }
 
 impl crate::asset::BuildAsset for SdfVolume {
-    fn compile_payload(
-        args: &serde_json::Value,
-        ctx: &crate::asset::BuildCtx<'_>,
-    ) -> std::io::Result<Vec<u8>> {
+    fn compile_payload(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> std::io::Result<Vec<u8>> {
         let raw = sdf_volume_source_path(args).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -99,10 +96,7 @@ impl crate::asset::BuildAsset for SdfVolume {
     // cache's generic walk misses: `fragment_shader` is typically a path with a
     // directory component under the source-tree `assets/` dir, and without this
     // an edit to it would replay stale bytes forever.
-    fn source_files(
-        args: &serde_json::Value,
-        ctx: &crate::asset::BuildCtx<'_>,
-    ) -> crate::asset::SourceFiles {
+    fn source_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> crate::asset::SourceFiles {
         use crate::asset::SourceFiles;
         let Some(raw) = sdf_volume_source_path(args) else {
             return SourceFiles::Only(Vec::new());
@@ -131,7 +125,7 @@ mod tests {
 
     // A minimal surface field: enough for the compiler to accept it, so a compile
     // that fails in these tests is the engine template's fault, not the field's.
-    const FIELD: &str = r#"
+    const FIELD: &str = r"
 float map(float3 p, SdfParams params, float time) { return sdSphere(p, 0.5); }
 SdfSurface shade(float3 p, float3 n, SdfParams params, float time, float2 uv) {
     SdfSurface s;
@@ -142,7 +136,7 @@ SdfSurface shade(float3 p, float3 n, SdfParams params, float time, float2 uv) {
     s.transmitted = float3(0.0, 0.0, 0.0);
     return s;
 }
-"#;
+";
 
     // A volume whose field has to be compiled on a host with no compiler is an
     // error naming the volume, not a payload that quietly draws nothing.

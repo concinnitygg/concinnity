@@ -148,6 +148,7 @@ impl BehaviorSystem {
     }
 
     /// Keep this world's variables and `once` flags in `store`.
+    #[must_use]
     pub fn with_store(mut self, store: Box<dyn BehaviorStore>) -> Self {
         self.store = Some(store);
         self
@@ -155,6 +156,7 @@ impl BehaviorSystem {
 
     /// Fan a tick's evaluation out on `pool` once its runs cost enough to pay
     /// for it.
+    #[must_use]
     pub fn with_pool<P: Fanout>(self, pool: Lent<P>) -> Self {
         self.with_scheduler(Box::new(pool))
     }
@@ -166,7 +168,7 @@ impl BehaviorSystem {
 }
 
 impl System for BehaviorSystem {
-    fn init(&mut self, ctx: &mut PipelineContext) {
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
         // A world starting is the resolution with nothing to carry over.
         self.reseed(ctx);
 
@@ -177,7 +179,7 @@ impl System for BehaviorSystem {
         self.restore_state();
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         // Before the freeze gate below: an edit made while the world is paused
         // is picked up when it lands, not when the world is next allowed to
         // run.
@@ -196,7 +198,7 @@ impl System for BehaviorSystem {
                 .extend(events.read(&mut self.press_cursor).copied());
         }
 
-        let menu_active = ctx.resource::<MenuActive>().map(|m| m.0).unwrap_or(false);
+        let menu_active = ctx.resource::<MenuActive>().is_some_and(|m| m.0);
         if menu_active {
             return StepResult::Continue;
         }
@@ -208,7 +210,7 @@ impl System for BehaviorSystem {
         let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
         for _ in 0..timing.ticks {
             self.sim_ticks += 1;
-            let elapsed = (self.sim_ticks as f64 * timing.tick_dt as f64) as f32;
+            let elapsed = (self.sim_ticks as f64 * f64::from(timing.tick_dt)) as f32;
             self.tick(ctx, timing.tick_dt, elapsed);
         }
         StepResult::Continue
@@ -220,7 +222,7 @@ impl BehaviorSystem {
     // state where the edit left it meaningful. Persisted state is not re-read:
     // restoring a save belongs to a world starting, which `init` does around
     // this.
-    fn reseed(&mut self, ctx: &PipelineContext) {
+    fn reseed(&mut self, ctx: &PipelineContext<'_>) {
         let resolved = resolve::resolve(
             ctx.query::<Variables>().as_slice(),
             ctx.query_with_entity::<Behavior>()
@@ -233,7 +235,7 @@ impl BehaviorSystem {
     // Recompile when a write has moved either source column since the programs
     // were compiled from it. This is what lets an editing tool rewrite one of
     // those components in place instead of reloading the world to apply it.
-    fn reseed_if_edited(&mut self, ctx: &PipelineContext) {
+    fn reseed_if_edited(&mut self, ctx: &PipelineContext<'_>) {
         if SourceTicks::of(ctx) != self.sources {
             self.reseed(ctx);
         }
@@ -313,7 +315,7 @@ impl BehaviorSystem {
 
     // Create instances for newly matching entities and drop those whose entity
     // is gone, preserving the state of everything that persists.
-    fn resync_instances(&mut self, snapshot: &Snapshot, frame: FrameContext) {
+    fn resync_instances(&mut self, snapshot: &Snapshot, frame: FrameContext<'_>) {
         // A variable source starts baselined at the variable's current value,
         // so a restored save does not read as a change on the instance's first
         // tick. Read before the loop, which borrows `self.instances` mutably.
@@ -362,12 +364,12 @@ impl BehaviorSystem {
                 self.instances[i].push(instance);
             }
             if self.instances[i].len() != before {
-                self.instances[i].sort_by_key(|inst| inst.entity.map(|e| e.to_bits()));
+                self.instances[i].sort_by_key(|inst| inst.entity.map(Entity::to_bits));
             }
         }
     }
 
-    fn tick(&mut self, ctx: &mut PipelineContext, dt: f32, elapsed: f32) {
+    fn tick(&mut self, ctx: &mut PipelineContext<'_>, dt: f32, elapsed: f32) {
         // Execution tracing is on only while an observer's request stands
         // (the editor's Behavior panel); its absence costs this one lookup.
         let request = ctx.resource::<TraceRequest>().cloned();
@@ -432,7 +434,7 @@ impl BehaviorSystem {
                 idx += 1;
             }
         }
-        for &(i, entity) in runs.iter() {
+        for &(i, entity) in &runs {
             let delay = self.programs[i].def.delay;
             if delay > 0.0 {
                 self.pending.push(Deferred {

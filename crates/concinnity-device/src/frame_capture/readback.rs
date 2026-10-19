@@ -14,22 +14,37 @@ struct Held {
 
 impl Held {
     fn lend(&self) {
-        *self.lent.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        *self
+            .lent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
     }
 
     fn give_back(&self) {
-        *self.lent.lock().unwrap_or_else(|p| p.into_inner()) = false;
+        *self
+            .lent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
         self.returned.notify_all();
     }
 
     fn is_lent(&self) -> bool {
-        *self.lent.lock().unwrap_or_else(|p| p.into_inner())
+        *self
+            .lent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn wait_returned(&self) {
-        let mut lent = self.lent.lock().unwrap_or_else(|p| p.into_inner());
+        let mut lent = self
+            .lent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while *lent {
-            lent = self.returned.wait(lent).unwrap_or_else(|p| p.into_inner());
+            lent = self
+                .returned
+                .wait(lent)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 }
@@ -172,19 +187,20 @@ impl<B> Drop for ReadbackPool<B> {
 mod tests {
     use super::*;
     use std::cell::Cell;
+    use std::cell::RefCell;
 
     // A pool of plain byte vectors standing in for mapped GPU buffers, counting
     // how many it allocated.
     struct Host {
         allocated: Cell<usize>,
-        memory: std::cell::RefCell<Vec<Box<[u8]>>>,
+        memory: RefCell<Vec<Box<[u8]>>>,
     }
 
     impl Host {
         fn new() -> Self {
             Self {
                 allocated: Cell::new(0),
-                memory: Default::default(),
+                memory: RefCell::default(),
             }
         }
 

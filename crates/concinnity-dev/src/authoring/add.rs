@@ -51,7 +51,7 @@ pub(crate) fn add_to_path(
         .map(str::to_string)
         .collect();
 
-    let tmp_path = format!("{}.tmp", world_path);
+    let tmp_path = format!("{world_path}.tmp");
 
     patch_world_jsonl_to(world_path, &tmp_path, |assets| {
         // Re-adding a text file (or any other single-entry TextLabel target)
@@ -84,9 +84,8 @@ pub(crate) fn add_to_path(
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::AlreadyExists,
                     format!(
-                        "an asset with `$id` '{}' (type: {}) already exists in {}; \
-                         remove it first with `concinnity rm {}`",
-                        entry_name, existing_type, WORLD_JSONL, entry_name
+                        "an asset with `$id` '{entry_name}' (type: {existing_type}) already exists in {WORLD_JSONL}; \
+                         remove it first with `concinnity rm {entry_name}`"
                     ),
                 ));
             }
@@ -236,10 +235,7 @@ fn scaffold_to_inject(
     if !world_exists && matches!(bootstrap, BootstrapKind::None) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            format!(
-                "no world found at '{}': create one with `cn init` or `cn new`",
-                world_path
-            ),
+            format!("no world found at '{world_path}': create one with `cn init` or `cn new`"),
         ));
     }
 
@@ -314,8 +310,7 @@ fn jsonl_has_renderer_trigger(content: &str) -> bool {
             continue;
         };
         if let Some(t) = value.get("type").and_then(|v| v.as_str())
-            && concinnity_cook::authoring::registry::RegisteredType::parse(t)
-                .is_some_and(concinnity_cook::authoring::registry::RegisteredType::renders)
+            && RegisteredType::parse(t).is_some_and(RegisteredType::renders)
         {
             return true;
         }
@@ -355,10 +350,10 @@ pub(crate) fn target_bootstrap_kind(target: &str) -> BootstrapKind {
     let ext = std::path::Path::new(target)
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase());
+        .map(str::to_ascii_lowercase);
     match ext.as_deref() {
-        Some("glb") | Some("gltf") | Some("fbx") => BootstrapKind::Scene,
-        Some("txt") | Some("md") => BootstrapKind::Text,
+        Some("glb" | "gltf" | "fbx") => BootstrapKind::Scene,
+        Some("txt" | "md") => BootstrapKind::Text,
         _ => BootstrapKind::None,
     }
 }
@@ -443,7 +438,7 @@ fn normalized_args_value(asset_type: &str, args: &serde_json::Value) -> serde_js
 // source path.
 fn import_entry(asset_type: &str, name: &str, source: &str) -> std::io::Result<serde_json::Value> {
     let reg = RegisteredType::parse(asset_type)
-        .ok_or_else(|| std::io::Error::other(format!("{} asset type is unavailable", asset_type)))?
+        .ok_or_else(|| std::io::Error::other(format!("{asset_type} asset type is unavailable")))?
         .registration();
     let mut args = reg
         .default_args
@@ -486,7 +481,7 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
+        .map(str::to_lowercase)
         .unwrap_or_default();
 
     // stem without extension, dots replaced with underscores (shared with
@@ -499,8 +494,7 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
     } else {
         path.file_name()
             .and_then(|s| s.to_str())
-            .map(|s| s.replace('.', "_"))
-            .unwrap_or_else(|| path_str.to_string())
+            .map_or_else(|| path_str.to_string(), |s| s.replace('.', "_"))
     };
 
     if ext == "json" {
@@ -597,9 +591,8 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
         other => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
-                "unknown extension '.{}'; pass a type name instead \
-                 (e.g. `concinnity add Logger`) or edit {} directly",
-                other, WORLD_JSONL
+                "unknown extension '.{other}'; pass a type name instead \
+                 (e.g. `concinnity add Logger`) or edit {WORLD_JSONL} directly"
             ),
         )),
     }
@@ -661,7 +654,7 @@ pub(crate) fn defines_distance_field(source: &str) -> bool {
 
 fn read_source_file(path_str: &str) -> std::io::Result<String> {
     std::fs::read_to_string(path_str)
-        .map_err(|e| std::io::Error::new(e.kind(), format!("could not read '{}': {}", path_str, e)))
+        .map_err(|e| std::io::Error::new(e.kind(), format!("could not read '{path_str}': {e}")))
 }
 
 // Cap text-label contents at a size that makes sense for a HUD overlay. A
@@ -676,9 +669,8 @@ const TEXT_LABEL_MAX_BYTES: usize = 64 * 1024;
 // `TEXT_LABEL_MAX_BYTES` are rejected up front rather than truncated, so the
 // user knows the contents weren't silently clipped.
 fn read_text_content(path_str: &str) -> std::io::Result<String> {
-    let metadata = std::fs::metadata(path_str).map_err(|e| {
-        std::io::Error::new(e.kind(), format!("could not read '{}': {}", path_str, e))
-    })?;
+    let metadata = std::fs::metadata(path_str)
+        .map_err(|e| std::io::Error::new(e.kind(), format!("could not read '{path_str}': {e}")))?;
     if metadata.len() as usize > TEXT_LABEL_MAX_BYTES {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -691,9 +683,8 @@ fn read_text_content(path_str: &str) -> std::io::Result<String> {
             ),
         ));
     }
-    let mut content = std::fs::read_to_string(path_str).map_err(|e| {
-        std::io::Error::new(e.kind(), format!("could not read '{}': {}", path_str, e))
-    })?;
+    let mut content = std::fs::read_to_string(path_str)
+        .map_err(|e| std::io::Error::new(e.kind(), format!("could not read '{path_str}': {e}")))?;
     if content.ends_with('\n') {
         content.pop();
         if content.ends_with('\r') {
@@ -719,9 +710,8 @@ fn text_label_entry(name: &str, path_str: &str) -> std::io::Result<serde_json::V
 // a story file.
 fn md_has_frontmatter(path_str: &str) -> std::io::Result<bool> {
     use std::io::BufRead;
-    let file = std::fs::File::open(path_str).map_err(|e| {
-        std::io::Error::new(e.kind(), format!("could not read '{}': {}", path_str, e))
-    })?;
+    let file = std::fs::File::open(path_str)
+        .map_err(|e| std::io::Error::new(e.kind(), format!("could not read '{path_str}': {e}")))?;
     let mut first = String::new();
     std::io::BufReader::new(file).read_line(&mut first)?;
     Ok(first.trim_start_matches('\u{feff}').trim_end() == "---")
@@ -791,8 +781,7 @@ fn refuse_build_config(asset_type: &str) -> std::io::Result<()> {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
-                "BuildConfig cannot be added via `concinnity add`; edit {} directly",
-                WORLD_JSONL
+                "BuildConfig cannot be added via `concinnity add`; edit {WORLD_JSONL} directly"
             ),
         ));
     }
@@ -840,8 +829,7 @@ pub(crate) fn resolve_add_target(target: &str) -> std::io::Result<Vec<serde_json
         let name = as_path
             .file_name()
             .and_then(|s| s.to_str())
-            .map(|s| s.replace('.', "_"))
-            .unwrap_or_else(|| target.to_string());
+            .map_or_else(|| target.to_string(), |s| s.replace('.', "_"));
         return entry_from_json_file(as_path, &name).map(|e| vec![e]);
     }
 
@@ -852,11 +840,10 @@ pub(crate) fn resolve_add_target(target: &str) -> std::io::Result<Vec<serde_json
     Err(std::io::Error::new(
         std::io::ErrorKind::InvalidInput,
         format!(
-            "could not resolve '{}' as any of:\n  \
+            "could not resolve '{target}' as any of:\n  \
              - a file path (no such file found)\n  \
              - a known asset type (use `concinnity list` to see available types)\n  \
-             - an inline entry, a world line such as '[\"Window\", {{}}]'",
-            target
+             - an inline entry, a world line such as '[\"Window\", {{}}]'"
         ),
     ))
 }
@@ -893,7 +880,11 @@ mod tests {
         assert_eq!(entries[0]["args"]["$id"], "water_shader");
         assert_eq!(entries[0]["type"], "Shader");
         assert_eq!(entries[0]["args"]["fragment"], "shaders/water.hlsl");
-        assert!(entries[0]["args"].get("vertex").is_none_or(|v| v.is_null()));
+        assert!(
+            entries[0]["args"]
+                .get("vertex")
+                .is_none_or(serde_json::Value::is_null)
+        );
     }
 
     // An `.hlsl` file dispatches on what it defines: a distance field becomes

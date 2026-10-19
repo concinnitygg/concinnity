@@ -40,7 +40,7 @@ impl fmt::Debug for PreparedPipelines {
     }
 }
 
-/// Builds world Shader and SdfVolume pipelines against a live backend's device,
+/// Builds world Shader and `SdfVolume` pipelines against a live backend's device,
 /// from any thread.
 ///
 /// A builder captures what pipeline creation reads when

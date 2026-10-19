@@ -1,4 +1,4 @@
-//! The lighting live path. Unlike a Sprite or a TextLabel, none of these assets
+//! The lighting live path. Unlike a Sprite or a `TextLabel`, none of these assets
 //! is data the running world re-reads each frame: the sun is packed into the
 //! renderer's light uniforms at load and the fog / shadow / post-process assets
 //! are consumed there outright, so writing their columns would apply nothing.
@@ -87,7 +87,7 @@ pub(super) fn commit(world: &mut World, config: RenderConfig) {
 /// the edited light lands in the slot it already occupied.
 pub(super) fn commit_sun(world: &mut World, entity: Entity, light: DirectionalLight) {
     world.replace_component(entity, ComponentAsset::DirectionalLight(light));
-    let lights: Vec<DirectionalLight> = world.query::<DirectionalLight>().cloned().collect();
+    let lights: Vec<DirectionalLight> = world.query::<DirectionalLight>().copied().collect();
     lighting_preview::apply_directional_lights(world, &lights);
 }
 
@@ -97,7 +97,7 @@ mod tests {
     use serde_json::json;
 
     fn keys(names: &[&str]) -> Vec<String> {
-        names.iter().map(|k| k.to_string()).collect()
+        names.iter().map(ToString::to_string).collect()
     }
 
     // The sun and the fog are replaced wholesale, so no field of theirs can

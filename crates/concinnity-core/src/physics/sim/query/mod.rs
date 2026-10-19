@@ -68,7 +68,7 @@ impl ShapeCast {
     /// A sweep of `shape` from `origin` along `motion`, unrotated, hitting
     /// everything.
     pub fn new(shape: ColliderShape, origin: [f32; 3], motion: [f32; 3]) -> Self {
-        ShapeCast {
+        Self {
             shape,
             origin,
             euler_deg: [0.0; 3],

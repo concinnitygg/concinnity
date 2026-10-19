@@ -56,16 +56,15 @@ impl MtlContext {
     // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
     pub(in crate::metal) fn encode_decals(
         &self,
-        cmd_buf: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+        cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         vp: [[f32; 4]; 4],
         // Inverse of `vp`, computed once in `draw_frame` and shared across the
         // depth-reconstruction passes; see `GraphFrameParams::inv_vp`.
         inv_vp: [[f32; 4]; 4],
         frustum: &Frustum,
     ) -> RenderResult<u32> {
-        let pipeline = match &self.decal.pipeline {
-            Some(p) => p,
-            None => return Ok(0),
+        let Some(pipeline) = &self.decal.pipeline else {
+            return Ok(0);
         };
         // Visibility-cull first so a world where every decal lands off-screen
         // skips the whole pass, including opening the render encoder. Peeking

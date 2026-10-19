@@ -1,5 +1,5 @@
 /// Runtime-only event sent by the renderer when a live camera setting changes,
-/// read by Camera3DSystem from its `Events<ControlsCommand>` queue.
+/// read by `Camera3DSystem` from its `Events<ControlsCommand>` queue.
 ///
 /// These settings (mouse sensitivity, field of view) take effect on the camera,
 /// not the renderer, so a change made in the settings menu is handed across as
@@ -13,7 +13,7 @@ pub struct ControlsCommand {
     /// unchanged. Applied live by the camera controller.
     pub mouse_sensitivity: Option<f32>,
     /// New camera vertical field of view, in degrees. None leaves it unchanged.
-    /// Applied live to every Camera3D by the camera controller.
+    /// Applied live to every `Camera3D` by the camera controller.
     pub fov_y_degrees: Option<f32>,
     /// New gamepad look sensitivity, in radians per second at full stick
     /// deflection. None leaves it unchanged. Applied live by the camera

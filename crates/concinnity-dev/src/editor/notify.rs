@@ -27,8 +27,8 @@ impl Level {
     // How long a toast of this level lives; `None` is sticky until clicked.
     fn ttl(self) -> Option<Duration> {
         match self {
-            Level::Info | Level::Success => Some(Duration::from_secs(4)),
-            Level::Error => None,
+            Self::Info | Self::Success => Some(Duration::from_secs(4)),
+            Self::Error => None,
         }
     }
 }
@@ -59,7 +59,7 @@ impl Toast {
         if age >= ttl {
             return 0.0;
         }
-        let left = ttl - age;
+        let left = ttl.saturating_sub(age);
         (left.as_secs_f32() / FADE.as_secs_f32()).min(1.0)
     }
 
@@ -170,7 +170,7 @@ impl Queue {
             finished: AtomicBool::new(false),
             born: now,
         });
-        self.ops.push(shared.clone());
+        self.ops.push(Arc::clone(&shared));
         OpHandle(shared)
     }
 
@@ -269,8 +269,7 @@ impl Notifier {
     pub(crate) fn is_empty(&self) -> bool {
         self.0
             .lock()
-            .map(|q| q.toasts.is_empty() && q.ops.is_empty())
-            .unwrap_or(true)
+            .map_or(true, |q| q.toasts.is_empty() && q.ops.is_empty())
     }
 
     // The stack to draw this frame; prunes expired toasts on the way.

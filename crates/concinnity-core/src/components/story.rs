@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 /// A compiled branching story graph, played at runtime by the story system.
 ///
-/// A `Story` is normally produced by a [StoryImport](#storyimport) expansion
+/// A `Story` is normally produced by a [`StoryImport`](#storyimport) expansion
 /// at build time rather than written by hand: the Markdown source compiles
 /// into this graph plus the stage scaffolding (a single dialogue
 /// [Screen](#screen) whose labels and sprites the story system mutates page by
@@ -65,7 +65,7 @@ impl Story {
 }
 
 /// The stage scaffolding a [Story](#story)'s build expansion generated: the
-/// [Screen](#screen)s, [Sprite](#sprite)s, and [TextLabel](#textlabel)s the
+/// [Screen](#screen)s, [Sprite](#sprite)s, and [`TextLabel`](#textlabel)s the
 /// story system mutates page by page.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
@@ -84,28 +84,28 @@ pub struct StoryScaffold {
     pub right: Option<Ref<Sprite>>,
     /// Dialog box backdrop [Sprite](#sprite).
     pub dialog_box: Option<Ref<Sprite>>,
-    /// Speaker name-plate [TextLabel](#textlabel).
+    /// Speaker name-plate [`TextLabel`](#textlabel).
     pub name_label: Option<Ref<TextLabel>>,
-    /// Dialog text [TextLabel](#textlabel).
+    /// Dialog text [`TextLabel`](#textlabel).
     pub text_label: Option<Ref<TextLabel>>,
     /// Choice button box [Sprite](#sprite)s, one per option slot.
     pub option_boxes: Vec<Ref<Sprite>>,
-    /// Choice button [TextLabel](#textlabel)s, one per option slot.
+    /// Choice button [`TextLabel`](#textlabel)s, one per option slot.
     pub options: Vec<Ref<TextLabel>>,
-    /// The title screen's Start [TextLabel](#textlabel). The story lays the
+    /// The title screen's Start [`TextLabel`](#textlabel). The story lays the
     /// title menu out at runtime, keeping only the buttons that apply
     /// contiguous (Continue and Load appear only when a save exists), so these
     /// labels are moved and cleared per the save state on disk.
     pub start_label: Option<Ref<TextLabel>>,
-    /// The title screen's Quit [TextLabel](#textlabel).
+    /// The title screen's Quit [`TextLabel`](#textlabel).
     pub quit_label: Option<Ref<TextLabel>>,
-    /// The title screen's Continue [TextLabel](#textlabel), hidden while no
+    /// The title screen's Continue [`TextLabel`](#textlabel), hidden while no
     /// save exists.
     pub continue_label: Option<Ref<TextLabel>>,
     /// The title screen [Screen](#screen), returned to when the load overlay is
     /// dismissed before play started.
     pub title: Option<Ref<Screen>>,
-    /// The title screen's Load [TextLabel](#textlabel), hidden while no
+    /// The title screen's Load [`TextLabel`](#textlabel), hidden while no
     /// slot save exists.
     pub load_label: Option<Ref<TextLabel>>,
     /// The pause-menu [Screen](#screen) (the injected Escape overlay), shown over
@@ -115,30 +115,30 @@ pub struct StoryScaffold {
     /// The settings-screen entry [Screen](#screen) opened by the pause menu's and
     /// the title screen's Settings items. Unset when there is no pause menu.
     pub settings: Option<Ref<Screen>>,
-    /// The title screen's Settings [TextLabel](#textlabel), laid out with the
+    /// The title screen's Settings [`TextLabel`](#textlabel), laid out with the
     /// other title buttons and hidden when there is no settings screen.
     pub settings_label: Option<Ref<TextLabel>>,
     /// The small pulsing [Sprite](#sprite) shown when a fully revealed page
     /// waits for input.
     pub advance_marker: Option<Ref<Sprite>>,
-    /// Quick-row Log [TextLabel](#textlabel) (dialogue history toggle).
+    /// Quick-row Log [`TextLabel`](#textlabel) (dialogue history toggle).
     pub log_label: Option<Ref<TextLabel>>,
-    /// Quick-row Auto [TextLabel](#textlabel) (auto-advance toggle).
+    /// Quick-row Auto [`TextLabel`](#textlabel) (auto-advance toggle).
     pub auto_label: Option<Ref<TextLabel>>,
-    /// Quick-row Skip [TextLabel](#textlabel) (fast-forward toggle).
+    /// Quick-row Skip [`TextLabel`](#textlabel) (fast-forward toggle).
     pub skip_label: Option<Ref<TextLabel>>,
-    /// Quick-row Save [TextLabel](#textlabel) (opens the slot overlay).
+    /// Quick-row Save [`TextLabel`](#textlabel) (opens the slot overlay).
     pub save_label: Option<Ref<TextLabel>>,
     /// Full-canvas dim [Sprite](#sprite) behind the backlog and slot
     /// overlays.
     pub overlay_dim: Option<Ref<Sprite>>,
-    /// The backlog overlay's history [TextLabel](#textlabel).
+    /// The backlog overlay's history [`TextLabel`](#textlabel).
     pub backlog_label: Option<Ref<TextLabel>>,
-    /// The slot overlay's heading [TextLabel](#textlabel) ("Save" / "Load").
+    /// The slot overlay's heading [`TextLabel`](#textlabel) ("Save" / "Load").
     pub slot_title: Option<Ref<TextLabel>>,
     /// Slot row box [Sprite](#sprite)s.
     pub slot_boxes: Vec<Ref<Sprite>>,
-    /// Slot row [TextLabel](#textlabel)s.
+    /// Slot row [`TextLabel`](#textlabel)s.
     pub slot_labels: Vec<Ref<TextLabel>>,
 }
 
@@ -155,7 +155,7 @@ pub struct StoryNode {
     pub choices: Vec<StoryChoice>,
     /// Stage dressing current at the choice menu.
     pub choice_stage: StoryStage,
-    /// Music current at the choice menu ([AudioClip](#audioclip) reference).
+    /// Music current at the choice menu ([`AudioClip`](#audioclip) reference).
     pub choice_music: Option<AudioClipHandle>,
     /// One-shots played when the choice menu shows.
     pub choice_sounds: Vec<AudioClipHandle>,
@@ -165,7 +165,7 @@ pub struct StoryNode {
     pub choice_gates: Vec<StoryGate>,
 }
 
-/// One click-through page of a [StoryNode](#storynode).
+/// One click-through page of a [`StoryNode`](#storynode).
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct StoryPage {
@@ -173,10 +173,10 @@ pub struct StoryPage {
     pub speaker: Option<StorySpeaker>,
     /// The dialog text, pre-wrapped with explicit newlines.
     pub text: String,
-    /// BehaviorNode index advancing jumps to, overriding the default next-page /
+    /// `BehaviorNode` index advancing jumps to, overriding the default next-page /
     /// fall-through order.
     pub jump: Option<u32>,
-    /// Music current at this page ([AudioClip](#audioclip) reference).
+    /// Music current at this page ([`AudioClip`](#audioclip) reference).
     /// Re-triggering the already-playing track is seamless.
     pub music: Option<AudioClipHandle>,
     /// One-shot effects played when the page shows.
@@ -190,7 +190,7 @@ pub struct StoryPage {
     pub gates: Vec<StoryGate>,
 }
 
-/// A resolved speaker attribution on a [StoryPage](#storypage).
+/// A resolved speaker attribution on a [`StoryPage`](#storypage).
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct StorySpeaker {
@@ -232,13 +232,13 @@ pub struct StoryImage {
     pub height: f32,
 }
 
-/// One option in a [StoryNode](#storynode)'s choice menu.
+/// One option in a [`StoryNode`](#storynode)'s choice menu.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct StoryChoice {
     /// Button text.
     pub label: String,
-    /// BehaviorNode index chosen; play continues at that node's first page.
+    /// `BehaviorNode` index chosen; play continues at that node's first page.
     pub target: u32,
     /// Condition gating the option: shown only while it passes. `None` is
     /// always shown.
@@ -269,11 +269,11 @@ pub struct StoryGate {
     pub op: StoryCompareOp,
     /// The literal compared against.
     pub value: i32,
-    /// BehaviorNode index play jumps to when the condition passes.
+    /// `BehaviorNode` index play jumps to when the condition passes.
     pub target: u32,
 }
 
-/// A condition on a [StoryChoice](#storychoice).
+/// A condition on a [`StoryChoice`](#storychoice).
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct StoryCondition {
@@ -317,12 +317,12 @@ impl StoryCompareOp {
     /// Evaluate `lhs <op> rhs`.
     pub fn eval(self, lhs: i32, rhs: i32) -> bool {
         match self {
-            StoryCompareOp::Eq => lhs == rhs,
-            StoryCompareOp::Ne => lhs != rhs,
-            StoryCompareOp::Lt => lhs < rhs,
-            StoryCompareOp::Le => lhs <= rhs,
-            StoryCompareOp::Gt => lhs > rhs,
-            StoryCompareOp::Ge => lhs >= rhs,
+            Self::Eq => lhs == rhs,
+            Self::Ne => lhs != rhs,
+            Self::Lt => lhs < rhs,
+            Self::Le => lhs <= rhs,
+            Self::Gt => lhs > rhs,
+            Self::Ge => lhs >= rhs,
         }
     }
 }
@@ -449,12 +449,10 @@ mod tests {
         };
         assert!(!silent.plays_audio());
         let mut paged = silent.clone();
-        paged.nodes[0].pages[0]
-            .sounds
-            .push(crate::ecs::AudioClipHandle::new(1));
+        paged.nodes[0].pages[0].sounds.push(AudioClipHandle::new(1));
         assert!(paged.plays_audio());
-        let mut menu = silent.clone();
-        menu.nodes[0].choice_music = Some(crate::ecs::AudioClipHandle::new(2));
+        let mut menu = silent;
+        menu.nodes[0].choice_music = Some(AudioClipHandle::new(2));
         assert!(menu.plays_audio());
     }
 }

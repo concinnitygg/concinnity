@@ -13,6 +13,8 @@
 
 use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::platform::Platform;
+#[cfg(any(backend_dx, backend_vk))]
+use concinnity_core::render::error::RenderError;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::shader_programs::raymarch::{self, Family};
 use concinnity_core::render::shader_source::{self, SourceFile};
@@ -91,7 +93,9 @@ pub(crate) fn family_artifacts(
     let mut stage = |which: &str| -> RenderResult<Vec<u8>> {
         let entry = stages
             .next()
-            .unwrap_or_else(|| panic!("a family declares a {which} entry"))
+            .ok_or_else(|| {
+                RenderError::Other(format!("{label}: the family declares no {which} entry"))
+            })?
             .entry;
         entry_artifact(programs, family, entry, platform, hot_reload, label)
     };
@@ -111,11 +115,7 @@ pub(crate) fn face_artifacts(
     hot_reload: bool,
     label: &str,
 ) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let missing = || {
-        concinnity_core::render::error::RenderError::Other(format!(
-            "no {faces:?}-face entry for {family:?}"
-        ))
-    };
+    let missing = || RenderError::Other(format!("no {faces:?}-face entry for {family:?}"));
     let vertex = raymarch::ALL
         .iter()
         .find(|p| p.family == family)
@@ -327,7 +327,7 @@ mod tests {
     // A surface field and a volumetric one, in source. These stand in for a
     // world's own: a test may not read one, and the point of the guard is the
     // engine template around them rather than the field itself.
-    const SURFACE_FIELD: &str = r#"
+    const SURFACE_FIELD: &str = r"
 float map(float3 p, SdfParams params, float time)
 {
     float3 rp = p + float3(sdf_param(params, 0u), 0.0, 0.0) * time;
@@ -345,9 +345,9 @@ SdfSurface shade(float3 p, float3 normal, SdfParams params, float time, float2 f
     s.transmitted = sampleSceneRefracted(frag_uv, normal, 0.05);
     return s;
 }
-"#;
+";
 
-    const VOLUMETRIC_FIELD: &str = r#"
+    const VOLUMETRIC_FIELD: &str = r"
 VolumeSample sampleVolume(float3 p, SdfParams params, float time)
 {
     VolumeSample vs;
@@ -356,7 +356,7 @@ VolumeSample sampleVolume(float3 p, SdfParams params, float time)
     vs.emission = float3(0.0, 0.0, 0.0);
     return vs;
 }
-"#;
+";
 
     // Every entry of every family compiles, on every backend, from the same
     // source the renderer assembles.

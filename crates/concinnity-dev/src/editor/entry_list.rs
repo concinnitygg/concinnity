@@ -127,7 +127,7 @@ impl EntryList {
 
     // The first read-only entry of `before` this list no longer holds as it
     // was: edited, or removed.
-    pub(crate) fn changed_read_only(&self, before: &EntryList) -> Option<usize> {
+    pub(crate) fn changed_read_only(&self, before: &Self) -> Option<usize> {
         (0..before.len()).find(|&i| {
             before.is_read_only(i) && self.by_key(before.keys[i]) != Some(&before.values[i])
         })

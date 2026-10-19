@@ -1,5 +1,5 @@
 //! Intel XeSS temporal upscaling for the D3D12 backend (see
-//! `crate::upscale_sdk::xess`); runs cross-vendor (Arc XMX + the DP4a fallback
+//! `crate::upscale_sdk::xess`); runs cross-vendor (Arc XMX + the `DP4a` fallback
 //! elsewhere). The runtime is `libxess.dll`, bundled beside the executable by
 //! `build.rs` when the SDK is found or else taken from PATH; a missing DLL falls
 //! through to the next backend.
@@ -124,7 +124,7 @@ impl XessUpscaler {
         let mut handle: xess_context_handle_t = ptr::null_mut();
         // SAFETY: the entry point came from the loaded DLL with the header's prototype, the device
         // is live, and `handle` is a live local the call fills.
-        let rc = unsafe { (api.create_context)(target.gpu.device.as_raw(), &mut handle) };
+        let rc = unsafe { (api.create_context)(target.gpu.device.as_raw(), &raw mut handle) };
         if rc != XESS_RESULT_SUCCESS || handle.is_null() {
             tracing::warn!(
                 "{LABEL}: xessD3D12CreateContext returned {rc}; trying the next backend"
@@ -153,7 +153,7 @@ impl XessUpscaler {
             p_pipeline_library: ptr::null_mut(),
         };
         // SAFETY: `ctx` holds the live context, and `init_params` is a live local the call reads.
-        let rc = unsafe { (api.init)(ctx.handle(), &init_params) };
+        let rc = unsafe { (api.init)(ctx.handle(), &raw const init_params) };
         if rc != XESS_RESULT_SUCCESS {
             tracing::warn!("{LABEL}: xessD3D12Init returned {rc}; trying the next backend");
             return Ok(None);
@@ -207,7 +207,7 @@ impl UpscaleBackend for XessUpscaler {
         };
         // SAFETY: `ctx` holds the live context, `cmd` is recording, and `params` is a live local
         // naming resources the frame keeps alive until the list executes.
-        let rc = unsafe { (self.execute)(self.ctx.handle(), cmd.as_raw(), &params) };
+        let rc = unsafe { (self.execute)(self.ctx.handle(), cmd.as_raw(), &raw const params) };
         if rc != XESS_RESULT_SUCCESS {
             return Err(RenderError::Other(format!(
                 "xessD3D12Execute returned {rc}"

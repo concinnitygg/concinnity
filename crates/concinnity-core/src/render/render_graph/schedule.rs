@@ -56,24 +56,24 @@ pub enum PassQueue {
 
 impl PassQueue {
     /// Every queue, in a stable order so a derived list is deterministic.
-    pub const ALL: [PassQueue; 2] = [PassQueue::Graphics, PassQueue::AsyncCompute];
+    pub const ALL: [Self; 2] = [Self::Graphics, Self::AsyncCompute];
     /// Number of distinct queues, the width of any `[T; PassQueue::COUNT]`
     /// companion array.
-    pub const COUNT: usize = PassQueue::ALL.len();
+    pub const COUNT: usize = Self::ALL.len();
 
     /// Dense index into a `[T; PassQueue::COUNT]` companion array.
     pub const fn index(self) -> usize {
         match self {
-            PassQueue::Graphics => 0,
-            PassQueue::AsyncCompute => 1,
+            Self::Graphics => 0,
+            Self::AsyncCompute => 1,
         }
     }
 
     /// Stable display name, for a diagnostic that names the queue.
     pub const fn name(self) -> &'static str {
         match self {
-            PassQueue::Graphics => "graphics",
-            PassQueue::AsyncCompute => "async_compute",
+            Self::Graphics => "graphics",
+            Self::AsyncCompute => "async_compute",
         }
     }
 }

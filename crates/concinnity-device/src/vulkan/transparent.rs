@@ -150,7 +150,7 @@ pub(in crate::vulkan) struct RecordDescriptors<'a> {
 // the bus on every draw.
 pub(in crate::vulkan) fn upload_record(
     gpu: &GpuUploadContext<'_>,
-    descriptors: RecordDescriptors,
+    descriptors: RecordDescriptors<'_>,
     upload: RecordUpload<'_>,
 ) -> RenderResult<TransparentRecord> {
     let alloc = gpu.alloc;
@@ -263,7 +263,7 @@ impl GlassMeshProducer {
     // but the layout the pipeline was built against still declares the
     // binding.
     pub(in crate::vulkan) fn new(
-        ctx: &ProducerCtx,
+        ctx: &ProducerCtx<'_>,
         pipelines: TracedGlassPipelines,
         object_indices: Vec<usize>,
     ) -> RenderResult<Self> {
@@ -271,7 +271,7 @@ impl GlassMeshProducer {
         let count = object_indices.len();
         let frames = ctx.frames;
         let params_stride = align_up(
-            std::mem::size_of::<GlassMeshParams>() as u64,
+            size_of::<GlassMeshParams>() as u64,
             ctx.ubo_offset_alignment,
         );
 
@@ -305,7 +305,7 @@ impl GlassMeshProducer {
                     ParamsSetTargets {
                         buffer: params_buffers[frame].buffer(),
                         offset: slot as u64 * params_stride,
-                        size: std::mem::size_of::<GlassMeshParams>() as u64,
+                        size: size_of::<GlassMeshParams>() as u64,
                         planar_view: ctx.stand_in_view,
                         sampler: ctx.sampler,
                         ocean: None,
@@ -337,23 +337,23 @@ impl GlassMeshProducer {
     // `rt_textured_ready` requires every live producer's textured pipeline, so
     // this is never asked for one it lacks.
     fn pipeline(&self, textured: bool) -> &OwnedPipeline {
-        match textured {
-            true => self
-                .pipeline_textured
+        if textured {
+            self.pipeline_textured
                 .as_ref()
-                .expect("rt_textured_ready gated the frame on every producer's textured pipeline"),
-            false => &self.pipeline_flat,
+                .expect("rt_textured_ready gated the frame on every producer's textured pipeline")
+        } else {
+            &self.pipeline_flat
         }
     }
 
     // The reflection pre-pass pipeline, under the same gate as `pipeline`.
     fn reflection_pipeline(&self, textured: bool) -> &OwnedPipeline {
-        match textured {
-            true => self
-                .reflection_textured
+        if textured {
+            self.reflection_textured
                 .as_ref()
-                .expect("rt_textured_ready gated the frame on every producer's textured pipeline"),
-            false => &self.reflection_flat,
+                .expect("rt_textured_ready gated the frame on every producer's textured pipeline")
+        } else {
+            &self.reflection_flat
         }
     }
 }
@@ -511,10 +511,10 @@ impl TransparentRt {
             deformed,
             skinned_indices,
         } = dynamic;
-        let sidx_buffer = if skinned_indices != vk::Buffer::null() {
-            skinned_indices
-        } else {
+        let sidx_buffer = if skinned_indices == vk::Buffer::null() {
             self.dummy_ssbo.buffer()
+        } else {
+            skinned_indices
         };
         SetWrites::new(self.sets[frame_idx])
             .acceleration_structure(1, tlas)
@@ -599,7 +599,7 @@ fn build_transparent_rt(
     };
 
     // Per-frame RtParams UBO ring (host-mapped).
-    let params_size = std::mem::size_of::<RtParams>() as vk::DeviceSize;
+    let params_size = size_of::<RtParams>() as vk::DeviceSize;
     let mut params_buffers = Vec::with_capacity(frames);
     for _ in 0..frames {
         params_buffers.push(alloc.create_buffer(
@@ -1090,7 +1090,7 @@ fn transparent_pipeline(
     device: &VkDevice,
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
-    shaders: TransparentShaders,
+    shaders: TransparentShaders<'_>,
     output: TransparentOutput,
 ) -> RenderResult<OwnedPipeline> {
     let TransparentShaders {
@@ -1359,10 +1359,10 @@ impl TransparentResources {
     // framebuffers. Called from `VkContext::new` when the world declares any
     // `GlassPanel` or `WaterSurface`.
     pub(in crate::vulkan) fn new(
-        ctx: TransparentDeviceCtx,
+        ctx: TransparentDeviceCtx<'_>,
         config: TransparentBuildConfig,
-        scene: TransparentSceneTargets,
-        content: TransparentContent,
+        scene: TransparentSceneTargets<'_>,
+        content: TransparentContent<'_>,
         rt_setup: TransparentRtSetup,
     ) -> RenderResult<Self> {
         let TransparentDeviceCtx {
@@ -1453,7 +1453,7 @@ impl TransparentResources {
         let snapshot = create_snapshot(alloc, device, command_pool, queue, width, height)?;
 
         // Per-frame view UBO ring (HOST_VISIBLE | HOST_COHERENT, mapped).
-        let view_size = std::mem::size_of::<TransparentView>() as u64;
+        let view_size = size_of::<TransparentView>() as u64;
         let mut view_ubos = Vec::with_capacity(frames);
         for _ in 0..frames {
             view_ubos.push(alloc.create_buffer(
@@ -1508,7 +1508,7 @@ impl TransparentResources {
             rt_layout_textured: rt
                 .as_ref()
                 .and_then(|r| r.layout_textured.as_ref())
-                .map(|l| l.handle()),
+                .map(OwnedPipelineLayout::handle),
             pool: descriptor_pool.handle(),
             params_set_layout: params_set_layout.handle(),
             stand_in_view: empty_layer.view,
@@ -1767,10 +1767,10 @@ impl TransparentResources {
     // the new handles).
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        ctx: TransparentDeviceCtx,
+        ctx: TransparentDeviceCtx<'_>,
         width: u32,
         height: u32,
-        targets: TransparentRebuildTargets,
+        targets: TransparentRebuildTargets<'_>,
     ) -> RenderResult<()> {
         let TransparentDeviceCtx {
             alloc,
@@ -1882,7 +1882,7 @@ impl VkContext {
     pub(in crate::vulkan) fn seethrough_meshes_enabled(&self) -> bool {
         self.transparent
             .as_ref()
-            .is_some_and(|t| t.mesh_pipelines_ready())
+            .is_some_and(TransparentResources::mesh_pipelines_ready)
     }
 
     // Whether the see-through mesh (Layer 2) path is live this frame: the
@@ -2014,12 +2014,14 @@ impl VkContext {
     // True when a visible surface samples a simulated ocean, so `WaterSim` has
     // a reader this frame.
     pub(in crate::vulkan) fn water_sim_live(&self) -> bool {
-        self.water_sim.as_ref().is_some_and(|o| o.simulates())
+        self.water_sim
+            .as_ref()
+            .is_some_and(super::water_sim::OceanSim::simulates)
             && self
                 .transparent
                 .as_ref()
                 .and_then(|t| t.producers.water.as_ref())
-                .is_some_and(|w| w.samples_ocean())
+                .is_some_and(producer::TransparentProducer::samples_ocean)
     }
 
     pub(in crate::vulkan) fn encode_transparent(
@@ -2310,7 +2312,7 @@ impl VkContext {
         &self,
         transparent: &TransparentResources,
         layers: &GlassReflectionLayers,
-        frame: &TransparentFrame,
+        frame: &TransparentFrame<'_>,
     ) {
         let device = &self.hw.device;
         let clears = [
@@ -2372,7 +2374,7 @@ impl VkContext {
     fn bind_transparent_sets(
         &self,
         transparent: &TransparentResources,
-        frame: &TransparentFrame,
+        frame: &TransparentFrame<'_>,
         view_set: vk::DescriptorSet,
     ) {
         let device = &self.hw.device;
@@ -2416,7 +2418,7 @@ impl VkContext {
     fn draw_transparent_entry(
         &self,
         transparent: &TransparentResources,
-        frame: &TransparentFrame,
+        frame: &TransparentFrame<'_>,
         kind: Producer,
         i: usize,
     ) {

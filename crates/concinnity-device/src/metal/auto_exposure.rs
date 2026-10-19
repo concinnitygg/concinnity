@@ -21,7 +21,7 @@
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::auto_exposure::ExposureAdaptation;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::uniforms::*;
+use concinnity_core::render::uniforms::{AutoExposureParams, ExposureMeasurement};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -31,7 +31,7 @@ use objc2_metal::{
 };
 
 use super::builtin_shaders::compute_pipeline;
-use super::context::*;
+use super::context::MtlContext;
 use super::encode::ComputeEncode;
 use super::scoped_encoder::ScopedEncoder;
 

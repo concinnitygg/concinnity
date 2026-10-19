@@ -1,4 +1,4 @@
-//! EditorHook: the Console panel's actions. The backtick toggle (with a
+//! `EditorHook`: the Console panel's actions. The backtick toggle (with a
 //! one-frame focus blur so the opening keypress never types into the command
 //! line), the log window's pinned-tail scroll, the /del ghost autocomplete, and
 //! the command dispatch: /add and /del mutate the working entries exactly like
@@ -156,8 +156,7 @@ impl EditorHook {
                 InputKey::Tab => self.accept_console_ghost(world),
                 InputKey::Right => {
                     let at_end = widget::input(world, console_panel::INPUT)
-                        .map(|t| t.caret >= t.content.chars().count())
-                        .unwrap_or(false);
+                        .is_some_and(|t| t.caret >= t.content.chars().count());
                     if at_end {
                         self.accept_console_ghost(world);
                     }
@@ -167,7 +166,7 @@ impl EditorHook {
         }
     }
 
-    fn accept_console_ghost(&mut self, world: &mut World) {
+    fn accept_console_ghost(&self, world: &mut World) {
         let text = widget::field_text(world, console_panel::INPUT);
         if let Some(ghost) = console::del_ghost(&text, self.entries.iter().filter_map(declared_id))
         {
@@ -296,7 +295,7 @@ impl EditorHook {
     // entries and write the blobs on a worker thread, reporting start /
     // finish / errors through the sink so the frame loop never stalls. One
     // build at a time, shared with /export.
-    fn console_build(&mut self) {
+    fn console_build(&self) {
         if self.console_build_running.swap(true, Ordering::SeqCst) {
             self.console_sink.warn("cook already running");
             return;

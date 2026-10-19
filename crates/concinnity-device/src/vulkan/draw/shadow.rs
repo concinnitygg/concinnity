@@ -1,6 +1,6 @@
 //! Shadow pass for the Vulkan backend: one depth-only render pass per
-//! cascade slice of the shadow-map array. Both of shadow_map's transitions are
-//! graph-driven: shadow_map is the render graph's `shadow_map` resource, so the
+//! cascade slice of the shadow-map array. Both of `shadow_map`'s transitions are
+//! graph-driven: `shadow_map` is the render graph's `shadow_map` resource, so the
 //! executor emits (over every cascade layer) the Shadow producer barrier
 //! (`SHADER_READ_ONLY_OPTIMAL` -> `DEPTH_STENCIL_ATTACHMENT_OPTIMAL`, the
 //! cross-frame reset for this frame's shadow loop) before this pass and the Main
@@ -205,7 +205,7 @@ impl VkContext {
         ) else {
             return;
         };
-        let stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32;
+        let stride = size_of::<vk::DrawIndexedIndirectCommand>() as u32;
         let prefix = self.state.draw.skinned_record_base() as u32;
 
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice

@@ -98,7 +98,7 @@ impl BoundsProbe {
                 1.0 / d
             }
         };
-        BoundsProbe {
+        Self {
             origin: ray.origin,
             inverse: vec3(
                 reciprocal(ray.direction.x),

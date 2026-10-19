@@ -68,7 +68,7 @@ pub fn gather_auto_seed_triangles(
             continue;
         }
         for t in all_indices[o.index_offset..iend].chunks_exact(3) {
-            let vi = |k: usize| (t[k] as i64 + o.base_vertex as i64) as usize;
+            let vi = |k: usize| (i64::from(t[k]) + i64::from(o.base_vertex)) as usize;
             let (a, b, c) = (vi(0), vi(1), vi(2));
             if a >= all_vertices.len() || b >= all_vertices.len() || c >= all_vertices.len() {
                 continue;
@@ -87,7 +87,7 @@ pub fn gather_auto_seed_triangles(
 /// geometry-aware auto-seed, except in a planet world, whose frame moves would
 /// leave a seeded probe's cube behind; else none.
 pub fn probe_placements<'a>(
-    ctx: &PipelineContext,
+    ctx: &PipelineContext<'_>,
     draw_objects: &[render_types::DrawObject],
     vertices: &[Vertex],
     indices: &[u32],
@@ -110,7 +110,7 @@ pub fn probe_placements<'a>(
 
 // The world's declared reflection probes. Read, not drained, so editor tooling
 // can address the authored probes by name.
-fn declared_probe_placements(ctx: &PipelineContext) -> Vec<ProbePlacement> {
+fn declared_probe_placements(ctx: &PipelineContext<'_>) -> Vec<ProbePlacement> {
     ctx.query::<ReflectionProbe>()
         .map(ProbePlacement::from)
         .collect()
@@ -118,7 +118,7 @@ fn declared_probe_placements(ctx: &PipelineContext) -> Vec<ProbePlacement> {
 
 // Whether a world without declared probes gets auto-seeded ones: not a planet
 // world.
-fn seeds_probes(ctx: &PipelineContext) -> bool {
+fn seeds_probes(ctx: &PipelineContext<'_>) -> bool {
     ctx.query::<crate::components::Planet>().next().is_none()
 }
 

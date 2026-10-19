@@ -33,9 +33,8 @@ pub(crate) fn parse_obj(content: &str) -> Result<(Vec<VertexData>, Vec<u16>), St
         }
 
         let mut tokens = line.split_whitespace();
-        let keyword = match tokens.next() {
-            Some(k) => k,
-            None => continue,
+        let Some(keyword) = tokens.next() else {
+            continue;
         };
 
         match keyword {
@@ -51,14 +50,11 @@ pub(crate) fn parse_obj(content: &str) -> Result<(Vec<VertexData>, Vec<u16>), St
                 // v is optional (defaults to 0)
                 let v = tokens
                     .next()
-                    .map(|s| s.parse::<f32>().unwrap_or(0.0))
-                    .unwrap_or(0.0);
+                    .map_or(0.0, |s| s.parse::<f32>().unwrap_or(0.0));
                 uvs.push([u, v]);
             }
 
             // Normals are ignored: the build pipeline recomputes them.
-            "vn" => {}
-
             "f" => {
                 let refs: Vec<&str> = tokens.collect();
                 if refs.len() < 3 {
@@ -72,29 +68,28 @@ pub(crate) fn parse_obj(content: &str) -> Result<(Vec<VertexData>, Vec<u16>), St
                 let mut corners: Vec<u16> = Vec::with_capacity(refs.len());
                 for ref_str in &refs {
                     let key = parse_face_ref(ref_str, &positions, &uvs, line_idx)?;
-                    let vi = match vertex_map.get(&key) {
-                        Some(&i) => i,
-                        None => {
-                            if vertices.len() >= u16::MAX as usize {
-                                return Err(format!(
-                                    "mesh exceeds {} unique vertices (u16 index limit)",
-                                    u16::MAX
-                                ));
-                            }
-                            let i = vertices.len() as u16;
-                            let uv = if key.1 == NO_UV {
-                                [0.0, 0.0]
-                            } else {
-                                uvs[key.1 as usize]
-                            };
-                            vertices.push(VertexData {
-                                pos: positions[key.0 as usize],
-                                color: NEUTRAL_COLOR,
-                                uv,
-                            });
-                            vertex_map.insert(key, i);
-                            i
+                    let vi = if let Some(&i) = vertex_map.get(&key) {
+                        i
+                    } else {
+                        if vertices.len() >= u16::MAX as usize {
+                            return Err(format!(
+                                "mesh exceeds {} unique vertices (u16 index limit)",
+                                u16::MAX
+                            ));
                         }
+                        let i = vertices.len() as u16;
+                        let uv = if key.1 == NO_UV {
+                            [0.0, 0.0]
+                        } else {
+                            uvs[key.1 as usize]
+                        };
+                        vertices.push(VertexData {
+                            pos: positions[key.0 as usize],
+                            color: NEUTRAL_COLOR,
+                            uv,
+                        });
+                        vertex_map.insert(key, i);
+                        i
                     };
                     corners.push(vi);
                 }
@@ -198,6 +193,7 @@ fn parse_f32(token: Option<&str>, line_idx: usize, field: &str) -> Result<f32, S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     fn triangle_obj() -> &'static str {
         "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3"
@@ -390,15 +386,10 @@ mod tests {
         let count = u16::MAX as usize + 3;
         let mut obj = String::with_capacity(count * 12);
         for i in 0..count {
-            obj.push_str(&format!("v {i} 0 0\n"));
+            let _ = writeln!(obj, "v {i} 0 0");
         }
         for tri in 0..count / 3 {
-            obj.push_str(&format!(
-                "f {} {} {}\n",
-                tri * 3 + 1,
-                tri * 3 + 2,
-                tri * 3 + 3
-            ));
+            let _ = writeln!(obj, "f {} {} {}", tri * 3 + 1, tri * 3 + 2, tri * 3 + 3);
         }
         let err = parse_obj(&obj).unwrap_err();
         assert_eq!(err, "mesh exceeds 65535 unique vertices (u16 index limit)");

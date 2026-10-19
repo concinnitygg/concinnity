@@ -40,7 +40,7 @@ pub enum ReactiveReader {
     Fsr,
     /// Intel XeSS, through its responsive pixel mask.
     Xess,
-    /// Apple MetalFX's temporal scaler.
+    /// Apple `MetalFX`'s temporal scaler.
     MetalFx,
     /// NVIDIA DLSS Super Resolution, which has no reactive input on its current
     /// models: its bias-current-color mask is limited to a retired preset.
@@ -50,13 +50,13 @@ pub enum ReactiveReader {
 impl ReactiveReader {
     /// Whether it takes the mask at all.
     pub const fn reads(self) -> bool {
-        !matches!(self, ReactiveReader::Dlss)
+        !matches!(self, Self::Dlss)
     }
 
     /// Whether every dispatch must name a mask, so a frame with no writer hands
     /// it a cleared one.
     pub const fn requires(self) -> bool {
-        matches!(self, ReactiveReader::Xess)
+        matches!(self, Self::Xess)
     }
 
     /// The mask value past which it removes no more history, for a reader
@@ -65,9 +65,9 @@ impl ReactiveReader {
     /// aliased edge of a pane still converge; XeSS clips at the write cap.
     pub const fn cap(self) -> Option<f32> {
         match self {
-            ReactiveReader::Taa => Some(0.8),
-            ReactiveReader::Xess => Some(WRITE_MAX),
-            ReactiveReader::Fsr | ReactiveReader::MetalFx | ReactiveReader::Dlss => None,
+            Self::Taa => Some(0.8),
+            Self::Xess => Some(WRITE_MAX),
+            Self::Fsr | Self::MetalFx | Self::Dlss => None,
         }
     }
 }
@@ -87,7 +87,7 @@ pub enum ReactiveWrite {
 impl ReactiveWrite {
     /// Whether this pass's writes reach memory.
     pub fn stores(self) -> bool {
-        self != ReactiveWrite::Unstored
+        self != Self::Unstored
     }
 }
 

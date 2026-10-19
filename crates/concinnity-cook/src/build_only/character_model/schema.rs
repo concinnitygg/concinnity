@@ -1,17 +1,17 @@
-//! Character-model schema: a body conforming to a CharacterSchema.
+//! Character-model schema: a body conforming to a `CharacterSchema`.
 
 use concinnity_core::components::CharacterCapsule;
 use concinnity_core::ecs::{MaterialHandle, NameRef};
 
 use super::character_schema::CharacterSchema;
 
-/// A character body that conforms to a [CharacterSchema](#characterschema).
+/// A character body that conforms to a [`CharacterSchema`](#characterschema).
 ///
 /// The build validates the source against the schema (joint names and
 /// parentage, complete `+` / `-` pairs for bipolar keys), imports it,
 /// generates the schema's synthesized targets, and emits one
-/// [SkinnedMesh](#skinnedmesh) under this asset's name. A
-/// [CharacterShape](#charactershape) or [Animation](#animation) targets the
+/// [`SkinnedMesh`](#skinnedmesh) under this asset's name. A
+/// [`CharacterShape`](#charactershape) or [Animation](#animation) targets the
 /// model by this name exactly as it would a `SkinnedMesh`. Lower levels of
 /// detail come from `lod_levels`, as on a `SkinnedMesh`.
 ///
@@ -30,7 +30,7 @@ use super::character_schema::CharacterSchema;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
 #[serde(default)]
 pub struct CharacterModel {
-    /// The [CharacterSchema](#characterschema) the source conforms to, by
+    /// The [`CharacterSchema`](#characterschema) the source conforms to, by
     /// asset name or the reserved `builtin:humanoid`.
     pub schema: NameRef<CharacterSchema>,
     /// Path to the `.glb` / `.gltf` body.

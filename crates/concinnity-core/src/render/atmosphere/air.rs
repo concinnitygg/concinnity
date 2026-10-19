@@ -55,7 +55,7 @@ impl AirProfile {
 
     /// Extinction per kilometer at `height` kilometers above the ground: what
     /// the air takes out of a beam crossing it. Mirrors `medium_extinction` in
-    /// atmosphere_common.hlsl.
+    /// `atmosphere_common.hlsl`.
     pub fn extinction_at(&self, height: f32) -> [f32; 3] {
         let rayleigh = exp(-height.max(0.0) / self.rayleigh_scale_height);
         let mie = exp(-height.max(0.0) / self.mie_scale_height);

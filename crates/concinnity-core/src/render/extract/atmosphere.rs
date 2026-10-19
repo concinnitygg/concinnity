@@ -40,7 +40,7 @@ impl AtmosphereDrive {
     // set, which this one then replaces).
     pub(super) fn frame(
         &mut self,
-        ctx: &PipelineContext,
+        ctx: &PipelineContext<'_>,
         cam_pos: [f32; 3],
         turned: Option<DirectionalLightSet>,
     ) -> (AtmosphereFrame, Option<DirectionalLightSet>) {
@@ -120,7 +120,7 @@ fn moon_light(
 
 // The world's directional lights as authored, or the neutral sun a world with
 // none is lit by. Inline, so the per-frame drive allocates nothing.
-fn authored_lights(ctx: &PipelineContext) -> DirectionalLightSet {
+fn authored_lights(ctx: &PipelineContext<'_>) -> DirectionalLightSet {
     let lights = DirectionalLightSet::collect(ctx.query::<DirectionalLight>().copied());
     if !lights.as_slice().is_empty() {
         return lights;
@@ -198,7 +198,7 @@ mod tests {
     fn the_moon_takes_the_shadows_at_night() {
         use crate::render::night_sky::NightSkySettings;
         let settings = AtmosphereSettings::resolve(&Atmosphere::default(), None)
-            .with_night(Some(NightSkySettings::resolve(&Default::default())));
+            .with_night(Some(NightSkySettings::resolve(&NightSky::default())));
         let mut night = world_with_sun([0.1, -1.0, 0.0]);
         let mut drive = AtmosphereDrive::new(settings);
         let (frame, set) = drive.frame(&night.context(), [0.0, 2.0, 0.0], None);

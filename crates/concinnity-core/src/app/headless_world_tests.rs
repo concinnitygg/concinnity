@@ -67,7 +67,12 @@ fn a_behavior_world_starts_with_just_the_behavior_system() {
     let mut app = App::with_systems(world, HEADLESS_SYSTEMS);
     app.start().expect("the world starts");
 
-    let names: Vec<&str> = app.world().systems().iter().map(|s| s.name()).collect();
+    let names: Vec<&str> = app
+        .world()
+        .systems()
+        .iter()
+        .map(crate::ecs::BuiltSystem::name)
+        .collect();
     assert_eq!(names, ["BehaviorSystem"]);
 }
 
@@ -249,6 +254,11 @@ fn a_simulating_world_starts_both_headless_systems() {
     let mut app = App::with_systems(world, HEADLESS_SYSTEMS);
     app.start().expect("the world starts");
 
-    let names: Vec<&str> = app.world().systems().iter().map(|s| s.name()).collect();
+    let names: Vec<&str> = app
+        .world()
+        .systems()
+        .iter()
+        .map(crate::ecs::BuiltSystem::name)
+        .collect();
     assert_eq!(names, ["BehaviorSystem", "PhysicsSystem"]);
 }

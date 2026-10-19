@@ -1,4 +1,4 @@
-//! RenderBackend impl for MtlContext, one impl block per trait family; the
+//! `RenderBackend` impl for `MtlContext`, one impl block per trait family; the
 //! bodies come from `crate::forward`.
 
 use concinnity_core::gfx::mesh_payload;
@@ -52,12 +52,12 @@ impl RenderBackend for MtlContext {
 
     fn prepare_frame(&mut self) {
         debug_assert_main_thread("prepare_frame");
-        MtlContext::prepare_frame(self);
+        Self::prepare_frame(self);
     }
 
     fn pump_events(&mut self) {
         debug_assert_main_thread("pump_events");
-        MtlContext::pump_events(self);
+        Self::pump_events(self);
     }
 
     fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()> {
@@ -71,13 +71,13 @@ impl RenderBackend for MtlContext {
         if let Some(e) = self.take_device_error() {
             return Err(e);
         }
-        MtlContext::draw_frame(self, params)
+        Self::draw_frame(self, params)
     }
 
     fn window_closed(&mut self) -> bool {
         // Metal's inherent method is &self; the trait takes &mut self for
         // parity with DX/VK.
-        MtlContext::window_closed(self)
+        Self::window_closed(self)
     }
 }
 
@@ -97,12 +97,12 @@ impl DrawStreaming for MtlContext {
     }
 
     forward! { assert = debug_assert_main_thread;
-        fn install_world_shader(&mut self, bucket: u32, programs: &concinnity_core::components::ShaderPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<()>;
+        fn install_world_shader(&mut self, bucket: u32, programs: &components::ShaderPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<()>;
     }
 
     fn pipeline_builder(&self) -> Option<std::sync::Arc<dyn backend::PipelineBuilder>> {
         debug_assert_main_thread("pipeline_builder");
-        Some(MtlContext::pipeline_builder(self))
+        Some(Self::pipeline_builder(self))
     }
 }
 
@@ -119,7 +119,7 @@ impl WindowControl for MtlContext {
         fn display_modes(&self) -> Vec<display_mode::DisplayMode>;
         fn current_display_mode(&self) -> Option<display_mode::DisplayMode>;
         fn set_display_mode(&mut self, mode: display_mode::DisplayMode);
-        fn set_keymap(&mut self, keymap: &KeyMap);
+        fn set_keymap(&mut self, keymap: KeyMap);
         fn logical_size(&self) -> (f32, f32);
         fn top_content_inset(&self) -> f32;
         fn clipboard(&mut self) -> Option<&mut dyn Clipboard>;
@@ -143,11 +143,11 @@ impl RenderTuning for MtlContext {
 impl LiveEdit for MtlContext {
     forward! { assert = debug_assert_main_thread;
         fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()>;
-        fn update_skinned_mesh_geometry(&mut self, skinned_index: SkinnedIndex, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> RenderResult<()>;
+        fn update_skinned_mesh_geometry(&mut self, skinned_index: SkinnedIndex, vertex_base: u32, verts: &[SkinnedVertex], idxs: &[u16]) -> RenderResult<()>;
         fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> RenderResult<Vec<backend::SkinnedSlotLayout>>;
         fn set_material_params(&mut self, row: u32, params: [f32; MATERIAL_PARAM_COUNT]);
-        fn update_world_shader(&mut self, bucket: u32, programs: &concinnity_core::components::ShaderPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
-        fn replace_sdf_volume_pipelines(&mut self, volume: usize, programs: &concinnity_core::components::sdf_programs::SdfPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
+        fn update_world_shader(&mut self, bucket: u32, programs: &components::ShaderPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
+        fn replace_sdf_volume_pipelines(&mut self, volume: usize, programs: &components::sdf_programs::SdfPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
         fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()>;
         fn rebuild_static_geometry(&mut self, changes: Vec<backend::DrawGeometryUpdate>) -> RenderResult<()>;
     }

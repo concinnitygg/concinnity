@@ -10,7 +10,7 @@ pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> 
     // geometry math, no I/O, so the check needs no asset search root.
     crate::compile::mesh::compile_mesh_payload(args)
         .map(|_| ())
-        .map_err(|e| format!("Asset '{}' mesh compile error: {}", name, e))
+        .map_err(|e| format!("Asset '{name}' mesh compile error: {e}"))
 }
 
 #[cfg(test)]

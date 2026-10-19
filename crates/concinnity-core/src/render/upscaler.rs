@@ -45,6 +45,7 @@ impl UpscalerAvailability {
     };
 
     /// These, minus the ones in `refused`.
+    #[must_use]
     pub fn without(self, refused: Self) -> Self {
         Self {
             dlss: self.dlss && !refused.dlss,

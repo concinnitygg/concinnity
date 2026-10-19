@@ -78,8 +78,7 @@ pub fn index_of(modes: &[DisplayMode], choice: DisplayMode) -> usize {
                 m.refresh_hz.abs_diff(choice.refresh_hz),
             )
         })
-        .map(|(i, _)| i)
-        .unwrap_or(0)
+        .map_or(0, |(i, _)| i)
 }
 
 /// The index in `modes` of the native mode to apply for `want`: an exact
@@ -88,7 +87,7 @@ pub fn index_of(modes: &[DisplayMode], choice: DisplayMode) -> usize {
 /// `None` when no mode has that resolution (e.g. a stale persisted choice from
 /// another monitor), so the caller leaves the display alone. Used by the
 /// DirectX + Vulkan apply paths; Metal does the same matching natively over
-/// CGDisplayModes (`find_native_mode`), so this is dead on a Metal-only build.
+/// `CGDisplayModes` (`find_native_mode`), so this is dead on a Metal-only build.
 pub fn best_native_index(modes: &[DisplayMode], want: DisplayMode) -> Option<usize> {
     let mut best: Option<(u32, usize)> = None;
     for (i, m) in modes.iter().enumerate() {

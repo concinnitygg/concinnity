@@ -25,29 +25,29 @@ pub enum Platform {
 
 impl Platform {
     /// Every platform.
-    pub const ALL: [Platform; 3] = [Platform::Metal, Platform::DirectX, Platform::Vulkan];
+    pub const ALL: [Self; 3] = [Self::Metal, Self::DirectX, Self::Vulkan];
 
     /// The short name a cook cache key and an export stamp record the backend under.
     pub fn key(self) -> &'static str {
         match self {
-            Platform::Metal => "metal",
-            Platform::DirectX => "directx",
-            Platform::Vulkan => "vulkan",
+            Self::Metal => "metal",
+            Self::DirectX => "directx",
+            Self::Vulkan => "vulkan",
         }
     }
 
     /// The graphics API's name as a player reads it in the settings menu.
     pub fn label(self) -> &'static str {
         match self {
-            Platform::Metal => "Metal",
-            Platform::DirectX => "DirectX 12",
-            Platform::Vulkan => "Vulkan",
+            Self::Metal => "Metal",
+            Self::DirectX => "DirectX 12",
+            Self::Vulkan => "Vulkan",
         }
     }
 
     /// The platform `key` names, if any.
-    pub fn from_key(key: &str) -> Option<Platform> {
-        Platform::ALL.into_iter().find(|p| p.key() == key)
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.key() == key)
     }
 
     const fn bit(self) -> u8 {
@@ -70,7 +70,7 @@ pub struct PlatformSet(u8);
 impl PlatformSet {
     /// The set holding only `platform`.
     pub const fn single(platform: Platform) -> Self {
-        PlatformSet(platform.bit())
+        Self(platform.bit())
     }
 
     /// Whether `platform` is in the set.
@@ -84,7 +84,7 @@ impl PlatformSet {
     }
 
     /// Whether every platform in the set is also in `other`.
-    pub const fn is_subset(self, other: PlatformSet) -> bool {
+    pub const fn is_subset(self, other: Self) -> bool {
         self.0 & !other.0 == 0
     }
 
@@ -102,13 +102,13 @@ impl PlatformSet {
 
 impl From<Platform> for PlatformSet {
     fn from(platform: Platform) -> Self {
-        PlatformSet::single(platform)
+        Self::single(platform)
     }
 }
 
 impl FromIterator<Platform> for PlatformSet {
     fn from_iter<I: IntoIterator<Item = Platform>>(iter: I) -> Self {
-        PlatformSet(iter.into_iter().fold(0, |bits, p| bits | p.bit()))
+        Self(iter.into_iter().fold(0, |bits, p| bits | p.bit()))
     }
 }
 

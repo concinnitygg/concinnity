@@ -340,7 +340,7 @@ pub(super) struct SettingsRow<'a> {
 }
 
 // Build an OptionSelect cycle-row asset for the settings body.
-pub(super) fn option_select_row(row: &SettingsRow) -> serde_json::Value {
+pub(super) fn option_select_row(row: &SettingsRow<'_>) -> serde_json::Value {
     let &SettingsRow {
         name,
         setting,
@@ -377,7 +377,7 @@ pub(super) fn option_select_row(row: &SettingsRow) -> serde_json::Value {
 }
 
 // Build a Slider row asset for the settings body.
-pub(super) fn slider_row(row: &SettingsRow) -> serde_json::Value {
+pub(super) fn slider_row(row: &SettingsRow<'_>) -> serde_json::Value {
     let &SettingsRow {
         name,
         setting,

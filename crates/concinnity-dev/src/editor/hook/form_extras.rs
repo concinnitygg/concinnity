@@ -1,4 +1,4 @@
-//! EditorHook: per-type extras on the add / edit form. A type whose form
+//! `EditorHook`: per-type extras on the add / edit form. A type whose form
 //! needs more than its schema fields implements `FormExtras`: rows after the
 //! fields, a reason confirming is unavailable, args it fills in itself, files
 //! a commit writes, edits to other entries that ride the same undo step, and
@@ -62,7 +62,7 @@ pub(in crate::editor::hook) trait FormExtras:
         &[]
     }
 
-    fn rows(&self, cx: &ExtrasCx) -> Vec<ExtraRow>;
+    fn rows(&self, cx: &ExtrasCx<'_>) -> Vec<ExtraRow>;
 
     // A press on the row with `id`.
     fn press(&mut self, id: usize);
@@ -73,14 +73,14 @@ pub(in crate::editor::hook) trait FormExtras:
     }
 
     // Why confirming is unavailable, when it is.
-    fn blocked(&self, _cx: &ExtrasCx) -> Option<String> {
+    fn blocked(&self, _cx: &ExtrasCx<'_>) -> Option<String> {
         None
     }
 
     // Fill in the args the extras decide, and name the files the commit writes.
     fn fill_args(
         &self,
-        _cx: &ExtrasCx,
+        _cx: &ExtrasCx<'_>,
         _args: &mut serde_json::Map<String, serde_json::Value>,
     ) -> Vec<NewFile> {
         Vec::new()
@@ -220,33 +220,30 @@ impl EditorHook {
     // The entry half of a commit: update the edited entry, or append a new
     // one, under the typed name.
     fn commit_form_entry(&mut self, ty: &str, typed: &str, args: serde_json::Value) -> Committed {
-        match self.form.target.entry() {
-            Some(key) => {
-                let renamed = self.rename_entry(key, typed);
-                if let Some(obj) = self.entries.by_key_mut(key).and_then(|e| e.as_object_mut()) {
-                    obj.insert(
-                        "args".to_string(),
-                        with_optional_id(args, renamed.name.as_deref()),
-                    );
-                }
-                Committed {
-                    key,
-                    before: renamed.before,
-                    name: renamed.name,
-                    moved: renamed.moved,
-                }
+        if let Some(key) = self.form.target.entry() {
+            let renamed = self.rename_entry(key, typed);
+            if let Some(obj) = self.entries.by_key_mut(key).and_then(|e| e.as_object_mut()) {
+                obj.insert(
+                    "args".to_string(),
+                    with_optional_id(args, renamed.name.as_deref()),
+                );
             }
-            None => {
-                let name = self.finalize_name(typed);
-                let key = self.entries.push(serde_json::json!({
-                    "type": ty, "args": with_optional_id(args, name.as_deref()),
-                }));
-                Committed {
-                    key,
-                    before: None,
-                    name,
-                    moved: 0,
-                }
+            Committed {
+                key,
+                before: renamed.before,
+                name: renamed.name,
+                moved: renamed.moved,
+            }
+        } else {
+            let name = self.finalize_name(typed);
+            let key = self.entries.push(serde_json::json!({
+                "type": ty, "args": with_optional_id(args, name.as_deref()),
+            }));
+            Committed {
+                key,
+                before: None,
+                name,
+                moved: 0,
             }
         }
     }

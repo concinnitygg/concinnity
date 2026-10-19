@@ -1,6 +1,6 @@
 //! Free-list allocator for backend draw-object slots. A backend appends draw
 //! objects into a single `Vec` and stores [`DrawIndex`]es into it on each entity's
-//! RenderHandle, so a despawned object's slot cannot be compacted away without
+//! `RenderHandle`, so a despawned object's slot cannot be compacted away without
 //! invalidating every later index. Instead the allocator hands out a vacated
 //! slot before growing the vec: `retire` pushes a freed index, the next runtime
 //! spawn pops it. Streamed chunks were the first consumer (one freed chunk's
@@ -18,7 +18,7 @@ use crate::gfx::render_types::{DrawIndex, DrawObject};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Where a newly allocated draw record lands.
 pub enum SlotAlloc {
-    /// Reuse this vacated slot: overwrite the existing draw_objects entry.
+    /// Reuse this vacated slot: overwrite the existing `draw_objects` entry.
     Reuse(DrawIndex),
     /// No free slot was available: append at this index (== the prior length).
     Append(DrawIndex),
@@ -51,7 +51,7 @@ impl DrawSlotAllocator {
 
     /// Hand out a slot: a vacated one if any is free, else the next new index.
     /// The caller writes its draw object at the returned slot and, on Append,
-    /// grows whatever side tables run parallel to draw_objects.
+    /// grows whatever side tables run parallel to `draw_objects`.
     pub fn allocate(&mut self) -> SlotAlloc {
         if let Some(slot) = self.free.pop() {
             SlotAlloc::Reuse(slot)
@@ -120,7 +120,7 @@ pub fn set_chunk_model(
 ) -> Result<(), String> {
     let obj = objects
         .get_mut(draw_idx.index())
-        .ok_or_else(|| format!("set_chunk_model: draw object {} out of range", draw_idx))?;
+        .ok_or_else(|| format!("set_chunk_model: draw object {draw_idx} out of range"))?;
     obj.set_model(model);
     Ok(())
 }
@@ -136,12 +136,12 @@ pub fn retire_chunk_slot(
 ) -> Result<ChunkRegion, String> {
     let obj = objects
         .get_mut(draw_idx.index())
-        .ok_or_else(|| format!("remove_chunk_mesh: draw object {} out of range", draw_idx))?;
+        .ok_or_else(|| format!("remove_chunk_mesh: draw object {draw_idx} out of range"))?;
     let region = ChunkRegion {
         vertex_offset: obj.vertex_offset as u64,
-        vertex_bytes: (obj.vertex_count * core::mem::size_of::<Vertex>()) as u64,
-        index_offset: (obj.index_offset * core::mem::size_of::<u32>()) as u64,
-        index_bytes: (obj.index_count * core::mem::size_of::<u32>()) as u64,
+        vertex_bytes: (obj.vertex_count * size_of::<Vertex>()) as u64,
+        index_offset: (obj.index_offset * size_of::<u32>()) as u64,
+        index_bytes: (obj.index_count * size_of::<u32>()) as u64,
     };
     obj.visible = false;
     obj.resident = false;
@@ -242,7 +242,7 @@ mod tests {
             region,
             ChunkRegion {
                 vertex_offset: 128,
-                vertex_bytes: 4 * core::mem::size_of::<Vertex>() as u64,
+                vertex_bytes: 4 * size_of::<Vertex>() as u64,
                 index_offset: 24,
                 index_bytes: 48,
             }
@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn retiring_an_out_of_range_slot_reports_it() {
-        let mut objects: alloc::vec::Vec<DrawObject> = alloc::vec::Vec::new();
+        let mut objects: Vec<DrawObject> = Vec::new();
         let err = retire_chunk_slot(&mut objects, DrawIndex(2)).unwrap_err();
         assert!(err.contains('2'), "{err}");
     }

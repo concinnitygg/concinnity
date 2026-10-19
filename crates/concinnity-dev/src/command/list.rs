@@ -41,7 +41,7 @@ pub fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::
     let assets = parse_world_jsonl(&content).map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("Failed to parse {}: {}", json_path, e),
+            format!("Failed to parse {json_path}: {e}"),
         )
     })?;
 
@@ -49,7 +49,7 @@ pub fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> std::io::
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     if raw.is_empty() {
-        println!("{} has no assets.", json_path);
+        println!("{json_path} has no assets.");
         return Ok(());
     }
 
@@ -138,7 +138,7 @@ fn list_expanded(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()
         .map_err(|errs| crate::authoring::report_validation_errors(&errs))?;
 
     if loaded.assets.is_empty() {
-        println!("{} expands to no assets.", json_path);
+        println!("{json_path} expands to no assets.");
         return Ok(());
     }
 
@@ -167,14 +167,7 @@ fn list_expanded(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()
     println!("{}", "-".repeat(w_name + w_type + 14));
 
     for (name, type_str, prov) in &rows {
-        println!(
-            "{:<w_name$}  {:<w_type$}  {}",
-            name,
-            type_str,
-            prov,
-            w_name = w_name,
-            w_type = w_type,
-        );
+        println!("{name:<w_name$}  {type_str:<w_type$}  {prov}");
     }
 
     let injected = loaded.injected.len();
@@ -201,13 +194,13 @@ fn list_systems(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()>
     let lines = manifest_lines(&mut world);
 
     if lines.is_empty() {
-        println!("{} runs no systems.", json_path);
+        println!("{json_path} runs no systems.");
         return Ok(());
     }
 
     println!("{} runs {} system(s), in order:", json_path, lines.len());
     for line in &lines {
-        println!("  {}", line);
+        println!("  {line}");
     }
     Ok(())
 }
@@ -249,8 +242,8 @@ fn manifest_lines(world: &mut concinnity_core::ecs::World) -> Vec<String> {
                 .entries
                 .iter()
                 .find(|e| e.name == *name);
-            let phase = entry.map(|e| e.phase.as_str()).unwrap_or("");
-            let reason = entry.map(|e| e.present_when).unwrap_or("");
+            let phase = entry.map_or("", |e| e.phase.as_str());
+            let reason = entry.map_or("", |e| e.present_when);
             format!("{name:<width$}  {phase:<phase_width$}  {reason}")
         })
         .collect()
@@ -410,7 +403,7 @@ mod tests {
         // A resource asset is a registered type like any other; what marks it is
         // the handle space it reports, not a separate registry.
         for name in ["AudioClip", "Texture"] {
-            assert!(RegisteredType::parse(name).is_some_and(|t| t.is_resource()));
+            assert!(RegisteredType::parse(name).is_some_and(RegisteredType::is_resource));
             let r = registration_for(name).unwrap();
             assert_eq!(
                 r.origin,

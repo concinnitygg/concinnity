@@ -88,7 +88,7 @@ fn decls(args: Option<&Value>) -> &[Value] {
     args.and_then(|a| a.get("vars"))
         .and_then(Value::as_array)
         .map(Vec::as_slice)
-        .unwrap_or(&[])
+        .unwrap_or_default()
 }
 
 fn name_of(decl: &Value) -> &str {

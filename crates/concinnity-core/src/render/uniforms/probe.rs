@@ -5,7 +5,7 @@
 //! Nothing in a shader depends on how many probes the host allocated room for.
 
 /// One reflection probe's parallax box. The specular IBL term box-projects the
-/// reflection vector against [box_min, box_max] (the probe's influence volume)
+/// reflection vector against [`box_min`, `box_max`] (the probe's influence volume)
 /// and re-anchors the cube sample at the box hit relative to `probe_pos` (the
 /// capture point), so a static captured cube tracks a moving first-person
 /// camera. Four float4s keep every field 16-byte aligned. `box_min.w` is the
@@ -87,18 +87,18 @@ pub struct ProbeSet {
 
 impl ProbeSet {
     /// An empty set: no probes, so the shaders fall back to the sky.
-    pub const EMPTY: ProbeSet = ProbeSet {
+    pub const EMPTY: Self = Self {
         count: 0,
         mip_count: 0,
         _pad: [0; 2],
     };
 
     /// The header for `count` live records of `mip_count`-level cubes.
-    pub fn new(count: usize, mip_count: u32) -> ProbeSet {
-        ProbeSet {
+    pub fn new(count: usize, mip_count: u32) -> Self {
+        Self {
             count: count as u32,
             mip_count,
-            ..ProbeSet::EMPTY
+            ..Self::EMPTY
         }
     }
 }

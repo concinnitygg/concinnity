@@ -36,14 +36,14 @@ const STAT_SLOTS: [Slot<StatHud>; 7] = [
 // StatHud gets its chips, since the stats strip is driven by menu toggles the
 // runtime cannot see.
 pub(super) fn inject_debug_hud(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     minter: &mut Minter,
 ) -> Result<(), WorldError> {
     complete(ctx, minter, &DEBUG_SLOTS, true)
 }
 
 pub(super) fn complete_stat_hud(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     minter: &mut Minter,
 ) -> Result<(), WorldError> {
     complete(ctx, minter, &STAT_SLOTS, false)
@@ -52,7 +52,7 @@ pub(super) fn complete_stat_hud(
 // Fill the unset label slots of the world's HUD with freshly minted chips.
 // `synthesize` adds the HUD itself when the world declares none.
 fn complete<H>(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     minter: &mut Minter,
     slots: &[Slot<H>],
     synthesize: bool,

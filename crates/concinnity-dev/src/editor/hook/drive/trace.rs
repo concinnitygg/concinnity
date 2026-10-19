@@ -1,4 +1,4 @@
-//! EditorHook: the execution-trace exchange with the behavior system. While the
+//! `EditorHook`: the execution-trace exchange with the behavior system. While the
 //! Behavior or Variables panel is open, a `TraceRequest` is published each frame
 //! (naming the selected entity and the resolved breakpoints) and the
 //! `ExecutionTrace` the last simulated tick reported is ingested: executed
@@ -64,14 +64,14 @@ impl EditorHook {
             .unwrap_or_default()
     }
 
-    fn publish_trace_request(&mut self, world: &mut World) {
+    fn publish_trace_request(&self, world: &mut World) {
         let entity = self
             .selection
             .active()
             .and_then(|h| self.handle_name(h))
             .and_then(|name| trace::id_of(&name))
             .and_then(|id| world.entity_of(id))
-            .map(|e| e.to_bits());
+            .map(concinnity_core::ecs::Entity::to_bits);
         let breakpoints = self.resolve_breakpoints(world);
         world.insert_resource(TraceRequest {
             entity,

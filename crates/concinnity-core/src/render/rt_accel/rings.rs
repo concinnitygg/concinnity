@@ -277,7 +277,7 @@ impl<B> ScratchRing<B> {
     pub fn drain(&mut self) -> impl Iterator<Item = B> + '_ {
         self.slots
             .iter_mut()
-            .filter_map(|s| s.take())
+            .filter_map(Option::take)
             .map(|s| s.buffer)
     }
 }

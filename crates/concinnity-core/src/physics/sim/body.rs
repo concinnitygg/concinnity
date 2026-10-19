@@ -92,7 +92,7 @@ impl Body {
         friction: f32,
         mask: LayerMask,
     ) -> Self {
-        Body {
+        Self {
             shape: BodyShape::Convex(shape),
             kind: BodyKind::Fixed,
             mask,
@@ -128,9 +128,9 @@ impl Body {
         friction: f32,
         mask: LayerMask,
     ) -> Self {
-        Body {
+        Self {
             kind: BodyKind::Kinematic,
-            ..Body::fixed(shape, position, orientation, friction, mask)
+            ..Self::fixed(shape, position, orientation, friction, mask)
         }
     }
 
@@ -144,9 +144,9 @@ impl Body {
         tag: u64,
         mask: LayerMask,
     ) -> Self {
-        Body {
+        Self {
             sensor: Some(tag),
-            ..Body::fixed(shape, position, orientation, 0.0, mask)
+            ..Self::fixed(shape, position, orientation, 0.0, mask)
         }
     }
 
@@ -159,9 +159,9 @@ impl Body {
         friction: f32,
         mask: LayerMask,
     ) -> Self {
-        Body {
+        Self {
             shape: BodyShape::Terrain { index, bounds },
-            ..Body::fixed(
+            ..Self::fixed(
                 ColliderShape::Ball { radius: 0.0 },
                 position,
                 Quat::IDENTITY,
@@ -179,7 +179,7 @@ impl Body {
         mask: LayerMask,
     ) -> Self {
         let properties = MassProperties::for_shape(&shape, params.mass);
-        Body {
+        Self {
             shape: BodyShape::Convex(shape),
             kind: BodyKind::Dynamic,
             mask,

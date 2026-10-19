@@ -7,6 +7,7 @@
 //! called with `hot_reload = true`. Production `cn run` never sets it.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use crate::metal::cull::ShadowViewIcb;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::shader_programs::surface::GrassShading;
@@ -79,7 +80,7 @@ fn static_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
         ],
         &[VertexLayout {
             buffer_index: 1,
-            stride: std::mem::size_of::<mesh_payload::Vertex>(),
+            stride: size_of::<mesh_payload::Vertex>(),
             step: MTLVertexStepFunction::PerVertex,
         }],
     )
@@ -274,8 +275,8 @@ impl MtlContext {
             self.cull.icbs_2 = Vec::new();
             self.cull.icb_2_arg_buffer = None;
             self.cull.status_buffer = None;
-            self.cull.shadow_views = Default::default();
-            self.cull.spot_views = Default::default();
+            self.cull.shadow_views = ShadowViewIcb::default();
+            self.cull.spot_views = ShadowViewIcb::default();
         }
         if let Some((init_pipeline, downsample_pipeline)) = hiz
             && let Some(h) = self.cull.hiz.as_mut()

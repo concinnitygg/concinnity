@@ -1,4 +1,4 @@
-//! Classify VkResult failure codes into the RenderError boundary vocabulary.
+//! Classify `VkResult` failure codes into the `RenderError` boundary vocabulary.
 //! Applied at the sites where the classes matter for recovery: fence waits,
 //! swapchain acquire/present, queue submit, and device-memory allocation.
 

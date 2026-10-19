@@ -56,7 +56,7 @@ mod tests {
         let mut warnings = Vec::new();
         clamp_authored("Shadows", Shadows::default(), |w| warnings.push(w));
         clamp_authored("IndirectLighting", IndirectLighting::default(), |w| {
-            warnings.push(w)
+            warnings.push(w);
         });
         assert!(warnings.is_empty(), "{warnings:?}");
     }

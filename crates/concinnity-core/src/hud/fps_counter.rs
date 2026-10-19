@@ -42,12 +42,12 @@ impl System for FpsCounterSystem {
             .reads_resources(crate::resource_mask![crate::ecs::EntityById, FrameTime])
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         let dt = ctx.resource::<FrameTime>().copied().unwrap_or_default().dt;
         if let Some((frames, secs)) = self.window.tick(dt, WINDOW_SECS) {
             let fps = frames as f32 / secs;
             crate::ecs::by_asset_id::update::<TextLabel>(ctx, self.label, |l| {
-                l.content = format!("FPS: {:.0}", fps);
+                l.content = format!("FPS: {fps:.0}");
             });
         }
         StepResult::Continue

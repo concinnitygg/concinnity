@@ -1,6 +1,6 @@
 //! Per-frame encoder for the raymarched SDF volume pass on D3D12. Runs at
 //! `PassId::Raymarch`, between `AutoExposure` and `Decals` on the
-//! hdr_resolve RMW chain. Each `SdfVolume` rasterizes one face set of
+//! `hdr_resolve` RMW chain. Each `SdfVolume` rasterizes one face set of
 //! its world-space bounding box and runs a user-authored HLSL fragment
 //! shader that sphere-traces the SDF inside the box. HLSL port of
 //! `src/metal/raymarch.rs`: same shader interface, same
@@ -87,7 +87,7 @@ fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
         cone_ratio: v.cone_ratio(),
         max_distance: v.max_distance,
         max_steps: v.max_steps as i32,
-        receive_shadows: if v.receive_shadows { 1 } else { 0 },
+        receive_shadows: i32::from(v.receive_shadows),
         params: v.params,
     }
 }
@@ -342,7 +342,7 @@ fn create_raymarch_volumetric_pso(
         DepthBiasClamp: 0.0,
         SlopeScaledDepthBias: 0.0,
         DepthClipEnable: windows::core::BOOL(1),
-        MultisampleEnable: windows::core::BOOL(if msaa_samples > 1 { 1 } else { 0 }),
+        MultisampleEnable: windows::core::BOOL(i32::from(msaa_samples > 1)),
         AntialiasedLineEnable: windows::core::BOOL(0),
         ForcedSampleCount: 0,
         ConservativeRaster: D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
@@ -375,11 +375,11 @@ fn create_raymarch_volumetric_pso(
     let desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         pRootSignature: com::borrowed(root_sig),
         VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
+            pShaderBytecode: vs.as_ptr().cast(),
             BytecodeLength: vs.len(),
         },
         PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
+            pShaderBytecode: ps.as_ptr().cast(),
             BytecodeLength: ps.len(),
         },
         BlendState: blend,
@@ -615,8 +615,8 @@ fn build_cube_buffers(
     let corners: [Vertex; 8] = cube_corners(1.0).map(v);
     let indices = CUBE_INDICES;
 
-    let vb_bytes = std::mem::size_of_val(&corners) as u64;
-    let ib_bytes = std::mem::size_of_val(&indices) as u64;
+    let vb_bytes = size_of_val(&corners) as u64;
+    let ib_bytes = size_of_val(&indices) as u64;
 
     let vb = alloc.alloc_buffer(
         vb_bytes,
@@ -632,21 +632,21 @@ fn build_cube_buffers(
     // is a separate allocation, so the ranges cannot overlap.
     unsafe {
         let mut p = std::ptr::null_mut::<c_void>();
-        vb.Map(0, None, Some(&mut p))
+        vb.Map(0, None, Some(&raw mut p))
             .map_err(|e| map_hresult(e.code(), "raymarch cube vb map"))?;
         std::ptr::copy_nonoverlapping(
-            corners.as_ptr() as *const u8,
-            p as *mut u8,
+            corners.as_ptr().cast::<u8>(),
+            p.cast::<u8>(),
             vb_bytes as usize,
         );
         vb.Unmap(0, None);
 
         let mut p = std::ptr::null_mut::<c_void>();
-        ib.Map(0, None, Some(&mut p))
+        ib.Map(0, None, Some(&raw mut p))
             .map_err(|e| map_hresult(e.code(), "raymarch cube ib map"))?;
         std::ptr::copy_nonoverlapping(
-            indices.as_ptr() as *const u8,
-            p as *mut u8,
+            indices.as_ptr().cast::<u8>(),
+            p.cast::<u8>(),
             ib_bytes as usize,
         );
         ib.Unmap(0, None);
@@ -655,7 +655,7 @@ fn build_cube_buffers(
     let vbv = D3D12_VERTEX_BUFFER_VIEW {
         BufferLocation: com::gpu_va(&vb),
         SizeInBytes: vb_bytes as u32,
-        StrideInBytes: std::mem::size_of::<Vertex>() as u32,
+        StrideInBytes: size_of::<Vertex>() as u32,
     };
     let ibv = D3D12_INDEX_BUFFER_VIEW {
         BufferLocation: com::gpu_va(&ib),
@@ -721,7 +721,7 @@ fn write_raymarch_srvs(
         };
         // SAFETY: the view descriptor and the resource it names are live for the call, and the
         // destination handle addresses a slot this context reserved for the view in a heap it owns.
-        unsafe { device.CreateShaderResourceView(shadow, Some(&desc), slot_cpu(0)) };
+        unsafe { device.CreateShaderResourceView(shadow, Some(&raw const desc), slot_cpu(0)) };
     }
 
     // irradiance + prefilter cubes at +1 / +2, each viewed in its own format:
@@ -744,7 +744,7 @@ fn write_raymarch_srvs(
         };
         // SAFETY: the view descriptor and the resource it names are live for the call, and the
         // destination handle addresses a slot this context reserved for the view in a heap it owns.
-        unsafe { device.CreateShaderResourceView(*res, Some(&desc), slot_cpu(1 + i)) };
+        unsafe { device.CreateShaderResourceView(*res, Some(&raw const desc), slot_cpu(1 + i)) };
     }
     // scene_color at +3, written by `write_scene_color_srv` from the
     // caller so resize can re-point just this slot.
@@ -774,7 +774,7 @@ fn write_scene_color_srv(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(scene_resource, Some(&desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(scene_resource, Some(&raw const desc), srv_cpu) };
 }
 
 // Write the 3-sampler descriptor table for the raymarch pass into the
@@ -802,7 +802,7 @@ fn write_raymarch_samplers(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateSampler(&shadow, slot_cpu(0)) };
+    unsafe { device.CreateSampler(&raw const shadow, slot_cpu(0)) };
 
     let cube = D3D12_SAMPLER_DESC {
         Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
@@ -815,7 +815,7 @@ fn write_raymarch_samplers(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateSampler(&cube, slot_cpu(1)) };
+    unsafe { device.CreateSampler(&raw const cube, slot_cpu(1)) };
 
     let scene = D3D12_SAMPLER_DESC {
         Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
@@ -828,7 +828,7 @@ fn write_raymarch_samplers(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateSampler(&scene, slot_cpu(2)) };
+    unsafe { device.CreateSampler(&raw const scene, slot_cpu(2)) };
 }
 
 // DirectX device / queue / info handles the raymarch build submits against.
@@ -870,7 +870,7 @@ pub(in crate::directx) struct RaymarchDescriptorHandles {
 
 // A per-frame `RaymarchView` cbuffer ring, persistently mapped.
 fn view_ring(alloc: &DeviceAllocator) -> RenderResult<(Vec<PooledBuffer>, Vec<*mut u8>)> {
-    let view_size = align256(std::mem::size_of::<RaymarchView>() as u64);
+    let view_size = align256(size_of::<RaymarchView>() as u64);
     let frames = alloc.frames_in_flight();
     let mut buffers: Vec<PooledBuffer> = Vec::with_capacity(frames);
     let mut ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
@@ -883,9 +883,9 @@ fn view_ring(alloc: &DeviceAllocator) -> RenderResult<(Vec<PooledBuffer>, Vec<*m
         let mut p = std::ptr::null_mut::<c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
         // local that receives the mapping.
-        unsafe { buf.Map(0, None, Some(&mut p)) }
+        unsafe { buf.Map(0, None, Some(&raw mut p)) }
             .map_err(|e| map_hresult(e.code(), "raymarch view ubo map"))?;
-        ptrs.push(p as *mut u8);
+        ptrs.push(p.cast::<u8>());
         buffers.push(buf);
     }
     Ok((buffers, ptrs))
@@ -895,9 +895,9 @@ impl RaymarchResources {
     // Build every raymarch resource and the per-volume records. Returns
     // `Ok(None)` when `sdf_volumes` is empty so the engine omits the pass.
     pub(in crate::directx) fn try_new(
-        ctx: RaymarchDeviceContext,
+        ctx: RaymarchDeviceContext<'_>,
         target: RaymarchTargetConfig,
-        bindings: RaymarchSharedBindings,
+        bindings: RaymarchSharedBindings<'_>,
         handles: RaymarchDescriptorHandles,
         sdf_volumes: &[SdfVolumeSource],
         hot_reload: bool,
@@ -980,7 +980,7 @@ impl RaymarchResources {
             // Per-volume cbuffer (static: `center`, `extent`,
             // `params` don't change frame-to-frame).
             let uniforms = volume_uniforms_from(vol);
-            let cb_size = align256(std::mem::size_of::<RaymarchVolumeUniforms>() as u64);
+            let cb_size = align256(size_of::<RaymarchVolumeUniforms>() as u64);
             let cb = alloc.alloc_buffer(
                 cb_size,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -989,15 +989,15 @@ impl RaymarchResources {
             let mut p = std::ptr::null_mut::<c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { cb.Map(0, None, Some(&mut p)) }
+            unsafe { cb.Map(0, None, Some(&raw mut p)) }
                 .map_err(|e| map_hresult(e.code(), "raymarch volume cb map"))?;
             // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
             // the source is a separate allocation, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &uniforms as *const RaymarchVolumeUniforms as *const u8,
-                    p as *mut u8,
-                    std::mem::size_of::<RaymarchVolumeUniforms>(),
+                    (&raw const uniforms).cast::<u8>(),
+                    p.cast::<u8>(),
+                    size_of::<RaymarchVolumeUniforms>(),
                 );
                 // Persistently mapped, never unmap.
             }
@@ -1134,9 +1134,9 @@ impl DxContext {
         // source is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                view as *const RaymarchView as *const u8,
+                std::ptr::from_ref::<RaymarchView>(view).cast::<u8>(),
                 view_ptr,
-                std::mem::size_of::<RaymarchView>(),
+                size_of::<RaymarchView>(),
             );
         }
         let view_gva = com::gpu_va(&rm.view_cbuffers[frame_idx]);
@@ -1216,9 +1216,9 @@ impl DxContext {
         unsafe {
             cmd.OMSetRenderTargets(
                 1,
-                Some(&self.targets.hdr.color_rtv),
+                Some(&raw const self.targets.hdr.color_rtv),
                 false,
-                Some(&self.targets.depth.dsv),
+                Some(&raw const self.targets.depth.dsv),
             );
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
@@ -1238,7 +1238,7 @@ impl DxContext {
             cmd.RSSetScissorRects(&[scissor]);
             cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             cmd.IASetVertexBuffers(0, Some(&[rm.cube_vbv]));
-            cmd.IASetIndexBuffer(Some(&rm.cube_ibv));
+            cmd.IASetIndexBuffer(Some(&raw const rm.cube_ibv));
 
             cmd.SetGraphicsRootSignature(&rm.root_sig);
             cmd.SetDescriptorHeaps(&[
@@ -1372,9 +1372,9 @@ impl DxContext {
         // source is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                view as *const RaymarchView as *const u8,
+                std::ptr::from_ref::<RaymarchView>(view).cast::<u8>(),
                 view_ptr,
-                std::mem::size_of::<RaymarchView>(),
+                size_of::<RaymarchView>(),
             );
         }
         // SAFETY: the command list is in the recording state with the pre-pass targets bound,
@@ -1383,7 +1383,7 @@ impl DxContext {
             cmd.SetGraphicsRootSignature(&rm.shadow_root_sig);
             cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             cmd.IASetVertexBuffers(0, Some(&[rm.cube_vbv]));
-            cmd.IASetIndexBuffer(Some(&rm.cube_ibv));
+            cmd.IASetIndexBuffer(Some(&raw const rm.cube_ibv));
             cmd.SetGraphicsRootConstantBufferView(0, com::gpu_va(view_cb));
             cmd.SetGraphicsRootConstantBufferView(2, com::gpu_va(lights));
             cmd.SetGraphicsRootConstantBufferView(3, com::gpu_va(shadow));
@@ -1458,9 +1458,9 @@ impl DxContext {
         // source is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                view as *const RaymarchView as *const u8,
+                std::ptr::from_ref::<RaymarchView>(view).cast::<u8>(),
                 view_ptr,
-                std::mem::size_of::<RaymarchView>(),
+                size_of::<RaymarchView>(),
             );
         }
         let view_gva = com::gpu_va(&rm.view_cbuffers[frame_idx]);
@@ -1473,7 +1473,7 @@ impl DxContext {
             cmd.SetGraphicsRootSignature(&rm.shadow_root_sig);
             cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             cmd.IASetVertexBuffers(0, Some(&[rm.cube_vbv]));
-            cmd.IASetIndexBuffer(Some(&rm.cube_ibv));
+            cmd.IASetIndexBuffer(Some(&raw const rm.cube_ibv));
 
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
@@ -1519,7 +1519,7 @@ impl DxContext {
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
-                cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
+                cmd.OMSetRenderTargets(0, None, false, Some(&raw const dsv));
                 let constants = [cascade_idx as u32, 0u32, 0u32, 0u32];
                 cmd.set_graphics_root_constants(4, &constants);
             }
@@ -1548,7 +1548,7 @@ impl DxContext {
 // `LightUniforms` is referenced only through the cbuffer GVA we read from
 // `self.uniforms.light_ubo_resources`, but the type is part of the
 // encode_raymarch contract surface for future readers.
-const _LIGHT_LAYOUT_REF: usize = std::mem::size_of::<LightUniforms>();
+const _LIGHT_LAYOUT_REF: usize = size_of::<LightUniforms>();
 
 // The `RaymarchView` / `RaymarchVolumeUniforms` layout tests live with the
 // structs in `concinnity_core::render::uniforms::directx`.

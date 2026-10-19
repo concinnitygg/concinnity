@@ -20,7 +20,11 @@ impl PathCache {
         declared: &str,
         resolve: impl FnOnce(&str) -> String,
     ) -> String {
-        if let Some(path) = self.found.get(declared).or(self.missing.get(declared)) {
+        if let Some(path) = self
+            .found
+            .get(declared)
+            .or_else(|| self.missing.get(declared))
+        {
             return path.clone();
         }
         let path = resolve(declared);

@@ -9,7 +9,7 @@ use crate::app::runtime::Runtime;
 
 impl Driver for Runtime {
     fn start(&mut self) -> Result<(), WorldError> {
-        Runtime::start(self)
+        Self::start(self)
     }
 
     fn run(self: Box<Self>) -> Result<(), WorldError> {
@@ -21,7 +21,7 @@ impl Driver for Runtime {
     }
 
     fn world_mut(&mut self) -> &mut World {
-        Runtime::world_mut(self)
+        Self::world_mut(self)
     }
 }
 

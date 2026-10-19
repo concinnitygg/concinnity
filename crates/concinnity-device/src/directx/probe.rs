@@ -179,10 +179,7 @@ impl DxContext {
     // scene); an empty list bakes none. Resets the staggered bake, and grows the
     // cube array when the list outgrows it; a world whose array cannot grow keeps
     // the sky.
-    pub(super) fn set_reflection_probes(
-        &mut self,
-        placements: &[reflection_probe::ProbePlacement],
-    ) {
+    pub(super) fn set_reflection_probes(&mut self, placements: &[ProbePlacement]) {
         let placements = placements.to_vec();
         let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements));
         crate::probe_report::report_probe_placement(placed);
@@ -292,8 +289,9 @@ impl DxContext {
         // initialized, and the borrow keeps them live for the snapshot copy below.
         let light_bytes = unsafe {
             std::slice::from_raw_parts(
-                self.uniforms.lights.uniforms() as *const render_types::LightUniforms as *const u8,
-                std::mem::size_of::<render_types::LightUniforms>(),
+                std::ptr::from_ref::<render_types::LightUniforms>(self.uniforms.lights.uniforms())
+                    .cast::<u8>(),
+                size_of::<render_types::LightUniforms>(),
             )
         };
         let (light_cbv, light_gva) = make_snapshot_cbv(alloc, light_bytes)?;
@@ -302,9 +300,8 @@ impl DxContext {
         // initialized, and the borrow keeps them live for the snapshot copy below.
         let shadow_bytes = unsafe {
             std::slice::from_raw_parts(
-                &self.state.planner.shadow.uniforms as *const render_types::ShadowUniforms
-                    as *const u8,
-                std::mem::size_of::<render_types::ShadowUniforms>(),
+                (&raw const self.state.planner.shadow.uniforms).cast::<u8>(),
+                size_of::<render_types::ShadowUniforms>(),
             )
         };
         let (shadow_cbv, shadow_gva) = make_snapshot_cbv(alloc, shadow_bytes)?;
@@ -343,14 +340,14 @@ impl DxContext {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { cbv.Map(0, None, Some(&mut ptr)) }
+            unsafe { cbv.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "probe: map view cbv"))?;
             // SAFETY: the buffer is 256 bytes; ViewUniforms is 208.
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &view as *const super::draw::ViewUniforms as *const u8,
-                    ptr as *mut u8,
-                    std::mem::size_of::<super::draw::ViewUniforms>(),
+                    (&raw const view).cast::<u8>(),
+                    ptr.cast::<u8>(),
+                    size_of::<super::draw::ViewUniforms>(),
                 );
             }
             view_gvas.push(com::gpu_va(&cbv));
@@ -556,7 +553,7 @@ impl DxContext {
                         SubresourceIndex: 0,
                     },
                 };
-                cmd.CopyTextureRegion(&dst_loc, 0, 0, 0, &src_loc, None);
+                cmd.CopyTextureRegion(&raw const dst_loc, 0, 0, 0, &raw const src_loc, None);
                 cmd.ResourceBarrier(&[transition_barrier(
                     resolve,
                     D3D12_RESOURCE_STATE_COPY_SOURCE,
@@ -579,7 +576,7 @@ impl DxContext {
                         SubresourceIndex: 0,
                     },
                 };
-                cmd.CopyTextureRegion(&dst_loc, 0, 0, 0, &src_loc, None);
+                cmd.CopyTextureRegion(&raw const dst_loc, 0, 0, 0, &raw const src_loc, None);
                 cmd.ResourceBarrier(&[transition_barrier(
                     &bake.color,
                     D3D12_RESOURCE_STATE_COPY_SOURCE,
@@ -752,7 +749,7 @@ impl DxContext {
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&rtv), false, Some(&dsv));
+            cmd.OMSetRenderTargets(1, Some(&raw const rtv), false, Some(&raw const dsv));
             cmd.ClearRenderTargetView(
                 rtv,
                 &storage.clear_color(self.state.view.clear_color),
@@ -778,7 +775,7 @@ impl DxContext {
 
             cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
+            cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view));
             cmd.SetDescriptorHeaps(&[
                 Some(self.descriptors.srv_heap.clone()),
                 Some(self.descriptors.sampler_heap.clone()),
@@ -834,7 +831,7 @@ impl DxContext {
                 cull_sig,
                 self.state.draw.skinned_record_base() as u32,
                 indirect,
-                indirect_offset as u64,
+                u64::from(indirect_offset),
                 None::<&ID3D12Resource>,
                 0,
             );
@@ -959,11 +956,11 @@ fn make_snapshot_cbv(alloc: &DeviceAllocator, bytes: &[u8]) -> RenderResult<(Poo
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { cbv.Map(0, None, Some(&mut ptr)) }
+    unsafe { cbv.Map(0, None, Some(&raw mut ptr)) }
         .map_err(|e| map_hresult(e.code(), "probe: map snapshot cbv"))?;
     // SAFETY: the buffer is at least `bytes.len()` bytes (256-aligned).
     unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast::<u8>(), bytes.len());
     }
     let gva = com::gpu_va(&cbv);
     Ok((cbv, gva))
@@ -979,7 +976,7 @@ fn create_rtv_heap(device: &ID3D12Device) -> RenderResult<ID3D12DescriptorHeap> 
     };
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    unsafe { device.CreateDescriptorHeap(&desc) }
+    unsafe { device.CreateDescriptorHeap(&raw const desc) }
         .map_err(|e| map_hresult(e.code(), "probe: rtv heap"))
 }
 
@@ -993,7 +990,7 @@ fn create_dsv_heap(device: &ID3D12Device) -> RenderResult<ID3D12DescriptorHeap> 
     };
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    unsafe { device.CreateDescriptorHeap(&desc) }
+    unsafe { device.CreateDescriptorHeap(&raw const desc) }
         .map_err(|e| map_hresult(e.code(), "probe: dsv heap"))
 }
 
@@ -1013,7 +1010,7 @@ fn create_bake_depth(
     let clear_value = optimized_clear();
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: size as u64,
+        Width: u64::from(size),
         Height: size,
         DepthOrArraySize: 1,
         MipLevels: 1,
@@ -1030,12 +1027,12 @@ fn create_bake_depth(
     // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
-            &heap_props,
+            &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
-            &desc,
+            &raw const desc,
             D3D12_RESOURCE_STATE_DEPTH_WRITE,
-            Some(&clear_value),
-            &mut tex_opt,
+            Some(&raw const clear_value),
+            &raw mut tex_opt,
         )
     }
     .map_err(|e| map_hresult(e.code(), "probe: create face depth"))?;
@@ -1053,6 +1050,6 @@ fn create_bake_depth(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateDepthStencilView(&texture, Some(&dsv_desc), dsv_cpu) };
+    unsafe { device.CreateDepthStencilView(&texture, Some(&raw const dsv_desc), dsv_cpu) };
     Ok(texture)
 }

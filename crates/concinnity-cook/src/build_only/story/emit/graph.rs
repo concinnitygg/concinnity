@@ -28,7 +28,7 @@ const PORTRAIT_RIGHT_CENTER_X: f32 = 960.0;
 pub(super) fn compile_nodes(
     story: &Story,
     media: &mut MediaAssets,
-    image_dims: ImageDims,
+    image_dims: ImageDims<'_>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let node_index = |slug: &str| -> u32 {
         story
@@ -119,7 +119,7 @@ pub(super) fn story_entry(
 fn stage_entry(
     stage: &Stage,
     media: &mut MediaAssets,
-    image_dims: ImageDims,
+    image_dims: ImageDims<'_>,
 ) -> Result<serde_json::Value, String> {
     let (win_w, win_h) = (UI_REFERENCE_SIZE[0], UI_REFERENCE_SIZE[1]);
     let mut entry = serde_json::json!({});
@@ -137,7 +137,7 @@ fn stage_entry(
         let Some(path) = path else { continue };
         let (iw, ih) = image_dims(path)?;
         if iw == 0 || ih == 0 {
-            return Err(format!("portrait '{}' has a zero dimension", path));
+            return Err(format!("portrait '{path}' has a zero dimension"));
         }
         let h = (ih as f32).min(win_h);
         let w = h * iw as f32 / ih as f32;

@@ -36,8 +36,8 @@ pub struct JoinIndex {
 
 impl JoinIndex {
     /// An empty index.
-    pub fn new() -> JoinIndex {
-        JoinIndex::default()
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Record that `entity` has component `id`, stored at `row` in that

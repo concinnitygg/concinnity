@@ -9,8 +9,12 @@ use concinnity_core::ecs::{AudioClipHandle, ComponentAsset, Ref, World};
 use concinnity_runtime::SYSTEMS;
 
 fn started(world: &mut World) -> Vec<&'static str> {
-    world.start(SYSTEMS).unwrap();
-    world.systems().iter().map(|s| s.name()).collect()
+    world.start(SYSTEMS).expect("the wiring systems start");
+    world
+        .systems()
+        .iter()
+        .map(concinnity_core::ecs::BuiltSystem::name)
+        .collect()
 }
 
 // The completion pass runs from `start`, before the gates read the world: a
@@ -105,7 +109,7 @@ fn initial_view_fires_its_cue() {
 
     let matched = world
         .system::<AudioSystem>()
-        .map(|a| a.cues_matched())
+        .map(AudioSystem::cues_matched)
         .expect("world has an AudioSystem");
     assert_eq!(matched, 1, "the initial screen's cue should have matched");
 }

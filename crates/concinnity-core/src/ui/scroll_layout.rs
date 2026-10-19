@@ -8,7 +8,7 @@
 //! current scroll offset, it returns where each row ends up (a delta from its
 //! build-time position), whether it is visible, the total content height, the
 //! clamped scroll, and the scrollbar thumb size + offset. It knows nothing about
-//! AssetIds or rendering; `UiInputSystem` maps these results onto concrete
+//! `AssetIds` or rendering; `UiInputSystem` maps these results onto concrete
 //! elements.
 
 use alloc::vec::Vec;

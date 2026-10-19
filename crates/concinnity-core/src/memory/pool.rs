@@ -359,7 +359,7 @@ mod tests {
         let c = pool.insert(3).expect("room");
         pool.remove(a);
 
-        let live: alloc::vec::Vec<i32> = pool.iter().map(|(_, v)| *v).collect();
+        let live: Vec<i32> = pool.iter().map(|(_, v)| *v).collect();
         assert_eq!(live, [2, 3]);
         // Handles from iteration address the objects they were read from.
         let (handle, _) = pool.iter().next().expect("a live object");

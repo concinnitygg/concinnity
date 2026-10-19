@@ -18,7 +18,7 @@ impl UiInputSystem {
         &self,
         intent: &UiIntent,
         typing: bool,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
     ) -> Option<StepResult> {
         let name = intent.pressed_key?;
         let toggles = self.screens.toggles_for_key(name);

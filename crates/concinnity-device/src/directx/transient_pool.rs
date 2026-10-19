@@ -107,7 +107,7 @@ impl TransientResourcePool {
             // Size the heap to the largest member; offset 0 satisfies every
             // member's alignment, so aliased members all place there.
             let mut slot_size: u64 = 0;
-            let mut slot_align: u64 = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT as u64;
+            let mut slot_align: u64 = u64::from(D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);
             let descs: Vec<(&TransientTexture, D3D12_RESOURCE_DESC)> = slot
                 .members
                 .iter()
@@ -138,7 +138,7 @@ impl TransientResourcePool {
             let mut heap: Option<ID3D12Heap> = None;
             // SAFETY: the create descriptor and every pointer it borrows are live for the call, and
             // the new COM object lands in a binding that owns it.
-            unsafe { device.CreateHeap(&heap_desc, &mut heap) }
+            unsafe { device.CreateHeap(&raw const heap_desc, &raw mut heap) }
                 .map_err(|e| map_hresult(e.code(), "transient pool heap"))?;
             let heap =
                 heap.ok_or_else(|| RenderError::Other("transient pool heap returned None".into()))?;
@@ -154,8 +154,8 @@ impl TransientResourcePool {
                         0,
                         desc,
                         resting_state(m),
-                        Some(&clear),
-                        &mut res,
+                        Some(&raw const clear),
+                        &raw mut res,
                     )
                 }
                 .map_err(|e| map_hresult(e.code(), &format!("transient pool place {}", m.label)))?;
@@ -207,7 +207,7 @@ impl TransientResourcePool {
             resources,
             by_label,
             #[cfg(debug_assertions)]
-            slot_labels: slots.iter().map(|s| s.labels()).collect(),
+            slot_labels: slots.iter().map(TransientSlot::labels).collect(),
             allocated_bytes,
         })
     }
@@ -331,7 +331,7 @@ fn rt_desc(m: &TransientTexture) -> D3D12_RESOURCE_DESC {
     D3D12_RESOURCE_DESC {
         Dimension: dimension,
         Alignment: 0,
-        Width: m.width.max(1) as u64,
+        Width: u64::from(m.width.max(1)),
         Height: m.height.max(1),
         DepthOrArraySize: depth_or_array as u16,
         MipLevels: m.mip_levels.max(1) as u16,
@@ -394,7 +394,7 @@ mod tests {
     use concinnity_core::render::depth::DEPTH_CLEAR;
     use concinnity_core::render::post::device::PostExtent;
     use concinnity_core::render::post::{bloom, ssao};
-    use concinnity_core::render::render_graph::{self, PoolGates, plan_pool_slots};
+    use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 
     fn planned(render: (u32, u32), output: (u32, u32)) -> Vec<TransientSlot> {
         let gates = PoolGates {
@@ -448,10 +448,7 @@ mod tests {
             .flat_map(|s| &s.members)
             .find(|m| m.label == "gbuffer_roughness")
             .expect("roughness pooled");
-        assert_eq!(
-            roughness.clear,
-            render_graph::ClearValue::Color(GBUFFER_ROUGHNESS_CLEAR)
-        );
+        assert_eq!(roughness.clear, ClearValue::Color(GBUFFER_ROUGHNESS_CLEAR));
     }
 
     #[test]

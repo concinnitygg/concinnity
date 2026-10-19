@@ -1,4 +1,4 @@
-//! Texture-pool slot management for VkContext: bindless-pool, decal and
+//! Texture-pool slot management for `VkContext`: bindless-pool, decal and
 //! particle descriptor rewires when an albedo or normal-map slot is streamed in
 //! or evicted. Mirrors the Metal pattern of "the texture pool gets re-read every
 //! frame," except Vulkan bakes texture *views* into descriptor sets, so a slot
@@ -6,10 +6,9 @@
 
 use ash::vk;
 use concinnity_core::bake;
-use concinnity_core::render::error;
 use concinnity_core::render::error::{RenderError, RenderResult};
 
-use super::super::context::*;
+use super::super::context::VkContext;
 use super::super::descriptor_layout::{IRRADIANCE_CUBE_BINDING, PREFILTER_CUBE_BINDING};
 use super::super::set_writes::SetWrites;
 use super::super::texture::{
@@ -84,7 +83,7 @@ impl VkContext {
         &mut self,
         slot: usize,
         image: &bake::texture::TextureImage,
-    ) -> error::RenderResult<()> {
+    ) -> RenderResult<()> {
         if slot >= self.scene.textures.len() {
             return Err(RenderError::Other(format!(
                 "update_texture_slot: slot {} out of range (pool size {})",
@@ -219,9 +218,8 @@ impl VkContext {
     // only through the bin's `cn debug` runtime-mutation path (dead in the FFI
     // lib, live in the bin).
     pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
-        let view = bake::environment_map::deserialize(payload).map_err(|e| {
-            error::RenderError::Other(format!("envmap hot-reload payload malformed: {e}"))
-        })?;
+        let view = bake::environment_map::deserialize(payload)
+            .map_err(|e| RenderError::Other(format!("envmap hot-reload payload malformed: {e}")))?;
         self.wait_idle();
         let new_env = super::super::texture::upload_environment_map(
             &GpuUploadContext {

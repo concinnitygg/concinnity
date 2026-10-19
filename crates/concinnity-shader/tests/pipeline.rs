@@ -96,7 +96,7 @@ float4 late_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
 }
 "#;
 
-fn job<'a>(entry: &'a str, target: HlslTarget) -> HlslJob<'a> {
+fn job(entry: &str, target: HlslTarget) -> HlslJob<'_> {
     job_from(SOURCE, entry, target)
 }
 

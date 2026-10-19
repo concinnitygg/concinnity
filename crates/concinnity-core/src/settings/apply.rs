@@ -150,16 +150,15 @@ pub fn plan_apply(
 // The live group a `live` change rides.
 fn live_change(live: &mut LiveChanges, change: &ParamChange) {
     match (change.asset, change.key) {
-        ("Bloom", _) | ("Vignette", _) | ("ColorLut", _) | ("Exposure", "ev") => {
-            live.post_process = true
+        ("Bloom" | "Vignette" | "ColorLut", _) | ("Exposure", "ev") => {
+            live.post_process = true;
         }
         ("IndirectLighting", "ambient_intensity") => live.ambient = true,
         ("Shadows", _) => live.shadow_cadence = true,
         ("FramePacing", "vsync") => live.vsync = true,
-        ("AmbientOcclusion", _)
-        | ("Reflections", _)
-        | ("IndirectLighting", _)
-        | ("Exposure", _) => live.feature_params = true,
+        ("AmbientOcclusion" | "Reflections" | "IndirectLighting" | "Exposure", _) => {
+            live.feature_params = true;
+        }
         // Read by the engine each frame (frame cap, stats overlay), never by
         // the renderer.
         _ => {}
@@ -168,7 +167,7 @@ fn live_change(live: &mut LiveChanges, change: &ParamChange) {
 
 // The features a `rebuild` change reallocates, and the live values riding it.
 fn rebuild_change(plan: &mut ApplyPlan, change: &ParamChange) {
-    use RebuildFeature::*;
+    use RebuildFeature::{AutoExposure, ReflectionComposite, RtReflections, Ssao, Ssgi, Ssr, Taa};
     let rebuild = &mut plan.rebuild;
     match (change.asset, change.key) {
         ("AmbientOcclusion", "enabled") => rebuild.insert(Ssao),
@@ -180,8 +179,8 @@ fn rebuild_change(plan: &mut ApplyPlan, change: &ParamChange) {
             rebuild.insert(RtReflections);
             rebuild.insert(ReflectionComposite);
         }
-        ("Reflections", "ray_traced_resolution") | ("Reflections", "ray_traced_shadows") => {
-            rebuild.insert(RtReflections)
+        ("Reflections", "ray_traced_resolution" | "ray_traced_shadows") => {
+            rebuild.insert(RtReflections);
         }
         ("Reflections", "blur_resolution") => rebuild.insert(ReflectionComposite),
         ("AntiAliasing", "mode") => {
@@ -236,9 +235,10 @@ pub fn apply_plan<T: SettingsTarget + ?Sized>(
     graphics: &ResolvedGraphics,
     plan: &ApplyPlan,
 ) -> RenderResult<()> {
-    let rebuilt = match plan.rebuild.is_empty() {
-        true => Ok(()),
-        false => target.rebuild_features(graphics),
+    let rebuilt = if plan.rebuild.is_empty() {
+        Ok(())
+    } else {
+        target.rebuild_features(graphics)
     };
     let live = &plan.live;
     if live.feature_params || !plan.rebuild.is_empty() {

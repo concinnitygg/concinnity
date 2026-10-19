@@ -1,7 +1,7 @@
 //! Platform-agnostic active-scene state and transition logic. Scenes are pure
 //! content groupings; changes are imperative jumps (UI actions, Behaviors), so
 //! this module tracks only which scene is active and drives fade transitions.
-//! The SceneControl trait decouples this module from any specific backend;
+//! The `SceneControl` trait decouples this module from any specific backend;
 //! callers supply a concrete backend that implements the two mutation methods.
 
 use crate::components::{Hidden, Identity, RenderHandle, Scene, SceneMember, SceneTransition};
@@ -29,16 +29,16 @@ fn identified_scenes<'a>(ctx: &'a PipelineContext<'_>) -> impl Iterator<Item = A
 }
 
 /// The scene active at world start: the first declared Scene.
-pub fn start_scene(ctx: &PipelineContext) -> Option<AssetId> {
+pub fn start_scene(ctx: &PipelineContext<'_>) -> Option<AssetId> {
     identified_scenes(ctx).next()
 }
 
 impl SceneFlow {
     /// The world's declared Scenes at world start, the [`start_scene`]
     /// active, or `None` for a world with no scenes.
-    pub fn starting(ctx: &PipelineContext) -> Option<SceneFlow> {
+    pub fn starting(ctx: &PipelineContext<'_>) -> Option<Self> {
         let scenes: Vec<AssetId> = identified_scenes(ctx).collect();
-        Some(SceneFlow {
+        Some(Self {
             current: *scenes.first()?,
             scenes,
             fade: FadePhase::None,
@@ -177,10 +177,7 @@ pub fn tick_transitions<B: SceneControl + ?Sized>(
     elapsed: f32,
     backend: &mut B,
 ) {
-    let flow = match flow_opt {
-        Some(f) => f,
-        None => return,
-    };
+    let Some(flow) = flow_opt else { return };
 
     match flow.fade {
         FadePhase::ToBlack { started_at, next } => {
@@ -292,7 +289,7 @@ pub struct SceneVisibilityScratch {
 /// props are shown on `backend` and every other scene's hidden. `None` for a
 /// world that declares no identified Scene.
 pub fn start_flow<B: SceneControl + ?Sized>(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     scratch: &mut SceneVisibilityScratch,
     backend: Option<&mut B>,
 ) -> Option<SceneFlow> {
@@ -307,11 +304,14 @@ pub fn start_flow<B: SceneControl + ?Sized>(
 }
 
 /// Rebuild the (draw slots, scene) visibility pairs from the per-entity
-/// components: every entity with a RenderHandle contributes its GPU draw
-/// slots, tagged with the SceneMember scene it belongs to (None = always
+/// components: every entity with a `RenderHandle` contributes its GPU draw
+/// slots, tagged with the `SceneMember` scene it belongs to (None = always
 /// visible). A Hidden entity contributes no slots: its draws were switched off
 /// by a hide request, and a scene switch must not relight them.
-pub fn refresh_visibility_snapshot(ctx: &PipelineContext, scratch: &mut SceneVisibilityScratch) {
+pub fn refresh_visibility_snapshot(
+    ctx: &PipelineContext<'_>,
+    scratch: &mut SceneVisibilityScratch,
+) {
     scratch.scene_of.clear();
     scratch.scene_of.extend(
         ctx.join2::<SceneMember, RenderHandle>()
@@ -323,7 +323,7 @@ pub fn refresh_visibility_snapshot(ctx: &PipelineContext, scratch: &mut SceneVis
             .visibility
             .begin_prop(scratch.scene_of.get(&entity).copied());
         if ctx.get::<Hidden>(entity).is_none() {
-            for &slot in handle.draws.iter() {
+            for &slot in &handle.draws {
                 scratch.visibility.push_draw(slot);
             }
         }
@@ -336,7 +336,7 @@ mod snapshot_tests {
     use crate::ecs::World;
     use alloc::vec;
 
-    fn snapshot_pairs(ctx: &PipelineContext) -> (Vec<Vec<DrawIndex>>, Vec<Option<AssetId>>) {
+    fn snapshot_pairs(ctx: &PipelineContext<'_>) -> (Vec<Vec<DrawIndex>>, Vec<Option<AssetId>>) {
         let mut scratch = SceneVisibilityScratch::default();
         refresh_visibility_snapshot(ctx, &mut scratch);
         let mut draws = Vec::new();
@@ -500,8 +500,12 @@ mod tests {
 
         let mut world = World::new();
         assert!(
-            start_flow::<TestBackend>(&mut world.context(), &mut Default::default(), None)
-                .is_none()
+            start_flow::<TestBackend>(
+                &mut world.context(),
+                &mut SceneVisibilityScratch::default(),
+                None
+            )
+            .is_none()
         );
 
         world.push_identified(AssetId(1), Scene::default());
@@ -520,7 +524,7 @@ mod tests {
         let mut backend = TestBackend::default();
         let flow = start_flow(
             &mut world.context(),
-            &mut Default::default(),
+            &mut SceneVisibilityScratch::default(),
             Some(&mut backend),
         )
         .expect("a flow");

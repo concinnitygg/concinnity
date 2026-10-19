@@ -576,9 +576,10 @@ impl EditorHook {
     // Read the palette's filter off its field. Mirrored onto the hook because
     // the data a press and a draw resolve against is built without world access.
     fn sample_behavior_filter(&mut self, world: &World) {
-        let typed = match self.behavior.picking {
-            true => widget::field_text(world, behavior::panel::FILTER_INPUT),
-            false => String::new(),
+        let typed = if self.behavior.picking {
+            widget::field_text(world, behavior::panel::FILTER_INPUT)
+        } else {
+            String::new()
         };
         if typed != self.behavior.filter {
             // A narrowed palette is a different list, so the highlight starts
@@ -761,11 +762,10 @@ impl FrameHook for EditorHook {
 
         // Re-anchor + recolor the top bar, then lay out (or hide) the panels.
         hud::apply_layout(world, self.hud_state());
-        let vp = input.as_ref().map(|i| i.viewport).unwrap_or([0.0, 0.0]);
+        let vp = input.as_ref().map_or([0.0, 0.0], |i| i.viewport);
         let mouse = input
             .as_ref()
-            .map(|i| [i.mouse_x, i.mouse_y])
-            .unwrap_or([0.0, 0.0]);
+            .map_or([0.0, 0.0], |i| [i.mouse_x, i.mouse_y]);
         // The panels lay out only once the HUD is shown and a real viewport exists
         // (frame 0 keeps the injected-hidden placeholders).
         let shown = self.hud_visible && vp[0] > 0.0;
@@ -974,12 +974,13 @@ impl EditorHook {
             Ok(built) => built,
             Err(e) => {
                 tracing::error!("editor: live preview rebuild failed, keeping current world: {e}");
-                match self.start_mode {
-                    true => self.preview_failed(&e.to_string()),
-                    false => self.notifier.error_with(
+                if self.start_mode {
+                    self.preview_failed(&e.to_string());
+                } else {
+                    self.notifier.error_with(
                         &format!("Preview rebuild failed: {e}"),
                         notify::Action::OpenConsole,
-                    ),
+                    );
                 }
                 return;
             }

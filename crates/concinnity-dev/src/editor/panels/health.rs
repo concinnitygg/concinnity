@@ -226,8 +226,8 @@ pub(crate) fn meters(snap: &HealthSnapshot) -> [Meter; 3] {
         Meter {
             caption: "CPU",
             parts: "Systems / Process / Cores",
-            tracked: snap.systems_cores.map(|v| v as f64),
-            used: snap.process_cores.map(|v| v as f64),
+            tracked: snap.systems_cores.map(f64::from),
+            used: snap.process_cores.map(f64::from),
             total: snap.total_cores.map(|v| v as f64),
             unit: Unit::Cores,
         },
@@ -337,7 +337,7 @@ impl HealthState {
             .profile()
             .system_timings()
             .iter()
-            .map(|&(_, micros)| micros as u64)
+            .map(|&(_, micros)| u64::from(micros))
             .sum::<u64>();
 
         let start = *self.window_start.get_or_insert(now);

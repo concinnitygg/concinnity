@@ -1,7 +1,7 @@
 //! Debug-build access validation hooks. `PipelineContext` accessors report each
 //! touch here; the client installs a hook that asserts the touch against the
 //! stepping system's declared [`Access`] (tracked
-//! client-side, since this crate is no_std and holds no per-thread state).
+//! client-side, since this crate is `no_std` and holds no per-thread state).
 //! `World::step` announces which system is stepping through the second hook,
 //! for the same reason: the tracking is per-thread and belongs to the host.
 //! Compiled out of release builds entirely: release parallel-safety never rests
@@ -58,7 +58,7 @@ pub enum Touch {
 type Hook = fn(&Touch);
 
 /// Marks the stepping system's declared access active, or clears it. The
-/// client keeps the per-thread state a no_std crate cannot.
+/// client keeps the per-thread state a `no_std` crate cannot.
 type ActiveHook = fn(Option<(Access, &'static str)>);
 
 static HOOK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
@@ -105,6 +105,14 @@ pub fn set_active(active: Option<(Access, &'static str)>) {
 /// system passes everything; structural change and blob access need
 /// exclusivity; a resource outside [`ACCESS_IDS`] can only be touched
 /// exclusively.
+///
+/// # Panics
+///
+/// Panics when `touch` falls outside what `access` declares; the panic is the check.
+#[expect(
+    clippy::panic,
+    reason = "a failed access check is a bug in the system that made the touch"
+)]
 pub fn verify(access: Access, system: &str, touch: &Touch) {
     if access.is_exclusive() {
         return;

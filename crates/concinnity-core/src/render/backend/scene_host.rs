@@ -210,7 +210,7 @@ mod tests {
     #[test]
     fn streaming_writes_through_the_lent_writer() {
         let mut b = Hosted::new();
-        b.seed_mesh_streaming(0, 3 * core::mem::size_of::<Vertex>() as u64, 0, 12);
+        b.seed_mesh_streaming(0, 3 * size_of::<Vertex>() as u64, 0, 12);
         b.upload_mesh(DrawIndex(0), &vertices(), &[0, 1, 2], 0)
             .expect("room for the mesh");
         assert_eq!(
@@ -231,7 +231,7 @@ mod tests {
         b.scene
             .placement
             .chunk_vtx
-            .free(0, 3 * core::mem::size_of::<Vertex>() as u64, 0);
+            .free(0, 3 * size_of::<Vertex>() as u64, 0);
         b.scene.placement.chunk_idx.free(0, 12, 0);
         let verts = vertices();
         let chunk = crate::render::backend::ChunkMesh {

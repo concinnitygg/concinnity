@@ -49,11 +49,11 @@ pub(super) fn parse_skin(
         .first_child_by_name("Objects")
         .ok_or_else(|| format!("'{path}': FBX has no Objects section"))?;
 
-    let mut model_by_id: HashMap<i64, NodeHandle> = HashMap::new();
+    let mut model_by_id: HashMap<i64, NodeHandle<'_>> = HashMap::new();
     let mut geom_ids: HashSet<i64> = HashSet::new();
     let mut geom_order: Vec<i64> = Vec::new();
     let mut skin_ids: HashSet<i64> = HashSet::new();
-    let mut cluster_by_id: HashMap<i64, NodeHandle> = HashMap::new();
+    let mut cluster_by_id: HashMap<i64, NodeHandle<'_>> = HashMap::new();
     for c in objects.children() {
         let Some(id) = object_id(&c) else { continue };
         match c.name() {
@@ -156,13 +156,13 @@ pub(super) fn parse_skin(
                 .first_child_by_name("Indexes")
                 .as_ref()
                 .and_then(arr_i32)
-                .map(|a| a.to_vec())
+                .map(<[i32]>::to_vec)
                 .unwrap_or_default(),
             weights: node
                 .first_child_by_name("Weights")
                 .as_ref()
                 .and_then(arr_f64)
-                .map(|a| a.to_vec())
+                .map(<[f64]>::to_vec)
                 .unwrap_or_default(),
             transform_link: node
                 .first_child_by_name("TransformLink")
@@ -362,7 +362,7 @@ pub(crate) fn import_skinned_fbx(
 
     let mut indices: Vec<u16> = Vec::with_capacity(indices32.len());
     for i in indices32 {
-        if i > u16::MAX as u32 {
+        if i > u32::from(u16::MAX) {
             return Err(format!(
                 "'{path}': skinned mesh exceeds the {}-vertex u16 index limit",
                 u16::MAX
@@ -439,7 +439,9 @@ fn top4_weights(list: Option<&Vec<(usize, f32)>>) -> ([u32; 4], [f32; 4]) {
 // vertex's control point so cluster weights (stored per control point) can be
 // scattered onto the final vertices. The skinned path keeps all material
 // groups together: a SkinnedMesh is a single primitive.
-fn extract_skinned_geometry(geom: &NodeHandle) -> Option<(Vec<VertexData>, Vec<u32>, Vec<i32>)> {
+fn extract_skinned_geometry(
+    geom: &NodeHandle<'_>,
+) -> Option<(Vec<VertexData>, Vec<u32>, Vec<i32>)> {
     let positions = geom
         .first_child_by_name("Vertices")
         .as_ref()
@@ -475,25 +477,24 @@ fn extract_skinned_geometry(geom: &NodeHandle) -> Option<(Vec<VertexData>, Vec<u
         } else {
             pv as i32
         };
-        let out = match dedup.get(&(cp, uv_key)) {
-            Some(&i) => i,
-            None => {
-                let c = (cp as usize) * 3;
-                let pos = [
-                    positions.get(c).copied().unwrap_or(0.0) as f32,
-                    positions.get(c + 1).copied().unwrap_or(0.0) as f32,
-                    positions.get(c + 2).copied().unwrap_or(0.0) as f32,
-                ];
-                let i = vertices.len() as u32;
-                vertices.push(VertexData {
-                    pos,
-                    color: [1.0, 1.0, 1.0],
-                    uv: super::lookup_uv(uv, uv_indexed, uv_index, pv),
-                });
-                control_points.push(cp);
-                dedup.insert((cp, uv_key), i);
-                i
-            }
+        let out = if let Some(&i) = dedup.get(&(cp, uv_key)) {
+            i
+        } else {
+            let c = (cp as usize) * 3;
+            let pos = [
+                positions.get(c).copied().unwrap_or(0.0) as f32,
+                positions.get(c + 1).copied().unwrap_or(0.0) as f32,
+                positions.get(c + 2).copied().unwrap_or(0.0) as f32,
+            ];
+            let i = vertices.len() as u32;
+            vertices.push(VertexData {
+                pos,
+                color: [1.0, 1.0, 1.0],
+                uv: super::lookup_uv(uv, uv_indexed, uv_index, pv),
+            });
+            control_points.push(cp);
+            dedup.insert((cp, uv_key), i);
+            i
         };
         corners.push(out);
         if !end {

@@ -104,7 +104,7 @@ impl core::fmt::Debug for AudioSystem {
             .field("mixer", &self.mixer)
             .field("emitters", &self.emitters.len())
             .field("cue_views", &self.cues.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -172,7 +172,7 @@ impl AudioSystem {
     // Read a clip's payload from the blob and hand it to the decode worker,
     // once per distinct clip. Returns false when the clip has no compiled
     // payload or the read failed (logged by the caller's context message).
-    fn queue_clip(&mut self, ctx: &mut PipelineContext, clip: AudioClipHandle) -> bool {
+    fn queue_clip(&mut self, ctx: &mut PipelineContext<'_>, clip: AudioClipHandle) -> bool {
         if !self.queued.insert(clip) {
             return true;
         }
@@ -182,7 +182,7 @@ impl AudioSystem {
         };
         match ctx.read_payload(&locator) {
             Ok(bytes) => {
-                self.mixer.queue_clip(clip.0 as u64, bytes.to_vec());
+                self.mixer.queue_clip(u64::from(clip.0), bytes.to_vec());
                 self.clips_queued += 1;
                 true
             }
@@ -197,7 +197,12 @@ impl AudioSystem {
     // Bind one `AudioEmitter` living on `entity`: create its mixer emitter,
     // queue and start its clip, and attach its occlusion probe to the entity
     // (so the probe despawns with it). Shared by init and runtime adoption.
-    fn bind_emitter(&mut self, ctx: &mut PipelineContext, entity: Entity, emitter: &AudioEmitter) {
+    fn bind_emitter(
+        &mut self,
+        ctx: &mut PipelineContext<'_>,
+        entity: Entity,
+        emitter: &AudioEmitter,
+    ) {
         let acoustics = Acoustics {
             bus: emitter.bus.unwrap_or(AudioBus::Sfx),
             distances: (emitter.min_distance, emitter.max_distance),
@@ -212,14 +217,14 @@ impl AudioSystem {
                     // Starts on the tick the decode lands.
                     self.mixer.play_emitter_clip(
                         id,
-                        clip.0 as u64,
+                        u64::from(clip.0),
                         emitter.looping,
                         emitter.volume,
                     );
                 }
             }
             None => {
-                tracing::warn!("audio: emitter has no clip with a compiled payload, silent")
+                tracing::warn!("audio: emitter has no clip with a compiled payload, silent");
             }
         }
         // Physics answers the probe each frame when the world
@@ -249,7 +254,7 @@ impl AudioSystem {
 impl AudioSystem {
     // Carry the free-standing emitters, and the components they were bound
     // from, into the frame `rebase` moves the world to.
-    fn carry(&mut self, ctx: &mut PipelineContext, rebase: &Rebase) {
+    fn carry(&mut self, ctx: &mut PipelineContext<'_>, rebase: &Rebase) {
         for (&entity, binding) in &mut self.emitters {
             if binding.follows.is_some() {
                 continue;
@@ -266,7 +271,7 @@ impl AudioSystem {
 }
 
 impl System for AudioSystem {
-    fn init(&mut self, ctx: &mut PipelineContext) {
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
         // Open the output (an inert mixer when there is no device), deferred
         // out of `new` so construction stays cheap.
         self.mixer = Mixer::new((self.open)());
@@ -321,7 +326,7 @@ impl System for AudioSystem {
                 clip,
                 kind: cue.kind,
                 volume: cue.volume,
-                bus: cue.bus.unwrap_or(default_bus(cue.kind)),
+                bus: cue.bus.unwrap_or_else(|| default_bus(cue.kind)),
                 priority: cue.priority,
             });
         }
@@ -360,7 +365,7 @@ impl System for AudioSystem {
         );
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         // Drain finished decodes (starting deferred plays) and release the
         // voice slots of finished one-shots.
         self.mixer.tick();
@@ -414,7 +419,7 @@ impl System for AudioSystem {
                 };
                 self.cues_matched += bindings.len();
                 for cue in bindings {
-                    let key = cue.clip.0 as u64;
+                    let key = u64::from(cue.clip.0);
                     match cue.kind {
                         CueKind::Music => {
                             self.mixer.play_music(key, cue.volume, cue.bus);
@@ -434,7 +439,7 @@ impl System for AudioSystem {
             let requests: Vec<PlayCue> = events.read(&mut self.play_cue_cursor).copied().collect();
             for cue in requests {
                 self.cues_matched += 1;
-                let key = cue.clip.0 as u64;
+                let key = u64::from(cue.clip.0);
                 match cue.kind {
                     CueKind::Music => {
                         self.mixer.play_music(key, cue.volume, AudioBus::Music);
@@ -455,7 +460,7 @@ impl System for AudioSystem {
         let frame = ctx.frame;
         if let Some(events) = ctx.events::<ContactEvent>() {
             let contacts = frame.collect(events.read(&mut self.contact_cursor).copied());
-            for &contact in contacts.iter() {
+            for &contact in &contacts {
                 for entity in [Some(contact.a), contact.b].into_iter().flatten() {
                     let Some(dynamics) = ctx.get::<BodyDynamics>(entity) else {
                         continue;
@@ -466,7 +471,7 @@ impl System for AudioSystem {
                     let gain = impact::gain(contact.impulse) * dynamics.impact_volume;
                     self.impacts_played += 1;
                     self.mixer
-                        .play_sound_at(contact.point, clip.0 as u64, gain, 0);
+                        .play_sound_at(contact.point, u64::from(clip.0), gain, 0);
                 }
             }
         }

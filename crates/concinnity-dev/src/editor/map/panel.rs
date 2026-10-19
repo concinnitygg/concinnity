@@ -98,7 +98,7 @@ pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bo
 // `None` means the press missed the panel, so it falls through to whatever is
 // behind. Title-bar presses never reach here: the shared routing takes them.
 pub(crate) fn hit_test(
-    view: &MapView,
+    view: &MapView<'_>,
     mx: f32,
     my: f32,
     o: [f32; 2],
@@ -135,7 +135,7 @@ pub(crate) fn root_pan(chart: &Chart, canvas: [f32; 2]) -> [f32; 2] {
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank
 // every element (`None`).
-pub(crate) fn place(world: &mut World, view: Option<&MapView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&MapView<'_>>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         ids().hide(world);
         return;
@@ -201,7 +201,7 @@ mod tests {
         ))
     }
 
-    fn view<'a>(chart: &'a Chart, pan: [f32; 2]) -> MapView<'a> {
+    fn view(chart: &Chart, pan: [f32; 2]) -> MapView<'_> {
         MapView {
             chart,
             selected: None,

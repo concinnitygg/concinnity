@@ -53,10 +53,10 @@ pub(crate) enum MenuItem {
 impl MenuItem {
     fn caption(&self) -> String {
         match self {
-            MenuItem::Type(ty) => (*ty).to_string(),
-            MenuItem::PrefabHeader { open: false } => "Prefab instance >".to_string(),
-            MenuItem::PrefabHeader { open: true } => "Prefab instance v".to_string(),
-            MenuItem::Prefab(name) => name.clone(),
+            Self::Type(ty) => (*ty).to_string(),
+            Self::PrefabHeader { open: false } => "Prefab instance >".to_string(),
+            Self::PrefabHeader { open: true } => "Prefab instance v".to_string(),
+            Self::Prefab(name) => name.clone(),
         }
     }
 
@@ -64,16 +64,16 @@ impl MenuItem {
     // a type, so it has none and leaves the column blank.
     fn summary(&self) -> &'static str {
         match self {
-            MenuItem::Type(ty) => crate::docs::type_summaries()
+            Self::Type(ty) => crate::docs::type_summaries()
                 .get(*ty)
                 .map(String::as_str)
                 .unwrap_or_default(),
-            MenuItem::PrefabHeader { .. } | MenuItem::Prefab(_) => "",
+            Self::PrefabHeader { .. } | Self::Prefab(_) => "",
         }
     }
 
     fn indented(&self) -> bool {
-        matches!(self, MenuItem::Prefab(_))
+        matches!(self, Self::Prefab(_))
     }
 }
 
@@ -158,42 +158,39 @@ pub(crate) fn place(world: &mut World, o: [f32; 2], items: &[MenuItem], mouse: [
         true,
     );
     for slot in 0..MAX_ROWS {
-        match items.get(slot) {
-            Some(item) => {
-                let r = row_rect(o, slot);
-                let hovered = point_in(mouse[0], mouse[1], r);
-                widget::place_rounded(
-                    world,
-                    row_bg(slot),
-                    r,
-                    theme::HOVER_TINT,
-                    theme::CONTROL_RADIUS,
-                    hovered,
-                );
-                let indent = if item.indented() { INDENT } else { 0.0 };
-                let baseline = r[1] + (ROW_H - widget::LINE_H) * 0.5;
-                widget::place_left_label(
-                    world,
-                    row_label(slot),
-                    [r[0] + 6.0 + indent, baseline],
-                    &widget::clip_text(&item.caption(), NAME_CHARS),
-                    theme::LABEL,
-                    true,
-                );
-                widget::place_left_label(
-                    world,
-                    row_summary(slot),
-                    [r[0] + 6.0 + SUMMARY_X, baseline],
-                    &widget::clip_text(item.summary(), SUMMARY_CHARS),
-                    theme::LABEL_DIM,
-                    true,
-                );
-            }
-            None => {
-                widget::set_sprite_visible(world, row_bg(slot), false);
-                widget::set_label_visible(world, row_label(slot), false);
-                widget::set_label_visible(world, row_summary(slot), false);
-            }
+        if let Some(item) = items.get(slot) {
+            let r = row_rect(o, slot);
+            let hovered = point_in(mouse[0], mouse[1], r);
+            widget::place_rounded(
+                world,
+                row_bg(slot),
+                r,
+                theme::HOVER_TINT,
+                theme::CONTROL_RADIUS,
+                hovered,
+            );
+            let indent = if item.indented() { INDENT } else { 0.0 };
+            let baseline = r[1] + (ROW_H - widget::LINE_H) * 0.5;
+            widget::place_left_label(
+                world,
+                row_label(slot),
+                [r[0] + 6.0 + indent, baseline],
+                &widget::clip_text(&item.caption(), NAME_CHARS),
+                theme::LABEL,
+                true,
+            );
+            widget::place_left_label(
+                world,
+                row_summary(slot),
+                [r[0] + 6.0 + SUMMARY_X, baseline],
+                &widget::clip_text(item.summary(), SUMMARY_CHARS),
+                theme::LABEL_DIM,
+                true,
+            );
+        } else {
+            widget::set_sprite_visible(world, row_bg(slot), false);
+            widget::set_label_visible(world, row_label(slot), false);
+            widget::set_label_visible(world, row_summary(slot), false);
         }
     }
 }

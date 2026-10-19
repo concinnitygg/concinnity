@@ -39,14 +39,14 @@ pub enum Justify {
 )]
 #[serde(default)]
 pub struct LayoutRow {
-    /// The [TextLabel](#textlabel)s in this row, laid out left to right. Their
+    /// The [`TextLabel`](#textlabel)s in this row, laid out left to right. Their
     /// own `x`/`y` are ignored: the container positions them.
     pub cols: Vec<Ref<TextLabel>>,
     /// How this row is placed within the container's content width.
     pub justify: Justify,
 }
 
-/// Positions a set of [TextLabel](#textlabel)s as a stack of rows, so a HUD does
+/// Positions a set of [`TextLabel`](#textlabel)s as a stack of rows, so a HUD does
 /// not have to hand-place every chip. Each row lays its labels out left to
 /// right; rows stack top to bottom. The container owns the labels' on-screen
 /// position: the labels keep their own styling (font, color, background,

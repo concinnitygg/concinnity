@@ -46,7 +46,7 @@ impl SsaoResources {
     // Build the kernel and blur at render resolution `extent`, over the pool's
     // `ao_output`.
     pub(in crate::directx) fn new(
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         settings: SsaoSettings,
         extent: PostExtent,
         ao_output: &ID3D12Resource,
@@ -62,7 +62,7 @@ impl SsaoResources {
     // rebuilt pool's `ao_output`. The caller has already idled the device.
     pub(in crate::directx) fn resize(
         &mut self,
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         extent: PostExtent,
         ao_output: &ID3D12Resource,
     ) -> RenderResult<()> {
@@ -73,7 +73,7 @@ impl SsaoResources {
     // View the pool's `ao_output` after a rebuild relocated it.
     pub(in crate::directx) fn repoint_output(
         &mut self,
-        device: &DxPostDevice,
+        device: &DxPostDevice<'_>,
         extent: PostExtent,
         ao_output: &ID3D12Resource,
     ) -> RenderResult<()> {

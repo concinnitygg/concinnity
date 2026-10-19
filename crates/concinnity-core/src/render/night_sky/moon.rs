@@ -1,6 +1,6 @@
 //! The moon: its path around the celestial sphere, the phase its angle from
 //! the sun gives it, and how its face is lit. Its face is mirrored from
-//! `moon_face` in night_sky.hlsl.
+//! `moon_face` in `night_sky.hlsl`.
 
 use super::celestial::CelestialBasis;
 use crate::math::vec3::{cross, dot, normalize_or, scale, sub};

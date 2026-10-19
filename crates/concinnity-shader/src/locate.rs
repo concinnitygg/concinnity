@@ -29,6 +29,10 @@ const VENDORED_NAME: &str = "dxc";
 /// Resolution runs on the host when this crate is a build dependency and on the
 /// target when it is linked into the runtime; `std::env::consts` names the
 /// machine it runs on either way.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the Vulkan SDK installer publishes its location only as VULKAN_SDK"
+)]
 pub(crate) fn dxc_candidates() -> Vec<PathBuf> {
     let vendored = match (WORKSPACE_ROOT, host_slug()) {
         (Some(root), Some(slug)) => vendored_in(&Path::new(root).join("vendor"), slug),

@@ -63,7 +63,7 @@ pub fn retarget_references(
 /// that asset, a `target` declared with `target_args`: the fields the registry
 /// derives and the structured references the build resolves by name (a Prop's
 /// or a Prefab entry's `mesh`, a Model's submeshes, a Behavior's nodes and
-/// trigger sources, an AnimationGraph's blendspace clips). Returns how many
+/// trigger sources, an `AnimationGraph`'s blendspace clips). Returns how many
 /// references changed.
 pub fn rename_references(
     entry: &mut serde_json::Value,

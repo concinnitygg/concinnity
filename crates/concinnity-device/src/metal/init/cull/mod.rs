@@ -2,6 +2,7 @@
 //! Hi-Z pyramid, and the GPU-driven cascade shadow, plus the probe state whose
 //! bake renders through the cull and the instance records it folds in.
 
+use crate::metal::cull::ShadowViewIcb;
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types::{GpuDrawArgs, InstancedCluster, draw_args_flags};
 use concinnity_core::render::backend_init::WorldShader;
@@ -61,8 +62,8 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         cur_view_proj: IDENTITY,
         shadow_pipeline: shadow.pipeline,
         shadow_bindless_pipeline: shadow.bindless_pipeline,
-        shadow_views: Default::default(),
-        spot_views: Default::default(),
+        shadow_views: ShadowViewIcb::default(),
+        spot_views: ShadowViewIcb::default(),
         mirror_slots: Vec::new(),
         mirror_status: None,
         mirror_icb_capacity: 0,

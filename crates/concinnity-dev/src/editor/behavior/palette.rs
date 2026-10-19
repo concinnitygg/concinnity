@@ -345,7 +345,7 @@ pub(crate) fn verb_of(value: &Value) -> &str {
         return word;
     }
     match value.as_object() {
-        Some(map) if map.len() == 1 => map.keys().next().map(String::as_str).unwrap_or(""),
+        Some(map) if map.len() == 1 => map.keys().next().map_or("", String::as_str),
         _ => "",
     }
 }
@@ -505,7 +505,10 @@ pub(crate) fn body_of(value: &Value) -> Option<&Value> {
 fn literal_body(from: &Value, verb: &str) -> Value {
     let number = from.as_f64();
     match verb {
-        "bool" => json!(from.as_bool().unwrap_or(number.is_some_and(|n| n != 0.0))),
+        "bool" => json!(
+            from.as_bool()
+                .unwrap_or_else(|| number.is_some_and(|n| n != 0.0))
+        ),
         "int" => json!(number.unwrap_or(0.0) as i64),
         "float" => json!(number.unwrap_or(0.0)),
         _ => match from.as_array() {

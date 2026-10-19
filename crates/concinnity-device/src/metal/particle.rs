@@ -91,7 +91,7 @@ impl MtlContext {
     pub(in crate::metal) fn encode_particles_sim(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        frame: &ParticleFrame,
+        frame: ParticleFrame,
     ) -> RenderResult<()> {
         let Some(pipelines) = self.particle.pipelines.as_ref() else {
             return Ok(());
@@ -116,7 +116,7 @@ impl MtlContext {
         // in a realistic mid-life state for when the camera turns back. The cost
         // is per-slot work in a single threadgroup, so leaving it un-culled is
         // cheap.
-        for emitter in self.particle.system.emitters(frame) {
+        for emitter in self.particle.system.emitters(&frame) {
             let (rec, gpu, params) = (emitter.record, emitter.gpu, emitter.params);
             enc.set_buffer(gpu.pool.as_ref(), 0, 0);
             enc.set_value(&params, 2);
@@ -144,7 +144,7 @@ impl MtlContext {
     pub(in crate::metal) fn encode_particles_draw(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        frame: &ParticleFrame,
+        frame: ParticleFrame,
         vp: [[f32; 4]; 4],
         frustum: &Frustum,
         reactive: ReactiveWrite,
@@ -156,7 +156,7 @@ impl MtlContext {
 
         // Visibility-cull per emitter, for the draw alone: the simulation above
         // ticked every pool.
-        let mut visible = self.particle.system.visible(frame, frustum).peekable();
+        let mut visible = self.particle.system.visible(&frame, frustum).peekable();
 
         // Camera basis for camera-facing billboards: rows 0 and 1 of the view
         // matrix's 3×3 are the world-space right and up vectors (the view
@@ -305,7 +305,7 @@ pub(super) fn build_emitter_gpu_state(
     record: &ParticleEmitterRecord,
 ) -> RenderResult<ParticleEmitterGpuState> {
     let slots = record.max_particles as usize;
-    let pool_bytes = slots * std::mem::size_of::<GpuParticle>();
+    let pool_bytes = slots * size_of::<GpuParticle>();
     let pool = device
         .newBufferWithLength_options(pool_bytes, MTLResourceOptions::StorageModeShared)
         .ok_or_else(|| allocation_failed("the particle pool buffer"))?;
@@ -313,7 +313,7 @@ pub(super) fn build_emitter_gpu_state(
     // SAFETY: `pool` was just allocated with `pool_bytes` bytes of shared storage, so `contents()`
     // is a live CPU mapping of exactly that many bytes.
     unsafe {
-        let dst = pool.contents().as_ptr() as *mut u8;
+        let dst = pool.contents().as_ptr().cast::<u8>();
         std::ptr::write_bytes(dst, 0, pool_bytes);
     }
 

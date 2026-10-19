@@ -825,7 +825,7 @@ fn behavior_wheel_pans_the_chart_within_its_extent() {
         behavior::panel::chart_canvas(h.effective_size(PanelKey::Behavior), ViewMode::Chart);
     assert_eq!(
         h.behavior.pan,
-        crate::editor::behavior::chart::clamp_pan(h.behavior.pan, &chart, canvas)
+        behavior::chart::clamp_pan(h.behavior.pan, &chart, canvas)
     );
 }
 
@@ -859,7 +859,7 @@ fn behavior_selection_pans_an_off_canvas_card_into_view() {
         h.effective_size(PanelKey::Behavior),
         ViewMode::Chart,
     );
-    let rect = crate::editor::behavior::chart::card_rect(card, band, h.behavior.pan);
+    let rect = behavior::chart::card_rect(card, band, h.behavior.pan);
     assert!(rect[0] >= band[0], "{rect:?} left of {band:?}");
     assert!(rect[0] + rect[2] <= band[0] + band[2] + 0.01, "{rect:?}");
 }
@@ -878,9 +878,7 @@ fn behavior_status_points_at_the_row_the_checker_named() {
     let data = h.behavior_data();
     let view = h.make_behavior_view(&data, [0.0, 0.0]);
     assert!(
-        view.status
-            .and_then(behavior::panel::Status::error)
-            .is_some(),
+        view.status.and_then(Status::error).is_some(),
         "an entity field holding an int does not check out"
     );
     let row = view.fault_row.expect("the checker located it");
@@ -888,10 +886,10 @@ fn behavior_status_points_at_the_row_the_checker_named() {
     assert_eq!(
         data.rows[row].path,
         vec![
-            crate::editor::behavior::path::field("do"),
-            crate::editor::behavior::path::Step::Index(1),
-            crate::editor::behavior::path::field("hide"),
-            crate::editor::behavior::path::field("target"),
+            path::field("do"),
+            path::Step::Index(1),
+            path::field("hide"),
+            path::field("target"),
         ],
     );
 }
@@ -905,7 +903,10 @@ fn behavior_status_with_nothing_to_blame_points_nowhere() {
         serde_json::json!({"on": "start", "do": [{"save": {}}]}),
     )]);
     let data = h.behavior_data();
-    assert!(h.make_behavior_view(&data, [0.0, 0.0]).status == Some(&behavior::panel::Status::Ok));
+    assert_eq!(
+        h.make_behavior_view(&data, [0.0, 0.0]).status,
+        Some(&Status::Ok)
+    );
 
     let (h, _world) = behavior_session(vec![behavior(
         "chase",
@@ -913,11 +914,7 @@ fn behavior_status_with_nothing_to_blame_points_nowhere() {
     )]);
     let data = h.behavior_data();
     let view = h.make_behavior_view(&data, [0.0, 0.0]);
-    assert!(
-        view.status
-            .and_then(behavior::panel::Status::error)
-            .is_some()
-    );
+    assert!(view.status.and_then(Status::error).is_some());
     // `on` is what the complaint blames, and the outline has a row for it.
     let row = view.fault_row.expect("the source row");
     assert_eq!(data.rows[row].label, "on");
@@ -992,7 +989,7 @@ fn a_stale_behavior_fault_never_points_off_its_own_path() {
     let row = h.make_behavior_view(&data, [0.0, 0.0]).fault_row;
     let path = row.map(|i| data.rows[i].path.clone()).unwrap_or_default();
     assert!(
-        crate::editor::behavior::path::starts_with(&located, &path),
+        path::starts_with(&located, &path),
         "pointed at {path:?}, which is not on the way to {located:?}",
     );
     assert_ne!(

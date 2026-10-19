@@ -1,6 +1,6 @@
 //! Hi-Z (depth-mip pyramid) build pass used by the GPU-cull compute kernel for
 //! occlusion culling. Each frame, after the main depth buffer has been written
-//! by the graph, we copy/reduce it into a Texture2D mip chain (R32_FLOAT, MAX
+//! by the graph, we copy/reduce it into a `Texture2D` mip chain (`R32_FLOAT`, MAX
 //! reduction). The *next* frame's `Cull` pass projects each `DrawObject` AABB
 //! through the previous frame's view-projection, picks the Hi-Z mip whose
 //! texels are roughly the size of the projected rect, and culls the AABB when
@@ -152,7 +152,7 @@ fn create_hiz_texture(
     };
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: width as u64,
+        Width: u64::from(width),
         Height: height,
         DepthOrArraySize: 1,
         MipLevels: mip_count as u16,
@@ -169,12 +169,12 @@ fn create_hiz_texture(
     // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
-            &heap_props,
+            &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
-            &desc,
+            &raw const desc,
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             None,
-            &mut tex,
+            &raw mut tex,
         )
     }
     .map_err(|e| map_hresult(e.code(), "create hiz texture"))?;
@@ -204,7 +204,7 @@ pub(in crate::directx) fn write_hiz_srv(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateShaderResourceView(tex, Some(&desc), srv_cpu) };
+    unsafe { device.CreateShaderResourceView(tex, Some(&raw const desc), srv_cpu) };
 }
 
 // Write a UAV pointing at a single mip slice.
@@ -226,7 +226,7 @@ pub(in crate::directx) fn write_hiz_mip_uav(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateUnorderedAccessView(tex, None, Some(&desc), uav_cpu) };
+    unsafe { device.CreateUnorderedAccessView(tex, None, Some(&raw const desc), uav_cpu) };
 }
 
 // Device handles the Hi-Z builder submits against, plus the shader hot-reload
@@ -256,7 +256,7 @@ impl HiZResources {
     // the bindless static pass + cull pipeline are active. Each of the
     // supplied descriptor handles points at a pre-reserved slot in the
     // SRV heap; the resource owns the descriptors but not the heap.
-    pub(super) fn new(ctx: HiZDeviceCtx, target: HiZTarget) -> RenderResult<Self> {
+    pub(super) fn new(ctx: HiZDeviceCtx<'_>, target: HiZTarget) -> RenderResult<Self> {
         let HiZDeviceCtx {
             device,
             info_queue,
@@ -363,9 +363,10 @@ impl crate::directx::context::DxContext {
         let plan = Plan::new(hiz.width, hiz.height, hiz.mip_count, sample_count);
 
         // Phase 1: main depth into mips 0..6. The UAV table starts at mip 0.
-        let pso = match self.targets.hdr.msaa_samples > 1 {
-            true => &hiz.spd_msaa_pso,
-            false => &hiz.spd_single_pso,
+        let pso = if self.targets.hdr.msaa_samples > 1 {
+            &hiz.spd_msaa_pso
+        } else {
+            &hiz.spd_single_pso
         };
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.

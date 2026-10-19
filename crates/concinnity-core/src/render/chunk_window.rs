@@ -593,7 +593,7 @@ mod tests {
             } else {
                 ChunkDetail::Far
             };
-            assert_eq!(*detail, expected, "chunk {:?} at distance {}", c, d);
+            assert_eq!(*detail, expected, "chunk {c:?} at distance {d}");
         }
     }
 
@@ -604,7 +604,7 @@ mod tests {
         let plan = w.plan(cc(0, 0));
         let crossing = cc(2, 0); // distance 2 -> Far impostor at the origin
         assert!(plan.to_load.contains(&(crossing, ChunkDetail::Far)));
-        for (c, _) in plan.to_load.clone() {
+        for (c, _) in plan.to_load {
             w.mark_resident(c, 0);
         }
         let (near0, far0) = w.counts_by_detail();

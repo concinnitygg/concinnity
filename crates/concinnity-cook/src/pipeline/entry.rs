@@ -90,7 +90,7 @@ pub fn build_loaded(
 /// is the blob output alone.
 pub fn write_blobs_to(
     result: &PipelineResult,
-    primary: &std::path::Path,
+    primary: &Path,
 ) -> std::io::Result<crate::blob::PackResult> {
     crate::blob::write_blobs(
         crate::blob::BlobStreams {
@@ -129,7 +129,7 @@ pub fn write_build_outputs(
     let named_refs: Vec<(&str, &BlobAssetDef)> = result
         .names
         .iter()
-        .map(|n| n.as_str())
+        .map(String::as_str)
         .zip(result.defs.iter())
         .collect();
     crate::blob::write_lock(
@@ -144,7 +144,7 @@ pub fn write_build_outputs(
         .blob_paths
         .iter()
         .map(|path| {
-            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            let size = std::fs::metadata(path).map_or(0, |m| m.len());
             (std::path::PathBuf::from(path), size)
         })
         .collect();
@@ -163,7 +163,7 @@ pub fn write_build_outputs(
 }
 
 /// Run the full build pipeline on an in-memory JSONL string without writing any
-/// blobs. Loads, expands, and validates the world (crate::build_only::prepare_world),
+/// blobs. Loads, expands, and validates the world (`crate::build_only::prepare_world`),
 /// then compiles it. `assets_dir` is the asset search root a bare `source`
 /// filename is searched under.
 pub fn build_pipeline_from_str(
@@ -177,7 +177,7 @@ pub fn build_pipeline_from_str(
 
 /// Compile an already-prepared world (expanded + structurally and semantically
 /// validated) into in-memory blobs. This is the compile-only stage; it assumes
-/// the assets have passed crate::build_only::prepare_world, which should have been
+/// the assets have passed `crate::build_only::prepare_world`, which should have been
 /// given the same `assets_dir`: an asset resolves its source the same way in
 /// both halves.
 pub fn build_compiled(

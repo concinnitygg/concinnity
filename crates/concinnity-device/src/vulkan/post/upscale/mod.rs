@@ -4,8 +4,8 @@
 //! composite stack consumes.
 //!
 //! Three interchangeable backends sit behind the `VkUpscaleBackend` trait:
-//!   fsr   AMD FidelityFX FSR (cross-vendor; ffx_api VK)
-//!   dlss  NVIDIA DLSS via raw NGX (RTX only; cfg(ngx_sdk_bundled))
+//!   fsr   AMD FidelityFX FSR (cross-vendor; `ffx_api` VK)
+//!   dlss  NVIDIA DLSS via raw NGX (RTX only; `cfg(ngx_sdk_bundled)`)
 //!   xess  Intel XeSS (cross-vendor; runtime libxess)
 //! The API-independent half of each lives in `crate::upscale_sdk`; these files
 //! hold the Vulkan resources, library loading and command recording.
@@ -412,7 +412,7 @@ pub(in crate::vulkan) fn build_upscaler(
             })
         },
     )?;
-    requested.adopt_running_preset(built.as_deref().and_then(|u| u.dlss_preset()));
+    requested.adopt_running_preset(built.as_deref().and_then(VkUpscaleBackend::dlss_preset));
     Ok((built, resolved))
 }
 
@@ -451,7 +451,7 @@ impl UpscaleSdk {
     // choice to a backend that needs no extra extensions, so instance / device
     // creation proceeds exactly as without upscaling.
     pub(in crate::vulkan) fn prepare(temporal_upscaling: bool, requested: UpscalerBackend) -> Self {
-        let mut sdk = UpscaleSdk {
+        let mut sdk = Self {
             choice: ResolvedBackend::Native,
             xess: None,
             instance_exts: Vec::new(),
@@ -466,37 +466,33 @@ impl UpscaleSdk {
             ResolvedBackend::Dlss =>
             {
                 #[cfg(ngx_sdk_bundled)]
-                match dlss::required_extensions() {
-                    Some((inst, dev)) => {
-                        sdk.instance_exts = inst;
-                        sdk.dlss_device_exts = dev;
-                    }
-                    None => {
-                        tracing::warn!(
-                            "temporal upscaling: DLSS required-extensions query failed; \
-                             device creation will skip DLSS extensions (build_upscaler will \
-                             fall back to FSR / native)"
-                        );
-                        sdk.choice = ResolvedBackend::Fsr;
-                    }
+                if let Some((inst, dev)) = dlss::required_extensions() {
+                    sdk.instance_exts = inst;
+                    sdk.dlss_device_exts = dev;
+                } else {
+                    tracing::warn!(
+                        "temporal upscaling: DLSS required-extensions query failed; \
+                         device creation will skip DLSS extensions (build_upscaler will \
+                         fall back to FSR / native)"
+                    );
+                    sdk.choice = ResolvedBackend::Fsr;
                 }
             }
-            ResolvedBackend::Xess => match xess::XessExtQuery::load() {
-                Some(q) => {
+            ResolvedBackend::Xess => {
+                if let Some(q) = xess::XessExtQuery::load() {
                     let (exts, min_api) = q.instance_extensions();
                     sdk.instance_exts = exts;
                     sdk.min_api_version = min_api;
                     sdk.xess = Some(q);
-                }
-                None => {
+                } else {
                     tracing::warn!(
                         "temporal upscaling: XeSS library / extension query unavailable; device \
-                         creation will skip XeSS extensions (build_upscaler will fall back to \
-                         FSR / native)"
+                     creation will skip XeSS extensions (build_upscaler will fall back to \
+                     FSR / native)"
                     );
                     sdk.choice = ResolvedBackend::Fsr;
                 }
-            },
+            }
             _ => {}
         }
         sdk
@@ -559,12 +555,14 @@ impl UpscaleSdk {
     }
 }
 
-// Copy a `const char* const*` array (`count` entries) returned by an SDK
-// extension query into owned `CString`s, severing the dependence on the
-// SDK-owned memory. Shared by the DLSS + XeSS extension queries.
-//
-// SAFETY: `exts` must be null or point to `count` valid, null-terminated C
-// strings (the SDK contract).
+/// Copy a `const char* const*` array (`count` entries) returned by an SDK
+/// extension query into owned `CString`s, severing the dependence on the
+/// SDK-owned memory. Shared by the DLSS + XeSS extension queries.
+///
+/// # Safety
+///
+/// `exts` must be null or point to `count` valid, null-terminated C strings
+/// (the SDK contract).
 unsafe fn copy_ext_names(count: u32, exts: *const *const c_char) -> Vec<CString> {
     if exts.is_null() {
         return Vec::new();

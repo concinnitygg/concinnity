@@ -34,8 +34,8 @@ pub enum Fallback {
 impl core::fmt::Display for Fallback {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Fallback::NotCompiled(p) => write!(f, "graphics API {} is not in this build", p.key()),
-            Fallback::NoDevice(p) => write!(f, "graphics API {} found no usable device", p.key()),
+            Self::NotCompiled(p) => write!(f, "graphics API {} is not in this build", p.key()),
+            Self::NoDevice(p) => write!(f, "graphics API {} found no usable device", p.key()),
         }
     }
 }

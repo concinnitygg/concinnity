@@ -29,7 +29,7 @@ pub struct AnimationBlendPoint {
     /// Parameter value at which this clip plays alone.
     pub value: f32,
     /// The [Animation](#animation) clip at this point. Must target the same
-    /// [SkinnedMesh](#skinnedmesh) as the graph.
+    /// [`SkinnedMesh`](#skinnedmesh) as the graph.
     pub clip: Option<Ref<Animation>>,
 }
 
@@ -185,7 +185,7 @@ pub struct AnimationState {
     /// State name, referenced by `initial` and by transitions.
     pub name: String,
     /// The [Animation](#animation) clip this state plays. Must target the
-    /// same [SkinnedMesh](#skinnedmesh) as the graph. Leave unset when the
+    /// same [`SkinnedMesh`](#skinnedmesh) as the graph. Leave unset when the
     /// state plays a `blend` instead.
     pub clip: Option<Ref<Animation>>,
     /// A blendspace to play instead of a single `clip`.
@@ -266,7 +266,7 @@ pub struct AnimationTransition {
     pub conditions: Vec<AnimationCondition>,
 }
 
-/// An animation state machine for one [SkinnedMesh](#skinnedmesh).
+/// An animation state machine for one [`SkinnedMesh`](#skinnedmesh).
 ///
 /// While a plain set of [Animation](#animation) clips blends every clip all
 /// the time, a graph plays exactly one *state* at a time and moves between
@@ -294,7 +294,7 @@ pub struct AnimationTransition {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct AnimationGraph {
-    /// The [SkinnedMesh](#skinnedmesh) asset this graph animates.
+    /// The [`SkinnedMesh`](#skinnedmesh) asset this graph animates.
     pub target: Option<SkinnedMeshHandle>,
     /// Named float parameters transitions compare against.
     pub parameters: Vec<AnimationParam>,
@@ -305,7 +305,7 @@ pub struct AnimationGraph {
     /// Directed transitions between states.
     pub transitions: Vec<AnimationTransition>,
     /// Two-bone IK chains applied on top of every state's pose; see
-    /// [AnimationIkChain](#animationikchain).
+    /// [`AnimationIkChain`](#animationikchain).
     pub ik_chains: Vec<AnimationIkChain>,
 }
 

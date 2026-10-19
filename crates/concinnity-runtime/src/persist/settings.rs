@@ -2,7 +2,7 @@
 //! root's `settings`, the mutable sibling of the build-regenerated `data`.
 //! Stored as CBOR, binary like the data blobs but self-describing; bincode,
 //! which the data blobs use, is positional and safe only for files regenerated
-//! each build. Core's SettingsSystem writes through [`FileStore`] on a
+//! each build. Core's `SettingsSystem` writes through [`FileStore`] on a
 //! background thread whenever its revision moves.
 
 use concinnity_core::settings::StoredSettings;
@@ -134,7 +134,7 @@ mod tests {
         #[derive(Debug)]
         struct EditThenStop;
         impl System for EditThenStop {
-            fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+            fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
                 let mut stored = StoredSettings::default();
                 stored.graphics.vsync = Some(false);
                 stored.store_changed(ctx.resources);
@@ -144,7 +144,7 @@ mod tests {
         #[derive(Debug)]
         struct Stop;
         impl System for Stop {
-            fn step(&mut self, _ctx: &mut PipelineContext) -> StepResult {
+            fn step(&mut self, _ctx: &mut PipelineContext<'_>) -> StepResult {
                 StepResult::Stop
             }
         }

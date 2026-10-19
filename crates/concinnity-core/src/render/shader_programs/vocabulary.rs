@@ -19,21 +19,21 @@ pub enum Block {
 
 impl Block {
     /// Every block.
-    pub const ALL: [Block; 2] = [Block::View, Block::Lights];
+    pub const ALL: [Self; 2] = [Self::View, Self::Lights];
 
     /// The name a Shader reads the block by.
     pub const fn name(self) -> &'static str {
         match self {
-            Block::View => "VIEW",
-            Block::Lights => "LIGHTS",
+            Self::View => "VIEW",
+            Self::Lights => "LIGHTS",
         }
     }
 
     /// The HLSL struct the block is declared as.
     pub const fn declared_as(self) -> &'static str {
         match self {
-            Block::View => "ViewUniforms",
-            Block::Lights => "LightUniforms",
+            Self::View => "ViewUniforms",
+            Self::Lights => "LightUniforms",
         }
     }
 }
@@ -67,11 +67,11 @@ impl Kind {
     /// type.
     pub const fn declared_in(self) -> Option<&'static str> {
         match self {
-            Kind::Helper | Kind::Hook | Kind::Type => None,
-            Kind::BlockField(b) => Some(b.declared_as()),
-            Kind::RecordField => Some(RECORD_STRUCT),
-            Kind::Varying => Some(VARYING_STRUCT),
-            Kind::ReturnField(s) => Some(s),
+            Self::Helper | Self::Hook | Self::Type => None,
+            Self::BlockField(b) => Some(b.declared_as()),
+            Self::RecordField => Some(RECORD_STRUCT),
+            Self::Varying => Some(VARYING_STRUCT),
+            Self::ReturnField(s) => Some(s),
         }
     }
 
@@ -80,10 +80,10 @@ impl Kind {
     /// struct is held under whatever name the file gives it, so it has none.
     pub const fn owner(self) -> Option<&'static str> {
         match self {
-            Kind::Helper | Kind::Hook | Kind::Type | Kind::ReturnField(_) => None,
-            Kind::BlockField(b) => Some(b.name()),
-            Kind::RecordField => Some("od"),
-            Kind::Varying => Some("v"),
+            Self::Helper | Self::Hook | Self::Type | Self::ReturnField(_) => None,
+            Self::BlockField(b) => Some(b.name()),
+            Self::RecordField => Some("od"),
+            Self::Varying => Some("v"),
         }
     }
 }

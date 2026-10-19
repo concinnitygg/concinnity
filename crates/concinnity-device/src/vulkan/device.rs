@@ -263,30 +263,30 @@ pub(super) fn create_logical_device(
 
     // Owned extension names, kept alive for the `create_device` call (the raw
     // ptr array below borrows from this).
-    let mut enabled: Vec<CString> = vec![CString::new("VK_KHR_swapchain").unwrap()];
+    let mut enabled: Vec<CString> = vec![c"VK_KHR_swapchain".to_owned()];
     if has_memory_budget {
-        enabled.push(CString::new("VK_EXT_memory_budget").unwrap());
+        enabled.push(c"VK_EXT_memory_budget".to_owned());
     }
     if has_calibrated_timestamps {
-        enabled.push(CString::new("VK_EXT_calibrated_timestamps").unwrap());
+        enabled.push(c"VK_EXT_calibrated_timestamps".to_owned());
     }
     if want_f16 {
-        enabled.push(CString::new("VK_KHR_shader_float16_int8").unwrap());
+        enabled.push(c"VK_KHR_shader_float16_int8".to_owned());
     }
     if want_16bit {
-        enabled.push(CString::new("VK_KHR_16bit_storage").unwrap());
+        enabled.push(c"VK_KHR_16bit_storage".to_owned());
     }
     if want_subgroup_ext {
-        enabled.push(CString::new("VK_KHR_shader_subgroup_extended_types").unwrap());
+        enabled.push(c"VK_KHR_shader_subgroup_extended_types".to_owned());
     }
     if has_mem_reqs2 {
-        enabled.push(CString::new("VK_KHR_get_memory_requirements2").unwrap());
+        enabled.push(c"VK_KHR_get_memory_requirements2".to_owned());
     }
     if has_dedicated {
-        enabled.push(CString::new("VK_KHR_dedicated_allocation").unwrap());
+        enabled.push(c"VK_KHR_dedicated_allocation".to_owned());
     }
     if has_portability_subset {
-        enabled.push(CString::new("VK_KHR_portability_subset").unwrap());
+        enabled.push(c"VK_KHR_portability_subset".to_owned());
     }
 
     // RT capability gate: the device is capable AND XeSS is not the active
@@ -340,9 +340,9 @@ pub(super) fn create_logical_device(
         );
 
     if rt_capable {
-        enabled.push(CString::new("VK_KHR_acceleration_structure").unwrap());
-        enabled.push(CString::new("VK_KHR_ray_query").unwrap());
-        enabled.push(CString::new("VK_KHR_deferred_host_operations").unwrap());
+        enabled.push(c"VK_KHR_acceleration_structure".to_owned());
+        enabled.push(c"VK_KHR_ray_query".to_owned());
+        enabled.push(c"VK_KHR_deferred_host_operations".to_owned());
     }
 
     // DLSS / XeSS device extensions, queried from the SDK (filtered to what the
@@ -488,18 +488,15 @@ pub(super) fn create_logical_device(
         // Hand XeSS our chain head; it patches required features + appends its
         // own structs (SDK-owned memory, valid while `upscaler_sdk` lives) and
         // returns the head to use as `VkDeviceCreateInfo.pNext`.
-        let head = upscaler_sdk.xess_device_features(
-            instance,
-            pd,
-            &mut features2 as *mut _ as *mut c_void,
-        );
+        let head =
+            upscaler_sdk.xess_device_features(instance, pd, (&raw mut features2).cast::<c_void>());
         enable_bindless_features(head);
         let mut device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_infos)
             .enabled_extension_names(&ext_names);
-        // SAFETY: `head` is a valid feature `pNext` chain (our `features2`, with
-        // XeSS structs appended), alive until `create_device` returns.
-        device_info.p_next = head as *const c_void;
+        // `head` is a valid feature `pNext` chain (our `features2`, with XeSS
+        // structs appended), alive until `create_device` returns.
+        device_info.p_next = head.cast_const();
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
         // it names belongs to this device.
         let device = unsafe { instance.create_device(pd, &device_info, None) }
@@ -586,7 +583,7 @@ fn enable_bindless_features(head: *mut c_void) {
             // SAFETY: `sType` names this struct, so the node is one, and it is
             // still mutable here: the chain is only read once `create_device`
             // consumes it, which has not been called yet.
-            let f = unsafe { &mut *node.cast::<vk::PhysicalDeviceVulkan12Features>() };
+            let f = unsafe { &mut *node.cast::<vk::PhysicalDeviceVulkan12Features<'_>>() };
             tracing::info!(
                 "chained Vulkan12Features: runtime_descriptor_array={}, \
                  sampled_image_non_uniform_indexing={}; forcing both on for the \

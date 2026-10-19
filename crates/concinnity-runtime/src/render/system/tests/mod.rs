@@ -460,7 +460,7 @@ fn skinned_payload_with_morphs(
     };
     let vertices: Vec<SkinnedVertex> = (0..n)
         .map(|i| SkinnedVertex {
-            pos: [i as f32, 0.0, 0.0],
+            pos: [f32::from(i), 0.0, 0.0],
             normal: [0.0, 1.0, 0.0],
             tangent: [1.0, 0.0, 0.0],
             color: [1.0; 3],

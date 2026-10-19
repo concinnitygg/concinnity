@@ -96,14 +96,18 @@ fn anchored() -> &'static Mutex<Option<PathBuf>> {
 /// another anchor replaces it. Until a host calls this every operation above is
 /// a miss: artifacts are produced fresh rather than warmed from disk.
 pub fn anchor<P: Into<PathBuf>>(path: P) {
-    *anchored().lock().unwrap() = Some(path.into());
+    *anchored()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(path.into());
 }
 
 /// Drop the anchor, leaving the process with no cache to warm from. The segment
 /// read under it is written back to its own file first, so a later [`flush`]
 /// has nothing left to write.
 pub fn clear_anchor() {
-    *anchored().lock().unwrap() = None;
+    *anchored()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     if let Some(mut previous) = lock().take() {
         previous
             .segment
@@ -113,7 +117,10 @@ pub fn clear_anchor() {
 
 // The file this run writes, when one is anchored.
 fn writable_path() -> Option<PathBuf> {
-    anchored().lock().unwrap().clone()
+    anchored()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
 // The segment this process read, and the file it came from.
@@ -150,7 +157,9 @@ fn with<R>(f: impl FnOnce(&mut Segment) -> R) -> Option<R> {
 // spares it.
 fn lock() -> MutexGuard<'static, Option<Loaded>> {
     static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
-    LOADED.lock().unwrap_or_else(|e| e.into_inner())
+    LOADED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]
@@ -188,7 +197,7 @@ mod tests {
         anchor(first.clone());
         assert!(store(CacheEntryKind::Shader, "k", b"v"));
 
-        anchor(second.clone());
+        anchor(second);
         assert_eq!(load(CacheEntryKind::Shader, "k"), None);
         assert_eq!(
             Segment::read_from(&first).get(CacheEntryKind::Shader, "k"),

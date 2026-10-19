@@ -1,7 +1,7 @@
 // Vignette schema.
 
 /// Darkening toward the corners of the frame. The `vignette` section of
-/// [GraphicsConfig](#graphicsconfig); left unset, there is no vignette.
+/// [`GraphicsConfig`](#graphicsconfig); left unset, there is no vignette.
 ///
 /// ```rust
 /// # use concinnity_core::components::{GraphicsConfig, VignetteOverrides};

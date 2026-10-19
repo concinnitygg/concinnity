@@ -141,7 +141,7 @@ impl PlanetSystem {
 
     // Publish the frame, the pull, the moves and the sky's frame as they now
     // are.
-    fn publish(&self, ctx: &mut PipelineContext) {
+    fn publish(&self, ctx: &mut PipelineContext<'_>) {
         let rotation = self.frame.frame.rotation_from_world();
         ctx.insert_resource(self.frame);
         ctx.insert_resource(PlanetGravity {
@@ -155,7 +155,7 @@ impl PlanetSystem {
         }
     }
 
-    fn publish_ground(&mut self, ctx: &mut PipelineContext, patch: GroundPatch) {
+    fn publish_ground(&mut self, ctx: &mut PipelineContext<'_>, patch: GroundPatch) {
         let revision = self.ground.as_ref().map_or(0, |g| g.revision + 1);
         let ground = PlanetGround { revision, patch };
         ctx.insert_resource(ground.clone());
@@ -163,7 +163,7 @@ impl PlanetSystem {
     }
 
     // Move the world into `frame`, carried there by `rebase`.
-    fn rebase(&mut self, ctx: &mut PipelineContext, frame: LocalFrame, rebase: Rebase) {
+    fn rebase(&mut self, ctx: &mut PipelineContext<'_>, frame: LocalFrame, rebase: Rebase) {
         let [x, y, z] = frame.origin();
         tracing::info!("planet: the simulated frame moved to ({x:.1}, {y:.1}, {z:.1})");
         self.frame.frame = frame;
@@ -174,7 +174,7 @@ impl PlanetSystem {
 
     // Take a finished patch: the ground moves, and for a patch built in a new
     // frame, the world moves with it.
-    fn receive(&mut self, ctx: &mut PipelineContext) {
+    fn receive(&mut self, ctx: &mut PipelineContext<'_>) {
         while let Some(result) = self.builder.as_mut().and_then(|b| b.try_recv()) {
             let Some((id, purpose)) = self.pending else {
                 continue;
@@ -186,9 +186,10 @@ impl PlanetSystem {
             if let PatchPurpose::Rebase { frame, rebase } = purpose {
                 self.rebase(ctx, frame, rebase);
             }
-            match result.patch {
-                Some(patch) => self.publish_ground(ctx, patch),
-                None => tracing::warn!("planet: no ground under the camera"),
+            if let Some(patch) = result.patch {
+                self.publish_ground(ctx, patch);
+            } else {
+                tracing::warn!("planet: no ground under the camera");
             }
         }
     }
@@ -213,12 +214,12 @@ impl PlanetSystem {
     }
 }
 
-fn camera_position(ctx: &PipelineContext) -> Option<[f32; 3]> {
+fn camera_position(ctx: &PipelineContext<'_>) -> Option<[f32; 3]> {
     ctx.query::<Camera3D>().next().map(|c| c.position)
 }
 
 // Publish where on the planet the camera is and which way it looks.
-fn publish_camera_geo(ctx: &mut PipelineContext, frame: &PlanetFrame) {
+fn publish_camera_geo(ctx: &mut PipelineContext<'_>, frame: &PlanetFrame) {
     let Some((position, yaw)) = ctx.query::<Camera3D>().next().map(|c| (c.position, c.yaw)) else {
         return;
     };
@@ -229,7 +230,7 @@ fn publish_camera_geo(ctx: &mut PipelineContext, frame: &PlanetFrame) {
 }
 
 impl System for PlanetSystem {
-    fn init(&mut self, ctx: &mut PipelineContext) {
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
         self.sky_rotates = ctx.query::<SkyRotation>().next().is_some();
         self.publish(ctx);
         // The first patch is built here, so physics finds ground from its
@@ -239,9 +240,10 @@ impl System for PlanetSystem {
             frame: self.frame.frame,
             around: camera_position(ctx).unwrap_or([0.0; 3]),
         };
-        match first.build(&self.frame.shape).patch {
-            Some(patch) => self.publish_ground(ctx, patch),
-            None => tracing::warn!("planet: the camera starts off the planet"),
+        if let Some(patch) = first.build(&self.frame.shape).patch {
+            self.publish_ground(ctx, patch);
+        } else {
+            tracing::warn!("planet: the camera starts off the planet");
         }
         let frame = self.frame;
         for camera in ctx.query_mut::<Camera3D>() {
@@ -253,7 +255,7 @@ impl System for PlanetSystem {
         publish_camera_geo(ctx, &frame);
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         if ctx.resource::<MenuActive>().is_some_and(|m| m.0) {
             return StepResult::Continue;
         }

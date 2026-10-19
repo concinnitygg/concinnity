@@ -123,14 +123,14 @@ impl AutoExposureResources {
         // dispatch flips it into UNORDERED_ACCESS for steady state.
         let histogram = create_uav_buffer(
             device,
-            (HISTOGRAM_BINS * std::mem::size_of::<u32>()) as u64,
+            (HISTOGRAM_BINS * size_of::<u32>()) as u64,
             D3D12_RESOURCE_STATE_COMMON,
         )?;
 
         // Output: the measurement the average kernel writes into.
         let output_buf = create_uav_buffer(
             device,
-            std::mem::size_of::<ExposureMeasurement>() as u64,
+            size_of::<ExposureMeasurement>() as u64,
             D3D12_RESOURCE_STATE_COMMON,
         )?;
 
@@ -141,7 +141,7 @@ impl AutoExposureResources {
         let mut readback_ptrs: Vec<*const ExposureMeasurement> = Vec::with_capacity(frames);
         for _ in 0..frames {
             let buf = alloc.alloc_buffer(
-                std::mem::size_of::<ExposureMeasurement>() as u64,
+                size_of::<ExposureMeasurement>() as u64,
                 D3D12_HEAP_TYPE_READBACK,
                 D3D12_RESOURCE_STATE_COPY_DEST,
             )?;
@@ -150,7 +150,7 @@ impl AutoExposureResources {
             // pointer stays valid for the resource's lifetime.
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "auto-exposure readback map"))?;
             readback_ptrs.push(ptr as *const ExposureMeasurement);
             readback_bufs.push(buf);
@@ -339,7 +339,7 @@ impl DxContext {
                     0,
                     &resources.output_buf,
                     0,
-                    std::mem::size_of::<ExposureMeasurement>() as u64,
+                    size_of::<ExposureMeasurement>() as u64,
                 );
             }
         }

@@ -26,20 +26,15 @@ pub enum DlssPreset {
 
 impl DlssPreset {
     /// Every preset, in settings-menu order.
-    pub const ALL: [DlssPreset; 4] = [
-        DlssPreset::Default,
-        DlssPreset::K,
-        DlssPreset::L,
-        DlssPreset::M,
-    ];
+    pub const ALL: [Self; 4] = [Self::Default, Self::K, Self::L, Self::M];
 
     /// The preset's name, as NVIDIA's tooling shows it.
     pub const fn label(self) -> &'static str {
         match self {
-            DlssPreset::Default => "Default",
-            DlssPreset::K => "K",
-            DlssPreset::L => "L",
-            DlssPreset::M => "M",
+            Self::Default => "Default",
+            Self::K => "K",
+            Self::L => "L",
+            Self::M => "M",
         }
     }
 
@@ -48,7 +43,7 @@ impl DlssPreset {
         let mut labels = [""; 4];
         let mut i = 0;
         while i < labels.len() {
-            labels[i] = DlssPreset::ALL[i].label();
+            labels[i] = Self::ALL[i].label();
             i += 1;
         }
         labels

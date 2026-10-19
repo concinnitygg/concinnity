@@ -1,6 +1,6 @@
 //! Runtime entity despawn: remove an authored placement (and its descendants)
 //! from the live world and reclaim the GPU draw slots it occupied, so nothing it
-//! contributed lingers in any pass. Driven by DespawnRequest events SpawnSystem
+//! contributed lingers in any pass. Driven by `DespawnRequest` events `SpawnSystem`
 //! drains each step (see system.rs), and by the Lifetime expiries it ticks.
 
 use alloc::vec;
@@ -17,7 +17,7 @@ use crate::render::render_slots::RenderSlots;
 // edges, pre-order, de-duplicated. A read-only walk: the caller hides each
 // entity's draw slots and despawns it. A cycle in the edges (which the parent
 // builder never produces) terminates on the de-dup check.
-pub(super) fn collect_subtree(ctx: &PipelineContext, root: Entity) -> Vec<Entity> {
+pub(super) fn collect_subtree(ctx: &PipelineContext<'_>, root: Entity) -> Vec<Entity> {
     let mut out: Vec<Entity> = Vec::new();
     let mut stack = vec![root];
     while let Some(entity) = stack.pop() {
@@ -51,7 +51,7 @@ pub(super) enum RetiredSlot {
 // `despawn_subtree` dispatches it to the backend's retire methods. Returns the
 // number of entities removed.
 fn despawn_collected(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     root: Entity,
     mut retire: impl FnMut(RetiredSlot),
 ) -> usize {
@@ -77,7 +77,7 @@ fn despawn_collected(
 // slot allocator and record the backend hides into the frame's op queue.
 // Returns the number of entities removed.
 pub(super) fn despawn_subtree(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     ops: &mut RenderOps,
     slots: &mut RenderSlots,
     root: Entity,
@@ -102,7 +102,7 @@ mod tests {
 
     // Build an isolated PipelineContext over a fresh world, like the draw_list
     // tests, so a despawn cascade can be exercised without a backend.
-    fn run<R>(body: impl FnOnce(&mut PipelineContext) -> R) -> R {
+    fn run<R>(body: impl FnOnce(&mut PipelineContext<'_>) -> R) -> R {
         body(&mut World::new().context())
     }
 

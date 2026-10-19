@@ -159,7 +159,11 @@ mod tests {
     #[test]
     fn every_flag_in_the_table_is_handled() {
         for flag in LAUNCH_FLAGS {
-            let value = flag.values.first().copied().or(flag.value.map(|_| "1"));
+            let value = flag
+                .values
+                .first()
+                .copied()
+                .or_else(|| flag.value.map(|_| "1"));
             let mut args = LaunchArgs::NONE;
             assert_eq!(args.set(flag.name, value), Ok(()), "{}", flag.name);
             assert_ne!(args, LaunchArgs::NONE, "{}", flag.name);

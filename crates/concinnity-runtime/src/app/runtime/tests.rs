@@ -208,14 +208,14 @@ fn an_app_config_home_moves_only_the_writable_root() {
     runtime.start().unwrap();
 
     let tree = runtime.state_tree().expect("the runtime kept its tree");
-    assert_eq!(tree.content_root(), std::path::Path::new(root));
+    assert_eq!(tree.content_root(), Path::new(root));
     assert_eq!(
         tree.saves_dir(),
-        std::path::Path::new(root).join("state").join("saves")
+        Path::new(root).join("state").join("saves")
     );
     assert_eq!(
         tree.data_dir(),
-        std::path::Path::new(root).join("data"),
+        Path::new(root).join("data"),
         "the world's home never moves what a build wrote"
     );
     assert_eq!(

@@ -11,8 +11,8 @@ use crate::components::{
     ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight, Terrain,
     VolumetricFog, VoxelChunk, WaterShape, WaterSurface, WaterWave, Wind,
 };
+use crate::math::sqrt;
 use crate::math::vec3::length;
-use crate::math::{sqrt, vec3};
 
 /// Normalize an authored volume for the runtime: clamp the raymarch knobs to
 /// sane bounds and force shadows off for translucent volumetrics, which write
@@ -22,7 +22,7 @@ pub fn sdf_volume(mut v: SdfVolume) -> SdfVolume {
     use crate::components::sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
     // Extents must be positive: a zero or negative extent would produce an
     // inside-out bounding box no fragment ever enters.
-    for axis in v.extent.iter_mut() {
+    for axis in &mut v.extent {
         if !axis.is_finite() || *axis <= 0.0 {
             *axis = 1.0;
         }
@@ -102,21 +102,21 @@ pub fn sky_rotation(mut args: SkyRotation) -> SkyRotation {
 /// that leg holding the angle it started from. `CameraTrack` bakes divergently, so no generated
 /// `from_args` runs this -- `CameraTrack::bake` calls it.
 pub fn camera_track(mut args: CameraTrackArgs) -> CameraTrackArgs {
-    for leg in args.travel.iter_mut() {
+    for leg in &mut args.travel {
         leg.distance = finite_non_negative(leg.distance);
         leg.speed = finite_non_negative(leg.speed);
         leg.seconds = finite_non_negative(leg.seconds);
-        for axis in leg.direction.iter_mut() {
+        for axis in &mut leg.direction {
             if !axis.is_finite() {
                 *axis = 0.0;
             }
         }
-        if vec3::length(leg.direction) < 1e-6 {
+        if length(leg.direction) < 1e-6 {
             leg.seconds = crate::components::camera_track::travel_seconds(leg);
             leg.distance = 0.0;
         }
     }
-    for leg in args.turn.iter_mut() {
+    for leg in &mut args.turn {
         leg.yaw_deg = leg.yaw_deg.filter(|a| a.is_finite());
         leg.pitch_deg = leg.pitch_deg.filter(|a| a.is_finite());
         leg.degrees_per_second = finite_non_negative(leg.degrees_per_second);

@@ -9,11 +9,11 @@
 //! the grass block and the blade buffer as two extra root parameters, so the
 //! lit blades shade on the lights, shadows and environment the surfaces bound.
 //! The bend pass and the cascade draw have small root signatures of their own.
-//! The blade, draw-argument and bend buffers rest in UNORDERED_ACCESS; the
+//! The blade, draw-argument and bend buffers rest in `UNORDERED_ACCESS`; the
 //! graph moves them to the states their readers need. On a planet the kernel
 //! also reads the frame's drawn tiles, from an upload-heap buffer per frame in
 //! flight, and their meshes, from the shared vertex buffer, which rests in
-//! GENERIC_READ.
+//! `GENERIC_READ`.
 
 use std::cell::RefCell;
 
@@ -127,8 +127,10 @@ fn create_draw_signature(device: &ID3D12Device) -> RenderResult<ID3D12CommandSig
     let mut sig: Option<ID3D12CommandSignature> = None;
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    unsafe { device.CreateCommandSignature(&desc, None::<&ID3D12RootSignature>, &mut sig) }
-        .map_err(|e| map_hresult(e.code(), "create grass command signature"))?;
+    unsafe {
+        device.CreateCommandSignature(&raw const desc, None::<&ID3D12RootSignature>, &raw mut sig)
+    }
+    .map_err(|e| map_hresult(e.code(), "create grass command signature"))?;
     sig.ok_or_else(|| {
         RenderError::Other("create grass command signature: returned None".to_string())
     })
@@ -289,9 +291,9 @@ impl MappedBlocks {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), label))?;
-            ptrs.push(ptr as *mut u8);
+            ptrs.push(ptr.cast::<u8>());
             buffers.push(buf);
         }
         Ok(Self {
@@ -325,7 +327,7 @@ impl MappedBlocks {
 // once a list the queue runs ahead of every later submission moves it there.
 // The kernel writes every blade a draw reads, so it starts unset.
 fn blade_buffer(alloc: &DeviceAllocator, count: u32) -> RenderResult<ID3D12Resource> {
-    let bytes = u64::from(count.max(1)) * std::mem::size_of::<GpuGrassBlade>() as u64;
+    let bytes = u64::from(count.max(1)) * size_of::<GpuGrassBlade>() as u64;
     let buffer = create_uav_buffer(alloc.device(), bytes, D3D12_RESOURCE_STATE_COMMON)?;
     let to_uav = transition_barrier(
         &buffer,
@@ -382,7 +384,7 @@ impl GrassResources {
             read,
         )?;
 
-        let params_size = std::mem::size_of::<GrassParams>();
+        let params_size = size_of::<GrassParams>();
         Ok(Self {
             field,
             pipelines,
@@ -398,17 +400,17 @@ impl GrassResources {
             shadow_params: MappedBlocks::new(alloc, params_size, "map grass shadow params")?,
             bend_params: MappedBlocks::new(
                 alloc,
-                std::mem::size_of::<GrassBendParams>(),
+                size_of::<GrassBendParams>(),
                 "map grass bend params",
             )?,
             planet_tiles: MappedBlocks::new(
                 alloc,
-                FRAME_PLANET_TILE_RECORDS * std::mem::size_of::<PlanetGrassTileGpu>(),
+                FRAME_PLANET_TILE_RECORDS * size_of::<PlanetGrassTileGpu>(),
                 "map grass planet tiles",
             )?,
             tiles: MappedBlocks::new(
                 alloc,
-                FRAME_TILE_RECORDS * std::mem::size_of::<GrassTileGpu>(),
+                FRAME_TILE_RECORDS * size_of::<GrassTileGpu>(),
                 "map grass tiles",
             )?,
             state: RefCell::new(GrassFrameState::default()),
@@ -609,7 +611,7 @@ impl DxContext {
             // commands name is live for the call; the args buffer is in INDIRECT_ARGUMENT for
             // this pass and the offset names one whole record of it.
             unsafe {
-                cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
+                cmd.OMSetRenderTargets(0, None, false, Some(&raw const dsv));
                 cmd.SetGraphicsRootSignature(&grass.pipelines.shadow_root_sig);
                 cmd.SetPipelineState(&grass.pipelines.shadow);
                 cmd.SetGraphicsRootConstantBufferView(0, shadow.params_gva);

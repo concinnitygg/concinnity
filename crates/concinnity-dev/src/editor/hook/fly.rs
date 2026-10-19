@@ -1,8 +1,8 @@
-//! EditorHook: the edit-mode fly camera. Toggled with Shift+F (or the Preview
+//! `EditorHook`: the edit-mode fly camera. Toggled with Shift+F (or the Preview
 //! panel's row); while on, the editor publishes the `FlyCam` resource so
-//! InputSystem keeps the navigation keys and mouse deltas live and the backend
+//! `InputSystem` keeps the navigation keys and mouse deltas live and the backend
 //! captures the cursor -- the world stays frozen behind the menu override, and
-//! this drive integrates Camera3D directly (free-fly: W flies where you look).
+//! this drive integrates `Camera3D` directly (free-fly: W flies where you look).
 //! Escape exits back to the free-cursor edit mode. The camera keeps its flown
 //! pose, so entering play mode afterwards continues from there.
 
@@ -84,7 +84,7 @@ impl EditorHook {
     // is frozen (Camera3DSystem included), so nothing fights the write; the
     // camera's view matrix is rebuilt in place, exactly as the engine
     // controller would.
-    pub(super) fn drive_fly(&mut self, input: &FrameInput, world: &mut World) {
+    pub(super) fn drive_fly(&self, input: &FrameInput, world: &mut World) {
         if !self.fly {
             return;
         }

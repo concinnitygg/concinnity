@@ -22,7 +22,7 @@ pub struct VertexData {
 ///
 /// Use when you want full control over shape: custom furniture,
 /// architectural details, signage, or any form a generator cannot
-/// produce. For standard shapes use [ProceduralMesh](#proceduralmesh).
+/// produce. For standard shapes use [`ProceduralMesh`](#proceduralmesh).
 ///
 /// Normals and tangents are computed automatically at build time.
 /// **Do not supply normals or tangents.**

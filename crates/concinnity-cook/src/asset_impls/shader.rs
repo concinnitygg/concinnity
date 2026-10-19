@@ -11,7 +11,7 @@ use crate::compile::shader::{compile_world_shader, read_shader_source};
 // used verbatim.
 pub(super) fn resolve_source_path_for(raw: &str, ctx: &BuildCtx<'_>) -> String {
     let p = std::path::Path::new(raw);
-    if p.parent().map(|d| d.as_os_str().is_empty()).unwrap_or(true) {
+    if p.parent().is_none_or(|d| d.as_os_str().is_empty()) {
         if let Some(path) = ctx
             .assets_dir
             .and_then(|dir| concinnity_host::store::source::find_in(dir, raw))
@@ -58,10 +58,7 @@ impl crate::asset::BuildAsset for Shader {
     // Read the declared files and compile every program each target backend
     // consumes into one container: a Shader is one asset with one payload, so its
     // programs load and unload together.
-    fn compile_payload(
-        args: &serde_json::Value,
-        ctx: &crate::asset::BuildCtx<'_>,
-    ) -> std::io::Result<Vec<u8>> {
+    fn compile_payload(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> std::io::Result<Vec<u8>> {
         let fragment_raw = declared_path(args, ShaderStage::Fragment).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -107,10 +104,7 @@ impl crate::asset::BuildAsset for Shader {
     // Only the declared files are read. Reporting them covers the resolution
     // the cache's generic walk misses: a bare filename found under the asset
     // root, which the walk cannot see.
-    fn source_files(
-        args: &serde_json::Value,
-        ctx: &crate::asset::BuildCtx<'_>,
-    ) -> crate::asset::SourceFiles {
+    fn source_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> crate::asset::SourceFiles {
         use crate::asset::SourceFiles;
         let mut inputs = Vec::new();
         for stage in [ShaderStage::Vertex, ShaderStage::Fragment] {

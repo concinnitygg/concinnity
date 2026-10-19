@@ -103,7 +103,7 @@ impl OverlayTransform {
     /// `forward`). Used to hit-test the live cursor against reference-space UI
     /// rects.
     pub fn inverse(&self, x: f32, y: f32) -> (f32, f32) {
-        let s = if self.scale != 0.0 { self.scale } else { 1.0 };
+        let s = if self.scale == 0.0 { 1.0 } else { self.scale };
         (
             self.ref_cx + (x - self.screen_cx) / s,
             self.ref_cy + (y - self.screen_cy) / s,

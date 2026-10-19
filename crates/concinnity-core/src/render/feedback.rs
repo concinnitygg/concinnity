@@ -27,5 +27,5 @@ pub struct FrameFeedback {
 // The feedback must stay owned data so it can cross the thread boundary.
 const _: () = {
     const fn require_send<T: Send + 'static>() {}
-    require_send::<FrameFeedback>()
+    require_send::<FrameFeedback>();
 };

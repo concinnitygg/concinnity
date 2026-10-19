@@ -40,7 +40,7 @@ pub enum QualityPreset {
 impl QualityPreset {
     /// The presets in menu-cycle order, matching
     /// [`levels::GRAPHICS_QUALITY`](crate::settings::levels::GRAPHICS_QUALITY).
-    pub const ALL: [QualityPreset; 6] = [
+    pub const ALL: [Self; 6] = [
         Self::Auto,
         Self::Low,
         Self::Medium,
@@ -313,9 +313,8 @@ pub fn auto_tier(profile: &GpuProfile) -> (&'static str, QualityCeiling) {
         // A discrete GPU whose driver would not report its VRAM: the mid tier
         // keeps the cheap wins and drops what an unknown GPU might not carry,
         // rather than handing it the whole top-tier look the defaults author.
-        GpuTier::Unknown => ("Medium", QualityCeiling::MEDIUM),
         GpuTier::Integrated => ("Low", QualityCeiling::LOW),
-        GpuTier::EntryDiscrete => ("Medium", QualityCeiling::MEDIUM),
+        GpuTier::Unknown | GpuTier::EntryDiscrete => ("Medium", QualityCeiling::MEDIUM),
         GpuTier::MidDiscrete => ("High", QualityCeiling::HIGH),
         GpuTier::HighDiscrete => ("Ultra", QualityCeiling::ULTRA),
     }

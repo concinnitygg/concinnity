@@ -189,7 +189,7 @@ impl PlanarReflectionSet {
         alloc: &DeviceAllocator,
         config: PlanarConfig,
         layout: PlanarReflectors,
-        targets: PlanarTargets,
+        targets: PlanarTargets<'_>,
     ) -> RenderResult<Self> {
         let planes = layout.planes();
         if planes.len() > MAX_PLANAR_PLANES {
@@ -260,10 +260,10 @@ impl PlanarReflectionSet {
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { cbv.Map(0, None, Some(&mut ptr)) }
+            unsafe { cbv.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "planar: map view cbv"))?;
             view_gvas.push(com::gpu_va(&cbv));
-            view_ptrs.push(ptr as *mut u8);
+            view_ptrs.push(ptr.cast::<u8>());
             view_cbvs.push(cbv);
         }
 
@@ -272,7 +272,7 @@ impl PlanarReflectionSet {
         // from COMMON on first use), matching the shadow indirect buffers.
         let indirect_size =
             align256((planes.len() * n_cull * INDIRECT_COMMAND_STRIDE as usize) as u64);
-        let status_size = align256((n_cull * std::mem::size_of::<u32>()) as u64).max(256);
+        let status_size = align256((n_cull * size_of::<u32>()) as u64).max(256);
         let mut planar_indirect = Vec::with_capacity(frames);
         let mut planar_status = Vec::with_capacity(frames);
         for _ in 0..frames {
@@ -324,6 +324,10 @@ impl PlanarReflectionSet {
     // render resolution and rewrite the RTV / DSV / resolve SRVs in place. The
     // descriptor slots do not move, so the transparent pass's GPU handles stay
     // valid. Mirrors the other `resize_to` resources.
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "the depth target is held only to keep it alive"
+    )]
     pub(in crate::directx) fn resize_to(
         &mut self,
         device: &ID3D12Device,
@@ -548,9 +552,9 @@ impl DxContext {
             // the GPU reads it later on this cmd list.
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &view as *const ViewUniforms as *const u8,
+                    (&raw const view).cast::<u8>(),
                     set.view_ptrs[ring],
-                    std::mem::size_of::<ViewUniforms>(),
+                    size_of::<ViewUniforms>(),
                 );
             }
             // Bin the frame's lights and probes over this plane's reflected
@@ -567,9 +571,9 @@ impl DxContext {
             // as for the view above.
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &cluster_params as *const ClusterParams as *const u8,
+                    (&raw const cluster_params).cast::<u8>(),
                     set.view_ptrs[ring].add(MIRROR_CLUSTER_OFFSET),
-                    std::mem::size_of::<ClusterParams>(),
+                    size_of::<ClusterParams>(),
                 );
             }
             if let Some(cull) = culls.get_mut(kept) {
@@ -594,7 +598,7 @@ impl DxContext {
             set.n_cull,
         );
 
-        self.encode_mirror_light_culls(cmd, params.frame_idx, set, crops, &clustered);
+        self.encode_mirror_light_culls(cmd, params.frame_idx, set, crops, clustered);
 
         // Per kept plane: render the culled region from the reflected view into
         // the plane's color attachment + the shared depth (against the frame's
@@ -647,7 +651,7 @@ impl DxContext {
         frame_idx: usize,
         set: &PlanarReflectionSet,
         crops: &[(usize, PixelRect)],
-        clustered: &[bool; MAX_PLANAR_PLANES],
+        clustered: [bool; MAX_PLANAR_PLANES],
     ) {
         let mut slots = [0; MAX_PLANAR_PLANES];
         let mut count = 0;
@@ -701,7 +705,7 @@ fn create_rtv_heap(
     };
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    unsafe { device.CreateDescriptorHeap(&desc) }
+    unsafe { device.CreateDescriptorHeap(&raw const desc) }
         .map_err(|e| map_hresult(e.code(), "planar: rtv heap"))
 }
 
@@ -772,7 +776,7 @@ fn create_dsv_heap(device: &ID3D12Device) -> RenderResult<ID3D12DescriptorHeap> 
     };
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
     // COM object lands in a binding that owns it.
-    unsafe { device.CreateDescriptorHeap(&desc) }
+    unsafe { device.CreateDescriptorHeap(&raw const desc) }
         .map_err(|e| map_hresult(e.code(), "planar: dsv heap"))
 }
 
@@ -794,7 +798,7 @@ fn create_planar_depth(
     let clear_value = optimized_clear();
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: width as u64,
+        Width: u64::from(width),
         Height: height,
         DepthOrArraySize: 1,
         MipLevels: 1,
@@ -811,12 +815,12 @@ fn create_planar_depth(
     // COM object lands in a binding that owns it.
     unsafe {
         device.CreateCommittedResource(
-            &heap_props,
+            &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
-            &desc,
+            &raw const desc,
             D3D12_RESOURCE_STATE_DEPTH_WRITE,
-            Some(&clear_value),
-            &mut tex_opt,
+            Some(&raw const clear_value),
+            &raw mut tex_opt,
         )
     }
     .map_err(|e| map_hresult(e.code(), "planar: create depth"))?;
@@ -834,7 +838,7 @@ fn create_planar_depth(
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateDepthStencilView(&texture, Some(&dsv_desc), dsv_cpu) };
+    unsafe { device.CreateDepthStencilView(&texture, Some(&raw const dsv_desc), dsv_cpu) };
     Ok(texture)
 }
 

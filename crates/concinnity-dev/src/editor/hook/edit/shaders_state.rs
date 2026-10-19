@@ -1,4 +1,4 @@
-//! EditorHook: the Shaders and Shader source panels' session state, beside
+//! `EditorHook`: the Shaders and Shader source panels' session state, beside
 //! their actions in `shaders.rs` and `shader_source.rs`.
 
 use std::path::{Path, PathBuf};
@@ -295,18 +295,15 @@ impl SourceState {
         self.known = text;
         self.noticed = None;
         self.mtime = modified(&self.path);
-        match self.live {
-            Some(false) => {
-                let owner = self.owner();
-                self.status = Some(Status::new(
-                    format!("Saved; the {owner} joins the running world when it rebuilds"),
-                    Tone::Info,
-                ))
-            }
-            _ => {
-                self.compiling = true;
-                self.status = Some(Status::new("Compiling...", Tone::Info));
-            }
+        if self.live == Some(false) {
+            let owner = self.owner();
+            self.status = Some(Status::new(
+                format!("Saved; the {owner} joins the running world when it rebuilds"),
+                Tone::Info,
+            ));
+        } else {
+            self.compiling = true;
+            self.status = Some(Status::new("Compiling...", Tone::Info));
         }
     }
 

@@ -20,7 +20,7 @@ enum FileOp {
 impl FileOp {
     fn path(&self) -> &Path {
         match self {
-            FileOp::Write(path, _) | FileOp::Remove(path) => path,
+            Self::Write(path, _) | Self::Remove(path) => path,
         }
     }
 }
@@ -36,11 +36,17 @@ struct Pending {
 
 impl Pending {
     fn add(&self) {
-        *self.count.lock().unwrap_or_else(|p| p.into_inner()) += 1;
+        *self
+            .count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
     }
 
     fn done(&self) {
-        let mut count = self.count.lock().unwrap_or_else(|p| p.into_inner());
+        let mut count = self
+            .count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *count = count.saturating_sub(1);
         if *count == 0 {
             self.drained.notify_all();
@@ -48,9 +54,15 @@ impl Pending {
     }
 
     fn wait(&self) {
-        let mut count = self.count.lock().unwrap_or_else(|p| p.into_inner());
+        let mut count = self
+            .count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while *count > 0 {
-            count = self.drained.wait(count).unwrap_or_else(|p| p.into_inner());
+            count = self
+                .drained
+                .wait(count)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 }
@@ -72,7 +84,7 @@ impl std::fmt::Debug for FileWriter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FileWriter")
             .field("name", &self.name)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -144,7 +156,7 @@ impl FileWriter {
     fn start(&self) -> Option<Running> {
         let mut sink = self.sink.lock().unwrap_or_else(|p| p.into_inner()).take()?;
         let (tx, rx) = mpsc::channel::<FileOp>();
-        let pending = self.pending.clone();
+        let pending = Arc::clone(&self.pending);
         let name = self.name;
         let thread = std::thread::Builder::new()
             .name(name.into())
@@ -205,7 +217,7 @@ mod tests {
 
     fn recording() -> (FileWriter, Arc<Mutex<Vec<FileOp>>>) {
         let log: Arc<Mutex<Vec<FileOp>>> = Arc::default();
-        let sink_log = log.clone();
+        let sink_log = Arc::clone(&log);
         let writer = FileWriter::with_sink("test-writer", move |op| {
             sink_log.lock().unwrap().push(op.clone());
             Ok(())
@@ -278,7 +290,7 @@ mod tests {
     #[test]
     fn a_failed_write_does_not_stop_the_writer() {
         let log: Arc<Mutex<Vec<FileOp>>> = Arc::default();
-        let sink_log = log.clone();
+        let sink_log = Arc::clone(&log);
         let writer = FileWriter::with_sink("test-writer", move |op| {
             if op.path() == Path::new("bad") {
                 return Err(std::io::Error::other("disk full"));

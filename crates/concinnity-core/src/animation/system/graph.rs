@@ -39,7 +39,7 @@ pub(super) struct GraphTarget {
 // flat drive with a warning rather than dropping the world.
 pub(super) fn install_graphs(
     targets: &mut BTreeMap<SkinnedMeshHandle, TargetState>,
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     clip_slots: &HashMap<AssetId, (SkinnedMeshHandle, usize)>,
 ) -> usize {
     let mut installed = 0usize;
@@ -120,7 +120,7 @@ pub(super) fn install_graphs(
 pub(super) fn step_target(
     g: &mut GraphTarget,
     target: SkinnedMeshHandle,
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     dt_secs: f32,
 ) {
     if let Some(params) = ctx

@@ -19,7 +19,7 @@ impl MtlContext {
     pub(crate) fn update_texture_slot(
         &mut self,
         slot: usize,
-        image: &concinnity_core::bake::texture::TextureImage,
+        image: &bake::texture::TextureImage,
     ) -> RenderResult<()> {
         texture_slot_in_range("update_texture_slot", slot, self.scene.textures.len())?;
         self.scene.textures[slot] = upload_texture_image(&self.hw.allocator, image)?;

@@ -16,8 +16,6 @@
 //! split, ~90 s with main-only) but never went away. The mechanism appears
 //! fundamentally incompatible with our usage on this hardware / macOS 26.4
 //! combo.
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PixelRect;
@@ -165,7 +163,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         camera: MainPassCamera,
-        gpu: GpuFrameBuffers,
+        gpu: GpuFrameBuffers<'_>,
         extras: MainPassExtras<'_>,
     ) -> RenderResult<u32> {
         let MainPassExtras {
@@ -212,10 +210,10 @@ impl MtlContext {
                 ca.setStoreAction(MTLStoreAction::Store);
             }
             ca.setClearColor(MTLClearColor {
-                red: r as f64,
-                green: g as f64,
-                blue: b as f64,
-                alpha: a as f64,
+                red: f64::from(r),
+                green: f64::from(g),
+                blue: f64::from(b),
+                alpha: f64::from(a),
             });
 
             let da = main_pass_desc.depthAttachment();
@@ -302,9 +300,9 @@ impl MtlContext {
     pub(in crate::metal) fn encode_main_into_face(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        face_targets: FaceTargets,
+        face_targets: FaceTargets<'_>,
         camera: MainPassCamera,
-        gpu: GpuFrameBuffers,
+        gpu: GpuFrameBuffers<'_>,
         pass: FacePass<'_>,
     ) -> RenderResult<u32> {
         let FaceTargets {
@@ -325,27 +323,22 @@ impl MtlContext {
         // declares.
         unsafe {
             let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
-            match face_color_msaa {
-                Some(msaa) => {
-                    ca.setTexture(Some(msaa));
-                    ca.setResolveTexture(Some(face_resolve));
-                    ca.setResolveSlice(resolve_slice);
-                    ca.setStoreAction(MTLStoreAction::MultisampleResolve);
-                }
-                // Single-sampled: the face draws into the destination slice
-                // itself, so the slice moves from the resolve to the attachment.
-                None => {
-                    ca.setTexture(Some(face_resolve));
-                    ca.setSlice(resolve_slice);
-                    ca.setStoreAction(MTLStoreAction::Store);
-                }
+            if let Some(msaa) = face_color_msaa {
+                ca.setTexture(Some(msaa));
+                ca.setResolveTexture(Some(face_resolve));
+                ca.setResolveSlice(resolve_slice);
+                ca.setStoreAction(MTLStoreAction::MultisampleResolve);
+            } else {
+                ca.setTexture(Some(face_resolve));
+                ca.setSlice(resolve_slice);
+                ca.setStoreAction(MTLStoreAction::Store);
             }
             ca.setLoadAction(MTLLoadAction::Clear);
             ca.setClearColor(MTLClearColor {
-                red: r as f64,
-                green: g as f64,
-                blue: b as f64,
-                alpha: a as f64,
+                red: f64::from(r),
+                green: f64::from(g),
+                blue: f64::from(b),
+                alpha: f64::from(a),
             });
 
             let da = desc.depthAttachment();
@@ -414,7 +407,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         camera: MainPassCamera,
-        gpu: GpuFrameBuffers,
+        gpu: GpuFrameBuffers<'_>,
     ) -> RenderResult<u32> {
         let GpuFrameBuffers {
             object_buffer,
@@ -505,7 +498,7 @@ impl MtlContext {
         obj_buf: &Retained<ProtocolObject<dyn MTLBuffer>>,
         tex_args: &Retained<ProtocolObject<dyn MTLBuffer>>,
         icbs: &[Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>],
-        gpu: GpuFrameBuffers,
+        gpu: GpuFrameBuffers<'_>,
     ) -> u32 {
         use objc2_metal::{MTLRenderStages, MTLResourceUsage};
         let GpuFrameBuffers {
@@ -729,7 +722,7 @@ impl MtlContext {
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
         view_uniforms: &ViewUniforms,
-        gpu: GpuFrameBuffers,
+        gpu: GpuFrameBuffers<'_>,
         // ICB to execute instead of the main cull's `self.cull.icb`: the planar
         // mirror render passes its slot's mirror ICB (culled against the
         // reflected frustum) here; the main + probe paths pass `None` to use the

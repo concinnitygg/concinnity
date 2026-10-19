@@ -45,7 +45,7 @@ pub(crate) fn expand_dim_set(
 // matching input inertness comes from the `DisabledSettingRows` resource,
 // published after the drain.
 pub(crate) fn set_rows_grayed(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     rows: &[(AssetId, [f32; 3])],
     grayed: bool,
 ) {
@@ -60,7 +60,7 @@ pub(crate) fn set_rows_grayed(
 // glyphs) so the row grays as a unit; the authored colors drive the restore.
 // Runs at init while the HitRegions / ScrollPanels are still present.
 pub(crate) fn capture_row_labels(
-    ctx: &mut PipelineContext,
+    ctx: &PipelineContext<'_>,
     keys: &[SettingKey],
 ) -> Vec<(AssetId, [f32; 3])> {
     // Collect the rows' value-label ids (every region of a row, a stepper's
@@ -93,7 +93,7 @@ pub(crate) fn capture_row_labels(
 }
 
 // Overwrite the text of the TextLabel with the given id, if present.
-pub(crate) fn set_label_content(ctx: &mut PipelineContext, id: AssetId, text: &str) {
+pub(crate) fn set_label_content(ctx: &mut PipelineContext<'_>, id: AssetId, text: &str) {
     crate::ecs::by_asset_id::set_text(ctx, id, text);
 }
 
@@ -104,7 +104,7 @@ pub(crate) fn set_label_content(ctx: &mut PipelineContext, id: AssetId, text: &s
 // is captured once rather than re-queried here.
 pub(crate) fn set_cached_row_label(
     labels: &hashbrown::HashMap<SettingKey, AssetId>,
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     key: SettingKey,
     text: &str,
 ) {
@@ -115,7 +115,7 @@ pub(crate) fn set_cached_row_label(
 
 // Move the Sprite with the given id to `x` (its left edge), if present. Used to
 // slide a slider's handle along its track.
-pub(crate) fn set_sprite_x(ctx: &mut PipelineContext, id: AssetId, x: f32) {
+pub(crate) fn set_sprite_x(ctx: &mut PipelineContext<'_>, id: AssetId, x: f32) {
     crate::ecs::by_asset_id::update::<Sprite>(ctx, Some(id), |s| s.x = x);
 }
 
@@ -125,7 +125,11 @@ impl SettingsState {
     // value. Runs once at init, before UiInputSystem drains the HitRegions and
     // hides the screen elements. `persisted` serves every controls slider, which
     // reads the store rather than the render params.
-    pub(crate) fn init_sliders(&mut self, ctx: &mut PipelineContext, persisted: &StoredSettings) {
+    pub(crate) fn init_sliders(
+        &mut self,
+        ctx: &mut PipelineContext<'_>,
+        persisted: &StoredSettings,
+    ) {
         let mut sliders: Vec<SliderViz> = Vec::new();
         for r in ctx.query::<HitRegion>() {
             let Some(UiAction::Setting {
@@ -165,7 +169,7 @@ impl SettingsState {
     // Capture each key-rebind row's bookkeeping from its `Rebind` HitRegion, then sync each value label to the live bound key. Runs once at
     // init (after the keymap is seeded), before UiInputSystem drains the
     // HitRegions.
-    pub(crate) fn init_rebind_rows(&mut self, ctx: &mut PipelineContext) {
+    pub(crate) fn init_rebind_rows(&mut self, ctx: &mut PipelineContext<'_>) {
         let mut rows: Vec<RebindViz> = Vec::new();
         let mut pad_rows: Vec<PadRebindViz> = Vec::new();
         for r in ctx.query::<HitRegion>() {
@@ -207,7 +211,7 @@ impl SettingsState {
     // can relabel a row other than the one clicked (the master preset relabels
     // its dependents; a quality-toggle change relabels the master row). Runs at
     // init, before UiInputSystem drains the HitRegions.
-    pub(crate) fn init_cycle_value_labels(&mut self, ctx: &mut PipelineContext) {
+    pub(crate) fn init_cycle_value_labels(&mut self, ctx: &PipelineContext<'_>) {
         let mut labels = hashbrown::HashMap::new();
         for r in ctx.query::<HitRegion>() {
             // A stepper row's `Next` region and a dropdown's `Open` region
@@ -231,7 +235,7 @@ impl SettingsState {
     // so the master "Display performance stats" toggle can gray them out at
     // runtime and restore them, and apply the initial gray from the resolved
     // toggle. Runs once at init while the HitRegions / ScrollPanels are present.
-    pub(crate) fn capture_perf_sub_rows(&mut self, ctx: &mut PipelineContext) {
+    pub(crate) fn capture_perf_sub_rows(&mut self, ctx: &mut PipelineContext<'_>) {
         self.perf_sub_row_labels =
             capture_row_labels(ctx, &[SettingKey::ShowFps, SettingKey::ShowVram]);
         set_rows_grayed(ctx, &self.perf_sub_row_labels, !self.resolved.perf_stats);
@@ -241,7 +245,7 @@ impl SettingsState {
     // resolved window mode: the row only applies in fullscreen (windowed sizes
     // come from the window itself, borderless covers the display), so it is
     // grayed + inert in the other modes. Same init window as the perf rows.
-    pub(crate) fn capture_resolution_row(&mut self, ctx: &mut PipelineContext) {
+    pub(crate) fn capture_resolution_row(&mut self, ctx: &mut PipelineContext<'_>) {
         self.resolution_row_labels = capture_row_labels(ctx, &[SettingKey::Resolution]);
         set_rows_grayed(
             ctx,
@@ -442,9 +446,9 @@ mod tests {
             ],
             ..Default::default()
         });
-        let mut ctx = world.context();
+        let ctx = world.context();
 
-        let captured = capture_row_labels(&mut ctx, &[SettingKey::ShadowMapSize]);
+        let captured = capture_row_labels(&ctx, &[SettingKey::ShadowMapSize]);
         let expected: Vec<(AssetId, [f32; 3])> = [1, 2, 3, 4, 5]
             .into_iter()
             .map(|id| (AssetId(id), [id as f32 / 100.0; 3]))
@@ -462,9 +466,9 @@ mod tests {
             serde_json::json!({"setting": {"key": "shadow_map_size", "verb": "next"}}),
             Some(1),
         ));
-        let mut ctx = world.context();
+        let ctx = world.context();
 
-        assert!(capture_row_labels(&mut ctx, &[SettingKey::Resolution]).is_empty());
+        assert!(capture_row_labels(&ctx, &[SettingKey::Resolution]).is_empty());
     }
 
     // A perf sub-row captured while the stats master is off starts grayed, and
@@ -536,9 +540,9 @@ mod tests {
             Some(2),
         ));
         let mut state = SettingsState::for_tests();
-        let mut ctx = world.context();
+        let ctx = world.context();
 
-        state.init_cycle_value_labels(&mut ctx);
+        state.init_cycle_value_labels(&ctx);
         assert_eq!(state.cycle_value_labels.len(), 1);
         assert_eq!(
             state.cycle_value_labels.get(&SettingKey::Vsync),

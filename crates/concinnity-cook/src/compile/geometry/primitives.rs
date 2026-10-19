@@ -11,9 +11,18 @@ pub(super) fn build_box(args: &serde_json::Value) -> GeomResult {
 }
 
 pub(super) fn build_cylinder(args: &serde_json::Value) -> GeomResult {
-    let radius = args.get("radius").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
-    let height = args.get("height").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-    let segments = args.get("segments").and_then(|v| v.as_u64()).unwrap_or(16) as u32;
+    let radius = args
+        .get("radius")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.5) as f32;
+    let height = args
+        .get("height")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(1.0) as f32;
+    let segments = args
+        .get("segments")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(16) as u32;
     Ok(concinnity_core::geometry::build_cylinder(
         radius, height, segments,
     ))
@@ -22,11 +31,11 @@ pub(super) fn build_cylinder(args: &serde_json::Value) -> GeomResult {
 pub(super) fn build_plane(args: &serde_json::Value) -> GeomResult {
     let half_width = args
         .get("half_width")
-        .and_then(|v| v.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .unwrap_or(1.0) as f32;
     let half_depth = args
         .get("half_depth")
-        .and_then(|v| v.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .unwrap_or(1.0) as f32;
     Ok(concinnity_core::geometry::build_plane(
         half_width, half_depth,
@@ -34,9 +43,18 @@ pub(super) fn build_plane(args: &serde_json::Value) -> GeomResult {
 }
 
 pub(super) fn build_sphere(args: &serde_json::Value) -> GeomResult {
-    let radius = args.get("radius").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-    let rings = args.get("rings").and_then(|v| v.as_u64()).unwrap_or(12) as u32;
-    let segments = args.get("segments").and_then(|v| v.as_u64()).unwrap_or(16) as u32;
+    let radius = args
+        .get("radius")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(1.0) as f32;
+    let rings = args
+        .get("rings")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(12) as u32;
+    let segments = args
+        .get("segments")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(16) as u32;
     concinnity_core::geometry::build_sphere(radius, rings, segments)
 }
 

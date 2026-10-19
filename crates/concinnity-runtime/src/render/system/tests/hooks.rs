@@ -1,4 +1,4 @@
-//! The GraphicsSystem injection hooks for unit tests: a fixed GPU profile and a
+//! The `GraphicsSystem` injection hooks for unit tests: a fixed GPU profile and a
 //! factory that builds a core `RecordingBackend` in place of the real
 //! `init_backend`. A test's settings store is the `StoredSettings` resource it
 //! inserts into the world.

@@ -78,6 +78,7 @@ impl Rebase {
     }
 
     /// The move back out of the new frame.
+    #[must_use]
     pub fn inverse(&self) -> Self {
         let [x, y, z, w] = self.rotation;
         let rotation = [-x, -y, -z, w];
@@ -89,6 +90,7 @@ impl Rebase {
     }
 
     /// This move followed by `next`.
+    #[must_use]
     pub fn then(&self, next: &Self) -> Self {
         Self {
             rotation: quat_normalize(quat_mul(next.rotation, self.rotation)),

@@ -35,7 +35,7 @@ struct Counted {
 
 impl Counted {
     fn new(workers: usize) -> Self {
-        Counted {
+        Self {
             threads: Threads(workers),
             scopes: AtomicUsize::new(0),
         }

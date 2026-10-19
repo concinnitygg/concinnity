@@ -10,7 +10,7 @@
 //!              in host and device memory, against optional budgets
 //!   arena      a bump allocator for per-frame working memory
 //!   pool       fixed-capacity storage for a population that churns
-//!   inline_vec a sequence that keeps its first element inline, for the many
+//!   `inline_vec` a sequence that keeps its first element inline, for the many
 //!              per-entity collections that hold exactly one thing
 //!
 //! The counters measure the Rust heap, not "the engine". They see every

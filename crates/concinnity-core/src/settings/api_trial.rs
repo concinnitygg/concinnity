@@ -28,8 +28,8 @@ impl Step {
     /// The API this step gave up on, for a revert.
     pub fn reverted(self) -> Option<Platform> {
         match self {
-            Step::Revert(platform) => Some(platform),
-            Step::MarkTrying => None,
+            Self::Revert(platform) => Some(platform),
+            Self::MarkTrying => None,
         }
     }
 }

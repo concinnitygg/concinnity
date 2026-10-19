@@ -34,7 +34,7 @@
 //! in `SHADER_READ_ONLY_OPTIMAL` so the cull kernel reads it as a sampled image
 //! (set 1). A single shared image read one frame and written the next is
 //! hazard-free on a single queue: the executor's end-of-frame restore (GENERAL ->
-//! SHADER_READ_ONLY) orders the write before the next frame's cull read, and the
+//! `SHADER_READ_ONLY`) orders the write before the next frame's cull read, and the
 //! producer barrier derived from `Cull`'s declared pyramid read orders that read
 //! before this frame's write.
 
@@ -231,8 +231,8 @@ impl HiZResources {
     // from the init path when the GPU-cull pipeline is active. `target.depth_views`
     // are the per-frame main-depth views the phase-1 kernel reduces.
     pub(super) fn new(
-        ctx: HiZDeviceCtx,
-        target: HiZTarget,
+        ctx: HiZDeviceCtx<'_>,
+        target: HiZTarget<'_>,
         sample_count: u32,
         frames: usize,
         // When set, allocate the phase-2 cull-read sets + UBOs for two-pass
@@ -266,7 +266,7 @@ impl HiZResources {
         let push_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .offset(0)
-            .size(std::mem::size_of::<HizSpdParams>() as u32);
+            .size(size_of::<HizSpdParams>() as u32);
         let spd_pipeline_layout =
             create_pipeline_layout(device, spd_set_layout.handle(), push_range)?;
         let spd_tail_pipeline_layout =
@@ -285,7 +285,7 @@ impl HiZResources {
 
         // Per-frame cull-read uniform buffers (host-mapped). The phase-2 set
         // gets its own ring (`cull_ubos2`) when two-pass occlusion is active.
-        let ubo_size = std::mem::size_of::<CullHizParams>() as u64;
+        let ubo_size = size_of::<CullHizParams>() as u64;
         let alloc_ubo_ring = |count: usize| -> RenderResult<Vec<PooledBuffer>> {
             (0..count)
                 .map(|_| {
@@ -332,7 +332,11 @@ impl HiZResources {
     // to it. Resets the descriptor pool, so all Hi-Z sets are freshly
     // allocated; the cull-read UBO buffers themselves survive (only their
     // descriptors are rewritten). The caller must have idled the GPU.
-    fn create_image_and_sets(&mut self, ctx: HiZDeviceCtx, target: HiZTarget) -> RenderResult<()> {
+    fn create_image_and_sets(
+        &mut self,
+        ctx: HiZDeviceCtx<'_>,
+        target: HiZTarget<'_>,
+    ) -> RenderResult<()> {
         let HiZDeviceCtx {
             alloc,
             device,
@@ -436,7 +440,7 @@ impl HiZResources {
         }
         // Read sets: the all-mips Hi-Z view and the per-frame cull UBO; the
         // phase-2 sets bind the phase-2 ring.
-        let ubo_size = std::mem::size_of::<CullHizParams>() as u64;
+        let ubo_size = size_of::<CullHizParams>() as u64;
         for (&set, ubo) in read_sets.iter().zip(&self.cull_ubos) {
             write_read_set(device, set, sampled_view, ubo.buffer(), ubo_size);
         }
@@ -464,7 +468,11 @@ impl HiZResources {
     // pyramid retires through the allocator when the new one replaces it. The
     // caller flips `hiz_valid` to false so the next cull dispatch ignores the
     // now-stale pyramid.
-    pub(super) fn resize_to(&mut self, ctx: HiZDeviceCtx, target: HiZTarget) -> RenderResult<()> {
+    pub(super) fn resize_to(
+        &mut self,
+        ctx: HiZDeviceCtx<'_>,
+        target: HiZTarget<'_>,
+    ) -> RenderResult<()> {
         self.create_image_and_sets(ctx, target)
     }
 
@@ -669,7 +677,7 @@ pub(super) fn off_camera_read_set(
         hiz_mip_count: 1,
         hiz_enabled: 0,
     };
-    let size = std::mem::size_of::<CullHizParams>() as u64;
+    let size = size_of::<CullHizParams>() as u64;
     let ubo = alloc.create_buffer(
         size,
         vk::BufferUsageFlags::UNIFORM_BUFFER,

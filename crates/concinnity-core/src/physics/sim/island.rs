@@ -22,7 +22,7 @@ pub(crate) struct Islands {
 
 impl Islands {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
-        Islands {
+        Self {
             parent: (0..capacity as u32).collect(),
             rank: alloc::vec![0; capacity],
             ready: alloc::vec![true; capacity],

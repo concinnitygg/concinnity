@@ -60,7 +60,7 @@ pub fn face_view_matrix(eye: [f32; 3], face: usize) -> [[f32; 4]; 4] {
 
 /// Where one reflection probe is captured from and the influence box it serves.
 /// Backend-agnostic: the renderer bakes a cube at `position` and, for a surface
-/// inside [box_min, box_max], selects this probe and parallax-corrects against the
+/// inside [`box_min`, `box_max`], selects this probe and parallax-corrects against the
 /// box. Derived from a declared `ReflectionProbe` asset or `auto_seed_probes`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProbePlacement {
@@ -108,12 +108,12 @@ fn per_axis_blend_margin(box_min: [f32; 3], box_max: [f32; 3]) -> [f32; 3] {
 }
 
 impl From<&ReflectionProbe> for ProbePlacement {
-    fn from(probe: &ReflectionProbe) -> ProbePlacement {
-        ProbePlacement {
+    fn from(probe: &ReflectionProbe) -> Self {
+        Self {
             capture_distance: probe.capture_distance,
             blend_margin: uniform_blend_margin(probe.half_extents, probe.blend_distance),
             sky_fallback: probe.sky_fallback,
-            ..ProbePlacement::from_center_extents(probe.position, probe.half_extents)
+            ..Self::from_center_extents(probe.position, probe.half_extents)
         }
     }
 }
@@ -122,8 +122,8 @@ impl ProbePlacement {
     /// A placement captured from `position` without limit, whose box is
     /// `position` plus or minus `half_extents`, blending as a declared probe
     /// with no `blend_distance` does.
-    pub fn from_center_extents(position: [f32; 3], half_extents: [f32; 3]) -> ProbePlacement {
-        ProbePlacement {
+    pub fn from_center_extents(position: [f32; 3], half_extents: [f32; 3]) -> Self {
+        Self {
             position,
             box_min: core::array::from_fn(|i| position[i] - half_extents[i]),
             box_max: core::array::from_fn(|i| position[i] + half_extents[i]),
@@ -135,8 +135,8 @@ impl ProbePlacement {
 
     /// An auto-seeded placement captured from `position` without limit over the
     /// box `box_min..box_max`, blending over a margin per axis.
-    fn seeded(position: [f32; 3], box_min: [f32; 3], box_max: [f32; 3]) -> ProbePlacement {
-        ProbePlacement {
+    fn seeded(position: [f32; 3], box_min: [f32; 3], box_max: [f32; 3]) -> Self {
+        Self {
             position,
             box_min,
             box_max,
@@ -176,8 +176,8 @@ pub struct ProbeBakeQueue {
 
 impl ProbeBakeQueue {
     /// A queue seeded with `total` probes waiting to bake.
-    pub fn new(total: usize) -> ProbeBakeQueue {
-        ProbeBakeQueue { total, next: 0 }
+    pub fn new(total: usize) -> Self {
+        Self { total, next: 0 }
     }
 
     /// Whether any placement is still waiting to bake.
@@ -338,7 +338,7 @@ impl PrefilterPlan {
     /// a wide lobe without aliasing. The clamp matches the asset default, so a
     /// captured probe and an imported HDR suppress the same bright-square fringe.
     /// The faces are stored at [`PROBE_STORAGE_SCALE`].
-    pub const RUNTIME: PrefilterPlan = PrefilterPlan {
+    pub const RUNTIME: Self = Self {
         face_size: 512,
         mips: em::max_mip_count(512),
         samples: 128,
@@ -348,8 +348,8 @@ impl PrefilterPlan {
 
     /// A plan over `face_size` faces at `samples` GGX samples and firefly cap
     /// `clamp`. `face_size` must be a power of two of at least four.
-    pub const fn new(face_size: u32, samples: u32, clamp: f32) -> PrefilterPlan {
-        PrefilterPlan {
+    pub const fn new(face_size: u32, samples: u32, clamp: f32) -> Self {
+        Self {
             face_size,
             mips: em::max_mip_count(face_size),
             samples,
@@ -360,8 +360,9 @@ impl PrefilterPlan {
 
     /// This plan over a cube whose radiance is stored at `scale`: the firefly
     /// cap, given in absolute radiance, is applied at the same scale.
-    pub const fn stored_at(self, scale: f32) -> PrefilterPlan {
-        PrefilterPlan {
+    #[must_use]
+    pub const fn stored_at(self, scale: f32) -> Self {
+        Self {
             storage_scale: scale,
             ..self
         }
@@ -889,9 +890,8 @@ fn seed_interior_probes(
     if budget == 0 || occupancy.is_empty() {
         return Vec::new();
     }
-    let (vs, nx, ny, nz) = match interior_voxel_grid(aabb_min, aabb_max) {
-        Some(g) => g,
-        None => return Vec::new(),
+    let Some((vs, nx, ny, nz)) = interior_voxel_grid(aabb_min, aabb_max) else {
+        return Vec::new();
     };
     let solid = solid_from_aabbs(aabb_min, vs, nx, ny, nz, occupancy);
     interior_probes_from_solid(aabb_min, vs, nx, ny, nz, &solid, budget)
@@ -909,9 +909,8 @@ fn seed_interior_probes_tris(
     if budget == 0 || triangles.is_empty() {
         return Vec::new();
     }
-    let (vs, nx, ny, nz) = match interior_voxel_grid(aabb_min, aabb_max) {
-        Some(g) => g,
-        None => return Vec::new(),
+    let Some((vs, nx, ny, nz)) = interior_voxel_grid(aabb_min, aabb_max) else {
+        return Vec::new();
     };
     let solid = solid_from_triangles(aabb_min, vs, nx, ny, nz, triangles);
     interior_probes_from_solid(aabb_min, vs, nx, ny, nz, &solid, budget)

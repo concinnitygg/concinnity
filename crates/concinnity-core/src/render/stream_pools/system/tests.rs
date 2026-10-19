@@ -63,8 +63,8 @@ fn queues() -> RenderQueues {
 fn world_with_camera(position: [f32; 3], view_matrix: [[f32; 4]; 4]) -> World {
     let mut w = World::new();
     w.push(Camera3D {
-        position,
         view_matrix,
+        position,
         ..Camera3D::bake(Default::default())
     });
     w

@@ -9,9 +9,9 @@ use alloc::vec::Vec;
 /// Optional: a world with physics bodies but no `PhysicsConfig` simulates over a
 /// flat floor at Y = 0, and receives one carrying these values at start so the
 /// settings are a component rather than a fallback. Physics runs whenever the world
-/// declares a `PhysicsConfig`, a [RigidBody](#rigidbody), a
-/// [PropBody](#propbody), a [TriggerVolume](#triggervolume), or a
-/// [SkinnedMesh](#skinnedmesh) with a `capsule`.
+/// declares a `PhysicsConfig`, a [`RigidBody`](#rigidbody), a
+/// [`PropBody`](#propbody), a [`TriggerVolume`](#triggervolume), or a
+/// [`SkinnedMesh`](#skinnedmesh) with a `capsule`.
 ///
 /// Every [Terrain](#terrain) in the world is solid ground. A world with no
 /// terrain stands on a flat floor at Y = 0.

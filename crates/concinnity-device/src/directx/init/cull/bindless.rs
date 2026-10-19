@@ -98,12 +98,12 @@ pub(super) fn build_bindless_pass(
     let mut object_ptrs: Vec<*mut u8> = Vec::new();
     if n_cull > 0 {
         let object_buffer_size =
-            align256((n_cull * std::mem::size_of::<render_types::GpuObjectData>()) as u64);
+            align256((n_cull * size_of::<render_types::GpuObjectData>()) as u64);
         // `frames + 1`: the extra slot (index `frames`) is reserved for the
         // asynchronous reflection-probe capture, which builds its CPU-written
         // bindless buffers into a slot the frame never touches (it uses
         // `[0, frames)`). See `directx/probe.rs::bake_ring_slot`.
-        for _ in 0..gpu.hw.frames() + 1 {
+        for _ in 0..=gpu.hw.frames() {
             let buf = gpu.hw.alloc.alloc_buffer(
                 object_buffer_size,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -112,9 +112,9 @@ pub(super) fn build_bindless_pass(
             let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
+            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "map object buffer"))?;
-            object_ptrs.push(ptr as *mut u8);
+            object_ptrs.push(ptr.cast::<u8>());
             object_buffers.push(buf);
         }
     }

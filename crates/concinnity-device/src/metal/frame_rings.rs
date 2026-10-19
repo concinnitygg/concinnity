@@ -268,7 +268,7 @@ mod tests {
         for _ in 0..8 {
             let again = ring.write(&device, 0, &[7u8; 64]).expect("repeat write");
             assert!(
-                std::ptr::eq(&*first, &*again),
+                std::ptr::eq(&raw const *first, &raw const *again),
                 "a slot that already fits must not reallocate"
             );
         }
@@ -301,7 +301,7 @@ mod tests {
         let mut ring = TransientRing::new(2);
         let a = ring.write(&device, 0, &[1u8; 48]).expect("slot 0");
         let b = ring.write(&device, 1, &[2u8; 48]).expect("slot 1");
-        assert!(!std::ptr::eq(&*a, &*b));
+        assert!(!std::ptr::eq(&raw const *a, &raw const *b));
         assert_eq!(read_back(&a, 48), vec![1u8; 48]);
         assert_eq!(read_back(&b, 48), vec![2u8; 48]);
     }
@@ -316,7 +316,10 @@ mod tests {
         let mut ring = TransientRing::new(2);
         let a = ring.write(&device, 0, &[1u8; 16]).expect("frame 0");
         let c = ring.write(&device, 2, &[3u8; 16]).expect("frame 2");
-        assert!(std::ptr::eq(&*a, &*c), "frame 2 must reuse slot 0");
+        assert!(
+            std::ptr::eq(&raw const *a, &raw const *c),
+            "frame 2 must reuse slot 0"
+        );
     }
 
     // A slot that outgrows its buffer reallocates, and the new one holds the
@@ -334,7 +337,7 @@ mod tests {
         assert!(big.length() > small_len);
         let shrunk = ring.write(&device, 0, &[5u8; 8]).expect("small again");
         assert!(
-            std::ptr::eq(&*big, &*shrunk),
+            std::ptr::eq(&raw const *big, &raw const *shrunk),
             "a grown slot must not be reallocated by a smaller write"
         );
     }

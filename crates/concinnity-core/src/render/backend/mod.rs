@@ -362,7 +362,7 @@ mod tests {
         });
 
         // Live look + input tunable no-ops.
-        backend.set_keymap(&KeyMap::default());
+        backend.set_keymap(KeyMap::default());
         let graphics = crate::settings::ResolvedGraphics::default();
         let mut plan =
             crate::settings::apply::ApplyPlan::live(crate::settings::apply::LiveChanges {
@@ -387,7 +387,7 @@ mod tests {
         // A bucket with no per-bucket pipeline to build is resident as-is.
         assert!(
             backend
-                .install_world_shader(1, &crate::components::ShaderPrograms::default(), None)
+                .install_world_shader(1, &ShaderPrograms::default(), None)
                 .is_ok()
         );
     }
@@ -499,11 +499,7 @@ mod tests {
     // default `reload_world`. Empty slices are `'static`; the only real borrow
     // is the window args.
     fn empty_backend_init(window: &crate::components::Window) -> BackendInit<'_> {
-        BackendInit::minimal(
-            crate::platform::Platform::Metal,
-            window,
-            alloc::vec::Vec::new(),
-        )
+        BackendInit::minimal(crate::platform::Platform::Metal, window, vec::Vec::new())
     }
 
     fn stub_decal() -> crate::render::decal::DecalRecord {

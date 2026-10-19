@@ -1,9 +1,10 @@
-//! Screen-space effect construction: the MetalFX upscaler, TAA, SSAO, SSR, the
+//! Screen-space effect construction: the `MetalFX` upscaler, TAA, SSAO, SSR, the
 //! unified G-buffer pre-pass, SSGI, and auto-exposure. Each is gated on its
 //! world setting so a world that disables an effect pays zero construction cost,
 //! and the runtime quality rebuild calls the same builders.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use crate::metal::post::upscale::UpscaleJitter;
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::auto_exposure::{AutoExposureSettings, ExposureAdaptation};
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -139,7 +140,7 @@ pub(super) fn build_upscale(
     UpscaleState {
         scaler: upscaler,
         scale,
-        jitter: Default::default(),
+        jitter: UpscaleJitter::default(),
         reset: Default::default(),
     }
 }
@@ -167,7 +168,7 @@ pub(super) fn post_device<'a>(
 // (the MetalFX scaler does temporal accumulation itself). Its targets are
 // sized at render-resolution to match the scene texture they sample.
 pub(in crate::metal) fn build_taa(
-    post_device: &MtlPostDevice,
+    post_device: &MtlPostDevice<'_>,
     enabled: bool,
     render: (u32, u32),
 ) -> RenderResult<TaaState> {
@@ -184,7 +185,7 @@ pub(in crate::metal) fn build_taa(
 // unified G-buffer pre-pass, so SSAO builds no pre-pass of its own; the white
 // fallback is always present.
 pub(in crate::metal) fn build_ssao(
-    post_device: &MtlPostDevice,
+    post_device: &MtlPostDevice<'_>,
     alloc: &DeviceAllocator,
     settings: &EffectSettings,
     render: (u32, u32),
@@ -211,7 +212,7 @@ pub(in crate::metal) fn build_ssao(
 // target too). The shared resolve is built only when SSR itself is on, and the
 // composite that blends the target over the scene when SSR or RT is.
 pub(in crate::metal) fn build_ssr(
-    post_device: &MtlPostDevice,
+    post_device: &MtlPostDevice<'_>,
     settings: &EffectSettings,
     render: (u32, u32),
 ) -> RenderResult<SsrState> {
@@ -286,7 +287,7 @@ pub(in crate::metal) fn build_gbuffer(
 // SSGI: the shared pyramid, trace and composite. Built only when SSGI is on;
 // the trace reads the G-buffer the pre-pass fills.
 pub(in crate::metal) fn build_ssgi(
-    post_device: &MtlPostDevice,
+    post_device: &MtlPostDevice<'_>,
     settings: &EffectSettings,
     render: (u32, u32),
 ) -> RenderResult<SsgiState> {
@@ -344,7 +345,7 @@ pub(in crate::metal) fn build_auto_exposure(
 fn make_auto_exposure_histogram(
     device: &ProtocolObject<dyn MTLDevice>,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
-    let hist_bytes = vec![0u8; std::mem::size_of::<u32>() * auto_exposure::HISTOGRAM_BINS];
+    let hist_bytes = vec![0u8; size_of::<u32>() * auto_exposure::HISTOGRAM_BINS];
     // SAFETY: the pointer and length describe the live `hist_bytes` allocation, and Metal copies
     // those bytes into the new buffer before the call returns.
     unsafe {
@@ -364,7 +365,7 @@ fn make_auto_exposure_histogram(
 fn make_auto_exposure_output(
     device: &ProtocolObject<dyn MTLDevice>,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
-    let out_bytes = vec![0u8; std::mem::size_of::<ExposureMeasurement>()];
+    let out_bytes = vec![0u8; size_of::<ExposureMeasurement>()];
     // SAFETY: the pointer and length describe the live `out_bytes` allocation, and Metal copies
     // those bytes into the new buffer before the call returns.
     unsafe {

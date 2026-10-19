@@ -113,6 +113,7 @@ impl LocalFrame {
 impl LocalFrame {
     /// The frame a world in this one moved to by `rebase`: the same authored
     /// point under every carried local point.
+    #[must_use]
     pub fn followed(&self, rebase: &Rebase) -> Self {
         // new = R old + t, so old = R^T (new - t).
         let r = dvec::mat_of_quat(rebase.rotation);

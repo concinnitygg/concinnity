@@ -9,6 +9,8 @@
 //     cargo test -p concinnity-core --release -- --ignored --nocapture \
 //         --test-threads=1 render_extraction
 
+use crate::animation::pose_scratch::PoseScratch;
+use crate::animation::proportions::ProportionLayer;
 use alloc::format;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -70,9 +72,9 @@ fn pose_world(count: usize) -> World {
                 joint_matrices: vec![model_at(i); JOINTS],
                 morph_weights: Vec::new(),
                 morph_base: Vec::new(),
-                proportions: Default::default(),
+                proportions: ProportionLayer::default(),
                 updated: true,
-                scratch: Default::default(),
+                scratch: PoseScratch::default(),
             },
         );
     }

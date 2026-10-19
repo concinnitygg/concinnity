@@ -1,5 +1,5 @@
 //! The debug-build access validator: installs the core `access_check` hooks,
-//! keeping the stepping system's declared access per thread (core is no_std and
+//! keeping the stepping system's declared access per thread (core is `no_std` and
 //! holds no per-thread state). `World::step` announces the stepping system
 //! through one hook; every context accessor's touch is verified against it
 //! through the other.
@@ -29,7 +29,7 @@ pub(crate) fn install_hook() {
 }
 
 fn check(touch: &Touch) {
-    if let Some((access, system)) = ACTIVE.with(|a| a.get()) {
+    if let Some((access, system)) = ACTIVE.with(std::cell::Cell::get) {
         access_check::verify(access, system, touch);
     }
 }

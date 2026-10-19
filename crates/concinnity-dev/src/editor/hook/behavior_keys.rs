@@ -1,4 +1,4 @@
-//! EditorHook: the Behavior panel's keyboard. `frame_keys` reaches the frontmost
+//! `EditorHook`: the Behavior panel's keyboard. `frame_keys` reaches the frontmost
 //! open panel only, so these bindings never compete with another panel's, and a
 //! key is one press rather than a held state -- one press is one step.
 //!
@@ -95,7 +95,7 @@ impl EditorHook {
             InputKey::Enter => self.commit_behavior_key(world),
             _ if self.behavior.name_focus => {}
             InputKey::Tab => {
-                self.apply_behavior_action(BehaviorAction::ToggleView, world, [0.0, 0.0])
+                self.apply_behavior_action(BehaviorAction::ToggleView, world, [0.0, 0.0]);
             }
             // Left and Right belong to the caret while the value field holds
             // the keyboard.

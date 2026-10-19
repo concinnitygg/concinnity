@@ -34,7 +34,7 @@ pub fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()> {
         };
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            format!("no asset named '{}' in the expanded world{}", name, hint),
+            format!("no asset named '{name}' in the expanded world{hint}"),
         ));
     };
 

@@ -1,19 +1,19 @@
-//! Compiles an EnvironmentMap component's args into a payload bundling two
+//! Compiles an `EnvironmentMap` component's args into a payload bundling two
 //! precomputed IBL cubemaps:
 //!
 //!   - **Irradiance cubemap.** Low-resolution (32x32 per face by default)
 //!     cosine-weighted hemisphere integral of the source. Used by the shader's
 //!     diffuse ambient term: `diffuse = (1-F)(1-metallic) * irradiance * albedo / π`.
 //!   - **Prefiltered radiance cubemap.** A mip chain where mip 0 = source and
-//!     mip N = source convolved with the GGX lobe at roughness = N / (mip_count - 1).
+//!     mip N = source convolved with the GGX lobe at roughness = N / (`mip_count` - 1).
 //!     Used with the Karis env-BRDF analytic fit (already in every fragment shader
 //!     as `env_brdf_approx`) for the specular ambient term.
 //!
 //! A BRDF LUT is deliberately NOT shipped: the Karis polynomial fit
-//! (`env_brdf_approx` in main_shading.hlsl) replaces
+//! (`env_brdf_approx` in `main_shading.hlsl`) replaces
 //! it analytically. That keeps one binding slot free and dodges a build step.
 //!
-//! Source format: equirectangular Radiance HDR (.hdr), same as CubemapTexture.
+//! Source format: equirectangular Radiance HDR (.hdr), same as `CubemapTexture`.
 //! Sampling: Hammersley QMC + GGX importance sampling for prefilter, uniform
 //! (phi, theta) grid for irradiance.
 //!
@@ -23,18 +23,18 @@
 //!
 //! Payload format (little-endian):
 //!   u32  magic              = b"ENVM" = 0x4D564E45
-//!   u32  format_id          = 0  (RGBA32F)
-//!   u32  irradiance_face    (e.g. 32)
-//!   u32  prefilter_face     (mip 0 size, e.g. 512)
-//!   u32  prefilter_mips     (e.g. 5)
+//!   u32  `format_id`          = 0  (RGBA32F)
+//!   u32  `irradiance_face`    (e.g. 32)
+//!   u32  `prefilter_face`     (mip 0 size, e.g. 512)
+//!   u32  `prefilter_mips`     (e.g. 5)
 //!   u32  _pad
-//!   ... irradiance cube         (6 * irradiance_face² * 16 bytes)
-//!   ... prefilter mip 0         (6 * prefilter_face² * 16 bytes)
-//!   ... prefilter mip 1         (6 * (prefilter_face/2)² * 16 bytes)
+//!   ... irradiance cube         (6 * `irradiance_face²` * 16 bytes)
+//!   ... prefilter mip 0         (6 * `prefilter_face²` * 16 bytes)
+//!   ... prefilter mip 1         (6 * (`prefilter_face/2)²` * 16 bytes)
 //!   ...
-//!   ... prefilter mip (mips-1)  (6 * (prefilter_face >> (mips-1))² * 16 bytes)
+//!   ... prefilter mip (mips-1)  (6 * (`prefilter_face` >> (mips-1))² * 16 bytes)
 //!
-//! Face order matches CubemapTexture: +X, -X, +Y, -Y, +Z, -Z.
+//! Face order matches `CubemapTexture`: +X, -X, +Y, -Y, +Z, -Z.
 
 pub mod bake;
 pub mod source;
@@ -63,15 +63,13 @@ pub fn check_sizes(map: &crate::components::EnvironmentMap) -> Result<(), String
     let prefilter_face = map.prefilter_face_size;
     if !(16..=1024).contains(&prefilter_face) || !prefilter_face.is_power_of_two() {
         return Err(format!(
-            "EnvironmentMap prefilter_face_size {} must be a power of two in 16..=1024",
-            prefilter_face
+            "EnvironmentMap prefilter_face_size {prefilter_face} must be a power of two in 16..=1024"
         ));
     }
     let irradiance_face = map.irradiance_face_size;
     if !(8..=128).contains(&irradiance_face) || !irradiance_face.is_power_of_two() {
         return Err(format!(
-            "EnvironmentMap irradiance_face_size {} must be a power of two in 8..=128",
-            irradiance_face
+            "EnvironmentMap irradiance_face_size {irradiance_face} must be a power of two in 8..=128"
         ));
     }
     if !map.prefilter_clamp.is_finite() || map.prefilter_clamp < 0.0 {
@@ -92,7 +90,7 @@ pub fn cube_mip_byte_len(face_size: u32, mip: usize) -> Result<usize, String> {
             "cube mip {mip} has no texels (face size {face_size})"
         ));
     }
-    crate::decode::checked_product("cube mip", &[6, face, face, 16])
+    checked_product("cube mip", &[6, face, face, 16])
 }
 
 /// Number of mip levels for a square cube face of `face_size` pixels. The
@@ -142,7 +140,7 @@ pub fn serialize_payload(
     buf
 }
 
-/// Metadata read from a serialized EnvironmentMap payload. The byte ranges
+/// Metadata read from a serialized `EnvironmentMap` payload. The byte ranges
 /// point into the payload buffer so the runtime can upload them directly.
 #[derive(Debug)]
 pub struct EnvMapView<'a> {
@@ -175,15 +173,14 @@ pub fn deserialize(bytes: &[u8]) -> Result<EnvMapView<'_>, String> {
     )?;
     let format = r.u32()?;
     if format != ENVMAP_FORMAT_RGBA32F {
-        return Err(format!("envmap format_id {} unsupported", format));
+        return Err(format!("envmap format_id {format} unsupported"));
     }
     let irradiance_face = r.u32()?;
     let prefilter_face = r.u32()?;
     let prefilter_mips = r.u32()?;
     if prefilter_mips == 0 || prefilter_mips > 12 {
         return Err(format!(
-            "envmap prefilter_mips {} out of range",
-            prefilter_mips
+            "envmap prefilter_mips {prefilter_mips} out of range"
         ));
     }
     // Face edges are payload-supplied, so each section's footprint is checked
@@ -267,7 +264,7 @@ mod tests {
     fn rejects_a_payload_shorter_than_the_header() {
         let full = header_only(4, 8, 2);
         for len in 0..ENVMAP_PAYLOAD_HEADER_BYTES {
-            assert!(deserialize(&full[..len]).is_err(), "len {} decoded", len);
+            assert!(deserialize(&full[..len]).is_err(), "len {len} decoded");
         }
     }
 

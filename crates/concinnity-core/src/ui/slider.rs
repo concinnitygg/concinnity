@@ -23,7 +23,7 @@ impl UiInputSystem {
         input: &FrameInput,
         active_screen: Option<AssetId>,
         overlay: &OverlayTransform,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
     ) {
         // Slider tracks are overlay UI: map the cursor to reference space.
         let (qx, qy) = overlay.inverse(input.mouse_x, input.mouse_y);

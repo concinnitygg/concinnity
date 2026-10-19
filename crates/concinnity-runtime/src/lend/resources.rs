@@ -9,7 +9,7 @@ use concinnity_core::platform::CompiledPlatforms;
 use concinnity_core::settings::{SettingsRevision, StoredSettings};
 use concinnity_host::store::paths::StateTree;
 
-pub(crate) fn publish(ctx: &mut PipelineContext) {
+pub(crate) fn publish(ctx: &mut PipelineContext<'_>) {
     insert_absent(ctx, || Clock(concinnity_host::clock::monotonic_micros));
     // Systems fan out on the job pool unless the launch chose a serial schedule.
     insert_absent(ctx, || ScheduleMode::Parallel);
@@ -25,7 +25,10 @@ pub(crate) fn publish(ctx: &mut PipelineContext) {
     insert_absent(ctx, SettingsRevision::default);
 }
 
-fn insert_absent<T: core::any::Any + Send>(ctx: &mut PipelineContext, value: impl FnOnce() -> T) {
+fn insert_absent<T: core::any::Any + Send>(
+    ctx: &mut PipelineContext<'_>,
+    value: impl FnOnce() -> T,
+) {
     if ctx.resource::<T>().is_none() {
         ctx.insert_resource(value());
     }

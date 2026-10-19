@@ -2,7 +2,7 @@ use crate::ecs::asset_id::AssetId;
 
 /// Runtime-only event published by the camera controller when the interact
 /// key fires on an Interactable entity: `target` is the entity's declared
-/// name. BehaviorSystem reads these from its `Events<InteractEvent>` queue
+/// name. `BehaviorSystem` reads these from its `Events<InteractEvent>` queue
 /// each step (one tick after the press, since the controller runs later in
 /// the schedule). World authors never declare this type directly.
 #[derive(Debug, Clone, Copy)]

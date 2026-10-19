@@ -31,7 +31,7 @@ pub(crate) struct Closest {
 
 impl Closest {
     fn of(point: Vec3, keep: &[usize], weights: &[f32]) -> Self {
-        let mut out = Closest {
+        let mut out = Self {
             point,
             keep: [0; 4],
             weights: [0.0; 4],
@@ -407,7 +407,7 @@ mod tests {
         let closest = check(&[a, b, c], vec3(1.0, 0.0, 0.0));
         assert_eq!(closest.count, 2, "{closest:?}");
         let mut kept = [closest.keep[0], closest.keep[1]];
-        kept.sort();
+        kept.sort_unstable();
         assert_eq!(kept, [1, 2], "B and C carry the closest point");
     }
 
@@ -419,12 +419,12 @@ mod tests {
     fn a_nearly_flat_tetrahedron_answers_from_the_face_the_origin_is_over() {
         let closest = check(
             &[
-                vec3(0.2654016, 1.0824523, 0.23114085),
-                vec3(-1.1327431, -1.5666139, 0.39738476),
-                vec3(0.019010901, -2.113846, 1.3638213),
-                vec3(1.4171555, 0.5352202, 1.1975772),
+                vec3(0.265_401_6, 1.082_452_3, 0.231_140_85),
+                vec3(-1.132_743_1, -1.566_613_9, 0.397_384_76),
+                vec3(0.019_010_901, -2.113_846, 1.363_821_3),
+                vec3(1.417_155_5, 0.535_220_2, 1.197_577_2),
             ],
-            vec3(-0.2032617, 0.12699336, 0.31414604),
+            vec3(-0.203_261_7, 0.126_993_36, 0.314_146_04),
         );
         assert!(!closest.encloses_origin);
         assert_eq!(closest.count, 3, "{closest:?}");

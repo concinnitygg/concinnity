@@ -6,7 +6,7 @@ use crate::ecs::Ref;
 /// A responsive invisible rectangular region in screen space.
 ///
 /// When clicked, fires an `action`. When hovered, it optionally restyles a
-/// referenced [TextLabel](#textlabel) (color and/or scale).
+/// referenced [`TextLabel`](#textlabel) (color and/or scale).
 ///
 /// The cursor must be free (not captured for camera control) for events to fire.
 ///
@@ -42,7 +42,7 @@ pub struct HitRegion {
     /// Height of the region in window pixels.
     #[asset(default = 40.0)]
     pub height: f32,
-    /// A [TextLabel](#textlabel) to style on hover. `None` = no label effect.
+    /// A [`TextLabel`](#textlabel) to style on hover. `None` = no label effect.
     pub label: Option<Ref<TextLabel>>,
     /// RGB color applied to the label while hovered. `None` = no change.
     pub hover_color: Option<[f32; 3]>,

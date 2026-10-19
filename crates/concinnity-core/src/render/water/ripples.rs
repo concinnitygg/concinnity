@@ -82,7 +82,7 @@ pub fn ripples(wind_direction: [f32; 2], longest: f32) -> [Ripple; RIPPLES] {
 // The fractional part of `r` golden-ratio steps past 0.2: the headings spread
 // evenly however many octaves there are.
 fn golden_fraction(r: usize) -> f32 {
-    let x = r as f32 * 0.618034 + 0.2;
+    let x = r as f32 * 0.618_034 + 0.2;
     x - floor(x)
 }
 

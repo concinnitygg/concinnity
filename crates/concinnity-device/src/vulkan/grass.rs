@@ -303,7 +303,7 @@ pub(in crate::vulkan) struct GrassResources {
 
 // Bytes of a buffer of `count` blades, at least one.
 fn blades_bytes(count: u32) -> u64 {
-    u64::from(count.max(1)) * std::mem::size_of::<GpuGrassBlade>() as u64
+    u64::from(count.max(1)) * size_of::<GpuGrassBlade>() as u64
 }
 
 // A device-local buffer of `bytes` of blades.
@@ -337,7 +337,7 @@ fn uniform_blocks(
 
 // A device-local buffer of `bytes` the kernels write, zeroed.
 fn zeroed_storage(
-    gpu: &GpuUploadContext,
+    gpu: &GpuUploadContext<'_>,
     bytes: u64,
     usage: vk::BufferUsageFlags,
 ) -> RenderResult<PooledBuffer> {
@@ -364,7 +364,7 @@ impl GrassResources {
     }
 
     pub(in crate::vulkan) fn build(
-        gpu: GpuUploadContext,
+        gpu: GpuUploadContext<'_>,
         field: GrassField,
         passes: GrassPassLayouts<'_>,
         targets: GrassTargets,
@@ -441,13 +441,12 @@ impl GrassResources {
             storage,
         )?;
 
-        let params_bytes = std::mem::size_of::<GrassParams>() as u64;
-        let bend_params_bytes = std::mem::size_of::<GrassBendParams>() as u64;
+        let params_bytes = size_of::<GrassParams>() as u64;
+        let bend_params_bytes = size_of::<GrassBendParams>() as u64;
         let params = uniform_blocks(alloc, params_bytes, frames)?;
         let shadow_params = uniform_blocks(alloc, params_bytes, frames)?;
         let bend_params = uniform_blocks(alloc, bend_params_bytes, frames)?;
-        let planet_bytes =
-            (FRAME_PLANET_TILE_RECORDS * std::mem::size_of::<PlanetGrassTileGpu>()) as u64;
+        let planet_bytes = (FRAME_PLANET_TILE_RECORDS * size_of::<PlanetGrassTileGpu>()) as u64;
         let planet_tiles = (0..frames)
             .map(|_| {
                 alloc.create_buffer(
@@ -457,7 +456,7 @@ impl GrassResources {
                 )
             })
             .collect::<RenderResult<Vec<_>>>()?;
-        let tile_bytes = (FRAME_TILE_RECORDS * std::mem::size_of::<GrassTileGpu>()) as u64;
+        let tile_bytes = (FRAME_TILE_RECORDS * size_of::<GrassTileGpu>()) as u64;
         let tiles = (0..frames)
             .map(|_| {
                 alloc.create_buffer(
@@ -1070,14 +1069,19 @@ impl VkContext {
             // SAFETY: `cmd` is a command buffer in the recording state and the query pool is live;
             // the frame's query block was reset at the frame's start.
             unsafe {
-                device.cmd_write_timestamp(cmd, vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, start)
+                device.cmd_write_timestamp(
+                    cmd,
+                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                    pool,
+                    start,
+                );
             };
         }
         record();
         if let Some((pool, (_, end))) = stamps {
             // SAFETY: as above.
             unsafe {
-                device.cmd_write_timestamp(cmd, vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, end)
+                device.cmd_write_timestamp(cmd, vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, end);
             };
         }
     }

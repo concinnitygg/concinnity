@@ -209,7 +209,7 @@ mod tests {
     fn a_planar_grid_interpolates_exactly() {
         let g = ramp();
         for &(x, z) in &[(-1.5, -0.75), (0.5, 0.9), (1.9, -0.1), (-0.2, 0.3)] {
-            let expected = (x + 2.0) / 2.0 + 10.0 * (z + 1.0);
+            let expected = f32::midpoint(x, 2.0) + 10.0 * (z + 1.0);
             let h = g.height_at([x, z]).unwrap();
             assert!((h - expected).abs() < 1e-4, "({x}, {z}): {h} vs {expected}");
             let [dx, dz] = g.slope_at([x, z]).unwrap();

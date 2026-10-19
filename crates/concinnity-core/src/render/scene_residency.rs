@@ -259,8 +259,8 @@ mod tests {
         // Setup blocks every owned member; the first sync then unblocks the
         // pinned scene's members and leaves the rest blocked (no changes).
         let mut r = residency();
-        let all: Vec<Member> = r.all_members().collect();
-        assert_eq!(all.len(), 4);
+
+        assert_eq!(r.all_members().count(), 4);
         let changes = r.sync_pins(&[AssetId(1)]);
         assert_eq!(
             changes.unblocked,

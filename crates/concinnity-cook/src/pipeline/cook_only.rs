@@ -29,7 +29,7 @@ pub(in crate::pipeline) fn cook_only_textures(assets: &[WorldJsonlAsset]) -> Has
     }
     cooked
         .difference(&sampled)
-        .map(|name| name.to_string())
+        .map(ToString::to_string)
         .collect()
 }
 

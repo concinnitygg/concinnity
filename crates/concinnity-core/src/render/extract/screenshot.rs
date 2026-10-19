@@ -3,6 +3,7 @@
 
 use alloc::format;
 use alloc::string::{String, ToString};
+use core::fmt::Write as _;
 
 use crate::camera_track::CameraTrackStatus;
 use crate::ecs::PipelineContext;
@@ -51,7 +52,7 @@ impl ScreenshotBurst {
 // something else; the burst ends with its last frame.
 pub(super) fn schedule(
     burst: &mut Option<ScreenshotBurst>,
-    ctx: &PipelineContext,
+    ctx: &PipelineContext<'_>,
     snap: &mut RenderSnapshot,
     frame: u64,
 ) {
@@ -81,11 +82,11 @@ fn file_name(
     let mut name = stamp.to_string();
     if let Some((index, count)) = shot {
         let width = count.to_string().len();
-        name.push_str(&format!("-{index:0width$}of{count}"));
+        let _ = write!(name, "-{index:0width$}of{count}");
     }
-    name.push_str(&format!("-frame{frame}"));
+    let _ = write!(name, "-frame{frame}");
     if let Some(seconds) = track_seconds {
-        name.push_str(&format!("-track{seconds:.2}s"));
+        let _ = write!(name, "-track{seconds:.2}s");
     }
     name.push_str(".png");
     name

@@ -149,7 +149,7 @@ impl CameraTrackSystem {
 
     // Write the pose the track holds at the pose time onto the camera, and
     // publish where the track has reached.
-    fn apply(&mut self, ctx: &mut PipelineContext) {
+    fn apply(&mut self, ctx: &mut PipelineContext<'_>) {
         self.advance();
         let elapsed = self.elapsed();
         let angles = timeline::sample(self.start_angles_deg, &self.turn, self.pose_seconds);
@@ -170,7 +170,7 @@ impl CameraTrackSystem {
 }
 
 impl System for CameraTrackSystem {
-    fn init(&mut self, ctx: &mut PipelineContext) {
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
         if let Some((entity, camera)) = ctx.query_with_entity::<Camera3D>().next() {
             self.camera = Some(entity);
             self.start_position = camera.position;
@@ -182,7 +182,7 @@ impl System for CameraTrackSystem {
         self.apply(ctx);
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         if ctx.resource::<MenuActive>().is_some_and(|m| m.0) {
             return StepResult::Continue;
         }

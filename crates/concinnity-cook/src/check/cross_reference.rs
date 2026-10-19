@@ -193,7 +193,7 @@ pub(crate) fn validate_cross_references(assets: &[WorldJsonlAsset]) -> Result<()
 
     // Detect cycles in the Prop parent chain. This is a graph-global pass, so
     // it stays in the validator rather than the per-asset trait.
-    let prop_parent_map: std::collections::HashMap<&str, &str> = assets
+    let prop_parent_map: HashMap<&str, &str> = assets
         .iter()
         .filter(|a| a.asset_type == RegisteredType::Prop)
         .filter_map(|a| {
@@ -206,15 +206,16 @@ pub(crate) fn validate_cross_references(assets: &[WorldJsonlAsset]) -> Result<()
         })
         .collect();
 
-    for &start in prop_parent_map.keys() {
-        let mut visited = std::collections::HashSet::new();
+    let mut starts: Vec<&str> = prop_parent_map.keys().copied().collect();
+    starts.sort_unstable();
+    for start in starts {
+        let mut visited = HashSet::new();
         let mut current = start;
         visited.insert(current);
         while let Some(&parent) = prop_parent_map.get(current) {
             if !visited.insert(parent) {
                 errors.push(format!(
-                    "Prop '{}': parent chain contains a cycle (via '{}')",
-                    start, parent
+                    "Prop '{start}': parent chain contains a cycle (via '{parent}')"
                 ));
                 break;
             }
@@ -248,7 +249,7 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     }
 
     // Animation name -> its target SkinnedMesh name.
-    let clip_targets: std::collections::HashMap<&str, &str> = assets
+    let clip_targets: HashMap<&str, &str> = assets
         .iter()
         .filter(|a| a.asset_type == RegisteredType::Animation)
         .map(|a| {
@@ -257,7 +258,7 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
         })
         .collect();
 
-    let mut owner_by_mesh: std::collections::HashMap<&str, &str> = Default::default();
+    let mut owner_by_mesh: HashMap<&str, &str> = HashMap::default();
     for graph in &graphs {
         let mesh = graph
             .args
@@ -280,8 +281,8 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
             .args
             .get("states")
             .and_then(|v| v.as_array())
-            .map(|a| a.as_slice())
-            .unwrap_or(&[])
+            .map(Vec::as_slice)
+            .unwrap_or_default()
         {
             // Single-clip and blendspace members alike; a state naming no
             // clips at all is already reported by cross_refs.
@@ -299,7 +300,9 @@ fn check_graph_ownership(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
             }
         }
 
-        for (&clip, &clip_target) in &clip_targets {
+        let mut by_clip: Vec<(&str, &str)> = clip_targets.iter().map(|(&c, &t)| (c, t)).collect();
+        by_clip.sort_unstable();
+        for (clip, clip_target) in by_clip {
             if clip_target == mesh && !referenced.contains(clip) {
                 errors.push(format!(
                     "Animation '{}': targets SkinnedMesh '{}', which AnimationGraph '{}' drives, \

@@ -13,9 +13,9 @@ pub(crate) enum Platform {
 impl Platform {
     pub(crate) const fn current() -> Self {
         if cfg!(target_os = "macos") {
-            Platform::Mac
+            Self::Mac
         } else {
-            Platform::Other
+            Self::Other
         }
     }
 }

@@ -61,14 +61,14 @@ impl Role {
     /// Whether contact can change this body's motion. A contact pair where
     /// neither side responds is never worth reporting.
     fn responds(self) -> bool {
-        self == Role::Dynamic
+        self == Self::Dynamic
     }
 
     /// Whether this body can be somewhere: it either crosses a sensor or is
     /// one. Immovable geometry is the world rather than something in it, so
     /// it crosses nothing.
     fn crosses(self) -> bool {
-        self != Role::Static
+        self != Self::Static
     }
 }
 
@@ -150,7 +150,7 @@ impl SweepPrune {
             },
             role: Role::Static,
         };
-        SweepPrune {
+        Self {
             proxies: alloc::vec![empty; capacity],
             order: Vec::with_capacity(capacity),
             axis: 0,
@@ -351,7 +351,7 @@ impl SweepPrune {
         let count = self.order.len();
         let workers = workers.min(self.scans.len());
         if workers < 2 || count < MIN_FANOUT_PROXIES {
-            let SweepPrune {
+            let Self {
                 proxies,
                 order,
                 axis,
@@ -361,7 +361,7 @@ impl SweepPrune {
             } = self;
             scan_range(proxies, order, *axis, 0, count, pairs, sensor_pairs);
         } else {
-            let SweepPrune {
+            let Self {
                 proxies,
                 order,
                 axis,

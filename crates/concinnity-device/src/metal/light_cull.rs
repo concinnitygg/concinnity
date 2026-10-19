@@ -1,5 +1,5 @@
 //! Clustered binning compute pass. Once per frame, before the Main pass, bins
-//! the scene's local lights (the GpuLight buffer bound at fragment buffer(8)) into
+//! the scene's local lights (the `GpuLight` buffer bound at fragment buffer(8)) into
 //! per-cluster light lists and the reflection probes' influence boxes into
 //! per-cluster probe masks, over a screen-tiled, exponential-depth froxel grid.
 //! The forward, SSR and transparent passes then shade from only a fragment's
@@ -99,7 +99,7 @@ pub(super) fn build_light_cull_pipeline(
 pub(in crate::metal) fn build_cluster_light_buffer(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
 ) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>> {
-    let len = CLUSTER_LIST_LEN as usize * std::mem::size_of::<u32>();
+    let len = CLUSTER_LIST_LEN as usize * size_of::<u32>();
     device
         .newBufferWithLength_options(len, MTLResourceOptions::StorageModePrivate)
         .ok_or_else(|| allocation_failed("cluster light buffer"))

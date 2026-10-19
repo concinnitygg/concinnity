@@ -55,10 +55,10 @@ impl Family {
     /// The variant define selecting this family.
     pub fn define(self) -> &'static str {
         match self {
-            Family::Surface => "RAYMARCH_SURFACE",
-            Family::Volumetric => "RAYMARCH_VOLUMETRIC",
-            Family::Shadow => "RAYMARCH_SHADOW",
-            Family::Prepass => "RAYMARCH_PREPASS",
+            Self::Surface => "RAYMARCH_SURFACE",
+            Self::Volumetric => "RAYMARCH_VOLUMETRIC",
+            Self::Shadow => "RAYMARCH_SHADOW",
+            Self::Prepass => "RAYMARCH_PREPASS",
         }
     }
 }
@@ -138,21 +138,17 @@ impl ProxyFaces {
         let cam = [view.cam_pos[0], view.cam_pos[1], view.cam_pos[2]];
         let reach = near_plane_reach(&view.inv_vp, cam);
         let outside = (0..3).any(|i| (cam[i] - center[i]).abs() > extent[i] + reach);
-        if outside {
-            ProxyFaces::Front
-        } else {
-            ProxyFaces::Back
-        }
+        if outside { Self::Front } else { Self::Back }
     }
 
     /// The fragment entry `family` draws these faces with, for the two families
     /// that march a surface.
     pub fn fragment(self, family: Family) -> Option<&'static str> {
         match (family, self) {
-            (Family::Surface, ProxyFaces::Back) => Some("raymarch_fragment"),
-            (Family::Surface, ProxyFaces::Front) => Some("raymarch_front_fragment"),
-            (Family::Prepass, ProxyFaces::Back) => Some("raymarch_prepass_fragment"),
-            (Family::Prepass, ProxyFaces::Front) => Some("raymarch_prepass_front_fragment"),
+            (Family::Surface, Self::Back) => Some("raymarch_fragment"),
+            (Family::Surface, Self::Front) => Some("raymarch_front_fragment"),
+            (Family::Prepass, Self::Back) => Some("raymarch_prepass_fragment"),
+            (Family::Prepass, Self::Front) => Some("raymarch_prepass_front_fragment"),
             _ => None,
         }
     }

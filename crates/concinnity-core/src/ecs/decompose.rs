@@ -10,7 +10,7 @@
 //! renderer / tag components. A `PropInstance` marker among them keeps the
 //! entity identifiable as a prop, which is what a behavior scoped to "Prop"
 //! resolves against. Cross-references between placements (a Prop's parent, a
-//! PropBody's owner) resolve through `EntityById`, which the loader filled.
+//! `PropBody`'s owner) resolve through `EntityById`, which the loader filled.
 
 use crate::components::{
     BodyDynamics, Children, Collider, Held, Interactable, MeshRenderer, ModelRenderer, Parent,
@@ -22,7 +22,7 @@ use alloc::vec::Vec;
 
 /// Decompose every loaded Prop into per-instance components on its own entity,
 /// then drain the Prop column.
-pub fn run(ctx: &mut PipelineContext) {
+pub fn run(ctx: &mut PipelineContext<'_>) {
     // Snapshot each Prop with its entity before mutating storage: inserting
     // components while iterating the Prop column would alias the borrow.
     let props: Vec<(Entity, Prop)> = ctx

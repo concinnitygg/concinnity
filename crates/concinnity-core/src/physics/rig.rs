@@ -37,7 +37,7 @@ impl RigPhysics {
     // component's position, already carried, as the one last written back.
     pub(crate) fn rebase(&mut self, rebase: &crate::planet::Rebase, written: Option<[f32; 3]>) {
         self.center.rebase(rebase);
-        self.written_pos = written.or(self.written_pos.map(|p| rebase.apply_point(p)));
+        self.written_pos = written.or_else(|| self.written_pos.map(|p| rebase.apply_point(p)));
     }
 }
 
@@ -55,7 +55,7 @@ fn center_of(rig: &CharacterRig) -> [f32; 3] {
 // caller's list so its reserved capacity survives.
 pub(crate) fn init_rigs(
     world: &mut Simulation,
-    ctx: &PipelineContext,
+    ctx: &PipelineContext<'_>,
     mask: LayerMask,
     rigs: &mut Vec<RigPhysics>,
 ) {
@@ -76,7 +76,7 @@ pub(crate) fn init_rigs(
 // AnimationSystem, which runs after physics; the events queue holds them for
 // one cycle) into `out`, cleared first so the caller's buffer is reused.
 pub(crate) fn drain_motions_into(
-    ctx: &PipelineContext,
+    ctx: &PipelineContext<'_>,
     cursor: &mut EventCursor,
     out: &mut Vec<RootMotionEvent>,
 ) {
@@ -89,7 +89,7 @@ pub(crate) fn drain_motions_into(
 // Adopt externally moved rig components before the frame's ticks run: a
 // position that differs from the one written back last frame was not ours,
 // so the capsule snaps to it with no blend across the jump.
-pub(crate) fn sync_rigs(ctx: &mut PipelineContext, rigs: &mut [RigPhysics]) {
+pub(crate) fn sync_rigs(ctx: &PipelineContext<'_>, rigs: &mut [RigPhysics]) {
     for rig_body in rigs.iter_mut() {
         let Some(rig) = ctx
             .query::<CharacterRig>()
@@ -108,7 +108,7 @@ pub(crate) fn sync_rigs(ctx: &mut PipelineContext, rigs: &mut [RigPhysics]) {
 // under gravity.
 pub(crate) fn tick_rigs(
     world: &mut Simulation,
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     rigs: &mut [RigPhysics],
     motions: &[RootMotionEvent],
     dt: f32,
@@ -173,7 +173,7 @@ pub(crate) fn tick_rigs(
 
 // Write each rig's blended capsule position back to its component for the
 // render follow.
-pub(crate) fn publish_rigs(ctx: &mut PipelineContext, rigs: &mut [RigPhysics], alpha: f32) {
+pub(crate) fn publish_rigs(ctx: &mut PipelineContext<'_>, rigs: &mut [RigPhysics], alpha: f32) {
     for rig_body in rigs.iter_mut() {
         let Some(rig) = ctx
             .query_mut::<CharacterRig>()

@@ -352,7 +352,11 @@ impl VkContext {
                 roughness_views: &rough_views,
             },
             super::post::rt_reflections::RtLayoutConfig {
-                bindless_set_layout: self.cull.bindless_set_layout.as_ref().map(|l| l.handle()),
+                bindless_set_layout: self
+                    .cull
+                    .bindless_set_layout
+                    .as_ref()
+                    .map(super::owned::OwnedSetLayout::handle),
                 global_set_layout: self.descriptors.global_set_layout.handle(),
                 pool_size: bindless_pool_size,
                 hot_reload: self.hot_reload.enabled,

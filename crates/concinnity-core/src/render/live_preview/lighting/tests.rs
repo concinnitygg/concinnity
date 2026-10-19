@@ -61,7 +61,7 @@ fn the_live_fields_are_the_ones_the_schema_declares_live() {
         let mut listed: Vec<String> = live_settings_fields(section)
             .unwrap_or_default()
             .iter()
-            .map(|k| k.to_string())
+            .map(ToString::to_string)
             .collect();
         listed.sort_unstable();
         let mut live = declared

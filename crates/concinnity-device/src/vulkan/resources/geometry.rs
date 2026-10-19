@@ -1,4 +1,4 @@
-//! The scene VkContext lends to the `SceneHost` defaults, and the writer that
+//! The scene `VkContext` lends to the `SceneHost` defaults, and the writer that
 //! stages its streamed geometry for the shared vertex / index buffers: each
 //! write is copied by the next geometry submit (see `geometry_upload`), so none
 //! waits on the GPU. Also the blocking `write_geometry_region` helper, which
@@ -11,7 +11,7 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::scene_state::{GeometryBuffer, GeometryWriter, SceneState};
 
 use super::super::allocator::DeviceAllocator;
-use super::super::context::*;
+use super::super::context::{VkContext, debug_assert_main_thread};
 use super::super::geometry_upload::{GeometryTarget, GeometryUploads};
 use super::super::texture;
 
@@ -96,7 +96,7 @@ impl VkContext {
                         staging.buffer(),
                         dest,
                         std::slice::from_ref(&copy),
-                    )
+                    );
                 };
             },
         )?;

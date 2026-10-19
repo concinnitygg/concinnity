@@ -72,10 +72,10 @@ pub(super) fn build_shadow_cull(
     let cull_pso = dump_on_err(info_queue, create_cull_pso(device, crs, &scs))?;
     let cascades = render_types::NUM_SHADOW_CASCADES as u64;
     let shadow_indirect_size =
-        align256(cascades * (plan.n_cull as u64) * INDIRECT_COMMAND_STRIDE as u64);
+        align256(cascades * (plan.n_cull as u64) * u64::from(INDIRECT_COMMAND_STRIDE));
     let status_size = status_buffer_size(plan.n_cull);
     let spot_indirect_size =
-        align256(spot_slices as u64 * (plan.n_cull as u64) * INDIRECT_COMMAND_STRIDE as u64);
+        align256(spot_slices as u64 * (plan.n_cull as u64) * u64::from(INDIRECT_COMMAND_STRIDE));
     let mut indirect_buffers: Vec<ID3D12Resource> = Vec::with_capacity(gpu.hw.frames());
     let mut status_buffers: Vec<ID3D12Resource> = Vec::with_capacity(gpu.hw.frames());
     let mut spot_indirect_buffers: Vec<ID3D12Resource> = Vec::new();

@@ -1,5 +1,5 @@
 //! Resolving each entity's world matrix from its Transform and its Parent
-//! chain, and writing the result back to its GlobalTransform. A host with a
+//! chain, and writing the result back to its `GlobalTransform`. A host with a
 //! renderer runs this every frame before it builds a draw list.
 //!
 //! The cache holds a slot table rather than entity-keyed maps: every entity that
@@ -104,7 +104,7 @@ impl TransformCache {
     // Rebuild the whole slot table from the live Transform + Parent columns:
     // one slot per Transform, each slot's parent slot, its depth, its children,
     // and the shallowest-first order that composes them.
-    fn resolve(&mut self, ctx: &PipelineContext) {
+    fn resolve(&mut self, ctx: &PipelineContext<'_>) {
         self.entity.clear();
         self.local.clear();
         for (entity, transform) in ctx.query_with_entity::<Transform>() {
@@ -272,7 +272,7 @@ impl TransformCache {
 
     // Write every slot's world matrix into its GlobalTransform. An entity that
     // owns a Transform but no GlobalTransform is simply skipped.
-    fn write_all(&self, ctx: &mut PipelineContext) {
+    fn write_all(&self, ctx: &mut PipelineContext<'_>) {
         for (slot, &entity) in self.entity.iter().enumerate() {
             if let Some(global) = ctx.get_mut::<GlobalTransform>(entity) {
                 global.0 = self.world[slot];
@@ -284,7 +284,7 @@ impl TransformCache {
     // Returns false when the per-row stamps cannot carry the pass -- an unknown
     // entity, or a dirty set large enough that a full resolve is cheaper -- and
     // the caller falls back.
-    fn resolve_incremental(&mut self, ctx: &mut PipelineContext, since: Tick) -> bool {
+    fn resolve_incremental(&mut self, ctx: &mut PipelineContext<'_>, since: Tick) -> bool {
         let budget = (self.entity.len() / DIRTY_BUDGET_DIVISOR).max(1);
         self.dirty.clear();
         for (entity, transform) in ctx.changed_rows::<Transform>(since) {
@@ -316,7 +316,7 @@ impl TransformCache {
     // Recompose `seed` and everything under it, writing each GlobalTransform as
     // it goes. Slots already recomposed this pass are skipped, so seeds that
     // share an ancestor cost one walk between them.
-    fn walk_subtree(&mut self, ctx: &mut PipelineContext, seed: u32) {
+    fn walk_subtree(&mut self, ctx: &mut PipelineContext<'_>, seed: u32) {
         self.stack.clear();
         self.stack.push(seed);
         while let Some(slot) = self.stack.pop() {
@@ -353,16 +353,16 @@ impl TransformCache {
 /// Returns an entity -> world matrix map, built through a throwaway
 /// [`TransformCache`]; the per-frame path owns a cache and calls
 /// [`propagate_transforms_cached`] instead so the buffers survive across frames.
-pub fn resolve_world_matrices(ctx: &PipelineContext) -> BTreeMap<Entity, WorldMatrix> {
+pub fn resolve_world_matrices(ctx: &PipelineContext<'_>) -> BTreeMap<Entity, WorldMatrix> {
     let mut cache = TransformCache::default();
     cache.resolve(ctx);
     cache.world_map()
 }
 
-/// Resolve and write every entity's GlobalTransform in one shot, with no cache
+/// Resolve and write every entity's `GlobalTransform` in one shot, with no cache
 /// carried across calls. The reparent recompose and the load-time pass use this;
 /// the per-frame path uses [`propagate_transforms_cached`].
-pub fn propagate_transforms(ctx: &mut PipelineContext) {
+pub fn propagate_transforms(ctx: &mut PipelineContext<'_>) {
     let mut cache = TransformCache::default();
     cache.resolve(ctx);
     cache.write_all(ctx);
@@ -370,12 +370,12 @@ pub fn propagate_transforms(ctx: &mut PipelineContext) {
 
 /// Per-frame transform propagation against the reused scratch in `cache`.
 ///
-/// Writes each entity's GlobalTransform from its Transform + Parent chain,
+/// Writes each entity's `GlobalTransform` from its Transform + Parent chain,
 /// exactly as [`propagate_transforms`], but does the least work the change ticks
 /// allow: nothing at all when neither source column moved, a walk of just the
 /// moved entities' subtrees when only targeted Transform writes landed, and a
 /// full ordered resolve otherwise.
-pub fn propagate_transforms_cached(ctx: &mut PipelineContext, cache: &mut TransformCache) {
+pub fn propagate_transforms_cached(ctx: &mut PipelineContext<'_>, cache: &mut TransformCache) {
     let transform = ctx.column_ticks::<Transform>();
     let parent = ctx.changed_tick::<Parent>();
 
@@ -411,7 +411,7 @@ pub fn propagate_transforms_cached(ctx: &mut PipelineContext, cache: &mut Transf
 /// parents' Children lists in sync, and recompose world matrices so the new
 /// chain shows up immediately. Entity-keyed throughout, so it is invariant to
 /// component-column order.
-pub fn reparent(ctx: &mut PipelineContext, child: Entity, new_parent: Option<Entity>) {
+pub fn reparent(ctx: &mut PipelineContext<'_>, child: Entity, new_parent: Option<Entity>) {
     use crate::components::Children;
 
     // Drop the old parent edge and unlist the child from that parent.
@@ -460,7 +460,7 @@ mod tests {
 
     // An entity carrying the Transform propagation reads and the
     // GlobalTransform it writes, optionally parented.
-    fn spawn(ctx: &mut PipelineContext, t: Transform, parent: Option<Entity>) -> Entity {
+    fn spawn(ctx: &mut PipelineContext<'_>, t: Transform, parent: Option<Entity>) -> Entity {
         let entity = ctx.components.spawn();
         ctx.insert(entity, t);
         ctx.insert(entity, GlobalTransform::default());
@@ -470,13 +470,13 @@ mod tests {
         entity
     }
 
-    fn global(ctx: &PipelineContext, entity: Entity) -> WorldMatrix {
+    fn global(ctx: &PipelineContext<'_>, entity: Entity) -> WorldMatrix {
         ctx.get::<GlobalTransform>(entity).unwrap().0
     }
 
     // A chain of `depth` entities each parented to the one above, translated a
     // unit apart, returned root-first.
-    fn chain(ctx: &mut PipelineContext, depth: usize) -> Vec<Entity> {
+    fn chain(ctx: &mut PipelineContext<'_>, depth: usize) -> Vec<Entity> {
         let mut chain = Vec::with_capacity(depth);
         let mut parent = None;
         for i in 0..depth {

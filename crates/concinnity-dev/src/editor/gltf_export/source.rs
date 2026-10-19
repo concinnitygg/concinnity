@@ -1,7 +1,7 @@
 //! Feeding the writer from the working world: prepare + compile the entries in
-//! memory and pull the named SkinnedMesh's compiled payload, which is the
-//! composed mesh (glTF import, CharacterModel expansion, synthesized targets).
-//! A `bake: true` CharacterShape targeting the mesh is compiled with the flag
+//! memory and pull the named `SkinnedMesh`'s compiled payload, which is the
+//! composed mesh (glTF import, `CharacterModel` expansion, synthesized targets).
+//! A `bake: true` `CharacterShape` targeting the mesh is compiled with the flag
 //! disarmed so the morph targets survive into the payload; the export-time bake
 //! then folds the same shape into the vertices on request.
 
@@ -35,7 +35,7 @@ pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result
     if bake && shape.is_none() {
         return Err(format!("no CharacterShape targets '{mesh}' to bake"));
     }
-    for a in assets.iter_mut() {
+    for a in &mut assets {
         if a.asset_type == RegisteredType::CharacterShape
             && a.args.get("target").and_then(|t| t.as_str()) == Some(mesh)
             && let Some(obj) = a.args.as_object_mut()

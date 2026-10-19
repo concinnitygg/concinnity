@@ -11,11 +11,11 @@ const SCREENSHOT_DIR: &str = "screenshots";
 
 // Start the burst a `screenshot` action asked for; the frames extracted from
 // here on capture it.
-pub(super) fn start_requested(ctx: &mut PipelineContext, extractor: &mut FrameExtractor) {
+pub(super) fn start_requested(ctx: &mut PipelineContext<'_>, extractor: &mut FrameExtractor) {
     start_requested_in(SCREENSHOT_DIR, ctx, extractor);
 }
 
-fn start_requested_in(dir: &str, ctx: &mut PipelineContext, extractor: &mut FrameExtractor) {
+fn start_requested_in(dir: &str, ctx: &mut PipelineContext<'_>, extractor: &mut FrameExtractor) {
     let Some(ScreenshotRequest(frames)) = ctx.resources.remove::<ScreenshotRequest>() else {
         return;
     };

@@ -23,7 +23,7 @@ pub enum ApplyClass {
 
 impl ApplyClass {
     /// Every class, cheapest first.
-    pub const ALL: [ApplyClass; 4] = [Self::Live, Self::Rebuild, Self::Variant, Self::Restart];
+    pub const ALL: [Self; 4] = [Self::Live, Self::Rebuild, Self::Variant, Self::Restart];
 
     /// The name an `#[asset(apply = ...)]` attribute and the docs use.
     pub const fn as_str(self) -> &'static str {
@@ -142,19 +142,26 @@ pub trait ParamNumber: Copy {
 }
 
 macro_rules! param_numbers {
-    ($($ty:ty),*) => {$(
+    ($convert:ident: $($ty:ty),*) => {$(
         impl ParamNumber for $ty {
             fn to_f64(self) -> f64 {
-                self as f64
+                param_numbers!(@$convert self)
             }
             fn from_f64(value: f64) -> Self {
                 value as $ty
             }
         }
     )*};
+    (@lossless $value:expr) => {
+        f64::from($value)
+    };
+    (@rounded $value:expr) => {
+        $value as f64
+    };
 }
 
-param_numbers!(f32, u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
+param_numbers!(lossless: f32, u8, u16, u32, i8, i16, i32);
+param_numbers!(rounded: u64, usize, i64, isize);
 
 impl ParamNumber for f64 {
     fn to_f64(self) -> f64 {

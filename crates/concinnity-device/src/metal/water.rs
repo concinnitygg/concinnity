@@ -1,5 +1,5 @@
 //! Water is a producer for the engine's transparent pass (`PassId::Transparent`:
-//! after SsrResolve, before TaaResolve / Upscale). It contributes one
+//! after `SsrResolve`, before `TaaResolve` / Upscale). It contributes one
 //! `TransparentDraw` per `WaterSurface`; the shared `encode_transparent`
 //! encoder owns the render pass, the scene snapshot, and back-to-front sorting.
 //!
@@ -15,7 +15,7 @@
 //!     else a hand-tuned sky gradient.
 //!   * Fresnel: Schlick-power mix of refraction-tinted vs. reflected color.
 //!
-//! Output blends with SRC_ALPHA / ONE_MINUS_SRC_ALPHA into `scene_pre_taa`.
+//! Output blends with `SRC_ALPHA` / `ONE_MINUS_SRC_ALPHA` into `scene_pre_taa`.
 //!
 //! The shaders are the shared `shaders/water.hlsl`, the single source all three
 //! backends compile; the pipeline state matches the glass panes exactly, because
@@ -75,8 +75,8 @@ pub(in crate::metal) fn build_water_surface_record(
     // A grid the core geometry refuses (too many vertices for a u16 index) is a
     // world-authoring limit, not a device failure.
     let (packed, idxs) = body.mesh().map_err(RenderError::Other)?;
-    let vb_bytes = packed.len() * std::mem::size_of::<Vertex>();
-    let ib_bytes = idxs.len() * std::mem::size_of::<u16>();
+    let vb_bytes = packed.len() * size_of::<Vertex>();
+    let ib_bytes = idxs.len() * size_of::<u16>();
 
     // SAFETY: the pointer and length describe the live `packed` allocation, and Metal copies those
     // bytes into the new buffer before the call returns.
@@ -167,7 +167,10 @@ impl MtlContext {
     // True when a visible surface samples a simulated ocean, so `WaterSim` has
     // a reader this frame.
     pub(in crate::metal) fn water_sim_live(&self) -> bool {
-        self.water.ocean.as_ref().is_some_and(|o| o.simulates())
+        self.water
+            .ocean
+            .as_ref()
+            .is_some_and(super::water_sim::OceanSim::simulates)
             && self
                 .water
                 .surfaces
@@ -202,8 +205,7 @@ impl MtlContext {
         // a slot, so this picks the fragment, not the reflection source.
         let rt_on = self.rt.accel.is_some();
         let pick = |base, rt, rt_textured| match (rt_on && bindless, rt_textured, rt_on, rt) {
-            (true, Some(p), _, _) => Some(p),
-            (_, _, true, Some(p)) => Some(p),
+            (true, Some(p), _, _) | (_, _, true, Some(p)) => Some(p),
             _ => base,
         };
         let Some(rectangle) = pick(

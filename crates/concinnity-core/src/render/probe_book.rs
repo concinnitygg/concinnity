@@ -48,8 +48,8 @@ impl Default for ProbeBook {
 
 impl ProbeBook {
     /// No placements, so reflections read the sky.
-    pub fn new() -> ProbeBook {
-        ProbeBook {
+    pub fn new() -> Self {
+        Self {
             placements: Vec::new(),
             records: Vec::new(),
             queue: ProbeBakeQueue::new(0),

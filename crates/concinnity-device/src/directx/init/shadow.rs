@@ -81,7 +81,7 @@ pub(in crate::directx) fn write_spot_uniforms(
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
     // local that receives the mapping.
-    unsafe { buf.Map(0, None, Some(&mut ptr)) }
+    unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
         .map_err(|e| map_hresult(e.code(), "map spot-shadow UBO"))?;
     for (i, sd) in spot_shadows.iter().enumerate() {
         let mut u = csm::empty_shadow_uniforms();
@@ -91,8 +91,8 @@ pub(in crate::directx) fn write_spot_uniforms(
         // and the source is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
-                &u as *const ShadowUniforms as *const u8,
-                (ptr as *mut u8).add(i * stride as usize),
+                (&raw const u).cast::<u8>(),
+                ptr.cast::<u8>().add(i * stride as usize),
                 size_of::<ShadowUniforms>(),
             );
         }

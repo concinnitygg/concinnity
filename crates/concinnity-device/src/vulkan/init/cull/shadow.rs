@@ -13,7 +13,10 @@ use crate::vulkan::allocator::PooledBuffer;
 use crate::vulkan::context::{VkDescriptors, VkShadow};
 use crate::vulkan::init::InitGpu;
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout};
-use crate::vulkan::pipeline::*;
+use crate::vulkan::pipeline::{
+    CULL_PUSH_CONSTANT_BYTES, compile_shadow_bindless_vs, compile_shadow_cull_shader,
+    create_shadow_pipeline,
+};
 use crate::vulkan::pipeline_desc::compute_pipeline;
 use crate::vulkan::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use crate::vulkan::set_writes::SetWrites;
@@ -189,9 +192,9 @@ impl ViewCullInputs<'_> {
             });
         }
         let n = self.n_cull as u64;
-        let object_buffer_size = n * std::mem::size_of::<render_types::GpuObjectData>() as u64;
-        let draw_args_size = n * std::mem::size_of::<render_types::GpuDrawArgs>() as u64;
-        let indirect_size = n * std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u64;
+        let object_buffer_size = n * size_of::<render_types::GpuObjectData>() as u64;
+        let draw_args_size = n * size_of::<render_types::GpuDrawArgs>() as u64;
+        let indirect_size = n * size_of::<vk::DrawIndexedIndirectCommand>() as u64;
         let mut all_bufs = Vec::with_capacity(frames);
         let mut all_sets = Vec::with_capacity(frames);
         for f in 0..frames {

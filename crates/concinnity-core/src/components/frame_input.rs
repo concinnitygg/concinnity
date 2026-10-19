@@ -24,7 +24,7 @@ pub struct FrameInput {
     pub jump: bool,
     /// True while the Control key is held. A modifier used by UI (e.g. a story
     /// fast-forwards its dialogue while it is down). Like [escape](#structfield.escape)
-    /// and [key_events](#structfield.key_events) it is not frozen while a
+    /// and [`key_events`](#structfield.key_events) it is not frozen while a
     /// menu is open.
     pub ctrl: bool,
     /// True while the Shift key is held. A modifier used by UI (e.g. additive
@@ -55,13 +55,13 @@ pub struct FrameInput {
     pub look_axis: [f32; 2],
     /// The gamepad button pressed this frame, for one frame, or `None`.
     /// Surfaced regardless of menu state (like
-    /// [key_events](#structfield.key_events)) so the settings menu can
+    /// [`key_events`](#structfield.key_events)) so the settings menu can
     /// capture a button for rebinding.
     pub captured_button: Option<crate::components::GamepadButton>,
     /// The UI-navigation pulse this frame, or `None`. A one-frame
-    /// [NavDirection](#navdirection) produced from a d-pad press (repeating
+    /// [`NavDirection`](#navdirection) produced from a d-pad press (repeating
     /// while held) or a deliberate left-stick deflection. Surfaced regardless
-    /// of menu state (like [key_events](#structfield.key_events)); menu
+    /// of menu state (like [`key_events`](#structfield.key_events)); menu
     /// focus movement consumes it only while a screen is active, so during
     /// play the d-pad and stick keep their movement meaning.
     pub nav: Option<crate::components::NavDirection>,
@@ -114,7 +114,7 @@ pub struct FrameInput {
     /// True for exactly one frame when the HUD-toggle key (F1) is pressed.
     pub hud_toggle: bool,
     /// True for exactly one frame when Escape is pressed while the cursor is
-    /// not captured (menu / UI worlds). Used to fire [KeyBinding](#keybinding)
+    /// not captured (menu / UI worlds). Used to fire [`KeyBinding`](#keybinding)
     /// actions. In worlds that capture the cursor, Escape instead releases the
     /// cursor and this stays false.
     pub escape: bool,

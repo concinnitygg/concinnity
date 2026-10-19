@@ -7,10 +7,10 @@
 //! slice each, with a mip chain the `probe_downsample` kernel fills. The probe
 //! cube is the result, one cube of the probe cube array: mip 0 a
 //! firefly-clamped copy of the capture, every mip after it a GGX convolution at
-//! that mip's roughness. Both are RGBA16Float --
+//! that mip's roughness. Both are `RGBA16Float` --
 //! the faces are captured as halfs, the clamp caps luminance well inside the
 //! format's range, and it halves what a probe costs in memory against the
-//! RGBA32Float cube the CPU convolution used to upload.
+//! `RGBA32Float` cube the CPU convolution used to upload.
 //!
 //! Nothing here reads back. A dispatch per destination mip, one mip per frame,
 //! is what replaced the readback plus the off-thread CPU convolution; the whole
@@ -57,8 +57,8 @@ impl ProbePrefilterPipelines {
     pub(in crate::metal) fn new(
         device: &ProtocolObject<dyn MTLDevice>,
         hot_reload: bool,
-    ) -> RenderResult<ProbePrefilterPipelines> {
-        Ok(ProbePrefilterPipelines {
+    ) -> RenderResult<Self> {
+        Ok(Self {
             mip0: compute_pipeline(device, &super::builtin_shaders::PROBE_MIP0, hot_reload)?,
             downsample: compute_pipeline(
                 device,
@@ -70,7 +70,7 @@ impl ProbePrefilterPipelines {
     }
 }
 
-/// The capture cube six faces render into: RGBA16Float, one slice per face, with
+/// The capture cube six faces render into: `RGBA16Float`, one slice per face, with
 /// the mip chain the convolution's source pyramid occupies.
 ///
 /// Created unpooled, like the bake's other render targets: it is transient, and
@@ -123,10 +123,10 @@ impl PrefilterGpu {
         cubes: &ProtocolObject<dyn MTLTexture>,
         slot: usize,
         plan: &PrefilterPlan,
-    ) -> RenderResult<PrefilterGpu> {
+    ) -> RenderResult<Self> {
         let capture_mip_views = mip_array_views(&capture, 0, plan.mips(), "capture")?;
         let probe_mip_views = mip_array_views(cubes, slot, plan.mips(), "probe")?;
-        Ok(PrefilterGpu {
+        Ok(Self {
             capture,
             capture_mip_views,
             probe_mip_views,

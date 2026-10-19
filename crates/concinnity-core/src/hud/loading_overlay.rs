@@ -1,8 +1,8 @@
-//! Scene-loading overlay: shows the LoadingOverlay's screen while the scene a
+//! Scene-loading overlay: shows the `LoadingOverlay`'s screen while the scene a
 //! jump targets still streams content, drives its progress bar and label, and
 //! fades the backdrop out to reveal the scene once it is resident. Runs after
-//! StreamingSystem (it reads the residency status published this tick) and
-//! before UiInputSystem (its screen commands apply the same tick); the elements
+//! `StreamingSystem` (it reads the residency status published this tick) and
+//! before `UiInputSystem` (its screen commands apply the same tick); the elements
 //! it writes are drawn by the next overlay build, like every HUD system.
 
 use crate::ecs::{Access, FrameTime, PipelineContext, Ref, ScreenStack, StepResult, System, World};
@@ -62,17 +62,20 @@ impl LoadingOverlaySystem {
         }
     }
 
-    fn sprite_mut<'a>(ctx: &'a mut PipelineContext, id: Option<AssetId>) -> Option<&'a mut Sprite> {
+    fn sprite_mut<'a>(
+        ctx: &'a mut PipelineContext<'_>,
+        id: Option<AssetId>,
+    ) -> Option<&'a mut Sprite> {
         ctx.get_mut_by_id::<Sprite>(id?)
     }
 
-    fn set_visible(ctx: &mut PipelineContext, id: Option<AssetId>, visible: bool) {
+    fn set_visible(ctx: &mut PipelineContext<'_>, id: Option<AssetId>, visible: bool) {
         if let Some(sprite) = Self::sprite_mut(ctx, id) {
             sprite.visible = visible;
         }
     }
 
-    fn set_backdrop_alpha(&self, ctx: &mut PipelineContext, alpha: f32) {
+    fn set_backdrop_alpha(&self, ctx: &mut PipelineContext<'_>, alpha: f32) {
         if let Some(sprite) = Self::sprite_mut(ctx, self.backdrop) {
             sprite.tint[3] = alpha;
         }
@@ -80,7 +83,7 @@ impl LoadingOverlaySystem {
 
     // Restore the overlay's elements to their shown state: the backdrop at its
     // authored alpha (captured here on first show), the bar visible.
-    fn show(&mut self, ctx: &mut PipelineContext, progress: f32) {
+    fn show(&mut self, ctx: &mut PipelineContext<'_>, progress: f32) {
         if self.backdrop_alpha.is_none() {
             self.backdrop_alpha = Self::sprite_mut(ctx, self.backdrop).map(|s| s.tint[3]);
         }
@@ -97,7 +100,7 @@ impl LoadingOverlaySystem {
     }
 
     // Size the fill against the track and refresh the percentage label.
-    fn update_bar(&self, ctx: &mut PipelineContext, progress: f32) {
+    fn update_bar(&self, ctx: &mut PipelineContext<'_>, progress: f32) {
         let progress = progress.clamp(0.0, 1.0);
         let track = self
             .track
@@ -118,7 +121,7 @@ impl LoadingOverlaySystem {
     }
 
     // Hide the bar and label, leaving only the backdrop to fade out.
-    fn hide_bar(&self, ctx: &mut PipelineContext) {
+    fn hide_bar(&self, ctx: &mut PipelineContext<'_>) {
         Self::set_visible(ctx, self.track, false);
         Self::set_visible(ctx, self.fill, false);
         if let Some(id) = self.label
@@ -130,7 +133,7 @@ impl LoadingOverlaySystem {
 
     // Whether the overlay's screen currently draws on top of the stack.
     // `None` when the screen is not in the stack at all.
-    fn screen_on_top(&self, ctx: &PipelineContext) -> Option<bool> {
+    fn screen_on_top(&self, ctx: &PipelineContext<'_>) -> Option<bool> {
         let screen = self.screen?;
         let stack = ctx.resource::<ScreenStack>()?;
         let mine = *stack.layers.get(&screen)?;
@@ -152,7 +155,7 @@ impl System for LoadingOverlaySystem {
             .writes_resources(crate::resource_mask![ScreenCommand])
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         // The scene the player is headed to: the fade target mid-jump, else
         // the active scene.
         let target = ctx
@@ -168,7 +171,7 @@ impl System for LoadingOverlaySystem {
                 .copied()
         });
         let loading = matches!(status, Some((_, SceneLoadState::Loading, _)));
-        let progress = status.map(|(_, _, p)| p).unwrap_or(1.0);
+        let progress = status.map_or(1.0, |(_, _, p)| p);
 
         match self.phase {
             Phase::Hidden => {

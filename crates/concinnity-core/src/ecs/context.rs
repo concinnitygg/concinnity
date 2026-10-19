@@ -70,7 +70,7 @@ pub struct PipelineContext<'a> {
     /// time here; the renderer writes the backend `RenderStats` after its
     /// draw call, and `StatHud` reads it back to drive the on-screen HUD.
     pub profile: &'a mut FrameProfile,
-    /// Type-keyed engine singletons (e.g. the per-frame FrameInput snapshot),
+    /// Type-keyed engine singletons (e.g. the per-frame `FrameInput` snapshot),
     /// accessed via `resource` / `resource_mut` / `insert_resource`. Events live
     /// here too, inside a single `EventStore` resource that owns one `Events<E>`
     /// queue per event type, reached via `events` / `events_mut`.
@@ -81,7 +81,7 @@ pub struct PipelineContext<'a> {
     pub frame: FrameContext<'a>,
 }
 
-impl<'a> PipelineContext<'a> {
+impl PipelineContext<'_> {
     /// Immutable iteration over all components of type C.
     pub fn query<C: ComponentSlot>(&self) -> core::slice::Iter<'_, C> {
         #[cfg(debug_assertions)]
@@ -95,7 +95,7 @@ impl<'a> PipelineContext<'a> {
         note_read::<C>();
         C::column(self.components)
             .into_iter()
-            .flat_map(|column| column.iter_with_entities())
+            .flat_map(super::column::Column::iter_with_entities)
     }
 
     /// Mutable iteration over all components of type C.
@@ -289,6 +289,10 @@ impl<'a> PipelineContext<'a> {
     /// Mutably borrow the event queue for event type E, creating an empty one on
     /// first access so writers and readers never miss it. All queues live in the
     /// `EventStore` resource, which the frame driver rotates wholesale.
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "the expect follows the insert that guarantees it"
+    )]
     pub fn events_mut<E: Send + 'static>(&mut self) -> &mut Events<E> {
         #[cfg(debug_assertions)]
         note_resource::<E>(true);

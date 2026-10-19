@@ -6,7 +6,7 @@
 //! state of its own, so the whole policy is unit-testable from synthetic
 //! rss/budget pairs.
 //!
-//! The VRAM-bounded byte budgets (StreamPlanner's `byte_budget`) remain the
+//! The VRAM-bounded byte budgets (`StreamPlanner`'s `byte_budget`) remain the
 //! primary residency control; this valve only backs streaming off when process
 //! RSS nears the RAM ceiling, with hysteresis so it does not flap at the
 //! threshold.
@@ -100,7 +100,7 @@ fn next_stage(
     rising: bool,
     prev: StreamPressureStage,
 ) -> StreamPressureStage {
-    use StreamPressureStage::*;
+    use StreamPressureStage::{Evict, Gate, None};
     if budget == 0 {
         return None;
     }

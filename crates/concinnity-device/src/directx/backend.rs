@@ -1,4 +1,4 @@
-//! RenderBackend impl for DxContext, one impl block per trait family; the
+//! `RenderBackend` impl for `DxContext`, one impl block per trait family; the
 //! bodies come from `crate::forward`.
 
 use concinnity_core::gfx::mesh_payload;
@@ -66,12 +66,12 @@ impl DrawStreaming for DxContext {
     }
 
     forward! { assert = debug_assert_main_thread;
-        fn install_world_shader(&mut self, bucket: u32, programs: &concinnity_core::components::ShaderPrograms, prepared: Option<concinnity_core::render::backend::PreparedPipelines>) -> RenderResult<()>;
+        fn install_world_shader(&mut self, bucket: u32, programs: &components::ShaderPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<()>;
     }
 
     fn pipeline_builder(&self) -> Option<std::sync::Arc<dyn backend::PipelineBuilder>> {
         debug_assert_main_thread("pipeline_builder");
-        Some(DxContext::pipeline_builder(self))
+        Some(Self::pipeline_builder(self))
     }
 }
 
@@ -88,7 +88,7 @@ impl WindowControl for DxContext {
         fn display_modes(&self) -> Vec<display_mode::DisplayMode>;
         fn current_display_mode(&self) -> Option<display_mode::DisplayMode>;
         fn set_display_mode(&mut self, mode: display_mode::DisplayMode);
-        fn set_keymap(&mut self, keymap: &KeyMap);
+        fn set_keymap(&mut self, keymap: KeyMap);
         fn logical_size(&self) -> (f32, f32);
     }
 
@@ -112,9 +112,9 @@ impl LiveEdit for DxContext {
     forward! { assert = debug_assert_main_thread;
         fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()>;
         fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()>;
-        fn update_world_shader(&mut self, bucket: u32, programs: &concinnity_core::components::ShaderPrograms, prepared: Option<concinnity_core::render::backend::PreparedPipelines>) -> RenderResult<concinnity_core::render::backend::PipelineSwap>;
-        fn replace_sdf_volume_pipelines(&mut self, volume: usize, programs: &concinnity_core::components::sdf_programs::SdfPrograms, prepared: Option<concinnity_core::render::backend::PreparedPipelines>) -> RenderResult<concinnity_core::render::backend::PipelineSwap>;
-        fn update_skinned_mesh_geometry(&mut self, skinned_index: SkinnedIndex, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> RenderResult<()>;
+        fn update_world_shader(&mut self, bucket: u32, programs: &components::ShaderPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
+        fn replace_sdf_volume_pipelines(&mut self, volume: usize, programs: &components::sdf_programs::SdfPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
+        fn update_skinned_mesh_geometry(&mut self, skinned_index: SkinnedIndex, vertex_base: u32, verts: &[SkinnedVertex], idxs: &[u16]) -> RenderResult<()>;
         fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> RenderResult<Vec<backend::SkinnedSlotLayout>>;
         fn rebuild_static_geometry(&mut self, changes: Vec<backend::DrawGeometryUpdate>) -> RenderResult<()>;
         fn set_material_params(&mut self, row: u32, params: [f32; concinnity_core::gfx::render_types::MATERIAL_PARAM_COUNT]);

@@ -109,11 +109,11 @@ fn framed(frame: u64, snapshot: &impl Serialize) -> Reply {
     serde_json::to_value(Framed { frame, snapshot }).map_err(|e| e.to_string())
 }
 
-fn ping(_: &Call, _: Args) -> Reply {
+fn ping(_: &Call<'_>, _: Args) -> Reply {
     Ok(json!({ "pong": true }))
 }
 
-fn state(call: &Call, _: Args) -> Reply {
+fn state(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     Ok(json!({
         "frame": s.frame,
@@ -123,16 +123,16 @@ fn state(call: &Call, _: Args) -> Reply {
     }))
 }
 
-fn assets(call: &Call, _: Args) -> Reply {
+fn assets(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     Ok(json!({ "frame": s.frame, "assets": s.assets }))
 }
 
-fn names(call: &Call, _: Args) -> Reply {
+fn names(call: &Call<'_>, _: Args) -> Reply {
     Ok(json!({ "names": &*call.snapshot().names }))
 }
 
-fn streaming(call: &Call, _: Args) -> Reply {
+fn streaming(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let pools = &s.streaming;
     Ok(json!({
@@ -182,7 +182,7 @@ fn chunk_pool(counts: Option<(usize, usize)>, bytes: Option<(u64, u64)>) -> Valu
 
 // The allocation layer's counters are global rather than snapshot state, so
 // they are read at reply time.
-fn memory(call: &Call, _: Args) -> Reply {
+fn memory(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     Ok(memory::report(
         s.frame,
@@ -193,7 +193,7 @@ fn memory(call: &Call, _: Args) -> Reply {
     ))
 }
 
-fn budget(call: &Call, _: Args) -> Reply {
+fn budget(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let budget = s
         .budget
@@ -202,7 +202,7 @@ fn budget(call: &Call, _: Args) -> Reply {
     framed(s.frame, budget)
 }
 
-fn profile(call: &Call, _: Args) -> Reply {
+fn profile(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let r = &s.profile_render;
     // Alloc counts share the timing list's order in builds that sample them,
@@ -263,7 +263,7 @@ fn fan_out_json(t: &FanOutTiming) -> Value {
     })
 }
 
-fn camera_get(call: &Call, _: Args) -> Reply {
+fn camera_get(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let camera = s
         .camera
@@ -274,7 +274,7 @@ fn camera_get(call: &Call, _: Args) -> Reply {
 
 // The token is attached before the run loop starts, so a missing one means the
 // loop has not been entered yet.
-fn shutdown(call: &Call, _: Args) -> Reply {
+fn shutdown(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let token = s
         .shutdown_token
@@ -286,7 +286,7 @@ fn shutdown(call: &Call, _: Args) -> Reply {
 
 // `tick` captures the flag once the backend exposes it: never under `cn run` or
 // a backend without shader hot-reload.
-fn reload_shaders(call: &Call, _: Args) -> Reply {
+fn reload_shaders(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let flag = s
         .shader_reload
@@ -298,7 +298,7 @@ fn reload_shaders(call: &Call, _: Args) -> Reply {
 
 // `tick` captures the signals once the reload driver is armed, which needs
 // `cn debug` and a graphics init that parked its reload sources.
-fn reload_assets(call: &Call, _: Args) -> Reply {
+fn reload_assets(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let signals = s.reload.as_ref().ok_or(
         "asset hot-reload not available (cn debug only; no file-backed textures captured yet)",

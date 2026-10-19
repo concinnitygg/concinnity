@@ -4,8 +4,8 @@
 //!
 //! Three interchangeable backends sit behind the `UpscaleBackend` trait:
 //!   fsr   AMD FidelityFX FSR3 (cross-vendor; needs the Agility SDK bundled)
-//!   dlss  NVIDIA DLSS via raw NGX (RTX only; cfg(ngx_sdk_bundled))
-//!   xess  Intel XeSS (cross-vendor DP4a + Arc XMX)
+//!   dlss  NVIDIA DLSS via raw NGX (RTX only; `cfg(ngx_sdk_bundled)`)
+//!   xess  Intel XeSS (cross-vendor `DP4a` + Arc XMX)
 //! The API-independent half of each lives in `crate::upscale_sdk`; these files
 //! hold the D3D12 resources, DLL loading and command recording. `build_upscaler`
 //! constructs the first backend that initializes, in the shared fallback order,
@@ -145,7 +145,7 @@ impl UpscaleOutput {
         };
         let desc = D3D12_RESOURCE_DESC {
             Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-            Width: width as u64,
+            Width: u64::from(width),
             Height: height,
             DepthOrArraySize: 1,
             MipLevels: 1,
@@ -162,12 +162,12 @@ impl UpscaleOutput {
         // new COM object lands in a binding that owns it.
         unsafe {
             device.CreateCommittedResource(
-                &heap_props,
+                &raw const heap_props,
                 D3D12_HEAP_FLAG_NONE,
-                &desc,
+                &raw const desc,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                 None,
-                &mut created,
+                &raw mut created,
             )
         }
         .map_err(|e| map_hresult(e.code(), "create upscale output texture"))?;
@@ -200,8 +200,13 @@ impl UpscaleOutput {
         // SAFETY: the view descriptors and the resource they name are live for the calls, and the
         // destination handles address slots init reserved for these views in a heap it owns.
         unsafe {
-            device.CreateUnorderedAccessView(&resource, None, Some(&uav), descriptors.uav_cpu);
-            device.CreateShaderResourceView(&resource, Some(&srv), descriptors.srv_cpu);
+            device.CreateUnorderedAccessView(
+                &resource,
+                None,
+                Some(&raw const uav),
+                descriptors.uav_cpu,
+            );
+            device.CreateShaderResourceView(&resource, Some(&raw const srv), descriptors.srv_cpu);
         }
         Ok(Self {
             resource,
@@ -284,7 +289,7 @@ pub(in crate::directx) fn build_upscaler(
                 _ => None,
             })
         })?;
-    requested.adopt_running_preset(built.as_deref().and_then(|u| u.dlss_preset()));
+    requested.adopt_running_preset(built.as_deref().and_then(UpscaleBackend::dlss_preset));
     Ok(built)
 }
 

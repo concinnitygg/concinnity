@@ -127,13 +127,13 @@ impl OceanSim {
             })
             .collect();
         let spectrum = buffer_with(device, bytemuck::cast_slice(&texels), "ocean spectrum")?;
-        let row_bytes = texels.len() * 2 * std::mem::size_of::<[f32; 4]>();
+        let row_bytes = texels.len() * 2 * size_of::<[f32; 4]>();
         let row_data = device
             .newBufferWithLength_options(row_bytes, MTLResourceOptions::StorageModePrivate)
             .ok_or_else(|| allocation_failed("the ocean row transforms"))?;
         let foam = device
             .newBufferWithLength_options(
-                texels.len() * std::mem::size_of::<f32>(),
+                texels.len() * size_of::<f32>(),
                 MTLResourceOptions::StorageModePrivate,
             )
             .ok_or_else(|| allocation_failed("the ocean foam"))?;

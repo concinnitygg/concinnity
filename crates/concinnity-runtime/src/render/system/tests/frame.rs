@@ -86,8 +86,12 @@ fn frame_steps_draw_and_publish_input() {
     // The polled input snapshot is republished as the FrameInput component +
     // resource for the camera / UI systems.
     let ctx = world.context();
-    let inputs: Vec<&FrameInput> = ctx.query::<FrameInput>().collect();
-    assert_eq!(inputs.len(), 1, "previous snapshot drained, one deposited");
+
+    assert_eq!(
+        ctx.query::<FrameInput>().count(),
+        1,
+        "previous snapshot drained, one deposited"
+    );
     let res = ctx.resource::<FrameInput>().expect("resource published");
     assert_eq!(res.mouse_x, 33.0);
     assert_eq!(res.viewport, [1280.0, 720.0]);
@@ -105,7 +109,7 @@ fn a_serial_frame_records_its_submission_as_the_render_handoff() {
     let mut world = scene_builder().build();
     let mut gs = init_graphics(&mut world, hooks);
     lock(&state).on_draw = Some(Box::new(|| {
-        std::thread::sleep(std::time::Duration::from_millis(3))
+        std::thread::sleep(std::time::Duration::from_millis(3));
     }));
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
 

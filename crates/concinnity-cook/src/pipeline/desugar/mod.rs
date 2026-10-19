@@ -62,7 +62,7 @@ fn skin_index_arg(asset: &WorldJsonlAsset) -> u32 {
     asset
         .args
         .get("skin_index")
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .unwrap_or(0) as u32
 }
 

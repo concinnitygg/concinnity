@@ -1,4 +1,4 @@
-//! The data half of an SdfVolume form's extras. Creating a volume chooses its
+//! The data half of an `SdfVolume` form's extras. Creating a volume chooses its
 //! kind and a starter for the new field file the volume reads, which the kind
 //! decides the `volumetric` flag of; editing one shows its field and the other
 //! volumes reading the same file. Every other flag is a plain field of the

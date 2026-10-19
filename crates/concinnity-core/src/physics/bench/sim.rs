@@ -538,7 +538,7 @@ fn assert_deterministic(d: Determinism) {
             sim.drain_sensor_crossings_into(&mut crossings);
             sim.drain_contact_hits_into(&mut hits);
             recorded.extend(crossings.iter().map(|c| (c.tag, c.entered)));
-            recorded.extend(hits.iter().map(|h| (h.impulse.to_bits() as u64, false)));
+            recorded.extend(hits.iter().map(|h| (u64::from(h.impulse.to_bits()), false)));
         }
         assert_eq!(sim.sensor_overflows(), 0, "the sensor queue overflowed");
         assert_eq!(sim.contact_hit_overflows(), 0, "the hit queue overflowed");
@@ -864,7 +864,7 @@ fn run(pace: Pace) {
                     None,
                     LayerMask::ALL,
                 );
-                hits += hit.is_some() as u32;
+                hits += u32::from(hit.is_some());
             }
             hits
         };
@@ -886,7 +886,7 @@ fn run(pace: Pace) {
                     [angle.cos() * 60.0, 30.0, angle.sin() * 60.0],
                     [0.0, -40.0, 0.0],
                 ));
-                hits += hit.is_some() as u32;
+                hits += u32::from(hit.is_some());
             }
             hits
         };
@@ -918,7 +918,7 @@ fn run(pace: Pace) {
                     None,
                     LayerMask::ALL,
                 );
-                hits += hit.is_some() as u32;
+                hits += u32::from(hit.is_some());
             }
             hits
         };

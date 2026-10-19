@@ -36,6 +36,10 @@ pub fn windows_forbidden() -> bool {
 ///
 /// Called at each backend's window entry point, before any operating-system
 /// resource is taken.
+///
+/// # Panics
+///
+/// Panics when the process forbids windows.
 pub fn assert_windows_allowed(backend: &str) {
     assert!(
         !windows_forbidden(),
@@ -56,7 +60,9 @@ mod tests {
 
     #[test]
     fn the_default_permits_a_window() {
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         allow_windows();
         assert!(!windows_forbidden());
         assert_windows_allowed("a backend");
@@ -64,7 +70,9 @@ mod tests {
 
     #[test]
     fn a_forbidden_process_panics_naming_the_backend() {
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         forbid_windows();
         assert!(windows_forbidden());
 

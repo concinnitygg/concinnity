@@ -1,4 +1,4 @@
-//! A CharacterShape edit. GraphicsSystem resolves every shape once at load, so
+//! A `CharacterShape` edit. `GraphicsSystem` resolves every shape once at load, so
 //! overwriting the component alone would change nothing; the running world is
 //! re-seeded through the same narrow seam a slider drag already uses
 //! (`live_preview::shape`), which re-resolves the shape against each live

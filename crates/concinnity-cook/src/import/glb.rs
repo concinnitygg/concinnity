@@ -119,7 +119,7 @@ pub(crate) fn import_static_glb_primitive_from_doc(
     let (vertices, indices_u32) = read_primitive_geometry(doc, source, primitive_index)?;
     let mut indices: Vec<u16> = Vec::with_capacity(indices_u32.len());
     for v in indices_u32 {
-        if v > u16::MAX as u32 {
+        if v > u32::from(u16::MAX) {
             return Err(format!(
                 "'{}': primitive {} exceeds the {}-vertex u16 index limit; \
                  import via `cn add` to auto-split it",
@@ -148,12 +148,7 @@ pub(crate) fn read_primitive_geometry(
         .meshes()
         .flat_map(|m| m.primitives())
         .nth(primitive_index as usize)
-        .ok_or_else(|| {
-            format!(
-                "'{}': primitive_index {} is out of range",
-                source, primitive_index
-            )
-        })?;
+        .ok_or_else(|| format!("'{source}': primitive_index {primitive_index} is out of range"))?;
 
     if primitive.mode() != gltf::mesh::Mode::Triangles {
         return Err(format!(
@@ -170,8 +165,7 @@ pub(crate) fn read_primitive_geometry(
         .read_positions()
         .ok_or_else(|| {
             format!(
-                "'{}': primitive {} has no POSITION data (missing buffer data)",
-                source, primitive_index
+                "'{source}': primitive {primitive_index} has no POSITION data (missing buffer data)"
             )
         })?
         .collect();
@@ -200,8 +194,7 @@ pub(crate) fn read_primitive_geometry(
 
     if vertices.is_empty() {
         return Err(format!(
-            "'{}': primitive {} has no vertices",
-            source, primitive_index
+            "'{source}': primitive {primitive_index} has no vertices"
         ));
     }
     // Indices come straight from the (untrusted) glTF index buffer. Reject any
@@ -261,7 +254,7 @@ pub(crate) fn split_into_u16_chunks(
     let mut chunks: Vec<(Vec<VertexData>, Vec<u16>)> = Vec::new();
     let mut cur_verts: Vec<VertexData> = Vec::new();
     let mut cur_indices: Vec<u16> = Vec::new();
-    let mut remap: std::collections::HashMap<u32, u16> = std::collections::HashMap::new();
+    let mut remap: HashMap<u32, u16> = HashMap::new();
 
     for tri in indices.chunks_exact(3) {
         let new_in_tri = tri.iter().filter(|&&v| !remap.contains_key(&v)).count();
@@ -463,8 +456,8 @@ fn import_geometry(
             .map(|(dp, dn, dt)| {
                 tangent_deltas_seen |= dt.is_some();
                 (
-                    dp.map(|it| it.collect()).unwrap_or_default(),
-                    dn.map(|it| it.collect()).unwrap_or_default(),
+                    dp.map(Iterator::collect).unwrap_or_default(),
+                    dn.map(Iterator::collect).unwrap_or_default(),
                 )
             })
             .collect();
@@ -506,7 +499,7 @@ fn import_geometry(
 
         let push_index = |indices: &mut Vec<u16>, v: u32| -> Result<(), String> {
             let abs = base + v;
-            if abs > u16::MAX as u32 {
+            if abs > u32::from(u16::MAX) {
                 return Err(format!(
                     "imported skinned mesh exceeds the {}-vertex u16 index limit",
                     u16::MAX
@@ -625,7 +618,19 @@ pub fn import_glb_animation_from_doc(
     animation_name: &str,
 ) -> Result<ImportedAnimation, String> {
     let mut anims = import_glb_animations_from_doc(doc, source, skin_index)?;
-    let idx = if !animation_name.is_empty() {
+    let idx = if animation_name.is_empty() {
+        let i = animation_index as usize;
+        if i >= anims.len() {
+            return Err(format!(
+                "'{}': animation_index {} out of range (file has {} animation{})",
+                source,
+                animation_index,
+                anims.len(),
+                if anims.len() == 1 { "" } else { "s" }
+            ));
+        }
+        i
+    } else {
         anims
             .iter()
             .position(|a| a.name == animation_name)
@@ -638,18 +643,6 @@ pub fn import_glb_animation_from_doc(
                     if anims.len() == 1 { "" } else { "s" }
                 )
             })?
-    } else {
-        let i = animation_index as usize;
-        if i >= anims.len() {
-            return Err(format!(
-                "'{}': animation_index {} out of range (file has {} animation{})",
-                source,
-                animation_index,
-                anims.len(),
-                if anims.len() == 1 { "" } else { "s" }
-            ));
-        }
-        i
     };
     Ok(anims.swap_remove(idx))
 }
@@ -687,7 +680,7 @@ pub(crate) fn skinned_node<'a>(
         })
         .collect();
     if skinned.is_empty() {
-        return Err(format!("'{}': no node with both a mesh and a skin", source));
+        return Err(format!("'{source}': no node with both a mesh and a skin"));
     }
     let count = skinned.len();
     skinned.into_iter().nth(skin_index as usize).ok_or_else(|| {
@@ -834,7 +827,7 @@ fn import_animation(
             }
             // Weight channels on other nodes target meshes this import does
             // not carry; drop them like any other non-joint channel.
-            Some(gltf::animation::util::ReadOutputs::MorphTargetWeights(_)) | None => continue,
+            Some(gltf::animation::util::ReadOutputs::MorphTargetWeights(_)) | None => {}
         }
     }
 
@@ -1150,8 +1143,8 @@ mod tests {
         let parents = [Some(1), Some(0)];
         let (order, _) = topological_order(&parents);
         assert_eq!(order.len(), 2);
-        let mut seen = order.clone();
-        seen.sort();
+        let mut seen = order;
+        seen.sort_unstable();
         assert_eq!(seen, vec![0, 1]);
     }
 
@@ -2135,8 +2128,8 @@ mod tests {
             vec![2, 1, 0, 0, 2, 3],
             // A degenerate triangle repeating one vertex.
             vec![5, 5, 5],
-            (0..u16::MAX as u32 + 3).collect(),
-            (0..(u16::MAX as u32 + 1) * 2 + 3).collect(),
+            (0..u32::from(u16::MAX) + 3).collect(),
+            (0..(u32::from(u16::MAX) + 1) * 2 + 3).collect(),
         ];
         for indices in cases {
             let max = indices.iter().copied().max().map_or(0, |m| m + 1);
@@ -2161,7 +2154,7 @@ mod tests {
     #[test]
     fn split_flushes_a_chunk_when_the_u16_limit_would_overflow() {
         // 21846 disjoint triangles = 65538 unique vertices, just past u16.
-        let count = u16::MAX as u32 + 3;
+        let count = u32::from(u16::MAX) + 3;
         let vertices: Vec<VertexData> = (0..count).map(vert).collect();
         let indices: Vec<u32> = (0..count).collect();
         let chunks = split_into_u16_chunks(&vertices, &indices);

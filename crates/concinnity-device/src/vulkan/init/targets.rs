@@ -7,8 +7,8 @@ use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 
 use super::{Features, InitGpu};
 use crate::vulkan::context::{HDR_FORMAT, SwapchainState, VkTargets};
-use crate::vulkan::render_pass::*;
-use crate::vulkan::swapchain::*;
+use crate::vulkan::render_pass::create_main_render_pass;
+use crate::vulkan::swapchain::{AttachmentDeviceCtx, create_attachments, create_main_framebuffers};
 
 pub(super) struct TargetInputs<'a> {
     pub(super) swapchain: &'a SwapchainState,

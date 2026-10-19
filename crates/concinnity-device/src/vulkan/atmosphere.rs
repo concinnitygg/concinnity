@@ -445,7 +445,7 @@ impl VkAtmosphere {
     // The tables, pipelines and sets, writing `cubes`.
     pub(in crate::vulkan) fn new(
         gpu: &GpuUploadContext<'_>,
-        settings: AtmosphereSettings,
+        settings: &AtmosphereSettings,
         cubes: AtmosphereCubes,
         frames: usize,
         targets: AtmosphereTargets<'_>,
@@ -550,7 +550,7 @@ impl VkAtmosphere {
         let params_ubos = (0..frames)
             .map(|_| {
                 gpu.alloc.create_buffer(
-                    std::mem::size_of::<AtmosphereParams>() as u64,
+                    size_of::<AtmosphereParams>() as u64,
                     vk::BufferUsageFlags::UNIFORM_BUFFER,
                     vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
                 )
@@ -621,7 +621,7 @@ impl VkAtmosphere {
             irradiance_faces,
             sky_gpu.capture_top_view(),
         ];
-        let params_size = std::mem::size_of::<AtmosphereParams>() as u64;
+        let params_size = size_of::<AtmosphereParams>() as u64;
         let mut kernel_sets = Vec::with_capacity(frames);
         for ubo in &params_ubos {
             let layouts = [kernel_set_layout.handle(); KERNELS];
@@ -697,7 +697,7 @@ impl VkAtmosphere {
         )?;
 
         Ok(Self {
-            settings,
+            settings: *settings,
             frame: None,
             params: None,
             tables,

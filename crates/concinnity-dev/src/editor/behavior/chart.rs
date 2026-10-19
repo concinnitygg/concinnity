@@ -5,7 +5,7 @@
 //! places, so the ids are the drawing panel's rather than one family fixed here.
 //!
 //! Nothing scissors an editor element (clip bands are captured once at init from
-//! the authored ScrollPanels), so a card panned past the canvas edge is drawn as
+//! the authored `ScrollPanels`), so a card panned past the canvas edge is drawn as
 //! the part still inside it and drops its text once too little is left to read.
 
 use concinnity_core::ecs::World;
@@ -264,7 +264,7 @@ fn overlaps(a: [f32; 4], b: [f32; 4]) -> bool {
 // is on screen. A slot is spent only on a card that is on screen, so a chart of
 // more cards than the pool holds is reached by panning rather than cut off
 // after its first `CARD_POOL`.
-fn shown_cards(view: &ChartView, band: [f32; 4]) -> Vec<(usize, [f32; 4])> {
+fn shown_cards(view: &ChartView<'_>, band: [f32; 4]) -> Vec<(usize, [f32; 4])> {
     view.chart
         .cards
         .iter()
@@ -279,7 +279,7 @@ fn shown_cards(view: &ChartView, band: [f32; 4]) -> Vec<(usize, [f32; 4])> {
 // The card under the cursor, if the cursor is over the canvas at all. Only a
 // card holding a slot answers, so the keyboard and the pointer reach the same
 // ones.
-pub(crate) fn hit_card(view: &ChartView, mx: f32, my: f32, band: [f32; 4]) -> Option<usize> {
+pub(crate) fn hit_card(view: &ChartView<'_>, mx: f32, my: f32, band: [f32; 4]) -> Option<usize> {
     if !point_in(mx, my, band) {
         return None;
     }
@@ -290,7 +290,7 @@ pub(crate) fn hit_card(view: &ChartView, mx: f32, my: f32, band: [f32; 4]) -> Op
         .map(|(i, _)| i)
 }
 
-pub(crate) fn place(world: &mut World, view: &ChartView, band: [f32; 4]) {
+pub(crate) fn place(world: &mut World, view: &ChartView<'_>, band: [f32; 4]) {
     let shown = shown_cards(view, band);
     layout_wires(world, view, band);
     layout_cards(world, view, band, &shown);
@@ -298,7 +298,12 @@ pub(crate) fn place(world: &mut World, view: &ChartView, band: [f32; 4]) {
     layout_indicator(world, view, band);
 }
 
-fn layout_cards(world: &mut World, view: &ChartView, band: [f32; 4], shown: &[(usize, [f32; 4])]) {
+fn layout_cards(
+    world: &mut World,
+    view: &ChartView<'_>,
+    band: [f32; 4],
+    shown: &[(usize, [f32; 4])],
+) {
     for slot in shown.len().min(CARD_POOL)..CARD_POOL {
         hide_card(world, view.ids, slot);
     }
@@ -323,8 +328,7 @@ fn layout_cards(world: &mut World, view: &ChartView, band: [f32; 4], shown: &[(u
             .pulses
             .iter()
             .find(|(c, _)| *c == index)
-            .map(|(_, a)| *a)
-            .unwrap_or(0.0);
+            .map_or(0.0, |(_, a)| *a);
         widget::place_bordered(
             world,
             view.ids.card_bg(slot),
@@ -405,7 +409,7 @@ fn hide_card(world: &mut World, ids: ChartIds, slot: usize) {
 // Each wire is an elbow of axis-aligned segments: out of the parent's right
 // edge, across to the child's row, then into its left edge. A child on the
 // parent's own row needs only the one run.
-fn layout_wires(world: &mut World, view: &ChartView, band: [f32; 4]) {
+fn layout_wires(world: &mut World, view: &ChartView<'_>, band: [f32; 4]) {
     let mut seg = 0;
     let mut label = 0;
     // What the labels drawn so far cover, so two wires cannot stack their words
@@ -491,7 +495,7 @@ fn elbow(ax: f32, ay: f32, bx: f32, by: f32, mid: f32) -> Vec<[f32; 4]> {
 // More cards in the band than the pool holds says how many are not drawn rather
 // than trailing off as though the chart were complete. What is off the band is
 // not counted: panning reaches it.
-fn layout_hint(world: &mut World, view: &ChartView, band: [f32; 4], shown: usize) {
+fn layout_hint(world: &mut World, view: &ChartView<'_>, band: [f32; 4], shown: usize) {
     let hidden = shown.saturating_sub(CARD_POOL);
     widget::place_message(
         world,
@@ -510,7 +514,7 @@ fn layout_hint(world: &mut World, view: &ChartView, band: [f32; 4], shown: usize
 
 // How much of the chart's width is on screen, so a body reaching past the panel
 // is visibly wider than the canvas.
-fn layout_indicator(world: &mut World, view: &ChartView, band: [f32; 4]) {
+fn layout_indicator(world: &mut World, view: &ChartView<'_>, band: [f32; 4]) {
     let e = extent(view.chart);
     if e[0] <= band[2] {
         widget::set_sprite_visible(world, view.ids.track(), false);
@@ -573,7 +577,7 @@ mod tests {
         }))
     }
 
-    fn view<'a>(chart: &'a Chart, pan: [f32; 2]) -> ChartView<'a> {
+    fn view(chart: &Chart, pan: [f32; 2]) -> ChartView<'_> {
         ChartView {
             overflow: "nodes -- open the outline to reach them",
             ids: IDS,

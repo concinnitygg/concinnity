@@ -5,7 +5,7 @@
 //!
 //! Entirely a dev-loop concern: the flag exists only when `DxContext::new` is
 //! called with `hot_reload = true`. Production `cn run` never sets it. Mirrors
-//! src/metal/hot_reload.rs.
+//! `src/metal/hot_reload.rs`.
 
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shader_programs::surface::GrassShading;

@@ -15,6 +15,10 @@ use std::path::{Path, PathBuf};
 const FNV_OFFSET: u32 = 0x811c_9dc5;
 const FNV_PRIME: u32 = 0x0100_0193;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
@@ -47,7 +51,9 @@ fn main() {
             "/// Hash of this crate's sources, folded into every shader-artifact\n\
              /// cache key so a compiler change misses instead of replaying bytes\n\
              /// an older invocation produced.\n\
-             pub const SOURCE_HASH: u32 = {hash:#010x};\n"
+             pub const SOURCE_HASH: u32 = 0x{:04x}_{:04x};\n",
+            hash >> 16,
+            hash & 0xffff
         ),
     )
     .expect("write source_hash.rs");
@@ -82,6 +88,7 @@ fn fnv(mut hash: u32, bytes: &[u8]) -> u32 {
     hash
 }
 
+#[expect(clippy::panic, reason = "a build script reports failure by panicking")]
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
     for entry in entries.flatten() {

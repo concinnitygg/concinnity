@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 /// A self-contained room (floor, ceiling, four walls), with optional texturing.
 ///
-/// Prefer `Room` over a [ProceduralMesh](#proceduralmesh) (generator `"room"`) +
+/// Prefer `Room` over a [`ProceduralMesh`](#proceduralmesh) (generator `"room"`) +
 /// [Prop](#prop) pair for a shorter declaration. The room is placed at the world
 /// origin.
 ///

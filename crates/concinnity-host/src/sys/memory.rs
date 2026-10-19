@@ -27,15 +27,15 @@ mod imp {
     // the process resident size.
     pub(super) fn total_physical_bytes() -> Option<u64> {
         let mut value: u64 = 0;
-        let mut len = std::mem::size_of::<u64>();
+        let mut len = size_of::<u64>();
         let name = c"hw.memsize";
         // SAFETY: `name` is a valid NUL-terminated C string; `value`/`len`
         // describe a correctly sized u64 output buffer for this sysctl.
         let rc = unsafe {
             libc::sysctlbyname(
                 name.as_ptr(),
-                &mut value as *mut u64 as *mut libc::c_void,
-                &mut len,
+                (&raw mut value).cast::<libc::c_void>(),
+                &raw mut len,
                 std::ptr::null_mut(),
                 0,
             )
@@ -54,8 +54,7 @@ mod imp {
         // SAFETY: `mach_task_basic_info` is a plain C struct of integer
         // fields, so all-zero is a valid inhabitant.
         let mut info: libc::mach_task_basic_info = unsafe { std::mem::zeroed() };
-        let mut count = (std::mem::size_of::<libc::mach_task_basic_info>()
-            / std::mem::size_of::<libc::natural_t>())
+        let mut count = (size_of::<libc::mach_task_basic_info>() / size_of::<libc::natural_t>())
             as libc::mach_msg_type_number_t;
         // SAFETY: `info`/`count` are a correctly sized MACH_TASK_BASIC_INFO
         // output buffer; `mach_task_self_` is the current task port (the raw
@@ -64,8 +63,8 @@ mod imp {
             libc::task_info(
                 libc::mach_task_self_,
                 libc::MACH_TASK_BASIC_INFO,
-                &mut info as *mut _ as libc::task_info_t,
-                &mut count,
+                &raw mut info as libc::task_info_t,
+                &raw mut count,
             )
         };
         (rc == libc::KERN_SUCCESS).then_some(info.resident_size)
@@ -104,11 +103,11 @@ mod imp {
 
     pub(super) fn total_physical_bytes() -> Option<u64> {
         let mut status = MEMORYSTATUSEX {
-            dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+            dwLength: size_of::<MEMORYSTATUSEX>() as u32,
             ..Default::default()
         };
         // SAFETY: `status.dwLength` is set to the struct size as the API requires.
-        unsafe { GlobalMemoryStatusEx(&mut status) }.ok()?;
+        unsafe { GlobalMemoryStatusEx(&raw mut status) }.ok()?;
         (status.ullTotalPhys > 0).then_some(status.ullTotalPhys)
     }
 
@@ -118,8 +117,8 @@ mod imp {
         let ok = unsafe {
             GetProcessMemoryInfo(
                 GetCurrentProcess(),
-                &mut counters,
-                std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+                &raw mut counters,
+                size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
             )
         };
         ok.ok().map(|()| counters.WorkingSetSize as u64)

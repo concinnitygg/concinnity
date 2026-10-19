@@ -248,7 +248,7 @@ mod tests {
 
     const PAYLOAD: CacheEntryKind = CacheEntryKind::Payload;
     const EXPANSION: CacheEntryKind = CacheEntryKind::Expansion;
-    const TOKEN: u32 = 0xC0FFEE;
+    const TOKEN: u32 = 0x00C0_FFEE;
 
     // Any path will do: which file a build's segment is belongs to the state
     // tree that resolved it, not to this module.

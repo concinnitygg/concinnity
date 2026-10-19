@@ -1,6 +1,6 @@
-//! EditorHook: viewport click-to-select. A press that missed the top bar and
+//! `EditorHook`: viewport click-to-select. A press that missed the top bar and
 //! every floating panel is offered to the 3D view: the mouse ray (built from
-//! the live Camera3D) is tested against the engine-published PickIndex, and the
+//! the live `Camera3D`) is tested against the engine-published `PickIndex`, and the
 //! nearest hit resolves into the handle its asset is addressed by
 //! (`hook/handles.rs`) and then into the selection set
 //! (`editor/selection.rs`). A plain click replaces the selection; a

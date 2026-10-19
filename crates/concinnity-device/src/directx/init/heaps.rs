@@ -93,7 +93,7 @@ pub(super) fn build_swapchain(
     // sync interval 0 with the tearing present flag (true uncapped). vsync
     // off without tearing -> sync interval 0, no flag (flip-model refresh
     // pacing, the best available fallback).
-    let present_sync_interval: u32 = if vsync { 1 } else { 0 };
+    let present_sync_interval: u32 = u32::from(vsync);
     // Hold the presents DXGI queues ahead of the display to the frames in
     // flight (its default is three), so a refresh-paced run does not add a
     // frame of input latency on top of the CPU's own lead.
@@ -183,9 +183,9 @@ fn create_samplers(
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe {
         device.CreateSampler(
-            &shadow_samp,
+            &raw const shadow_samp,
             D3D12_CPU_DESCRIPTOR_HANDLE { ptr: base_cpu.ptr },
-        )
+        );
     };
 
     // [1] Anisotropic repeat (albedo + normal map). Anisotropic filtering plus
@@ -207,11 +207,11 @@ fn create_samplers(
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe {
         device.CreateSampler(
-            &linear_samp,
+            &raw const linear_samp,
             D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: base_cpu.ptr + stride,
             },
-        )
+        );
     };
 
     // [2] Cube linear-clamp + mip linear (IBL irradiance / prefilter).
@@ -228,11 +228,11 @@ fn create_samplers(
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe {
         device.CreateSampler(
-            &cube_samp,
+            &raw const cube_samp,
             D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: base_cpu.ptr + stride * 2,
             },
-        )
+        );
     };
 
     // [3] Linear clamp, mip 0 only (text atlas). The text atlas is a tightly
@@ -255,10 +255,10 @@ fn create_samplers(
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe {
         device.CreateSampler(
-            &clamp_samp,
+            &raw const clamp_samp,
             D3D12_CPU_DESCRIPTOR_HANDLE {
                 ptr: base_cpu.ptr + stride * 3,
             },
-        )
+        );
     };
 }

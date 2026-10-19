@@ -75,8 +75,8 @@ pub(crate) struct KeyState {
 
 impl KeyState {
     // Replace the runtime movement key map.
-    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
-        self.keymap = *keymap;
+    pub(crate) fn set_keymap(&mut self, keymap: KeyMap) {
+        self.keymap = keymap;
     }
 
     // Apply a key transition to whichever gameplay actions are bound to `key`.

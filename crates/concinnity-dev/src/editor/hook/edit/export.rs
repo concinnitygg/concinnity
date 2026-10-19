@@ -1,4 +1,4 @@
-//! EditorHook: the console's /export action. Compiles the working entries in
+//! `EditorHook`: the console's /export action. Compiles the working entries in
 //! memory on a worker thread (under the one-cook-at-a-time guard), writes the
 //! named skinned mesh as `<name>.glb` beside the project's world file, and
 //! reports through the log sink and a toast.
@@ -15,17 +15,18 @@ use crate::editor::{gltf_export, notify};
 impl EditorHook {
     // /export: resolve the mesh (an explicit name, or the selection through
     // the same binding the shape panel uses) and export it off-thread.
-    pub(super) fn console_export(&mut self, name: Option<&str>, bake: bool) {
+    pub(super) fn console_export(&self, name: Option<&str>, bake: bool) {
         let mesh = match name {
             Some(n) => n.to_string(),
-            None => match self.shape_binding() {
-                Some(b) => b.mesh,
-                None => {
+            None => {
+                if let Some(b) = self.shape_binding() {
+                    b.mesh
+                } else {
                     self.console_sink
                         .error("select a skinned mesh or name one: /export [name] [bake]");
                     return;
                 }
-            },
+            }
         };
         if self.console_build_running.swap(true, Ordering::SeqCst) {
             self.console_sink.warn("cook already running");
@@ -46,7 +47,7 @@ impl EditorHook {
             .join(format!("{mesh}.glb"));
         let sink = self.console_sink.clone();
         let toasts = self.notifier.clone();
-        let running = self.console_build_running.clone();
+        let running = std::sync::Arc::clone(&self.console_build_running);
         let op = self.notifier.begin_op("Exporting");
         sink.info(&format!("export of '{mesh}' started"));
         std::thread::spawn(move || {
@@ -57,7 +58,7 @@ impl EditorHook {
                 .scope(|| gltf_export::export_world_mesh(&content, &mesh, bake))
                 .and_then(|bytes| {
                     std::fs::write(&out, &bytes)
-                        .map(|_| bytes.len())
+                        .map(|()| bytes.len())
                         .map_err(|e| format!("write {}: {e}", out.display()))
                 });
             op.finish();

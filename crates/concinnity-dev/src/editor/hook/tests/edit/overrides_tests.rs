@@ -264,7 +264,7 @@ fn jump_to_override_cycles_through_the_marked_fields() {
 
     let max = h.form.fields.len().saturating_sub(h.form_window());
     let mut seen = Vec::new();
-    for _ in 0..marked.len() + 1 {
+    for _ in 0..=marked.len() {
         h.jump_to_override(&mut world);
         seen.push(h.form.scroll);
     }

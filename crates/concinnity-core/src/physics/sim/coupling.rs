@@ -112,7 +112,7 @@ impl Coupling {
         }
 
         let linear = a.inv_mass + b.inv_mass;
-        let mut coupling = Coupling {
+        let mut coupling = Self {
             rows: [[0.0; MAX_MANIFOLD_POINTS]; MAX_MANIFOLD_POINTS],
             mass: [0.0; MAX_MANIFOLD_POINTS],
         };

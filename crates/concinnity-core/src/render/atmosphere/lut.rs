@@ -1,6 +1,6 @@
 //! The lookup tables' sizes and parameterizations: how a texel maps to the
 //! height and angles it holds, and back. Each function mirrors one in
-//! atmosphere_common.hlsl.
+//! `atmosphere_common.hlsl`.
 
 use super::optics::ray_enter;
 use crate::math::{acos, asin, cos, floor, sqrt};
@@ -27,7 +27,7 @@ pub const IRRADIANCE_FACE: u32 = 16;
 pub const SKY_CUBE_FACE: u32 = 512;
 
 /// Midpoint samples along each transmittance path. `TRANSMITTANCE_STEPS` in
-/// atmosphere_common.hlsl.
+/// `atmosphere_common.hlsl`.
 pub(super) const TRANSMITTANCE_STEPS: u32 = 40;
 
 // A [0, 1] table coordinate to the texel-center range, so 0 and 1 land on the
@@ -91,7 +91,7 @@ pub(super) fn horizon_angles(bottom: f32, r: f32) -> (f32, f32) {
 /// The angles from the zenith the sky-view table spans from radius `r`:
 /// where its rays start to meet the air (the zenith inside it, the air's
 /// rim seen from above it), the horizon, and the horizon's depth below the
-/// level. Mirrors `atmo_sky_angles` in atmosphere_common.hlsl.
+/// level. Mirrors `atmo_sky_angles` in `atmosphere_common.hlsl`.
 pub fn sky_angles(bottom: f32, top: f32, r: f32) -> [f32; 3] {
     let (zenith_horizon, beta) = horizon_angles(bottom, r);
     let rim = if r > top {
@@ -145,7 +145,7 @@ pub fn sky_view_direction(bottom: f32, top: f32, r: f32, uv: [f32; 2]) -> (f32, 
 /// A cubic B-spline read of a table `size` texels long at coordinate `uv`,
 /// as two linear taps: their coordinates and their weights. The spline bends
 /// smoothly through the texel centers, where a linear read creases. Mirrors
-/// `atmo_bspline_taps` in atmosphere_common.hlsl, one axis at a time.
+/// `atmo_bspline_taps` in `atmosphere_common.hlsl`, one axis at a time.
 pub fn bspline_taps(uv: f32, size: u32) -> ([f32; 2], [f32; 2]) {
     let n = size as f32;
     let x = uv * n - 0.5;
@@ -163,7 +163,7 @@ pub fn bspline_taps(uv: f32, size: u32) -> ([f32; 2], [f32; 2]) {
 
 /// The sky-view table's row taps at row coordinate `v`, kept to the half of
 /// the table, sky or ground, that `v` is in, so the horizon is never blurred
-/// across. Mirrors `atmo_sky_view_sample` in atmosphere_common.hlsl.
+/// across. Mirrors `atmo_sky_view_sample` in `atmosphere_common.hlsl`.
 pub fn sky_view_row_taps(v: f32) -> ([f32; 2], [f32; 2]) {
     let n = SKY_VIEW_HEIGHT as f32;
     let (lo, hi) = if v < 0.5 {
@@ -183,7 +183,7 @@ pub fn sky_view_row_taps(v: f32) -> ([f32; 2], [f32; 2]) {
 /// center if it passes over that sphere, so a ray that strikes the ground
 /// keeps its last slices about the ground whatever its length; and never
 /// past [`AERIAL_MAX_DISTANCE_KM`]. Mirrors `atmo_aerial_span` in
-/// atmosphere_common.hlsl.
+/// `atmosphere_common.hlsl`.
 pub fn aerial_span(bottom: f32, top: f32, depth: f32, r: f32, mu: f32) -> Option<[f32; 2]> {
     let enter = ray_enter(r, mu, top);
     if enter < 0.0 {
@@ -460,7 +460,7 @@ mod tests {
         assert!((down[1] - (top - bottom + depth)).abs() < 1e-3, "{down:?}");
         assert_eq!(aerial_span(bottom, top, depth, r, 0.0), None);
         let floor = bottom - depth;
-        let tangent = -crate::math::sqrt(1.0 - (floor / r) * (floor / r));
+        let tangent = -sqrt(1.0 - (floor / r) * (floor / r));
         let reach = |mu: f32| aerial_span(bottom, top, depth, r, mu).expect("in the air")[1];
         // A chord's length near tangency goes as the root of the angle, so the
         // gap closes as the rays close in on the tangent from either side.

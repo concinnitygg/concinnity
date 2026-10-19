@@ -27,7 +27,7 @@ use crate::ecs::{AnyAsset, AudioClipHandle, Ref};
 ///
 /// A `set_transform` node moves an entity: `entity` names it, and the optional
 /// `position`, `rotation_deg` (Euler degrees) and `scale` vectors replace
-/// those parts of its transform. It moves the [Camera3D](#camera3d) too, with
+/// those parts of its transform. It moves the [`Camera3D`](#camera3d) too, with
 /// `rotation_deg`'s `x` as the camera's pitch and `y` as its yaw. `"cut":
 /// true` marks the move as a jump, of the camera or of what it follows: the
 /// first frame drawn afterwards starts afresh rather than blending with the
@@ -92,9 +92,9 @@ pub enum BehaviorSource {
     },
     /// Fires whenever the named world variable changes value.
     Variable(String),
-    /// Fires when something enters the named [TriggerVolume](#triggervolume).
+    /// Fires when something enters the named [`TriggerVolume`](#triggervolume).
     Enter(Option<Ref<TriggerVolume>>),
-    /// Fires when something leaves the named [TriggerVolume](#triggervolume).
+    /// Fires when something leaves the named [`TriggerVolume`](#triggervolume).
     Exit(Option<Ref<TriggerVolume>>),
     /// Fires when the interact key is pressed on the named entity (a
     /// [Prop](#prop) declared `interactable`).
@@ -154,7 +154,7 @@ pub enum BehaviorLiteral {
 
 impl Default for BehaviorLiteral {
     fn default() -> Self {
-        BehaviorLiteral::Int(0)
+        Self::Int(0)
     }
 }
 
@@ -191,10 +191,10 @@ pub enum BehaviorExpr {
     Elapsed,
     /// World-space position of an entity. A camera answers from its own
     /// pose, everything else from its transform.
-    Position(Box<BehaviorExpr>),
+    Position(Box<Self>),
     /// Distance between two entities, each located the way
     /// [`Position`](BehaviorExpr::Position) locates one.
-    Distance(Box<BehaviorExpr>, Box<BehaviorExpr>),
+    Distance(Box<Self>, Box<Self>),
     /// The first entity of a declared query, or none when it is empty.
     First(String),
     /// How many entities a declared query matched.
@@ -205,7 +205,7 @@ pub enum BehaviorExpr {
         /// The declared query searched.
         query: String,
         /// The point searched around, as a vector.
-        of: Box<BehaviorExpr>,
+        of: Box<Self>,
     },
     /// How many entities of a declared query lie within `radius` of a point.
     /// The behavior's own entity is never counted.
@@ -214,9 +214,9 @@ pub enum BehaviorExpr {
         /// The declared query searched.
         query: String,
         /// The point searched around, as a vector.
-        of: Box<BehaviorExpr>,
+        of: Box<Self>,
         /// How far from the point to search.
-        radius: Box<BehaviorExpr>,
+        radius: Box<Self>,
     },
     /// The nearest entity of a declared query a ray meets, or none when it
     /// meets nothing.
@@ -228,48 +228,48 @@ pub enum BehaviorExpr {
         /// The declared query whose entities the ray is tested against.
         query: String,
         /// Where the ray starts, as a vector.
-        from: Box<BehaviorExpr>,
+        from: Box<Self>,
         /// Which way the ray points, as a vector. Need not be unit length; a
         /// zero direction meets nothing.
-        dir: Box<BehaviorExpr>,
+        dir: Box<Self>,
         /// How far the ray reaches.
-        distance: Box<BehaviorExpr>,
+        distance: Box<Self>,
     },
     /// Whether an entity is still alive.
-    Alive(Box<BehaviorExpr>),
+    Alive(Box<Self>),
     /// Sum of two values.
-    Add(Box<BehaviorExpr>, Box<BehaviorExpr>),
+    Add(Box<Self>, Box<Self>),
     /// Difference of two values.
-    Sub(Box<BehaviorExpr>, Box<BehaviorExpr>),
+    Sub(Box<Self>, Box<Self>),
     /// Product of two values; a vector may be scaled by a scalar.
-    Mul(Box<BehaviorExpr>, Box<BehaviorExpr>),
+    Mul(Box<Self>, Box<Self>),
     /// Quotient of two values; dividing by zero yields zero.
-    Div(Box<BehaviorExpr>, Box<BehaviorExpr>),
+    Div(Box<Self>, Box<Self>),
     /// A vector rescaled to unit length; a zero vector stays zero.
-    Normalize(Box<BehaviorExpr>),
+    Normalize(Box<Self>),
     /// Equality test.
-    Eq(Box<BehaviorExpr>, Box<BehaviorExpr>),
+    Eq(Box<Self>, Box<Self>),
     /// Inequality test.
-    Ne(Box<BehaviorExpr>, Box<BehaviorExpr>),
+    Ne(Box<Self>, Box<Self>),
     /// Less-than test.
-    Lt(Box<BehaviorExpr>, Box<BehaviorExpr>),
+    Lt(Box<Self>, Box<Self>),
     /// Less-than-or-equal test.
-    Le(Box<BehaviorExpr>, Box<BehaviorExpr>),
+    Le(Box<Self>, Box<Self>),
     /// Greater-than test.
-    Gt(Box<BehaviorExpr>, Box<BehaviorExpr>),
+    Gt(Box<Self>, Box<Self>),
     /// Greater-than-or-equal test.
-    Ge(Box<BehaviorExpr>, Box<BehaviorExpr>),
+    Ge(Box<Self>, Box<Self>),
     /// True when every operand is true.
-    All(Vec<BehaviorExpr>),
+    All(Vec<Self>),
     /// True when any operand is true.
-    Any(Vec<BehaviorExpr>),
+    Any(Vec<Self>),
     /// Logical negation.
-    Not(Box<BehaviorExpr>),
+    Not(Box<Self>),
 }
 
 impl Default for BehaviorExpr {
     fn default() -> Self {
-        BehaviorExpr::Bool(false)
+        Self::Bool(false)
     }
 }
 
@@ -286,10 +286,10 @@ pub enum BehaviorNode {
         cond: BehaviorExpr,
         /// Nodes run when `cond` holds.
         #[serde(default)]
-        then: Vec<BehaviorNode>,
+        then: Vec<Self>,
         /// Nodes run when `cond` does not hold.
         #[serde(default, rename = "else")]
-        otherwise: Vec<BehaviorNode>,
+        otherwise: Vec<Self>,
     },
     /// Runs `do` once per entity a declared query matched, binding each to
     /// `bind`.
@@ -300,7 +300,7 @@ pub enum BehaviorNode {
         bind: String,
         /// Nodes run per entity.
         #[serde(default, rename = "do")]
-        body: Vec<BehaviorNode>,
+        body: Vec<Self>,
     },
     /// Runs `do` once, `seconds` of simulated time after this node is reached.
     ///
@@ -313,7 +313,7 @@ pub enum BehaviorNode {
         seconds: BehaviorExpr,
         /// Nodes run once the wait elapses.
         #[serde(default, rename = "do")]
-        body: Vec<BehaviorNode>,
+        body: Vec<Self>,
     },
     /// Binds an expression to a name for the rest of the body.
     Let {
@@ -346,11 +346,11 @@ pub enum BehaviorNode {
     /// Writes an entity's transform. An omitted field is left unchanged, and
     /// an entity with no transform to write is left alone.
     ///
-    /// The [Camera3D](#camera3d) is moved the same way: `position` places it,
+    /// The [`Camera3D`](#camera3d) is moved the same way: `position` places it,
     /// and `rotation_deg` aims it, `x` as its pitch and `y` as its yaw (a
     /// camera does not roll, and has no scale). A first-person or free-fly
     /// camera carries on from the written pose. A camera a
-    /// [CameraTrack](#cameratrack) or a follow controller drives is put back on
+    /// [`CameraTrack`](#cameratrack) or a follow controller drives is put back on
     /// its path the next tick, so the write shows for one frame; move what it
     /// follows instead.
     ///
@@ -425,13 +425,13 @@ pub enum BehaviorNode {
         target: BehaviorExpr,
     },
     /// Wakes an entity's physics body, so one authored asleep (see
-    /// [PropBody](#propbody)) or settled at rest is simulated again. An entity
+    /// [`PropBody`](#propbody)) or settled at rest is simulated again. An entity
     /// with no dynamic body is left alone.
     Wake {
         /// The entity whose body wakes.
         target: BehaviorExpr,
     },
-    /// Plays an [AudioClip](#audioclip) flat on the main mix (no 3D position).
+    /// Plays an [`AudioClip`](#audioclip) flat on the main mix (no 3D position).
     Sound {
         /// The clip played.
         #[serde(default)]
@@ -448,7 +448,7 @@ pub enum BehaviorNode {
         /// The scene jumped to.
         #[serde(default)]
         scene: Option<Ref<Scene>>,
-        /// The transition. See [SceneTransition](crate::components::SceneTransition).
+        /// The transition. See [`SceneTransition`](crate::components::SceneTransition).
         #[serde(default)]
         transition: crate::components::SceneTransition,
     },

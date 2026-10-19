@@ -9,7 +9,7 @@ pub const MAX_DIRECTIONAL_LIGHTS: usize = 4;
 pub const MAX_POINT_LIGHTS: usize = 8;
 
 /// Capacity of the per-scene local-light storage buffer the forward pass reads.
-/// Distinct from MAX_POINT_LIGHTS, which bounds the fixed LightUniforms point
+/// Distinct from `MAX_POINT_LIGHTS`, which bounds the fixed `LightUniforms` point
 /// array world Shader hooks read. Lights past this
 /// cap are dropped with a warning.
 pub const MAX_LOCAL_LIGHTS: usize = 1024;
@@ -21,13 +21,13 @@ pub const LIGHT_KIND_SPOT: u32 = 1;
 /// `GpuLight.kind` for a rectangular area light. See [`LIGHT_KIND_POINT`].
 pub const LIGHT_KIND_AREA: u32 = 2;
 
-/// Capacity of the per-scene AreaLightData table. Area lights are far heavier to
+/// Capacity of the per-scene `AreaLightData` table. Area lights are far heavier to
 /// shade than point or spot lights (a polygon integral per fragment), so the cap
-/// is deliberately well under MAX_LOCAL_LIGHTS.
+/// is deliberately well under `MAX_LOCAL_LIGHTS`.
 pub const MAX_AREA_LIGHTS: usize = 64;
 
 /// Clustered forward lighting froxel grid. The screen is tiled
-/// CLUSTER_GRID_X x CLUSTER_GRID_Y with CLUSTER_GRID_Z exponential depth slices;
+/// `CLUSTER_GRID_X` x `CLUSTER_GRID_Y` with `CLUSTER_GRID_Z` exponential depth slices;
 /// a compute pass bins the local lights into per-cluster index lists the forward
 /// pass reads instead of iterating every light.
 pub const CLUSTER_GRID_X: u32 = 16;
@@ -38,8 +38,8 @@ pub const CLUSTER_GRID_Z: u32 = 24;
 /// Total clusters in the froxel grid.
 pub const CLUSTER_COUNT: u32 = CLUSTER_GRID_X * CLUSTER_GRID_Y * CLUSTER_GRID_Z;
 /// Per-cluster light-index list capacity. Each cluster occupies
-/// CLUSTER_LIGHT_LIST_STRIDE u32 slots: slot 0 is the count, slots 1.. are light
-/// indices into the GpuLight buffer. Lights past the cap are dropped.
+/// `CLUSTER_LIGHT_LIST_STRIDE` u32 slots: slot 0 is the count, slots 1.. are light
+/// indices into the `GpuLight` buffer. Lights past the cap are dropped.
 pub const MAX_LIGHTS_PER_CLUSTER: u32 = 63;
 /// `u32` slots one cluster occupies in the light-index buffer: the count plus
 /// [`MAX_LIGHTS_PER_CLUSTER`] indices.
@@ -65,13 +65,13 @@ pub const NUM_SHADOW_CASCADES: usize = 4;
 
 /// Slices in the spot shadow map array: the number of spot lights that can cast
 /// shadows at once. Spots past this still light the scene with `shadow_index`
-/// left at -1. Hardcoded for the same reason as NUM_SHADOW_CASCADES.
+/// left at -1. Hardcoded for the same reason as `NUM_SHADOW_CASCADES`.
 pub const MAX_SHADOWED_SPOTS: usize = 16;
 
 /// Per-slice edge of the spot shadow map array, derived from the authored
 /// directional `shadow_map_size` so one quality knob scales both. Quartered
 /// because a spot's cone covers far less world area than a CSM cascade, and the
-/// array multiplies the cost by MAX_SHADOWED_SPOTS.
+/// array multiplies the cost by `MAX_SHADOWED_SPOTS`.
 pub fn spot_shadow_slice_size(shadow_map_size: u32) -> u32 {
     (shadow_map_size / 4).clamp(256, 1024)
 }
@@ -245,7 +245,7 @@ impl MaterialUniforms {
     };
 }
 
-/// One directional light entry in LightUniforms.
+/// One directional light entry in `LightUniforms`.
 /// Layout (32 bytes) mirrors `DirLight` in `main_types.hlsl`, which spells each
 /// (float3, scalar) pair as one float4 lane.
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -261,7 +261,7 @@ pub struct DirectionalLightData {
     pub _pad: f32,
 }
 
-/// One point light entry in LightUniforms.
+/// One point light entry in `LightUniforms`.
 /// Layout (32 bytes) mirrors `PointLight` in `main_types.hlsl`, spelled the
 /// same way as `DirectionalLightData`.
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -279,7 +279,7 @@ pub struct PointLightData {
 
 /// One local light in the per-scene storage buffer the forward pass iterates
 /// (bound at Metal fragment buffer(8)). 64 bytes = four 16-byte lanes, so every
-/// packed_float3 sits inside one lane with no GPU alignment promotion. Must match
+/// `packed_float3` sits inside one lane with no GPU alignment promotion. Must match
 /// the `GpuLight` struct in the single-source shaders.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
@@ -294,7 +294,7 @@ pub struct GpuLight {
     pub intensity: f32,
     /// Unit vector the light points along (spot / area). Zero for a point light.
     pub direction: [f32; 3],
-    /// LIGHT_KIND_* discriminant.
+    /// `LIGHT_KIND`_* discriminant.
     pub kind: u32,
     /// Spot cone: cosine of the inner (full-bright) and outer (cutoff) half-angles.
     /// Both zero for a point light; the shader gates the cone term on `kind`.
@@ -303,7 +303,7 @@ pub struct GpuLight {
     pub cos_outer: f32,
     /// Index into the spot shadow atlas, or -1 when the light casts no shadow.
     pub shadow_index: i32,
-    /// Index into the AreaLightData table for an area light, or -1 for a point /
+    /// Index into the `AreaLightData` table for an area light, or -1 for a point /
     /// spot light. A rect needs two edge vectors that do not fit in the spare
     /// fields here, so the extra data lives in a parallel table (the same shape
     /// `shadow_index` uses for the spot shadow slices).
@@ -359,7 +359,7 @@ pub struct LightUniforms {
     /// areas the directional light cannot reach. Occupies the first of the two
     /// trailing pad words, so the 400-byte layout is unchanged.
     pub ambient_intensity: f32,
-    /// Number of valid entries in the GpuLight storage buffer the forward pass
+    /// Number of valid entries in the `GpuLight` storage buffer the forward pass
     /// reads. Occupies the second trailing pad word, so the 400-byte layout is
     /// unchanged. Shader hooks read `num_point` against the fixed `point` array
     /// instead.
@@ -401,7 +401,7 @@ impl LightUniforms {
 /// pass that reads the per-cluster lists. The compute kernel unprojects each
 /// cluster's screen tile through `inv_view_proj` and walks camera rays to the
 /// slice's near/far depth to build a world-space AABB (same convention as the fog
-/// froxel kernel), then tests each GpuLight sphere against it. The forward pass
+/// froxel kernel), then tests each `GpuLight` sphere against it. The forward pass
 /// reads the grid dims + depth range + screen size to map a fragment to its
 /// cluster. The same pass bins the reflection probes' influence boxes into
 /// per-cluster probe masks. 128 bytes; `cam_pos` / `view_forward` each share a
@@ -429,7 +429,7 @@ pub struct ClusterParams {
     pub grid_y: u32,
     /// Exponential depth slices per cluster column.
     pub grid_z: u32,
-    /// Number of valid GpuLight entries the kernel bins.
+    /// Number of valid `GpuLight` entries the kernel bins.
     pub num_lights: u32,
     /// Render-target size in pixels; maps a fragment's `position.xy` to a tile.
     pub screen_w: f32,
@@ -446,7 +446,7 @@ pub struct ClusterParams {
 
 impl ClusterParams {
     /// Neutral params for context construction before the first per-frame update.
-    /// use_clusters = 0 so the forward pass falls back to brute-force iteration
+    /// `use_clusters` = 0 so the forward pass falls back to brute-force iteration
     /// until a real frame's camera fills the grid.
     pub const ZERO: Self = Self {
         inv_view_proj: [[0.0; 4]; 4],
@@ -482,6 +482,7 @@ impl ClusterParams {
 
     /// The same lights and probes binned over `camera`'s grid instead: a
     /// second viewpoint, such as a planar mirror, shading the frame's lights.
+    #[must_use]
     pub fn with_camera(&self, camera: &ClusterCamera) -> Self {
         let view = camera.view;
         Self {
@@ -522,7 +523,7 @@ pub struct ClusterCamera {
 /// Cascaded shadow map view-projection matrices and split depths.
 ///
 /// Pushed to the shadow-pass vertex shader at buffer(0) (alongside a
-/// cascade_idx push constant that picks one matrix) and to the main-pass
+/// `cascade_idx` push constant that picks one matrix) and to the main-pass
 /// fragment shader at buffer(5). Layout must stay in sync with the
 /// `ShadowUniforms` struct in the single-source shaders. Three of them declare
 /// it: the forward pass stops at `active_cascades`, the shadow pass at
@@ -595,7 +596,7 @@ pub struct SpotShadowData {
 
 impl SpotShadowData {
     /// An all-zero slice, used to fill unused entries.
-    pub const ZERO: Self = SpotShadowData {
+    pub const ZERO: Self = Self {
         light_vp: [
             [1.0, 0.0, 0.0, 0.0],
             [0.0, 1.0, 0.0, 0.0],
@@ -609,11 +610,11 @@ impl SpotShadowData {
 }
 
 /// One rectangular area light's extent, indexed by `GpuLight.data_index`. The
-/// center is the GpuLight's `position` and the emitting direction its
+/// center is the `GpuLight`'s `position` and the emitting direction its
 /// `direction`; only the two in-plane edge vectors and the sidedness flag need
 /// the extra room.
 ///
-/// 32 bytes: a scalar follows each vec3 so the MSL (packed_float3), HLSL (float3,
+/// 32 bytes: a scalar follows each vec3 so the MSL (`packed_float3`), HLSL (float3,
 /// no 16-byte straddle), and GLSL std430 (vec3 align-16) layouts all agree.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
@@ -631,7 +632,7 @@ pub struct AreaLightData {
 
 impl AreaLightData {
     /// An all-zero entry, used to fill unused slots.
-    pub const ZERO: Self = AreaLightData {
+    pub const ZERO: Self = Self {
         right: [0.0; 3],
         two_sided: 0,
         up: [0.0; 3],
@@ -752,9 +753,9 @@ pub struct PostProcessParams {
     /// `ColorLut` resolves to.
     pub lut_strength: f32,
     /// HDR display output flag. `0.0` = SDR path (ACES tonemap + gamma 2.2 +
-    /// FXAA + ColorLut, output BGRA8Unorm). `1.0` = HDR EDR path (no tonemap
+    /// FXAA + `ColorLut`, output `BGRA8Unorm`). `1.0` = HDR EDR path (no tonemap
     /// or gamma; the exposed HDR scene is emitted into a `RGBA16Float`
-    /// swapchain attached to a Display P3 EDR layer). FXAA + ColorLut are
+    /// swapchain attached to a Display P3 EDR layer). FXAA + `ColorLut` are
     /// skipped on the HDR path because both depend on display-referred
     /// values. Stored as a float (not a uint) so the MSL shader can branch
     /// on `> 0.5` without a cast.
@@ -903,7 +904,7 @@ pub struct SsrParams {
     pub stride: f32,
     /// View-space depth tolerance for accepting a ray/scene-depth intersection.
     pub thickness: f32,
-    /// IBL prefilter cubemap mip count. 0 when no EnvironmentMap is bound: the
+    /// IBL prefilter cubemap mip count. 0 when no `EnvironmentMap` is bound: the
     /// resolve then skips the cube fallback and keeps the base shading instead.
     pub prefilter_mip_count: f32,
     /// The scale the HDR chain is written at; the probe and sky fallback,
@@ -981,7 +982,7 @@ pub struct RtParams {
     pub tan_half_fov_y: f32,
     /// Viewport aspect ratio (width / height).
     pub aspect: f32,
-    /// IBL prefilter cubemap mip count. 0 when no EnvironmentMap is bound: the
+    /// IBL prefilter cubemap mip count. 0 when no `EnvironmentMap` is bound: the
     /// kernel then keeps the base shading for missed rays instead of a cube tap.
     pub prefilter_mip_count: f32,
     /// 1.0 when a reflected hit casts a sun-shadow ray, 0.0 when it is lit
@@ -1357,7 +1358,7 @@ pub struct DrawObject {
     /// Per-draw material scalars pushed to the fragment shader at buffer(3).
     pub material: MaterialUniforms,
     /// When false the object is skipped in both the shadow and main passes.
-    /// Which world shader renders this object: the dense ShaderHandle value of
+    /// Which world shader renders this object: the dense `ShaderHandle` value of
     /// the material's `shader` reference, or 0 (the world default) when the
     /// material names none. The backend binds the matching pipeline for each
     /// bucket; the value never changes after the draw is built.
@@ -1771,8 +1772,8 @@ pub const MAX_SHADER_BUCKETS: usize = 8;
 
 /// Upper bound on shader buckets a cull dispatch can route between (the ICB
 /// argument-buffer array length in the Metal encode kernel): the budgeted
-/// Shaders plus the default's second grass twin. Mirrored by MAX_DRAW_BUCKETS
-/// in cull_encode.metal.
+/// Shaders plus the default's second grass twin. Mirrored by `MAX_DRAW_BUCKETS`
+/// in `cull_encode.metal`.
 pub const MAX_DRAW_BUCKETS: usize = MAX_SHADER_BUCKETS + 1;
 
 /// Pack the per-frame cull-decision bits for one `DrawObject`. Mirrors the
@@ -1811,7 +1812,7 @@ pub fn draw_args_bucket_bits(shader_bucket: u32) -> u32 {
 
 /// One GPU-instanced draw: a shared mesh slice + material rendered at many
 /// world-space transforms in a single `drawIndexedInstanced` / `cmd_draw_indexed`
-/// (instance_count > 1). The cluster has a single union AABB across all
+/// (`instance_count` > 1). The cluster has a single union AABB across all
 /// instances; it is frustum-tested as a whole. Cluster culling trades per-
 /// instance precision for one draw call instead of N.
 pub struct InstancedCluster {
@@ -1915,7 +1916,7 @@ pub struct SkinnedDrawObject {
     /// Upper corner of the mesh-local bind-pose AABB.
     pub local_bb_max: [f32; 3],
     /// LOD1..N slices, in ascending `switch_distance` order. Empty when
-    /// the SkinnedMesh declared `lod_levels <= 1`. Each slice points at a
+    /// the `SkinnedMesh` declared `lod_levels <= 1`. Each slice points at a
     /// rebased index range in the shared skinned IB; QEM half-edge
     /// decimation keeps the vertex set unchanged so all LODs share this
     /// slot's `vertex_base` / `vertex_count`.

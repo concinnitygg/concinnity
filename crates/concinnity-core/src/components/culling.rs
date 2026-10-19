@@ -1,7 +1,7 @@
 // Visibility-culling schema.
 
 /// How the renderer culls objects the camera cannot see. The `culling` section
-/// of [GraphicsConfig](#graphicsconfig); a field left unset takes the default
+/// of [`GraphicsConfig`](#graphicsconfig); a field left unset takes the default
 /// below.
 ///
 /// ```rust

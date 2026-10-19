@@ -78,7 +78,7 @@ mod tests {
     }
 
     fn keys(names: &[&str]) -> Vec<String> {
-        names.iter().map(|k| k.to_string()).collect()
+        names.iter().map(ToString::to_string).collect()
     }
 
     #[test]

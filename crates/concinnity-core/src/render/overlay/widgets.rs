@@ -126,8 +126,7 @@ pub(super) fn build_dropdown_overlay(
     // draws after the sprites, so it sits over the highlights).
     let line_h = loaded_fonts
         .resolve(screen.font)
-        .map(|f| f.size_px * screen.scale)
-        .unwrap_or(0.0);
+        .map_or(0.0, |f| f.size_px * screen.scale);
     for (opt, rect) in screen.options.iter().skip(first).zip(&layout.items) {
         let content = out.string(opt);
         out.labels.push(TextLabel {
@@ -231,9 +230,7 @@ pub(super) fn build_text_input_overlay(
 ) {
     const CARET_W: f32 = 2.0;
     let font = loaded_fonts.resolve(ti.font);
-    let line_h = font
-        .map(|f| f.size_px * ti.scale)
-        .unwrap_or(ti.height * 0.6);
+    let line_h = font.map_or(ti.height * 0.6, |f| f.size_px * ti.scale);
     // Text baseline math centers the cap band in `[y, y + line_h]`, so placing
     // the line box's top here vertically centers the text in the field.
     let text_y = ti.y + (ti.height - line_h) / 2.0;
@@ -269,26 +266,24 @@ pub(super) fn build_text_input_overlay(
         ti.content
             .char_indices()
             .nth(caret)
-            .map(|(b, _)| b)
-            .unwrap_or(ti.content.len())
+            .map_or(ti.content.len(), |(b, _)| b)
     };
     // Fit the text to the box. Without a loaded font we cannot measure, so pass it
     // through (it will not be rendered until a font loads).
     let avail = (ti.width - 2.0 * ti.padding - CARET_W).max(0.0);
     let mut content = out.string("");
-    let (x_offset, caret_off) = match font {
-        Some(f) => fit_line(
+    let (x_offset, caret_off) = if let Some(f) = font {
+        fit_line(
             raw,
             caret_byte,
             avail,
             ti.focused,
             |s| text::text_advance_width(s, f, ti.scale),
             &mut content,
-        ),
-        None => {
-            content.push_str(raw);
-            (0.0, 0.0)
-        }
+        )
+    } else {
+        content.push_str(raw);
+        (0.0, 0.0)
     };
 
     out.labels.push(TextLabel {
@@ -476,7 +471,7 @@ mod tests {
     fn dropdown_view(options: &[&str]) -> DropdownView {
         DropdownView {
             anchor: [400.0, 100.0, 200.0, 40.0],
-            options: options.iter().map(|s| s.to_string()).collect(),
+            options: options.iter().map(ToString::to_string).collect(),
             selected: 0,
             first: 0,
             hovered: None,
@@ -596,7 +591,7 @@ mod tests {
     #[test]
     fn build_dropdown_overlay_windows_a_scrolled_list() {
         let options: Vec<String> = (0..16).map(|i| format!("o{i}")).collect();
-        let refs: Vec<&str> = options.iter().map(|s| s.as_str()).collect();
+        let refs: Vec<&str> = options.iter().map(String::as_str).collect();
         let mut view = dropdown_view(&refs);
         view.first = 8;
         view.selected = 0;

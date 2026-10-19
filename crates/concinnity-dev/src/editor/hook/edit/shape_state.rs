@@ -1,4 +1,4 @@
-//! EditorHook: the Character Shape panel's session state: the row window's
+//! `EditorHook`: the Character Shape panel's session state: the row window's
 //! scroll, the row count sampled once a frame (the rows come from the live
 //! world, which the panel sizing cannot reach), the last rejected commit, the
 //! seed counter behind Randomize, and a slider drag in flight

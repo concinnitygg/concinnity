@@ -98,7 +98,7 @@ impl RenderOps {
 
     /// Move this queue's ops onto the end of `dst`, leaving this queue empty
     /// with its capacity intact.
-    pub fn drain_into(&mut self, dst: &mut RenderOps) {
+    pub fn drain_into(&mut self, dst: &mut Self) {
         dst.ops.append(&mut self.ops);
     }
 

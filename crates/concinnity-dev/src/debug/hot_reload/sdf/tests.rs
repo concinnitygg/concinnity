@@ -144,7 +144,7 @@ fn entry(name: &str, volume: usize, path: &std::path::Path, flags: (bool, bool))
 fn pending(names: &[&str]) -> PendingSdfVolumes {
     PendingSdfVolumes {
         all: false,
-        ids: names.iter().map(|n| n.to_string()).collect(),
+        ids: names.iter().map(ToString::to_string).collect(),
     }
 }
 
@@ -196,11 +196,7 @@ fn backend(resident: &[usize]) -> VolumeBackend {
 }
 
 // Poll until `count` reports arrived.
-fn poll_for(
-    reload: &mut SdfReload,
-    backend: &mut VolumeBackend,
-    count: usize,
-) -> Vec<ReloadReport> {
+fn poll_for(reload: &SdfReload, backend: &mut VolumeBackend, count: usize) -> Vec<ReloadReport> {
     let mut reports = Vec::new();
     concinnity_testing::eventually(format_args!("{count} reload reports"), || {
         reports.extend(reload.poll(backend));
@@ -239,7 +235,7 @@ fn a_shared_field_compiles_once_per_flag_set_and_swaps_every_volume() {
             .request(&pending(&["cloud_a", "cloud_b", "cloud_caster"]), None)
             .is_empty()
     );
-    let reports = poll_for(&mut f.reload, &mut backend, 3);
+    let reports = poll_for(&f.reload, &mut backend, 3);
     assert_eq!(
         outcomes(&reports),
         [
@@ -270,7 +266,7 @@ fn a_request_compiles_just_the_named_volumes() {
     let mut backend = backend(&[0, 1, 2, 3]);
     f.write("blob.hlsl", "blob v2");
     f.reload.request(&pending(&["blob"]), None);
-    let reports = poll_for(&mut f.reload, &mut backend, 1);
+    let reports = poll_for(&f.reload, &mut backend, 1);
     assert_eq!(outcomes(&reports), [("blob", "swapped")]);
     assert_eq!(backend.swaps, [(3, "blob v2".to_string())]);
     // Without a builder the swap is handed nothing and builds for itself.
@@ -285,7 +281,7 @@ fn a_volume_the_backend_does_not_hold_applies_on_load() {
     let mut f = Fixture::new();
     let mut backend = backend(&[3]);
     f.reload.request(&pending(&["lost"]), None);
-    let reports = poll_for(&mut f.reload, &mut backend, 1);
+    let reports = poll_for(&f.reload, &mut backend, 1);
     assert_eq!(outcomes(&reports), [("lost", "applies on load")]);
     assert!(backend.swaps.is_empty());
 }
@@ -302,7 +298,7 @@ fn a_request_for_all_reaches_every_volume() {
         },
         None,
     );
-    assert_eq!(poll_for(&mut f.reload, &mut backend, 5).len(), 5);
+    assert_eq!(poll_for(&f.reload, &mut backend, 5).len(), 5);
     assert_eq!(f.compiles().len(), 4, "one per field and flag set");
 }
 
@@ -314,7 +310,7 @@ fn a_compile_error_keeps_every_volume_as_it_was() {
     let mut backend = backend(&[0, 1]);
     f.write("cloud.hlsl", "cloud error");
     f.reload.request(&pending(&["cloud_a", "cloud_b"]), None);
-    let reports = poll_for(&mut f.reload, &mut backend, 2);
+    let reports = poll_for(&f.reload, &mut backend, 2);
     assert_eq!(
         outcomes(&reports),
         [("cloud_a", "failed"), ("cloud_b", "failed")]
@@ -336,7 +332,7 @@ fn a_rejected_pipeline_is_reported() {
         ..backend(&[3])
     };
     f.reload.request(&pending(&["blob"]), None);
-    let reports = poll_for(&mut f.reload, &mut backend, 1);
+    let reports = poll_for(&f.reload, &mut backend, 1);
     assert!(matches!(
         &reports[0].outcome,
         ReloadOutcome::Failed(ReloadFailure::Rejected(e)) if e.contains("pipeline build failed")
@@ -355,7 +351,7 @@ fn every_volume_of_a_group_is_handed_its_own_worker_built_pipelines() {
         &pending(&["cloud_a", "cloud_b", "cloud_caster"]),
         builder(false),
     );
-    let reports = poll_for(&mut f.reload, &mut backend, 3);
+    let reports = poll_for(&f.reload, &mut backend, 3);
     assert_eq!(outcomes(&reports).len(), 3);
     assert_eq!(f.compiles().len(), 2, "one per flag set");
     backend.prepared.sort_by_key(|p| p.0);
@@ -388,7 +384,7 @@ fn pipelines_the_builder_refuses_are_never_swapped() {
     let mut backend = backend(&[0, 1]);
     f.reload
         .request(&pending(&["cloud_a", "cloud_b"]), builder(true));
-    let reports = poll_for(&mut f.reload, &mut backend, 2);
+    let reports = poll_for(&f.reload, &mut backend, 2);
     assert_eq!(
         outcomes(&reports),
         [("cloud_a", "failed"), ("cloud_b", "failed")]

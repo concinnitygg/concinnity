@@ -329,10 +329,7 @@ fn story_world_with_pause(story: Story) -> World {
 
 fn sprite_visible(world: &World, name: &str) -> bool {
     let id = intern(name);
-    world
-        .get_by_id::<Sprite>(id)
-        .map(|s| s.visible)
-        .unwrap_or(false)
+    world.get_by_id::<Sprite>(id).is_some_and(|s| s.visible)
 }
 
 fn label_content(world: &World, name: &str) -> String {
@@ -936,7 +933,7 @@ fn numeric_ops_accumulate_and_comparisons_gate() {
                         ..page("One.")
                     },
                     StoryPage {
-                        ops: vec![add_trip.clone()],
+                        ops: vec![add_trip],
                         ..page("Two.")
                     },
                     StoryPage {
@@ -1052,10 +1049,10 @@ fn slot_summaries_and_slot_presence() {
         page: 1,
         vars: BTreeMap::new(),
     };
-    store.put(SaveSlot::Manual(0), save.clone());
+    store.put(SaveSlot::Manual(0), save);
     assert!(sys.any_slot_save());
     let summary = sys.slot_summary(0);
-    assert!(summary.contains("a"), "{summary}");
+    assert!(summary.contains('a'), "{summary}");
     assert!(summary.contains("page 2"), "{summary}");
 }
 
@@ -1155,7 +1152,7 @@ fn slot_overlay_scrolls_the_window_over_all_slots() {
         page: 1,
         vars: BTreeMap::new(),
     };
-    store.put(SaveSlot::Manual(6), save.clone());
+    store.put(SaveSlot::Manual(6), save);
     world.step();
 
     // Open the load overlay: the window starts at slot 1, showing three rows.
@@ -1327,7 +1324,7 @@ fn title_load_works_after_returning_to_the_title() {
         page: 1,
         vars: BTreeMap::new(),
     };
-    store.put(SaveSlot::Manual(0), save.clone());
+    store.put(SaveSlot::Manual(0), save);
 
     // Quit to the title (a plain `show` the pause menu's Quit fires).
     world

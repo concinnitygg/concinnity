@@ -32,7 +32,7 @@ pub struct Frustum {
 impl Frustum {
     /// The frustum of a camera view-projection: the main camera, a reflection
     /// probe face or a planar reflection. `vp[col][row]`, column-major, the
-    /// layout the renderer's ViewUniforms use. The projection has no far plane,
+    /// layout the renderer's `ViewUniforms` use. The projection has no far plane,
     /// so the frustum is open-ended unless `view_distance` closes it at that
     /// distance along the view axis.
     pub fn from_camera(vp: [[f32; 4]; 4], view_distance: Option<f32>) -> Self {

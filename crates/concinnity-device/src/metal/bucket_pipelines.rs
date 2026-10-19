@@ -91,9 +91,10 @@ pub(crate) fn build_bucket_pipelines(
     build: BucketBuild,
 ) -> RenderResult<BucketPipelines> {
     let main = build_bucket_main(device, vert_desc, bucket, world, grass, build)?;
-    let prepass = match build.prepass {
-        true => build_bucket_prepass(device, bucket, world, build.hot_reload),
-        false => None,
+    let prepass = if build.prepass {
+        build_bucket_prepass(device, bucket, world, build.hot_reload)
+    } else {
+        None
     };
     Ok(BucketPipelines {
         main,
@@ -167,7 +168,7 @@ fn build_bucket_prepass(
 ) -> Option<Pipeline> {
     try_build_bucket_prepass(device, world, hot_reload)
         .map_err(|e| {
-            tracing::warn!("shader bucket {bucket}'s G-buffer pre-pass did not build: {e}")
+            tracing::warn!("shader bucket {bucket}'s G-buffer pre-pass did not build: {e}");
         })
         .ok()
 }
@@ -319,9 +320,9 @@ mod tests {
     }
 
     fn pipeline_id(
-        pipeline: &Option<Pipeline>,
+        pipeline: Option<&Pipeline>,
     ) -> Option<*const ProtocolObject<dyn MTLRenderPipelineState>> {
-        pipeline.as_ref().map(Retained::as_ptr)
+        pipeline.map(Retained::as_ptr)
     }
 
     // A fresh bucket whose pre-pass fails still shades. Rebuilt, it may
@@ -406,11 +407,11 @@ mod tests {
         assert!(pipelines.prepass.is_none());
 
         sync_prepass(&device, build(true), 1, &mut pipelines, Some(&world));
-        let built = pipeline_id(&pipelines.prepass);
+        let built = pipeline_id(pipelines.prepass.as_ref());
         assert!(built.is_some());
 
         sync_prepass(&device, build(true), 1, &mut pipelines, Some(&world));
-        assert_eq!(pipeline_id(&pipelines.prepass), built);
+        assert_eq!(pipeline_id(pipelines.prepass.as_ref()), built);
 
         sync_prepass(&device, build(false), 1, &mut pipelines, Some(&world));
         assert!(pipelines.prepass.is_none());

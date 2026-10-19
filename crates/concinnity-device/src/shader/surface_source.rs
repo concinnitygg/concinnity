@@ -37,7 +37,7 @@ pub(crate) struct Request {
 pub(crate) fn artifact<'a>(
     programs: &'a ShaderPrograms,
     program: &surface::Program,
-    req: &Request,
+    req: Request,
     compile: impl FnOnce(Platform, &str, &str, &str) -> RenderResult<Vec<u8>>,
 ) -> RenderResult<Cow<'a, [u8]>> {
     let label = programs.name.as_str();
@@ -55,7 +55,7 @@ pub(crate) fn artifact<'a>(
 
 // The source text this host expects for one entry, preferring the checkout's
 // templates under hot-reload exactly as every other single-source shader does.
-fn source(program: &surface::Program, req: &Request, sources: &Sources<'_>) -> String {
+fn source(program: &surface::Program, req: Request, sources: &Sources<'_>) -> String {
     if !req.hot_reload {
         return surface::source(program, req.platform, sources);
     }
@@ -112,8 +112,8 @@ mod tests {
     fn a_matching_artifact_is_taken_without_compiling() {
         for program in surface::ALL {
             let programs = stored(Platform::Metal, program, b"stored bytes");
-            let got = artifact(&programs, program, &request(Platform::Metal), no_compile)
-                .expect("stored");
+            let got =
+                artifact(&programs, program, request(Platform::Metal), no_compile).expect("stored");
             assert_eq!(got.as_ref(), b"stored bytes");
             assert!(matches!(got, Cow::Borrowed(_)), "no compile was needed");
         }
@@ -145,7 +145,7 @@ mod tests {
         let got = artifact(
             &programs,
             &surface::MAIN_FRAGMENT_CANOPY,
-            &req,
+            req,
             |_, _, _, src| {
                 assert!(src.contains("#define SURFACE_CANOPY 1"));
                 Ok(b"canopy".to_vec())
@@ -153,7 +153,7 @@ mod tests {
         )
         .expect("compiled");
         assert_eq!(got.as_ref(), b"canopy");
-        let plain = artifact(&programs, &surface::MAIN_FRAGMENT, &req, no_compile).expect("stored");
+        let plain = artifact(&programs, &surface::MAIN_FRAGMENT, req, no_compile).expect("stored");
         assert_eq!(plain.as_ref(), b"plain");
     }
 
@@ -172,7 +172,7 @@ mod tests {
         let got = artifact(
             &programs,
             &surface::MAIN_FRAGMENT,
-            &req,
+            req,
             |platform, file, entry, src| {
                 assert_eq!(platform, Platform::Metal);
                 assert_eq!(
@@ -186,7 +186,7 @@ mod tests {
         .expect("compiled");
         assert_eq!(got.as_ref(), b"fresh");
 
-        let err = artifact(&programs, &surface::MAIN_FRAGMENT, &req, |_, _, _, _| {
+        let err = artifact(&programs, &surface::MAIN_FRAGMENT, req, |_, _, _, _| {
             Err(RenderError::ShaderCompile("no compiler".to_string()))
         })
         .unwrap_err()

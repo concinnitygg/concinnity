@@ -34,7 +34,7 @@ pub(crate) struct CharacterConfig {
 
 impl Default for CharacterConfig {
     fn default() -> Self {
-        CharacterConfig {
+        Self {
             max_slope_deg: 45.0,
             step_height: 0.3,
             grounded: true,
@@ -46,7 +46,7 @@ impl CharacterConfig {
     /// Tune a character by climb limit, step height, and whether gravity
     /// governs it.
     pub(crate) fn new(max_slope_deg: f32, step_height: f32, grounded: bool) -> Self {
-        CharacterConfig {
+        Self {
             max_slope_deg,
             step_height,
             grounded,

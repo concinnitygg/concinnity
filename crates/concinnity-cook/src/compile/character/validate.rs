@@ -55,13 +55,13 @@ pub(crate) fn source_errors(
                 match (has(&plus), has(&minus)) {
                     (true, true) => {}
                     (false, false) => {
-                        errors.push(format!("missing shape key pair '{plus}' / '{minus}'"))
+                        errors.push(format!("missing shape key pair '{plus}' / '{minus}'"));
                     }
                     (true, false) => {
-                        errors.push(format!("shape key '{plus}' has no '{minus}' half"))
+                        errors.push(format!("shape key '{plus}' has no '{minus}' half"));
                     }
                     (false, true) => {
-                        errors.push(format!("shape key '{minus}' has no '{plus}' half"))
+                        errors.push(format!("shape key '{minus}' has no '{plus}' half"));
                     }
                 }
             }
@@ -130,7 +130,7 @@ mod tests {
     }
 
     fn names(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| s.to_string()).collect()
+        list.iter().map(ToString::to_string).collect()
     }
 
     #[test]

@@ -271,9 +271,10 @@ impl FramePlanner {
         let reflections = r.reflection_composite
             && ReflectionPath::new(self.gates.ssr, self.gates.rt_pass, c.bvh_live).resolves();
         let records = (graph_inputs.bindless_cull_enabled && !c.world_hidden).then_some(
-            match motion_read && r.model_history {
-                true => HistoryMode::Track,
-                false => HistoryMode::Stale,
+            if motion_read && r.model_history {
+                HistoryMode::Track
+            } else {
+                HistoryMode::Stale
             },
         );
         Ok(FramePlan {

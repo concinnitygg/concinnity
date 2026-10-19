@@ -65,7 +65,7 @@ pub struct ModelHistory {
 
 // `kind`'s occupant at `index`, at generation `generation`.
 fn token(kind: u64, generation: u32, index: usize) -> u64 {
-    (kind << 62) | ((generation as u64 & 0x3FFF_FFFF) << 32) | (index as u64 & 0xFFFF_FFFF)
+    (kind << 62) | ((u64::from(generation) & 0x3FFF_FFFF) << 32) | (index as u64 & 0xFFFF_FFFF)
 }
 
 impl ModelHistory {
@@ -173,7 +173,7 @@ pub struct HistoryWindow<'a> {
     first: usize,
 }
 
-impl<'a> HistoryWindow<'a> {
+impl HistoryWindow<'_> {
     /// The first record this window answers for.
     pub fn first(&self) -> usize {
         self.first
@@ -222,10 +222,7 @@ impl<'a> HistoryWindow<'a> {
         };
         let stale = *slot != token;
         *slot = token;
-        match stale {
-            true => draw_args_no_history(),
-            false => 0,
-        }
+        if stale { draw_args_no_history() } else { 0 }
     }
 }
 

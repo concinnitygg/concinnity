@@ -1,4 +1,4 @@
-//! `VoxelWorld` chunk streaming for DxContext: the init-time headroom growth
+//! `VoxelWorld` chunk streaming for `DxContext`: the init-time headroom growth
 //! that seeds the chunk allocators. Placing, moving and removing chunks is
 //! scene bookkeeping, done in `SceneState`.
 
@@ -7,8 +7,8 @@ use concinnity_core::render::error;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::super::com;
-use super::super::context::*;
-use super::super::texture::*;
+use super::super::context::DxContext;
+use super::super::texture::{one_shot_submit, transition_barrier};
 
 impl DxContext {
     // Grow the shared vertex/index buffers by a headroom region for streamed
@@ -26,8 +26,8 @@ impl DxContext {
         chunk_idx_bytes: usize,
     ) -> error::RenderResult<()> {
         self.wait_idle();
-        let old_v_len = self.scene.geometry.vertex_buffer_view.SizeInBytes as u64;
-        let old_i_len = self.scene.geometry.index_buffer_view.SizeInBytes as u64;
+        let old_v_len = u64::from(self.scene.geometry.vertex_buffer_view.SizeInBytes);
+        let old_i_len = u64::from(self.scene.geometry.index_buffer_view.SizeInBytes);
         let new_v_len = old_v_len + chunk_vtx_bytes as u64;
         let new_i_len = old_i_len + chunk_idx_bytes as u64;
 
@@ -90,7 +90,7 @@ impl DxContext {
         self.scene.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_vbuf),
             SizeInBytes: new_v_len as u32,
-            StrideInBytes: std::mem::size_of::<Vertex>() as u32,
+            StrideInBytes: size_of::<Vertex>() as u32,
         };
         self.scene.geometry.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_ibuf),

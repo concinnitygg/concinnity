@@ -41,9 +41,9 @@ mod tests {
     use super::*;
     use core::cell::Cell;
 
-    fn counting<'a>(
-        builds: &'a Cell<u32>,
-    ) -> impl FnOnce(&FrameGraphInputs) -> Result<CompiledGraph, GraphError> + 'a {
+    fn counting(
+        builds: &Cell<u32>,
+    ) -> impl FnOnce(&FrameGraphInputs) -> Result<CompiledGraph, GraphError> + '_ {
         move |inputs| {
             builds.set(builds.get() + 1);
             build_frame_graph(inputs)

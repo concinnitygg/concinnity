@@ -42,11 +42,11 @@ impl Category {
     // The short tag drawn on a result row.
     pub(crate) fn tag(self) -> &'static str {
         match self {
-            Category::Panel => "panel",
-            Category::Entity => "entity",
-            Category::Asset => "asset",
-            Category::Command => "command",
-            Category::Option => "option",
+            Self::Panel => "panel",
+            Self::Entity => "entity",
+            Self::Asset => "asset",
+            Self::Command => "command",
+            Self::Option => "option",
         }
     }
 }

@@ -27,12 +27,12 @@ impl BuiltSystem {
     }
 
     /// Run the system's `init`.
-    pub fn init(&mut self, ctx: &mut PipelineContext) {
+    pub fn init(&mut self, ctx: &mut PipelineContext<'_>) {
         self.system.init(ctx);
     }
 
     /// Run the system's `step`.
-    pub fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    pub fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         self.system.step(ctx)
     }
 
@@ -49,7 +49,7 @@ impl BuiltSystem {
 
     /// Mutably borrow the system as `S`, or `None` when it is a different
     /// system. The dev tooling's per-frame hook reaches the renderer's
-    /// hot-reload bookkeeping and the AnimationSystem's clip table through
+    /// hot-reload bookkeeping and the `AnimationSystem`'s clip table through
     /// this, from outside the per-system step.
     pub fn downcast_mut<S: System>(&mut self) -> Option<&mut S> {
         (&mut *self.system as &mut dyn core::any::Any).downcast_mut::<S>()
@@ -64,7 +64,7 @@ mod tests {
     struct Tick(u32);
 
     impl System for Tick {
-        fn step(&mut self, _ctx: &mut PipelineContext) -> StepResult {
+        fn step(&mut self, _ctx: &mut PipelineContext<'_>) -> StepResult {
             self.0 += 1;
             StepResult::Continue
         }
@@ -74,7 +74,7 @@ mod tests {
     struct Other;
 
     impl System for Other {
-        fn step(&mut self, _ctx: &mut PipelineContext) -> StepResult {
+        fn step(&mut self, _ctx: &mut PipelineContext<'_>) -> StepResult {
             StepResult::Continue
         }
     }

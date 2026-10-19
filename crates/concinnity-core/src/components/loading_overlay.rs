@@ -10,7 +10,7 @@ use crate::ecs::Ref;
 /// The overlay is assembled from ordinary UI elements the fields reference: a
 /// [Screen](#screen) that hosts them, a backdrop [Sprite](#sprite) covering
 /// the canvas, a progress-bar track and fill [Sprite](#sprite) pair, and a
-/// [TextLabel](#textlabel) above the bar. Each frame the engine widens the
+/// [`TextLabel`](#textlabel) above the bar. Each frame the engine widens the
 /// fill to the destination scene's load progress and rewrites the label with
 /// the percentage; restyle any piece by declaring it yourself and pointing the
 /// overlay's field at it.
@@ -21,10 +21,10 @@ use crate::ecs::Ref;
 /// without the overlay ever appearing.
 ///
 /// Every rendering world that declares [Scene](#scene)s and a
-/// [StreamingConfig](#streamingconfig) receives a `LoadingOverlay` at start
+/// [`StreamingConfig`](#streamingconfig) receives a `LoadingOverlay` at start
 /// when it declares none, and any field left unset receives the piece it
 /// names, so the example below is only needed to restyle them. Declare an
-/// [EngineDefaults](#enginedefaults) with `"loading_overlay": false` to leave
+/// [`EngineDefaults`](#enginedefaults) with `"loading_overlay": false` to leave
 /// the world without one.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
@@ -43,6 +43,6 @@ pub struct LoadingOverlay {
     /// Progress-bar fill [Sprite](#sprite); the engine sets its width to the
     /// track width times the destination scene's load progress each frame.
     pub fill: Option<Ref<Sprite>>,
-    /// [TextLabel](#textlabel) rewritten each frame with the load percentage.
+    /// [`TextLabel`](#textlabel) rewritten each frame with the load percentage.
     pub label: Option<Ref<TextLabel>>,
 }

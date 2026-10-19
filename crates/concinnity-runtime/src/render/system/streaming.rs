@@ -137,18 +137,18 @@ impl GraphicsSystem {
         match ChunkSource::choose(voxel_world, planet) {
             ChunkSource::None => {}
             ChunkSource::VoxelWorld(vw) => {
-                self.setup_voxel_world_streaming(&vw, block_types, material_map)
+                self.setup_voxel_world_streaming(&vw, block_types, material_map);
             }
             ChunkSource::Planet(planet) => {
-                self.setup_planet_streaming(&planet, planet_far_field, material_map)
+                self.setup_planet_streaming(&planet, planet_far_field, material_map);
             }
         }
     }
 
     // Scene residency over the streaming pools.
-    fn build_scene_residency(&self, ctx: &PipelineContext) -> Option<SceneResidency> {
+    fn build_scene_residency(&self, ctx: &PipelineContext<'_>) -> Option<SceneResidency> {
         let content = StreamedContent {
-            texture_slots: self.stream_pools.texture.as_ref().map(|t| t.len()),
+            texture_slots: self.stream_pools.texture.as_ref().map(StreamPool::len),
             mesh_draws: self
                 .stream_pools
                 .mesh
@@ -171,7 +171,7 @@ impl GraphicsSystem {
     // match the draw's frame.
     pub(super) fn publish_streaming_state(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         frames_in_flight: usize,
     ) {
         self.stream_pools.scene_residency = self.build_scene_residency(ctx);

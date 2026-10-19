@@ -114,7 +114,7 @@ fn frame_job<T: Send + 'static>(
 fn lock(shared: &Mutex<DebugState>) -> MutexGuard<'_, DebugState> {
     shared
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn wait<T>(
@@ -136,7 +136,7 @@ mod tests {
     // Stand in for the engine: stamp each frame and run what it queued until
     // the call on the worker returns.
     fn drive<T: Send + 'static>(
-        call: impl FnOnce(&Call) -> T + Send + 'static,
+        call: impl FnOnce(&Call<'_>) -> T + Send + 'static,
     ) -> (T, RuntimeQueue) {
         let shared = Arc::new(Mutex::new(DebugState::default()));
         let queue = lock(&shared).queue.clone();

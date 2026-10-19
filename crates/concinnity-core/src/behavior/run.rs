@@ -380,7 +380,7 @@ fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
             }
         }
         COp::After { seconds, .. } => {
-            let Some(seconds) = eval(seconds, view).and_then(|v| v.as_f32()) else {
+            let Some(seconds) = eval(seconds, view).and_then(Val::as_f32) else {
                 return;
             };
             // The block is reached by node id rather than copied, so the
@@ -648,6 +648,10 @@ mod tests {
         CNode { id: 0, op }
     }
 
+    #[expect(
+        clippy::unnecessary_box_returns,
+        reason = "builds the boxed child an expression node holds"
+    )]
     fn lit(v: Val) -> Box<CExpr> {
         Box::new(CExpr::Lit(v))
     }

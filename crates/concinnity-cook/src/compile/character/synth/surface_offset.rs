@@ -18,7 +18,7 @@ pub(crate) fn window(t: f32, span: [f32; 2], falloff: f32) -> f32 {
     rise * fall
 }
 
-pub(crate) fn displace(input: &SynthInput) -> Vec<[f32; 3]> {
+pub(crate) fn displace(input: &SynthInput<'_>) -> Vec<[f32; 3]> {
     let p = input.params;
     let dir = try_normalize(p.direction, 1e-6);
     let frame = &input.frames[input.primary];

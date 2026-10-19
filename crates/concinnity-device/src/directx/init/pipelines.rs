@@ -37,8 +37,8 @@ pub(in crate::directx) fn world_entry(
         platform: concinnity_core::platform::Platform::DirectX,
         hot_reload,
     };
-    crate::shader::surface_source::artifact(world, program, &req, crate::shader::compile::cooked)
-        .map(|c| c.into_owned())
+    crate::shader::surface_source::artifact(world, program, req, crate::shader::compile::cooked)
+        .map(std::borrow::Cow::into_owned)
 }
 
 // Compile the engine's bindless main-pass and pre-pass pairs. A bucket whose
@@ -311,33 +311,31 @@ pub(in crate::directx) fn build_bucket_pipeline(
     bucket: usize,
     source: &BucketSource<'_>,
 ) -> RenderResult<BucketPsos> {
-    match source.programs {
-        Some(programs) => build_world_shader_pso(
+    if let Some(programs) = source.programs {
+        return build_world_shader_pso(
             device,
             info_queue,
             targets.world(),
             bucket,
             programs,
             source.grass,
-        ),
-        None => {
-            let engine = targets.engine_default;
-            let mut psos = create_bucket_psos(
-                device,
-                info_queue,
-                targets.world(),
-                bucket,
-                BucketStages {
-                    vs: &engine.vs,
-                    ps: engine.main_ps(source.grass),
-                    prepass_vs: &engine.prepass_vs,
-                    prepass_ps: &engine.prepass_ps,
-                },
-            )?;
-            psos.grass = source.grass;
-            Ok(psos)
-        }
+        );
     }
+    let engine = targets.engine_default;
+    let mut psos = create_bucket_psos(
+        device,
+        info_queue,
+        targets.world(),
+        bucket,
+        BucketStages {
+            vs: &engine.vs,
+            ps: engine.main_ps(source.grass),
+            prepass_vs: &engine.prepass_vs,
+            prepass_ps: &engine.prepass_ps,
+        },
+    )?;
+    psos.grass = source.grass;
+    Ok(psos)
 }
 
 // Build a world Shader's PSOs for bucket `bucket` from its own compiled stages.

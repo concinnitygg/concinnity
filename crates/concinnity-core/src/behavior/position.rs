@@ -69,7 +69,7 @@ pub(crate) fn write(
 /// What rewrites `camera`'s pose every tick, undoing a write to it from
 /// anywhere else: the world's [`CameraTrack`], or the camera's follow
 /// controller. `None` for a camera that keeps what is written to it.
-pub fn camera_driver(ctx: &PipelineContext, camera: Entity) -> Option<&'static str> {
+pub fn camera_driver(ctx: &PipelineContext<'_>, camera: Entity) -> Option<&'static str> {
     if ctx.query::<CameraTrack>().next().is_some() {
         return Some("the world's CameraTrack");
     }

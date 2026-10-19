@@ -1,4 +1,4 @@
-//! EditorHook: the marquee (box-select) drive. A press over empty viewport
+//! `EditorHook`: the marquee (box-select) drive. A press over empty viewport
 //! space -- already past the top bar, the panels, and the gizmo handles by the
 //! time it reaches the pick -- arms a marquee; while the button is held the
 //! rect follows the cursor once it clears the start slop. Releasing selects

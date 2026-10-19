@@ -1,4 +1,4 @@
-//! EditorHook: deleting a distance field from the Shaders panel. Its menu's
+//! `EditorHook`: deleting a distance field from the Shaders panel. Its menu's
 //! Delete asks first, with the box that also deletes the file when nothing the
 //! delete leaves still reads it. The delete removes every volume reading the
 //! field that the editor can remove, as one undoable world edit, and only then
@@ -91,11 +91,11 @@ impl EditorHook {
             .then(|| std::fs::remove_file(&field.path).map_err(|e| e.to_string()));
         let failed = matches!(file, Some(Err(_)));
         let message = sdf_field_edit::deleted_message(&field, &delete.removed, file);
-        match failed {
-            false => self.notifier.success(&message),
-            true => self
-                .notifier
-                .error_with(&message, notify::Action::OpenConsole),
+        if failed {
+            self.notifier
+                .error_with(&message, notify::Action::OpenConsole);
+        } else {
+            self.notifier.success(&message);
         }
     }
 }

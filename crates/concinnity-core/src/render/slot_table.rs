@@ -68,18 +68,15 @@ impl<T> SlotTable<T> {
     /// Place `value` in a slot and return its id, reusing a tombstoned slot
     /// before growing the table.
     pub fn insert(&mut self, value: T) -> Result<usize, AtCapacity> {
-        let id = match self.free_slots.pop() {
-            Some(id) => {
-                self.slots[id] = Some(value);
-                id
+        let id = if let Some(id) = self.free_slots.pop() {
+            self.slots[id] = Some(value);
+            id
+        } else {
+            if self.slots.len() >= self.capacity {
+                return Err(AtCapacity);
             }
-            None => {
-                if self.slots.len() >= self.capacity {
-                    return Err(AtCapacity);
-                }
-                self.slots.push(Some(value));
-                self.slots.len() - 1
-            }
+            self.slots.push(Some(value));
+            self.slots.len() - 1
         };
         self.live += 1;
         Ok(id)

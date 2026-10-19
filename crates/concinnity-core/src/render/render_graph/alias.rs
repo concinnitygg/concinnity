@@ -177,21 +177,18 @@ pub(crate) fn plan_aliasing_for(
         let chosen = slots.iter().position(|s| {
             s.class == c.class && s.members.iter().all(|&m| graph.resource_precedes(m, c.idx))
         });
-        let si = match chosen {
-            Some(si) => {
-                let s = &mut slots[si];
-                s.byte_size = s.byte_size.max(c.size);
-                s.members.push(c.idx);
-                si
-            }
-            None => {
-                slots.push(SlotMeta {
-                    class: c.class,
-                    byte_size: c.size,
-                    members: vec![c.idx],
-                });
-                slots.len() - 1
-            }
+        let si = if let Some(si) = chosen {
+            let s = &mut slots[si];
+            s.byte_size = s.byte_size.max(c.size);
+            s.members.push(c.idx);
+            si
+        } else {
+            slots.push(SlotMeta {
+                class: c.class,
+                byte_size: c.size,
+                members: vec![c.idx],
+            });
+            slots.len() - 1
         };
         assignment[c.idx] = Some(si);
     }
@@ -254,7 +251,7 @@ mod tests {
 
     // Bytes a full-drawable texture of `format` occupies at 100x100.
     fn size_at_100(format: PixelFormat) -> u64 {
-        100 * 100 * format.bytes_per_texel() as u64
+        100 * 100 * u64::from(format.bytes_per_texel())
     }
 
     #[test]

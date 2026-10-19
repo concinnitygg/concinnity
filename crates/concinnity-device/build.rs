@@ -2,7 +2,7 @@
 //! `setup_graphics_backends` call into the shared concinnity-toolchain helper:
 //!
 //! 1. Resolve the rendering backends and expose one cfg per backend the crate
-//!    gates on (backend_metal / backend_dx / backend_vk).
+//!    gates on (`backend_metal` / `backend_dx` / `backend_vk`).
 //!
 //! 2. Detect the optional upscaler SDKs and emit the cfgs the backends gate on.
 //!    This crate produces only an rlib (consumed by the client) plus its own test
@@ -830,6 +830,7 @@ fn main() {
 // Metal indices is generated (concinnity-shader's `metal_bindings`), so assert the
 // MSL the precompile emitted: a slot that moves fails the build instead of
 // binding garbage at draw time.
+#[expect(clippy::panic, reason = "a build script reports failure by panicking")]
 fn assert_metal_abi(emitted: &EmittedMsl) {
     for abi in METAL_ENTRY_ABI {
         let program = abi.program;
@@ -1960,8 +1961,12 @@ const WATER_RT_TEXTURED_SLOTS: &[&[(&str, &str)]] = &[
 // builds. Each variant compiles alone, so a register only has to hold in the
 // entry that declares it. The rows preprocess side by side and are checked in
 // table order.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 fn assert_dxil_abi() {
-    let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"));
     let declared = parallel_map(DXIL_ENTRY_ABI, |abi| {
         let program = abi.program;
         let source = program.at(false).assemble(Platform::DirectX);
@@ -1976,6 +1981,7 @@ fn assert_dxil_abi() {
 // declarations the preprocessor leaves standing are the ones the root signature
 // binds. Preprocessed rather than raw: a register behind an inactive `#if`, or
 // spelled as a macro, is not the one the compile sees.
+#[expect(clippy::panic, reason = "a build script reports failure by panicking")]
 fn assert_hlsl_registers(
     abi: &DxilAbi,
     declared: Result<Vec<concinnity_shader::declarations::Declaration>, String>,
@@ -2006,19 +2012,28 @@ fn dxil_register(register: concinnity_shader::declarations::Register) -> String 
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 fn emit_shader_compile_source_hash() {
-    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let manifest =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
     let roots: Vec<PathBuf> = SHADER_COMPILE_SOURCES
         .iter()
         .map(|p| manifest.join(p))
         .collect();
     let hash = hash_sources(&roots);
 
-    let out =
-        PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("shader_compile_source_hash.rs");
+    let out = PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"))
+        .join("shader_compile_source_hash.rs");
     std::fs::write(
         &out,
-        format!("const SHADER_COMPILE_SOURCE_HASH: u32 = {hash:#010x};\n"),
+        format!(
+            "const SHADER_COMPILE_SOURCE_HASH: u32 = 0x{:04x}_{:04x};\n",
+            hash >> 16,
+            hash & 0xffff
+        ),
     )
     .expect("write shader_compile_source_hash.rs");
 }

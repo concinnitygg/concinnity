@@ -57,7 +57,7 @@ fn a_rendering_world_gets_the_debug_hud_its_chips_and_a_font() {
         "the face is baked, not compiled"
     );
     for chip in &chips {
-        assert_eq!(chip.font, Some(crate::ecs::FontHandle::new(0)));
+        assert_eq!(chip.font, Some(FontHandle::new(0)));
     }
     for id in ids::<TextLabel>(&world) {
         assert!(named.contains(&Some(Ref::new(id))));

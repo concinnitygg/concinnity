@@ -46,7 +46,7 @@ impl Support {
             ),
             ColliderShape::Cuboid { half_extents } => (Vec3::from_array(half_extents).abs(), 0.0),
         };
-        Support {
+        Self {
             half,
             radius,
             pose,

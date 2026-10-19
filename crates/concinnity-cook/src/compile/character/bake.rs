@@ -180,7 +180,7 @@ fn scale_capsule(capsule: &mut CharacterCapsule, scale: CapsuleScale) {
 
 fn is_baking(a: &WorldJsonlAsset) -> bool {
     a.asset_type == RegisteredType::CharacterShape
-        && a.args.get("bake").and_then(|v| v.as_bool()) == Some(true)
+        && a.args.get("bake").and_then(serde_json::Value::as_bool) == Some(true)
 }
 
 // The args of the baking shape that targets `mesh`, if one does.

@@ -330,17 +330,21 @@ impl<T: Copy + core::fmt::Debug> core::fmt::Debug for ArenaVec<'_, T> {
     }
 }
 
-// SAFETY: every element of `slice` must have been initialized.
+/// # Safety
+///
+/// Every element of `slice` must have been initialized.
 unsafe fn assume_init_ref<T>(slice: &[MaybeUninit<T>]) -> &[T] {
     // SAFETY: `MaybeUninit<T>` has the same layout as `T`, and the caller
     // guarantees every element holds an initialized value.
-    unsafe { &*(slice as *const [MaybeUninit<T>] as *const [T]) }
+    unsafe { &*(core::ptr::from_ref::<[MaybeUninit<T>]>(slice) as *const [T]) }
 }
 
-// SAFETY: every element of `slice` must have been initialized.
+/// # Safety
+///
+/// Every element of `slice` must have been initialized.
 unsafe fn assume_init_mut<T>(slice: &mut [MaybeUninit<T>]) -> &mut [T] {
     // SAFETY: as `assume_init_ref`, for a unique borrow.
-    unsafe { &mut *(slice as *mut [MaybeUninit<T>] as *mut [T]) }
+    unsafe { &mut *(core::ptr::from_mut::<[MaybeUninit<T>]>(slice) as *mut [T]) }
 }
 
 #[cfg(test)]
@@ -378,7 +382,7 @@ mod tests {
         // A byte first, so the cursor sits at an odd offset.
         let _ = arena.alloc(1u8).expect("fits");
         let wide = arena.alloc(1u128).expect("fits");
-        assert!((wide as *const u128).is_aligned());
+        assert!(core::ptr::from_ref::<u128>(wide).is_aligned());
 
         let _ = arena.alloc(1u8).expect("fits");
         let slice = arena.alloc_slice(3, 0u64).expect("fits");

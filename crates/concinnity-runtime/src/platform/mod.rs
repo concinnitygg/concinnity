@@ -65,7 +65,7 @@ pub fn current() -> Platform {
 /// answer and warns when it differs.
 pub fn select(requested: Option<Platform>) -> Platform {
     let selection = resolve(requested, native(), compiled(), |platform| {
-        crate::platform::device::probe_device_on(platform).is_some()
+        device::probe_device_on(platform).is_some()
     });
     if let Some(fallback) = selection.fallback {
         tracing::warn!("{fallback}; rendering with {}", selection.platform.key());
@@ -169,6 +169,6 @@ mod tests {
 
     #[test]
     fn the_native_api_leads_what_the_build_compiled() {
-        assert_eq!(compiled().first().copied().unwrap_or(native()), native());
+        assert_eq!(compiled().first().copied().unwrap_or_else(native), native());
     }
 }

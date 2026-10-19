@@ -90,7 +90,7 @@ pub(crate) fn count(assets: &[WorldJsonlAsset]) -> Option<PhysicsCounts> {
                 }
                 match name_arg(asset, "body_b") {
                     Some(b) if colliders.contains(b) => counts.joints += 1,
-                    Some(_) => continue,
+                    Some(_) => {}
                     // No second body: the joint mints a hidden static anchor.
                     None => {
                         counts.joints += 1;
@@ -127,7 +127,7 @@ fn spawn_headroom(assets: &[WorldJsonlAsset]) -> u32 {
         .iter()
         .find(|a| a.asset_type == RegisteredType::PhysicsConfig)
         .and_then(|a| a.args.get("spawn_headroom"))
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .unwrap_or(0)
         .min(u64::from(u32::MAX)) as u32
 }
@@ -559,7 +559,7 @@ mod tests {
             fn exit(&self, _: &tracing::span::Id) {}
         }
         let count = std::sync::Arc::new(AtomicUsize::new(0));
-        tracing::subscriber::with_default(Counter(count.clone()), f);
+        tracing::subscriber::with_default(Counter(std::sync::Arc::clone(&count)), f);
         count.load(Ordering::Relaxed)
     }
 
@@ -570,7 +570,7 @@ mod tests {
         let bounded = bounded_world(serde_json::json!(0));
         assert_eq!(count_warnings(|| report_spawn_reservation(&bounded)), 0);
 
-        let mut with_behavior = bounded.clone();
+        let mut with_behavior = bounded;
         with_behavior.push(asset(
             "thrower",
             RegisteredType::Behavior,

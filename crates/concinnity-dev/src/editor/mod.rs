@@ -191,21 +191,18 @@ pub fn run_editor(
     if pick_a_world {
         editor_hook = editor_hook.with_start_screen(previewing);
     }
-    let hook: Box<dyn FrameHook> = match debug_port {
-        Some(port) => {
-            let server = crate::debug::DebugServer::start(port)?
-                .with_notifier(editor_hook.notifier())
-                .with_world_path(editor_hook.world_path_handle())
-                .with_reload_reports(editor_hook.reload_reports());
-            MultiHook::boxed(vec![Box::new(editor_hook), Box::new(server)])
-        }
-        None => {
-            let reload = crate::debug::hot_reload::HotReloadDriver::new()
-                .with_notifier(editor_hook.notifier())
-                .with_world_path(editor_hook.world_path_handle())
-                .with_reload_reports(editor_hook.reload_reports());
-            MultiHook::boxed(vec![Box::new(editor_hook), Box::new(reload)])
-        }
+    let hook: Box<dyn FrameHook> = if let Some(port) = debug_port {
+        let server = crate::debug::DebugServer::start(port)?
+            .with_notifier(editor_hook.notifier())
+            .with_world_path(editor_hook.world_path_handle())
+            .with_reload_reports(editor_hook.reload_reports());
+        MultiHook::boxed(vec![Box::new(editor_hook), Box::new(server)])
+    } else {
+        let reload = crate::debug::hot_reload::HotReloadDriver::new()
+            .with_notifier(editor_hook.notifier())
+            .with_world_path(editor_hook.world_path_handle())
+            .with_reload_reports(editor_hook.reload_reports());
+        MultiHook::boxed(vec![Box::new(editor_hook), Box::new(reload)])
     };
 
     crate::run::start_app(runtime, Some(hook))
@@ -238,9 +235,10 @@ fn start_screen_pick() -> Option<String> {
 
 // Where the editor puts a world nobody has saved yet.
 pub(crate) fn unsaved_world_path() -> String {
-    crate::project::worlds_dir()
-        .map(|dir| dir.join(WORLD_JSONL).to_string_lossy().into_owned())
-        .unwrap_or_else(|| WORLD_JSONL.to_string())
+    crate::project::worlds_dir().map_or_else(
+        || WORLD_JSONL.to_string(),
+        |dir| dir.join(WORLD_JSONL).to_string_lossy().into_owned(),
+    )
 }
 
 // Populate `runtime` with a renderable world for editing, compiled from the

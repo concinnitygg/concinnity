@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn a_framed_sky_turns_with_the_frame() {
         let sky = SkyOrientation::new([1.0, 0.0, 0.0], 30.0);
-        let q = crate::math::quat_from_axis_angle([0.0, 0.3, 1.0], 0.4);
+        let q = quat_from_axis_angle([0.0, 0.3, 1.0], 0.4);
         let frame = quat_to_mat3(q);
         let d = [0.2, 0.9, -0.3];
         let expected = crate::math::quat_rotate(q, sky.rotate(d));

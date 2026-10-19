@@ -77,7 +77,7 @@ impl VkContext {
         if !self.instanced.any_lod {
             return;
         }
-        let stride = std::mem::size_of::<GpuDrawArgs>();
+        let stride = size_of::<GpuDrawArgs>();
         let base = self.state.draw.n_objects;
         lod::for_each_instance_lod(
             &self.instanced.clusters,
@@ -120,8 +120,8 @@ impl VkContext {
             PackView, StaticPack, draw_bucket, pool_object_record,
         };
         let texture_count = self.scene.textures.len() as u32;
-        let record_stride = std::mem::size_of::<GpuObjectData>();
-        let args_stride = std::mem::size_of::<GpuDrawArgs>();
+        let record_stride = size_of::<GpuObjectData>();
+        let args_stride = size_of::<GpuDrawArgs>();
         let mut model_history = self.state.model_history.borrow_mut();
         model_history.begin(history, self.state.draw.record_count());
         // Hand the dispatch the rebuild's prime request here, on the one thread
@@ -158,8 +158,8 @@ impl VkContext {
                 args.records_mut::<GpuDrawArgs>(0, static_draws.len()),
             )
         };
-        let packing = match packed {
-            (Some(records), Some(draw_args)) => self.cull.packer.pack(
+        let packing = if let (Some(records), Some(draw_args)) = packed {
+            self.cull.packer.pack(
                 StaticPack {
                     objects: static_draws,
                     records,
@@ -168,14 +168,13 @@ impl VkContext {
                 },
                 &view,
                 &|obj| pool_object_record(obj, texture_count),
-            ),
-            _ => {
-                tracing::error!(
-                    "vulkan: cull record buffers cannot hold {} static draws",
-                    static_draws.len()
-                );
-                FanOutTiming::default()
-            }
+            )
+        } else {
+            tracing::error!(
+                "vulkan: cull record buffers cannot hold {} static draws",
+                static_draws.len()
+            );
+            FanOutTiming::default()
         };
 
         // Runtime objects -- streamed chunks and spawned clones -- one record each
@@ -367,7 +366,7 @@ impl VkContext {
             rt_transparent: self
                 .transparent
                 .as_ref()
-                .is_some_and(|t| t.rt_pipelines_ready()),
+                .is_some_and(super::transparent::TransparentResources::rt_pipelines_ready),
             taa: self.taa.is_some(),
             model_history: self.gbuffer_targets().is_some() && self.cull.model_history.is_some(),
             reflection_composite: self.reflection_composite.is_some(),
@@ -385,18 +384,24 @@ impl VkContext {
             emitters: !self.particle.system.is_empty(),
             fog: self.fog.settings.is_some_and(|s| s.contributes()),
             decals: !self.decal.set.is_empty(),
-            visible_surfaces: self.transparent.as_ref().is_some_and(|t| t.any_visible()),
+            visible_surfaces: self
+                .transparent
+                .as_ref()
+                .is_some_and(super::transparent::TransparentResources::any_visible),
             visible_see_through: self.see_through_mesh_visible(),
             planar_targets: self
                 .planar_reflection
                 .as_ref()
-                .is_some_and(|s| s.has_targets()),
+                .is_some_and(super::planar::PlanarReflectionSet::has_targets),
             water_planar_slot: self
                 .transparent
                 .as_ref()
-                .is_some_and(|t| t.water_planar_slot_live()),
+                .is_some_and(super::transparent::TransparentResources::water_planar_slot_live),
             lines: lines_published,
-            visible_volumes: self.raymarch.as_ref().is_some_and(|r| r.any_visible()),
+            visible_volumes: self
+                .raymarch
+                .as_ref()
+                .is_some_and(super::raymarch::RaymarchResources::any_visible),
             atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
             water_sim: self.water_sim_live(),
             grass: self.grass.is_some(),
@@ -535,7 +540,7 @@ impl FrameDevice for VkContext {
         let timings = self.read_gpu_timings(frame_idx);
         let gpu_done = self.read_gpu_done(frame_idx);
         self.frame_input_sampled_us[frame_idx] = params.input_sampled_us;
-        self.begin_frame_stats(&gpu_wait, timings, gpu_done);
+        self.begin_frame_stats(gpu_wait, timings, gpu_done);
         let Some(image_index) = self.acquire_frame(frame_idx, &mut gpu_wait)? else {
             return Ok(None);
         };

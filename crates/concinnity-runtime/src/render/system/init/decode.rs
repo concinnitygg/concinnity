@@ -1,7 +1,14 @@
 // The decode steps of graphics init: every payload the world's graphics load
 // reads, decoded before the shared blobs are released.
 
-use super::*;
+use super::{
+    AssetId, ColorLutSource, DecodedMaterials, EnvironmentMapSource, FontTable, GraphicsSystem,
+    MaterialTable, Model, OverlayImages, PayloadLocator, PipelineContext, Shader, ShaderPrograms,
+    ShaderSourceMap, SkinnedAssembly, SkinnedMeshSourceMap, SubMeshRef, TexturePayloads,
+    TexturePool, TextureSlotSkips, TextureSourceMap, TextureTable, blobs_to_release,
+    decode_texture_payloads, draw_list, font, font_less_text, media, procedural_mesh_snapshot,
+    retained_blobs, skinned, skinned_mesh_source_map, tables, texture, texture_catalog,
+};
 use concinnity_core::render::overlay_maps::{Atlas, AtlasPool};
 use concinnity_core::render::terrain::LoadedTerrain;
 use concinnity_core::render::world_load::scene_deferral::ShaderDeferral;
@@ -20,7 +27,7 @@ pub(super) struct DecodedShader {
 // blob's byte range when the world is disk-backed (`cn run`, so the bytes
 // never stay RAM-resident), else a copy of the in-memory payload.
 fn deferred_shader_source(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     locator: &PayloadLocator,
     blob_disk_backed: bool,
 ) -> Result<crate::render::streaming::shader::ShaderPayloadSource, String> {
@@ -112,7 +119,7 @@ impl GraphicsSystem {
     // own main-pass program".
     pub(super) fn decode_shaders(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         streaming: bool,
         capture_sources: bool,
     ) -> Option<DecodedShaders> {
@@ -122,7 +129,7 @@ impl GraphicsSystem {
             return Some(DecodedShaders {
                 locators: Vec::new(),
                 shaders: vec![DecodedShader::default()],
-                source_map: Default::default(),
+                source_map: ShaderSourceMap::default(),
                 overrides: Default::default(),
             });
         }
@@ -139,12 +146,11 @@ impl GraphicsSystem {
         let mut locators = Vec::with_capacity(world_shaders.len());
         let mut shaders = Vec::with_capacity(world_shaders.len());
         for (bucket, shader) in world_shaders.iter().enumerate() {
-            let locator = match &shader.locator {
-                Some(l) => l.clone(),
-                None => {
-                    tracing::error!("GraphicsSystem: Shader has no compiled payload");
-                    return None;
-                }
+            let locator = if let Some(l) = &shader.locator {
+                l.clone()
+            } else {
+                tracing::error!("GraphicsSystem: Shader has no compiled payload");
+                return None;
             };
             if self.shader_deferral.is_deferred(bucket as u32) {
                 match deferred_shader_source(ctx, &locator, blob_disk_backed) {
@@ -216,7 +222,7 @@ impl GraphicsSystem {
                 concinnity_host::thread::asset_id::name_of,
             )
         } else {
-            Default::default()
+            ShaderSourceMap::default()
         };
 
         Some(DecodedShaders {
@@ -233,7 +239,7 @@ impl GraphicsSystem {
     // watch). None, failing init, if the payload is unreadable.
     pub(super) fn decode_environment_map(
         &self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         capture_sources: bool,
     ) -> Option<(Option<Vec<u8>>, Option<EnvironmentMapSource>)> {
         let env_map_bytes = media::environment_map_payload(ctx)?;
@@ -262,7 +268,7 @@ impl GraphicsSystem {
     // None, failing init, if the payload is unreadable.
     pub(super) fn decode_color_lut(
         &self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         capture_sources: bool,
     ) -> Option<(Option<Vec<u8>>, Option<ColorLutSource>)> {
         let color_lut_bytes = media::color_lut_payload(ctx)?;
@@ -292,7 +298,7 @@ impl GraphicsSystem {
     // or read failure.
     pub(super) fn decode_text_atlases(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         texture_locators: &[PayloadLocator],
     ) -> Option<TextAtlases> {
         let font_table = ctx.resource::<FontTable>().cloned().unwrap_or_default();
@@ -340,15 +346,14 @@ impl GraphicsSystem {
         // samples.
         if font_less_text(ctx) {
             let handle = pool.next_font();
-            match crate::render::builtin_font::load(handle) {
-                Some(builtin) => {
-                    pool.push_font(builtin.atlas);
-                    self.loaded_fonts.insert(handle, builtin.loaded);
-                    self.loaded_fonts.set_fallback(handle);
-                }
-                None => tracing::error!(
+            if let Some(builtin) = crate::render::builtin_font::load(handle) {
+                pool.push_font(builtin.atlas);
+                self.loaded_fonts.insert(handle, builtin.loaded);
+                self.loaded_fonts.set_fallback(handle);
+            } else {
+                tracing::error!(
                     "GraphicsSystem: text naming no Font cannot draw: the built-in face failed to decode"
-                ),
+                );
             }
         }
 
@@ -367,13 +372,14 @@ impl GraphicsSystem {
                 continue;
             };
             match ctx.read_payload(&locator) {
-                Ok(bytes) => match texture::deserialize(bytes).and_then(|image| image.into_rgba8())
-                {
-                    Ok(atlas) => pool.push_sprite(tex_id, atlas),
-                    Err(e) => {
-                        tracing::warn!("GraphicsSystem: sprite texture {:?}: {}", tex_id, e)
+                Ok(bytes) => {
+                    match texture::deserialize(bytes).and_then(texture::TextureImage::into_rgba8) {
+                        Ok(atlas) => pool.push_sprite(tex_id, atlas),
+                        Err(e) => {
+                            tracing::warn!("GraphicsSystem: sprite texture {:?}: {}", tex_id, e);
+                        }
                     }
-                },
+                }
                 Err(e) => tracing::warn!(
                     "GraphicsSystem: sprite texture {:?} payload read failed: {:?}",
                     tex_id,
@@ -403,7 +409,7 @@ impl GraphicsSystem {
     // each is consumed here before the release.
     pub(super) fn decode_world(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         load: WorldLoad,
     ) -> Option<WorldPayloads> {
         let WorldLoad {

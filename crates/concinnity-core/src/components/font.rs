@@ -5,7 +5,7 @@ use alloc::string::String;
 
 /// Rasterizes a TrueType font into a glyph atlas at build time.
 ///
-/// Reference a Font by name from a [TextLabel](#textlabel). Declaring one is
+/// Reference a Font by name from a [`TextLabel`](#textlabel). Declaring one is
 /// optional: text naming no Font draws with the engine's built-in face at 24px,
 /// and compiles no atlas at all. Declare a Font to pick the face, or to pick the
 /// size the glyphs are rasterized at.
@@ -36,7 +36,7 @@ pub struct Font {
     /// Rasterization size in pixels. Determines the rendered glyph height.
     #[asset(default = 20)]
     pub size_px: u32,
-    /// Filled by inject_locator after the build step packs the payload.
+    /// Filled by `inject_locator` after the build step packs the payload.
     #[serde(skip)]
     pub locator: Option<PayloadLocator>,
 }

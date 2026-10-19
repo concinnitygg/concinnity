@@ -72,7 +72,7 @@ impl Mover {
                 mask,
             )
             .expect("room for the capsule");
-        Mover {
+        Self {
             sim,
             shape: Simulation::character_shape(HALF_HEIGHT, RADIUS),
             handle,

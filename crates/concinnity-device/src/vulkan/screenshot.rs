@@ -163,7 +163,7 @@ fn readback_buffer(alloc: &DeviceAllocator, len: usize) -> RenderResult<Mapped<P
             visible | vk::MemoryPropertyFlags::HOST_CACHED,
         )
         .or_else(|_| alloc.create_buffer(len as u64, usage, visible))?;
-    let mapped = buffer.mapped_ptr() as *const u8;
+    let mapped = buffer.mapped_ptr().cast_const();
     if mapped.is_null() {
         return Err(RenderError::Other(
             "frame capture: read-back buffer is not host-mapped".into(),

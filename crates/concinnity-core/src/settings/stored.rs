@@ -226,17 +226,18 @@ where
     }
     let names: Vec<&str> = dropped.iter().map(String::as_str).collect();
     let repaired = read(readable).ok().filter(T::binds_each_input_once);
-    match repaired {
-        Some(_) => tracing::warn!(
+    if repaired.is_some() {
+        tracing::warn!(
             "{} bindings unreadable, using their defaults: {}",
             T::NAME,
             names.join(", ")
-        ),
-        None => tracing::warn!(
+        );
+    } else {
+        tracing::warn!(
             "{} bindings unreadable ({}) and their defaults collide, using the default map",
             T::NAME,
             names.join(", ")
-        ),
+        );
     }
     Ok(repaired)
 }

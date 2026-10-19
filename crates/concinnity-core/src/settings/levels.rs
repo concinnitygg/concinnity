@@ -150,7 +150,7 @@ pub const WINDOW_MODE: Levels<WindowMode> = Levels::new(
 );
 
 /// Upscaler backends, in `UpscalerBackend` order. DirectX / Vulkan only (Metal
-/// uses MetalFX).
+/// uses `MetalFX`).
 pub const UPSCALE_BACKEND: Levels<UpscalerBackend> = Levels::new(
     &["Auto", "FSR 3", "DLSS", "XeSS"],
     &[

@@ -189,7 +189,7 @@ mod tests {
     // The point at `(fs, ft)` across a tile on its mesh: the triangle under
     // it, split along the same diagonal the mesh's indices split each cell.
     fn on_mesh(origin: DVec3, grid: &[[f32; 3]], fs: f64, ft: f64) -> DVec3 {
-        let n = TILE_CELLS as f64;
+        let n = f64::from(TILE_CELLS);
         let side = TILE_CELLS as usize + 1;
         let (gs, gt) = (fs * n, ft * n);
         let (ci, cj) = (

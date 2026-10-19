@@ -1,4 +1,4 @@
-//! EditorHook: frame-selected and the short eased camera glide it (and a
+//! `EditorHook`: frame-selected and the short eased camera glide it (and a
 //! bookmark recall) rides on. F moves the camera so the whole selection fits
 //! the view; the pose math lives in `editor/viewport/framing.rs`, this drive resolves
 //! the selection's world bounds and steps the interpolation.

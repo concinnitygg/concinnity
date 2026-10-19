@@ -256,9 +256,9 @@ macro_rules! define_component_storage {
             /// yields both component refs. This is the multi-component query for
             /// read paths (the draw-list push, scene visibility): one column scan
             /// plus a join probe per row, no allocation.
-            pub fn join2<'s, A: $slot, B: $slot>(
-                &'s self,
-            ) -> impl Iterator<Item = ($crate::ecs::Entity, &'s A, &'s B)> + 's {
+            pub fn join2<A: $slot, B: $slot>(
+                &self,
+            ) -> impl Iterator<Item = ($crate::ecs::Entity, &A, &B)> + '_ {
                 let bid = $crate::ecs::ComponentId::new(B::DISCRIMINANT);
                 let bcol = B::column(self);
                 A::column(self)
@@ -276,9 +276,9 @@ macro_rules! define_component_storage {
             }
 
             /// Read-only join over three component types, lead on the first.
-            pub fn join3<'s, A: $slot, B: $slot, C: $slot>(
-                &'s self,
-            ) -> impl Iterator<Item = ($crate::ecs::Entity, &'s A, &'s B, &'s C)> + 's {
+            pub fn join3<A: $slot, B: $slot, C: $slot>(
+                &self,
+            ) -> impl Iterator<Item = ($crate::ecs::Entity, &A, &B, &C)> + '_ {
                 let bid = $crate::ecs::ComponentId::new(B::DISCRIMINANT);
                 let cid = $crate::ecs::ComponentId::new(C::DISCRIMINANT);
                 let bcol = B::column(self);
@@ -834,9 +834,9 @@ mod tests {
         let b = s.spawn();
         assert_eq!(a.index(), b.index());
         s.insert_typed(b, Position(2));
-        let joined: Vec<_> = s.join2::<Position, Velocity>().collect();
+
         assert!(
-            joined.is_empty(),
+            s.join2::<Position, Velocity>().next().is_none(),
             "b has no Velocity; stale join must not match"
         );
         let positions: Vec<_> = s

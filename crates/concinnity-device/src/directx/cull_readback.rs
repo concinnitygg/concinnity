@@ -8,7 +8,7 @@
 //! draw-call count is CPU-side and does not move when the GPU rejects an object,
 //! and an object the Hi-Z test correctly occluded leaves no trace in the
 //! presented pixels. Readback is synchronous (it idles the GPU), so it is a
-//! probe-only path, never a per-frame one. Mirrors src/vulkan/cull_readback.rs.
+//! probe-only path, never a per-frame one. Mirrors `src/vulkan/cull_readback.rs`.
 
 use concinnity_core::gfx::cull_status;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -23,7 +23,7 @@ impl DxContext {
     // u32 per live cull record. Distinct name from the
     // `RenderBackend::read_cull_status` trait method so the backend forwarder
     // is unambiguous.
-    pub(crate) fn read_cull_status_buffer(&mut self) -> RenderResult<Vec<u32>> {
+    pub(crate) fn read_cull_status_buffer(&self) -> RenderResult<Vec<u32>> {
         if self.cull.cull_status_buffers.is_empty() {
             return Err(RenderError::Other(
                 "cull-status: this world does not run the GPU-driven cull".into(),
@@ -44,7 +44,7 @@ impl DxContext {
         let frames = self.hw.frames();
         let slot = (self.current_frame + frames - 1) % frames;
         let src = self.cull.cull_status_buffers[slot].clone();
-        let byte_size = (count * std::mem::size_of::<u32>()) as u64;
+        let byte_size = (count * size_of::<u32>()) as u64;
 
         // The GPU must be idle: the status buffer is then settled and no
         // in-flight cull dispatch is still writing the slot being copied.
@@ -72,7 +72,7 @@ impl DxContext {
         let mut map_ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
-        unsafe { readback.Map(0, None, Some(&mut map_ptr)) }
+        unsafe { readback.Map(0, None, Some(&raw mut map_ptr)) }
             .map_err(|e| map_hresult(e.code(), "cull-status: map readback"))?;
         // SAFETY: the mapping covers `byte_size` bytes (the size the buffer was created at), and
         // the copy completed (one_shot_submit waits its fence).

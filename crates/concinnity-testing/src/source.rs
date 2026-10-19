@@ -38,6 +38,10 @@ pub fn rust_sources(dirs: &[PathBuf], skip_file: &str) -> Vec<PathBuf> {
 
 /// Every `.rs` file under `dir`, as [`rust_sources`] walks it, paired with its
 /// path relative to `dir` joined with `/` on every host.
+///
+/// # Panics
+///
+/// Panics on a file name that is not UTF-8.
 pub fn relative_rust_sources(dir: &Path) -> Vec<(String, PathBuf)> {
     rust_sources(&[dir.to_path_buf()], "")
         .into_iter()
@@ -116,16 +120,12 @@ fn scan_line(line: &str, in_raw: &mut Option<usize>) -> isize {
                     .chain(core::iter::repeat_n('#', hashes))
                     .collect();
                 let rest: String = bytes[j + 1..].iter().collect();
-                match rest.find(&close) {
-                    Some(at) => {
-                        i = j + 1 + rest[..at + close.len()].chars().count();
-                        continue;
-                    }
-                    None => {
-                        *in_raw = Some(hashes);
-                        return depth;
-                    }
+                if let Some(at) = rest.find(&close) {
+                    i = j + 1 + rest[..at + close.len()].chars().count();
+                    continue;
                 }
+                *in_raw = Some(hashes);
+                return depth;
             }
         }
         // Ordinary string, with backslash escapes.

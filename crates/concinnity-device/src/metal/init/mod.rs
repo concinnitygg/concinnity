@@ -1,27 +1,28 @@
-//! MtlContext construction. `build` resolves the backend inputs, then calls each
+//! `MtlContext` construction. `build` resolves the backend inputs, then calls each
 //! stage in dependency order. A stage builds one owned group or subsystem state
 //! whole and returns it, borrowing the finished states it depends on:
 //!
-//!   bootstrap.rs     window, MTKView, device, command queues, EDR negotiation.
+//!   bootstrap.rs     window, `MTKView`, device, command queues, EDR negotiation.
 //!   effects.rs       upscaler, TAA, SSAO, SSR, G-buffer pre-pass, SSGI, auto-exposure.
-//!   scene_assets.rs  geometry, light tables, LTC, textures, samplers, IBL, color LUT.
+//!   `scene_assets.rs`  geometry, light tables, LTC, textures, samplers, IBL, color LUT.
 //!   targets.rs       depth states, HDR scene target, transient pool.
-//!   scene_data.rs    clustered light binning.
+//!   `scene_data.rs`    clustered light binning.
 //!   shadow.rs        cascade and spot shadow states.
 //!   cull/            bindless main pass, compute cull, Hi-Z, GPU-driven shadow,
 //!                    probe prefilter, instance records.
-//!   arg_buffers.rs   bindless texture and sampler blocks, probe cube encoder.
+//!   `arg_buffers.rs`   bindless texture and sampler blocks, probe cube encoder.
 //!   text.rs          text atlases and pipeline.
 //!   composite.rs     composite pipeline and sampler.
 //!   bloom.rs         the bloom chain.
-//!   world_fx.rs      decals, fog, particles, water, glass, planar reflections, raymarch.
-//!   ray_tracing.rs   RT reflection pipelines, acceleration structure.
+//!   `world_fx.rs`      decals, fog, particles, water, glass, planar reflections, raymarch.
+//!   `ray_tracing.rs`   RT reflection pipelines, acceleration structure.
 //!   commands.rs      frame rings, pass timing diagnostics.
 //!
 //! `pipelines.rs` holds the main-pass and shadow pipeline builders the stages
 //! share with the shader hot reload.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use crate::metal::canopy::CanopyTables;
 use concinnity_core::gfx::render_types::{ClusterParams, PostProcessParams};
 use concinnity_core::render::backend_init::BackendInit;
 use concinnity_core::render::error::RenderResult;
@@ -31,7 +32,7 @@ use concinnity_core::render::shader_reload::ShaderReload;
 use concinnity_core::settings::ResolvedGraphics;
 
 use self::effects::EffectSettings;
-use super::context::*;
+use super::context::{MtlContext, MtlHardware, debug_assert_main_thread};
 use super::frame_pacing::FrameInFlight;
 use super::line::LineState;
 use super::post::UpscaleState;
@@ -238,7 +239,7 @@ impl MtlContext {
                 let (state, cubes) = super::atmosphere::AtmosphereState::build(
                     &hw.device,
                     &hw.allocator,
-                    settings,
+                    &settings,
                     features.hdr_samples,
                     hot_reload,
                 )?;
@@ -354,7 +355,7 @@ impl MtlContext {
             ),
             canopy: Default::default(),
             grass_lod: None,
-            canopy_tables: Default::default(),
+            canopy_tables: CanopyTables::default(),
             shadow,
             spot_shadow,
             probe,
@@ -431,7 +432,7 @@ impl MtlContext {
         debug_assert_main_thread("apply_world_reload");
         self.wait_idle();
         let reuse = self.hw.hand_over()?;
-        *self = MtlContext::build(init, Some(reuse))?;
+        *self = Self::build(init, Some(reuse))?;
         Ok(())
     }
 }

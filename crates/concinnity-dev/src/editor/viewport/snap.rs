@@ -20,7 +20,7 @@ pub(crate) struct Snap {
 impl Snap {
     // The step to apply this frame, or `None` when snapping is off. `invert`
     // (held Ctrl during a drag) flips the enabled state for that drag.
-    pub(crate) fn active_step(&self, invert: bool) -> Option<f32> {
+    pub(crate) fn active_step(self, invert: bool) -> Option<f32> {
         (self.enabled != invert && self.step > 0.0 && self.step.is_finite()).then_some(self.step)
     }
 

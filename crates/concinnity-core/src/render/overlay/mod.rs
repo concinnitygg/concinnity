@@ -1,10 +1,10 @@
-//! OverlaySystem: builds the 2D overlay draw list (sprites, text, dropdown,
+//! `OverlaySystem`: builds the 2D overlay draw list (sprites, text, dropdown,
 //! text-input fields, cursor) from the world's UI components and publishes the
 //! per-frame menu state. Runs first in the schedule, before the renderer
 //! submits the frame:
 //!   mod.rs        system + the per-frame draw-list build
 //!   widgets.rs    transient dropdown / text-input element synthesis
-//!   hud_layout.rs LayoutContainer reflow + DebugHud / StatHud chip anchoring
+//!   `hud_layout.rs` `LayoutContainer` reflow + `DebugHud` / `StatHud` chip anchoring
 //!
 //! The font atlases and texture slots the build measures against are uploaded
 //! by graphics init, which parks them here as the `OverlayAssets`
@@ -49,9 +49,9 @@ pub struct OverlayAssets {
     pub fonts: text::FontSet,
     /// Each sprite texture's pool slot.
     pub sprite_texture_slots: overlay_maps::TextureSlots,
-    /// The DebugHud chip label ids, top to bottom.
+    /// The `DebugHud` chip label ids, top to bottom.
     pub debug_hud_chips: Vec<AssetId>,
-    /// The StatHud chip label ids, top to bottom.
+    /// The `StatHud` chip label ids, top to bottom.
     pub stat_hud_chips: Vec<AssetId>,
     /// The scroll-panel clip bands.
     pub clip_rects: overlay_maps::ClipRects,
@@ -60,7 +60,7 @@ pub struct OverlayAssets {
     pub initial_viewport: (f32, f32),
 }
 
-/// One frame's overlay build, published by OverlaySystem and consumed (taken)
+/// One frame's overlay build, published by `OverlaySystem` and consumed (taken)
 /// by the render submit the same tick.
 #[derive(Default)]
 pub struct OverlayFrame {
@@ -132,14 +132,14 @@ impl System for OverlaySystem {
                 FrameTime,
             ])
             .writes_resources(crate::resource_mask![
-                crate::render::overlay::OverlayAssets,
-                crate::render::overlay::OverlayFrame,
-                crate::render::overlay::OverlayRecycle,
+                OverlayAssets,
+                OverlayFrame,
+                OverlayRecycle,
                 MenuActive,
             ])
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         // No parked assets: graphics init has not succeeded (or not run), so
         // there is nothing to build against and nothing will be drawn.
         let Some(assets) = ctx.take_resource::<OverlayAssets>() else {
@@ -181,7 +181,7 @@ impl OverlaySystem {
     // sprites are emitted last so the cursor sits on top of everything.
     fn build_frame(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         assets: &OverlayAssets,
         elapsed: f32,
     ) -> OverlayFrame {
@@ -195,8 +195,7 @@ impl OverlaySystem {
         // one frame later, which is invisible mid-drag.
         let (win_w, win_h) = ctx
             .resource::<FrameInput>()
-            .map(|i| (i.viewport[0], i.viewport[1]))
-            .unwrap_or(assets.initial_viewport);
+            .map_or(assets.initial_viewport, |i| (i.viewport[0], i.viewport[1]));
         // The cursor state the input poll sampled at the end of the previous tick
         // (`follow_cursor` sprites are positioned a frame after the input that
         // moved them).

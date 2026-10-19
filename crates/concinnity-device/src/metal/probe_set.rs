@@ -41,8 +41,8 @@ pub(in crate::metal) struct ProbeCubeArray {
 impl ProbeCubeArray {
     pub(in crate::metal) fn placeholder(
         device: &ProtocolObject<dyn MTLDevice>,
-    ) -> RenderResult<ProbeCubeArray> {
-        Ok(ProbeCubeArray {
+    ) -> RenderResult<Self> {
+        Ok(Self {
             texture: create(device, 1, 1, 1)?,
             capacity: 0,
         })
@@ -52,8 +52,8 @@ impl ProbeCubeArray {
         device: &ProtocolObject<dyn MTLDevice>,
         plan: &PrefilterPlan,
         capacity: usize,
-    ) -> RenderResult<ProbeCubeArray> {
-        Ok(ProbeCubeArray {
+    ) -> RenderResult<Self> {
+        Ok(Self {
             texture: create(
                 device,
                 plan.face_size() as usize,

@@ -1,6 +1,6 @@
 //! The data half of the Shaders panel: every `Shader` the world declares, in
 //! declaration order, with the Materials that name it and its files, then the
-//! SdfVolume distance fields (`sdf_field_list`), and the rows the panel lists
+//! `SdfVolume` distance fields (`sdf_field_list`), and the rows the panel lists
 //! them as, with the actions each row's menu offers. A file's status is its
 //! Shader's latest reload outcome as it bears on that file.
 
@@ -126,23 +126,22 @@ pub(crate) enum FileStatus {
 impl FileStatus {
     pub(crate) fn label(self) -> String {
         match self {
-            FileStatus::Built => "as built".to_string(),
-            FileStatus::NotLive => "after rebuild".to_string(),
-            FileStatus::Ok(0) => "ok".to_string(),
-            FileStatus::Ok(1) => "1 warning".to_string(),
-            FileStatus::Ok(n) => format!("{n} warnings"),
-            FileStatus::AppliesOnLoad(_) => "on scene load".to_string(),
-            FileStatus::Failed => "failed".to_string(),
-            FileStatus::SiblingFailed => "other file failed".to_string(),
+            Self::Built => "as built".to_string(),
+            Self::NotLive => "after rebuild".to_string(),
+            Self::Ok(0) => "ok".to_string(),
+            Self::Ok(1) => "1 warning".to_string(),
+            Self::Ok(n) => format!("{n} warnings"),
+            Self::AppliesOnLoad(_) => "on scene load".to_string(),
+            Self::Failed => "failed".to_string(),
+            Self::SiblingFailed => "other file failed".to_string(),
         }
     }
 
     pub(crate) fn tone(self) -> Tone {
         match self {
-            FileStatus::Built | FileStatus::NotLive | FileStatus::Ok(0) => Tone::Info,
-            FileStatus::AppliesOnLoad(0) => Tone::Info,
-            FileStatus::Ok(_) | FileStatus::AppliesOnLoad(_) => Tone::Warning,
-            FileStatus::Failed | FileStatus::SiblingFailed => Tone::Error,
+            Self::Built | Self::NotLive | Self::Ok(0) | Self::AppliesOnLoad(0) => Tone::Info,
+            Self::Ok(_) | Self::AppliesOnLoad(_) => Tone::Warning,
+            Self::Failed | Self::SiblingFailed => Tone::Error,
         }
     }
 }
@@ -179,9 +178,10 @@ pub(crate) fn file_status(
                     .any(|f| f.stage != file.stage && same_file(path, &f.path))
             };
             let here = failed.errors().any(|e| same_file(&e.path, &file.path));
-            match !here && failed.errors().any(|e| in_sibling(&e.path)) {
-                true => FileStatus::SiblingFailed,
-                false => FileStatus::Failed,
+            if !here && failed.errors().any(|e| in_sibling(&e.path)) {
+                FileStatus::SiblingFailed
+            } else {
+                FileStatus::Failed
             }
         }
         ReloadOutcome::Failed(_) => FileStatus::Failed,
@@ -229,17 +229,17 @@ pub(crate) enum MenuItem {
 impl MenuItem {
     pub(crate) fn caption(self) -> &'static str {
         match self {
-            MenuItem::Edit => "Edit",
-            MenuItem::Duplicate => "Duplicate",
-            MenuItem::Delete => "Delete",
-            MenuItem::RemoveVertex => "Remove",
-            MenuItem::Open => "Open",
-            MenuItem::SelectVolumes => "Select volumes",
+            Self::Edit => "Edit",
+            Self::Duplicate => "Duplicate",
+            Self::Delete => "Delete",
+            Self::RemoveVertex => "Remove",
+            Self::Open => "Open",
+            Self::SelectVolumes => "Select volumes",
         }
     }
 
     pub(crate) fn danger(self) -> bool {
-        matches!(self, MenuItem::Delete | MenuItem::RemoveVertex)
+        matches!(self, Self::Delete | Self::RemoveVertex)
     }
 }
 

@@ -32,7 +32,7 @@ impl Look<'_> {
 // Override the authored look values with the persisted settings-menu choices;
 // `None` (or no published choices) keeps the authored value. Applies a
 // persisted FOV to every Camera3D directly, since no controller state holds it.
-pub(super) fn apply_persisted(ctx: &mut PipelineContext, mut look: Look) {
+pub(super) fn apply_persisted(ctx: &mut PipelineContext<'_>, mut look: Look<'_>) {
     let Some(persisted) = ctx
         .resource::<StoredSettings>()
         .map(StoredSettings::controls_command)
@@ -52,9 +52,9 @@ pub(super) fn apply_persisted(ctx: &mut PipelineContext, mut look: Look) {
 // command this tick wins. Returns a pending field of view for the caller to
 // write inside its own Camera3D loop.
 pub(super) fn drain_commands(
-    ctx: &PipelineContext,
+    ctx: &PipelineContext<'_>,
     cursor: &mut EventCursor,
-    mut look: Look,
+    mut look: Look<'_>,
 ) -> Option<f32> {
     let mut pending_fov = None;
     if let Some(events) = ctx.events::<ControlsCommand>() {

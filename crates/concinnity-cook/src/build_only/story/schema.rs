@@ -5,11 +5,11 @@
 /// One `StoryImport` stands in for a whole branching, click-through story (a
 /// visual-novel flow). The build parses the Markdown and expands the import
 /// into the UI assets that play it: a [Screen](#screen) per page with a backdrop
-/// [Sprite](#sprite), [TextLabel](#textlabel)s for narration and speaker
-/// names, and [HitRegion](#hitregion)s wiring page to page, so `world.jsonl`
+/// [Sprite](#sprite), [`TextLabel`](#textlabel)s for narration and speaker
+/// names, and [`HitRegion`](#hitregion)s wiring page to page, so `world.jsonl`
 /// stays a single readable line while the story lives in the Markdown file.
 ///
-/// The `source` file is CommonMark Markdown opening with a YAML frontmatter
+/// The `source` file is `CommonMark` Markdown opening with a YAML frontmatter
 /// block:
 ///
 /// - frontmatter declares the story `title`, its `characters`, and an
@@ -26,7 +26,7 @@
 /// - a lone link to an audio file is a media directive: `music` loops from
 ///   the next page onward until replaced, `sound` plays once when the next
 ///   page shows (`[music](assets/theme.ogg)`, `[sound](assets/door.wav)`);
-///   these expand to [AudioClip](#audioclip) + [AudioCue](#audiocue) entries
+///   these expand to [`AudioClip`](#audioclip) + [`AudioCue`](#audiocue) entries
 /// - `![bg](assets/inn.png)` sets the backdrop image from the next page
 ///   onward; `![left](ana.png)` / `![center](mid.png)` / `![right](ben.png)`
 ///   place a character portrait at that stage position, bottom-anchored at

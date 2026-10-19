@@ -44,12 +44,12 @@ pub(super) struct ComputeInputs<'a> {
 // region and the main pass issues one `ExecuteIndirect` per region under that
 // bucket's pipeline.
 pub(super) fn indirect_buffer_size(bucket_count: usize, n_cull: usize) -> u64 {
-    align256((bucket_count * n_cull) as u64 * INDIRECT_COMMAND_STRIDE as u64)
+    align256((bucket_count * n_cull) as u64 * u64::from(INDIRECT_COMMAND_STRIDE))
 }
 
 // Per-object cull-status buffer size (one u32 each).
 pub(super) fn status_buffer_size(n_cull: usize) -> u64 {
-    align256((n_cull as u64) * std::mem::size_of::<u32>() as u64)
+    align256((n_cull as u64) * size_of::<u32>() as u64)
 }
 
 // Compute cull: cull compute pipeline + per-frame draw-args /
@@ -87,8 +87,7 @@ pub(super) fn build_compute_cull(
         create_cull_command_signature(device, &bindless.root_sigs.main),
     )?;
 
-    let draw_args_size =
-        align256((n_cull * std::mem::size_of::<render_types::GpuDrawArgs>()) as u64);
+    let draw_args_size = align256((n_cull * size_of::<render_types::GpuDrawArgs>()) as u64);
     let indirect_size = indirect_buffer_size(bindless.world_pipelines.bucket_count(), n_cull);
     // Always allocated when the cull path is active (matches Metal); resting
     // state `UAV` so it binds as a root UAV with no transition.
@@ -111,9 +110,9 @@ pub(super) fn build_compute_cull(
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
         // local that receives the mapping.
-        unsafe { da.Map(0, None, Some(&mut ptr)) }
+        unsafe { da.Map(0, None, Some(&raw mut ptr)) }
             .map_err(|e| map_hresult(e.code(), "map draw args buffer"))?;
-        draw_args_ptrs.push(ptr as *mut u8);
+        draw_args_ptrs.push(ptr.cast::<u8>());
         draw_args_buffers.push(da);
 
         // Created in COMMON (D3D12 always makes committed buffers in COMMON

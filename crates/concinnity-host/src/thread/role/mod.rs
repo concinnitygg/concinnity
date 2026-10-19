@@ -8,7 +8,7 @@
 //! | Platform      | Frame thread, raised           | Frame thread, not raised      | [`ThreadRole::Background`]          |
 //! | ------------- | ------------------------------ | ----------------------------- | ----------------------------------- |
 //! | macOS, iOS    | `QOS_CLASS_USER_INTERACTIVE`   | `QOS_CLASS_USER_INTERACTIVE`  | `QOS_CLASS_UTILITY`                 |
-//! | Windows       | above normal, throttling off   | normal, throttling off        | normal, power throttling (EcoQoS)   |
+//! | Windows       | above normal, throttling off   | normal, throttling off        | normal, power throttling (`EcoQoS`)   |
 //! | anything else | unchanged                      | unchanged                     | unchanged                           |
 //!
 //! Whether a frame thread is raised is the application's [`FramePriority`]
@@ -55,16 +55,14 @@ impl ThreadRole {
     /// applications on the machine.
     pub fn raised(self) -> bool {
         match self {
-            ThreadRole::Frame(priority) | ThreadRole::FrameWorker(priority) => {
-                priority.raises_frame_threads()
-            }
-            ThreadRole::Background => false,
+            Self::Frame(priority) | Self::FrameWorker(priority) => priority.raises_frame_threads(),
+            Self::Background => false,
         }
     }
 
     /// Whether every frame waits on the thread.
     pub fn is_frame(self) -> bool {
-        !matches!(self, ThreadRole::Background)
+        !matches!(self, Self::Background)
     }
 }
 

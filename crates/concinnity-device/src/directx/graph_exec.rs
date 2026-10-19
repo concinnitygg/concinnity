@@ -29,7 +29,7 @@
 //! and what state it rests in between frames. Its class -- what a `Write` means --
 //! comes from the usage the graph declares, so this executor and the Vulkan one
 //! cannot disagree about it. Resting cannot: `shadow_map` and `hdr_depth` are both
-//! depth targets, and the first rests sampled while the second rests DEPTH_WRITE.
+//! depth targets, and the first rests sampled while the second rests `DEPTH_WRITE`.
 //!
 //! Bundled passes:
 //!   * `PassId::SsaoBlur` dispatches the bundled `encode_ssao` (which
@@ -277,7 +277,7 @@ impl<'a> BarrierBatch<'a> {
 // first use (`Undefined` source) starts from, which is how a resource this pass
 // has just discarded is taken on from `DISCARD_STATE` rather than from rest.
 fn stage_graph_barrier(
-    batch: &mut BarrierBatch,
+    batch: &mut BarrierBatch<'_>,
     registry: &DxBarrierRegistry,
     op: &BarrierOp,
     opened_at: Option<D3D12_RESOURCE_STATES>,
@@ -479,7 +479,7 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &DxBarrierRegistry
         gaps.is_empty(),
         "render graph (directx): uncovered accesses on graph-driven resources: {}",
         gaps.iter()
-            .map(|g| g.to_string())
+            .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ")
     );
@@ -668,7 +668,7 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     pub grass_benders: &'a [concinnity_core::render::grass::GrassBender],
     // This frame's particle clock, advanced before recording; `None` when the
     // particle passes are inert.
-    pub particle: Option<concinnity_core::render::particles::ParticleFrame>,
+    pub particle: Option<ParticleFrame>,
 }
 
 impl DxContext {
@@ -1130,7 +1130,7 @@ impl DxContext {
         pass_id: PassId,
         cmd: &ID3D12GraphicsCommandList,
         params: &GraphFrameParams<'_>,
-        particle_frame: Option<&concinnity_core::render::particles::ParticleFrame>,
+        particle_frame: Option<&ParticleFrame>,
         grass_frame: Option<&super::grass::GrassFrame>,
     ) -> RenderResult<()> {
         match pass_id {
@@ -1267,7 +1267,7 @@ impl DxContext {
                 // still records it in the compiled order. The per-frame particle
                 // state was advanced once before the fan-out by `prepare_particle_pass`.
                 if let Some(frame) = particle_frame {
-                    self.encode_particles_sim(cmd, params.frame_idx, frame);
+                    self.encode_particles_sim(cmd, params.frame_idx, *frame);
                 }
             }
             PassId::ParticlesDraw => {

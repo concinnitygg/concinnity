@@ -100,7 +100,7 @@ struct CameraStep {
 
 // The debug tick runs before the world step, so the controller sees the new
 // pose the same frame.
-fn camera_set(call: &Call, args: Args) -> Reply {
+fn camera_set(call: &Call<'_>, args: Args) -> Reply {
     let pose: CameraPose = args.parse()?;
     call.on_world(move |world, _| apply_camera_set(&pose, world))?;
     Ok(json!({ "set": true }))
@@ -108,7 +108,7 @@ fn camera_set(call: &Call, args: Args) -> Reply {
 
 // The reply fires when the motion is installed, not when it finishes, so a long
 // move never outlasts the call's wait.
-fn camera_move(call: &Call, args: Args) -> Reply {
+fn camera_move(call: &Call<'_>, args: Args) -> Reply {
     let step: CameraStep = args.parse()?;
     let frames = step.frames;
     call.on_world(move |world, motion| {
@@ -121,7 +121,7 @@ fn camera_move(call: &Call, args: Args) -> Reply {
     Ok(json!({ "frames": frames, "holding": frames == 0 }))
 }
 
-fn camera_stop(call: &Call, _: Args) -> Reply {
+fn camera_stop(call: &Call<'_>, _: Args) -> Reply {
     call.on_world(|_, motion| {
         *motion = None;
         Ok(())

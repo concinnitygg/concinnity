@@ -16,8 +16,8 @@ use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{DrawObject, InstancedCluster};
 use alloc::vec::Vec;
 
-const VERTEX_STRIDE: usize = core::mem::size_of::<Vertex>();
-const INDEX_STRIDE: usize = core::mem::size_of::<u32>();
+const VERTEX_STRIDE: usize = size_of::<Vertex>();
+const INDEX_STRIDE: usize = size_of::<u32>();
 
 /// The streaming headroom reserved in the shared vertex / index buffers, in
 /// bytes. After init the renderer seeds the mesh sub-allocators with this one
@@ -99,7 +99,7 @@ fn relocate_region(
     src_i: &[u32],
     dst_v: &mut Vec<Vertex>,
     dst_i: &mut Vec<u32>,
-    region: Region,
+    region: Region<'_>,
 ) -> (usize, usize, Vec<usize>) {
     let Region {
         v_off_bytes,
@@ -115,7 +115,7 @@ fn relocate_region(
     // i64 so a cluster relocated *forward* (its geometry sat behind the props
     // it now trails) rebases correctly too.
     let delta = new_vbase as i64 - old_vbase as i64;
-    let rebase = |i: u32| -> u32 { (i as i64 + delta) as u32 };
+    let rebase = |i: u32| -> u32 { (i64::from(i) + delta) as u32 };
 
     let (i0_off, i0_count) = lod0;
     let new_i0_off = dst_i.len();
@@ -437,11 +437,7 @@ mod tests {
         assert_eq!(pos(&v[c0..c0 + 5]), c_verts);
         for k in 0..c_ic {
             let idx = i[draws[2].index_offset + k] as usize;
-            assert!(
-                idx >= c0 && idx < c0 + 5,
-                "C index {} out of its region",
-                idx
-            );
+            assert!(idx >= c0 && idx < c0 + 5, "C index {idx} out of its region");
         }
 
         // Cluster D relocated; indices address its own vertices.
@@ -449,11 +445,7 @@ mod tests {
         assert_eq!(pos(&v[d0..d0 + 6]), d_verts);
         for k in 0..d_ic {
             let idx = i[clusters[0].index_offset + k] as usize;
-            assert!(
-                idx >= d0 && idx < d0 + 6,
-                "D index {} out of its region",
-                idx
-            );
+            assert!(idx >= d0 && idx < d0 + 6, "D index {idx} out of its region");
         }
 
         // The buffer shrank by exactly B's vertex + index region.

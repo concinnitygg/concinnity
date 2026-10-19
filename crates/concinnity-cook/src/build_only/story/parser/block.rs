@@ -39,10 +39,7 @@ impl StoryParser {
         let text = self.inline.heading.take().unwrap_or_default();
         let s = slug(&text);
         if s.is_empty() {
-            return self.err(
-                range,
-                format!("heading '{}' produces an empty anchor", text),
-            );
+            return self.err(range, format!("heading '{text}' produces an empty anchor"));
         }
         if let Some(node) = self.cur_node.take() {
             let line = self.line_of(range);
@@ -167,10 +164,7 @@ impl StoryParser {
         if lang != "story" {
             return self.err(
                 range,
-                format!(
-                    "code fence '{}' is not supported; script blocks use ```story",
-                    lang
-                ),
+                format!("code fence '{lang}' is not supported; script blocks use ```story"),
             );
         }
         self.require_open_node(range)?;

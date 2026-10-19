@@ -134,8 +134,7 @@ impl ScreenRegistry {
                 let band = self
                     .known
                     .get(id)
-                    .map(|m| m.layer.clamp(-LAYER_MAX, LAYER_MAX))
-                    .unwrap_or(0);
+                    .map_or(0, |m| m.layer.clamp(-LAYER_MAX, LAYER_MAX));
                 (*id, band * LAYER_BAND + (i as i32) + 1)
             })
             .collect()
@@ -321,7 +320,7 @@ mod tests {
         let t = r.apply(ScreenCommand::Clear).unwrap();
         assert_eq!(r.top(), None);
         assert!(t.top_changed && t.new_top.is_none());
-        let mut hidden = t.hidden.clone();
+        let mut hidden = t.hidden;
         hidden.sort_by_key(|id| id.0);
         assert_eq!(hidden, vec![AssetId(1), AssetId(2)]);
         assert!(r.apply(ScreenCommand::Clear).is_none());

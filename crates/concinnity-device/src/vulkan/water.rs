@@ -1,4 +1,4 @@
-//! WaterSurface: one producer of the engine's transparent pass on the Vulkan
+//! `WaterSurface`: one producer of the engine's transparent pass on the Vulkan
 //! backend (`transparent.rs` owns the render pass itself, the scene snapshot, the
 //! shared descriptor / pipeline layouts and the combined back-to-front draw
 //! order; `glass.rs` is the other producer). Each surface is a flat tessellated
@@ -95,7 +95,7 @@ fn compile_water_rt_shaders(
 // Upload one surface's tessellated grid VB + IB and its per-frame `WaterParams`
 // UBOs, then allocate + write the surface's descriptor sets.
 fn build_surface_record(
-    ctx: &ProducerCtx,
+    ctx: &ProducerCtx<'_>,
     body: &WaterBody,
     planar_slot: Option<usize>,
 ) -> RenderResult<(TransparentRecord, WaterMotion)> {
@@ -123,7 +123,7 @@ fn build_surface_record(
 // pipeline rebuild); a compile failure leaves it absent and the base
 // probe/planar path runs.
 pub(in crate::vulkan) fn build_water_producer(
-    ctx: ProducerCtx,
+    ctx: ProducerCtx<'_>,
     surfaces: &[WaterBody],
     // Per-surface planar resolve slot (aligned with `surfaces`); `None` surfaces
     // keep the probe/sky reflection. From `assign_planar_slots`.
@@ -159,7 +159,7 @@ pub(in crate::vulkan) fn build_water_producer(
 // pipeline layouts; a compile failure leaves it absent and the base probe /
 // planar path runs.
 fn build_water_pipelines(
-    ctx: &ProducerCtx,
+    ctx: &ProducerCtx<'_>,
     programs: &WaterPrograms,
 ) -> RenderResult<ShapePipelines> {
     let (vert_spv, frag_spv) = compile_water_shaders(programs, ctx.hot_reload, ctx.msaa)?;
@@ -199,7 +199,7 @@ type WaterRtPipelines = (
 );
 
 fn build_water_rt_pipelines(
-    ctx: &ProducerCtx,
+    ctx: &ProducerCtx<'_>,
     programs: &WaterPrograms,
     flat_layout: vk::PipelineLayout,
 ) -> RenderResult<WaterRtPipelines> {

@@ -34,15 +34,15 @@ impl GeometryTarget {
     // The state the buffer rests in between command lists.
     fn resting_state(self) -> D3D12_RESOURCE_STATES {
         match self {
-            GeometryTarget::Vertex => D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
-            GeometryTarget::Index => D3D12_RESOURCE_STATE_INDEX_BUFFER,
+            Self::Vertex => D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+            Self::Index => D3D12_RESOURCE_STATE_INDEX_BUFFER,
         }
     }
 
     fn pick<'a>(self, dest: &GeometryDest<'a>) -> &'a ID3D12Resource {
         match self {
-            GeometryTarget::Vertex => dest.vertex,
-            GeometryTarget::Index => dest.index,
+            Self::Vertex => dest.vertex,
+            Self::Index => dest.index,
         }
     }
 }
@@ -260,7 +260,7 @@ fn staging_buffer(alloc: &DeviceAllocator, capacity: u64) -> RenderResult<Stagin
     let mut base = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
     // that receives the mapping.
-    unsafe { buffer.Map(0, None, Some(&mut base)) }
+    unsafe { buffer.Map(0, None, Some(&raw mut base)) }
         .map_err(|e| map_hresult(e.code(), "geometry staging map"))?;
     Ok(StagingBuffer {
         buffer,
@@ -301,7 +301,7 @@ mod tests {
     fn gpu() -> Option<(ID3D12Device, ID3D12CommandQueue, DeviceAllocator)> {
         let mut device: Option<ID3D12Device> = None;
         // SAFETY: the out-parameter is a live local that receives the new COM object.
-        unsafe { D3D12CreateDevice(None, D3D_FEATURE_LEVEL_11_0, &mut device) }.ok()?;
+        unsafe { D3D12CreateDevice(None, D3D_FEATURE_LEVEL_11_0, &raw mut device) }.ok()?;
         let device = device?;
         let queue_desc = D3D12_COMMAND_QUEUE_DESC {
             Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -309,7 +309,8 @@ mod tests {
         };
         // SAFETY: the create descriptor is live for the call, and the new COM object lands in a
         // binding that owns it.
-        let queue: ID3D12CommandQueue = unsafe { device.CreateCommandQueue(&queue_desc) }.ok()?;
+        let queue: ID3D12CommandQueue =
+            unsafe { device.CreateCommandQueue(&raw const queue_desc) }.ok()?;
         let alloc = DeviceAllocator::new(&device, &queue, 3);
         Some((device, queue, alloc))
     }
@@ -374,7 +375,7 @@ mod tests {
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local
         // that receives the mapping.
-        unsafe { readback.Map(0, None, Some(&mut ptr)) }.expect("readback maps");
+        unsafe { readback.Map(0, None, Some(&raw mut ptr)) }.expect("readback maps");
         // SAFETY: the mapping covers the `len`-byte buffer, and the copy into it has completed.
         unsafe { std::slice::from_raw_parts(ptr as *const u8, len).to_vec() }
     }
@@ -424,7 +425,7 @@ mod tests {
         uploads
             .stage(alloc, GeometryTarget::Vertex, 0, &pattern(64, 1))
             .expect("stage");
-        assert!(*uploads.staging.buffer().expect("ring").buffer == *ring);
+        assert_eq!(*uploads.staging.buffer().expect("ring").buffer, *ring);
         flush(device, queue, &mut uploads, &dest);
         assert_eq!(
             read(&gpu, GeometryTarget::Vertex, &dest.0, 0, 64),
@@ -497,7 +498,7 @@ mod tests {
                 )
                 .expect("stage");
         }
-        assert!(*uploads.staging.buffer().expect("ring").buffer == *ring);
+        assert_eq!(*uploads.staging.buffer().expect("ring").buffer, *ring);
         flush(device, queue, &mut uploads, &dest);
         let reused = uploads.lists.pop_due(u64::MAX, 0).expect("held");
         assert!(reused.cmd == first_cmd, "the retired copy list was reused");

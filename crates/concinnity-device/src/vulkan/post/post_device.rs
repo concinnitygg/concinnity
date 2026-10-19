@@ -6,7 +6,7 @@
 //! pipeline layout adds a fragment push-constant range of the declared size and,
 //! for a probe-reading program, the forward global set as set 1, and the render
 //! pass comes from the target's format and load action. The sets are allocated
-//! per frame (post/set_arena.rs) rather than pre-wired per effect, so no pass
+//! per frame (`post/set_arena.rs`) rather than pre-wired per effect, so no pass
 //! has to rewire an input another effect owns.
 
 use ash::vk;

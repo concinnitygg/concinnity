@@ -31,7 +31,7 @@ impl TaaResources {
     // Build the resolve at `extent`, with one accumulation image per frame in
     // flight.
     pub(in crate::vulkan) fn new(
-        device: &VkPostDevice,
+        device: &VkPostDevice<'_>,
         frames: usize,
         extent: vk::Extent2D,
     ) -> RenderResult<Self> {
@@ -51,7 +51,7 @@ impl TaaResources {
     // framebuffer cache, which keys on the views this drops.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        device: &VkPostDevice,
+        device: &VkPostDevice<'_>,
         extent: vk::Extent2D,
     ) -> RenderResult<()> {
         self.pass.resize(device, post_extent(extent))?;

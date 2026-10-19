@@ -2,7 +2,7 @@
 //! render, the camera mirrored across each reflector plane, and the part of the
 //! screen each mirror render has to cover this frame.
 //!
-//! Backend-agnostic and pure (mirrors gfx/reflection_probe.rs). A reflective flat
+//! Backend-agnostic and pure (mirrors `gfx/reflection_probe.rs`). A reflective flat
 //! surface (water, a glass pane) renders the scene a second time from the camera
 //! reflected across its plane; the reflective surface then samples that render
 //! projectively, at its own screen position. So only the reflector's own screen

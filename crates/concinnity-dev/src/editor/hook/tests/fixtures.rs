@@ -338,7 +338,7 @@ pub(in crate::editor::hook) fn type_name(world: &mut World, text: &str) {
 pub(in crate::editor::hook) fn focus_story(h: &mut EditorHook) {
     h.open[PanelKey::Story] = true;
     h.story.focus = true;
-    h.focus_panel(crate::editor::panels::registry::PanelKey::Story);
+    h.focus_panel(PanelKey::Story);
 }
 
 pub(in crate::editor::hook) fn key_input(key: InputKey) -> FrameInput {

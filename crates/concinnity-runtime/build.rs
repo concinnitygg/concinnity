@@ -31,6 +31,10 @@ fn main() {
 }
 
 // Compile the bundled face into `OUT_DIR`, where `gfx::builtin_font` embeds it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 fn bake_builtin_font() {
     let payload = concinnity_core::bake::font::compile(
         concinnity_core::bake::font::BUILTIN_FONT_BYTES,

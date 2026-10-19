@@ -92,18 +92,18 @@ impl PendingHistoryReset {
     /// Add `causes` to whatever is already pending. Raise it on the tick the
     /// camera's new pose is written, or the one that moves what the camera
     /// follows; the cut lands on the first frame drawn from the moved camera.
-    pub fn raise(ctx: &mut PipelineContext, causes: HistoryResetCauses) {
-        match ctx.resource_mut::<PendingHistoryReset>() {
+    pub fn raise(ctx: &mut PipelineContext<'_>, causes: HistoryResetCauses) {
+        match ctx.resource_mut::<Self>() {
             Some(pending) => pending.0 = pending.0.union(causes),
             None => {
-                ctx.insert_resource(PendingHistoryReset(causes));
+                ctx.insert_resource(Self(causes));
             }
         }
     }
 
     /// Everything pending, leaving nothing.
-    pub fn take(ctx: &mut PipelineContext) -> HistoryResetCauses {
-        ctx.resource_mut::<PendingHistoryReset>()
+    pub fn take(ctx: &mut PipelineContext<'_>) -> HistoryResetCauses {
+        ctx.resource_mut::<Self>()
             .map_or(HistoryResetCauses::NONE, |pending| {
                 core::mem::take(&mut pending.0)
             })

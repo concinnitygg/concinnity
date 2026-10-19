@@ -94,7 +94,7 @@ impl SettingsState {
     /// Set every settings-menu row to its live value before the first render,
     /// so a persisted or authored choice shows instead of the build's
     /// placeholder, and capture the rows a runtime change relabels.
-    pub fn sync_menu_labels(&mut self, ctx: &mut PipelineContext, stored: &StoredSettings) {
+    pub fn sync_menu_labels(&mut self, ctx: &mut PipelineContext<'_>, stored: &StoredSettings) {
         let volume_of = |gain: Option<f32>| levels::VOLUME.index_of(gain.unwrap_or(DEFAULT_VOLUME));
         let audio = &stored.audio;
         let volumes = [
@@ -107,7 +107,7 @@ impl SettingsState {
         let g = &r.graphics;
         let window_mode = self.window_args.mode;
         sync_setting_value_labels(ctx, |key| match key {
-            SettingKey::Vsync => Some(g.frame_pacing.vsync as usize),
+            SettingKey::Vsync => Some(usize::from(g.frame_pacing.vsync)),
             SettingKey::FpsCap => Some(levels::FPS_CAP.index_of(g.frame_pacing.fps_cap)),
             SettingKey::WindowMode => Some(levels::WINDOW_MODE.index_of(window_mode)),
             // Resolution is a dynamic dropdown, labeled once the backend has
@@ -123,12 +123,12 @@ impl SettingsState {
             SettingKey::MusicVolume => Some(volumes[1]),
             SettingKey::SfxVolume => Some(volumes[2]),
             SettingKey::VoiceVolume => Some(volumes[3]),
-            SettingKey::TemporalUpscaling => Some(g.anti_aliasing.upscaling as usize),
-            SettingKey::HdrDisplay => Some(g.display.hdr as usize),
-            SettingKey::HdrPq => Some(g.display.pq as usize),
-            SettingKey::PerfStats => Some(r.perf_stats as usize),
-            SettingKey::ShowFps => Some(r.show_fps as usize),
-            SettingKey::ShowVram => Some(r.show_vram as usize),
+            SettingKey::TemporalUpscaling => Some(usize::from(g.anti_aliasing.upscaling)),
+            SettingKey::HdrDisplay => Some(usize::from(g.display.hdr)),
+            SettingKey::HdrPq => Some(usize::from(g.display.pq)),
+            SettingKey::PerfStats => Some(usize::from(r.perf_stats)),
+            SettingKey::ShowFps => Some(usize::from(r.show_fps)),
+            SettingKey::ShowVram => Some(usize::from(r.show_vram)),
             SettingKey::ShadowMapSize => {
                 Some(levels::SHADOW_RESOLUTION.index_of(g.shadows.map_size))
             }
@@ -145,12 +145,12 @@ impl SettingsState {
             SettingKey::FramesInFlight => {
                 Some(levels::FRAMES_IN_FLIGHT.index_of(g.frame_pacing.frames_in_flight))
             }
-            SettingKey::OcclusionTwoPass => Some(g.culling.two_pass_occlusion as usize),
+            SettingKey::OcclusionTwoPass => Some(usize::from(g.culling.two_pass_occlusion)),
             SettingKey::TextureQuality => {
                 Some(levels::TEXTURE_QUALITY.index_of((r.texture_cap, r.texture_budget)))
             }
             key => quality_toggle(key)
-                .map(|row| (row.get)(g) as usize)
+                .map(|row| usize::from((row.get)(g)))
                 .or_else(|| quality_cycle(key).map(|row| (row.index)(g))),
         });
         // After the generic sync: under Auto the master row names the resolved
@@ -173,7 +173,11 @@ impl SettingsState {
     /// and the display's own mode. Then publish the Resolution row's mode list
     /// and value label and the resolved frame-rate cap for the runtime-level
     /// pacer.
-    pub fn adopt_display(&mut self, ctx: &mut PipelineContext, reported: Option<DisplayReport>) {
+    pub fn adopt_display(
+        &mut self,
+        ctx: &mut PipelineContext<'_>,
+        reported: Option<DisplayReport>,
+    ) {
         if let Some(DisplayReport { modes, current }) = reported {
             self.display_modes = if modes.is_empty() {
                 display_mode::fallback_modes()
@@ -195,7 +199,7 @@ impl SettingsState {
 // that setting. `current_index` maps a setting key to the index of its active
 // option (None for an unknown key).
 fn sync_setting_value_labels(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     current_index: impl Fn(SettingKey) -> Option<usize>,
 ) {
     let rows: Vec<(SettingKey, AssetId)> = ctx
@@ -218,7 +222,7 @@ fn sync_setting_value_labels(
 // Set the value label of the settings row bound to `key` to `text` directly,
 // for a label that is not one of the row's static `options` (the master preset
 // row's "Auto (High)", the Graphics API row, a display mode).
-fn set_setting_row_label(ctx: &mut PipelineContext, key: SettingKey, text: &str) {
+fn set_setting_row_label(ctx: &mut PipelineContext<'_>, key: SettingKey, text: &str) {
     let label_id = ctx.query::<HitRegion>().find_map(|r| match r.action {
         Some(UiAction::Setting { key: row_key, .. }) if row_key == key => r.label,
         _ => None,
@@ -230,11 +234,11 @@ fn set_setting_row_label(ctx: &mut PipelineContext, key: SettingKey, text: &str)
 
 /// Gray out and disable every settings row whose feature the device cannot
 /// provide (e.g. ray-traced reflections on a GPU without hardware ray
-/// tracing). A disabled HitRegion is dropped by UiInputSystem so it never
+/// tracing). A disabled `HitRegion` is dropped by `UiInputSystem` so it never
 /// hovers or fires; the row's labels are recolored to a muted gray, and the
 /// value label is marked as unsupported.
 pub fn gate_unavailable_rows(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     caps: &backend::DeviceCapabilities,
     vendor: backend::GpuVendor,
 ) {
@@ -252,7 +256,7 @@ pub fn gate_unavailable_rows(
             Some(UiAction::Setting { key, .. })
                 if !registry::setting_available(key, caps, vendor, compiled) =>
             {
-                Some((key, r.label.map(|l| l.id())))
+                Some((key, r.label.map(crate::ecs::reference::Ref::id)))
             }
             _ => None,
         })

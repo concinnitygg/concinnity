@@ -118,7 +118,7 @@ impl TransientTexturePool {
             heaps,
             textures,
             #[cfg(debug_assertions)]
-            slot_labels: slots.iter().map(|s| s.labels()).collect(),
+            slot_labels: slots.iter().map(TransientSlot::labels).collect(),
         };
         let aliased_bytes = pool.heap_bytes();
         tracing::info!(

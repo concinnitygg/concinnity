@@ -97,7 +97,7 @@ where
 
     // Every result that has arrived and still answers its key's newest
     // request. Never blocks.
-    pub(super) fn drain(&mut self) -> Vec<(K, T)> {
+    pub(super) fn drain(&self) -> Vec<(K, T)> {
         let generations = &self.generations;
         self.rx
             .try_iter()

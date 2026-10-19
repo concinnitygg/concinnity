@@ -109,11 +109,11 @@ pub enum FieldType {
     /// A JSON object with no described shape.
     Object,
     /// The inner type, or `null`.
-    Optional(fn() -> FieldType),
+    Optional(fn() -> Self),
     /// A list of the element type, of a fixed length when `len` is set.
     Array {
         /// The element type.
-        elem: fn() -> FieldType,
+        elem: fn() -> Self,
         /// The fixed length of a Rust array; `None` for a `Vec`.
         len: Option<usize>,
     },

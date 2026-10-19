@@ -30,7 +30,7 @@ pub(super) struct VkWireframe {
 impl VkWireframe {
     // Retire every built pipeline, leaving the set unbuilt.
     pub(super) fn destroy(&mut self) {
-        *self = VkWireframe::default();
+        *self = Self::default();
     }
 }
 

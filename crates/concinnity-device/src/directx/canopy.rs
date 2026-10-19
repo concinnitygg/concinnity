@@ -34,7 +34,7 @@ impl MappedCopy {
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
         // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a
         // live local that receives the mapping.
-        unsafe { buffer.Map(0, None, Some(&mut ptr)) }
+        unsafe { buffer.Map(0, None, Some(&raw mut ptr)) }
             .map_err(|e| map_hresult(e.code(), "map canopy block"))?;
         Ok(Self {
             buffer,
@@ -58,8 +58,8 @@ impl DxCanopy {
     // `slots` mapped copies of an empty block and of room for every layer's
     // table.
     pub(in crate::directx) fn new(alloc: &DeviceAllocator, slots: usize) -> RenderResult<Self> {
-        let size = (std::mem::size_of::<CanopyParams>() as u64 + 255) & !255;
-        let table_size = (MAX_CANOPY_TABLE_ROWS * std::mem::size_of::<[f32; 4]>()) as u64;
+        let size = (size_of::<CanopyParams>() as u64 + 255) & !255;
+        let table_size = (MAX_CANOPY_TABLE_ROWS * size_of::<[f32; 4]>()) as u64;
         let copies = (0..slots)
             .map(|_| MappedCopy::new(alloc, size))
             .collect::<RenderResult<Vec<_>>>()?;

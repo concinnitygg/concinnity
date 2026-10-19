@@ -163,10 +163,7 @@ impl MtlContext {
     // scene); an empty list bakes none. Resets the staggered bake so the next
     // eligible frames re-bake from scratch, and grows the cube array when the
     // list outgrows it; a world whose array cannot grow keeps the sky.
-    pub(in crate::metal) fn set_reflection_probes(
-        &mut self,
-        placements: &[reflection_probe::ProbePlacement],
-    ) {
+    pub(in crate::metal) fn set_reflection_probes(&mut self, placements: &[ProbePlacement]) {
         let placements = placements.to_vec();
         let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements));
         crate::probe_report::report_probe_placement(placed);
@@ -193,7 +190,7 @@ impl MtlContext {
         self.probe
             .retire_pool
             .collect(self.frame_ring_index, self.frames_in_flight as u64);
-        let report = self.with_probe_bake(|bake, ctx| bake.advance_prefilter(ctx));
+        let report = self.with_probe_bake(ProbeBake::advance_prefilter);
         crate::probe_report::report_probe_bake(report);
     }
 

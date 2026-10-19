@@ -26,30 +26,34 @@ pub struct Access {
 
 impl Access {
     /// An empty declaration: no components, no resources, not exclusive.
-    pub fn new() -> Access {
-        Access::default()
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Declare the components `step` reads.
-    pub fn reads_components(mut self, components: ComponentMask) -> Access {
+    #[must_use]
+    pub fn reads_components(mut self, components: ComponentMask) -> Self {
         self.component_reads = components;
         self
     }
 
     /// Declare the components `step` writes.
-    pub fn writes_components(mut self, components: ComponentMask) -> Access {
+    #[must_use]
+    pub fn writes_components(mut self, components: ComponentMask) -> Self {
         self.component_writes = components;
         self
     }
 
     /// Declare the resources `step` reads.
-    pub fn reads_resources(mut self, resources: ComponentMask) -> Access {
+    #[must_use]
+    pub fn reads_resources(mut self, resources: ComponentMask) -> Self {
         self.resource_reads = resources;
         self
     }
 
     /// Declare the resources `step` writes.
-    pub fn writes_resources(mut self, resources: ComponentMask) -> Access {
+    #[must_use]
+    pub fn writes_resources(mut self, resources: ComponentMask) -> Self {
         self.resource_writes = resources;
         self
     }
@@ -57,7 +61,8 @@ impl Access {
     /// Mark the system as exclusive: it conflicts with every other system and so
     /// never runs concurrently. Used for a system that touches non-shareable
     /// state the access masks do not model (e.g. a main-thread-only backend).
-    pub fn exclusive(mut self) -> Access {
+    #[must_use]
+    pub fn exclusive(mut self) -> Self {
         self.exclusive = true;
         self
     }
@@ -70,8 +75,9 @@ impl Access {
     /// The combined access of two declarations: reads, writes, and exclusivity
     /// union. Used to fold a data-dependent system's per-program accesses into
     /// its schedule-visible declaration.
-    pub fn union(self, other: Access) -> Access {
-        Access {
+    #[must_use]
+    pub fn union(self, other: Self) -> Self {
+        Self {
             component_reads: self.component_reads.merged(other.component_reads),
             component_writes: self.component_writes.merged(other.component_writes),
             resource_reads: self.resource_reads.merged(other.resource_reads),
@@ -103,7 +109,7 @@ impl Access {
     }
 
     /// Whether this system can run concurrently with `other`.
-    pub fn conflicts_with(self, other: Access) -> bool {
+    pub fn conflicts_with(self, other: Self) -> bool {
         self.exclusive
             || other.exclusive
             || overlaps(

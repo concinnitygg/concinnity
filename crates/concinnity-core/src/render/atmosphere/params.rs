@@ -7,7 +7,7 @@ use crate::math::vec3::length;
 use crate::render::night_sky::{MAX_GALAXIES, NightLanes};
 
 /// The atmosphere's constants, shared by the table kernels, the sky draw and
-/// the haze pass. Mirrors `AtmosphereParams` in atmosphere_common.hlsl. Every
+/// the haze pass. Mirrors `AtmosphereParams` in `atmosphere_common.hlsl`. Every
 /// member is a `float4` lane so the three shader targets lay it out alike.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]

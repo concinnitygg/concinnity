@@ -362,7 +362,7 @@ mod tests {
 
         let before = payload_key(11, &args, &ctx(), &CacheInputs::extra(vec![path.clone()]));
         std::fs::write(&file, b"void shade(float) {}").unwrap();
-        let after = payload_key(11, &args, &ctx(), &CacheInputs::extra(vec![path.clone()]));
+        let after = payload_key(11, &args, &ctx(), &CacheInputs::extra(vec![path]));
         assert_ne!(
             before, after,
             "an extra source file's contents must affect the key"

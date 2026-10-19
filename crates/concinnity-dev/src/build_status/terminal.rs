@@ -30,14 +30,14 @@ impl Surface {
         // On Windows the console only reads escape codes once asked to.
         let escapes = anstyle_query::windows::enable_ansi_colors().unwrap_or(true);
         if stderr.is_terminal() && escapes {
-            Surface::Live { drawn: 0 }
+            Self::Live { drawn: 0 }
         } else {
-            Surface::Stream { printed: 0 }
+            Self::Stream { printed: 0 }
         }
     }
 
     pub(super) fn colored(&self) -> bool {
-        matches!(self, Surface::Live { .. })
+        matches!(self, Self::Live { .. })
     }
 
     // The text that brings the output up to date with `board`: the notes
@@ -56,7 +56,7 @@ impl Surface {
         let notes = board.take_notes();
         let footer = if last { render::footer(board) } else { None };
         match self {
-            Surface::Live { drawn } => {
+            Self::Live { drawn } => {
                 out.push_str(SYNC_BEGIN);
                 if *drawn > 0 {
                     let _ = write!(out, "\x1b[{drawn}A");
@@ -78,7 +78,7 @@ impl Surface {
                 }
                 out.push_str(SYNC_END);
             }
-            Surface::Stream { printed } => {
+            Self::Stream { printed } => {
                 for line in notes.iter().flat_map(render::note) {
                     let _ = writeln!(out, "{}", line.paint(color));
                 }
@@ -100,8 +100,7 @@ impl Surface {
 
 pub(super) fn width() -> usize {
     terminal_size::terminal_size_of(std::io::stderr())
-        .map(|(w, _)| usize::from(w.0))
-        .unwrap_or(FALLBACK_WIDTH)
+        .map_or(FALLBACK_WIDTH, |(w, _)| usize::from(w.0))
 }
 
 #[cfg(test)]

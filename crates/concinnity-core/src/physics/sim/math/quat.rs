@@ -26,7 +26,7 @@ impl Default for Quat {
 }
 
 impl Quat {
-    pub(crate) const IDENTITY: Quat = Quat {
+    pub(crate) const IDENTITY: Self = Self {
         x: 0.0,
         y: 0.0,
         z: 0.0,
@@ -34,7 +34,7 @@ impl Quat {
     };
 
     pub(crate) const fn from_xyzw(v: [f32; 4]) -> Self {
-        Quat {
+        Self {
             x: v[0],
             y: v[1],
             z: v[2],
@@ -51,7 +51,7 @@ impl Quat {
     pub(crate) fn from_axis_angle(axis: Vec3, angle_rad: f32) -> Self {
         let half = angle_rad * 0.5;
         let s = sin(half);
-        Quat {
+        Self {
             x: axis.x * s,
             y: axis.y * s,
             z: axis.z * s,
@@ -70,8 +70,8 @@ impl Quat {
         crate::math::euler_yxz_deg_from_quat(self.to_xyzw())
     }
 
-    pub(crate) fn mul(self, rhs: Quat) -> Quat {
-        Quat {
+    pub(crate) fn mul(self, rhs: Self) -> Self {
+        Self {
             x: self.w * rhs.x + self.x * rhs.w + self.y * rhs.z - self.z * rhs.y,
             y: self.w * rhs.y - self.x * rhs.z + self.y * rhs.w + self.z * rhs.x,
             z: self.w * rhs.z + self.x * rhs.y - self.y * rhs.x + self.z * rhs.w,
@@ -79,8 +79,8 @@ impl Quat {
         }
     }
 
-    pub(crate) fn conjugate(self) -> Quat {
-        Quat {
+    pub(crate) fn conjugate(self) -> Self {
+        Self {
             x: -self.x,
             y: -self.y,
             z: -self.z,
@@ -88,13 +88,13 @@ impl Quat {
         }
     }
 
-    pub(crate) fn normalize(self) -> Quat {
+    pub(crate) fn normalize(self) -> Self {
         let len_sq = self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w;
         if len_sq <= f32::MIN_POSITIVE {
-            return Quat::IDENTITY;
+            return Self::IDENTITY;
         }
         let inv = 1.0 / sqrt(len_sq);
-        Quat {
+        Self {
             x: self.x * inv,
             y: self.y * inv,
             z: self.z * inv,
@@ -116,8 +116,8 @@ impl Quat {
 
     /// Advance an orientation by `angular_velocity` (radians per second) over
     /// `dt`, renormalizing so repeated steps do not drift off the unit sphere.
-    pub(crate) fn integrate(self, angular_velocity: Vec3, dt: f32) -> Quat {
-        let w = Quat {
+    pub(crate) fn integrate(self, angular_velocity: Vec3, dt: f32) -> Self {
+        let w = Self {
             x: angular_velocity.x,
             y: angular_velocity.y,
             z: angular_velocity.z,
@@ -125,7 +125,7 @@ impl Quat {
         };
         let d = w.mul(self);
         let half = dt * 0.5;
-        Quat {
+        Self {
             x: self.x + d.x * half,
             y: self.y + d.y * half,
             z: self.z + d.z * half,

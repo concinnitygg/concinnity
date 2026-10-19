@@ -14,13 +14,13 @@ pub(crate) struct Aabb {
 
 impl Aabb {
     /// Bounds that contain nothing, so a union with anything is that thing.
-    pub(crate) const EMPTY: Aabb = Aabb {
+    pub(crate) const EMPTY: Self = Self {
         min: Vec3::splat(f32::INFINITY),
         max: Vec3::splat(f32::NEG_INFINITY),
     };
 
     pub(crate) fn from_center_half_extents(center: Vec3, half_extents: Vec3) -> Self {
-        Aabb {
+        Self {
             min: center - half_extents,
             max: center + half_extents,
         }
@@ -28,13 +28,13 @@ impl Aabb {
 
     pub(crate) fn expanded(self, margin: f32) -> Self {
         let m = Vec3::splat(margin);
-        Aabb {
+        Self {
             min: self.min - m,
             max: self.max + m,
         }
     }
 
-    pub(crate) fn contains(self, other: Aabb) -> bool {
+    pub(crate) fn contains(self, other: Self) -> bool {
         self.min.x <= other.min.x
             && self.min.y <= other.min.y
             && self.min.z <= other.min.z
@@ -43,7 +43,7 @@ impl Aabb {
             && self.max.z >= other.max.z
     }
 
-    pub(crate) fn overlaps(self, other: Aabb) -> bool {
+    pub(crate) fn overlaps(self, other: Self) -> bool {
         self.min.x <= other.max.x
             && self.max.x >= other.min.x
             && self.min.y <= other.max.y
@@ -57,8 +57,8 @@ impl Aabb {
     }
 
     /// The smallest bounds containing both.
-    pub(crate) fn union(self, other: Aabb) -> Self {
-        Aabb {
+    pub(crate) fn union(self, other: Self) -> Self {
+        Self {
             min: self.min.min(other.min),
             max: self.max.max(other.max),
         }

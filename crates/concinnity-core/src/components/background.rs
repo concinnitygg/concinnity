@@ -1,8 +1,8 @@
 // Background color schema.
 
 /// What the frame shows where no surface is drawn and no
-/// [EnvironmentMap](#environmentmap) serves as the backdrop. The `background`
-/// section of [GraphicsConfig](#graphicsconfig); left unset, the default below
+/// [`EnvironmentMap`](#environmentmap) serves as the backdrop. The `background`
+/// section of [`GraphicsConfig`](#graphicsconfig); left unset, the default below
 /// applies.
 ///
 /// ```rust

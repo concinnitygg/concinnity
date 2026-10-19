@@ -8,7 +8,7 @@
 //! draw-call count is CPU-side and does not move when the GPU rejects an object,
 //! and an object the Hi-Z test correctly occluded leaves no trace in the
 //! presented pixels. Readback is synchronous, so it is a probe-only path, never
-//! a per-frame one. Mirrors src/vulkan/cull_readback.rs.
+//! a per-frame one. Mirrors `src/vulkan/cull_readback.rs`.
 //!
 //! Metal's status buffer is a single `StorageModePrivate` allocation rather than
 //! a per-frame ring (the decision and encode kernels of one frame are the only
@@ -32,7 +32,7 @@ impl MtlContext {
     // Read the cull-status buffer back to the host, one u32 per live cull
     // record. Distinct name from the `RenderBackend::read_cull_status` trait
     // method so the backend forwarder is unambiguous.
-    pub(in crate::metal) fn read_cull_status_buffer(&mut self) -> RenderResult<Vec<u32>> {
+    pub(in crate::metal) fn read_cull_status_buffer(&self) -> RenderResult<Vec<u32>> {
         // `None` both on a non-bindless world (no cull pipeline, so
         // `ensure_icb_capacity` allocates nothing) and before the first frame.
         let src = self.cull.status_buffer.clone().ok_or_else(|| {
@@ -44,7 +44,7 @@ impl MtlContext {
         if count == 0 {
             return Ok(Vec::new());
         }
-        let byte_size = count * std::mem::size_of::<u32>();
+        let byte_size = count * size_of::<u32>();
         if byte_size > src.length() {
             return Err(RenderError::Other(
                 "cull-status: status buffer is smaller than the live object count".to_string(),

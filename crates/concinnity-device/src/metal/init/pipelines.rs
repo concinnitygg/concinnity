@@ -62,7 +62,7 @@ pub(crate) fn make_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
         ],
         &[VertexLayout {
             buffer_index: 1,
-            stride: std::mem::size_of::<Vertex>(),
+            stride: size_of::<Vertex>(),
             step: MTLVertexStepFunction::PerVertex,
         }],
     )

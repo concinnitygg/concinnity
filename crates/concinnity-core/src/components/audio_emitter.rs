@@ -5,7 +5,7 @@ use crate::ecs::{AudioClipHandle, Ref};
 
 /// A point source of sound in the world.
 ///
-/// Plays its `clip` (an [AudioClip](#audioclip) reference) from `position`,
+/// Plays its `clip` (an [`AudioClip`](#audioclip) reference) from `position`,
 /// attenuated and panned relative to the camera. When `prop` names a
 /// [Prop](#prop), the emitter tracks that prop's position every frame, so the
 /// sound follows a moving object.
@@ -31,7 +31,7 @@ use crate::ecs::{AudioClipHandle, Ref};
 )]
 #[serde(default)]
 pub struct AudioEmitter {
-    /// The [AudioClip](#audioclip) this emitter plays.
+    /// The [`AudioClip`](#audioclip) this emitter plays.
     pub clip: Option<AudioClipHandle>,
     /// World-space position of the sound source.
     pub position: [f32; 3],
@@ -57,7 +57,7 @@ pub struct AudioEmitter {
     pub bus: Option<AudioBus>,
 }
 
-/// How an [AudioEmitter](#audioemitter)'s volume falls with distance.
+/// How an [`AudioEmitter`](#audioemitter)'s volume falls with distance.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default, Vocabulary,
 )]

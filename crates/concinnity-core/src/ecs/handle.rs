@@ -91,7 +91,7 @@ macro_rules! handle_spaces {
 }
 
 handle_spaces! {
-    /// The shared mesh-source space: Mesh, ProceduralMesh, VoxelChunk, and
+    /// The shared mesh-source space: Mesh, `ProceduralMesh`, `VoxelChunk`, and
     /// mesh-kind File. Which types a reference may name depends on a File's
     /// kind, so mesh references keep a structured check.
     Mesh => MeshHandle, "mesh";
@@ -109,7 +109,7 @@ handle_spaces! {
     EnvironmentMap => EnvironmentMapHandle, "environment-map", "EnvironmentMap";
     /// Color lookup tables.
     ColorLut => ColorLutHandle, "color-lut", "ColorLut";
-    /// Skinned meshes. A SkinnedMesh's authored references bake to its dense
+    /// Skinned meshes. A `SkinnedMesh`'s authored references bake to its dense
     /// handle rather than an interned id.
     SkinnedMesh => SkinnedMeshHandle, "skinned-mesh", "SkinnedMesh";
     /// Shaders. A Shader is a component, but a Material's `shader` reference

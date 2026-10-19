@@ -20,14 +20,6 @@
 //! The source importers parse artist-supplied files, so a panic here is a crash
 //! on a malformed asset rather than a bug. Invariants that genuinely cannot fail
 //! use `expect` with the invariant named; tests unwrap freely.
-#![warn(clippy::unwrap_used)]
-#![cfg_attr(
-    test,
-    expect(
-        clippy::unwrap_used,
-        reason = "tests unwrap freely; the crate-wide warn covers non-test code"
-    )
-)]
 
 // Build-host API, re-exported deliberately: a host driving the pipeline (the
 // CLI, an example harness) works against cook alone, the way a runtime host

@@ -1,7 +1,7 @@
 //! HLSL: keywords, types, numbers, strings, comments (a block comment may run
 //! across lines), preprocessor directives, and the names the engine provides
 //! the file, from one of the engine's vocabulary tables: a Shader's, or an
-//! SdfVolume distance field's.
+//! `SdfVolume` distance field's.
 
 use concinnity_core::render::shader_programs::vocabulary::{
     self, Entry, Kind, RECORD_STRUCT, VARYING_STRUCT,
@@ -242,17 +242,14 @@ fn close_block_comment(s: &mut Scan, out: &mut Vec<Span>) -> bool {
 }
 
 fn close_block_comment_from(s: &mut Scan, start: usize, out: &mut Vec<Span>) -> bool {
-    match s.find("*/") {
-        Some(end) => {
-            s.at = end + 2;
-            push(out, start, s.at, Token::Comment);
-            true
-        }
-        None => {
-            s.at = s.len();
-            push(out, start, s.at, Token::Comment);
-            false
-        }
+    if let Some(end) = s.find("*/") {
+        s.at = end + 2;
+        push(out, start, s.at, Token::Comment);
+        true
+    } else {
+        s.at = s.len();
+        push(out, start, s.at, Token::Comment);
+        false
     }
 }
 

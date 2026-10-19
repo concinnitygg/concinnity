@@ -203,7 +203,7 @@ fn persisted_display_and_system_overrides_reach_the_backend() {
     settings.graphics.resolution = Some([1920, 1080, 60]);
 
     let (state, hooks) = recording_hooks();
-    let mut world = effects_scene(Default::default()).build();
+    let mut world = effects_scene(ResolvedGraphics::default()).build();
     world.insert_resource(settings);
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);

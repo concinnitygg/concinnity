@@ -292,7 +292,7 @@ fn the_build_command_runs_on_a_worker_and_reports_back() {
 
     // Wait out the worker rather than the wall clock, so the cwd is restored
     // only once nothing is still writing through it.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_mins(2);
     while h.console_build_running.load(Ordering::SeqCst) {
         assert!(std::time::Instant::now() < deadline, "the cook worker hung");
         std::thread::yield_now();
@@ -372,7 +372,7 @@ fn the_export_command_runs_on_a_worker_and_writes_the_file() {
     h.run_console_line(&mut world, "/export");
     assert!(log_text(&h).contains("export of 'prism' started"));
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_mins(2);
     while h.console_build_running.load(Ordering::SeqCst) {
         assert!(
             std::time::Instant::now() < deadline,

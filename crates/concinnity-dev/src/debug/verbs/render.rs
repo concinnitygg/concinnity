@@ -235,7 +235,7 @@ fn default_burst_prefix() -> String {
     "frame".to_string()
 }
 
-fn decal_add(call: &Call, args: Args) -> Reply {
+fn decal_add(call: &Call<'_>, args: Args) -> Reply {
     let decal: DecalAdd = args.parse()?;
     let id = call.on_backend(REPLY_TIMEOUT, move |backend, slots| {
         let slot = texture_slot(decal.texture.as_deref(), slots)?;
@@ -246,7 +246,7 @@ fn decal_add(call: &Call, args: Args) -> Reply {
     Ok(json!({ "id": id }))
 }
 
-fn decal_remove(call: &Call, args: Args) -> Reply {
+fn decal_remove(call: &Call<'_>, args: Args) -> Reply {
     let Slot { id } = args.parse()?;
     call.on_backend(REPLY_TIMEOUT, move |backend, _| {
         backend.remove_decal(id).map_err(|e| e.to_string())
@@ -254,7 +254,7 @@ fn decal_remove(call: &Call, args: Args) -> Reply {
     Ok(json!({ "removed": true }))
 }
 
-fn emitter_add(call: &Call, args: Args) -> Reply {
+fn emitter_add(call: &Call<'_>, args: Args) -> Reply {
     let EmitterAdd { texture, emitter } = args.parse()?;
     let id = call.on_backend(REPLY_TIMEOUT, move |backend, slots| {
         let slot = texture_slot(texture.as_deref(), slots)?;
@@ -265,7 +265,7 @@ fn emitter_add(call: &Call, args: Args) -> Reply {
     Ok(json!({ "id": id }))
 }
 
-fn emitter_remove(call: &Call, args: Args) -> Reply {
+fn emitter_remove(call: &Call<'_>, args: Args) -> Reply {
     let Slot { id } = args.parse()?;
     call.on_backend(REPLY_TIMEOUT, move |backend, _| {
         backend.remove_emitter(id).map_err(|e| e.to_string())
@@ -276,7 +276,7 @@ fn emitter_remove(call: &Call, args: Args) -> Reply {
 // The capture idles the GPU, copies the swapchain image back, and encodes the
 // PNG on the render thread, so it gets the readback wait. The path is checked
 // and written as the same trimmed value.
-fn screenshot(call: &Call, args: Args) -> Reply {
+fn screenshot(call: &Call<'_>, args: Args) -> Reply {
     let path = args.parse::<Screenshot>()?.path.trim().to_string();
     let is_png = std::path::Path::new(&path)
         .extension()
@@ -293,7 +293,7 @@ fn screenshot(call: &Call, args: Args) -> Reply {
 // One capture per frame, each re-queued for the next frame by the one before,
 // so the files cover every jitter phase in order. The frame index is the
 // counter `state` reports.
-fn screenshot_burst(call: &Call, args: Args) -> Reply {
+fn screenshot_burst(call: &Call<'_>, args: Args) -> Reply {
     let burst: ScreenshotBurst = args.parse()?;
     let paths = burst_paths(&burst)?;
     std::fs::create_dir_all(burst.dir.trim())
@@ -328,7 +328,7 @@ fn burst_paths(burst: &ScreenshotBurst) -> Result<Vec<String>, String> {
         .collect())
 }
 
-fn cull_status(call: &Call, _: Args) -> Reply {
+fn cull_status(call: &Call<'_>, _: Args) -> Reply {
     let raw = call.on_backend(READBACK_TIMEOUT, |backend, _| {
         backend.read_cull_status().map_err(|e| e.to_string())
     })?;

@@ -210,9 +210,9 @@ impl ParticleResources {
     // declared at least one `ParticleEmitter`. The encoder is a no-op
     // when this is `None`.
     pub(in crate::vulkan) fn new(
-        gpu: &GpuUploadContext,
+        gpu: &GpuUploadContext<'_>,
         frames: usize,
-        targets: ParticlePassTargets,
+        targets: ParticlePassTargets<'_>,
         msaa: bool,
         hot_reload: bool,
     ) -> RenderResult<Self> {
@@ -249,7 +249,7 @@ impl ParticleResources {
 
         // Per-frame ParticleView UBOs (HOST_VISIBLE | HOST_COHERENT,
         // persistently mapped).
-        let view_size = std::mem::size_of::<ParticleView>() as u64;
+        let view_size = size_of::<ParticleView>() as u64;
         let mut view_ubos = Vec::with_capacity(frames);
         for _ in 0..frames {
             let buf = alloc.create_buffer(
@@ -367,15 +367,15 @@ impl ParticleResources {
 // emitter's pair when one is spare) and writes the pool bindings. The albedo
 // binding stays stale; `add_emitter` writes it from the live texture pool.
 pub(in crate::vulkan) fn build_emitter_gpu_state(
-    gpu: GpuUploadContext,
+    gpu: GpuUploadContext<'_>,
     resources: &mut ParticleResources,
     record: &ParticleEmitterRecord,
 ) -> RenderResult<ParticleEmitterGpuState> {
     // Destructure the handles the buffer allocations need directly; the
     // one-shot zero-fills below take the whole `gpu` context (it is Copy).
     let GpuUploadContext { alloc, device, .. } = gpu;
-    let slots = record.max_particles as u64;
-    let pool_bytes = slots * std::mem::size_of::<GpuParticle>() as u64;
+    let slots = u64::from(record.max_particles);
+    let pool_bytes = slots * size_of::<GpuParticle>() as u64;
 
     // Pool buffer: DEVICE_LOCAL, used as STORAGE by both passes. The
     // compute kernel writes through it; the vertex stage reads it. A WAR
@@ -548,7 +548,7 @@ fn emitter_set_bindings() -> [Binding; 3] {
 // vertex emits the color; fragment reads it via varyings) + compute
 // (every field). The vertex stage actually only reads the gradient + size
 // fields, but binding the full struct keeps the host upload single-shot.
-const PARTICLE_PUSH_BYTES: u32 = std::mem::size_of::<ParticleParams>() as u32;
+const PARTICLE_PUSH_BYTES: u32 = size_of::<ParticleParams>() as u32;
 // 128 bytes is the `maxPushConstantsSize` every Vulkan device offers.
 const _: () = assert!(PARTICLE_PUSH_BYTES <= 128);
 
@@ -659,7 +659,11 @@ fn create_render_pipeline(
 // inside a one-shot command buffer. Cheaper than the staging-buffer
 // alternative and trivially correct since `vkCmdFillBuffer` writes a
 // 32-bit pattern; `bytes` is a multiple of 4 since a pool slot is 32 bytes.
-fn zero_device_buffer(gpu: GpuUploadContext, target: vk::Buffer, bytes: u64) -> RenderResult<()> {
+fn zero_device_buffer(
+    gpu: GpuUploadContext<'_>,
+    target: vk::Buffer,
+    bytes: u64,
+) -> RenderResult<()> {
     let GpuUploadContext {
         device,
         command_pool,
@@ -702,7 +706,7 @@ impl VkContext {
     pub(in crate::vulkan) fn encode_particles_sim(
         &self,
         cmd: vk::CommandBuffer,
-        frame: &ParticleFrame,
+        frame: ParticleFrame,
     ) {
         let Some(resources) = self.particle.resources.as_ref() else {
             return;
@@ -723,7 +727,7 @@ impl VkContext {
                 resources.compute_pipeline.handle(),
             );
         }
-        for emitter in self.particle.system.emitters(frame) {
+        for emitter in self.particle.system.emitters(&frame) {
             let (rec, gpu, params) = (emitter.record, emitter.gpu, &emitter.params);
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
@@ -758,7 +762,7 @@ impl VkContext {
         &self,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
-        frame: &ParticleFrame,
+        frame: ParticleFrame,
         vp: [[f32; 4]; 4],
         frustum: &Frustum,
         mask: ReactiveWrite,
@@ -773,7 +777,7 @@ impl VkContext {
         // every live pool so off-screen emitters stay in a realistic mid-life
         // state when the camera turns back. Tombstoned (None) slots are always
         // invisible.
-        let mut visible = self.particle.system.visible(frame, frustum).peekable();
+        let mut visible = self.particle.system.visible(&frame, frustum).peekable();
         if visible.peek().is_none() {
             return false;
         }

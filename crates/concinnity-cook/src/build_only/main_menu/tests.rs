@@ -10,8 +10,12 @@ use super::*;
 //   CN_PROBE_PROFILE=minimal CN_PROBE_TAB=video cargo test -p concinnity-cook \
 //       dump_settings_tab_probe_world -- --ignored
 // then `concinnity debug -f world.jsonl` + the `screenshot` debug verb.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "an ignored probe takes its inputs from the shell that runs it"
+)]
 #[test]
-#[ignore]
+#[ignore = "writes a probe world for a manual screenshot"]
 fn dump_settings_tab_probe_world() {
     let tab = std::env::var("CN_PROBE_TAB").unwrap_or_else(|_| "controls".to_string());
     let profile = std::env::var("CN_PROBE_PROFILE").unwrap_or_else(|_| "full".to_string());
@@ -599,7 +603,7 @@ fn settings_chrome_and_band_fit_on_screen() {
         let by = panel["args"]["y"].as_f64().unwrap();
         let bh = panel["args"]["height"].as_f64().unwrap();
         assert!(
-            by >= 0.0 && by + bh <= ref_h as f64,
+            by >= 0.0 && by + bh <= f64::from(ref_h),
             "{screen} band off-screen"
         );
         // Back sits below the band but on screen.
@@ -607,13 +611,16 @@ fn settings_chrome_and_band_fit_on_screen() {
         let back_y = back["args"]["y"].as_f64().unwrap();
         let back_h = back["args"]["height"].as_f64().unwrap();
         assert!(back_y >= by + bh, "{screen} Back overlaps the band");
-        assert!(back_y + back_h <= ref_h as f64, "{screen} Back off-screen");
+        assert!(
+            back_y + back_h <= f64::from(ref_h),
+            "{screen} Back off-screen"
+        );
         // The scrollbar gutter stays inside the canvas width.
         let track = by_name(&assets, &format!("{screen}_scrolltrack"));
         let tx = track["args"]["x"].as_f64().unwrap();
         let tw = track["args"]["width"].as_f64().unwrap();
         assert!(
-            tx + tw <= ref_w as f64,
+            tx + tw <= f64::from(ref_w),
             "{screen} scrollbar off the right edge"
         );
     }

@@ -66,7 +66,7 @@ pub(crate) fn hovered<'v, 'a>(view: &'v RefView<'a>, rect: [f32; 4]) -> Option<&
 }
 
 // Position and show the column in `rect` (`Some(view)`), or blank it.
-pub(crate) fn place(world: &mut World, view: Option<&RefView>, rect: [f32; 4]) {
+pub(crate) fn place(world: &mut World, view: Option<&RefView<'_>>, rect: [f32; 4]) {
     let Some(view) = view else {
         return ids().hide(world);
     };

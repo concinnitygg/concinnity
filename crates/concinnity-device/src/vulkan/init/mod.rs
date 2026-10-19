@@ -1,21 +1,24 @@
-//! VkContext construction. `build` resolves the backend inputs, then calls each
+//! `VkContext` construction. `build` resolves the backend inputs, then calls each
 //! stage in dependency order. A stage builds one owned group or subsystem state
 //! whole and returns it, borrowing the finished states it depends on:
 //!
 //!   bootstrap.rs     window, instance, debug messenger, surface, device, swapchain.
 //!   commands.rs      command pools and buffers, timestamp reset, sync objects.
-//!   scene_assets.rs  textures, scene and cube samplers, IBL cubes, color LUT.
+//!   `scene_assets.rs`  textures, scene and cube samplers, IBL cubes, color LUT.
 //!   targets.rs       main render pass, HDR attachments, transient image pool.
-//!   scene_data.rs    area lights, geometry, uniform rings, clustered lights.
+//!   `scene_data.rs`    area lights, geometry, uniform rings, clustered lights.
 //!   shadow.rs        cascade and spot shadow states.
 //!   descriptors.rs   global set layout, the shared pool, global and shadow sets.
 //!   effects.rs       upscaler, screen-space passes, TAA wiring, world effects.
 //!   cull/            bindless pass, compute cull, Hi-Z, GPU-driven shadow, G-buffer.
-//!   ray_tracing.rs   RT acceleration structure, reflections, reflection composite.
+//!   `ray_tracing.rs`   RT acceleration structure, reflections, reflection composite.
 //!   bloom.rs         the shared bloom chain.
 //!   composite.rs     composite pass, pipeline and input sets.
 //!   text.rs          text atlases, pipeline and atlas sets.
 
+use crate::vulkan::particle::ParticleState;
+use crate::vulkan::pipeline_builder::PipelineGate;
+use crate::vulkan::wireframe::VkWireframe;
 use ash::vk;
 use concinnity_core::gfx::render_types::PostProcessParams;
 use concinnity_core::render::backend_init::{BackendInit, WorldShader};
@@ -24,8 +27,12 @@ use concinnity_core::render::feature_plan::{BackendFacts, FeaturePlan};
 use concinnity_core::render::scene_state::{DrawList, SceneState};
 use concinnity_core::render::shader_reload::ShaderReload;
 use concinnity_core::settings::ResolvedGraphics;
+use std::cell::Cell;
 
-use super::context::*;
+use super::context::{
+    HDR_FORMAT, ProbeState, StreamState, SwapchainState, VkContext, VkCull, VkDescriptors,
+    VkHardware, VkInstanced, VkShadow, VkSkinned, VkTargets, record_main_thread,
+};
 use super::geometry_upload::GeometryUploads;
 use super::texture::GpuUploadContext;
 use crate::vulkan::descriptor_layout::SCREEN_INDIRECT_BINDING;
@@ -179,7 +186,7 @@ impl VkContext {
         // Record this (main) thread so the `RenderBackend` mutation entry points
         // can `debug_assert_main_thread` against it; the Send invariant rests on
         // the context being touched from this thread alone.
-        super::context::record_main_thread();
+        record_main_thread();
         let frames = graphics.frames_in_flight();
 
         let request = bootstrap::HardwareRequest {
@@ -396,7 +403,7 @@ impl VkContext {
                     targets.depth_images.iter().map(|img| img.view).collect();
                 Some(crate::vulkan::atmosphere::VkAtmosphere::new(
                     &gpu.upload(),
-                    settings,
+                    &settings,
                     cube,
                     frames,
                     crate::vulkan::atmosphere::AtmosphereTargets {
@@ -404,7 +411,7 @@ impl VkContext {
                         depth_views: &depth_views,
                         extent: render_extent,
                         msaa: targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
-                        hdr_format: super::context::HDR_FORMAT,
+                        hdr_format: HDR_FORMAT,
                     },
                     crate::vulkan::atmosphere::AtmosphereSky {
                         global_set_layout: descriptors.global_set_layout.handle(),
@@ -451,14 +458,14 @@ impl VkContext {
             transparent: world_fx.transparent,
             water_sim: world_fx.water_sim,
             planar_reflection: world_fx.planar_reflection,
-            particle: Default::default(),
+            particle: ParticleState::default(),
             grass,
             grass_lod: None,
             auto_exposure: world_fx.auto_exposure,
             hot_reload: ShaderReload::new(hot_reload),
-            pipeline_gate: Default::default(),
+            pipeline_gate: PipelineGate::default(),
             world_shader: world_programs.cloned(),
-            frame_stats: Default::default(),
+            frame_stats: Cell::default(),
             draw_calls_accum: Default::default(),
             descriptors,
             instanced: VkInstanced::new(world.instanced_clusters),
@@ -482,7 +489,7 @@ impl VkContext {
             ),
             graph_scratch: None,
             submit_scratch: Vec::new(),
-            wireframe: Default::default(),
+            wireframe: VkWireframe::default(),
             probe: ProbeState::new(probe_prefilter, probe_gpu),
             stream: StreamState::new(frames),
             // A freshly built context owns its hardware outright; only
@@ -567,7 +574,7 @@ impl VkContext {
         // means they can go now rather than after the successor's first frames.
         self.hw.device.reclaim_idle();
         tracing::debug!("reload: old world freed: {}", self.hw.alloc.stats());
-        match VkContext::build(init, Some(reuse)) {
+        match Self::build(init, Some(reuse)) {
             Ok(rebuilt) => {
                 *self = rebuilt;
                 Ok(())
@@ -589,7 +596,7 @@ struct GrassInit<'a> {
     descriptors: &'a VkDescriptors,
     cull: &'a VkCull,
     targets: &'a VkTargets,
-    shadow: &'a super::context::VkShadow,
+    shadow: &'a VkShadow,
 }
 
 fn build_grass(

@@ -1,7 +1,7 @@
 //! The runtime, rebindable key map for the gameplay movement keys. Each backend
 //! decodes physical keys into the same semantic booleans (forward, jump, ...);
-//! this map says which canonical InputKey drives each action, so the settings menu can
-//! remap them at runtime. The map is canonical (backend-agnostic InputKey values); a
+//! this map says which canonical `InputKey` drives each action, so the settings menu can
+//! remap them at runtime. The map is canonical (backend-agnostic `InputKey` values); a
 //! backend resolves it to its own native key codes when it is pushed via
 //! `RenderBackend::set_keymap`.
 
@@ -31,27 +31,27 @@ pub enum Bindable {
 
 impl Bindable {
     /// Every rebindable action, in Controls-tab row order.
-    pub const ALL: [Bindable; 7] = [
-        Bindable::Forward,
-        Bindable::Backward,
-        Bindable::Left,
-        Bindable::Right,
-        Bindable::Sprint,
-        Bindable::Jump,
-        Bindable::Interact,
+    pub const ALL: [Self; 7] = [
+        Self::Forward,
+        Self::Backward,
+        Self::Left,
+        Self::Right,
+        Self::Sprint,
+        Self::Jump,
+        Self::Interact,
     ];
 
     /// The settings key string used in rebind actions and the
     /// engine settings registry.
     pub const fn setting_key(self) -> &'static str {
         match self {
-            Bindable::Forward => "key_forward",
-            Bindable::Backward => "key_backward",
-            Bindable::Left => "key_left",
-            Bindable::Right => "key_right",
-            Bindable::Sprint => "key_sprint",
-            Bindable::Jump => "key_jump",
-            Bindable::Interact => "key_interact",
+            Self::Forward => "key_forward",
+            Self::Backward => "key_backward",
+            Self::Left => "key_left",
+            Self::Right => "key_right",
+            Self::Sprint => "key_sprint",
+            Self::Jump => "key_jump",
+            Self::Interact => "key_interact",
         }
     }
 }
@@ -63,31 +63,31 @@ impl Bindable {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyMap {
     #[serde(default = "def_forward")]
-    /// InputKey bound to [`Bindable::Forward`].
+    /// `InputKey` bound to [`Bindable::Forward`].
     pub forward: InputKey,
     #[serde(default = "def_backward")]
-    /// InputKey bound to [`Bindable::Backward`].
+    /// `InputKey` bound to [`Bindable::Backward`].
     pub backward: InputKey,
     #[serde(default = "def_left")]
-    /// InputKey bound to [`Bindable::Left`].
+    /// `InputKey` bound to [`Bindable::Left`].
     pub left: InputKey,
     #[serde(default = "def_right")]
-    /// InputKey bound to [`Bindable::Right`].
+    /// `InputKey` bound to [`Bindable::Right`].
     pub right: InputKey,
     #[serde(default = "def_sprint")]
-    /// InputKey bound to [`Bindable::Sprint`].
+    /// `InputKey` bound to [`Bindable::Sprint`].
     pub sprint: InputKey,
     #[serde(default = "def_jump")]
-    /// InputKey bound to [`Bindable::Jump`].
+    /// `InputKey` bound to [`Bindable::Jump`].
     pub jump: InputKey,
     #[serde(default = "def_interact")]
-    /// InputKey bound to [`Bindable::Interact`].
+    /// `InputKey` bound to [`Bindable::Interact`].
     pub interact: InputKey,
 }
 
 impl KeyMap {
     /// The default bindings: the keys that were hardcoded before rebinding.
-    pub const DEFAULT: KeyMap = KeyMap {
+    pub const DEFAULT: Self = Self {
         forward: InputKey::W,
         backward: InputKey::S,
         left: InputKey::A,

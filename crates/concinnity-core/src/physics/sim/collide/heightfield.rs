@@ -92,7 +92,7 @@ impl Heightfield {
             min: origin + vec3(-half_width, lowest, -half_depth),
             max: origin + vec3(half_width, highest, half_depth),
         };
-        Some(Heightfield {
+        Some(Self {
             rows,
             cols,
             heights,
@@ -111,7 +111,7 @@ impl Heightfield {
     }
 
     pub(crate) fn reserved_bytes(&self) -> u64 {
-        (self.heights.capacity() * size_of::<f32>() + size_of::<Heightfield>()) as u64
+        (self.heights.capacity() * size_of::<f32>() + size_of::<Self>()) as u64
     }
 
     /// The world-space grid vertex at a row and column.
@@ -305,7 +305,7 @@ pub(crate) struct Heightfields {
 
 impl Heightfields {
     pub(crate) fn new() -> Self {
-        Heightfields {
+        Self {
             fields: Vec::new(),
             overflows: AtomicU32::new(0),
         }
@@ -568,7 +568,7 @@ mod tests {
         assert_eq!(field.triangles_at(2, 0), [None, None]);
         assert_eq!(field.triangles_at(0, 2), [None, None]);
         // Every triangle of the grid is named by its own key.
-        let mut keys = alloc::vec::Vec::new();
+        let mut keys = Vec::new();
         for row in 0..2 {
             for col in 0..2 {
                 for half in 0..2 {
@@ -632,7 +632,7 @@ mod tests {
             max: Vec3::splat(10.0),
         };
         let mut candidates = field.candidates(all);
-        let keys: alloc::vec::Vec<u32> = (&mut candidates).map(|(key, _)| key).collect();
+        let keys: Vec<u32> = (&mut candidates).map(|(key, _)| key).collect();
         assert!(!candidates.cut_off());
         assert_eq!(keys.len(), 8);
         let mut sorted = keys.clone();
@@ -692,7 +692,7 @@ mod tests {
         };
         let pose = at(vec3(-1.0, 0.5, -1.0));
         let bounds = Aabb::from_center_half_extents(pose.position, Vec3::splat(0.5));
-        let mut out = alloc::vec::Vec::new();
+        let mut out = Vec::new();
         let manifolds = collide_into(
             &table,
             index,
@@ -733,7 +733,7 @@ mod tests {
         let ball = ColliderShape::Ball { radius: 0.5 };
         let pose = at(vec3(-1.0, 0.4, -1.0));
         let bounds = Aabb::from_center_half_extents(pose.position, Vec3::splat(0.5));
-        let mut out = alloc::vec::Vec::new();
+        let mut out = Vec::new();
         collide_into(
             &table,
             index,
@@ -766,7 +766,7 @@ mod tests {
         let ball = ColliderShape::Ball { radius: 0.5 };
         let pose = at(vec3(0.0, 5.0, 0.0));
         let bounds = Aabb::from_center_half_extents(pose.position, Vec3::splat(0.5));
-        let mut out = alloc::vec::Vec::new();
+        let mut out = Vec::new();
         assert_eq!(
             collide_into(
                 &table,
@@ -801,7 +801,7 @@ mod tests {
         // (-1, .., -1) sits at y = 0.5.
         let pose = at(vec3(-1.0, 0.75, -1.0));
         let bounds = Aabb::from_center_half_extents(pose.position, Vec3::splat(0.3));
-        let mut out = alloc::vec::Vec::new();
+        let mut out = Vec::new();
         assert!(
             collide_into(
                 &table,

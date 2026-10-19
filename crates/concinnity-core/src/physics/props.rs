@@ -248,7 +248,7 @@ impl PropBodies {
         world: &mut Simulation,
         authored: impl Fn(Entity) -> Option<([f32; 3], [f32; 3])>,
     ) {
-        for prop in self.bodies.iter_mut() {
+        for prop in &mut self.bodies {
             let Some((position, rotation_deg)) = authored(prop.entity) else {
                 continue;
             };
@@ -272,12 +272,14 @@ impl PropBodies {
         rebase: &crate::planet::Rebase,
         written: impl Fn(Entity) -> Option<([f32; 3], [f32; 3])>,
     ) {
-        for prop in self.bodies.iter_mut() {
+        for prop in &mut self.bodies {
             prop.pose.rebase(rebase);
-            prop.written = written(prop.entity).unwrap_or((
-                rebase.apply_point(prop.written.0),
-                rebase.apply_euler_deg(prop.written.1),
-            ));
+            prop.written = written(prop.entity).unwrap_or_else(|| {
+                (
+                    rebase.apply_point(prop.written.0),
+                    rebase.apply_euler_deg(prop.written.1),
+                )
+            });
         }
     }
 

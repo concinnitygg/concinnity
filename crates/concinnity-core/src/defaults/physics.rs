@@ -7,7 +7,7 @@ use crate::components::{PhysicsConfig, PropBody, RigidBody, TriggerVolume};
 use crate::ecs::PipelineContext;
 use crate::resource::SkinnedMeshTable;
 
-pub(super) fn inject(ctx: &mut PipelineContext) {
+pub(super) fn inject(ctx: &mut PipelineContext<'_>) {
     if ctx.query::<PhysicsConfig>().next().is_some() || !has_physics_content(ctx) {
         return;
     }
@@ -17,7 +17,7 @@ pub(super) fn inject(ctx: &mut PipelineContext) {
 // Mirrors the physics schedule gate, minus the PhysicsConfig arm the caller
 // has already ruled out: the two must agree on which worlds run physics, or a
 // world would receive a config it never simulates with.
-fn has_physics_content(ctx: &PipelineContext) -> bool {
+fn has_physics_content(ctx: &PipelineContext<'_>) -> bool {
     ctx.query::<RigidBody>().next().is_some()
         || ctx.query::<PropBody>().next().is_some()
         || ctx.query::<TriggerVolume>().next().is_some()

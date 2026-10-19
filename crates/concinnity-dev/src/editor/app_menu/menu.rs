@@ -1,9 +1,9 @@
-//! Building the NSMenu tree, and carrying choices back to the editor.
+//! Building the `NSMenu` tree, and carrying choices back to the editor.
 //!
 //! The tree is built once. A state change pushes into the items already there
 //! (`sync`), so the marks are right the moment the menu drops down. A choice
 //! lands in the target's queue and is drained on the next frame rather than
-//! acted on where it arrives, which is inside the nested run loop AppKit
+//! acted on where it arrives, which is inside the nested run loop `AppKit`
 //! tracks an open menu with.
 
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -66,7 +66,7 @@ thread_local! {
 }
 
 /// Install the session's menu bar, replacing whatever the application carries.
-/// Does nothing off the main thread, which is where AppKit refuses to be used
+/// Does nothing off the main thread, which is where `AppKit` refuses to be used
 /// at all; the session then simply runs without a menu bar.
 pub(crate) fn install(state: PanelMarks) {
     let Some(mtm) = MainThreadMarker::new() else {

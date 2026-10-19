@@ -75,7 +75,7 @@ fn the_current_action_is_selected_and_written_back() {
 #[test]
 fn an_action_the_list_does_not_offer_is_kept() {
     let choose = json!({"story": {"choose": 2}});
-    let (fields, at) = action_field("KeyBinding", json!({"action": choose.clone()}), "action");
+    let (fields, at) = action_field("KeyBinding", json!({"action": choose}), "action");
     let field = &fields[at];
     assert_eq!(field.choices[field.variant_idx], choose);
     assert_eq!(field.variants[field.variant_idx], choose.to_string());

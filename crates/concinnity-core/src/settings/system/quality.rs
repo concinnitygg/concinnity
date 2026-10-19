@@ -22,7 +22,7 @@ impl SettingsState {
     // `crate::settings::quality`.
     pub(super) fn apply_quality_preset(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         cfg: &mut StoredSettings,
         cmd: &SettingCommand,
     ) -> bool {
@@ -61,10 +61,10 @@ impl SettingsState {
     // Refresh the rows a preset change re-derives from the init-captured
     // value-label ids; the menu's HitRegions are drained after init, so they
     // cannot be re-queried here.
-    fn relabel_preset_dependents(&self, ctx: &mut PipelineContext) {
+    fn relabel_preset_dependents(&self, ctx: &mut PipelineContext<'_>) {
         for row in &QUALITY_TOGGLES {
             let on = (row.get)(&self.resolved.graphics);
-            self.relabel_option(ctx, row.key, on as usize);
+            self.relabel_option(ctx, row.key, usize::from(on));
         }
         self.relabel_option(
             ctx,
@@ -101,7 +101,7 @@ impl SettingsState {
     }
 
     // Set a captured cycle row's value label to its option at `index`.
-    fn relabel_option(&self, ctx: &mut PipelineContext, key: SettingKey, index: usize) {
+    fn relabel_option(&self, ctx: &mut PipelineContext<'_>, key: SettingKey, index: usize) {
         let Some(text) = settings::options(key).and_then(|o| o.get(index).copied()) else {
             return;
         };
@@ -118,14 +118,14 @@ impl SettingsState {
     // plan rebuilds the affected render resources.
     pub(super) fn apply_quality_toggle(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         cfg: &mut StoredSettings,
         row: &QualityToggle,
         opts: RowOptions,
         op: SettingOp,
     ) -> &'static str {
         let cur = (row.get)(&self.resolved.graphics);
-        let next = registry::cycle(cur as usize, opts.len(), op);
+        let next = registry::cycle(usize::from(cur), opts.len(), op);
         let on = next == 1;
         (row.set)(&mut self.resolved.graphics, on);
         *(row.persisted.get_mut)(&mut cfg.graphics) = Some(on);
@@ -137,7 +137,7 @@ impl SettingsState {
     // plan rebuilds the affected effect.
     pub(super) fn apply_quality_cycle(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         cfg: &mut StoredSettings,
         row: &QualityCycle,
         opts: RowOptions,
@@ -155,7 +155,7 @@ impl SettingsState {
     // (no ceiling clamps the user's choice) and relabels the master row.
     pub(super) fn opt_out_of_preset(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         cfg: &mut StoredSettings,
     ) {
         self.quality_preset = QualityPreset::Custom;

@@ -15,7 +15,7 @@ pub trait SettingsStore: core::fmt::Debug + Send {
 impl SettingsSystem {
     // Write the store when its revision moved since the last write. A revision
     // seen before the store is published waits for it.
-    pub(super) fn persist(&mut self, ctx: &PipelineContext) {
+    pub(super) fn persist(&mut self, ctx: &PipelineContext<'_>) {
         let Some(&revision) = ctx.resource::<SettingsRevision>() else {
             return;
         };

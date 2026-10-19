@@ -218,7 +218,7 @@ pub(crate) fn hit_test(
 
 // The status line's text and tone: the gutter marker or reference name under
 // the cursor while one is hovered, else the panel's own status.
-fn status_line(view: &SourceView, g: &Geometry, reference: [f32; 4]) -> Option<Status> {
+fn status_line(view: &SourceView<'_>, g: &Geometry, reference: [f32; 4]) -> Option<Status> {
     let area_view = TextAreaView {
         area: view.area,
         focused: view.focus,
@@ -240,7 +240,7 @@ fn status_line(view: &SourceView, g: &Geometry, reference: [f32; 4]) -> Option<S
             .reference
             .as_ref()
             .and_then(|r| reference::hovered(r, reference))
-            .and_then(|row| row.describe())
+            .and_then(super::shader_reference::RefRow::describe)
             .map(|text| Status::new(text, Tone::Info))
             .or_else(|| view.status.cloned()),
     }
@@ -250,7 +250,7 @@ fn status_line(view: &SourceView, g: &Geometry, reference: [f32; 4]) -> Option<S
 // element (`None`).
 pub(crate) fn place(
     world: &mut World,
-    view: Option<&SourceView>,
+    view: Option<&SourceView<'_>>,
     o: [f32; 2],
     s: [f32; 2],
     m: Metrics,
@@ -263,9 +263,10 @@ pub(crate) fn place(
     let dirty = view.area.is_dirty();
     widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
     let title = widget::title_rect(o, w);
-    let heading = match dirty {
-        true => format!("{} *", view.title),
-        false => view.title.to_string(),
+    let heading = if dirty {
+        format!("{} *", view.title)
+    } else {
+        view.title.to_string()
     };
     widget::place_heading(world, TITLE_LABEL, title, &heading);
     let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
@@ -298,7 +299,7 @@ pub(crate) fn place(
 }
 
 // The path on the left, then the unsaved-edits mark and Save on the right.
-fn place_header(world: &mut World, view: &SourceView, o: [f32; 2], w: f32, dirty: bool) {
+fn place_header(world: &mut World, view: &SourceView<'_>, o: [f32; 2], w: f32, dirty: bool) {
     let y = o[1] + widget::TITLE_H + HEADER_H * 0.5 - theme::TEXT_HALF;
     let save = save_rect(o, w);
     let toggle = reference_button_rect(o, w);

@@ -139,7 +139,7 @@ pub(in crate::metal) struct FullscreenPass<'a> {
 pub(in crate::metal) fn encode_fullscreen_pass(
     cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
     timing: Option<&crate::metal::pass_timing::PassTimingResources>,
-    pass: FullscreenPass,
+    pass: FullscreenPass<'_>,
     bind: impl FnOnce(&ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>),
 ) -> RenderResult<()> {
     let FullscreenPass {

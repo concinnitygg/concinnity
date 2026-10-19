@@ -79,7 +79,7 @@ pub struct InjectedAsset {
     pub asset_type: String,
     /// The args the injection supplied.
     pub args: serde_json::Value,
-    /// The injection pass (an EngineDefaults flag name or "companion"), so
+    /// The injection pass (an `EngineDefaults` flag name or "companion"), so
     /// listings can say where a default came from.
     pub injected_by: &'static str,
 }
@@ -93,7 +93,7 @@ pub struct GeneratedAsset {
     pub name: String,
     /// The asset's registry type name.
     pub asset_type: String,
-    /// The authored asset that generated it (a SceneImport's name).
+    /// The authored asset that generated it (a `SceneImport`'s name).
     pub generated_by: String,
 }
 

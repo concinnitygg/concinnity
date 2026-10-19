@@ -7,6 +7,7 @@ use super::shader_edit::file_name;
 use super::shader_list::ShaderDecl;
 use super::shader_source::same_file;
 use crate::editor::widget_check::Check;
+use std::fmt::Write as _;
 
 // What deleting a field does: the volumes removed, and who still reads its
 // file after, an included volume the editor cannot remove or a Shader
@@ -54,14 +55,12 @@ pub(crate) fn delete_message(field: &FieldDecl, delete: &FieldDelete) -> String 
     let mut out = format!("Delete the SDF field {}?", field.declared);
     match delete.removed.len() {
         0 => {}
-        1 => out.push_str(&format!(
-            " Its volume {} is deleted.",
-            quoted(&delete.removed)
-        )),
-        _ => out.push_str(&format!(
-            " Its volumes {} are deleted.",
-            quoted(&delete.removed)
-        )),
+        1 => {
+            let _ = write!(out, " Its volume {} is deleted.", quoted(&delete.removed));
+        }
+        _ => {
+            let _ = write!(out, " Its volumes {} are deleted.", quoted(&delete.removed));
+        }
     }
     out
 }
@@ -97,11 +96,16 @@ pub(crate) fn deleted_message(
         quoted(removed)
     );
     match file {
-        Some(Ok(())) => out.push_str(&format!(
-            " and {}; undo restores the volumes but not the file",
-            file_name(&field.declared)
-        )),
-        Some(Err(e)) => out.push_str(&format!("; could not delete {}: {e}", field.path)),
+        Some(Ok(())) => {
+            let _ = write!(
+                out,
+                " and {}; undo restores the volumes but not the file",
+                file_name(&field.declared)
+            );
+        }
+        Some(Err(e)) => {
+            let _ = write!(out, "; could not delete {}: {e}", field.path);
+        }
         None => {}
     }
     out

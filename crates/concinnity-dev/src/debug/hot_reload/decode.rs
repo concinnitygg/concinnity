@@ -8,11 +8,16 @@ use concinnity_core::components::build_skeleton_from_joint_defs;
 use concinnity_core::fanout::Fanout;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend;
-use concinnity_core::render::world_load::source_maps::*;
+use concinnity_core::render::world_load::source_maps::{
+    ColorLutSource, MeshSourceEntry, SkinnedMeshSourceEntry, TextureSourceEntry,
+};
 use concinnity_host::thread::jobs::pool;
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 
-use super::state::*;
+use super::state::{
+    AssetHotReloadState, DecodedAssetBatch, DecodedColorLut, DecodedMesh, DecodedSkinnedMesh,
+    DecodedTexture, PendingSkeletonUpdate,
+};
 
 // Trigger a hot-reload pass. Spawns at most two worker threads: one for the
 // IBL convolution (when an EnvironmentMap is declared) and one for the rest
@@ -86,7 +91,7 @@ fn spawn_asset_decode_worker(state: &AssetHotReloadState) {
                 totals.0,
                 totals.1,
                 totals.2,
-                if totals.3 { 1 } else { 0 }
+                i32::from(totals.3)
             );
         }
         Err(e) => {
@@ -188,13 +193,17 @@ pub(super) fn decode_asset_batch(
     // and the resolved buffers are `Arc`-backed, so the clone is cheap.
     let assets_dir = crate::project::assets_dir();
     let load_glb = |source: &str| -> Result<concinnity_cook::import::gltf_source::GltfDoc, String> {
-        if let Some(doc) = parsed_glb_cache.lock().unwrap().get(source) {
+        if let Some(doc) = parsed_glb_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(source)
+        {
             return Ok(doc.clone());
         }
         let doc = concinnity_cook::import::glb::parse_glb(source, assets_dir.as_deref())?;
         parsed_glb_cache
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(source.to_string(), doc.clone());
         Ok(doc)
     };
@@ -205,7 +214,13 @@ pub(super) fn decode_asset_batch(
         .par_iter()
         .map(|entry| {
             let lower = entry.source.to_lowercase();
-            let decoded = if lower.ends_with(".glb") || lower.ends_with(".gltf") {
+            let decoded = if std::path::Path::new(&lower)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("glb"))
+                || std::path::Path::new(&lower)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("gltf"))
+            {
                 match load_glb(&entry.source) {
                     Ok(doc) => concinnity_cook::compile::texture::decode_glb_image_from_doc(
                         &doc,
@@ -411,9 +426,8 @@ pub(crate) fn poll_pending_assets(
         Ok(g) => g,
         Err(p) => p.into_inner(),
     };
-    let rx = match slot.as_ref() {
-        Some(r) => r,
-        None => return false,
+    let Some(rx) = slot.as_ref() else {
+        return false;
     };
     let batch = match rx.try_recv() {
         Ok(b) => b,
@@ -474,17 +488,14 @@ pub(crate) fn poll_pending_assets(
     let mut rebuild_changes: Vec<backend::DrawGeometryUpdate> = Vec::new();
     let mut rebuild_entry_count = 0usize;
     for dm in &batch.meshes {
-        let entry = match state.meshes.entries.get(dm.entry_idx) {
-            Some(e) => e,
-            None => {
-                tracing::warn!(
-                    "asset hot-reload: decoded Mesh entry_idx {} out of range (source \
-                     map mutated mid-pass?); skipping",
-                    dm.entry_idx
-                );
-                failed += 1;
-                continue;
-            }
+        let Some(entry) = state.meshes.entries.get(dm.entry_idx) else {
+            tracing::warn!(
+                "asset hot-reload: decoded Mesh entry_idx {} out of range (source \
+                 map mutated mid-pass?); skipping",
+                dm.entry_idx
+            );
+            failed += 1;
+            continue;
         };
         let size_changed = entry.draw_indices.iter().any(|&draw_idx| {
             let base_changed = match backend.draw_geometry_size(draw_idx) {
@@ -575,17 +586,14 @@ pub(crate) fn poll_pending_assets(
     // entry; applied after the rebuild dispatch (success path only).
     let mut joint_count_changes: Vec<(usize /*entry_idx*/, usize /*new_count*/)> = Vec::new();
     for ds in &batch.skinned_meshes {
-        let entry = match state.skinned_meshes.entries.get(ds.entry_idx) {
-            Some(e) => e,
-            None => {
-                tracing::warn!(
-                    "asset hot-reload: decoded SkinnedMesh entry_idx {} out of range; \
-                     skipping",
-                    ds.entry_idx
-                );
-                failed += 1;
-                continue;
-            }
+        let Some(entry) = state.skinned_meshes.entries.get(ds.entry_idx) else {
+            tracing::warn!(
+                "asset hot-reload: decoded SkinnedMesh entry_idx {} out of range; \
+                 skipping",
+                ds.entry_idx
+            );
+            failed += 1;
+            continue;
         };
         let new_joint_count = ds.skeleton.len().min(render_types::MAX_JOINTS);
         let joint_count_changed = new_joint_count != entry.joint_count;
@@ -679,8 +687,7 @@ pub(crate) fn poll_pending_assets(
                         .skinned_meshes
                         .entries
                         .get(*entry_idx)
-                        .map(|e| !failed_skinned.contains(&e.skinned_index))
-                        .unwrap_or(true)
+                        .is_none_or(|e| !failed_skinned.contains(&e.skinned_index))
                 });
             }
         }
@@ -691,9 +698,8 @@ pub(crate) fn poll_pending_assets(
     // dispatch so failed rebuilds can prune their joint-count writes
     // before they land.
     for (entry_idx, new_count) in &joint_count_changes {
-        let entry = match state.skinned_meshes.entries.get_mut(*entry_idx) {
-            Some(e) => e,
-            None => continue,
+        let Some(entry) = state.skinned_meshes.entries.get_mut(*entry_idx) else {
+            continue;
         };
         if let Err(e) = backend.update_skinned_skeleton(entry.skinned_index, *new_count) {
             tracing::error!(
@@ -738,9 +744,8 @@ pub(crate) fn poll_pending_envmap(
         Ok(g) => g,
         Err(p) => p.into_inner(),
     };
-    let rx = match slot.as_ref() {
-        Some(r) => r,
-        None => return false,
+    let Some(rx) = slot.as_ref() else {
+        return false;
     };
     match rx.try_recv() {
         Ok(Ok(payload)) => {

@@ -284,12 +284,11 @@ mod tests {
         let plan = plan_frame(&graph, FrameEvents::new(0, graph.passes.len()), [None; 2]);
         for i in 0..graph.passes.len() {
             for &(queue, value) in &plan.pass(i).waits {
-                let signaled_before: Vec<u64> = (0..i)
-                    .filter(|&j| queue_of(&graph, j) == queue)
-                    .flat_map(|j| plan.pass(j).signals.iter().copied())
-                    .collect();
                 assert!(
-                    signaled_before.contains(&value),
+                    (0..i)
+                        .filter(|&j| queue_of(&graph, j) == queue)
+                        .flat_map(|j| plan.pass(j).signals.iter().copied())
+                        .any(|x| x == value),
                     "pass {i} waits for {value} on {}, signaled only later",
                     queue.name()
                 );

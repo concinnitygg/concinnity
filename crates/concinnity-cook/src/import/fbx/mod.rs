@@ -11,8 +11,8 @@
 //! and the node transform travels on the prop, mirroring the glTF import.
 //!
 //! FBX texture slots are mapped from the connection property they bind to:
-//! DiffuseColor -> albedo, NormalMap -> normal, SpecularColor -> packed ORM
-//! (occlusion/roughness/metalness), EmissiveColor -> emissive.
+//! `DiffuseColor` -> albedo, `NormalMap` -> normal, `SpecularColor` -> packed ORM
+//! (occlusion/roughness/metalness), `EmissiveColor` -> emissive.
 
 mod anim;
 #[cfg(test)]
@@ -51,7 +51,7 @@ pub(crate) struct FbxMaterial {
     /// Emissive color, linear RGB.
     pub emissive_factor: [f32; 3],
     /// Surface opacity in [0, 1]; 1 = fully opaque. Read from the FBX Opacity /
-    /// TransparencyFactor property (glass/windows export < 1). 1.0 when absent.
+    /// `TransparencyFactor` property (glass/windows export < 1). 1.0 when absent.
     pub opacity: f32,
 }
 
@@ -113,7 +113,7 @@ pub(crate) fn read_primitive_geometry(
 fn attr_i64(a: &AttributeValue) -> Option<i64> {
     match a {
         AttributeValue::I64(v) => Some(*v),
-        AttributeValue::I32(v) => Some(*v as i64),
+        AttributeValue::I32(v) => Some(i64::from(*v)),
         _ => None,
     }
 }
@@ -128,8 +128,8 @@ fn attr_str(a: &AttributeValue) -> Option<&str> {
 fn attr_f64(a: &AttributeValue) -> Option<f64> {
     match a {
         AttributeValue::F64(v) => Some(*v),
-        AttributeValue::F32(v) => Some(*v as f64),
-        AttributeValue::I32(v) => Some(*v as f64),
+        AttributeValue::F32(v) => Some(f64::from(*v)),
+        AttributeValue::I32(v) => Some(f64::from(*v)),
         AttributeValue::I64(v) => Some(*v as f64),
         _ => None,
     }
@@ -163,11 +163,11 @@ fn child_str<'a>(n: &NodeHandle<'a>, name: &str) -> Option<&'a str> {
 
 // Object id (first attribute) and clean name (second attribute, trimmed at the
 // FBX `name\0\u{1}Class` separator).
-fn object_id(n: &NodeHandle) -> Option<i64> {
+fn object_id(n: &NodeHandle<'_>) -> Option<i64> {
     n.attributes().first().and_then(attr_i64)
 }
 
-fn object_name(n: &NodeHandle) -> String {
+fn object_name(n: &NodeHandle<'_>) -> String {
     n.attributes()
         .get(1)
         .and_then(attr_str)
@@ -177,7 +177,7 @@ fn object_name(n: &NodeHandle) -> String {
 
 // Read a `Properties70` P entry's three numeric values (x, y, z at attribute
 // indices 4..7).
-fn prop_vec3(p70: &NodeHandle, name: &str) -> Option<[f64; 3]> {
+fn prop_vec3(p70: &NodeHandle<'_>, name: &str) -> Option<[f64; 3]> {
     for p in p70.children_by_name("P") {
         let a = p.attributes();
         if a.first().and_then(attr_str) == Some(name) {
@@ -192,7 +192,7 @@ fn prop_vec3(p70: &NodeHandle, name: &str) -> Option<[f64; 3]> {
 }
 
 // Read a `Properties70` P entry's single numeric value (at attribute index 4).
-fn prop_scalar(p70: &NodeHandle, name: &str) -> Option<f64> {
+fn prop_scalar(p70: &NodeHandle<'_>, name: &str) -> Option<f64> {
     for p in p70.children_by_name("P") {
         let a = p.attributes();
         if a.first().and_then(attr_str) == Some(name) {
@@ -279,7 +279,7 @@ fn trs_matrix(t: [f64; 3], r_deg: [f64; 3], s: [f64; 3]) -> Mat4 {
 // Scene-pose local transform of a node including its PreRotation and
 // RotationOrder: T * Rpre * R * S. Used for skeleton joints that carry no
 // cluster bind matrix.
-fn node_scene_local(model: &NodeHandle) -> Mat4 {
+fn node_scene_local(model: &NodeHandle<'_>) -> Mat4 {
     let Some(p70) = model.first_child_by_name("Properties70") else {
         return IDENTITY;
     };
@@ -293,7 +293,7 @@ fn node_scene_local(model: &NodeHandle) -> Mat4 {
 }
 
 // (node-local matrix, geometric-offset matrix) for a Model node.
-fn local_matrices(model: &NodeHandle) -> (Mat4, Mat4) {
+fn local_matrices(model: &NodeHandle<'_>) -> (Mat4, Mat4) {
     let Some(p70) = model.first_child_by_name("Properties70") else {
         return (IDENTITY, IDENTITY);
     };
@@ -309,7 +309,7 @@ fn local_matrices(model: &NodeHandle) -> (Mat4, Mat4) {
 // World matrix of a model, walking the parent chain (depth is shallow in
 // practice; most nodes parent directly to the scene root id 0).
 fn world_matrix(id: i64, locals: &HashMap<i64, (Mat4, Mat4)>, parents: &HashMap<i64, i64>) -> Mat4 {
-    let local = locals.get(&id).map(|x| x.0).unwrap_or(IDENTITY);
+    let local = locals.get(&id).map_or(IDENTITY, |x| x.0);
     match parents.get(&id) {
         Some(&p) if p != 0 && locals.contains_key(&p) => {
             mat4_mul(world_matrix(p, locals, parents), local)
@@ -329,7 +329,7 @@ fn is_author_absolute(path: &str) -> bool {
 }
 
 // Resolve an FBX texture's RelativeFilename to a path under the FBX directory.
-fn resolve_texture_path(tex: &NodeHandle, fbx_dir: &Path) -> Option<String> {
+fn resolve_texture_path(tex: &NodeHandle<'_>, fbx_dir: &Path) -> Option<String> {
     let rel = child_str(tex, "RelativeFilename").or_else(|| child_str(tex, "FileName"))?;
     let rel = rel.replace('\\', "/");
     let joined = if is_author_absolute(&rel) {
@@ -352,7 +352,7 @@ fn resolve_texture_path(tex: &NodeHandle, fbx_dir: &Path) -> Option<String> {
 // and animation importers normalize to meters so characters, capsules, and
 // root motion agree with the glTF path; the static-scene path keeps file
 // units (Bistro-era worlds are authored against them).
-fn unit_scale_to_meters(root: &NodeHandle) -> f32 {
+fn unit_scale_to_meters(root: &NodeHandle<'_>) -> f32 {
     let factor = root
         .first_child_by_name("GlobalSettings")
         .and_then(|gs| gs.first_child_by_name("Properties70"))
@@ -382,11 +382,11 @@ pub(crate) fn parse_fbx(path: &str) -> Result<FbxScene, String> {
         .ok_or_else(|| format!("'{path}': FBX has no Objects section"))?;
 
     // Index objects by id and type.
-    let mut geom_by_id: HashMap<i64, NodeHandle> = HashMap::new();
+    let mut geom_by_id: HashMap<i64, NodeHandle<'_>> = HashMap::new();
     let mut geom_order: Vec<i64> = Vec::new();
-    let mut model_by_id: HashMap<i64, NodeHandle> = HashMap::new();
-    let mut material_by_id: HashMap<i64, NodeHandle> = HashMap::new();
-    let mut texture_by_id: HashMap<i64, NodeHandle> = HashMap::new();
+    let mut model_by_id: HashMap<i64, NodeHandle<'_>> = HashMap::new();
+    let mut material_by_id: HashMap<i64, NodeHandle<'_>> = HashMap::new();
+    let mut texture_by_id: HashMap<i64, NodeHandle<'_>> = HashMap::new();
     let mut skin_ids: HashSet<i64> = HashSet::new();
     for c in objects.children() {
         let Some(id) = object_id(&c) else { continue };
@@ -455,7 +455,7 @@ pub(crate) fn parse_fbx(path: &str) -> Result<FbxScene, String> {
 
     let fbx_dir = Path::new(path)
         .parent()
-        .unwrap_or(Path::new("."))
+        .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
 
     // Materials, in object-declaration order (deterministic).
@@ -466,12 +466,10 @@ pub(crate) fn parse_fbx(path: &str) -> Result<FbxScene, String> {
         let p70 = c.first_child_by_name("Properties70");
         let diffuse = p70
             .and_then(|p| prop_vec3(&p, "DiffuseColor"))
-            .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32])
-            .unwrap_or([1.0, 1.0, 1.0]);
+            .map_or([1.0, 1.0, 1.0], |v| [v[0] as f32, v[1] as f32, v[2] as f32]);
         let emissive_factor = p70
             .and_then(|p| prop_vec3(&p, "EmissiveColor").or_else(|| prop_vec3(&p, "Emissive")))
-            .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32])
-            .unwrap_or([0.0, 0.0, 0.0]);
+            .map_or([0.0, 0.0, 0.0], |v| [v[0] as f32, v[1] as f32, v[2] as f32]);
         // Opacity: `Opacity` (1 = opaque) preferred; else `TransparencyFactor`
         // (0 = opaque, so invert). Absent -> fully opaque.
         let opacity = p70
@@ -479,8 +477,7 @@ pub(crate) fn parse_fbx(path: &str) -> Result<FbxScene, String> {
                 prop_scalar(&p, "Opacity")
                     .or_else(|| prop_scalar(&p, "TransparencyFactor").map(|t| 1.0 - t))
             })
-            .map(|v| v.clamp(0.0, 1.0) as f32)
-            .unwrap_or(1.0);
+            .map_or(1.0, |v| v.clamp(0.0, 1.0) as f32);
 
         let mut mat = FbxMaterial {
             name: object_name(&c),
@@ -543,7 +540,7 @@ pub(crate) fn parse_fbx(path: &str) -> Result<FbxScene, String> {
         };
 
         let node_world = world_matrix(model_id, &locals, &model_parent);
-        let geometric = locals.get(&model_id).map(|x| x.1).unwrap_or(IDENTITY);
+        let geometric = locals.get(&model_id).map_or(IDENTITY, |x| x.1);
         let mesh_world = mat4_mul(node_world, geometric);
         let (position, quat, scale) = decompose(mesh_world);
         let rotation_deg = euler_yxz_from_quat(quat);
@@ -653,7 +650,7 @@ fn lookup_uv(uv: Option<&[f64]>, indexed: bool, uv_index: Option<&[i32]>, pv: us
 // Split a geometry into per-material primitives: triangulate polygons (fan) and
 // deduplicate vertices by (control point, UV index) so UV seams stay sharp.
 fn extract_geometry_groups(
-    geom: &NodeHandle,
+    geom: &NodeHandle<'_>,
     local_mats: &[Option<usize>],
 ) -> Vec<(Option<usize>, Vec<VertexData>, Vec<u32>)> {
     let positions = geom
@@ -684,9 +681,8 @@ fn extract_geometry_groups(
 
     // Per-polygon material assignment.
     let mat_layer = geom.first_child_by_name("LayerElementMaterial");
-    let mat_all_same = mat_layer
-        .map(|l| child_str(&l, "MappingInformationType") == Some("AllSame"))
-        .unwrap_or(true);
+    let mat_all_same =
+        mat_layer.is_none_or(|l| child_str(&l, "MappingInformationType") == Some("AllSame"));
     let mat_per_poly = mat_layer.and_then(|l| {
         l.first_child_by_name("Materials")
             .as_ref()
@@ -764,7 +760,7 @@ fn extract_geometry_groups(
     // Deterministic primitive order: by material index, untextured group last.
     let mut out: Vec<(Option<usize>, Vec<VertexData>, Vec<u32>)> =
         groups.into_iter().map(|(m, (_, v, i))| (m, v, i)).collect();
-    out.sort_by_key(|(m, _, _)| m.map(|x| x as i64).unwrap_or(i64::MAX));
+    out.sort_by_key(|(m, _, _)| m.map_or(i64::MAX, |x| x as i64));
     out
 }
 

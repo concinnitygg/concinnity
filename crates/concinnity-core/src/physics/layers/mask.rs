@@ -16,14 +16,14 @@ pub struct LayerMask {
 
 impl LayerMask {
     /// Member of every layer, interacting with everything.
-    pub const ALL: LayerMask = LayerMask {
+    pub const ALL: Self = Self {
         memberships: u32::MAX,
         filter: u32::MAX,
     };
 
     /// Whether two masks admit each other. The same rule governs a query
     /// against a collider, with the query carrying one of the two masks.
-    pub(crate) const fn interacts_with(self, other: LayerMask) -> bool {
+    pub(crate) const fn interacts_with(self, other: Self) -> bool {
         (self.memberships & other.filter) != 0 && (other.memberships & self.filter) != 0
     }
 }

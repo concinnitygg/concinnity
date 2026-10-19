@@ -1,4 +1,4 @@
-//! Skinned-mesh upload, per-frame joint upload, and helpers for VkContext.
+//! Skinned-mesh upload, per-frame joint upload, and helpers for `VkContext`.
 //! Builds the per-(frame, object) joint storage buffers once at init;
 //! per-frame `update_skinned_pose` + `upload_joint_matrices` keep the matrices
 //! fresh from the gameplay-side pose update.
@@ -6,12 +6,12 @@
 use ash::vk;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::SkinnedVertex;
-use concinnity_core::gfx::render_types::*;
+use concinnity_core::gfx::render_types::{MAX_JOINTS, SkinnedDrawObject, SkinnedIndex};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::{geometry_repack, rt_geom};
 use concinnity_core::transform::IDENTITY;
 
-use super::super::context::*;
+use super::super::context::VkContext;
 use super::super::set_writes::SetWrites;
 
 impl VkContext {
@@ -67,7 +67,7 @@ impl VkContext {
 
         // Per-(frame, object) joint storage buffers seeded with identity
         // matrices so any not-yet-overwritten slot reads as identity.
-        let joint_buf_bytes = (MAX_JOINTS * std::mem::size_of::<[[f32; 4]; 4]>()) as u64;
+        let joint_buf_bytes = (MAX_JOINTS * size_of::<[[f32; 4]; 4]>()) as u64;
         let identity_seed: Vec<[[f32; 4]; 4]> = vec![IDENTITY; MAX_JOINTS];
         let mut joint_buffers: Vec<Vec<super::super::allocator::PooledBuffer>> =
             Vec::with_capacity(frames);
@@ -130,6 +130,10 @@ impl VkContext {
     // Mirrors `DxContext::update_skinned_mesh_geometry`. Reached only through
     // the bin's `cn debug` runtime-mutation path (dead in the FFI lib, live in
     // the bin).
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "`forward!` reaches it from the trait's `&mut self` method of the same name"
+    )]
     pub(crate) fn update_skinned_mesh_geometry(
         &mut self,
         skinned_index: SkinnedIndex,
@@ -206,23 +210,22 @@ impl VkContext {
         for (i, m) in morphs.iter().take(n).enumerate() {
             let Some(data) = m else { continue };
             let key = std::sync::Arc::as_ptr(data) as usize;
-            let (buf, count) = match by_source.get(&key) {
-                Some(e) => *e,
-                None => {
-                    let words = data.packed_words();
-                    let bytes: &[u8] = bytemuck::cast_slice(&words);
-                    let pooled = self.hw.alloc.create_buffer(
-                        bytes.len().max(4) as u64,
-                        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-                        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                    )?;
-                    let buf = pooled.buffer();
-                    self.write_geometry_region(buf, 0, bytes)?;
-                    let count = data.target_count() as u32;
-                    delta_unique.push(pooled);
-                    by_source.insert(key, (buf, count));
-                    (buf, count)
-                }
+            let (buf, count) = if let Some(e) = by_source.get(&key) {
+                *e
+            } else {
+                let words = data.packed_words();
+                let bytes: &[u8] = bytemuck::cast_slice(&words);
+                let pooled = self.hw.alloc.create_buffer(
+                    bytes.len().max(4) as u64,
+                    vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                )?;
+                let buf = pooled.buffer();
+                self.write_geometry_region(buf, 0, bytes)?;
+                let count = data.target_count() as u32;
+                delta_unique.push(pooled);
+                by_source.insert(key, (buf, count));
+                (buf, count)
             };
             delta_buffers[i] = buf;
             target_counts[i] = count;
@@ -237,7 +240,7 @@ impl VkContext {
             for _ in 0..frames {
                 let mut bufs = Vec::with_capacity(n);
                 for &count in &target_counts {
-                    let size = (count.max(1) as u64) * std::mem::size_of::<f32>() as u64;
+                    let size = u64::from(count.max(1)) * size_of::<f32>() as u64;
                     let buf = self.hw.alloc.create_buffer(
                         size,
                         vk::BufferUsageFlags::STORAGE_BUFFER,

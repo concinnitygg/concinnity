@@ -82,8 +82,8 @@ pub(super) fn raytracing_supported(device: &ID3D12Device) -> bool {
     let ok = unsafe {
         device.CheckFeatureSupport(
             D3D12_FEATURE_D3D12_OPTIONS5,
-            &mut opts5 as *mut _ as *mut std::ffi::c_void,
-            std::mem::size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS5>() as u32,
+            (&raw mut opts5).cast::<std::ffi::c_void>(),
+            size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS5>() as u32,
         )
     };
     ok.is_ok() && opts5.RaytracingTier.0 >= D3D12_RAYTRACING_TIER_1_1.0
@@ -284,7 +284,7 @@ fn upload_slice<T: Copy>(
     data: &[T],
     label: &str,
 ) -> RenderResult<PooledBuffer> {
-    let bytes = std::mem::size_of_val(data).max(16) as u64;
+    let bytes = size_of_val(data).max(16) as u64;
     let buf = alloc.alloc_buffer(
         bytes,
         D3D12_HEAP_TYPE_UPLOAD,
@@ -293,15 +293,15 @@ fn upload_slice<T: Copy>(
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
     // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
     // receives the mapping.
-    unsafe { buf.Map(0, None, Some(&mut ptr)) }
+    unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
         .map_err(|e| map_hresult(e.code(), &format!("map {label}")))?;
     // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
     // is a separate allocation, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(
-            data.as_ptr() as *const u8,
-            ptr as *mut u8,
-            std::mem::size_of_val(data),
+            data.as_ptr().cast::<u8>(),
+            ptr.cast::<u8>(),
+            size_of_val(data),
         );
         buf.Unmap(0, None);
     }
@@ -331,7 +331,7 @@ fn prebuild_info(
     let mut info = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO::default();
     // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it fills
     // are live locals that outlive the call.
-    unsafe { device.GetRaytracingAccelerationStructurePrebuildInfo(inputs, &mut info) };
+    unsafe { device.GetRaytracingAccelerationStructurePrebuildInfo(inputs, &raw mut info) };
     info
 }
 
@@ -524,7 +524,7 @@ fn write_upload_ring<T: Copy>(
     data: &[T],
     label: &str,
 ) -> RenderResult<PooledBuffer> {
-    let len_bytes = std::mem::size_of_val(data);
+    let len_bytes = size_of_val(data);
     let needed = upload_ring_size(data);
     if ring_slot_needs_grow(slot.is_some(), *cap, needed) {
         *slot = Some(
@@ -543,9 +543,9 @@ fn write_upload_ring<T: Copy>(
     // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
     // is a separate allocation, so the ranges cannot overlap.
     unsafe {
-        buf.Map(0, None, Some(&mut ptr))
+        buf.Map(0, None, Some(&raw mut ptr))
             .map_err(|e| map_hresult(e.code(), &format!("{label} map")))?;
-        std::ptr::copy_nonoverlapping(data.as_ptr() as *const u8, ptr as *mut u8, len_bytes);
+        std::ptr::copy_nonoverlapping(data.as_ptr().cast::<u8>(), ptr.cast::<u8>(), len_bytes);
         buf.Unmap(0, None);
     }
     Ok(buf)
@@ -555,7 +555,7 @@ fn write_upload_ring<T: Copy>(
 // element, so a shader reading it as an array (the geometry table of a
 // zero-instance TLAS) sees a full entry, and never under 4.
 fn upload_ring_size<T>(data: &[T]) -> u64 {
-    (std::mem::size_of_val(data).max(std::mem::size_of::<T>()) as u64).max(4)
+    (size_of_val(data).max(size_of::<T>()) as u64).max(4)
 }
 
 // Ensure a ring slot holds an acceleration-structure buffer of at least `needed`
@@ -686,7 +686,7 @@ pub(super) fn build_rt_skin(device: &ID3D12Device, hot_reload: bool) -> Option<S
         .inspect_err(|e| {
             tracing::warn!(
                 "RT skin pipeline build failed (skinned meshes absent from reflections): {e}"
-            )
+            );
         })
         .ok()
 }
@@ -742,7 +742,7 @@ pub(super) struct RtDynamicInputs<'a> {
 // `albedo_count` is the shared pool's real-texture count, used to resolve each
 // geometry's albedo / normal pool indices (the flat-normal fallback sits at
 // `albedo_count`) for the RT hit shader.
-pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<RtAccelData>> {
+pub(super) fn build_rt_accel(geometry: RtInitGeometry<'_>) -> RenderResult<Option<RtAccelData>> {
     let RtInitGeometry {
         alloc,
         shared,
@@ -817,7 +817,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
                 SourceAccelerationStructureData: 0,
                 ScratchAccelerationStructureData: scratch_gva,
             };
-            cmd4.BuildRaytracingAccelerationStructure(&desc, None);
+            cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None);
             cmd4.ResourceBarrier(&[uav_barrier()]);
         }
         let tlas_desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
@@ -826,7 +826,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
             SourceAccelerationStructureData: 0,
             ScratchAccelerationStructureData: scratch_gva,
         };
-        cmd4.BuildRaytracingAccelerationStructure(&tlas_desc, None);
+        cmd4.BuildRaytracingAccelerationStructure(&raw const tlas_desc, None);
     })?;
 
     // Skinned geometry joins on the dynamic update (`rebuild_skinned`), so this
@@ -852,9 +852,9 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
             tlas: Some(tlas.clone()),
             tlas_cap: tlas_pre.ResultDataMaxSizeInBytes.max(256),
             instance: Some(instance_buffer.clone()),
-            instance_cap: (std::mem::size_of_val(book.instances()) as u64).max(16),
+            instance_cap: (size_of_val(book.instances()) as u64).max(16),
             geom: Some(geom_table.clone()),
-            geom_cap: (std::mem::size_of_val(book.geom_table()) as u64).max(16),
+            geom_cap: (size_of_val(book.geom_table()) as u64).max(16),
         },
     );
 
@@ -966,7 +966,7 @@ impl RtAccelData {
         alloc: &DeviceAllocator,
         cmd: &ID3D12GraphicsCommandList,
         draw_objects: &[DrawObject],
-        inputs: RtDynamicInputs,
+        inputs: RtDynamicInputs<'_>,
     ) -> RenderResult<RtUpdate> {
         let RtDynamicInputs {
             mode,
@@ -1153,7 +1153,7 @@ impl RtAccelData {
                     SourceAccelerationStructureData: 0,
                     ScratchAccelerationStructureData: scratch_gva,
                 };
-                cmd4.BuildRaytracingAccelerationStructure(&desc, None);
+                cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None);
                 cmd.ResourceBarrier(&[uav_barrier()]);
             }
             let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
@@ -1162,7 +1162,7 @@ impl RtAccelData {
                 SourceAccelerationStructureData: 0,
                 ScratchAccelerationStructureData: scratch_gva,
             };
-            cmd4.BuildRaytracingAccelerationStructure(&desc, None);
+            cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None);
             cmd.ResourceBarrier(&[uav_barrier()]);
         }
 
@@ -1277,7 +1277,7 @@ impl RtAccelData {
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd4.BuildRaytracingAccelerationStructure(&desc, None);
+            cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None);
             // Order the build before this frame's trace reads the TLAS / table.
             cmd.ResourceBarrier(&[uav_barrier()]);
         }
@@ -1328,7 +1328,7 @@ impl RtAccelData {
     // to a shader-readable state, then the BLAS/TLAS build (reads it). The start
     // cmd list is submitted before every per-pass trace, so build -> trace is
     // ordered by submission too.
-    fn rebuild_skinned(&mut self, req: SkinnedRebuild) -> RenderResult<RtUpdate> {
+    fn rebuild_skinned(&mut self, req: SkinnedRebuild<'_>) -> RenderResult<RtUpdate> {
         // This frame slot's buffers, taken out for the duration (sidesteps the
         // `&mut self` borrow while the rebuild reads other fields) and put back
         // on every exit path, so a failed rebuild leaves the ring intact. A slot a
@@ -1357,7 +1357,7 @@ impl RtAccelData {
 
     fn rebuild_skinned_into(
         &mut self,
-        req: SkinnedRebuild,
+        req: SkinnedRebuild<'_>,
         ring: &mut SkinnedFrameRing,
     ) -> RenderResult<()> {
         let SkinnedRebuild {
@@ -1592,7 +1592,7 @@ impl RtAccelData {
                     },
                     ScratchAccelerationStructureData: scratch_gva,
                 };
-                cmd4.BuildRaytracingAccelerationStructure(&desc, None);
+                cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None);
                 cmd.ResourceBarrier(&[uav_barrier()]);
             }
             let tlas_desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
@@ -1601,7 +1601,7 @@ impl RtAccelData {
                 SourceAccelerationStructureData: 0,
                 ScratchAccelerationStructureData: scratch_gva,
             };
-            cmd4.BuildRaytracingAccelerationStructure(&tlas_desc, None);
+            cmd4.BuildRaytracingAccelerationStructure(&raw const tlas_desc, None);
             // Order the TLAS build before this frame's trace reads it.
             cmd.ResourceBarrier(&[uav_barrier()]);
         }
@@ -1756,8 +1756,7 @@ impl super::context::DxContext {
                 .morph_delta_buffers
                 .get(i)
                 .and_then(|b| b.as_ref())
-                .map(|b| com::gpu_va(b))
-                .unwrap_or(src_gva);
+                .map_or(src_gva, |b| com::gpu_va(b));
             let weight_gva = self.morph_weight_gva(frame_idx, i).unwrap_or(src_gva);
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
@@ -1841,8 +1840,8 @@ impl super::context::DxContext {
             .skinned
             .joint_buffers
             .get(frame_idx)
-            .map(|b| b.as_slice())
-            .unwrap_or(&[]);
+            .map(Vec::as_slice)
+            .unwrap_or_default();
 
         // Read before `rt.accel` is borrowed mutably below.
         let exclude_seethrough = self.seethrough_meshes_enabled();

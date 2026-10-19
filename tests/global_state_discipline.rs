@@ -94,6 +94,10 @@ fn mentions(text: &str, needles: &[&str]) -> bool {
 // A test's own body plus the bodies of the same-file helpers it calls. One
 // level deep: enough to see through a `fn world_with_reload_entry()` that
 // writes a flag on the test's behalf.
+#[expect(
+    clippy::iter_over_hash_type,
+    reason = "the text is only searched, so helper order cannot show"
+)]
 fn reach(body: &FnBody, helpers: &HashMap<String, String>) -> String {
     let mut text = body.text.clone();
     for (name, helper_body) in helpers {
@@ -167,6 +171,10 @@ fn test_binary_of(path: &Path, root: &Path) -> String {
 }
 
 #[test]
+#[expect(
+    clippy::iter_over_hash_type,
+    reason = "the offenders are sorted before they are reported"
+)]
 fn a_test_that_writes_a_global_holds_the_exclusive_guard() {
     let root = workspace_root();
     // Per binary: the tests that write a global without holding the guard.

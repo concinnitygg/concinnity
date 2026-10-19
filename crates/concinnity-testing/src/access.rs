@@ -35,7 +35,9 @@ pub struct ExclusiveAccess {
 /// and erroring every later lock buries that failure under a cascade.
 pub fn exclusive() -> ExclusiveAccess {
     ExclusiveAccess {
-        _guard: ACCESS.lock().unwrap_or_else(|e| e.into_inner()),
+        _guard: ACCESS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
     }
 }
 

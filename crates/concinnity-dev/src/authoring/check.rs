@@ -26,11 +26,11 @@ fn check_source(source: concinnity_cook::WorldSource<'_>, label: &str) -> std::i
 }
 
 /// Print each validation error in CLI form and collapse them into a single
-/// io::Error naming the count, so a failed world surfaces every problem in one
+/// `io::Error` naming the count, so a failed world surfaces every problem in one
 /// pass.
 pub(crate) fn report_validation_errors(errors: &[String]) -> std::io::Error {
     for e in errors {
-        eprintln!("error:   {}", e);
+        eprintln!("error:   {e}");
     }
     eprintln!("\nvalidation failed ({} error(s))", errors.len());
     validation_failed(errors.len())

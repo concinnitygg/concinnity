@@ -6,15 +6,15 @@ type Verts = Vec<([f32; 3], [f32; 3], [f32; 3], [f32; 2])>;
 pub(super) fn build_room(args: &serde_json::Value) -> Result<(Verts, Vec<u16>), String> {
     let half_width = args
         .get("half_width")
-        .and_then(|v| v.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .unwrap_or(8.0) as f32;
     let half_depth = args
         .get("half_depth")
-        .and_then(|v| v.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .unwrap_or(10.0) as f32;
     let ceiling_height = args
         .get("ceiling_height")
-        .and_then(|v| v.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .unwrap_or(3.5) as f32;
     Ok(concinnity_core::geometry::build_room_geometry(
         half_width,

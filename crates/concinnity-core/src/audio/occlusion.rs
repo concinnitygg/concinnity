@@ -43,7 +43,7 @@ pub fn volume_db(occlusion: f32) -> f32 {
 /// Lowpass cutoff for a smoothed occlusion factor, swept in log-frequency
 /// space so the muffling sounds even across the range.
 pub fn cutoff_hz(occlusion: f32) -> f64 {
-    let t = occlusion.clamp(0.0, 1.0) as f64;
+    let t = f64::from(occlusion.clamp(0.0, 1.0));
     OPEN_CUTOFF_HZ * math::powf_f64(OCCLUDED_CUTOFF_HZ / OPEN_CUTOFF_HZ, t)
 }
 

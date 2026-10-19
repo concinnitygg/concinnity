@@ -1,4 +1,4 @@
-//! EditorHook: the blob-cook worker behind the console's build command. It
+//! `EditorHook`: the blob-cook worker behind the console's build command. It
 //! compiles the serialized entries on a worker thread with an operation card fed
 //! by the pipeline's compile progress, on the engine's bounded job pool, under
 //! the one-cook-at-a-time guard.
@@ -20,7 +20,7 @@ impl EditorHook {
         content: String,
         done: impl FnOnce(std::io::Result<()>, f32) + Send + 'static,
     ) {
-        let running = self.console_build_running.clone();
+        let running = std::sync::Arc::clone(&self.console_build_running);
         let op = self.notifier.begin_op(label);
         std::thread::spawn(move || {
             set_current_thread_role(ThreadRole::Background);

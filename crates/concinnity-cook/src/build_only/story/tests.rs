@@ -43,7 +43,7 @@ fn find<'a>(entries: &'a [serde_json::Value], name: &str) -> &'a serde_json::Val
     entries
         .iter()
         .find(|e| asset_name(e) == name)
-        .unwrap_or_else(|| panic!("missing entry '{}'", name))
+        .unwrap_or_else(|| panic!("missing entry '{name}'"))
 }
 
 fn action(entry: &serde_json::Value) -> serde_json::Value {
@@ -448,7 +448,7 @@ fn generated_name_collision_is_an_error() {
     assert!(err.contains("collides"));
 }
 
-const SCORED: &str = r#"---
+const SCORED: &str = r"---
 title: T
 ---
 
@@ -470,7 +470,7 @@ The door creaks.
 
 - [Left](#inn)
 - [Right](#crossroads)
-"#;
+";
 
 #[test]
 fn media_directives_parse_and_propagate() {

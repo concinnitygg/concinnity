@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn the_store_cap_keeps_the_hue() {
         assert_eq!(store_cap([1.0, 2.0, 3.0]), [1.0, 2.0, 3.0]);
-        let capped = store_cap([120000.0, 60000.0, 30000.0]);
+        let capped = store_cap([120_000.0, 60000.0, 30000.0]);
         assert_eq!(capped, [60000.0, 30000.0, 15000.0]);
         assert_eq!(
             store_cap([f32::INFINITY, 1.0, 70000.0]),

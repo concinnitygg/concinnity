@@ -139,8 +139,7 @@ mod layout_container {
             visible: true,
         };
         let sizes = |id: AssetId| match id {
-            AssetId(1) => Some(boxed(20.0, 10.0, 0.0)),
-            AssetId(2) => Some(boxed(20.0, 10.0, 0.0)),
+            AssetId(1 | 2) => Some(boxed(20.0, 10.0, 0.0)),
             _ => None,
         };
         let p = c.layout(sizes);
@@ -175,8 +174,7 @@ mod layout_container {
             visible: true,
         };
         let sizes = |id: AssetId| match id {
-            AssetId(1) => Some(boxed(40.0, 18.0, 0.0)),
-            AssetId(2) => Some(boxed(40.0, 18.0, 0.0)),
+            AssetId(1 | 2) => Some(boxed(40.0, 18.0, 0.0)),
             AssetId(3) => Some(boxed(120.0, 14.0, 0.0)),
             _ => None,
         };
@@ -219,7 +217,7 @@ mod layout_container {
         assert_eq!(narrow.x, 30.0);
     }
 
-    /// SpaceBetween spreads a short row across the content width, distributing
+    /// `SpaceBetween` spreads a short row across the content width, distributing
     /// slack into the gaps between labels.
     #[test]
     fn space_between_distributes_slack_into_gaps() {
@@ -247,7 +245,7 @@ mod layout_container {
         };
         let sizes = |id: AssetId| match id {
             AssetId(10) => Some(boxed(200.0, 10.0, 0.0)),
-            AssetId(1) | AssetId(2) | AssetId(3) => Some(boxed(20.0, 10.0, 0.0)),
+            AssetId(1..=3) => Some(boxed(20.0, 10.0, 0.0)),
             _ => None,
         };
         let p = c.layout(sizes);

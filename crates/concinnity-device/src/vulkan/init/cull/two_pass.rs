@@ -13,7 +13,7 @@ use crate::vulkan::context::HDR_FORMAT;
 use crate::vulkan::descriptor_layout::PoolSizes;
 use crate::vulkan::init::InitGpu;
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedPipeline, OwnedRenderPass};
-use crate::vulkan::pipeline::*;
+use crate::vulkan::pipeline::compile_cull_shader_phase2;
 use crate::vulkan::pipeline_desc::compute_pipeline;
 use crate::vulkan::render_pass::create_main_render_pass_two_pass;
 use crate::vulkan::resources::alloc_descriptor_sets;
@@ -83,14 +83,13 @@ pub(super) fn build_two_pass_cull(
     {
         let (set_layout, pipeline_layout) = (&kernels.set_layout, &kernels.pipeline_layout);
         let n = plan.n_cull as u64;
-        let object_buffer_size = n * std::mem::size_of::<render_types::GpuObjectData>() as u64;
-        let draw_args_size = n * std::mem::size_of::<render_types::GpuDrawArgs>() as u64;
+        let object_buffer_size = n * size_of::<render_types::GpuObjectData>() as u64;
+        let draw_args_size = n * size_of::<render_types::GpuDrawArgs>() as u64;
         // Bucket-expanded exactly like the phase-1 buffers: `Main2` issues the
         // same per-bucket regions over this buffer.
-        let indirect_size = shader_bucket_count as u64
-            * n
-            * std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u64;
-        let status_size = n * std::mem::size_of::<u32>() as u64;
+        let indirect_size =
+            shader_bucket_count as u64 * n * size_of::<vk::DrawIndexedIndirectCommand>() as u64;
+        let status_size = n * size_of::<u32>() as u64;
 
         // Phase-2 cull pipeline (`main_phase2` entry, shared layout).
         let cs2 = compile_cull_shader_phase2(hot_reload)?;

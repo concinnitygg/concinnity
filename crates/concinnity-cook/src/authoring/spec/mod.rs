@@ -30,66 +30,66 @@ pub enum ArgValue {
     /// A string.
     Str(String),
     /// An array of values.
-    Array(Vec<ArgValue>),
+    Array(Vec<Self>),
     /// An object, in insertion order (nested args reuse the same ordered shape).
-    Object(Vec<(String, ArgValue)>),
+    Object(Vec<(String, Self)>),
 }
 
 impl ArgValue {
     /// A numeric array from float components (colors, positions, sizes).
-    pub(crate) fn floats(vals: &[f32]) -> ArgValue {
-        ArgValue::Array(vals.iter().map(|&v| ArgValue::Float(v as f64)).collect())
+    pub(crate) fn floats(vals: &[f32]) -> Self {
+        Self::Array(vals.iter().map(|&v| Self::Float(f64::from(v))).collect())
     }
 }
 
 impl From<bool> for ArgValue {
     fn from(v: bool) -> Self {
-        ArgValue::Bool(v)
+        Self::Bool(v)
     }
 }
 impl From<i64> for ArgValue {
     fn from(v: i64) -> Self {
-        ArgValue::Int(v)
+        Self::Int(v)
     }
 }
 impl From<u32> for ArgValue {
     fn from(v: u32) -> Self {
-        ArgValue::Int(v as i64)
+        Self::Int(i64::from(v))
     }
 }
 impl From<usize> for ArgValue {
     fn from(v: usize) -> Self {
-        ArgValue::Int(v as i64)
+        Self::Int(v as i64)
     }
 }
 impl From<f32> for ArgValue {
     fn from(v: f32) -> Self {
-        ArgValue::Float(v as f64)
+        Self::Float(f64::from(v))
     }
 }
 impl From<f64> for ArgValue {
     fn from(v: f64) -> Self {
-        ArgValue::Float(v)
+        Self::Float(v)
     }
 }
 impl From<&str> for ArgValue {
     fn from(v: &str) -> Self {
-        ArgValue::Str(String::from(v))
+        Self::Str(String::from(v))
     }
 }
 impl From<String> for ArgValue {
     fn from(v: String) -> Self {
-        ArgValue::Str(v)
+        Self::Str(v)
     }
 }
-impl<T: Into<ArgValue>> From<Option<T>> for ArgValue {
+impl<T: Into<Self>> From<Option<T>> for ArgValue {
     fn from(v: Option<T>) -> Self {
-        v.map_or(ArgValue::Null, Into::into)
+        v.map_or(Self::Null, Into::into)
     }
 }
 impl<const N: usize> From<[f32; N]> for ArgValue {
     fn from(v: [f32; N]) -> Self {
-        ArgValue::floats(&v)
+        Self::floats(&v)
     }
 }
 
@@ -109,7 +109,7 @@ impl AssetSpec {
     /// An entry of `asset_type` named `name`, with no args set yet (each unset
     /// field takes the type's serde default when materialized).
     pub(crate) fn new(name: impl Into<String>, asset_type: &'static str) -> Self {
-        AssetSpec {
+        Self {
             name: name.into(),
             asset_type,
             fields: Vec::new(),
@@ -118,6 +118,7 @@ impl AssetSpec {
 
     /// Set one arg, chainable. A later `set` of the same key appends a second
     /// entry; builders set each key once.
+    #[must_use]
     pub fn set(mut self, key: impl Into<String>, value: impl Into<ArgValue>) -> Self {
         self.fields.push((key.into(), value.into()));
         self

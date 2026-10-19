@@ -76,9 +76,9 @@ pub fn shade_mesh(
     )
 }
 
-/// [shade_mesh](#method.shade_mesh) over several parts at once, framed to
+/// [`shade_mesh`](#method.shade_mesh) over several parts at once, framed to
 /// their combined bounds (a Model's sub-meshes, each with its material color).
-pub fn shade_parts(parts: &[MeshPart], size: u32) -> RasterImage {
+pub fn shade_parts(parts: &[MeshPart<'_>], size: u32) -> RasterImage {
     let mut img = RasterImage {
         width: size,
         height: size,

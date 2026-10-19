@@ -43,12 +43,19 @@ impl EmittedMsl {
 }
 
 /// Precompile every `.metal` under `shaders_dir`, plus every variant of the
-/// single-source programs in `table`, into OUT_DIR and generate
+/// single-source programs in `table`, into `OUT_DIR` and generate
 /// `engine_metallibs.rs` there, looking each library up by its artifact name. Returns the MSL each
 /// program compiled from, or `None` when the host has no Metal toolchain and a
 /// cross build embedded nothing.
+///
+/// # Panics
+///
 /// Panics if the Metal toolchain is present but a shader fails to compile: a
 /// broken shader must fail the build, not surface at renderer init.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 pub fn precompile_metal_shaders(shaders_dir: &Path, table: &Table) -> Option<EmittedMsl> {
     println!("cargo:rerun-if-changed={}", shaders_dir.display());
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
@@ -115,6 +122,7 @@ struct Job {
 }
 
 impl Job {
+    #[expect(clippy::panic, reason = "a build script reports failure by panicking")]
     fn hand_written(path: &Path) -> Self {
         let name = path
             .file_name()
@@ -123,7 +131,7 @@ impl Job {
             .to_string();
         let source = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        Job {
+        Self {
             name,
             source,
             program: None,
@@ -138,7 +146,7 @@ impl Job {
             concinnity_core::render::shaders::embedded(file).is_some(),
             "no embedded shader named {file}"
         );
-        Job {
+        Self {
             name: variant.artifact_name(),
             source: variant.assemble(Platform::Metal),
             program: Some(variant),
@@ -187,6 +195,7 @@ fn lib_path(lib_dir: &Path, name: &str) -> PathBuf {
 }
 
 // Every `.metal` in the directory, sorted for a deterministic generated file.
+#[expect(clippy::panic, reason = "a build script reports failure by panicking")]
 fn metal_sources(shaders_dir: &Path) -> Vec<PathBuf> {
     let mut shaders: Vec<PathBuf> = std::fs::read_dir(shaders_dir)
         .unwrap_or_else(|e| panic!("read {}: {e}", shaders_dir.display()))

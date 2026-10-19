@@ -225,7 +225,7 @@ impl MtlContext {
     pub(in crate::metal) fn encode_planar_reflections(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        params: &super::graph_exec::GraphFrameParams,
+        params: &super::graph_exec::GraphFrameParams<'_>,
     ) -> RenderResult<()> {
         let Some(set) = self.planar_reflection.as_ref() else {
             return Ok(());

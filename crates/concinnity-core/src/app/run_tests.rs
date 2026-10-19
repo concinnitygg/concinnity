@@ -25,7 +25,7 @@ const STOP_AT: f32 = 3.0;
 struct Ticker;
 
 impl System for Ticker {
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         for transform in ctx.query_mut::<Transform>() {
             transform.position[0] += 1.0;
         }
@@ -38,7 +38,7 @@ impl System for Ticker {
 struct Stopper;
 
 impl System for Stopper {
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         match ctx.query::<Transform>().next() {
             Some(t) if t.position[0] >= STOP_AT => StepResult::Stop,
             _ => StepResult::Continue,

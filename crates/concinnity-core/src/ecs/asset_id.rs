@@ -124,7 +124,7 @@ impl<'de> Deserialize<'de> for AssetId {
         if d.is_human_readable() {
             d.deserialize_any(AssetIdVisitor)
         } else {
-            Ok(AssetId(u32::deserialize(d)?))
+            Ok(Self(u32::deserialize(d)?))
         }
     }
 }

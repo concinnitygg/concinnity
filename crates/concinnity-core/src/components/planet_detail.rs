@@ -1,7 +1,7 @@
 // Planet terrain detail schema.
 
 /// How finely a planet's terrain tiles are drawn. The `planet_detail` section
-/// of [GraphicsConfig](#graphicsconfig); a field left unset takes the default
+/// of [`GraphicsConfig`](#graphicsconfig); a field left unset takes the default
 /// below.
 ///
 /// The default describes the detail capable hardware runs: the `Auto`

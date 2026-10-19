@@ -99,11 +99,11 @@ impl HlslTarget {
     #[must_use]
     pub fn cooked(platform: Platform) -> Self {
         match platform {
-            Platform::Metal => HlslTarget::Msl,
-            Platform::DirectX => HlslTarget::Dxil {
+            Platform::Metal => Self::Msl,
+            Platform::DirectX => Self::Dxil {
                 shader_model_6_5: false,
             },
-            Platform::Vulkan => HlslTarget::Spirv,
+            Platform::Vulkan => Self::Spirv,
         }
     }
 
@@ -112,17 +112,17 @@ impl HlslTarget {
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
-            HlslTarget::Spirv => "spirv",
-            HlslTarget::Dxil {
+            Self::Spirv => "spirv",
+            Self::Dxil {
                 shader_model_6_5: false,
             } => "dxil",
-            HlslTarget::Dxil {
+            Self::Dxil {
                 shader_model_6_5: true,
             } => "dxil-6.5",
-            HlslTarget::Metallib => "metallib",
-            HlslTarget::Msl => "msl",
-            HlslTarget::SpirvWithVulkanLayout => "spirv-vulkan-layout",
-            HlslTarget::SpirvWithDxLayout => "spirv-dx-layout",
+            Self::Metallib => "metallib",
+            Self::Msl => "msl",
+            Self::SpirvWithVulkanLayout => "spirv-vulkan-layout",
+            Self::SpirvWithDxLayout => "spirv-dx-layout",
         }
     }
 
@@ -131,7 +131,7 @@ impl HlslTarget {
     // leg but a 6.5 DXIL program compiles at the base model.
     fn profile(self, stage: Stage) -> String {
         let (major, minor) = match self {
-            HlslTarget::Dxil {
+            Self::Dxil {
                 shader_model_6_5: true,
             } => MODEL_6_5,
             _ => BASE_MODEL,
@@ -194,7 +194,7 @@ pub fn dxc_path() -> Option<&'static Path> {
 
 /// Whether this host can compile `.hlsl` sources.
 ///
-/// The cook asks before compiling a Shader or an SdfVolume field and fails
+/// The cook asks before compiling a Shader or an `SdfVolume` field and fails
 /// naming the asset when the answer is no, so a build never quietly produces a
 /// world missing what it declared.
 ///

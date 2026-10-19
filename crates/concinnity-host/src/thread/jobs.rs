@@ -30,7 +30,11 @@ impl JobPool {
     /// Build a pool with an explicit worker count (floored at one) whose
     /// workers are scheduled as `priority` asks, for work that must not size
     /// the process-wide pool before the runtime configures it.
-    pub fn new(threads: usize, priority: FramePriority) -> JobPool {
+    ///
+    /// # Panics
+    ///
+    /// Panics if the operating system refuses to start the worker threads.
+    pub fn new(threads: usize, priority: FramePriority) -> Self {
         let threads = threads.max(1);
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
@@ -39,7 +43,7 @@ impl JobPool {
             .build()
             .expect("failed to build job thread pool");
         tracing::info!("JobPool: {threads} worker thread(s), priority {priority:?}");
-        JobPool { pool, priority }
+        Self { pool, priority }
     }
 
     /// The priority setting the workers were started with.
@@ -117,9 +121,7 @@ static POOL: OnceLock<JobPool> = OnceLock::new();
 /// Worker count when nothing configures the pool: one per logical core, less
 /// one for the main thread, floored at one.
 pub fn default_threads() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get().saturating_sub(1).max(1))
-        .unwrap_or(1)
+    std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1).max(1))
 }
 
 /// Build the process-wide job pool at `threads` workers scheduled as
@@ -210,7 +212,11 @@ mod tests {
             // SAFETY: both out-pointers are live locals, and `pthread_self`
             // names the calling worker, which outlives the call.
             let status = unsafe {
-                libc::pthread_get_qos_class_np(libc::pthread_self(), &mut class, &mut relative)
+                libc::pthread_get_qos_class_np(
+                    libc::pthread_self(),
+                    &raw mut class,
+                    &raw mut relative,
+                )
             };
             (status, class as u32)
         });

@@ -50,7 +50,7 @@ pub(crate) struct Manifold {
 
 impl Manifold {
     pub(crate) fn new(a: u32, b: u32) -> Self {
-        Manifold {
+        Self {
             a,
             b,
             normal: Vec3::Y,
@@ -132,7 +132,7 @@ pub(crate) struct ContactCache {
 
 impl ContactCache {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
-        ContactCache {
+        Self {
             current: Vec::with_capacity(capacity),
             previous: Vec::with_capacity(capacity),
         }

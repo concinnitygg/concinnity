@@ -40,7 +40,7 @@ impl UiInputSystem {
     pub(super) fn step_rebind_capture(
         &mut self,
         input: &FrameInput,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
     ) -> StepResult {
         let Some(cap) = self.capturing.as_ref() else {
             return StepResult::Continue;
@@ -74,7 +74,7 @@ impl UiInputSystem {
         &mut self,
         setting_key: SettingKey,
         value_label: Option<AssetId>,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
     ) {
         let prev_text = value_label
             .and_then(|id| ctx.get_by_id::<TextLabel>(id).map(|l| l.content.clone()))
@@ -95,7 +95,7 @@ impl UiInputSystem {
     }
 
     // Cancel a pending rebind capture, restoring the row's previous value text.
-    pub(super) fn cancel_capture(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn cancel_capture(&mut self, ctx: &mut PipelineContext<'_>) {
         if let Some(cap) = self.capturing.take()
             && let Some(id) = cap.value_label
         {

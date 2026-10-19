@@ -13,9 +13,9 @@ impl ComponentId {
     pub const MAX: u8 = 127;
 
     /// The id for a raw discriminant. Panics in debug past [`ComponentId::MAX`].
-    pub const fn new(id: u8) -> ComponentId {
+    pub const fn new(id: u8) -> Self {
         debug_assert!(id <= Self::MAX, "component id exceeds ComponentId::MAX");
-        ComponentId(id)
+        Self(id)
     }
 
     /// The raw discriminant.
@@ -30,11 +30,11 @@ pub struct ComponentMask(u128);
 
 impl ComponentMask {
     /// The empty set.
-    pub const EMPTY: ComponentMask = ComponentMask(0);
+    pub const EMPTY: Self = Self(0);
 
     /// The set holding just `id`.
-    pub const fn with(id: ComponentId) -> ComponentMask {
-        let mut mask = ComponentMask::EMPTY;
+    pub const fn with(id: ComponentId) -> Self {
+        let mut mask = Self::EMPTY;
         mask.insert(id);
         mask
     }
@@ -55,12 +55,12 @@ impl ComponentMask {
     }
 
     // Whether this mask contains every id in `other` (i.e. is a superset).
-    pub(crate) fn contains_all(self, other: ComponentMask) -> bool {
+    pub(crate) fn contains_all(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
 
     // Whether this mask shares no id with `other`.
-    pub(crate) fn is_disjoint(self, other: ComponentMask) -> bool {
+    pub(crate) fn is_disjoint(self, other: Self) -> bool {
         self.0 & other.0 == 0
     }
 
@@ -70,8 +70,9 @@ impl ComponentMask {
     }
 
     /// The union of two masks.
-    pub fn merged(self, other: ComponentMask) -> ComponentMask {
-        ComponentMask(self.0 | other.0)
+    #[must_use]
+    pub fn merged(self, other: Self) -> Self {
+        Self(self.0 | other.0)
     }
 }
 

@@ -34,8 +34,7 @@ pub(super) fn source_dimensions(doc: &GltfDoc, image_index: u32) -> Result<(u32,
         Some("image/png") | None => png_dimensions(&bytes),
         Some("image/jpeg") => jpeg_dimensions(&bytes),
         Some(other) => Err(format!(
-            "image {} has unsupported MIME type '{}'; a panorama must be PNG or JPEG",
-            image_index, other
+            "image {image_index} has unsupported MIME type '{other}'; a panorama must be PNG or JPEG"
         )),
     }
 }
@@ -49,16 +48,15 @@ pub(crate) fn load_equirect(
 ) -> Result<HdrImage, String> {
     let (bytes, mime) = doc
         .image_bytes(image_index)
-        .map_err(|e| format!("'{}': {}", source, e))?;
+        .map_err(|e| format!("'{source}': {e}"))?;
     match mime.as_deref() {
         Some("image/png") | None => decode_png(bytes),
         Some("image/jpeg") => decode_jpeg(bytes),
         Some(other) => Err(format!(
-            "image {} has unsupported MIME type '{}'; a panorama must be PNG or JPEG",
-            image_index, other
+            "image {image_index} has unsupported MIME type '{other}'; a panorama must be PNG or JPEG"
         )),
     }
-    .map_err(|e| format!("'{}': {}", source, e))
+    .map_err(|e| format!("'{source}': {e}"))
 }
 
 // Width of one decoded sample. A 4K panorama is eight million pixels, so the
@@ -82,10 +80,11 @@ impl SampleDepth {
     // Normalize one channel of a pixel to 0..1.
     fn read(self, pixel: &[u8], channel: usize) -> f32 {
         match self {
-            Self::Eight => pixel[channel] as f32 / u8::MAX as f32,
+            Self::Eight => f32::from(pixel[channel]) / f32::from(u8::MAX),
             Self::Sixteen => {
                 let offset = channel * 2;
-                u16::from_be_bytes([pixel[offset], pixel[offset + 1]]) as f32 / u16::MAX as f32
+                f32::from(u16::from_be_bytes([pixel[offset], pixel[offset + 1]]))
+                    / f32::from(u16::MAX)
             }
         }
     }
@@ -104,7 +103,7 @@ fn srgb_to_linear(c: f32) -> f32 {
 fn png_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {
     let reader = png::Decoder::new(std::io::Cursor::new(bytes))
         .read_info()
-        .map_err(|e| format!("failed to read PNG info: {}", e))?;
+        .map_err(|e| format!("failed to read PNG info: {e}"))?;
     let info = reader.info();
     Ok((info.width, info.height))
 }
@@ -113,11 +112,11 @@ fn jpeg_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {
     let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(bytes));
     decoder
         .read_info()
-        .map_err(|e| format!("failed to read JPEG info: {}", e))?;
+        .map_err(|e| format!("failed to read JPEG info: {e}"))?;
     let info = decoder
         .info()
         .ok_or_else(|| "JPEG has no info after header read".to_string())?;
-    Ok((info.width as u32, info.height as u32))
+    Ok((u32::from(info.width), u32::from(info.height)))
 }
 
 // Decode a PNG of any color type or bit depth. Palette and sub-byte depths
@@ -129,7 +128,7 @@ fn decode_png(bytes: Vec<u8>) -> Result<HdrImage, String> {
     decoder.set_transformations(png::Transformations::EXPAND);
     let mut reader = decoder
         .read_info()
-        .map_err(|e| format!("failed to read PNG info: {}", e))?;
+        .map_err(|e| format!("failed to read PNG info: {e}"))?;
     let mut buffer = vec![
         0u8;
         reader
@@ -138,17 +137,16 @@ fn decode_png(bytes: Vec<u8>) -> Result<HdrImage, String> {
     ];
     let info = reader
         .next_frame(&mut buffer)
-        .map_err(|e| format!("failed to decode PNG frame: {}", e))?;
+        .map_err(|e| format!("failed to decode PNG frame: {e}"))?;
 
     let channels = match info.color_type {
         ColorType::Rgb => 3,
         ColorType::Rgba => 4,
         ColorType::Grayscale => 1,
         ColorType::GrayscaleAlpha => 2,
-        other => {
+        other @ ColorType::Indexed => {
             return Err(format!(
-                "unsupported PNG color type {:?}; convert the panorama to RGB or RGBA",
-                other
+                "unsupported PNG color type {other:?}; convert the panorama to RGB or RGBA"
             ));
         }
     };
@@ -170,7 +168,7 @@ fn decode_jpeg(bytes: Vec<u8>) -> Result<HdrImage, String> {
     let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(bytes));
     let raw = decoder
         .decode()
-        .map_err(|e| format!("failed to decode JPEG: {}", e))?;
+        .map_err(|e| format!("failed to decode JPEG: {e}"))?;
     let info = decoder
         .info()
         .ok_or_else(|| "JPEG has no info after decode".to_string())?;
@@ -179,14 +177,13 @@ fn decode_jpeg(bytes: Vec<u8>) -> Result<HdrImage, String> {
         PixelFormat::L8 => 1,
         other => {
             return Err(format!(
-                "unsupported JPEG pixel format {:?}; convert the panorama to RGB",
-                other
+                "unsupported JPEG pixel format {other:?}; convert the panorama to RGB"
             ));
         }
     };
     Ok(HdrImage {
-        width: info.width as u32,
-        height: info.height as u32,
+        width: u32::from(info.width),
+        height: u32::from(info.height),
         pixels: gather_linear_rgb(&raw, channels, SampleDepth::Eight),
     })
 }
@@ -250,7 +247,7 @@ mod tests {
         assert_eq!(image.pixels.len(), 8);
         let expected = srgb_to_linear(128.0 / 255.0);
         for px in &image.pixels {
-            assert!((px[0] - expected).abs() < 1e-5, "got {:?}", px);
+            assert!((px[0] - expected).abs() < 1e-5, "got {px:?}");
             assert_eq!(px[0], px[2]);
         }
         assert!(expected < 0.25, "sRGB mid-gray linearizes well below 0.5");
@@ -263,14 +260,14 @@ mod tests {
         let raw = 30001u16;
         let doc = doc_with(panorama_png16(4, 2, raw));
         let image = load_equirect(&doc, "test.glb", 0).expect("decode");
-        let expected = srgb_to_linear(raw as f32 / u16::MAX as f32);
+        let expected = srgb_to_linear(f32::from(raw) / f32::from(u16::MAX));
         assert!(
             (image.pixels[0][0] - expected).abs() < 1e-6,
             "got {:?}, want {}",
             image.pixels[0],
             expected
         );
-        let truncated = srgb_to_linear((raw >> 8) as f32 / u8::MAX as f32);
+        let truncated = srgb_to_linear(f32::from(raw >> 8) / f32::from(u8::MAX));
         assert!(
             (image.pixels[0][0] - truncated).abs() > 1e-6,
             "a 16-bit source must not decode as if it were 8-bit"

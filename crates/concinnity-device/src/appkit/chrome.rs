@@ -1,4 +1,4 @@
-//! NSWindow creation and chrome styling, shared by both macOS backends and by
+//! `NSWindow` creation and chrome styling, shared by both macOS backends and by
 //! the settings-menu mode switch (`window::set_window_mode`), so all three agree
 //! on what a windowed window looks like.
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -75,7 +75,7 @@ pub(crate) fn create_window(
 
     let content_rect = NSRect::new(
         NSPoint::new(0.0, 0.0),
-        NSSize::new(width as f64, height as f64),
+        NSSize::new(f64::from(width), f64::from(height)),
     );
     // SAFETY: `mtm` proves this is the main thread, which is where AppKit
     // requires NSWindow to be created; the designated initializer consumes the

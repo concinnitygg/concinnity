@@ -2,7 +2,7 @@ use crate::components::CueKind;
 use crate::ecs::AudioClipHandle;
 
 /// Runtime-only event asking the audio system to play a clip: the direct
-/// equivalent of an AudioCue firing, for systems that trigger audio from their
+/// equivalent of an `AudioCue` firing, for systems that trigger audio from their
 /// own state (the story system plays page music and one-shots this way). World
 /// authors never declare this type directly.
 #[derive(Debug, Clone, Copy)]

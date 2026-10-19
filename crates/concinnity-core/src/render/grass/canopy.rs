@@ -701,7 +701,7 @@ mod tests {
                         let top = heights.iter().fold(0.0f32, |a, &h| a.max(h));
                         // Per fine step: the seen area, and its sums of t and of
                         // the leaf above.
-                        let steps: alloc::vec::Vec<[f32; 3]> = (0..n)
+                        let steps: Vec<[f32; 3]> = (0..n)
                             .map(|i| {
                                 let z = top * (1.0 - (i as f32 + 0.5) / n as f32);
                                 let mut acc = [0.0f32; 3];
@@ -791,7 +791,7 @@ mod tests {
     #[test]
     fn the_height_classes_are_the_kernels_terciles() {
         let n = 600;
-        let mut spread: alloc::vec::Vec<f32> = (0..n * n)
+        let mut spread: Vec<f32> = (0..n * n)
             .map(|i| {
                 let (u, v) = ((i % n) as f32 + 0.5, (i / n) as f32 + 0.5);
                 1.2 * (u / n as f32 - 0.5) + 0.8 * (v / n as f32 - 0.5)
@@ -1191,7 +1191,7 @@ mod tests {
         let p = ground_params();
         assert_eq!(p.ground_octaves, 8);
         for i in 0..32 {
-            let dir = CubeFace(2).direction(0.001 * i as f64, -0.04 + 0.0007 * i as f64);
+            let dir = CubeFace(2).direction(0.001 * f64::from(i), -0.04 + 0.0007 * f64::from(i));
             let want = crate::math::dvec3::to_f32(shape.normal(dir));
             let got = shader_ground_normal(&p, crate::math::dvec3::to_f32(dir), 0.01);
             assert!(dot(got, want) > 1.0 - 1e-6, "{got:?} {want:?}");

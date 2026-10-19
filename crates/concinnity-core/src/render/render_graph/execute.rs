@@ -143,9 +143,10 @@ mod tests {
 
         fn record(&self, index: usize, pass: &CompiledPass) -> RenderResult<(usize, PassId)> {
             self.calls.fetch_add(1, Ordering::Relaxed);
-            match self.fail == Some(pass.id) {
-                true => Err(RenderError::Other(alloc::format!("{:?}", pass.id))),
-                false => Ok((index, pass.id)),
+            if self.fail == Some(pass.id) {
+                Err(RenderError::Other(alloc::format!("{:?}", pass.id)))
+            } else {
+                Ok((index, pass.id))
             }
         }
     }

@@ -128,22 +128,19 @@ impl MtlContext {
         enc.set_depth_stencil(&self.targets.depth_state_read_only);
         enc.set_vertex_value(view, 0);
         enc.set_fragment_value(view, 0);
-        match self
+        if let Some((atmo, params)) = self
             .atmosphere
             .as_ref()
             .and_then(|a| Some((a, a.params.as_ref()?)))
         {
-            Some((atmo, params)) => {
-                enc.set_pipeline(&atmo.sky_pipeline);
-                enc.set_fragment_value(params, 1);
-                enc.set_fragment_texture(&atmo.sky_view, 0);
-                enc.set_fragment_sampler(&self.composite.sampler, 0);
-            }
-            None => {
-                enc.set_pipeline(&self.sky.pipeline);
-                enc.set_fragment_texture(&self.scene.env_map.prefilter, 0);
-                enc.set_fragment_sampler(&self.scene.cube_sampler, 0);
-            }
+            enc.set_pipeline(&atmo.sky_pipeline);
+            enc.set_fragment_value(params, 1);
+            enc.set_fragment_texture(&atmo.sky_view, 0);
+            enc.set_fragment_sampler(&self.composite.sampler, 0);
+        } else {
+            enc.set_pipeline(&self.sky.pipeline);
+            enc.set_fragment_texture(&self.scene.env_map.prefilter, 0);
+            enc.set_fragment_sampler(&self.scene.cube_sampler, 0);
         }
         // SAFETY: the vertex stage generates all three vertices, so the draw reads no bound vertex
         // buffer.

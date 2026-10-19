@@ -1,4 +1,4 @@
-//! EditorHook: the Shaders panel's edits beyond its form (`shader_form.rs`).
+//! `EditorHook`: the Shaders panel's edits beyond its form (`shader_form.rs`).
 //! A heading's menu deletes its Shader (its entry, the references to it, and,
 //! when asked, the files no other Shader reads); "+ Add vertex file" writes a
 //! starter vertex file, and a vertex file's menu stops declaring it. Each is
@@ -110,9 +110,10 @@ impl EditorHook {
         let Some(i) = shaders.iter().position(|s| s.name == name) else {
             return;
         };
-        let own = match files {
-            true => shader_edit::files_of(&shaders, i).own,
-            false => Vec::new(),
+        let own = if files {
+            shader_edit::files_of(&shaders, i).own
+        } else {
+            Vec::new()
         };
         let Some(idx) = find_entry(&self.entries, name) else {
             return;
@@ -131,11 +132,11 @@ impl EditorHook {
             }
         }
         let message = shader_edit::deleted_message(name, &deleted, &failed);
-        match failed.is_empty() {
-            true => self.notifier.success(&message),
-            false => self
-                .notifier
-                .error_with(&message, notify::Action::OpenConsole),
+        if failed.is_empty() {
+            self.notifier.success(&message);
+        } else {
+            self.notifier
+                .error_with(&message, notify::Action::OpenConsole);
         }
     }
 

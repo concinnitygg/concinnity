@@ -1,5 +1,5 @@
 //! The integer hash every procedural piece of the night sky is drawn from.
-//! Mirrors `night_hash` / `night_unit` in night_sky.hlsl bit for bit, so the
+//! Mirrors `night_hash` / `night_unit` in `night_sky.hlsl` bit for bit, so the
 //! CPU sees the same stars and galaxies the GPU draws.
 
 /// The PCG output permutation over one step of its generator: a well mixed

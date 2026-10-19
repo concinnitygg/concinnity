@@ -1,5 +1,5 @@
 //! The extent-outline drive (`hook/drive/outline.rs`): the lines a selected
-//! TriggerVolume publishes for its own shape.
+//! `TriggerVolume` publishes for its own shape.
 
 use concinnity_core::components::{Sprite, TriggerVolume};
 use concinnity_core::ecs::WorldLines;

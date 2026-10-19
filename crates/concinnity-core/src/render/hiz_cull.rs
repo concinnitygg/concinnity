@@ -206,7 +206,11 @@ mod tests {
             }
         };
         let corners = [fp.lo, [fp.hi[0], fp.lo[1]], [fp.lo[0], fp.hi[1]], fp.hi];
-        assert!(corners.iter().all(|&[x, y]| hole(x, y, fp.mip) == WALL));
+        assert!(
+            corners
+                .iter()
+                .all(|&[x, y]| hole(x, y, fp.mip).to_bits() == WALL.to_bits())
+        );
         assert!(!fp.occludes(BEHIND_WALL, hole));
     }
 

@@ -1,4 +1,4 @@
-//! Flat tessellated quad for a WaterSurface.
+//! Flat tessellated quad for a `WaterSurface`.
 //!
 //! The mesh sits in the XZ plane at Y = 0. All vertical motion comes from the
 //! per-frame Gerstner displacement applied by the water vertex shader; the
@@ -6,8 +6,8 @@
 //! (+Y); the shader rebuilds them analytically from the wave derivatives.
 //!
 //! Parameters:
-//!   half_width    -- half extent along X    (default 10.0)
-//!   half_depth    -- half extent along Z    (default 10.0)
+//!   `half_width`    -- half extent along X    (default 10.0)
+//!   `half_depth`    -- half extent along Z    (default 10.0)
 //!   subdivisions  -- grid resolution per axis (default 64, clamped 8..=255)
 
 use alloc::string::String;

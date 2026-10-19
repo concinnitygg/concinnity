@@ -98,7 +98,7 @@ pub(super) fn sample_bilinear(texels: &[u8], width: u32, height: u32, s: f32, t:
     let (x0, y0) = (floor(fx) as u32, floor(fy) as u32);
     let (x1, y1) = ((x0 + 1).min(width - 1), (y0 + 1).min(height - 1));
     let (sx, sy) = (fx - x0 as f32, fy - y0 as f32);
-    let at = |x: u32, y: u32| texels[(y * width + x) as usize] as f32 / 255.0;
+    let at = |x: u32, y: u32| f32::from(texels[(y * width + x) as usize]) / 255.0;
     let top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * sx;
     let bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * sx;
     top + (bottom - top) * sy

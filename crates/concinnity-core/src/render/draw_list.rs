@@ -19,14 +19,14 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 /// Geometry decoded for one Room: the asset, its vertices, LOD0 indices, and
-/// LOD alternates (switch_distance, indices).
+/// LOD alternates (`switch_distance`, indices).
 pub type RoomGeometry = (Room, Vec<Vertex>, Vec<u16>, Vec<(f32, Vec<u16>)>);
 
 /// Mesh-geometry lookup tables from `load_mesh_geometry`: the loaded geometry
 /// (dense, indexed by the unified mesh-source handle, which a `.mesh`
 /// reference's `MeshHandle` indexes directly), file-backed Mesh source metadata
 /// keyed by handle (dev-only), and the asset id -> handle map for the geometry
-/// producers that are still components (ProceduralMesh / VoxelChunk / File).
+/// producers that are still components (`ProceduralMesh` / `VoxelChunk` / File).
 pub struct MeshGeometry {
     /// Decoded geometry, indexed by the unified mesh-source handle.
     pub meshes: Vec<LoadedMesh>,
@@ -88,7 +88,7 @@ impl DeferredMeshSources {
 /// Output of `build_draw_list`. `prop_draw_indices` and `prop_local_bounds`
 /// are column-aligned with the input `items`; `mesh_handle_to_draws` backs
 /// hot-reload. A prop whose meshes carry no vertices gets the non-finite
-/// UNCULLED_BB as its local bounds (unpickable, uncullable).
+/// `UNCULLED_BB` as its local bounds (unpickable, uncullable).
 pub struct DrawListData {
     /// The shared vertex buffer.
     pub vertices: Vec<Vertex>,
@@ -159,7 +159,7 @@ fn local_bounds(verts: &[Vertex]) -> ([f32; 3], [f32; 3]) {
     (mn, mx)
 }
 
-/// The renderer-relevant view of one placement that build_draw_list consumes:
+/// The renderer-relevant view of one placement that `build_draw_list` consumes:
 /// the mesh/model/material/texture refs, the cull distance, whether it is dynamic
 /// (skips frustum culling), and the asset id. Built from an
 /// entity's MeshRenderer/ModelRenderer + tag components by
@@ -173,11 +173,11 @@ fn local_bounds(verts: &[Vertex]) -> ([f32; 3], [f32; 3]) {
 pub struct RenderableItem {
     /// The placement's asset id.
     pub asset_id: Option<AssetId>,
-    /// The Model it draws, for a ModelRenderer.
+    /// The Model it draws, for a `ModelRenderer`.
     pub model: Option<AssetId>,
-    /// The mesh it draws, for a MeshRenderer.
+    /// The mesh it draws, for a `MeshRenderer`.
     pub mesh: Option<MeshHandle>,
-    /// The material a MeshRenderer binds.
+    /// The material a `MeshRenderer` binds.
     pub material: Option<MaterialHandle>,
     /// Camera distance past which it is not drawn; 0 never culls by distance.
     pub cull_distance: f32,
@@ -185,10 +185,10 @@ pub struct RenderableItem {
     pub is_dynamic: bool,
 }
 
-/// Build one entity's RenderableItem: read its renderer fields from its
-/// MeshRenderer xor ModelRenderer, its dynamic flag from the Pickup /
+/// Build one entity's `RenderableItem`: read its renderer fields from its
+/// `MeshRenderer` xor `ModelRenderer`, its dynamic flag from the Pickup /
 /// Interactable / Parent / Collider tags, and its asset id from its Identity.
-pub fn decomposed_renderable_item(ctx: &PipelineContext, entity: Entity) -> RenderableItem {
+pub fn decomposed_renderable_item(ctx: &PipelineContext<'_>, entity: Entity) -> RenderableItem {
     use crate::components::{Collider, Interactable, MeshRenderer, ModelRenderer, Parent, Pickup};
 
     let (model, mesh, material, cull_distance) = if let Some(m) = ctx.get::<ModelRenderer>(entity) {
@@ -262,7 +262,7 @@ pub struct LoadedMesh {
 /// Hot-reload source metadata for a file-backed `Mesh`. Captured by
 /// `load_mesh_geometry` before the Mesh is drained and consumed; the
 /// `(asset_id, source, primitive_index, lod_levels, lod_distances)` tuple is
-/// later cross-referenced against `build_draw_list`'s mesh_id to draw_indices
+/// later cross-referenced against `build_draw_list`'s `mesh_id` to `draw_indices`
 /// map to build the hot-reload source map.
 pub struct MeshSourceMeta {
     /// Authored source path.
@@ -277,7 +277,7 @@ pub struct MeshSourceMeta {
 
 /// Decode all mesh-source payloads into a dense, handle-indexed geometry table.
 /// The Mesh block comes from the blob's resource stream (`MeshTable`); the
-/// remaining geometry producers (ProceduralMesh, VoxelChunk, mesh-kind File) are
+/// remaining geometry producers (`ProceduralMesh`, `VoxelChunk`, mesh-kind File) are
 /// still components and are decoded after it, in the same fixed block order cook
 /// assigned handles, so `geometry[h]` is the source cook gave handle `h`.
 /// Returns None if any payload is missing or malformed. Also returns a
@@ -285,7 +285,7 @@ pub struct MeshSourceMeta {
 /// the `MeshSources` catalog when `capture_sources` is set (a development
 /// loop), and the asset id -> handle map for the still-component producers.
 pub fn load_mesh_geometry(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     deferred: &DeferredMeshSources,
     blob_disk_backed: bool,
     capture_sources: bool,
@@ -336,7 +336,7 @@ pub fn load_mesh_geometry(
     let file_assets = ctx.drain_with_ids::<File>();
     let file_meshes: Vec<&Identified<File>> = file_assets
         .iter()
-        .filter(|(_, f)| f.kind.as_ref().map(FileKind::is_mesh).unwrap_or(false))
+        .filter(|(_, f)| f.kind.as_ref().is_some_and(FileKind::is_mesh))
         .collect();
 
     if mesh_table.is_empty()
@@ -424,7 +424,7 @@ fn decode_loaded(bytes: &[u8], label: &str) -> Option<LoadedMesh> {
 
 // Read the payload behind `locator`, logging a failed read under `label`.
 fn read_payload(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     locator: &PayloadLocator,
     label: &str,
 ) -> Option<Vec<u8>> {
@@ -464,7 +464,7 @@ impl<'a> MeshSink<'a> {
     // only when the blob is not disk-backed; without them it decodes now.
     fn push(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         locator: &PayloadLocator,
         bounds: Option<([f32; 3], [f32; 3])>,
         label: &str,
@@ -503,7 +503,7 @@ impl<'a> MeshSink<'a> {
     // iterates in declaration order.
     fn push_components<'m>(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         label: &str,
         items: impl Iterator<Item = (Option<AssetId>, Option<&'m PayloadLocator>)>,
     ) -> Option<()> {
@@ -522,22 +522,21 @@ impl<'a> MeshSink<'a> {
 
 /// Decode all Room mesh payloads and collect blob indices for the release step.
 /// Returns None if any payload is missing or malformed (error already logged).
-pub fn load_room_geometry(ctx: &mut PipelineContext) -> Option<(Vec<RoomGeometry>, Vec<u32>)> {
+pub fn load_room_geometry(ctx: &mut PipelineContext<'_>) -> Option<(Vec<RoomGeometry>, Vec<u32>)> {
     let rooms = ctx.drain_with_ids::<Room>();
     let mut room_geometry: Vec<RoomGeometry> = Vec::new();
     let mut blob_indices: Vec<u32> = Vec::new();
 
     for (i, (id, room)) in rooms.into_iter().enumerate() {
-        let locator = match &room.locator {
-            Some(l) => l.clone(),
-            None => {
-                tracing::error!(
-                    "graphics: Room[{}] {:?} has no compiled payload; did the build succeed?",
-                    i,
-                    id
-                );
-                return None;
-            }
+        let locator = if let Some(l) = &room.locator {
+            l.clone()
+        } else {
+            tracing::error!(
+                "graphics: Room[{}] {:?} has no compiled payload; did the build succeed?",
+                i,
+                id
+            );
+            return None;
         };
         blob_indices.push(locator.blob_index);
         let bytes = match ctx.read_payload(&locator) {
@@ -589,9 +588,9 @@ pub struct DrawListInputs<'a> {
 /// Assemble the shared vertex/index buffers and per-object draw records from all
 /// scene geometry (props, rooms, terrains). A mesh nothing places draws
 /// nothing. Also returns the per-prop draw-index table for runtime model-matrix
-/// updates and the GPU-instanced cluster list (one entry per InstancedProp).
+/// updates and the GPU-instanced cluster list (one entry per `InstancedProp`).
 /// Returns None if any referenced asset is missing (error already logged).
-pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
+pub fn build_draw_list(inputs: DrawListInputs<'_>) -> Option<DrawListData> {
     let DrawListInputs {
         items,
         instanced_props,
@@ -627,7 +626,7 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
     // set.
     let mut append_mesh = |handle: usize| -> Option<AppendedMesh> {
         let loaded = mesh_geometry.get(handle)?;
-        let vertex_byte_offset = all_vertices.len() * core::mem::size_of::<Vertex>();
+        let vertex_byte_offset = all_vertices.len() * size_of::<Vertex>();
         let index_elem_offset = all_indices.len();
         let base = all_vertices.len() as u32;
         let (bb_min, bb_max) = loaded
@@ -640,8 +639,9 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
         // counts so the streamed upload's size check matches the real geometry.
         let (vertex_count, index_count) = loaded
             .counts
-            .map(|(v, i)| (v as usize, i as usize))
-            .unwrap_or((loaded.vertices.len(), loaded.indices.len()));
+            .map_or((loaded.vertices.len(), loaded.indices.len()), |(v, i)| {
+                (v as usize, i as usize)
+            });
         Some((
             vertex_byte_offset,
             vertex_count,
@@ -669,26 +669,22 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
 
         if let Some(model_id) = item.model {
             // multi-mesh model path: one draw object per sub-mesh
-            let submeshes = match model_map.get(&model_id) {
-                Some(s) => s,
-                None => {
-                    tracing::error!(
-                        "graphics: Prop {:?} references unknown model {}; add a Model asset with that id",
-                        item.asset_id,
-                        model_id
-                    );
-                    return None;
-                }
+            let Some(submeshes) = model_map.get(&model_id) else {
+                tracing::error!(
+                    "graphics: Prop {:?} references unknown model {}; add a Model asset with that id",
+                    item.asset_id,
+                    model_id
+                );
+                return None;
             };
             for sub in submeshes {
-                let sub_mesh = match sub.mesh {
-                    Some(m) => m.index(),
-                    None => {
-                        tracing::error!("graphics: Model {} has a sub-mesh with no mesh", model_id);
-                        return None;
-                    }
+                let sub_mesh = if let Some(m) = sub.mesh {
+                    m.index()
+                } else {
+                    tracing::error!("graphics: Model {} has a sub-mesh with no mesh", model_id);
+                    return None;
                 };
-                let (
+                let Some((
                     vertex_offset,
                     vertex_count,
                     index_offset,
@@ -696,16 +692,14 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                     lod_alternates,
                     local_min,
                     local_max,
-                ) = match append_mesh(sub_mesh) {
-                    Some(t) => t,
-                    None => {
-                        tracing::error!(
-                            "graphics: Model {} sub-mesh handle {} out of range; add a Mesh or ProceduralMesh asset with that name",
-                            model_id,
-                            sub_mesh
-                        );
-                        return None;
-                    }
+                )) = append_mesh(sub_mesh)
+                else {
+                    tracing::error!(
+                        "graphics: Model {} sub-mesh handle {} out of range; add a Mesh or ProceduralMesh asset with that name",
+                        model_id,
+                        sub_mesh
+                    );
+                    return None;
                 };
                 let mat_entry = match resolve_material_slots(sub.material, material_map) {
                     Ok(entry) => entry,
@@ -750,17 +744,16 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             }
         } else {
             // single-mesh path
-            let mesh_handle = match item.mesh {
-                Some(m) => m.index(),
-                None => {
-                    tracing::error!(
-                        "graphics: Prop {:?} has neither a model nor a mesh",
-                        item.asset_id
-                    );
-                    return None;
-                }
+            let mesh_handle = if let Some(m) = item.mesh {
+                m.index()
+            } else {
+                tracing::error!(
+                    "graphics: Prop {:?} has neither a model nor a mesh",
+                    item.asset_id
+                );
+                return None;
             };
-            let (
+            let Some((
                 vertex_offset,
                 vertex_count,
                 index_offset,
@@ -768,16 +761,14 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 lod_alternates,
                 local_min,
                 local_max,
-            ) = match append_mesh(mesh_handle) {
-                Some(t) => t,
-                None => {
-                    tracing::error!(
-                        "graphics: Prop {:?} references out-of-range mesh handle {}; add a Mesh or ProceduralMesh asset with that name",
-                        item.asset_id,
-                        mesh_handle
-                    );
-                    return None;
-                }
+            )) = append_mesh(mesh_handle)
+            else {
+                tracing::error!(
+                    "graphics: Prop {:?} references out-of-range mesh handle {}; add a Mesh or ProceduralMesh asset with that name",
+                    item.asset_id,
+                    mesh_handle
+                );
+                return None;
             };
             let mat_entry = match resolve_material_slots(item.material, material_map) {
                 Ok(entry) => entry,
@@ -846,7 +837,7 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
         // Instanced clusters carry the mesh's LOD alternates; each instance
         // picks its slice by camera distance in its cull record (see
         // `lod::for_each_instance_lod`).
-        let (
+        let Some((
             vertex_offset,
             vertex_count,
             index_offset,
@@ -854,16 +845,14 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             lod_alternates,
             local_min,
             local_max,
-        ) = match append_mesh(mesh_handle) {
-            Some(t) => t,
-            None => {
-                tracing::error!(
-                    "graphics: InstancedProp[{}] references out-of-range mesh handle {}",
-                    cluster,
-                    mesh_handle
-                );
-                return None;
-            }
+        )) = append_mesh(mesh_handle)
+        else {
+            tracing::error!(
+                "graphics: InstancedProp[{}] references out-of-range mesh handle {}",
+                cluster,
+                mesh_handle
+            );
+            return None;
         };
         let mat_entry = match resolve_material_slots(inst.material, material_map) {
             Ok(entry) => entry,
@@ -924,7 +913,7 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
     // sentinel-AABB fallback, so practical swaps only fire if the camera
     // wanders far from the world origin.
     for (room, verts, idxs, room_lods) in room_geometry {
-        let vertex_byte_offset = all_vertices.len() * core::mem::size_of::<Vertex>();
+        let vertex_byte_offset = all_vertices.len() * size_of::<Vertex>();
         let index_elem_offset = all_indices.len();
         let base = all_vertices.len() as u32;
         all_vertices.extend_from_slice(verts);
@@ -998,6 +987,7 @@ pub fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
 mod tests {
     use super::*;
     use crate::components::{InstanceTransform, Prop};
+    use crate::ecs::NameRef;
     use crate::ecs::{ComponentSlot, PayloadStore, Ref, TextureHandle, World};
     use crate::error::PayloadError;
     use crate::gfx::render_types::NO_ALBEDO_SLOT;
@@ -1041,7 +1031,7 @@ mod tests {
             pickup: false,
             parent: None,
             scene: None,
-            prefab: Default::default(),
+            prefab: NameRef::default(),
             cull_distance: 0.0,
             is_held: false,
         }
@@ -1209,7 +1199,7 @@ mod tests {
             },
         );
         ctx.insert(e, Pickup);
-        ctx.insert(e, Collider(prop.collider.clone().unwrap()));
+        ctx.insert(e, Collider(prop.collider.unwrap()));
 
         ctx.identify(e, AssetId(7));
         let item = decomposed_renderable_item(&ctx, e);
@@ -1465,7 +1455,7 @@ mod tests {
     #[test]
     fn build_draw_list_returns_none_on_missing_references() {
         let mesh = || vec![unit_quad_mesh()];
-        let none = |inputs: DrawListInputs| build_draw_list(inputs).is_none();
+        let none = |inputs: DrawListInputs<'_>| build_draw_list(inputs).is_none();
 
         // Model referenced by an item but absent from the model_map.
         assert!(none(DrawListInputs {

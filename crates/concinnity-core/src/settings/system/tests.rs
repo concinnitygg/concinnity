@@ -15,7 +15,10 @@ use crate::render::backend::{GpuProfile, GpuVendor};
 use crate::render::backend_init::ShadowCadence;
 use crate::render::dlss::DlssPreset;
 use crate::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
-use crate::render::ops;
+use crate::settings::UserGraphicsSettings;
+use crate::settings::system::EventCursor;
+use crate::settings::system::RenderOps;
+use crate::settings::system::Window;
 use crate::window::display_mode::DisplayMode;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -136,23 +139,23 @@ impl Fixture {
             gpu_profile,
             capabilities: crate::render::backend::DeviceCapabilities::ALL,
             perf_sub_row_labels: vec![(SUB_ROW_LABEL, LIT)],
-            window_args: Default::default(),
+            window_args: Window::default(),
             display_modes: Vec::new(),
             resolution: None,
             current_mode: None,
             resolution_row_labels: vec![(RESOLUTION_LABEL, LIT)],
-            persisted_graphics: Default::default(),
-            session: Default::default(),
+            persisted_graphics: UserGraphicsSettings::default(),
+            session: UserGraphicsSettings::default(),
             fog_built: true,
-            scene_cmd_cursor: Default::default(),
-            setting_cmd_cursor: Default::default(),
+            scene_cmd_cursor: EventCursor::default(),
+            setting_cmd_cursor: EventCursor::default(),
             published_hud_prefs: None,
             published_disabled_inputs: None,
             steps_since_init: 0,
             graphics_api_settled: false,
         };
 
-        let mut fixture = Fixture {
+        let mut fixture = Self {
             world: World::new(),
             state,
             backend,
@@ -203,7 +206,7 @@ impl Fixture {
             }
         }
         let mut ctx = self.world.context();
-        let mut ops = ops::RenderOps::default();
+        let mut ops = RenderOps::default();
         self.state.apply_setting_commands(&mut ctx, &mut ops);
         ops.replay(&mut self.backend);
     }
@@ -214,7 +217,7 @@ impl Fixture {
     }
 
     // The stored settings after a persisted change.
-    fn persisted(&mut self) -> StoredSettings {
+    fn persisted(&self) -> StoredSettings {
         assert!(self.revision() > 0, "a change was persisted");
         self.world
             .resource::<StoredSettings>()
@@ -252,7 +255,7 @@ impl Fixture {
         self.world
             .context()
             .events::<ControlsCommand>()
-            .map(|e| e.read(&mut Default::default()).cloned().collect())
+            .map(|e| e.read(&mut EventCursor::default()).copied().collect())
             .unwrap_or_default()
     }
 }
@@ -499,7 +502,7 @@ fn a_fraction_on_a_non_slider_is_ignored() {
     f.apply(vec![drag(SettingKey::Vsync, 0.5, true)]);
 
     assert!(f.calls.lock().calls.is_empty());
-    assert!(f.revision() == 0);
+    assert_eq!(f.revision(), 0);
 }
 
 // Every row with static options applies a Next and persists it, so no setting
@@ -528,7 +531,7 @@ fn an_op_outside_its_row_kind_is_ignored() {
     ]);
 
     assert!(f.calls.lock().calls.is_empty());
-    assert!(f.revision() == 0);
+    assert_eq!(f.revision(), 0);
     assert_eq!(f.state.keymap, KeyMap::default());
 }
 
@@ -602,7 +605,7 @@ fn mouse_sensitivity_slider_sends_a_controls_command() {
         .world
         .context()
         .events::<ControlsCommand>()
-        .map(|e| e.read(&mut Default::default()).cloned().collect())
+        .map(|e| e.read(&mut EventCursor::default()).copied().collect())
         .unwrap_or_default();
     assert_eq!(sent.len(), 1);
     assert!(sent[0].mouse_sensitivity.is_some());
@@ -640,7 +643,7 @@ fn fov_slider_sends_a_controls_command() {
         .world
         .context()
         .events::<ControlsCommand>()
-        .map(|e| e.read(&mut Default::default()).cloned().collect())
+        .map(|e| e.read(&mut EventCursor::default()).copied().collect())
         .unwrap_or_default();
     assert_eq!(sent.len(), 1);
     assert!(sent[0].fov_y_degrees.is_some());
@@ -766,7 +769,7 @@ fn volume_rows_send_targeted_audio_commands() {
         .world
         .context()
         .events::<AudioCommand>()
-        .map(|e| e.read(&mut Default::default()).cloned().collect())
+        .map(|e| e.read(&mut EventCursor::default()).copied().collect())
         .unwrap_or_default();
     assert_eq!(sent.len(), 2);
     assert_eq!(sent[0].target, AudioTarget::Master);
@@ -939,15 +942,10 @@ fn quality_rebuild_out_of_memory_raises_memory_pressure() {
     ] {
         let (calls, mut backend) = recording_backend();
         calls.lock().fail_quality = Some(error);
-        let mut queue = ops::RenderOps::default();
-        let mut plan = crate::settings::apply::ApplyPlan::default();
-        plan.rebuild
-            .insert(crate::settings::apply::RebuildFeature::Ssao);
-        super::record_plan(
-            &mut queue,
-            &crate::settings::ResolvedGraphics::default(),
-            plan,
-        );
+        let mut queue = RenderOps::default();
+        let mut plan = settings::apply::ApplyPlan::default();
+        plan.rebuild.insert(settings::apply::RebuildFeature::Ssao);
+        super::record_plan(&mut queue, &settings::ResolvedGraphics::default(), plan);
 
         let outcome = queue.replay(&mut backend);
         assert_eq!(outcome.memory_pressure, pressure);
@@ -1163,7 +1161,7 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
     assert_eq!(f.label(TOGGLE_LABEL), "On", "the dependent row relabeled");
     assert_eq!(
         f.label(QUALITY_LABEL),
-        crate::settings::quality::preset_label(QualityPreset::Ultra, &f.state.gpu_profile),
+        settings::quality::preset_label(QualityPreset::Ultra, &f.state.gpu_profile),
     );
 
     // Every per-row override is dropped, so the next launch re-resolves them from
@@ -1245,8 +1243,7 @@ fn low_preset_clamps_the_authored_features_off() {
         persist: true,
     }]);
 
-    let ceiling =
-        crate::settings::quality::resolve_ceiling(QualityPreset::Low, &f.state.gpu_profile);
+    let ceiling = settings::quality::resolve_ceiling(QualityPreset::Low, &f.state.gpu_profile);
     assert!(!ceiling.ssgi, "the Low ceiling disallows SSGI");
     assert_eq!(
         f.state.resolved.graphics.indirect_lighting.technique,
@@ -1312,7 +1309,7 @@ fn an_empty_drain_persists_nothing() {
     f.apply(Vec::new());
 
     assert!(f.calls.lock().calls.is_empty());
-    assert!(f.revision() == 0);
+    assert_eq!(f.revision(), 0);
 }
 
 // The stats-HUD readouts are gated by their master toggle, so turning the master
@@ -1409,7 +1406,7 @@ fn step_drains_into_the_op_queue_and_reparks() {
     f.world
         .insert_resource(crate::render::queues::ActiveRenderQueues::new(
             crate::render::queues::RenderQueues {
-                ops: Default::default(),
+                ops: RenderOps::default(),
                 slots: crate::render::render_slots::RenderSlots::new(0, true, &[]),
             },
         ));

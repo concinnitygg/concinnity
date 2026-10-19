@@ -107,7 +107,7 @@ impl<B: Backend> KiraOut<B> {
             next_voice: 0,
             decoder: DecodeWorker::spawn()
                 .map_err(|e| {
-                    tracing::warn!("audio decode worker spawn failed, clips stay silent: {e}")
+                    tracing::warn!("audio decode worker spawn failed, clips stay silent: {e}");
                 })
                 .ok(),
             clips: HashMap::new(),

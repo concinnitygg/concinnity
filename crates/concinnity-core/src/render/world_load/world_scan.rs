@@ -17,7 +17,7 @@ use crate::resource::ColorLutTable;
 /// How a world holds the cursor from its first frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CursorPolicy {
-    /// A camera world with UI the cursor is freed for (a HitRegion or a
+    /// A camera world with UI the cursor is freed for (a `HitRegion` or a
     /// Screen): capture follows the menu frame by frame.
     pub menu_mode: bool,
     /// A plain first-person world captures the cursor at startup, unless a
@@ -26,9 +26,9 @@ pub struct CursorPolicy {
     pub capture_at_start: bool,
 }
 
-/// The cursor policy for the world. KeyBindings alone need no free cursor,
+/// The cursor policy for the world. `KeyBindings` alone need no free cursor,
 /// and a UI-only world (no camera) stays free-cursor.
-pub fn cursor_policy(ctx: &PipelineContext) -> CursorPolicy {
+pub fn cursor_policy(ctx: &PipelineContext<'_>) -> CursorPolicy {
     let has_ui =
         ctx.query::<HitRegion>().next().is_some() || ctx.query::<Screen>().next().is_some();
     let has_camera = ctx.query::<Camera3D>().next().is_some();
@@ -40,16 +40,16 @@ pub fn cursor_policy(ctx: &PipelineContext) -> CursorPolicy {
 
 /// Whether any text in the world names no Font, and so has no face to draw
 /// with unless one is registered as the fallback.
-pub fn font_less_text(ctx: &PipelineContext) -> bool {
+pub fn font_less_text(ctx: &PipelineContext<'_>) -> bool {
     ctx.query::<TextLabel>().any(|l| l.font.is_none())
         || ctx.query::<TextInput>().any(|t| t.font.is_none())
 }
 
-/// The DebugHud chip ids (cursor, camera, sys, passes: the top-right stack
-/// order) and the StatHud chip ids (fps, gpu wait, vram, ram, ev, edr, track:
+/// The `DebugHud` chip ids (cursor, camera, sys, passes: the top-right stack
+/// order) and the `StatHud` chip ids (fps, gpu wait, vram, ram, ev, edr, track:
 /// the top-left strip order) the frame step anchors. Passes is last because its
 /// height follows the frame's step count.
-pub fn capture_hud_chips(ctx: &PipelineContext) -> (Vec<AssetId>, Vec<AssetId>) {
+pub fn capture_hud_chips(ctx: &PipelineContext<'_>) -> (Vec<AssetId>, Vec<AssetId>) {
     let debug = ctx
         .query::<DebugHud>()
         .next()
@@ -85,7 +85,7 @@ pub fn capture_hud_chips(ctx: &PipelineContext) -> (Vec<AssetId>, Vec<AssetId>) 
 
 /// The blend strength of the world's first `ColorLut`, read from its compiled
 /// payload, or `None` without one.
-pub fn color_lut_strength(ctx: &mut PipelineContext) -> Option<f32> {
+pub fn color_lut_strength(ctx: &mut PipelineContext<'_>) -> Option<f32> {
     let locator = ctx.resource::<ColorLutTable>()?.locator(0)?;
     let bytes = ctx.read_payload(&locator).ok()?;
     crate::bake::color_lut::strength(bytes).ok()
@@ -94,7 +94,7 @@ pub fn color_lut_strength(ctx: &mut PipelineContext) -> Option<f32> {
 /// Whether the world saves frames as it goes, from its benchmark or from a
 /// `screenshot` action, which needs the presented frame readable just as an
 /// exit screenshot does.
-pub fn declares_frame_captures(ctx: &PipelineContext) -> bool {
+pub fn declares_frame_captures(ctx: &PipelineContext<'_>) -> bool {
     let screenshot = |action: Option<&UiAction>| matches!(action, Some(UiAction::Screenshot(_)));
     ctx.resource::<crate::benchmark::BenchmarkRun>()
         .is_some_and(|run| !run.config.captures.is_empty())

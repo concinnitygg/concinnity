@@ -262,6 +262,10 @@ pub fn sync_point_gaps(graph: &CompiledGraph) -> Vec<SyncGap> {
 /// do it, so each queue's commit order is that queue's graph order and every
 /// wait names a value its producing queue signals no later. `backend` names the
 /// caller in the message.
+///
+/// # Panics
+///
+/// Panics when the serial pass order does not honor the schedule.
 pub fn assert_serial_order_honors_schedule(graph: &CompiledGraph, backend: &str) {
     let problems = serial_order_problems(graph);
     assert!(
@@ -462,10 +466,10 @@ mod tests {
     }
 
     // Join a list of reportable items into one message body.
-    fn joined<T: core::fmt::Display>(items: &[T]) -> alloc::string::String {
+    fn joined<T: core::fmt::Display>(items: &[T]) -> String {
         items
             .iter()
-            .map(|i| i.to_string())
+            .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ")
     }

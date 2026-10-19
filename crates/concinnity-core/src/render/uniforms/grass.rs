@@ -477,7 +477,7 @@ mod tests {
         ];
         assert_eq!(args[..20], slot);
         assert_eq!(args[20..], slot);
-        assert_eq!(core::mem::size_of_val(&args), GRASS_ARGS_BYTES);
+        assert_eq!(size_of_val(&args), GRASS_ARGS_BYTES);
     }
 
     #[test]

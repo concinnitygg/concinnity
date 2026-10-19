@@ -17,11 +17,11 @@ pub(super) enum Step {
 impl Step {
     pub(super) fn label(self) -> &'static str {
         match self {
-            Step::Load => "Load",
-            Step::Cook(BuildStage::Import) => "Import",
-            Step::Cook(BuildStage::Compile) => "Compile",
-            Step::Cook(BuildStage::Write) => "Write",
-            Step::Cook(BuildStage::Thumbnails) => "Thumbnails",
+            Self::Load => "Load",
+            Self::Cook(BuildStage::Import) => "Import",
+            Self::Cook(BuildStage::Compile) => "Compile",
+            Self::Cook(BuildStage::Write) => "Write",
+            Self::Cook(BuildStage::Thumbnails) => "Thumbnails",
         }
     }
 }
@@ -267,12 +267,7 @@ impl Board {
 mod tests {
     use super::*;
 
-    fn finished<'a>(
-        stage: BuildStage,
-        item: &'a str,
-        done: u32,
-        reused: bool,
-    ) -> BuildProgress<'a> {
+    fn finished(stage: BuildStage, item: &str, done: u32, reused: bool) -> BuildProgress<'_> {
         BuildProgress::ItemFinished {
             stage,
             item,

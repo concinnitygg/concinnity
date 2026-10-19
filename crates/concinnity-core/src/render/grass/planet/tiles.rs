@@ -318,7 +318,7 @@ mod tests {
             model: frame.model_at(mesh.origin),
             vertex_base: 0,
             radial: mesh.radial,
-            morph: Default::default(),
+            morph: GpuTileMorph::default(),
             morph_extent: 0.0,
         }
     }
@@ -544,7 +544,7 @@ mod tests {
                 .zip(&r.blocks)
                 .map(|(t, b)| (t.tile, b.1, b.2))
                 .collect();
-            v.sort();
+            v.sort_unstable();
             v
         };
         assert_eq!(blocks(&ra), blocks(&rb));
@@ -578,7 +578,7 @@ mod tests {
                 model: frame.model_at(s.surface(id.direction(0.5, 0.5))),
                 vertex_base: 0,
                 radial: [0.0; 2],
-                morph: Default::default(),
+                morph: GpuTileMorph::default(),
                 morph_extent: 0.0,
             };
             let step = 1.0 / f64::from(1u32 << level);

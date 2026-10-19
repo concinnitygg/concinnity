@@ -85,7 +85,7 @@ impl SsgiSettings {
                     cfg.ssgi_resolution.scale_divisor(),
                 )
             })
-            .filter(|s| s.contributes())
+            .filter(Self::contributes)
     }
 
     /// Clamp the authored tunables into safe ranges.

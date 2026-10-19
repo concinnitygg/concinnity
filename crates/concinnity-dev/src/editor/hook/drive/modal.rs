@@ -1,4 +1,4 @@
-//! EditorHook: the confirmation dialog's open state, click routing, and draw.
+//! `EditorHook`: the confirmation dialog's open state, click routing, and draw.
 //! The geometry lives in `editor/modal.rs`. While open the dialog is
 //! screen-modal: every press and wheel is swallowed before any other routing
 //! (`tick` checks it first), and only a button press closes it -- a click-away
@@ -111,7 +111,7 @@ impl EditorHook {
             modal::Action::Worlds(confirm) => self.apply_worlds_confirm(confirm, world),
             modal::Action::NameWorld => self.name_untitled_world(typed),
             modal::Action::LeaveShaderSource { save, then } => {
-                self.answer_leave_shader_source(save, then, world)
+                self.answer_leave_shader_source(save, then, world);
             }
             modal::Action::DeleteShader(name) => self.delete_shader(&name, checked),
             modal::Action::DeleteSdfField(path) => self.delete_sdf_field(&path, checked),

@@ -1,4 +1,4 @@
-//! The CharacterShape panel's layout half: a floating panel of the schema's
+//! The `CharacterShape` panel's layout half: a floating panel of the schema's
 //! sections (see `character_shape.rs` for the rows), preset rows, Reset /
 //! Randomize buttons and a status line in its header row. Each slider row is a caption plus one drag
 //! slider (`widget_slider.rs`) backed by a per-visible-row control pool at
@@ -176,7 +176,7 @@ pub(crate) fn cursor_over_rows(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bo
 // size `s`. `None` means the click missed the panel. Title-bar presses never
 // reach this: the shared routing intercepts them first.
 pub(crate) fn hit_test(
-    view: &ShapeView,
+    view: &ShapeView<'_>,
     mx: f32,
     my: f32,
     o: [f32; 2],
@@ -236,7 +236,7 @@ fn place_button(
 }
 
 // Position + show the panel at effective size `s`.
-pub(crate) fn place(world: &mut World, view: &ShapeView, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: &ShapeView<'_>, o: [f32; 2], s: [f32; 2]) {
     let w = s[0];
     widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
     let title = widget::title_rect(o, w);
@@ -364,7 +364,7 @@ mod tests {
     }
 
     fn names(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| s.to_string()).collect()
+        list.iter().map(ToString::to_string).collect()
     }
 
     fn fixture() -> (Rows, Vec<Row>, Vec<f32>) {

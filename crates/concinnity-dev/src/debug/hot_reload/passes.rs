@@ -1,4 +1,4 @@
-//! The world.jsonl / ProceduralMesh / VolumetricFog / world-loaded Shader stage
+//! The world.jsonl / `ProceduralMesh` / `VolumetricFog` / world-loaded Shader stage
 //! reload passes: re-read the on-disk source, diff against the captured state,
 //! and apply changes through the backend. Each returns a small tally the drive
 //! logs.
@@ -7,7 +7,7 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::take_entry_id;
 use concinnity_core::components::{ProceduralMesh, Story, VolumetricFog};
 use concinnity_core::gfx::mesh_payload;
-use concinnity_core::render::world_load::source_maps::*;
+use concinnity_core::render::world_load::source_maps::ProceduralMeshSourceMap;
 use concinnity_core::render::{backend, volumetric_fog};
 use concinnity_host::thread::asset_id;
 
@@ -198,7 +198,7 @@ pub(super) fn reload_procedural_meshes(
                 continue;
             }
         };
-        new_args_by_name.insert(name.to_string(), (parsed, raw_args));
+        new_args_by_name.insert(name.clone(), (parsed, raw_args));
     }
 
     // Collect rebuild changes batched into a single rebuild call (mirrors the
@@ -411,7 +411,7 @@ pub(super) fn reload_stories(
         }
         match serde_json::from_value::<Story>(args.clone()) {
             Ok(story) => {
-                snapshots.insert(name.to_string(), args);
+                snapshots.insert(name.clone(), args);
                 out.push(story);
             }
             Err(e) => {

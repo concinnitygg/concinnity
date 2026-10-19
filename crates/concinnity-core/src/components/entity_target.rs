@@ -16,19 +16,19 @@ pub enum EntityTarget {
 
 impl Default for EntityTarget {
     fn default() -> Self {
-        EntityTarget::Name(AssetId::default())
+        Self::Name(AssetId::default())
     }
 }
 
 impl From<AssetId> for EntityTarget {
     fn from(name: AssetId) -> Self {
-        EntityTarget::Name(name)
+        Self::Name(name)
     }
 }
 
 impl From<Entity> for EntityTarget {
     fn from(entity: Entity) -> Self {
-        EntityTarget::Entity(entity)
+        Self::Entity(entity)
     }
 }
 
@@ -36,8 +36,8 @@ impl EntityTarget {
     /// The asset name this target addresses, if it is name-addressed.
     pub fn name(self) -> Option<AssetId> {
         match self {
-            EntityTarget::Name(name) => Some(name),
-            EntityTarget::Entity(_) => None,
+            Self::Name(name) => Some(name),
+            Self::Entity(_) => None,
         }
     }
 }

@@ -1,5 +1,5 @@
 //! The transparent pass's three producers, the ray-traced reflection resolve, and
-//! the fog pair. `TransparentView` is declared by glass.hlsl, glass_mesh.hlsl
+//! the fog pair. `TransparentView` is declared by glass.hlsl, `glass_mesh.hlsl`
 //! and water.hlsl alike, so all three are mirrored: they are separate
 //! declarations that can drift apart. The water body and the fog froxel kernel
 //! bind the shared `ShadowUniforms` from `light_types.hlsl`.

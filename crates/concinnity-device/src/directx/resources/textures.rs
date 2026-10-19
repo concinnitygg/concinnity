@@ -1,4 +1,4 @@
-//! Texture-pool slot updates for DxContext: streamed and hot-reloaded albedo /
+//! Texture-pool slot updates for `DxContext`: streamed and hot-reloaded albedo /
 //! normal-map slots, the IBL environment map and the color-grading LUT, plus
 //! the runtime clone of a static draw object (which reuses the source's
 //! descriptors).
@@ -7,8 +7,11 @@ use concinnity_core::bake;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
-use super::super::context::*;
-use super::super::texture::*;
+use super::super::context::DxContext;
+use super::super::texture::{
+    EnvironmentMapDescriptors, EnvironmentMapPayload, StreamedUploadRetire, upload_color_lut,
+    upload_environment_map, upload_texture_image, upload_texture_image_deferred, write_texture_srv,
+};
 
 impl DxContext {
     // CPU descriptor handle for CBV/SRV/UAV heap `slot`.
@@ -103,7 +106,7 @@ impl DxContext {
         self.stream.pool_rewrites.queue(slot);
         self.stream.retires.push(
             self.stream.frame,
-            super::super::texture::StreamedUploadRetire {
+            StreamedUploadRetire {
                 texture: old,
                 upload: in_flight.upload,
                 allocator: in_flight.allocator,

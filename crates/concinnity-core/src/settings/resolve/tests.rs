@@ -583,9 +583,10 @@ fn an_unset_world_resolves_to_the_tier_capped_defaults() {
         let q = &r.graphics;
         let fx = q;
         assert_eq!(q.shadows.map_size, 4096.min(cap.shadow_map_size));
-        let update = match cap.allow_every_frame_shadows {
-            true => ShadowUpdate::EveryFrame,
-            false => ShadowUpdate::Hybrid,
+        let update = if cap.allow_every_frame_shadows {
+            ShadowUpdate::EveryFrame
+        } else {
+            ShadowUpdate::Hybrid
         };
         assert_eq!(q.shadows.update, update);
         assert_eq!(q.shadows.distance, 80.min(cap.shadow_distance));
@@ -603,9 +604,10 @@ fn an_unset_world_resolves_to_the_tier_capped_defaults() {
             fx.reflections.blur_resolution,
             PassResolution::Half.max(cap.reflection_blur_resolution)
         );
-        let technique = match cap.ssgi {
-            true => IndirectTechnique::Ssgi,
-            false => IndirectTechnique::Ibl,
+        let technique = if cap.ssgi {
+            IndirectTechnique::Ssgi
+        } else {
+            IndirectTechnique::Ibl
         };
         assert_eq!(fx.indirect_lighting.technique, technique);
         assert_eq!(

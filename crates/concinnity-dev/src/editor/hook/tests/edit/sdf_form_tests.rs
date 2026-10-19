@@ -1,4 +1,4 @@
-//! An SdfVolume form's extras (`hook/edit/sdf_form.rs`): the Shaders panel's
+//! An `SdfVolume` form's extras (`hook/edit/sdf_form.rs`): the Shaders panel's
 //! create form switching to a volume when a field kind is chosen, the volume
 //! and its starter file a create writes, where the new volume lands, the
 //! Shader limit leaving the field kinds open, and an edited volume listing who

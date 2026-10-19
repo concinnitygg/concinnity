@@ -1,5 +1,5 @@
 //! Runtime `File` component. Its authored args and `FileKind` live in the schema
-//! crate (concinnity_core::components::file).
+//! crate (`concinnity_core::components::file`).
 
 use crate::components::Vocabulary;
 use crate::ecs::PayloadLocator;

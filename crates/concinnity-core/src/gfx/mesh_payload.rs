@@ -1,5 +1,5 @@
 //! Canonical vertex type and the binary serialization format shared between
-//! the build step (build_mesh.rs writes) and the renderer (reads).
+//! the build step (`build_mesh.rs` writes) and the renderer (reads).
 //!
 //! The layout asserts below stay hand-written. A vertex payload reaches a shader
 //! through a vertex descriptor or a raw pointer, never as a declared buffer
@@ -8,17 +8,17 @@
 //! has nothing to compare against here.
 //!
 //! Format (little-endian):
-//!   u32  vertex_count
-//!   vertex_count * 56 bytes   float3 pos + float3 normal + float3 tangent + float3 color + float2 uv (14 x f32)
-//!   u32  index_count                              // LOD0 indices
-//!   index_count  * 2 bytes    u16 indices
+//!   u32  `vertex_count`
+//!   `vertex_count` * 56 bytes   float3 pos + float3 normal + float3 tangent + float3 color + float2 uv (14 x f32)
+//!   u32  `index_count`                              // LOD0 indices
+//!   `index_count`  * 2 bytes    u16 indices
 //!   optional LOD trailer
 //!   4 bytes                   ascii "LODS" magic (absent for legacy / single-LOD payloads)
-//!   u32  alt_count            // number of additional LODs beyond LOD0
-//!   alt_count × {
-//!     f32  switch_distance    // camera-distance threshold (LOD i+1 applies at d >= switch_distance)
-//!     u32  index_count
-//!     index_count * 2 bytes   u16 indices
+//!   u32  `alt_count`            // number of additional LODs beyond LOD0
+//!   `alt_count` × {
+//!     f32  `switch_distance`    // camera-distance threshold (LOD i+1 applies at d >= `switch_distance`)
+//!     u32  `index_count`
+//!     `index_count` * 2 bytes   u16 indices
 //!   }
 //!
 //! `deserialize` reads only the LOD0 indices and ignores any trailer, so old

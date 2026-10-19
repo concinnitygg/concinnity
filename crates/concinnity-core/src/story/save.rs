@@ -1,7 +1,10 @@
-use super::*;
+use super::{
+    Overlay, PipelineContext, SLOT_COUNT, SaveSlot, ScreenCommand, StorySave, StoryStore,
+    StorySystem,
+};
 
 impl StorySystem {
-    pub(super) fn start(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn start(&mut self, ctx: &mut PipelineContext<'_>) {
         self.started = true;
         self.vars.clear();
         self.history.clear();
@@ -22,7 +25,7 @@ impl StorySystem {
 
     // Resume from the auto-saved position; a missing, stale, or unreadable
     // save starts fresh.
-    pub(super) fn continue_story(&mut self, ctx: &mut PipelineContext) {
+    pub(super) fn continue_story(&mut self, ctx: &mut PipelineContext<'_>) {
         match self.read_saved(SaveSlot::Auto) {
             Some(save) => self.resume_from(save, ctx),
             None => self.start(ctx),
@@ -31,7 +34,7 @@ impl StorySystem {
 
     // Put play at a saved position; an unknown slug or an empty node starts
     // fresh instead.
-    pub(super) fn resume_from(&mut self, save: StorySave, ctx: &mut PipelineContext) {
+    pub(super) fn resume_from(&mut self, save: StorySave, ctx: &mut PipelineContext<'_>) {
         let Some(node) = self.story.nodes.iter().position(|n| n.slug == save.slug) else {
             self.start(ctx);
             return;

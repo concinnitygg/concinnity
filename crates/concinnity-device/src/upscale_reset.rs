@@ -39,7 +39,8 @@ mod tests {
             fn exit(&self, _: &tracing::span::Id) {}
         }
         let count = Arc::new(AtomicUsize::new(0));
-        let discards = tracing::subscriber::with_default(Counter(count.clone()), || consume(latch));
+        let discards =
+            tracing::subscriber::with_default(Counter(Arc::clone(&count)), || consume(latch));
         (discards, count.load(Ordering::Relaxed))
     }
 

@@ -70,9 +70,9 @@ impl DxContext {
         unsafe {
             cmd.OMSetRenderTargets(
                 1,
-                Some(&self.targets.hdr.color_rtv),
+                Some(&raw const self.targets.hdr.color_rtv),
                 false,
-                Some(&depth_dsv),
+                Some(&raw const depth_dsv),
             );
             cmd.ClearRenderTargetView(
                 self.targets.hdr.color_rtv,
@@ -117,7 +117,7 @@ impl DxContext {
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
             cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
+            cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view));
             cmd.SetDescriptorHeaps(&[
                 Some(self.descriptors.srv_heap.clone()),
                 Some(self.descriptors.sampler_heap.clone()),
@@ -294,7 +294,7 @@ impl DxContext {
                 // base_vertex = 0 (the deformed buffer mirrors global skinned
                 // indexing) and index offsets into the skinned IB.
                 cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv]));
-                cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
+                cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view));
                 cmd.SetDescriptorHeaps(&[
                     Some(self.descriptors.srv_heap.clone()),
                     Some(self.descriptors.sampler_heap.clone()),
@@ -455,9 +455,9 @@ impl DxContext {
         unsafe {
             cmd.OMSetRenderTargets(
                 1,
-                Some(&self.targets.hdr.color_rtv),
+                Some(&raw const self.targets.hdr.color_rtv),
                 false,
-                Some(&depth_dsv),
+                Some(&raw const depth_dsv),
             );
 
             let vp = D3D12_VIEWPORT {
@@ -481,7 +481,7 @@ impl DxContext {
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
             cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
+            cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view));
             cmd.SetDescriptorHeaps(&[
                 Some(self.descriptors.srv_heap.clone()),
                 Some(self.descriptors.sampler_heap.clone()),
@@ -570,7 +570,7 @@ impl DxContext {
                 unsafe {
                     cmd.SetPipelineState(bindless_pso);
                     cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv]));
-                    cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
+                    cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view));
                     cmd.ExecuteIndirect(
                         cull_sig,
                         self.state.draw.n_skinned as u32,

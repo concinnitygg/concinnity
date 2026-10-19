@@ -139,7 +139,7 @@ pub static QUALITY_CYCLES: [QualityCycle; 5] = [
         AA_MODE,
         |cfg, ceiling| {
             let aa = &mut cfg.anti_aliasing;
-            aa.mode = clamp_aa_mode(aa.mode, ceiling.aa_mode)
+            aa.mode = clamp_aa_mode(aa.mode, ceiling.aa_mode);
         }
     ),
     cycle!(
@@ -149,7 +149,7 @@ pub static QUALITY_CYCLES: [QualityCycle; 5] = [
         PASS_RESOLUTION,
         |cfg, ceiling| {
             let gi = &mut cfg.indirect_lighting;
-            gi.ssgi_resolution = gi.ssgi_resolution.max(ceiling.ssgi_resolution)
+            gi.ssgi_resolution = gi.ssgi_resolution.max(ceiling.ssgi_resolution);
         }
     ),
     cycle!(
@@ -159,7 +159,7 @@ pub static QUALITY_CYCLES: [QualityCycle; 5] = [
         SSGI_RAYS,
         |cfg, ceiling| {
             let gi = &mut cfg.indirect_lighting;
-            gi.ssgi_rays = gi.ssgi_rays.min(ceiling.ssgi_rays)
+            gi.ssgi_rays = gi.ssgi_rays.min(ceiling.ssgi_rays);
         }
     ),
     cycle!(
@@ -171,7 +171,7 @@ pub static QUALITY_CYCLES: [QualityCycle; 5] = [
             let r = &mut cfg.reflections;
             r.ray_traced_resolution = r
                 .ray_traced_resolution
-                .max(ceiling.rt_reflection_resolution)
+                .max(ceiling.rt_reflection_resolution);
         }
     ),
     cycle!(
@@ -181,7 +181,7 @@ pub static QUALITY_CYCLES: [QualityCycle; 5] = [
         PASS_RESOLUTION,
         |cfg, ceiling| {
             let r = &mut cfg.reflections;
-            r.blur_resolution = r.blur_resolution.max(ceiling.reflection_blur_resolution)
+            r.blur_resolution = r.blur_resolution.max(ceiling.reflection_blur_resolution);
         }
     ),
 ];

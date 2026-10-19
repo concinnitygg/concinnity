@@ -87,7 +87,7 @@ fn check_initial_screens(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     let initial: Vec<&str> = assets
         .iter()
         .filter(|a| a.asset_type == RegisteredType::Screen)
-        .filter(|a| a.args.get("initial").and_then(|v| v.as_bool()) == Some(true))
+        .filter(|a| a.args.get("initial").and_then(serde_json::Value::as_bool) == Some(true))
         .map(|a| a.id.as_str())
         .collect();
     if initial.len() > 1 {

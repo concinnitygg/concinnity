@@ -148,7 +148,7 @@ pub enum TraceStep {
 }
 
 /// A behavior node's address: the hops from the behavior's args down to it.
-pub type TracePath = alloc::vec::Vec<TraceStep>;
+pub type TracePath = Vec<TraceStep>;
 
 /// A behavior-body value in its cross-boundary form: what
 /// [`Val`](crate::behavior::Val) publishes to an observer. Entities travel as
@@ -168,7 +168,7 @@ pub enum TraceVal {
 }
 
 /// One node execution: which behavior, and the node's compile-assigned
-/// pre-order id (an index into that behavior's [TracePaths] entry).
+/// pre-order id (an index into that behavior's [`TracePaths`] entry).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TraceEvent {
     /// The behavior the node belongs to.
@@ -180,21 +180,21 @@ pub struct TraceEvent {
 /// An external observer's request for execution tracing, published per frame by
 /// the `cn editor` HUD while its Behavior panel is open and removed when it
 /// closes. While present, the behavior system records which nodes ran each
-/// simulated tick and publishes [ExecutionTrace]; absent (the shipped runtime,
+/// simulated tick and publishes [`ExecutionTrace`]; absent (the shipped runtime,
 /// or the panel closed), the system does no recording work beyond noticing the
 /// absence. `entity` selects whose per-entity locals to surface; `breakpoints`
-/// are nodes whose execution should be reported as a [ExecutionTrace::hit] so
+/// are nodes whose execution should be reported as a [`ExecutionTrace::hit`] so
 /// the observer can pause the simulation.
 #[derive(Debug, Clone, Default)]
 pub struct TraceRequest {
     /// Whose per-entity locals to surface, as entity id bits.
     pub entity: Option<u64>,
     /// Nodes whose execution should be reported as a hit.
-    pub breakpoints: alloc::vec::Vec<TraceEvent>,
+    pub breakpoints: Vec<TraceEvent>,
 }
 
 /// What the behavior system observed over one simulated tick, published while a
-/// [TraceRequest] stands. `frame` increments per published tick so the observer
+/// [`TraceRequest`] stands. `frame` increments per published tick so the observer
 /// can tell fresh data from the stale resource a paused world leaves behind.
 /// `events` are the nodes that ran (deduplicated); `vars` the world variables
 /// with their current values in slot order; `locals` the requested entity's
@@ -204,20 +204,20 @@ pub struct ExecutionTrace {
     /// Increments per published tick, so stale data is recognizable.
     pub frame: u64,
     /// The nodes that ran this tick, deduplicated.
-    pub events: alloc::vec::Vec<TraceEvent>,
+    pub events: Vec<TraceEvent>,
     /// World variables with their current values, in slot order.
-    pub vars: alloc::vec::Vec<(String, TraceVal)>,
+    pub vars: Vec<(String, TraceVal)>,
     /// The requested entity's per-behavior locals.
-    pub locals: alloc::vec::Vec<(AssetId, String, TraceVal)>,
+    pub locals: Vec<(AssetId, String, TraceVal)>,
     /// The first executed breakpoint, if any.
     pub hit: Option<TraceEvent>,
 }
 
-/// Each behavior's node paths, indexed by the node ids [ExecutionTrace] events
+/// Each behavior's node paths, indexed by the node ids [`ExecutionTrace`] events
 /// carry. Published once when tracing is first requested (the compile that
 /// derives it runs at init either way; the publish just exposes it).
 #[derive(Debug, Clone, Default)]
-pub struct TracePaths(pub alloc::vec::Vec<(AssetId, alloc::vec::Vec<TracePath>)>);
+pub struct TracePaths(pub Vec<(AssetId, Vec<TracePath>)>);
 
 /// The silhouette the in-engine cursor sprite should draw this frame. Published
 /// by the `cn editor` HUD when the pointer is over a resizable panel's edge or
@@ -245,7 +245,7 @@ pub enum CursorShape {
 /// The silhouette the in-engine cursor sprite should draw this frame.
 pub struct DesiredCursor(pub CursorShape);
 
-/// Per-frame draw-layer overrides for HUD Sprites / TextLabels / TextInputs, keyed
+/// Per-frame draw-layer overrides for HUD Sprites / `TextLabels` / `TextInputs`, keyed
 /// by asset id and published by the `cn editor` HUD so its floating panels occlude
 /// cleanly. Overlay draw calls render in two passes (all sprites, then all text),
 /// so two overlapping panels' contents merge -- one panel's text draws over the
@@ -257,7 +257,7 @@ pub struct DesiredCursor(pub CursorShape);
 #[derive(Debug, Clone, Default)]
 pub struct HudLayers(pub alloc::collections::BTreeMap<AssetId, i32>);
 
-/// The active screen stack, published by UiInputSystem at init and whenever the
+/// The active screen stack, published by `UiInputSystem` at init and whenever the
 /// stack changes, and read a frame later (the same one-frame lag screen
 /// visibility flips already have). `layers` maps each active Screen's id to its
 /// computed draw layer (authored layer band + stack position; screen-less HUD
@@ -282,7 +282,7 @@ pub struct ScreenStack {
 /// to the backend, so a stale list would keep drawing. Absent when nothing
 /// draws lines, which keeps the line pass out of the frame graph.
 #[derive(Debug, Clone, Default)]
-pub struct WorldLines(pub alloc::vec::Vec<crate::gfx::lines::Line>);
+pub struct WorldLines(pub Vec<crate::gfx::lines::Line>);
 
 /// Device-memory pressure signal, published by the renderer whenever GPU
 /// work fails for lack of device memory. Renderer-free counters so the
@@ -299,7 +299,7 @@ pub struct GpuMemoryPressure {
 /// The editor's fly-camera state. While true (published only by the `cn
 /// editor` HUD drive), the input poll keeps the navigation keys and mouse deltas
 /// live and the renderer captures the cursor even though the world is frozen
-/// behind the editor's menu override -- the editor integrates Camera3D itself,
+/// behind the editor's menu override -- the editor integrates `Camera3D` itself,
 /// so the viewport can be flown without running the simulation. Absent / false
 /// in a shipped runtime.
 #[derive(Debug, Clone, Copy, Default)]
@@ -307,7 +307,7 @@ pub struct FlyCam(pub bool);
 
 /// Assets suppressed from rendering for this frame. The renderer collapses
 /// each listed asset's draw slots to a degenerate transform (so it neither
-/// rasterizes nor casts shadows) and drops it from the [PickIndex]. Authored
+/// rasterizes nor casts shadows) and drops it from the [`PickIndex`]. Authored
 /// data is untouched, and the collapse is re-derived every frame, so clearing
 /// an id restores the object immediately. Published by the `cn editor` HUD
 /// drive; absent / empty otherwise.
@@ -315,7 +315,7 @@ pub struct FlyCam(pub bool);
 pub struct HiddenAssets(pub alloc::collections::BTreeSet<AssetId>);
 
 /// The viewport's view mode + show flags. The renderer forwards it to the
-/// backend's FrameParams: the mode selects what the composite presents, the
+/// backend's `FrameParams`: the mode selects what the composite presents, the
 /// flags skip feature passes for the frame. Published by the editor each frame
 /// and by the dev tools' `view-set` and `show-set` verbs; absent otherwise,
 /// which reads as the lit default.
@@ -327,7 +327,7 @@ pub struct ViewOverrides {
     pub show: crate::gfx::view_modes::ShowFlags,
 }
 
-/// One pickable entity in the [PickIndex]: its asset id and current world-space
+/// One pickable entity in the [`PickIndex`]: its asset id and current world-space
 /// AABB. Ray-tested by the editor with `math::pick::ray_aabb`.
 #[derive(Debug, Clone, Copy)]
 pub struct PickEntry {
@@ -352,7 +352,7 @@ pub struct PickIndex {
 }
 
 /// One extra RGBA8 image for the sprite/text atlas pool, bound to a reserved
-/// [TextureHandle](crate::components) the inserting tool chose. The handle space
+/// [`TextureHandle`](crate::components) the inserting tool chose. The handle space
 /// must stay clear of the compiled world's dense texture handles (tools use a
 /// high base).
 #[derive(Debug, Clone)]
@@ -376,7 +376,7 @@ impl OverlayImage {
 
 /// Extra images appended to the sprite/text atlas pool at graphics init: a
 /// sprite whose `texture` names one of these handles samples the image like any
-/// compiled texture. Opt-in like [PickIndex]: inserted before start (the `cn
+/// compiled texture. Opt-in like [`PickIndex`]: inserted before start (the `cn
 /// editor` HUD injection adds baked asset thumbnails); absent everywhere else,
 /// so a shipped runtime never pays for it. Read once at init -- images added to
 /// the resource later join the pool on the next world rebuild.
@@ -465,11 +465,8 @@ pub enum ScheduleMode {
 impl ScheduleMode {
     /// The mode a world runs under: the published resource, or `Serial` when
     /// nothing published one.
-    pub fn current(resources: &crate::ecs::Resources) -> ScheduleMode {
-        resources
-            .get::<ScheduleMode>()
-            .copied()
-            .unwrap_or(ScheduleMode::Serial)
+    pub fn current(resources: &crate::ecs::Resources) -> Self {
+        resources.get::<Self>().copied().unwrap_or(Self::Serial)
     }
 }
 

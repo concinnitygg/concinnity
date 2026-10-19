@@ -19,13 +19,17 @@ pub struct Resources {
 
 impl Resources {
     /// An empty store.
-    pub fn new() -> Resources {
-        Resources::default()
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Insert a resource, returning the previous instance of the same type if
     /// one was present. Replaces in place when the type is already present, so
     /// a per-frame republish reuses the existing allocation.
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "slots are stored only under their own type's id"
+    )]
     pub fn insert<T: Any + Send>(&mut self, value: T) -> Option<T> {
         if let Some(slot) = self.map.get_mut(&TypeId::of::<T>()) {
             let existing = (slot.as_mut() as &mut dyn Any)
@@ -78,7 +82,7 @@ impl Resources {
             "a disjoint resource borrow names one type twice"
         );
         let (mut ra, mut rb, mut rc) = (None, None, None);
-        for (id, slot) in self.map.iter_mut() {
+        for (id, slot) in &mut self.map {
             let value = slot.as_mut() as &mut dyn Any;
             if *id == a {
                 ra = value.downcast_mut::<A>();
@@ -138,9 +142,9 @@ mod tests {
     fn insert_replaces_in_place_without_reboxing() {
         let mut resources = Resources::new();
         resources.insert(Seconds(1.0));
-        let before = resources.get::<Seconds>().unwrap() as *const Seconds;
+        let before = core::ptr::from_ref::<Seconds>(resources.get::<Seconds>().unwrap());
         assert_eq!(resources.insert(Seconds(2.0)), Some(Seconds(1.0)));
-        let after = resources.get::<Seconds>().unwrap() as *const Seconds;
+        let after = core::ptr::from_ref::<Seconds>(resources.get::<Seconds>().unwrap());
         assert_eq!(before, after, "republish must reuse the existing box");
     }
 
@@ -149,9 +153,9 @@ mod tests {
         let mut resources = Resources::new();
         assert_eq!(resources.take::<Seconds>(), None);
         resources.insert(Seconds(3.0));
-        let before = resources.get::<Seconds>().unwrap() as *const Seconds;
+        let before = core::ptr::from_ref::<Seconds>(resources.get::<Seconds>().unwrap());
         assert_eq!(resources.take::<Seconds>(), Some(Seconds(3.0)));
-        let after = resources.get::<Seconds>().unwrap() as *const Seconds;
+        let after = core::ptr::from_ref::<Seconds>(resources.get::<Seconds>().unwrap());
         assert_eq!(before, after, "take must leave the box parked");
         assert_eq!(resources.get::<Seconds>(), Some(&Seconds(0.0)));
     }

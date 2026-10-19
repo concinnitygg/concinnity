@@ -31,8 +31,8 @@ pub struct EventCursor {
 }
 
 impl<E> Default for Events<E> {
-    fn default() -> Events<E> {
-        Events {
+    fn default() -> Self {
+        Self {
             buffers: [Vec::new(), Vec::new()],
             newest: 0,
             next_id: 0,
@@ -43,8 +43,8 @@ impl<E> Default for Events<E> {
 
 impl<E> Events<E> {
     /// An empty queue.
-    pub fn new() -> Events<E> {
-        Events::default()
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Queue an event. It becomes visible to readers immediately and stays

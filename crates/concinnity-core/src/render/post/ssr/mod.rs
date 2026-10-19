@@ -90,11 +90,11 @@ impl<Pipeline> SsrPass<Pipeline> {
     }
 
     /// Encode the resolve into `inputs.target` with this frame's `params`.
-    pub fn encode<'t, D>(
+    pub fn encode<D>(
         &self,
         device: &D,
         rec: &D::Recorder,
-        inputs: SsrInputs<'t, D>,
+        inputs: SsrInputs<'_, D>,
         params: &SsrParams,
     ) -> RenderResult<()>
     where

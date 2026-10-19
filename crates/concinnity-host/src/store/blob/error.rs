@@ -38,14 +38,14 @@ pub enum BlobLoadError {
 
 impl BlobLoadError {
     pub(super) fn io(path: &str, source: std::io::Error) -> Self {
-        BlobLoadError::Io {
+        Self::Io {
             path: path.to_string(),
             source,
         }
     }
 
     pub(super) fn format(path: &str, source: BlobError) -> Self {
-        BlobLoadError::Format {
+        Self::Format {
             path: path.to_string(),
             source,
         }

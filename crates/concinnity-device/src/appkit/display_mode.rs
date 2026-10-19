@@ -21,7 +21,7 @@ use objc2_foundation::{NSNumber, ns_string};
 // (also the embedded-mode answer, where no engine window exists).
 fn display_id(window: Option<&NSWindow>) -> CGDirectDisplayID {
     window
-        .and_then(|w| w.screen())
+        .and_then(NSWindow::screen)
         .and_then(|s| screen_display_id(&s))
         .unwrap_or_else(|| CGMainDisplayID())
 }
@@ -74,8 +74,9 @@ fn copy_all_modes(display: CGDirectDisplayID) -> Vec<CFRetained<CGDisplayMode>> 
     };
     // SAFETY: as above -- `options` is either null or the documented options
     // dictionary, and it outlives the call.
-    let array =
-        unsafe { CGDisplayCopyAllDisplayModes(display, options.as_deref().map(|d| d.as_opaque())) };
+    let array = unsafe {
+        CGDisplayCopyAllDisplayModes(display, options.as_deref().map(CFDictionary::as_opaque))
+    };
     let Some(array) = array else {
         return Vec::new();
     };
@@ -166,7 +167,7 @@ impl std::fmt::Debug for FullscreenDisplayMode {
             .field("desired", &self.desired)
             .field("applied", &self.applied)
             .field("holds_original", &self.original.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

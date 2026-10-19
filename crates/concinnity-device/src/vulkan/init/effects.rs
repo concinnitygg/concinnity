@@ -156,7 +156,6 @@ pub(super) fn build_screen_space(
         command_pool,
         frames,
         hot_reload,
-        ..
     } = *gpu;
     let (device, alloc) = (&hw.device, &hw.alloc);
     let ScreenSpaceInputs {
@@ -167,7 +166,7 @@ pub(super) fn build_screen_space(
         descriptors,
     } = inputs;
     let render_extent = targets.render_extent;
-    let post_support = crate::vulkan::post::PostSupport::new(device, frames)?;
+    let post_support = PostSupport::new(device, frames)?;
     let init_post_device = shared_post_device(gpu, &post_support, scene, descriptors);
 
     // SSAO (GTAO): the shared depth copy, kernel + blur. Its blurred output is
@@ -187,7 +186,7 @@ pub(super) fn build_screen_space(
     // on; its settings stay `None` unless SSR itself is authored, and the
     // resolve runs only when it is and RT did not take its graph slot.
     let ssr = if graphics.ssr().is_some() || graphics.ssgi().is_some() || features.rt_wanted {
-        Some(crate::vulkan::post::ssr::SsrResources::new(
+        Some(SsrResources::new(
             &init_post_device,
             graphics.ssr(),
             render_extent,
@@ -209,7 +208,7 @@ pub(super) fn build_screen_space(
     // (harmless) or -- the dangerous direction -- leave them unplaced for one
     // that is.
     let gbuffer = if features.gbuffer_enabled {
-        Some(crate::vulkan::post::gbuffer::GbufferResources::new(
+        Some(GbufferResources::new(
             crate::vulkan::post::gbuffer::GbufferDeviceCtx { alloc, device },
             crate::vulkan::post::gbuffer::GbufferQueueCtx {
                 command_pool,
@@ -232,7 +231,7 @@ pub(super) fn build_screen_space(
     // `indirect_lighting: ssgi`; it samples the unified pre-pass G-buffer,
     // which SSGI forces on, and each frame's HDR resolve.
     let ssgi = match graphics.ssgi() {
-        Some(settings) => Some(crate::vulkan::post::ssgi::SsgiResources::new(
+        Some(settings) => Some(SsgiResources::new(
             &init_post_device,
             settings,
             render_extent,
@@ -443,7 +442,7 @@ pub(super) fn build_world_effects(
     // Raymarched SDF volumes: per-volume pipelines + the shared view ring,
     // descriptor pool, render passes, and scene snapshot. `None` when the world
     // declares no `SdfVolume`, so the Raymarch pass is omitted from the frame graph.
-    let raymarch = crate::vulkan::raymarch::RaymarchResources::try_new(
+    let raymarch = RaymarchResources::try_new(
         crate::vulkan::raymarch::RaymarchDeviceContext {
             alloc,
             device,
@@ -514,7 +513,7 @@ pub(super) fn build_world_effects(
                 .as_ref()
                 .map(|h| (h.read_set_layout.handle(), h.read_set_view())),
         };
-        Some(crate::vulkan::planar::PlanarReflectionSet::new(
+        Some(PlanarReflectionSet::new(
             crate::vulkan::planar::PlanarDevice {
                 alloc,
                 device,
@@ -611,7 +610,7 @@ pub(super) fn build_world_effects(
         });
         let (water_planar_slots, glass_planar_slots) =
             planar_slots.split_at(fx.water_surfaces.len());
-        Some(crate::vulkan::transparent::TransparentResources::new(
+        Some(TransparentResources::new(
             crate::vulkan::transparent::TransparentDeviceCtx {
                 alloc,
                 instance: &hw.instance,
@@ -641,7 +640,9 @@ pub(super) fn build_world_effects(
                 glass_planar_slots,
                 water_surfaces: &fx.water_surfaces,
                 water_planar_slots,
-                ocean: water_sim.as_ref().map(|o| o.views()),
+                ocean: water_sim
+                    .as_ref()
+                    .map(super::super::water_sim::OceanSim::views),
                 planar_target_views: &planar_target_views,
                 seethrough_mesh_indices: &rt.seethrough_mesh_indices,
             },
@@ -650,7 +651,10 @@ pub(super) fn build_world_effects(
                 vertex_buffer: geometry.vertex_buffer.buffer(),
                 index_buffer: geometry.index_buffer.buffer(),
                 rt_inputs,
-                bindless_set_layout: cull.bindless_set_layout.as_ref().map(|l| l.handle()),
+                bindless_set_layout: cull
+                    .bindless_set_layout
+                    .as_ref()
+                    .map(super::super::owned::OwnedSetLayout::handle),
                 bindless_pool_size: cull.bindless_pool_size,
             },
         )?)

@@ -1,7 +1,7 @@
-//! Classify a faulted MTLCommandBuffer's NSError into the RenderError boundary
+//! Classify a faulted `MTLCommandBuffer`'s `NSError` into the `RenderError` boundary
 //! vocabulary. GPU failures on Metal surface asynchronously on completed
 //! command buffers, so the completion handler classifies here and parks the
-//! result on the context for the next draw_frame to report.
+//! result on the context for the next `draw_frame` to report.
 
 use concinnity_core::render::error::{DeviceLostReason, RenderError, RenderResult};
 use objc2::runtime::ProtocolObject;

@@ -251,10 +251,10 @@ mod tests {
         for (idx, face) in faces.iter().enumerate() {
             assert_eq!(face.len(), 16 * 16 * 4);
             for px in face.chunks_exact(4) {
-                assert!((px[0] - pixel[0]).abs() < 1e-4, "face {} R", idx);
-                assert!((px[1] - pixel[1]).abs() < 1e-4, "face {} G", idx);
-                assert!((px[2] - pixel[2]).abs() < 1e-4, "face {} B", idx);
-                assert!((px[3] - 1.0).abs() < 1e-6, "face {} A", idx);
+                assert!((px[0] - pixel[0]).abs() < 1e-4, "face {idx} R");
+                assert!((px[1] - pixel[1]).abs() < 1e-4, "face {idx} G");
+                assert!((px[2] - pixel[2]).abs() < 1e-4, "face {idx} B");
+                assert!((px[3] - 1.0).abs() < 1e-6, "face {idx} A");
             }
         }
     }
@@ -285,9 +285,7 @@ mod tests {
         let minus_x = mean_red(&faces[1]);
         assert!(
             minus_x > 5.0 * plus_x.max(0.001),
-            "-X mean red ({}) should dwarf +X mean red ({})",
-            minus_x,
-            plus_x
+            "-X mean red ({minus_x}) should dwarf +X mean red ({plus_x})"
         );
     }
 

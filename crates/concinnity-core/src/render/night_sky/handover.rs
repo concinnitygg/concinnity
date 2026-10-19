@@ -82,11 +82,11 @@ mod tests {
             let set = shadowed_first(sun_light(&frame, &sun), Some(moon), share, &[]);
             let now = total(&set);
             if set.as_slice()[0].direction == moon.direction {
-                if !swapped {
+                if swapped {
+                    assert!(now >= before, "{step}: {before} -> {now}");
+                } else {
                     assert_eq!(frame.sun_transmittance, [0.0; 3], "swap at {elevation}");
                     assert!(now < 1e-4 && before < 0.01, "{before} -> {now}");
-                } else {
-                    assert!(now >= before, "{step}: {before} -> {now}");
                 }
                 swapped = true;
             } else {

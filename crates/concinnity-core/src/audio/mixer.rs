@@ -45,7 +45,7 @@ impl<O: AudioOut + ?Sized> core::fmt::Debug for Mixer<O> {
             .field("emitters", &self.emitters.len())
             .field("voices", &self.voices.len())
             .field("volumes", &self.last_volumes)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -98,12 +98,11 @@ impl<O: AudioOut + ?Sized> Mixer<O> {
     /// another track.
     pub fn add_emitter(&mut self, position: [f32; 3], acoustics: Acoustics) -> Option<EmitterId> {
         let out = self.out.as_mut()?;
-        let id = match self.free_slots.pop() {
-            Some(slot) => EmitterId(slot),
-            None => {
-                self.emitters.push(None);
-                EmitterId(self.emitters.len() - 1)
-            }
+        let id = if let Some(slot) = self.free_slots.pop() {
+            EmitterId(slot)
+        } else {
+            self.emitters.push(None);
+            EmitterId(self.emitters.len() - 1)
         };
         let (min, max) = acoustics.distances;
         let acoustics = Acoustics {

@@ -134,6 +134,7 @@ impl App {
     ///     .run()
     ///     .expect("the app runs");
     /// ```
+    #[must_use]
     pub fn into_headless(self) -> Self {
         Self {
             driver: driver::headless(self.driver.into_world()),

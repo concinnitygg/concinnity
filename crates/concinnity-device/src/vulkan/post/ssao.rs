@@ -31,7 +31,7 @@ pub(in crate::vulkan) struct SsaoResources {
 
 impl SsaoResources {
     pub(in crate::vulkan) fn new(
-        device: &VkPostDevice,
+        device: &VkPostDevice<'_>,
         settings: SsaoSettings,
         extent: vk::Extent2D,
     ) -> RenderResult<Self> {
@@ -45,7 +45,7 @@ impl SsaoResources {
     // already idled the device.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        device: &VkPostDevice,
+        device: &VkPostDevice<'_>,
         extent: vk::Extent2D,
     ) -> RenderResult<()> {
         self.pass.resize(device, post_extent(extent))

@@ -1,4 +1,4 @@
-//! EditorHook: the Assets panel's drive. Owns when the cooked tree is rebuilt
+//! `EditorHook`: the Assets panel's drive. Owns when the cooked tree is rebuilt
 //! (an expansion is far too costly per frame, so it is recomputed only when the
 //! panel is up and something changed), the fold state, the search field, the "+"
 //! type picker, the editor-session hide / lock sets, and the two-way selection

@@ -277,7 +277,7 @@ fn field_dropdown_backing(o: [f32; 2], w: f32, slot: usize, shown: usize) -> [f3
 
 // How many slots are on screen at effective size `s`: the fields and the
 // type's extra rows, capped at the height-derived window.
-fn visible_field_count(view: &FormView, s: [f32; 2]) -> usize {
+fn visible_field_count(view: &FormView<'_>, s: [f32; 2]) -> usize {
     view.row_count().min(rows_for_height(s[1]))
 }
 
@@ -353,7 +353,7 @@ fn ovr_menu_backing(o: [f32; 2], w: f32, anchor: [f32; 4], shown: usize) -> [f32
 // Where the open override / entity menu anchors this frame, if any: the field
 // menu hangs off its row's button (gone when its row scrolls out), the entity
 // menu off the header button.
-fn ovr_menu_anchor(view: &FormView, o: [f32; 2], w: f32, window: usize) -> Option<[f32; 4]> {
+fn ovr_menu_anchor(view: &FormView<'_>, o: [f32; 2], w: f32, window: usize) -> Option<[f32; 4]> {
     let ovr = view.overrides.as_ref()?;
     if let Some((field, _)) = ovr.field_menu {
         let slot = field_slot(view, window, field)?;
@@ -363,7 +363,7 @@ fn ovr_menu_anchor(view: &FormView, o: [f32; 2], w: f32, window: usize) -> Optio
 }
 
 // The open override / entity menu's option labels, if any.
-fn ovr_menu_options<'a>(view: &'a FormView) -> Option<&'a [String]> {
+fn ovr_menu_options<'a>(view: &'a FormView<'_>) -> Option<&'a [String]> {
     let ovr = view.overrides.as_ref()?;
     if let Some((_, options)) = ovr.field_menu {
         return Some(options);
@@ -373,7 +373,7 @@ fn ovr_menu_options<'a>(view: &'a FormView) -> Option<&'a [String]> {
 
 // The slot showing logical field `j`, if it is inside the scroll window of
 // `window` rows.
-fn field_slot(view: &FormView, window: usize, j: usize) -> Option<usize> {
+fn field_slot(view: &FormView<'_>, window: usize, j: usize) -> Option<usize> {
     let scroll = view.form_scroll;
     (j >= scroll && j < scroll + window).then(|| j - scroll)
 }
@@ -412,7 +412,7 @@ fn field_caption(fields: &[FormField], field: &FormField) -> String {
             .to_string()
     });
     if field.unset {
-        format!("{caption} {}", super::form::AUTO_LABEL)
+        format!("{caption} {}", form::AUTO_LABEL)
     } else {
         caption
     }
@@ -537,7 +537,7 @@ pub(crate) fn cursor_over(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
 // `None` means the click missed the panel (the caller lets it fall through).
 // Title-bar presses never reach this: the hook intercepts them first to drag.
 pub(crate) fn hit_test(
-    view: &FormView,
+    view: &FormView<'_>,
     mx: f32,
     my: f32,
     o: [f32; 2],
@@ -678,7 +678,7 @@ pub(crate) fn hit_test(
 
 // Position + show the panel's elements for this frame at origin `o`, effective
 // size `s`.
-pub(crate) fn place(world: &mut World, view: &FormView, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: &FormView<'_>, o: [f32; 2], s: [f32; 2]) {
     // Blank everything, then re-show what this frame needs.
     ids().hide(world);
 
@@ -792,8 +792,7 @@ pub(crate) fn place(world: &mut World, view: &FormView, o: [f32; 2], s: [f32; 2]
                 let value = field
                     .variants
                     .get(field.variant_idx)
-                    .map(String::as_str)
-                    .unwrap_or("");
+                    .map_or("", String::as_str);
                 place_center_label(world, form_enum_label(r), c, value, LABEL, true);
             }
             FieldKind::Array => {
@@ -1044,7 +1043,7 @@ fn layout_form_scrollbar(
 // overflows, its own thin scrollbar.
 fn layout_field_dropdown(
     world: &mut World,
-    view: &FormView,
+    view: &FormView<'_>,
     o: [f32; 2],
     w: f32,
     window: usize,
@@ -1240,7 +1239,7 @@ mod tests {
         }
     }
 
-    fn view<'a>(fields: &'a [FormField]) -> FormView<'a> {
+    fn view(fields: &[FormField]) -> FormView<'_> {
         FormView {
             title: "New PointLight",
             editing: false,
@@ -1867,11 +1866,7 @@ mod tests {
     }
 
     // A FormView with the value dropdown for logical field `open` disclosed.
-    fn view_with_dropdown<'a>(
-        fields: &'a [FormField],
-        open: usize,
-        mouse: [f32; 2],
-    ) -> FormView<'a> {
+    fn view_with_dropdown(fields: &[FormField], open: usize, mouse: [f32; 2]) -> FormView<'_> {
         FormView {
             field_dropdown: Some(open),
             mouse,
@@ -1886,7 +1881,7 @@ mod tests {
             kind: FieldKind::Enum,
             initial: String::new(),
             boolval: false,
-            variants: variants.iter().map(|s| s.to_string()).collect(),
+            variants: variants.iter().map(ToString::to_string).collect(),
             variant_idx: 0,
             choices: Vec::new(),
             sparse: false,

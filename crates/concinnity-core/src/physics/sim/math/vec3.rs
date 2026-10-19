@@ -20,10 +20,10 @@ pub(crate) const fn vec3(x: f32, y: f32, z: f32) -> Vec3 {
 }
 
 impl Vec3 {
-    pub(crate) const ZERO: Vec3 = vec3(0.0, 0.0, 0.0);
-    pub(crate) const X: Vec3 = vec3(1.0, 0.0, 0.0);
-    pub(crate) const Y: Vec3 = vec3(0.0, 1.0, 0.0);
-    pub(crate) const Z: Vec3 = vec3(0.0, 0.0, 1.0);
+    pub(crate) const ZERO: Self = vec3(0.0, 0.0, 0.0);
+    pub(crate) const X: Self = vec3(1.0, 0.0, 0.0);
+    pub(crate) const Y: Self = vec3(0.0, 1.0, 0.0);
+    pub(crate) const Z: Self = vec3(0.0, 0.0, 1.0);
 
     pub(crate) const fn splat(v: f32) -> Self {
         vec3(v, v, v)
@@ -155,55 +155,55 @@ impl Vec3 {
 }
 
 impl Add for Vec3 {
-    type Output = Vec3;
-    fn add(self, rhs: Vec3) -> Vec3 {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
         vec3(self.x + rhs.x, self.y + rhs.y, self.z + rhs.z)
     }
 }
 
 impl Sub for Vec3 {
-    type Output = Vec3;
-    fn sub(self, rhs: Vec3) -> Vec3 {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
         vec3(self.x - rhs.x, self.y - rhs.y, self.z - rhs.z)
     }
 }
 
 impl Mul<f32> for Vec3 {
-    type Output = Vec3;
-    fn mul(self, rhs: f32) -> Vec3 {
+    type Output = Self;
+    fn mul(self, rhs: f32) -> Self {
         vec3(self.x * rhs, self.y * rhs, self.z * rhs)
     }
 }
 
-impl Mul<Vec3> for Vec3 {
-    type Output = Vec3;
-    fn mul(self, rhs: Vec3) -> Vec3 {
+impl Mul<Self> for Vec3 {
+    type Output = Self;
+    fn mul(self, rhs: Self) -> Self {
         vec3(self.x * rhs.x, self.y * rhs.y, self.z * rhs.z)
     }
 }
 
 impl Div<f32> for Vec3 {
-    type Output = Vec3;
-    fn div(self, rhs: f32) -> Vec3 {
+    type Output = Self;
+    fn div(self, rhs: f32) -> Self {
         vec3(self.x / rhs, self.y / rhs, self.z / rhs)
     }
 }
 
 impl Neg for Vec3 {
-    type Output = Vec3;
-    fn neg(self) -> Vec3 {
+    type Output = Self;
+    fn neg(self) -> Self {
         vec3(-self.x, -self.y, -self.z)
     }
 }
 
 impl AddAssign for Vec3 {
-    fn add_assign(&mut self, rhs: Vec3) {
+    fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
 
 impl SubAssign for Vec3 {
-    fn sub_assign(&mut self, rhs: Vec3) {
+    fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
 }

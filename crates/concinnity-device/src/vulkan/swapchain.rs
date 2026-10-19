@@ -7,9 +7,9 @@ use concinnity_core::render::hdr_output;
 use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 
 use super::allocator::DeviceAllocator;
-use super::context::*;
+use super::context::{HDR_FORMAT, VkContext, VkTargets};
 use super::descriptor_layout::SCREEN_INDIRECT_BINDING;
-use super::device::*;
+use super::device::query_queue_families;
 use super::hiz::{HiZDeviceCtx, HiZTarget};
 use super::post::bloom::composite_bloom_view;
 use super::post::gbuffer::{GbufferDeviceCtx, GbufferExtent, GbufferQueueCtx};
@@ -18,7 +18,10 @@ use super::post::rt_reflections::RtStaticInputs;
 use super::post::upscale::UpscalerGpu;
 use super::raymarch::RaymarchDeviceContext;
 use super::set_writes::SetWrites;
-use super::texture::*;
+use super::texture::{
+    GpuImage, GpuUploadContext, create_depth_image, create_hdr_resolve_image, create_image_view,
+    create_msaa_color_image,
+};
 use super::transparent::{TransparentDeviceCtx, TransparentRebuildTargets};
 use crate::vulkan::owned::{OwnedFramebuffer, VkDevice};
 
@@ -43,7 +46,7 @@ impl VkContext {
             unsafe {
                 self.swapchain
                     .loader
-                    .destroy_swapchain(self.swapchain.handle, None)
+                    .destroy_swapchain(self.swapchain.handle, None);
             };
         }
         self.targets.framebuffers.clear();
@@ -634,7 +637,7 @@ impl VkContext {
         // Re-point the auto-exposure build sets at the rebuilt HDR resolve
         // views. The histogram / output / readback buffers are
         // resolution-independent and survive the rebuild untouched.
-        if let Some(mut ae) = self.auto_exposure.resources.take() {
+        if let Some(ae) = self.auto_exposure.resources.take() {
             let hdr_views: Vec<vk::ImageView> = self
                 .targets
                 .hdr_resolve_images
@@ -781,7 +784,7 @@ pub(super) fn extent_is_presentable(extent: vk::Extent2D) -> bool {
 }
 
 pub(super) fn create_swapchain_inner(
-    surface: &SwapchainSurface,
+    surface: &SwapchainSurface<'_>,
     families: SwapchainQueueFamilies,
     config: SwapchainConfig,
 ) -> RenderResult<(vk::SwapchainKHR, Vec<vk::Image>, vk::Format, vk::Extent2D)> {
@@ -959,7 +962,7 @@ pub(super) struct AttachmentDeviceCtx<'a> {
 type FrameAttachments = (Vec<GpuImage>, Vec<GpuImage>, Vec<GpuImage>);
 
 pub(super) fn create_attachments(
-    ctx: &AttachmentDeviceCtx,
+    ctx: &AttachmentDeviceCtx<'_>,
     width: u32,
     height: u32,
     msaa: vk::SampleCountFlags,
@@ -1007,14 +1010,14 @@ pub(super) fn create_main_framebuffers(
 ) -> RenderResult<Vec<OwnedFramebuffer>> {
     (0..resolve_images.len())
         .map(|i| {
-            let attachments: Vec<vk::ImageView> = if msaa != vk::SampleCountFlags::TYPE_1 {
+            let attachments: Vec<vk::ImageView> = if msaa == vk::SampleCountFlags::TYPE_1 {
+                vec![resolve_images[i].view, depth_images[i].view]
+            } else {
                 vec![
                     color_images[i].view,
                     depth_images[i].view,
                     resolve_images[i].view,
                 ]
-            } else {
-                vec![resolve_images[i].view, depth_images[i].view]
             };
             let fb_info = vk::FramebufferCreateInfo::default()
                 .render_pass(render_pass)
@@ -1104,7 +1107,7 @@ pub(super) fn write_composite_channel_set(
 // Frame slot `i`'s composite channel sources: the G-buffer's and the pooled
 // SSAO output's views, `white` wherever one does not exist.
 pub(super) fn composite_channels(
-    targets: &super::context::VkTargets,
+    targets: &VkTargets,
     gbuffer: Option<&super::post::gbuffer::GbufferResources>,
     white: vk::ImageView,
     i: usize,

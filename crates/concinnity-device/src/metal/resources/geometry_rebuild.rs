@@ -27,7 +27,7 @@ impl MtlContext {
         // Read views over the current shared buffers. `StorageModeShared`
         // means `contents()` is a CPU-addressable pointer aliasing the GPU
         // data; safe after `wait_idle`.
-        let old_v_len = self.scene.vertex_buffer.length() / std::mem::size_of::<Vertex>();
+        let old_v_len = self.scene.vertex_buffer.length() / size_of::<Vertex>();
         // SAFETY: the buffer is `StorageModeShared`, so `contents()` is a live CPU mapping of its
         // bytes, and the length was derived from that buffer's own byte length divided by the
         // element size. The preceding `wait_idle` means the GPU is not writing it.
@@ -35,7 +35,7 @@ impl MtlContext {
             let ptr = self.scene.vertex_buffer.contents().as_ptr() as *const Vertex;
             std::slice::from_raw_parts(ptr, old_v_len)
         };
-        let old_i_len = self.scene.index_buffer.length() / std::mem::size_of::<u32>();
+        let old_i_len = self.scene.index_buffer.length() / size_of::<u32>();
         // SAFETY: the buffer is `StorageModeShared`, so `contents()` is a live CPU mapping of its
         // bytes, and the length was derived from that buffer's own byte length divided by the
         // element size. The preceding `wait_idle` means the GPU is not writing it.

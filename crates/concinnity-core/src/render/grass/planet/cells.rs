@@ -153,7 +153,7 @@ pub fn face_direction(face: CubeFace, s: f32, t: f32) -> [f32; 3] {
 pub fn face_coords(dir: [f32; 3]) -> (CubeFace, [f32; 2]) {
     let a = dir.map(f32::abs);
     let face = if a[0] >= a[1] && a[0] >= a[2] {
-        if dir[0] >= 0.0 { 0 } else { 1 }
+        u8::from(dir[0] < 0.0)
     } else if a[1] >= a[2] {
         if dir[1] >= 0.0 { 2 } else { 3 }
     } else if dir[2] >= 0.0 {

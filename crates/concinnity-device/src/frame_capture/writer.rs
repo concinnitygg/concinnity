@@ -19,9 +19,15 @@ struct Outstanding {
 
 impl Outstanding {
     fn wait(&self) {
-        let mut count = self.count.lock().unwrap_or_else(|p| p.into_inner());
+        let mut count = self
+            .count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while *count > 0 {
-            count = self.drained.wait(count).unwrap_or_else(|p| p.into_inner());
+            count = self
+                .drained
+                .wait(count)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 }
@@ -32,14 +38,21 @@ struct Ticket(Arc<Outstanding>);
 
 impl Ticket {
     fn new(outstanding: &Arc<Outstanding>) -> Self {
-        *outstanding.count.lock().unwrap_or_else(|p| p.into_inner()) += 1;
+        *outstanding
+            .count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
         Self(Arc::clone(outstanding))
     }
 }
 
 impl Drop for Ticket {
     fn drop(&mut self) {
-        let mut count = self.0.count.lock().unwrap_or_else(|p| p.into_inner());
+        let mut count = self
+            .0
+            .count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *count = count.saturating_sub(1);
         if *count == 0 {
             self.0.drained.notify_all();
@@ -234,7 +247,7 @@ mod tests {
         let image = CaptureImage::tight(2, 1, PixelLayout::Bgra8);
         // A second buffer, when the reserved one is still lent, reads zeroes.
         static SPARE: [u8; 8] = [0; 8];
-        let (_, lease) = pool
+        let ((), lease) = pool
             .lend(image.byte_len(), |_| {
                 Ok(Mapped {
                     buffer: (),

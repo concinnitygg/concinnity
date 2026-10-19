@@ -67,7 +67,7 @@ fn content_grid_lists_filters_and_selects_visual_assets() {
 
     // A cell click selects the asset by name.
     h.apply_content_action(
-        crate::editor::panels::content_panel::ContentAction::SelectCell(0),
+        content_panel::ContentAction::SelectCell(0),
         &mut world,
         [0.0, 0.0],
     );

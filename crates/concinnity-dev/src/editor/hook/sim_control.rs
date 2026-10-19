@@ -1,4 +1,4 @@
-//! EditorHook: the simulation transport's per-frame drive. The pure state
+//! `EditorHook`: the simulation transport's per-frame drive. The pure state
 //! machine lives in `editor/sim.rs`; this maps it onto the engine's freeze
 //! gate (`MenuOverride`), onto the preview rebuild that restores the authored
 //! state on Stop, and onto the transport's keyboard shortcuts. The tick runs

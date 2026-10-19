@@ -295,8 +295,8 @@ unsafe fn graphics_name(desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> String {
             desc.DepthStencilState.DepthWriteMask.0 as u32,
             desc.DepthStencilState.DepthFunc.0 as u32,
             desc.DepthStencilState.StencilEnable.0 as u32,
-            desc.DepthStencilState.StencilReadMask as u32,
-            desc.DepthStencilState.StencilWriteMask as u32,
+            u32::from(desc.DepthStencilState.StencilReadMask),
+            u32::from(desc.DepthStencilState.StencilWriteMask),
         ],
     );
     hash_stencil_op(&mut h, &desc.DepthStencilState.FrontFace);
@@ -316,7 +316,7 @@ unsafe fn graphics_name(desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> String {
                 let semantic =
                     // SAFETY: the caller's contract is that a non-null `SemanticName` is NUL-
                     // terminated, and it stays live for the copy this makes.
-                    unsafe { std::ffi::CStr::from_ptr(e.SemanticName.0 as *const _) }.to_bytes();
+                    unsafe { std::ffi::CStr::from_ptr(e.SemanticName.0.cast()) }.to_bytes();
                 h.update((semantic.len() as u64).to_le_bytes());
                 h.update(semantic);
             }
@@ -386,7 +386,7 @@ unsafe fn hash_bytecode(h: &mut Sha256, bytecode: &D3D12_SHADER_BYTECODE) {
         // `BytecodeLength` bytes.
         h.update(unsafe {
             std::slice::from_raw_parts(
-                bytecode.pShaderBytecode as *const u8,
+                bytecode.pShaderBytecode.cast::<u8>(),
                 bytecode.BytecodeLength,
             )
         });
@@ -412,7 +412,7 @@ fn hash_blend(h: &mut Sha256, rt: &D3D12_RENDER_TARGET_BLEND_DESC) {
             rt.DestBlendAlpha.0 as u32,
             rt.BlendOpAlpha.0 as u32,
             rt.LogicOp.0 as u32,
-            rt.RenderTargetWriteMask as u32,
+            u32::from(rt.RenderTargetWriteMask),
         ],
     );
 }
@@ -439,11 +439,11 @@ mod tests {
     fn graphics_desc(vs: &[u8], ps: &[u8]) -> D3D12_GRAPHICS_PIPELINE_STATE_DESC {
         D3D12_GRAPHICS_PIPELINE_STATE_DESC {
             VS: D3D12_SHADER_BYTECODE {
-                pShaderBytecode: vs.as_ptr() as *const _,
+                pShaderBytecode: vs.as_ptr().cast(),
                 BytecodeLength: vs.len(),
             },
             PS: D3D12_SHADER_BYTECODE {
-                pShaderBytecode: ps.as_ptr() as *const _,
+                pShaderBytecode: ps.as_ptr().cast(),
                 BytecodeLength: ps.len(),
             },
             ..Default::default()
@@ -510,7 +510,7 @@ mod tests {
         let kernel = [7u8, 7, 7];
         let compute = compute_name_of(&D3D12_COMPUTE_PIPELINE_STATE_DESC {
             CS: D3D12_SHADER_BYTECODE {
-                pShaderBytecode: kernel.as_ptr() as *const _,
+                pShaderBytecode: kernel.as_ptr().cast(),
                 BytecodeLength: kernel.len(),
             },
             ..Default::default()

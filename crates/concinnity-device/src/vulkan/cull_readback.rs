@@ -8,7 +8,7 @@
 //! draw-call count is CPU-side and does not move when the GPU rejects an object,
 //! and an object the Hi-Z test correctly occluded leaves no trace in the
 //! presented pixels. Readback is synchronous (it idles the device), so it is a
-//! probe-only path, never a per-frame one. Mirrors src/directx/cull_readback.rs.
+//! probe-only path, never a per-frame one. Mirrors `src/directx/cull_readback.rs`.
 
 use ash::vk;
 use concinnity_core::gfx::cull_status;
@@ -43,7 +43,7 @@ impl VkContext {
         let frames = self.frames_in_flight.max(1);
         let slot = (self.current_frame + frames - 1) % frames;
         let src = self.cull.cull_status_buffers[slot].buffer();
-        let byte_size = (count * std::mem::size_of::<u32>()) as u64;
+        let byte_size = (count * size_of::<u32>()) as u64;
 
         // The GPU must be idle: the status buffer is then settled and no
         // in-flight cull dispatch is still writing the slot being copied.

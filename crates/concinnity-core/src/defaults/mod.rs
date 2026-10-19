@@ -36,7 +36,7 @@ pub use font::{HUD_FONT_SIZE_PX, HudFont, hud_font};
 ///
 /// Errors when the world declares more than one `EngineDefaults` (which one
 /// applies would be arbitrary), or when baking an injected payload fails.
-pub fn run(ctx: &mut PipelineContext) -> Result<(), WorldError> {
+pub fn run(ctx: &mut PipelineContext<'_>) -> Result<(), WorldError> {
     let toggles = take_toggles(ctx)?;
     let mut minter = Minter::resume(ctx);
     let result = inject_defaults(ctx, &toggles, &mut minter);
@@ -45,7 +45,7 @@ pub fn run(ctx: &mut PipelineContext) -> Result<(), WorldError> {
 }
 
 fn inject_defaults(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     toggles: &EngineDefaults,
     minter: &mut Minter,
 ) -> Result<(), WorldError> {
@@ -72,7 +72,7 @@ fn inject_defaults(
 // Drain the world's EngineDefaults column into the one set of toggles that
 // applies. The type is a build directive rather than something a system reads,
 // so it holds nothing past this pass.
-fn take_toggles(ctx: &mut PipelineContext) -> Result<EngineDefaults, WorldError> {
+fn take_toggles(ctx: &mut PipelineContext<'_>) -> Result<EngineDefaults, WorldError> {
     let mut declared = ctx.drain::<EngineDefaults>();
     if declared.len() > 1 {
         return Err(WorldError::RepeatedEngineDefaults {
@@ -91,14 +91,14 @@ pub(crate) struct Minter {
 impl Minter {
     // Continue from the world's own counter, so nothing minted before this
     // pass (a mesh handed over through `World::add_mesh`) is renamed.
-    fn resume(ctx: &PipelineContext) -> Self {
+    fn resume(ctx: &PipelineContext<'_>) -> Self {
         Self {
             ids: ctx.resource::<MintedIds>().cloned().unwrap_or_default(),
         }
     }
 
     // Hand the counter back to the world once the pass is done with it.
-    fn store(self, ctx: &mut PipelineContext) {
+    fn store(self, ctx: &mut PipelineContext<'_>) {
         ctx.insert_resource(self.ids);
     }
 
@@ -110,8 +110,8 @@ impl Minter {
     // The font every injected chip and label draws with. Baked into the world
     // on first use and shared from there, so the chips of both HUDs and the
     // loading label land on one atlas.
-    fn hud_font(&mut self, ctx: &mut PipelineContext) -> Result<FontHandle, WorldError> {
-        font::hud_font(ctx)
+    fn hud_font(&self, ctx: &mut PipelineContext<'_>) -> Result<FontHandle, WorldError> {
+        hud_font(ctx)
     }
 }
 

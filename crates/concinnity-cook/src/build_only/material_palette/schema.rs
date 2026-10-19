@@ -12,14 +12,14 @@ use concinnity_core::ecs::NameRef;
 )]
 #[serde(default)]
 pub struct MaterialPalette {
-    /// Name of a built-in or file-backed preset (e.g. "pal_stone_dungeon").
+    /// Name of a built-in or file-backed preset (e.g. "`pal_stone_dungeon`").
     /// When set, `entries` is ignored.
     pub preset: String,
     /// Inline material entries. Ignored when `preset` is set.
     pub entries: Vec<PaletteEntry>,
 }
 
-/// One entry in a [MaterialPalette]. Each carries an `alias` (the suffix of the
+/// One entry in a [`MaterialPalette`]. Each carries an `alias` (the suffix of the
 /// expanded [Material](#material) name) plus the Material fields the expansion
 /// fills in. The [Texture](#texture)s named by `albedo` / `normal_map` resolve
 /// on the expanded Material.

@@ -36,7 +36,7 @@ const VK_BC7_SRGB: u32 = 146;
 
 // Compile a `.ktx2` byte buffer into a tagged texture image.
 pub(crate) fn compile_ktx2(bytes: &[u8]) -> Result<TextureImage, String> {
-    let reader = Reader::new(bytes).map_err(|e| format!("not a valid KTX2 container: {:?}", e))?;
+    let reader = Reader::new(bytes).map_err(|e| format!("not a valid KTX2 container: {e:?}"))?;
     let header = reader.header();
 
     if header.face_count > 1 {
@@ -60,7 +60,7 @@ pub(crate) fn compile_ktx2(bytes: &[u8]) -> Result<TextureImage, String> {
     let width = header.pixel_width;
     let height = header.pixel_height;
     if width == 0 || height == 0 {
-        return Err(format!("KTX2 has a zero dimension {}x{}", width, height));
+        return Err(format!("KTX2 has a zero dimension {width}x{height}"));
     }
 
     match header.format {
@@ -87,9 +87,8 @@ fn compile_block_format(
         VK_BC7_UNORM | VK_BC7_SRGB => TextureFormat::Bc7,
         other => {
             return Err(format!(
-                "unsupported KTX2 vkFormat {:?} ({}); supported: BC1, BC3, BC5, BC7 \
-                 (unorm/srgb), or Basis Universal (ETC1S / UASTC LDR)",
-                format, other
+                "unsupported KTX2 vkFormat {format:?} ({other}); supported: BC1, BC3, BC5, BC7 \
+                 (unorm/srgb), or Basis Universal (ETC1S / UASTC LDR)"
             ));
         }
     };
@@ -105,7 +104,7 @@ fn compile_block_format(
     let mut level_blocks: Vec<Vec<u8>> = Vec::with_capacity(levels.len());
     for (level, data) in levels.iter().enumerate() {
         let blocks =
-            decompress_level(data, scheme).map_err(|e| format!("KTX2 level {}: {}", level, e))?;
+            decompress_level(data, scheme).map_err(|e| format!("KTX2 level {level}: {e}"))?;
         level_blocks.push(blocks);
     }
 
@@ -156,7 +155,7 @@ fn compile_block_format(
 // UASTC LDR -> BC7. A single-level source transcodes to RGBA8 instead.
 fn compile_basis(bytes: &[u8]) -> Result<TextureImage, String> {
     let transcoder =
-        Transcoder::new(bytes).map_err(|e| format!("KTX2 Basis parse failed: {:?}", e))?;
+        Transcoder::new(bytes).map_err(|e| format!("KTX2 Basis parse failed: {e:?}"))?;
 
     let (target, tex_format, flags) = match transcoder.source_format() {
         SourceFormat::Etc1s => {
@@ -173,8 +172,7 @@ fn compile_basis(bytes: &[u8]) -> Result<TextureImage, String> {
         ),
         other => {
             return Err(format!(
-                "unsupported Basis source format {:?}; only ETC1S and UASTC LDR are handled",
-                other
+                "unsupported Basis source format {other:?}; only ETC1S and UASTC LDR are handled"
             ));
         }
     };
@@ -182,14 +180,14 @@ fn compile_basis(bytes: &[u8]) -> Result<TextureImage, String> {
     let level_count = transcoder.level_count();
     let base = transcoder
         .image_level_info(0)
-        .map_err(|e| format!("KTX2 Basis level 0 info failed: {:?}", e))?;
+        .map_err(|e| format!("KTX2 Basis level 0 info failed: {e:?}"))?;
 
     // No mip chain: transcode the base level to RGBA8 for runtime mip
     // generation rather than shipping a single compressed level.
     if level_count <= 1 {
         let rgba = transcoder
             .transcode(0, TargetFormat::Rgba32, DecodeFlags::NONE)
-            .map_err(|e| format!("KTX2 Basis RGBA transcode failed: {:?}", e))?;
+            .map_err(|e| format!("KTX2 Basis RGBA transcode failed: {e:?}"))?;
         tracing::info!(
             "KTX2 Basis texture has no mip chain; transcoded to RGBA8 for a cooked mip chain"
         );
@@ -200,12 +198,9 @@ fn compile_basis(bytes: &[u8]) -> Result<TextureImage, String> {
     for level in 0..level_count {
         let info = transcoder
             .image_level_info(level)
-            .map_err(|e| format!("KTX2 Basis level {} info failed: {:?}", level, e))?;
+            .map_err(|e| format!("KTX2 Basis level {level} info failed: {e:?}"))?;
         let data = transcoder.transcode(level, target, flags).map_err(|e| {
-            format!(
-                "KTX2 Basis level {} transcode to {:?} failed: {:?}",
-                level, target, e
-            )
+            format!("KTX2 Basis level {level} transcode to {target:?} failed: {e:?}")
         })?;
         let expected = tex_format.mip_byte_len(info.width, info.height)?;
         if data.len() != expected {
@@ -257,8 +252,7 @@ fn decompress_level(
         None => Ok(data.to_vec()),
         Some(SupercompressionScheme::Zstandard) => inflate_zstd(data),
         Some(other) => Err(format!(
-            "unsupported KTX2 supercompression {:?} for a block format; use none or zstd",
-            other
+            "unsupported KTX2 supercompression {other:?} for a block format; use none or zstd"
         )),
     }
 }
@@ -267,11 +261,11 @@ fn decompress_level(
 fn inflate_zstd(data: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Read;
     let mut decoder = ruzstd::StreamingDecoder::new(data)
-        .map_err(|e| format!("zstd frame header invalid: {}", e))?;
+        .map_err(|e| format!("zstd frame header invalid: {e}"))?;
     let mut out = Vec::new();
     decoder
         .read_to_end(&mut out)
-        .map_err(|e| format!("zstd inflate failed: {}", e))?;
+        .map_err(|e| format!("zstd inflate failed: {e}"))?;
     Ok(out)
 }
 
@@ -779,7 +773,7 @@ mod tests {
         let mut bit_ofs = 0usize;
         put_bits(&mut block, &mut bit_ofs, 0x17, 5);
         for channel in rgba {
-            put_bits(&mut block, &mut bit_ofs, channel as u32, 8);
+            put_bits(&mut block, &mut bit_ofs, u32::from(channel), 8);
         }
         block.to_vec()
     }

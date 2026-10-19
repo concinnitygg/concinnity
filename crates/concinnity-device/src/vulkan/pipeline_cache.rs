@@ -16,6 +16,7 @@
 
 use ash::vk::Handle;
 use ash::{Device, vk};
+use std::fmt::Write as _;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -48,7 +49,7 @@ fn current() -> vk::PipelineCache {
 // them, and success hands each one to a wrapper that destroys it.
 pub(in crate::vulkan) fn create_graphics_pipelines(
     device: &VkDevice,
-    infos: &[vk::GraphicsPipelineCreateInfo],
+    infos: &[vk::GraphicsPipelineCreateInfo<'_>],
 ) -> Result<Vec<OwnedPipeline>, vk::Result> {
     let started = std::time::Instant::now();
     // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
@@ -61,7 +62,7 @@ pub(in crate::vulkan) fn create_graphics_pipelines(
 // The one-pipeline case, which is every call site but the wireframe twins.
 pub(in crate::vulkan) fn create_graphics_pipeline(
     device: &VkDevice,
-    info: &vk::GraphicsPipelineCreateInfo,
+    info: &vk::GraphicsPipelineCreateInfo<'_>,
 ) -> Result<OwnedPipeline, vk::Result> {
     Ok(one(create_graphics_pipelines(
         device,
@@ -72,7 +73,7 @@ pub(in crate::vulkan) fn create_graphics_pipeline(
 // `vkCreateComputePipelines` counterpart of [`create_graphics_pipelines`].
 pub(in crate::vulkan) fn create_compute_pipelines(
     device: &VkDevice,
-    infos: &[vk::ComputePipelineCreateInfo],
+    infos: &[vk::ComputePipelineCreateInfo<'_>],
 ) -> Result<Vec<OwnedPipeline>, vk::Result> {
     let started = std::time::Instant::now();
     // SAFETY: the create-infos and every slice they borrow are live for the call, and each handle
@@ -85,7 +86,7 @@ pub(in crate::vulkan) fn create_compute_pipelines(
 // The one-pipeline case of [`create_compute_pipelines`].
 pub(in crate::vulkan) fn create_compute_pipeline(
     device: &VkDevice,
-    info: &vk::ComputePipelineCreateInfo,
+    info: &vk::ComputePipelineCreateInfo<'_>,
 ) -> Result<OwnedPipeline, vk::Result> {
     Ok(one(create_compute_pipelines(
         device,
@@ -228,7 +229,12 @@ pub(in crate::vulkan) fn shutdown(device: &Device) {
 // The cache entry this device's blob is stored under: its identity is the
 // device, so the key is what makes a blob built on another GPU a miss.
 fn entry_key(uuid: &[u8; vk::UUID_SIZE]) -> String {
-    let hex: String = uuid.iter().map(|b| format!("{b:02x}")).collect();
+    let hex = uuid
+        .iter()
+        .fold(String::with_capacity(uuid.len() * 2), |mut hex, b| {
+            let _ = write!(hex, "{b:02x}");
+            hex
+        });
     format!("vk-{hex}")
 }
 

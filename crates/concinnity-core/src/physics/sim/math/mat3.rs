@@ -20,22 +20,22 @@ impl Default for Mat3 {
 }
 
 impl Mat3 {
-    pub(crate) const ZERO: Mat3 = Mat3 {
+    pub(crate) const ZERO: Self = Self {
         cols: [Vec3::ZERO; 3],
     };
 
     #[cfg(test)]
-    pub(crate) const IDENTITY: Mat3 = Mat3 {
+    pub(crate) const IDENTITY: Self = Self {
         cols: [Vec3::X, Vec3::Y, Vec3::Z],
     };
 
     pub(crate) const fn from_cols(x: Vec3, y: Vec3, z: Vec3) -> Self {
-        Mat3 { cols: [x, y, z] }
+        Self { cols: [x, y, z] }
     }
 
     #[cfg(test)]
     pub(crate) const fn from_diagonal(d: Vec3) -> Self {
-        Mat3 {
+        Self {
             cols: [
                 Vec3 {
                     x: d.x,
@@ -57,7 +57,7 @@ impl Mat3 {
     }
 
     pub(crate) fn from_quat(q: Quat) -> Self {
-        Mat3 {
+        Self {
             cols: [q.rotate(Vec3::X), q.rotate(Vec3::Y), q.rotate(Vec3::Z)],
         }
     }
@@ -70,7 +70,7 @@ impl Mat3 {
         let scaled = [r.cols[0] * d.x, r.cols[1] * d.y, r.cols[2] * d.z];
         // Row i of R^T is column i of R, so the product's column j is
         // sum_k scaled[k] * R.cols[k].get(j).
-        Mat3 {
+        Self {
             cols: [
                 scaled[0] * r.cols[0].x + scaled[1] * r.cols[1].x + scaled[2] * r.cols[2].x,
                 scaled[0] * r.cols[0].y + scaled[1] * r.cols[1].y + scaled[2] * r.cols[2].y,
@@ -83,8 +83,8 @@ impl Mat3 {
         self.cols[0] * v.x + self.cols[1] * v.y + self.cols[2] * v.z
     }
 
-    pub(crate) fn add(&self, other: Mat3) -> Mat3 {
-        Mat3 {
+    pub(crate) fn add(&self, other: Self) -> Self {
+        Self {
             cols: [
                 self.cols[0] + other.cols[0],
                 self.cols[1] + other.cols[1],
@@ -98,17 +98,17 @@ impl Mat3 {
     /// A singular block is the honest answer for a pair nothing can move: an
     /// inverse of zero produces an impulse of zero, where a `None` would make
     /// every caller restate the same degenerate case.
-    pub(crate) fn inverse(&self) -> Mat3 {
+    pub(crate) fn inverse(&self) -> Self {
         let [a, b, c] = self.cols;
         let (r0, r1, r2) = (b.cross(c), c.cross(a), a.cross(b));
         let determinant = a.dot(r0);
         if determinant.abs() <= f32::MIN_POSITIVE {
-            return Mat3::ZERO;
+            return Self::ZERO;
         }
         let inv = 1.0 / determinant;
         // The cofactor rows scaled by the determinant are the inverse's rows,
         // so they transpose into its columns.
-        Mat3 {
+        Self {
             cols: [
                 super::vec3::vec3(r0.x, r1.x, r2.x) * inv,
                 super::vec3::vec3(r0.y, r1.y, r2.y) * inv,
@@ -118,8 +118,8 @@ impl Mat3 {
     }
 
     #[cfg(test)]
-    pub(crate) fn transpose(&self) -> Mat3 {
-        Mat3 {
+    pub(crate) fn transpose(&self) -> Self {
+        Self {
             cols: [
                 super::vec3::vec3(self.cols[0].x, self.cols[1].x, self.cols[2].x),
                 super::vec3::vec3(self.cols[0].y, self.cols[1].y, self.cols[2].y),

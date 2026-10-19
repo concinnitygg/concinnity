@@ -1,6 +1,6 @@
 //! Focus model for cursor-free menu navigation: derives focusable targets from
 //! the active screen's hit regions and picks the next focus for a directional
-//! pulse. Pure geometry + action grouping; UiInputSystem owns the focus
+//! pulse. Pure geometry + action grouping; `UiInputSystem` owns the focus
 //! state and applies the resulting styling / actions to the world.
 
 use alloc::vec::Vec;

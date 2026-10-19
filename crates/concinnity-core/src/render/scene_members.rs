@@ -1,6 +1,6 @@
 //! Which streamed content each scene owns, for scene residency: texture
 //! members from the blob's baked per-scene groups (a streamed texture's slot is
-//! its resource handle), mesh members from each streamed draw's SceneMember
+//! its resource handle), mesh members from each streamed draw's `SceneMember`
 //! entity, and shader members from the deferred buckets (a bucket's pipeline
 //! is built when its scene pins).
 
@@ -32,9 +32,9 @@ pub struct StreamedContent<'a> {
 /// The residency over `scenes` that `content` implies, or `None` when nothing
 /// streams.
 pub fn scene_residency(
-    ctx: &PipelineContext,
+    ctx: &PipelineContext<'_>,
     scenes: &[AssetId],
-    content: StreamedContent,
+    content: StreamedContent<'_>,
 ) -> Option<SceneResidency> {
     if content.texture_slots.is_none() && content.mesh_draws.is_none() && !content.shaders_stream {
         return None;

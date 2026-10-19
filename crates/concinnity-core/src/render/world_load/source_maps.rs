@@ -131,14 +131,14 @@ pub struct MeshSourceEntry {
 /// so their hot-reload trigger is a `world.jsonl` save (or the
 /// `reload-assets` debug tool call): the renderer captures each mesh's args at init
 /// and re-runs the generator when the on-disk args change. `draw_indices`
-/// mirrors [`MeshSourceEntry`]: one ProceduralMesh asset can map to many
+/// mirrors [`MeshSourceEntry`]: one `ProceduralMesh` asset can map to many
 /// draw slots when several `Prop`s share it.
 #[derive(Debug, Clone)]
 pub struct ProceduralMeshSourceEntry {
     /// The asset's name as declared in `world.jsonl`. The reload pass joins
     /// the on-disk JSONL's `ProceduralMesh` entries by name so a Prop's
     /// renamed-or-replaced mesh trips the same "unknown" log as any other
-    /// add; we never have to round-trip AssetIds through the interner here.
+    /// add; we never have to round-trip `AssetIds` through the interner here.
     pub name: String,
     /// Last-applied generator args as the parsed component, so default-filled
     /// fields match what a reload-time parse of `world.jsonl` produces.

@@ -310,12 +310,12 @@ const SPLITTABLE_STACKS: usize = 64;
 
 /// A floor with `stacks` separate two-body columns resting on it, which is
 /// the shape the island split is built for.
-fn columns(stacks: usize) -> (Solver, alloc::vec::Vec<Manifold>, usize) {
+fn columns(stacks: usize) -> (Solver, Vec<Manifold>, usize) {
     let capacity = stacks * 2 + 1;
     let mut solver = Solver::with_capacity(capacity);
     solver.begin();
     solver.set_body(0, SolverBody::from_body(&ground(vec3(0.0, -0.5, 0.0))));
-    let mut manifolds = alloc::vec::Vec::new();
+    let mut manifolds = Vec::new();
     for stack in 0..stacks {
         let x = stack as f32 * 4.0;
         let (lower, upper) = (1 + stack as u32 * 2, 2 + stack as u32 * 2);
@@ -359,8 +359,11 @@ fn chunk_order_does_not_change_the_result() {
         let (mut solver, mut manifolds, capacity) = columns(SPLITTABLE_STACKS);
         for _ in 0..8 {
             fanout(&mut solver, capacity, &mut manifolds);
-            let taken: alloc::vec::Vec<SolverBody> =
-                (0..capacity).map(|s| *solver.body(s as u32)).collect();
+            #[expect(
+                clippy::needless_collect,
+                reason = "the bodies are read before begin clears them"
+            )]
+            let taken: Vec<SolverBody> = (0..capacity).map(|s| *solver.body(s as u32)).collect();
             solver.begin();
             for (slot, body) in taken.into_iter().enumerate() {
                 solver.set_body(slot as u32, body);
@@ -376,13 +379,13 @@ fn chunk_order_does_not_change_the_result() {
                     body.linear_velocity.y.to_bits(),
                 )
             })
-            .collect::<alloc::vec::Vec<_>>()
+            .collect::<Vec<_>>()
     };
     let serial = poses(&|solver, capacity, manifolds| {
-        run_with(solver, capacity, manifolds, &mut [], &Inline, 1)
+        run_with(solver, capacity, manifolds, &mut [], &Inline, 1);
     });
     let split = poses(&|solver, capacity, manifolds| {
-        run_with(solver, capacity, manifolds, &mut [], &Reversed(4), 4)
+        run_with(solver, capacity, manifolds, &mut [], &Reversed(4), 4);
     });
     assert_eq!(serial, split, "the split changed what the solve produced");
 }
@@ -396,7 +399,7 @@ fn one_island_takes_one_chunk_however_many_workers_are_offered() {
     let mut solver = Solver::with_capacity(LEVELS as usize + 1);
     solver.begin();
     solver.set_body(0, SolverBody::from_body(&ground(vec3(0.0, -0.5, 0.0))));
-    let mut manifolds = alloc::vec::Vec::new();
+    let mut manifolds = Vec::new();
     for level in 0..LEVELS {
         solver.set_body(
             level + 1,

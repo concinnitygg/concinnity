@@ -133,8 +133,8 @@ impl FogResources {
     // dependent resources. Called from `VkContext::new` only when the world
     // declared a `VolumetricFog` and `FogSettings::resolve` returned a value.
     pub(in crate::vulkan) fn new(
-        ctx: FogDeviceContext,
-        targets: FogFrameTargets,
+        ctx: FogDeviceContext<'_>,
+        targets: FogFrameTargets<'_>,
         shadow: FogShadowResources<'_>,
         hot_reload: bool,
     ) -> RenderResult<Self> {
@@ -211,10 +211,9 @@ impl FogResources {
         let volume_sampler = create_volume_sampler(device)?;
 
         // Per-frame FogParams UBOs (HOST_VISIBLE | HOST_COHERENT, mapped).
-        let params_ubos = alloc_ubo_ring(alloc, frames, std::mem::size_of::<FogParams>() as u64)?;
+        let params_ubos = alloc_ubo_ring(alloc, frames, size_of::<FogParams>() as u64)?;
         // Per-frame FogFroxelParams UBOs.
-        let froxel_ubos =
-            alloc_ubo_ring(alloc, frames, std::mem::size_of::<FogFroxelParams>() as u64)?;
+        let froxel_ubos = alloc_ubo_ring(alloc, frames, size_of::<FogFroxelParams>() as u64)?;
 
         let descriptor_pool = create_fog_descriptor_pool(device, frames)?;
         let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout.handle()).collect();
@@ -492,9 +491,9 @@ fn write_view_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogViewBi
         volume_sampler,
     } = bindings;
     SetWrites::new(set)
-        .uniform_buffer(0, params_ubo, std::mem::size_of::<FogParams>() as u64)
+        .uniform_buffer(0, params_ubo, size_of::<FogParams>() as u64)
         .sampled_image(1, depth_view)
-        .uniform_buffer(2, froxel_ubo, std::mem::size_of::<FogFroxelParams>() as u64)
+        .uniform_buffer(2, froxel_ubo, size_of::<FogFroxelParams>() as u64)
         .sampled_image(3, volume_view)
         .sampler(4, volume_sampler)
         .apply(device);
@@ -523,9 +522,9 @@ fn write_froxel_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogFrox
         volume_storage_view,
     } = bindings;
     SetWrites::new(set)
-        .uniform_buffer(0, params_ubo, std::mem::size_of::<FogParams>() as u64)
-        .uniform_buffer(1, froxel_ubo, std::mem::size_of::<FogFroxelParams>() as u64)
-        .uniform_buffer(2, shadow_ubo, std::mem::size_of::<ShadowUniforms>() as u64)
+        .uniform_buffer(0, params_ubo, size_of::<FogParams>() as u64)
+        .uniform_buffer(1, froxel_ubo, size_of::<FogFroxelParams>() as u64)
+        .uniform_buffer(2, shadow_ubo, size_of::<ShadowUniforms>() as u64)
         .sampled_image(3, shadow_map_view)
         .storage_image(4, volume_storage_view)
         .sampler(5, shadow_sampler)
@@ -699,9 +698,8 @@ impl VkContext {
         frame_idx: usize,
         blocks: &FogBlocks,
     ) {
-        let fog = match &self.fog.resources {
-            Some(f) => f,
-            None => return,
+        let Some(fog) = &self.fog.resources else {
+            return;
         };
         fog.params_ubos[frame_idx].write_val(0, &blocks.params);
         fog.froxel_ubos[frame_idx].write_val(0, &blocks.froxel);
@@ -741,9 +739,8 @@ impl VkContext {
     // resolved HDR target. `FogParams` / `FogFroxelParams` were uploaded by
     // `encode_fog_froxel` for this frame's slot, so this pass only binds.
     pub(in crate::vulkan) fn encode_fog(&self, rec: &Recorder<'_>, frame_idx: usize) {
-        let fog = match &self.fog.resources {
-            Some(f) => f,
-            None => return,
+        let Some(fog) = &self.fog.resources else {
+            return;
         };
 
         let extent = self.targets.render_extent;

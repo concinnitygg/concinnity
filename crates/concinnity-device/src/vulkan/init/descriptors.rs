@@ -194,7 +194,7 @@ fn write_shadow_global_sets(
     let layout = shadow.global_set_layout.handle();
     let shadow_global_layouts: Vec<_> = (0..frames).map(|_| layout).collect();
     let shadow_global_sets = alloc_descriptor_sets(device, pool.handle(), &shadow_global_layouts)?;
-    let shadow_ubo_size = std::mem::size_of::<ShadowUniforms>() as u64;
+    let shadow_ubo_size = size_of::<ShadowUniforms>() as u64;
     for (&set, ubo) in shadow_global_sets.iter().zip(&shadow.ubos) {
         SetWrites::new(set)
             .uniform_buffer(0, ubo.buffer(), shadow_ubo_size)

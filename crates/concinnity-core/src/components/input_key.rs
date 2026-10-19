@@ -18,7 +18,7 @@ macro_rules! define_keys {
     ($($variant:ident $(=> $label:literal)?),* $(,)?) => {
         /// A canonical, backend-agnostic keyboard key.
         ///
-        /// Each rendering backend maps its native key codes (macOS NSEvent key
+        /// Each rendering backend maps its native key codes (macOS `NSEvent` key
         /// codes, Windows virtual keys, GLFW keys) to and from this enum, so a
         /// key binding can be stored and shown the same way everywhere. Unit
         /// variants serialize to their name, so a persisted binding survives a
@@ -38,9 +38,9 @@ macro_rules! define_keys {
             pub const ALL: &'static [InputKey] = &[$(InputKey::$variant),*];
 
             /// The canonical variant name, matching the serialized form and how
-            /// a [KeyBinding](#keybinding) stores its `key` (e.g. `"W"`,
+            /// a [`KeyBinding`](#keybinding) stores its `key` (e.g. `"W"`,
             /// `"Space"`, `"Enter"`, `"Control"`). Unlike
-            /// [display_name](#method.display_name) this is the exact
+            /// [`display_name`](#method.display_name) this is the exact
             /// enum-variant spelling, so it round-trips with serde.
             pub fn name(self) -> &'static str {
                 match self {

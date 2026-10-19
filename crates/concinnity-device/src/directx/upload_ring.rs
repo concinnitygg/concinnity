@@ -84,11 +84,11 @@ impl UploadRing {
             let mut base = std::ptr::null_mut::<std::ffi::c_void>();
             // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
             // local that receives the mapping.
-            unsafe { buffer.Map(0, None, Some(&mut base)) }
+            unsafe { buffer.Map(0, None, Some(&raw mut base)) }
                 .map_err(|e| super::error::map_hresult(e.code(), "upload map"))?;
             Ok(MappedUpload {
                 gpu_va: com::gpu_va(&buffer),
-                base: base as *mut u8,
+                base: base.cast::<u8>(),
                 _buffer: buffer,
             })
         })

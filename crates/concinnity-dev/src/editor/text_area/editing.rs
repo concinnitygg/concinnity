@@ -219,7 +219,7 @@ impl TextArea {
         self.reveal_caret();
     }
 
-    fn copy(&mut self, clipboard: &mut dyn Clipboard) {
+    fn copy(&self, clipboard: &mut dyn Clipboard) {
         if let Some((start, end)) = self.selection() {
             clipboard.set_text(&self.buffer.slice(start, end));
         }

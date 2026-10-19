@@ -49,8 +49,8 @@ pub struct Column<T> {
 }
 
 impl<T> Default for Column<T> {
-    fn default() -> Column<T> {
-        Column {
+    fn default() -> Self {
+        Self {
             data: Vec::new(),
             entities: Vec::new(),
             row_changed: Vec::new(),
@@ -64,8 +64,8 @@ impl<T> Default for Column<T> {
 
 impl<T> Column<T> {
     /// An empty column.
-    pub fn new() -> Column<T> {
-        Column::default()
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// The Entity owning each row, aligned with the data slice.

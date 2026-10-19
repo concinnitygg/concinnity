@@ -4,6 +4,7 @@
 //! distance field is `sdf_field_edit`.
 
 use concinnity_cook::authoring::world::is_label_of;
+use std::fmt::Write as _;
 
 use super::shader_list::ShaderDecl;
 use super::shader_source::{SourceKey, same_file, stage_name};
@@ -27,11 +28,11 @@ impl ShaderEdit {
     // Whether the edit takes away the file `open` shows.
     pub(crate) fn closes(&self, open: &SourceKey) -> bool {
         match (self, open) {
-            (ShaderEdit::RemoveVertex(name), SourceKey::Shader { name: n, stage }) => {
+            (Self::RemoveVertex(name), SourceKey::Shader { name: n, stage }) => {
                 n == name && *stage == ShaderStage::Vertex
             }
-            (ShaderEdit::Delete { name, .. }, SourceKey::Shader { name: n, .. }) => n == name,
-            (ShaderEdit::DeleteField { path, .. }, SourceKey::Field { path: p }) => p == path,
+            (Self::Delete { name, .. }, SourceKey::Shader { name: n, .. }) => n == name,
+            (Self::DeleteField { path, .. }, SourceKey::Field { path: p }) => p == path,
             _ => false,
         }
     }
@@ -62,16 +63,18 @@ pub(crate) fn check_name(typed: &str, what: &str) -> Result<String, String> {
 pub(crate) fn file_stem(name: &str) -> String {
     let stem: String = name
         .chars()
-        .map(
-            |c| match c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                true => c,
-                false => '_',
-            },
-        )
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
-    match stem.is_empty() {
-        true => "shader".to_string(),
-        false => stem,
+    if stem.is_empty() {
+        "shader".to_string()
+    } else {
+        stem
     }
 }
 
@@ -104,7 +107,7 @@ pub(crate) fn files_of(shaders: &[ShaderDecl], i: usize) -> Files {
         match reader {
             Some((_, other)) => out.shared.push((file.declared.clone(), other.name.clone())),
             None if !out.own.iter().any(|p| same_file(p, &file.path)) => {
-                out.own.push(file.path.clone())
+                out.own.push(file.path.clone());
             }
             None => {}
         }
@@ -120,19 +123,24 @@ pub(crate) fn delete_message(shaders: &[ShaderDecl], i: usize) -> String {
     };
     let mut out = format!("Delete Shader '{}'?", shader.name);
     let remaining = shaders.len() > 1;
-    let fallback = match remaining {
-        true => "the default Shader",
-        false => "the engine's own shading",
+    let fallback = if remaining {
+        "the default Shader"
+    } else {
+        "the engine's own shading"
     };
     match shader.materials.len() {
         0 => {}
-        1 => out.push_str(&format!(" 1 Material falls back to {fallback}.")),
-        n => out.push_str(&format!(" {n} Materials fall back to {fallback}.")),
+        1 => {
+            let _ = write!(out, " 1 Material falls back to {fallback}.");
+        }
+        n => {
+            let _ = write!(out, " {n} Materials fall back to {fallback}.");
+        }
     }
     if shader.default
         && let Some(next) = shaders.iter().enumerate().find(|&(j, _)| j != i)
     {
-        out.push_str(&format!(" '{}' becomes the world default.", next.1.name));
+        let _ = write!(out, " '{}' becomes the world default.", next.1.name);
     }
     out
 }
@@ -169,13 +177,14 @@ pub(crate) fn deleted_message(name: &str, deleted: &[String], failed: &[String])
     let mut out = format!("Deleted Shader '{name}'");
     if !deleted.is_empty() {
         let names: Vec<&str> = deleted.iter().map(|p| file_name(p)).collect();
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             " and {}; undo restores the Shader but not its files",
             names.join(", ")
-        ));
+        );
     }
     if !failed.is_empty() {
-        out.push_str(&format!("; could not delete {}", failed.join("; ")));
+        let _ = write!(out, "; could not delete {}", failed.join("; "));
     }
     out
 }

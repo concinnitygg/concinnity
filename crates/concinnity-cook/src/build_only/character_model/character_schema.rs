@@ -267,7 +267,7 @@ pub struct ShapePreset {
 /// parents), the shape keys a conforming mesh carries, the regions those keys
 /// and the editor group by, the proportion rows the editor offers, the morph
 /// targets the build synthesizes from the mesh, the panel's section order,
-/// and the presets it offers. A [CharacterModel](#charactermodel) names one
+/// and the presets it offers. A [`CharacterModel`](#charactermodel) names one
 /// schema and is validated against it at build time, so any conforming body
 /// gets the same sliders, panel, and animations.
 ///

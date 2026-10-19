@@ -43,7 +43,7 @@ pub(crate) struct SolverBody {
 
 impl SolverBody {
     /// The state an unoccupied slot holds: present, and moved by nothing.
-    pub(crate) const IMMOVABLE: SolverBody = SolverBody {
+    pub(crate) const IMMOVABLE: Self = Self {
         linear_velocity: Vec3::ZERO,
         angular_velocity: Vec3::ZERO,
         position: Vec3::ZERO,
@@ -62,7 +62,7 @@ impl SolverBody {
 
     pub(crate) fn from_body(body: &Body) -> Self {
         let simulated = body.is_simulated();
-        SolverBody {
+        Self {
             linear_velocity: body.linear_velocity,
             angular_velocity: body.angular_velocity,
             position: body.position,
@@ -173,7 +173,7 @@ impl<'a> Bodies<'a> {
     /// handle writes or reads. The solver satisfies this by giving each chunk
     /// a disjoint set of islands: a slot the step moves belongs to exactly one
     /// island, and the slots two chunks share are ones neither writes.
-    pub(crate) unsafe fn share(&self) -> Bodies<'a> {
+    pub(crate) unsafe fn share(&self) -> Self {
         Bodies {
             at: self.at,
             len: self.len,

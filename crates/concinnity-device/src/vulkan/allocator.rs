@@ -181,7 +181,7 @@ impl Drop for Lease {
 pub(super) struct PooledBuffer {
     buffer: vk::Buffer,
     mapped: *mut u8,
-    _lease: Option<Rc<Lease>>,
+    lease: Option<Rc<Lease>>,
 }
 
 impl PooledBuffer {
@@ -199,7 +199,7 @@ impl PooledBuffer {
     // Byte length of the leased range backing this buffer: its aligned
     // allocation size, at least the size requested at creation. 0 for `null()`.
     pub(super) fn byte_len(&self) -> usize {
-        self._lease.as_ref().map_or(0, |l| l.size as usize)
+        self.lease.as_ref().map_or(0, |l| l.size as usize)
     }
 
     // Records `first..first + len` of this buffer's mapping viewed as `T`s, for a
@@ -284,7 +284,7 @@ impl PooledBuffer {
         // exactly that many bytes (padding is copied, never inspected). The
         // borrow is separate from the mapping, so the ranges cannot overlap.
         unsafe {
-            std::ptr::copy_nonoverlapping((value as *const T).cast::<u8>(), dst, len);
+            std::ptr::copy_nonoverlapping(std::ptr::from_ref::<T>(value).cast::<u8>(), dst, len);
         }
     }
 
@@ -325,7 +325,7 @@ impl PooledBuffer {
         Self {
             buffer: vk::Buffer::null(),
             mapped: std::ptr::null_mut(),
-            _lease: None,
+            lease: None,
         }
     }
 
@@ -340,7 +340,7 @@ impl PooledBuffer {
 #[derive(Clone)]
 pub(super) struct PooledImage {
     image: vk::Image,
-    _lease: Option<Rc<Lease>>,
+    lease: Option<Rc<Lease>>,
 }
 
 impl PooledImage {
@@ -351,8 +351,8 @@ impl PooledImage {
     // Tie `view` to this image's lifetime: it is destroyed just before the
     // image, at the same retirement.
     pub(super) fn attach_view(&self, view: vk::ImageView) {
-        debug_assert!(self._lease.is_some(), "attach_view on a null PooledImage");
-        if let Some(lease) = &self._lease {
+        debug_assert!(self.lease.is_some(), "attach_view on a null PooledImage");
+        if let Some(lease) = &self.lease {
             lease.views.borrow_mut().push(view);
         }
     }
@@ -362,7 +362,7 @@ impl PooledImage {
     pub(super) fn null() -> Self {
         Self {
             image: vk::Image::null(),
-            _lease: None,
+            lease: None,
         }
     }
 
@@ -503,7 +503,7 @@ impl DeviceAllocator {
         Ok(PooledBuffer {
             buffer,
             mapped,
-            _lease: Some(Rc::new(
+            lease: Some(Rc::new(
                 self.lease(reservation, PooledHandle::Buffer(buffer)),
             )),
         })
@@ -514,7 +514,7 @@ impl DeviceAllocator {
     // buffers, an OPTIMAL one never does.
     pub(super) fn create_image(
         &self,
-        info: &vk::ImageCreateInfo,
+        info: &vk::ImageCreateInfo<'_>,
         props: vk::MemoryPropertyFlags,
     ) -> error::RenderResult<PooledImage> {
         // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
@@ -552,7 +552,7 @@ impl DeviceAllocator {
         }
         Ok(PooledImage {
             image,
-            _lease: Some(Rc::new(self.lease(reservation, PooledHandle::Image(image)))),
+            lease: Some(Rc::new(self.lease(reservation, PooledHandle::Image(image)))),
         })
     }
 
@@ -593,6 +593,10 @@ impl DeviceAllocator {
         }
     }
 
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each pool is visited on its own, so the order cannot show"
+    )]
     fn advance(&self, ticks: u64) {
         let mut inner = self.inner.borrow_mut();
         inner.frame += ticks;
@@ -606,6 +610,10 @@ impl DeviceAllocator {
         }
     }
 
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each pool is visited on its own, so the order cannot show"
+    )]
     fn release_empty_blocks(&self) {
         let mut inner = self.inner.borrow_mut();
         for pool in inner.pools.values_mut() {
@@ -622,6 +630,10 @@ impl DeviceAllocator {
         }
     }
 
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each pool is visited on its own, so the order cannot show"
+    )]
     pub(super) fn stats(&self) -> AllocatorStats {
         let inner = self.inner.borrow();
         let mut stats = AllocatorStats::default();
@@ -642,6 +654,10 @@ impl DeviceAllocator {
     // Destroy everything still queued and free every block. The caller has
     // already idled the device and dropped every pooled resource; this is the
     // last allocator call before `destroy_device`.
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each pool is visited on its own, so the order cannot show"
+    )]
     pub(super) fn destroy(&self) {
         let mut inner = self.inner.borrow_mut();
         for retired in inner.retired.drain() {
@@ -799,7 +815,7 @@ impl DeviceAllocator {
             match unsafe {
                 device.map_memory(memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
             } {
-                Ok(ptr) => ptr as *mut u8,
+                Ok(ptr) => ptr.cast::<u8>(),
                 Err(e) => {
                     // SAFETY: the handle was created from this device moments ago and never
                     // submitted, so this cleanup is its only remaining use.

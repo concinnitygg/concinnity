@@ -1,4 +1,4 @@
-//! EditorHook: camera bookmarks. Ctrl+1..9 saves the current camera pose to a
+//! `EditorHook`: camera bookmarks. Ctrl+1..9 saves the current camera pose to a
 //! numbered slot, 1..9 glides back to it. Slots persist per world in the
 //! project's editor session store (`editor/session_store.rs`).
 

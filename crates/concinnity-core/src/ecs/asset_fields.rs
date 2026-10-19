@@ -214,7 +214,7 @@ pub mod probe {
 
     impl<T: ?Sized> Probe<T> {
         /// The probe value the generated code borrows.
-        pub const NEW: Self = Probe(PhantomData);
+        pub const NEW: Self = Self(PhantomData);
     }
 
     /// A field that references other assets.
@@ -304,7 +304,7 @@ mod tests {
         fit: SpriteFit,
         weight: f32,
         #[asset(owned_file)]
-        script: alloc::string::String,
+        script: String,
     }
 
     #[derive(AssetFields)]
@@ -330,10 +330,10 @@ mod tests {
         middle: Middle,
         #[serde(flatten)]
         flat: Leaf,
-        name: alloc::string::String,
+        name: String,
         #[asset(owned_file)]
         #[serde(rename = "src")]
-        source: Option<alloc::string::String>,
+        source: Option<String>,
     }
 
     fn paths<F>(fields: &[F], path: impl Fn(&F) -> &str) -> Vec<&str> {

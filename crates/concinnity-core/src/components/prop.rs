@@ -4,7 +4,7 @@ use crate::components::{Model, Scene, Vocabulary, vocabulary_synonyms};
 use crate::ecs::{MaterialHandle, MeshHandle, NameRef, Ref, RefTarget};
 use alloc::string::String;
 
-/// The collision volume a [PropCollider](#propcollider)'s `shape` names. The
+/// The collision volume a [`PropCollider`](#propcollider)'s `shape` names. The
 /// single accepted vocabulary: the build rejects an authored name this does not
 /// recognize, and the runtime resolves the same name through it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Vocabulary)]
@@ -56,7 +56,7 @@ impl PropColliderShape {
 #[serde(default)]
 pub struct PropCollider {
     /// Collision shape: `aabb` (alias `cuboid`), `ball` (alias `sphere`), or
-    /// `capsule`. See [PropColliderShape].
+    /// `capsule`. See [`PropColliderShape`].
     pub shape: PropColliderShape,
     /// Box half-extents in local space [x, y, z]. Used by cuboid shapes.
     #[asset(default = [0.5, 0.5, 0.5])]
@@ -68,16 +68,16 @@ pub struct PropCollider {
     #[asset(default = 0.5)]
     pub half_height: f32,
     /// Collision layer name. Built-in layers are `world`, `prop`, `character`,
-    /// and `trigger`; extra names come from [PhysicsConfig](#physicsconfig)
+    /// and `trigger`; extra names come from [`PhysicsConfig`](#physicsconfig)
     /// `layers`. Empty derives the layer from the body kind: `world` for a
-    /// static prop, `prop` when a [PropBody](#propbody) makes it dynamic.
+    /// static prop, `prop` when a [`PropBody`](#propbody) makes it dynamic.
     pub layer: String,
 }
 
 /// A scene object: places geometry at a world-space transform.
 ///
 /// Reference either a [Model](#model) (multi-mesh) or a single
-/// [Mesh](#mesh)/[ProceduralMesh](#proceduralmesh). `model` takes precedence
+/// [Mesh](#mesh)/[`ProceduralMesh`](#proceduralmesh). `model` takes precedence
 /// when both are set.
 ///
 /// Rotation notes:
@@ -106,7 +106,7 @@ pub struct Prop {
     /// that model (each with its own material) sharing this prop's transform.
     /// Takes precedence over `mesh` and `material`.
     pub model: Option<Ref<Model>>,
-    /// A [Mesh](#mesh) or [ProceduralMesh](#proceduralmesh) asset this prop
+    /// A [Mesh](#mesh) or [`ProceduralMesh`](#proceduralmesh) asset this prop
     /// renders. Used when `model` is unset.
     pub mesh: Option<MeshHandle>,
     /// A [Material](#material) to use for this prop: the albedo texture plus
@@ -128,7 +128,7 @@ pub struct Prop {
     /// key (E) while close and facing it triggers its rotation behavior.
     pub interactable: bool,
     /// When true, the player can pick up and carry this prop with the interact
-    /// key (E). A companion [PropBody](#propbody) must also be declared so the
+    /// key (E). A companion [`PropBody`](#propbody) must also be declared so the
     /// prop falls correctly after being dropped.
     pub pickup: bool,
     /// Another [Prop](#prop) whose world transform this prop inherits. When set,
@@ -149,14 +149,14 @@ pub struct Prop {
     /// visible at any distance.
     pub cull_distance: f32,
     /// Set at runtime while the prop is being carried. Not serialized.
-    /// While true, PhysicsSystem drives the prop as a kinematic body that
+    /// While true, `PhysicsSystem` drives the prop as a kinematic body that
     /// follows the camera instead of simulating it dynamically.
     #[serde(skip)]
     pub is_held: bool,
 }
 
 /// What a [Prop](#prop)'s `parent` may name: another prop, or the
-/// [SkyRotation](#skyrotation) pivot.
+/// [`SkyRotation`](#skyrotation) pivot.
 #[derive(Debug, Clone, Copy)]
 pub struct PropParent;
 

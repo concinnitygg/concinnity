@@ -1,4 +1,4 @@
-//! The one forwarding macro the three backends' RenderBackend impls share.
+//! The one forwarding macro the three backends' `RenderBackend` impls share.
 //!
 //! Almost every method of the trait families is a mechanical 1:1 call into the
 //! inherent method of the same name, so each family's impl block states the
@@ -14,7 +14,7 @@
 //! `unsafe impl Send` on each context rests on. The `&self` arms are read-only
 //! and skip it.
 //!
-//! Metal's window entry points live on the shared AppKit layer rather than on
+//! Metal's window entry points live on the shared `AppKit` layer rather than on
 //! the context, which is what `via` is for: `via = self.window().appkit,
 //! via_mut = self.window_mut().appkit` forwards the `&self` arms of the block to
 //! the first receiver and the `&mut self` arms to the second.

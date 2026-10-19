@@ -89,7 +89,7 @@ pub(crate) struct LiveState {
 /// current head, so a frame without skinned geometry has nothing left to do
 /// after one. A head whose objects changed shape without a refresh is left for
 /// the refresh the change will flag.
-pub(crate) fn next_step(mode: RtDynamicMode, plan: &RtUpdatePlan, live: LiveState) -> RtStep {
+pub(crate) fn next_step(mode: RtDynamicMode, plan: RtUpdatePlan, live: LiveState) -> RtStep {
     if !live.models_current {
         return RtStep::Keep;
     }
@@ -239,7 +239,7 @@ mod tests {
             for dirty in [false, true] {
                 let plan = plan_update(mode, dirty, true).expect("dynamic");
                 assert_eq!(
-                    next_step(mode, &plan, live(true, false, false)),
+                    next_step(mode, plan, live(true, false, false)),
                     RtStep::Skinned
                 );
             }
@@ -251,10 +251,7 @@ mod tests {
         for mode in MODES.into_iter().filter(|m| m.is_dynamic()) {
             for skinned in [false, true] {
                 let plan = plan_update(mode, false, skinned).expect("dynamic");
-                assert_eq!(
-                    next_step(mode, &plan, live(false, true, true)),
-                    RtStep::Keep
-                );
+                assert_eq!(next_step(mode, plan, live(false, true, true)), RtStep::Keep);
             }
         }
     }
@@ -263,7 +260,7 @@ mod tests {
     fn a_refresh_is_the_whole_static_update() {
         let plan = plan_update(RtDynamicMode::Auto, true, false).expect("dynamic");
         assert_eq!(
-            next_step(RtDynamicMode::Auto, &plan, live(true, true, true)),
+            next_step(RtDynamicMode::Auto, plan, live(true, true, true)),
             RtStep::Keep
         );
     }
@@ -273,18 +270,12 @@ mod tests {
         let mode = RtDynamicMode::Auto;
         let plan = plan_update(mode, false, false).expect("dynamic");
         assert_eq!(
-            next_step(mode, &plan, live(true, false, false)),
+            next_step(mode, plan, live(true, false, false)),
             RtStep::Keep
         );
-        assert_eq!(
-            next_step(mode, &plan, live(true, true, false)),
-            RtStep::Tlas
-        );
+        assert_eq!(next_step(mode, plan, live(true, true, false)), RtStep::Tlas);
         // The last skinned object went away: drop its tail.
-        assert_eq!(
-            next_step(mode, &plan, live(true, false, true)),
-            RtStep::Tlas
-        );
+        assert_eq!(next_step(mode, plan, live(true, false, true)), RtStep::Tlas);
     }
 
     #[test]
@@ -292,7 +283,7 @@ mod tests {
         let mode = RtDynamicMode::Tlas;
         let plan = plan_update(mode, false, false).expect("dynamic");
         assert_eq!(
-            next_step(mode, &plan, live(true, false, false)),
+            next_step(mode, plan, live(true, false, false)),
             RtStep::Tlas
         );
     }

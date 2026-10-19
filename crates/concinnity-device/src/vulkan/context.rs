@@ -3,9 +3,11 @@
 // backends identically.
 
 use ash::vk;
+use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::*;
-use concinnity_core::gfx::{auto_exposure, render_types};
+use concinnity_core::gfx::render_types::{
+    InstancedCluster, LightUniforms, PostProcessParams, PostProcessTunables,
+};
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::render::backend::FrameParams;
@@ -23,8 +25,11 @@ use concinnity_core::{components, profile};
 
 use super::allocator::PooledBuffer;
 use super::geometry_upload::{CopySubmit, GeometryDest, GeometryUploads};
-use super::post::*;
-use super::texture::*;
+use super::post::{
+    GbufferResources, PostSupport, RtReflectionsResources, SsaoResources, SsgiResources,
+    SsrResources, TaaResources, VkBloomPass, VkReflectionCompositePass, VkUpscaleBackend, gbuffer,
+};
+use super::texture::{EnvironmentMapTextures, GpuImage, StreamedUploadRetire};
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSampler, OwnedSetLayout, VkDevice,
@@ -349,7 +354,7 @@ pub(super) struct VkCull {
     // exactly when `bindless_pipeline` is), and bucket 0's pipeline, from the
     // same programs as `bindless_pipeline`, which exists only while a G-buffer
     // consumer is on and its build succeeded.
-    pub(super) prepass_layout: Option<super::post::gbuffer::PrepassLayout>,
+    pub(super) prepass_layout: Option<gbuffer::PrepassLayout>,
     pub(super) prepass_pipeline: Option<OwnedPipeline>,
     // One bindless descriptor set per frame-in-flight: binding 0 is that frame's
     // GpuObjectData storage buffer, binding 1 the shared texture pool, binding 2
@@ -437,7 +442,7 @@ pub(super) struct VkCull {
     pub(super) prev_model_buffers: Vec<PooledBuffer>,
     // The snapshot kernel that fills `prev_model_buffers`, and the per-frame
     // sets pairing each object buffer with its history slot.
-    pub(super) model_history: Option<super::post::gbuffer::ModelHistoryPipeline>,
+    pub(super) model_history: Option<gbuffer::ModelHistoryPipeline>,
 }
 
 impl VkCull {
@@ -875,7 +880,7 @@ pub(super) struct VkHardware {
     // Owns the logical device: the instance and the entry stay alive for as
     // long as it does, and every Vulkan object the backend owns retires through
     // its queue. Derefs to `ash::Device`.
-    pub(super) device: super::owned::VkDevice,
+    pub(super) device: VkDevice,
     pub(super) physical_device: vk::PhysicalDevice,
     pub(super) surface: vk::SurfaceKHR,
     pub(super) surface_loader: ash::khr::surface::Instance,
@@ -949,7 +954,7 @@ pub(super) struct VkHardware {
     // dropped immediately after (see the `window` / `window_mut` accessors).
     pub(super) window: Option<super::window::PlatformWindow>,
     // Keep Entry alive for the lifetime of the instance
-    pub(super) _entry: ash::Entry,
+    pub(super) entry: ash::Entry,
 }
 
 impl VkHardware {
@@ -983,7 +988,7 @@ impl VkHardware {
             hdr_mode: self.hdr_mode,
             vsync: self.vsync,
             swapchain_config: self.swapchain_config,
-            _entry: self._entry.clone(),
+            entry: self.entry.clone(),
         })
     }
 }
@@ -1026,9 +1031,9 @@ pub(crate) struct VkContext {
     // Post-process tunables (bloom intensity / threshold / knee, exposure,
     // vignette). Drives whether the bloom passes run and feeds the composite
     // + bloom-prefilter push constants.
-    pub(super) post_process: render_types::PostProcessParams,
+    pub(super) post_process: PostProcessParams,
     // The scale the frame's HDR chain is written at, advanced once per frame.
-    pub(super) pre_exposure: concinnity_core::gfx::auto_exposure::PreExposure,
+    pub(super) pre_exposure: auto_exposure::PreExposure,
 
     // Temporal anti-aliasing resources. `Some` only when the world's
     // `AntiAliasing` set `mode: taa`; `None` skips the velocity pre-pass
@@ -1041,7 +1046,7 @@ pub(crate) struct VkContext {
     // What every shared fullscreen post pass draws through: the cached render
     // passes and framebuffers, and the per-frame descriptor arena. Held once for
     // the backend rather than once per effect, which is the point of the seam.
-    pub(super) post: super::post::PostSupport,
+    pub(super) post: PostSupport,
 
     // Temporal upscaling (FSR / DLSS / XeSS, behind `VkUpscaleBackend`). `Some`
     // only when the world's `AntiAliasing` set `upscaling: true`
@@ -1166,7 +1171,7 @@ pub(crate) struct VkContext {
     // The world default Shader's compiled programs, `None` for the engine's
     // own. Kept past init so the built-in shader reload rebuilds bucket 0 from
     // the world's pair rather than the engine's.
-    pub(super) world_shader: Option<concinnity_core::components::ShaderPrograms>,
+    pub(super) world_shader: Option<components::ShaderPrograms>,
 
     // Per-frame draw-call / VRAM / GPU-time counters surfaced to the
     // profiler overlay via [`Self::render_stats`]. Lives in a `Cell` because
@@ -1515,7 +1520,7 @@ impl VkContext {
     // Replace the live post-process tunables, pushed to the bloom + composite
     // shaders each frame. The composite's display-output flags are not part of
     // the payload, so the EDR path negotiated at init survives every push.
-    pub(crate) fn update_post_process(&mut self, tunables: render_types::PostProcessTunables) {
+    pub(crate) fn update_post_process(&mut self, tunables: PostProcessTunables) {
         self.post_process.set_tunables(tunables);
     }
 
@@ -1608,7 +1613,7 @@ impl VkContext {
 
     // Replace the runtime movement key map. The window's key decode routes
     // through it, so a settings-menu rebind takes effect immediately.
-    pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
+    pub(crate) fn set_keymap(&mut self, keymap: KeyMap) {
         self.window_mut().set_keymap(keymap);
     }
 
@@ -1701,18 +1706,10 @@ impl VkContext {
         // IBL cubes + cube sampler.
         self.scene.env_map.irradiance = GpuImage::null();
         self.scene.env_map.prefilter = GpuImage::null();
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
 
         // Pipelines.
         self.wireframe.destroy();
         self.text.pipeline = None;
-        // Instanced-prop pipeline + per-frame instance buffers (see
-        // `VkInstanced::destroy`).
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
 
         // GPU-driven cull + bindless static pass resources, including the Hi-Z
         // pyramid (see `VkCull::destroy`). The bindless / cull / phase-2
@@ -1892,7 +1889,7 @@ impl Drop for VkContext {
             unsafe {
                 self.hw
                     .surface_loader
-                    .destroy_surface(self.hw.surface, None)
+                    .destroy_surface(self.hw.surface, None);
             };
         }
 

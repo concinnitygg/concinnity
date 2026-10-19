@@ -22,9 +22,7 @@ const PAYLOAD: crate::cache::CacheEntryKind = crate::cache::CacheEntryKind::Payl
 
 // The resource kind of a job selected by `collect_resource_jobs`. Every entry
 // there was chosen by having one, so the lookup cannot fail.
-fn job_resource_kind(
-    rt: crate::authoring::registry::RegisteredType,
-) -> concinnity_core::blob::ResourceKind {
+fn job_resource_kind(rt: RegisteredType) -> concinnity_core::blob::ResourceKind {
     rt.resource_kind()
         .expect("a resource job carries a resource type")
 }
@@ -61,8 +59,7 @@ pub(in crate::pipeline) fn probe_mesh_payload_cache(
             .args
             .get("source")
             .and_then(|v| v.as_str())
-            .map(|s| !s.is_empty())
-            .unwrap_or(false);
+            .is_some_and(|s| !s.is_empty());
         if !has_source && asset.args.get("character_model").is_none() {
             continue;
         }
@@ -212,8 +209,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
                     .get("kind")
                     .and_then(|k| k.as_str())
                     .and_then(FileKind::from_ext)
-                    .map(|fk| fk.is_mesh())
-                    .unwrap_or(false)
+                    .is_some_and(|fk| fk.is_mesh())
             } else {
                 ct.registration().needs_compilation()
             };
@@ -292,7 +288,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
     // compiled mesh-source components, sorted by handle for determinism.
     let mut mesh_bounds: Vec<MeshBoundsRecord> = Vec::new();
     for ((_, rt, handle), res) in resource_jobs.iter().zip(&resource_pending) {
-        if *rt == crate::authoring::registry::RegisteredType::Mesh
+        if *rt == RegisteredType::Mesh
             && let Some(record) = mesh_bounds_record(*handle, &res.bytes)
         {
             mesh_bounds.push(record);
@@ -515,13 +511,12 @@ fn compile_resource(
     // the source parse really is skipped on a hit and the pre-desugar key is
     // reused at store time (same contract as the component gltf-cache path).
     let (bytes, reused) = if let Some(entry) = shared.mesh_cache.get(&asset.id) {
-        match &entry.bytes {
-            Some(bytes) => (bytes.clone(), true),
-            None => {
-                let compiled = rt.compile_payload(&asset.args, shared.assets_dir)?;
-                crate::cache::store(PAYLOAD, &entry.key, &compiled);
-                (compiled, false)
-            }
+        if let Some(bytes) = &entry.bytes {
+            (bytes.clone(), true)
+        } else {
+            let compiled = rt.compile_payload(&asset.args, shared.assets_dir)?;
+            crate::cache::store(PAYLOAD, &entry.key, &compiled);
+            (compiled, false)
         }
     } else {
         // Every resource asset compiles identically on every backend, so its
@@ -534,13 +529,12 @@ fn compile_resource(
             &ctx,
             &inputs,
         );
-        match crate::cache::load(PAYLOAD, &key) {
-            Some(bytes) => (bytes, true),
-            None => {
-                let compiled = rt.compile_payload(&asset.args, shared.assets_dir)?;
-                crate::cache::store(PAYLOAD, &key, &compiled);
-                (compiled, false)
-            }
+        if let Some(bytes) = crate::cache::load(PAYLOAD, &key) {
+            (bytes, true)
+        } else {
+            let compiled = rt.compile_payload(&asset.args, shared.assets_dir)?;
+            crate::cache::store(PAYLOAD, &key, &compiled);
+            (compiled, false)
         }
     };
     if reused {
@@ -571,8 +565,13 @@ mod tests {
     use super::*;
     use crate::asset_api::{self, AssetRequest};
     use crate::pipeline::fixtures::wja;
+    use std::collections::HashMap;
 
     #[test]
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "every entry is checked on its own"
+    )]
     fn probe_mesh_payload_cache_probes_only_source_backed_mesh_assets() {
         let assets = vec![
             wja(
@@ -602,7 +601,7 @@ mod tests {
             concinnity_core::platform::Platform::Metal.into(),
         );
 
-        let mut names: Vec<&str> = probed.keys().map(|s| s.as_str()).collect();
+        let mut names: Vec<&str> = probed.keys().map(String::as_str).collect();
         names.sort_unstable();
         assert_eq!(names, vec!["m", "s"]);
         for entry in probed.values() {
@@ -668,7 +667,7 @@ mod tests {
         ];
         let mut named = vec![("shape".to_string(), procedural_mesh_def())];
         let resource_jobs = vec![(1usize, RegisteredType::Mesh, 0u32)];
-        let mut cache = std::collections::HashMap::new();
+        let mut cache = HashMap::new();
         cache.insert(
             "shape".to_string(),
             MeshCacheEntry {
@@ -755,7 +754,7 @@ mod tests {
             (3usize, RegisteredType::Mesh, 0u32),
             (4usize, RegisteredType::Mesh, 1u32),
         ];
-        let cache = std::collections::HashMap::from([
+        let cache = HashMap::from([
             (
                 "day_mesh".to_string(),
                 MeshCacheEntry {
@@ -830,7 +829,7 @@ mod tests {
                 mesh_source_handles: &handles,
                 max_blob_bytes: 1 << 20,
                 assets_dir: None,
-                mesh_cache: &Default::default(),
+                mesh_cache: &HashMap::default(),
                 progress: Progress::none(),
             },
         )
@@ -867,7 +866,7 @@ mod tests {
             bytes: None,
             capsule_scale: None,
         };
-        let cache = std::collections::HashMap::from([
+        let cache = HashMap::from([
             ("shape".to_string(), miss("shape-key")),
             ("body".to_string(), miss("body-key")),
         ]);
@@ -982,7 +981,7 @@ mod tests {
                 mesh_source_handles: &handles,
                 max_blob_bytes: 1 << 20,
                 assets_dir: None,
-                mesh_cache: &Default::default(),
+                mesh_cache: &HashMap::default(),
                 progress: Progress::none(),
             },
         )
@@ -1062,7 +1061,7 @@ mod tests {
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1024,
                 assets_dir: None,
-                mesh_cache: &Default::default(),
+                mesh_cache: &HashMap::default(),
                 progress: Progress::none(),
             },
         )
@@ -1111,7 +1110,7 @@ mod tests {
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1024,
                 assets_dir: None,
-                mesh_cache: &Default::default(),
+                mesh_cache: &HashMap::default(),
                 progress: Progress::none(),
             },
         )
@@ -1133,7 +1132,7 @@ mod tests {
             ("a".to_string(), procedural_mesh_def()),
             ("b".to_string(), procedural_mesh_def()),
         ];
-        let cache = std::collections::HashMap::from([
+        let cache = HashMap::from([
             (
                 "a".to_string(),
                 MeshCacheEntry {

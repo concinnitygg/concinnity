@@ -10,7 +10,7 @@ use crate::metal::post::{MtlBloomPass, build_bloom_pass};
 // scene there is nothing to threshold, and the graph never inserts the Bloom
 // pass.
 pub(super) fn build_bloom(
-    device: &MtlPostDevice,
+    device: &MtlPostDevice<'_>,
     scene: bool,
     output: (u32, u32),
 ) -> RenderResult<Option<MtlBloomPass>> {

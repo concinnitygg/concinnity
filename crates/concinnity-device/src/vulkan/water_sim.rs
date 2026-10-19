@@ -197,7 +197,7 @@ impl OceanKernels {
             vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let foam_bytes = (texels.len() * std::mem::size_of::<f32>()) as u64;
+        let foam_bytes = (texels.len() * size_of::<f32>()) as u64;
         let foam = gpu.alloc.create_buffer(
             foam_bytes,
             vk::BufferUsageFlags::STORAGE_BUFFER,
@@ -208,7 +208,7 @@ impl OceanKernels {
         let push = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .offset(0)
-            .size(std::mem::size_of::<OceanFftParams>() as u32);
+            .size(size_of::<OceanFftParams>() as u32);
         let set_layouts = [set_layout.handle()];
         let layout = device
             .create_pipeline_layout(
@@ -428,7 +428,7 @@ impl VkContext {
                     vk::PipelineBindPoint::COMPUTE,
                     &k.layout,
                     0,
-                    &k.sets[level..level + 1],
+                    &k.sets[level..=level],
                     &[],
                 );
                 rec.push_constants(&k.layout, compute, 0, &reduce);

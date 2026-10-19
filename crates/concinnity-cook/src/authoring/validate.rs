@@ -472,7 +472,7 @@ mod tests {
                 ..Default::default()
             };
             v.params[7] = 0.42;
-            let json = serde_json::to_value(v.clone()).expect("serializes");
+            let json = serde_json::to_value(v).expect("serializes");
             let back: SdfVolume = serde_json::from_value(json).expect("deserializes");
             let back = super::super::sdf_volume(back);
             assert_eq!(back.center, [1.0, 2.0, 3.0]);

@@ -27,7 +27,7 @@ fn preset_path_in(assets: &Path, filename: &str, subdir: &str) -> Option<String>
 
 /// Load a JSON object from `<assets_dir>/<subdir>/<name>.json`.
 pub fn load_preset_obj(name: &str, subdir: &str, assets_dir: Option<&Path>) -> serde_json::Value {
-    let filename = format!("{}.json", name);
+    let filename = format!("{name}.json");
     let path = find_preset_path(&filename, subdir, assets_dir);
     let Some(path) = path else {
         return serde_json::Value::Null;

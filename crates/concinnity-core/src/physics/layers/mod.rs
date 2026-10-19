@@ -33,7 +33,7 @@ pub(crate) struct LayerTable {
 
 impl LayerTable {
     pub(crate) fn new(config: &PhysicsConfig) -> Self {
-        let mut names: Vec<String> = BUILTIN_LAYERS.iter().map(|s| s.to_string()).collect();
+        let mut names: Vec<String> = BUILTIN_LAYERS.iter().map(ToString::to_string).collect();
         for layer in &config.layers {
             if names.len() >= 32 || names.iter().any(|n| n == layer) {
                 continue;
@@ -98,7 +98,7 @@ mod tests {
 
     fn config(layers: &[&str], no_collide: &[[&str; 2]]) -> PhysicsConfig {
         PhysicsConfig {
-            layers: layers.iter().map(|s| s.to_string()).collect(),
+            layers: layers.iter().map(ToString::to_string).collect(),
             no_collide: no_collide
                 .iter()
                 .map(|[a, b]| [a.to_string(), b.to_string()])
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn layer_count_caps_at_32() {
         let extras: Vec<String> = (0..40).map(|i| alloc::format!("extra{i}")).collect();
-        let refs: Vec<&str> = extras.iter().map(|s| s.as_str()).collect();
+        let refs: Vec<&str> = extras.iter().map(String::as_str).collect();
         let table = LayerTable::new(&config(&refs, &[]));
         assert_eq!(table.names.len(), 32);
         assert_eq!(table.mask("extra27").memberships, 1 << 31);

@@ -1,10 +1,10 @@
 // Grounded character-body schema.
 
-/// Gives a player [Camera3D](#camera3d) gravity, jumping, and a grounded
+/// Gives a player [`Camera3D`](#camera3d) gravity, jumping, and a grounded
 /// character body.
 ///
-/// Every [Camera3D](#camera3d) already collides with the world as a capsule.
-/// Adding a RigidBody upgrades that camera from a free-flying spectator to a
+/// Every [`Camera3D`](#camera3d) already collides with the world as a capsule.
+/// Adding a `RigidBody` upgrades that camera from a free-flying spectator to a
 /// grounded character: it falls under gravity, lands on surfaces, climbs steps,
 /// slides off steep slopes, and can jump. The capsule size is configured here
 /// too.
@@ -41,7 +41,7 @@ pub struct RigidBody {
     #[asset(default = 0.3)]
     pub step_height: f32,
     /// True when the capsule is resting on a surface this frame.
-    /// Written by PhysicsSystem.
+    /// Written by `PhysicsSystem`.
     // Starting grounded keeps the first frame from playing a fall.
     #[serde(skip)]
     #[asset(default = true)]

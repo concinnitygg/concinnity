@@ -1,4 +1,4 @@
-//! EditorHook: the CharacterShape panel's actions. The panel edits the shape
+//! `EditorHook`: the `CharacterShape` panel's actions. The panel edits the shape
 //! whose target is the selected skinned mesh or character model (or the
 //! selected shape entry); its rows are the target's schema laid over what
 //! that mesh exposes in the live world (`character_shape.rs`). Every commit
@@ -286,7 +286,7 @@ impl EditorHook {
                 }
             }
             ShapeAction::Drag { slider, rect } => {
-                self.begin_shape_drag(data, slider, rect, mouse, world)
+                self.begin_shape_drag(data, slider, rect, mouse, world);
             }
             ShapeAction::Consume => {}
         }

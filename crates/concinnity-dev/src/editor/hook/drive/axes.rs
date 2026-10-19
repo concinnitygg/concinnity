@@ -1,4 +1,4 @@
-//! EditorHook: the world-origin axes drive. Builds this frame's axis lines
+//! `EditorHook`: the world-origin axes drive. Builds this frame's axis lines
 //! (`editor/viewport/axes.rs`) sized to the live camera's view distance and hands them to the
 //! renderer's line pass. Unlike the overlay furniture the axes are world
 //! geometry, so there is nothing to place or hide here: an empty list is the

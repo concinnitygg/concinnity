@@ -440,8 +440,8 @@ fn behavior_duplicate_copies_a_node_subtree_next_to_it() {
     assert_eq!(
         h.behavior_rows()[row].element,
         Some(vec![
-            crate::editor::behavior::path::field("do"),
-            crate::editor::behavior::path::Step::Index(1),
+            behavior::path::field("do"),
+            behavior::path::Step::Index(1),
         ]),
     );
 }

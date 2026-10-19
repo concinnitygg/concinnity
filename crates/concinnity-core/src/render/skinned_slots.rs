@@ -84,10 +84,7 @@ impl SkinnedSlots {
             .draw_objects
             .get_mut(skinned_index.index())
             .ok_or_else(|| {
-                format!(
-                    "update_skinned_skeleton: skinned object {} out of range",
-                    skinned_index
-                )
+                format!("update_skinned_skeleton: skinned object {skinned_index} out of range")
             })?;
         let capped = new_joint_count.min(MAX_JOINTS);
         obj.joint_count = capped;
@@ -118,7 +115,9 @@ impl SkinnedSlots {
         // the next pre-pass must reproject through the revealed model instead.
         history.reoccupy_skinned(instance_index);
         if let Some(palette) = self.joint_matrices.get_mut(instance_index.index()) {
-            palette.iter_mut().for_each(|m| *m = IDENTITY);
+            for m in palette.iter_mut() {
+                *m = IDENTITY;
+            }
         }
     }
 

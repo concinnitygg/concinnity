@@ -3,7 +3,7 @@
 use concinnity_core::components::{Material, Model, PropCollider, PropParent};
 use concinnity_core::ecs::NameRef;
 
-/// A reusable template of [Prop](#prop)s, [PointLight](#pointlight)s, and nested
+/// A reusable template of [Prop](#prop)s, [`PointLight`](#pointlight)s, and nested
 /// prefabs.
 ///
 /// Placed as a unit at a world-space transform. Add a `prefab` field to a
@@ -28,7 +28,7 @@ pub struct Prefab {
     pub props: Vec<PrefabEntry>,
 }
 
-/// Which kind of asset a [PrefabEntry] expands into.
+/// Which kind of asset a [`PrefabEntry`] expands into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default, concinnity_core::components::Vocabulary)]
@@ -38,7 +38,7 @@ pub enum PrefabKind {
     #[default]
     #[vocab("prop")]
     Prop,
-    /// A [PointLight](#pointlight) built from the entry's `light_*` fields at the
+    /// A [`PointLight`](#pointlight) built from the entry's `light_*` fields at the
     /// entry's `position`.
     #[vocab("point_light")]
     PointLight,
@@ -70,14 +70,14 @@ pub struct PrefabEntry {
     /// `mesh`.
     #[serde(skip_serializing_if = "NameRef::is_empty")]
     pub model: NameRef<Model>,
-    /// `prop`: [Mesh](#mesh) / [ProceduralMesh](#proceduralmesh) of the
+    /// `prop`: [Mesh](#mesh) / [`ProceduralMesh`](#proceduralmesh) of the
     /// expanded prop.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub mesh: String,
     /// `prop`: [Material](#material) of the expanded prop.
     #[serde(skip_serializing_if = "NameRef::is_empty")]
     pub material: NameRef<Material>,
-    /// `prop`: [Prop](#prop) or [SkyRotation](#skyrotation) the expanded prop
+    /// `prop`: [Prop](#prop) or [`SkyRotation`](#skyrotation) the expanded prop
     /// is parented to.
     #[serde(skip_serializing_if = "NameRef::is_empty")]
     pub parent: NameRef<PropParent>,

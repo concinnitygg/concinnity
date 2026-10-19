@@ -184,7 +184,7 @@ pub(crate) enum ViewMode {
 
 impl ViewMode {
     // The views cycle, so one button reaches all three.
-    pub(crate) fn other(self) -> ViewMode {
+    pub(crate) fn other(self) -> Self {
         match self {
             Self::Outline => Self::Chart,
             Self::Chart => Self::Overview,
@@ -224,8 +224,8 @@ pub(crate) enum Status {
 
 impl Status {
     // A complaint with nowhere in particular to point.
-    pub(crate) fn message(text: impl Into<String>) -> Status {
-        Status::Error {
+    pub(crate) fn message(text: impl Into<String>) -> Self {
+        Self::Error {
             message: text.into(),
             at: Path::new(),
         }
@@ -612,7 +612,7 @@ pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bo
 // `None` means the click missed the panel. Title-bar presses never reach this:
 // the shared routing intercepts them first.
 pub(crate) fn hit_test(
-    view: &BehaviorView,
+    view: &BehaviorView<'_>,
     mx: f32,
     my: f32,
     o: [f32; 2],
@@ -731,7 +731,7 @@ pub(crate) fn overview_action(card: &Card, i: usize) -> BehaviorAction {
 
 // Position + show the panel (`Some(view)`) at effective size `s`, or blank every
 // element (`None`).
-pub(crate) fn place(world: &mut World, view: Option<&BehaviorView>, o: [f32; 2], s: [f32; 2]) {
+pub(crate) fn place(world: &mut World, view: Option<&BehaviorView<'_>>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
         ids().hide(world);
         return;
@@ -763,7 +763,7 @@ pub(crate) fn place(world: &mut World, view: Option<&BehaviorView>, o: [f32; 2],
     layout_palette(world, view, o, w);
 }
 
-fn hide_inspector(world: &mut World, view: &BehaviorView) {
+fn hide_inspector(world: &mut World, view: &BehaviorView<'_>) {
     widget::set_sprite_visible(world, INSPECT_BG, false);
     widget::set_label_visible(world, INSPECT_LABEL, false);
     if view.mode != ViewMode::Outline {
@@ -830,17 +830,18 @@ fn chart_view<'a>(view: &'a BehaviorView<'a>) -> chart::ChartView<'a> {
     }
 }
 
-fn palette_open(view: &BehaviorView) -> bool {
+fn palette_open(view: &BehaviorView<'_>) -> bool {
     view.picking && !view.picks.is_empty()
 }
 
-fn layout_header(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
+fn layout_header(world: &mut World, view: &BehaviorView<'_>, o: [f32; 2], w: f32) {
     let has_any = view.total > 0;
     // The armed chip says what the next press does, so nothing is destroyed by
     // a press that only meant to reach for it.
-    let (remove_caption, remove_tint) = match view.remove_armed && has_any {
-        true => ("Confirm", CONFIRM_TINT),
-        false => ("Remove", DEL_TINT),
+    let (remove_caption, remove_tint) = if view.remove_armed && has_any {
+        ("Confirm", CONFIRM_TINT)
+    } else {
+        ("Remove", DEL_TINT)
     };
     for chip in [
         Chip {
@@ -892,7 +893,7 @@ fn layout_header(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
 // The open behavior's name, typed in place, with its place in the world's
 // behaviors beside it. An empty world has no name to type, so the field gives
 // way to the prompt that says what to press.
-fn layout_name(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
+fn layout_name(world: &mut World, view: &BehaviorView<'_>, o: [f32; 2], w: f32) {
     let text_y = header_y(o) + CTRL_H * 0.5 - theme::TEXT_HALF;
     if view.total == 0 {
         widget::hide_field(world, NAME_INPUT);
@@ -926,7 +927,7 @@ fn layout_name(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
     );
 }
 
-fn layout_toolbar(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
+fn layout_toolbar(world: &mut World, view: &BehaviorView<'_>, o: [f32; 2], w: f32) {
     // The toolbar acts on a row of the open behavior, so the overview leaves it
     // with nothing to act on.
     let on = view.total > 0 && view.mode != ViewMode::Overview;
@@ -989,7 +990,7 @@ fn layout_toolbar(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
 
 // The checker's complaint, floating over the foot of the body. Nothing is drawn
 // while the open behavior checks out, so a working panel is all body.
-fn layout_status(world: &mut World, view: &BehaviorView, o: [f32; 2], s: [f32; 2]) {
+fn layout_status(world: &mut World, view: &BehaviorView<'_>, o: [f32; 2], s: [f32; 2]) {
     let Some(error) = view
         .status
         .and_then(Status::error)
@@ -1023,7 +1024,7 @@ pub(crate) fn status_rect(o: [f32; 2], s: [f32; 2]) -> [f32; 4] {
 // The inspector: the selected node's own settings beside the chart. Every row
 // is an ordinary body row, so the toolbar and the palette act on it exactly as
 // they do in the outline.
-fn layout_inspector(world: &mut World, view: &BehaviorView, o: [f32; 2], s: [f32; 2]) {
+fn layout_inspector(world: &mut World, view: &BehaviorView<'_>, o: [f32; 2], s: [f32; 2]) {
     let b = inspect_rect(o, s);
     place_rounded(
         world,
@@ -1056,7 +1057,7 @@ fn layout_inspector(world: &mut World, view: &BehaviorView, o: [f32; 2], s: [f32
     layout_rows(world, view, o, s, view.fields.len().min(room));
 }
 
-fn layout_rows(world: &mut World, view: &BehaviorView, o: [f32; 2], s: [f32; 2], shown: usize) {
+fn layout_rows(world: &mut World, view: &BehaviorView<'_>, o: [f32; 2], s: [f32; 2], shown: usize) {
     let (value_x, value_budget) = match view.mode {
         ViewMode::Outline => (value_column(s[0]), max_value_chars(s[0])),
         _ => (
@@ -1137,7 +1138,7 @@ fn label_color(kind: &Kind) -> [f32; 3] {
     }
 }
 
-fn layout_scrollbar(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32, shown: usize) {
+fn layout_scrollbar(world: &mut World, view: &BehaviorView<'_>, o: [f32; 2], w: f32, shown: usize) {
     let total = if view.total > 0 { view.rows.len() } else { 0 };
     if total <= shown {
         widget::set_sprite_visible(world, LIST_TRACK, false);
@@ -1170,7 +1171,7 @@ fn layout_scrollbar(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32,
 // The floating palette: an opaque backing over the outline, a field narrowing
 // what it offers, one row per kept option with its hint, and its own scrollbar
 // once what is kept overflows.
-fn layout_palette(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
+fn layout_palette(world: &mut World, view: &BehaviorView<'_>, o: [f32; 2], w: f32) {
     if !palette_open(view) {
         widget::set_sprite_visible(world, DROP_BG, false);
         widget::set_sprite_visible(world, DROP_TRACK, false);
@@ -1245,7 +1246,7 @@ fn layout_palette(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
 
 // The field the palette is narrowed by. Its ghost says what typing does, so the
 // affordance does not need a label of its own taking a row.
-fn layout_filter(world: &mut World, view: &BehaviorView, o: [f32; 2], w: f32) {
+fn layout_filter(world: &mut World, view: &BehaviorView<'_>, o: [f32; 2], w: f32) {
     let r = filter_rect(o, w);
     place_rounded(
         world,
@@ -1284,7 +1285,7 @@ fn empty_palette_row(world: &mut World, o: [f32; 2], w: f32) {
 
 fn layout_palette_scrollbar(
     world: &mut World,
-    view: &BehaviorView,
+    view: &BehaviorView<'_>,
     o: [f32; 2],
     w: f32,
     shown: usize,
@@ -1805,7 +1806,7 @@ mod tests {
             [20.0, 20.0],
             chart_size(),
         );
-        let card = super::fields::owning_card(&sample_chart().cards, &rows[target].path)
+        let card = fields::owning_card(&sample_chart().cards, &rows[target].path)
             .expect("a card settles the target row");
         assert_eq!(
             sprite(&world, CHART_IDS.card_bg(card)).border_width,
@@ -2178,7 +2179,7 @@ mod tests {
 
     fn node_fields(rows: &[Row]) -> Vec<usize> {
         let chart = sample_chart();
-        super::fields::own_rows(rows, &chart.cards, 1)
+        fields::own_rows(rows, &chart.cards, 1)
     }
 
     // The inspector column is beside the chart, not over it, so selecting a card

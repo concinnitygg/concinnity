@@ -33,7 +33,7 @@ fn bind(
     );
 }
 
-pub(super) fn map_material(prefix: &str, mat: &gltf::Material) -> MappedMaterial {
+pub(super) fn map_material(prefix: &str, mat: &gltf::Material<'_>) -> MappedMaterial {
     let pbr = mat.pbr_metallic_roughness();
     let mut mapped = MappedMaterial {
         args: Map::new(),
@@ -197,7 +197,7 @@ mod tests {
         for materials in [
             r#"{"alphaMode": "OPAQUE"}"#,
             r#"{"alphaMode": "BLEND"}"#,
-            r#"{}"#,
+            r"{}",
         ] {
             let mapped = map_first(materials);
             assert!(

@@ -19,12 +19,12 @@ use objc2_metal::{
 };
 
 use super::builtin_shaders::compute_pipeline;
-use super::context::*;
+use super::context::{BINDLESS_TEXTURE_COUNT, DrawRecordCounts, MtlContext};
 use super::encode::ComputeEncode;
 use super::init::pipelines::BucketPipelines;
 use super::pipeline::{cull_encode_library, ns_str};
 use super::scoped_encoder::ScopedEncoder;
-use concinnity_core::render::uniforms::metal::*;
+use concinnity_core::render::uniforms::metal::{CullUniforms, EncodeParams};
 
 // One shadow pass's GPU-driven views: an ICB with one region of `cull_count()`
 // command slots per view (view `v` at base `v * cull_count()`), the argument
@@ -206,7 +206,7 @@ pub(super) fn metal_flat_pool_indices(
     material: &render_types::MaterialUniforms,
 ) -> FlatPoolIndices {
     use concinnity_core::gfx::render_types::{albedo_pool_index, normal_pool_index};
-    let cap = (super::context::BINDLESS_TEXTURE_COUNT as u32).saturating_sub(1);
+    let cap = (BINDLESS_TEXTURE_COUNT as u32).saturating_sub(1);
     let tc = texture_count as u32;
     let clamp = |i: u32| i.min(cap);
     // The emissive / ORM indices already carry their final shared-pool handle
@@ -313,7 +313,7 @@ struct CullSceneBuffers<'a> {
     draw_args_buffer: &'a ProtocolObject<dyn objc2_metal::MTLBuffer>,
     // The record set the two buffers hold. Drives the dispatch width, so the
     // kernel never reads past a snapshot the live draw list has since outgrown.
-    counts: crate::metal::context::DrawRecordCounts,
+    counts: DrawRecordCounts,
 }
 
 // The camera the cull kernel tests records against: the frustum planes plus the
@@ -565,7 +565,7 @@ impl MtlContext {
         draw_args_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
         frustum: &Frustum,
         cam_pos: [f32; 3],
-        counts: crate::metal::context::DrawRecordCounts,
+        counts: DrawRecordCounts,
     ) -> RenderResult<()> {
         let (Some(arg_buf), Some(status)) = (&self.cull.icb_arg_buffer, &self.cull.status_buffer)
         else {
@@ -656,10 +656,10 @@ impl MtlContext {
     fn encode_cull_into(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        scene: CullSceneBuffers,
-        view: CullView,
-        target: CullOutputTarget,
-        options: CullDispatchOptions,
+        scene: CullSceneBuffers<'_>,
+        view: CullView<'_>,
+        target: CullOutputTarget<'_>,
+        options: CullDispatchOptions<'_>,
     ) -> RenderResult<()> {
         let CullSceneBuffers {
             object_buffer,
@@ -701,11 +701,7 @@ impl MtlContext {
                 Some(h.texture.as_ref()),
                 [h.width as f32, h.height as f32],
                 h.mip_count,
-                if use_hiz && self.state.planner.temporal().occlusion().valid() {
-                    1u32
-                } else {
-                    0u32
-                },
+                u32::from(use_hiz && self.state.planner.temporal().occlusion().valid()),
             ),
             None => (None, [1.0, 1.0], 1, 0u32),
         };
@@ -1148,7 +1144,7 @@ impl MtlContext {
             return Ok(None);
         }
         let tail_sig = self.bindless_tail_signature();
-        let count = super::context::BINDLESS_TEXTURE_COUNT;
+        let count = BINDLESS_TEXTURE_COUNT;
         let len = super::bindless_args::bindless_block_len(count);
         // Ring slot, grown to the block's length instead of a fresh allocation
         // each frame, and rewritten in place; the fence guarantees the prior
@@ -1210,7 +1206,7 @@ impl MtlContext {
                 .textures
                 .iter()
                 .chain(self.scene.fallback_textures.iter())
-                .map(|t| t.as_ref())
+                .map(AsRef::as_ref)
                 .chain(self.bindless_fixed_members().map(|(_, tex)| tex)),
         );
         self.arg_buffers.bindless_residency = set;

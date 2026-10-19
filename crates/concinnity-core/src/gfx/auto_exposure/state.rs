@@ -170,8 +170,8 @@ pub(crate) fn average_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
         if n == 0 || center < metered_from {
             continue;
         }
-        weighted_sum += center as f64 * n as f64;
-        count += n as u64;
+        weighted_sum += f64::from(center) * f64::from(n);
+        count += u64::from(n);
     }
     if count == 0 {
         LUM_LOG2_MIN

@@ -1,5 +1,5 @@
 //! World-space line pass for the Vulkan backend. Runs at the tail of the
-//! hdr_resolve decoration chain, after the main pass resolved color into the
+//! `hdr_resolve` decoration chain, after the main pass resolved color into the
 //! HDR scene target and depth into the main depth image, so the lines layer over
 //! the lit scene and SSR / TAA treat them like any other scene content.
 //!
@@ -118,8 +118,8 @@ pub(in crate::vulkan) struct LinePassTargets<'a> {
 
 impl LineResources {
     fn new(
-        ctx: LineDeviceContext,
-        targets: LinePassTargets,
+        ctx: LineDeviceContext<'_>,
+        targets: LinePassTargets<'_>,
         frames: usize,
         msaa: bool,
         hot_reload: bool,
@@ -144,7 +144,7 @@ impl LineResources {
             &frag_spv,
         )?;
 
-        let view_size = std::mem::size_of::<LineView>() as u64;
+        let view_size = size_of::<LineView>() as u64;
         let mut view_ubos = Vec::with_capacity(frames);
         let mut vertex_slots = Vec::with_capacity(frames);
         for _ in 0..frames {
@@ -382,7 +382,7 @@ fn create_line_pipeline(
     // `line_vertex_layout_matches_shaders`.
     let bindings = [vk::VertexInputBindingDescription::default()
         .binding(0)
-        .stride(std::mem::size_of::<LineVertex>() as u32)
+        .stride(size_of::<LineVertex>() as u32)
         .input_rate(vk::VertexInputRate::VERTEX)];
     let attrs = [
         vk::VertexInputAttributeDescription::default()
@@ -470,9 +470,7 @@ impl VkContext {
                 }
             }
         }
-        if let Err(e) =
-            self.grow_line_vertex_slot(frame_idx, std::mem::size_of_val(vertices) as u64)
-        {
+        if let Err(e) = self.grow_line_vertex_slot(frame_idx, size_of_val(vertices) as u64) {
             self.lines.build_failed = true;
             tracing::error!("line vertex buffer: {}", e);
         }
@@ -515,7 +513,7 @@ impl VkContext {
         let Some(slot) = lines.vertex_slots.get(frame_idx) else {
             return;
         };
-        let bytes = std::mem::size_of_val(vertices) as u64;
+        let bytes = size_of_val(vertices) as u64;
         if bytes > slot.capacity {
             return;
         }

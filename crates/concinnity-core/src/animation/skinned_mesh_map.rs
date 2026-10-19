@@ -27,7 +27,7 @@ impl SkinnedMeshNameIndex {
         self.0
             .get(&name_id)
             .copied()
-            .unwrap_or(SkinnedMeshHandle::new(name_id.0))
+            .unwrap_or_else(|| SkinnedMeshHandle::new(name_id.0))
     }
 }
 

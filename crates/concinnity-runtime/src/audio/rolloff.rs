@@ -1,4 +1,4 @@
-//! Maps authored AudioEmitter attenuation onto kira's spatial-track
+//! Maps authored `AudioEmitter` attenuation onto kira's spatial-track
 //! parameters; core's `audio::distance` sanitizes the range.
 
 use concinnity_core::components::Rolloff;

@@ -1,6 +1,6 @@
-//! Runtime behavior for the SkinnedMesh asset. The authored schema (SkinnedMesh,
-//! its SkinnedVertexData / SkeletonJoint / CharacterCapsule, and their Defaults) lives
-//! above; SkinnedMesh is a resource (compiled by cook into the
+//! Runtime behavior for the `SkinnedMesh` asset. The authored schema (`SkinnedMesh`,
+//! its `SkinnedVertexData` / `SkeletonJoint` / `CharacterCapsule`, and their Defaults) lives
+//! above; `SkinnedMesh` is a resource (compiled by cook into the
 //! blob's resource stream, no `Component` impl), so this file keeps only the
 //! skeleton builder and the model matrix, both built through `animation::skeleton`.
 
@@ -94,12 +94,12 @@ pub struct SkeletonJoint {
 /// skeleton (`root`, `hips`, `spine`, `chest`,
 /// `upper_chest`, `neck`, `head`, and `clavicle` / `upper_arm` / `forearm` /
 /// `hand` / `thumb` / `thigh` / `shin` / `foot` / `toe` with an `_l` / `_r`
-/// suffix), the morph targets a [CharacterShape](#charactershape) slider set
+/// suffix), the morph targets a [`CharacterShape`](#charactershape) slider set
 /// names (`weight+/-`, `muscle`, `shoulders+/-`, `hips+/-`, `chest+/-`,
 /// `belly`, `head+/-`, `jaw+/-`, `nose+/-`, `brow`, `cheeks+/-`,
 /// `chin+/-`, `eyes+/-`, `lips+/-`, `mouth_width+/-`, `ears+/-`,
 /// `cheekbones+/-`), and a rotation-only `idle` clip an Animation can import from
-/// the same file; a [CharacterModel](#charactermodel) is the usual way to
+/// the same file; a [`CharacterModel`](#charactermodel) is the usual way to
 /// declare it.
 ///
 /// The `skeleton` (joint hierarchy and bind pose) is provided as an arg
@@ -178,7 +178,7 @@ pub struct SkinnedMesh {
     pub locator: Option<PayloadLocator>,
 }
 
-/// A kinematic character capsule for a [SkinnedMesh](#skinnedmesh), in world
+/// A kinematic character capsule for a [`SkinnedMesh`](#skinnedmesh), in world
 /// units (after the mesh's `scale`).
 #[derive(
     Debug,

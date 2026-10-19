@@ -107,7 +107,7 @@ impl NgxSession {
                     cmd.as_raw(),
                     NVSDK_NGX_FEATURE_SUPERSAMPLING,
                     self.params,
-                    &mut self.feature,
+                    &raw mut self.feature,
                 )
             };
         })?;
@@ -179,7 +179,7 @@ impl DlssUpscaler {
         };
 
         // SAFETY: NGX is initialized, and `ngx.params` is a live field that receives the bag.
-        let rc = unsafe { NVSDK_NGX_D3D12_GetCapabilityParameters(&mut ngx.params) };
+        let rc = unsafe { NVSDK_NGX_D3D12_GetCapabilityParameters(&raw mut ngx.params) };
         if !ngx_succeeded(rc) || ngx.params.is_null() {
             tracing::warn!(
                 "DLSS: GetCapabilityParameters returned {rc:#x}; trying the next backend"

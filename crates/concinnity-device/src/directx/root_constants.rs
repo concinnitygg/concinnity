@@ -11,7 +11,7 @@ pub(in crate::directx) const fn root_dwords<T: NoUninit>() -> u32 {
         assert!(
             size_of::<T>().is_multiple_of(4),
             "a root-constant block must be whole 32-bit values"
-        )
+        );
     };
     (size_of::<T>() / 4) as u32
 }
@@ -47,9 +47,9 @@ impl RootConstants for ID3D12GraphicsCommandList {
             self.SetGraphicsRoot32BitConstants(
                 param,
                 root_dwords::<T>(),
-                (value as *const T).cast(),
+                std::ptr::from_ref::<T>(value).cast(),
                 0,
-            )
+            );
         }
     }
 
@@ -67,9 +67,9 @@ impl RootConstants for ID3D12GraphicsCommandList {
             self.SetComputeRoot32BitConstants(
                 param,
                 root_dwords::<T>(),
-                (value as *const T).cast(),
+                std::ptr::from_ref::<T>(value).cast(),
                 0,
-            )
+            );
         }
     }
 }

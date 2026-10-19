@@ -1,4 +1,4 @@
-//! EditorHook: what each panel's actions do, one module per surface. A panel's
+//! `EditorHook`: what each panel's actions do, one module per surface. A panel's
 //! layout half reports what was clicked (`editor/*_panel.rs`); the module here
 //! carries that report out. Most of them mutate the working authored entry list
 //! and commit it the way every other edit commits (`hook/edits.rs`: the undo

@@ -177,7 +177,7 @@ mod tests {
     fn a_key_written_out_at_its_default_is_not_a_change() {
         let before = vec![entry("a", "Sprite", json!({ "width": 4.0 }))];
         let defaults = form::base_args("Sprite");
-        let mut spelled_out = defaults.clone();
+        let mut spelled_out = defaults;
         spelled_out.insert("width".to_string(), json!(8.0));
         let after = vec![entry("a", "Sprite", Value::Object(spelled_out))];
         assert_eq!(changes(&before, &after).unwrap()[0].keys, ["width"]);

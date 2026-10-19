@@ -69,7 +69,7 @@ pub(super) fn build_composite(
     let composite_pc_range = vk::PushConstantRange::default()
         .stage_flags(vk::ShaderStageFlags::FRAGMENT)
         .offset(0)
-        .size(std::mem::size_of::<CompositeParams>() as u32);
+        .size(size_of::<CompositeParams>() as u32);
     let set_layouts = [set_layout.handle()];
     let pipeline_layout = device
         .create_pipeline_layout(
@@ -105,9 +105,8 @@ pub(super) fn build_composite(
         // blended over the scene) when a reflection path is active, else the raw
         // HDR resolve (a SSGI-only build composited its bounce into the latter
         // upstream). The TAA / upscale wiring overrides this later.
-        let scene_view = reflection_composite
-            .map(|c| c.output().view())
-            .unwrap_or(targets.hdr_resolve_images[i].view);
+        let scene_view =
+            reflection_composite.map_or(targets.hdr_resolve_images[i].view, |c| c.output().view());
         write_composite_set(
             device,
             set,

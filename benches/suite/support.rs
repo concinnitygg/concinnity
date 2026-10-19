@@ -9,6 +9,7 @@
 //! per-item costs. Bodies must be deterministic and self-contained: whatever a
 //! body builds it should also tear down, or the heap column will show the drift.
 
+use std::fmt::Write as _;
 use std::time::Instant;
 
 use concinnity_core::memory::Realm;
@@ -32,9 +33,9 @@ pub(crate) struct Rng(u64);
 
 impl Rng {
     /// A generator seeded with `seed`; zero is replaced by a fixed constant.
-    pub(crate) fn new(seed: u64) -> Rng {
+    pub(crate) fn new(seed: u64) -> Self {
         // Xorshift has a zero fixed point; substitute a fixed odd constant.
-        Rng(if seed == 0 {
+        Self(if seed == 0 {
             0x9E37_79B9_7F4A_7C15
         } else {
             seed
@@ -101,11 +102,11 @@ impl Bench {
     /// Build a harness from the CLI arguments `cargo bench` forwards: bare
     /// words select benchmarks by substring, `--json <path>` writes the
     /// records as JSON, and other flags (cargo's own `--bench`) are ignored.
-    pub(crate) fn from_env() -> Bench {
-        Bench::from_args(std::env::args().skip(1))
+    pub(crate) fn from_env() -> Self {
+        Self::from_args(std::env::args().skip(1))
     }
 
-    pub(crate) fn from_args(args: impl Iterator<Item = String>) -> Bench {
+    pub(crate) fn from_args(args: impl Iterator<Item = String>) -> Self {
         let mut filters = Vec::new();
         let mut json_path = None;
         let mut args = args;
@@ -116,7 +117,7 @@ impl Bench {
                 word => filters.push(word.to_string()),
             }
         }
-        Bench {
+        Self {
             filters,
             json_path,
             samples: DEFAULT_SAMPLES,
@@ -152,7 +153,7 @@ impl Bench {
             }
             samples.push(start.elapsed().as_nanos() as f64 / iters as f64);
         }
-        samples.sort_by(|a, b| a.total_cmp(b));
+        samples.sort_by(f64::total_cmp);
 
         // A separate pass for memory, so snapshot reads sit outside the timed
         // windows and the timing loop sits outside the counted window.
@@ -205,6 +206,10 @@ impl Bench {
     }
 
     /// Finish the run: write the JSON report when one was requested.
+    #[expect(
+        clippy::panic,
+        reason = "a benchmark that cannot write its report has nothing to report"
+    )]
     pub(crate) fn finish(self) {
         if self.records.is_empty() {
             println!("no benchmarks matched the filter");
@@ -303,10 +308,11 @@ pub(crate) fn json_report(records: &[Record]) -> String {
     let mut out = String::from("[\n");
     for (i, r) in records.iter().enumerate() {
         let comma = if i + 1 < records.len() { "," } else { "" };
-        out.push_str(&format!(
+        let _ = writeln!(
+            out,
             "  {{\"name\":\"{}\",\"items\":{},\"iters\":{},\"median_ns\":{},\"p95_ns\":{},\
              \"allocs_per_iter\":{},\"frees_per_iter\":{},\"heap_bytes_per_iter\":{},\
-             \"device_bytes_per_iter\":{}}}{comma}\n",
+             \"device_bytes_per_iter\":{}}}{comma}",
             json_escape(&r.name),
             r.items,
             r.iters,
@@ -316,7 +322,7 @@ pub(crate) fn json_report(records: &[Record]) -> String {
             r.frees_per_iter,
             r.heap_bytes_per_iter,
             r.device_bytes_per_iter,
-        ));
+        );
     }
     out.push_str("]\n");
     out

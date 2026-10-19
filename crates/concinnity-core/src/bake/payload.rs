@@ -63,7 +63,7 @@ impl core::fmt::Debug for MeshPayload {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("MeshPayload")
             .field("len", &self.bytes.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

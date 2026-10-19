@@ -1,3 +1,5 @@
+use crate::animation::pose_scratch::PoseScratch;
+use crate::animation::proportions::ProportionLayer;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -91,9 +93,9 @@ fn bare_pose(skinned_index: u32, joints: usize) -> SkeletonPose {
         joint_matrices: vec![translated(1.0); joints],
         morph_weights: Vec::new(),
         morph_base: Vec::new(),
-        proportions: Default::default(),
+        proportions: ProportionLayer::default(),
         updated: true,
-        scratch: Default::default(),
+        scratch: PoseScratch::default(),
     }
 }
 
@@ -503,7 +505,10 @@ fn extraction_applies_editor_hides_and_pick_index_only_when_opted_in() {
     extract_once(&mut fx, &mut world);
     let index = world.resource::<PickIndex>().unwrap();
     assert_eq!(index.entries.len(), 1);
-    let (slot, storage) = (index as *const PickIndex, index.entries.as_ptr());
+    let (slot, storage) = (
+        core::ptr::from_ref::<PickIndex>(index),
+        index.entries.as_ptr(),
+    );
     extract_once(&mut fx, &mut world);
     let index = world.resource::<PickIndex>().unwrap();
     assert!(

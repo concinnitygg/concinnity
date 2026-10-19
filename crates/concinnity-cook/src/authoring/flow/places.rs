@@ -80,7 +80,7 @@ fn settings_screen(asset: &WorldJsonlAsset) -> Option<Place> {
 }
 
 fn flag(asset: &WorldJsonlAsset, key: &str) -> bool {
-    asset.args.get(key).and_then(|v| v.as_bool()) == Some(true)
+    asset.args.get(key).and_then(serde_json::Value::as_bool) == Some(true)
 }
 
 #[cfg(test)]

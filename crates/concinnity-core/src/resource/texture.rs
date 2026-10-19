@@ -37,11 +37,10 @@ impl TextureTable {
     /// The runtime fields of the texture at `handle`; the defaults when there
     /// is no such texture.
     pub fn record(&self, handle: usize) -> Result<TextureRecord, FrameError> {
-        self.0
-            .get(handle)
-            .map_or(Ok(TextureRecord::default()), |e| {
-                TextureRecord::from_bytes(&e.data_bytes)
-            })
+        self.0.get(handle).map_or_else(
+            || Ok(TextureRecord::default()),
+            |e| TextureRecord::from_bytes(&e.data_bytes),
+        )
     }
 
     /// The handles of every texture only the cook reads.

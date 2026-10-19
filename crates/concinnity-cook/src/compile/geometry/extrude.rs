@@ -31,14 +31,17 @@ pub(super) fn build_extrude(args: &serde_json::Value) -> GeomResult {
         profile.push([x, z]);
     }
 
-    let height = args.get("height").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+    let height = args
+        .get("height")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(1.0) as f32;
     let corner_radius = args
         .get("corner_radius")
-        .and_then(|v| v.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .unwrap_or(0.0) as f32;
     let corner_segments = args
         .get("corner_segments")
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .unwrap_or(8) as u32;
 
     concinnity_core::geometry::build_extrude(&profile, height, corner_radius, corner_segments)

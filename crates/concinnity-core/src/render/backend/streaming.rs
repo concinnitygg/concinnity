@@ -221,7 +221,7 @@ pub trait DrawStreaming: SceneHost {
         let _ = bucket;
     }
 
-    /// A builder that creates world Shader and SdfVolume pipelines against this
+    /// A builder that creates world Shader and `SdfVolume` pipelines against this
     /// backend's device on another thread, so a scene's bucket install and a
     /// hot reload's swap receive a finished pipeline instead of building one on
     /// the frame thread. Default `None`: the install builds for itself.

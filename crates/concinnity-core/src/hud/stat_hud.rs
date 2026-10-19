@@ -209,7 +209,7 @@ impl StatHudSystem {
     }
 
     // Write `text` into the TextLabel with the given id, if it exists.
-    fn write_chip(ctx: &mut PipelineContext, id: Option<AssetId>, text: String) {
+    fn write_chip(ctx: &mut PipelineContext<'_>, id: Option<AssetId>, text: String) {
         crate::ecs::by_asset_id::update::<TextLabel>(ctx, id, |l| l.content = text);
     }
 }
@@ -228,11 +228,11 @@ impl System for StatHudSystem {
             ])
     }
 
-    fn init(&mut self, ctx: &mut PipelineContext) {
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
         self.benchmark = ctx.resource::<BenchmarkRun>().cloned();
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         // Per-chip visibility from the "Display performance stats" video
         // settings, published by SettingsSystem. Absent (no settings state),
         // both are shown.
@@ -269,7 +269,7 @@ impl System for StatHudSystem {
             self.ram_bytes = ctx
                 .resource::<ResidentMemory>()
                 .and_then(ResidentMemory::read);
-            let budget_mib = ctx.resource::<MemoryBudget>().map(|b| b.budget_mib());
+            let budget_mib = ctx.resource::<MemoryBudget>().map(MemoryBudget::budget_mib);
             // A blank chip reads as empty content -> the renderer draws neither
             // text nor the background box, so a disabled chip fully disappears.
             Self::write_chip(

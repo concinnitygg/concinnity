@@ -17,6 +17,10 @@ const DATE: &str = "CONCINNITY_STAMP_DATE";
 /// Emit the calling package's version stamp as build-script env vars, plus the
 /// rerun directives that restamp it: the git refs when there are any, and the
 /// package sources otherwise, so a rebuilt tree never reports a stale date.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 pub fn emit_version_stamp() {
     let dir =
         std::env::var("CARGO_MANIFEST_DIR").map_or_else(|_| PathBuf::from("."), PathBuf::from);

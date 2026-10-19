@@ -9,9 +9,9 @@
 // view. GPU objects inside the world are not thread-safe; the mutex here stops
 // re-entrancy, it does not lift that requirement.
 
-use std::ffi::{CStr, c_void};
+use core::ffi::{CStr, c_void};
+use core::ptr::NonNull;
 use std::os::raw::{c_char, c_int};
-use std::ptr::NonNull;
 use std::sync::{Mutex, OnceLock};
 
 use concinnity_core::ecs::StepResult;
@@ -59,9 +59,9 @@ pub enum CnStep {
 impl From<StepResult> for CnStep {
     fn from(result: StepResult) -> Self {
         match result {
-            StepResult::Continue => CnStep::Continue,
-            StepResult::Done => CnStep::Done,
-            StepResult::Stop => CnStep::Stopped,
+            StepResult::Continue => Self::Continue,
+            StepResult::Done => Self::Done,
+            StepResult::Stop => Self::Stopped,
         }
     }
 }
@@ -200,7 +200,7 @@ fn code_for(e: &OpenError) -> CnError {
 }
 
 // The whole cause chain on one line, which is what the code leaves out.
-fn chain(e: &dyn std::error::Error) -> String {
+fn chain(e: &dyn core::error::Error) -> String {
     let mut line = e.to_string();
     let mut source = e.source();
     while let Some(cause) = source {

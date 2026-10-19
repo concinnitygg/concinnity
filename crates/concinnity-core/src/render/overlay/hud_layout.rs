@@ -25,7 +25,7 @@ pub(super) struct LabelLayoutScratch {
 // the resolved origin is written back into each label so `build_text_calls`
 // then draws it in place.
 pub(super) fn apply_label_layout(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     loaded_fonts: &text::FontSet,
     scratch: &mut LabelLayoutScratch,
 ) {
@@ -81,7 +81,7 @@ enum ChipStrip {
 // therefore correct: the measured width always matches the content being
 // drawn, so the stack never mismatches within a frame.
 pub(super) fn position_debug_hud(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     chip_ids: &[AssetId],
     loaded_fonts: &text::FontSet,
     win_w: f32,
@@ -97,7 +97,7 @@ pub(super) fn position_debug_hud(
 // tight strip from the top-left of the window. Measured each frame (same timing rationale as the
 // DebugHud stack) so a chip that changes width re-packs its neighbors.
 pub(super) fn position_stat_hud(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     chip_ids: &[AssetId],
     loaded_fonts: &text::FontSet,
 ) {
@@ -116,7 +116,7 @@ pub(super) fn position_stat_hud(
 // positions in window space directly. Measure and write share one lookup per
 // chip.
 fn position_chip_strip(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     chip_ids: &[AssetId],
     loaded_fonts: &text::FontSet,
     strip: ChipStrip,

@@ -11,6 +11,7 @@
 //! same table the renderer iterates, so the text compiled here is the text the
 //! renderer would have compiled.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 // The directory under `OUT_DIR` the compiled artifacts land in.
@@ -50,6 +51,15 @@ pub struct ShaderArtifact<'a> {
 /// the build rather than surface at renderer init. So is a missing dxc (see
 /// `embedded_shaders::require_dxc`). An empty `artifacts` emits a stub lookup
 /// answering `None` for every name, for a host that has nothing to embed.
+///
+/// # Panics
+///
+/// Panics outside a build script, where cargo sets no `OUT_DIR`, and on any
+/// compile or write failure.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 pub fn precompile_shader_artifacts(
     artifacts: &[ShaderArtifact<'_>],
     generated: &str,
@@ -94,6 +104,7 @@ pub fn precompile_shader_artifacts(
 /// `entry` gives a job's lookup name, source digest and artifact path.
 /// `compile` gives its bytes and whatever else the caller keeps from it, or
 /// the message the build fails with. Returns the kept values in job order.
+#[expect(clippy::panic, reason = "a build script reports failure by panicking")]
 pub(crate) fn embed<J: Sync, K: Send>(
     jobs: &[J],
     entry: impl Fn(&J) -> (String, u64, PathBuf),
@@ -142,13 +153,23 @@ fn lookup_source(entries: &[(String, u64, PathBuf)], lookup: &str) -> String {
          \x20   match name {{\n"
     );
     for (name, digest, path) in entries {
-        src.push_str(&format!(
-            "        {name:?} => Some(({digest}u64, include_bytes!({:?}))),\n",
+        let _ = writeln!(
+            src,
+            "        {name:?} => Some(({}, include_bytes!({:?}))),",
+            digest_literal(*digest),
             path.display().to_string()
-        ));
+        );
     }
     src.push_str("        _ => None,\n    }\n}\n");
     src
+}
+
+// A digest as a hex literal grouped in fours, which the including crate's
+// `unreadable_literal` lint accepts.
+fn digest_literal(digest: u64) -> String {
+    let hex = format!("{digest:016x}");
+    let groups: Vec<&str> = (0..4).map(|i| &hex[i * 4..i * 4 + 4]).collect();
+    format!("0x{}_u64", groups.join("_"))
 }
 
 // The lookup for a build that embeds nothing.
@@ -181,9 +202,22 @@ mod tests {
         ];
         let src = lookup_source(&entries, "embedded_dxil");
         assert!(src.contains("fn embedded_dxil"));
-        assert!(src.contains("\"vert.dxil\" => Some((7u64, include_bytes!(\"/out/vert.dxil\")))"));
-        assert!(src.contains("\"frag.dxil\" => Some((9u64, include_bytes!(\"/out/frag.dxil\")))"));
+        assert!(src.contains(
+            "\"vert.dxil\" => Some((0x0000_0000_0000_0007_u64, include_bytes!(\"/out/vert.dxil\")))"
+        ));
+        assert!(src.contains(
+            "\"frag.dxil\" => Some((0x0000_0000_0000_0009_u64, include_bytes!(\"/out/frag.dxil\")))"
+        ));
         assert!(src.contains("_ => None"));
+    }
+
+    #[test]
+    fn digest_literal_groups_hex_digits_in_fours() {
+        assert_eq!(
+            digest_literal(0x35BA_0D8E_1F2C_3A4B),
+            "0x35ba_0d8e_1f2c_3a4b_u64"
+        );
+        assert_eq!(digest_literal(u64::MAX), "0xffff_ffff_ffff_ffff_u64");
     }
 
     // Without a compiler the lookup must still compile and answer for every name,

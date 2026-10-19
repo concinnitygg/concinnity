@@ -55,10 +55,7 @@ pub(super) fn build_scene_assets(
     // zero-length buffer, so a minimal placeholder is allocated instead --
     // the draw list is empty so the placeholder is never read.
     let vertex_buffer = if vertices.is_empty() {
-        allocator.alloc_buffer(
-            std::mem::size_of::<Vertex>(),
-            MTLResourceOptions::StorageModeShared,
-        )
+        allocator.alloc_buffer(size_of::<Vertex>(), MTLResourceOptions::StorageModeShared)
     } else {
         allocator.alloc_buffer_with_bytes(
             bytes_of_slice(vertices),
@@ -68,10 +65,7 @@ pub(super) fn build_scene_assets(
     .map_err(|e| e.context("vertex buffer"))?;
 
     let index_buffer = if indices.is_empty() {
-        allocator.alloc_buffer(
-            std::mem::size_of::<u32>(),
-            MTLResourceOptions::StorageModeShared,
-        )
+        allocator.alloc_buffer(size_of::<u32>(), MTLResourceOptions::StorageModeShared)
     } else {
         allocator.alloc_buffer_with_bytes(
             bytes_of_slice(indices),
@@ -85,10 +79,7 @@ pub(super) fn build_scene_assets(
     // no local lights gets a one-element placeholder; num_local_lights == 0
     // keeps the shader from reading it.
     let local_light_buffer = if local_lights.is_empty() {
-        allocator.alloc_buffer(
-            std::mem::size_of::<GpuLight>(),
-            MTLResourceOptions::StorageModeShared,
-        )
+        allocator.alloc_buffer(size_of::<GpuLight>(), MTLResourceOptions::StorageModeShared)
     } else {
         allocator.alloc_buffer_with_bytes(
             bytes_of_slice(local_lights),
@@ -103,7 +94,7 @@ pub(super) fn build_scene_assets(
     // placeholder the shader never reads (every data_index stays -1).
     let area_light_buffer = if area_lights.is_empty() {
         allocator.alloc_buffer(
-            std::mem::size_of::<AreaLightData>(),
+            size_of::<AreaLightData>(),
             MTLResourceOptions::StorageModeShared,
         )
     } else {

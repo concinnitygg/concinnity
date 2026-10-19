@@ -95,12 +95,11 @@ fn parse_dds_header(bytes: &[u8]) -> Result<DdsHeader, String> {
     let mip_count = u32::from_le_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]).max(1);
     if mip_count as usize > MAX_MIP_LEVELS {
         return Err(format!(
-            "DDS declares {} mip levels (expected at most {})",
-            mip_count, MAX_MIP_LEVELS
+            "DDS declares {mip_count} mip levels (expected at most {MAX_MIP_LEVELS})"
         ));
     }
     if width == 0 || height == 0 {
-        return Err(format!("DDS has zero dimension {}x{}", width, height));
+        return Err(format!("DDS has zero dimension {width}x{height}"));
     }
     let format = match &bytes[84..88] {
         b"DXT1" => TextureFormat::Bc1,
@@ -134,7 +133,7 @@ pub(crate) mod test_fixtures {
 
     // Build a minimal legacy DDS around concatenated block levels.
     pub(crate) fn wrap_dds_mips(
-        fourcc: &[u8; 4],
+        fourcc: [u8; 4],
         width: u32,
         height: u32,
         mip_count: u32,
@@ -145,7 +144,7 @@ pub(crate) mod test_fixtures {
         v[12..16].copy_from_slice(&height.to_le_bytes());
         v[16..20].copy_from_slice(&width.to_le_bytes());
         v[28..32].copy_from_slice(&mip_count.to_le_bytes());
-        v[84..88].copy_from_slice(fourcc);
+        v[84..88].copy_from_slice(&fourcc);
         v.extend_from_slice(data);
         v
     }
@@ -162,7 +161,7 @@ mod tests {
     use super::*;
 
     // A single-level DDS: mip_count 0 is clamped to one stored level.
-    fn wrap_dds(fourcc: &[u8; 4], width: u32, height: u32, block: &[u8]) -> Vec<u8> {
+    fn wrap_dds(fourcc: [u8; 4], width: u32, height: u32, block: &[u8]) -> Vec<u8> {
         wrap_dds_mips(fourcc, width, height, 0, block)
     }
 
@@ -177,14 +176,14 @@ mod tests {
     // than reserving one `TextureMip` per claimed level.
     #[test]
     fn rejects_an_absurd_mip_count() {
-        let bytes = wrap_dds_mips(b"DXT1", 4, 4, u32::MAX, &bc1_red_block());
+        let bytes = wrap_dds_mips(*b"DXT1", 4, 4, u32::MAX, &bc1_red_block());
         let err = blocks_err(&bytes);
         assert!(err.contains("mip levels"), "{}", err);
     }
 
     #[test]
     fn rejects_a_mip_count_past_the_dimension_limit() {
-        let bytes = wrap_dds_mips(b"DXT1", 4, 4, 33, &bc1_red_block());
+        let bytes = wrap_dds_mips(*b"DXT1", 4, 4, 33, &bc1_red_block());
         assert!(blocks_err(&bytes).contains("mip levels"));
     }
 
@@ -193,7 +192,7 @@ mod tests {
     // than wrapped to zero and compared against the file length.
     #[test]
     fn rejects_dimensions_that_overflow_the_block_footprint() {
-        let bytes = wrap_dds_mips(b"DXT5", u32::MAX, u32::MAX, 1, &[0u8; 16]);
+        let bytes = wrap_dds_mips(*b"DXT5", u32::MAX, u32::MAX, 1, &[0u8; 16]);
         let err = blocks_err(&bytes);
         assert!(err.contains("overflow"), "{}", err);
     }
@@ -202,7 +201,7 @@ mod tests {
     // is a plain shortfall and must name the size it wanted.
     #[test]
     fn reports_the_required_size_when_the_footprint_still_fits() {
-        let bytes = wrap_dds_mips(b"DXT1", u32::MAX, u32::MAX, 1, &bc1_red_block());
+        let bytes = wrap_dds_mips(*b"DXT1", u32::MAX, u32::MAX, 1, &bc1_red_block());
         let err = blocks_err(&bytes);
         assert!(err.contains("needs"), "{}", err);
     }
@@ -210,7 +209,7 @@ mod tests {
     #[test]
     fn rejects_a_mip_chain_truncated_partway() {
         // Declares four levels of an 8x8 BC1 image but stores only level 0.
-        let bytes = wrap_dds_mips(b"DXT1", 8, 8, 4, &[0u8; 32]);
+        let bytes = wrap_dds_mips(*b"DXT1", 8, 8, 4, &[0u8; 32]);
         let err = blocks_err(&bytes);
         assert!(err.contains("needs"), "{}", err);
     }
@@ -218,7 +217,7 @@ mod tests {
     #[test]
     fn decodes_dxt1() {
         let block = [0x00, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]; // solid red
-        let dds = wrap_dds(b"DXT1", 4, 4, &block);
+        let dds = wrap_dds(*b"DXT1", 4, 4, &block);
         let (w, h, px) = decode_dds(&dds).unwrap();
         assert_eq!((w, h), (4, 4));
         assert_eq!(&px[0..4], &[255, 0, 0, 255]);
@@ -226,20 +225,20 @@ mod tests {
 
     #[test]
     fn rejects_dx10_header() {
-        let dds = wrap_dds(b"DX10", 4, 4, &[0u8; 16]);
+        let dds = wrap_dds(*b"DX10", 4, 4, &[0u8; 16]);
         let err = decode_dds(&dds).unwrap_err();
         assert!(err.contains("DX10"), "got: {err}");
     }
 
     #[test]
     fn rejects_unknown_fourcc() {
-        let dds = wrap_dds(b"DXT3", 4, 4, &[0u8; 16]);
+        let dds = wrap_dds(*b"DXT3", 4, 4, &[0u8; 16]);
         assert!(decode_dds(&dds).is_err());
     }
 
     #[test]
     fn rejects_bad_magic() {
-        let mut dds = wrap_dds(b"DXT1", 4, 4, &[0u8; 8]);
+        let mut dds = wrap_dds(*b"DXT1", 4, 4, &[0u8; 8]);
         dds[0] = b'X';
         assert!(decode_dds(&dds).is_err());
     }
@@ -254,7 +253,7 @@ mod tests {
         data.extend_from_slice(&block); // mip1
         data.extend_from_slice(&block); // mip2
         data.extend_from_slice(&block); // mip3
-        let dds = wrap_dds_mips(b"DXT1", 8, 8, 4, &data);
+        let dds = wrap_dds_mips(*b"DXT1", 8, 8, 4, &data);
         let blocks = decode_dds_blocks(&dds).expect("blocks");
         assert_eq!(blocks.format, TextureFormat::Bc1);
         assert_eq!(blocks.mips.len(), 4);
@@ -268,7 +267,7 @@ mod tests {
     fn dds_blocks_rejects_truncated_chain() {
         // Claims 4 mips but only supplies mip0's blocks.
         let block = [0u8; 8];
-        let dds = wrap_dds_mips(b"DXT1", 8, 8, 4, &block.repeat(4));
+        let dds = wrap_dds_mips(*b"DXT1", 8, 8, 4, &block.repeat(4));
         let err = blocks_err(&dds);
         assert_eq!(
             err,
@@ -284,7 +283,7 @@ mod tests {
 
     #[test]
     fn dds_blocks_rejects_bad_magic() {
-        let mut dds = wrap_dds(b"DXT1", 4, 4, &bc1_red_block());
+        let mut dds = wrap_dds(*b"DXT1", 4, 4, &bc1_red_block());
         dds[0] = b'X';
         let err = blocks_err(&dds);
         assert_eq!(err, "not a DDS file (bad magic)");
@@ -292,19 +291,19 @@ mod tests {
 
     #[test]
     fn dds_blocks_rejects_a_zero_dimension() {
-        let dds = wrap_dds(b"DXT1", 0, 4, &bc1_red_block());
+        let dds = wrap_dds(*b"DXT1", 0, 4, &bc1_red_block());
         let err = blocks_err(&dds);
         assert_eq!(err, "DDS has zero dimension 0x4");
     }
 
     #[test]
     fn dds_blocks_maps_dxt5_and_ati2_to_bc3_and_bc5() {
-        let dds = wrap_dds(b"DXT5", 4, 4, &[0u8; 16]);
+        let dds = wrap_dds(*b"DXT5", 4, 4, &[0u8; 16]);
         let blocks = decode_dds_blocks(&dds).expect("dxt5");
         assert_eq!(blocks.format, TextureFormat::Bc3);
         assert_eq!(blocks.mips[0].data.len(), 16);
 
-        let dds = wrap_dds(b"ATI2", 4, 4, &[0u8; 16]);
+        let dds = wrap_dds(*b"ATI2", 4, 4, &[0u8; 16]);
         let blocks = decode_dds_blocks(&dds).expect("ati2");
         assert_eq!(blocks.format, TextureFormat::Bc5);
         assert_eq!(blocks.mips[0].data.len(), 16);
@@ -312,9 +311,9 @@ mod tests {
 
     #[test]
     fn dds_blocks_rejects_dx10_and_unknown_fourccs() {
-        let err = blocks_err(&wrap_dds(b"DX10", 4, 4, &[0u8; 16]));
+        let err = blocks_err(&wrap_dds(*b"DX10", 4, 4, &[0u8; 16]));
         assert!(err.contains("DX10 extended header"), "got: {err}");
-        let err = blocks_err(&wrap_dds(b"DXT3", 4, 4, &[0u8; 16]));
+        let err = blocks_err(&wrap_dds(*b"DXT3", 4, 4, &[0u8; 16]));
         assert!(
             err.contains("unsupported DDS fourCC \"DXT3\""),
             "got: {err}"
@@ -323,7 +322,7 @@ mod tests {
 
     #[test]
     fn decode_dds_rejects_a_zero_dimension() {
-        let dds = wrap_dds(b"DXT1", 4, 0, &bc1_red_block());
+        let dds = wrap_dds(*b"DXT1", 4, 0, &bc1_red_block());
         let err = decode_dds(&dds).unwrap_err();
         assert_eq!(err, "DDS has zero dimension 4x0");
     }
@@ -337,7 +336,7 @@ mod tests {
         block[1] = 10;
         block[8] = 0xFF;
         block[9] = 0xFF;
-        let dds = wrap_dds(b"DXT5", 4, 4, &block);
+        let dds = wrap_dds(*b"DXT5", 4, 4, &block);
         let (w, h, px) = decode_dds(&dds).unwrap();
         assert_eq!((w, h), (4, 4));
         for chunk in px.chunks(4) {
@@ -348,7 +347,7 @@ mod tests {
     #[test]
     fn decode_dds_rejects_pixel_data_shorter_than_one_block() {
         for fourcc in [b"DXT1", b"DXT5", b"ATI2"] {
-            let dds = wrap_dds(fourcc, 4, 4, &[0u8; 4]);
+            let dds = wrap_dds(*fourcc, 4, 4, &[0u8; 4]);
             let err = decode_dds(&dds).unwrap_err();
             assert!(
                 err.starts_with("block-compressed data too short"),
@@ -367,7 +366,7 @@ mod tests {
         block[1] = 128;
         block[8] = 128;
         block[9] = 128;
-        let dds = wrap_dds(b"ATI2", 4, 4, &block);
+        let dds = wrap_dds(*b"ATI2", 4, 4, &block);
         let (_, _, px) = decode_dds(&dds).unwrap();
         assert_eq!(&px[0..2], &[128, 128]);
         assert!(px[2] >= 253, "expected near-255 blue, got {}", px[2]);

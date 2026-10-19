@@ -1,4 +1,4 @@
-//! HitRegion / Screen / KeyBinding input dispatch. An internal system (not a
+//! `HitRegion` / Screen / `KeyBinding` input dispatch. An internal system (not a
 //! declarable asset): the host's system table builds one whenever the world
 //! contains any `HitRegion`, `Screen`, or `KeyBinding`, then it processes
 //! hover/click, screen overlays, and key bindings each frame.
@@ -223,7 +223,7 @@ struct OpenRequest {
     scale: Option<f32>,
 }
 
-/// HitRegion / Screen / KeyBinding input dispatch behavior. Built by the host's
+/// `HitRegion` / Screen / `KeyBinding` input dispatch behavior. Built by the host's
 /// system table when the world declares any `HitRegion`, `Screen`, or
 /// `KeyBinding`; never a world-declared asset, so it carries no config.
 #[derive(Debug)]
@@ -343,7 +343,7 @@ impl System for UiInputSystem {
             ])
     }
 
-    fn init(&mut self, ctx: &mut PipelineContext) {
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
         // Drain Screen assets, record each one's policies, and pick the one
         // flagged `initial` to open at world start.
         let mut initial: Option<AssetId> = None;
@@ -375,8 +375,7 @@ impl System for UiInputSystem {
                 None => (None, None),
                 Some(label_id) => ctx
                     .get_by_id::<TextLabel>(label_id.id())
-                    .map(|l| (Some(l.color), Some(l.scale)))
-                    .unwrap_or((None, None)),
+                    .map_or((None, None), |l| (Some(l.color), Some(l.scale))),
             };
             let screen = region.screen;
             let slider_key = match region.action {
@@ -479,7 +478,7 @@ impl System for UiInputSystem {
         self.apply_scroll_layout(ctx);
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         self.apply_pending_screen_commands(ctx);
 
         // Read (not drain) the latest input snapshot: Camera3DSystem queries it
@@ -572,7 +571,7 @@ impl UiInputSystem {
         input: &FrameInput,
         nav: Option<NavDirection>,
         pulses: DropdownPulses,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
     ) {
         let DropdownPulses {
             confirm,
@@ -606,9 +605,7 @@ impl UiInputSystem {
         // cursor's offset within it); a press elsewhere in the scrollbar strip
         // jumps the thumb there. While the button stays down the cursor's y
         // maps back to the window's scroll position, even outside the list.
-        if !input.left_button_down {
-            state.thumb_drag = None;
-        } else {
+        if input.left_button_down {
             if state.thumb_drag.is_none()
                 && input.left_click
                 && let Some(thumb) = dropdown::thumb_rect(&layout, state.first(), count)
@@ -623,6 +620,8 @@ impl UiInputSystem {
             if let Some(grab) = state.thumb_drag {
                 state.scroll_rows = dropdown::first_for_thumb_top(&layout, count, qy - grab);
             }
+        } else {
+            state.thumb_drag = None;
         }
         let dragging = state.thumb_drag.is_some();
 
@@ -705,7 +704,7 @@ impl UiInputSystem {
     // (stays closed) when the setting has no options to offer.
     fn build_open_dropdown(
         req: OpenRequest,
-        ctx: &mut PipelineContext,
+        ctx: &PipelineContext<'_>,
     ) -> Option<OpenDropdownState> {
         let options: Vec<String> = if req.setting == SettingKey::GraphicsApi {
             ctx.resource::<CompiledPlatforms>()?
@@ -713,17 +712,21 @@ impl UiInputSystem {
                 .iter()
                 .map(|p| p.label().to_string())
                 .collect()
-        } else if crate::settings::is_dynamic_dropdown(req.setting) {
+        } else if settings::is_dynamic_dropdown(req.setting) {
             // `resolution`'s modes, which the renderer publishes at init.
             let modes = ctx.resource::<crate::ecs::DisplayModes>()?;
             if modes.0.is_empty() {
                 return None;
             }
-            modes.0.iter().map(|m| m.label()).collect()
+            modes
+                .0
+                .iter()
+                .map(super::window::display_mode::DisplayMode::label)
+                .collect()
         } else {
             settings::options(req.setting)?
                 .iter()
-                .map(|s| s.to_string())
+                .map(ToString::to_string)
                 .collect()
         };
         // The value label's font (for the list text) and current content (to
@@ -758,7 +761,7 @@ impl UiInputSystem {
     // view is updated in place: the option labels only change when a list
     // opens, so the steady-state frames of an open list refresh the cheap
     // fields without recloning the options.
-    fn publish_dropdown(&self, ctx: &mut PipelineContext) {
+    fn publish_dropdown(&self, ctx: &mut PipelineContext<'_>) {
         let mut published = ctx.take_resource::<OpenDropdown>().unwrap_or_default();
         match &self.open_dropdown {
             None => published.0 = None,
@@ -807,7 +810,7 @@ impl UiInputSystem {
         &mut self,
         dir: NavDirection,
         active_screen: Option<AssetId>,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
     ) {
         // Follow-label regions with an empty label are hidden menu entries;
         // resolve their label contents in one pass so they never focus.
@@ -914,7 +917,7 @@ impl UiInputSystem {
 
     // Apply the ScreenCommands queued since last frame, ahead of this frame's
     // hit-testing. They are cloned out to release the ctx borrow for the apply.
-    fn apply_pending_screen_commands(&mut self, ctx: &mut PipelineContext) {
+    fn apply_pending_screen_commands(&mut self, ctx: &mut PipelineContext<'_>) {
         let screen_cmds: Vec<ScreenCommand> = match ctx.events::<ScreenCommand>() {
             Some(events) => events.read(&mut self.screen_cmd_cursor).cloned().collect(),
             None => Vec::new(),
@@ -924,7 +927,7 @@ impl UiInputSystem {
         }
     }
 
-    fn apply_screen_command(&mut self, cmd: ScreenCommand, ctx: &mut PipelineContext) {
+    fn apply_screen_command(&mut self, cmd: ScreenCommand, ctx: &mut PipelineContext<'_>) {
         let Some(transition) = self.screens.apply(cmd) else {
             return;
         };
@@ -940,9 +943,9 @@ impl UiInputSystem {
     // screens' element visibility, move keyboard focus to the new top's
     // `focus` field, and announce the newly-topmost screen (AudioCue).
     fn apply_transition(
-        &mut self,
+        &self,
         transition: screen::ScreenTransition,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
     ) {
         for id in &transition.hidden {
             self.set_screen_visibility(*id, false, ctx);
@@ -971,7 +974,7 @@ impl UiInputSystem {
     // Publish the stack's derived per-frame state (draw layers, world-pause,
     // input capture) for the overlay build and the input poll, which read it a
     // frame later, the same one-frame lag the visibility flips have.
-    fn publish_screen_stack(&self, ctx: &mut PipelineContext) {
+    fn publish_screen_stack(&self, ctx: &mut PipelineContext<'_>) {
         ctx.insert_resource(ScreenStack {
             layers: self.screens.layers(),
             pauses_world: self.screens.pauses_world(),
@@ -979,7 +982,12 @@ impl UiInputSystem {
         });
     }
 
-    fn set_screen_visibility(&self, screen_id: AssetId, visible: bool, ctx: &mut PipelineContext) {
+    fn set_screen_visibility(
+        &self,
+        screen_id: AssetId,
+        visible: bool,
+        ctx: &mut PipelineContext<'_>,
+    ) {
         for &id in self.sprites_by_screen.get(&screen_id).into_iter().flatten() {
             by_asset_id::update::<Sprite>(ctx, Some(id), |s| s.visible = visible);
         }
@@ -1001,7 +1009,7 @@ impl UiInputSystem {
     // `i32` group index into an `Option`, and bucket each HitRegion into the
     // panel row whose band its center falls in (so the region reflows + gates
     // with that row). Runs once at init, after HitRegions are drained.
-    fn init_panels(&mut self, ctx: &mut PipelineContext) {
+    fn init_panels(&mut self, ctx: &mut PipelineContext<'_>) {
         let panels = ctx.drain::<ScrollPanel>();
         if panels.is_empty() {
             return;
@@ -1077,7 +1085,7 @@ impl UiInputSystem {
         // overflow row's authored y reaches their position. Panels read
         // immutably while the regions are mutated (disjoint fields).
         let panels = &self.panels;
-        for entry in self.regions.iter_mut() {
+        for entry in &mut self.regions {
             let is_content = matches!(
                 entry.region.action,
                 Some(UiAction::Setting { .. } | UiAction::GroupToggle(_))
@@ -1135,9 +1143,7 @@ impl UiInputSystem {
 
         // Thumb drag: begin on the press edge over the thumb, then map the
         // cursor's y to a scroll offset for the rest of the press.
-        if !input.left_button_down {
-            self.thumb_drag = None;
-        } else {
+        if input.left_button_down {
             if self.thumb_drag.is_none()
                 && input.left_click
                 && let Some(pi) = active_panel
@@ -1156,6 +1162,8 @@ impl UiInputSystem {
                     panel.scroll = frac * max_scroll;
                 }
             }
+        } else {
+            self.thumb_drag = None;
         }
         self.thumb_drag.is_some()
     }
@@ -1175,7 +1183,7 @@ impl UiInputSystem {
     // writes (an inactive screen's elements stay hidden by the screen system). Runs
     // at init and at the end of each step so the next frame draws + hit-tests the
     // reflowed positions consistently.
-    fn apply_scroll_layout(&mut self, ctx: &mut PipelineContext) {
+    fn apply_scroll_layout(&mut self, ctx: &mut PipelineContext<'_>) {
         if self.panels.is_empty() {
             return;
         }
@@ -1246,7 +1254,7 @@ impl UiInputSystem {
 
         // Reflow each panel-owned region in memory (positions the click loop
         // hit-tests against next frame).
-        for entry in self.regions.iter_mut() {
+        for entry in &mut self.regions {
             if let Some((pi, ri)) = entry.scroll_row
                 && let Some(solve) = self.layout.solved.get(pi)
                 && solve.active
@@ -1336,7 +1344,7 @@ fn region_covers_canvas(r: &HitRegion) -> bool {
 // applied when a hovered region goes inert (its screen hides, its row collapses,
 // or it is disabled) so its hover styling never strands on the label.
 fn set_label_style(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     label: Option<AssetId>,
     color: Option<[f32; 3]>,
     scale: Option<f32>,
@@ -1358,7 +1366,7 @@ fn set_label_style(
 fn fire_action(
     action: &UiAction,
     label: Option<AssetId>,
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
 ) -> Option<StepResult> {
     match action {
         UiAction::Quit => return Some(StepResult::Stop),
@@ -2286,7 +2294,9 @@ mod tests {
         world.add_component(frame_input_at(300.0, 230.0, [2560.0, 1440.0]));
         world.step();
         assert!(
-            world.events::<SceneCommand>().is_none_or(|e| e.is_empty()),
+            world
+                .events::<SceneCommand>()
+                .is_none_or(crate::ecs::Events::is_empty),
             "click at the unscaled coords should miss the scaled region"
         );
     }

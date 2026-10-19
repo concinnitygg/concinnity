@@ -64,7 +64,7 @@ const FALLBACK_JITTER_PHASE_COUNT: i32 = 8;
 #[repr(C)]
 pub(crate) struct ffxApiHeader {
     ty: u64,
-    p_next: *mut ffxApiHeader,
+    p_next: *mut Self,
 }
 
 impl ffxApiHeader {
@@ -390,7 +390,8 @@ impl<L: SdkLibrary> FfxContext<L> {
         // SAFETY: the entry point came from the loaded library with the header's prototype, `desc`
         // and `handle` are live locals, and the caller guarantees the backend description `desc`
         // chains to.
-        let rc = unsafe { (api.create_context)(&mut handle, &mut desc.header, ptr::null()) };
+        let rc =
+            unsafe { (api.create_context)(&raw mut handle, &raw mut desc.header, ptr::null()) };
         if rc != FFX_API_RETURN_OK || handle.is_null() {
             tracing::warn!("{label}: ffxCreateContext returned {rc}; trying the next backend");
             return None;
@@ -420,7 +421,7 @@ impl<L: SdkLibrary> FfxContext<L> {
             debug_level: FFX_API_CONFIGURE_GLOBALDEBUG_LEVEL_VERBOSE,
         };
         // SAFETY: `self.handle` is the live context and `desc` a live local the call only reads.
-        let rc = unsafe { (self.api.configure)(&mut self.handle, &desc.header) };
+        let rc = unsafe { (self.api.configure)(&raw mut self.handle, &raw const desc.header) };
         if rc != FFX_API_RETURN_OK {
             tracing::warn!("{label}: global debug configure returned {rc} (non-fatal)");
         }
@@ -432,11 +433,11 @@ impl<L: SdkLibrary> FfxContext<L> {
             header: ffxApiHeader::new(FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTERPHASECOUNT),
             render_width: self.extent.render.0,
             display_width: self.extent.output.0,
-            out_phase_count: &mut phase_count,
+            out_phase_count: &raw mut phase_count,
         };
         // SAFETY: `self.handle` is the live context, and `desc` is a live local whose out-pointer
         // borrows another live local.
-        let rc = unsafe { (self.api.query)(&mut self.handle, &mut desc.header) };
+        let rc = unsafe { (self.api.query)(&raw mut self.handle, &raw mut desc.header) };
         if rc != FFX_API_RETURN_OK || phase_count <= 0 {
             tracing::warn!(
                 "{label}: jitter-phase-count query returned {rc} (phase_count={phase_count})"
@@ -460,13 +461,13 @@ impl<L: SdkLibrary> FfxContext<L> {
             header: ffxApiHeader::new(FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTEROFFSET),
             index: (frame_index as i32).rem_euclid(phase_count),
             phase_count: self.jitter_phase_count,
-            out_x: &mut x,
-            out_y: &mut y,
+            out_x: &raw mut x,
+            out_y: &raw mut y,
         };
         // SAFETY: `self.handle` is the live context and `desc` a live local whose out-pointers
         // borrow live locals. The C prototype takes the handle by mutable pointer, but only
         // create and destroy write through it.
-        let rc = unsafe { (self.api.query)(self.handle_ptr(), &mut desc.header) };
+        let rc = unsafe { (self.api.query)(self.handle_ptr(), &raw mut desc.header) };
         if rc != FFX_API_RETURN_OK {
             return [0.0, 0.0];
         }
@@ -566,7 +567,7 @@ impl<L: SdkLibrary> FfxContext<L> {
         // SAFETY: `self.handle` is the live context and `desc` a live local; the caller guarantees
         // the command list and resources it names. Only create and destroy write through the
         // handle pointer.
-        let rc = unsafe { (self.api.dispatch)(self.handle_ptr(), &desc.header) };
+        let rc = unsafe { (self.api.dispatch)(self.handle_ptr(), &raw const desc.header) };
         if rc != FFX_API_RETURN_OK {
             return Err(RenderError::Other(format!(
                 "ffxDispatch (upscale) returned {rc}"
@@ -579,7 +580,7 @@ impl<L: SdkLibrary> FfxContext<L> {
 impl<L> FfxContext<L> {
     // The handle by the mutable pointer the C prototypes take.
     fn handle_ptr(&self) -> *mut ffxContext {
-        &self.handle as *const ffxContext as *mut ffxContext
+        (&raw const self.handle).cast_mut()
     }
 
     /// Destroy the context now; dropping it afterwards does nothing more. The
@@ -590,7 +591,7 @@ impl<L> FfxContext<L> {
         }
         // SAFETY: `self.handle` is the live, non-null context, destroyed exactly once (nulled
         // straight after) while the library its entry point came from is still loaded.
-        unsafe { (self.api.destroy_context)(&mut self.handle, ptr::null()) };
+        unsafe { (self.api.destroy_context)(&raw mut self.handle, ptr::null()) };
         self.handle = ptr::null_mut();
     }
 }

@@ -130,8 +130,8 @@ impl DecalResources {
     // works from a world that started empty; the cost is one pipeline
     // + small buffers.
     pub(in crate::vulkan) fn new(
-        ctx: DecalDeviceContext,
-        targets: DecalPassTargets,
+        ctx: DecalDeviceContext<'_>,
+        targets: DecalPassTargets<'_>,
         frames: usize,
         msaa: bool,
         hot_reload: bool,
@@ -190,7 +190,7 @@ impl DecalResources {
         let mut view_ubos = Vec::with_capacity(frames);
         for _ in 0..frames {
             view_ubos.push(alloc.create_buffer(
-                std::mem::size_of::<DecalView>() as u64,
+                size_of::<DecalView>() as u64,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )?);
@@ -216,11 +216,7 @@ impl DecalResources {
             // The dynamic params binding windows one PARAMS_STRIDE slot at the
             // offset given at bind time.
             SetWrites::new(set)
-                .uniform_buffer(
-                    0,
-                    view_ubos[i].buffer(),
-                    std::mem::size_of::<DecalView>() as u64,
-                )
+                .uniform_buffer(0, view_ubos[i].buffer(), size_of::<DecalView>() as u64)
                 .buffer(
                     1,
                     vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
@@ -529,7 +525,7 @@ pub(in crate::vulkan) fn upload_static_buffer(
                 staging.buffer(),
                 buf.buffer(),
                 std::slice::from_ref(&region),
-            )
+            );
         };
     })?;
     Ok(buf)
@@ -556,9 +552,8 @@ impl VkContext {
         vp: [[f32; 4]; 4],
         frustum: &Frustum,
     ) {
-        let decals = match &self.decal.resources {
-            Some(s) => s,
-            None => return,
+        let Some(decals) = &self.decal.resources else {
+            return;
         };
         // Frustum-cull first so a frame where every live decal lands
         // off-screen skips the pass, including the depth-transition
@@ -730,9 +725,8 @@ impl VkContext {
     }
 
     pub(in crate::vulkan) fn rewrite_decal_albedo_slot(&self, slot: usize) {
-        let decals = match &self.decal.resources {
-            Some(s) => s,
-            None => return,
+        let Some(decals) = &self.decal.resources else {
+            return;
         };
         let slots = decals.decal_texture_slots.get();
         let last_tex = self.scene.textures.len().saturating_sub(1);

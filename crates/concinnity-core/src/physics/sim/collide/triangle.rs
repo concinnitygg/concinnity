@@ -53,7 +53,7 @@ impl Triangle {
         if length <= f32::MIN_POSITIVE {
             return None;
         }
-        Some(Triangle {
+        Some(Self {
             corners,
             normal: normal * (1.0 / length),
         })

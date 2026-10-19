@@ -191,12 +191,13 @@ pub(super) fn build_cull(
     // The reflection-probe convolution kernels, under the same gate the bake
     // itself needs: a probe capture renders through the bindless GPU cull, so a
     // world without the cull pipeline never bakes one and never needs them.
-    let probe_prefilter = match compute.kernels.is_some() {
-        true => Some(ProbePrefilterPipelines::new(
+    let probe_prefilter = if compute.kernels.is_some() {
+        Some(ProbePrefilterPipelines::new(
             &gpu.hw.device,
             gpu.hot_reload,
-        )?),
-        false => None,
+        )?)
+    } else {
+        None
     };
     let two_pass = two_pass::build_two_pass_cull(
         gpu,

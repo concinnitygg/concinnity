@@ -13,7 +13,7 @@
 //! While there is no BVH to trace, an authored SSR resolve takes the slot, or
 //! the pass clears its output so the reflection composite leaves the scene as
 //! it was.
-//! Mirrors src/directx/post/rt_reflections.rs (DXR inline `RayQuery`); the GLSL
+//! Mirrors `src/directx/post/rt_reflections.rs` (DXR inline `RayQuery`); the GLSL
 //! is compiled with the Vulkan-1.2 / SPIR-V-1.4 target ray query needs.
 //!
 //! Unlike DirectX (which binds the TLAS + geometry table as root SRVs by GPU
@@ -34,7 +34,9 @@ use super::super::descriptor_layout::{Binding, PoolSizes};
 use super::super::pipeline_desc::{Blend, GraphicsPipelineDesc};
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::set_writes::SetWrites;
-use super::super::texture::*;
+use super::super::texture::{
+    GpuImage, ImageSpec, create_image, create_image_view, create_sampler_linear_clamp,
+};
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
@@ -316,9 +318,9 @@ impl RtReflectionsResources {
     // trace; `layout.bindless_set_layout` + `layout.pool_size` enable the
     // textured variant.
     pub(in crate::vulkan) fn new(
-        build: RtBuild,
+        build: RtBuild<'_>,
         settings: RtReflectionSettings,
-        static_inputs: RtStaticInputs,
+        static_inputs: RtStaticInputs<'_>,
         layout: RtLayoutConfig,
     ) -> RenderResult<Self> {
         let RtBuild {
@@ -389,7 +391,7 @@ impl RtReflectionsResources {
         };
 
         // Per-frame RtParams UBO.
-        let params_size = std::mem::size_of::<RtParams>() as vk::DeviceSize;
+        let params_size = size_of::<RtParams>() as vk::DeviceSize;
         let mut params_buffers = Vec::with_capacity(frames);
         for _ in 0..frames {
             let buf = alloc.create_buffer(
@@ -537,7 +539,7 @@ impl RtReflectionsResources {
     //
     // `gbuffer_views` / `roughness_views` carry the unified G-buffer pre-pass's
     // per-frame normal+depth / roughness views; resolve set `i` binds slot `i`.
-    pub(in crate::vulkan) fn wire_static(&self, device: &VkDevice, inputs: RtStaticInputs) {
+    pub(in crate::vulkan) fn wire_static(&self, device: &VkDevice, inputs: RtStaticInputs<'_>) {
         let RtStaticInputs {
             vertex_buffer,
             index_buffer,
@@ -593,10 +595,10 @@ impl RtReflectionsResources {
             deformed_verts: deformed,
             skinned_indices,
         } = accel;
-        let sidx_buffer = if skinned_indices != vk::Buffer::null() {
-            skinned_indices
-        } else {
+        let sidx_buffer = if skinned_indices == vk::Buffer::null() {
             self.dummy_ssbo.buffer()
+        } else {
+            skinned_indices
         };
         SetWrites::new(self.resolve_sets[frame_idx])
             .acceleration_structure(1, tlas)
@@ -608,9 +610,6 @@ impl RtReflectionsResources {
 
     fn destroy_targets(&mut self, _device: &VkDevice) {
         if !self.framebuffer.is_null() {
-            // SAFETY: the handle was created from this device and is destroyed exactly once; the
-            // caller has already waited for the device to go idle, so no submission still
-            // references it.
             self.framebuffer = OwnedFramebuffer::null();
         }
         if self.output.image != vk::Image::null() {
@@ -628,7 +627,7 @@ impl RtReflectionsResources {
         device: &VkDevice,
         width: u32,
         height: u32,
-        inputs: RtStaticInputs,
+        inputs: RtStaticInputs<'_>,
     ) -> RenderResult<()> {
         self.destroy_targets(device);
         self.build_targets(alloc, device, width, height)?;
@@ -681,7 +680,7 @@ impl VkContext {
             && self
                 .transparent
                 .as_ref()
-                .is_some_and(|t| t.rt_pipelines_ready())
+                .is_some_and(super::super::transparent::TransparentResources::rt_pipelines_ready)
     }
 
     // Run the per-frame dynamic acceleration-structure update on `cmd` (the
@@ -799,8 +798,8 @@ impl VkContext {
             .skinned
             .joint_buffers
             .get(frame_idx)
-            .map(|b| b.as_slice())
-            .unwrap_or(&[]);
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let skinned = skinned_inputs
             .zip(self.rt.skin.as_mut())
             .map(|((vb, ib), skin)| super::super::raytrace::SkinnedRtInputs {
@@ -851,9 +850,8 @@ impl VkContext {
         frame_idx: usize,
         params: Option<&RtParams>,
     ) {
-        let rt = match &self.rt_reflections {
-            Some(r) => r,
-            None => return,
+        let Some(rt) = &self.rt_reflections else {
+            return;
         };
         let device = &self.hw.device;
         let extent = rt.extent;

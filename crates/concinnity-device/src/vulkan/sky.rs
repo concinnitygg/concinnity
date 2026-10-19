@@ -162,14 +162,19 @@ impl VkContext {
             // SAFETY: `cmd` is a command buffer in the recording state and the query pool is live;
             // the frame's query block was reset at the frame's start.
             unsafe {
-                device.cmd_write_timestamp(cmd, vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, start)
+                device.cmd_write_timestamp(
+                    cmd,
+                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                    pool,
+                    start,
+                );
             };
         }
         self.encode_sky(cmd, self.descriptors.global_sets[frame_idx], frame_idx);
         if let Some((pool, (_, end))) = stamps {
             // SAFETY: as above.
             unsafe {
-                device.cmd_write_timestamp(cmd, vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, end)
+                device.cmd_write_timestamp(cmd, vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, end);
             };
         }
     }

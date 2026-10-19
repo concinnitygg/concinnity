@@ -1,6 +1,6 @@
 /// Check a `Shader`'s authored args.
 pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
-    check_args(args).map_err(|e| format!("Asset '{}': {}", name, e))
+    check_args(args).map_err(|e| format!("Asset '{name}': {e}"))
 }
 
 // Validate Shader args without compiling: the `fragment` file is required and

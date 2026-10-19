@@ -8,7 +8,7 @@ use concinnity_core::math::vec3;
 use super::SynthInput;
 use crate::compile::character::frame::region_weight;
 
-pub(crate) fn displace(input: &SynthInput, source: &[MorphDelta]) -> Vec<[f32; 3]> {
+pub(crate) fn displace(input: &SynthInput<'_>, source: &[MorphDelta]) -> Vec<[f32; 3]> {
     input
         .vertices
         .iter()

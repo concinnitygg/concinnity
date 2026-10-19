@@ -19,6 +19,7 @@ use crate::render::decal::DecalRecord;
 use crate::render::particles::ParticleEmitterRecord;
 use crate::render::rt_geom::RtDynamicMode;
 use crate::render::volumetric_fog::FogSettings;
+use crate::render::water::ocean::OceanQuality;
 use crate::settings::ResolvedGraphics;
 use alloc::string::String;
 use alloc::vec;
@@ -39,7 +40,7 @@ pub struct SceneData<'a> {
     /// instances + skinned) at init; the skinned geometry itself is uploaded
     /// later via `upload_skinned`.
     pub n_skinned: usize,
-    /// Worst-case resident chunk count for a streaming VoxelWorld (0
+    /// Worst-case resident chunk count for a streaming `VoxelWorld` (0
     /// otherwise). Reserves a chunk record region in the shared GPU-cull
     /// buffers at init; resident chunks fold into the indirect path each
     /// frame. Honored by DirectX + Vulkan; Metal's per-frame rebuild already
@@ -82,14 +83,14 @@ pub struct MediaPayloads<'a> {
     pub textures: &'a [crate::bake::texture::TextureImage],
     /// Glyph atlas textures for text rendering; empty = no text support.
     pub text_atlases: Vec<(u32, u32, Vec<u8>)>,
-    /// Serialized EnvironmentMap payload (irradiance + prefilter cubemaps).
+    /// Serialized `EnvironmentMap` payload (irradiance + prefilter cubemaps).
     /// None disables IBL; the runtime binds 1x1 gray fallback cubes.
     pub env_map_bytes: Option<&'a [u8]>,
     /// Draw the environment map as the background behind all geometry (see
     /// [`crate::render::sky`]). Without a map the background is the clear
     /// color either way.
     pub env_map_background: bool,
-    /// Serialized ColorLut payload (3D grading LUT). None = identity LUT.
+    /// Serialized `ColorLut` payload (3D grading LUT). None = identity LUT.
     pub color_lut_bytes: Option<&'a [u8]>,
 }
 
@@ -223,8 +224,8 @@ pub struct BackendInit<'a> {
     pub embedded_surface: Option<EmbeddedSurface>,
     /// The world's static geometry and draw lists.
     pub scene: SceneData<'a>,
-    /// One entry per world Shader, indexed by the dense ShaderHandle value a
-    /// DrawObject's `shader_bucket` carries; entry 0 is the world default
+    /// One entry per world Shader, indexed by the dense `ShaderHandle` value a
+    /// `DrawObject`'s `shader_bucket` carries; entry 0 is the world default
     /// program. Never empty for a rendering world.
     pub shaders: Vec<WorldShader<'a>>,
     /// Compiled media payloads (textures, fonts, environment maps).
@@ -232,7 +233,7 @@ pub struct BackendInit<'a> {
     /// The fixed directional / point light arrays.
     pub light_uniforms: LightUniforms,
     /// Every local light (point + spot + area) for the clustered forward pass,
-    /// uploaded to a per-scene GpuLight storage buffer. The first MAX_POINT_LIGHTS
+    /// uploaded to a per-scene `GpuLight` storage buffer. The first `MAX_POINT_LIGHTS`
     /// point lights are also mirrored into `light_uniforms.point` for the
     /// raymarch / fog / probe paths that still read the fixed array.
     pub local_lights: Vec<GpuLight>,
@@ -265,7 +266,7 @@ pub struct PlanarBudget {
 
 impl PlanarBudget {
     /// No mirror planes at all.
-    pub const NONE: PlanarBudget = PlanarBudget {
+    pub const NONE: Self = Self {
         planes: 0,
         resolution: PassResolution::Full,
     };
@@ -302,7 +303,7 @@ pub struct RenderRequirements {
 
 impl Default for RenderRequirements {
     fn default() -> Self {
-        RenderRequirements { scene: true }
+        Self { scene: true }
     }
 }
 
@@ -310,7 +311,7 @@ impl RenderRequirements {
     /// Derive the requirements a scene plus its effect content imposes, where
     /// `sky` says the world draws its environment map as the background. An
     /// atmosphere is a sky too.
-    pub fn derive(scene: &SceneData, fx: &WorldFx, sky: bool) -> Self {
+    pub fn derive(scene: &SceneData<'_>, fx: &WorldFx, sky: bool) -> Self {
         let scene_present = sky
             || fx.atmosphere.is_some()
             || !scene.vertices.is_empty()
@@ -324,7 +325,7 @@ impl RenderRequirements {
             || !fx.particles.is_empty()
             || !fx.decals.is_empty()
             || fx.grass.is_some();
-        RenderRequirements {
+        Self {
             scene: scene_present,
         }
     }
@@ -385,13 +386,13 @@ impl<'a> BackendInit<'a> {
                 particles: Vec::new(),
                 fog: None,
                 water_surfaces: Vec::new(),
-                ocean: crate::render::water::ocean::OceanPlan::new(Default::default()),
+                ocean: crate::render::water::ocean::OceanPlan::new(OceanQuality::default()),
                 glass_panels: Vec::new(),
                 sdf_volumes: Vec::new(),
                 grass: None,
                 atmosphere: None,
             },
-            requirements: Default::default(),
+            requirements: RenderRequirements::default(),
         };
         init.resolve_requirements();
         init
@@ -403,7 +404,7 @@ impl<'a> BackendInit<'a> {
     pub fn reloads_into(&self, backend: &dyn RenderBackend) -> bool {
         backend
             .live_edit_ref()
-            .and_then(|edit| edit.hot_swap_config())
+            .and_then(super::backend::LiveEdit::hot_swap_config)
             == Some(self.swapchain_config())
     }
 
@@ -454,6 +455,7 @@ fn minimal_graphics() -> ResolvedGraphics {
 mod tests {
     use super::*;
     use crate::components::WaterSurface;
+    use crate::render::water::ocean::OceanQuality;
 
     fn empty_scene() -> SceneData<'static> {
         SceneData {
@@ -473,7 +475,7 @@ mod tests {
             particles: Vec::new(),
             fog: None,
             water_surfaces: Vec::new(),
-            ocean: crate::render::water::ocean::OceanPlan::new(Default::default()),
+            ocean: crate::render::water::ocean::OceanPlan::new(OceanQuality::default()),
             glass_panels: Vec::new(),
             sdf_volumes: Vec::new(),
             grass: None,
@@ -503,7 +505,10 @@ mod tests {
         let init = BackendInit::minimal(Platform::Metal, &window, Vec::new());
         let (state, fresh) = recording_backend();
         assert!(!init.reloads_into(&fresh), "no hot-swap config");
-        let same = RecordingBackend::transplant(state.clone(), Some(init.swapchain_config()));
+        let same = RecordingBackend::transplant(
+            alloc::sync::Arc::clone(&state),
+            Some(init.swapchain_config()),
+        );
         assert!(init.reloads_into(&same));
         let mut other = init.swapchain_config();
         other.hdr_display = !other.hdr_display;

@@ -100,11 +100,10 @@ impl MtlContext {
         // available. Every `diagnostics.pass_timing.attach_*` call this frame writes
         // into the same slot's buffer; the completion handler resolves it
         // after the frame retires.
-        self.diagnostics
-            .pass_timing
-            .as_mut()
-            .map(|p| p.begin_frame())
-            .unwrap_or(0)
+        self.diagnostics.pass_timing.as_mut().map_or(
+            0,
+            super::super::pass_timing::PassTimingResources::begin_frame,
+        )
     }
 
     // Returns false once the window has closed.
@@ -331,10 +330,12 @@ impl MtlContext {
             effects: EffectInputs {
                 ssao: self.ssao.settings,
                 ssr: self.ssr.settings,
-                ssgi: self
-                    .ssgi
-                    .settings
-                    .zip(self.ssgi.pass.as_ref().map(|pass| pass.frame())),
+                ssgi: self.ssgi.settings.zip(
+                    self.ssgi
+                        .pass
+                        .as_ref()
+                        .map(concinnity_core::render::post::ssgi::SsgiPass::frame),
+                ),
                 rt: self.rt.settings,
                 history_scale: self.pre_exposure.history_scale(),
             },
@@ -391,7 +392,7 @@ impl MtlContext {
             let part = std::sync::Arc::clone(&join);
             join.add_part();
             let handler = block2::RcBlock::new(
-                move |cb: std::ptr::NonNull<ProtocolObject<dyn objc2_metal::MTLCommandBuffer>>| {
+                move |cb: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
                     // SAFETY: Metal hands the completion handler a live command buffer, and the
                     // borrow does not escape the block.
                     let cb = unsafe { cb.as_ref() };
@@ -556,8 +557,7 @@ impl MtlContext {
                 let mirror_slots = self
                     .planar_reflection
                     .as_ref()
-                    .map(|s| s.layout.planes().len())
-                    .unwrap_or(0);
+                    .map_or(0, |s| s.layout.planes().len());
                 self.ensure_mirror_icb_capacity(mirror_slots, self.cull_count())?;
             }
             let cull_draw_args = draw_args;
@@ -642,7 +642,7 @@ impl MtlContext {
             && self.gbuffer.targets.is_some()
             && self.cull.main_pipeline.is_some()
         {
-            let bytes = self.cull_count() * std::mem::size_of::<[[f32; 4]; 4]>();
+            let bytes = self.cull_count() * size_of::<[[f32; 4]; 4]>();
             let prime = self.state.model_history.get_mut().take_prime();
             let read_slot = (ring_slot + self.frames_in_flight - 1) % self.frames_in_flight;
             let mut targets = Vec::new();

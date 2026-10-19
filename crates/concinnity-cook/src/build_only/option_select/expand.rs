@@ -123,7 +123,7 @@ fn expand_one(
 ) -> Vec<serde_json::Value> {
     let line_h = font_px * s.text_scale;
     let text_y = s.y + (s.height - line_h) / 2.0;
-    let value_name = format!("{}_value", name);
+    let value_name = format!("{name}_value");
 
     let glyph_w = font_px * AVG_ADVANCE_RATIO * s.text_scale;
     let ctrl_x = (s.x + s.width * CONTROL_FRAC).max(s.x + s.width - MAX_CONTROL_WIDTH);
@@ -137,7 +137,7 @@ fn expand_one(
         return vec![
             // Name (left).
             label_value(
-                &format!("{}_label", name),
+                &format!("{name}_label"),
                 &s.label,
                 &s.font,
                 s.x,
@@ -157,7 +157,7 @@ fn expand_one(
             ),
             // Downward chevron flush to the right edge (mirrors the stepper `>`).
             label_value(
-                &format!("{}_chevron", name),
+                &format!("{name}_chevron"),
                 "v",
                 &s.font,
                 right - glyph_w,
@@ -167,7 +167,7 @@ fn expand_one(
             ),
             // One click region over the whole control column opens the list.
             region(
-                &format!("{}_open", name),
+                &format!("{name}_open"),
                 Rect {
                     x: ctrl_x,
                     y: s.y,
@@ -197,7 +197,7 @@ fn expand_one(
     vec![
         // Name (left).
         label_value(
-            &format!("{}_label", name),
+            &format!("{name}_label"),
             &s.label,
             &s.font,
             s.x,
@@ -207,7 +207,7 @@ fn expand_one(
         ),
         // `<` glyph, centered in the prev button.
         label_value(
-            &format!("{}_prev_glyph", name),
+            &format!("{name}_prev_glyph"),
             "<",
             &s.font,
             ctrl_x + (sw - glyph_w) / 2.0,
@@ -228,7 +228,7 @@ fn expand_one(
         // `>` glyph, flush to the right edge of the row, so it mirrors the
         // left-aligned name and the row's left/right padding stays symmetric.
         label_value(
-            &format!("{}_next_glyph", name),
+            &format!("{name}_next_glyph"),
             ">",
             &s.font,
             right - glyph_w,
@@ -238,7 +238,7 @@ fn expand_one(
         ),
         // Prev click region (the `<` button).
         region(
-            &format!("{}_prev", name),
+            &format!("{name}_prev"),
             Rect {
                 x: ctrl_x,
                 y: s.y,
@@ -254,7 +254,7 @@ fn expand_one(
         ),
         // Next click region (value + `>`).
         region(
-            &format!("{}_next", name),
+            &format!("{name}_next"),
             Rect {
                 x: next_x,
                 y: s.y,

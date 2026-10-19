@@ -33,22 +33,22 @@ enum Ty {
 impl Ty {
     fn name(self) -> &'static str {
         match self {
-            Ty::Bool => "bool",
-            Ty::Int => "int",
-            Ty::Float => "float",
-            Ty::Vec3 => "vec3",
-            Ty::Entity => "entity",
+            Self::Bool => "bool",
+            Self::Int => "int",
+            Self::Float => "float",
+            Self::Vec3 => "vec3",
+            Self::Entity => "entity",
         }
     }
 
     fn is_numeric(self) -> bool {
-        matches!(self, Ty::Int | Ty::Float | Ty::Vec3)
+        matches!(self, Self::Int | Self::Float | Self::Vec3)
     }
 
     // Only scalars have an ordering; comparing vectors or entities with `lt`
     // and friends is a type error rather than a component-wise operation.
     fn is_ordered(self) -> bool {
-        matches!(self, Ty::Int | Ty::Float)
+        matches!(self, Self::Int | Self::Float)
     }
 }
 
@@ -63,8 +63,8 @@ pub(crate) struct DeclaredVars {
 impl DeclaredVars {
     // Read the world's `Variables` asset args. Malformed entries are skipped;
     // the asset's own check reports them.
-    pub(crate) fn from_args(args: &Value) -> DeclaredVars {
-        DeclaredVars {
+    pub(crate) fn from_args(args: &Value) -> Self {
+        Self {
             declared: true,
             types: array(args, "vars")
                 .iter()
@@ -96,7 +96,7 @@ struct Scope<'a> {
     vars: &'a DeclaredVars,
 }
 
-impl<'a> Scope<'a> {
+impl Scope<'_> {
     fn local(&self, name: &str) -> Option<Ty> {
         self.locals
             .iter()
@@ -297,7 +297,7 @@ fn body(args: &Value, vars: &DeclaredVars) -> Result<(), Fault> {
 }
 
 fn check_nodes<'a>(nodes: Option<&'a Value>, scope: &mut Scope<'a>) -> Result<(), Fault> {
-    let nodes = nodes.and_then(|v| v.as_array()).map(|a| a.as_slice());
+    let nodes = nodes.and_then(|v| v.as_array()).map(Vec::as_slice);
     let depth = scope.bindings.len();
     for (i, node) in nodes.unwrap_or(&[]).iter().enumerate() {
         check_node(node, scope).at_index(i)?;
@@ -684,8 +684,8 @@ fn single_key(value: &Value) -> Option<(&str, &Value)> {
 fn array<'a>(args: &'a Value, key: &str) -> &'a [Value] {
     args.get(key)
         .and_then(|v| v.as_array())
-        .map(|a| a.as_slice())
-        .unwrap_or(&[])
+        .map(Vec::as_slice)
+        .unwrap_or_default()
 }
 
 fn str_array<'a>(args: &'a Value, key: &str) -> Vec<&'a str> {

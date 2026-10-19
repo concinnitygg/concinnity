@@ -4,6 +4,7 @@
 
 use concinnity_core::utc::UtcTime;
 use concinnity_host::store::blob::SCHEMA_VERSION;
+use std::fmt::Write as _;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::memory::MemorySnapshot;
@@ -24,10 +25,10 @@ pub(crate) enum ReportKind {
 impl ReportKind {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            ReportKind::Panic => "panic",
-            ReportKind::DeviceLost => "gpu-device-lost",
+            Self::Panic => "panic",
+            Self::DeviceLost => "gpu-device-lost",
             #[cfg(any(target_os = "macos", target_os = "windows"))]
-            ReportKind::NativeFault => "native-fault",
+            Self::NativeFault => "native-fault",
         }
     }
 }
@@ -97,18 +98,19 @@ impl CrashReport {
     fn header(&self) -> String {
         let mut out = String::with_capacity(256);
         out.push_str("concinnity crash report\n");
-        out.push_str(&format!("kind: {}\n", self.kind.label()));
-        out.push_str(&format!("time: {} UTC\n", self.time.display()));
-        out.push_str(&format!("engine: {}\n", env!("CARGO_PKG_VERSION")));
-        out.push_str(&format!("schema: {:#010x}\n", SCHEMA_VERSION));
-        out.push_str(&format!(
-            "os: {} {}\n",
+        let _ = writeln!(out, "kind: {}", self.kind.label());
+        let _ = writeln!(out, "time: {} UTC", self.time.display());
+        let _ = writeln!(out, "engine: {}", env!("CARGO_PKG_VERSION"));
+        let _ = writeln!(out, "schema: {SCHEMA_VERSION:#010x}");
+        let _ = writeln!(
+            out,
+            "os: {} {}",
             std::env::consts::OS,
             std::env::consts::ARCH
-        ));
+        );
         self.memory.write_into(&mut out);
         for (key, value) in &self.notes {
-            out.push_str(&format!("{key}: {value}\n"));
+            let _ = writeln!(out, "{key}: {value}");
         }
         out.push('\n');
         out
@@ -120,10 +122,10 @@ impl CrashReport {
         out.push_str(&self.message[..self.message.floor_char_boundary(MAX_MESSAGE_BYTES)]);
         out.push('\n');
         if let Some(thread) = &self.thread {
-            out.push_str(&format!("thread: {thread}\n"));
+            let _ = writeln!(out, "thread: {thread}");
         }
         if let Some(location) = &self.location {
-            out.push_str(&format!("location: {location}\n"));
+            let _ = writeln!(out, "location: {location}");
         }
         out.push('\n');
         out
@@ -164,8 +166,7 @@ pub(crate) fn file_stem_at(time: UtcTime) -> String {
 pub(crate) fn utc_now() -> UtcTime {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     UtcTime::from_unix(secs)
 }
 

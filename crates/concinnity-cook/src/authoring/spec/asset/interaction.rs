@@ -4,7 +4,7 @@ use concinnity_core::components::NamedAction;
 
 use crate::authoring::spec::AssetSpec;
 
-/// A HitRegion over `rect` ([x, y, w, h], window pixels) that fires `action` when
+/// A `HitRegion` over `rect` ([x, y, w, h], window pixels) that fires `action` when
 /// clicked. Hover styling and references keep their defaults.
 pub(crate) fn hit_region(
     name: impl Into<String>,

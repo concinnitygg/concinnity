@@ -1,5 +1,5 @@
-//! EditorHook: the Shader source panel's actions. The panel is a code text
-//! area over one of a Shader's `.hlsl` files or an SdfVolume's distance field.
+//! `EditorHook`: the Shader source panel's actions. The panel is a code text
+//! area over one of a Shader's `.hlsl` files or an `SdfVolume`'s distance field.
 //! Save (the button or the save shortcut) writes the file and nothing else:
 //! the hot-reload watcher sees the write and recompiles the Shader, or every
 //! volume reading the field, exactly as it does for a save from any other
@@ -55,7 +55,7 @@ impl EditorHook {
         &mut self,
         save: bool,
         then: Leave,
-        world: &mut World,
+        world: &World,
     ) {
         if save && !self.save_shader_source() {
             return;

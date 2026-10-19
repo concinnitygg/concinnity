@@ -1,4 +1,4 @@
-//! The action vocabulary a HitRegion click or KeyBinding press fires.
+//! The action vocabulary a `HitRegion` click or `KeyBinding` press fires.
 
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize, Serializer};
@@ -9,7 +9,7 @@ use crate::ecs::asset_fields::{AssetFields, FieldTable};
 use crate::ecs::asset_id::AssetId;
 use crate::settings::SettingKey;
 
-/// What a [HitRegion](#hitregion) click or a [KeyBinding](#keybinding) press
+/// What a [`HitRegion`](#hitregion) click or a [`KeyBinding`](#keybinding) press
 /// does, with its targets resolved to asset ids.
 ///
 /// Authored as an [`AuthoredAction`], whose [Scene](#scene) and
@@ -61,27 +61,21 @@ pub enum SettingVerb {
 
 impl SettingVerb {
     /// Every verb, in declaration order.
-    pub const ALL: [SettingVerb; 5] = [
-        SettingVerb::Next,
-        SettingVerb::Prev,
-        SettingVerb::Drag,
-        SettingVerb::Rebind,
-        SettingVerb::Open,
-    ];
+    pub const ALL: [Self; 5] = [Self::Next, Self::Prev, Self::Drag, Self::Rebind, Self::Open];
 
     /// The verb as a settings row's action writes it.
     pub const fn as_str(self) -> &'static str {
         match self {
-            SettingVerb::Next => "next",
-            SettingVerb::Prev => "prev",
-            SettingVerb::Drag => "drag",
-            SettingVerb::Rebind => "rebind",
-            SettingVerb::Open => "open",
+            Self::Next => "next",
+            Self::Prev => "prev",
+            Self::Drag => "drag",
+            Self::Rebind => "rebind",
+            Self::Open => "open",
         }
     }
 
     /// The verb named by `text`, or `None`.
-    pub fn parse(text: &str) -> Option<SettingVerb> {
+    pub fn parse(text: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|v| v.as_str() == text)
     }
 }
@@ -103,46 +97,46 @@ enum Encoded {
 }
 
 impl Encoded {
-    fn encode(action: &UiAction) -> Option<Encoded> {
+    fn encode(action: &UiAction) -> Option<Self> {
         Some(match action {
-            UiAction::Quit => Encoded::Quit,
-            UiAction::Scene(id) => Encoded::Scene(id.0),
-            UiAction::Screen(ScreenCommand::Show(id)) => Encoded::ScreenShow(id.0),
-            UiAction::Screen(ScreenCommand::Push(id)) => Encoded::ScreenPush(id.0),
-            UiAction::Screen(ScreenCommand::Toggle(id)) => Encoded::ScreenToggle(id.0),
-            UiAction::Screen(ScreenCommand::Hide) => Encoded::ScreenHide,
+            UiAction::Quit => Self::Quit,
+            UiAction::Scene(id) => Self::Scene(id.0),
+            UiAction::Screen(ScreenCommand::Show(id)) => Self::ScreenShow(id.0),
+            UiAction::Screen(ScreenCommand::Push(id)) => Self::ScreenPush(id.0),
+            UiAction::Screen(ScreenCommand::Toggle(id)) => Self::ScreenToggle(id.0),
+            UiAction::Screen(ScreenCommand::Hide) => Self::ScreenHide,
             UiAction::Screen(ScreenCommand::Clear) => return None,
-            UiAction::GroupToggle(i) => Encoded::GroupToggle(u32::try_from(*i).ok()?),
-            UiAction::Story(cmd) => Encoded::Story {
+            UiAction::GroupToggle(i) => Self::GroupToggle(u32::try_from(*i).ok()?),
+            UiAction::Story(cmd) => Self::Story {
                 verb: StoryCommand::VERBS.iter().position(|v| *v == cmd.verb())? as u8,
                 index: u32::try_from(cmd.index().unwrap_or(0)).ok()?,
             },
-            UiAction::Setting { key, verb } => Encoded::Setting {
+            UiAction::Setting { key, verb } => Self::Setting {
                 key: u8::try_from(SettingKey::ALL.iter().position(|k| k == key)?).ok()?,
                 verb: SettingVerb::ALL.iter().position(|v| v == verb)? as u8,
             },
-            UiAction::Screenshot(frames) => Encoded::Screenshot(*frames),
+            UiAction::Screenshot(frames) => Self::Screenshot(*frames),
         })
     }
 
     fn decode(self) -> Option<UiAction> {
         Some(match self {
-            Encoded::Quit => UiAction::Quit,
-            Encoded::Scene(id) => UiAction::Scene(AssetId(id)),
-            Encoded::ScreenShow(id) => UiAction::Screen(ScreenCommand::Show(AssetId(id))),
-            Encoded::ScreenPush(id) => UiAction::Screen(ScreenCommand::Push(AssetId(id))),
-            Encoded::ScreenToggle(id) => UiAction::Screen(ScreenCommand::Toggle(AssetId(id))),
-            Encoded::ScreenHide => UiAction::Screen(ScreenCommand::Hide),
-            Encoded::GroupToggle(i) => UiAction::GroupToggle(i as usize),
-            Encoded::Story { verb, index } => UiAction::Story(StoryCommand::from_verb(
+            Self::Quit => UiAction::Quit,
+            Self::Scene(id) => UiAction::Scene(AssetId(id)),
+            Self::ScreenShow(id) => UiAction::Screen(ScreenCommand::Show(AssetId(id))),
+            Self::ScreenPush(id) => UiAction::Screen(ScreenCommand::Push(AssetId(id))),
+            Self::ScreenToggle(id) => UiAction::Screen(ScreenCommand::Toggle(AssetId(id))),
+            Self::ScreenHide => UiAction::Screen(ScreenCommand::Hide),
+            Self::GroupToggle(i) => UiAction::GroupToggle(i as usize),
+            Self::Story { verb, index } => UiAction::Story(StoryCommand::from_verb(
                 StoryCommand::VERBS.get(verb as usize)?,
                 Some(index as usize),
             )?),
-            Encoded::Setting { key, verb } => UiAction::Setting {
+            Self::Setting { key, verb } => UiAction::Setting {
                 key: *SettingKey::ALL.get(key as usize)?,
                 verb: *SettingVerb::ALL.get(verb as usize)?,
             },
-            Encoded::Screenshot(frames) => UiAction::Screenshot(frames),
+            Self::Screenshot(frames) => UiAction::Screenshot(frames),
         })
     }
 }
@@ -154,16 +148,16 @@ type Resolved = AuthoredAction<Ref<Scene>, Ref<Screen>>;
 impl From<Resolved> for UiAction {
     fn from(action: Resolved) -> Self {
         match action {
-            AuthoredAction::Quit => UiAction::Quit,
-            AuthoredAction::Scene(scene) => UiAction::Scene(scene.id()),
-            AuthoredAction::Show(screen) => UiAction::Screen(ScreenCommand::Show(screen.id())),
-            AuthoredAction::Push(screen) => UiAction::Screen(ScreenCommand::Push(screen.id())),
-            AuthoredAction::Toggle(screen) => UiAction::Screen(ScreenCommand::Toggle(screen.id())),
-            AuthoredAction::Hide => UiAction::Screen(ScreenCommand::Hide),
-            AuthoredAction::Story(cmd) => UiAction::Story(cmd),
-            AuthoredAction::GroupToggle(i) => UiAction::GroupToggle(i),
-            AuthoredAction::Setting { key, verb } => UiAction::Setting { key, verb },
-            AuthoredAction::Screenshot(frames) => UiAction::Screenshot(frames),
+            AuthoredAction::Quit => Self::Quit,
+            AuthoredAction::Scene(scene) => Self::Scene(scene.id()),
+            AuthoredAction::Show(screen) => Self::Screen(ScreenCommand::Show(screen.id())),
+            AuthoredAction::Push(screen) => Self::Screen(ScreenCommand::Push(screen.id())),
+            AuthoredAction::Toggle(screen) => Self::Screen(ScreenCommand::Toggle(screen.id())),
+            AuthoredAction::Hide => Self::Screen(ScreenCommand::Hide),
+            AuthoredAction::Story(cmd) => Self::Story(cmd),
+            AuthoredAction::GroupToggle(i) => Self::GroupToggle(i),
+            AuthoredAction::Setting { key, verb } => Self::Setting { key, verb },
+            AuthoredAction::Screenshot(frames) => Self::Screenshot(frames),
         }
     }
 }
@@ -173,20 +167,20 @@ impl UiAction {
     // sends.
     fn authored(&self) -> Option<Resolved> {
         Some(match self {
-            UiAction::Quit => AuthoredAction::Quit,
-            UiAction::Scene(id) => AuthoredAction::Scene(Ref::new(*id)),
-            UiAction::Screen(ScreenCommand::Show(id)) => AuthoredAction::Show(Ref::new(*id)),
-            UiAction::Screen(ScreenCommand::Push(id)) => AuthoredAction::Push(Ref::new(*id)),
-            UiAction::Screen(ScreenCommand::Toggle(id)) => AuthoredAction::Toggle(Ref::new(*id)),
-            UiAction::Screen(ScreenCommand::Hide) => AuthoredAction::Hide,
-            UiAction::Screen(ScreenCommand::Clear) => return None,
-            UiAction::Story(cmd) => AuthoredAction::Story(cmd.clone()),
-            UiAction::GroupToggle(i) => AuthoredAction::GroupToggle(*i),
-            UiAction::Setting { key, verb } => AuthoredAction::Setting {
+            Self::Quit => AuthoredAction::Quit,
+            Self::Scene(id) => AuthoredAction::Scene(Ref::new(*id)),
+            Self::Screen(ScreenCommand::Show(id)) => AuthoredAction::Show(Ref::new(*id)),
+            Self::Screen(ScreenCommand::Push(id)) => AuthoredAction::Push(Ref::new(*id)),
+            Self::Screen(ScreenCommand::Toggle(id)) => AuthoredAction::Toggle(Ref::new(*id)),
+            Self::Screen(ScreenCommand::Hide) => AuthoredAction::Hide,
+            Self::Screen(ScreenCommand::Clear) => return None,
+            Self::Story(cmd) => AuthoredAction::Story(cmd.clone()),
+            Self::GroupToggle(i) => AuthoredAction::GroupToggle(*i),
+            Self::Setting { key, verb } => AuthoredAction::Setting {
                 key: *key,
                 verb: *verb,
             },
-            UiAction::Screenshot(frames) => AuthoredAction::Screenshot(*frames),
+            Self::Screenshot(frames) => AuthoredAction::Screenshot(*frames),
         })
     }
 }
@@ -206,7 +200,7 @@ impl Serialize for SettingVerb {
 impl<'de> Deserialize<'de> for SettingVerb {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let verb = alloc::string::String::deserialize(d)?;
-        SettingVerb::parse(&verb)
+        Self::parse(&verb)
             .ok_or_else(|| de::Error::custom(format_args!("unknown setting verb {verb:?}")))
     }
 }
@@ -226,7 +220,7 @@ impl Serialize for UiAction {
 impl<'de> Deserialize<'de> for UiAction {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         if d.is_human_readable() {
-            Resolved::deserialize(d).map(UiAction::from)
+            Resolved::deserialize(d).map(Self::from)
         } else {
             Encoded::deserialize(d)?
                 .decode()

@@ -75,7 +75,7 @@ pub(super) enum Attr {
 pub(super) struct Node {
     name: &'static str,
     attrs: Vec<Attr>,
-    children: Vec<Node>,
+    children: Vec<Self>,
 }
 
 pub(super) fn node(name: &'static str, attrs: Vec<Attr>, children: Vec<Node>) -> Node {

@@ -1,11 +1,11 @@
 //! Per-frame encoder for the raymarched SDF volume pass. Runs at
 //! `PassId::Raymarch`, between `AutoExposure` and `Decals` on the
-//! hdr_resolve RMW chain. Each `SdfVolume` rasterizes one face set of
+//! `hdr_resolve` RMW chain. Each `SdfVolume` rasterizes one face set of
 //! its world-space bounding box and runs a user-authored fragment
 //! shader that sphere-traces the SDF inside the box.
 //!
 //! Architecture:
-//!   * One MTLRenderPipelineState per `SdfVolume` (built lazily at init
+//!   * One `MTLRenderPipelineState` per `SdfVolume` (built lazily at init
 //!     from the engine-shipped helpers + the user's source bytes + the
 //!     engine-shipped template). The wrap order is helpers → user →
 //!     template so the template's `fragment_main` can call the user's
@@ -15,7 +15,7 @@
 //!     36 indices, allocated once at init. The encoder draws one face set
 //!     per volume, so each pixel inside the box gets exactly one fragment:
 //!     the front faces when the camera is clear of the box, else the back.
-//!   * Color attachment = `hdr_resolve` (LoadAction::Load, opaque write),
+//!   * Color attachment = `hdr_resolve` (`LoadAction::Load`, opaque write),
 //!     depth attachment = the scene depth, which surfaces write. The march
 //!     also stops at a single-sample copy of that depth (`main_depth`,
 //!     texture(0)).
@@ -232,7 +232,7 @@ pub(in crate::metal) fn build_raymarch_pipeline(
         }],
         &[VertexLayout {
             buffer_index: RAYMARCH_VERTEX_BUFFER,
-            stride: std::mem::size_of::<Vertex>(),
+            stride: size_of::<Vertex>(),
             step: MTLVertexStepFunction::PerVertex,
         }],
     );
@@ -302,7 +302,7 @@ pub(in crate::metal) fn build_raymarch_shadow_pipeline(
         }],
         &[VertexLayout {
             buffer_index: RAYMARCH_VERTEX_BUFFER,
-            stride: std::mem::size_of::<Vertex>(),
+            stride: size_of::<Vertex>(),
             step: MTLVertexStepFunction::PerVertex,
         }],
     );
@@ -357,7 +357,7 @@ pub(in crate::metal) fn build_raymarch_volumetric_pipeline(
         }],
         &[VertexLayout {
             buffer_index: RAYMARCH_VERTEX_BUFFER,
-            stride: std::mem::size_of::<Vertex>(),
+            stride: size_of::<Vertex>(),
             step: MTLVertexStepFunction::PerVertex,
         }],
     );
@@ -426,7 +426,7 @@ pub(in crate::metal) fn build_raymarch_prepass_pipeline(
         }],
         &[VertexLayout {
             buffer_index: RAYMARCH_VERTEX_BUFFER,
-            stride: std::mem::size_of::<Vertex>(),
+            stride: size_of::<Vertex>(),
             step: MTLVertexStepFunction::PerVertex,
         }],
     );
@@ -574,7 +574,7 @@ fn volume_uniforms_from(volume: &SdfVolume) -> RaymarchVolumeUniforms {
         cone_ratio: volume.cone_ratio(),
         max_distance: volume.max_distance,
         max_steps: volume.max_steps as i32,
-        receive_shadows: if volume.receive_shadows { 1 } else { 0 },
+        receive_shadows: i32::from(volume.receive_shadows),
         params: volume.params,
     }
 }
@@ -600,8 +600,8 @@ pub(in crate::metal) fn build_raymarch_cube_buffers(
     let corners: [Vertex; 8] = cube_corners(1.0).map(v);
     let indices = CUBE_INDICES;
 
-    let vb_bytes = std::mem::size_of_val(&corners);
-    let ib_bytes = std::mem::size_of_val(&indices);
+    let vb_bytes = size_of_val(&corners);
+    let ib_bytes = size_of_val(&indices);
 
     // SAFETY: `ptr`/`vb_bytes` describe the live `corners` array, and Metal copies those bytes into
     // the new buffer before the call returns.

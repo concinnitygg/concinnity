@@ -1,4 +1,4 @@
-//! DxContext construction. `build` resolves the backend inputs, then calls each
+//! `DxContext` construction. `build` resolves the backend inputs, then calls each
 //! stage in dependency order. A stage builds one owned group or subsystem state
 //! whole and returns it, borrowing the finished states it depends on:
 //!
@@ -6,14 +6,14 @@
 //!   heaps.rs         RTV heap with the back-buffer views, DSV and sampler heaps.
 //!   descriptors.rs   shader-visible SRV heap, sampler handles, post-pass block.
 //!   effects.rs       upscaler, screen-space passes, world effects.
-//!   scene_assets.rs  area lights, IBL cubes, textures, color LUT, geometry.
+//!   `scene_assets.rs`  area lights, IBL cubes, textures, color LUT, geometry.
 //!   targets.rs       main depth, HDR scene target, transient pool.
-//!   scene_data.rs    constant-buffer rings, clustered light binning.
+//!   `scene_data.rs`    constant-buffer rings, clustered light binning.
 //!   shadow.rs        cascade and spot shadow states.
 //!   cull/            bindless pass, compute cull, Hi-Z, GPU-driven shadow, G-buffer.
 //!   text.rs          text atlases and pipeline.
 //!   composite.rs     composite pipeline.
-//!   ray_tracing.rs   reflection composite, RT reflections, acceleration structure.
+//!   `ray_tracing.rs`   reflection composite, RT reflections, acceleration structure.
 //!   bloom.rs         the shared bloom chain.
 //!   commands.rs      command lists, frame sync, timestamp queries.
 //!
@@ -29,7 +29,9 @@ use concinnity_core::render::shader_reload::ShaderReload;
 use concinnity_core::settings::ResolvedGraphics;
 
 use self::heap_layout::{RtvHeapLayout, SrvHeapParams};
-use super::context::*;
+use super::context::{
+    DxContext, DxHardware, DxInstanced, ProbeState, StreamState, record_main_thread,
+};
 use super::geometry_upload::GeometryUploads;
 use super::resources::skinning::SkinnedState;
 
@@ -191,7 +193,7 @@ impl DxContext {
         // Record this (main) thread so the `RenderBackend` mutation entry
         // points can `debug_assert_main_thread` against it; the Send invariant
         // rests on the context being touched from this thread alone.
-        super::context::record_main_thread();
+        record_main_thread();
 
         // The swapchain config the caller's reload gate compares against.
         let swapchain_config = backend_init::SwapchainConfig {
@@ -544,7 +546,7 @@ impl DxContext {
             allow_tearing: self.swapchain.allow_tearing,
         };
         let reuse = (self.hw.hand_over()?, swapchain);
-        *self = DxContext::build(init, Some(reuse))?;
+        *self = Self::build(init, Some(reuse))?;
         Ok(())
     }
 }

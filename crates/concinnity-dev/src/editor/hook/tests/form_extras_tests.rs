@@ -1,5 +1,5 @@
 //! The form-extras seam (`hook/form_extras.rs`) through a stub type's extras
-//! on a PointLight form: hidden fields, rows after the fields, a press, the
+//! on a `PointLight` form: hidden fields, rows after the fields, a press, the
 //! reason the form cannot confirm, args the extras fill in, the file a commit
 //! writes, and an edit to another entry riding the same undo step. A refused
 //! edit keeps the form open and writes nothing.
@@ -28,7 +28,7 @@ impl FormExtras for Stub {
         &["range"]
     }
 
-    fn rows(&self, cx: &ExtrasCx) -> Vec<ExtraRow> {
+    fn rows(&self, cx: &ExtrasCx<'_>) -> Vec<ExtraRow> {
         vec![
             ExtraRow::label("Extra", Some(format!("for '{}'", cx.name))),
             ExtraRow {
@@ -50,13 +50,13 @@ impl FormExtras for Stub {
         }
     }
 
-    fn blocked(&self, _cx: &ExtrasCx) -> Option<String> {
+    fn blocked(&self, _cx: &ExtrasCx<'_>) -> Option<String> {
         (!self.flag).then(|| "tick the flag".to_string())
     }
 
     fn fill_args(
         &self,
-        _cx: &ExtrasCx,
+        _cx: &ExtrasCx<'_>,
         args: &mut serde_json::Map<String, serde_json::Value>,
     ) -> Vec<NewFile> {
         args.insert("intensity".to_string(), 7.0.into());

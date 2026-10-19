@@ -33,13 +33,12 @@ impl Neighbors {
         for (of, program) in self.of.iter_mut().zip(programs) {
             of.clear();
             for tags in &program.queries {
-                let slot = match self.tags.iter().position(|t| t == tags) {
-                    Some(slot) => slot,
-                    None => {
-                        self.tags.push(tags.clone());
-                        self.indexes.push(NeighborIndex::default());
-                        self.tags.len() - 1
-                    }
+                let slot = if let Some(slot) = self.tags.iter().position(|t| t == tags) {
+                    slot
+                } else {
+                    self.tags.push(tags.clone());
+                    self.indexes.push(NeighborIndex::default());
+                    self.tags.len() - 1
                 };
                 of.push(slot);
             }
@@ -62,6 +61,7 @@ impl Neighbors {
 
 #[cfg(test)]
 mod tests {
+    use crate::components::Behavior;
     use alloc::vec;
 
     use super::*;
@@ -69,7 +69,7 @@ mod tests {
     fn declaring(queries: Vec<Vec<u8>>) -> Program {
         Program {
             id: None,
-            def: Default::default(),
+            def: Behavior::default(),
             scope: Vec::new(),
             local_inits: Vec::new(),
             queries,

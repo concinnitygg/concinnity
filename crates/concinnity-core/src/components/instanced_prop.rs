@@ -41,8 +41,8 @@ pub struct InstanceTransform {
 )]
 #[serde(default)]
 pub struct InstancedProp {
-    /// A [Mesh](#mesh), [ProceduralMesh](#proceduralmesh),
-    /// [VoxelChunk](#voxelchunk), or mesh-kind [File](#file) asset.
+    /// A [Mesh](#mesh), [`ProceduralMesh`](#proceduralmesh),
+    /// [`VoxelChunk`](#voxelchunk), or mesh-kind [File](#file) asset.
     pub mesh: Option<MeshHandle>,
     /// A [Material](#material) providing the albedo texture plus lighting parameters.
     pub material: Option<MaterialHandle>,

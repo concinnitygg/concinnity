@@ -17,14 +17,12 @@ pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> 
         .is_empty();
     if has_prefab && (has_model || has_mesh) {
         return Err(format!(
-            "Asset '{}': Prop with 'prefab' cannot also set 'model' or 'mesh'",
-            name
+            "Asset '{name}': Prop with 'prefab' cannot also set 'model' or 'mesh'"
         ));
     }
     if !has_model && !has_mesh && !has_prefab {
         return Err(format!(
-            "Asset '{}': Prop requires either a 'prefab', 'model', or 'mesh' field",
-            name
+            "Asset '{name}': Prop requires either a 'prefab', 'model', or 'mesh' field"
         ));
     }
     super::physics::check_collider_shape(name, args)

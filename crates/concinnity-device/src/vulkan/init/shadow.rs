@@ -47,7 +47,7 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
     // cascade's VP is frozen for several frames and then jumps a whole
     // texel-snap quantum, so an aliased read samples that cascade with the
     // jumped VP against depth rasterized with the old one.
-    let shadow_ubo_size = std::mem::size_of::<ShadowUniforms>() as u64;
+    let shadow_ubo_size = size_of::<ShadowUniforms>() as u64;
     let mut ubos = Vec::with_capacity(frames);
     for _ in 0..frames {
         ubos.push(hw.alloc.create_buffer(

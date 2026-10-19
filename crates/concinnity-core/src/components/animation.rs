@@ -81,26 +81,26 @@ pub struct AnimationTrack {
     pub keyframes: Vec<Keyframe>,
 }
 
-/// A skeletal animation clip that animates one [SkinnedMesh](#skinnedmesh).
+/// A skeletal animation clip that animates one [`SkinnedMesh`](#skinnedmesh).
 ///
 /// The clip plays every frame, sampling each track and deforming the target
 /// mesh's skeleton. Joints with no track hold their bind pose.
 ///
-/// Several `Animation` assets may target the same [SkinnedMesh](#skinnedmesh);
+/// Several `Animation` assets may target the same [`SkinnedMesh`](#skinnedmesh);
 /// they are then blended into one pose, weighted by each clip's `weight` (a
 /// normalized weighted average). A single clip plays at full strength
 /// regardless of its `weight`.
 ///
 /// **File import.** A clip may be authored entirely by hand (`tracks` filled
 /// out, `source` left empty) or imported from the same glTF (`.glb` /
-/// `.gltf`) or `.fbx` file that backs the target [SkinnedMesh](#skinnedmesh).
+/// `.gltf`) or `.fbx` file that backs the target [`SkinnedMesh`](#skinnedmesh).
 /// Set `source` to the file path and the build imports `duration` + `tracks`
 /// from it. `animation_index` picks one clip when the file contains several
 /// (default 0); `animation_name` names it for matching against the file's
 /// clip names: when set it takes precedence over the index. FBX curves are
 /// baked at `sample_rate` keys per second. Channels whose target node is not
 /// a joint of the file's first skinned node are dropped. The same file should
-/// back the target [SkinnedMesh](#skinnedmesh) so the joint indices agree.
+/// back the target [`SkinnedMesh`](#skinnedmesh) so the joint indices agree.
 ///
 /// ```rust
 /// # use concinnity_core::components::Animation;
@@ -119,7 +119,7 @@ pub struct AnimationTrack {
 )]
 #[serde(default)]
 pub struct Animation {
-    /// The [SkinnedMesh](#skinnedmesh) asset this clip animates.
+    /// The [`SkinnedMesh`](#skinnedmesh) asset this clip animates.
     pub target: Option<SkinnedMeshHandle>,
     /// Optional path to a `.glb`, `.gltf`, or `.fbx` file. When set, the
     /// build imports `duration` + `tracks` from it; inline-authored clips
@@ -143,7 +143,7 @@ pub struct Animation {
     #[asset(default = true)]
     pub looping: bool,
     /// Blend weight used when several clips target the same
-    /// [SkinnedMesh](#skinnedmesh). Ignored when this is the only clip on its
+    /// [`SkinnedMesh`](#skinnedmesh). Ignored when this is the only clip on its
     /// target.
     #[asset(default = 1.0)]
     pub weight: f32,
@@ -154,7 +154,7 @@ pub struct Animation {
     /// When true, the build strips the root joint's travel out of the pose
     /// and bakes it into `root_track`: the pose stays anchored in place and
     /// the runtime moves the character by the curve's frame-to-frame delta
-    /// instead (the [SkinnedMesh](#skinnedmesh) `capsule` is the usual
+    /// instead (the [`SkinnedMesh`](#skinnedmesh) `capsule` is the usual
     /// consumer). X and Z travel is always stripped; Y only with
     /// `root_motion_y`.
     pub root_motion: bool,
@@ -168,7 +168,7 @@ pub struct Animation {
     /// Per-joint keyframe channels.
     pub tracks: Vec<AnimationTrack>,
     /// Morph-target weight keys for the target mesh, in time order. Each key
-    /// holds one weight per morph target of the [SkinnedMesh](#skinnedmesh).
+    /// holds one weight per morph target of the [`SkinnedMesh`](#skinnedmesh).
     /// Filled by the glTF import; empty when the clip animates no morph
     /// targets.
     pub morph_track: Vec<MorphKey>,

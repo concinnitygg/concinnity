@@ -1,5 +1,5 @@
 //! The Milky Way's shape: a band around the galactic plane, thicker and
-//! brighter toward its core. Mirrors `milky_way_envelope` in night_sky.hlsl;
+//! brighter toward its core. Mirrors `milky_way_envelope` in `night_sky.hlsl`;
 //! the shader breaks the band up with clumps and dark dust lanes on top.
 
 use crate::math::exp;

@@ -22,7 +22,7 @@ use concinnity_core::settings::apply::{ApplyPlan, LiveChanges};
 use super::backend_handoff::RuntimeHandoff;
 use super::skinned_templates::SkinnedUpload;
 use super::streaming::StreamingSetup;
-use super::*;
+use super::{FrameCounter, GraphicsSystem, RenderInitFailure, overlay_maps, scene_flow};
 use crate::live_edit::hot_reload_sources::{
     HotReloadSources, procedural_mesh_snapshot, resolve_sdf_fields,
 };
@@ -91,7 +91,7 @@ impl GraphicsSystem {
     // and effect pipelines.
     fn detect_quality(
         &self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         launch: &LaunchRequest,
         persisted: &concinnity_core::settings::StoredSettings,
     ) -> DetectedQuality {
@@ -126,7 +126,7 @@ impl GraphicsSystem {
     // settings-menu labels, and return the config the rest of init needs.
     fn init_render_settings(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         launch: &LaunchRequest,
         persisted: &concinnity_core::settings::StoredSettings,
         quality: DetectedQuality,
@@ -160,7 +160,7 @@ impl GraphicsSystem {
         settings.sync_menu_labels(ctx, persisted);
         // Each ScrollPanel's per-element clip band, captured before
         // UiInputSystem drains the ScrollPanels (GraphicsSystem.init runs first).
-        self.clip_rects = concinnity_core::render::overlay_maps::scroll_clip_rects(ctx);
+        self.clip_rects = overlay_maps::scroll_clip_rects(ctx);
 
         (
             ResolvedRenderConfig {
@@ -180,7 +180,11 @@ impl GraphicsSystem {
     // (backend-enumerated, else the static preset fallback), apply a persisted
     // display-mode choice to the backend, and seed the frame-rate-cap resource +
     // the Resolution row's dynamic value label. Runs after the backend is built.
-    fn finalize_display_modes(&mut self, ctx: &mut PipelineContext, settings: &mut SettingsState) {
+    fn finalize_display_modes(
+        &mut self,
+        ctx: &mut PipelineContext<'_>,
+        settings: &mut SettingsState,
+    ) {
         let reported = self.backend.as_deref_mut().map(|backend| {
             // No-op in embedded mode (the backend owns no window there).
             if let Some(mode) = settings.startup_window_mode() {
@@ -201,7 +205,11 @@ impl GraphicsSystem {
     // Decide cursor handling and push the post-build backend config: menu mode,
     // ambient scale, key map, the startup cursor grab (plain first-person worlds
     // only), and the device capability flags that gate the settings rows.
-    fn finalize_backend_config(&mut self, ctx: &mut PipelineContext, settings: &mut SettingsState) {
+    fn finalize_backend_config(
+        &mut self,
+        ctx: &mut PipelineContext<'_>,
+        settings: &mut SettingsState,
+    ) {
         // In menu mode capture is driven per-frame in `run_step`.
         let cursor = cursor_policy(ctx);
         self.extractor.set_menu_mode(cursor.menu_mode);
@@ -235,7 +243,7 @@ impl GraphicsSystem {
             // Push the movement key map (the persisted rebinds, or the default).
             // The backend decodes physical keys through it; idempotent with its
             // own default seed when there is no override.
-            backend.set_keymap(settings.keymap());
+            backend.set_keymap(*settings.keymap());
             if cursor.capture_at_start {
                 backend.request_cursor_capture();
             }
@@ -261,7 +269,7 @@ impl GraphicsSystem {
     // takes the streamed draws' geometry out of those buffers.
     fn assemble_draws(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         world: &WorldPayloads,
         streaming_config: Option<&StreamingConfig>,
     ) -> Option<SceneDraws> {
@@ -318,7 +326,7 @@ impl GraphicsSystem {
     }
 
     // Run init, marking the system failed when any step of it fails.
-    pub(super) fn try_init(&mut self, ctx: &mut PipelineContext) -> Option<()> {
+    pub(super) fn try_init(&mut self, ctx: &mut PipelineContext<'_>) -> Option<()> {
         let launch = ctx.resource::<LaunchRequest>().copied().unwrap_or_default();
         let persisted = ctx
             .resource::<concinnity_core::settings::StoredSettings>()
@@ -387,7 +395,9 @@ impl GraphicsSystem {
                 &concinnity_core::render::terrain::grass_by_id(ctx),
             )
         });
-        let planet_far_field = planet_grass.as_ref().map(|g| g.far_field());
+        let planet_far_field = planet_grass
+            .as_ref()
+            .map(concinnity_core::render::grass::PlanetGrass::far_field);
         let fx = drain_world_fx(
             ctx,
             concinnity_host::thread::asset_id::name_of,
@@ -509,7 +519,7 @@ impl GraphicsSystem {
                 // has a GPU that refused rather than no GPU at all. Leave the
                 // cause where `Runtime::start` reads it, so the failure reaches
                 // the caller instead of a loop that draws nothing.
-                ctx.insert_resource(crate::render::system::RenderInitFailure(e));
+                ctx.insert_resource(RenderInitFailure(e));
                 return None;
             }
         }

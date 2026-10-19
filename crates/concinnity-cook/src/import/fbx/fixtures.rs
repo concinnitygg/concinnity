@@ -22,7 +22,7 @@ pub(super) enum Attr {
 pub(super) struct Node {
     name: String,
     attrs: Vec<Attr>,
-    children: Vec<Node>,
+    children: Vec<Self>,
 }
 
 pub(super) fn node(name: &str) -> Node {
@@ -71,12 +71,12 @@ impl Node {
         self.attr(Attr::ArrF64(v))
     }
 
-    pub(super) fn child(mut self, c: Node) -> Self {
+    pub(super) fn child(mut self, c: Self) -> Self {
         self.children.push(c);
         self
     }
 
-    pub(super) fn children(mut self, cs: Vec<Node>) -> Self {
+    pub(super) fn children(mut self, cs: Vec<Self>) -> Self {
         self.children.extend(cs);
         self
     }
@@ -180,7 +180,7 @@ impl tracing::Subscriber for WarnCounter {
 // nothing is listening, so the warning paths never run without one.
 pub(super) fn count_warnings<R>(f: impl FnOnce() -> R) -> (R, usize) {
     let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let out = tracing::subscriber::with_default(WarnCounter(count.clone()), f);
+    let out = tracing::subscriber::with_default(WarnCounter(std::sync::Arc::clone(&count)), f);
     (out, count.load(std::sync::atomic::Ordering::Relaxed))
 }
 

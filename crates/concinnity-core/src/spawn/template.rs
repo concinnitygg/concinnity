@@ -30,7 +30,7 @@ use crate::ecs::{Entity, FrameVec, PipelineContext};
 /// authored placement; transient spawns (a Spawner's churn) pass None. Returns the new entity, or None when the template has no draw slots to
 /// copy or a clone fails.
 pub fn spawn_from_template(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     template: Entity,
     name: Option<AssetId>,
     transform: Transform,
@@ -88,20 +88,20 @@ pub fn spawn_from_template(
     Some(entity)
 }
 
-/// Instantiate a runtime copy of a skinned `template` (a SkinnedMesh's
-/// SkeletonPose entity) at `transform`.
+/// Instantiate a runtime copy of a skinned `template` (a `SkinnedMesh`'s
+/// `SkeletonPose` entity) at `transform`.
 ///
 /// Unlike the static path, a skinned instance is not a cloned draw slot: it
 /// claims one of the template's pre-reserved hidden bind-pose copies through
 /// `acquire_slot`, which reveals it and returns its skinned index. The new
-/// entity carries its own SkeletonPose (so an animation system drives it, keyed
+/// entity carries its own `SkeletonPose` (so an animation system drives it, keyed
 /// on the shared mesh id, in lockstep with the template), a Transform (so the
 /// per-frame model push can move it), and an optional Lifetime. When `name` is
 /// Some the instance is identified by it so it can be addressed (e.g.
 /// despawned). Returns the new entity, or None when the template is not skinned or
 /// its instance pool is exhausted.
 pub fn spawn_skinned_from_template(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     template: Entity,
     name: Option<AssetId>,
     transform: Transform,
@@ -183,7 +183,7 @@ pub fn tick_spawners<'a>(ctx: &mut PipelineContext<'a>, dt: f32) -> FrameVec<'a,
             .map(|&(.., count)| count as usize)
             .sum::<usize>(),
     );
-    for &(entity, template, lifetime, count) in fired.iter() {
+    for &(entity, template, lifetime, count) in &fired {
         let transform = ctx.get::<Transform>(entity).copied().unwrap_or_default();
         for _ in 0..count {
             due.push(DueSpawn {
@@ -202,7 +202,7 @@ pub fn tick_spawners<'a>(ctx: &mut PipelineContext<'a>, dt: f32) -> FrameVec<'a,
 /// Entities still alive keep their decremented remaining. Returning the expired
 /// list (rather than despawning inline, which would mutate storage
 /// mid-iteration) lets the caller route each expiry through the same despawn
-/// cascade a DespawnRequest uses.
+/// cascade a `DespawnRequest` uses.
 pub fn tick_lifetimes<'a>(ctx: &mut PipelineContext<'a>, dt: f32) -> FrameVec<'a, Entity> {
     let mut expired = ctx.frame.vec::<Entity>(ctx.query::<Lifetime>().len());
     for (entity, life) in ctx.query_mut_with_entity::<Lifetime>() {
@@ -227,7 +227,7 @@ mod tests {
 
     // Build an isolated PipelineContext over a fresh world, mirroring the
     // despawn tests, so the spawn/despawn loop can run without a backend.
-    fn run<R>(body: impl FnOnce(&mut PipelineContext) -> R) -> R {
+    fn run<R>(body: impl FnOnce(&mut PipelineContext<'_>) -> R) -> R {
         body(&mut World::new().context())
     }
 

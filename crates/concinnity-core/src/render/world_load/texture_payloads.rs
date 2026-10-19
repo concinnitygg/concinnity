@@ -32,7 +32,7 @@ pub struct TextureSlotSkips<'a> {
 /// Decode every texture slot. A skipped slot enters the pool as a 1x1
 /// placeholder. `None` when a payload cannot be read or decoded.
 pub fn decode_texture_payloads(
-    ctx: &mut PipelineContext,
+    ctx: &mut PipelineContext<'_>,
     locators: &[PayloadLocator],
     skips: TextureSlotSkips<'_>,
     blob_disk_backed: bool,

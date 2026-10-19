@@ -71,17 +71,17 @@ impl Backend {
     pub fn platform(self) -> concinnity_core::platform::Platform {
         use concinnity_core::platform::Platform;
         match self {
-            Backend::Metal => Platform::Metal,
-            Backend::Dx => Platform::DirectX,
-            Backend::Vk => Platform::Vulkan,
+            Self::Metal => Platform::Metal,
+            Self::Dx => Platform::DirectX,
+            Self::Vk => Platform::Vulkan,
         }
     }
 
     pub(crate) fn cfg_name(self) -> &'static str {
         match self {
-            Backend::Metal => "backend_metal",
-            Backend::Dx => "backend_dx",
-            Backend::Vk => "backend_vk",
+            Self::Metal => "backend_metal",
+            Self::Dx => "backend_dx",
+            Self::Vk => "backend_vk",
         }
     }
 }
@@ -106,7 +106,7 @@ pub(crate) enum BinaryTargets {
 
 impl BinaryTargets {
     pub(crate) fn bundles(self) -> bool {
-        self != BinaryTargets::None
+        self != Self::None
     }
 
     // The `cargo::rustc-link-arg-*` key covering these targets. Cargo rejects
@@ -115,19 +115,23 @@ impl BinaryTargets {
     // every example the package builds.
     pub(crate) fn link_arg_key(self) -> Option<&'static str> {
         match self {
-            BinaryTargets::None => None,
-            BinaryTargets::Bins => Some("cargo::rustc-link-arg-bins"),
-            BinaryTargets::Examples => Some("cargo::rustc-link-arg-examples"),
+            Self::None => None,
+            Self::Bins => Some("cargo::rustc-link-arg-bins"),
+            Self::Examples => Some("cargo::rustc-link-arg-examples"),
         }
     }
 
     // Subdirectory of `<target>/<profile>/` Cargo writes these binaries to.
     pub(crate) fn exe_subdir(self) -> Option<&'static str> {
-        matches!(self, BinaryTargets::Examples).then_some("examples")
+        matches!(self, Self::Examples).then_some("examples")
     }
 }
 
 // Whether the calling package's build script runs with its `vulkan` feature on.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 fn vulkan_from_cargo() -> bool {
     std::env::var("CARGO_FEATURE_VULKAN").is_ok()
 }
@@ -156,6 +160,10 @@ fn emit_check_cfgs() {
 }
 
 // The whole setup: declare the cfgs, emit the backend cfgs, then set up the SDKs.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 fn setup_for(vulkan: bool) -> Vec<Backend> {
     emit_check_cfgs();
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
@@ -229,6 +237,10 @@ fn binary_targets_from_cargo() -> Vec<BinaryTargets> {
     targets::binary_targets(&manifest, &dir)
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 fn manifest_dir() -> Option<PathBuf> {
     std::env::var("CARGO_MANIFEST_DIR").ok().map(PathBuf::from)
 }
@@ -240,6 +252,14 @@ fn manifest_dir() -> Option<PathBuf> {
 /// The hash is what a content-addressed cache folds in so that a change to the
 /// code producing its stored bytes evicts entries whose other inputs did not
 /// move. See `source_hash` for the shape of the guarantee.
+///
+/// # Panics
+///
+/// Panics outside a build script, where cargo sets no `CARGO_MANIFEST_DIR`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 pub fn hash_sources(roots: &[PathBuf]) -> u32 {
     let package =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("build script runs under cargo"));
@@ -275,6 +295,10 @@ fn opted_in(value: Option<&str>) -> bool {
 // Snapshot every environment input the SDK setup reads. This is the only place
 // the setup consults the process environment; everything downstream works on
 // the returned struct.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 fn sdk_env_from_cargo() -> SdkEnv {
     let var = |name: &str| std::env::var(name).ok();
     let workspace = workspace_root();
@@ -285,7 +309,7 @@ fn sdk_env_from_cargo() -> SdkEnv {
     // `<VAR>=0`: an absent DLL costs the feature and nothing else.
     let enabled = |name: &str| var(name).as_deref() != Some("0");
     // Agility is the exception and defaults to OFF; see `opted_in`.
-    let opted_in = |name: &str| self::opted_in(var(name).as_deref());
+    let opted_in = |name: &str| opted_in(var(name).as_deref());
     SdkEnv {
         target_os: var("CARGO_CFG_TARGET_OS").unwrap_or_default(),
         out_dir: var("OUT_DIR").map(PathBuf::from),
@@ -318,12 +342,14 @@ fn sdk_root(explicit: Option<String>, vendored: Option<PathBuf>) -> Option<PathB
 
 // Locate the workspace root by walking up from the caller's manifest until a
 // `Cargo.toml` declaring `[workspace]` is found.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "cargo passes build-script inputs through the environment"
+)]
 fn workspace_root() -> Option<PathBuf> {
     let start = std::env::var("CARGO_MANIFEST_DIR").ok()?;
     find_ancestor_with(Path::new(&start), |dir| {
-        std::fs::read_to_string(dir.join("Cargo.toml"))
-            .map(|c| c.contains("[workspace]"))
-            .unwrap_or(false)
+        std::fs::read_to_string(dir.join("Cargo.toml")).is_ok_and(|c| c.contains("[workspace]"))
     })
 }
 
@@ -406,6 +432,10 @@ mod tests {
         assert!(manifest.contains("[workspace]"));
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the default holds only while the shell leaves the variable unset"
+    )]
     #[test]
     fn sdk_env_snapshot_defaults_the_loadlibrary_probes_on() {
         let env = sdk_env_from_cargo();
@@ -434,7 +464,7 @@ mod tests {
             (Some("/explicit"), None, Some("/explicit")),
             (
                 None,
-                Some(vendored.clone()),
+                Some(vendored),
                 Some("/checkout/vendor/xess-3.0.1-windows-x86_64"),
             ),
             // Nothing named a root, which is an answer rather than a reason to
@@ -451,6 +481,10 @@ mod tests {
     // Agility is the one that binds the executable to a directory beside it, so
     // an unset variable must leave it OFF: the default has to be the artifact
     // that runs anywhere, not the one that runs only where it was built.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the default holds only while the shell leaves the variable unset"
+    )]
     #[test]
     fn sdk_env_snapshot_defaults_agility_off() {
         if std::env::var("CN_ENABLE_AGILITY_SDK").is_err() {
@@ -499,6 +533,10 @@ mod tests {
         emit_check_cfgs();
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the expected backends follow the target cargo builds for"
+    )]
     #[test]
     fn the_setup_returns_the_backends_it_resolved() {
         let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();

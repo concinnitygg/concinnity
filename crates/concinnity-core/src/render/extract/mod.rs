@@ -103,21 +103,9 @@ struct FrameCamera {
 }
 
 impl FrameCamera {
-    fn read(ctx: &PipelineContext) -> FrameCamera {
-        let mut camera = ctx
-            .query_with_entity::<Camera3D>()
-            .next()
-            .map(|(entity, c)| FrameCamera {
-                entity: Some(entity),
-                fov_y_radians: c.fov_y_degrees.to_radians(),
-                near: c.near,
-                view_distance: c.view_distance,
-                view: c.view_matrix,
-                position: c.position,
-                draw_view: c.view_matrix,
-                draw_position: c.position,
-            })
-            .unwrap_or(FrameCamera {
+    fn read(ctx: &PipelineContext<'_>) -> Self {
+        let mut camera = ctx.query_with_entity::<Camera3D>().next().map_or(
+            Self {
                 entity: None,
                 fov_y_radians: core::f32::consts::FRAC_PI_4,
                 near: 0.05,
@@ -126,7 +114,18 @@ impl FrameCamera {
                 position: [0.0; 3],
                 draw_view: IDENTITY4,
                 draw_position: [0.0; 3],
-            });
+            },
+            |(entity, c)| Self {
+                entity: Some(entity),
+                fov_y_radians: c.fov_y_degrees.to_radians(),
+                near: c.near,
+                view_distance: c.view_distance,
+                view: c.view_matrix,
+                position: c.position,
+                draw_view: c.view_matrix,
+                draw_position: c.position,
+            },
+        );
         if let Some(relative) = ctx.resource::<CameraRelativeView>() {
             camera.draw_view = relative.view;
             camera.draw_position = relative.cam_pos;
@@ -220,7 +219,12 @@ impl FrameExtractor {
     }
 
     /// Fill `snap` with everything frame `frame` draws.
-    pub fn extract(&mut self, ctx: &mut PipelineContext, snap: &mut RenderSnapshot, frame: u64) {
+    pub fn extract(
+        &mut self,
+        ctx: &mut PipelineContext<'_>,
+        snap: &mut RenderSnapshot,
+        frame: u64,
+    ) {
         snap.clear();
 
         // The backend effects the earlier systems recorded this tick (spawn
@@ -273,7 +277,7 @@ impl FrameExtractor {
     // The cursor and menu-mode state the backend applies before the draw.
     fn write_ui_state(
         &self,
-        ctx: &PipelineContext,
+        ctx: &PipelineContext<'_>,
         snap: &mut RenderSnapshot,
         overlay: &OverlayFrame,
         menu_overridden: bool,
@@ -301,7 +305,7 @@ impl FrameExtractor {
     // propagation skips the resolve when no Transform / Parent changed; the
     // push gate drops slots whose matrix is unchanged, so a static scene sends
     // nothing.
-    fn push_models(&mut self, ctx: &mut PipelineContext, snap: &mut RenderSnapshot) {
+    fn push_models(&mut self, ctx: &mut PipelineContext<'_>, snap: &mut RenderSnapshot) {
         propagation::propagate_transforms_cached(ctx, &mut self.transform_cache);
         for (_entity, global, handle) in ctx.join2::<GlobalTransform, RenderHandle>() {
             for &slot in &handle.draws {
@@ -319,7 +323,7 @@ impl FrameExtractor {
 
     // The latest skinned poses the animation wrote on the previous tick, and
     // the skinned models that moved. An untouched pose keeps its last upload.
-    fn push_skinned(&mut self, ctx: &mut PipelineContext, snap: &mut RenderSnapshot) {
+    fn push_skinned(&mut self, ctx: &mut PipelineContext<'_>, snap: &mut RenderSnapshot) {
         for pose in ctx.query_mut::<SkeletonPose>() {
             if !pose.updated {
                 continue;
@@ -358,7 +362,7 @@ impl FrameExtractor {
     // is actually running.
     fn advance_scene_fade(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         snap: &mut RenderSnapshot,
         elapsed: f32,
     ) {
@@ -386,7 +390,7 @@ impl FrameExtractor {
     // against the same camera the frame draws with.
     fn build_lines(
         &mut self,
-        ctx: &PipelineContext,
+        ctx: &PipelineContext<'_>,
         snap: &mut RenderSnapshot,
         camera: &FrameCamera,
     ) {
@@ -423,7 +427,7 @@ impl FrameExtractor {
     // the temporal history still matches this frame.
     fn frame_scalars(
         &mut self,
-        ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext<'_>,
         snap: &mut RenderSnapshot,
         camera: &FrameCamera,
         overlay: &OverlayFrame,
@@ -523,7 +527,7 @@ impl FrameExtractor {
     // hidden objects get the degenerate model matrix (nothing draws) and stay
     // out of the index; re-derived every frame, so un-hiding shows up as a
     // changed matrix and is re-sent.
-    fn refresh_pick_index(&mut self, ctx: &mut PipelineContext, snap: &mut RenderSnapshot) {
+    fn refresh_pick_index(&mut self, ctx: &mut PipelineContext<'_>, snap: &mut RenderSnapshot) {
         let mut entries = ctx
             .resources
             .take::<PickIndex>()
@@ -532,10 +536,7 @@ impl FrameExtractor {
         entries.clear();
         {
             let empty = BTreeSet::new();
-            let hidden = ctx
-                .resource::<HiddenAssets>()
-                .map(|h| &h.0)
-                .unwrap_or(&empty);
+            let hidden = ctx.resource::<HiddenAssets>().map_or(&empty, |h| &h.0);
             for c in self
                 .pick_candidates
                 .iter()

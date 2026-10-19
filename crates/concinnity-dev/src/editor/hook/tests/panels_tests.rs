@@ -464,11 +464,7 @@ fn preview_rows_toggle_play_mode_and_fly() {
 // Templates panel (the same click path a real session drives).
 #[test]
 fn tick_view_button_opens_view_then_a_row_opens_templates() {
-    let vis = |w: &World, id: AssetId| {
-        w.get_by_id::<Sprite>(id)
-            .map(|s| s.visible)
-            .unwrap_or(false)
-    };
+    let vis = |w: &World, id: AssetId| w.get_by_id::<Sprite>(id).is_some_and(|s| s.visible);
     let rect = |w: &World, id: AssetId| {
         let s = w.get_by_id::<Sprite>(id).unwrap();
         [s.x, s.y, s.width, s.height]
@@ -532,11 +528,7 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
 // the detail. Drives the whole flow through `tick` end to end.
 #[test]
 fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
-    let vis = |w: &World, id: AssetId| {
-        w.get_by_id::<Sprite>(id)
-            .map(|s| s.visible)
-            .unwrap_or(false)
-    };
+    let vis = |w: &World, id: AssetId| w.get_by_id::<Sprite>(id).is_some_and(|s| s.visible);
     let rect = |w: &World, id: AssetId| {
         let s = w.get_by_id::<Sprite>(id).unwrap();
         [s.x, s.y, s.width, s.height]

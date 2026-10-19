@@ -108,7 +108,7 @@ impl System for ThirdPersonSystem {
             .reads_resources(crate::resource_mask![ControlsCommand, FrameTime])
     }
 
-    fn init(&mut self, ctx: &mut PipelineContext) {
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
         super::look_controls::apply_persisted(
             ctx,
             super::look_controls::Look {
@@ -163,7 +163,7 @@ impl System for ThirdPersonSystem {
         });
     }
 
-    fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         // Live settings-menu changes sent this tick by the renderer, which runs
         // first. FOV is written in the camera loop below, which holds the
         // mutable Camera3D borrow.
@@ -179,9 +179,8 @@ impl System for ThirdPersonSystem {
         // Read (not drain) the input snapshot deposited by the renderer, so
         // UiInputSystem can read the same snapshot. Movement fields are frozen
         // while a menu is open, which parks the character and the orbit.
-        let input = match ctx.query::<FrameInput>().next().cloned() {
-            Some(i) => i,
-            None => return StepResult::Continue,
+        let Some(input) = ctx.query::<FrameInput>().next().cloned() else {
+            return StepResult::Continue;
         };
 
         let dt = ctx
@@ -413,7 +412,7 @@ mod tests {
             desired_move: [0.0; 3],
             jump_requested: false,
             interact_requested: false,
-            controller: Some(controller.clone()),
+            controller: Some(controller),
         });
         world.add_component(CharacterRig::new(
             hero(),

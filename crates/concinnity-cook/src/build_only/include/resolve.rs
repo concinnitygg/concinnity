@@ -148,7 +148,7 @@ fn target_path(entry: &Value, file: Option<&Path>) -> Result<PathBuf, String> {
         return Ok(path.to_path_buf());
     }
     match file {
-        Some(file) => Ok(file.parent().unwrap_or(Path::new("")).join(path)),
+        Some(file) => Ok(file.parent().unwrap_or_else(|| Path::new("")).join(path)),
         None => Err(at(format!(
             "'{}' is relative, and a world held in memory has no file to resolve it against",
             include.path

@@ -2,16 +2,16 @@
 
 /// The sky beyond the air: stars, the Milky Way, distant galaxies and the
 /// moon, fixed to the celestial sphere so they rise and set as a
-/// [SkyRotation](#skyrotation) turns it.
+/// [`SkyRotation`](#skyrotation) turns it.
 ///
 /// Under an [Atmosphere](#atmosphere) the night sky is seen through the air:
 /// it dims and hides toward the horizon, and the daylight sky outshines it,
 /// so it comes out as the sun sets and the twilight fades. Without one it is
 /// seen as from airless ground: black between the stars, with the sun's disc
 /// in it by day, and it lights the scene in place of an
-/// [EnvironmentMap](#environmentmap).
+/// [`EnvironmentMap`](#environmentmap).
 ///
-/// The celestial pole is the [SkyRotation](#skyrotation)'s axis (straight up
+/// The celestial pole is the [`SkyRotation`](#skyrotation)'s axis (straight up
 /// without one). The Milky Way is a band around the sky whose own pole leans
 /// `milky_way_tilt_deg` away from the celestial pole, toward the side
 /// `milky_way_turn_deg` around the pole from the sun, with its bright core
@@ -22,7 +22,7 @@
 /// one full turn of the sky), drifting east against the stars, so it rises
 /// a little later each day. Its lit side faces the sun, so its phase follows
 /// its angle from the sun: new beside it, full opposite it. At night it is a
-/// second, dim [DirectionalLight](#directionallight), dimmed and reddened by
+/// second, dim [`DirectionalLight`](#directionallight), dimmed and reddened by
 /// the air like the sun. Only one directional light casts shadows: once the
 /// sun has fully set the moon takes them over, its light fading in over the
 /// next 6 degrees of the sun's descent, and it hands them back the same way
@@ -109,7 +109,7 @@ pub struct NightSky {
     pub moon_angular_diameter_deg: f32,
     /// The full moon's light as a fraction of the sunlight. The default is
     /// the real moon's, 14 magnitudes fainter than the sun.
-    #[asset(default = 0.0000025)]
+    #[asset(default = 0.000_002_5)]
     pub moon_brightness: f32,
     /// Brightness of the moon's face as a multiple of the face whose light,
     /// over the whole disc, is `moon_brightness`. At 1 the full moon's face

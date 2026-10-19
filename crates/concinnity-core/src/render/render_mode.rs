@@ -28,13 +28,13 @@ pub enum RenderMode {
 impl RenderMode {
     /// Whether this mode builds a renderer.
     pub fn renders(self) -> bool {
-        self == RenderMode::Rendered
+        self == Self::Rendered
     }
 
     /// Whether the mode published in `world` builds a renderer. A world with
     /// none published was never started by a host that renders.
     pub fn renders_in(world: &World) -> bool {
-        world.resource::<RenderMode>().is_some_and(|m| m.renders())
+        world.resource::<Self>().is_some_and(|m| m.renders())
     }
 }
 
@@ -51,8 +51,8 @@ impl HeadlessReason {
     /// Why, in words, for the log line that says so.
     pub fn as_str(self) -> &'static str {
         match self {
-            HeadlessReason::Requested => "the world asks for it (AppConfig.headless)",
-            HeadlessReason::NothingToDraw => "the world holds nothing to draw",
+            Self::Requested => "the world asks for it (AppConfig.headless)",
+            Self::NothingToDraw => "the world holds nothing to draw",
         }
     }
 }
@@ -70,11 +70,11 @@ impl NoRenderer {
     /// What the run reports when it refuses to start.
     pub fn message(self) -> &'static str {
         match self {
-            NoRenderer::NoBackend => {
+            Self::NoBackend => {
                 "this build compiles no render backend; set AppConfig.headless to run \
                  the world without one"
             }
-            NoRenderer::NoGpu => {
+            Self::NoGpu => {
                 "no usable GPU was found; set AppConfig.headless to run the world \
                  without one"
             }
@@ -98,8 +98,8 @@ impl Resolution {
     /// window either, and fails at start.
     pub fn mode(self) -> RenderMode {
         match self {
-            Resolution::Rendered => RenderMode::Rendered,
-            Resolution::Headless(_) | Resolution::Unavailable(_) => RenderMode::Headless,
+            Self::Rendered => RenderMode::Rendered,
+            Self::Headless(_) | Self::Unavailable(_) => RenderMode::Headless,
         }
     }
 
@@ -107,7 +107,7 @@ impl Resolution {
     /// to draw and nothing here can draw it.
     pub fn startable(self) -> Result<RenderMode, RenderError> {
         match self {
-            Resolution::Unavailable(why) => Err(RenderError::Other(why.message().into())),
+            Self::Unavailable(why) => Err(RenderError::Other(why.message().into())),
             resolved => Ok(resolved.mode()),
         }
     }

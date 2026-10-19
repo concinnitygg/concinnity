@@ -5,7 +5,7 @@
 //! the backend context it needs through a `ParallelCtxRef`.
 //!
 //! The backend context types are not Send/Sync in Rust's type system: they hold
-//! COM smart pointers, objc2 protocol objects, RefCells, and the like. The
+//! COM smart pointers, objc2 protocol objects, `RefCells`, and the like. The
 //! graphics APIs nonetheless permit shared, read-only access to device-derived
 //! resources from many threads. A backend adopts that claim for its own context
 //! type with a single `unsafe impl ParallelEncodeCtx`, where it documents the

@@ -124,10 +124,7 @@ VolumeSample sampleVolume(float3 p, SdfParams params, float time)
 
 // The starters for a surface or a volumetric field.
 pub(crate) fn of(volumetric: bool) -> &'static [Template] {
-    match volumetric {
-        true => &VOLUMETRIC,
-        false => &SURFACE,
-    }
+    if volumetric { &VOLUMETRIC } else { &SURFACE }
 }
 
 // Starter `i` of its kind, or the first past the end.

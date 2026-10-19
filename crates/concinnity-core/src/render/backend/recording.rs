@@ -174,7 +174,7 @@ pub enum Call {
         visible: bool,
     },
     /// A draw slot's material rewritten in place. The uniforms are not
-    /// compared (they carry no PartialEq); the pool slots identify which
+    /// compared (they carry no `PartialEq`); the pool slots identify which
     /// material landed.
     SetDrawMaterial {
         draw_idx: DrawIndex,
@@ -211,25 +211,25 @@ pub struct RecordingState {
     pub models: HashMap<DrawIndex, [[f32; 4]; 4]>,
     /// Latest visibility pushed per draw slot.
     pub visibility: HashMap<DrawIndex, bool>,
-    /// Returned by the next window_closed() poll.
+    /// Returned by the next `window_closed()` poll.
     pub window_closed: bool,
-    /// When set, draw_frame returns this error instead of Ok.
+    /// When set, `draw_frame` returns this error instead of Ok.
     pub fail_draw: Option<RenderError>,
-    /// Run inside each draw_frame, standing in for the work of a real draw.
+    /// Run inside each `draw_frame`, standing in for the work of a real draw.
     pub on_draw: Option<Box<dyn Fn() + Send>>,
-    /// Returned by render_stats().
+    /// Returned by `render_stats()`.
     pub render_stats: crate::profile::RenderStats,
-    /// When set, reload_world returns this error instead of Ok.
+    /// When set, `reload_world` returns this error instead of Ok.
     pub fail_reload: Option<RenderError>,
-    /// When set, upload_skinned_morphs returns this error instead of Ok.
+    /// When set, `upload_skinned_morphs` returns this error instead of Ok.
     pub fail_morph_upload: Option<RenderError>,
-    /// When set, update_texture_slot returns this error instead of Ok.
+    /// When set, `update_texture_slot` returns this error instead of Ok.
     pub fail_texture_upload: Option<RenderError>,
-    /// When set, evict_texture_slot returns this error instead of Ok.
+    /// When set, `evict_texture_slot` returns this error instead of Ok.
     pub fail_texture_evict: Option<RenderError>,
     /// When set, a settings apply's rebuild returns this error instead of Ok.
     pub fail_quality: Option<RenderError>,
-    /// Snapshot the next take_input() returns, then reset to default (a real
+    /// Snapshot the next `take_input()` returns, then reset to default (a real
     /// backend's drain-on-poll semantics).
     pub next_input: InputSnapshot,
     /// Reported logical viewport size.
@@ -280,7 +280,7 @@ impl RecordingState {
         self.calls.contains(call)
     }
 
-    /// Count of DrawFrame entries in the call log.
+    /// Count of `DrawFrame` entries in the call log.
     pub fn draw_frames(&self) -> usize {
         self.calls
             .iter()
@@ -288,7 +288,7 @@ impl RecordingState {
             .count()
     }
 
-    /// The last DrawFrame entry, if any frame was drawn.
+    /// The last `DrawFrame` entry, if any frame was drawn.
     pub fn last_draw_frame(&self) -> Option<Call> {
         self.calls
             .iter()
@@ -670,7 +670,7 @@ impl WindowControl for RecordingBackend {
         self.record(Call::SetDisplayMode(mode));
     }
 
-    fn set_keymap(&mut self, _keymap: &keymap::KeyMap) {
+    fn set_keymap(&mut self, _keymap: keymap::KeyMap) {
         self.record(Call::SetKeymap);
     }
 }

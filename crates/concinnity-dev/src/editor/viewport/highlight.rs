@@ -3,7 +3,7 @@
 //! AABB every frame. The active (most recently picked) member's ring draws in
 //! the full accent; the rest a dimmed step. Window-space like the rest of the
 //! editor HUD, injected hidden alongside it, and drawn under the floating
-//! panels (the ids are absent from the HudLayers map, so they sit at layer 0
+//! panels (the ids are absent from the `HudLayers` map, so they sit at layer 0
 //! below every focused panel).
 
 use concinnity_core::components::Sprite;

@@ -20,7 +20,7 @@ fn settings_rows_show_their_live_values_at_init() {
     let mut settings = concinnity_core::settings::StoredSettings::default();
     settings.graphics.vsync = Some(true);
     let (_state, hooks) = recording_hooks_with(profile_at(GpuTier::MidDiscrete));
-    let mut b = effects_scene(Default::default());
+    let mut b = effects_scene(ResolvedGraphics::default());
     push_settings_row(&mut b, "vsync", "next", AssetId(100));
     push_settings_row(&mut b, "graphics_quality", "next", AssetId(121));
     let mut world = b.build();
@@ -91,7 +91,7 @@ fn the_backend_capabilities_gate_the_settings_rows() {
         selectable_upscaler: false,
         ..backend::DeviceCapabilities::ALL
     };
-    let mut b = effects_scene(Default::default());
+    let mut b = effects_scene(ResolvedGraphics::default());
     push_settings_row(&mut b, "upscale_backend", "next", AssetId(600));
     push_settings_row(&mut b, "vsync", "next", AssetId(602));
     let mut world = b.build();
@@ -135,7 +135,7 @@ fn the_dlss_preset_row_follows_whether_dlss_is_selectable() {
         let mut profile = GpuProfile::UNKNOWN;
         profile.vendor = vendor;
         let (_, hooks) = recording_hooks_with(profile);
-        let mut b = effects_scene(Default::default());
+        let mut b = effects_scene(ResolvedGraphics::default());
         push_settings_row(&mut b, "dlss_preset", "next", AssetId(600));
         let mut world = b.build();
         let gs = init_graphics(&mut world, hooks);

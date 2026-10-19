@@ -28,7 +28,7 @@ use super::context::VkContext;
 
 // Byte stride of one `VkDrawIndexedIndirectCommand` in the cull kernel's output.
 pub(in crate::vulkan) const INDIRECT_COMMAND_STRIDE: u32 =
-    std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32;
+    size_of::<vk::DrawIndexedIndirectCommand>() as u32;
 
 impl VkContext {
     // Shader-bucket regions the cull kernel routes between: the world default
@@ -59,7 +59,7 @@ impl VkContext {
     // Byte offset of shader bucket `b`'s command region in an indirect buffer.
     pub(in crate::vulkan) fn bucket_region_offset(&self, bucket: usize) -> vk::DeviceSize {
         (bucket * self.cull.bucket_stride) as vk::DeviceSize
-            * INDIRECT_COMMAND_STRIDE as vk::DeviceSize
+            * vk::DeviceSize::from(INDIRECT_COMMAND_STRIDE)
     }
 
     // True when two-pass Hi-Z occlusion runs this frame: the world requested
@@ -396,7 +396,7 @@ mod tests {
     #[test]
     fn cull_params_size_matches_push_range() {
         assert_eq!(
-            std::mem::size_of::<super::CullParams>() as u32,
+            size_of::<super::CullParams>() as u32,
             super::super::pipeline::CULL_PUSH_CONSTANT_BYTES
         );
     }

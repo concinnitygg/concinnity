@@ -1,12 +1,12 @@
-//! Skinned-mesh resources for DxContext: the skinned geometry upload (built
-//! lazily by `upload_skinned` the first time a SkinnedMesh is uploaded), and
+//! Skinned-mesh resources for `DxContext`: the skinned geometry upload (built
+//! lazily by `upload_skinned` the first time a `SkinnedMesh` is uploaded), and
 //! the per-frame joint / morph-weight uploads.
 //! The per-slot CPU records these uploads read live in the scene's
 //! `SkinnedSlots`.
 
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
-use concinnity_core::gfx::render_types::*;
+use concinnity_core::gfx::render_types::{MAX_JOINTS, SkinnedDrawObject, SkinnedIndex};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::{geometry_repack, rt_geom};
 use concinnity_core::transform::IDENTITY;
@@ -15,9 +15,11 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::super::allocator::PooledBuffer;
 use super::super::com;
-use super::super::context::*;
+use super::super::context::DxContext;
 use super::super::error::map_hresult;
-use super::super::texture::*;
+use super::super::texture::{
+    create_uav_buffer, one_shot_submit, transition_barrier, upload_buffer, upload_buffer_padded,
+};
 
 // Skinned (skeletally animated) mesh rendering. All `None` / empty until
 // `upload_skinned` runs; with no `SkinnedMesh` in the world every skinned pass
@@ -133,7 +135,7 @@ impl DxContext {
         self.skinned.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&skinned_vertex_buffer),
             SizeInBytes: vtx_bytes.len() as u32,
-            StrideInBytes: std::mem::size_of::<SkinnedVertex>() as u32,
+            StrideInBytes: size_of::<SkinnedVertex>() as u32,
         };
         self.skinned.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&skinned_index_buffer),
@@ -153,7 +155,7 @@ impl DxContext {
         // UPLOAD-heap memory and producing an arbitrary spike. The seed is
         // also what the renderer wants on frame 0 before the first pose
         // arrives: every joint is identity, so the mesh shows in bind pose.
-        let joint_buf_bytes = (MAX_JOINTS * std::mem::size_of::<[[f32; 4]; 4]>()) as u64;
+        let joint_buf_bytes = (MAX_JOINTS * size_of::<[[f32; 4]; 4]>()) as u64;
         let identity_seed: Vec<[[f32; 4]; 4]> = vec![IDENTITY; MAX_JOINTS];
         let frames = self.hw.frames();
         let mut joint_buffers: Vec<Vec<PooledBuffer>> = Vec::with_capacity(frames);
@@ -175,16 +177,16 @@ impl DxContext {
                 // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload,
                 // and the source is a separate allocation, so the ranges cannot overlap.
                 unsafe {
-                    buf.Map(0, None, Some(&mut ptr))
+                    buf.Map(0, None, Some(&raw mut ptr))
                         .map_err(|e| map_hresult(e.code(), "map skinned joint buf"))?;
                     std::ptr::copy_nonoverlapping(
-                        identity_seed.as_ptr() as *const u8,
-                        ptr as *mut u8,
+                        identity_seed.as_ptr().cast::<u8>(),
+                        ptr.cast::<u8>(),
                         joint_buf_bytes as usize,
                     );
                 }
                 frame_bufs.push(buf);
-                frame_ptrs.push(ptr as *mut u8);
+                frame_ptrs.push(ptr.cast::<u8>());
             }
             joint_buffers.push(frame_bufs);
             joint_ptrs.push(frame_ptrs);
@@ -226,7 +228,7 @@ impl DxContext {
         // rides the GPU-driven pass, so a build failure is a startup error, as
         // on Metal.
         {
-            let stride = std::mem::size_of::<Vertex>();
+            let stride = size_of::<Vertex>();
             let deformed_bytes = (vertices.len() * stride).max(stride) as u64;
             let mut deformed_buffers: Vec<ID3D12Resource> = Vec::with_capacity(frames);
             let mut deformed_vbvs: Vec<D3D12_VERTEX_BUFFER_VIEW> = Vec::with_capacity(frames);
@@ -293,6 +295,10 @@ impl DxContext {
     // changes resize the per-slot joint-matrix buffers via
     // `update_skinned_skeleton`. Pipelines stay untouched.
     // Mirrors `MtlContext::update_skinned_mesh_geometry`.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "`forward!` reaches it from the trait's `&mut self` method of the same name"
+    )]
     pub(crate) fn update_skinned_mesh_geometry(
         &mut self,
         skinned_index: SkinnedIndex,
@@ -353,9 +359,9 @@ impl DxContext {
             // the source is a separate allocation, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    mats.as_ptr() as *const u8,
+                    mats.as_ptr().cast::<u8>(),
                     dst,
-                    n * std::mem::size_of::<[[f32; 4]; 4]>(),
+                    n * size_of::<[[f32; 4]; 4]>(),
                 );
             }
         }
@@ -392,20 +398,19 @@ impl DxContext {
                 }
                 Some(data) => {
                     let key = std::sync::Arc::as_ptr(data) as usize;
-                    let (buf, count) = match by_source.get(&key) {
-                        Some(entry) => entry.clone(),
-                        None => {
-                            let words = data.packed_words();
-                            let bytes: &[u8] = bytemuck::cast_slice(&words);
-                            let buf = upload_buffer(
-                                &self.hw.alloc,
-                                bytes,
-                                D3D12_RESOURCE_STATE_GENERIC_READ,
-                            )?;
-                            let count = data.target_count() as u32;
-                            by_source.insert(key, (buf.clone(), count));
-                            (buf, count)
-                        }
+                    let (buf, count) = if let Some(entry) = by_source.get(&key) {
+                        entry.clone()
+                    } else {
+                        let words = data.packed_words();
+                        let bytes: &[u8] = bytemuck::cast_slice(&words);
+                        let buf = upload_buffer(
+                            &self.hw.alloc,
+                            bytes,
+                            D3D12_RESOURCE_STATE_GENERIC_READ,
+                        )?;
+                        let count = data.target_count() as u32;
+                        by_source.insert(key, (buf.clone(), count));
+                        (buf, count)
                     };
                     delta_buffers.push(Some(buf));
                     weights.push(vec![0.0; count as usize]);
@@ -429,7 +434,7 @@ impl DxContext {
                 let mut frame_bufs: Vec<PooledBuffer> = Vec::with_capacity(n);
                 let mut frame_ptrs: Vec<*mut u8> = Vec::with_capacity(n);
                 for count in &target_counts {
-                    let bytes = ((*count).max(1) as u64) * std::mem::size_of::<f32>() as u64;
+                    let bytes = u64::from((*count).max(1)) * size_of::<f32>() as u64;
                     let buf = self
                         .hw
                         .alloc
@@ -444,12 +449,12 @@ impl DxContext {
                     // payload, and the source is a separate allocation, so the ranges cannot
                     // overlap.
                     unsafe {
-                        buf.Map(0, None, Some(&mut ptr))
+                        buf.Map(0, None, Some(&raw mut ptr))
                             .map_err(|e| map_hresult(e.code(), "map morph weight buf"))?;
-                        std::ptr::write_bytes(ptr as *mut u8, 0, bytes as usize);
+                        std::ptr::write_bytes(ptr.cast::<u8>(), 0, bytes as usize);
                     }
                     frame_bufs.push(buf);
-                    frame_ptrs.push(ptr as *mut u8);
+                    frame_ptrs.push(ptr.cast::<u8>());
                 }
                 weight_buffers.push(frame_bufs);
                 weight_ptrs.push(frame_ptrs);
@@ -479,9 +484,9 @@ impl DxContext {
             // the source is a separate allocation, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    w.as_ptr() as *const u8,
+                    w.as_ptr().cast::<u8>(),
                     dst,
-                    w.len() * std::mem::size_of::<f32>(),
+                    w.len() * size_of::<f32>(),
                 );
             }
         }

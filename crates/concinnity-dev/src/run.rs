@@ -59,7 +59,7 @@ pub(crate) fn start_app(
     // Hand the shutdown token to the hook so a debug client can request a clean
     // exit (the `shutdown` debug tool call). No-op when no hook is present.
     if let Some(hook) = hook.as_mut() {
-        hook.attach_shutdown(shutdown.clone());
+        hook.attach_shutdown(shutdown);
     }
 
     // Resolved before `start()`, which is where the columns the resolution

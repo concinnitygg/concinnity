@@ -68,6 +68,7 @@ impl OceanFftParams {
     }
 
     /// The same simulation's reduction into mip `level`.
+    #[must_use]
     pub fn reduce(&self, level: u32) -> Self {
         Self {
             mip_size: (self.grid[0] >> level).max(1),

@@ -32,12 +32,12 @@ impl MassProperties {
         let derived = Self::at_unit_density(shape);
         if mass > 0.0 {
             let scale = mass / derived.mass.max(MIN_MASS);
-            return MassProperties {
+            return Self {
                 mass: mass.max(MIN_MASS),
                 inertia: derived.inertia * scale,
             };
         }
-        MassProperties {
+        Self {
             mass: derived.mass.max(MIN_MASS),
             inertia: derived.inertia,
         }
@@ -49,7 +49,7 @@ impl MassProperties {
                 let h = Vec3::from_array(half_extents).abs();
                 let mass = UNIT_DENSITY * 8.0 * h.x * h.y * h.z;
                 let third = mass / 3.0;
-                MassProperties {
+                Self {
                     mass,
                     inertia: vec3(
                         third * (h.y * h.y + h.z * h.z),
@@ -61,7 +61,7 @@ impl MassProperties {
             ColliderShape::Ball { radius } => {
                 let r = radius.abs();
                 let mass = UNIT_DENSITY * (4.0 / 3.0) * core::f32::consts::PI * r * r * r;
-                MassProperties {
+                Self {
                     mass,
                     inertia: Vec3::splat(0.4 * mass * r * r),
                 }
@@ -81,7 +81,7 @@ impl MassProperties {
                 let transverse = cylinder * (0.25 * r * r + h * h / 3.0)
                     + caps * (0.4 * r * r + h * h + 0.75 * h * r);
                 let axial = 0.5 * cylinder * r * r + 0.4 * caps * r * r;
-                MassProperties {
+                Self {
                     mass,
                     inertia: vec3(transverse, axial, transverse),
                 }

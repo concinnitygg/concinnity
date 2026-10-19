@@ -204,9 +204,10 @@ pub fn frame_graph_inputs(gates: &FeatureGates, facts: &FrameFacts) -> FrameGrap
         upscale_reads_reactive: facts.upscaler && facts.upscaler_reads_reactive,
         ssgi_enabled: gates.ssgi,
         ssgi_resolve_enabled: gates.ssgi_resolve,
-        rt_reflections_enabled: match gates.traits.composite_scene_fixed {
-            true => path.rt_node,
-            false => path.rt_trace,
+        rt_reflections_enabled: if gates.traits.composite_scene_fixed {
+            path.rt_node
+        } else {
+            path.rt_trace
         },
         grass_enabled: facts.grass && bindless,
         grass_shadow_enabled: facts.grass_casts,

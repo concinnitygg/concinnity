@@ -22,7 +22,7 @@
 //! SSR / RT cube array -- all without blocking the render loop (the sky reflection
 //! covers a probe until its cube installs). Nothing is read back and no convolution
 //! runs on the CPU. The forward / SSR / RT sampling lives in the main / resolve
-//! shaders (see the reflection_probes.md DX/VK port checklist).
+//! shaders (see the `reflection_probes.md` DX/VK port checklist).
 
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
@@ -565,11 +565,11 @@ impl VkContext {
             },
         };
         let clear_depth = depth::CLEAR_VALUE;
-        let clears: &[vk::ClearValue] = if self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1
+        let clears: &[vk::ClearValue] = if self.targets.msaa_samples == vk::SampleCountFlags::TYPE_1
         {
-            &[clear_color, clear_depth, vk::ClearValue::default()]
-        } else {
             &[clear_color, clear_depth]
+        } else {
+            &[clear_color, clear_depth, vk::ClearValue::default()]
         };
         let FaceArea {
             extent,
@@ -617,7 +617,7 @@ impl VkContext {
                 indirect,
                 0,
                 self.state.draw.skinned_record_base() as u32,
-                std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
+                size_of::<vk::DrawIndexedIndirectCommand>() as u32,
             );
         }
         // A face is always rendered lit, whatever the viewport shows.
@@ -676,10 +676,8 @@ impl ProbeBakeDevice for VkContext {
         // Bake-owned cull buffers, zeroed first so the untouched instance tail reads
         // as disabled (a probe omits instanced geometry), then filled with this
         // probe's static + chunk + skinned records (LOD by probe eye).
-        let object_size =
-            self.state.draw.record_count() * std::mem::size_of::<render_types::GpuObjectData>();
-        let args_size =
-            self.state.draw.record_count() * std::mem::size_of::<render_types::GpuDrawArgs>();
+        let object_size = self.state.draw.record_count() * size_of::<render_types::GpuObjectData>();
+        let args_size = self.state.draw.record_count() * size_of::<render_types::GpuDrawArgs>();
         bake.object_buf.zero_bytes(0, object_size);
         bake.draw_args_buf.zero_bytes(0, args_size);
         self.build_records_into(
@@ -1015,7 +1013,7 @@ impl BakeResources {
         }
     }
 
-    fn new(ctx: &VkContext) -> RenderResult<BakeResources> {
+    fn new(ctx: &VkContext) -> RenderResult<Self> {
         use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
         let device = &ctx.hw.device;
         let alloc = &ctx.hw.alloc;
@@ -1113,10 +1111,10 @@ impl BakeResources {
 
         // Bake-owned cull ring, sized like the per-frame rings.
         let n = ctx.state.draw.record_count();
-        let object_size = (n * std::mem::size_of::<GpuObjectData>()) as u64;
-        let args_size = (n * std::mem::size_of::<GpuDrawArgs>()) as u64;
-        let indirect_size = (n * std::mem::size_of::<vk::DrawIndexedIndirectCommand>()) as u64;
-        let status_size = (n * std::mem::size_of::<u32>()) as u64;
+        let object_size = (n * size_of::<GpuObjectData>()) as u64;
+        let args_size = (n * size_of::<GpuDrawArgs>()) as u64;
+        let indirect_size = (n * size_of::<vk::DrawIndexedIndirectCommand>()) as u64;
+        let status_size = (n * size_of::<u32>()) as u64;
         let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         let object_buf =
             alloc.create_buffer(object_size, vk::BufferUsageFlags::STORAGE_BUFFER, host)?;
@@ -1145,7 +1143,7 @@ impl BakeResources {
             bytemuck::cast_slice(ctx.uniforms.canopy_tables.rows()),
             vk::BufferUsageFlags::STORAGE_BUFFER,
         )?;
-        let view_size = std::mem::size_of::<ViewUniforms>() as u64;
+        let view_size = size_of::<ViewUniforms>() as u64;
         let mut view_bufs = Vec::with_capacity(CAPTURE_FACES);
         for _ in 0..CAPTURE_FACES {
             view_bufs.push(alloc.create_buffer(
@@ -1258,7 +1256,7 @@ impl BakeResources {
         let layouts = vec![ctx.descriptors.global_set_layout.handle(); CAPTURE_FACES];
         let global_sets = alloc_descriptor_sets(device, pool.handle(), &layouts)?;
 
-        let bake = BakeResources {
+        let bake = Self {
             color,
             _depth: depth,
             resolve,

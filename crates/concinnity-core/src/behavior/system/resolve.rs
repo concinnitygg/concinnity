@@ -33,7 +33,7 @@ pub(super) struct SourceTicks {
 }
 
 impl SourceTicks {
-    pub(super) fn of(ctx: &PipelineContext) -> Self {
+    pub(super) fn of(ctx: &PipelineContext<'_>) -> Self {
         Self {
             behaviors: ctx.changed_tick::<Behavior>(),
             variables: ctx.changed_tick::<Variables>(),

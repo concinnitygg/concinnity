@@ -14,7 +14,7 @@ use crate::render::material_entry::{self, MaterialEntry};
 use crate::render::material_params;
 use crate::resource::{MaterialTable, TextureTable};
 
-/// The texture pool a world load reads from its TextureTable.
+/// The texture pool a world load reads from its `TextureTable`.
 pub struct TexturePool {
     /// Each texture's payload locator, by pool slot.
     pub locators: Vec<PayloadLocator>,
@@ -22,7 +22,7 @@ pub struct TexturePool {
     pub cook_only: BTreeSet<usize>,
 }
 
-/// The materials a world load decodes from its MaterialTable.
+/// The materials a world load decodes from its `MaterialTable`.
 pub struct DecodedMaterials {
     /// Each material's draw entry, by handle.
     pub map: HashMap<MaterialHandle, MaterialEntry>,

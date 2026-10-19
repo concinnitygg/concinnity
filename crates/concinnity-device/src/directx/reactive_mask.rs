@@ -50,8 +50,8 @@ impl ReactiveMask {
         };
         // SAFETY: a null-resource view with a fully specified descriptor, written
         // into a slot this context reserved for it in a heap it owns.
-        unsafe { device.CreateRenderTargetView(None, Some(&null_desc), slots.null_rtv) };
-        let mut mask = Self {
+        unsafe { device.CreateRenderTargetView(None, Some(&raw const null_desc), slots.null_rtv) };
+        let mask = Self {
             resource: create_rt_target(device, width, height, REACTIVE_MASK_FORMAT)?,
             slots,
         };
@@ -71,7 +71,7 @@ impl ReactiveMask {
         Ok(())
     }
 
-    fn write_views(&mut self, device: &ID3D12Device) {
+    fn write_views(&self, device: &ID3D12Device) {
         write_format_rtv(device, &self.resource, self.slots.rtv, REACTIVE_MASK_FORMAT);
         write_format_srv(
             device,

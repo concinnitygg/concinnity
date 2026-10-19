@@ -17,7 +17,7 @@
 //!     frame it submits shows the tick's input, simulation and cameras. Only
 //!     the frame report follows it.
 //!
-//! Event-carried couplings (RootMotionEvent, GroundProbes, SettingCommand) are
+//! Event-carried couplings (`RootMotionEvent`, `GroundProbes`, `SettingCommand`) are
 //! order-robust thanks to the event store's two-frame retention.
 
 use concinnity_core::audio::out::AudioOut;
@@ -106,7 +106,7 @@ const GRAPHICS: SystemEntry = SystemEntry {
 // their `init`. The defaults the world is completed with land earlier still
 // (`complete_world`), so a Prop one of them injects decomposes here like any
 // other.
-fn before_init(ctx: &mut PipelineContext) {
+fn before_init(ctx: &mut PipelineContext<'_>) {
     // Every context touch a stepping system makes is asserted against what it
     // declared; the hook is installed before the first step can happen.
     #[cfg(debug_assertions)]

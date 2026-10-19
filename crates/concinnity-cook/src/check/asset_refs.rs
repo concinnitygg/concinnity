@@ -122,8 +122,8 @@ impl CrossReferenced for AnimationGraph {
         let states = args
             .get("states")
             .and_then(|v| v.as_array())
-            .map(|a| a.as_slice())
-            .unwrap_or(&[]);
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         for (i, state) in states.iter().enumerate() {
             let state_name = state.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let label = if state_name.is_empty() {
@@ -187,8 +187,7 @@ impl CrossReferenced for Prop {
             kind: RefKind::MeshSource,
             target: mesh_ref.to_string(),
             error: format!(
-                "Prop '{}': mesh '{}' not found, add a Mesh, ProceduralMesh, or File (obj) asset with that `$id`",
-                name, mesh_ref
+                "Prop '{name}': mesh '{mesh_ref}' not found, add a Mesh, ProceduralMesh, or File (obj) asset with that `$id`"
             ),
         }]
     }
@@ -236,16 +235,14 @@ impl CrossReferenced for Model {
                 let sub_mesh = sub.get("mesh").and_then(|v| v.as_str()).unwrap_or("");
                 if sub_mesh.is_empty() {
                     refs.push(CrossRef::Issue(format!(
-                        "Model '{}': submesh[{}] is missing a 'mesh' field",
-                        name, i
+                        "Model '{name}': submesh[{i}] is missing a 'mesh' field"
                     )));
                 } else {
                     refs.push(CrossRef::Resolve {
                         kind: RefKind::MeshSource,
                         target: sub_mesh.to_string(),
                         error: format!(
-                            "Model '{}': submesh[{}] mesh '{}' not found, add a Mesh, ProceduralMesh, or File (obj) asset with that `$id`",
-                            name, i, sub_mesh
+                            "Model '{name}': submesh[{i}] mesh '{sub_mesh}' not found, add a Mesh, ProceduralMesh, or File (obj) asset with that `$id`"
                         ),
                     });
                 }
@@ -263,16 +260,14 @@ impl CrossReferenced for InstancedProp {
         let mesh_ref = args.get("mesh").and_then(|v| v.as_str()).unwrap_or("");
         if mesh_ref.is_empty() {
             return vec![CrossRef::Issue(format!(
-                "InstancedProp '{}': `mesh` field is required",
-                name
+                "InstancedProp '{name}': `mesh` field is required"
             ))];
         }
         vec![CrossRef::Resolve {
             kind: RefKind::MeshSource,
             target: mesh_ref.to_string(),
             error: format!(
-                "InstancedProp '{}': mesh '{}' not found, add a Mesh, ProceduralMesh, VoxelChunk, or File (obj) asset with that `$id`",
-                name, mesh_ref
+                "InstancedProp '{name}': mesh '{mesh_ref}' not found, add a Mesh, ProceduralMesh, VoxelChunk, or File (obj) asset with that `$id`"
             ),
         }]
     }
@@ -285,15 +280,14 @@ impl CrossReferenced for VoxelChunk {
         let palette = args
             .get("palette")
             .and_then(|v| v.as_array())
-            .map(|a| a.as_slice())
-            .unwrap_or(&[]);
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         // Each named entry resolves generically; an entry that names nothing
         // is caught here.
         for (i, entry) in palette.iter().enumerate() {
             if entry.as_str().unwrap_or("").is_empty() && !entry.is_u64() {
                 refs.push(CrossRef::Issue(format!(
-                    "VoxelChunk '{}': palette[{}] is not a valid BlockType name",
-                    name, i
+                    "VoxelChunk '{name}': palette[{i}] is not a valid BlockType name"
                 )));
             }
         }
@@ -309,15 +303,14 @@ impl CrossReferenced for VoxelWorld {
         let palette = args
             .get("palette")
             .and_then(|v| v.as_array())
-            .map(|a| a.as_slice())
-            .unwrap_or(&[]);
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         // Each named entry resolves generically; an entry that names nothing
         // is caught here.
         for (i, entry) in palette.iter().enumerate() {
             if entry.as_str().unwrap_or("").is_empty() && !entry.is_u64() {
                 refs.push(CrossRef::Issue(format!(
-                    "VoxelWorld '{}': palette[{}] is not a valid BlockType name",
-                    name, i
+                    "VoxelWorld '{name}': palette[{i}] is not a valid BlockType name"
                 )));
             }
         }
@@ -377,7 +370,7 @@ impl CrossReferenced for Behavior {
                             ),
                         });
                     }
-                    Some(serde_json::Value::String(_)) | Some(serde_json::Value::Null) => {
+                    Some(serde_json::Value::String(_) | serde_json::Value::Null) => {
                         refs.push(CrossRef::Issue(format!(
                             "Behavior '{name}': `{verb}` source requires a TriggerVolume name"
                         )));
@@ -393,7 +386,7 @@ impl CrossReferenced for Behavior {
                         error: format!("Behavior '{name}': `interact` target '{target}' not found"),
                     });
                 }
-                Some(serde_json::Value::String(_)) | Some(serde_json::Value::Null) => {
+                Some(serde_json::Value::String(_) | serde_json::Value::Null) => {
                     refs.push(CrossRef::Issue(format!(
                         "Behavior '{name}': `interact` source requires an entity name"
                     )));
@@ -428,7 +421,7 @@ fn walk_behavior_nodes(value: Option<&serde_json::Value>, name: &str, refs: &mut
                     error: format!("Behavior '{name}': {verb} {key} '{target}' not found"),
                 });
             }
-            None | Some(serde_json::Value::String(_)) | Some(serde_json::Value::Null) => {
+            None | Some(serde_json::Value::String(_) | serde_json::Value::Null) => {
                 refs.push(CrossRef::Issue(format!(
                     "Behavior '{name}': `{verb}` node requires `{key}`"
                 )));
@@ -602,7 +595,7 @@ mod tests {
             .iter()
             .filter_map(|r| match r {
                 CrossRef::Issue(msg) => Some(msg.clone()),
-                _ => None,
+                CrossRef::Resolve { .. } => None,
             })
             .collect();
         assert_eq!(issues.len(), 2);

@@ -48,7 +48,7 @@ const STEP_PROGRESS: f32 = 4.0 * CONTACT_OFFSET;
 pub(crate) fn resolve(
     scene: Scene<'_>,
     config: &CharacterConfig,
-    capsule: &CharacterCapsule,
+    capsule: CharacterCapsule,
     input: &CharacterMoveInput,
 ) -> CharacterMove {
     let center = Vec3::from_array(input.center);

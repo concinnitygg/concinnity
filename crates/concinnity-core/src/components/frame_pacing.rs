@@ -2,7 +2,7 @@
 
 /// How the render loop paces its frames: how many may be in flight, whether
 /// presentation waits for the display refresh, and the frame-rate cap. The
-/// `frame_pacing` section of [GraphicsConfig](#graphicsconfig); a field left
+/// `frame_pacing` section of [`GraphicsConfig`](#graphicsconfig); a field left
 /// unset takes the default below.
 ///
 /// Pacing is a preference of whoever runs the build rather than a quality

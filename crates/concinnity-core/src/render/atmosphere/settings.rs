@@ -121,6 +121,7 @@ impl AtmosphereSettings {
     /// These settings over ground of `radius`. With an apparent radius the
     /// air keeps its proportion to the ground, exactly as authored over the
     /// apparent ground; without one it keeps its thickness.
+    #[must_use]
     pub fn with_ground_radius(&self, radius: f32) -> Self {
         if radius == self.bottom_radius {
             return *self;
@@ -155,6 +156,7 @@ impl AtmosphereSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::NightSky;
 
     #[test]
     fn earth_defaults_resolve_to_the_literature_shell() {
@@ -267,7 +269,7 @@ mod tests {
         }
         assert_eq!(s.ground_albedo, [0.0; 3]);
         assert!(s.night.is_none());
-        let night = crate::render::night_sky::NightSkySettings::resolve(&Default::default());
+        let night = NightSkySettings::resolve(&NightSky::default());
         assert_eq!(s.with_night(Some(night)).night, Some(night));
     }
 

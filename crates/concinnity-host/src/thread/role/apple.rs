@@ -39,7 +39,7 @@ mod tests {
         // SAFETY: both out-pointers are live locals, and `pthread_self` names
         // the calling thread, which outlives the call.
         let status = unsafe {
-            libc::pthread_get_qos_class_np(libc::pthread_self(), &mut class, &mut relative)
+            libc::pthread_get_qos_class_np(libc::pthread_self(), &raw mut class, &raw mut relative)
         };
         assert_eq!(status, 0);
         class

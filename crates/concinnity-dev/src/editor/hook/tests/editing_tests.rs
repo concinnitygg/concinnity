@@ -81,7 +81,7 @@ fn plus_picker_then_name_form_adds_the_entry() {
     assert!(h.form_open());
     assert!(!h.assets.picker_open);
     assert_eq!(h.form.selected_type.as_deref(), Some(ty.as_str()));
-    assert!((h.form.target == FormTarget::New));
+    assert_eq!(h.form.target, FormTarget::New);
     let name_field = world
         .get_by_id::<TextInput>(form_panel::NAME_INPUT)
         .unwrap();
@@ -348,7 +348,7 @@ fn picker_lists_types_alphabetically() {
     let opts = h.picker_options(&world).unwrap();
     let names: Vec<&str> = opts.iter().map(|o| o.name.as_str()).collect();
     let mut sorted = names.clone();
-    sorted.sort();
+    sorted.sort_unstable();
     assert_eq!(names, sorted, "the picker is alphabetized ascending");
     assert_eq!(
         opts.len(),

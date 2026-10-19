@@ -97,7 +97,7 @@ pub fn build(
     handle: FontHandle,
     hovered: bool,
 ) -> Layout {
-    let size_px = fonts.get(handle).map(|f| f.size_px).unwrap_or(1.0).max(1.0);
+    let size_px = fonts.get(handle).map_or(1.0, |f| f.size_px).max(1.0);
 
     let mut labels: Vec<TextLabel> = vec![TextLabel {
         font: Some(handle),
@@ -131,9 +131,7 @@ pub fn build(
         };
         // Advance by what the line actually occupies, so a wrapped path pushes
         // the following lines down instead of drawing over them.
-        let height = measure_label_box(&label, fonts)
-            .map(|b| b.h)
-            .unwrap_or(MESSAGE_PX);
+        let height = measure_label_box(&label, fonts).map_or(MESSAGE_PX, |b| b.h);
         y += height * (1.0 + LINE_GAP);
         labels.push(label);
     }

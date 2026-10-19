@@ -10,7 +10,7 @@ use super::expand::asset_name_str;
 /// Objects merge recursively with the patch winning per key. Everything else
 /// (scalars, arrays, explicit null) replaces the template value wholesale: an
 /// array override is a full replacement, and an authored `null` overrides a
-/// template object (preserving markers like a Camera3D's `controller: null`).
+/// template object (preserving markers like a `Camera3D`'s `controller: null`).
 pub fn merge_args(template: &serde_json::Value, patch: &serde_json::Value) -> serde_json::Value {
     match (template, patch) {
         (serde_json::Value::Object(t), serde_json::Value::Object(p)) => {

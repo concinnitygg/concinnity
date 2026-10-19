@@ -4,7 +4,7 @@
 //! `metal/post/` shape:
 //!
 //!   bloom.rs    the inputs of the shared bloom chain
-//!   reflection_composite.rs  the reflection path + inputs of the shared composite
+//!   `reflection_composite.rs`  the reflection path + inputs of the shared composite
 //!   ssao.rs     the settings + inputs of the shared SSAO kernel and blur
 //!   ssgi.rs     the settings + inputs of the shared SSGI trace and composite
 //!   ssr.rs      the reflection target + inputs of the shared SSR resolve
@@ -14,7 +14,7 @@
 //! Vulkan half: `post_device.rs` implements `gfx::post::PostPassDevice`,
 //! `pass_cache.rs` caches the render passes and framebuffers a draw needs, and
 //! `set_arena.rs` hands out descriptor sets per frame instead of per effect.
-//!   upscale/    temporal upscaling (FSR / DLSS / XeSS) behind VkUpscaleBackend
+//!   upscale/    temporal upscaling (FSR / DLSS / XeSS) behind `VkUpscaleBackend`
 
 pub(in crate::vulkan) mod bloom;
 pub(in crate::vulkan) mod gbuffer;

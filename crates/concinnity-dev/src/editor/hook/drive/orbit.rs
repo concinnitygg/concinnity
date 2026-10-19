@@ -1,4 +1,4 @@
-//! EditorHook: the Alt+drag tumble around the selection. The pivot is the
+//! `EditorHook`: the Alt+drag tumble around the selection. The pivot is the
 //! selection's bounds center; angles and the camera's orientation offset are
 //! captured at press time (math in `editor/viewport/orbit.rs`) and stepped from the
 //! cursor's own frame-to-frame movement, so the drag needs neither cursor

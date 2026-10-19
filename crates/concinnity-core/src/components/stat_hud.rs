@@ -4,7 +4,7 @@ use crate::components::TextLabel;
 use crate::ecs::Ref;
 
 /// Requests the default on-screen stats HUD. Drives a set of
-/// [TextLabel](#textlabel) chips with live engine stats, refreshed on a fixed
+/// [`TextLabel`](#textlabel) chips with live engine stats, refreshed on a fixed
 /// interval.
 ///
 /// Each label field, when set, receives one chip: `fps_label` the averaged
@@ -12,8 +12,8 @@ use crate::ecs::Ref;
 /// the GPU, `vram_label` the GPU-memory use, `ram_label` the host process
 /// memory (resident set size, against the memory budget when known), `ev_label`
 /// the auto-exposure value, `edr_label` the HDR headroom multiplier, and
-/// `track_label` how far a [CameraTrack](#cameratrack) has run and, in a
-/// benchmarked run, the [BenchmarkConfig](#benchmarkconfig) phase it is in.
+/// `track_label` how far a [`CameraTrack`](#cameratrack) has run and, in a
+/// benchmarked run, the [`BenchmarkConfig`](#benchmarkconfig) phase it is in.
 /// Chips whose stat is unavailable stay blank. The frame-rate,
 /// blocked-on-GPU, and GPU-memory chips are shown or hidden from the in-game
 /// video settings ("Display performance stats"); the host-memory, exposure,
@@ -34,29 +34,29 @@ use crate::ecs::Ref;
 /// is fixed by the engine rather than the authored coordinates.
 ///
 /// Developer-facing readouts (per-pass GPU timings, cursor position, live
-/// camera pose) live on the separate [DebugHud](#debughud), toggled with F1.
+/// camera pose) live on the separate [`DebugHud`](#debughud), toggled with F1.
 ///
-/// A world that declares a [MainMenu](#mainmenu) receives a `StatHud` from the
+/// A world that declares a [`MainMenu`](#mainmenu) receives a `StatHud` from the
 /// build when it declares none, since the menu's performance-stats toggles
 /// drive the chips, and any label field left unset receives a chip at start.
 /// So the example below is only needed to restyle the chips or run a HUD
-/// without a menu. Declare an [EngineDefaults](#enginedefaults) with
+/// without a menu. Declare an [`EngineDefaults`](#enginedefaults) with
 /// `"hud": false` to leave the chips unfilled.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct StatHud {
-    /// [TextLabel](#textlabel) that receives the frame-rate chip text.
+    /// [`TextLabel`](#textlabel) that receives the frame-rate chip text.
     pub fps_label: Option<Ref<TextLabel>>,
-    /// [TextLabel](#textlabel) that receives the blocked-on-GPU chip text.
+    /// [`TextLabel`](#textlabel) that receives the blocked-on-GPU chip text.
     pub gpu_wait_label: Option<Ref<TextLabel>>,
-    /// [TextLabel](#textlabel) that receives the GPU-memory chip text.
+    /// [`TextLabel`](#textlabel) that receives the GPU-memory chip text.
     pub vram_label: Option<Ref<TextLabel>>,
-    /// [TextLabel](#textlabel) that receives the host-memory (RSS) chip text.
+    /// [`TextLabel`](#textlabel) that receives the host-memory (RSS) chip text.
     pub ram_label: Option<Ref<TextLabel>>,
-    /// [TextLabel](#textlabel) that receives the auto-exposure chip text.
+    /// [`TextLabel`](#textlabel) that receives the auto-exposure chip text.
     pub ev_label: Option<Ref<TextLabel>>,
-    /// [TextLabel](#textlabel) that receives the HDR-headroom chip text.
+    /// [`TextLabel`](#textlabel) that receives the HDR-headroom chip text.
     pub edr_label: Option<Ref<TextLabel>>,
-    /// [TextLabel](#textlabel) that receives the camera-track chip text.
+    /// [`TextLabel`](#textlabel) that receives the camera-track chip text.
     pub track_label: Option<Ref<TextLabel>>,
 }

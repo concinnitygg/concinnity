@@ -108,7 +108,7 @@ impl TransientSlot {
 ///
 /// `upscale_enabled` is NOT forced on, and a lifetime read out of this graph can
 /// therefore be shorter than the real maximal one. Upscale substitutes for
-/// TaaResolve, so forcing it would drop the TAA branch instead; neither branch
+/// `TaaResolve`, so forcing it would drop the TAA branch instead; neither branch
 /// dominates the other and one graph cannot hold both. The concrete casualty is
 /// `gbuffer_depth`, whose only consumer is the upscaler and which looks one-pass
 /// here -- see `the_prepass_depth_is_short_lived_only_in_the_planning_graph`.
@@ -342,6 +342,10 @@ pub(crate) fn slot_conflicts(
 /// passes that *substitute* for one another mean there is no single maximal
 /// graph to plan against. The sweep covers the input space it models; this
 /// covers the graph actually in hand.
+///
+/// # Panics
+///
+/// Panics when two members of one alias slot are live at the same time.
 pub fn assert_slot_aliasing_sound(
     graph: &CompiledGraph,
     slot_labels: &[Vec<&'static str>],
@@ -353,7 +357,7 @@ pub fn assert_slot_aliasing_sound(
         "transient pool ({backend}): alias slot members are simultaneously live: {}",
         conflicts
             .iter()
-            .map(|c| c.to_string())
+            .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ")
     );
@@ -470,7 +474,7 @@ mod tests {
         let slots =
             plan_transient_slots(&build_inputs_with(false, true, false), &pooled, 1920, 1080)
                 .expect("planning graph compiles");
-        let labels: Vec<&str> = slots.iter().flat_map(|s| s.labels()).collect();
+        let labels: Vec<&str> = slots.iter().flat_map(TransientSlot::labels).collect();
         assert_eq!(labels, vec!["bloom_top"]);
     }
 
@@ -501,7 +505,7 @@ mod tests {
         // exists.
         let off = plan_transient_slots(&build_inputs_with(true, true, false), &pooled, 1920, 1080)
             .expect("planning graph compiles");
-        let off_labels: Vec<&str> = off.iter().flat_map(|s| s.labels()).collect();
+        let off_labels: Vec<&str> = off.iter().flat_map(TransientSlot::labels).collect();
         assert!(
             !off_labels.contains(&"gbuffer_normal_depth"),
             "{off_labels:?}"
@@ -509,7 +513,7 @@ mod tests {
 
         let on = plan_transient_slots(&build_inputs(true, true), &pooled, 1920, 1080)
             .expect("planning graph compiles");
-        let on_labels: Vec<&str> = on.iter().flat_map(|s| s.labels()).collect();
+        let on_labels: Vec<&str> = on.iter().flat_map(TransientSlot::labels).collect();
         for want in [
             "gbuffer_normal_depth",
             "gbuffer_roughness",
@@ -529,7 +533,7 @@ mod tests {
         // D3D12 needs a typeless resource format for a shader-readable depth
         // target, so the depth sibling stays feature-owned (see `pooled`).
         let slots = plan_pool_slots(ALL_GATES, (1024, 768), (1024, 768)).expect("plans");
-        let labels: Vec<&str> = slots.iter().flat_map(|s| s.labels()).collect();
+        let labels: Vec<&str> = slots.iter().flat_map(TransientSlot::labels).collect();
         assert!(labels.contains(&"gbuffer_normal_depth"), "{labels:?}");
         assert!(!labels.contains(&"gbuffer_depth"), "{labels:?}");
     }
@@ -543,12 +547,12 @@ mod tests {
         let slots = plan_pool_slots(ALL_GATES, (1024, 768), (1024, 768)).expect("plans");
         let pair = slots
             .iter()
-            .map(|s| s.labels())
+            .map(TransientSlot::labels)
             .find(|l| l.len() > 1 && l.contains(&"bloom_top"))
             .unwrap_or_else(|| {
                 panic!(
                     "bloom_top should share a slot: {:?}",
-                    slots.iter().map(|s| s.labels()).collect::<Vec<_>>()
+                    slots.iter().map(TransientSlot::labels).collect::<Vec<_>>()
                 )
             });
         assert_ne!(pair[0], "bloom_top", "{pair:?}");
@@ -657,7 +661,7 @@ mod tests {
             .expect("planning graph compiles");
         let shared: Vec<Vec<&'static str>> = slots
             .iter()
-            .map(|s| s.labels())
+            .map(TransientSlot::labels)
             .filter(|l| l.len() > 1)
             .collect();
         assert!(
@@ -673,7 +677,7 @@ mod tests {
     }
 
     fn labels_of(slots: &[TransientSlot]) -> Vec<Vec<&'static str>> {
-        slots.iter().map(|s| s.labels()).collect()
+        slots.iter().map(TransientSlot::labels).collect()
     }
 
     // Bytes a slot list costs (each slot sized to its largest member) against
@@ -685,11 +689,11 @@ mod tests {
     // needed here.
     fn slot_bytes(slots: &[TransientSlot]) -> (u64, u64) {
         let member_bytes = |m: &TransientTexture| -> u64 {
-            let texels = (m.width as u64) * (m.height as u64) * (m.depth.max(1) as u64);
+            let texels = u64::from(m.width) * u64::from(m.height) * u64::from(m.depth.max(1));
             texels
-                * m.format.bytes_per_texel() as u64
-                * m.sample_count.max(1) as u64
-                * m.array_layers.max(1) as u64
+                * u64::from(m.format.bytes_per_texel())
+                * u64::from(m.sample_count.max(1))
+                * u64::from(m.array_layers.max(1))
         };
         let mut aliased = 0;
         let mut unaliased = 0;
@@ -792,7 +796,7 @@ mod tests {
     fn assert_sound(build: &FrameGraphInputs, inputs: &FrameGraphInputs, what: &str) {
         let slots =
             plan_transient_slots(build, &pooled, 1920, 1080).expect("the planning graph compiles");
-        let grouped: Vec<Vec<&'static str>> = slots.iter().map(|s| s.labels()).collect();
+        let grouped: Vec<Vec<&'static str>> = slots.iter().map(TransientSlot::labels).collect();
         let graph = build_frame_graph(inputs)
             .unwrap_or_else(|e| panic!("graph failed to compile for {what}: {e}"));
         let conflicts = slot_conflicts(&graph, &grouped);
@@ -801,7 +805,7 @@ mod tests {
             "aliasing conflict for {what}: {}",
             conflicts
                 .iter()
-                .map(|c| c.to_string())
+                .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(", ")
         );

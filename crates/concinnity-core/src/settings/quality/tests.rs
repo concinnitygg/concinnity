@@ -94,8 +94,7 @@ fn ceilings_are_monotonic_in_tier() {
         // The AA-mode cap rises (or holds) with the tier: a higher tier
         // never permits a less aggressive (cheaper) anti-aliasing mode.
         assert!(
-            crate::settings::levels::AA_MODE.index_of(lo.aa_mode)
-                <= crate::settings::levels::AA_MODE.index_of(hi.aa_mode),
+            AA_MODE.index_of(lo.aa_mode) <= AA_MODE.index_of(hi.aa_mode),
             "a higher tier capped AA at a cheaper mode"
         );
         // And never forces more aggressive upscaling than a lower tier.

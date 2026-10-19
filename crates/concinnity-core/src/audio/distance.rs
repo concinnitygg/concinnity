@@ -1,4 +1,4 @@
-//! Sanitizes an AudioEmitter's authored attenuation range. The cook rejects
+//! Sanitizes an `AudioEmitter`'s authored attenuation range. The cook rejects
 //! degenerate values, but a hand-edited blob or hot-reloaded world must not
 //! produce NaN volume.
 

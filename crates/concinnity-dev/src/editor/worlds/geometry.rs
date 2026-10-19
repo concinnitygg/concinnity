@@ -147,21 +147,23 @@ impl Layout {
     // The panel's footprint. The sidebar spans the window it is docked to; the
     // switcher is sized by the rows it shows.
     pub(crate) fn size(&self) -> [f32; 2] {
-        match self.m.docked {
-            true => [self.m.width, self.vp[1]],
-            false => [
+        if self.m.docked {
+            [self.m.width, self.vp[1]]
+        } else {
+            [
                 self.m.width,
                 self.chrome_h() + self.m.max_rows as f32 * self.m.row_h + self.m.pad,
-            ],
+            ]
         }
     }
 
     // Where the panel sits until the user drags it. The sidebar docks to the
     // window's left edge; the switcher hangs below the top bar, centered.
     pub(crate) fn default_origin(&self) -> [f32; 2] {
-        match self.m.docked {
-            true => [0.0, 0.0],
-            false => [(self.vp[0] - self.m.width) * 0.5, hud::body_top() + 24.0],
+        if self.m.docked {
+            [0.0, 0.0]
+        } else {
+            [(self.vp[0] - self.m.width) * 0.5, hud::body_top() + 24.0]
         }
     }
 
@@ -170,12 +172,11 @@ impl Layout {
     // is rounded and the fill reaches the very top of the window.
     pub(crate) fn panel_rect(&self, o: [f32; 2]) -> [f32; 4] {
         let s = self.size();
-        match self.m.docked {
-            true => {
-                let r = theme::PANEL_RADIUS;
-                [o[0] - r, o[1] - r, s[0] + r, s[1] + 2.0 * r]
-            }
-            false => widget::outer_rect(o, s),
+        if self.m.docked {
+            let r = theme::PANEL_RADIUS;
+            [o[0] - r, o[1] - r, s[0] + r, s[1] + 2.0 * r]
+        } else {
+            widget::outer_rect(o, s)
         }
     }
 
@@ -183,14 +184,15 @@ impl Layout {
     // the docked sidebar. The floating switcher stands over a session's
     // viewport rather than beside it, so there it is the whole window.
     pub(crate) fn preview_rect(&self) -> [f32; 4] {
-        match self.m.docked {
-            true => [
+        if self.m.docked {
+            [
                 self.m.width,
                 0.0,
                 (self.vp[0] - self.m.width).max(0.0),
                 self.vp[1],
-            ],
-            false => [0.0, 0.0, self.vp[0], self.vp[1]],
+            ]
+        } else {
+            [0.0, 0.0, self.vp[0], self.vp[1]]
         }
     }
 
@@ -205,9 +207,10 @@ impl Layout {
     // nor against the window's edge. The switcher's title bar already does this
     // for it.
     fn content_offset(&self) -> f32 {
-        match self.m.docked {
-            true => self.inset + self.m.pad,
-            false => 0.0,
+        if self.m.docked {
+            self.inset + self.m.pad
+        } else {
+            0.0
         }
     }
 
@@ -295,9 +298,10 @@ impl Layout {
         let x = o[0] + self.m.width - MENU_W - SCROLLBAR_W - 2.0;
         let r = self.row_rect(o, slot);
         let below = r[1] + r[3];
-        let top = match below + h <= o[1] + self.size()[1] {
-            true => below,
-            false => r[1] - h,
+        let top = if below + h <= o[1] + self.size()[1] {
+            below
+        } else {
+            r[1] - h
         };
         let open_h = if opens { MENU_ROW_H } else { 0.0 };
         (
@@ -344,7 +348,12 @@ pub(crate) struct Bar {
 // In the switcher a title-bar press never reaches this (the shared routing
 // intercepts it first); the sidebar has no drag, so its chrome is swallowed
 // here like the rest.
-pub(crate) fn hit_test(view: &WorldsView, mx: f32, my: f32, o: [f32; 2]) -> Option<WorldsAction> {
+pub(crate) fn hit_test(
+    view: &WorldsView<'_>,
+    mx: f32,
+    my: f32,
+    o: [f32; 2],
+) -> Option<WorldsAction> {
     let l = &view.layout;
     // An open row menu is modal over the panel: its rows pick, and every other
     // press dismisses it rather than reaching what is under it.
@@ -410,7 +419,7 @@ mod tests {
         Layout::new(mode, VP, 0.0)
     }
 
-    fn view<'a>(l: Layout, rows: &'a [WorldRow]) -> WorldsView<'a> {
+    fn view(l: Layout, rows: &[WorldRow]) -> WorldsView<'_> {
         WorldsView {
             rows,
             scroll: 0,

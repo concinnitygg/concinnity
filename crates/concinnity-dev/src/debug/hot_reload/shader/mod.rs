@@ -99,7 +99,7 @@ impl ShaderReload {
     }
 
     // Swap in every compile that finished since the last call.
-    pub(crate) fn poll(&mut self, backend: &mut dyn LiveEdit) -> Vec<ReloadReport> {
+    pub(crate) fn poll(&self, backend: &mut dyn LiveEdit) -> Vec<ReloadReport> {
         self.compiles
             .drain()
             .into_iter()

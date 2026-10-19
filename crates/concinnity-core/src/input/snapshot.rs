@@ -1,10 +1,10 @@
-//! Backend-agnostic input snapshot returned by RenderBackend::take_input.
+//! Backend-agnostic input snapshot returned by `RenderBackend::take_input`.
 
 use alloc::vec::Vec;
 
 /// Accumulated input state since the last poll. Drained and reset every
-/// frame by the renderer and converted into a FrameInput component for
-/// Camera3DSystem to consume.
+/// frame by the renderer and converted into a `FrameInput` component for
+/// `Camera3DSystem` to consume.
 #[derive(Default, Debug, Clone)]
 pub struct InputSnapshot {
     /// Forward movement key held.
@@ -35,11 +35,11 @@ pub struct InputSnapshot {
     /// Windows and Linux leave this false and keep Ctrl as their shortcut
     /// modifier, because the Super key there belongs to the desktop shell.
     pub cmd: bool,
-    /// Accumulated mouse delta since the last take_input() call.
+    /// Accumulated mouse delta since the last `take_input()` call.
     pub mouse_dx: f32,
-    /// Accumulated vertical mouse delta since the last take_input().
+    /// Accumulated vertical mouse delta since the last `take_input()`.
     pub mouse_dy: f32,
-    /// Accumulated vertical scroll-wheel delta since the last take_input().
+    /// Accumulated vertical scroll-wheel delta since the last `take_input()`.
     /// Only delivered while the cursor is free.
     pub scroll_delta: f32,
     /// Absolute cursor position in window pixels (origin top-left).
@@ -107,7 +107,7 @@ impl InputPacket {
     /// pulses OR together, deltas accumulate, key events queue after the older
     /// ones, and positions and held states take the newer value. Only needed when a consumer misses a frame (startup,
     /// a stall); steady state is one packet per tick.
-    pub fn merge_from(&mut self, newer: InputPacket) {
+    pub fn merge_from(&mut self, newer: Self) {
         let old = core::mem::take(&mut self.raw);
         let mut raw = newer.raw;
         raw.interact |= old.interact;
@@ -139,9 +139,9 @@ impl InputPacket {
 pub(crate) const WHEEL_NOTCH_SCROLL_UNITS: f32 = 20.0;
 
 /// Convert a signed wheel rotation in notches (positive = rotated away from the
-/// user, i.e. scroll up) into an additive scroll_delta increment. Negated so a
-/// positive scroll_delta scrolls a panel's content up, matching
-/// FrameInput.scroll_delta's convention (see ui.rs and metal/input.rs).
+/// user, i.e. scroll up) into an additive `scroll_delta` increment. Negated so a
+/// positive `scroll_delta` scrolls a panel's content up, matching
+/// `FrameInput.scroll_delta`'s convention (see ui.rs and metal/input.rs).
 pub fn wheel_notches_to_scroll_delta(notches: f32) -> f32 {
     -notches * WHEEL_NOTCH_SCROLL_UNITS
 }

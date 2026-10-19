@@ -12,12 +12,12 @@ use std::io::{Read, Seek, SeekFrom};
 // Errors are human-readable strings: they reach the renderer through the
 // background worker, which has nothing to act on a typed error with.
 pub(super) fn read_at(path: &str, file_offset: u64, len: u64) -> Result<Vec<u8>, String> {
-    let mut file = File::open(path).map_err(|e| format!("open {}: {}", path, e))?;
+    let mut file = File::open(path).map_err(|e| format!("open {path}: {e}"))?;
     file.seek(SeekFrom::Start(file_offset))
-        .map_err(|e| format!("seek {} in {}: {}", file_offset, path, e))?;
+        .map_err(|e| format!("seek {file_offset} in {path}: {e}"))?;
     let mut bytes = vec![0u8; len as usize];
     file.read_exact(&mut bytes)
-        .map_err(|e| format!("read {} bytes from {}: {}", len, path, e))?;
+        .map_err(|e| format!("read {len} bytes from {path}: {e}"))?;
     Ok(bytes)
 }
 

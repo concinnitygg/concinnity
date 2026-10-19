@@ -1,8 +1,8 @@
 // Voxel-chunk block-palette entry schema.
 
-/// Describes one entry in a [VoxelChunk](#voxelchunk) palette.
+/// Describes one entry in a [`VoxelChunk`](#voxelchunk) palette.
 ///
-/// Each BlockType represents either a solid block (with UVs into the chunk's atlas texture)
+/// Each `BlockType` represents either a solid block (with UVs into the chunk's atlas texture)
 /// or an empty/air marker.
 ///
 /// Per-face fields fall back to `uv_min`/`uv_max` when omitted. Set `solid=false`

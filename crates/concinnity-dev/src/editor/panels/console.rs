@@ -102,7 +102,7 @@ impl ConsoleSink {
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.0.lock().map(|log| log.len()).unwrap_or(0)
+        self.0.lock().map_or(0, |log| log.len())
     }
 
     pub(crate) fn window(&self, first: usize, count: usize) -> Vec<ConsoleLine> {

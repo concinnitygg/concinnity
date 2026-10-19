@@ -18,7 +18,7 @@
 //! pooled buffers and images, and it is what makes replacing a live pipeline
 //! (shader hot-reload, lazily built wireframe twins, a quality-toggle rebuild)
 //! correct without the caller reasoning about GPU progress. The alternative --
-//! destroying in `Drop` and leaning on the existing "wait_idle, then tear down"
+//! destroying in `Drop` and leaning on the existing "`wait_idle`, then tear down"
 //! ordering -- would have left the safe API still lying: `drop(pipeline)`
 //! followed by `submit(cmd)` compiles either way, and only the deferred queue
 //! makes it harmless.
@@ -59,13 +59,13 @@ impl Retired {
         // SAFETY: the caller upholds provenance, single-destruction and quiescence; see above.
         unsafe {
             match self {
-                Retired::Pipeline(h) => device.destroy_pipeline(h, None),
-                Retired::PipelineLayout(h) => device.destroy_pipeline_layout(h, None),
-                Retired::SetLayout(h) => device.destroy_descriptor_set_layout(h, None),
-                Retired::DescriptorPool(h) => device.destroy_descriptor_pool(h, None),
-                Retired::RenderPass(h) => device.destroy_render_pass(h, None),
-                Retired::Framebuffer(h) => device.destroy_framebuffer(h, None),
-                Retired::Sampler(h) => device.destroy_sampler(h, None),
+                Self::Pipeline(h) => device.destroy_pipeline(h, None),
+                Self::PipelineLayout(h) => device.destroy_pipeline_layout(h, None),
+                Self::SetLayout(h) => device.destroy_descriptor_set_layout(h, None),
+                Self::DescriptorPool(h) => device.destroy_descriptor_pool(h, None),
+                Self::RenderPass(h) => device.destroy_render_pass(h, None),
+                Self::Framebuffer(h) => device.destroy_framebuffer(h, None),
+                Self::Sampler(h) => device.destroy_sampler(h, None),
             }
         }
     }
@@ -161,7 +161,9 @@ impl DeviceInner {
     // holding it has already failed, and refusing the queue here would strand
     // every handle waiting in it.
     fn queue(&self) -> std::sync::MutexGuard<'_, RetireQueue> {
-        self.queue.lock().unwrap_or_else(|e| e.into_inner())
+        self.queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 

@@ -79,8 +79,8 @@ pub(crate) struct Row {
 }
 
 impl Row {
-    fn new(depth: usize, label: &str, value: impl Into<String>, kind: Kind, path: Path) -> Row {
-        Row {
+    fn new(depth: usize, label: &str, value: impl Into<String>, kind: Kind, path: Path) -> Self {
+        Self {
             depth,
             label: label.to_string(),
             value: value.into(),
@@ -90,7 +90,7 @@ impl Row {
         }
     }
 
-    fn member(mut self, element: Path) -> Row {
+    fn member(mut self, element: Path) -> Self {
         self.element = Some(element);
         self
     }
@@ -592,7 +592,7 @@ fn array(value: Option<&Value>) -> &[Value] {
     value
         .and_then(Value::as_array)
         .map(Vec::as_slice)
-        .unwrap_or(&[])
+        .unwrap_or_default()
 }
 
 fn count_text(n: usize) -> String {

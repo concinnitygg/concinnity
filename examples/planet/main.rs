@@ -61,7 +61,7 @@ fn run(args: LaunchArgs) -> Result<(), String> {
 fn blob_path() -> PathBuf {
     let dir = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.to_path_buf()))
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
         .unwrap_or_default();
     dir.join("planet-world").join("0")
 }

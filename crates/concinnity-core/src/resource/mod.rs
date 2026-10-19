@@ -35,7 +35,7 @@ use crate::ecs::{PayloadLocator, ResourceKind, ResourceRecord, World};
 /// texture) carries a `PayloadLocator` into the blob payload section, or the
 /// payload itself when the running world baked it; a data resource (a baked
 /// Material) carries its runtime bytes in `data_bytes`, and so does a hybrid
-/// (a SkinnedMesh, an EnvironmentMap) beside its payload.
+/// (a `SkinnedMesh`, an `EnvironmentMap`) beside its payload.
 #[derive(Debug, Clone, Default)]
 pub struct ResourceEntry {
     /// Where the compiled payload lives, for a payload resource.
@@ -200,7 +200,7 @@ resource_tables! {
 
 impl SkinnedMeshTable {
     /// Whether any skinned mesh declares a character capsule; gates whether the
-    /// world needs a PhysicsSystem.
+    /// world needs a `PhysicsSystem`.
     pub fn has_capsule(&self) -> bool {
         self.0.iter().any(|e| {
             crate::blob::decode_exact::<(u32, crate::components::SkinnedMesh)>(&e.data_bytes)
@@ -277,7 +277,7 @@ mod tests {
             handle,
             payload: Some(PayloadLocator {
                 blob_index: 0,
-                offset: handle as u64 * 16,
+                offset: u64::from(handle) * 16,
                 len: 16,
             }),
             data_bytes: vec![handle as u8; 4],
