@@ -89,13 +89,16 @@ pub mod profile;
 pub mod render;
 pub mod resource;
 pub mod settings;
+pub mod shutdown;
 pub mod sky;
 pub mod spawn;
+pub mod story;
 pub mod terrain;
 #[cfg(test)]
 mod test_support;
 pub mod transform;
 pub mod ui;
+pub mod utc;
 pub mod window;
 
 // The headless driver over a world and the trait any loop that runs one

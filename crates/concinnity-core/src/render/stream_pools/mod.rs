@@ -8,6 +8,7 @@ mod accounting;
 pub mod budget;
 mod chunk_pool;
 mod decoded_mesh;
+mod deferred_payloads;
 mod item_pool;
 mod mailbox;
 mod planet_tiles;
@@ -20,6 +21,7 @@ pub use chunk_pool::{ChunkLoad, ChunkPool, ChunkRequest};
 pub use decoded_mesh::{
     DecodedMesh, DeferredMeshPayload, decode_deferred_payload, decode_mesh, encode_mesh,
 };
+pub use deferred_payloads::deferred_mesh_payloads;
 pub use item_pool::{ItemLoad, StreamPool, StreamedItem};
 pub use mailbox::{LoadPool, Mailbox};
 pub use planet_tiles::{PlanetTiles, TileCamera, TileMaterial, tile_mesh_size};

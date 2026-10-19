@@ -6,7 +6,7 @@
 
 use concinnity_core::components::Camera3D;
 use concinnity_core::ecs::World;
-use concinnity_engine::shutdown::ShutdownToken;
+use concinnity_core::shutdown::ShutdownToken;
 use concinnity_host::thread::asset_id;
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 use std::io::BufReader;

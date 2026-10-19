@@ -119,7 +119,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     fn finished(key: u32, generation: u64) -> Finished<u32, ()> {
         Finished {
@@ -168,12 +168,10 @@ mod tests {
             .unwrap();
         queue.submit(7, || "new").unwrap();
 
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let mut applied = Vec::new();
-        while applied.is_empty() && Instant::now() < deadline {
-            applied = queue.drain();
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        let applied = concinnity_testing::eventually("the newer compile", || {
+            let applied = queue.drain();
+            (!applied.is_empty()).then_some(applied)
+        });
         assert_eq!(applied, [(7, "new")]);
 
         release_old.send(()).unwrap();

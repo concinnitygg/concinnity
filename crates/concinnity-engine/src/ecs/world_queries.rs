@@ -8,10 +8,9 @@ use concinnity_core::render::backend::{GpuProfile, RenderBackend};
 use concinnity_core::render::stream_pools::{StreamingPressure, StreamingStats};
 use concinnity_host::store::paths::StateTree;
 
-use crate::animation::AnimationSystem;
-use crate::app::mem_drift::MemoryDrift;
 use crate::ecs::ActiveRenderBackend;
 use crate::gfx::streaming::system::StreamingRuntime;
+use concinnity_core::budget::drift::MemoryDrift;
 
 /// Whether the world runs with a renderer: the run mode `Runtime::start`
 /// resolved and published, or a constructed `GraphicsSystem` for a world
@@ -22,12 +21,11 @@ use crate::gfx::streaming::system::StreamingRuntime;
 /// should ask `Runtime::render_mode` instead, which resolves on demand.
 pub fn renders(world: &World) -> bool {
     world
-        .resource::<crate::ecs::render_mode::RenderMode>()
+        .resource::<concinnity_core::render::render_mode::RenderMode>()
         .is_some_and(|m| m.renders())
-        || world.systems().iter().any(|s| {
-            s.downcast_ref::<crate::gfx::system::GraphicsSystem>()
-                .is_some()
-        })
+        || world
+            .system::<crate::gfx::system::GraphicsSystem>()
+            .is_some()
 }
 
 /// Per-pool `(resident, pending, unloaded)` streaming counts from the parked
@@ -80,14 +78,6 @@ pub fn take_render_backend(world: &mut World) -> Option<Box<dyn RenderBackend>> 
         .and_then(|slot| slot.0.take())
 }
 
-/// The world's AnimationSystem, when one was built.
-pub fn animation_system_mut(world: &mut World) -> Option<&mut AnimationSystem> {
-    world
-        .systems_mut()
-        .iter_mut()
-        .find_map(|system| system.downcast_mut::<AnimationSystem>())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,7 +87,7 @@ mod tests {
     // can't be unit-tested here: its `init` builds the GPU backend.)
     #[test]
     fn the_published_run_mode_is_what_renders_reports() {
-        use crate::ecs::render_mode::RenderMode;
+        use concinnity_core::render::render_mode::RenderMode;
 
         let mut world = World::new();
         assert!(!renders(&world), "an unresolved world renders nothing");
@@ -118,12 +108,9 @@ mod tests {
         assert!(streaming_pressure(&world).is_none());
     }
 
-    // A world that never built a backend has none to yield, and one that built
-    // no AnimationSystem has none to lend.
+    // A world that never built a backend has none to yield.
     #[test]
-    fn world_accessors_without_their_systems() {
-        let mut world = World::new();
-        assert!(take_render_backend(&mut world).is_none());
-        assert!(animation_system_mut(&mut world).is_none());
+    fn a_world_without_a_backend_yields_none() {
+        assert!(take_render_backend(&mut World::new()).is_none());
     }
 }

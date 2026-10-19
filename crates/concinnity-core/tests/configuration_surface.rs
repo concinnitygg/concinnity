@@ -108,5 +108,5 @@ fn the_scan_reaches_the_whole_crate() {
     let files = crate_sources();
     assert!(files.len() > 100, "found only {} sources", files.len());
     assert!(files.iter().any(|p| p.ends_with("build.rs")));
-    assert!(files.iter().any(|p| p.ends_with("platform.rs")));
+    assert!(files.iter().any(|p| p.ends_with("platform/mod.rs")));
 }

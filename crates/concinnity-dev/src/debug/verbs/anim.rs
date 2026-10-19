@@ -6,9 +6,9 @@
 //! must match the target's clip count. `anim-param` writes one graph parameter,
 //! and `anim-state` reports the graph's state as of the last animation step.
 
+use concinnity_core::animation::AnimationSystem;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_engine::AnimationSystem;
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value, json};
 
@@ -144,7 +144,8 @@ fn on_target<T>(
 ) -> Result<T, String> {
     let id =
         asset_id::lookup(target).ok_or_else(|| format!("{verb}: unknown asset name '{target}'"))?;
-    let anim = concinnity_engine::ecs::animation_system_mut(world)
+    let anim = world
+        .system_mut::<AnimationSystem>()
         .ok_or_else(|| format!("{verb}: no AnimationSystem in this world"))?;
     apply(anim, id)
 }

@@ -440,6 +440,19 @@ impl World {
         &mut self.systems
     }
 
+    /// The built system of type `S`, if the world built one.
+    pub fn system<S: System>(&self) -> Option<&S> {
+        self.systems.iter().find_map(BuiltSystem::downcast_ref::<S>)
+    }
+
+    /// Mutable access to the built system of type `S`, so a caller holding the
+    /// world can drive it between steps.
+    pub fn system_mut<S: System>(&mut self) -> Option<&mut S> {
+        self.systems
+            .iter_mut()
+            .find_map(BuiltSystem::downcast_mut::<S>)
+    }
+
     /// Disjoint mutable borrows of the system list and the resource map, for a
     /// caller that drives a system against something parked in a resource (the
     /// `cn debug` hot-reload drive reaches the render backend that way).

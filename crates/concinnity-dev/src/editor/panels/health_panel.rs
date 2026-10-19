@@ -311,9 +311,9 @@ fn place_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::budget::drift::{DriftVerdict, MemoryDrift};
     use concinnity_core::components::{Sprite, TextLabel};
     use concinnity_core::memory::{Ledger, MemStats, MemTag, Realm};
-    use concinnity_engine::app::mem_drift;
 
     const GB: u64 = 1024 * 1024 * 1024;
 
@@ -532,11 +532,11 @@ mod tests {
     #[test]
     fn the_widest_drift_line_fits_the_panel() {
         let snap = HealthSnapshot {
-            drift: Some(mem_drift::MemoryDrift {
+            drift: Some(MemoryDrift {
                 heap_growth_bytes: -999 * GB as i64,
                 outside_heap_growth_bytes: 999 * GB as i64,
                 window_secs: 999 * 24 * 3600,
-                verdict: mem_drift::DriftVerdict::Both,
+                verdict: DriftVerdict::Both,
             }),
             ..snapshot()
         };
@@ -554,11 +554,11 @@ mod tests {
     fn the_drift_line_takes_a_row_only_once_it_reports() {
         let without = size(&snapshot());
         let mut snap = snapshot();
-        snap.drift = Some(mem_drift::MemoryDrift {
+        snap.drift = Some(MemoryDrift {
             heap_growth_bytes: 0,
             outside_heap_growth_bytes: 0,
             window_secs: 60,
-            verdict: mem_drift::DriftVerdict::Settled,
+            verdict: DriftVerdict::Settled,
         });
         assert_eq!(size(&snap)[1], without[1] + TAG_ROW_H);
 

@@ -36,6 +36,7 @@ pub mod access_id;
 pub mod asset_fields;
 pub mod asset_id;
 pub mod by_asset_id;
+pub mod decompose;
 pub mod handle;
 pub mod locator;
 pub mod name_ref;

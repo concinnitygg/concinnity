@@ -6,57 +6,43 @@
 //! `sysinfo`, matching sysmem: one syscall per platform, `None` when the
 //! platform call is unavailable or fails, and callers degrade to "unknown".
 
+use concinnity_core::budget::cpu::CpuRate;
 use std::time::{Duration, Instant};
 
 // Total CPU time consumed by this process since it started, summed over every
 // thread and over user + kernel time. `None` if the platform query is
 // unsupported or fails.
-pub(crate) fn process_cpu_time() -> Option<Duration> {
+fn process_cpu_time() -> Option<Duration> {
     imp::process_cpu_time()
 }
 
-/// Turns successive `process_cpu_time` readings into a utilization rate.
-///
-/// The unit is cores: 1.0 means one core saturated for the whole interval, 4.0
-/// means four. It is deliberately not a percentage, because the useful
-/// comparison is against `ThreadBudget::total_cores` rather than against 100.
-#[derive(Debug, Default)]
+/// Samples the process CPU clock into core's `CpuRate`.
+#[derive(Debug)]
 pub struct CpuSampler {
-    last: Option<(Duration, Instant)>,
+    origin: Instant,
+    rate: CpuRate,
+}
+
+impl Default for CpuSampler {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CpuSampler {
     /// A sampler with no prior reading.
     pub fn new() -> Self {
-        Self { last: None }
+        Self {
+            origin: Instant::now(),
+            rate: CpuRate::default(),
+        }
     }
 
-    /// Samples the process clock now. `None` on the first call (a rate needs two
-    /// readings), when the platform query fails, or when no time has passed.
+    /// Samples the process clock now, in cores. `None` on the first call (a
+    /// rate needs two readings), when the platform query fails, or when no
+    /// time has passed.
     pub fn sample(&mut self) -> Option<f32> {
-        self.fold(process_cpu_time()?, Instant::now())
-    }
-
-    // The rate itself, split out from the clock reads so it can be tested
-    // against known intervals.
-    fn fold(&mut self, cpu: Duration, at: Instant) -> Option<f32> {
-        let rate = match self.last {
-            Some((last_cpu, last_at)) => {
-                let wall = at.saturating_duration_since(last_at).as_secs_f64();
-                // Two samples in the same instant have no rate to report; the
-                // stored reading stays put so the next one spans a real gap.
-                if wall <= 0.0 {
-                    return None;
-                }
-                // CPU time is monotonic, but a failed platform read must not be
-                // able to produce a negative rate.
-                let busy = cpu.saturating_sub(last_cpu).as_secs_f64();
-                Some((busy / wall) as f32)
-            }
-            None => None,
-        };
-        self.last = Some((cpu, at));
-        rate
+        self.rate.fold(process_cpu_time()?, self.origin.elapsed())
     }
 }
 
@@ -143,83 +129,16 @@ mod tests {
 
         let start = process_cpu_time().expect("CPU query works on this platform");
 
-        // Burn CPU until the reading advances, bounded so a broken query fails
-        // the test instead of hanging it.
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // Burn CPU until the reading advances.
         let mut work: u64 = 0;
-        let latest = loop {
+        concinnity_testing::eventually("the process CPU time to advance", || {
             for _ in 0..4096 {
                 work = work.wrapping_mul(2_654_435_761).wrapping_add(1);
             }
             let now = process_cpu_time().expect("CPU query keeps working");
             assert!(now >= start, "process CPU time must be non-decreasing");
-            if now > start || Instant::now() >= deadline {
-                break now;
-            }
-        };
+            (now > start).then_some(())
+        });
         std::hint::black_box(work);
-
-        assert!(
-            latest > start,
-            "process CPU time should advance while the test burns CPU"
-        );
-    }
-
-    // A rate needs two readings, so the first sample only primes the sampler.
-    #[test]
-    fn first_fold_reports_no_rate() {
-        let mut sampler = CpuSampler::new();
-        assert_eq!(sampler.fold(Duration::from_secs(1), Instant::now()), None);
-    }
-
-    // One core busy for half of a two-second interval is 0.5 cores.
-    #[test]
-    fn fold_reports_cpu_time_over_wall_time() {
-        let t0 = Instant::now();
-        let mut sampler = CpuSampler::new();
-        sampler.fold(Duration::ZERO, t0);
-
-        let rate = sampler
-            .fold(Duration::from_secs(1), t0 + Duration::from_secs(2))
-            .expect("second fold spans a real interval");
-        assert!((rate - 0.5).abs() < 1e-5, "expected 0.5 cores, got {rate}");
-    }
-
-    // Cores are not capped at one: four cores saturated for an interval reads
-    // as 4.0, which is what makes the value comparable to the core count.
-    #[test]
-    fn fold_reports_more_than_one_core() {
-        let t0 = Instant::now();
-        let mut sampler = CpuSampler::new();
-        sampler.fold(Duration::ZERO, t0);
-
-        let rate = sampler
-            .fold(Duration::from_secs(4), t0 + Duration::from_secs(1))
-            .expect("second fold spans a real interval");
-        assert!((rate - 4.0).abs() < 1e-5, "expected 4.0 cores, got {rate}");
-    }
-
-    // Successive folds each measure their own interval rather than accumulating
-    // against the first reading.
-    #[test]
-    fn fold_measures_each_interval_independently() {
-        let t0 = Instant::now();
-        let mut sampler = CpuSampler::new();
-        sampler.fold(Duration::ZERO, t0);
-        sampler.fold(Duration::from_secs(1), t0 + Duration::from_secs(1));
-
-        let rate = sampler
-            .fold(Duration::from_millis(1500), t0 + Duration::from_secs(2))
-            .expect("third fold spans a real interval");
-        assert!((rate - 0.5).abs() < 1e-5, "expected 0.5 cores, got {rate}");
-    }
-
-    // Two reads in the same instant have no interval to divide by.
-    #[test]
-    fn fold_with_no_elapsed_time_reports_no_rate() {
-        let t0 = Instant::now();
-        let mut sampler = CpuSampler::new();
-        sampler.fold(Duration::ZERO, t0);
-        assert_eq!(sampler.fold(Duration::from_secs(1), t0), None);
     }
 }

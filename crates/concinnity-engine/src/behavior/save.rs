@@ -35,14 +35,12 @@ impl BehaviorStore for FileStore {
     }
 
     fn write(&self, state: &BehaviorState) {
-        match crate::cbor_file::encode(state) {
-            Ok(bytes) => self.writer.write(state_file(&self.dir), bytes),
-            Err(e) => tracing::warn!("BehaviorSystem: state save failed: {e}"),
-        }
+        self.writer
+            .write_cbor(state_file(&self.dir), state, "BehaviorSystem: state");
     }
 }
 
-pub(crate) fn state_file(dir: &Path) -> PathBuf {
+fn state_file(dir: &Path) -> PathBuf {
     dir.join("state")
 }
 

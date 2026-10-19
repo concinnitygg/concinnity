@@ -56,11 +56,5 @@ fn payload_message(info: &PanicHookInfo<'_>) -> String {
     } else {
         "<non-string panic payload>"
     };
-    let mut message = String::with_capacity(text.len().min(MAX_MESSAGE_BYTES));
-    let mut end = text.len().min(MAX_MESSAGE_BYTES);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    message.push_str(&text[..end]);
-    message
+    text[..text.floor_char_boundary(MAX_MESSAGE_BYTES)].to_string()
 }

@@ -112,7 +112,8 @@ pub(crate) fn create_dump_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crash::report::{ReportKind, UtcTime};
+    use crate::crash::report::ReportKind;
+    use concinnity_core::utc::UtcTime;
 
     fn report_at(secs: u64) -> CrashReport {
         CrashReport {

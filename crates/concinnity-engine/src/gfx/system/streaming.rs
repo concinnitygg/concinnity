@@ -7,41 +7,32 @@ use std::sync::Arc;
 
 use hashbrown::HashMap;
 
-use concinnity_core::components::{
-    BlockType, Planet, RenderHandle, SceneMember, StreamingConfig, VoxelWorld,
-};
+use concinnity_core::components::{BlockType, Planet, StreamingConfig, VoxelWorld};
 use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{
-    BlobSceneGroups, MaterialHandle, PayloadLocator, PipelineContext, ResourceKind,
-};
+use concinnity_core::ecs::{MaterialHandle, PayloadLocator, PipelineContext};
 use concinnity_core::geometry::ChunkBlockType;
 use concinnity_core::gfx::chunk_coord;
-use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::mesh_seed;
 use concinnity_core::gfx::render_types::{DrawIndex, FarFieldTint};
 use concinnity_core::planet::{LocalFrame, MAX_RESIDENT_TILES, PlanetFrame};
 use concinnity_core::render::draw_list::DeferredMeshSeed;
 use concinnity_core::render::grass::CanopyRange;
 use concinnity_core::render::material_entry::MaterialEntry;
-use concinnity_core::render::scene_residency::{
-    CHANNEL_MESH, CHANNEL_SHADER, CHANNEL_TEXTURE, SceneResidency,
-};
+use concinnity_core::render::scene_members::{self, StreamedContent};
+use concinnity_core::render::scene_residency::SceneResidency;
 use concinnity_core::render::stream_pools::budget::{
     self, CHUNK_VRAM_FRACTION, ChunkWindowShape, MESH_VRAM_FRACTION, TEXTURE_VRAM_FRACTION,
 };
 use concinnity_core::render::stream_pools::{
     ChunkPool, ChunkStream, DecodedMesh, DeferredMeshPayload, PlanetTiles, ProceduralChunks,
-    StreamPool, StreamingState, TileMaterial, tile_mesh_size,
+    StreamPool, StreamingState, TileMaterial,
 };
 use concinnity_core::render::world_load::stream_seed::StreamSeed;
 
 use super::GraphicsSystem;
-use super::stream_sources::{
-    block_type_to_chunk, build_texture_payload_source, deferred_mesh_payloads, disk_mesh_payload,
-};
+use super::stream_sources::{build_texture_payload_source, disk_mesh_payload};
 use crate::gfx::streaming::mesh::{self, MeshPayloadSource};
 use crate::gfx::streaming::planet as tile_workers;
-use crate::gfx::streaming::shader::ShaderWarmup;
 use crate::gfx::streaming::system::StreamingRuntime;
 use crate::gfx::streaming::texture;
 use crate::worker::Worker;
@@ -127,7 +118,7 @@ impl GraphicsSystem {
         }
         // Per-stream-id payload refs for the deferred meshes, so the worker
         // can decode them from the blob payload when their scene pins.
-        let deferred_payloads = deferred_mesh_payloads(
+        let deferred_payloads = concinnity_core::render::stream_pools::deferred_mesh_payloads(
             deferred_mesh_seeds,
             &seed.draw_to_handle,
             &seed.mesh.draw_indices,
@@ -163,70 +154,19 @@ impl GraphicsSystem {
         }
     }
 
-    // Scene residency over the streaming pools: texture members come from the
-    // blob's baked per-scene groups (a streamed texture's slot is its resource
-    // handle), mesh members from each streamed draw's SceneMember entity, and
-    // shader members from the deferred buckets (a bucket's pipeline is built
-    // when its scene pins).
+    // Scene residency over the streaming pools.
     fn build_scene_residency(&self, ctx: &PipelineContext) -> Option<SceneResidency> {
-        let scenes = &self.scene_flow.as_ref()?.scenes;
-        let no_shaders = self
-            .shader_warmup
-            .as_ref()
-            .is_none_or(ShaderWarmup::is_empty);
-        if self.stream_pools.texture.is_none() && self.stream_pools.mesh.is_none() && no_shaders {
-            return None;
-        }
-        let scene_idx: HashMap<AssetId, usize> =
-            scenes.iter().enumerate().map(|(i, &s)| (s, i)).collect();
-        let mut members: Vec<Vec<(u8, u32)>> = vec![Vec::new(); scenes.len()];
-
-        if let Some(streamer) = &self.stream_pools.texture
-            && let Some(groups) = ctx.resource::<BlobSceneGroups>()
-        {
-            for group in &groups.0 {
-                let Some(&idx) = scene_idx.get(&group.scene) else {
-                    continue;
-                };
-                for &(kind, handle) in &group.resources {
-                    if kind == ResourceKind::Texture && (handle as usize) < streamer.len() {
-                        members[idx].push((CHANNEL_TEXTURE, handle));
-                    }
-                }
-            }
-        }
-
-        if self.stream_pools.mesh.is_some() {
-            let mut scene_of_draw = HashMap::new();
-            for (_, member, handle) in ctx.join2::<SceneMember, RenderHandle>() {
-                for &slot in &handle.draws {
-                    scene_of_draw.insert(slot, member.0);
-                }
-            }
-            for (stream_id, draw_idx) in self.stream_pools.mesh_draws.iter().enumerate() {
-                if let Some(scene) = scene_of_draw.get(draw_idx)
-                    && let Some(&idx) = scene_idx.get(scene)
-                {
-                    members[idx].push((CHANNEL_MESH, stream_id as u32));
-                }
-            }
-        }
-
-        for &(bucket, scene) in &self.deferred_shader_scenes {
-            if let Some(&idx) = scene_idx.get(&scene) {
-                members[idx].push((CHANNEL_SHADER, bucket));
-            }
-        }
-
-        let owned: usize = members.iter().map(Vec::len).sum();
-        tracing::info!(
-            "GraphicsSystem: scene residency enabled ({} scenes, {} owned members)",
-            scenes.len(),
-            owned,
-        );
-        Some(SceneResidency::new(
-            scenes.iter().copied().zip(members).collect(),
-        ))
+        let content = StreamedContent {
+            texture_slots: self.stream_pools.texture.as_ref().map(|t| t.len()),
+            mesh_draws: self
+                .stream_pools
+                .mesh
+                .is_some()
+                .then_some(self.stream_pools.mesh_draws.as_slice()),
+            shaders_stream: self.shader_warmup.as_ref().is_some_and(|w| !w.is_empty()),
+            deferred_shaders: &self.deferred_shader_scenes,
+        };
+        scene_members::scene_residency(ctx, &self.scene_flow.as_ref()?.scenes, content)
     }
 
     // Hand the streaming pools built at init, with their load threads, to
@@ -421,7 +361,7 @@ impl GraphicsSystem {
             .palette
             .iter()
             .map(|id| match block_types.get(&id.id()) {
-                Some(bt) => block_type_to_chunk(bt),
+                Some(bt) => ChunkBlockType::from(bt),
                 None => {
                     tracing::warn!(
                         "GraphicsSystem: VoxelWorld palette entry {} is not a known BlockType",
@@ -530,10 +470,7 @@ impl GraphicsSystem {
         if let Some(far) = &far_field {
             material.material.far_field = FarFieldTint::of(far.packed());
         }
-        let (vertices, indices) = tile_mesh_size();
-        let tiles = MAX_RESIDENT_TILES as u64;
-        let vertex_bytes = tiles * (vertices * std::mem::size_of::<Vertex>()) as u64;
-        let index_bytes = tiles * (indices * std::mem::size_of::<u32>()) as u64;
+        let (vertex_bytes, index_bytes) = budget::planet_tile_headroom();
         let Some(backend) = self.backend.as_deref_mut() else {
             return;
         };
@@ -545,7 +482,7 @@ impl GraphicsSystem {
         else {
             return;
         };
-        if let Err(e) = backend.setup_chunk_streaming(vertex_bytes as usize, index_bytes as usize) {
+        if let Err(e) = backend.setup_chunk_streaming(vertex_bytes, index_bytes) {
             tracing::error!("GraphicsSystem: Planet terrain streaming: {e}");
             return;
         }

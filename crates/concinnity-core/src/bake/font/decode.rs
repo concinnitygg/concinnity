@@ -7,6 +7,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::decode::{ByteReader, checked_product};
+use crate::render::text::{FontMetrics, LoadedFont, derive_cap_px};
 
 // Bytes each glyph's metrics occupy in the payload: char code, four atlas
 // coordinates, advance, and two bearings.
@@ -54,6 +55,27 @@ pub fn deserialize(bytes: &[u8]) -> Result<DecodedFont, String> {
         });
     }
     Ok((atlas_w, atlas_h, supersample, size_px, rgba, metrics))
+}
+
+/// A font atlas as the backend uploads it: width, height and RGBA pixels.
+pub type FontAtlas = (u32, u32, Vec<u8>);
+
+/// A font payload as the face text lays out with, drawn from atlas slot
+/// `slot`, and the atlas that slot uploads.
+pub fn load_face(slot: usize, bytes: &[u8]) -> Result<(LoadedFont, FontAtlas), String> {
+    let (atlas_w, atlas_h, supersample, size_px, rgba, metrics) = deserialize(bytes)?;
+    let metrics: FontMetrics = metrics.into_iter().map(|m| (m.char_code, m)).collect();
+    let size_px = size_px as f32;
+    let face = LoadedFont {
+        atlas_slot: slot,
+        cap_px: derive_cap_px(&metrics, size_px),
+        metrics,
+        atlas_w,
+        atlas_h,
+        size_px,
+        supersample: supersample.max(1) as f32,
+    };
+    Ok((face, (atlas_w, atlas_h, rgba)))
 }
 
 #[cfg(test)]
@@ -188,5 +210,20 @@ mod tests {
         bytes[count_at..].copy_from_slice(&u32::MAX.to_le_bytes());
         let err = deserialize(&bytes).unwrap_err();
         assert!(err.contains("truncated"), "{}", err);
+    }
+
+    // The face keys its glyphs by code point, takes its slot, and reads the
+    // payload's sizes; its atlas is the payload's pixels.
+    #[test]
+    fn a_payload_loads_as_a_face_and_its_atlas() {
+        let bytes = payload(2, 2, &[glyph(u32::from(b'H'))]);
+        let (face, (w, h, rgba)) = load_face(3, &bytes).expect("loads");
+        assert_eq!(face.atlas_slot, 3);
+        assert_eq!((face.atlas_w, face.atlas_h, w, h), (2, 2, 2, 2));
+        assert_eq!(face.size_px, 32.0);
+        assert_eq!(face.supersample, 2.0);
+        assert!(face.metrics.contains_key(&u32::from(b'H')));
+        assert_eq!(rgba.len(), 16);
+        assert!(load_face(0, &bytes[..3]).is_err());
     }
 }

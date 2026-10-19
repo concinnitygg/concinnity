@@ -15,7 +15,7 @@
 //! It is optional. A binary without it runs correctly on Rust's default
 //! allocator, and every consumer of `concinnity_core::memory::stats()` already reads
 //! an `Option`: crash reports ship without heap figures, and drift detection
-//! (`app::mem_drift`) reports nothing rather than guessing. A host embedding the
+//! (`concinnity_core::budget::drift`) reports nothing rather than guessing. A host embedding the
 //! engine is entitled to that trade, so nothing complains about it at startup.
 //!
 //! The binaries that do report heap figures each pin their own declaration with

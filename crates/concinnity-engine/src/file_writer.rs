@@ -1,4 +1,5 @@
-//! Background writer for small persisted files (story saves, behavior state).
+//! Background writer for small persisted files (the settings store, story saves,
+//! behavior state).
 //! The caller encodes the bytes and queues the write; a Background-role thread
 //! applies the queued writes and removals in the order they were queued, so a
 //! slow filesystem never stalls the sim thread. A write immediately followed by
@@ -7,6 +8,7 @@
 //! drains the queue, so the last save is always flushed before shutdown.
 
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
 
@@ -82,7 +84,7 @@ impl FileWriter {
     }
 
     // Writer with an injectable sink, so tests can observe the operations.
-    pub(crate) fn with_sink(
+    fn with_sink(
         name: &'static str,
         sink: impl FnMut(&FileOp) -> std::io::Result<()> + Send + 'static,
     ) -> Self {
@@ -97,6 +99,15 @@ impl FileWriter {
     // Queue `bytes` to replace the contents of `path`, creating its directory.
     pub(crate) fn write(&self, path: PathBuf, bytes: Vec<u8>) {
         self.queue(FileOp::Write(path, bytes));
+    }
+
+    // Queue `value`, encoded as CBOR, to replace the contents of `path`. An
+    // encoding failure is logged naming `what`.
+    pub(crate) fn write_cbor<T: serde::Serialize>(&self, path: PathBuf, value: &T, what: &str) {
+        match crate::cbor_file::encode(value) {
+            Ok(bytes) => self.write(path, bytes),
+            Err(e) => tracing::warn!("{what} save failed: {e}"),
+        }
     }
 
     // Queue the removal of `path`; a missing file is not an error.
@@ -178,15 +189,34 @@ impl Drop for FileWriter {
     }
 }
 
+// Replace the contents of `path` with `bytes`, creating its directory. The
+// bytes land in a sibling temporary file renamed over `path` (which replaces an
+// existing file on every platform), so a crash mid-write leaves the old file
+// whole rather than a torn one.
+pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut temp = path.as_os_str().to_owned();
+    temp.push(".tmp");
+    let temp = PathBuf::from(temp);
+    let written = std::fs::File::create(&temp).and_then(|mut file| {
+        file.write_all(bytes)?;
+        file.sync_all()
+    });
+    match written.and_then(|()| std::fs::rename(&temp, path)) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp);
+            Err(e)
+        }
+    }
+}
+
 // Apply one operation to the filesystem.
 fn apply(op: &FileOp) -> std::io::Result<()> {
     match op {
-        FileOp::Write(path, bytes) => {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)?;
-            }
-            std::fs::write(path, bytes)
-        }
+        FileOp::Write(path, bytes) => write_file(path, bytes),
         FileOp::Remove(path) => match std::fs::remove_file(path) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
             _ => Ok(()),
@@ -299,5 +329,21 @@ mod tests {
         writer.remove(path.clone());
         writer.flush();
         assert!(!path.exists());
+    }
+
+    // A write replaces the old contents and leaves no temporary file beside
+    // the target.
+    #[test]
+    fn a_write_replaces_the_file_and_leaves_no_temporary() {
+        let tree = concinnity_testing::TempTree::new();
+        let path = tree.join("nested/state");
+        write_file(&path, b"old").expect("first write");
+        write_file(&path, b"new").expect("second write");
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        let names: Vec<_> = std::fs::read_dir(tree.join("nested"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["state"]);
     }
 }

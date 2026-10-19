@@ -27,7 +27,7 @@ pub(crate) fn select(world: Inner) -> Box<dyn Driver> {
 // with something to draw on a build or machine that cannot draw it.
 #[cfg(feature = "std")]
 pub(crate) fn adopt(mut runtime: concinnity_engine::Runtime) -> Box<dyn Driver> {
-    use concinnity_engine::ecs::render_mode::Resolution;
+    use concinnity_core::render::render_mode::Resolution;
     match runtime.render_resolution() {
         Resolution::Headless(_) => headless(runtime.into_world()),
         Resolution::Rendered | Resolution::Unavailable(_) => Box::new(runtime),

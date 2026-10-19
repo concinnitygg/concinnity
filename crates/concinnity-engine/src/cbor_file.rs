@@ -1,5 +1,5 @@
 // CBOR-on-disk store shared by the engine's small persisted files: the settings
-// store, story saves, and behavior fired-flag saves. All three want the same
+// store, story saves, and behavior state saves. All three want the same
 // shape -- read-or-default on a missing/corrupt file, and a write that creates
 // the parent directory.
 
@@ -21,10 +21,7 @@ pub(crate) fn read<T: serde::de::DeserializeOwned>(path: &Path, what: &str) -> O
 
 // Write `value` to `path` as CBOR, creating the parent directory as needed.
 pub(crate) fn write<T: serde::Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(path, encode(value)?)
+    crate::file_writer::write_file(path, &encode(value)?)
 }
 
 // `value` as the CBOR bytes `write` stores, for a caller that writes elsewhere.

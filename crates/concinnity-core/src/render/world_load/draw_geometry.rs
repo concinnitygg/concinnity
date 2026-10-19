@@ -83,31 +83,56 @@ pub fn gather_auto_seed_triangles(
     (!tris.is_empty()).then_some(tris)
 }
 
-/// The world's declared reflection probes. Read, not drained, so editor tooling
-/// can address the authored probes by name.
-pub fn declared_probe_placements(ctx: &PipelineContext) -> Vec<ProbePlacement> {
+/// Where a world's reflection probes go: the declared ones, else the
+/// geometry-aware auto-seed, except in a planet world, whose frame moves would
+/// leave a seeded probe's cube behind; else none.
+pub fn probe_placements<'a>(
+    ctx: &PipelineContext,
+    draw_objects: &[render_types::DrawObject],
+    vertices: &[Vertex],
+    indices: &[u32],
+    water_surfaces: impl IntoIterator<Item = &'a WaterSurface>,
+    glass_panels: &[GlassPanel],
+) -> Vec<ProbePlacement> {
+    let declared = declared_probe_placements(ctx);
+    if !declared.is_empty() || !seeds_probes(ctx) {
+        return declared;
+    }
+    auto_seed_probe_placements(
+        draw_objects,
+        vertices,
+        indices,
+        water_surfaces,
+        glass_panels,
+    )
+    .unwrap_or_default()
+}
+
+// The world's declared reflection probes. Read, not drained, so editor tooling
+// can address the authored probes by name.
+fn declared_probe_placements(ctx: &PipelineContext) -> Vec<ProbePlacement> {
     ctx.query::<ReflectionProbe>()
         .map(ProbePlacement::from)
         .collect()
 }
 
-/// Whether a world without declared probes gets auto-seeded ones: not a planet
-/// world, whose frame moves would leave a seeded probe's cube behind.
-pub fn seeds_probes(ctx: &PipelineContext) -> bool {
+// Whether a world without declared probes gets auto-seeded ones: not a planet
+// world.
+fn seeds_probes(ctx: &PipelineContext) -> bool {
     ctx.query::<crate::components::Planet>().next().is_none()
 }
 
-/// Geometry-aware probe auto-seed for a world that declares no ReflectionProbe:
-/// surface-voxelizing the static geometry detects a watertight single-mesh
-/// interior, which object AABBs alone would read as a solid block. An
-/// over-budget import falls back to coarse AABB occupancy rather than no seed.
-///
-/// The grid bounds union the reflectors with the geometry, because a water
-/// surface or glass pane is not a draw object: a pool wider than every mesh
-/// would otherwise sit outside the grid. Occupancy stays geometry-only, since
-/// it answers "is this capture point inside a wall", which a plane does not make
-/// true. `None` when nothing is bounded, leaving the backend's own AABB seed.
-pub fn auto_seed_probe_placements<'a>(
+// Geometry-aware probe auto-seed for a world that declares no ReflectionProbe:
+// surface-voxelizing the static geometry detects a watertight single-mesh
+// interior, which object AABBs alone would read as a solid block. An
+// over-budget import falls back to coarse AABB occupancy rather than no seed.
+//
+// The grid bounds union the reflectors with the geometry, because a water
+// surface or glass pane is not a draw object: a pool wider than every mesh
+// would otherwise sit outside the grid. Occupancy stays geometry-only, since
+// it answers "is this capture point inside a wall", which a plane does not make
+// true. `None` when nothing is bounded, leaving the backend's own AABB seed.
+fn auto_seed_probe_placements<'a>(
     draw_objects: &[render_types::DrawObject],
     vertices: &[Vertex],
     indices: &[u32],
@@ -141,6 +166,21 @@ mod tests {
         assert!(seeds_probes(&world.context()));
         world.push(crate::components::Planet::default());
         assert!(!seeds_probes(&world.context()));
+    }
+
+    // Declared probes win; a planet world without any gets none, even with
+    // geometry to seed from.
+    #[test]
+    fn declared_probes_win_and_a_planet_seeds_none() {
+        let mut world = crate::ecs::World::new();
+        world.push(crate::components::Planet::default());
+        let none: [&WaterSurface; 0] = [];
+        assert!(probe_placements(&world.context(), &[], &[], &[], none, &[]).is_empty());
+        world.push(ReflectionProbe::default());
+        assert_eq!(
+            probe_placements(&world.context(), &[], &[], &[], none, &[]).len(),
+            1
+        );
     }
 
     use super::*;

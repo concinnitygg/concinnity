@@ -20,6 +20,7 @@ use super::parked::{ShaderOverrides, TextureNameSlots};
 use super::sdf_field_sources::SdfFieldMap;
 use super::shader_sources::ShaderSourceMap;
 use concinnity_core::render::draw_list::MeshSourceMeta;
+use concinnity_core::render::world_load::skinned::{SkinnedAssembly, SkinnedGeometry};
 
 // Every unique parent directory across `paths`. The watcher subscribes to
 // these; a bare-filename source (no parent) is skipped and only reachable via
@@ -272,6 +273,54 @@ pub struct TextureSourceMap {
     pub entries: Vec<TextureSourceEntry>,
 }
 
+/// The file-backed skinned meshes among `geometry`, each with the region its
+/// template slot holds in `assembly`.
+pub(crate) fn skinned_mesh_source_map(
+    geometry: &[SkinnedGeometry],
+    assembly: &SkinnedAssembly,
+) -> SkinnedMeshSourceMap {
+    let entries = geometry
+        .iter()
+        .zip(&assembly.templates)
+        .filter(|(g, _)| !g.mesh.source.is_empty())
+        .filter_map(|(g, t)| {
+            let slot = assembly.draw_objects.get(t.template_index.index())?;
+            Some(SkinnedMeshSourceEntry {
+                source: g.mesh.source.clone(),
+                skin_index: g.mesh.skin_index,
+                skinned_index: t.template_index,
+                vertex_base: slot.vertex_base,
+                vertex_count: slot.vertex_count,
+                index_count: slot.index_count,
+                joint_count: slot.joint_count,
+            })
+        })
+        .collect();
+    SkinnedMeshSourceMap { entries }
+}
+
+/// The file-backed textures of a pool of `count` slots, with each texture's
+/// name -> slot index, from the dev source catalog.
+pub(crate) fn texture_catalog(
+    sources: Option<&concinnity_core::resource::TextureSources>,
+    count: usize,
+) -> (TextureSourceMap, HashMap<AssetId, usize>) {
+    let mut map = TextureSourceMap::new();
+    let mut name_to_slot = HashMap::new();
+    for (slot, info) in sources
+        .into_iter()
+        .flat_map(|s| s.0.iter())
+        .take(count)
+        .enumerate()
+    {
+        name_to_slot.insert(AssetId(info.name_id), slot);
+        if !info.source.is_empty() {
+            map.push_texture(info.source.clone(), info.image_index, slot);
+        }
+    }
+    (map, name_to_slot)
+}
+
 impl TextureSourceMap {
     /// An empty catalog.
     pub fn new() -> Self {
@@ -476,6 +525,28 @@ mod tests {
         assert_eq!(map.entries[0].image_index, 0);
         assert_eq!(map.entries[1].slot, 7);
         assert_eq!(map.entries[1].image_index, 2);
+    }
+
+    // Every slot inside the pool is named; only file-backed ones are
+    // reloadable, and the catalog past the pool is ignored.
+    #[test]
+    fn the_texture_catalog_names_every_slot_and_keeps_file_backed_ones() {
+        let source = |name_id, source: &str| concinnity_core::resource::TextureSource {
+            name_id,
+            source: source.to_string(),
+            image_index: 0,
+        };
+        let sources = concinnity_core::resource::TextureSources(vec![
+            source(10, "a.png"),
+            source(11, ""),
+            source(12, "c.png"),
+        ]);
+        let (map, names) = texture_catalog(Some(&sources), 2);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.entries[0].slot, 0);
+        assert_eq!(names.get(&AssetId(11)), Some(&1));
+        assert!(!names.contains_key(&AssetId(12)));
+        assert!(texture_catalog(None, 2).0.is_empty());
     }
 
     // Entries sharing a directory collapse to one subscription, and the result

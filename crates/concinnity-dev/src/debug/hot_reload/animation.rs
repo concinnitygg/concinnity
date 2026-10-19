@@ -5,8 +5,8 @@
 //! the setter (`apply_reloaded_clip`). Mirrors the path the desugar pass takes at
 //! build time, so a hot-reloaded clip is byte-identical to a fresh `cn build`.
 
+use concinnity_core::animation::AnimationSystem;
 use concinnity_core::animation::skeleton::{AnimationClip, JointTrack, Keyframe};
-use concinnity_engine::AnimationSystem;
 use std::collections::HashMap;
 
 use super::signals::ReloadSignals;
@@ -244,7 +244,8 @@ mod tests {
     }
 
     fn with_anim<R>(world: &mut World, f: impl FnOnce(&mut AnimationSystem) -> R) -> R {
-        f(concinnity_engine::ecs::animation_system_mut(world)
+        f(world
+            .system_mut::<AnimationSystem>()
             .expect("AnimationSystem not constructed"))
     }
 

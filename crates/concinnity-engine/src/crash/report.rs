@@ -2,6 +2,7 @@
 //! section-based: the writer emits sections in order of forensic value and
 //! flushes between them, so a partial report still leads with what matters.
 
+use concinnity_core::utc::UtcTime;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::memory::MemorySnapshot;
@@ -48,7 +49,7 @@ impl CrashReport {
     pub(crate) fn gather(kind: ReportKind, message: String) -> Self {
         Self {
             kind,
-            time: UtcTime::now(),
+            time: utc_now(),
             message,
             thread: None,
             location: None,
@@ -65,7 +66,7 @@ impl CrashReport {
     pub(crate) fn gather_nonblocking(kind: ReportKind, message: String) -> Self {
         Self {
             kind,
-            time: UtcTime::now(),
+            time: utc_now(),
             message,
             thread: None,
             location: None,
@@ -118,7 +119,7 @@ impl CrashReport {
     fn summary(&self) -> String {
         let mut out = String::with_capacity(self.message.len().min(MAX_MESSAGE_BYTES) + 64);
         out.push_str("message: ");
-        out.push_str(truncated(&self.message, MAX_MESSAGE_BYTES));
+        out.push_str(&self.message[..self.message.floor_char_boundary(MAX_MESSAGE_BYTES)]);
         out.push('\n');
         if let Some(thread) = &self.thread {
             out.push_str(&format!("thread: {thread}\n"));
@@ -132,7 +133,10 @@ impl CrashReport {
 
     fn backtrace_section(&self) -> String {
         match &self.backtrace {
-            Some(bt) => format!("backtrace:\n{}\n", truncated(bt, MAX_BACKTRACE_BYTES)),
+            Some(bt) => format!(
+                "backtrace:\n{}\n",
+                &bt[..bt.floor_char_boundary(MAX_BACKTRACE_BYTES)]
+            ),
             None => "backtrace: <none>\n".to_string(),
         }
     }
@@ -158,99 +162,18 @@ pub(crate) fn file_stem_at(time: UtcTime) -> String {
     format!("crash-{}-{}", time.stem(), std::process::id())
 }
 
-// Truncate to `cap` bytes on a char boundary.
-fn truncated(s: &str, cap: usize) -> &str {
-    if s.len() <= cap {
-        return s;
-    }
-    let mut end = cap;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
-}
-
-// A civil UTC timestamp, derived from the system clock without a date
-// dependency. Only meaningful for post-epoch times, which is all a crash
-// report needs.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct UtcTime {
-    pub(crate) year: i64,
-    pub(crate) month: u32,
-    pub day: u32,
-    pub(crate) hour: u32,
-    pub minute: u32,
-    pub second: u32,
-}
-
-impl UtcTime {
-    pub(crate) fn now() -> Self {
-        let secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        Self::from_unix(secs)
-    }
-
-    // Civil-from-days conversion (Gregorian, proleptic; Hinnant's algorithm).
-    pub(crate) fn from_unix(secs: u64) -> Self {
-        let days = (secs / 86_400) as i64;
-        let rem = secs % 86_400;
-        let z = days + 719_468;
-        let era = z.div_euclid(146_097);
-        let doe = z.rem_euclid(146_097) as u64;
-        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-        let mp = (5 * doy + 2) / 153;
-        let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
-        let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-        let year = yoe as i64 + era * 400 + i64::from(month <= 2);
-        Self {
-            year,
-            month,
-            day,
-            hour: (rem / 3600) as u32,
-            minute: (rem % 3600 / 60) as u32,
-            second: (rem % 60) as u32,
-        }
-    }
-
-    pub(crate) fn display(&self) -> String {
-        format!(
-            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-            self.year, self.month, self.day, self.hour, self.minute, self.second
-        )
-    }
-
-    // Compact, lexicographically sortable form for file names.
-    pub(crate) fn stem(&self) -> String {
-        format!(
-            "{:04}{:02}{:02}-{:02}{:02}{:02}",
-            self.year, self.month, self.day, self.hour, self.minute, self.second
-        )
-    }
+// The system clock as a civil UTC time.
+pub(crate) fn utc_now() -> UtcTime {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    UtcTime::from_unix(secs)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn epoch_converts_to_civil_origin() {
-        let t = UtcTime::from_unix(0);
-        assert_eq!(t.display(), "1970-01-01 00:00:00");
-    }
-
-    #[test]
-    fn known_timestamps_convert() {
-        // 2026-08-08 12:34:56 UTC.
-        let t = UtcTime::from_unix(1_786_192_496);
-        assert_eq!(t.display(), "2026-08-08 12:34:56");
-        assert_eq!(t.stem(), "20260808-123456");
-        // A leap day: 2024-02-29 23:59:59 UTC.
-        let t = UtcTime::from_unix(1_709_251_199);
-        assert_eq!(t.display(), "2024-02-29 23:59:59");
-    }
 
     fn sample() -> CrashReport {
         CrashReport {

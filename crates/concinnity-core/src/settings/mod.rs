@@ -11,6 +11,7 @@
 //! the renderer is built with, reading the settings rows in [`rows`]. Reading
 //! the user's choices from disk and detecting the GPU are the host's.
 
+pub mod api_trial;
 pub mod apply;
 mod key;
 pub mod levels;

@@ -49,8 +49,9 @@ impl<Req, Res> Mailbox<Req, Res> {
         self.inbox.push(result);
     }
 
-    /// Every request queued since the last call, in order.
-    pub fn take_requests(&mut self) -> impl Iterator<Item = Req> + '_ {
+    // Every request queued since the last call, in order.
+    #[cfg(test)]
+    pub(super) fn take_requests(&mut self) -> impl Iterator<Item = Req> + '_ {
         self.outbox.drain(..)
     }
 
@@ -59,8 +60,9 @@ impl<Req, Res> Mailbox<Req, Res> {
         self.outbox.pop_front()
     }
 
-    /// Whether requests wait to be sent.
-    pub fn has_requests(&self) -> bool {
+    // Whether requests wait to be sent.
+    #[cfg(test)]
+    pub(super) fn has_requests(&self) -> bool {
         !self.outbox.is_empty()
     }
 

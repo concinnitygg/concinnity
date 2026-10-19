@@ -1,7 +1,7 @@
 //! The skeletal-animation vocabulary and the CPU compute over it: skeletons and
 //! the clips that animate them, pose blending and the animation state machine,
 //! two-bone IK, per-joint proportions, character shapes, root motion, and morph
-//! targets with the weights that drive them.
+//! targets with the weights that drive them, and the playback system over them.
 pub mod anim_graph;
 pub mod character_shape;
 pub mod flat_blend;
@@ -14,3 +14,6 @@ pub mod proportions;
 pub mod root_motion;
 pub mod skeleton;
 pub mod skinned_mesh_map;
+mod system;
+
+pub use system::{AnimationReloadEntry, AnimationSystem, GraphStateReport, PoseFanOut};

@@ -10,11 +10,6 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
 use std::io::Write;
 use std::sync::Mutex;
-use std::time::Duration;
-
-// Upper bound on pumps while waiting for a build thread, a few seconds at one
-// millisecond apart.
-const MAX_PUMPS: usize = 5000;
 
 fn programs(name: &str) -> ShaderPrograms {
     ShaderPrograms {
@@ -146,14 +141,10 @@ impl Harness {
 
     // Step until `done` holds, pausing between steps while a build thread runs.
     fn step_until(&mut self, done: impl Fn(&Self) -> bool) {
-        for _ in 0..MAX_PUMPS {
+        concinnity_testing::eventually("the shader warmup's expected state", || {
             self.step();
-            if done(self) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        panic!("the shader warmup never reached the expected state");
+            done(self).then_some(())
+        });
     }
 
     fn step_until_resident(&mut self, bucket: u32) {
@@ -261,16 +252,15 @@ fn an_edit_landing_after_the_build_is_installed_in_its_place() {
     let overrides = ShaderOverrides::default();
     let mut h = Harness::new(Some(overrides.clone()), Some(Arc::default()));
     h.warmup.set_blocked(1, false);
-    for _ in 0..MAX_PUMPS {
+    concinnity_testing::eventually("the install to be recorded", || {
         let mut ops = h.pump();
-        if h.changes.contains(&(1, true)) {
+        let recorded = h.changes.contains(&(1, true));
+        if recorded {
             overrides.set(1, edited("edited"));
-            ops.replay(&mut h.backend);
-            break;
         }
         ops.replay(&mut h.backend);
-        std::thread::sleep(Duration::from_millis(1));
-    }
+        recorded.then_some(())
+    });
     assert_eq!(h.installs(), [install(1, "edited", None)]);
 }
 

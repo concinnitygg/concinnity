@@ -5,7 +5,7 @@
 //! (runtime spawn commands, camera motion) around it. Each session constructs
 //! exactly one driver, so a reload is never applied twice.
 
-use concinnity_core::animation::skeleton;
+use concinnity_core::animation::{AnimationSystem, skeleton};
 use concinnity_core::components::SkeletonPose;
 use concinnity_core::components::StoryReload;
 use concinnity_core::ecs::World;
@@ -98,7 +98,7 @@ impl HotReloadDriver {
         if let Some(sources) = concinnity_engine::live_edit::take_hot_reload_sources(world) {
             self.arm(sources);
         }
-        if let Some(anim) = concinnity_engine::ecs::animation_system_mut(world) {
+        if let Some(anim) = world.system_mut::<AnimationSystem>() {
             super::animation::reload_clips_if_pending(anim, &self.signals);
         }
         let Some(state) = self.state.as_mut() else {

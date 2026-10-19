@@ -108,6 +108,18 @@ fn resolve(name: &str) -> u32 {
     })
 }
 
+// Install this thread's interner behind the resolver seam, keeping what it
+// already holds.
+pub(crate) fn install_interner() {
+    crate::ecs::resolver::set_name_resolver(resolve);
+}
+
+// The id `name` interns to on this thread, with the interner installed.
+pub(crate) fn intern(name: &str) -> crate::ecs::asset_id::AssetId {
+    install_interner();
+    crate::ecs::asset_id::AssetId(resolve(name))
+}
+
 // Empty this thread's interner and install it behind the resolver seam. Call first in any test that interns or deserializes a named
 // reference.
 pub(crate) fn reset_interner() {

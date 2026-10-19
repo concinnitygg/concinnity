@@ -54,6 +54,19 @@ pub struct Story {
     pub save_key: String,
 }
 
+impl Story {
+    /// Whether any page or choice menu plays music or a sound.
+    pub fn plays_audio(&self) -> bool {
+        self.nodes.iter().any(|n| {
+            n.choice_music.is_some()
+                || !n.choice_sounds.is_empty()
+                || n.pages
+                    .iter()
+                    .any(|p| p.music.is_some() || !p.sounds.is_empty())
+        })
+    }
+}
+
 /// The stage scaffolding a [Story](#story)'s build expansion generated: the
 /// [Screen](#screen)s, [Sprite](#sprite)s, and [TextLabel](#textlabel)s the
 /// story system mutates page by page.
@@ -426,5 +439,25 @@ mod tests {
         };
         assert!(reload.story.nodes.is_empty());
         assert!(alloc::format!("{reload:?}").contains("StoryReload"));
+    }
+
+    #[test]
+    fn a_story_plays_audio_when_a_page_or_menu_has_some() {
+        let silent = Story {
+            nodes: alloc::vec![StoryNode {
+                pages: alloc::vec![StoryPage::default()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(!silent.plays_audio());
+        let mut paged = silent.clone();
+        paged.nodes[0].pages[0]
+            .sounds
+            .push(crate::ecs::AudioClipHandle::new(1));
+        assert!(paged.plays_audio());
+        let mut menu = silent.clone();
+        menu.nodes[0].choice_music = Some(crate::ecs::AudioClipHandle::new(2));
+        assert!(menu.plays_audio());
     }
 }

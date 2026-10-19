@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use crate::camera_track::CameraTrackStatus;
 use crate::camera_track::timeline::{self, Key};
 use crate::components::{Camera3D, CameraTrack, CameraTurnKey};
-use crate::ecs::{Entity, MenuActive, PipelineContext, SimTiming, StepResult, System};
+use crate::ecs::{Entity, MenuActive, PipelineContext, SimTiming, StepResult, System, World};
 use crate::math::{quat_mul, quat_normalize, quat_rotate, shortest_turn, vec3};
 use crate::planet::{FrameRebases, RebaseCursor};
 use crate::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
@@ -52,6 +52,14 @@ pub struct CameraTrackSystem {
 }
 
 impl CameraTrackSystem {
+    /// The system for a world that declares both a `CameraTrack` and the
+    /// `Camera3D` it drives.
+    pub fn for_world(world: &World) -> Option<Self> {
+        let track = world.query::<CameraTrack>().next()?;
+        world.query::<Camera3D>().next()?;
+        Some(Self::new(track))
+    }
+
     /// The system for a world's baked track. The travel list is ready here;
     /// the turn list waits for `init` to supply the camera's starting heading.
     pub fn new(track: &CameraTrack) -> Self {

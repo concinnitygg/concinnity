@@ -48,6 +48,13 @@ pub struct Camera3DSystem {
 }
 
 impl Camera3DSystem {
+    /// The controller for a world whose first controlled `Camera3D` has no
+    /// `follow` block.
+    pub fn for_world(world: &crate::ecs::World) -> Option<Self> {
+        let controller = super::controlled_camera(world)?;
+        controller.follow.is_none().then(|| Self::new(controller))
+    }
+
     /// Build a controller from a `Camera3D`'s controller settings.
     pub fn new(c: CameraController) -> Self {
         Self {
@@ -321,8 +328,7 @@ impl System for Camera3DSystem {
 mod tests {
     use super::Camera3DSystem;
     use crate::components::{Camera3D, CameraController, ControlsCommand, FrameInput};
-    use crate::ecs::{Phase, World};
-    use crate::test_support::start_with;
+    use crate::ecs::World;
 
     fn camera(controller: Option<CameraController>) -> Camera3D {
         Camera3D {
@@ -341,9 +347,12 @@ mod tests {
         }
     }
 
-    fn start(world: &mut World, ctrl: CameraController) {
-        let system = Camera3DSystem::new(ctrl);
-        start_with(world, Phase::Late, "Camera3DSystem", system);
+    // Start `world` on the headless table, which builds the controller from
+    // the world's camera.
+    fn start(world: &mut World) {
+        world
+            .start(crate::ecs::HEADLESS_SYSTEMS)
+            .expect("the test world starts");
     }
 
     // A ControlsCommand pushed mid-tick updates the live mouse sensitivity, so
@@ -359,7 +368,7 @@ mod tests {
             ..CameraController::default()
         };
         world.add_component(camera(Some(ctrl.clone())));
-        start(&mut world, ctrl);
+        start(&mut world);
 
         // A mouse delta in the same frame must rotate by the NEW sensitivity
         // (0.005), not the controller's 0.001.
@@ -390,7 +399,7 @@ mod tests {
             ..CameraController::default()
         };
         world.add_component(camera(Some(ctrl.clone())));
-        start(&mut world, ctrl);
+        start(&mut world);
         let fov = |world: &World| world.query::<Camera3D>().next().map(|c| c.fov_y_degrees);
         assert_eq!(fov(&world), Some(75.0));
 
@@ -434,7 +443,7 @@ mod tests {
         // Well outside the +X wall so the containment clamp is observable.
         cam.position = [100.0, 2.0, 0.0];
         world.add_component(cam);
-        start(&mut world, ctrl);
+        start(&mut world);
 
         world.add_component(FrameInput {
             forward: true,

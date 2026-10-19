@@ -18,4 +18,4 @@ mod payload;
 mod sdf;
 
 pub use compile::{BUILTIN_FONT_BYTES, BUILTIN_FONT_FILE, compile};
-pub use decode::deserialize;
+pub use decode::{FontAtlas, deserialize, load_face};

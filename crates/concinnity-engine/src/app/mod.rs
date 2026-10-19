@@ -11,8 +11,6 @@ pub(crate) mod clock;
 pub(crate) mod frame_gate;
 // The windowed loop's implementation of the core driver trait.
 mod driver;
-/// Long-session drift of process memory against the tracked heap.
-pub mod mem_drift;
 pub(crate) mod pacing;
 // Pipelined frame driver: sim thread + render half + the channel pair.
 pub(crate) mod pipeline;

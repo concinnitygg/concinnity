@@ -20,8 +20,8 @@ use concinnity_core::input::compose::{compose_frame_input, nav_dt};
 use concinnity_core::input::nav::NavRepeat;
 use concinnity_core::input::pad::PadState;
 
-use crate::ecs::InputMailbox;
 use crate::input::gamepad::GamepadSource;
+use concinnity_core::input::mailbox::InputMailbox;
 
 #[derive(Debug, Default)]
 pub(crate) struct InputSystem {
@@ -56,7 +56,7 @@ impl System for InputSystem {
                 FrameTime,
             ])
             .writes_resources(concinnity_core::resource_mask![
-                crate::ecs::InputMailbox,
+                InputMailbox,
                 concinnity_core::ecs::InputSampledAt,
                 CursorState,
                 WindowMinimized,

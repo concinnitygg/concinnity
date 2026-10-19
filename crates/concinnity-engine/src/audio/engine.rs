@@ -296,10 +296,7 @@ impl<B: Backend> AudioEngine<B> {
     // sharing a music cue never restarts the track. Returns false when the
     // engine is disabled or the clip failed to decode or was never queued.
     pub(crate) fn play_music(&mut self, key: u64, gain: f32, bus: AudioBus) -> bool {
-        if let Some(active) = &self.active
-            && let Some((current, _)) = &active.music
-            && *current == key
-        {
+        if self.active.as_ref().is_some_and(|a| a.music_is(key)) {
             return true;
         }
         self.request_play(key, PendingPlay::Music { key, gain, bus })
@@ -367,9 +364,7 @@ impl<B: Backend> AudioEngine<B> {
 
     // Move an emitter. No-op on a disabled engine or an unknown id.
     pub(crate) fn set_emitter_position(&mut self, id: EmitterId, position: [f32; 3]) {
-        if let Some(active) = self.active.as_mut()
-            && let Some(emitter) = active.emitters.get_mut(id.0).and_then(Option::as_mut)
-        {
+        if let Some(emitter) = self.active.as_mut().and_then(|a| a.emitter_mut(id)) {
             emitter.track.set_position(vec3(position), Tween::default());
         }
     }
@@ -378,10 +373,7 @@ impl<B: Backend> AudioEngine<B> {
     // dip plus a lowpass sweep. No-op on a disabled engine, an unknown id,
     // or an unchanged factor.
     pub(crate) fn set_emitter_occlusion(&mut self, id: EmitterId, factor: f32) {
-        let Some(active) = self.active.as_mut() else {
-            return;
-        };
-        let Some(emitter) = active.emitters.get_mut(id.0).and_then(Option::as_mut) else {
+        let Some(emitter) = self.active.as_mut().and_then(|a| a.emitter_mut(id)) else {
             return;
         };
         if (factor - emitter.last_occlusion).abs() < 1.0e-3 {
@@ -435,12 +427,36 @@ impl<B: Backend> AudioEngine<B> {
 }
 
 impl<B: Backend> Active<B> {
+    fn emitter_mut(&mut self, id: EmitterId) -> Option<&mut Emitter> {
+        self.emitters.get_mut(id.0).and_then(Option::as_mut)
+    }
+
+    // Whether `key` is the music playing now.
+    fn music_is(&self, key: u64) -> bool {
+        self.music
+            .as_ref()
+            .is_some_and(|(current, _)| *current == key)
+    }
+
+    // Make room in the voice pool for a one-shot of `priority`, silencing the
+    // voice it steals. False when the pool refuses it.
+    fn make_room(&mut self, priority: i32) -> bool {
+        match self.voices.make_room(priority) {
+            Admission::Available => true,
+            Admission::Steal(mut stolen) => {
+                stolen.stop(Tween::default());
+                true
+            }
+            Admission::Refused => false,
+        }
+    }
+
     // Start a decoded clip according to its play request. The decoded frames
     // are shared; per-play settings (gain, loop) ride a cheap settings copy.
     fn play_now(&mut self, play: PendingPlay, data: &StaticSoundData) -> bool {
         match play {
             PendingPlay::Emitter { id, looping, gain } => {
-                let Some(emitter) = self.emitters.get_mut(id.0).and_then(Option::as_mut) else {
+                let Some(emitter) = self.emitter_mut(id) else {
                     return false;
                 };
                 let mut data = data.clone().volume(Decibels(gain_to_db(gain)));
@@ -456,9 +472,7 @@ impl<B: Backend> Active<B> {
                 }
             }
             PendingPlay::Music { key, gain, bus } => {
-                if let Some((current, _)) = &self.music
-                    && *current == key
-                {
+                if self.music_is(key) {
                     return true;
                 }
                 // The default tween fades the outgoing track briefly so the
@@ -486,10 +500,8 @@ impl<B: Backend> Active<B> {
                 gain,
                 priority,
             } => {
-                match self.voices.make_room(priority) {
-                    Admission::Available => {}
-                    Admission::Steal(mut stolen) => stolen.stop(Tween::default()),
-                    Admission::Refused => return false,
+                if !self.make_room(priority) {
+                    return false;
                 }
                 let data = data.clone().volume(Decibels(gain_to_db(gain)));
                 match self.buses.get_mut(bus).play(data) {
@@ -508,10 +520,8 @@ impl<B: Backend> Active<B> {
                 gain,
                 priority,
             } => {
-                match self.voices.make_room(priority) {
-                    Admission::Available => {}
-                    Admission::Steal(mut stolen) => stolen.stop(Tween::default()),
-                    Admission::Refused => return false,
+                if !self.make_room(priority) {
+                    return false;
                 }
                 // A transient spatial track: dropping its handle after the
                 // play leaves it alive only until the sound finishes.
@@ -646,14 +656,10 @@ mod tests {
 
         // Tick until `key` decodes; the worker is a real thread, so poll.
         fn wait_ready(&mut self, key: u64) {
-            for _ in 0..500 {
+            concinnity_testing::eventually(format_args!("clip {key} to decode"), || {
                 self.tick();
-                if self.clip_ready(key) {
-                    return;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(2));
-            }
-            panic!("clip {key} never decoded");
+                self.clip_ready(key).then_some(())
+            });
         }
     }
 
@@ -736,14 +742,11 @@ mod tests {
         assert_eq!(engine.playing_sounds(), 1);
         // The mock renderer runs at 1 Hz, so each pump processes 2 seconds:
         // a 64-frame clip finishes almost immediately.
-        for _ in 0..500 {
+        concinnity_testing::eventually("the finished voice to be reaped", || {
             engine.pump();
             engine.tick();
-            if engine.playing_sounds() == 0 {
-                return;
-            }
-        }
-        panic!("finished voice never reaped");
+            (engine.playing_sounds() == 0).then_some(())
+        });
     }
 
     #[test]
@@ -846,15 +849,14 @@ mod tests {
         engine.queue_clip(7, b"not an audio file".to_vec());
         // Deferred behind the decode, then dropped when it fails.
         assert!(engine.play_sound(7, 1.0, AudioBus::Sfx, 0));
-        for _ in 0..500 {
+        concinnity_testing::eventually("the decode to fail", || {
             engine.tick();
-            if let Some(active) = &engine.active
-                && active.clips.state(7) == Some(ClipState::Failed)
-            {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
+            engine
+                .active
+                .as_ref()
+                .is_some_and(|a| a.clips.state(7) == Some(ClipState::Failed))
+                .then_some(())
+        });
         assert!(
             !engine.play_sound(7, 1.0, AudioBus::Sfx, 0),
             "failed clip refuses plays"

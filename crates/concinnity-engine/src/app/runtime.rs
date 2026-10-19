@@ -11,13 +11,15 @@ use concinnity_host::thread::jobs::pool;
 use crate::app::run::LaunchRequest;
 use crate::app::startup_error::StartupError;
 use crate::blob;
-use crate::ecs::render_mode::{self, RenderMode, Resolution};
+use crate::ecs::render_mode;
 use crate::ecs::{RenderInitFailure, SYSTEMS};
-use crate::shutdown::ShutdownToken;
+use concinnity_core::input::mailbox::InputMailbox;
 use concinnity_core::launch::LaunchArgs;
+use concinnity_core::render::render_mode::{RenderMode, Resolution};
+use concinnity_core::shutdown::ShutdownToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuntimeStatus {
+enum RuntimeStatus {
     Created,
     Started,
 }
@@ -438,14 +440,7 @@ impl Runtime {
             let Some((input, sampled_us)) = gate.wait() else {
                 return StepResult::Stop;
             };
-            match self.world.resource_mut::<crate::ecs::InputMailbox>() {
-                Some(mailbox) => mailbox.deposit(input, sampled_us),
-                None => {
-                    let mut mailbox = crate::ecs::InputMailbox::default();
-                    mailbox.deposit(input, sampled_us);
-                    self.world.insert_resource(mailbox);
-                }
-            }
+            InputMailbox::deposit_in(self.world.context().resources, input, sampled_us);
         }
         let paused = self.world.resource::<MenuActive>().is_some_and(|m| m.0);
         let (timing, frame) = match self.launch.fixed_frame_rate {

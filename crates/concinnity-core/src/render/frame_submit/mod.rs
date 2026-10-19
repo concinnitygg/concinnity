@@ -12,8 +12,12 @@ use crate::render::error::RenderError;
 use crate::render::ops::ReplayOutcome;
 use crate::render::snapshot::{RenderSnapshot, SceneOp};
 
+mod go_timing;
+mod pace;
 mod policy;
 
+pub use go_timing::GoTiming;
+pub use pace::{FramePace, frame_cap};
 pub use policy::FramePolicy;
 
 use policy::FrameAction;

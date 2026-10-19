@@ -11,7 +11,7 @@ use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
 use concinnity_engine::live_edit::shader_sources::ShaderFile;
 use std::collections::HashSet;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 // A backend that records every Shader update with the pipeline it was handed,
 // reports the buckets in `resident` as installed, and rejects every build when
@@ -161,19 +161,17 @@ fn pending(ids: &[u32]) -> PendingShaders {
     }
 }
 
-// Poll until `count` reports arrived; bounded so a lost result fails the test
-// instead of hanging it.
+// Poll until `count` reports arrived.
 fn poll_for(
     reload: &mut ShaderReload,
     backend: &mut ShaderBackend,
     count: usize,
 ) -> Vec<ReloadReport> {
-    let deadline = Instant::now() + Duration::from_secs(10);
     let mut reports = Vec::new();
-    while reports.len() < count && Instant::now() < deadline {
+    concinnity_testing::eventually(format_args!("{count} reload reports"), || {
         reports.extend(reload.poll(backend));
-        std::thread::sleep(Duration::from_millis(5));
-    }
+        (reports.len() >= count).then_some(())
+    });
     reports
 }
 

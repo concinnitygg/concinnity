@@ -73,6 +73,13 @@ pub fn ensure_event_queues(tables: &[&[AccessEntry]], store: &mut EventStore, ac
     }
 }
 
+/// Create every event queue `access` may touch among this crate's
+/// [`ACCESS_IDS`]: the table's `prepare_events` for a host with no ids of its
+/// own.
+pub fn prepare_events(store: &mut EventStore, access: Access) {
+    ensure_event_queues(&[ACCESS_IDS], store, access);
+}
+
 /// Register resource and event types for access declaration: each gets an
 /// [`AccessId`] by list position from `base`, and the named table lists them
 /// for runtime resolution, and the named const is the first id past them. More ids than the 128-bit mask holds is a compile
@@ -211,6 +218,7 @@ crate::define_access_ids! {
         crate::render::overlay::OverlayFrame,
         crate::render::overlay::OverlayAssets,
         crate::render::overlay::OverlayRecycle,
+        crate::input::mailbox::InputMailbox,
     ],
     events: [
         crate::components::ControlsCommand,

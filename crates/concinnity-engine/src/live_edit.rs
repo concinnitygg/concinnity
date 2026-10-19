@@ -26,7 +26,6 @@ use crate::ecs::ActiveRenderBackend;
 use crate::gfx::system::hot_reload_sources::HotReloadSources;
 use crate::gfx::system::parked::{PushedFogSettings, TextureNameSlots};
 
-pub use crate::animation::AnimationReloadEntry;
 pub use crate::ecs::take_render_backend;
 pub use crate::gfx::system::{hot_reload_sources, parked, sdf_field_sources, shader_sources};
 

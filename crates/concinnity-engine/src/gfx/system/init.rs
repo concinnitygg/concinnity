@@ -4,67 +4,52 @@
 use concinnity_core::bake::font;
 use concinnity_core::bake::texture;
 use concinnity_core::components::Planet;
-use concinnity_core::components::Screen;
 use concinnity_core::components::ShaderPrograms;
-use concinnity_core::components::SkeletonJoint;
-use concinnity_core::components::SkinnedMesh;
 use concinnity_core::components::Sprite;
 use concinnity_core::components::Story;
 use concinnity_core::components::SubMeshRef;
-use concinnity_core::components::Transform;
 use concinnity_core::components::WindowMode;
-use concinnity_core::components::build_skeleton_from_joint_defs;
 use concinnity_core::components::{
-    BlockType, Camera3D, GraphicsConfig, HitRegion, Model, Shader, StreamingConfig, VoxelWorld,
-    Window,
+    BlockType, GraphicsConfig, Model, Shader, StreamingConfig, VoxelWorld, Window,
 };
 use concinnity_core::ecs::FontHandle;
-use concinnity_core::ecs::MaterialHandle;
-use concinnity_core::ecs::MenuOverride;
 use concinnity_core::ecs::OverlayImages;
 use concinnity_core::ecs::PayloadLocator;
 use concinnity_core::ecs::PipelineContext;
-use concinnity_core::ecs::SkinnedMeshHandle;
 use concinnity_core::ecs::TextureHandle;
 use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::geometry::payload_joints_to_defs;
-use concinnity_core::gfx::render_types::{FarFieldTint, SkinnedIndex};
-use concinnity_core::gfx::{mesh_payload, render_types};
-use concinnity_core::render::{backend, backend_init, text};
+use concinnity_core::gfx::render_types::FarFieldTint;
+use concinnity_core::render::{backend, backend_init};
 use concinnity_core::resource::ColorLutTable;
 use concinnity_core::resource::EnvironmentMapTable;
 use concinnity_core::resource::FontTable;
 use concinnity_core::resource::MaterialTable;
-use concinnity_core::resource::SkinnedMeshTable;
+use concinnity_core::resource::ResourceEntry;
 use concinnity_core::resource::TextureTable;
-use concinnity_host::store::blob::blob_path;
-use concinnity_host::store::blob::payload_section_start;
 
 use super::backend_handoff::RuntimeHandoff;
 use super::hot_reload_sources::{
     HotReloadSources, capture_hot_reload_sources, mesh_source_map, procedural_mesh_snapshot,
-    procedural_mesh_source_map,
+    procedural_mesh_source_map, skinned_mesh_source_map, texture_catalog,
 };
-use super::skinned_templates::{SkinnedSkeletonEntry, SkinnedUpload};
+use super::skinned_templates::SkinnedUpload;
 use super::streaming::StreamingSetup;
 use super::*;
 use crate::app::run::LaunchRequest;
 use concinnity_core::render::draw_list;
 use concinnity_core::render::extract::gather_lights;
-use concinnity_core::render::material_entry::MaterialEntry;
 use concinnity_core::render::world_load::blob_release::{blobs_to_release, retained_blobs};
-use concinnity_core::render::world_load::draw_geometry::{
-    auto_seed_probe_placements, declared_probe_placements, seeds_probes,
-};
+use concinnity_core::render::world_load::draw_geometry::probe_placements;
 use concinnity_core::render::world_load::prop_draws::{PropDrawInputs, assemble_prop_draws};
+use concinnity_core::render::world_load::skinned::{self, SkinnedAssembly};
 use concinnity_core::render::world_load::stream_seed::{StreamGeometry, plan_stream_seed};
-use concinnity_core::render::world_load::tables::{self, DecodedMaterials};
+use concinnity_core::render::world_load::tables::{self, DecodedMaterials, TexturePool};
 use concinnity_core::render::world_load::texture_payloads::{
     TexturePayloads, TextureSlotSkips, decode_texture_payloads,
 };
 use concinnity_core::render::world_load::world_fx::drain_world_fx;
 use concinnity_core::render::world_load::world_scan::{
-    capture_hud_chips, color_lut_strength, declares_frame_captures, font_less_text,
+    capture_hud_chips, color_lut_strength, cursor_policy, declares_frame_captures, font_less_text,
 };
 use concinnity_core::settings::quality::resolve_ceiling;
 use concinnity_core::settings::system::{DisplayReport, SettingsInit, SettingsSlot, SettingsState};
@@ -80,51 +65,6 @@ struct ResolvedRenderConfig {
     // Raw world ambient (`IndirectLighting.ambient_intensity`, no user override),
     // folded into the static LightUniforms built later in init.
     world_ambient_intensity: f32,
-}
-
-// Decoded geometry for one SkinnedMesh, produced in the order cook assigned
-// handles (the table index IS the `SkinnedMeshHandle` keying the animation
-// correlation web): its handle, interned name id, the baked mesh, its vertices,
-// LOD0 indices, the bind-pose joint defs, its morph targets, and LOD alternates.
-struct SkinnedGeometry {
-    handle: SkinnedMeshHandle,
-    name_id: AssetId,
-    mesh: SkinnedMesh,
-    vertices: Vec<mesh_payload::SkinnedVertex>,
-    indices: Vec<u16>,
-    joint_defs: Vec<SkeletonJoint>,
-    morphs: mesh_payload::PayloadMorphs,
-    lod_alternates: Vec<(f32, Vec<u16>)>,
-}
-
-// Assembled skinned-mesh GPU inputs from `assemble_skinned_meshes`: the shared
-// skinned vertex/index buffers, the per-slot draw objects (templates + their
-// hidden pre-reserved instance copies), the per-mesh skeleton bookkeeping, the
-// (template, copy) pool reservations, per-slot morph targets, and the hot-reload
-// source map.
-struct SkinnedMeshAssembly {
-    vertices: Vec<mesh_payload::SkinnedVertex>,
-    // Absolute indices into the shared skinned vertex buffer, so u32 rather
-    // than the per-mesh u16 the payload carries.
-    indices: Vec<u32>,
-    draw_objects: Vec<render_types::SkinnedDrawObject>,
-    skeletons: Vec<SkinnedSkeletonEntry>,
-    pool_reservations: Vec<(SkinnedIndex, SkinnedIndex)>,
-    morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>,
-    source_map: super::hot_reload_sources::SkinnedMeshSourceMap,
-}
-
-// The shared texture pool decoded from the TextureTable by `decode_texture_table`:
-// each texture's payload locator (dense by pool slot / cook TextureHandle), the
-// dev-only file-backed source map + name->slot index (cn debug hot-reload / spawn
-// by name), and the pool size.
-struct TextureTableDecode {
-    locators: Vec<PayloadLocator>,
-    source_map: super::hot_reload_sources::TextureSourceMap,
-    name_to_slot: hashbrown::HashMap<AssetId, usize>,
-    count: usize,
-    // Slots only the cook reads, which stay placeholders on the GPU.
-    cook_only: std::collections::BTreeSet<usize>,
 }
 
 // One world Shader as decoded at init: its compiled programs, or nothing for
@@ -153,14 +93,92 @@ fn deferred_shader_source(
             .to_vec();
         return Ok(ShaderPayloadSource::Bytes(bytes));
     }
-    let path = blob_path(locator.blob_index)
-        .ok_or_else(|| format!("blob {}: no blob layout installed", locator.blob_index))?;
-    let start = payload_section_start(&path).map_err(|e| e.to_string())?;
+    let (path, start) = super::stream_sources::blob_payload_section(locator.blob_index)?;
     Ok(ShaderPayloadSource::Disk {
         path,
         offset: start + locator.offset,
         len: locator.len,
     })
+}
+
+// The payload of the sole resource of its kind the renderer uses, from `first`
+// (the table's length and its handle 0 entry): the bytes a world baked for
+// itself, else read through its locator. Extra declarations are logged and
+// ignored. `Some(None)` with no payload; `None`, failing init, if unreadable.
+fn first_payload(
+    ctx: &mut PipelineContext,
+    first: Option<(usize, Option<ResourceEntry>)>,
+    what: &str,
+) -> Option<Option<Vec<u8>>> {
+    let Some((count, entry)) = first else {
+        return Some(None);
+    };
+    if count > 1 {
+        tracing::warn!("GraphicsSystem: {count} {what}s declared; only the first is used");
+    }
+    let Some(entry) = entry else {
+        return Some(None);
+    };
+    if let Some(baked) = entry.baked_bytes() {
+        return Some(Some(baked.to_vec()));
+    }
+    let Some(locator) = entry.payload else {
+        return Some(None);
+    };
+    match ctx.read_payload(&locator) {
+        Ok(bytes) => Some(Some(bytes.to_vec())),
+        Err(e) => {
+            tracing::error!("GraphicsSystem: failed to read {what} payload: {e}");
+            None
+        }
+    }
+}
+
+// How `decode_world` reads the world: whether content streams, whether the
+// hot-reload source maps are gathered, and whether the blobs are files on disk.
+#[derive(Clone, Copy)]
+struct WorldLoad {
+    streaming: bool,
+    capture_sources: bool,
+    blob_disk_backed: bool,
+}
+
+// Every payload the graphics load decoded before the blobs were released.
+struct WorldPayloads {
+    mesh: draw_list::MeshGeometry,
+    deferred_mesh_sources: draw_list::DeferredMeshSources,
+    proc_mesh_args_snapshot:
+        hashbrown::HashMap<AssetId, (String, concinnity_core::components::ProceduralMesh)>,
+    model_map: hashbrown::HashMap<AssetId, Vec<SubMeshRef>>,
+    room_geometry: Vec<draw_list::RoomGeometry>,
+    terrains: Vec<concinnity_core::render::terrain::LoadedTerrain>,
+    shaders: DecodedShaders,
+    textures: TexturePool,
+    texture_count: usize,
+    asset_source_map: super::hot_reload_sources::TextureSourceMap,
+    texture_name_to_slot: hashbrown::HashMap<AssetId, usize>,
+    materials: DecodedMaterials,
+    skinned: SkinnedAssembly,
+    skinned_mesh_source_map: super::hot_reload_sources::SkinnedMeshSourceMap,
+    texture_payloads: TexturePayloads,
+    env_map_bytes: Option<Vec<u8>>,
+    environment_map_source: Option<super::hot_reload_sources::EnvironmentMapSource>,
+    env_map_background: bool,
+    color_lut_bytes: Option<Vec<u8>>,
+    color_lut_source: Option<super::hot_reload_sources::ColorLutSource>,
+    text_atlas_data: Vec<(u32, u32, Vec<u8>)>,
+}
+
+// The world's static draws, from `assemble_draws`.
+struct SceneDraws {
+    vertices: Vec<concinnity_core::gfx::mesh_payload::Vertex>,
+    indices: Vec<u32>,
+    draw_objects: Vec<concinnity_core::gfx::render_types::DrawObject>,
+    instanced_clusters: Vec<concinnity_core::gfx::render_types::InstancedCluster>,
+    mesh_handle_to_draws:
+        hashbrown::HashMap<usize, Vec<concinnity_core::gfx::render_types::DrawIndex>>,
+    far_bands: Vec<(u32, FarFieldTint)>,
+    stream_seed: concinnity_core::render::world_load::stream_seed::StreamSeed,
 }
 
 struct DecodedShaders {
@@ -272,7 +290,9 @@ impl GraphicsSystem {
         }
 
         settings.sync_menu_labels(ctx, persisted);
-        self.init_clip_rects(ctx);
+        // Each ScrollPanel's per-element clip band, captured before
+        // UiInputSystem drains the ScrollPanels (GraphicsSystem.init runs first).
+        self.clip_rects = concinnity_core::render::overlay_maps::scroll_clip_rects(ctx);
 
         (
             ResolvedRenderConfig {
@@ -294,356 +314,6 @@ impl GraphicsSystem {
     // Returns the decoded geometry and the blob indices its payloads occupy (for
     // the release step), or None if any entry's baked data or payload is missing
     // or malformed, which fails init.
-    fn decode_skinned_geometry(
-        &self,
-        ctx: &mut PipelineContext,
-    ) -> Option<(Vec<SkinnedGeometry>, Vec<u32>)> {
-        // Load the SkinnedMesh resource table and decode each entry's geometry
-        // payload now, before the shared blob is released. The placement,
-        // material references, capsule, and spawn reserve travel in the baked
-        // `data_bytes`; the vertex/index geometry + skeleton in the compiled
-        // payload. The table index IS the mesh's `SkinnedMeshHandle`, which keys
-        // the whole animation correlation web.
-        let skinned_table = ctx
-            .resource::<SkinnedMeshTable>()
-            .cloned()
-            .unwrap_or_default();
-        let mut skinned_geometry: Vec<SkinnedGeometry> = Vec::new();
-        let mut skinned_blob_indices: Vec<u32> = Vec::new();
-        // Interned name -> handle, published for the animation debug tool
-        // calls, which address a mesh by its typed name.
-        let mut skinned_name_index: hashbrown::HashMap<AssetId, SkinnedMeshHandle> =
-            hashbrown::HashMap::new();
-        for (handle, entry) in skinned_table.0.iter().enumerate() {
-            let handle = SkinnedMeshHandle::new(handle as u32);
-            let (name_id, sm): (u32, SkinnedMesh) = match postcard::from_bytes(&entry.data_bytes) {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::error!(
-                        "GraphicsSystem: SkinnedMesh handle {} baked data failed to decode: {}",
-                        handle.index(),
-                        e
-                    );
-                    return None;
-                }
-            };
-            let name_id = AssetId(name_id);
-            skinned_name_index.insert(name_id, handle);
-            let locator = match &entry.payload {
-                Some(l) => l.clone(),
-                None => {
-                    tracing::error!(
-                        "GraphicsSystem: SkinnedMesh handle {} has no compiled payload",
-                        handle.index()
-                    );
-                    return None;
-                }
-            };
-            skinned_blob_indices.push(locator.blob_index);
-            let bytes = match ctx.read_payload(&locator) {
-                Ok(b) => b.to_vec(),
-                Err(e) => {
-                    tracing::error!(
-                        "GraphicsSystem: failed to read SkinnedMesh handle {} payload: {}",
-                        handle.index(),
-                        e
-                    );
-                    return None;
-                }
-            };
-            match mesh_payload::deserialize_skinned_with_lods(&bytes) {
-                Ok(p) => {
-                    let joint_defs = payload_joints_to_defs(p.joints);
-                    skinned_geometry.push(SkinnedGeometry {
-                        handle,
-                        name_id,
-                        mesh: sm,
-                        vertices: p.vertices,
-                        indices: p.indices,
-                        joint_defs,
-                        morphs: p.morphs,
-                        lod_alternates: p.lods,
-                    });
-                }
-                Err(e) => {
-                    tracing::error!("GraphicsSystem: malformed SkinnedMesh payload: {}", e);
-                    return None;
-                }
-            }
-        }
-        // Publish the name index before AnimationSystem inits (it runs after
-        // GraphicsSystem) so animation debug tool calls can resolve a typed
-        // mesh name to the handle keying the correlation web. The skin
-        // selectors ride along for the animation reload catalog.
-        ctx.insert_resource(
-            concinnity_core::animation::skinned_mesh_map::SkinnedMeshNameIndex(skinned_name_index),
-        );
-        ctx.insert_resource(
-            concinnity_core::animation::skinned_mesh_map::SkinnedMeshSkinIndex(
-                skinned_geometry.iter().map(|g| g.mesh.skin_index).collect(),
-            ),
-        );
-        ctx.insert_resource(
-            concinnity_core::animation::skinned_mesh_map::SkinnedMeshMorphNames(
-                skinned_geometry
-                    .iter()
-                    .map(|g| g.morphs.names.clone())
-                    .collect(),
-            ),
-        );
-        Some((skinned_geometry, skinned_blob_indices))
-    }
-
-    // Build skinned draw objects, the shared skinned vertex/index buffers, and
-    // bind-pose skeletons from the decoded SkinnedMesh geometry. Runs after the
-    // material map so SkinnedMesh material references resolve. Each mesh also
-    // pre-reserves `max_instances` hidden bind-pose copies for runtime spawns.
-    // Returns None, failing init, if a mesh references an unknown material.
-    fn assemble_skinned_meshes(
-        &self,
-        skinned_geometry: &[SkinnedGeometry],
-        material_map: &hashbrown::HashMap<MaterialHandle, MaterialEntry>,
-        capture_sources: bool,
-    ) -> Option<SkinnedMeshAssembly> {
-        let mut skinned_vertices: Vec<mesh_payload::SkinnedVertex> = Vec::new();
-        let mut skinned_indices: Vec<u32> = Vec::new();
-        let mut skinned_draw_objects: Vec<render_types::SkinnedDrawObject> = Vec::new();
-        // One entry per authored skinned mesh: its handle, interned name id,
-        // the skinned index of its (visible) template draw object, and its
-        let mut skinned_skeletons: Vec<SkinnedSkeletonEntry> = Vec::new();
-        // `(template_index, instance_index)` pairs seeding the backend skinned
-        // instance pool: each instance is a hidden bind-pose copy reserved from
-        // SkinnedMesh.max_instances.
-        let mut skinned_pool_reservations: Vec<(SkinnedIndex, SkinnedIndex)> = Vec::new();
-        // Morph-target data per skinned draw object; instance copies share
-        // their template's data through the Arc.
-        let mut skinned_morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>> =
-            Vec::new();
-        // Asset hot-reload (`cn debug` only) needs the per-slot vertex region
-        // + joint count so it can reject size + shape changes before pushing
-        // to the backend. SkinnedMesh is 1:1 with its draw slot (no Prop
-        // fan-out), so one entry per asset.
-        let mut skinned_mesh_source_map = super::hot_reload_sources::SkinnedMeshSourceMap::new();
-        for SkinnedGeometry {
-            handle,
-            name_id,
-            mesh: sm,
-            vertices: verts,
-            indices: idxs,
-            joint_defs,
-            morphs,
-            lod_alternates: lod_alts,
-        } in skinned_geometry
-        {
-            let mat_entry = match concinnity_core::render::material_entry::resolve_material_slots(
-                sm.material,
-                material_map,
-            ) {
-                Ok(entry) => entry,
-                Err(mat_id) => {
-                    tracing::error!(
-                        "GraphicsSystem: SkinnedMesh '{}' references unknown material {}",
-                        name_id,
-                        mat_id.index()
-                    );
-                    return None;
-                }
-            };
-            let (texture_slot, normal_map_slot, material) = (
-                mat_entry.albedo_slot,
-                mat_entry.normal_map_slot,
-                mat_entry.uniforms,
-            );
-
-            let base = skinned_vertices.len() as u32;
-            let index_offset = skinned_indices.len();
-            skinned_vertices.extend_from_slice(verts);
-            skinned_indices.extend(idxs.iter().map(|i| u32::from(*i) + base));
-
-            // LOD alternates share this slot's vertex region. The runtime
-            // skinned IB is u16, so each alternate's mesh-relative indices
-            // are rebased onto the same `base` as LOD0, identical to how
-            // the shadow / velocity / SSAO / SSR pre-passes already consume
-            // the IB.
-            let lod_slices = concinnity_core::render::draw_list::append_lod_slices(
-                &mut skinned_indices,
-                lod_alts,
-                base,
-            );
-
-            let skeleton = build_skeleton_from_joint_defs(joint_defs);
-            let joint_count = skeleton.len().min(render_types::MAX_JOINTS);
-
-            // Bind-pose (object-space) AABB over this mesh's vertices. The
-            // GPU-driven skinned fold pads + transforms it per frame for culling.
-            let (local_bb_min, local_bb_max) = if verts.is_empty() {
-                ([0.0; 3], [0.0; 3])
-            } else {
-                let mut lo = [f32::INFINITY; 3];
-                let mut hi = [f32::NEG_INFINITY; 3];
-                for v in verts.iter() {
-                    for a in 0..3 {
-                        lo[a] = lo[a].min(v.pos[a]);
-                        hi[a] = hi[a].max(v.pos[a]);
-                    }
-                }
-                (lo, hi)
-            };
-
-            let mesh_morphs = (!morphs.is_empty()).then(|| std::sync::Arc::new(morphs.clone()));
-            let skinned_index = SkinnedIndex::from_usize(skinned_draw_objects.len());
-            skinned_morphs.push(mesh_morphs.clone());
-            skinned_draw_objects.push(render_types::SkinnedDrawObject {
-                vertex_base: base,
-                vertex_count: verts.len(),
-                index_offset,
-                index_count: idxs.len(),
-                model: sm.model_matrix(),
-                texture_slot,
-                normal_map_slot,
-                material,
-                visible: true,
-                joint_count,
-                local_bb_min,
-                local_bb_max,
-                lod_alternates: lod_slices,
-            });
-            if capture_sources && !sm.source.is_empty() {
-                skinned_mesh_source_map.entries.push(
-                    super::hot_reload_sources::SkinnedMeshSourceEntry {
-                        source: sm.source.clone(),
-                        skin_index: sm.skin_index,
-                        skinned_index,
-                        vertex_base: base,
-                        vertex_count: verts.len(),
-                        index_count: idxs.len(),
-                        joint_count,
-                    },
-                );
-            }
-            // Pre-reserve runtime spawn copies: append `max_instances` hidden
-            // bind-pose duplicates of this mesh, each with its OWN vertex region
-            // in the shared skinned buffer. They must not share a region because
-            // the GPU skin fold writes the deformed buffer keyed by global vertex
-            // index, so two live instances at one region would clobber each
-            // other's pose. A runtime skinned spawn reveals one of these without
-            // growing any GPU buffer; a despawn returns it to the pool.
-            for _ in 0..sm.max_instances {
-                let copy_base = skinned_vertices.len() as u32;
-                let copy_index_offset = skinned_indices.len();
-                skinned_vertices.extend_from_slice(verts);
-                skinned_indices.extend(idxs.iter().map(|i| u32::from(*i) + copy_base));
-                let copy_lods = concinnity_core::render::draw_list::append_lod_slices(
-                    &mut skinned_indices,
-                    lod_alts,
-                    copy_base,
-                );
-                let copy_skinned_index = SkinnedIndex::from_usize(skinned_draw_objects.len());
-                skinned_morphs.push(mesh_morphs.clone());
-                skinned_draw_objects.push(render_types::SkinnedDrawObject {
-                    vertex_base: copy_base,
-                    vertex_count: verts.len(),
-                    index_offset: copy_index_offset,
-                    index_count: idxs.len(),
-                    model: sm.model_matrix(),
-                    texture_slot,
-                    normal_map_slot,
-                    material,
-                    // Hidden until a runtime spawn claims it.
-                    visible: false,
-                    joint_count,
-                    local_bb_min,
-                    local_bb_max,
-                    lod_alternates: copy_lods,
-                });
-                skinned_pool_reservations.push((skinned_index, copy_skinned_index));
-            }
-
-            skinned_skeletons.push(SkinnedSkeletonEntry {
-                handle: *handle,
-                name_id: *name_id,
-                template_index: skinned_index,
-                skeleton,
-                morph_names: morphs.names.clone(),
-                model: sm.model_matrix(),
-                capsule: sm.capsule.clone(),
-                transform: Transform {
-                    position: sm.position,
-                    rotation_deg: sm.rotation_deg,
-                    scale: sm.scale,
-                },
-                local_bounds: (local_bb_min, local_bb_max),
-            });
-        }
-
-        Some(SkinnedMeshAssembly {
-            vertices: skinned_vertices,
-            indices: skinned_indices,
-            draw_objects: skinned_draw_objects,
-            skeletons: skinned_skeletons,
-            pool_reservations: skinned_pool_reservations,
-            morphs: skinned_morphs,
-            source_map: skinned_mesh_source_map,
-        })
-    }
-
-    // Read the shared TextureTable, collecting each texture's payload locator
-    // (dense by pool slot / cook `TextureHandle`). Under `cn debug`
-    // (`capture_sources`) also records the file-backed source paths + the
-    // name -> slot map for the hot-reload watcher and the runtime spawn-by-name
-    // path; the shipped runtime resolves every texture by handle and needs
-    // neither. Returns None, failing init, if a texture lacks a payload.
-    fn decode_texture_table(
-        &self,
-        ctx: &PipelineContext,
-        capture_sources: bool,
-    ) -> Option<TextureTableDecode> {
-        let empty = TextureTable::default();
-        let table = ctx.resource::<TextureTable>().unwrap_or(&empty);
-        let pool = match tables::texture_pool(table) {
-            Ok(pool) => pool,
-            Err(e) => {
-                tracing::error!("GraphicsSystem: {e}");
-                return None;
-            }
-        };
-        let mut source_map = super::hot_reload_sources::TextureSourceMap::new();
-        let mut name_to_slot = hashbrown::HashMap::new();
-        // Dev-only source catalog (present under `cn debug`) so the hot-reload
-        // watcher can map a texture handle back to the file that backs it.
-        let sources = ctx.resource::<concinnity_core::resource::TextureSources>();
-        if capture_sources && let Some(sources) = sources {
-            for (slot, info) in sources.0.iter().enumerate().take(table.len()) {
-                name_to_slot.insert(AssetId(info.name_id), slot);
-                if !info.source.is_empty() {
-                    source_map.push_texture(info.source.clone(), info.image_index, slot);
-                }
-            }
-        }
-        Some(TextureTableDecode {
-            count: table.len(),
-            locators: pool.locators,
-            source_map,
-            name_to_slot,
-            cook_only: pool.cook_only,
-        })
-    }
-
-    // Decode the MaterialTable into the per-object GPU uniforms + resolved
-    // texture slots the draw list indexes, and the material parameter table's
-    // rows. Returns None, failing init, on any decode or resolution failure.
-    fn build_material_map(
-        &self,
-        ctx: &PipelineContext,
-        texture_count: usize,
-    ) -> Option<DecodedMaterials> {
-        let empty = MaterialTable::default();
-        let table = ctx.resource::<MaterialTable>().unwrap_or(&empty);
-        tables::decode_materials(table, texture_count)
-            .map_err(|e| tracing::error!("GraphicsSystem: {e}"))
-            .ok()
-    }
-
     // Drain the world's Shader components, read every compiled stage
     // container, and split each into the per-stage byte sets the backend's
     // pipeline table consumes. Drain order matches cook's shader handle
@@ -818,21 +488,9 @@ impl GraphicsSystem {
     // ambient scale, key map, the startup cursor grab (plain first-person worlds
     // only), and the device capability flags that gate the settings rows.
     fn finalize_backend_config(&mut self, ctx: &mut PipelineContext, settings: &mut SettingsState) {
-        // A plain first-person world (Camera3D, no UI) captures the cursor at
-        // startup. A Camera3D world that also has UI the cursor is freed for
-        // (a MainMenu's HitRegion or Screen) is "menu mode": capture is driven
-        // per-frame in `run_step`. KeyBindings alone need no free cursor. A
-        // UI-only world (no camera) stays free-cursor.
-        let has_ui =
-            ctx.query::<HitRegion>().next().is_some() || ctx.query::<Screen>().next().is_some();
-        let has_camera = ctx.query::<Camera3D>().next().is_some();
-        let menu_mode = has_camera && has_ui;
-        self.extractor.set_menu_mode(menu_mode);
-        // A menu / editor driver (a `MenuOverride` is present) owns cursor capture
-        // per frame, so the startup auto-grab is skipped: the editor re-runs this
-        // init on every live-preview rebuild, and grabbing there would re-hide and
-        // decouple the OS cursor each time, desyncing the free-cursor handoff.
-        let menu_driven = ctx.resource::<MenuOverride>().is_some();
+        // In menu mode capture is driven per-frame in `run_step`.
+        let cursor = cursor_policy(ctx);
+        self.extractor.set_menu_mode(cursor.menu_mode);
         let mut device_caps = backend::DeviceCapabilities::ALL;
         if let Some(backend) = self.backend.as_deref_mut() {
             // Capability flags drive the settings-menu gating below.
@@ -848,7 +506,7 @@ impl GraphicsSystem {
                 gpu.unified_memory,
                 gpu.discrete,
             );
-            backend.set_menu_mode(menu_mode);
+            backend.set_menu_mode(cursor.menu_mode);
             // Push the effective ambient scale (world value or persisted
             // override). The backend already seeds the world value at its own
             // init, so this is the path that applies a persisted Ambient-slider
@@ -866,7 +524,7 @@ impl GraphicsSystem {
             // The backend decodes physical keys through it; idempotent with its
             // own default seed when there is no override.
             backend.set_keymap(settings.keymap());
-            if has_camera && !has_ui && !menu_driven {
+            if cursor.capture_at_start {
                 backend.request_cursor_capture();
             }
         }
@@ -888,12 +546,10 @@ impl GraphicsSystem {
         self.apply_capability_gating(ctx);
     }
 
-    // Read the sole EnvironmentMap (handle 0) from its resource table and capture
-    // its IBL payload; extra declarations are logged and ignored. Under `cn debug`
-    // (`capture_sources`) also captures the resolved HDR source path + convolution
-    // sizing for the hot-reload watcher (procedural generators have no file to
-    // watch). Returns (payload bytes, source), or None, failing init, if the
-    // payload is unreadable.
+    // The sole EnvironmentMap's (handle 0) IBL payload, and, with
+    // `capture_sources`, the resolved HDR source path and convolution sizing the
+    // hot-reload watcher rebuilds it from (procedural generators have no file to
+    // watch). None, failing init, if the payload is unreadable.
     fn decode_environment_map(
         &self,
         ctx: &mut PipelineContext,
@@ -902,38 +558,11 @@ impl GraphicsSystem {
         Option<Vec<u8>>,
         Option<super::hot_reload_sources::EnvironmentMapSource>,
     )> {
-        let env_map_table = ctx
+        let first = ctx
             .resource::<EnvironmentMapTable>()
-            .cloned()
-            .unwrap_or_default();
-        if env_map_table.len() > 1 {
-            tracing::warn!(
-                "GraphicsSystem: {} EnvironmentMaps declared; only the first is used",
-                env_map_table.len()
-            );
-        }
-        let mut env_map_bytes: Option<Vec<u8>> = None;
-        let mut environment_map_source: Option<super::hot_reload_sources::EnvironmentMapSource> =
-            None;
-        // The runtime uses handle 0. A map installed at runtime holds its
-        // payload directly; a compiled one is read through its locator. An
-        // entry with neither means simply "no EnvironmentMap declared".
-        if let Some(entry) = env_map_table.0.first() {
-            match (entry.baked_bytes(), &entry.payload) {
-                (Some(baked), _) => env_map_bytes = Some(baked.to_vec()),
-                (None, Some(locator)) => match ctx.read_payload(&locator.clone()) {
-                    Ok(b) => env_map_bytes = Some(b.to_vec()),
-                    Err(e) => {
-                        tracing::error!(
-                            "GraphicsSystem: failed to read EnvironmentMap payload: {}",
-                            e
-                        );
-                        return None;
-                    }
-                },
-                (None, None) => {}
-            }
-        }
+            .map(|t| (t.len(), t.0.first().cloned()));
+        let env_map_bytes = first_payload(ctx, first, "EnvironmentMap")?;
+        let mut environment_map_source = None;
         if capture_sources
             && let Some(info) = ctx
                 .resource::<concinnity_core::resource::EnvironmentMapSources>()
@@ -953,10 +582,9 @@ impl GraphicsSystem {
         Some((env_map_bytes, environment_map_source))
     }
 
-    // Read the sole ColorLut (handle 0) from its resource table and capture its
-    // color-grading payload; extras are logged and ignored. Under `cn debug`
-    // captures the resolved source path for the hot-reload watcher. Returns
-    // (payload bytes, source), or None, failing init, if unreadable.
+    // The sole ColorLut's (handle 0) color-grading payload, and, with
+    // `capture_sources`, its resolved source path for the hot-reload watcher.
+    // None, failing init, if the payload is unreadable.
     fn decode_color_lut(
         &self,
         ctx: &mut PipelineContext,
@@ -965,26 +593,11 @@ impl GraphicsSystem {
         Option<Vec<u8>>,
         Option<super::hot_reload_sources::ColorLutSource>,
     )> {
-        let color_lut_table = ctx.resource::<ColorLutTable>().cloned().unwrap_or_default();
-        if color_lut_table.len() > 1 {
-            tracing::warn!(
-                "GraphicsSystem: {} ColorLuts declared; only the first is used",
-                color_lut_table.len()
-            );
-        }
-        let mut color_lut_bytes: Option<Vec<u8>> = None;
-        let mut color_lut_source: Option<super::hot_reload_sources::ColorLutSource> = None;
-        // Handle 0 is the sole LUT the renderer applies; a compiled ColorLut always
-        // carries a payload, so a `None` locator means "no ColorLut declared".
-        if let Some(locator) = color_lut_table.locator(0) {
-            match ctx.read_payload(&locator) {
-                Ok(b) => color_lut_bytes = Some(b.to_vec()),
-                Err(e) => {
-                    tracing::error!("GraphicsSystem: failed to read ColorLut payload: {}", e);
-                    return None;
-                }
-            }
-        }
+        let first = ctx
+            .resource::<ColorLutTable>()
+            .map(|t| (t.len(), t.0.first().cloned()));
+        let color_lut_bytes = first_payload(ctx, first, "ColorLut")?;
+        let mut color_lut_source = None;
         if capture_sources
             && let Some(src) = ctx
                 .resource::<concinnity_core::resource::ColorLutSources>()
@@ -1039,24 +652,10 @@ impl GraphicsSystem {
                     return None;
                 }
             };
-            match font::deserialize(&bytes) {
-                Ok((aw, ah, supersample, size_px, rgba, metrics)) => {
-                    let metrics_map: text::FontMetrics =
-                        metrics.into_iter().map(|m| (m.char_code, m)).collect();
-                    let size_px = size_px as f32;
-                    self.loaded_fonts.insert(
-                        FontHandle::new(slot as u32),
-                        text::LoadedFont {
-                            atlas_slot: slot,
-                            cap_px: text::derive_cap_px(&metrics_map, size_px),
-                            metrics: metrics_map,
-                            atlas_w: aw,
-                            atlas_h: ah,
-                            size_px,
-                            supersample: (supersample.max(1)) as f32,
-                        },
-                    );
-                    text_atlas_data.push((aw, ah, rgba));
+            match font::load_face(slot, &bytes) {
+                Ok((face, atlas)) => {
+                    self.loaded_fonts.insert(FontHandle::new(slot as u32), face);
+                    text_atlas_data.push(atlas);
                 }
                 Err(e) => {
                     tracing::error!("GraphicsSystem: malformed Font payload: {}", e);
@@ -1170,6 +769,229 @@ impl GraphicsSystem {
         })
     }
 
+    // Decode every payload the world's graphics load reads, then release the
+    // shared blobs nothing else holds. All payloads live in those blobs, so
+    // each is consumed here before the release.
+    fn decode_world(
+        &mut self,
+        ctx: &mut PipelineContext,
+        load: WorldLoad,
+    ) -> Option<WorldPayloads> {
+        let WorldLoad {
+            streaming,
+            capture_sources,
+            blob_disk_backed,
+        } = load;
+        let proc_mesh_args_snapshot = if capture_sources {
+            procedural_mesh_snapshot(ctx)
+        } else {
+            hashbrown::HashMap::new()
+        };
+
+        // Mesh sources owned by a scene other than the start scene skip their
+        // payload decode: draw records use the blob's baked bounds, and the
+        // mesh streamer decodes the payload when the owning scene pins.
+        let deferred_mesh_sources =
+            concinnity_core::render::world_load::scene_deferral::deferred_mesh_sources(
+                ctx, streaming,
+            );
+        let mesh = draw_list::load_mesh_geometry(
+            ctx,
+            &deferred_mesh_sources,
+            blob_disk_backed,
+            capture_sources,
+        )?;
+
+        let (skinned_geometry, skinned_blob_indices) = skinned::decode_skinned(ctx)
+            .map_err(|e| tracing::error!("GraphicsSystem: {e}"))
+            .ok()?;
+
+        // drain Model components into a name-keyed map for Prop lookup
+        let model_map: hashbrown::HashMap<AssetId, Vec<SubMeshRef>> = ctx
+            .drain_with_ids::<Model>()
+            .into_iter()
+            .filter_map(|(id, m)| Some((id?, m.meshes)))
+            .collect();
+
+        // decode Room payloads before shaders/textures are read; all payloads
+        // live in the same blob and must be consumed before it is released
+        let (room_geometry, room_blob_indices) = draw_list::load_room_geometry(ctx)?;
+        let (terrains, terrain_blob_indices) =
+            concinnity_core::render::terrain::load_terrains(ctx)?;
+
+        let shaders = self.decode_shaders(ctx, streaming, capture_sources)?;
+
+        // Read the shared texture pool + the material table into the maps the
+        // draw list resolves against.
+        let empty_textures = TextureTable::default();
+        let texture_table = ctx.resource::<TextureTable>().unwrap_or(&empty_textures);
+        let texture_count = texture_table.len();
+        let textures = tables::texture_pool(texture_table)
+            .map_err(|e| tracing::error!("GraphicsSystem: {e}"))
+            .ok()?;
+        let (asset_source_map, texture_name_to_slot) = if capture_sources {
+            texture_catalog(
+                ctx.resource::<concinnity_core::resource::TextureSources>(),
+                texture_count,
+            )
+        } else {
+            Default::default()
+        };
+        let empty_materials = MaterialTable::default();
+        let materials = tables::decode_materials(
+            ctx.resource::<MaterialTable>().unwrap_or(&empty_materials),
+            texture_count,
+        )
+        .map_err(|e| tracing::error!("GraphicsSystem: {e}"))
+        .ok()?;
+
+        // Build skinned draw objects, the shared skinned vertex/index buffers,
+        // and bind-pose skeletons from the decoded SkinnedMesh geometry. Runs
+        // after the material map so SkinnedMesh material references resolve.
+        let skinned = skinned::assemble_skinned(&skinned_geometry, &materials.map)
+            .map_err(|e| tracing::error!("GraphicsSystem: {e}"))
+            .ok()?;
+        let skinned_mesh_source_map = if capture_sources {
+            skinned_mesh_source_map(&skinned_geometry, &skinned)
+        } else {
+            Default::default()
+        };
+
+        let deferred_slots =
+            concinnity_core::render::world_load::scene_deferral::deferred_texture_slots(
+                ctx,
+                streaming,
+                textures.locators.len(),
+            );
+        let texture_payloads = decode_texture_payloads(
+            ctx,
+            &textures.locators,
+            TextureSlotSkips {
+                deferred: &deferred_slots,
+                cook_only: &textures.cook_only,
+            },
+            blob_disk_backed,
+        )?;
+
+        // Read the sole EnvironmentMap + ColorLut payloads, then build the shared
+        // text/sprite atlas pool.
+        let (env_map_bytes, environment_map_source) =
+            self.decode_environment_map(ctx, capture_sources)?;
+        let env_map_background = match ctx.resource::<EnvironmentMapTable>().map(|t| t.record(0)) {
+            None => true,
+            Some(Ok(record)) => record.background,
+            Some(Err(e)) => {
+                tracing::error!(
+                    "GraphicsSystem: EnvironmentMap handle 0 runtime record failed to decode: {e}"
+                );
+                return None;
+            }
+        };
+        let (color_lut_bytes, color_lut_source) = self.decode_color_lut(ctx, capture_sources)?;
+        let TextAtlases {
+            atlases: text_atlas_data,
+            font_blob_indices,
+        } = self.decode_text_atlases(ctx, &textures.locators)?;
+
+        let consumed = shaders
+            .locators
+            .iter()
+            .map(|l| l.blob_index)
+            .chain(textures.locators.iter().map(|l| l.blob_index))
+            .chain(room_blob_indices)
+            .chain(terrain_blob_indices)
+            .chain(font_blob_indices)
+            .chain(skinned_blob_indices);
+        for idx in blobs_to_release(consumed, &retained_blobs(ctx)) {
+            ctx.release_blob(idx);
+        }
+
+        Some(WorldPayloads {
+            mesh,
+            deferred_mesh_sources,
+            proc_mesh_args_snapshot,
+            model_map,
+            room_geometry,
+            terrains,
+            shaders,
+            textures,
+            texture_count,
+            asset_source_map,
+            texture_name_to_slot,
+            materials,
+            skinned,
+            skinned_mesh_source_map,
+            texture_payloads,
+            env_map_bytes,
+            environment_map_source,
+            env_map_background,
+            color_lut_bytes,
+            color_lut_source,
+            text_atlas_data,
+        })
+    }
+
+    // The world's static draws: every placement's records over the shared
+    // geometry buffers, each Shader's far band, and the streaming seed that
+    // takes the streamed draws' geometry out of those buffers.
+    fn assemble_draws(
+        &mut self,
+        ctx: &mut PipelineContext,
+        world: &WorldPayloads,
+        streaming_config: Option<&StreamingConfig>,
+    ) -> Option<SceneDraws> {
+        // A geometry-less world (e.g. text-only) is valid: the backend is
+        // initialized with empty geometry buffers and only the text path runs.
+        let draw_list::DrawListData {
+            vertices: mut all_vertices,
+            indices: mut all_indices,
+            mut draw_objects,
+            mut instanced_clusters,
+            mesh_handle_to_draws,
+            ..
+        } = assemble_prop_draws(
+            ctx,
+            PropDrawInputs {
+                model_map: &world.model_map,
+                mesh_geometry: &world.mesh.meshes,
+                room_geometry: &world.room_geometry,
+                terrains: &world.terrains,
+                texture_count: world.texture_count,
+                material_map: &world.materials.map,
+            },
+            self.extractor.pick_candidates_mut(),
+        )?;
+
+        // Taken before streaming plans its geometry, so a Shader's far band is
+        // seen whichever scene its draws stream with.
+        let far_bands: Vec<(u32, FarFieldTint)> = draw_objects
+            .iter()
+            .map(|d| (d.shader_bucket, d.material.far_field))
+            .collect();
+
+        let stream_seed = plan_stream_seed(StreamGeometry {
+            vertices: &mut all_vertices,
+            indices: &mut all_indices,
+            draw_objects: &mut draw_objects,
+            instanced_clusters: &mut instanced_clusters,
+            mesh_handle_to_draws: &mesh_handle_to_draws,
+            deferred_mesh_seeds: &world.mesh.deferred_seeds,
+            deferred_mesh_counts: &world.deferred_mesh_sources.counts,
+            texture_count: world.texture_payloads.images.len(),
+            config: streaming_config,
+        });
+
+        Some(SceneDraws {
+            vertices: all_vertices,
+            indices: all_indices,
+            draw_objects,
+            instanced_clusters,
+            mesh_handle_to_draws,
+            far_bands,
+            stream_seed,
+        })
+    }
+
     // Run init, marking the system failed when any step of it fails.
     pub(super) fn run_init(&mut self, ctx: &mut PipelineContext) {
         if self.try_init(ctx).is_none() {
@@ -1207,186 +1029,34 @@ impl GraphicsSystem {
             .filter_map(|(id, bt)| Some((id?, bt)))
             .collect();
 
-        // Whether the blob payloads came from files on disk (`cn run`) rather
-        // than an in-memory build (`cn debug`). Captured before the blobs are
+        // Whether the blob payloads came from files on disk rather than an
+        // in-memory build. Captured before the blobs are
         // released; the streaming subsystem uses it to pick a disk-backed
         // payload source so streamed bytes need not stay RAM-resident.
         let blob_disk_backed = ctx.blob.disk_backed();
 
-        // `capture_sources` (cn debug) gathers the file-backed source maps the
-        // hot-reload watcher consumes.
+        // A development loop gathers the file-backed source maps the hot-reload
+        // watcher consumes.
         let capture_sources = launch.dev_loop;
-        let proc_mesh_args_snapshot = if capture_sources {
-            procedural_mesh_snapshot(ctx)
-        } else {
-            hashbrown::HashMap::new()
-        };
-
-        // Mesh sources owned by a scene other than the start scene skip their
-        // payload decode: draw records use the blob's baked bounds, and the
-        // mesh streamer decodes the payload when the owning scene pins.
-        let deferred_mesh_sources =
-            concinnity_core::render::world_load::scene_deferral::deferred_mesh_sources(
-                ctx,
-                streaming_config.is_some(),
-            );
-        let draw_list::MeshGeometry {
-            meshes: mesh_geometry,
-            sources: mesh_sources,
-            component_handles: component_mesh_handles,
-            deferred_seeds: deferred_mesh_seeds,
-        } = draw_list::load_mesh_geometry(
+        let world = self.decode_world(
             ctx,
-            &deferred_mesh_sources,
-            blob_disk_backed,
-            // The hot-reload watcher maps a mesh handle back to the file that
-            // backs it only in a development loop.
-            ctx.resource::<LaunchRequest>()
-                .is_some_and(|launch| launch.dev_loop),
-        )?;
-
-        let (skinned_geometry, skinned_blob_indices) = self.decode_skinned_geometry(ctx)?;
-
-        // drain Model components into a name-keyed map for Prop lookup
-        let model_map: hashbrown::HashMap<AssetId, Vec<SubMeshRef>> = ctx
-            .drain_with_ids::<Model>()
-            .into_iter()
-            .filter_map(|(id, m)| Some((id?, m.meshes)))
-            .collect();
-
-        // decode Room payloads before shaders/textures are read; all payloads
-        // live in the same blob and must be consumed before it is released
-        let (room_geometry, room_blob_indices) = draw_list::load_room_geometry(ctx)?;
-        let (terrains, terrain_blob_indices) =
-            concinnity_core::render::terrain::load_terrains(ctx)?;
-
-        let DecodedShaders {
-            locators: shader_locators,
-            source_map: shader_source_map,
-            overrides: shader_overrides,
-            shaders: decoded_shaders,
-        } = self.decode_shaders(ctx, streaming_config.is_some(), capture_sources)?;
-
-        // Read the shared texture pool + the material table into the maps the
-        // draw list resolves against.
-        let TextureTableDecode {
-            locators: texture_locators,
-            source_map: asset_source_map,
-            name_to_slot: texture_name_to_slot,
-            count: texture_count,
-            cook_only: cook_only_textures,
-        } = self.decode_texture_table(ctx, capture_sources)?;
-        let DecodedMaterials {
-            map: material_map,
-            params: material_params,
-        } = self.build_material_map(ctx, texture_count)?;
-
-        // Build skinned draw objects, the shared skinned vertex/index buffers,
-        // and bind-pose skeletons from the decoded SkinnedMesh geometry. Runs
-        // after the material map so SkinnedMesh material references resolve.
-        let SkinnedMeshAssembly {
-            vertices: skinned_vertices,
-            indices: skinned_indices,
-            draw_objects: skinned_draw_objects,
-            skeletons: skinned_skeletons,
-            pool_reservations: skinned_pool_reservations,
-            morphs: skinned_morphs,
-            source_map: skinned_mesh_source_map,
-        } = self.assemble_skinned_meshes(&skinned_geometry, &material_map, capture_sources)?;
-
-        let deferred_slots =
-            concinnity_core::render::world_load::scene_deferral::deferred_texture_slots(
-                ctx,
-                streaming_config.is_some(),
-                texture_locators.len(),
-            );
-        let TexturePayloads {
-            images: texture_data,
-            payloads: texture_payloads,
-        } = decode_texture_payloads(
-            ctx,
-            &texture_locators,
-            TextureSlotSkips {
-                deferred: &deferred_slots,
-                cook_only: &cook_only_textures,
+            WorldLoad {
+                streaming: streaming_config.is_some(),
+                capture_sources,
+                blob_disk_backed,
             },
-            blob_disk_backed,
         )?;
-
-        // Read the sole EnvironmentMap + ColorLut payloads, then build the shared
-        // text/sprite atlas pool.
-        let (env_map_bytes, environment_map_source) =
-            self.decode_environment_map(ctx, capture_sources)?;
-        let env_map_background = match ctx.resource::<EnvironmentMapTable>().map(|t| t.record(0)) {
-            None => true,
-            Some(Ok(record)) => record.background,
-            Some(Err(e)) => {
-                tracing::error!(
-                    "GraphicsSystem: EnvironmentMap handle 0 runtime record failed to decode: {e}"
-                );
-                return None;
-            }
-        };
-        let (color_lut_bytes, color_lut_source) = self.decode_color_lut(ctx, capture_sources)?;
-        let TextAtlases {
-            atlases: text_atlas_data,
-            font_blob_indices,
-        } = self.decode_text_atlases(ctx, &texture_locators)?;
-
         let (light_data, light_uniforms) = gather_lights(ctx, world_ambient_intensity);
 
-        let consumed = shader_locators
-            .iter()
-            .map(|l| l.blob_index)
-            .chain(texture_locators.iter().map(|l| l.blob_index))
-            .chain(room_blob_indices)
-            .chain(terrain_blob_indices)
-            .chain(font_blob_indices)
-            .chain(skinned_blob_indices);
-        for idx in blobs_to_release(consumed, &retained_blobs(ctx)) {
-            ctx.release_blob(idx);
-        }
-
-        // A geometry-less world (e.g. text-only) is valid: the backend is
-        // initialized with empty geometry buffers and only the text path runs.
-        let draw_list::DrawListData {
-            vertices: mut all_vertices,
-            indices: mut all_indices,
-            mut draw_objects,
-            mut instanced_clusters,
+        let SceneDraws {
+            vertices: all_vertices,
+            indices: all_indices,
+            draw_objects,
+            instanced_clusters,
             mesh_handle_to_draws,
-            ..
-        } = assemble_prop_draws(
-            ctx,
-            PropDrawInputs {
-                model_map: &model_map,
-                mesh_geometry: &mesh_geometry,
-                room_geometry: &room_geometry,
-                terrains: &terrains,
-                texture_count,
-                material_map: &material_map,
-            },
-            self.extractor.pick_candidates_mut(),
-        )?;
-
-        // Taken before streaming plans its geometry, so a Shader's far band is
-        // seen whichever scene its draws stream with.
-        let far_bands: Vec<(u32, FarFieldTint)> = draw_objects
-            .iter()
-            .map(|d| (d.shader_bucket, d.material.far_field))
-            .collect();
-
-        let stream_seed = plan_stream_seed(StreamGeometry {
-            vertices: &mut all_vertices,
-            indices: &mut all_indices,
-            draw_objects: &mut draw_objects,
-            instanced_clusters: &mut instanced_clusters,
-            mesh_handle_to_draws: &mesh_handle_to_draws,
-            deferred_mesh_seeds: &deferred_mesh_seeds,
-            deferred_mesh_counts: &deferred_mesh_sources.counts,
-            texture_count: texture_data.len(),
-            config: streaming_config.as_ref(),
-        });
+            far_bands,
+            stream_seed,
+        } = self.assemble_draws(ctx, &world, streaming_config.as_ref())?;
 
         let draw_object_count = draw_objects.len();
         let cluster_count = instanced_clusters.len();
@@ -1402,8 +1072,8 @@ impl GraphicsSystem {
         let fx = drain_world_fx(
             ctx,
             concinnity_host::thread::asset_id::name_of,
-            texture_count,
-            &terrains,
+            world.texture_count,
+            &world.terrains,
             planet_grass,
             planet.as_ref(),
             quality_ceiling.ocean,
@@ -1426,28 +1096,19 @@ impl GraphicsSystem {
         // Metal is unaffected by `validation`: its layer is enabled by the CLI
         // re-execing with `MTL_DEBUG_LAYER`.
         let validation = launch.resolve_validation();
-        // A shipped run leaves shader hot-reload off, so the backend never spawns
-        // the filesystem watcher.
-        let hot_reload = launch.dev_loop;
         let capture = launch.frame_capture() || declares_frame_captures(ctx);
         let embedded_surface = ctx
             .resource::<concinnity_core::render::backend_init::EmbeddedSurface>()
             .copied();
 
-        // Declared probes win; otherwise the geometry-aware auto-seed, except in
-        // a planet world, whose frame moves would leave a seeded probe's cube
-        // behind; otherwise none.
-        let mut probe_placements = declared_probe_placements(ctx);
-        if probe_placements.is_empty() && seeds_probes(ctx) {
-            probe_placements = auto_seed_probe_placements(
-                &draw_objects,
-                &all_vertices,
-                &all_indices,
-                fx.water_surfaces.iter().map(|w| &w.surface),
-                &fx.glass_panels,
-            )
-            .unwrap_or_default();
-        }
+        let probe_placements = probe_placements(
+            ctx,
+            &draw_objects,
+            &all_vertices,
+            &all_indices,
+            fx.water_surfaces.iter().map(|w| &w.surface),
+            &fx.glass_panels,
+        );
 
         // Assemble the backend construction inputs, derive the world's render
         // requirements from them (a world with no 3D content drops every
@@ -1465,7 +1126,9 @@ impl GraphicsSystem {
             // probe faces all bake the count, so a live AA toggle keeps it.
             hdr_samples: settings.resolved().graphics.hdr_samples(),
             launch: render_launch,
-            hot_reload,
+            // A shipped run leaves shader hot-reload off, so the backend never
+            // spawns the filesystem watcher.
+            hot_reload: capture_sources,
             capture,
             embedded_surface,
             scene: SceneData {
@@ -1475,30 +1138,24 @@ impl GraphicsSystem {
                 instanced_clusters,
                 // Sizes the GPU-cull buffers for the merged total; the skinned
                 // geometry itself is uploaded after the build.
-                n_skinned: skinned_draw_objects.len(),
+                n_skinned: world.skinned.draw_objects.len(),
                 // Worst-case resident chunk count, so the GPU-cull buffers
                 // reserve a chunk record region (0 for a non-voxel world).
-                n_chunk_max: voxel_world.as_ref().map_or_else(
-                    || {
-                        planet
-                            .as_ref()
-                            .map_or(0, |_| concinnity_core::planet::MAX_RESIDENT_TILES)
-                    },
-                    |vw| {
-                        concinnity_core::render::stream_pools::budget::chunk_reserve_count(
-                            vw.impostor_radius() as u32,
-                        )
-                    },
+                n_chunk_max: concinnity_core::render::stream_pools::budget::chunk_record_reserve(
+                    voxel_world.as_ref().map(|vw| vw.impostor_radius() as u32),
+                    planet.is_some(),
                 ),
-                material_params,
+                material_params: world.materials.params,
             },
             // One entry per world Shader, indexed by ShaderHandle value;
             // entry 0 is the world default program.
-            shaders: decoded_shaders
+            shaders: world
+                .shaders
+                .shaders
                 .iter()
                 .zip(
                     concinnity_core::render::world_load::far_band_shaders::far_band_shaders(
-                        decoded_shaders.len(),
+                        world.shaders.shaders.len(),
                         far_bands,
                         planet_far_field.is_some(),
                     ),
@@ -1510,11 +1167,11 @@ impl GraphicsSystem {
                 })
                 .collect(),
             media: MediaPayloads {
-                textures: &texture_data,
-                text_atlases: text_atlas_data,
-                env_map_bytes: env_map_bytes.as_deref(),
-                env_map_background,
-                color_lut_bytes: color_lut_bytes.as_deref(),
+                textures: &world.texture_payloads.images,
+                text_atlases: world.text_atlas_data,
+                env_map_bytes: world.env_map_bytes.as_deref(),
+                env_map_background: world.env_map_background,
+                color_lut_bytes: world.color_lut_bytes.as_deref(),
             },
             light_uniforms,
             local_lights: light_data.lights,
@@ -1553,21 +1210,21 @@ impl GraphicsSystem {
         let (hot_reload_sources, texture_name_slots) = if capture_sources {
             let (sources, slots) = capture_hot_reload_sources(
                 HotReloadSources {
-                    map: asset_source_map,
-                    color_lut: color_lut_source,
-                    environment_map: environment_map_source,
-                    meshes: mesh_source_map(&mesh_sources, &mesh_handle_to_draws),
-                    skinned_meshes: skinned_mesh_source_map,
+                    map: world.asset_source_map,
+                    color_lut: world.color_lut_source,
+                    environment_map: world.environment_map_source,
+                    meshes: mesh_source_map(&world.mesh.sources, &mesh_handle_to_draws),
+                    skinned_meshes: world.skinned_mesh_source_map,
                     procedural_meshes: procedural_mesh_source_map(
-                        &proc_mesh_args_snapshot,
-                        &component_mesh_handles,
+                        &world.proc_mesh_args_snapshot,
+                        &world.mesh.component_handles,
                         &mesh_handle_to_draws,
                     ),
-                    shaders: shader_source_map,
-                    shader_overrides,
+                    shaders: world.shaders.source_map,
+                    shader_overrides: world.shaders.overrides,
                     sdf_fields,
                 },
-                texture_name_to_slot,
+                world.texture_name_to_slot,
             );
             (Some(sources), Some(slots))
         } else {
@@ -1575,12 +1232,13 @@ impl GraphicsSystem {
         };
 
         let skinned_upload = SkinnedUpload {
-            vertices: skinned_vertices,
-            indices: skinned_indices,
-            draw_objects: skinned_draw_objects,
-            morphs: skinned_morphs,
+            vertices: world.skinned.vertices,
+            indices: world.skinned.indices,
+            draw_objects: world.skinned.draw_objects,
+            morphs: world.skinned.morphs,
         };
-        if let Err(e) = self.install_skinned_templates(ctx, skinned_upload, skinned_skeletons) {
+        if let Err(e) = self.install_skinned_templates(ctx, skinned_upload, world.skinned.templates)
+        {
             tracing::error!("GraphicsSystem: skinned upload failed: {e}");
             return None;
         }
@@ -1588,16 +1246,16 @@ impl GraphicsSystem {
         self.setup_streaming(StreamingSetup {
             config: streaming_config,
             seed: stream_seed,
-            texture_payloads,
-            texture_locators: &texture_locators,
-            cook_only_textures: &cook_only_textures,
+            texture_payloads: world.texture_payloads.payloads,
+            texture_locators: &world.textures.locators,
+            cook_only_textures: &world.textures.cook_only,
             disk_backed: blob_disk_backed,
-            deferred_mesh_seeds: &deferred_mesh_seeds,
+            deferred_mesh_seeds: &world.mesh.deferred_seeds,
             voxel_world,
             planet,
             planet_far_field,
             block_types: &block_types,
-            material_map: &material_map,
+            material_map: &world.materials.map,
         });
 
         self.finalize_backend_config(ctx, &mut settings);
@@ -1609,7 +1267,7 @@ impl GraphicsSystem {
             RuntimeHandoff {
                 draw_object_count,
                 frames_in_flight: settings.resolved().graphics.frames_in_flight(),
-                skinned_pool_reservations: &skinned_pool_reservations,
+                skinned_pool_reservations: &world.skinned.pool_reservations,
                 fog: fog_settings,
                 texture_name_slots,
                 hot_reload_sources,

@@ -61,7 +61,7 @@
 
 use concinnity_core::ecs::PipelineContext;
 
-use crate::ecs::{access_ids, decompose, host_resources, schedule};
+use crate::ecs::{host_resources, schedule};
 
 // Runs once at world start, after the gates have built the systems and before
 // their `init`. The engine defaults the world is completed with land earlier
@@ -71,15 +71,15 @@ fn before_init(ctx: &mut PipelineContext) {
     // Every context touch a stepping system makes is asserted against what it
     // declared; the hook is installed before the first step can happen.
     #[cfg(debug_assertions)]
-    access_ids::install_hook();
+    crate::ecs::access_check::install_hook();
     host_resources::publish(ctx);
-    decompose::run(ctx);
+    concinnity_core::ecs::decompose::run(ctx);
 }
 
 crate::define_systems! {
     complete_world: concinnity_core::defaults::run,
     before_init: before_init,
-    prepare_events: access_ids::ensure_event_queues,
+    prepare_events: concinnity_core::ecs::access_id::prepare_events,
     // Graphics runs at the tail of the tick, but its init builds the window,
     // the backend and the payload indexes later inits read: it inits right
     // after the entries its own init reads.
@@ -114,7 +114,7 @@ crate::define_systems! {
         after: [OverlaySystem],
         before: [GraphicsSystem],
     },
-    PlanetSystem => crate::planet::PlanetSystem {
+    PlanetSystem => concinnity_core::planet::PlanetSystem {
         gate: schedule::planet,
         present_when: "the world declares a Planet",
         phase: Early,
@@ -163,14 +163,14 @@ crate::define_systems! {
         after: [PhysicsSystem],
         before: [AudioSystem],
     },
-    AnimationSystem => crate::animation::AnimationSystem {
+    AnimationSystem => concinnity_core::animation::AnimationSystem {
         gate: schedule::animation,
         present_when: "the world declares any Animation or AnimationGraph",
         phase: Late,
         after: [OverlaySystem],
         before: [],
     },
-    StorySystem => crate::story::StorySystem {
+    StorySystem => concinnity_core::story::StorySystem {
         gate: schedule::story,
         present_when: "the world declares a Story",
         phase: Late,
@@ -179,7 +179,7 @@ crate::define_systems! {
     },
     AudioSystem => crate::audio::AudioSystem {
         gate: schedule::audio,
-        present_when: "the world declares any AudioEmitter, AudioCue, a Story page/choice with audio, or a Behavior with a sound node",
+        present_when: "the world declares any AudioEmitter, AudioCue, a Story page/choice with audio, a Behavior with a sound node, or a PropBody with an impact sound",
         phase: Late,
         after: [BehaviorSystem, Camera3DSystem, ThirdPersonSystem, StorySystem],
         before: [],
@@ -487,6 +487,24 @@ mod tests {
         let mut world = World::new();
         world.add_component(AudioEmitter::default());
         assert_eq!(world.system_manifest(SYSTEMS), ["AudioSystem"]);
+    }
+
+    // Impact sounds alone need the audio system; a silent body does not.
+    #[test]
+    fn an_impact_sound_gates_the_audio_system() {
+        use concinnity_core::components::PropBody;
+        use concinnity_core::ecs::AudioClipHandle;
+
+        let mut silent = World::new();
+        silent.add_component(PropBody::default());
+        assert!(!silent.system_manifest(SYSTEMS).contains(&"AudioSystem"));
+
+        let mut world = World::new();
+        world.add_component(PropBody {
+            impact_clip: Some(AudioClipHandle::new(0)),
+            ..Default::default()
+        });
+        assert!(world.system_manifest(SYSTEMS).contains(&"AudioSystem"));
     }
 
     // A Story gates the StorySystem. An empty-node story pulls in no audio

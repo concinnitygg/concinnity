@@ -18,6 +18,8 @@
 //! - [`GeoPosition`] and [`GeoPose`]: latitude, longitude and height on the
 //!   planet, and the conversions to and from the simulated frame.
 //! - [`Horizon`]: the planet's lowest ground as an occluder.
+//! - [`PlanetSystem`]: keeps the simulated frame, gravity and ground around
+//!   the camera, building ground on a host's [`GroundBuilder`].
 
 mod carry;
 pub(crate) mod dvec;
@@ -31,6 +33,7 @@ mod morph;
 mod rebase;
 mod seams;
 mod shape;
+mod system;
 mod tile;
 
 pub use carry::carry_world;
@@ -49,6 +52,10 @@ pub use rebase::{FrameRebases, Rebase, RebaseCursor, needs_rebase};
 pub use seams::{DrawnTile, TileSeams};
 pub(crate) use shape::OCTAVE_TURN;
 pub use shape::{CubeFace, MAX_OCTAVES, MIN_OCTAVES, PlanetShape};
+pub use system::{
+    GroundBuilder, InlineGround, PatchRequest, PatchResult, PlanetSystem, StartBuilder,
+    inline_ground,
+};
 pub use tile::{
     MAX_TILE_LEVEL, TILE_CELLS, TileBounds, TileId, TileMesh, TileSide, tile_bounds, tile_mesh,
 };

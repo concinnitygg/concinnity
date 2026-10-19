@@ -8,7 +8,7 @@
 use crash_handler::{CrashContext, CrashEventResult, CrashHandler};
 use std::sync::OnceLock;
 
-use super::report::{CrashReport, ReportKind, UtcTime, file_stem_at};
+use super::report::{CrashReport, ReportKind, file_stem_at, utc_now};
 use super::write;
 
 // Keeps the handler (and its exception thread on macOS) alive for the
@@ -42,7 +42,7 @@ fn report_fault(ctx: &CrashContext) {
     let Some(dir) = super::report_dir() else {
         return;
     };
-    let time = UtcTime::now();
+    let time = utc_now();
     let stem = write::unique_stem(&dir, &file_stem_at(time));
     super::minidump::write_fault_dump(&dir, &stem, ctx);
 

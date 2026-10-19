@@ -89,15 +89,7 @@ impl std::fmt::Write for BoundedLine<'_> {
         if remaining == 0 {
             return Ok(());
         }
-        if s.len() <= remaining {
-            self.0.push_str(s);
-        } else {
-            let mut end = remaining;
-            while !s.is_char_boundary(end) {
-                end -= 1;
-            }
-            self.0.push_str(&s[..end]);
-        }
+        self.0.push_str(&s[..s.floor_char_boundary(remaining)]);
         Ok(())
     }
 }

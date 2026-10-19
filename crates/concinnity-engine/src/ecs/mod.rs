@@ -23,12 +23,12 @@
 //! agree on order, gate description, and the edges among the systems both know
 //! about. `headless_drift_tests` is what holds them to that.
 
-pub(crate) mod access_ids;
+#[cfg(debug_assertions)]
+pub(crate) mod access_check;
 #[cfg(test)]
 mod consumed_columns_tests;
 #[cfg(test)]
 mod controller_schedule_tests;
-pub(crate) mod decompose;
 #[cfg(test)]
 mod determinism_tests;
 #[cfg(test)]
@@ -49,8 +49,8 @@ pub use registry::SYSTEMS;
 // What stays client-side is the content only a renderer-bearing runtime has:
 // the resources below, and the queries over them in `world_queries`.
 pub use world_queries::{
-    animation_system_mut, gpu_profile, memory_drift, renders, state_tree, streaming_pressure,
-    streaming_stats, take_render_backend,
+    gpu_profile, memory_drift, renders, state_tree, streaming_pressure, streaming_stats,
+    take_render_backend,
 };
 
 /// Why the renderer could not be built, left by GraphicsSystem's init for
@@ -60,38 +60,6 @@ pub use world_queries::{
 /// always means a GPU that refused. A machine with no GPU never builds the
 /// system that publishes it.
 pub struct RenderInitFailure(pub concinnity_core::render::error::RenderError);
-
-// The sampled window input and when it was sampled on the host clock, taken
-// by the next tick's InputSystem. Serial execution deposits it beside the
-// backend right after the draw (whose event pump produced it); the pipelined
-// driver deposits the input the render half's go-ahead carried. A missed
-// consume merges into the next deposit so no edge is lost.
-#[derive(Default)]
-pub(crate) struct InputMailbox {
-    packet: Option<concinnity_core::input::snapshot::InputPacket>,
-    sampled_us: u64,
-}
-
-impl InputMailbox {
-    // Deposit a packet sampled at `sampled_us`, merging onto an unconsumed one.
-    // The merged input is as fresh as its latest sample.
-    pub(crate) fn deposit(
-        &mut self,
-        packet: concinnity_core::input::snapshot::InputPacket,
-        sampled_us: u64,
-    ) {
-        match &mut self.packet {
-            Some(pending) => pending.merge_from(packet),
-            None => self.packet = Some(packet),
-        }
-        self.sampled_us = sampled_us;
-    }
-
-    // Take the pending packet and its sample time, if one was deposited.
-    pub(crate) fn take(&mut self) -> Option<(concinnity_core::input::snapshot::InputPacket, u64)> {
-        self.packet.take().map(|packet| (packet, self.sampled_us))
-    }
-}
 
 // Recorded backend effects that failed at replay and need a simulation-side
 // rollback (a streamed-mesh upload refused by a full region, a chunk add).

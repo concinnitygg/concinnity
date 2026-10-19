@@ -4,8 +4,8 @@
 //! hot-reload driver; the editor's `MultiHook` runs several in order.
 
 use concinnity_core::ecs::World;
+use concinnity_core::shutdown::ShutdownToken;
 use concinnity_engine::app::runtime::Runtime;
-use concinnity_engine::shutdown::ShutdownToken;
 
 pub(crate) trait FrameHook: Send {
     // Called once per frame on the main thread, just before the world step.

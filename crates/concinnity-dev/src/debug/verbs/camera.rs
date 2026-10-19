@@ -234,10 +234,8 @@ fn apply_camera_set(pose: &CameraPose, world: &mut World) -> Result<(), String> 
 // The free-fly controller integrates a smoothed velocity onto the camera every
 // step, so a leftover velocity would drift an externally written pose away.
 fn reset_controller_velocity(world: &mut World) {
-    for system in world.systems_mut() {
-        if let Some(c) = system.downcast_mut::<Camera3DSystem>() {
-            c.reset_velocity();
-        }
+    if let Some(c) = world.system_mut::<Camera3DSystem>() {
+        c.reset_velocity();
     }
 }
 

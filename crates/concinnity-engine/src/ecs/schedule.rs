@@ -9,31 +9,21 @@
 //! and side-effect-free: the manifest probe discards the value, and anything
 //! heavy (device acquisition, payload reads) belongs in `System::init`.
 
-use concinnity_core::components::Animation;
-use concinnity_core::components::AnimationGraph;
 use concinnity_core::components::AudioCue;
 use concinnity_core::components::AudioEmitter;
 use concinnity_core::components::Behavior;
-use concinnity_core::components::Camera3D;
-use concinnity_core::components::CameraController;
-use concinnity_core::components::CameraTrack;
 use concinnity_core::components::DebugHud;
 use concinnity_core::components::FpsCounter;
 use concinnity_core::components::HitRegion;
 use concinnity_core::components::KeyBinding;
 use concinnity_core::components::LoadingOverlay;
-use concinnity_core::components::PhysicsConfig;
-use concinnity_core::components::Planet;
 use concinnity_core::components::PropBody;
-use concinnity_core::components::RigidBody;
 use concinnity_core::components::Screen;
 use concinnity_core::components::SkyRotation;
 use concinnity_core::components::StatHud;
 use concinnity_core::components::Story;
 use concinnity_core::components::TextInput;
-use concinnity_core::components::TriggerVolume;
 use concinnity_core::ecs::World;
-use concinnity_core::resource::SkinnedMeshTable;
 
 // The render band's shared gate: the run mode `Runtime::start` resolved and
 // published before building any system. A world reaching here without one
@@ -41,7 +31,7 @@ use concinnity_core::resource::SkinnedMeshTable;
 // so the absent case is headless.
 fn rendered(world: &World) -> bool {
     world
-        .resource::<crate::ecs::render_mode::RenderMode>()
+        .resource::<concinnity_core::render::render_mode::RenderMode>()
         .is_some_and(|m| m.renders())
 }
 
@@ -158,84 +148,31 @@ pub(crate) fn loading_overlay(
         .map(concinnity_core::hud::loading_overlay::LoadingOverlaySystem::new)
 }
 
-// PhysicsSystem: present whenever the world has physics content, namely a
-// `PhysicsConfig` (optional floor / terrain tuning), a `RigidBody` (character
-// capsule), a `PropBody` (dynamic prop), or a `TriggerVolume` (sensor
-// region). Reads the `PhysicsConfig` if present, otherwise a flat-floor
-// default.
+// PhysicsSystem: present whenever the world has physics content (see
+// `PhysicsSystem::config_for`), stepping on the job pool.
 pub(crate) fn physics(world: &World) -> Option<concinnity_core::physics::PhysicsSystem> {
-    let needs = world
-        .query::<PhysicsConfig>()
-        .next()
-        .is_some()
-        || world.query::<RigidBody>().next().is_some()
-        || world.query::<PropBody>().next().is_some()
-        || world
-            .query::<TriggerVolume>()
-            .next()
-            .is_some()
-        // A skinned mesh with a character capsule needs the rig drive
-        // (the CharacterRig itself is published later, by GraphicsSystem
-        // init, so gate on the baked resource data).
-        || world
-            .resource::<SkinnedMeshTable>()
-            .is_some_and(|t| t.has_capsule());
-    if !needs {
-        return None;
-    }
-    // Cook injects the config into every shipped world with physics content,
-    // so the fallback covers worlds built directly (tests, the editor's
-    // in-memory path).
-    let config = world
-        .query::<PhysicsConfig>()
-        .next()
-        .cloned()
-        .unwrap_or_default();
-    Some(crate::physics::build(config))
+    concinnity_core::physics::PhysicsSystem::config_for(world).map(crate::physics::build)
 }
 
 // PlanetSystem: present whenever the world declares a `Planet`. Scheduled
 // before the world's logic, spawns, physics and the camera controllers, so a
 // move of the simulated frame lands between two ticks.
-pub(crate) fn planet(world: &World) -> Option<crate::planet::PlanetSystem> {
-    world
-        .query::<Planet>()
-        .next()
-        .cloned()
-        .map(crate::planet::PlanetSystem::new)
+pub(crate) fn planet(world: &World) -> Option<concinnity_core::planet::PlanetSystem> {
+    concinnity_core::planet::PlanetSystem::for_world(world, crate::planet::start_ground_worker)
 }
 
-// The first controlled `Camera3D` picks the controller flavor: no `follow`
-// block selects this first-person / fly controller, a `follow` block selects
-// the adjacent ThirdPersonSystem entry instead (a camera never gets both). A
-// `controller: null` camera opts out entirely (cutscene cameras).
+// The input controllers: the first controlled `Camera3D` picks one (see
+// core's `controller`).
 pub(crate) fn camera3d(
     world: &World,
 ) -> Option<concinnity_core::controller::camera::Camera3DSystem> {
-    let ctrl = controlled_camera(world)?;
-    ctrl.follow
-        .is_none()
-        .then(|| concinnity_core::controller::camera::Camera3DSystem::new(ctrl))
+    concinnity_core::controller::camera::Camera3DSystem::for_world(world)
 }
 
-// Counterpart of `camera3d`: the first controlled camera declares a `follow`
-// block, so the third-person controller drives it.
 pub(crate) fn third_person(
     world: &World,
 ) -> Option<concinnity_core::controller::third_person::ThirdPersonSystem> {
-    let ctrl = controlled_camera(world)?;
-    ctrl.follow
-        .is_some()
-        .then(|| concinnity_core::controller::third_person::ThirdPersonSystem::new(&ctrl))
-}
-
-// A declared CameraTrack owns the camera, so neither input controller is
-// built: two systems writing the same pose would fight for it every tick.
-fn controlled_camera(world: &World) -> Option<CameraController> {
-    if world.query::<CameraTrack>().next().is_some() {
-        return None;
-    }
-    world.query::<Camera3D>().find_map(|c| c.controller.clone())
+    concinnity_core::controller::third_person::ThirdPersonSystem::for_world(world)
 }
 
 // CameraTrackSystem: present when a world declares both a `CameraTrack` and the
@@ -244,9 +181,7 @@ fn controlled_camera(world: &World) -> Option<CameraController> {
 pub(crate) fn camera_track(
     world: &World,
 ) -> Option<concinnity_core::camera_track::CameraTrackSystem> {
-    let track = world.query::<CameraTrack>().next()?;
-    world.query::<Camera3D>().next()?;
-    Some(concinnity_core::camera_track::CameraTrackSystem::new(track))
+    concinnity_core::camera_track::CameraTrackSystem::for_world(world)
 }
 
 // FrameReportSystem: present whenever the run was armed as a benchmark; built
@@ -278,41 +213,51 @@ pub(crate) fn fps_counter(
 // `AnimationGraph`. It drains both at init and writes `SkeletonPose` each
 // frame. (A graph without clips is a build error, so the second check
 // only matters for hand-assembled worlds.)
-pub(crate) fn animation(world: &World) -> Option<crate::animation::AnimationSystem> {
-    let declared = world.query::<Animation>().next().is_some()
-        || world.query::<AnimationGraph>().next().is_some();
-    declared.then(crate::animation::AnimationSystem::new)
+pub(crate) fn animation(world: &World) -> Option<concinnity_core::animation::AnimationSystem> {
+    let system = concinnity_core::animation::AnimationSystem::for_world(world)?.with_fan_out(
+        |poses, sample| concinnity_host::thread::jobs::pool().parallel_for(poses, sample),
+    );
+    let capture = world
+        .resource::<crate::app::run::LaunchRequest>()
+        .is_some_and(|launch| launch.dev_loop);
+    Some(if capture {
+        system.capturing_sources()
+    } else {
+        system
+    })
 }
 
 // StorySystem: present whenever the world declares a `Story` (a compiled
 // story graph). It runs before AudioSystem so its page-audio requests are
 // heard the same tick, and before UiInputSystem like every other event
 // producer (its screen commands apply next frame).
-pub(crate) fn story(world: &World) -> Option<crate::story::StorySystem> {
-    world
-        .query::<Story>()
-        .next()
-        .cloned()
-        .map(|story| crate::story::StorySystem::new(story, crate::ecs::state_tree(world)))
+pub(crate) fn story(world: &World) -> Option<concinnity_core::story::StorySystem> {
+    let system = concinnity_core::story::StorySystem::new(world.query::<Story>().next().cloned()?);
+    Some(match crate::ecs::state_tree(world) {
+        Some(tree) => {
+            let transient = world
+                .resource::<concinnity_core::ecs::TransientSaves>()
+                .is_some_and(|t| t.0);
+            system.with_store(Box::new(crate::story::FileStore::new(tree, transient)))
+        }
+        None => system,
+    })
 }
 
 // AudioSystem: present whenever the world declares any `AudioEmitter`
 // (positional sound), `AudioCue` (screen-triggered sound), `Story`
-// (page-triggered sound), or `Behavior` with a sound node. Its init opens
-// an audio device, so a world with none of them stays silent and device-free.
+// (page-triggered sound), `Behavior` with a sound node, or `PropBody` with an
+// impact sound. Its init opens an audio device, so a world with none of them
+// stays silent and device-free.
 pub(crate) fn audio(world: &World) -> Option<crate::audio::AudioSystem> {
     let needs = world.query::<AudioEmitter>().next().is_some()
         || world.query::<AudioCue>().next().is_some()
-        || world.query::<Story>().next().is_some_and(|s| {
-            s.nodes.iter().any(|n| {
-                n.choice_music.is_some()
-                    || !n.choice_sounds.is_empty()
-                    || n.pages
-                        .iter()
-                        .any(|p| p.music.is_some() || !p.sounds.is_empty())
-            })
-        })
-        || world.query::<Behavior>().any(Behavior::plays_sound);
+        || world
+            .query::<Story>()
+            .next()
+            .is_some_and(Story::plays_audio)
+        || world.query::<Behavior>().any(Behavior::plays_sound)
+        || world.query::<PropBody>().any(|b| b.impact_clip.is_some());
     needs.then(crate::audio::AudioSystem::new)
 }
 
@@ -467,9 +412,7 @@ mod tests {
         world.step();
 
         let matched = world
-            .systems()
-            .iter()
-            .find_map(|s| s.downcast_ref::<crate::audio::AudioSystem>())
+            .system::<crate::audio::AudioSystem>()
             .map(|a| a.cues_matched())
             .expect("world has an AudioSystem");
         assert_eq!(matched, 1, "the initial screen's cue should have matched");

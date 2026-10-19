@@ -4,7 +4,7 @@
 use concinnity_core::ecs::{PipelineContext, ScreenshotRequest};
 use concinnity_core::render::extract::{FrameExtractor, ScreenshotBurst};
 
-use crate::crash::UtcTime;
+use crate::crash::utc_now;
 
 // Where screenshots land, relative to the working directory.
 const SCREENSHOT_DIR: &str = "screenshots";
@@ -22,7 +22,7 @@ fn start_requested_in(dir: &str, ctx: &mut PipelineContext, extractor: &mut Fram
     if let Err(e) = std::fs::create_dir_all(dir) {
         tracing::warn!("screenshot: cannot create {dir}: {e}");
     }
-    extractor.start_screenshots(ScreenshotBurst::start(dir, UtcTime::now().stem(), frames));
+    extractor.start_screenshots(ScreenshotBurst::start(dir, utc_now().stem(), frames));
 }
 
 #[cfg(test)]

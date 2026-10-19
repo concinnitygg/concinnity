@@ -46,19 +46,12 @@ mod device;
 /// Whether this build links a rendering backend. A build with no backend
 /// feature has none, so the only loop that can run a world is a headless one.
 pub use device::AVAILABLE as HAS_RENDER_BACKEND;
-// Skeletal animation playback. Internal system, constructed by `World::start`
-// when the world declares any `Animation`; produces per-frame skinning matrices.
-pub(crate) mod animation;
-// Name-addressed control of a running world's animation between steps, reached
-// through `ecs::animation_system_mut`.
-pub use animation::{AnimationSystem, GraphStateReport};
 pub(crate) mod cbor_file;
 /// Crash reporting: panic hook, native fault capture, local report files.
 /// `pub` so the binaries install the hooks and the editor composes the
 /// recent-log ring layer into its tracing subscriber.
 pub mod crash;
 pub(crate) mod file_writer;
-pub mod shutdown;
 // 3D positional sound and screen-triggered cues, and the one module that names
 // kira.
 pub(crate) mod audio;
@@ -71,8 +64,7 @@ pub mod live_edit;
 // The rigid-body simulation driver: builds a `concinnity_core::physics::Simulation`
 // from the world's physics content and steps it on the fixed tick.
 pub(crate) mod physics;
-// Keeps a planet world simulating around its camera: the moving frame, the
-// pull toward the center, and the ground patch near the camera.
+// The thread that builds core PlanetSystem's ground patches.
 pub(crate) mod planet;
 // The user-facing settings registry and the system that applies setting
 // changes.

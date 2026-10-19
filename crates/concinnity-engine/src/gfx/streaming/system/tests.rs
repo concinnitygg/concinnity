@@ -9,11 +9,6 @@ use concinnity_core::render::scene_residency::{CHANNEL_SHADER, SceneResidency};
 use concinnity_core::render::stream_pools::{StreamPool, StreamingPools, StreamingPressure};
 use std::sync::Arc;
 
-// Upper bound on frames a test drives while a load thread works. The threads
-// decode on their own, so a test that waits on one yields rather than sleeps;
-// the bound turns a regression into a failure instead of a hang.
-const MAX_DRIVE_SPINS: usize = 100_000;
-
 fn translation_view(x: f32, y: f32, z: f32) -> [[f32; 4]; 4] {
     [
         [1.0, 0.0, 0.0, 0.0],
@@ -81,16 +76,12 @@ fn view(pins: Option<&[AssetId]>) -> DriveView<'_> {
 fn the_texture_pool_loads_through_its_thread() {
     let (recorded, mut backend) = recording_backend();
     let mut runtime = texture_runtime();
-    for _ in 0..MAX_DRIVE_SPINS {
+    concinnity_testing::eventually("both textures to load", || {
         let mut q = queues();
         runtime.drive(&mut q, view(None));
         q.ops.replay(&mut backend);
-        if runtime.state.streaming_stats().texture == Some((2, 0, 0)) {
-            break;
-        }
-        std::thread::yield_now();
-    }
-    assert_eq!(runtime.state.streaming_stats().texture, Some((2, 0, 0)));
+        (runtime.state.streaming_stats().texture == Some((2, 0, 0))).then_some(())
+    });
     let s = recorded.lock();
     for slot in [0, 1] {
         assert!(s.saw(&Call::UpdateTextureSlot { slot, w: 1, h: 1 }));
@@ -142,14 +133,13 @@ fn a_pinned_scene_loads_once_its_shader_bucket_is_installed() {
         loading(&runtime),
         "the dispatch alone does not load the scene"
     );
-    for _ in 0..MAX_DRIVE_SPINS {
+    concinnity_testing::eventually("the scene to load", || {
         if !loading(&runtime) {
-            break;
+            return Some(());
         }
         drive(&mut runtime);
-        std::thread::yield_now();
-    }
-    assert!(!loading(&runtime));
+        None
+    });
     assert_eq!(
         recorded.lock().calls,
         [Call::InstallWorldShader {
@@ -172,7 +162,10 @@ fn sample_drift_reports_once_settled_and_splits_the_whole_rss_movement() {
     let d = (0..16)
         .find_map(|_| r.sample_drift(Some(RSS), BUDGET))
         .expect("a steady run settles the baseline");
-    assert_eq!(d.verdict, crate::app::mem_drift::DriftVerdict::Settled);
+    assert_eq!(
+        d.verdict,
+        concinnity_core::budget::drift::DriftVerdict::Settled
+    );
     // RSS did not move, so whatever the heap did, the outside term is its
     // exact complement.
     assert_eq!(d.heap_growth_bytes + d.outside_heap_growth_bytes, 0);

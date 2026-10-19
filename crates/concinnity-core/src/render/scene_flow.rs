@@ -44,6 +44,36 @@ impl SceneFlow {
             fade: FadePhase::None,
         })
     }
+
+    /// The scenes whose streamed content stays resident: the current one, plus
+    /// the scene a fade is heading to, so it loads before visibility flips.
+    pub fn streaming_pins(&self) -> ScenePins {
+        let mut pins = ScenePins {
+            ids: [self.current; 2],
+            len: 1,
+        };
+        if let FadePhase::ToBlack { next, .. } = self.fade
+            && next != self.current
+        {
+            pins.ids[1] = next;
+            pins.len = 2;
+        }
+        pins
+    }
+}
+
+/// The scenes [`SceneFlow::streaming_pins`] keeps resident.
+#[derive(Debug, Clone, Copy)]
+pub struct ScenePins {
+    ids: [AssetId; 2],
+    len: usize,
+}
+
+impl ScenePins {
+    /// The pinned scenes, current first.
+    pub fn as_slice(&self) -> &[AssetId] {
+        &self.ids[..self.len]
+    }
 }
 
 /// A scene transition's fade phase.
@@ -315,6 +345,28 @@ mod snapshot_tests {
         let flow = SceneFlow::starting(&ctx).expect("scenes");
         assert_eq!(flow.current, AssetId(5));
         assert_eq!(flow.scenes, vec![AssetId(5), AssetId(6)]);
+    }
+
+    // A fade pins the scene it heads to beside the current one; a fade back to
+    // the current scene, or none, pins only it.
+    #[test]
+    fn a_fade_pins_its_destination_too() {
+        let mut flow = SceneFlow {
+            scenes: vec![AssetId(1), AssetId(2)],
+            current: AssetId(1),
+            fade: FadePhase::None,
+        };
+        assert_eq!(flow.streaming_pins().as_slice(), [AssetId(1)]);
+        flow.fade = FadePhase::ToBlack {
+            started_at: 0.0,
+            next: AssetId(2),
+        };
+        assert_eq!(flow.streaming_pins().as_slice(), [AssetId(1), AssetId(2)]);
+        flow.fade = FadePhase::ToBlack {
+            started_at: 0.0,
+            next: AssetId(1),
+        };
+        assert_eq!(flow.streaming_pins().as_slice(), [AssetId(1)]);
     }
 
     // The snapshot pairs each entity's draw slots with its scene; scene-less

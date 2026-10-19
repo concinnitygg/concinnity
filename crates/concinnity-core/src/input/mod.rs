@@ -4,6 +4,7 @@
 
 pub mod compose;
 pub mod keymap;
+pub mod mailbox;
 pub mod nav;
 pub mod pad;
 pub mod snapshot;

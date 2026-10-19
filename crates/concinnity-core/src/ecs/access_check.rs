@@ -12,7 +12,8 @@
 use core::any::TypeId;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
-use crate::ecs::Access;
+use crate::ecs::access_id::{self, ACCESS_IDS};
+use crate::ecs::{Access, ComponentId};
 
 /// What a context accessor touched. Component ids are the registry
 /// discriminants; resources and events report their `TypeId` for the client's
@@ -98,4 +99,50 @@ pub fn set_active(active: Option<(Access, &'static str)>) {
     // `install_active`.
     let hook: ActiveHook = unsafe { core::mem::transmute::<*mut (), ActiveHook>(raw) };
     hook(active);
+}
+
+/// Assert `touch` against the `access` that `system` declared. An exclusive
+/// system passes everything; structural change and blob access need
+/// exclusivity; a resource outside [`ACCESS_IDS`] can only be touched
+/// exclusively.
+pub fn verify(access: Access, system: &str, touch: &Touch) {
+    if access.is_exclusive() {
+        return;
+    }
+    match touch {
+        Touch::ComponentRead { id, type_name } => assert!(
+            access.may_read_component(ComponentId::new(*id)),
+            "{system} reads {type_name} without declaring it",
+        ),
+        Touch::ComponentWrite { id, type_name } => assert!(
+            access.may_write_component(ComponentId::new(*id)),
+            "{system} writes {type_name} without declaring it",
+        ),
+        Touch::Structural { op } => {
+            panic!("{system} performs structural change ({op}) without exclusive access")
+        }
+        Touch::Blob { op } => {
+            panic!("{system} touches the blob store ({op}) without exclusive access")
+        }
+        Touch::Resource {
+            type_id,
+            type_name,
+            write,
+        } => match access_id::resolve(&[ACCESS_IDS], *type_id) {
+            Some(id) if *write => assert!(
+                access.may_write_resource(id),
+                "{system} writes resource {type_name} without declaring it",
+            ),
+            Some(id) => assert!(
+                access.may_read_resource(id),
+                "{system} reads resource {type_name} without declaring it",
+            ),
+            None => panic!(
+                "{system} touches resource {type_name}, which is not in the \
+                 access-id registry; register it or keep the system exclusive \
+                 (registry holds {} entries)",
+                ACCESS_IDS.len(),
+            ),
+        },
+    }
 }

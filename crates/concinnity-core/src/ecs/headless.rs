@@ -13,14 +13,15 @@
 
 use alloc::boxed::Box;
 
+use crate::animation::AnimationSystem;
 use crate::behavior::BehaviorSystem;
 use crate::camera_track::CameraTrackSystem;
-use crate::components::{
-    Behavior, Camera3D, CameraTrack, PhysicsConfig, PropBody, RigidBody, SkyRotation, TriggerVolume,
-};
+use crate::components::{Behavior, SkyRotation};
+use crate::controller::camera::Camera3DSystem;
+use crate::controller::third_person::ThirdPersonSystem;
 use crate::ecs::{Phase, System, SystemEntry, SystemTable, World};
 use crate::physics::PhysicsSystem;
-use crate::resource::SkinnedMeshTable;
+use crate::planet::{PlanetSystem, inline_ground};
 use crate::sky::SkyRotationSystem;
 
 // SkyRotationSystem: present whenever the world declares a `SkyRotation`. Runs
@@ -28,6 +29,13 @@ use crate::sky::SkyRotationSystem;
 fn sky_rotation(world: &World) -> Option<Box<dyn System>> {
     let rotation = world.query::<SkyRotation>().next()?;
     Some(Box::new(SkyRotationSystem::new(rotation)))
+}
+
+// PlanetSystem: present whenever the world declares a `Planet`. Runs before the
+// world's logic, so a move of the simulated frame lands between two ticks, and
+// builds its ground on the calling thread.
+fn planet(world: &World) -> Option<Box<dyn System>> {
+    Some(Box::new(PlanetSystem::for_world(world, inline_ground)?))
 }
 
 // BehaviorSystem: present whenever the world declares any `Behavior`. Runs
@@ -41,33 +49,31 @@ fn behavior(world: &World) -> Option<Box<dyn System>> {
 // PhysicsSystem: present whenever the world has physics content. Steps on the
 // calling thread; a host lends it a job pool when it has one.
 fn physics(world: &World) -> Option<Box<dyn System>> {
-    let needs = world.query::<PhysicsConfig>().next().is_some()
-        || world.query::<RigidBody>().next().is_some()
-        || world.query::<PropBody>().next().is_some()
-        || world.query::<TriggerVolume>().next().is_some()
-        || world
-            .resource::<SkinnedMeshTable>()
-            .is_some_and(|t| t.has_capsule());
-    if !needs {
-        return None;
-    }
-    // A shipped world carries the config cook injected; one built directly
-    // (a test, an in-memory tool) gets the flat-floor default.
-    let config = world
-        .query::<PhysicsConfig>()
-        .next()
-        .cloned()
-        .unwrap_or_default();
+    let config = PhysicsSystem::config_for(world)?;
     Some(Box::new(PhysicsSystem::new(config)))
+}
+
+// The input controllers: the first controlled `Camera3D` picks one. Both run
+// after physics has settled the tick's poses.
+fn camera3d(world: &World) -> Option<Box<dyn System>> {
+    Some(Box::new(Camera3DSystem::for_world(world)?))
+}
+
+fn third_person(world: &World) -> Option<Box<dyn System>> {
+    Some(Box::new(ThirdPersonSystem::for_world(world)?))
+}
+
+// AnimationSystem: present whenever the world declares any `Animation` or
+// `AnimationGraph`. Samples its poses on the calling thread.
+fn animation(world: &World) -> Option<Box<dyn System>> {
+    Some(Box::new(AnimationSystem::for_world(world)?))
 }
 
 // CameraTrackSystem: present when a world declares both a `CameraTrack` and the
 // `Camera3D` it drives. Runs after physics, which is where the camera's pose is
 // settled for the tick.
 fn camera_track(world: &World) -> Option<Box<dyn System>> {
-    let track = world.query::<CameraTrack>().next()?;
-    world.query::<Camera3D>().next()?;
-    Some(Box::new(CameraTrackSystem::new(track)))
+    Some(Box::new(CameraTrackSystem::for_world(world)?))
 }
 
 /// The simulation systems a world runs with no host beyond this crate, in run
@@ -84,6 +90,20 @@ pub const HEADLESS_SYSTEMS: &SystemTable = &SystemTable {
             before: &[],
         },
         SystemEntry {
+            name: "PlanetSystem",
+            present_when: "the world declares a Planet",
+            phase: Phase::Early,
+            gate: planet,
+            after: &[],
+            before: &[
+                "BehaviorSystem",
+                "PhysicsSystem",
+                "Camera3DSystem",
+                "ThirdPersonSystem",
+                "CameraTrackSystem",
+            ],
+        },
+        SystemEntry {
             name: "BehaviorSystem",
             present_when: "the world declares any Behavior",
             phase: Phase::Logic,
@@ -97,6 +117,22 @@ pub const HEADLESS_SYSTEMS: &SystemTable = &SystemTable {
             phase: Phase::Late,
             gate: physics,
             after: &[],
+            before: &["Camera3DSystem", "ThirdPersonSystem"],
+        },
+        SystemEntry {
+            name: "Camera3DSystem",
+            present_when: "the first controlled Camera3D has no follow block",
+            phase: Phase::Late,
+            gate: camera3d,
+            after: &["PhysicsSystem"],
+            before: &[],
+        },
+        SystemEntry {
+            name: "ThirdPersonSystem",
+            present_when: "the first controlled Camera3D has a follow block",
+            phase: Phase::Late,
+            gate: third_person,
+            after: &["PhysicsSystem"],
             before: &[],
         },
         SystemEntry {
@@ -107,18 +143,27 @@ pub const HEADLESS_SYSTEMS: &SystemTable = &SystemTable {
             after: &["PhysicsSystem"],
             before: &[],
         },
+        SystemEntry {
+            name: "AnimationSystem",
+            present_when: "the world declares any Animation or AnimationGraph",
+            phase: Phase::Late,
+            gate: animation,
+            after: &[],
+            before: &[],
+        },
     ],
     // The headless tier renders nothing, so the completion pass leaves it with
     // the one default that is not a rendering concern: the PhysicsConfig its
     // simulation already runs on.
     complete_world: Some(crate::defaults::run),
-    before_init: None,
+    before_init: Some(crate::ecs::decompose::run),
     prepare_events: None,
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::{Camera3D, CameraTrack, PhysicsConfig, RigidBody};
     use alloc::vec::Vec;
 
     // Every declared edge agrees with table order, and names a real entry: an
@@ -203,7 +248,11 @@ mod tests {
 
         let mut world = World::new();
         world.add_component(Camera3D::bake(Default::default()));
-        assert!(world.system_manifest(HEADLESS_SYSTEMS).is_empty());
+        assert!(
+            !world
+                .system_manifest(HEADLESS_SYSTEMS)
+                .contains(&"CameraTrackSystem")
+        );
 
         let mut world = World::new();
         world.add_component(CameraTrack::default());

@@ -33,6 +33,20 @@ pub struct ChunkBlockType {
     pub uv_side: [f32; 4],
 }
 
+impl From<&crate::components::BlockType> for ChunkBlockType {
+    /// A `BlockType`'s palette entry: per-face UV overrides fall back to the
+    /// `uv_min`/`uv_max` rectangle.
+    fn from(bt: &crate::components::BlockType) -> Self {
+        let default_rect = [bt.uv_min[0], bt.uv_min[1], bt.uv_max[0], bt.uv_max[1]];
+        ChunkBlockType {
+            solid: bt.solid,
+            uv_top: bt.uv_top.unwrap_or(default_rect),
+            uv_bottom: bt.uv_bottom.unwrap_or(default_rect),
+            uv_side: bt.uv_side.unwrap_or(default_rect),
+        }
+    }
+}
+
 /// Deterministic terrain generator for one `VoxelWorld`.
 ///
 /// Constructed once from the world's seed and chunk dimensions; `generate`
@@ -207,6 +221,38 @@ fn hash01(seed: u64, x: i32, z: i32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A per-face override wins where set; the remaining faces fall back to the
+    // uv_min/uv_max rectangle.
+    #[test]
+    fn block_type_to_chunk_overrides_then_falls_back() {
+        let bt = crate::components::BlockType {
+            solid: true,
+            uv_min: [0.1, 0.2],
+            uv_max: [0.6, 0.7],
+            uv_top: Some([0.0, 0.0, 0.25, 0.25]),
+            uv_bottom: None,
+            uv_side: None,
+        };
+        let chunk = ChunkBlockType::from(&bt);
+        assert!(chunk.solid);
+        assert_eq!(chunk.uv_top, [0.0, 0.0, 0.25, 0.25], "override kept");
+        let fallback = [0.1, 0.2, 0.6, 0.7];
+        assert_eq!(
+            chunk.uv_bottom, fallback,
+            "unset face -> uv_min/uv_max rect"
+        );
+        assert_eq!(chunk.uv_side, fallback);
+    }
+
+    #[test]
+    fn block_type_to_chunk_air_is_not_solid() {
+        let bt = crate::components::BlockType {
+            solid: false,
+            ..Default::default()
+        };
+        assert!(!ChunkBlockType::from(&bt).solid);
+    }
 
     fn make_gen() -> ChunkGenerator {
         ChunkGenerator::new(1234, [16, 24, 16], 3)

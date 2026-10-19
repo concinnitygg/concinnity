@@ -1,17 +1,42 @@
 //! What a world's components ask of its graphics load: a fallback font face,
-//! the HUD chips the frame anchors, the color LUT's blend, frame captures, and
-//! the planet's grass.
+//! the HUD chips the frame anchors, the color LUT's blend, frame captures, the
+//! planet's grass, and how it holds the cursor.
 
 use alloc::vec::Vec;
 use hashbrown::HashMap;
 
 use crate::components::{
-    DebugHud, Grass, HitRegion, KeyBinding, Planet, StatHud, TextInput, TextLabel, UiAction,
+    Camera3D, DebugHud, Grass, HitRegion, KeyBinding, Planet, Screen, StatHud, TextInput,
+    TextLabel, UiAction,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{PipelineContext, Ref};
+use crate::ecs::{MenuOverride, PipelineContext, Ref};
 use crate::render::grass::PlanetGrass;
 use crate::resource::ColorLutTable;
+
+/// How a world holds the cursor from its first frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CursorPolicy {
+    /// A camera world with UI the cursor is freed for (a HitRegion or a
+    /// Screen): capture follows the menu frame by frame.
+    pub menu_mode: bool,
+    /// A plain first-person world captures the cursor at startup, unless a
+    /// menu or editor driver (a `MenuOverride`) owns capture: an editor reruns
+    /// the load on every rebuild, and a grab each time would re-hide its cursor.
+    pub capture_at_start: bool,
+}
+
+/// The cursor policy for the world. KeyBindings alone need no free cursor,
+/// and a UI-only world (no camera) stays free-cursor.
+pub fn cursor_policy(ctx: &PipelineContext) -> CursorPolicy {
+    let has_ui =
+        ctx.query::<HitRegion>().next().is_some() || ctx.query::<Screen>().next().is_some();
+    let has_camera = ctx.query::<Camera3D>().next().is_some();
+    CursorPolicy {
+        menu_mode: has_camera && has_ui,
+        capture_at_start: has_camera && !has_ui && ctx.resource::<MenuOverride>().is_none(),
+    }
+}
 
 /// Whether any text in the world names no Font, and so has no face to draw
 /// with unless one is registered as the fallback.
@@ -109,6 +134,37 @@ mod tests {
     use crate::components::TerrainLayer;
     use crate::ecs::World;
     use alloc::vec;
+
+    // A camera alone captures at start; UI beside it makes menu mode; a menu
+    // driver keeps the cursor free; a UI-only world neither.
+    #[test]
+    fn the_cursor_follows_camera_ui_and_driver() {
+        let policy = |camera: bool, ui: bool, driven: bool| {
+            let mut world = World::new();
+            if camera {
+                world.push(Camera3D::bake(crate::components::cook::Camera3D::default()));
+            }
+            if ui {
+                world.push(Screen::default());
+            }
+            if driven {
+                world.insert_resource(MenuOverride::default());
+            }
+            cursor_policy(&world.context())
+        };
+        let p = policy(true, false, false);
+        assert!(p.capture_at_start && !p.menu_mode);
+        let p = policy(true, true, false);
+        assert!(!p.capture_at_start && p.menu_mode);
+        assert!(!policy(true, false, true).capture_at_start);
+        assert_eq!(
+            policy(false, true, false),
+            CursorPolicy {
+                menu_mode: false,
+                capture_at_start: false
+            }
+        );
+    }
 
     #[test]
     fn layers_resolve_through_their_grass() {

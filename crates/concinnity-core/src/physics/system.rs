@@ -14,12 +14,12 @@ use crate::physics::{
 
 use crate::components::{
     BodyDynamics, Camera3D, Collider, ContactEvent, Held, Identity, PhysicsConfig, PhysicsJoint,
-    Pickup, RigidBody, Transform, TriggerFilter, TriggerVolume, VolumeEvent, WakeRequest,
+    Pickup, PropBody, RigidBody, Transform, TriggerFilter, TriggerVolume, VolumeEvent, WakeRequest,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{
     Entity, EventCursor, MenuActive, PipelineContext, ScheduleMode, SimTiming, StepResult, System,
-    WorldPhysicsBudget,
+    World, WorldPhysicsBudget,
 };
 use crate::math::vec3::{normalize_or, scale, sub};
 use crate::math::{cos, sin, sqrt};
@@ -275,6 +275,28 @@ impl PhysicsSystem {
 }
 
 impl PhysicsSystem {
+    /// The config a world's physics runs on, or `None` when it has no physics
+    /// content: a `PhysicsConfig`, `RigidBody`, `PropBody`, `TriggerVolume`, or
+    /// a skinned mesh that bakes a character capsule. A world with content but
+    /// no config (one built directly rather than cooked) gets the flat-floor
+    /// default.
+    pub fn config_for(world: &World) -> Option<PhysicsConfig> {
+        let needs = world.query::<PhysicsConfig>().next().is_some()
+            || world.query::<RigidBody>().next().is_some()
+            || world.query::<PropBody>().next().is_some()
+            || world.query::<TriggerVolume>().next().is_some()
+            || world
+                .resource::<crate::resource::SkinnedMeshTable>()
+                .is_some_and(|t| t.has_capsule());
+        needs.then(|| {
+            world
+                .query::<PhysicsConfig>()
+                .next()
+                .cloned()
+                .unwrap_or_default()
+        })
+    }
+
     // Catch up with a planet world: carry the bodies through every move of
     // the simulated frame this system has not yet seen, swap in a newer
     // ground patch, and aim gravity at the planet's center in this frame.

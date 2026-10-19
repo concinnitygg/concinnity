@@ -64,6 +64,13 @@ pub struct ThirdPersonSystem {
 }
 
 impl ThirdPersonSystem {
+    /// The controller for a world whose first controlled `Camera3D` has a
+    /// `follow` block.
+    pub fn for_world(world: &crate::ecs::World) -> Option<Self> {
+        let controller = super::controlled_camera(world)?;
+        controller.follow.is_some().then(|| Self::new(&controller))
+    }
+
     /// Build from a `Camera3D`'s controller settings; the caller has already
     /// established that `controller.follow` is set.
     pub fn new(controller: &CameraController) -> Self {
@@ -344,9 +351,9 @@ impl System for ThirdPersonSystem {
 mod tests {
     use super::*;
     use crate::components::{FollowController, PhysicsConfig};
-    use crate::ecs::{Phase, World};
+    use crate::ecs::World;
     use crate::gfx::render_types::SkinnedIndex;
-    use crate::test_support::{from_json, start_with};
+    use crate::test_support::from_json;
     use crate::transform;
     use alloc::string::ToString;
     use alloc::vec;
@@ -422,12 +429,9 @@ mod tests {
         if physics {
             world.add_component(PhysicsConfig::default());
         }
-        start_with(
-            &mut world,
-            Phase::Late,
-            "ThirdPersonSystem",
-            ThirdPersonSystem::new(&controller),
-        );
+        world
+            .start(crate::ecs::HEADLESS_SYSTEMS)
+            .expect("the test world starts");
         world
     }
 

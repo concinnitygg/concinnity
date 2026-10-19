@@ -7,8 +7,7 @@
 // is the engine's one answer to that whichever way the world was assembled.
 
 use concinnity_core::ecs::FontHandle;
-use concinnity_core::render::text;
-use concinnity_core::render::text::{LoadedFont, derive_cap_px};
+use concinnity_core::render::text::LoadedFont;
 
 const BAKED_ATLAS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtin_font.bin"));
 
@@ -24,29 +23,13 @@ pub(crate) struct BuiltinFont {
 // `None` means the embedded payload did not parse, which leaves the caller no
 // way to draw text with it.
 pub(crate) fn load(handle: FontHandle) -> Option<BuiltinFont> {
-    let (atlas_w, atlas_h, supersample, size_px, rgba, metrics) =
-        match concinnity_core::bake::font::deserialize(BAKED_ATLAS) {
-            Ok(decoded) => decoded,
-            Err(e) => {
-                tracing::error!("built-in font atlas failed to decode: {e}");
-                return None;
-            }
-        };
-
-    let metrics: text::FontMetrics = metrics.into_iter().map(|m| (m.char_code, m)).collect();
-    let size_px = size_px as f32;
-    Some(BuiltinFont {
-        loaded: LoadedFont {
-            atlas_slot: handle.0 as usize,
-            cap_px: derive_cap_px(&metrics, size_px),
-            metrics,
-            atlas_w,
-            atlas_h,
-            size_px,
-            supersample: supersample.max(1) as f32,
-        },
-        atlas: (atlas_w, atlas_h, rgba),
-    })
+    match concinnity_core::bake::font::load_face(handle.0 as usize, BAKED_ATLAS) {
+        Ok((loaded, atlas)) => Some(BuiltinFont { loaded, atlas }),
+        Err(e) => {
+            tracing::error!("built-in font atlas failed to decode: {e}");
+            None
+        }
+    }
 }
 
 #[cfg(test)]

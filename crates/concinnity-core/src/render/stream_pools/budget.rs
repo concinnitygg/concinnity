@@ -1,8 +1,11 @@
 //! What the streaming pools may hold: each pool's resident-byte budget, and the
-//! device headroom and draw records a voxel world's chunk window needs.
+//! device headroom and draw records a voxel world's chunk window or a planet's
+//! tiles need.
 
 use crate::gfx::mesh_payload::Vertex;
+use crate::planet::MAX_RESIDENT_TILES;
 use crate::render::chunk_window::{max_full_detail_chunks, max_resident_chunks};
+use crate::render::stream_pools::tile_mesh_size;
 
 /// Default share of the GPU's reported memory the texture pool may hold.
 pub const TEXTURE_VRAM_FRACTION: f64 = 0.50;
@@ -37,6 +40,30 @@ pub fn derive_byte_budget(override_mb: u32, gpu_memory_bytes: u64, fraction: f64
 /// every chunk it can hold resident, capped.
 pub fn chunk_reserve_count(far_radius: u32) -> usize {
     max_resident_chunks(far_radius).min(MAX_CHUNK_RECORDS) as usize
+}
+
+/// The chunk draw records a world reserves: a voxel world's window reaching
+/// `voxel_far_radius`, else every tile a planet holds resident, else none.
+pub fn chunk_record_reserve(voxel_far_radius: Option<u32>, planet: bool) -> usize {
+    match voxel_far_radius {
+        Some(far) => chunk_reserve_count(far),
+        None if planet => MAX_RESIDENT_TILES,
+        None => 0,
+    }
+}
+
+/// The vertex and index bytes a planet's terrain takes with every resident
+/// tile at its largest mesh.
+pub fn planet_tile_headroom() -> (usize, usize) {
+    let (vertices, indices) = tile_mesh_size();
+    let tiles = MAX_RESIDENT_TILES as u64;
+    let bytes = |count: usize, size: usize| {
+        usize::try_from(tiles * count as u64 * size as u64).unwrap_or(usize::MAX)
+    };
+    (
+        bytes(vertices, core::mem::size_of::<Vertex>()),
+        bytes(indices, core::mem::size_of::<u32>()),
+    )
 }
 
 /// The shape of a voxel world's chunk window, which sizes its headroom.
@@ -119,6 +146,24 @@ mod tests {
             assert_eq!(chunk_reserve_count(far) as u64, max_resident_chunks(far));
         }
         assert_eq!(chunk_reserve_count(500) as u64, MAX_CHUNK_RECORDS);
+    }
+
+    #[test]
+    fn a_voxel_window_wins_over_a_planet_for_the_record_reserve() {
+        assert_eq!(chunk_record_reserve(Some(2), true), chunk_reserve_count(2));
+        assert_eq!(chunk_record_reserve(None, true), MAX_RESIDENT_TILES);
+        assert_eq!(chunk_record_reserve(None, false), 0);
+    }
+
+    #[test]
+    fn the_planet_headroom_holds_every_resident_tile_at_full_size() {
+        let (vertices, indices) = tile_mesh_size();
+        let (vtx, idx) = planet_tile_headroom();
+        assert_eq!(
+            vtx,
+            MAX_RESIDENT_TILES * vertices * core::mem::size_of::<Vertex>()
+        );
+        assert_eq!(idx / MAX_RESIDENT_TILES, indices * 4);
     }
 
     // Impostors cost less headroom than full chunks over the same window, and

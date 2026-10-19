@@ -5,7 +5,7 @@
 
 use concinnity_core::budget::ResidentMemory;
 use concinnity_core::ecs::{Clock, PipelineContext};
-use concinnity_core::platform::{CompiledPlatforms, GraphicsApiStatus};
+use concinnity_core::platform::CompiledPlatforms;
 use concinnity_core::settings::{SettingsRevision, StoredSettings};
 use concinnity_host::store::paths::StateTree;
 
@@ -15,11 +15,7 @@ pub(crate) fn publish(ctx: &mut PipelineContext) {
         ResidentMemory(crate::app::sysmem::process_resident_bytes)
     });
     insert_absent(ctx, || CompiledPlatforms(crate::platform::compiled()));
-    insert_absent(ctx, || GraphicsApiStatus {
-        current: crate::platform::current(),
-        reverted: crate::platform::reverted(),
-        confirm_pending: crate::platform::confirm_pending(),
-    });
+    insert_absent(ctx, crate::platform::api_status);
     if ctx.resource::<StoredSettings>().is_none() {
         let stored = crate::settings::store::load(ctx.resource::<StateTree>());
         ctx.insert_resource(stored);
@@ -37,6 +33,7 @@ fn insert_absent<T: core::any::Any + Send>(ctx: &mut PipelineContext, value: imp
 mod tests {
     use super::*;
     use concinnity_core::ecs::World;
+    use concinnity_core::platform::GraphicsApiStatus;
 
     #[test]
     fn a_world_without_a_state_tree_stores_nothing() {

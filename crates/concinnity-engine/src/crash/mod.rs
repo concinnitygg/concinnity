@@ -9,7 +9,7 @@
 mod hook;
 mod memory;
 mod report;
-pub(crate) use report::UtcTime;
+pub(crate) use report::utc_now;
 mod ring;
 mod write;
 
@@ -55,8 +55,8 @@ static NOTES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 /// previous value for `key`. Bounded: at most 16 keys, keys truncate at 32
 /// bytes and values at 128; further keys are dropped.
 pub fn note(key: &str, value: &str) {
-    let key = clamp(key, MAX_NOTE_KEY_BYTES);
-    let value = clamp(value, MAX_NOTE_VALUE_BYTES);
+    let key = key[..key.floor_char_boundary(MAX_NOTE_KEY_BYTES)].to_string();
+    let value = value[..value.floor_char_boundary(MAX_NOTE_VALUE_BYTES)].to_string();
     let mut notes = NOTES.lock().unwrap_or_else(|p| p.into_inner());
     if let Some(slot) = notes.iter_mut().find(|(k, _)| *k == key) {
         slot.1 = value;
@@ -91,14 +91,6 @@ pub(crate) fn try_notes_snapshot() -> Vec<(String, String)> {
         Ok(notes) => notes.clone(),
         Err(_) => Vec::new(),
     }
-}
-
-fn clamp(s: &str, cap: usize) -> String {
-    let mut end = s.len().min(cap);
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    s[..end].to_string()
 }
 
 #[cfg(test)]

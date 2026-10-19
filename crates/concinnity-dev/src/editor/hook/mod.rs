@@ -38,9 +38,9 @@ use concinnity_core::ecs::{
     CursorShape, DesiredCursor, FlyCam, HiddenAssets, HudLayers, MenuOverride, ViewOverrides,
     World, WorldLines,
 };
+use concinnity_core::shutdown::ShutdownToken;
 use concinnity_engine::app::runtime::Runtime;
 use concinnity_engine::live_edit::PendingBackend;
-use concinnity_engine::shutdown::ShutdownToken;
 
 use super::asset_handle::AssetHandle;
 use super::behavior;

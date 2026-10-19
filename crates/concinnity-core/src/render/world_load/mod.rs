@@ -8,6 +8,7 @@ pub mod draw_geometry;
 pub mod far_band_shaders;
 pub mod prop_draws;
 pub mod scene_deferral;
+pub mod skinned;
 pub mod stream_seed;
 pub mod tables;
 pub mod texture_payloads;

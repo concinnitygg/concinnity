@@ -104,12 +104,17 @@ fn every_headless_entry_keeps_its_phase_gate_description_and_shared_edges() {
 // only half the claim. The other half is that they fire on the same content.
 #[test]
 fn the_two_tables_gate_the_same_systems_in_for_the_same_world() {
-    use concinnity_core::components::{Behavior, PhysicsConfig, RigidBody, TriggerVolume};
+    use concinnity_core::components::{
+        Animation, AnimationGraph, Behavior, PhysicsConfig, Planet, RigidBody, TriggerVolume,
+    };
     use concinnity_core::ecs::World;
 
     // One world per gating component, so a gate that fires on the wrong half
     // of an `or` is caught rather than hidden by a neighbor.
-    let worlds: [fn(&mut World); 4] = [
+    let worlds: [fn(&mut World); 7] = [
+        |w| w.add_component(Animation::default()),
+        |w| w.add_component(AnimationGraph::default()),
+        |w| w.add_component(Planet::default()),
         |w| w.add_component(Behavior::default()),
         |w| w.add_component(PhysicsConfig::default()),
         |w| w.add_component(RigidBody::default()),

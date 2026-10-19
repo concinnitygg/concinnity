@@ -66,16 +66,9 @@ mod tests {
     use super::*;
     use crate::audio::test_wav::pcm_wav_mono;
 
-    // Drain with a deadline: decoding runs on the worker thread, so tests
-    // poll briefly instead of assuming completion within one call.
+    // Decoding runs on the worker thread, so wait for its result.
     fn drain_one(worker: &DecodeWorker) -> DecodeResult {
-        for _ in 0..500 {
-            if let Some(result) = worker.try_recv() {
-                return result;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
-        panic!("decode worker produced no result within a second");
+        concinnity_testing::eventually("a decode result", || worker.try_recv())
     }
 
     #[test]

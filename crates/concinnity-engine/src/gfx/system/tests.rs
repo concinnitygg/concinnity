@@ -61,7 +61,6 @@ use concinnity_core::settings::SettingKey;
 use concinnity_core::transform::propagation;
 use concinnity_host::store::blob::BlobData;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use super::GraphicsSystem;
 use crate::app::run::LaunchRequest;
@@ -316,7 +315,7 @@ fn init_graphics(world: &mut World, hooks: TestHooks) -> GraphicsSystem {
     let mut gs = GraphicsSystem::new(None);
     gs.test_hooks = Some(hooks);
     let mut ctx = world.context();
-    crate::ecs::decompose::run(&mut ctx);
+    concinnity_core::ecs::decompose::run(&mut ctx);
     gs.run_init(&mut ctx);
     gs
 }
@@ -336,7 +335,7 @@ fn a_first_launch_persists_the_auto_preset_into_the_state_tree() {
     let mut writer = crate::settings::SettingsWriterSystem::new();
     {
         let mut ctx = world.context();
-        crate::ecs::decompose::run(&mut ctx);
+        concinnity_core::ecs::decompose::run(&mut ctx);
         gs.run_init(&mut ctx);
         writer.step(&mut ctx);
     }
@@ -1680,29 +1679,24 @@ fn texture_streaming_uploads_evicted_slots() {
     let mut gs = init_graphics(&mut world, hooks);
 
     // The streamer decodes on a worker thread; step until the completed
-    // upload lands (bounded so a regression fails rather than hangs).
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
+    // upload lands.
+    concinnity_testing::eventually("the texture to stream back in", || {
         assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
-        if lock(&state).calls.iter().any(|c| {
-            matches!(
-                c,
-                Call::UpdateTextureSlot {
-                    slot: 0,
-                    w: 2,
-                    h: 2
-                }
-            )
-        }) {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "texture never streamed back in: {:?}",
-            lock(&state).calls
-        );
-        std::thread::sleep(Duration::from_millis(2));
-    }
+        lock(&state)
+            .calls
+            .iter()
+            .any(|c| {
+                matches!(
+                    c,
+                    Call::UpdateTextureSlot {
+                        slot: 0,
+                        w: 2,
+                        h: 2
+                    }
+                )
+            })
+            .then_some(())
+    });
     let (resident, pending, unloaded) = streaming_stats(&world).texture.unwrap();
     assert_eq!((resident, pending, unloaded), (1, 0, 0));
 }
@@ -1715,28 +1709,23 @@ fn mesh_streaming_reuploads_evicted_geometry() {
     let mut world = b.build();
     let mut gs = init_graphics(&mut world, hooks);
 
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
+    concinnity_testing::eventually("the mesh to stream back in", || {
         assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
-        if lock(&state).calls.iter().any(|c| {
-            matches!(
-                c,
-                Call::UploadMesh {
-                    draw_idx: DrawIndex(0),
-                    vertices: 4,
-                    indices: 6,
-                }
-            )
-        }) {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "mesh never streamed back in: {:?}",
-            lock(&state).calls
-        );
-        std::thread::sleep(Duration::from_millis(2));
-    }
+        lock(&state)
+            .calls
+            .iter()
+            .any(|c| {
+                matches!(
+                    c,
+                    Call::UploadMesh {
+                        draw_idx: DrawIndex(0),
+                        vertices: 4,
+                        indices: 6,
+                    }
+                )
+            })
+            .then_some(())
+    });
     let (resident, pending, unloaded) = streaming_stats(&world).mesh.unwrap();
     assert_eq!((resident, pending, unloaded), (1, 0, 0));
 }
@@ -2132,7 +2121,7 @@ fn system_trait_delegates_to_init_and_step() {
     };
     {
         let mut ctx = world.context();
-        crate::ecs::decompose::run(&mut ctx);
+        concinnity_core::ecs::decompose::run(&mut ctx);
         gs.init(&mut ctx);
     }
     assert!(

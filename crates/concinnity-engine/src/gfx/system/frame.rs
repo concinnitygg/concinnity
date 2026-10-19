@@ -15,14 +15,7 @@ use super::*;
 // an unconsumed one so no edge is lost.
 fn deposit_input(ctx: &mut PipelineContext, packet: InputPacket) {
     let sampled_us = concinnity_host::clock::monotonic_micros();
-    match ctx.resource_mut::<crate::ecs::InputMailbox>() {
-        Some(mailbox) => mailbox.deposit(packet, sampled_us),
-        None => {
-            let mut mailbox = crate::ecs::InputMailbox::default();
-            mailbox.deposit(packet, sampled_us);
-            ctx.insert_resource(mailbox);
-        }
-    }
+    concinnity_core::input::mailbox::InputMailbox::deposit_in(ctx.resources, packet, sampled_us);
 }
 
 // The engine-owned skinned instance pool's free count, for the profiler's
@@ -82,16 +75,18 @@ fn publish_memory_pressure(ctx: &mut PipelineContext, frame: u64) {
 }
 
 impl GraphicsSystem {
-    // Whether the launch's frame cap is reached, logged when it is. A reached
-    // cap, like a failed init, ends the run with Stop rather than Done: `Done`
-    // only retires this system, and the process would spin on headlessly with
-    // nothing to present.
+    // Whether the launch's frame cap is reached, logged on the frame that first
+    // reaches it. A reached cap, like a failed init, ends the run with Stop
+    // rather than Done: `Done` only retires this system, and the process would
+    // spin on headlessly with nothing to present.
     fn frame_cap_reached(&self) -> bool {
-        let reached = self.max_frames.is_some_and(|max| self.frame_count >= max);
-        if reached {
-            tracing::info!("GraphicsSystem: max_frames ({}) reached", self.frame_count);
+        let Some(max) = self.max_frames else {
+            return false;
+        };
+        if self.frame_count == max.max(1) {
+            tracing::info!("GraphicsSystem: max_frames ({max}) reached");
         }
-        reached
+        self.frame_count >= max
     }
 
     pub(super) fn run_step(&mut self, ctx: &mut PipelineContext) -> StepResult {
@@ -212,12 +207,6 @@ impl GraphicsSystem {
     pub(crate) fn extract(&mut self, ctx: &mut PipelineContext, snap: &mut RenderSnapshot) {
         super::screenshot::start_requested(ctx, &mut self.extractor);
         self.extractor.extract(ctx, snap, self.frame_count);
-    }
-
-    // Capture each ScrollPanel's per-element clip band. Runs at init, before
-    // UiInputSystem drains the ScrollPanels (GraphicsSystem.init runs first).
-    pub(super) fn init_clip_rects(&mut self, ctx: &mut PipelineContext) {
-        self.clip_rects = overlay_maps::scroll_clip_rects(ctx);
     }
 
     // Gray out and disable every settings row whose feature the device cannot

@@ -95,9 +95,9 @@ pub(crate) struct StreamingRuntime {
     pub(crate) shader_warmup: Option<ShaderWarmup>,
     // Long-session memory drift, folded from the pressure valve's throttled
     // sample. Purely reported: it names what grew, and never moves the valve.
-    drift: crate::app::mem_drift::DriftTracker,
+    drift: concinnity_core::budget::drift::DriftTracker,
     // Last verdict logged, so a steady session states its reading once.
-    last_drift_verdict: Option<crate::app::mem_drift::DriftVerdict>,
+    last_drift_verdict: Option<concinnity_core::budget::drift::DriftVerdict>,
 }
 
 impl std::fmt::Debug for StreamingRuntime {
@@ -143,11 +143,16 @@ impl StreamingRuntime {
         &mut self,
         rss: Option<u64>,
         budget: u64,
-    ) -> Option<crate::app::mem_drift::MemoryDrift> {
-        use crate::app::mem_drift::DriftVerdict;
+    ) -> Option<concinnity_core::budget::drift::MemoryDrift> {
+        use concinnity_core::budget::drift::DriftVerdict;
         let rss = rss?;
         let heap_live = concinnity_core::memory::stats()?.live_bytes;
-        let drift = self.drift.sample(rss, heap_live, budget)?;
+        let drift = self.drift.sample(
+            rss,
+            heap_live,
+            budget,
+            concinnity_host::clock::monotonic_micros(),
+        )?;
 
         if self.last_drift_verdict != Some(drift.verdict) {
             self.last_drift_verdict = Some(drift.verdict);
@@ -219,24 +224,11 @@ impl System for StreamingSystem {
             .map(|o| o.world_hidden)
             .unwrap_or(false);
 
-        // Scene pins for streamed-content residency: the active scene, plus a
-        // fade target mid-transition so the destination starts loading before
-        // visibility flips.
-        let pin_pair: Option<([AssetId; 2], usize)> = ctx
+        let pins = ctx
             .resource::<scene_flow::ActiveSceneFlow>()
             .and_then(|slot| slot.flow.as_ref())
-            .map(|flow| {
-                let mut pins = [flow.current; 2];
-                let mut len = 1;
-                if let scene_flow::FadePhase::ToBlack { next, .. } = flow.fade
-                    && next != flow.current
-                {
-                    pins[1] = next;
-                    len = 2;
-                }
-                (pins, len)
-            });
-        let scene_pins: Option<&[AssetId]> = pin_pair.as_ref().map(|(pins, len)| &pins[..*len]);
+            .map(scene_flow::SceneFlow::streaming_pins);
+        let scene_pins = pins.as_ref().map(scene_flow::ScenePins::as_slice);
         let transient_pool_bytes = ctx.profile.render.transient_pool_bytes;
 
         // Throttled process-RAM back-off sample (~2x/sec), skipped entirely

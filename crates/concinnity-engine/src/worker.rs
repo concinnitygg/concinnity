@@ -61,6 +61,14 @@ pub(crate) struct Worker<Req: Job, Res> {
     next: usize,
 }
 
+impl<Req: Job, Res> std::fmt::Debug for Worker<Req, Res> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Worker")
+            .field("threads", &self.threads.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl<Req: Job, Res: Send + 'static> Worker<Req, Res> {
     // `threads` threads named `name-N` (or `name` alone for one), each
     // answering a request with `load`. Fails when the OS refuses a thread.
@@ -196,7 +204,7 @@ fn answer_each<Req: Job, Res>(
 mod tests {
     use super::*;
     use concinnity_core::render::stream_pools::Mailbox;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     // A pool that records the requests it had reverted or retired.
     #[derive(Default)]
@@ -223,14 +231,12 @@ mod tests {
         }
     }
 
-    // Deliver until `done` holds or ten seconds pass.
+    // Deliver until `done` holds.
     fn deliver_until(worker: &Worker<usize, usize>, pool: &mut Pool, done: impl Fn(&Pool) -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !done(pool) {
-            assert!(Instant::now() < deadline, "no answers came back");
+        concinnity_testing::eventually("the answers", || {
             worker.deliver(pool);
-            std::thread::yield_now();
-        }
+            done(pool).then_some(())
+        });
     }
 
     #[test]
@@ -254,13 +260,11 @@ mod tests {
         got: &mut Vec<usize>,
         count: usize,
     ) {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while got.len() < count {
-            assert!(Instant::now() < deadline, "no answers came back");
+        concinnity_testing::eventually("the answers", || {
             worker.deliver(pool);
             got.extend(pool.mail.take_results());
-            std::thread::yield_now();
-        }
+            (got.len() >= count).then_some(())
+        });
     }
 
     // A load that panics leaves the thread answering: its request comes back

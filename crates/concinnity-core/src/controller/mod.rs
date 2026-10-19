@@ -8,3 +8,19 @@ mod look_controls;
 /// Third-person character controller, built instead of the first-person one
 /// when the controlling camera's controller has a `follow` block.
 pub mod third_person;
+
+use crate::components::{Camera3D, CameraController, CameraTrack};
+use crate::ecs::World;
+
+// The controller of the first controlled `Camera3D`, which picks the
+// controller flavor: no `follow` block selects the first-person / fly
+// controller, a `follow` block the third-person one (a camera never gets
+// both). A `controller: null` camera opts out (cutscene cameras), and a
+// declared CameraTrack owns the camera, so neither is built: two systems
+// writing the same pose would fight for it every tick.
+fn controlled_camera(world: &World) -> Option<CameraController> {
+    if world.query::<CameraTrack>().next().is_some() {
+        return None;
+    }
+    world.query::<Camera3D>().find_map(|c| c.controller.clone())
+}

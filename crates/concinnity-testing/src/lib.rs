@@ -16,6 +16,8 @@
 //!   - [`exclusive`]: the one lock over this binary's process-global state,
 //!     held alone. [`GlobalState`] is that guard plus the cwd and
 //!     window-policy moves, both put back on drop.
+//!   - [`eventually`]: waiting on another thread's work with a bound, so work
+//!     that never finishes fails the test instead of hanging it.
 //!   - [`shared_cache_dir`] / [`shared_state_dir`]: the two roots a suite keeps
 //!     outside any one test -- a content-addressed cache shared by every
 //!     process, and the state a process empties and keeps to itself.
@@ -24,6 +26,7 @@ mod access;
 mod global;
 mod shared_dirs;
 mod temp;
+mod wait;
 
 pub mod fixtures;
 pub mod source;
@@ -32,6 +35,7 @@ pub use access::{ExclusiveAccess, exclusive};
 pub use global::GlobalState;
 pub use shared_dirs::{shared_cache_dir, shared_state_dir};
 pub use temp::{TempTree, utf8, write_into};
+pub use wait::eventually;
 
 /// Forbid window creation for the rest of the process.
 ///

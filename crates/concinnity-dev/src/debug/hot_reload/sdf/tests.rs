@@ -197,19 +197,17 @@ fn backend(resident: &[usize]) -> VolumeBackend {
     }
 }
 
-// Poll until `count` reports arrived; bounded so a lost result fails the test
-// instead of hanging it.
+// Poll until `count` reports arrived.
 fn poll_for(
     reload: &mut SdfReload,
     backend: &mut VolumeBackend,
     count: usize,
 ) -> Vec<ReloadReport> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let mut reports = Vec::new();
-    while reports.len() < count && std::time::Instant::now() < deadline {
+    concinnity_testing::eventually(format_args!("{count} reload reports"), || {
         reports.extend(reload.poll(backend));
-        std::thread::sleep(Duration::from_millis(5));
-    }
+        (reports.len() >= count).then_some(())
+    });
     reports
 }
 
