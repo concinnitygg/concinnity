@@ -104,3 +104,52 @@ fn templates_spawn_posed_and_rigged_and_pickable() {
     assert_eq!(picks.len(), 2);
     assert!(ctx.entity_of(AssetId(101)).is_some());
 }
+
+// Under a pick index a template is placed by its authored Transform, so the
+// extracted index follows a move of it and the move reaches the skinned model
+// push; without one the template stays a bare pose.
+#[test]
+fn a_pickable_template_follows_its_transform_into_the_index_and_the_model() {
+    use crate::components::Transform;
+    use crate::render::extract::FrameExtractor;
+    use crate::render::snapshot::RenderSnapshot;
+
+    let mut placed = geometry(0, 0, None);
+    placed.mesh.position = [5.0, 0.0, 0.0];
+    let out = assemble_skinned(&[placed], &HashMap::new()).unwrap();
+    let template = out.templates[0].template_index;
+    let mut world = World::new();
+    world.insert_resource(PickIndex::default());
+    let mut fx = FrameExtractor::default();
+    spawn_skinned_templates(
+        &mut world.context(),
+        out.templates,
+        fx.pick_candidates_mut(),
+    );
+    assert_eq!(fx.pick_candidates().len(), 1);
+    let mut extract = |world: &mut World| {
+        let mut snap = RenderSnapshot::default();
+        fx.extract(&mut world.context(), &mut snap, 0);
+        let bb_min = world.resource::<PickIndex>().unwrap().entries[0].bb_min[0];
+        (snap, bb_min)
+    };
+    let (_, bb_min) = extract(&mut world);
+    assert!(bb_min >= 5.0, "bounds follow the authored position");
+
+    let entity = world.context().entity_of(AssetId(100)).unwrap();
+    world
+        .context()
+        .get_mut::<Transform>(entity)
+        .unwrap()
+        .position = [7.0, 0.0, 0.0];
+    let (snap, bb_min) = extract(&mut world);
+    assert!(snap.skinned_models.iter().any(|(idx, _)| *idx == template));
+    assert!(bb_min >= 7.0, "the index follows the move");
+
+    let out = assemble_skinned(&[geometry(0, 0, None)], &HashMap::new()).unwrap();
+    let mut world = World::new();
+    let mut picks = Vec::new();
+    spawn_skinned_templates(&mut world.context(), out.templates, &mut picks);
+    assert!(picks.is_empty());
+    assert_eq!(world.context().query::<Transform>().count(), 0);
+}

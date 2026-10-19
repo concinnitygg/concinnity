@@ -8,6 +8,8 @@
 //! [`current`] without either fixes the native backend. The runtime, the editor
 //! and the cook all read [`current`], so a world built in a process plays in it.
 
+pub(crate) mod device;
+
 use std::sync::OnceLock;
 
 use concinnity_core::platform::select::{native_platform, resolve};
@@ -63,7 +65,7 @@ pub fn current() -> Platform {
 /// answer and warns when it differs.
 pub fn select(requested: Option<Platform>) -> Platform {
     let selection = resolve(requested, native(), compiled(), |platform| {
-        crate::device::probe_device_on(platform).is_some()
+        crate::platform::device::probe_device_on(platform).is_some()
     });
     if let Some(fallback) = selection.fallback {
         tracing::warn!("{fallback}; rendering with {}", selection.platform.key());
@@ -102,7 +104,7 @@ pub fn select_persisted(tree: Option<&StateTree>) -> Platform {
 // The API the settings in `tree` ask this launch for, after moving the choice's
 // trial along (and saving it) the way the launch plan says.
 fn persisted_request(tree: Option<&StateTree>) -> Option<Platform> {
-    let mut settings = crate::settings::store::load(tree);
+    let mut settings = crate::persist::settings::load(tree);
     let launch = concinnity_core::settings::api_trial::plan(
         settings.graphics.graphics_api,
         settings.graphics.graphics_api_trial,
@@ -110,7 +112,7 @@ fn persisted_request(tree: Option<&StateTree>) -> Option<Platform> {
     if let Some(step) = launch.step {
         concinnity_core::settings::api_trial::apply(step, &mut settings.graphics);
         let _ = LAUNCH_STEP.set(step);
-        if let Err(e) = crate::settings::store::save(&settings, tree) {
+        if let Err(e) = crate::persist::settings::save(&settings, tree) {
             tracing::warn!("graphics API choice: could not save settings: {e}");
         }
     }
@@ -140,14 +142,14 @@ mod tests {
         let mut settings = concinnity_core::settings::StoredSettings::default();
         settings.graphics.graphics_api = Some(Platform::Vulkan);
         settings.graphics.graphics_api_trial = Some(GraphicsApiTrial::Untried);
-        crate::settings::store::save(&settings, Some(&tree)).unwrap();
+        crate::persist::settings::save(&settings, Some(&tree)).unwrap();
 
         assert_eq!(persisted_request(Some(&tree)), Some(Platform::Vulkan));
-        let stored = crate::settings::store::load(Some(&tree)).graphics;
+        let stored = crate::persist::settings::load(Some(&tree)).graphics;
         assert_eq!(stored.graphics_api_trial, Some(GraphicsApiTrial::Trying));
 
         assert_eq!(persisted_request(Some(&tree)), None);
-        let stored = crate::settings::store::load(Some(&tree)).graphics;
+        let stored = crate::persist::settings::load(Some(&tree)).graphics;
         assert_eq!(stored.graphics_api, None);
         assert_eq!(stored.graphics_api_trial, None);
     }
@@ -158,7 +160,7 @@ mod tests {
         let tree = StateTree::at(dir.path());
         let mut settings = concinnity_core::settings::StoredSettings::default();
         settings.graphics.graphics_api = Some(Platform::Vulkan);
-        crate::settings::store::save(&settings, Some(&tree)).unwrap();
+        crate::persist::settings::save(&settings, Some(&tree)).unwrap();
         let before = std::fs::read(tree.settings_path()).unwrap();
 
         assert_eq!(persisted_request(Some(&tree)), Some(Platform::Vulkan));

@@ -367,4 +367,32 @@ mod tests {
         assert!(reach(alone) <= 1.0);
         assert!(reach(widened) >= 55.0);
     }
+
+    // Declared probes replace the auto-seed a world with geometry would get,
+    // each placement keeping its capture distance, and stay resident: the
+    // editor's billboard drive can only address a live probe entity.
+    #[test]
+    fn declared_probes_replace_the_auto_seed_and_stay_resident() {
+        let objs = vec![draw(IDENTITY, [-1.0; 3], [1.0; 3], 0, 3, 0)];
+        let verts = vec![vert([0.0; 3]), vert([1.0, 0.0, 0.0]), vert([0.0, 0.0, 1.0])];
+        let idx = [0u32, 1, 2];
+        let probes =
+            [(0.0, None), (10.0, Some(6.0))].map(|(x, capture_distance)| ReflectionProbe {
+                position: [x, 1.0, 0.0],
+                half_extents: [4.0; 3],
+                capture_distance,
+                ..Default::default()
+            });
+        let mut world = crate::ecs::World::new();
+        for probe in &probes {
+            world.push(probe.clone());
+        }
+        let none: [&WaterSurface; 0] = [];
+        let placements = probe_placements(&world.context(), &objs, &verts, &idx, none, &[]);
+        assert_eq!(
+            placements,
+            probes.iter().map(ProbePlacement::from).collect::<Vec<_>>()
+        );
+        assert_eq!(world.context().query::<ReflectionProbe>().count(), 2);
+    }
 }

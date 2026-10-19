@@ -18,7 +18,7 @@ use concinnity_core::render::error::RenderError;
 use concinnity_host::store::paths::StateTree;
 use tracing_subscriber::EnvFilter;
 
-use crate::app::blob_source::BlobSource;
+use crate::app::blob::BlobSource;
 use crate::app::runloop;
 use crate::app::runtime::Runtime;
 use crate::app::startup_error::StartupError;
@@ -102,7 +102,7 @@ fn start_failure(e: WorldError) -> std::io::Error {
 // the user learns what happened, not a substitute for failing.
 fn report_startup_error(error: StartupError) -> std::io::Error {
     tracing::error!("{error}");
-    if !crate::error_screen::show("Concinnity", &error.user_message()) {
+    if !crate::render::error_screen::show("Concinnity", &error.user_message()) {
         // No window, so the log line above is the whole report; repeat it on
         // stderr, which a console user sees regardless of the tracing filter.
         eprintln!("{error}");
@@ -201,7 +201,7 @@ fn report_render_failure(cause: &RenderError) {
         "This app could not start its renderer.\n\n{cause}\n\n\
          Updating your graphics driver is the usual fix."
     );
-    if !crate::error_screen::show("Concinnity", &message) {
+    if !crate::render::error_screen::show("Concinnity", &message) {
         eprintln!("{message}");
     }
 }

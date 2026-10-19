@@ -30,6 +30,8 @@ use crate::sky::SkyOrientation;
 use crate::transform::propagation::{self, TransformCache};
 
 mod atmosphere;
+#[cfg(test)]
+mod bench;
 mod grass_benders;
 mod lights;
 mod lines;

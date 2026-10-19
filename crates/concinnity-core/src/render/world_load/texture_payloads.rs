@@ -83,3 +83,74 @@ pub fn decode_texture_payloads(
     }
     Some(TexturePayloads { images, payloads })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ecs::World;
+    use crate::test_support::OneSection;
+    use alloc::boxed::Box;
+
+    // A w x h mid-gray image in the compiled texture payload format.
+    fn payload(w: u32, h: u32) -> Vec<u8> {
+        texture::serialize(&TextureImage::rgba8(w, h, vec![0x7F; (w * h * 4) as usize]))
+    }
+
+    // A world whose blob holds a 2x2 then a 4x4 texture, and their locators.
+    fn two_textures() -> (World, Vec<PayloadLocator>) {
+        let mut section = OneSection::default();
+        let locators = vec![
+            section.payload(&payload(2, 2)),
+            section.payload(&payload(4, 4)),
+        ];
+        (World::from_payloads(Box::new(section)), locators)
+    }
+
+    fn size(image: &TextureImage) -> (u32, u32) {
+        (image.width(), image.height())
+    }
+
+    // A deferred slot enters the pool as a 1x1 placeholder. Disk-backed, it
+    // keeps no payload bytes (the streamer re-reads the blob file); RAM-backed,
+    // every slot's bytes are kept for the streamer to re-decode.
+    #[test]
+    fn a_deferred_slot_decodes_to_a_placeholder() {
+        let (mut world, locators) = two_textures();
+        let deferred = HashSet::from([1]);
+        let cook_only = BTreeSet::new();
+        let skips = || TextureSlotSkips {
+            deferred: &deferred,
+            cook_only: &cook_only,
+        };
+
+        let disk = decode_texture_payloads(&mut world.context(), &locators, skips(), true)
+            .expect("decodes");
+        assert_eq!(disk.images.len(), 2);
+        assert_eq!(size(&disk.images[0]), (2, 2));
+        assert_eq!(size(&disk.images[1]), (1, 1));
+        assert!(disk.payloads.is_empty());
+
+        let ram = decode_texture_payloads(&mut world.context(), &locators, skips(), false)
+            .expect("decodes");
+        assert_eq!(size(&ram.images[1]), (1, 1));
+        assert_eq!(ram.payloads, vec![payload(2, 2), payload(4, 4)]);
+    }
+
+    // A texture only the cook reads enters the pool as a 1x1 placeholder and
+    // its payload is never read: RAM-backed, its slot keeps an empty entry so
+    // the streamer's slots stay dense.
+    #[test]
+    fn a_cook_only_slot_stays_a_placeholder() {
+        let (mut world, locators) = two_textures();
+        let cook_only = BTreeSet::from([0]);
+        let skips = TextureSlotSkips {
+            deferred: &HashSet::new(),
+            cook_only: &cook_only,
+        };
+        let ram = decode_texture_payloads(&mut world.context(), &locators, skips, false)
+            .expect("decodes");
+        assert_eq!(size(&ram.images[0]), (1, 1));
+        assert_eq!(size(&ram.images[1]), (4, 4));
+        assert_eq!(ram.payloads, vec![Vec::new(), payload(4, 4)]);
+    }
+}

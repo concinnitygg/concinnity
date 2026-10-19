@@ -145,3 +145,141 @@ pub fn drain_sdf_volumes(
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::{Terrain, TerrainLayer};
+    use crate::ecs::{PayloadLocator, Ref, TextureHandle, World};
+    use crate::terrain::TerrainGrid;
+    use crate::terrain::payload::TerrainPayload;
+    use crate::test_support::OneSection;
+    use alloc::boxed::Box;
+    use alloc::string::ToString;
+    use alloc::vec;
+
+    const ORB: AssetId = AssetId(840);
+    const GRASS: AssetId = AssetId(834);
+
+    fn name_of(id: AssetId) -> Option<String> {
+        (id == ORB).then(|| "glass_orb".to_string())
+    }
+
+    // A flat terrain growing the GRASS layer.
+    fn grassy_terrain() -> LoadedTerrain {
+        LoadedTerrain {
+            terrain: Terrain {
+                extent: [8.0, 8.0],
+                resolution: 4,
+                layers: vec![TerrainLayer {
+                    grass: Ref::new(GRASS),
+                    density_mask: None,
+                }],
+                ..Default::default()
+            },
+            payload: TerrainPayload {
+                grid: TerrainGrid::new(4, [8.0, 8.0], vec![0.0; 25]).unwrap(),
+                masks: vec![None],
+            },
+            far_field: None,
+        }
+    }
+
+    fn sdf(locator: Option<PayloadLocator>) -> SdfVolume {
+        SdfVolume {
+            extent: [2.0; 3],
+            locator,
+            visible: true,
+            ..Default::default()
+        }
+    }
+
+    // The one-shot effects are resolved and drained: each becomes a backend
+    // record with no per-frame update path, so leaving the components behind
+    // would only invite a second, stale build. The terrain the grass grows on
+    // stays for the physics collider built after graphics init.
+    #[test]
+    fn the_one_shot_effects_are_resolved_and_drained() {
+        let mut section = OneSection::default();
+        let fragment = section.payload(b"sdf-fragment-bytes");
+        let mut world = World::from_payloads(Box::new(section));
+        world.push_identified(
+            AssetId(830),
+            Decal {
+                texture: Some(TextureHandle::new(0)),
+                size: [1.0; 3],
+                visible: true,
+                ..Default::default()
+            },
+        );
+        world.push_identified(
+            AssetId(831),
+            ParticleEmitter {
+                texture: Some(TextureHandle::new(0)),
+                max_particles: 16,
+                visible: true,
+                ..Default::default()
+            },
+        );
+        world.push(WaterSurface::default());
+        world.push(GlassPanel::default());
+        world.push(Wind::default());
+        world.push_identified(GRASS, Grass::default());
+        world.push(Terrain::default());
+        world.push_identified(AssetId(832), sdf(Some(fragment)));
+        world.push_identified(AssetId(833), sdf(None));
+
+        let fx = drain_world_fx(
+            &mut world.context(),
+            name_of,
+            1,
+            &[grassy_terrain()],
+            None,
+            None,
+            OceanQuality::FULL,
+        );
+        assert!(
+            fx.grass.is_some(),
+            "the terrain's grass resolves to a field"
+        );
+        assert_eq!(
+            fx.sdf_volumes.len(),
+            1,
+            "the payload-less volume is skipped"
+        );
+        let ctx = world.context();
+        assert_eq!(ctx.query::<Decal>().count(), 0);
+        assert_eq!(ctx.query::<ParticleEmitter>().count(), 0);
+        assert_eq!(ctx.query::<WaterSurface>().count(), 0);
+        assert_eq!(ctx.query::<GlassPanel>().count(), 0);
+        assert_eq!(ctx.query::<SdfVolume>().count(), 0);
+        assert_eq!(ctx.query::<Wind>().count(), 0);
+        assert_eq!(ctx.query::<Grass>().count(), 0);
+        assert_eq!(ctx.query::<Terrain>().count(), 1);
+    }
+
+    // A volume with no compiled payload, or one whose payload cannot be read,
+    // is skipped; a readable one keeps its bytes and its asset name as label.
+    #[test]
+    fn sdf_volumes_without_a_readable_payload_are_skipped() {
+        let mut section = OneSection::default();
+        let fragment = section.payload(b"sdf-fragment-bytes");
+        let mut world = World::from_payloads(Box::new(section));
+        world.push_identified(ORB, sdf(Some(fragment)));
+        world.push_identified(AssetId(841), sdf(None));
+        world.push_identified(
+            AssetId(842),
+            sdf(Some(PayloadLocator {
+                blob_index: 7,
+                offset: 0,
+                len: 4,
+            })),
+        );
+
+        let volumes = drain_sdf_volumes(&mut world.context(), name_of);
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].fragment_source, b"sdf-fragment-bytes");
+        assert_eq!(volumes[0].label, "glass_orb");
+        assert_eq!(world.context().query::<SdfVolume>().count(), 0, "drained");
+    }
+}

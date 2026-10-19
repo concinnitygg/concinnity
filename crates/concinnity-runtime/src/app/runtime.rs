@@ -11,9 +11,11 @@ use concinnity_host::thread::jobs::{self, configure, pool};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::app::blob;
+use crate::app::render_mode;
 use crate::app::startup_error::StartupError;
-use crate::blob;
-use crate::ecs::{RenderInitFailure, SYSTEMS, render_mode};
+use crate::lend::SYSTEMS;
+use crate::render::system::RenderInitFailure;
 use concinnity_core::ecs::ActiveRenderBackend;
 use concinnity_core::input::mailbox::InputMailbox;
 use concinnity_core::launch::LaunchRequest;

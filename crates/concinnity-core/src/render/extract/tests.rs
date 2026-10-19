@@ -357,6 +357,116 @@ fn extraction_resolves_menu_override_into_ui_intents() {
         Some(true),
         "no active menu screen, so the camera captures"
     );
+
+    // Forced edit mode: the overlay build folded the override into an active
+    // menu, so the backend enters menu mode with the cursor released.
+    world.insert_resource(MenuOverride(Some(true)));
+    world.insert_resource(menu_frame(true));
+    let snap = extract_once(&mut fx, &mut world);
+    assert_eq!(snap.ui.menu_mode, Some(true));
+    assert_eq!(snap.ui.camera_capture, Some(false));
+}
+
+// The overlay build of a frame whose menu is `active`.
+fn menu_frame(active: bool) -> OverlayFrame {
+    OverlayFrame {
+        calls: Vec::new(),
+        want_ui_cursor: false,
+        menu_active: active,
+        world_hidden: false,
+    }
+}
+
+// A menu-mode world releases the camera capture while its menu is open and
+// takes it back once the menu closes; menu mode itself was set at init.
+#[test]
+fn a_menu_mode_world_releases_the_camera_behind_an_open_menu() {
+    let mut world = World::new();
+    let mut fx = FrameExtractor::default();
+    fx.set_menu_mode(true);
+    world.insert_resource(menu_frame(true));
+    let snap = extract_once(&mut fx, &mut world);
+    assert_eq!(snap.ui.camera_capture, Some(false));
+    assert_eq!(snap.ui.menu_mode, None);
+
+    world.insert_resource(menu_frame(false));
+    assert_eq!(
+        extract_once(&mut fx, &mut world).ui.camera_capture,
+        Some(true)
+    );
+}
+
+// Each frame's extract adopts the overlay draw list and hands the spent one
+// back through `OverlayRecycle` for the next overlay build to reuse.
+#[test]
+fn extraction_hands_the_spent_overlay_list_back() {
+    let mut world = World::new();
+    let mut fx = FrameExtractor::default();
+    for _ in 0..2 {
+        extract_once(&mut fx, &mut world);
+        assert!(world.resource::<OverlayRecycle>().is_some());
+    }
+}
+
+// Without a camera-relative view the frame draws from the camera's own view
+// and position.
+#[test]
+fn extraction_reads_the_camera_view_without_a_relative_view() {
+    let mut world = World::new();
+    let cam = {
+        let mut ctx = world.context();
+        let e = ctx.components.spawn();
+        ctx.insert(e, camera_at(0.0));
+        e
+    };
+    let mut fx = FrameExtractor::default();
+    extract_once(&mut fx, &mut world);
+    *world.context().get_mut::<Camera3D>(cam).unwrap() = Camera3D {
+        position: [7.0, 8.0, 9.0],
+        view_matrix: translated(-7.0),
+        ..camera_at(0.0)
+    };
+    let snap = extract_once(&mut fx, &mut world);
+    assert_eq!(snap.frame.view, translated(-7.0));
+    assert_eq!(snap.frame.cam_pos, [7.0, 8.0, 9.0]);
+}
+
+// A Transform edit propagates into the entity's model: the first frame seeds
+// its slot, static frames push nothing, and one move pushes exactly one
+// update carrying the new matrix.
+#[test]
+fn a_transform_edit_pushes_one_model_update() {
+    let mut world = World::new();
+    let entity = {
+        let mut ctx = world.context();
+        let e = ctx.components.spawn();
+        ctx.insert(e, Transform::default());
+        ctx.insert(e, GlobalTransform(crate::transform::IDENTITY));
+        ctx.insert(
+            e,
+            RenderHandle {
+                draws: [DrawIndex(0)].into(),
+            },
+        );
+        e
+    };
+    let mut fx = FrameExtractor::default();
+    assert_eq!(extract_once(&mut fx, &mut world).models.len(), 1);
+    for _ in 0..2 {
+        assert!(extract_once(&mut fx, &mut world).models.is_empty());
+    }
+
+    world
+        .context()
+        .get_mut::<Transform>(entity)
+        .unwrap()
+        .position = [10.0, 20.0, 30.0];
+    let snap = extract_once(&mut fx, &mut world);
+    assert_eq!(snap.models.len(), 1, "one move, one update");
+    let (slot, model) = snap.models[0];
+    assert_eq!(slot, DrawIndex(0));
+    assert_eq!([model[3][0], model[3][1], model[3][2]], [10.0, 20.0, 30.0]);
+    assert!(extract_once(&mut fx, &mut world).models.is_empty());
 }
 
 // Editor-session hidden objects overwrite their queued models with the
@@ -421,4 +531,10 @@ fn extraction_applies_editor_hides_and_pick_index_only_when_opted_in() {
     );
     let index = world.resource::<PickIndex>().unwrap();
     assert!(index.entries.is_empty(), "a hidden asset is not pickable");
+
+    // Clearing the set restores both the real model and the index entry.
+    world.insert_resource(HiddenAssets::default());
+    let snap = extract_once(&mut fx, &mut world);
+    assert_eq!(snap.models, vec![(DrawIndex(9), translated(3.0))]);
+    assert_eq!(world.resource::<PickIndex>().unwrap().entries.len(), 1);
 }

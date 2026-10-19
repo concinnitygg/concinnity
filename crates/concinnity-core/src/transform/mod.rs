@@ -4,6 +4,8 @@
 //! through, and the quaternion conversions that let a rotation be interpolated
 //! along the shorter arc rather than component-wise through its Euler angles.
 
+#[cfg(test)]
+mod bench;
 pub mod propagation;
 
 use crate::math::{acos, sin, sin_cos, sqrt};

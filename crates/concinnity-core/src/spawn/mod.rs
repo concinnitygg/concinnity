@@ -16,3 +16,6 @@ pub use system::SpawnSystem;
 pub use template::{
     DueSpawn, spawn_from_template, spawn_skinned_from_template, tick_lifetimes, tick_spawners,
 };
+
+#[cfg(test)]
+mod tests;

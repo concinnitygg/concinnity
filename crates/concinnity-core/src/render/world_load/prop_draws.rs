@@ -96,3 +96,111 @@ pub fn assemble_prop_draws(
     }
     Some(data)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::{InstanceTransform, Prop};
+    use crate::ecs::{MeshHandle, World};
+    use crate::gfx::mesh_payload::Vertex;
+    use crate::render::extract::FrameExtractor;
+    use crate::render::snapshot::RenderSnapshot;
+    use crate::test_support::vertex;
+    use alloc::vec;
+
+    const PROP: AssetId = AssetId(4);
+
+    // A unit quad over x/z in [0, 1] at y = 0.
+    fn quad() -> LoadedMesh {
+        let at = |x, z| Vertex {
+            pos: [x, 0.0, z],
+            ..vertex()
+        };
+        LoadedMesh {
+            vertices: vec![at(0.0, 0.0), at(1.0, 0.0), at(1.0, 1.0), at(0.0, 1.0)],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            lod_alternates: Vec::new(),
+            bounds: None,
+            counts: None,
+        }
+    }
+
+    // A world with one PROP placing the quad at (1, 2, 3), decomposed the way
+    // the world's start does before graphics init.
+    fn placed_quad() -> World {
+        let mut world = World::new();
+        world.push_identified(
+            PROP,
+            Prop {
+                mesh: Some(MeshHandle::new(0)),
+                position: [1.0, 2.0, 3.0],
+                ..Default::default()
+            },
+        );
+        crate::ecs::decompose::run(&mut world.context());
+        world
+    }
+
+    fn assemble(world: &mut World, picks: &mut Vec<PickCandidate>) -> DrawListData {
+        let meshes = [quad()];
+        assemble_prop_draws(
+            &mut world.context(),
+            PropDrawInputs {
+                model_map: &HashMap::new(),
+                mesh_geometry: &meshes,
+                room_geometry: &[],
+                terrains: &[],
+                texture_count: 0,
+                material_map: &HashMap::new(),
+            },
+            picks,
+        )
+        .expect("assembles")
+    }
+
+    // An InstancedProp bakes its instances into one cluster rather than a draw
+    // object each, and is drained: it has no per-frame update path.
+    #[test]
+    fn an_instanced_prop_bakes_into_one_cluster_and_is_drained() {
+        let mut world = placed_quad();
+        world.push(InstancedProp {
+            mesh: Some(MeshHandle::new(0)),
+            instances: (0..3)
+                .map(|i| InstanceTransform {
+                    position: [i as f32 * 2.0, 0.0, 0.0],
+                    rotation_deg: [0.0; 3],
+                    scale: [1.0; 3],
+                })
+                .collect(),
+            ..Default::default()
+        });
+        let data = assemble(&mut world, &mut Vec::new());
+        assert_eq!(data.instanced_clusters.len(), 1, "one mesh, one cluster");
+        assert_eq!(data.draw_objects.len(), 1, "only the prop draws on its own");
+        assert_eq!(world.context().query::<InstancedProp>().count(), 0);
+    }
+
+    // Under the editor's PickIndex each prop becomes a pick candidate, and the
+    // frame publishes it with its world-space bounds; without one nothing is
+    // captured.
+    #[test]
+    fn props_become_pick_candidates_only_under_a_pick_index() {
+        let mut world = placed_quad();
+        world.insert_resource(PickIndex::default());
+        let mut fx = FrameExtractor::default();
+        assemble(&mut world, fx.pick_candidates_mut());
+        assert_eq!(fx.pick_candidates().len(), 1, "one candidate per prop");
+        fx.extract(&mut world.context(), &mut RenderSnapshot::default(), 0);
+        let index = world.resource::<PickIndex>().unwrap();
+        assert_eq!(index.entries.len(), 1);
+        let entry = &index.entries[0];
+        assert_eq!(entry.asset_id, PROP);
+        assert_eq!(entry.bb_min, [1.0, 2.0, 3.0]);
+        assert_eq!(entry.bb_max, [2.0, 2.0, 4.0]);
+
+        let mut world = placed_quad();
+        let mut picks = Vec::new();
+        assemble(&mut world, &mut picks);
+        assert!(picks.is_empty());
+    }
+}

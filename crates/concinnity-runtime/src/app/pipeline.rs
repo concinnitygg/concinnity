@@ -19,6 +19,7 @@
 //! channel returns render stats, op-replay results, and the consumed snapshot
 //! for buffer reuse.
 
+use concinnity_core::ecs::Parked;
 use concinnity_core::ecs::StepResult;
 use concinnity_core::input::snapshot::InputPacket;
 use concinnity_core::render::backend::RenderBackend;
@@ -31,11 +32,22 @@ use std::time::Instant;
 use crate::app::budget::main_thread_role;
 use crate::app::frame_gate::FrameGo;
 use crate::app::runtime::Runtime;
-use crate::ecs::PipelinedFrames;
-use crate::gfx::system::submit::submit;
+use crate::render::system::submit::submit;
 use concinnity_core::render::frame_submit::{FramePolicy, GoTiming};
 use concinnity_core::shutdown::ShutdownToken;
 use concinnity_host::clock::micros_since;
+
+// The channel pair, published (parked, so the per-step take never re-boxes)
+// before the world moves to the simulation thread. Present exactly when frames
+// are pipelined: GraphicsSystem's step extracts and sends the snapshot through
+// it instead of submitting against a parked backend (which the render half
+// owns), and applies the render half's feedback. Absent in serial execution.
+pub(crate) type PipelinedFrames = Parked<PipelineChannels>;
+
+pub(crate) struct PipelineChannels {
+    pub(crate) snapshot_tx: std::sync::mpsc::SyncSender<RenderSnapshot>,
+    pub(crate) feedback_rx: std::sync::mpsc::Receiver<FrameFeedback>,
+}
 
 // Drive a started Runtime with pipelined frames until it stops. Evicts the
 // backend from the world onto this (main) thread, publishes the channel pair,
@@ -58,7 +70,7 @@ pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
     runtime.gate_steps_on(gate);
     runtime
         .world_mut()
-        .insert_resource(PipelinedFrames::new(crate::ecs::PipelineChannels {
+        .insert_resource(PipelinedFrames::new(PipelineChannels {
             snapshot_tx,
             feedback_rx,
         }));

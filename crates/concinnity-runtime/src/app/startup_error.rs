@@ -3,7 +3,7 @@
 //! window. The classification happens here, where the paths involved are still
 //! known, and carries the load failure itself as its cause.
 
-use crate::blob::WorldLoadError;
+use crate::app::blob::WorldLoadError;
 use std::fmt;
 use std::path::PathBuf;
 

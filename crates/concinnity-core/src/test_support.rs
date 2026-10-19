@@ -299,3 +299,46 @@ mod tests {
         );
     }
 }
+
+// One resident payload section every locator reads from by its byte range,
+// filled through `payload` the way cook appends a payload to a blob.
+#[derive(Default)]
+pub(crate) struct OneSection(pub(crate) Vec<u8>);
+
+impl OneSection {
+    // Append `bytes` and return the locator that reads them back.
+    pub(crate) fn payload(&mut self, bytes: &[u8]) -> crate::ecs::PayloadLocator {
+        let offset = self.0.len() as u64;
+        self.0.extend_from_slice(bytes);
+        crate::ecs::PayloadLocator {
+            blob_index: 0,
+            offset,
+            len: bytes.len() as u64,
+        }
+    }
+}
+
+impl crate::ecs::PayloadStore for OneSection {
+    fn read(
+        &mut self,
+        locator: &crate::ecs::PayloadLocator,
+    ) -> Result<&[u8], crate::error::PayloadError> {
+        let start = locator.offset as usize;
+        let end = start + locator.len as usize;
+        self.0
+            .get(start..end)
+            .filter(|_| locator.blob_index == 0)
+            .ok_or(crate::error::PayloadError::OutOfBounds {
+                index: locator.blob_index,
+                offset: locator.offset,
+                len: locator.len,
+                section_len: self.0.len(),
+            })
+    }
+
+    fn release(&mut self, _blob_index: u32) {}
+
+    fn disk_backed(&self) -> bool {
+        false
+    }
+}

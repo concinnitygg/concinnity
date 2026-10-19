@@ -6,7 +6,8 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use super::*;
 use crate::components::DirectionalLight;
-use crate::render::backend::recording::{Call, recording_backend};
+use crate::gfx::render_types::DrawIndex;
+use crate::render::backend::recording::{Call, SharedRecording, recording_backend};
 use crate::render::error::DeviceLostReason;
 use crate::render::lights::DirectionalLightSet;
 
@@ -205,4 +206,137 @@ fn a_frame_carrying_lights_installs_them_before_the_draw() {
             sun.intensity
         )])]
     );
+}
+
+// Submit one frame per entry against one policy, each drawing with that
+// entry's failure, and return every frame's result plus the recording.
+fn frames_failing_with(failures: Vec<Option<RenderError>>) -> (Vec<StepResult>, SharedRecording) {
+    let (state, mut backend) = recording_backend();
+    let mut policy = FramePolicy::default();
+    let results = failures
+        .into_iter()
+        .map(|fail| {
+            state.lock().fail_draw = fail;
+            submit(
+                &mut policy,
+                &mut RenderSnapshot::default(),
+                &mut backend,
+                no_clock,
+            )
+            .result
+        })
+        .collect();
+    (results, state)
+}
+
+// An unclassified frame error skips frames up to its bound, then stops after
+// draining the (still healthy) device.
+#[test]
+fn an_unclassified_draw_error_skips_bounded_then_drains_and_stops() {
+    let boom = || Some(RenderError::Other("boom".to_string()));
+    let (results, state) = frames_failing_with(vec![boom(), boom(), boom()]);
+    assert_eq!(
+        results,
+        [StepResult::Continue, StepResult::Continue, StepResult::Stop]
+    );
+    assert!(state.lock().saw(&Call::WaitIdle));
+}
+
+// A frame drawing successfully resets the failure streak, so intermittent
+// errors never accumulate to a stop.
+#[test]
+fn a_drawn_frame_resets_the_failure_streak() {
+    let boom = || Some(RenderError::Other("boom".to_string()));
+    let failures = (0..3).flat_map(|_| [boom(), boom(), None]).collect();
+    let (results, _state) = frames_failing_with(failures);
+    assert!(results.iter().all(|r| *r == StepResult::Continue));
+}
+
+// A lost device stops at once and never drains: waiting on it blocks on a
+// queue that can never signal.
+#[test]
+fn a_lost_device_stops_without_draining() {
+    let lost = RenderError::DeviceLost {
+        reason: DeviceLostReason::Removed,
+        detail: "test".to_string(),
+    };
+    let (results, state) = frames_failing_with(vec![Some(lost)]);
+    assert_eq!(results, [StepResult::Stop]);
+    assert!(!state.lock().saw(&Call::WaitIdle));
+}
+
+// A swapchain mismatch and device-memory exhaustion are transient: the frame
+// is skipped and the run goes on within their bounds.
+#[test]
+fn transient_draw_errors_skip_the_frame_and_continue() {
+    let mut failures: Vec<_> = (0..5)
+        .map(|_| Some(RenderError::SwapchainOutOfDate))
+        .collect();
+    failures.extend((0..2).map(|_| Some(RenderError::OutOfDeviceMemory("test".to_string()))));
+    let (results, state) = frames_failing_with(failures);
+    assert!(results.iter().all(|r| *r == StepResult::Continue));
+    assert!(!state.lock().saw(&Call::WaitIdle));
+}
+
+// The snapshot's camera, models, ui intents and world visibility reach the
+// backend calls that apply them.
+#[test]
+fn the_snapshot_reaches_the_backend() {
+    let view = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [-7.0, -8.0, -9.0, 1.0],
+    ];
+    let mut model = view;
+    model[3] = [10.0, 20.0, 30.0, 1.0];
+    let (state, mut backend) = recording_backend();
+    let mut snap = RenderSnapshot::default();
+    snap.frame.view = view;
+    snap.frame.cam_pos = [7.0, 8.0, 9.0];
+    snap.frame.world_hidden = true;
+    snap.models = vec![(DrawIndex(0), model)];
+    snap.ui.menu_mode = Some(true);
+    snap.ui.camera_capture = Some(false);
+    submit(
+        &mut FramePolicy::default(),
+        &mut snap,
+        &mut backend,
+        no_clock,
+    );
+
+    let s = state.lock();
+    assert!(s.saw(&Call::UpdateView(view)));
+    assert!(s.saw(&Call::UpdateModel(DrawIndex(0))));
+    assert_eq!(s.models.get(&DrawIndex(0)), Some(&model));
+    assert!(s.saw(&Call::SetMenuMode(true)));
+    assert!(s.saw(&Call::SetCameraCapture(false)));
+    match s.last_draw_frame() {
+        Some(Call::DrawFrame {
+            cam_pos,
+            world_hidden,
+            ..
+        }) => {
+            assert_eq!(cam_pos, [7.0, 8.0, 9.0]);
+            assert!(world_hidden);
+        }
+        other => panic!("expected a DrawFrame, got {other:?}"),
+    }
+}
+
+// A frame with no changed models and no ui intents pushes neither.
+#[test]
+fn an_empty_snapshot_pushes_no_models_or_ui_intents() {
+    let (state, mut backend) = recording_backend();
+    submit(
+        &mut FramePolicy::default(),
+        &mut RenderSnapshot::default(),
+        &mut backend,
+        no_clock,
+    );
+    let s = state.lock();
+    assert!(!s.calls.iter().any(|c| matches!(
+        c,
+        Call::UpdateModel(_) | Call::SetMenuMode(_) | Call::SetCameraCapture(_)
+    )));
 }

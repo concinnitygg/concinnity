@@ -129,18 +129,53 @@ mod tests {
         let mut mat = material();
         mat.albedo = Some(TextureHandle::new(2));
         mat.normal_map = Some(TextureHandle::new(3));
-        let entry = of(MaterialHandle::new(0), &mat, 4).expect("bakes");
+        mat.emissive_map = Some(TextureHandle::new(1));
+        mat.orm_map = Some(TextureHandle::new(4));
+        let entry = of(MaterialHandle::new(0), &mat, 5).expect("bakes");
         assert_eq!(entry.albedo_slot, 2);
         assert_eq!(entry.normal_map_slot, 3);
+        assert_eq!(entry.uniforms.emissive_map_index, 1);
+        assert_eq!(entry.uniforms.orm_map_index, 4);
     }
 
     // A reference past the pool is a corrupt build; the field is named so the
     // caller can log which one.
     #[test]
     fn a_reference_past_the_pool_names_its_field() {
-        let mut mat = material();
-        mat.orm_map = Some(TextureHandle::new(9));
-        assert_eq!(of(MaterialHandle::new(0), &mat, 4).err(), Some("orm_map"));
+        let past = Some(TextureHandle::new(9));
+        let cases = [
+            (
+                "albedo",
+                Material {
+                    albedo: past,
+                    ..material()
+                },
+            ),
+            (
+                "normal_map",
+                Material {
+                    normal_map: past,
+                    ..material()
+                },
+            ),
+            (
+                "emissive_map",
+                Material {
+                    emissive_map: past,
+                    ..material()
+                },
+            ),
+            (
+                "orm_map",
+                Material {
+                    orm_map: past,
+                    ..material()
+                },
+            ),
+        ];
+        for (role, mat) in cases {
+            assert_eq!(of(MaterialHandle::new(0), &mat, 4).err(), Some(role));
+        }
     }
 
     #[test]

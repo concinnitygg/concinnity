@@ -43,6 +43,10 @@ use crate::window::display_mode;
 
 mod apply;
 mod init;
+#[cfg(test)]
+mod init_rows_tests;
+#[cfg(test)]
+mod init_tests;
 #[cfg(any(test, feature = "test-support"))]
 mod inspect;
 mod persist;

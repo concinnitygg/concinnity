@@ -350,6 +350,65 @@ fn the_fxaa_flag_follows_the_clamped_aa_mode() {
     assert_eq!(r.graphics.post_process().fxaa, AaMode::Fxaa.fxaa_flag());
 }
 
+// A world authoring every quality-governed section as `effects` sets it.
+fn effects_world(effects: &ResolvedGraphics) -> WorldSettings {
+    let e = effects.clone();
+    authored(GraphicsConfig {
+        ambient_occlusion: e.ambient_occlusion.into(),
+        reflections: e.reflections.into(),
+        indirect_lighting: e.indirect_lighting.into(),
+        anti_aliasing: e.anti_aliasing.into(),
+        exposure: e.exposure.into(),
+        ..Default::default()
+    })
+}
+
+fn graphics_under(
+    world: &WorldSettings,
+    user: &UserGraphicsSettings,
+    preset: QualityPreset,
+) -> ResolvedGraphics {
+    let ceiling = resolve_ceiling(preset, &GpuProfile::UNKNOWN);
+    SettingsLayers::new(world, &ceiling, user)
+        .resolve()
+        .graphics
+}
+
+#[test]
+fn hdr_samples_follow_the_clamped_aa_mode() {
+    let mut post = ResolvedGraphics::default();
+    post.anti_aliasing.mode = AaMode::Taa;
+    post.anti_aliasing.upscaling = false;
+    let world = effects_world(&post);
+    let user = UserGraphicsSettings::default();
+
+    let unclamped = graphics_under(&world, &user, QualityPreset::Custom);
+    assert!(unclamped.taa());
+    assert_eq!(unclamped.hdr_samples(), 1);
+    // The Low ceiling caps TAA to FXAA, which multisamples the HDR target.
+    let clamped = graphics_under(&world, &user, QualityPreset::Low);
+    assert!(!clamped.taa());
+    assert_eq!(
+        clamped.hdr_samples(),
+        crate::components::HDR_MULTISAMPLE_COUNT
+    );
+}
+
+#[test]
+fn upscale_scale_follows_the_render_scale_without_a_section() {
+    let user = UserGraphicsSettings {
+        render_scale: Some(UpscaleQuality::Performance),
+        ..Default::default()
+    };
+    let undeclared = WorldSettings::default();
+    let scaled = graphics_under(&undeclared, &user, QualityPreset::Custom);
+    assert_eq!(scaled.upscale_scale(), UpscaleQuality::Performance.scale());
+
+    let declared = effects_world(&ResolvedGraphics::default());
+    let scaled = graphics_under(&declared, &user, QualityPreset::Custom);
+    assert_eq!(scaled.upscale_scale(), UpscaleQuality::Performance.scale());
+}
+
 // Look tuning is not preset-governed, so a cleared set of Quality-row
 // overrides still carries the user's sub-quality sliders.
 #[test]

@@ -33,6 +33,8 @@ mod trace;
 #[cfg(test)]
 mod bench;
 #[cfg(test)]
+mod started_tests;
+#[cfg(test)]
 mod test_world;
 #[cfg(test)]
 mod tests;
