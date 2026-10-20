@@ -168,7 +168,7 @@ impl RangeAllocator {
     /// Number of distinct free blocks -- a fragmentation gauge for diagnostics.
     /// Observes coalescing, which no caller acts on but the tests assert.
     #[cfg(test)]
-    pub fn free_block_count(&self) -> usize {
+    fn free_block_count(&self) -> usize {
         self.free.len()
     }
 

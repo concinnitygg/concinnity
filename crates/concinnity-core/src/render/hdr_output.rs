@@ -92,7 +92,7 @@ impl HdrOutputMode {
     /// Value to push into `PostProcessParams.hdr_output` so the composite
     /// shader's `> 0.5` branch lights up on the HDR path and stays inert
     /// on the SDR path.
-    pub fn shader_flag(&self) -> f32 {
+    fn shader_flag(self) -> f32 {
         match self {
             Self::Sdr => 0.0,
             Self::Hdr { .. } => 1.0,

@@ -293,7 +293,8 @@ pub static GRAPHICS_SLIDERS: [GraphicsSlider; 16] = [
 ];
 
 /// The graphics slider for `key`, or `None` if it is not one.
-pub fn graphics_slider(key: SettingKey) -> Option<&'static GraphicsSlider> {
+#[cfg(test)]
+fn graphics_slider(key: SettingKey) -> Option<&'static GraphicsSlider> {
     GRAPHICS_SLIDERS.iter().find(|s| s.key == key)
 }
 

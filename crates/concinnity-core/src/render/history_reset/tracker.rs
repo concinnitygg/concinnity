@@ -54,7 +54,7 @@ pub struct FrameClock {
 
 impl FrameClock {
     /// Seconds of simulation this frame ran.
-    pub fn sim_seconds(&self) -> f32 {
+    fn sim_seconds(&self) -> f32 {
         self.ticks as f32 * self.tick_dt
     }
 }

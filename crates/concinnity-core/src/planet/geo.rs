@@ -2,9 +2,13 @@
 // conversions between them and the simulated frame.
 
 use super::PlanetFrame;
-use super::dvec::{self, DVec3};
+#[cfg(test)]
+use super::dvec;
+use super::dvec::DVec3;
 use super::shape::PlanetShape;
-use crate::math::{Quat, dvec3};
+#[cfg(test)]
+use crate::math::Quat;
+use crate::math::dvec3;
 
 // The north pole's direction from the center, in authored coordinates.
 const NORTH: DVec3 = [0.0, 0.0, -1.0];
@@ -124,7 +128,8 @@ impl PlanetShape {
 
     /// The authored point `height_above_ground` meters over the ground at
     /// `latitude` / `longitude` degrees.
-    pub fn geo_point(&self, latitude: f64, longitude: f64, height_above_ground: f64) -> DVec3 {
+    #[cfg(test)]
+    fn geo_point(&self, latitude: f64, longitude: f64, height_above_ground: f64) -> DVec3 {
         let dir = geo_direction(latitude, longitude);
         let r = self.radius + self.height(dir) + height_above_ground;
         dvec3::add(self.center, dvec3::scale(dir, r))
@@ -144,6 +149,7 @@ fn heading_of(up: DVec3, forward: DVec3) -> f64 {
 }
 
 // The level authored direction `heading` degrees clockwise from north at `up`.
+#[cfg(test)]
 fn heading_direction(up: DVec3, heading: f64) -> DVec3 {
     let [east, north, _] = geo_axes(up);
     let h = heading.to_radians();
@@ -161,7 +167,8 @@ impl PlanetFrame {
 
     /// The pose of something at local point `p` facing local direction
     /// `forward`, its heading taken from `forward` laid level.
-    pub fn geo_pose(&self, p: [f32; 3], forward: [f32; 3]) -> GeoPose {
+    #[cfg(test)]
+    fn geo_pose(&self, p: [f32; 3], forward: [f32; 3]) -> GeoPose {
         let world = self.frame.to_world(p);
         let at = self.shape.geo_at(world);
         GeoPose {
@@ -178,7 +185,8 @@ impl PlanetFrame {
     /// Where `pose` is in the simulated frame, and the rotation that turns
     /// something standing at the origin facing `-Z` with `+Y` up into it:
     /// standing on the planet's up there, facing its heading.
-    pub fn local_pose(&self, pose: &GeoPose) -> ([f32; 3], Quat) {
+    #[cfg(test)]
+    fn local_pose(&self, pose: &GeoPose) -> ([f32; 3], Quat) {
         let world = self
             .shape
             .geo_point(pose.latitude, pose.longitude, pose.height_above_ground);
@@ -194,7 +202,8 @@ impl PlanetFrame {
     /// The yaw that, at local point `p` and about the planet's up there (as
     /// [`crate::gfx::camera::view_matrix_about`] turns it), faces `heading`
     /// degrees clockwise from north.
-    pub fn yaw_for_heading(&self, p: [f32; 3], heading: f64) -> f32 {
+    #[cfg(test)]
+    fn yaw_for_heading(&self, p: [f32; 3], heading: f64) -> f32 {
         let world = self.frame.to_world(p);
         let up_world = dvec3::sub(world, self.shape.center);
         let forward = self
@@ -219,6 +228,7 @@ impl PlanetFrame {
 
 // `v`, given in the frame whose up is `up`, turned back into the frame whose
 // up is `+Y`: the inverse of `tilt_to_up`.
+#[cfg(test)]
 fn untilt(up: [f32; 3], v: [f32; 3]) -> [f32; 3] {
     crate::gfx::camera::tilt_to_up([-up[0], up[1], -up[2]], v)
 }

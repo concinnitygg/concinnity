@@ -20,7 +20,7 @@ const FULL_TURN_DEG: f32 = 360.0;
 /// camera moves as far as the frame took rather than by whole steps. Frozen
 /// while a world-pausing screen is open.
 #[derive(Debug)]
-pub struct CameraTrackSystem {
+pub(crate) struct CameraTrackSystem {
     travel: Vec<Key<3>>,
     // Held until `init`, which is the first point the heading the first leg
     // turns away from is known.
@@ -54,7 +54,7 @@ pub struct CameraTrackSystem {
 impl CameraTrackSystem {
     /// The system for a world that declares both a `CameraTrack` and the
     /// `Camera3D` it drives.
-    pub fn for_world(world: &World) -> Option<Self> {
+    pub(crate) fn for_world(world: &World) -> Option<Self> {
         let track = world.query::<CameraTrack>().next()?;
         world.query::<Camera3D>().next()?;
         Some(Self::new(track))
@@ -62,7 +62,7 @@ impl CameraTrackSystem {
 
     /// The system for a world's baked track. The travel list is ready here;
     /// the turn list waits for `init` to supply the camera's starting heading.
-    pub fn new(track: &CameraTrack) -> Self {
+    pub(crate) fn new(track: &CameraTrack) -> Self {
         Self {
             travel: track
                 .travel
@@ -91,12 +91,12 @@ impl CameraTrackSystem {
     }
 
     /// How long the whole track runs: whichever of its two lists lasts longer.
-    pub fn duration(&self) -> f32 {
+    pub(crate) fn duration(&self) -> f32 {
         timeline::duration(&self.travel).max(timeline::duration(&self.turn))
     }
 
     /// Seconds of simulated time the track has run for.
-    pub fn elapsed(&self) -> f32 {
+    pub(crate) fn elapsed(&self) -> f32 {
         self.ticks as f32 * self.tick_dt
     }
 

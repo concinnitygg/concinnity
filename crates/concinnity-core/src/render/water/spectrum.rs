@@ -14,7 +14,7 @@ pub const WIND_SEA_WAVES: usize = 20;
 
 /// The slowest mean wind, in meters per second, that raises a wind sea. Below
 /// it the surface keeps only its ripples.
-pub const CALM_WIND: f32 = 0.5;
+const CALM_WIND: f32 = 0.5;
 
 // The dimensionless fetch `g F / U^2` past which the sea is fully developed: a
 // longer fetch builds nothing more (Pierson-Moskowitz).
@@ -65,14 +65,14 @@ impl Wave {
 /// The angular frequency, in radians per second, of the waves carrying the
 /// most energy in a sea a `wind_speed` m/s wind builds over `fetch` meters of
 /// open water (JONSWAP; a long enough fetch reaches the fully developed sea).
-pub fn peak_angular_frequency(wind_speed: f32, fetch: f32) -> f32 {
+fn peak_angular_frequency(wind_speed: f32, fetch: f32) -> f32 {
     let x = dimensionless_fetch(wind_speed, fetch);
     22.0 * (GRAVITY / wind_speed) * powf(x, -1.0 / 3.0)
 }
 
 /// The wavelength, in meters, of a deep-water wave of angular frequency
 /// `omega`.
-pub fn wavelength_of(omega: f32) -> f32 {
+fn wavelength_of(omega: f32) -> f32 {
     TAU * GRAVITY / (omega * omega)
 }
 
@@ -93,7 +93,7 @@ pub struct SeaShape {
 
 impl SeaShape {
     /// The sea a `wind_speed` m/s wind builds over `fetch` meters, or `None`
-    /// below [`CALM_WIND`] or over no fetch.
+    /// below `CALM_WIND` or over no fetch.
     pub fn new(wind_speed: f32, fetch: f32) -> Option<Self> {
         // Written to also refuse a NaN speed or fetch.
         let calm = wind_speed.is_nan() || wind_speed < CALM_WIND;
@@ -182,7 +182,7 @@ pub(super) fn unit_hash(i: u32, salt: u32) -> f32 {
 /// wavelengths spread geometrically around the spectrum's peak, each carrying
 /// its band's share of the energy. Headings scatter around the wind, wider
 /// for waves far from the peak, with every few running across it. The same
-/// inputs give the same waves. Empty below [`CALM_WIND`].
+/// inputs give the same waves. Empty below `CALM_WIND`.
 pub fn wind_sea(wind_speed: f32, direction: [f32; 2], fetch: f32) -> Vec<Wave> {
     let Some(sea) = SeaShape::new(wind_speed, fetch) else {
         return Vec::new();

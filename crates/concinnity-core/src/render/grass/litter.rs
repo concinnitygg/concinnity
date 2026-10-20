@@ -5,14 +5,16 @@
 //! point in the planet's own frame), so they hold still under the camera and
 //! every move of the simulated frame.
 //!
-//! [`ground_variation`] is the shaders' `grass_ground_variation` line for
+//! `ground_variation` is the shaders' `grass_ground_variation` line for
 //! line.
 
+#[cfg(test)]
 use super::planet::density::grass_hash;
+#[cfg(test)]
 use crate::math::{SaturatingFrom, floor, lerp, smoothstep};
 
 /// The hue dead grass browns toward, at unit luminance.
-pub const LITTER_HUE: [f32; 3] = [1.38, 0.94, 0.52];
+const LITTER_HUE: [f32; 3] = [1.38, 0.94, 0.52];
 
 // How far a derived litter color moves from the root's hue to brown, and how
 // much darker than the root it lies.
@@ -21,14 +23,17 @@ const LITTER_SHADE: f32 = 0.8;
 
 /// Sizes of the ground's patches, finest first, in meters. Matches
 /// `GRASS_LITTER_SCALES` in the shaders.
-pub const LITTER_SCALES: [f32; 3] = [0.45, 1.8, 7.0];
+#[cfg(test)]
+const LITTER_SCALES: [f32; 3] = [0.45, 1.8, 7.0];
 
 // Salts of the patch noises, one per scale.
+#[cfg(test)]
 const SALTS: [u32; 3] = [0x6a09_e667, 0xbb67_ae85, 0x3c6e_f372];
 
 /// A unit value at a 3D lattice point, salted, from a single hash step. The
 /// shaders' `grass_patch_lattice`.
-pub fn patch_lattice(c: [i32; 3], salt: u32) -> f32 {
+#[cfg(test)]
+fn patch_lattice(c: [i32; 3], salt: u32) -> f32 {
     let h = grass_hash(
         c[0].cast_unsigned().wrapping_mul(0x8da6_b343)
             ^ c[1].cast_unsigned().wrapping_mul(0xd816_3841)
@@ -40,7 +45,8 @@ pub fn patch_lattice(c: [i32; 3], salt: u32) -> f32 {
 
 /// Trilinear value noise in [0, 1] over [`patch_lattice`]: the shaders'
 /// `grass_patch_value_noise3`.
-pub fn patch_noise(p: [f32; 3], salt: u32) -> f32 {
+#[cfg(test)]
+fn patch_noise(p: [f32; 3], salt: u32) -> f32 {
     let cell = p.map(floor);
     let f: [f32; 3] = core::array::from_fn(|i| {
         let t = p[i] - cell[i];
@@ -74,7 +80,8 @@ pub fn litter_color(root_color: [f32; 3]) -> [f32; 3] {
 /// (`[0]`, in [0.35, 1]), how dark the earth is (`[1]`, a multiplier in
 /// [0.65, 1]), and how dry and light the litter is (`[2]`, in [0, 1]).
 /// Patches a pixel cannot hold fade to their mean.
-pub fn ground_variation(p: [f32; 3], footprint: f32) -> [f32; 3] {
+#[cfg(test)]
+fn ground_variation(p: [f32; 3], footprint: f32) -> [f32; 3] {
     let [fine, mid, broad] = core::array::from_fn(|i| {
         let scale = LITTER_SCALES[i];
         let detail = 1.0 - smoothstep(scale * 0.5, scale * 2.0, footprint);

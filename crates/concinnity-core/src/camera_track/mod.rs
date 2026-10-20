@@ -12,5 +12,5 @@ mod status;
 mod system;
 mod timeline;
 
-pub use status::CameraTrackStatus;
-pub use system::CameraTrackSystem;
+pub(crate) use status::CameraTrackStatus;
+pub(crate) use system::CameraTrackSystem;

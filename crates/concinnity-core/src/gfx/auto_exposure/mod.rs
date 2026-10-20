@@ -33,7 +33,7 @@ pub const EV_LIMIT: f32 = 24.0;
 /// the average pixel reads as a comfortable mid-tone instead of "scene
 /// white = SDR reference white = bright" (which only worked on the SDR path
 /// because the ACES tonemap implicitly compressed scene-white back down).
-pub const HDR_MIDDLE_GRAY_LOG2: f32 = -2.473;
+const HDR_MIDDLE_GRAY_LOG2: f32 = -2.473;
 
 /// Share of a frame's pixels, the black ones counted, that the highlight
 /// measurement takes as the frame's brightest.
@@ -53,11 +53,11 @@ pub const HIGHLIGHT_HEADROOM_EV: f32 = 2.0;
 /// How many stops under a luminance of 1 a scene's mean sits where the night
 /// bias starts to ease in: the end of civil dusk under a sun of a few units'
 /// intensity.
-pub const NIGHT_BIAS_START: f32 = 15.0;
+const NIGHT_BIAS_START: f32 = 15.0;
 
 /// How many stops under a luminance of 1 a scene's mean sits where the night
 /// bias applies in full: a moonlit night under the same sun.
-pub const NIGHT_BIAS_FULL: f32 = 22.0;
+const NIGHT_BIAS_FULL: f32 = 22.0;
 
 /// Clamped auto-exposure tunables resolved from the authored asset fields. Held
 /// by the backend; the per-frame EMA in `AutoExposureState::update` reads them
@@ -79,7 +79,7 @@ pub struct AutoExposureSettings {
     /// from `Display.hdr` at asset time.
     pub target_log_lum: f32,
     /// Stops added to the target of a dark scene, eased in by its measured
-    /// mean luminance between [`NIGHT_BIAS_START`] and [`NIGHT_BIAS_FULL`]
+    /// mean luminance between `NIGHT_BIAS_START` and `NIGHT_BIAS_FULL`
     /// stops under 1. Negative keeps a fully adapted night darker than a day.
     pub night_bias_ev: f32,
     /// How far, in `[0, 1]`, the composite turns a dark scene to night
@@ -131,7 +131,7 @@ impl AutoExposureSettings {
 
     /// The highest EV that keeps a frame whose brightest pixels start at
     /// `highlight_log_lum` within the highlight headroom.
-    pub fn highlight_cap(&self, highlight_log_lum: f32) -> f32 {
+    fn highlight_cap(&self, highlight_log_lum: f32) -> f32 {
         self.highlight_headroom_ev - highlight_log_lum
     }
 
@@ -162,7 +162,7 @@ impl AutoExposureSettings {
     /// The night bias for a scene whose measured mean log2 luminance is
     /// `avg_log_lum`: none down to [`NIGHT_BIAS_START`] stops under 1, all
     /// of it from [`NIGHT_BIAS_FULL`] on, a smoothstep between.
-    pub fn night_bias(&self, avg_log_lum: f32) -> f32 {
+    fn night_bias(&self, avg_log_lum: f32) -> f32 {
         let t = ((-avg_log_lum - NIGHT_BIAS_START) / (NIGHT_BIAS_FULL - NIGHT_BIAS_START))
             .clamp(0.0, 1.0);
         self.night_bias_ev * t * t * (3.0 - 2.0 * t)

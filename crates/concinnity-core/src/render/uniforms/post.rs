@@ -42,7 +42,7 @@ pub struct AutoExposureParams {
 impl AutoExposureParams {
     /// The mapping for the histogram the engine builds by default:
     /// `HISTOGRAM_BINS` bins spanning `LUM_LOG2_MIN..LUM_LOG2_MAX`.
-    pub const HISTOGRAM: Self = Self::spanning(LUM_LOG2_MIN);
+    const HISTOGRAM: Self = Self::spanning(LUM_LOG2_MIN);
 
     /// `HISTOGRAM_BINS` bins spanning `floor..LUM_LOG2_MAX`.
     pub const fn spanning(floor: f32) -> Self {

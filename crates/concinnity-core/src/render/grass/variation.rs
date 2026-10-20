@@ -5,21 +5,23 @@
 //! field read the same drift wherever they meet and it never moves with the
 //! simulated frame.
 //!
-//! [`macro_variation`] and [`macro_tint`] are the shaders' `grass_macro` and
+//! [`macro_variation`] and `macro_tint` are the shaders' `grass_macro` and
 //! `grass_macro_tint` line for line.
 
 use super::planet::density::value_noise;
 
 /// Size of the smaller patches the drift is made of, in meters.
-pub const MACRO_NEAR_SIZE: f32 = 150.0;
+const MACRO_NEAR_SIZE: f32 = 150.0;
 
 /// Size of the larger stretches, in meters.
-pub const MACRO_FAR_SIZE: f32 = 1200.0;
+const MACRO_FAR_SIZE: f32 = 1200.0;
 
 /// The tint a dry clump or a dry stretch of field leans toward.
-pub const DRY_TINT: [f32; 3] = [1.35, 1.1, 0.55];
+#[cfg(test)]
+const DRY_TINT: [f32; 3] = [1.35, 1.1, 0.55];
 
 // How much lighter or deeper the green of a lush or sparse patch reads.
+#[cfg(test)]
 const LUSH_SHIFT: f32 = 0.3;
 // How much drier a slope grows per unit of `1 - cos` of its angle.
 const SLOPE_DRYNESS: f32 = 4.0;
@@ -51,7 +53,8 @@ pub fn macro_variation(
 
 /// The multiplier a drift `m` (from [`macro_variation`]) puts on a blade's
 /// color.
-pub fn macro_tint(m: [f32; 2]) -> [f32; 3] {
+#[cfg(test)]
+fn macro_tint(m: [f32; 2]) -> [f32; 3] {
     core::array::from_fn(|i| (1.0 + (DRY_TINT[i] - 1.0) * m[0]) * (1.0 + LUSH_SHIFT * m[1]))
 }
 

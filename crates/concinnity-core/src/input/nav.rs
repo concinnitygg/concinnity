@@ -17,7 +17,7 @@ const STICK_PRESS: f32 = 0.5;
 const STICK_RELEASE: f32 = 0.35;
 
 /// Held d-pad directions, in `[up, down, left, right]` order.
-pub type DpadHeld = [bool; 4];
+type DpadHeld = [bool; 4];
 
 /// Auto-repeat state for the navigation pulse: which direction is being
 /// commanded (d-pad or stick) and how long until the next repeat fires.

@@ -33,10 +33,10 @@ fn perspective_90(near: f32) -> [[f32; 4]; 4] {
 /// Near plane of every probe face. The capture is independent of the live
 /// camera's near plane and view distance, so a probe sees the same scene
 /// whatever the camera's are.
-pub const CAPTURE_NEAR: f32 = 0.05;
+const CAPTURE_NEAR: f32 = 0.05;
 
 /// The view-projection for cube face `face` (0..6) captured from `eye`, from
-/// [`CAPTURE_NEAR`] out to infinity.
+/// `CAPTURE_NEAR` out to infinity.
 pub fn face_view_projection(eye: [f32; 3], face: usize) -> [[f32; 4]; 4] {
     let b = FACE_BASIS[face];
     let view = view_from_basis(eye, b[0], b[1], b[2]);

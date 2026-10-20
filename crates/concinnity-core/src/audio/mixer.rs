@@ -182,7 +182,8 @@ impl<O: AudioOut + ?Sized> Mixer<O> {
     }
 
     /// One-shot voices playing, or waiting on a decode.
-    pub fn playing_sounds(&self) -> usize {
+    #[cfg(test)]
+    fn playing_sounds(&self) -> usize {
         self.voices.len()
     }
 
@@ -344,7 +345,7 @@ fn target_index(target: AudioTarget) -> usize {
 
 /// A linear gain in decibels: 1.0 is 0 dB, and gains at or below about -80 dB
 /// clamp so silence does not read as `-inf`.
-pub fn gain_to_db(gain: f32) -> f32 {
+fn gain_to_db(gain: f32) -> f32 {
     20.0 * math::log10(gain.max(1.0e-4))
 }
 

@@ -110,7 +110,7 @@ pub fn drain_world_fx(
 /// no payload, or one whose payload cannot be read, is skipped with a warning
 /// rather than failing the world build. `name_of` labels each by its asset's
 /// name.
-pub fn drain_sdf_volumes(
+fn drain_sdf_volumes(
     ctx: &mut PipelineContext<'_>,
     name_of: fn(AssetId) -> Option<String>,
 ) -> Vec<SdfVolumeSource> {

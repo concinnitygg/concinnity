@@ -30,7 +30,8 @@ impl Block {
     }
 
     /// The HLSL struct the block is declared as.
-    pub const fn declared_as(self) -> &'static str {
+    #[cfg(test)]
+    const fn declared_as(self) -> &'static str {
         match self {
             Self::View => "ViewUniforms",
             Self::Lights => "LightUniforms",
@@ -65,7 +66,8 @@ pub const VARYING_STRUCT: &str = "VertexOut";
 impl Kind {
     /// The HLSL struct declaring a field kind; `None` for a function or a
     /// type.
-    pub const fn declared_in(self) -> Option<&'static str> {
+    #[cfg(test)]
+    const fn declared_in(self) -> Option<&'static str> {
         match self {
             Self::Helper | Self::Hook | Self::Type => None,
             Self::BlockField(b) => Some(b.declared_as()),

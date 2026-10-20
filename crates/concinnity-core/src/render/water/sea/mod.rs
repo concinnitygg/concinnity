@@ -30,7 +30,7 @@ pub const SEA_FACES: usize = 3;
 /// How far a sea's grid reaches from its anchor, in planet radii along the
 /// sphere's tangent plane, before the stretch of its face: enough for the
 /// horizon from about a quarter of a radius up.
-pub const SEA_GRID_REACH_RADII: f32 = 0.6;
+const SEA_GRID_REACH_RADII: f32 = 0.6;
 
 // The widest a face's stereographic map stretches, at the cube's corners:
 // 2 / (1 + 1 / sqrt(3)).

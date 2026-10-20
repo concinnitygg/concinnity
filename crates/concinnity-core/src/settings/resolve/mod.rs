@@ -331,7 +331,7 @@ fn resolve_quality(
 
 /// Overlay the user's sliders (look tuning, not preset-governed) onto settings
 /// already carrying the world's values.
-pub fn overlay_sliders(graphics: &mut ResolvedGraphics, user: &UserGraphicsSettings) {
+fn overlay_sliders(graphics: &mut ResolvedGraphics, user: &UserGraphicsSettings) {
     for s in &GRAPHICS_SLIDERS {
         if let Some(v) = *(s.persisted.get)(user) {
             *(s.field.get_mut)(graphics) = (s.apply)(v);
@@ -358,7 +358,7 @@ pub fn overlay_quality_overrides(graphics: &mut ResolvedGraphics, user: &UserGra
 /// Clamp the preset-governed settings under the ceiling: a feature the tier
 /// forbids turns off and a cycle knob lowers, except where the user chose that
 /// row. Only ever reduces, so a config within the ceiling passes untouched.
-pub fn clamp_quality_under_ceiling(
+fn clamp_quality_under_ceiling(
     graphics: &mut ResolvedGraphics,
     user: &UserGraphicsSettings,
     ceiling: &QualityCeiling,

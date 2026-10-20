@@ -9,34 +9,42 @@
 //! a pixel: a sub-pixel jitter moves the light between pixels without
 //! changing its total, and a temporal filter sees a steady point.
 
+#[cfg(test)]
 use super::hash::{night_hash, night_unit};
-use crate::math::{SaturatingFrom, exp, ln, powf, sqrt};
+use crate::math::powf;
+#[cfg(test)]
+use crate::math::{SaturatingFrom, exp, ln, sqrt};
 
 /// Cells along each edge of a cube face.
-pub const STAR_GRID: u32 = 128;
+#[cfg(test)]
+pub(crate) const STAR_GRID: u32 = 128;
 /// Stars brighter than [`NAKED_EYE_LIMIT`] over the whole sky.
-pub const NAKED_EYE_STARS: f32 = 9000.0;
+pub(crate) const NAKED_EYE_STARS: f32 = 9000.0;
 /// The magnitude [`NAKED_EYE_STARS`] counts down to.
-pub const NAKED_EYE_LIMIT: f32 = 6.5;
+pub(crate) const NAKED_EYE_LIMIT: f32 = 6.5;
 /// How fast the count grows with magnitude: each magnitude fainter holds
 /// `10^COUNT_SLOPE` times as many stars as the one before.
-pub const COUNT_SLOPE: f32 = 0.5;
+pub(crate) const COUNT_SLOPE: f32 = 0.5;
 /// The brightest a star is drawn.
-pub const BRIGHTEST_MAGNITUDE: f32 = -1.5;
+#[cfg(test)]
+pub(crate) const BRIGHTEST_MAGNITUDE: f32 = -1.5;
 /// The faintest-star magnitudes a sky may ask for. The upper end keeps a
 /// face-center cell's chance of holding a star at or under 1.
-pub const LIMIT_RANGE: [f32; 2] = [2.0, 8.0];
+pub(crate) const LIMIT_RANGE: [f32; 2] = [2.0, 8.0];
 /// Width of a star's Gaussian, in pixels.
-pub const STAR_SIGMA_PX: f32 = 0.6;
+#[cfg(test)]
+pub(crate) const STAR_SIGMA_PX: f32 = 0.6;
 /// How far from the edges of a cube face its border cells keep their stars,
 /// as a fraction of a cell: a star's footprint never crosses into the next
 /// face, whose cells the lookup does not visit.
-pub const FACE_MARGIN: f32 = 0.25;
+#[cfg(test)]
+pub(crate) const FACE_MARGIN: f32 = 0.25;
 /// How much of a star's blackbody tint is kept.
-pub const STAR_SATURATION: f32 = 0.7;
+#[cfg(test)]
+pub(crate) const STAR_SATURATION: f32 = 0.7;
 
 /// Mean stars per steradian down to magnitude `limit`.
-pub fn stars_per_steradian(limit: f32) -> f32 {
+pub(crate) fn stars_per_steradian(limit: f32) -> f32 {
     let limit = limit.clamp(LIMIT_RANGE[0], LIMIT_RANGE[1]);
     NAKED_EYE_STARS * powf(10.0, COUNT_SLOPE * (limit - NAKED_EYE_LIMIT))
         / (4.0 * core::f32::consts::PI)
@@ -45,7 +53,8 @@ pub fn stars_per_steradian(limit: f32) -> f32 {
 /// The cube face `dir` points through and its coordinates on that face, each
 /// in `[-1, 1]`. Face `2a + s` lies along axis `a`, positive when `s` is 0;
 /// `u` runs along the next axis and `v` the one after.
-pub fn cube_face(dir: [f32; 3]) -> (u32, f32, f32) {
+#[cfg(test)]
+pub(crate) fn cube_face(dir: [f32; 3]) -> (u32, f32, f32) {
     let abs = dir.map(f32::abs);
     let axis = if abs[0] >= abs[1] && abs[0] >= abs[2] {
         0
@@ -64,7 +73,8 @@ pub fn cube_face(dir: [f32; 3]) -> (u32, f32, f32) {
 }
 
 /// The direction (not normalized) through `(u, v)` on cube face `face`.
-pub fn face_direction(face: u32, u: f32, v: f32) -> [f32; 3] {
+#[cfg(test)]
+pub(crate) fn face_direction(face: u32, u: f32, v: f32) -> [f32; 3] {
     let axis = (face / 2) as usize;
     let mut d = [0.0; 3];
     d[axis] = if face.is_multiple_of(2) { 1.0 } else { -1.0 };
@@ -74,7 +84,8 @@ pub fn face_direction(face: u32, u: f32, v: f32) -> [f32; 3] {
 }
 
 /// The solid angle of cell `(i, j)` of a face, taken at its center.
-pub fn cell_solid_angle(i: u32, j: u32) -> f32 {
+#[cfg(test)]
+pub(crate) fn cell_solid_angle(i: u32, j: u32) -> f32 {
     let w = 2.0 / STAR_GRID as f32;
     let u = -1.0 + (i as f32 + 0.5) * w;
     let v = -1.0 + (j as f32 + 0.5) * w;
@@ -84,7 +95,8 @@ pub fn cell_solid_angle(i: u32, j: u32) -> f32 {
 
 /// One star.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Star {
+#[cfg(test)]
+pub(crate) struct Star {
     /// Unit direction in the celestial sphere's frame.
     pub direction: [f32; 3],
     /// Apparent magnitude: 5 magnitudes fainter is 100 times dimmer.
@@ -96,7 +108,8 @@ pub struct Star {
 /// The star in cell `(i, j)` of face `face`, if it holds one. `seed` is the
 /// sky's 24-bit seed lane ([`super::seed_lane`]) and `density` its stars per
 /// steradian ([`stars_per_steradian`]).
-pub fn star_in_cell(
+#[cfg(test)]
+pub(crate) fn star_in_cell(
     seed: u32,
     density: f32,
     limit: f32,
@@ -131,7 +144,8 @@ pub fn star_in_cell(
 /// The magnitude at quantile `u` of the stars down to `limit`: the count
 /// brighter than `m` grows as `10^(COUNT_SLOPE m)`, so most stars sit near
 /// the limit and a few are bright.
-pub fn magnitude_of(u: f32, limit: f32) -> f32 {
+#[cfg(test)]
+pub(crate) fn magnitude_of(u: f32, limit: f32) -> f32 {
     let limit = limit.clamp(LIMIT_RANGE[0], LIMIT_RANGE[1]);
     let log10 = ln(u.max(1e-7)) / core::f32::consts::LN_10;
     (limit + log10 / COUNT_SLOPE).max(BRIGHTEST_MAGNITUDE)
@@ -139,14 +153,16 @@ pub fn magnitude_of(u: f32, limit: f32) -> f32 {
 
 /// The temperature at quantile `u`: 3000 K to 30000 K, most stars cool and
 /// sun-like and a few hot and blue.
-pub fn temperature_of(u: f32) -> f32 {
+#[cfg(test)]
+pub(crate) fn temperature_of(u: f32) -> f32 {
     3000.0 * powf(10.0, powf(u, 1.6))
 }
 
 /// A blackbody's color at `temperature` kelvin, sampled at a red, green and
 /// blue wavelength, with [`STAR_SATURATION`] of its tint kept and scaled to
 /// unit luminance.
-pub fn blackbody_color(temperature: f32) -> [f32; 3] {
+#[cfg(test)]
+pub(crate) fn blackbody_color(temperature: f32) -> [f32; 3] {
     const C2: f32 = 14_388.0;
     const WAVELENGTHS_UM: [f32; 3] = [0.610, 0.550, 0.465];
     let planck = WAVELENGTHS_UM.map(|l| {
@@ -158,20 +174,22 @@ pub fn blackbody_color(temperature: f32) -> [f32; 3] {
 }
 
 /// Rec. 709 luminance.
-pub fn luminance(c: [f32; 3]) -> f32 {
+pub(crate) fn luminance(c: [f32; 3]) -> f32 {
     0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
 }
 
 /// The share of a star's light a pixel takes along one axis, the star
 /// `offset_px` pixels from the pixel's center: its Gaussian integrated over
 /// the pixel's width.
-pub fn footprint(offset_px: f32) -> f32 {
+#[cfg(test)]
+pub(crate) fn footprint(offset_px: f32) -> f32 {
     let k = 1.0 / (STAR_SIGMA_PX * core::f32::consts::SQRT_2);
     0.5 * (erf((offset_px + 0.5) * k) - erf((offset_px - 0.5) * k))
 }
 
 // An odd, saturating fit to the error function (within 4e-4); the footprint
 // telescopes, so its total stays exact whatever the fit's error.
+#[cfg(test)]
 fn erf(x: f32) -> f32 {
     let x = (x * (core::f32::consts::FRAC_2_SQRT_PI + 0.100_91 * x * x)).clamp(-15.0, 15.0);
     1.0 - 2.0 / (exp(2.0 * x) + 1.0)

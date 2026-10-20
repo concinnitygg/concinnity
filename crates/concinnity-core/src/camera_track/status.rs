@@ -7,7 +7,7 @@
 ///
 /// A world with no track never publishes one.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct CameraTrackStatus {
+pub(crate) struct CameraTrackStatus {
     /// Seconds of simulated time the track has run for, counted in whole
     /// fixed steps.
     pub elapsed_seconds: f32,

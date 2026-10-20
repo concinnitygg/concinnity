@@ -13,7 +13,9 @@
 //! always at hand. The bend pass and the blade kernel in `grass.hlsl` mirror
 //! the addressing and the stamp below.
 
-use crate::math::{SaturatingFrom, exp, floor, sqrt};
+#[cfg(test)]
+use crate::math::sqrt;
+use crate::math::{SaturatingFrom, exp, floor};
 use alloc::vec::Vec;
 
 use crate::render::uniforms::grass::MAX_GRASS_STAMPS;
@@ -26,21 +28,23 @@ pub const GRASS_BEND_RESOLUTION: u32 = 256;
 pub const GRASS_BEND_CELL_SIZE: f32 = 0.25;
 
 /// Seconds over which a pressed blade recovers all but `1/e` of its bend.
-pub const GRASS_BEND_RECOVERY: f32 = 1.0;
+const GRASS_BEND_RECOVERY: f32 = 1.0;
 
 /// The longest frame the field relaxes over at once, in seconds, so a stall
 /// does not stand the whole field up in one frame.
-pub const GRASS_BEND_MAX_STEP: f32 = 0.25;
+const GRASS_BEND_MAX_STEP: f32 = 0.25;
 
 /// How far past its radius a footprint presses blades, as a multiple of it.
-pub const GRASS_STAMP_REACH: f32 = 1.5;
+const GRASS_STAMP_REACH: f32 = 1.5;
 
 /// Where a footprint's press starts to fade, as a multiple of its radius.
-pub const GRASS_STAMP_CORE: f32 = 0.8;
+#[cfg(test)]
+const GRASS_STAMP_CORE: f32 = 0.8;
 
 /// The bend a footprint at full strength stores, per meter of blade; a blade
 /// pressed this far lies flat.
-pub const GRASS_TRAMPLE_BEND: f32 = 0.85;
+#[cfg(test)]
+const GRASS_TRAMPLE_BEND: f32 = 0.85;
 
 /// Words in the bend buffer: two halves of one packed bend per cell.
 pub const GRASS_BEND_WORDS: usize = 2 * (GRASS_BEND_RESOLUTION * GRASS_BEND_RESOLUTION) as usize;
@@ -82,7 +86,8 @@ impl BendWindow {
     }
 
     /// The world cell the window holds in slot `slot`.
-    pub fn cell_at_slot(&self, slot: usize) -> [i32; 2] {
+    #[cfg(test)]
+    fn cell_at_slot(self, slot: usize) -> [i32; 2] {
         let n = i32::saturating_from(GRASS_BEND_RESOLUTION);
         let s = [
             i32::saturating_from(slot) % n,
@@ -124,7 +129,8 @@ pub fn decay(dt: f32) -> f32 {
 /// The bend a footprint `stamp` (center `x`, `z`, radius, strength) presses
 /// into the blades at world `xz`: outward from its center, full within its
 /// core, fading to nothing at its reach. Mirrors `grass_stamp_bend`.
-pub fn stamp_bend(stamp: [f32; 4], xz: [f32; 2]) -> [f32; 2] {
+#[cfg(test)]
+fn stamp_bend(stamp: [f32; 4], xz: [f32; 2]) -> [f32; 2] {
     let [cx, cz, radius, strength] = stamp;
     let d = [xz[0] - cx, xz[1] - cz];
     let dist = sqrt(d[0] * d[0] + d[1] * d[1]);
@@ -145,7 +151,7 @@ pub fn stamp_bend(stamp: [f32; 4], xz: [f32; 2]) -> [f32; 2] {
 /// and the tallest blades are `blade_height` tall: center, radius and
 /// strength, the strength falling from 1 standing on the ground to nothing
 /// once it clears the blades. `None` when it presses nothing.
-pub fn stamp_of(bender: &GrassBender, ground_y: f32, blade_height: f32) -> Option<[f32; 4]> {
+fn stamp_of(bender: &GrassBender, ground_y: f32, blade_height: f32) -> Option<[f32; 4]> {
     let gap = bender.base[1] - ground_y;
     let top = gap + bender.height;
     if bender.radius <= 0.0 || top < 0.0 || blade_height <= 0.0 {

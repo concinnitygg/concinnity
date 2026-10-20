@@ -4,19 +4,21 @@
 //! mirrored from `night_sky.hlsl`.
 
 use super::hash::{night_hash, night_unit};
-use crate::math::vec3::{cross, dot, normalize_or, scale};
-use crate::math::{atan2, cos, exp, ln, powf, sin, smoothstep, sqrt};
+use crate::math::vec3::{cross, normalize_or, scale};
+#[cfg(test)]
+use crate::math::{atan2, exp, ln, smoothstep, vec3::dot};
+use crate::math::{cos, powf, sin, sqrt};
 
 /// The most galaxies a sky draws.
-pub const MAX_GALAXIES: usize = 16;
+pub(crate) const MAX_GALAXIES: usize = 16;
 /// Angular radius of the smallest and largest galaxy, in degrees.
-pub const GALAXY_RADIUS_DEG: [f32; 2] = [0.25, 2.0];
+pub(crate) const GALAXY_RADIUS_DEG: [f32; 2] = [0.25, 2.0];
 /// Integrated magnitude of the brightest and faintest galaxy.
-pub const GALAXY_MAGNITUDE: [f32; 2] = [2.5, 5.5];
+pub(crate) const GALAXY_MAGNITUDE: [f32; 2] = [2.5, 5.5];
 /// The integral of [`galaxy_profile`] over a spiral's unit disc.
-pub const SPIRAL_NORM: f32 = 0.1945;
+pub(crate) const SPIRAL_NORM: f32 = 0.1945;
 /// The integral of [`galaxy_profile`] over an elliptical's unit disc.
-pub const ELLIPTICAL_NORM: f32 = 0.1952;
+pub(crate) const ELLIPTICAL_NORM: f32 = 0.1952;
 
 /// One galaxy, in the celestial sphere's frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -38,7 +40,7 @@ pub struct Galaxy {
 }
 
 /// Galaxy `index` of the sky with 24-bit seed lane `seed`.
-pub fn galaxy(seed: u32, index: u32) -> Galaxy {
+pub(crate) fn galaxy(seed: u32, index: u32) -> Galaxy {
     let mut h = night_hash(index.wrapping_add(night_hash(seed ^ 0x6a09_e667)));
     let mut next = || {
         h = night_hash(h);
@@ -86,7 +88,8 @@ pub fn galaxy(seed: u32, index: u32) -> Galaxy {
 /// its long axis and, face-on, along its short one: zero past the unit
 /// circle. A spiral is an exponential disc wound with two logarithmic arms
 /// around a bright bulge; an elliptical a smooth exponential glow.
-pub fn galaxy_profile(spiral: bool, x: f32, y: f32) -> f32 {
+#[cfg(test)]
+pub(crate) fn galaxy_profile(spiral: bool, x: f32, y: f32) -> f32 {
     let r = sqrt(x * x + y * y);
     if r >= 1.0 {
         return 0.0;
@@ -106,7 +109,7 @@ pub fn galaxy_profile(spiral: bool, x: f32, y: f32) -> f32 {
 /// its direction and the radiance at its profile's 1 (`illuminance` is its
 /// whole light spread over its area), then its long axis over its radius and
 /// its axis ratio, negative for an elliptical.
-pub fn galaxy_lanes(g: &Galaxy, illuminance: f32) -> [[f32; 4]; 2] {
+pub(crate) fn galaxy_lanes(g: &Galaxy, illuminance: f32) -> [[f32; 4]; 2] {
     let norm = if g.spiral {
         SPIRAL_NORM
     } else {
@@ -127,7 +130,8 @@ pub fn galaxy_lanes(g: &Galaxy, illuminance: f32) -> [[f32; 4]; 2] {
 
 /// Whether a direction `c` falls on galaxy `g`, and its coordinates there.
 /// The shader's test, mirrored for the tests.
-pub fn galaxy_coordinates(g: &Galaxy, c: [f32; 3]) -> Option<(f32, f32)> {
+#[cfg(test)]
+pub(crate) fn galaxy_coordinates(g: &Galaxy, c: [f32; 3]) -> Option<(f32, f32)> {
     if dot(c, g.direction) <= 0.0 {
         return None;
     }

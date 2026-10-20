@@ -31,7 +31,7 @@ pub struct SkinnedFrame<'a> {
 ///
 /// The upload is required. The per-frame pose, weight and model pushes and the
 /// instance reveal and retire only edit the scene's
-/// [`SkinnedSlots`](crate::render::skinned_slots::SkinnedSlots), so they are
+/// `SkinnedSlots`, so they are
 /// defaulted over [`SceneHost`]; without a scene they do nothing, and a skinned
 /// spawn finds nothing to claim.
 pub trait SkinnedDraws: SceneHost {

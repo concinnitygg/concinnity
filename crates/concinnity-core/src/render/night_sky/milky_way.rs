@@ -8,7 +8,7 @@ use crate::math::exp;
 /// longitude `longitude` (radians, 0 at the core, in `[-pi, pi]`): 1 at the
 /// core's heart, falling away from the plane and toward the anticenter, over
 /// a faint floor of unresolved stars.
-pub fn milky_way_envelope(latitude: f32, longitude: f32) -> f32 {
+pub(crate) fn milky_way_envelope(latitude: f32, longitude: f32) -> f32 {
     let core = exp(-(longitude * longitude) / (0.5 * 0.5));
     let width = 0.1 + 0.12 * core;
     let band = exp(-0.5 * (latitude * latitude) / (width * width));

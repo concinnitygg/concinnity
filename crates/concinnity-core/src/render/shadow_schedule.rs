@@ -31,7 +31,7 @@ pub struct CascadeCamera {
 
 /// The directional light a renderer's cascades are cast from.
 #[derive(Clone, Copy, Debug)]
-pub struct CascadeLight {
+pub(crate) struct CascadeLight {
     /// Unit vector pointing toward the light.
     pub dir_to_source: [f32; 3],
     /// Per-cascade shadow map edge, in texels.
@@ -44,7 +44,7 @@ pub struct CascadeLight {
 /// re-rasterizes only those slices, so skipped cascades keep the depth + VP they
 /// were last rendered with.
 #[derive(Debug, Default)]
-pub struct ShadowCascadeScheduler {
+pub(crate) struct ShadowCascadeScheduler {
     // Advances once per shadow update; selects which far cascade Hybrid mode
     // refreshes this frame.
     clock: u32,
@@ -59,7 +59,7 @@ impl ShadowCascadeScheduler {
     /// clock. Delegates the selection to the pure `select_cascade_mask` and
     /// applies its side effects: advance the clock and record the newly primed
     /// set. Bit `i` set in the result means cascade `i` re-renders this frame.
-    pub fn next_mask(&mut self, update: ShadowUpdate, active_cascades: u32) -> u32 {
+    pub(crate) fn next_mask(&mut self, update: ShadowUpdate, active_cascades: u32) -> u32 {
         let (mask, primed) =
             select_cascade_mask(update, self.clock, self.primed_mask, active_cascades);
         self.clock = self.clock.wrapping_add(1);
@@ -72,7 +72,7 @@ impl ShadowCascadeScheduler {
     /// that re-renders this frame. A skipped cascade keeps the projection its
     /// slice was last rendered with, so every slice is sampled the way it was
     /// drawn. Returns the re-render mask.
-    pub fn refresh(
+    pub(crate) fn refresh(
         &mut self,
         uniforms: &mut ShadowUniforms,
         cadence: &ShadowCadence,

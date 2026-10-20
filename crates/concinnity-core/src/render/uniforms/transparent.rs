@@ -167,7 +167,7 @@ pub struct WaterWaveGpu {
 
 impl WaterWaveGpu {
     /// The shader-side lanes for one wave of a body at `phase`.
-    pub fn from_wave(w: &BodyWave, phase: f32) -> Self {
+    fn from_wave(w: &BodyWave, phase: f32) -> Self {
         let wave = &w.wave;
         Self {
             dir_amp_k: [
@@ -195,7 +195,7 @@ pub struct WaterRippleGpu {
 
 impl WaterRippleGpu {
     /// The shader-side lanes for one ripple octave at `offset`.
-    pub fn from_ripple(r: &Ripple, offset: [f32; 2]) -> Self {
+    fn from_ripple(r: &Ripple, offset: [f32; 2]) -> Self {
         Self {
             shape: [r.direction[0], r.direction[1], r.wavelength, 0.0],
             offset: [offset[0], offset[1], 0.0, 0.0],
@@ -222,7 +222,7 @@ pub struct WaterOceanGpu {
 impl WaterOceanGpu {
     /// The block for a body's share of an ocean, at no offset, sampling the
     /// foam of its longest cascades when it `whitecaps`.
-    pub fn from_ocean(ocean: &BodyOcean, whitecaps: bool) -> Self {
+    fn from_ocean(ocean: &BodyOcean, whitecaps: bool) -> Self {
         let c = &ocean.cascades;
         let mut inv_lengths = [0.0; 4];
         for (slot, &l) in inv_lengths.iter_mut().zip(c.lengths()) {
@@ -272,7 +272,7 @@ pub struct WaterSeaFaceGpu {
 
 impl WaterSeaFaceGpu {
     /// The block for one face at one instant.
-    pub fn from_motion(face: &SeaFaceMotion) -> Self {
+    fn from_motion(face: &SeaFaceMotion) -> Self {
         let m = &face.motion;
         let [a, b, c, d] = m.ripple_offsets;
         Self {

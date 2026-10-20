@@ -415,7 +415,7 @@ impl World {
 
     /// Advance every event queue once, before systems run, so each queue's
     /// two-frame retention holds for readers that run after the writer.
-    pub fn update_events(&mut self) {
+    fn update_events(&mut self) {
         if let Some(store) = self.resources.get_mut::<EventStore>() {
             store.update_all();
         }
@@ -423,13 +423,13 @@ impl World {
 
     /// Hand the whole frame's scratch back. `&mut self` is the proof that no
     /// allocation from the last frame survives.
-    pub fn reset_scratch(&mut self) {
+    fn reset_scratch(&mut self) {
         self.scratch.reset();
     }
 
     /// Release every resident compiled payload, returning the bytes freed. Run
     /// once every system has inited and cached what it keeps.
-    pub fn release_payloads(&mut self) -> usize {
+    fn release_payloads(&mut self) -> usize {
         self.blob.release_all_resident()
     }
 
@@ -705,7 +705,7 @@ impl World {
     /// total, returning what this frame declined. A frame that outgrew the
     /// reserve fell back to the heap and still rendered, so nothing breaks; the
     /// count is what a host surfaces to say the reserve is undersized.
-    pub fn take_scratch_overflows(&mut self) -> u32 {
+    fn take_scratch_overflows(&mut self) -> u32 {
         let overflows = self.scratch.overflows();
         if overflows > 0 {
             self.scratch.clear_overflows();

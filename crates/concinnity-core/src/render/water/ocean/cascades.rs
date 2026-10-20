@@ -10,11 +10,11 @@ use core::f32::consts::{PI, TAU};
 
 /// The longest cascade's side, in peak wavelengths: long enough that its
 /// wavenumber grid samples the spectrum's peak finely in heading and length.
-pub const TILE_PER_PEAK: f32 = 10.0;
+const TILE_PER_PEAK: f32 = 10.0;
 
 /// The shortest wave a cascade holds, in its texels: half its Nyquist
 /// wavelength, so bilinear filtering never blurs what it holds.
-pub const SHORTEST_TEXELS: f32 = 4.0;
+const SHORTEST_TEXELS: f32 = 4.0;
 
 /// The cascades of one simulation, longest first.
 #[derive(Debug, Clone, PartialEq)]
@@ -26,7 +26,7 @@ pub struct Cascades {
 
 impl Cascades {
     /// `quality`'s cascades for a sea peaking at `peak_wavelength` meters:
-    /// the longest [`TILE_PER_PEAK`] peaks across, each next one
+    /// the longest `TILE_PER_PEAK` peaks across, each next one
     /// [`Cascades::ratio`] times shorter.
     pub fn new(peak_wavelength: f32, quality: OceanQuality) -> Self {
         let quality = quality.clamped();
@@ -72,7 +72,7 @@ impl Cascades {
     }
 
     /// The shortest wave cascade `c` holds, in meters.
-    pub fn shortest_wavelength(&self, c: usize) -> f32 {
+    fn shortest_wavelength(&self, c: usize) -> f32 {
         SHORTEST_TEXELS * self.lengths[c] / self.size as f32
     }
 

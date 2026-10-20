@@ -19,35 +19,24 @@ mod galaxies;
 mod handover;
 mod hash;
 mod lanes;
+#[cfg(test)]
 mod milky_way;
 mod moon;
 mod settings;
 mod stars;
 
-pub use celestial::CelestialBasis;
-pub use frame::{MoonFrame, NightFrame};
-pub use galaxies::{
-    ELLIPTICAL_NORM, GALAXY_MAGNITUDE, GALAXY_RADIUS_DEG, Galaxy, MAX_GALAXIES, SPIRAL_NORM,
-    galaxy, galaxy_coordinates, galaxy_lanes, galaxy_profile,
-};
-pub use handover::{MOON_FADE_DEG, moon_share, shadowed_first};
-pub use hash::{night_hash, night_unit, seed_lane};
-pub use lanes::NightLanes;
-pub use milky_way::milky_way_envelope;
-pub use moon::{MoonPath, face_light, face_up, lambert_phase};
-pub use settings::{
-    EARTHSHINE, GALAXY_GAIN, MILKY_WAY_RADIANCE, MoonSettings, NightSkySettings,
-    STAR_ZERO_ILLUMINANCE,
-};
-pub use stars::{
-    BRIGHTEST_MAGNITUDE, COUNT_SLOPE, FACE_MARGIN, LIMIT_RANGE, NAKED_EYE_LIMIT, NAKED_EYE_STARS,
-    STAR_GRID, STAR_SATURATION, STAR_SIGMA_PX, Star, blackbody_color, cell_solid_angle, cube_face,
-    face_direction, footprint, luminance, magnitude_of, star_in_cell, stars_per_steradian,
-    temperature_of,
-};
+pub(crate) use frame::NightFrame;
+pub(crate) use galaxies::MAX_GALAXIES;
+pub(crate) use handover::{moon_share, shadowed_first};
+pub(crate) use lanes::NightLanes;
+pub(crate) use settings::NightSkySettings;
+pub(crate) use stars::LIMIT_RANGE;
 
 #[cfg(test)]
 mod tests {
+    use super::stars::{
+        BRIGHTEST_MAGNITUDE, COUNT_SLOPE, FACE_MARGIN, STAR_GRID, STAR_SATURATION, STAR_SIGMA_PX,
+    };
     use super::*;
     use crate::render::shader_consts::{float, uint};
 

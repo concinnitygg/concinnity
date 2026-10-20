@@ -18,7 +18,7 @@ pub const STAGING_ALIGN: u64 = 16;
 pub const STAGING_MIN_CAPACITY: u64 = 8 << 20;
 
 /// The largest ring created ahead of need. A burst past it grows the ring.
-pub const STAGING_RESERVE_CAP: u64 = 64 << 20;
+const STAGING_RESERVE_CAP: u64 = 64 << 20;
 
 // A submitted run of placements, released whole once `retire_at` has passed.
 #[derive(Clone, Copy, Debug)]

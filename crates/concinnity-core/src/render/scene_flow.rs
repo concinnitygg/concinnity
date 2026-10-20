@@ -127,13 +127,13 @@ impl SceneVisibility {
 
     /// Start the next prop's entry; its draw slots follow via
     /// [`SceneVisibility::push_draw`].
-    pub fn begin_prop(&mut self, scene: Option<AssetId>) {
+    fn begin_prop(&mut self, scene: Option<AssetId>) {
         self.spans.push((u32::saturating_from(self.draws.len()), 0));
         self.scenes.push(scene);
     }
 
     /// Add one draw slot to the prop most recently begun.
-    pub fn push_draw(&mut self, draw_idx: DrawIndex) {
+    fn push_draw(&mut self, draw_idx: DrawIndex) {
         debug_assert!(!self.spans.is_empty(), "push_draw before begin_prop");
         self.draws.push(draw_idx);
         if let Some(span) = self.spans.last_mut() {
@@ -154,7 +154,7 @@ impl SceneVisibility {
 
 /// Set draw-object visibility according to which scene is currently active.
 /// Props with no scene association (scene == None) are always visible.
-pub fn set_scene_visibility<B: SceneControl + ?Sized>(
+fn set_scene_visibility<B: SceneControl + ?Sized>(
     visibility: &SceneVisibility,
     active_scene: AssetId,
     backend: &mut B,

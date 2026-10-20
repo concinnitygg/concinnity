@@ -46,7 +46,7 @@ const AUTO_SEED_MAX_TRIANGLES: usize = 200_000;
 /// `base_vertex` is honored so streamed (mesh-relative) chunks resolve too, and every
 /// fetch is bounds-checked against the shared vertex buffer (build-time offsets should be
 /// in range, but a bad offset is skipped rather than risking an out-of-bounds index).
-pub fn gather_auto_seed_triangles(
+fn gather_auto_seed_triangles(
     draw_objects: &[render_types::DrawObject],
     all_vertices: &[Vertex],
     all_indices: &[u32],

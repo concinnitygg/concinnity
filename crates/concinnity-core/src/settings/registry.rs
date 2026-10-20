@@ -103,7 +103,7 @@ pub const DEFAULT_VOLUME: f32 = 1.0;
 
 /// Effective mouse sensitivity (radians per pixel) when the user has never
 /// chosen one. Matches `CameraController`'s authored default.
-pub const DEFAULT_MOUSE_SENSITIVITY: f32 = 0.0015;
+const DEFAULT_MOUSE_SENSITIVITY: f32 = 0.0015;
 
 /// Effective gamepad stick deadzone (deflection fraction) when the user has
 /// never chosen one.
@@ -111,7 +111,7 @@ pub const DEFAULT_GAMEPAD_DEADZONE: f32 = 0.15;
 
 /// Effective vertical FOV in degrees when the user has never chosen one.
 /// Matches `Camera3D`'s authored default.
-pub const DEFAULT_FOV: f32 = 75.0;
+const DEFAULT_FOV: f32 = 75.0;
 
 /// Fraction of a slider's range one focused Left/Right pulse steps.
 pub const SLIDER_STEP_FRACTION: f32 = 0.05;
@@ -302,7 +302,7 @@ fn hundred_scale_from(stored: f32, min: f32, max: f32) -> f32 {
 
 /// Every slider row. The post-process ranges are practical UI ceilings; the
 /// graphics clamps live with their rows in [`crate::settings::rows`].
-pub static SLIDERS: [SliderSetting; 20] = [
+static SLIDERS: [SliderSetting; 20] = [
     // Authored in EV (centered on neutral); the composite applies 2^ev.
     SliderSetting {
         key: SettingKey::Exposure,

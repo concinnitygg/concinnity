@@ -316,7 +316,7 @@ pub fn resolve_ceiling(preset: QualityPreset, profile: &GpuProfile) -> QualityCe
 
 /// The named tier `Auto` resolves to on this GPU, as (label, ceiling). One
 /// table, so the menu label can never disagree with the ceiling applied.
-pub fn auto_tier(profile: &GpuProfile) -> (&'static str, QualityCeiling) {
+fn auto_tier(profile: &GpuProfile) -> (&'static str, QualityCeiling) {
     match profile.tier {
         // A discrete GPU whose driver would not report its VRAM: the mid tier
         // keeps the cheap wins and drops what an unknown GPU might not carry,

@@ -56,7 +56,8 @@ impl ProbeUniforms {
     /// the scenery about as far past its box as the box is wide. 0 for a record
     /// without parallax (`box_min.w` off) or without the sky fallback
     /// (`box_max.w` off), which keeps the probe whole.
-    pub fn sky_share(&self, point: [f32; 3]) -> f32 {
+    #[cfg(test)]
+    fn sky_share(&self, point: [f32; 3]) -> f32 {
         if self.box_min[3] <= 0.5 || self.box_max[3] <= 0.5 {
             return 0.0;
         }

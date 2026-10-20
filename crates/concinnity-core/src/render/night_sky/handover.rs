@@ -12,12 +12,12 @@ use crate::components::DirectionalLight;
 use crate::render::lights::DirectionalLightSet;
 
 /// Degrees the sun sinks past setting over which the moon's light fades in.
-pub const MOON_FADE_DEG: f32 = 6.0;
+pub(crate) const MOON_FADE_DEG: f32 = 6.0;
 
 /// The share of the moon's light that is on, for a sun `set_depth` radians
 /// past fully set (negative while any of it is up): 0 until it has set, 1
 /// once it is [`MOON_FADE_DEG`] further down.
-pub fn moon_share(set_depth: f32) -> f32 {
+pub(crate) fn moon_share(set_depth: f32) -> f32 {
     let t = (set_depth / MOON_FADE_DEG.to_radians()).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
@@ -26,7 +26,7 @@ pub fn moon_share(set_depth: f32) -> f32 {
 /// the shadowed place while the moon's share is 0, else `moon` (its full
 /// light through the air) scaled by `share` in that place, the set sun left
 /// out. `rest` follows either way.
-pub fn shadowed_first(
+pub(crate) fn shadowed_first(
     sun: DirectionalLight,
     moon: Option<DirectionalLight>,
     share: f32,

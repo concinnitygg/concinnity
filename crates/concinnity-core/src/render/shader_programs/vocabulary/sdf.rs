@@ -6,9 +6,9 @@
 use super::{Entry, Kind, field, helper};
 
 /// The struct `shade` returns.
-pub const SURFACE_STRUCT: &str = "SdfSurface";
+const SURFACE_STRUCT: &str = "SdfSurface";
 /// The struct `sampleVolume` returns.
-pub const SAMPLE_STRUCT: &str = "VolumeSample";
+const SAMPLE_STRUCT: &str = "VolumeSample";
 
 const fn hook(name: &'static str, signature: &'static str, summary: &'static str) -> Entry {
     field(Kind::Hook, name, signature, summary)

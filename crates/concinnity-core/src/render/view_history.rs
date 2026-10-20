@@ -21,7 +21,7 @@ pub struct ViewFrame {
 /// The previous frame's camera and clock, absent until a frame has recorded
 /// one.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct ViewHistory {
+pub(crate) struct ViewHistory {
     prev: Option<ViewFrame>,
 }
 
@@ -29,23 +29,23 @@ impl ViewHistory {
     /// The frame this frame's motion reprojects to. A view with no history yet
     /// reprojects to itself, so its first motion frame reads no camera or
     /// clock motion rather than reprojecting through a placeholder.
-    pub fn prev_or(&self, cur: ViewFrame) -> ViewFrame {
+    pub(crate) fn prev_or(&self, cur: ViewFrame) -> ViewFrame {
         self.prev.unwrap_or(cur)
     }
 
     /// Record this frame as the next frame's history.
-    pub fn advance(&mut self, cur: ViewFrame) {
+    pub(crate) fn advance(&mut self, cur: ViewFrame) {
         self.prev = Some(cur);
     }
 
     /// Forget the history, so the next motion frame starts over.
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.prev = None;
     }
 
     /// Carry the history into the frame the world moved to, so a point that
     /// stayed put reprojects to where the previous frame drew it.
-    pub fn rebase(&mut self, rebase: &crate::planet::Rebase) {
+    pub(crate) fn rebase(&mut self, rebase: &crate::planet::Rebase) {
         if let Some(prev) = self.prev.as_mut() {
             prev.vp = rebase.reproject(prev.vp);
             prev.cam_pos = rebase.apply_point(prev.cam_pos);

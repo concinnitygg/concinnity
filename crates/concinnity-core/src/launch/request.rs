@@ -59,7 +59,7 @@ impl LaunchRequest {
     }
 
     /// The view state the run starts with, or `None` for the shipping frame.
-    pub fn view_overrides(&self) -> Option<ViewOverrides> {
+    fn view_overrides(&self) -> Option<ViewOverrides> {
         (self.show != ShowFlags::all()).then_some(ViewOverrides {
             mode: ViewMode::Lit,
             show: self.show,

@@ -54,7 +54,8 @@ impl ParamRange {
     };
 
     /// Whether either end is bounded.
-    pub const fn is_bounded(&self) -> bool {
+    #[cfg(test)]
+    const fn is_bounded(&self) -> bool {
         self.min.is_some() || self.max.is_some()
     }
 

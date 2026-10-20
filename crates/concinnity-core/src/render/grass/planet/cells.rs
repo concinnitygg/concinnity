@@ -10,7 +10,9 @@
 //! roots on.
 
 use crate::math::{SaturatingFrom, dvec3, narrow_f32};
-use crate::planet::{CubeFace, FINEST_CELL_SIZE, PlanetShape, TileId, TileLod};
+#[cfg(test)]
+use crate::planet::TileId;
+use crate::planet::{CubeFace, FINEST_CELL_SIZE, PlanetShape, TileLod};
 use crate::render::grass::tiles::{GRASS_TILE_SIZE, MAX_GRASS_DENSITY};
 
 /// How a planet's faces divide into grass tiles, the unit the kernel culls.
@@ -50,7 +52,7 @@ impl PlanetGrassGrid {
     }
 
     /// Grass tiles along each side of a whole face.
-    pub fn face_tiles(&self) -> u32 {
+    fn face_tiles(&self) -> u32 {
         self.tiles_per_side(0)
     }
 
@@ -82,7 +84,8 @@ impl PlanetGrassGrid {
     /// The cell of the face at grass tile `grass_tile` of `tile`, cell `cell`
     /// within it, for `cells` cells per grass tile, counted from the face's
     /// `-s`, `-t` corner. Mirrors the kernel's `grass_planet_cell`.
-    pub fn face_cell(
+    #[cfg(test)]
+    fn face_cell(
         &self,
         tile: TileId,
         grass_tile: [u32; 2],
@@ -101,7 +104,8 @@ impl PlanetGrassGrid {
 
     /// Cells along each side of a whole face, for `cells` cells per grass
     /// tile.
-    pub fn face_cells(&self, cells: u32) -> u64 {
+    #[cfg(test)]
+    fn face_cells(&self, cells: u32) -> u64 {
         u64::from(self.face_tiles()) * u64::from(cells)
     }
 }
@@ -154,7 +158,8 @@ pub fn face_direction(face: CubeFace, s: f32, t: f32) -> [f32; 3] {
 /// through: [`face_direction`] inverted, in single precision, the shader's
 /// `grass_face_coords` line for line. The face is the cube axis `dir` leans
 /// along most.
-pub fn face_coords(dir: [f32; 3]) -> (CubeFace, [f32; 2]) {
+#[cfg(test)]
+fn face_coords(dir: [f32; 3]) -> (CubeFace, [f32; 2]) {
     let a = dir.map(f32::abs);
     let face = if a[0] >= a[1] && a[0] >= a[2] {
         u8::from(dir[0] < 0.0)

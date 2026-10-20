@@ -9,7 +9,7 @@ use crate::math::{SaturatingFrom, floor, narrow_f32};
 
 /// Width of the bare and grassy patches a planet's meadow is made of, in
 /// meters.
-pub const MEADOW_PATCH_SIZE: f32 = 24.0;
+const MEADOW_PATCH_SIZE: f32 = 24.0;
 
 // The noise values the density ramps up over: below the first the ground is
 // bare, above the second fully grown.

@@ -153,7 +153,7 @@ impl UvRect {
     /// The texels of a `width` x `height` target this rectangle touches, grown
     /// by `margin` texels on every side for the filter footprint and clamped to
     /// the target. `None` for an empty target.
-    pub fn to_pixels(self, width: u32, height: u32, margin: u32) -> Option<PixelRect> {
+    fn to_pixels(self, width: u32, height: u32, margin: u32) -> Option<PixelRect> {
         let span = |lo: f32, hi: f32, size: u32| {
             let a = (i64::saturating_from(floor(lo * size as f32)) - i64::from(margin)).max(0);
             let b = (i64::saturating_from(ceil(hi * size as f32)) + i64::from(margin))

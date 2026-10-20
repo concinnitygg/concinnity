@@ -28,25 +28,26 @@ use crate::render::uniforms::canopy::{CanopyLayerGpu, CanopyParams, MAX_CANOPY_L
 
 /// Most layers one terrain's far field shades: its vertex colors carry one
 /// layer's density per channel.
-pub const MAX_CANOPY_LAYERS_PER_TERRAIN: usize = 3;
+const MAX_CANOPY_LAYERS_PER_TERRAIN: usize = 3;
 
 /// A blade's mean lean: the kernel's `(0.15 + 0.35 u) (0.6 + 0.8 v)` over its
 /// uniform hashes.
-pub const CANOPY_BEND: f32 = 0.325;
+const CANOPY_BEND: f32 = 0.325;
 
 // A blade's width tapers as `1 - t^WIDTH_TAPER` from root to tip.
 const WIDTH_TAPER: f32 = 1.4;
 
 /// How many facings around the view the canopy lights its blades at: the
 /// shaders' `CANOPY_FACINGS`.
-pub const CANOPY_FACINGS: u32 = 8;
+#[cfg(test)]
+const CANOPY_FACINGS: u32 = 8;
 
 /// How many height segments a blade is cut into for what a view sees of it.
 /// The upper half of them makes the upper band, the lower half the lower.
-pub const CANOPY_SEGMENTS: usize = 8;
+const CANOPY_SEGMENTS: usize = 8;
 
 /// How wide a blade is at height `t` along it, as a share of its root width.
-pub fn blade_width(t: f32) -> f32 {
+fn blade_width(t: f32) -> f32 {
     1.0 - powf(t.clamp(0.0, 1.0), WIDTH_TAPER)
 }
 
@@ -60,7 +61,7 @@ pub fn leaf_area(look: &GrassBladeLook, density: f32) -> f32 {
 /// How far a blade leaning by `bend` tilts from upright at height `t` along
 /// it, in radians: the slope of the kernel's curve there, upright at the root
 /// and arcing over toward the tip. Mirrors `canopy_tilt`.
-pub fn blade_tilt(bend: f32, t: f32) -> f32 {
+fn blade_tilt(bend: f32, t: f32) -> f32 {
     let rise = sqrt((1.0 - bend * bend).max(0.0));
     atan2(t * bend, (1.0 - t) * rise)
 }
@@ -120,7 +121,7 @@ pub struct CanopyBand {
     /// The mean of the ramp times the occlusion.
     pub ramp_occlusion: f32,
     /// The mean share of the field's leaf area standing above it, which a
-    /// direct light crosses on its way down ([`leaf_above`]).
+    /// direct light crosses on its way down (`leaf_above`).
     pub above: f32,
 }
 
@@ -145,7 +146,7 @@ pub fn ramp(t: f32) -> f32 {
 
 /// How much of the sky reaches height `t` inside the field. Mirrors
 /// `grass_root_occlusion`.
-pub fn root_occlusion(t: f32) -> f32 {
+fn root_occlusion(t: f32) -> f32 {
     let s = (t / 0.6).clamp(0.0, 1.0);
     0.25 + 0.75 * s * s * (3.0 - 2.0 * s)
 }
@@ -161,7 +162,7 @@ fn blade_area_above(t: f32) -> f32 {
 /// its mean blade height, for blades varying in height by `height_variance`:
 /// what a direct light crosses on its way down to there. Mirrors
 /// `grass_leaf_above`.
-pub fn leaf_above(z: f32, height_variance: f32) -> f32 {
+fn leaf_above(z: f32, height_variance: f32) -> f32 {
     let heights = class_heights(height_variance);
     let total: f32 = heights.iter().sum();
     heights
@@ -176,7 +177,7 @@ const PROJECTION_FIT_STEPS: usize = 64;
 
 /// The side-on and top-down axes of the ellipse that stands for
 /// [`projection`] where no canopy table is read (the blade draws), scaled so
-/// it errs as far over as under. See [`ellipse_projection`].
+/// it errs as far over as under. See `ellipse_projection`.
 pub fn projection_axes(bend: f32) -> [f32; 2] {
     let axes = [projection(bend, 0.0), projection(bend, 1.0)];
     let (mut low, mut high) = (f32::MAX, 0.0f32);
@@ -195,7 +196,7 @@ pub fn projection_axes(bend: f32) -> [f32; 2] {
 
 /// The projection along view cosine `mu` of blades whose ellipse has `axes`
 /// (side-on, top-down). Mirrors `grass_light_depth`.
-pub fn ellipse_projection(axes: [f32; 2], mu: f32) -> f32 {
+fn ellipse_projection(axes: [f32; 2], mu: f32) -> f32 {
     let mu = mu.clamp(0.0, 1.0);
     sqrt(axes[1] * axes[1] * mu * mu + axes[0] * axes[0] * (1.0 - mu * mu))
 }
@@ -204,7 +205,7 @@ pub fn ellipse_projection(axes: [f32; 2], mu: f32) -> f32 {
 /// offsets per unit of variation from the mean: the means of the three equally
 /// likely terciles of the kernel's clump plus blade spread,
 /// `1.2 (u - 0.5) + 0.8 (v - 0.5)`.
-pub const CANOPY_HEIGHT_CLASSES: [f32; 3] = [-0.4665, 0.0, 0.4665];
+const CANOPY_HEIGHT_CLASSES: [f32; 3] = [-0.4665, 0.0, 0.4665];
 
 // The three class heights, relative to the mean, for `height_variance`; the
 // kernel floors a blade at a tenth of the mean.
@@ -343,7 +344,7 @@ struct PlanetCanopy {
 
 /// The cosine from the blades' up the sky is taken to reach the ground along,
 /// on average. Matches `sky_mu` in the shaders' `canopy_at`.
-pub const SKY_MU: f32 = 2.0 / 3.0;
+const SKY_MU: f32 = 2.0 / 3.0;
 
 /// Every far field's layers in the world, and the planet they may grow on:
 /// what each frame's canopy block and view tables are filled from.

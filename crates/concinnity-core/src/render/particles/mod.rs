@@ -23,7 +23,7 @@ pub const MAX_EMITTERS: usize = 256;
 /// is 32 bytes on the GPU (matching `Particle` in `shaders/particle_types.hlsl`),
 /// so 65 536 slots = 2 MiB per emitter, already well past the visual point
 /// of diminishing returns for a billboard pool.
-pub const MAX_PARTICLES_PER_EMITTER: u32 = 65_536;
+const MAX_PARTICLES_PER_EMITTER: u32 = 65_536;
 
 // Hard floor on lifetime so the per-particle `age / lifetime` ratio never
 // divides by zero in the render kernel.
@@ -241,7 +241,7 @@ struct SpawnedRun {
 /// instead, so a pool needs `spawn_rate * lifetime_max` slots to emit at its
 /// full rate.
 #[derive(Debug, Clone, Default)]
-pub struct ParticleSpawnState {
+struct ParticleSpawnState {
     // Fractional particles owed by this emitter, carried forward across frames.
     accumulator: f32,
     // Seconds of frame time this emitter has stepped through.
@@ -261,7 +261,7 @@ impl ParticleSpawnState {
     /// as the run of slots it fills. Spawns with no dead slot to land in are
     /// dropped. The run is empty when the emitter is paused
     /// (`spawn_rate <= 0`).
-    pub fn take_spawns(&mut self, dt: f32, record: &ParticleEmitterRecord) -> ParticleSpawns {
+    fn take_spawns(&mut self, dt: f32, record: &ParticleEmitterRecord) -> ParticleSpawns {
         let pool = record.max_particles.max(1);
         if pool != self.pool {
             self.pool = pool;

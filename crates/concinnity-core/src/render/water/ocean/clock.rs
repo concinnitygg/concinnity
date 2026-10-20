@@ -21,7 +21,8 @@ pub fn omega_steps(omega: f32) -> f32 {
 
 /// The angular frequency, in radians per second, a wave of `steps` turns
 /// per repeat actually runs at.
-pub fn stepped_omega(steps: f32) -> f64 {
+#[cfg(test)]
+fn stepped_omega(steps: f32) -> f64 {
     f64::from(steps) * TAU / OCEAN_REPEAT_SECONDS
 }
 

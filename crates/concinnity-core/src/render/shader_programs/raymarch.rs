@@ -17,10 +17,10 @@ use crate::render::uniforms::RaymarchView;
 pub const FILE: &str = "raymarch.hlsl";
 
 /// The marker a volume's authored distance field is spliced at.
-pub const BODY_MARKER: &str = "{SDF_BODY}";
+const BODY_MARKER: &str = "{SDF_BODY}";
 
 /// The helper an authored `shade` calls to read the scene behind the surface.
-pub const SCENE_TAP: &str = "sampleSceneRefracted";
+const SCENE_TAP: &str = "sampleSceneRefracted";
 
 /// Whether an authored distance field reads the scene behind the surface.
 ///

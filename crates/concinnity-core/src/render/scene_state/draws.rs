@@ -152,14 +152,14 @@ impl SceneState {
     }
 
     /// Reveal a pre-reserved skinned instance at `model`; see
-    /// [`SkinnedSlots::reveal`](crate::render::skinned_slots::SkinnedSlots::reveal).
+    /// `SkinnedSlots::reveal`.
     pub fn reveal_skinned_instance(&mut self, index: SkinnedIndex, model: [[f32; 4]; 4]) {
         self.skinned
             .reveal(index, model, self.model_history.get_mut());
     }
 
     /// Resize a skinned slot's palette to a reloaded skeleton; see
-    /// [`SkinnedSlots::update_skeleton`](crate::render::skinned_slots::SkinnedSlots::update_skeleton).
+    /// `SkinnedSlots::update_skeleton`.
     pub fn update_skinned_skeleton(
         &mut self,
         index: SkinnedIndex,

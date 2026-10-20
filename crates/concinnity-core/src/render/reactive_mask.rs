@@ -18,7 +18,7 @@
 //!   most.
 //!
 //! Writers max-blend, so the most reactive layer over a pixel wins, and store at
-//! most [`WRITE_MAX`]. The writers' pipelines always carry the target; a frame
+//! most `WRITE_MAX`. The writers' pipelines always carry the target; a frame
 //! with no temporal reader leaves it unstored, and a frame with no writer tells
 //! the readers there is none. A reader that can cap how much history the mask
 //! takes away says where ([`ReactiveReader::cap`]).
@@ -29,7 +29,7 @@ use super::render_graph::FrameGraphInputs;
 /// crawls with the jitter, and AMD recommends capping FSR's reactive input near
 /// 0.9; the readers that cannot cap the mask themselves see it capped here.
 /// Matches `REACTIVE_WRITE_MAX` in `shaders/reactive_mask.hlsl`.
-pub const WRITE_MAX: f32 = 0.9;
+const WRITE_MAX: f32 = 0.9;
 
 /// A temporal pass that may read the reactive mask.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

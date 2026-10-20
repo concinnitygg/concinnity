@@ -112,7 +112,7 @@ pub const fn max_mip_count(face_size: u32) -> u32 {
 // Payload codec
 
 /// Pack the baked irradiance and prefilter cubes into a blob payload.
-pub fn serialize_payload(
+fn serialize_payload(
     irradiance_face: u32,
     prefilter_face: u32,
     prefilter_mips: u32,

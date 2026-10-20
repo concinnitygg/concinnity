@@ -5,10 +5,11 @@
 //! / `GrassBlade` / `GrassBendParams` / `PlanetGrassTile` in
 //! `shaders/grass.hlsl`.
 
+#[cfg(test)]
 use crate::math::SaturatingFrom;
-use crate::render::grass::lod::{
-    GRASS_LOD_VERTEX_STRIDE, GRASS_LOD_VERTICES, GRASS_REGION_COUNT, region_level,
-};
+use crate::render::grass::lod::GRASS_REGION_COUNT;
+#[cfg(test)]
+use crate::render::grass::lod::{GRASS_LOD_VERTEX_STRIDE, GRASS_LOD_VERTICES, region_level};
 
 /// Draw-argument slots the args buffer holds. The kernel fills one each frame
 /// and resets the other for the next, so no separate clear runs.
@@ -23,7 +24,7 @@ pub const GRASS_ARGS_STRIDE: usize = 16;
 /// order, then the band, then one record whose first word counts the blades
 /// the coarsest level and the band reserved together in the span they share
 /// (see [`GRASS_SPAN_COUNT`](crate::render::grass::lod::GRASS_SPAN_COUNT)).
-pub const GRASS_ARGS_SLOT_BYTES: usize = (GRASS_REGION_COUNT + 1) * GRASS_ARGS_STRIDE;
+const GRASS_ARGS_SLOT_BYTES: usize = (GRASS_REGION_COUNT + 1) * GRASS_ARGS_STRIDE;
 
 /// Bytes in the whole args buffer.
 pub const GRASS_ARGS_BYTES: usize = GRASS_ARGS_SLOTS * GRASS_ARGS_SLOT_BYTES;
@@ -325,7 +326,8 @@ pub struct GrassBendParams {
 /// The initial contents of the args buffer: every record a draw of its
 /// region's strip with no instances, starting at the region's vertex ids, and
 /// nothing reserved in the shared span.
-pub fn initial_grass_args() -> [u32; GRASS_ARGS_BYTES / 4] {
+#[cfg(test)]
+fn initial_grass_args() -> [u32; GRASS_ARGS_BYTES / 4] {
     let mut args = [0u32; GRASS_ARGS_BYTES / 4];
     for (i, record) in args.chunks_exact_mut(4).enumerate() {
         let region = i % (GRASS_REGION_COUNT + 1);

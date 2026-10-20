@@ -8,7 +8,7 @@
 //! the coarsest level it represents.
 //!
 //! Distance thinning keeps a blade while its keep fraction exceeds its hash
-//! (see [`lod`](super::lod)). The hash it thins by is [`nested_hash`] of its
+//! (see [`lod`](super::lod)). The hash it thins by is `nested_hash` of its
 //! rank: uniform over the field like any hash, but below `4^-j` exactly for
 //! the representatives of level `j`. So wherever the keep fraction, over the
 //! shrink band's span, is at most `4^-j`, every blade that survives is a
@@ -16,7 +16,7 @@
 //! cells, a `4^j`-th of its blades. Which blades survive is the same
 //! whichever level visits them, so a tile changing level moves nothing.
 //!
-//! [`representative`], [`rank`] and [`nested_hash`] are the kernel's
+//! [`representative`], [`rank`] and `nested_hash` are the kernel's
 //! `grass_nest_representative`, `grass_nest_rank` and `grass_nested_hash`.
 
 use super::planet::density::grass_hash;
@@ -76,7 +76,8 @@ fn quarter_pow(level: u32) -> f32 {
 
 /// The hash a blade of rank `rank` thins by, from its own unit hash `u`:
 /// within `[4^-(rank + 1), 4^-rank)`, or `[0, 4^-rank)` at the coarsest rank.
-pub fn nested_hash(rank: u32, u: f32) -> f32 {
+#[cfg(test)]
+fn nested_hash(rank: u32, u: f32) -> f32 {
     if rank >= GRASS_NEST_LEVELS {
         quarter_pow(GRASS_NEST_LEVELS) * u
     } else {

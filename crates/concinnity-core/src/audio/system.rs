@@ -27,7 +27,7 @@ use crate::resource::AudioClipTable;
 use crate::settings::StoredSettings;
 
 /// Opens the host's audio output, or `None` when there is no device.
-pub type OpenAudio = fn() -> Option<Box<dyn AudioOut>>;
+type OpenAudio = fn() -> Option<Box<dyn AudioOut>>;
 
 /// Plays a world's sounds. Its init opens the output.
 pub struct AudioSystem {

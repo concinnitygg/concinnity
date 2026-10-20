@@ -122,7 +122,8 @@ impl ExposureAdaptation {
     }
 
     /// The scene's mean log2 luminance the eye is currently adapted to.
-    pub fn adapted_log_lum(&self) -> f32 {
+    #[cfg(test)]
+    fn adapted_log_lum(&self) -> f32 {
         self.state.adapted_log_lum
     }
 

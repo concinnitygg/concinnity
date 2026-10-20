@@ -27,4 +27,4 @@ mod stats;
 mod system;
 mod tally;
 
-pub use system::FrameReportSystem;
+pub(crate) use system::FrameReportSystem;

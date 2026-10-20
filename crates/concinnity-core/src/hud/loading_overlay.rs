@@ -27,7 +27,7 @@ enum Phase {
 /// The scene-loading overlay, built from a world's `LoadingOverlay` request
 /// component.
 #[derive(Debug)]
-pub struct LoadingOverlaySystem {
+pub(crate) struct LoadingOverlaySystem {
     screen: Option<AssetId>,
     backdrop: Option<AssetId>,
     track: Option<AssetId>,
@@ -41,12 +41,12 @@ pub struct LoadingOverlaySystem {
 
 impl LoadingOverlaySystem {
     /// The system for a world that declares a `LoadingOverlay`.
-    pub fn for_world(world: &World) -> Option<Self> {
+    pub(crate) fn for_world(world: &World) -> Option<Self> {
         world.query::<LoadingOverlay>().next().map(Self::new)
     }
 
     /// Build the overlay from a world's `LoadingOverlay` request component.
-    pub fn new(config: &LoadingOverlay) -> Self {
+    pub(crate) fn new(config: &LoadingOverlay) -> Self {
         Self {
             screen: config.screen.map(Ref::id),
             backdrop: config.backdrop.map(Ref::id),

@@ -180,7 +180,8 @@ pub fn transform_aabb(
 
 /// Squared distance from `cam` to the closest point on the AABB.
 /// Returns 0 if `cam` is inside.
-pub fn aabb_distance_sq(cam: [f32; 3], bb_min: [f32; 3], bb_max: [f32; 3]) -> f32 {
+#[cfg(test)]
+fn aabb_distance_sq(cam: [f32; 3], bb_min: [f32; 3], bb_max: [f32; 3]) -> f32 {
     let mut sq = 0.0f32;
     for i in 0..3 {
         let v = cam[i];

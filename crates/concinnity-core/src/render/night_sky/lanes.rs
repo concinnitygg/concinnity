@@ -9,7 +9,7 @@ use core::f32::consts::PI;
 
 /// The night sky's `float4` lanes, as `AtmosphereParams` carries them.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct NightLanes {
+pub(crate) struct NightLanes {
     /// x = a magnitude-0 star's light, y = the faintest magnitude drawn,
     /// z = the Milky Way's radiance at its heart, w = galaxies drawn.
     pub night: [f32; 4],
@@ -38,7 +38,7 @@ fn disc_solid_angle(cos_radius: f32) -> f32 {
 
 impl NightLanes {
     /// No night sky: every lane zero and no moon.
-    pub const OFF: Self = Self {
+    pub(crate) const OFF: Self = Self {
         night: [0.0; 4],
         galactic_pole: [0.0; 4],
         galactic_center: [0.0; 4],
@@ -50,7 +50,11 @@ impl NightLanes {
 
     /// The lanes for `settings` this `frame`, under a sun whose light above
     /// the air is `sun_illuminance`.
-    pub fn new(settings: &NightSkySettings, frame: &NightFrame, sun_illuminance: [f32; 3]) -> Self {
+    pub(crate) fn new(
+        settings: &NightSkySettings,
+        frame: &NightFrame,
+        sun_illuminance: [f32; 3],
+    ) -> Self {
         let sun = luminance(sun_illuminance);
         let star_zero = settings.star_illuminance * sun;
         let v3 = |v: [f32; 3], w: f32| [v[0], v[1], v[2], w];

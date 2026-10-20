@@ -42,7 +42,8 @@ const THICKNESS_SCALE: f32 = 2.5;
 ///
 /// Each declares the literal as a `static const`, and a unit test locks every
 /// declaration to this value.
-pub const REFLECTION_ROUGHNESS_CUT: f32 = 0.6;
+#[cfg(test)]
+const REFLECTION_ROUGHNESS_CUT: f32 = 0.6;
 
 /// Clamped SSR tunables resolved from the authored asset fields. Held by the
 /// backend and turned into a per-frame [`SsrParams`] once the camera is known.

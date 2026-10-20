@@ -94,7 +94,8 @@ impl GrassMask {
 
     /// The density at normalized (`s`, `t`) across the terrain, in [0, 1],
     /// as the kernel's `grass_mask_density` reads it.
-    pub fn density_at(&self, buffers: &GrassGroundBuffers, s: f32, t: f32) -> f32 {
+    #[cfg(test)]
+    fn density_at(&self, buffers: &GrassGroundBuffers, s: f32, t: f32) -> f32 {
         let (w, h) = (self.width, self.height);
         let fx = s.clamp(0.0, 1.0) * (w - 1) as f32;
         let fy = t.clamp(0.0, 1.0) * (h - 1) as f32;

@@ -4,19 +4,19 @@
 
 /// The PCG output permutation over one step of its generator: a well mixed
 /// 32-bit hash of `v`.
-pub fn night_hash(v: u32) -> u32 {
+pub(crate) fn night_hash(v: u32) -> u32 {
     let state = v.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
     let word = ((state >> ((state >> 28) + 4)) ^ state).wrapping_mul(277_803_737);
     (word >> 22) ^ word
 }
 
 /// A hash's top 24 bits as a float in `[0, 1)`.
-pub fn night_unit(h: u32) -> f32 {
+pub(crate) fn night_unit(h: u32) -> f32 {
     (h >> 8) as f32 * (1.0 / 16_777_216.0)
 }
 
 /// `seed` folded into the 24 bits a shader receives exactly as a float.
-pub fn seed_lane(seed: u32) -> f32 {
+pub(crate) fn seed_lane(seed: u32) -> f32 {
     (night_hash(seed) >> 8) as f32
 }
 

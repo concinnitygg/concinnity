@@ -18,7 +18,8 @@ use crate::math::log2;
 
 /// The largest value a channel of a half-float scene target is written at.
 /// A brighter color is scaled down whole, keeping its hue.
-pub const HDR_STORE_MAX: f32 = 60000.0;
+#[cfg(test)]
+const HDR_STORE_MAX: f32 = 60000.0;
 
 /// The scale a reflection probe's faces are drawn at, and its cube stored
 /// at. The largest power of two at which a color the store cap scales down
@@ -69,7 +70,8 @@ impl FaceStorage {
 
 /// `rgb` capped to [`HDR_STORE_MAX`] in its brightest channel, its hue kept.
 /// An infinite channel is capped alone. Mirrors `hdr_store_cap`.
-pub fn store_cap(rgb: [f32; 3]) -> [f32; 3] {
+#[cfg(test)]
+fn store_cap(rgb: [f32; 3]) -> [f32; 3] {
     let peak = rgb[0].max(rgb[1]).max(rgb[2]);
     if peak <= HDR_STORE_MAX {
         rgb

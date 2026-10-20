@@ -148,7 +148,7 @@ fn edr_text(max_edr: Option<f32>) -> String {
 // ```
 /// The default stats HUD, built from a world's `StatHud` request component.
 #[derive(Debug)]
-pub struct StatHudSystem {
+pub(crate) struct StatHudSystem {
     fps_label: Option<AssetId>,
     gpu_wait_label: Option<AssetId>,
     vram_label: Option<AssetId>,
@@ -183,12 +183,12 @@ pub struct StatHudSystem {
 
 impl StatHudSystem {
     /// The system for a world that declares a `StatHud`.
-    pub fn for_world(world: &World) -> Option<Self> {
+    pub(crate) fn for_world(world: &World) -> Option<Self> {
         world.query::<StatHud>().next().map(Self::new)
     }
 
     /// Build the HUD from a world's `StatHud` request component.
-    pub fn new(config: &StatHud) -> Self {
+    pub(crate) fn new(config: &StatHud) -> Self {
         Self {
             fps_label: config.fps_label.map(Ref::id),
             gpu_wait_label: config.gpu_wait_label.map(Ref::id),

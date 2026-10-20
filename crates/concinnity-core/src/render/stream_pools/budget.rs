@@ -39,7 +39,7 @@ pub fn derive_byte_budget(override_mb: u32, gpu_memory_bytes: u64, fraction: f64
 
 /// The draw records a chunk window reaching `far_radius` reserves: one for
 /// every chunk it can hold resident, capped.
-pub fn chunk_reserve_count(far_radius: u32) -> usize {
+fn chunk_reserve_count(far_radius: u32) -> usize {
     max_resident_chunks(far_radius).min(MAX_CHUNK_RECORDS) as usize
 }
 

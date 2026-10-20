@@ -16,9 +16,9 @@ use crate::platform::Platform;
 use crate::render::shader_source::{self, SourceFile, Splice};
 
 /// The marker the world's `vertex` file is spliced at.
-pub const VERTEX_MARKER: &str = "{SURFACE_VERTEX}";
+const VERTEX_MARKER: &str = "{SURFACE_VERTEX}";
 /// The marker the world's `fragment` file is spliced at.
-pub const FRAGMENT_MARKER: &str = "{SURFACE_FRAGMENT}";
+const FRAGMENT_MARKER: &str = "{SURFACE_FRAGMENT}";
 
 /// The gate the G-buffer pre-pass entries compile under.
 pub const PREPASS_GATE: &str = "SURFACE_PREPASS";
@@ -77,7 +77,7 @@ pub const MAIN_FRAGMENT_CANOPY: Program = Program {
 };
 /// The bindless main-pass fragment entry that shades the ground under grass
 /// without the canopy.
-pub const MAIN_FRAGMENT_GROUND: Program = Program {
+const MAIN_FRAGMENT_GROUND: Program = Program {
     file: "main_bindless.hlsl",
     entry: "fragment_main_bindless",
     gates: &[GROUND_GATE],

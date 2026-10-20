@@ -74,7 +74,7 @@ pub const FINEST_CELL_SIZE: f64 = 1.0;
 
 /// How far the camera strays from the simulated frame's origin before the
 /// frame moves to it, in meters.
-pub const REBASE_DISTANCE: f32 = 1_000.0;
+const REBASE_DISTANCE: f32 = 1_000.0;
 
 /// How near the camera something stays drawn although the planet's horizon
 /// hides it, in meters: twice the longest shadow distance a camera can be set

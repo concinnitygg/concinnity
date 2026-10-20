@@ -138,7 +138,7 @@ fn sys_text(
 /// async-compute queue overlaps the graphics one and the gaps between render
 /// passes belong to no pass.
 #[derive(Debug)]
-pub struct DebugHudSystem {
+pub(crate) struct DebugHudSystem {
     passes_label: Option<AssetId>,
     mouse_label: Option<AssetId>,
     camera_label: Option<AssetId>,
@@ -162,12 +162,12 @@ pub struct DebugHudSystem {
 
 impl DebugHudSystem {
     /// The system for a world that declares a `DebugHud`.
-    pub fn for_world(world: &World) -> Option<Self> {
+    pub(crate) fn for_world(world: &World) -> Option<Self> {
         world.query::<DebugHud>().next().map(Self::new)
     }
 
     /// Build the debug HUD from a world's `DebugHud` request component.
-    pub fn new(config: &DebugHud) -> Self {
+    pub(crate) fn new(config: &DebugHud) -> Self {
         Self {
             passes_label: config.passes_label.map(Ref::id),
             mouse_label: config.mouse_label.map(Ref::id),

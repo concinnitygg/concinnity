@@ -18,7 +18,7 @@ use hashbrown::HashMap;
 
 #[derive(Debug, Default)]
 /// Recycles skinned draw slots as skinned instances spawn and despawn.
-pub struct SkinnedInstancePool {
+pub(crate) struct SkinnedInstancePool {
     // template skinned-draw-object index -> its currently free instance slots.
     free: HashMap<SkinnedIndex, Vec<SkinnedIndex>>,
     // instance slot -> the template it belongs to, so `release` returns it to
@@ -29,27 +29,27 @@ pub struct SkinnedInstancePool {
 
 impl SkinnedInstancePool {
     /// An empty pool.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Record a pre-reserved instance slot as free and owned by `template`.
     /// Called once per expanded copy at load.
-    pub fn reserve(&mut self, template: SkinnedIndex, instance: SkinnedIndex) {
+    pub(crate) fn reserve(&mut self, template: SkinnedIndex, instance: SkinnedIndex) {
         self.owner.insert(instance, template);
         self.free.entry(template).or_default().push(instance);
     }
 
     /// Claim a free instance slot for `template`, or `None` when the reserve is
     /// exhausted (more live copies than were pre-reserved).
-    pub fn acquire(&mut self, template: SkinnedIndex) -> Option<SkinnedIndex> {
+    pub(crate) fn acquire(&mut self, template: SkinnedIndex) -> Option<SkinnedIndex> {
         self.free.get_mut(&template).and_then(Vec::pop)
     }
 
     /// Return a live instance slot to its template's free list. Returns false if
     /// the slot was never a pre-reserved instance (e.g. an authored template
     /// slot), so the caller can tell a recyclable slot from a fixed one.
-    pub fn release(&mut self, instance: SkinnedIndex) -> bool {
+    pub(crate) fn release(&mut self, instance: SkinnedIndex) -> bool {
         let Some(&template) = self.owner.get(&instance) else {
             return false;
         };
@@ -60,7 +60,7 @@ impl SkinnedInstancePool {
     /// Total free slots across every template. Surfaced through the debug
     /// profile so a probe can watch the pool drain on spawn and refill on
     /// despawn, a direct check on the free-list recycle.
-    pub fn total_free(&self) -> usize {
+    pub(crate) fn total_free(&self) -> usize {
         self.free.values().map(Vec::len).sum()
     }
 }

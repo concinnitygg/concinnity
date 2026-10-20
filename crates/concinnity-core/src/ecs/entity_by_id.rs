@@ -139,7 +139,8 @@ impl PipelineContext<'_> {
     }
 
     /// Push `c` onto a new entity identified by a freshly minted id.
-    pub fn push_minted<C: ComponentSlot>(
+    #[cfg(test)]
+    fn push_minted<C: ComponentSlot>(
         &mut self,
         c: C,
     ) -> Result<(AssetId, Entity), AssetIdsExhausted> {

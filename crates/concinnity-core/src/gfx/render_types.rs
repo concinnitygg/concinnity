@@ -31,29 +31,30 @@ pub const MAX_AREA_LIGHTS: usize = 64;
 /// `CLUSTER_GRID_X` x `CLUSTER_GRID_Y` with `CLUSTER_GRID_Z` exponential depth slices;
 /// a compute pass bins the local lights into per-cluster index lists the forward
 /// pass reads instead of iterating every light.
-pub const CLUSTER_GRID_X: u32 = 16;
+const CLUSTER_GRID_X: u32 = 16;
 /// Cluster tiles down the screen. See [`CLUSTER_GRID_X`].
-pub const CLUSTER_GRID_Y: u32 = 9;
+const CLUSTER_GRID_Y: u32 = 9;
 /// Exponential depth slices per cluster column. See [`CLUSTER_GRID_X`].
-pub const CLUSTER_GRID_Z: u32 = 24;
+const CLUSTER_GRID_Z: u32 = 24;
 /// Total clusters in the froxel grid.
 pub const CLUSTER_COUNT: u32 = CLUSTER_GRID_X * CLUSTER_GRID_Y * CLUSTER_GRID_Z;
 /// Per-cluster light-index list capacity. Each cluster occupies
 /// `CLUSTER_LIGHT_LIST_STRIDE` u32 slots: slot 0 is the count, slots 1.. are light
 /// indices into the `GpuLight` buffer. Lights past the cap are dropped.
-pub const MAX_LIGHTS_PER_CLUSTER: u32 = 63;
+const MAX_LIGHTS_PER_CLUSTER: u32 = 63;
 /// `u32` slots one cluster occupies in the light-index buffer: the count plus
 /// [`MAX_LIGHTS_PER_CLUSTER`] indices.
-pub const CLUSTER_LIGHT_LIST_STRIDE: u32 = MAX_LIGHTS_PER_CLUSTER + 1;
+const CLUSTER_LIGHT_LIST_STRIDE: u32 = MAX_LIGHTS_PER_CLUSTER + 1;
 /// `u32` words of each of a cluster's two reflection-probe masks. The masks
 /// follow every cluster's light list in the same buffer: bit `i` of a cluster's
 /// influence mask is set when probe `i`'s influence reaches the cluster, and bit
 /// `i` of its nearest mask when probe `i` can be the nearest capture to a point
 /// in it (the fallback where no influence reaches).
-pub const CLUSTER_PROBE_MASK_WORDS: u32 = 8;
+const CLUSTER_PROBE_MASK_WORDS: u32 = 8;
 /// Probes a cluster mask can exclude. A probe past this index is never masked
 /// out, so a larger set costs its readers time but never drops a reflection.
-pub const MAX_CLUSTERED_PROBES: u32 = CLUSTER_PROBE_MASK_WORDS * 32;
+#[cfg(test)]
+const MAX_CLUSTERED_PROBES: u32 = CLUSTER_PROBE_MASK_WORDS * 32;
 /// `u32` slots in the whole per-cluster list buffer: every cluster's light list,
 /// then every cluster's two probe masks.
 pub const CLUSTER_LIST_LEN: u32 =
@@ -421,7 +422,7 @@ pub struct ClusterParams {
     pub view_forward: [f32; 3],
     /// Far end of the sliced depth range in view units (positive distance):
     /// the reach of what the grid bins, from
-    /// [`ClusterReach::range`](crate::render::cluster_range::ClusterReach::range).
+    /// `ClusterReach::range`.
     /// The last slice also holds every fragment past it.
     pub z_far: f32,
     /// Cluster tiles across the screen.
@@ -840,12 +841,12 @@ pub struct CompositeParams {
 
 /// The farthest distance the depth channel view tells apart for a camera that
 /// sees without limit, in world units.
-pub const DEPTH_VIEW_UNLIMITED_SPAN: f32 = 10_000.0;
+const DEPTH_VIEW_UNLIMITED_SPAN: f32 = 10_000.0;
 
 impl CompositeParams {
     /// The `(depth_near, depth_far)` the depth channel view maps for a camera
     /// with near plane `near`: from the near plane out to the view distance, or
-    /// to [`DEPTH_VIEW_UNLIMITED_SPAN`] when there is none. A log scale gives
+    /// to `DEPTH_VIEW_UNLIMITED_SPAN` when there is none. A log scale gives
     /// every decade of distance the same share of the gray ramp.
     pub fn depth_view_range(near: f32, view_distance: Option<f32>) -> (f32, f32) {
         let near = near.max(1e-3);

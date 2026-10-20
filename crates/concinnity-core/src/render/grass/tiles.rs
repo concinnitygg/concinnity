@@ -148,7 +148,7 @@ impl NestedTiles {
 pub type GrassBox = ([f32; 3], [f32; 3]);
 
 /// Whether box `b` lies wholly outside one of `planes`.
-pub fn box_outside(planes: &[[f32; 4]; 6], (lo, hi): &GrassBox) -> bool {
+fn box_outside(planes: &[[f32; 4]; 6], (lo, hi): &GrassBox) -> bool {
     planes.iter().any(|p| {
         let v: [f32; 3] = core::array::from_fn(|i| if p[i] >= 0.0 { hi[i] } else { lo[i] });
         p[0] * v[0] + p[1] * v[1] + p[2] * v[2] + p[3] < 0.0
@@ -156,7 +156,7 @@ pub fn box_outside(planes: &[[f32; 4]; 6], (lo, hi): &GrassBox) -> bool {
 }
 
 /// The distance from `p` to box `b`, 0 inside it.
-pub fn box_distance(p: [f32; 3], (lo, hi): &GrassBox) -> f32 {
+fn box_distance(p: [f32; 3], (lo, hi): &GrassBox) -> f32 {
     let d: [f32; 3] = core::array::from_fn(|i| (lo[i] - p[i]).max(p[i] - hi[i]).max(0.0));
     sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
 }

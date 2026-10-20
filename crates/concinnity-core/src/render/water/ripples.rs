@@ -11,7 +11,7 @@ use core::f32::consts::TAU;
 pub const RIPPLES: usize = 4;
 
 /// The shortest ripple, in meters.
-pub const SHORTEST_RIPPLE: f32 = 0.012;
+const SHORTEST_RIPPLE: f32 = 0.012;
 
 /// A crest's length over the ripple's, inverted: how much less the noise
 /// varies along a crest than across it. Mirrors `WATER_RIPPLE_CREST`.
@@ -60,8 +60,8 @@ impl Ripple {
 }
 
 /// The ripple octaves under a wind blowing toward `wind_direction`, from
-/// `longest` meters (held to at least [`SHORTEST_RIPPLE`]) down to
-/// [`SHORTEST_RIPPLE`], spaced evenly in log wavelength.
+/// `longest` meters (held to at least `SHORTEST_RIPPLE`) down to
+/// `SHORTEST_RIPPLE`, spaced evenly in log wavelength.
 pub fn ripples(wind_direction: [f32; 2], longest: f32) -> [Ripple; RIPPLES] {
     let longest = longest.max(SHORTEST_RIPPLE);
     let wind_angle = atan2(wind_direction[1], wind_direction[0]);

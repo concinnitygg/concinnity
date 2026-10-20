@@ -43,13 +43,14 @@ impl PixelLayout {
 /// Convert the tightly-packed read-back bytes to opaque RGBA8, decoding per the
 /// classified layout. The alpha channel is forced to 255 so a saved image is
 /// opaque regardless of the composited alpha.
-pub fn decode_to_rgba8(raw: &[u8], layout: PixelLayout) -> Vec<u8> {
+#[cfg(test)]
+fn decode_to_rgba8(raw: &[u8], layout: PixelLayout) -> Vec<u8> {
     let mut out = Vec::with_capacity(raw.len() / layout.bytes_per_pixel() * 4);
     decode_into_rgba8(raw, layout, &mut out);
     out
 }
 
-/// Append `raw` decoded as [`decode_to_rgba8`] does to `out`, so a caller that
+/// Append `raw` decoded as `decode_to_rgba8` does to `out`, so a caller that
 /// decodes row by row reuses one buffer.
 pub fn decode_into_rgba8(raw: &[u8], layout: PixelLayout, out: &mut Vec<u8>) {
     match layout {

@@ -50,10 +50,10 @@ pub fn sort_distance(center: [f32; 3], cam: [f32; 3]) -> f32 {
 /// Screen-space refraction offset a see-through glass mesh draws with. A
 /// `Material` carries no glass tunables, so this and
 /// [`GLASS_MESH_FRESNEL_POWER`] match the `GlassPanel` defaults.
-pub const GLASS_MESH_REFRACTION: f32 = 0.02;
+const GLASS_MESH_REFRACTION: f32 = 0.02;
 /// Schlick-Fresnel exponent a see-through glass mesh draws with: a subtle
 /// reflection head-on, a full mirror at grazing angles.
-pub const GLASS_MESH_FRESNEL_POWER: f32 = 1.0;
+const GLASS_MESH_FRESNEL_POWER: f32 = 1.0;
 
 /// One see-through glass mesh as this frame's transparent pass draws it: the
 /// LOD slice the opaque passes would have picked at the same camera distance,

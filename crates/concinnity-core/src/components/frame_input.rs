@@ -159,7 +159,7 @@ impl FrameInput {
     }
 
     /// The characters typed this frame, in order.
-    pub fn typed_chars(&self) -> impl Iterator<Item = char> + '_ {
+    fn typed_chars(&self) -> impl Iterator<Item = char> + '_ {
         self.key_events.iter().filter_map(|e| match e {
             KeyEvent::Text(c) => Some(*c),
             KeyEvent::Press(_) => None,

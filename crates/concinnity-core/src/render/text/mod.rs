@@ -118,7 +118,7 @@ pub fn derive_cap_px(metrics: &FontMetrics, size_px: f32) -> f32 {
 
 /// Width of the widest line of `content` in scaled pixels: what a label's
 /// background box and its center / right alignment are both sized against.
-pub fn widest_line_width(content: &str, font: &LoadedFont, scale: f32) -> f32 {
+fn widest_line_width(content: &str, font: &LoadedFont, scale: f32) -> f32 {
     content
         .split('\n')
         .map(|line| text_advance_width(line, font, scale))

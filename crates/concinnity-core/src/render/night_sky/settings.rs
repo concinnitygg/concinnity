@@ -11,17 +11,17 @@ use crate::math::{SaturatingFrom, cos};
 /// Light of a magnitude-0 star, as a fraction of the sunlight, at
 /// `star_brightness` 1: the 26.74 magnitudes between a star like Vega and
 /// the sun above the air.
-pub const STAR_ZERO_ILLUMINANCE: f32 = 2.0e-11;
+pub(crate) const STAR_ZERO_ILLUMINANCE: f32 = 2.0e-11;
 /// Radiance at the Milky Way's heart, as a fraction of the sunlight, at
 /// `milky_way_brightness` 1: about 20 magnitudes per square arcsecond, its
 /// brightest star clouds.
-pub const MILKY_WAY_RADIANCE: f32 = 8.6e-9;
+pub(crate) const MILKY_WAY_RADIANCE: f32 = 8.6e-9;
 /// How much brighter galaxies are drawn than their magnitudes, so the larger
 /// ones show as more than their cores.
-pub const GALAXY_GAIN: f32 = 4.0;
+pub(crate) const GALAXY_GAIN: f32 = 4.0;
 /// The moon's dark side, lit by light from the planet, as a share of its lit
 /// face.
-pub const EARTHSHINE: f32 = 0.004;
+pub(crate) const EARTHSHINE: f32 = 0.004;
 
 /// The moon as resolved from the asset.
 #[derive(Debug, Clone, Copy, PartialEq)]

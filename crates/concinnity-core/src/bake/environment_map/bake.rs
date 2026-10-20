@@ -152,7 +152,7 @@ fn clamp_radiance(rgb: [f32; 3], clamp: f32) -> [f32; 3] {
 
 /// One row of a bake's output: the RGBA texels of row `y` on cube face `face`.
 ///
-/// Handed out by [`face_rows`] and filled by [`CubeBake::compute_row`]. A row
+/// Handed out by [`face_rows`] and filled by `CubeBake::compute_row`. A row
 /// borrows only its own texels, so the whole set can be worked through in any
 /// order and on any thread.
 pub struct FaceRow<'a> {
@@ -277,7 +277,7 @@ impl<'a> CubeBake<'a> {
     }
 
     /// Cube face edge of this bake's output, in pixels.
-    pub fn output_face_size(&self) -> u32 {
+    fn output_face_size(&self) -> u32 {
         self.output_face_size
     }
 

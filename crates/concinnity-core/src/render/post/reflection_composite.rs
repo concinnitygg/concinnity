@@ -67,7 +67,7 @@ pub fn output_desc() -> TextureDesc {
 }
 
 /// The blur's shape: the render resolution divided by `blur_scale`.
-pub fn blur_desc(blur_scale: u32) -> TextureDesc {
+fn blur_desc(blur_scale: u32) -> TextureDesc {
     shape(blur_scale, TextureUsage(0))
 }
 

@@ -42,7 +42,8 @@ const MAX_LUT_SIZE: u32 = 128;
 /// fixed-point weights step a read by about 1/256 of a texel span, which on a
 /// 2x2x2 LUT is a whole 8-bit output step. `LUT_FILTER_MIN_SIZE` in
 /// composite.hlsl.
-pub const LUT_FILTER_MIN_SIZE: u32 = 16;
+#[cfg(test)]
+const LUT_FILTER_MIN_SIZE: u32 = 16;
 
 /// Classify a `ColorLut` source path by extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

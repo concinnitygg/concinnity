@@ -11,10 +11,10 @@ use crate::math::{hypot, powi};
 use alloc::vec::Vec;
 
 /// Grid lines on each side of the anchor.
-pub const OCEAN_GRID_HALF_LINES: u32 = 127;
+const OCEAN_GRID_HALF_LINES: u32 = 127;
 
 /// Square cells on each side of the anchor before they start to widen.
-pub const OCEAN_GRID_INNER_CELLS: u32 = 16;
+const OCEAN_GRID_INNER_CELLS: u32 = 16;
 
 /// The inner cell, in peak wavelengths, and the range it is held to, meters.
 const INNER_CELL_PER_PEAK: f32 = 1.0 / 48.0;
@@ -86,7 +86,8 @@ impl OceanGrid {
     }
 
     /// The cell size the shader estimates at `x` meters from the anchor.
-    pub fn estimated_cell(&self, x: f32) -> f32 {
+    #[cfg(test)]
+    fn estimated_cell(self, x: f32) -> f32 {
         let [inner, half, widening, _] = self.gpu_lane();
         inner + (x.abs() - half).max(0.0) * widening
     }

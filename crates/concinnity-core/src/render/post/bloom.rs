@@ -289,7 +289,7 @@ impl<Pipeline, Target> BloomPass<Pipeline, Target> {
 }
 
 /// The bytes of `post` the prefilter declares.
-pub fn prefilter_constants(post: &PostProcessParams) -> &[u8] {
+fn prefilter_constants(post: &PostProcessParams) -> &[u8] {
     &bytemuck::bytes_of(post)[..BLOOM_PREFILTER_CONSTANTS]
 }
 

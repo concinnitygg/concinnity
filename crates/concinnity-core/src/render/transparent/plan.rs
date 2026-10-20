@@ -123,7 +123,7 @@ impl<M> TransparentFramePlan<M> {
     }
 
     /// Whether a glass surface (pane or mesh) draws this frame.
-    pub fn draws_glass(&self) -> bool {
+    fn draws_glass(&self) -> bool {
         self.order
             .iter()
             .any(|&(kind, _)| matches!(kind, Producer::Glass | Producer::GlassMesh))

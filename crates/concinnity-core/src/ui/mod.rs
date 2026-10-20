@@ -4,7 +4,7 @@
 //! hover/click, screen overlays, and key bindings each frame.
 
 mod capture;
-pub mod dropdown;
+pub(crate) mod dropdown;
 mod focus;
 mod intent;
 mod key_bindings;
@@ -228,7 +228,7 @@ struct OpenRequest {
 /// system table when the world declares any `HitRegion`, `Screen`, or
 /// `KeyBinding`; never a world-declared asset, so it carries no config.
 #[derive(Debug)]
-pub struct UiInputSystem {
+pub(crate) struct UiInputSystem {
     regions: Vec<RegionEntry>,
     bindings: Vec<KeyBinding>,
     screens: ScreenRegistry,
@@ -282,7 +282,7 @@ pub struct UiInputSystem {
 impl UiInputSystem {
     /// The system for a world that declares any `HitRegion`, `Screen` or
     /// `KeyBinding`.
-    pub fn for_world(world: &World) -> Option<Self> {
+    pub(crate) fn for_world(world: &World) -> Option<Self> {
         let needs = world.query::<HitRegion>().next().is_some()
             || world.query::<Screen>().next().is_some()
             || world.query::<KeyBinding>().next().is_some();
@@ -291,7 +291,7 @@ impl UiInputSystem {
 
     /// Empty dispatch state. The world's `HitRegion` / `Screen` / `KeyBinding`
     /// components are drained into it in [`System::init`].
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             regions: Vec::new(),
             bindings: Vec::new(),

@@ -48,13 +48,13 @@ fn square(radius: u64) -> u64 {
 
 /// The most chunks a window reaching `far_radius` keeps resident: every chunk
 /// short of its evict radius.
-pub fn max_resident_chunks(far_radius: u32) -> u64 {
+pub(crate) fn max_resident_chunks(far_radius: u32) -> u64 {
     square(u64::from(far_radius) + EVICT_HYSTERESIS as u64)
 }
 
 /// The most chunks a window keeps at full detail for `near_radius`, counting
 /// the receding ring a full chunk keeps before it becomes an impostor.
-pub fn max_full_detail_chunks(near_radius: u32) -> u64 {
+pub(crate) fn max_full_detail_chunks(near_radius: u32) -> u64 {
     square(u64::from(near_radius) + DETAIL_HYSTERESIS as u64)
 }
 
@@ -93,7 +93,7 @@ struct Slot {
 
 /// The load / evict decisions produced by one [`ChunkWindow::plan`] call.
 #[derive(Debug, Default, PartialEq, Eq)]
-pub struct ChunkPlan {
+pub(crate) struct ChunkPlan {
     /// Chunks whose background load should be dispatched this frame, nearest
     /// to the camera first, each tagged with the detail to generate it at.
     /// Already marked `ChunkState::Pending`.
@@ -114,7 +114,7 @@ pub struct ChunkPlan {
 ///
 /// [`plan`]: ChunkWindow::plan
 /// [`mark_resident`]: ChunkWindow::mark_resident
-pub struct ChunkWindow {
+pub(crate) struct ChunkWindow {
     // Tracked chunks only: a chunk absent from the map is unloaded.
     states: BTreeMap<ChunkCoord, Slot>,
     // Chunks whose generation failed for good, never dispatched again.
@@ -147,7 +147,7 @@ impl ChunkWindow {
     /// `near_radius` (so it never undercuts the full-detail band; equal means
     /// "no impostors"), and `load_budget` at 1 so a stray 0 cannot wedge
     /// streaming permanently.
-    pub fn new(near_radius: i32, far_radius: i32, load_budget: usize) -> Self {
+    pub(crate) fn new(near_radius: i32, far_radius: i32, load_budget: usize) -> Self {
         let near_radius = near_radius.max(0);
         let far_radius = far_radius.max(near_radius);
         Self {
@@ -165,13 +165,13 @@ impl ChunkWindow {
     /// keeps the pure radius-based window; `Some(b)` additionally clamps the
     /// effective view radius down until resident bytes fit `b`. Off by default
     /// so worlds that never set it behave exactly as the radius-only window.
-    pub fn set_byte_budget(&mut self, budget: Option<u64>) {
+    pub(crate) fn set_byte_budget(&mut self, budget: Option<u64>) {
         self.byte_budget = budget;
     }
 
     /// The active resident-byte budget, or `None` when byte accounting is off
     /// (the pure radius window). For diagnostics.
-    pub fn byte_budget(&self) -> Option<u64> {
+    pub(crate) fn byte_budget(&self) -> Option<u64> {
         self.byte_budget
     }
 
@@ -256,7 +256,7 @@ impl ChunkWindow {
     /// near/far boundary (evict + reload at the new detail), and dispatches the
     /// nearest in-window chunks not yet tracked, up to the load budget, marking
     /// each `Pending`.
-    pub fn plan(&mut self, camera: ChunkCoord) -> ChunkPlan {
+    pub(crate) fn plan(&mut self, camera: ChunkCoord) -> ChunkPlan {
         // 0. Reconcile the effective window with the byte budget. The clamp only
         //    ever shrinks below the configured radii, so a world with no budget
         //    (shrink pinned to 0) plans exactly the configured window.
@@ -336,7 +336,7 @@ impl ChunkWindow {
     ///
     /// A no-op if the chunk is no longer tracked: the camera may have moved
     /// far enough to evict it while its load was still in flight.
-    pub fn mark_resident(&mut self, coord: ChunkCoord, bytes: u64) {
+    pub(crate) fn mark_resident(&mut self, coord: ChunkCoord, bytes: u64) {
         if let Some(slot) = self.states.get_mut(&coord) {
             slot.state = ChunkState::Resident;
             slot.bytes = bytes;
@@ -345,7 +345,7 @@ impl ChunkWindow {
 
     /// Total bytes of all currently Resident chunks, for diagnostics and the
     /// byte-budget clamp. Pending chunks (not yet uploaded) are excluded.
-    pub fn resident_bytes(&self) -> u64 {
+    pub(crate) fn resident_bytes(&self) -> u64 {
         self.states
             .values()
             .filter(|slot| slot.state == ChunkState::Resident)
@@ -358,13 +358,13 @@ impl ChunkWindow {
     ///
     /// The driver calls this when a dispatch could not be delivered to the
     /// background worker, so the chunk is retried rather than stuck `Pending`.
-    pub fn forget(&mut self, coord: ChunkCoord) {
+    pub(crate) fn forget(&mut self, coord: ChunkCoord) {
         self.states.remove(&coord);
     }
 
     /// Retire `coord` after a generation that cannot succeed: it is dropped
     /// from tracking and never dispatched again.
-    pub fn mark_failed(&mut self, coord: ChunkCoord) {
+    pub(crate) fn mark_failed(&mut self, coord: ChunkCoord) {
         self.states.remove(&coord);
         self.failed.insert(coord);
     }
@@ -373,12 +373,12 @@ impl ChunkWindow {
     ///
     /// The driver checks this when a background load completes: a chunk
     /// evicted mid-flight is no longer tracked and its mesh should be dropped.
-    pub fn is_tracked(&self, coord: ChunkCoord) -> bool {
+    pub(crate) fn is_tracked(&self, coord: ChunkCoord) -> bool {
         self.states.contains_key(&coord)
     }
 
     /// `(resident, pending)` chunk counts: for diagnostics.
-    pub fn counts(&self) -> (usize, usize) {
+    pub(crate) fn counts(&self) -> (usize, usize) {
         let mut resident = 0;
         let mut pending = 0;
         for slot in self.states.values() {
@@ -392,7 +392,7 @@ impl ChunkWindow {
 
     /// `(near_resident, far_resident)` counts: resident full chunks vs
     /// resident impostors, for diagnostics / verifying the far band is active.
-    pub fn counts_by_detail(&self) -> (usize, usize) {
+    pub(crate) fn counts_by_detail(&self) -> (usize, usize) {
         let mut near = 0;
         let mut far = 0;
         for slot in self.states.values() {

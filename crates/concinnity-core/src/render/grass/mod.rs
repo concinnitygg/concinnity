@@ -40,7 +40,7 @@ pub use lod::{GrassCapacity, GrassLodView, GrassSizing};
 
 /// Frames the hand-off's per-pixel choice between the blades and the canopy
 /// cycles through before it repeats.
-pub const GRASS_CROSSFADE_PHASES: u32 = 64;
+const GRASS_CROSSFADE_PHASES: u32 = 64;
 pub use planet::PlanetGrass;
 pub use planet::tiles::DrawnPlanetTile;
 pub use shadow::GrassShadowView;
@@ -318,7 +318,7 @@ pub fn map_then(rows: [[f32; 4]; 2], m: &Mat4) -> [[f32; 4]; 2] {
 
 /// Rows over a point `(x, y, z, 1)` applied at fixed height `y`, as rows over
 /// `(x, z, 1)`.
-pub fn map_at_height(rows: [[f32; 4]; 2], y: f32) -> [[f32; 4]; 2] {
+fn map_at_height(rows: [[f32; 4]; 2], y: f32) -> [[f32; 4]; 2] {
     rows.map(|r| [r[0], r[2], r[1] * y + r[3], 0.0])
 }
 
@@ -1132,7 +1132,7 @@ fn light_projection(look: &GrassBladeLook, wind_speed: f32) -> [f32; 2] {
 /// its tallest height, since a bent blade keeps its length, plus half its
 /// widest width, distance widening and edge-on widening included, plus the
 /// farthest clumping moves it. Mirrors the kernel's height and width draws.
-pub fn blade_reach(look: &GrassBladeLook, lod_height: f32) -> f32 {
+fn blade_reach(look: &GrassBladeLook, lod_height: f32) -> f32 {
     let tallest = look.height * (1.0 + look.height_variance);
     let widest = look.width * 1.25 * lod::max_width_scale(look.width, lod_height) * 1.3;
     tallest + 0.5 * widest + clumping::max_gather_offset(look.clump_size, look.clumping)

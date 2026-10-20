@@ -106,7 +106,7 @@ pub(crate) fn build_cursor_calls(
 
 /// `build_cursor_calls`, appending onto an existing draw list. Sprites without
 /// `follow_cursor` are skipped, so the caller can pass its whole sprite slice.
-pub fn build_cursor_calls_into(
+pub(crate) fn build_cursor_calls_into(
     out: &mut crate::render::call_buffer::TextCallBuffer,
     sprites: &[Sprite],
     pointer: [f32; 2],

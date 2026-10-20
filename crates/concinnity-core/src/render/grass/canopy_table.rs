@@ -8,20 +8,24 @@
 //! deep into the blades a ray gets keeps changing long after nearly every ray
 //! is stopped.
 
-use crate::math::{SaturatingFrom, acos, cos, exp, floor, ln};
+#[cfg(test)]
+use crate::math::{SaturatingFrom, floor};
+use crate::math::{acos, cos, exp, ln};
 use alloc::vec::Vec;
 
-use super::canopy::{CanopyBand, CanopyView, canopy_view, projection};
+#[cfg(test)]
+use super::canopy::CanopyBand;
+use super::canopy::{CanopyView, canopy_view, projection};
 use crate::render::uniforms::canopy::MAX_CANOPY_LAYERS;
 
 /// View angles a layer's table holds, from straight down to grazing.
-pub const CANOPY_TABLE_ANGLES: usize = 16;
+const CANOPY_TABLE_ANGLES: usize = 16;
 
 /// Optical depths a layer's table holds, from bare ground to closed canopy.
-pub const CANOPY_TABLE_DEPTHS: usize = 16;
+const CANOPY_TABLE_DEPTHS: usize = 16;
 
 /// `float4` rows in each cell of a layer's table.
-pub const CANOPY_TABLE_ROWS: usize = 3;
+const CANOPY_TABLE_ROWS: usize = 3;
 
 /// `float4` rows in one layer's table.
 pub const CANOPY_TABLE_LEN: usize = CANOPY_TABLE_ANGLES * CANOPY_TABLE_DEPTHS * CANOPY_TABLE_ROWS;
@@ -31,14 +35,14 @@ pub const MAX_CANOPY_TABLE_ROWS: usize = MAX_CANOPY_LAYERS * CANOPY_TABLE_LEN;
 
 /// The shallowest view the canopy is seen along, as the cosine from the
 /// blades' up: grazing views are held there.
-pub const CANOPY_MIN_MU: f32 = 0.02;
+const CANOPY_MIN_MU: f32 = 0.02;
 
 /// The optical depth the depth axis is spaced around: rows are even in
 /// `ln(1 + depth / CANOPY_DEPTH_KNEE)`.
-pub const CANOPY_DEPTH_KNEE: f32 = 0.25;
+const CANOPY_DEPTH_KNEE: f32 = 0.25;
 
 /// The deepest view a layer's table holds; deeper views read its last row.
-pub const CANOPY_MAX_DEPTH: f32 = 400.0;
+const CANOPY_MAX_DEPTH: f32 = 400.0;
 
 // The view angle from the blades' up at grazing.
 fn max_angle() -> f32 {
@@ -51,12 +55,14 @@ fn angle_mu(i: usize) -> f32 {
 }
 
 // The fractional angle row of view cosine `mu`.
+#[cfg(test)]
 fn angle_coord(mu: f32) -> f32 {
     (acos(mu.clamp(CANOPY_MIN_MU, 1.0)) / max_angle()).clamp(0.0, 1.0)
         * (CANOPY_TABLE_ANGLES - 1) as f32
 }
 
 // The log-spaced coordinate of optical depth `depth`, in [0, 1].
+#[cfg(test)]
 fn depth_unit(depth: f32) -> f32 {
     (ln(1.0 + depth.max(0.0) / CANOPY_DEPTH_KNEE) / ln(1.0 + CANOPY_MAX_DEPTH / CANOPY_DEPTH_KNEE))
         .clamp(0.0, 1.0)
@@ -83,7 +89,7 @@ fn cell(view: &CanopyView, projection: f32) -> [[f32; 4]; CANOPY_TABLE_ROWS] {
 }
 
 /// The table of a layer bent by `bend` whose blades vary in height by
-/// `height_variance`: angle rows of depth columns of [`CANOPY_TABLE_ROWS`]
+/// `height_variance`: angle rows of depth columns of `CANOPY_TABLE_ROWS`
 /// rows each.
 pub fn canopy_table(bend: f32, height_variance: f32) -> Vec<[f32; 4]> {
     let mut rows = Vec::with_capacity(CANOPY_TABLE_LEN);
@@ -100,6 +106,7 @@ pub fn canopy_table(bend: f32, height_variance: f32) -> Vec<[f32; 4]> {
 }
 
 // Row `r` of the cell at fractional angle `x` and depth `y`, interpolated.
+#[cfg(test)]
 fn fetch(table: &[[f32; 4]], x: f32, y: f32, r: usize) -> [f32; 4] {
     let (i0, j0) = (
         usize::saturating_from(floor(x)),
@@ -122,13 +129,15 @@ fn fetch(table: &[[f32; 4]], x: f32, y: f32, r: usize) -> [f32; 4] {
 
 /// The projection of `table`'s layer along view cosine `mu`, as
 /// [`projection`] gives it.
-pub fn table_projection(table: &[[f32; 4]], mu: f32) -> f32 {
+#[cfg(test)]
+fn table_projection(table: &[[f32; 4]], mu: f32) -> f32 {
     fetch(table, angle_coord(mu), 0.0, 0)[1]
 }
 
 /// Where rays seen along `mu` stop in a field of `leaf_area` of `table`'s
 /// layer, as [`canopy_view`] gives it.
-pub fn table_view(table: &[[f32; 4]], mu: f32, leaf_area: f32) -> CanopyView {
+#[cfg(test)]
+fn table_view(table: &[[f32; 4]], mu: f32, leaf_area: f32) -> CanopyView {
     let mu = mu.max(CANOPY_MIN_MU);
     let x = angle_coord(mu);
     let depth = fetch(table, x, 0.0, 0)[1] * leaf_area / mu;

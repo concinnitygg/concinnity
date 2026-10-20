@@ -30,15 +30,15 @@ use spectrum::{GRAVITY, WIND_SEA_WAVES, Wave, unit_hash, wind_sea};
 pub const MAX_WAVES: usize = WIND_SEA_WAVES + MAX_WATER_WAVES;
 
 /// The most waves that displace the grid; the rest shade it only.
-pub const MAX_DISPLACING_WAVES: usize = 16;
+const MAX_DISPLACING_WAVES: usize = 16;
 
 /// The shortest wave that displaces the grid, in grid cells: anything finer
 /// would alias between vertices, so it moves the shading normal only.
-pub const DISPLACE_MIN_CELLS: f32 = 2.0;
+const DISPLACE_MIN_CELLS: f32 = 2.0;
 
 /// The longest ripple the shader's procedural ripples carry, in meters, when
 /// the wind raises no sea for them to continue.
-pub const STILL_RIPPLE_WAVELENGTH: f32 = 0.06;
+const STILL_RIPPLE_WAVELENGTH: f32 = 0.06;
 
 // The share of its own self-intersection limit the wind sea's displacing
 // waves pinch their crests by together, and the ceiling every displacing wave
@@ -74,7 +74,7 @@ pub struct WaterBody {
     /// How many of `waves` displace the grid.
     pub displacing: usize,
     /// The wavelength, in meters, the shader's ripples start below: the
-    /// shortest wave of the wind sea, or [`STILL_RIPPLE_WAVELENGTH`].
+    /// shortest wave of the wind sea, or `STILL_RIPPLE_WAVELENGTH`.
     pub ripple_wavelength: f32,
     /// The ripple octaves, longest first, starting at `ripple_wavelength`.
     pub ripples: [Ripple; RIPPLES],

@@ -36,7 +36,7 @@ pub use user::{GraphicsApiTrial, UserGraphicsSettings};
 
 /// Shared Off/On labels for the boolean rows. Index 0 is off, 1 on, so
 /// `bool as usize` indexes directly.
-pub const OFF_ON_OPTIONS: [&str; 2] = ["Off", "On"];
+const OFF_ON_OPTIONS: [&str; 2] = ["Off", "On"];
 
 /// Effective gamepad look sensitivity (radians per second at full stick
 /// deflection) when the user has never chosen one.

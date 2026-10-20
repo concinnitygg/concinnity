@@ -44,7 +44,7 @@ pub const MAX_PLANAR_PLANES: usize = 4;
 
 /// Distance a mirror's clip plane is pushed toward the kept (camera) side, so
 /// geometry exactly on the surface is not lost to near-plane precision.
-pub const PLANAR_CLIP_BIAS: f32 = 0.02;
+const PLANAR_CLIP_BIAS: f32 = 0.02;
 
 /// Texels a mirror's crop is grown by on every side, covering the bilinear
 /// footprint of the reflector's lookup.

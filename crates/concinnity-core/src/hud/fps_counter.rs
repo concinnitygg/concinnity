@@ -15,19 +15,19 @@ const WINDOW_SECS: f32 = 1.0;
 
 /// The FPS counter, built from a world's `FpsCounter` request component.
 #[derive(Debug)]
-pub struct FpsCounterSystem {
+pub(crate) struct FpsCounterSystem {
     window: RateWindow,
     label: Option<AssetId>,
 }
 
 impl FpsCounterSystem {
     /// The system for a world that declares an `FpsCounter`.
-    pub fn for_world(world: &World) -> Option<Self> {
+    pub(crate) fn for_world(world: &World) -> Option<Self> {
         world.query::<FpsCounter>().next().map(Self::new)
     }
 
     /// Build the counter from a world's `FpsCounter` request component.
-    pub fn new(config: &FpsCounter) -> Self {
+    pub(crate) fn new(config: &FpsCounter) -> Self {
         Self {
             window: RateWindow::default(),
             label: config.label.map(Ref::id),

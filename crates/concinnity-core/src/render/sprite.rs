@@ -18,7 +18,7 @@ use crate::render::overlay_maps::{Placement, TextureSlots};
 /// A view-owned sprite that spans the whole reference canvas is a full-screen
 /// backdrop (e.g. a menu dim): it is stretched to fill the live window rather
 /// than uniform-scaled, and an opaque one hides the scene behind it.
-pub fn covers_canvas(s: &Sprite) -> bool {
+pub(crate) fn covers_canvas(s: &Sprite) -> bool {
     let [ref_w, ref_h] = UI_REFERENCE_SIZE;
     s.screen.is_some()
         && s.x <= 0.0
@@ -60,7 +60,7 @@ pub(crate) fn build_sprite_calls(
 /// steady state, the pooled geometry of the spent frame it recycled). A
 /// `follow_cursor` sprite is skipped: it is the cursor pass's silhouette
 /// source (see `cursor.rs`), not a scene quad.
-pub fn build_sprite_calls_into<'a>(
+pub(crate) fn build_sprite_calls_into<'a>(
     out: &mut crate::render::call_buffer::TextCallBuffer,
     sprites: impl IntoIterator<Item = (&'a Sprite, Placement)>,
     default_atlas_slot: Option<usize>,

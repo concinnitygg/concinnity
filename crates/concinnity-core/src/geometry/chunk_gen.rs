@@ -54,7 +54,7 @@ impl From<&BlockType> for ChunkBlockType {
 
 impl ChunkBlockType {
     /// Empty space: no geometry, occludes nothing.
-    pub const AIR: Self = Self {
+    const AIR: Self = Self {
         solid: false,
         uv_top: [0.0; 4],
         uv_bottom: [0.0; 4],

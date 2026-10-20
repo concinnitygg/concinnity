@@ -1,7 +1,7 @@
 //! Whitecaps on a simulated ocean. Each cascade keeps a foam field across
 //! frames: where the surface converges into a sharpening crest, its Jacobian
 //! falling below a threshold, the foam is topped up to full, and everywhere
-//! it fades over [`FOAM_SECONDS`], so a breaking crest leaves a streak behind
+//! it fades over `FOAM_SECONDS`, so a breaking crest leaves a streak behind
 //! it that thins out as the wave runs on.
 //!
 //! The threshold follows the wind so that the foam covers the share of the
@@ -23,7 +23,7 @@ use crate::render::water::spectrum::{GRAVITY, SeaShape};
 use core::f32::consts::TAU;
 
 /// The time, in seconds, foam takes to fade to `1 / e` of itself.
-pub const FOAM_SECONDS: f32 = 2.5;
+const FOAM_SECONDS: f32 = 2.5;
 
 /// The cascades that whitecap: the longest two, which hold the waves of a
 /// meter and up that break. Shorter waves only roughen the surface.
@@ -32,7 +32,7 @@ pub const FOAM_CASCADES: usize = 2;
 /// The Jacobian span, in its standard deviations, over which the injected
 /// foam ramps from none to full: narrow, so a breaking crest turns white
 /// rather than gray.
-pub const FOAM_RAMP_SIGMAS: f32 = 0.1;
+const FOAM_RAMP_SIGMAS: f32 = 0.1;
 
 // The foam each crossing leaves behind as it fades, in fade times of full
 // foam. Short of one: neighboring crossings overlap, so their wakes do too.
@@ -42,7 +42,7 @@ const LINGER: f32 = 0.9;
 
 /// The share of the sea whitecaps cover under a `wind_speed` m/s wind,
 /// `3.84e-6 U^3.41`.
-pub fn whitecap_coverage(wind_speed: f32) -> f32 {
+fn whitecap_coverage(wind_speed: f32) -> f32 {
     (3.84e-6 * powf(wind_speed.max(0.0), 3.41)).min(1.0)
 }
 
@@ -84,7 +84,7 @@ pub struct FoamCalibration {
 
 impl FoamCalibration {
     /// The thresholds that make `sea`'s whitecaps cover
-    /// [`whitecap_coverage`] of it, the first [`FOAM_CASCADES`] of
+    /// `whitecap_coverage` of it, the first [`FOAM_CASCADES`] of
     /// `cascades` sharing it evenly.
     pub fn new(sea: &OceanSea, cascades: &Cascades) -> Self {
         let mut out = Self::default();

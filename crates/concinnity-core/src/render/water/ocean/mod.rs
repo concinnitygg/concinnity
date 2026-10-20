@@ -29,15 +29,15 @@ use super::spectrum::SeaShape;
 /// A body takes the simulated ocean once its longer side spans at least this
 /// many of its sea's peak wavelengths: past that a sum of a few dozen waves
 /// shows its repeating interference.
-pub const OCEAN_MIN_PEAK_WAVELENGTHS: f32 = 16.0;
+const OCEAN_MIN_PEAK_WAVELENGTHS: f32 = 16.0;
 
 /// A body takes the simulated ocean only once its longer side reaches this
 /// many meters: below it the sum costs less than any simulation could.
-pub const OCEAN_MIN_SIDE_METERS: f32 = 256.0;
+const OCEAN_MIN_SIDE_METERS: f32 = 256.0;
 
 /// The most distinct seas one world simulates. Bodies past it whose sea
 /// differs from every simulated one keep the summed waves.
-pub const MAX_OCEAN_SIMULATIONS: usize = 4;
+const MAX_OCEAN_SIMULATIONS: usize = 4;
 
 /// The most cascades one simulation runs. Mirrors `WATER_OCEAN_MAX_CASCADES`
 /// in `shaders/water.hlsl`.
@@ -65,7 +65,7 @@ impl OceanQuality {
         cascades: 3,
     };
     /// The smallest cascade side.
-    pub const MIN_SIZE: u32 = 64;
+    const MIN_SIZE: u32 = 64;
     /// The largest cascade side. Mirrors `WATER_FFT_MAX_SIZE` in
     /// `shaders/water_fft.hlsl`.
     pub const MAX_SIZE: u32 = 256;
@@ -84,7 +84,8 @@ impl OceanQuality {
     }
 
     /// `log2(size)`, the FFT's stage count.
-    pub fn log2_size(&self) -> u32 {
+    #[cfg(test)]
+    fn log2_size(self) -> u32 {
         self.size.trailing_zeros()
     }
 }
@@ -111,8 +112,8 @@ pub struct OceanSea {
 impl OceanSea {
     /// The sea `surface` takes under a wind of `wind_speed` m/s toward
     /// `direction`, when it is large enough to simulate: a wind sea whose
-    /// peak wavelength its longer side spans [`OCEAN_MIN_PEAK_WAVELENGTHS`]
-    /// times, on a side of at least [`OCEAN_MIN_SIDE_METERS`].
+    /// peak wavelength its longer side spans `OCEAN_MIN_PEAK_WAVELENGTHS`
+    /// times, on a side of at least `OCEAN_MIN_SIDE_METERS`.
     pub fn of(surface: &WaterSurface, wind_speed: f32, direction: [f32; 2]) -> Option<Self> {
         let wind_speed = wind_speed * surface.wind_response;
         let sea = SeaShape::new(wind_speed, surface.fetch_meters)?;
@@ -182,7 +183,7 @@ pub struct BodyOcean {
 /// laid out, all at one quality.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OceanPlan {
-    /// The distinct seas, at most [`MAX_OCEAN_SIMULATIONS`].
+    /// The distinct seas, at most `MAX_OCEAN_SIMULATIONS`.
     pub simulations: Vec<OceanSimulation>,
     /// The quality every simulation runs at.
     pub quality: OceanQuality,

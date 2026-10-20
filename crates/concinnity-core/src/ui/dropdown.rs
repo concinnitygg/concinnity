@@ -23,7 +23,7 @@ pub(crate) fn visible_count(count: usize) -> usize {
 
 /// The largest valid `first` (top shown option) for a `count`-option list, so
 /// the window never runs past the last option.
-pub fn max_first(count: usize) -> usize {
+pub(crate) fn max_first(count: usize) -> usize {
     count.saturating_sub(MAX_VISIBLE)
 }
 
@@ -38,7 +38,7 @@ pub(crate) fn first_for_selected(selected: usize, count: usize) -> usize {
 /// The placed list rectangle and the per-row rectangles inside it, all in
 /// reference-space `[x, y, width, height]`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct DropdownLayout {
+pub(crate) struct DropdownLayout {
     /// The whole list.
     pub list: [f32; 4],
     /// One entry per shown row (at most `MAX_VISIBLE`), top to bottom; row `i`
@@ -53,7 +53,7 @@ pub struct DropdownLayout {
 /// below the anchor, flipping to open upward when opening down would overflow
 /// the reference canvas bottom, and clamps onto the canvas if it is taller than
 /// the space either way. A zero `count` yields an empty list.
-pub fn layout(anchor: [f32; 4], count: usize) -> DropdownLayout {
+pub(crate) fn layout(anchor: [f32; 4], count: usize) -> DropdownLayout {
     let [ax, ay, aw, ah] = anchor;
     let count = visible_count(count);
     let item_h = ah;
@@ -108,7 +108,7 @@ fn thumb_height(list_h: f32, count: usize) -> f32 {
 /// right edge), or `None` when every option fits and no scrollbar is needed.
 /// The thumb's position mirrors the shown window's scroll position, like the
 /// settings `ScrollPanel`'s thumb.
-pub fn thumb_rect(layout: &DropdownLayout, first: usize, count: usize) -> Option<[f32; 4]> {
+pub(crate) fn thumb_rect(layout: &DropdownLayout, first: usize, count: usize) -> Option<[f32; 4]> {
     let visible = visible_count(count);
     if count <= visible {
         return None;
@@ -129,7 +129,7 @@ pub fn thumb_rect(layout: &DropdownLayout, first: usize, count: usize) -> Option
 /// for a scrolled list, or `None` when every option fits. A press inside it is
 /// scrollbar input (a thumb grab, or a jump to the pressed spot), never an
 /// option pick.
-pub fn track_rect(layout: &DropdownLayout, count: usize) -> Option<[f32; 4]> {
+pub(crate) fn track_rect(layout: &DropdownLayout, count: usize) -> Option<[f32; 4]> {
     if count <= visible_count(count) {
         return None;
     }

@@ -9,7 +9,7 @@
 //! from ever sharing an artifact.
 //!
 //! Every program also leads with one `CN_BACKEND_*` define naming the backend
-//! it compiles for ([`backend_define`]). The assembler adds it rather than each
+//! it compiles for (`backend_define`). The assembler adds it rather than each
 //! program table, so a shader branches on the backend the same way everywhere
 //! and no table can forget it.
 //!
@@ -132,7 +132,7 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
 /// Prepend a `#define` line per `(name, value)` pair. The defines become part
 /// of the source text on purpose: the shader cache keys on the assembled
 /// source, so two pool sizes can never share an artifact.
-pub fn inject_defines(source: &str, defines: &[(&str, &str)]) -> String {
+fn inject_defines(source: &str, defines: &[(&str, &str)]) -> String {
     if defines.is_empty() {
         return source.to_string();
     }
@@ -151,7 +151,7 @@ pub fn inject_defines(source: &str, defines: &[(&str, &str)]) -> String {
 /// The define every assembled source leads with, naming the backend it compiles
 /// for. A shader branches on it wherever the backends bind one declaration at
 /// different slots or in a different shape.
-pub fn backend_define(platform: Platform) -> &'static str {
+fn backend_define(platform: Platform) -> &'static str {
     match platform {
         Platform::Metal => "CN_BACKEND_METAL",
         Platform::DirectX => "CN_BACKEND_DIRECTX",
@@ -186,7 +186,7 @@ pub fn source_digest(source: &str) -> u64 {
 /// (and of every fragment it splices) over the embedded one. A resolver that
 /// returns `None` falls back to the embedded text, so a missing file loses the
 /// edit rather than the shader.
-pub fn assemble_with(
+fn assemble_with(
     file: &str,
     platform: Platform,
     defines: &[(&str, &str)],
@@ -221,7 +221,7 @@ impl<'a> Splice<'a> {
     }
 
     /// Text read from `path`.
-    pub const fn from_file(marker: &'a str, text: &'a str, path: &'a str) -> Self {
+    const fn from_file(marker: &'a str, text: &'a str, path: &'a str) -> Self {
         Self {
             marker,
             text,

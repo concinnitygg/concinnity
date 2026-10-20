@@ -31,17 +31,8 @@ impl fmt::Display for RemoveError {
 /// Slots of `T` addressed by the id [`SlotTable::insert`] returns. An id is
 /// stable until [`SlotTable::remove`] tombstones it, so it can index a
 /// backend's parallel per-slot resources.
-///
-/// ```rust
-/// # use concinnity_core::render::slot_table::{AtCapacity, SlotTable};
-/// let mut table = SlotTable::new(1);
-/// let id = table.insert('a').expect("room for one");
-/// assert_eq!(table.insert('b'), Err(AtCapacity));
-/// assert_eq!(table.remove(id), Ok('a'));
-/// assert_eq!(table.insert('c'), Ok(id));
-/// ```
 #[derive(Debug, Clone)]
-pub struct SlotTable<T> {
+pub(crate) struct SlotTable<T> {
     slots: Vec<Option<T>>,
     free_slots: Vec<usize>,
     live: usize,
@@ -50,7 +41,7 @@ pub struct SlotTable<T> {
 
 impl<T> SlotTable<T> {
     /// An empty table holding at most `capacity` slots.
-    pub fn new(capacity: usize) -> Self {
+    pub(crate) fn new(capacity: usize) -> Self {
         Self {
             slots: Vec::new(),
             free_slots: Vec::new(),
@@ -61,13 +52,13 @@ impl<T> SlotTable<T> {
 
     /// Whether another [`Self::insert`] would succeed, so a caller can skip
     /// building resources for a value the table would reject.
-    pub fn has_room(&self) -> bool {
+    pub(crate) fn has_room(&self) -> bool {
         !self.free_slots.is_empty() || self.slots.len() < self.capacity
     }
 
     /// Place `value` in a slot and return its id, reusing a tombstoned slot
     /// before growing the table.
-    pub fn insert(&mut self, value: T) -> Result<usize, AtCapacity> {
+    pub(crate) fn insert(&mut self, value: T) -> Result<usize, AtCapacity> {
         let id = if let Some(id) = self.free_slots.pop() {
             self.slots[id] = Some(value);
             id
@@ -84,7 +75,7 @@ impl<T> SlotTable<T> {
 
     /// Tombstone the slot at `id`, returning its value and freeing the id for
     /// the next [`Self::insert`].
-    pub fn remove(&mut self, id: usize) -> Result<T, RemoveError> {
+    pub(crate) fn remove(&mut self, id: usize) -> Result<T, RemoveError> {
         let slot = self.slots.get_mut(id).ok_or(RemoveError::OutOfRange)?;
         let value = slot.take().ok_or(RemoveError::AlreadyRemoved)?;
         self.free_slots.push(id);
@@ -93,22 +84,23 @@ impl<T> SlotTable<T> {
     }
 
     /// Whether no slot is live.
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.live == 0
     }
 
     /// Whether no slot has ever been handed out, tombstoned or not.
-    pub fn never_used(&self) -> bool {
+    pub(crate) fn never_used(&self) -> bool {
         self.slots.is_empty()
     }
 
     /// The value at `id`, if that slot is live.
-    pub fn get(&self, id: usize) -> Option<&T> {
+    #[cfg(test)]
+    pub(crate) fn get(&self, id: usize) -> Option<&T> {
         self.slots.get(id)?.as_ref()
     }
 
     /// The live slots with their ids, in id order.
-    pub fn iter(&self) -> impl Iterator<Item = (usize, &T)> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (usize, &T)> {
         self.slots
             .iter()
             .enumerate()
@@ -116,7 +108,7 @@ impl<T> SlotTable<T> {
     }
 
     /// The live slots with their ids, in id order, mutably.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (usize, &mut T)> {
+    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = (usize, &mut T)> {
         self.slots
             .iter_mut()
             .enumerate()
@@ -124,7 +116,7 @@ impl<T> SlotTable<T> {
     }
 
     /// Drop every slot, live or tombstoned, keeping the capacity.
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.slots.clear();
         self.free_slots.clear();
         self.live = 0;
@@ -135,6 +127,15 @@ impl<T> SlotTable<T> {
 mod tests {
     use super::*;
     use alloc::vec;
+
+    #[test]
+    fn a_removed_id_is_reused_at_capacity() {
+        let mut table = SlotTable::new(1);
+        let id = table.insert('a').expect("room for one");
+        assert_eq!(table.insert('b'), Err(AtCapacity));
+        assert_eq!(table.remove(id), Ok('a'));
+        assert_eq!(table.insert('c'), Ok(id));
+    }
 
     #[test]
     fn insert_hands_out_ascending_ids_up_to_capacity() {

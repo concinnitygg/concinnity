@@ -7,17 +7,19 @@
 //!
 //! A blade's place in its cell is its spot: its distance to the nearest
 //! center over its distance to the second nearest, 0 at the center and 1 on
-//! the cell's edge. [`clump_at`], [`gather_scale`] and [`gathered_density`]
+//! the cell's edge. `clump_at`, `gather_scale` and `gathered_density`
 //! are the shaders' `grass_clump_at`, `grass_gather_scale` and
 //! `grass_gathered_density` line for line.
 
+#[cfg(test)]
 use super::planet::density::grass_hash;
+#[cfg(test)]
 use crate::math::{SaturatingFrom, floor, sqrt};
 
 /// How far the strongest clumping draws a blade at its clump's center toward
 /// it: the share of its distance it keeps there is `1 - GATHER_STRENGTH`.
 /// Matches `GRASS_GATHER` in the shaders.
-pub const GATHER_STRENGTH: f32 = 0.65;
+const GATHER_STRENGTH: f32 = 0.65;
 
 /// The clump a point belongs to.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -31,6 +33,7 @@ pub struct Clump {
 }
 
 // The kernel's `grass_hash2`.
+#[cfg(test)]
 fn hash2(c: [i32; 2]) -> u32 {
     grass_hash(
         c[0].cast_unsigned()
@@ -39,13 +42,15 @@ fn hash2(c: [i32; 2]) -> u32 {
 }
 
 // The kernel's `grass_unit`.
+#[cfg(test)]
 fn unit(h: u32, salt: u32) -> f32 {
     (grass_hash(h ^ salt) >> 8) as f32 * (1.0 / 16_777_216.0)
 }
 
 /// The clump point `p` (meters on the ground's plane) belongs to, for clumps
 /// `clump_size` across salted by `seed` and `salt`.
-pub fn clump_at(p: [f32; 2], clump_size: f32, seed: u32, salt: u32) -> Clump {
+#[cfg(test)]
+fn clump_at(p: [f32; 2], clump_size: f32, seed: u32, salt: u32) -> Clump {
     let q = [p[0] / clump_size, p[1] / clump_size];
     let base = [
         i32::saturating_from(floor(q[0])),
@@ -80,7 +85,7 @@ pub fn clump_at(p: [f32; 2], clump_size: f32, seed: u32, salt: u32) -> Clump {
 /// The share of its distance to its clump's center a blade at `spot` keeps
 /// under `clumping`: `1 - GATHER_STRENGTH * clumping` at the center, rising
 /// to 1 at the cell's edge.
-pub fn gather_scale(spot: f32, clumping: f32) -> f32 {
+fn gather_scale(spot: f32, clumping: f32) -> f32 {
     let center = 1.0 - GATHER_STRENGTH * clumping;
     center + (1.0 - center) * spot
 }
@@ -97,7 +102,8 @@ pub fn gathered(p: [f32; 2], clump: &Clump, clumping: f32) -> [f32; 2] {
 /// How densely blades grow at `spot` under `clumping`, as a multiple of the
 /// layer's mean: the blades drawn to a spot came from the larger one whose
 /// gathered place it is, so the density is that ring's area over this one's.
-pub fn gathered_density(spot: f32, clumping: f32) -> f32 {
+#[cfg(test)]
+fn gathered_density(spot: f32, clumping: f32) -> f32 {
     let center = 1.0 - GATHER_STRENGTH * clumping;
     let pull = 1.0 - center;
     // The spot `from` a blade left: `from * gather_scale(from) = spot`.

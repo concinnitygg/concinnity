@@ -192,7 +192,7 @@ impl TileLod {
 
     /// The width of a tile at `level` across the middle of an undistorted
     /// face, in meters: the measure every level's range is set in.
-    pub fn nominal_width(&self, level: u8) -> f64 {
+    fn nominal_width(&self, level: u8) -> f64 {
         self.shape.radius * core::f64::consts::FRAC_PI_2 / f64::from(1u32 << level)
     }
 

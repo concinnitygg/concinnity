@@ -29,7 +29,7 @@ impl HistoryResetCauses {
     /// The camera jumped: a teleport, a shot change, a snap turn.
     pub const CAMERA_CUT: Self = Self(1 << 0);
     /// Another scene became the active one.
-    pub const SCENE_SWITCH: Self = Self(1 << 1);
+    const SCENE_SWITCH: Self = Self(1 << 1);
     /// A render setting changed what the frame draws.
     pub const SETTINGS_CHANGE: Self = Self(1 << 2);
 

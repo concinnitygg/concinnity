@@ -1,6 +1,6 @@
 //! Dispatch geometry for the single-pass Hi-Z downsampler.
 //!
-//! One workgroup of the `hiz_spd_*` kernels reduces a [`TILE`]x[`TILE`] tile of
+//! One workgroup of the `hiz_spd_*` kernels reduces a `TILE`x`TILE` tile of
 //! its base level through [`LEVELS`] levels, so a pyramid is built in two
 //! dispatches instead of one per mip: phase 1 reads the main depth and writes
 //! mips 0..5, and the tail continues from mip 5 to write mips 6..10. Vulkan and
@@ -12,7 +12,7 @@ use crate::render::uniforms::HizSpdParams;
 pub const LEVELS: u32 = 6;
 
 /// Base-level texels one workgroup reduces, per axis.
-pub const TILE: u32 = 32;
+const TILE: u32 = 32;
 
 /// Deepest pyramid two dispatches can produce: phase 1 covers levels 0..5 and
 /// the tail adds another five on top of the mip 5 it starts from.
@@ -56,7 +56,7 @@ pub fn pyramid_mip_count(width: u32, height: u32) -> u32 {
 }
 
 /// Size of mip `level` of a `base`-sized image, floored at 1.
-pub fn level_size(base: (u32, u32), level: u32) -> (u32, u32) {
+fn level_size(base: (u32, u32), level: u32) -> (u32, u32) {
     ((base.0 >> level).max(1), (base.1 >> level).max(1))
 }
 

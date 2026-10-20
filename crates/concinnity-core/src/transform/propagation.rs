@@ -24,7 +24,7 @@ use crate::ecs::{ColumnTicks, Entity, MAX_CHANGE_AGE, PipelineContext, Tick};
 use crate::transform::{IDENTITY, mat4_mul};
 
 /// A resolved world matrix, column-major like every other matrix here.
-pub type WorldMatrix = [[f32; 4]; 4];
+type WorldMatrix = [[f32; 4]; 4];
 
 // Slot sentinel for "no parent" and for an entity the slot table does not hold.
 const NO_SLOT: u32 = u32::MAX;
@@ -363,7 +363,7 @@ pub fn resolve_world_matrices(ctx: &PipelineContext<'_>) -> BTreeMap<Entity, Wor
 /// Resolve and write every entity's `GlobalTransform` in one shot, with no cache
 /// carried across calls. The reparent recompose and the load-time pass use this;
 /// the per-frame path uses [`propagate_transforms_cached`].
-pub fn propagate_transforms(ctx: &mut PipelineContext<'_>) {
+fn propagate_transforms(ctx: &mut PipelineContext<'_>) {
     let mut cache = TransformCache::default();
     cache.resolve(ctx);
     cache.write_all(ctx);
@@ -372,7 +372,7 @@ pub fn propagate_transforms(ctx: &mut PipelineContext<'_>) {
 /// Per-frame transform propagation against the reused scratch in `cache`.
 ///
 /// Writes each entity's `GlobalTransform` from its Transform + Parent chain,
-/// exactly as [`propagate_transforms`], but does the least work the change ticks
+/// exactly as `propagate_transforms`, but does the least work the change ticks
 /// allow: nothing at all when neither source column moved, a walk of just the
 /// moved entities' subtrees when only targeted Transform writes landed, and a
 /// full ordered resolve otherwise.

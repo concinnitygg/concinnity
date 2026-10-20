@@ -58,7 +58,7 @@ impl JointPose {
     /// Slerps the poses' own Euler rotations rather than going through
     /// [`blend_matrices`](crate::transform::blend_matrices), which would
     /// have to recover them from the composed matrices first.
-    pub fn blend_matrix(&self, other: &Self, f: f32) -> Mat4 {
+    fn blend_matrix(&self, other: &Self, f: f32) -> Mat4 {
         let mix = |a: [f32; 3], b: [f32; 3]| {
             [
                 a[0] + (b[0] - a[0]) * f,

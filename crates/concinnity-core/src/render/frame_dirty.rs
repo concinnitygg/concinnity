@@ -4,27 +4,19 @@
 //! nothing after the ring has caught up.
 
 /// Which frame-in-flight copies of a ringed uniform block still need a write.
-///
-/// ```rust
-/// # use concinnity_core::render::frame_dirty::FrameDirty;
-/// let mut dirty = FrameDirty::new(2);
-/// assert!(dirty.take(0));
-/// assert!(dirty.take(1));
-/// assert!(!dirty.take(0));
-/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct FrameDirty {
+pub(crate) struct FrameDirty {
     all: u32,
     pending: u32,
 }
 
 /// Frames in flight a single [`FrameDirty`] can track.
-pub const MAX_TRACKED_FRAMES: usize = 32;
+pub(crate) const MAX_TRACKED_FRAMES: usize = 32;
 
 impl FrameDirty {
     /// Track `frames` slots, every one pending so the ring seeds itself.
     /// Frames beyond [`MAX_TRACKED_FRAMES`] are not tracked.
-    pub const fn new(frames: usize) -> Self {
+    pub(crate) const fn new(frames: usize) -> Self {
         let all = if frames >= MAX_TRACKED_FRAMES {
             u32::MAX
         } else {
@@ -34,12 +26,12 @@ impl FrameDirty {
     }
 
     /// Mark every slot pending, after a change to the CPU-side values.
-    pub fn mark_all(&mut self) {
+    pub(crate) fn mark_all(&mut self) {
         self.pending = self.all;
     }
 
     /// Whether `frame` still needs a write, clearing it if so.
-    pub fn take(&mut self, frame: usize) -> bool {
+    pub(crate) fn take(&mut self, frame: usize) -> bool {
         if frame >= MAX_TRACKED_FRAMES {
             return true;
         }
@@ -50,7 +42,8 @@ impl FrameDirty {
     }
 
     /// Whether any slot is still pending.
-    pub const fn any_pending(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) const fn any_pending(self) -> bool {
         self.pending != 0
     }
 }
@@ -58,6 +51,14 @@ impl FrameDirty {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_slot_is_taken_once_after_creation() {
+        let mut dirty = FrameDirty::new(2);
+        assert!(dirty.take(0));
+        assert!(dirty.take(1));
+        assert!(!dirty.take(0));
+    }
 
     #[test]
     fn every_slot_is_pending_until_it_is_taken_once() {

@@ -15,7 +15,7 @@
 //! A program's stage comes from its entry's `[shader("...")]` attribute, so the
 //! one part of a DXIL profile left to state is the shader model: 6.0, the floor
 //! `NonUniformResourceIndex` needs for the bindless pool, or 6.5 for the
-//! programs in [`SHADER_MODEL_6_5`], as every entry reaching an inline
+//! programs in `SHADER_MODEL_6_5`, as every entry reaching an inline
 //! `RayQuery` must.
 
 use super::{ShaderProgram, Table, shared, spd};
@@ -29,7 +29,7 @@ pub static TABLE: Table = Table {
 /// The programs compiled at shader model 6.5 rather than 6.0: the ray-traced
 /// fragments. Only the ray-query entries are raised, so the glass and water
 /// vertex stages and the base fragments stay at 6.0.
-pub static SHADER_MODEL_6_5: &[&ShaderProgram] = &[
+static SHADER_MODEL_6_5: &[&ShaderProgram] = &[
     &shared::RT_REFLECTIONS_FRAG,
     &shared::RT_REFLECTIONS_FRAG_TEXTURED,
     &shared::GLASS_FRAG_RT,

@@ -48,7 +48,7 @@ const MICROS_PER_MILLI: f32 = 1_000.0;
 /// report says how many there were, and a capture due among them is skipped
 /// rather than saving whatever was last shown.
 #[derive(Debug)]
-pub struct FrameReportSystem {
+pub(crate) struct FrameReportSystem {
     run: FrameRun,
     // The frame the previous step measured, waiting for its system timings.
     pending: Option<PendingFrame>,
@@ -85,14 +85,14 @@ struct PendingFrame {
 
 impl FrameReportSystem {
     /// The system for a benchmarked run, writing its report through `out`.
-    pub fn for_world(world: &World, out: fn(&str)) -> Option<Self> {
+    pub(crate) fn for_world(world: &World, out: fn(&str)) -> Option<Self> {
         world
             .resource::<BenchmarkRun>()
             .map(|run| Self::new(run, out))
     }
 
     /// The system that measures `benchmark` and writes its report to `out`.
-    pub fn new(benchmark: &BenchmarkRun, out: fn(&str)) -> Self {
+    pub(crate) fn new(benchmark: &BenchmarkRun, out: fn(&str)) -> Self {
         let config = &benchmark.config;
         let options = ReduceOptions {
             warmup_seconds: config.warmup_seconds,

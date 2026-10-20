@@ -52,7 +52,7 @@ impl PlanetShape {
     /// The ground's height in direction `dir` (unit length) and its gradient
     /// over directions: how fast the height grows, in meters per unit of
     /// direction, along each authored axis.
-    pub fn height_gradient(&self, dir: DVec3) -> (f64, DVec3) {
+    fn height_gradient(&self, dir: DVec3) -> (f64, DVec3) {
         if self.amplitude <= 0.0 {
             return (0.0, [0.0; 3]);
         }

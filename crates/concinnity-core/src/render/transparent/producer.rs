@@ -141,7 +141,7 @@ impl<P, R> TransparentProducer<P, R> {
     }
 
     /// Whether a visible record holds a planar slot.
-    pub fn planar_slot_live(&self) -> bool {
+    fn planar_slot_live(&self) -> bool {
         self.records
             .iter()
             .any(|r| r.visible && r.planar_slot.is_some())

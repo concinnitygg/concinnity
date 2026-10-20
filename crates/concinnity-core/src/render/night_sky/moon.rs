@@ -4,8 +4,10 @@
 
 use super::celestial::CelestialBasis;
 use crate::math::narrow_f32;
+#[cfg(test)]
+use crate::math::sqrt;
 use crate::math::vec3::{cross, dot, normalize_or, scale, sub};
-use crate::math::{acos, cos, sin, sqrt};
+use crate::math::{acos, cos, sin};
 use core::f32::consts::PI;
 
 /// The moon's path: where it starts, how fast it goes round, and how far its
@@ -50,14 +52,14 @@ impl MoonPath {
 /// The share of the full moon's light a moon at `cos_elongation` from the sun
 /// sends: a matte sphere's phase law, 1 when full, `1/pi` at a quarter, 0
 /// when new.
-pub fn lambert_phase(cos_elongation: f32) -> f32 {
+pub(crate) fn lambert_phase(cos_elongation: f32) -> f32 {
     let alpha = PI - acos(cos_elongation.clamp(-1.0, 1.0));
     (sin(alpha) + (PI - alpha) * cos(alpha)) / PI
 }
 
 /// The moon's up across its face: the celestial pole's side, square to the
 /// line of sight, so its face keeps the same way up as the sky turns.
-pub fn face_up(pole: [f32; 3], moon: [f32; 3]) -> [f32; 3] {
+pub(crate) fn face_up(pole: [f32; 3], moon: [f32; 3]) -> [f32; 3] {
     let up = sub(pole, scale(moon, dot(moon, pole)));
     let fallback = if moon[1].abs() < 0.9 {
         [0.0, 1.0, 0.0]
@@ -74,7 +76,8 @@ pub fn face_up(pole: [f32; 3], moon: [f32; 3]) -> [f32; 3] {
 /// How brightly the point `(x, y)` of the moon's unit disc (`x` right, `y`
 /// up) is lit by a sun toward `sun`, as a share of the full moon's mean face:
 /// a matte sphere, so a face lit head-on averages 1 over the disc.
-pub fn face_light(moon: [f32; 3], up: [f32; 3], sun: [f32; 3], x: f32, y: f32) -> f32 {
+#[cfg(test)]
+pub(crate) fn face_light(moon: [f32; 3], up: [f32; 3], sun: [f32; 3], x: f32, y: f32) -> f32 {
     let r2 = x * x + y * y;
     if r2 >= 1.0 {
         return 0.0;

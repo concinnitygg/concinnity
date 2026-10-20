@@ -11,16 +11,16 @@
 //!
 //! Every distance is measured in what the view resolves there: a blade `h`
 //! meters tall `d` meters away stands `h * focal / d` pixels tall. Blades end
-//! where they shrink to [`GRASS_END_PIXELS`], coarser strips start where they
-//! stand [`GRASS_LOD_PIXELS`] tall, and the field thins so its survivors,
-//! widened to keep its coverage, stand [`GRASS_BLADE_PIXELS`] wide: at a
+//! where they shrink to `GRASS_END_PIXELS`, coarser strips start where they
+//! stand `GRASS_LOD_PIXELS` tall, and the field thins so its survivors,
+//! widened to keep its coverage, stand `GRASS_BLADE_PIXELS` wide: at a
 //! grazing view, where the blades stand side by side, about one blade shows
 //! per that many pixels across at every distance.
 //!
 //! Where a view ray meets the ground at a grazing angle it crosses many blades
 //! deep, and only the first few show. Past where the blades stand the coarsest
 //! strip's height, the field also thins so a ray crosses at most
-//! [`GRASS_DEPTH_LIMIT`] blade layers, without widening the survivors (see
+//! `GRASS_DEPTH_LIMIT` blade layers, without widening the survivors (see
 //! [`GrassLodView::keep`]).
 //!
 //! Every blade carries a stable hash `u` in [0, 1). A blade survives while the
@@ -88,15 +88,15 @@ pub const fn region_level(region: usize) -> usize {
 
 /// How tall on screen, in pixels, a blade of the field's height stands where
 /// each coarser level starts.
-pub const GRASS_LOD_PIXELS: [f32; GRASS_LOD_COUNT - 1] = [60.0, 24.0];
+const GRASS_LOD_PIXELS: [f32; GRASS_LOD_COUNT - 1] = [60.0, 24.0];
 
 /// How tall on screen, in pixels, a blade of the field's height stands where
 /// the blades end and the canopy alone shows the field.
-pub const GRASS_END_PIXELS: f32 = 1.5;
+const GRASS_END_PIXELS: f32 = 1.5;
 
 /// How wide on screen, in pixels, the field's surviving blades stand once
 /// widened for the blades thinning dropped.
-pub const GRASS_BLADE_PIXELS: f32 = 4.0;
+const GRASS_BLADE_PIXELS: f32 = 4.0;
 
 /// The narrowest vertical field of view, in radians, the visible-blade buffer
 /// is sized for at a view's height: a narrower one thins as this one does
@@ -114,11 +114,11 @@ pub const GRASS_SHRINK_BAND: f32 = 0.3;
 /// The most blade layers a view ray crossing the field at a grazing angle meets
 /// before the field thins further: past it the ray would see only blade tips,
 /// so deeper blades add vertices but nothing to the picture.
-pub const GRASS_DEPTH_LIMIT: f32 = 16.0;
+const GRASS_DEPTH_LIMIT: f32 = 16.0;
 
 /// The last share of the blades' reach over which they hand the field to the
 /// canopy, pixel by pixel.
-pub const GRASS_FADE_FRACTION: f32 = 0.25;
+const GRASS_FADE_FRACTION: f32 = 0.25;
 
 /// The vertical focal length, in pixels, of a view `height` pixels tall with
 /// vertical field of view `fov_y` radians: how many pixels one unit of height
@@ -170,7 +170,7 @@ impl GrassLodView {
     /// blade layers deep (width x density x height, see [`blade_depth`]),
     /// kept at `distance` where the view ray meets the ground at an angle
     /// whose sine is `facing`: thinning's, lowered where the ray would cross
-    /// more than [`GRASS_DEPTH_LIMIT`] layers. The survivors keep thinning's
+    /// more than `GRASS_DEPTH_LIMIT` layers. The survivors keep thinning's
     /// widening, so the field stays opaque along the ray and only its deepest
     /// layers go. Nearer than [`Self::depth_onset`] the limit grows with the
     /// square of the shortfall, so the near field keeps its depth.
@@ -183,7 +183,7 @@ impl GrassLodView {
     }
 
     /// Where the depth limit takes full effect: where the field's blades
-    /// stand the coarsest strip's [`GRASS_LOD_PIXELS`] tall.
+    /// stand the coarsest strip's `GRASS_LOD_PIXELS` tall.
     pub fn depth_onset(&self) -> f32 {
         self.lod_distances[GRASS_LOD_COUNT - 2]
     }
@@ -203,12 +203,14 @@ impl GrassLodView {
 
     /// How much wider every surviving blade `width` meters wide grows at
     /// `distance` to make up for the blades thinning drops there.
-    pub fn width_scale(&self, width: f32, distance: f32) -> f32 {
+    #[cfg(test)]
+    fn width_scale(&self, width: f32, distance: f32) -> f32 {
         1.0 / coverage(self.thinning(width, distance))
     }
 
     /// The detail level of a blade `distance` meters from the camera.
-    pub fn lod_at(&self, distance: f32) -> usize {
+    #[cfg(test)]
+    fn lod_at(&self, distance: f32) -> usize {
         self.lod_distances
             .iter()
             .take_while(|&&start| distance >= start)
@@ -218,7 +220,8 @@ impl GrassLodView {
     /// The region of the visible-blade buffer a blade `distance` meters from
     /// the camera lands in: its detail level's, or the band past where the
     /// blades start handing over.
-    pub fn region_at(&self, distance: f32) -> usize {
+    #[cfg(test)]
+    fn region_at(&self, distance: f32) -> usize {
         if distance >= self.fade_start() {
             GRASS_BAND_REGION
         } else {
@@ -263,7 +266,7 @@ impl GrassLodView {
 
 /// The widest any blade `width` meters wide grows, in any view, in a field
 /// whose tallest layer stands `blade_height` meters tall: the scale at the
-/// blades' end in a view whose end is set by [`GRASS_END_PIXELS`], where
+/// blades' end in a view whose end is set by `GRASS_END_PIXELS`, where
 /// thinning keeps the least.
 pub fn max_width_scale(width: f32, blade_height: f32) -> f32 {
     let fewest = width * GRASS_END_PIXELS / (GRASS_BLADE_PIXELS * blade_height.max(1e-3));
