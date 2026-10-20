@@ -42,15 +42,11 @@ pub struct LoadingOverlaySystem {
 impl LoadingOverlaySystem {
     /// The system for a world that declares a `LoadingOverlay`.
     pub fn for_world(world: &World) -> Option<Self> {
-        world
-            .query::<LoadingOverlay>()
-            .next()
-            .cloned()
-            .map(Self::new)
+        world.query::<LoadingOverlay>().next().map(Self::new)
     }
 
     /// Build the overlay from a world's `LoadingOverlay` request component.
-    pub fn new(config: LoadingOverlay) -> Self {
+    pub fn new(config: &LoadingOverlay) -> Self {
         Self {
             screen: config.screen.map(Ref::id),
             backdrop: config.backdrop.map(Ref::id),
@@ -263,7 +259,7 @@ mod tests {
         world.add_system(
             crate::ecs::Phase::PreRender,
             "LoadingOverlaySystem",
-            LoadingOverlaySystem::new(overlay_config()),
+            LoadingOverlaySystem::new(&overlay_config()),
         );
         crate::test_support::start_with(
             world,

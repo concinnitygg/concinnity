@@ -108,6 +108,10 @@ impl Room {
     /// Translate the authored args into the runtime room: resolve the `size`
     /// shorthand into half extents. Run by cook at build time (the baked blob
     /// record carries the result).
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the cook registry calls every component's `bake` with owned args"
+    )]
     pub fn bake(args: RoomArgs) -> Self {
         let (half_width, half_depth, ceiling_height) = if let Some([w, d, h]) = args.size {
             (w / 2.0, d / 2.0, h)

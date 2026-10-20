@@ -269,6 +269,7 @@ impl RegionCull {
 
 // The kernel and output buffer a run of region culls shares. Region `r`'s
 // commands start at command `r * region_stride`.
+#[derive(Clone, Copy)]
 struct RegionCullPass<'a> {
     pso: &'a ID3D12PipelineState,
     indirect: &'a ID3D12Resource,

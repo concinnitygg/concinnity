@@ -289,7 +289,7 @@ mod tests {
         path.to_string_lossy().into_owned()
     }
 
-    fn scene_import(name: &str, source: &str, extra: serde_json::Value) -> serde_json::Value {
+    fn scene_import(name: &str, source: &str, extra: &serde_json::Value) -> serde_json::Value {
         let mut args = serde_json::json!({"source": source});
         for (k, v) in extra.as_object().cloned().unwrap_or_default() {
             args[k] = v;
@@ -306,7 +306,7 @@ mod tests {
         let source = triangle_gltf(dir.path());
         let mut assets = vec![
             serde_json::json!({"type":"GraphicsConfig","args":{"$id":"gfx"}}),
-            scene_import("bistro", &source, serde_json::json!({})),
+            scene_import("bistro", &source, &serde_json::json!({})),
         ];
         let mut report = ExpandReport::default();
         expand_scene_imports(&mut assets, &mut report, None).unwrap();
@@ -344,14 +344,14 @@ mod tests {
                 .count()
         };
 
-        let mut alone = vec![scene_import("a", &source, serde_json::json!({}))];
+        let mut alone = vec![scene_import("a", &source, &serde_json::json!({}))];
         expand_scene_imports(&mut alone, &mut ExpandReport::default(), None).unwrap();
         assert_eq!(cameras(&alone), 1);
 
         // Two imports: only the first frames a camera.
         let mut pair = vec![
-            scene_import("a", &source, serde_json::json!({})),
-            scene_import("b", &source, serde_json::json!({})),
+            scene_import("a", &source, &serde_json::json!({})),
+            scene_import("b", &source, &serde_json::json!({})),
         ];
         expand_scene_imports(&mut pair, &mut ExpandReport::default(), None).unwrap();
         assert_eq!(cameras(&pair), 1);
@@ -360,7 +360,7 @@ mod tests {
         // as the world's own camera.
         let mut authored = vec![
             serde_json::json!({"type":"CameraShot","args":{"$id":"cam"}}),
-            scene_import("a", &source, serde_json::json!({})),
+            scene_import("a", &source, &serde_json::json!({})),
         ];
         expand_scene_imports(&mut authored, &mut ExpandReport::default(), None).unwrap();
         assert_eq!(cameras(&authored), 0);
@@ -369,7 +369,7 @@ mod tests {
         let mut declined = vec![scene_import(
             "a",
             &source,
-            serde_json::json!({"emit_camera": false}),
+            &serde_json::json!({"emit_camera": false}),
         )];
         expand_scene_imports(&mut declined, &mut ExpandReport::default(), None).unwrap();
         assert_eq!(cameras(&declined), 0);
@@ -395,7 +395,7 @@ mod tests {
         let mut assets = vec![scene_import(
             "bistro",
             &source.to_string_lossy(),
-            serde_json::json!({"texture_max_size": 128, "emissive_map_strength": 5.0}),
+            &serde_json::json!({"texture_max_size": 128, "emissive_map_strength": 5.0}),
         )];
         let mut report = ExpandReport::default();
         expand_scene_imports(&mut assets, &mut report, None).unwrap();
@@ -417,7 +417,7 @@ mod tests {
         let source = triangle_gltf(dir.path());
         let mut assets = vec![
             serde_json::json!({"type":"Sprite","args":{"$id":"bistro_mat_default"}}),
-            scene_import("bistro", &source, serde_json::json!({})),
+            scene_import("bistro", &source, &serde_json::json!({})),
         ];
         let mut report = ExpandReport::default();
         let err = expand_scene_imports(&mut assets, &mut report, None).unwrap_err();
@@ -447,7 +447,7 @@ mod tests {
             serde_json::json!({
                 "type":"Material","args":{"$id":"bistro_mat_default","roughness":0.1}
             }),
-            scene_import("bistro", &source, serde_json::json!({})),
+            scene_import("bistro", &source, &serde_json::json!({})),
         ];
         let mut report = ExpandReport::default();
         expand_scene_imports(&mut assets, &mut report, None).unwrap();

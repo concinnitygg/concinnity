@@ -95,11 +95,11 @@ impl EditorHook {
     // already shows it; the toast covers the panel being closed or buried.
     // Keyed on the message so per-keystroke re-checks of the same fault stay
     // quiet.
-    pub(in crate::editor::hook) fn notify_behavior_fault(&self, prev_fault: Option<String>) {
+    pub(in crate::editor::hook) fn notify_behavior_fault(&self, prev_fault: Option<&str>) {
         let Some(message) = self.behavior.status.as_ref().and_then(|s| s.error()) else {
             return;
         };
-        if prev_fault.as_deref() == Some(message) {
+        if prev_fault == Some(message) {
             return;
         }
         self.notifier.push_with(

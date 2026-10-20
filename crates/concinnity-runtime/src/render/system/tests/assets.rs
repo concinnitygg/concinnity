@@ -507,7 +507,7 @@ impl WorldBuilder {
     // Bake a Material into the resource stream at the next handle and return it,
     // the way cook does (Materials are a data resource; all their data lives in
     // the baked bytes).
-    fn push_material(&mut self, mat: Material) -> MaterialHandle {
+    fn push_material(&mut self, mat: &Material) -> MaterialHandle {
         let handle = u32::saturating_from(self.material_records.len());
         self.material_records
             .push(concinnity_core::ecs::ResourceRecord {
@@ -527,7 +527,7 @@ impl WorldBuilder {
 fn a_material_texture_handle_past_the_pool_fails_init() {
     let (_state, hooks) = recording_hooks();
     let mut b = scene_builder();
-    b.push_material(Material {
+    b.push_material(&Material {
         albedo: Some(TextureHandle::new(99)),
         ..Default::default()
     });

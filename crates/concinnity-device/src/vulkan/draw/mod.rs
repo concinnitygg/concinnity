@@ -462,6 +462,7 @@ impl VkContext {
 }
 
 // The per-frame inputs `plan_frame` plans from.
+#[derive(Clone, Copy)]
 struct PlanArgs {
     camera: CameraInputs,
     elapsed: f32,

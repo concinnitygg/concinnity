@@ -115,7 +115,7 @@ impl DxContext {
         ssao.pass.encode(
             &self.post_device(frame_idx),
             cmd,
-            SsaoInputs {
+            &SsaoInputs {
                 normal_depth: gbuffer.normal_depth_srv_gpu,
                 output: ssao.output.attachment(),
             },

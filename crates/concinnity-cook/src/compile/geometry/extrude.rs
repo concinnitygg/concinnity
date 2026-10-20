@@ -49,7 +49,7 @@ pub(super) fn build_extrude(args: &serde_json::Value) -> GeomResult {
 mod tests {
     use super::*;
 
-    fn extrude_args(profile: serde_json::Value, extras: serde_json::Value) -> serde_json::Value {
+    fn extrude_args(profile: serde_json::Value, extras: &serde_json::Value) -> serde_json::Value {
         let mut obj = serde_json::Map::new();
         obj.insert("generator".into(), "extrude".into());
         obj.insert("profile".into(), profile);
@@ -65,7 +65,7 @@ mod tests {
     fn build_extrude_square() {
         let profile = serde_json::json!([[-1, -1], [1, -1], [1, 1], [-1, 1]]);
         let (verts, idxs) =
-            build_extrude(&extrude_args(profile, serde_json::json!({"height": 2.0}))).unwrap();
+            build_extrude(&extrude_args(profile, &serde_json::json!({"height": 2.0}))).unwrap();
         assert!(!verts.is_empty());
         assert!(!idxs.is_empty());
         assert_eq!(idxs.len() % 3, 0);
@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn build_extrude_rejects_too_few_points() {
         let profile = serde_json::json!([[0, 0], [1, 0]]);
-        let err = build_extrude(&extrude_args(profile, serde_json::json!({}))).unwrap_err();
+        let err = build_extrude(&extrude_args(profile, &serde_json::json!({}))).unwrap_err();
         assert!(err.contains("at least 3"));
     }
 
@@ -109,7 +109,7 @@ mod tests {
             ),
         ];
         for (profile, expected) in cases {
-            let err = build_extrude(&extrude_args(profile, serde_json::json!({}))).unwrap_err();
+            let err = build_extrude(&extrude_args(profile, &serde_json::json!({}))).unwrap_err();
             assert!(err.contains(expected), "expected '{expected}', got: {err}");
         }
     }
@@ -118,7 +118,7 @@ mod tests {
     fn build_extrude_rejects_non_positive_height() {
         let profile = serde_json::json!([[0, 0], [1, 0], [1, 1]]);
         let err =
-            build_extrude(&extrude_args(profile, serde_json::json!({"height": 0.0}))).unwrap_err();
+            build_extrude(&extrude_args(profile, &serde_json::json!({"height": 0.0}))).unwrap_err();
         assert!(err.contains("positive"), "got: {err}");
     }
 
@@ -127,7 +127,7 @@ mod tests {
         let profile = serde_json::json!([[0, 0], [1, 0], [1, 1]]);
         let err = build_extrude(&extrude_args(
             profile,
-            serde_json::json!({"corner_radius": -0.5}),
+            &serde_json::json!({"corner_radius": -0.5}),
         ))
         .unwrap_err();
         assert!(err.contains("non-negative"), "got: {err}");
@@ -138,14 +138,14 @@ mod tests {
         let profile = serde_json::json!([[-1, -1], [1, -1], [1, 1], [-1, 1]]);
         let sharp = build_extrude(&extrude_args(
             profile.clone(),
-            serde_json::json!({"corner_segments": 4}),
+            &serde_json::json!({"corner_segments": 4}),
         ))
         .unwrap()
         .0
         .len();
         let rounded = build_extrude(&extrude_args(
             profile,
-            serde_json::json!({"corner_radius": 0.2, "corner_segments": 4}),
+            &serde_json::json!({"corner_radius": 0.2, "corner_segments": 4}),
         ))
         .unwrap()
         .0

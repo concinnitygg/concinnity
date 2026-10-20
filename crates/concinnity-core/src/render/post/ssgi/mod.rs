@@ -296,7 +296,7 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
         &'t self,
         device: &D,
         rec: &D::Recorder,
-        inputs: SsgiResolveInputs<'t, D>,
+        inputs: &SsgiResolveInputs<'t, D>,
         params: &SsgiParams,
     ) -> RenderResult<()>
     where
@@ -337,7 +337,7 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
         &'t self,
         device: &D,
         rec: &D::Recorder,
-        inputs: SsgiTraceInputs<'t, D>,
+        inputs: &SsgiTraceInputs<'t, D>,
         params: &SsgiParams,
     ) -> RenderResult<()>
     where
@@ -510,7 +510,7 @@ mod tests {
         pass.encode_resolve(
             device,
             &(),
-            SsgiResolveInputs {
+            &SsgiResolveInputs {
                 normal_depth: NORMAL_DEPTH,
                 velocity: VELOCITY,
                 occlusion: OCCLUSION,
@@ -521,7 +521,7 @@ mod tests {
         pass.encode(
             device,
             &(),
-            SsgiTraceInputs {
+            &SsgiTraceInputs {
                 scene: SCENE,
                 normal_depth: NORMAL_DEPTH,
                 velocity: VELOCITY,

@@ -176,7 +176,7 @@ mod tests {
         cook::world()
             .add(
                 "sun",
-                DirectionalLight {
+                &DirectionalLight {
                     intensity: 3.5,
                     ..Default::default()
                 },

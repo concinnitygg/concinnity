@@ -450,6 +450,7 @@ pub(in crate::directx) struct GrassFrame {
 }
 
 // What a frame's grass is prepared from.
+#[derive(Clone, Copy)]
 pub(in crate::directx) struct GrassRequest<'a> {
     pub frame_idx: usize,
     pub cam_pos: [f32; 3],

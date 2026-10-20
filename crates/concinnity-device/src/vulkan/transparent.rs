@@ -121,6 +121,7 @@ pub(in crate::vulkan) type ShapePipelines = producer::ShapePipelines<OwnedPipeli
 // The geometry, uniform payload and per-record state one producer hands over for
 // a `TransparentRecord`. Keeps the buffer uploads and the descriptor write in
 // one place instead of once per producer.
+#[derive(Clone, Copy)]
 pub(in crate::vulkan) struct RecordUpload<'a> {
     pub vertices: &'a [Vertex],
     pub indices: &'a [u16],
@@ -1072,6 +1073,7 @@ pub(in crate::vulkan) fn create_glass_reflection_pipeline(
 
 // A transparent pipeline's two stages and the vertex attributes its vertex
 // stage fetches.
+#[derive(Clone, Copy)]
 struct TransparentShaders<'a> {
     vert_spv: &'a [u8],
     frag_spv: &'a [u8],

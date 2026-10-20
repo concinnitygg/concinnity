@@ -401,7 +401,7 @@ fn a_worker_built_pipeline_reaches_the_swap() {
     };
     f.write("lit.hlsl", "lit v2");
     f.write("water.hlsl", "water v2");
-    f.reload.request(&pending(&[1, 2]), builder(false));
+    f.reload.request(&pending(&[1, 2]), builder(false).as_ref());
     let reports = poll_for(&f.reload, &mut backend, 2);
     assert_eq!(
         outcomes(&reports),
@@ -427,7 +427,7 @@ fn a_pipeline_the_builder_refuses_is_never_swapped() {
         resident: [1].into(),
         ..Default::default()
     };
-    f.reload.request(&pending(&[2]), builder(true));
+    f.reload.request(&pending(&[2]), builder(true).as_ref());
     let reports = poll_for(&f.reload, &mut backend, 1);
     assert!(matches!(
         &reports[0].outcome,

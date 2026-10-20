@@ -18,7 +18,7 @@ pub(super) fn emit_ending_screen(names: &StoryNames) -> Vec<serde_json::Value> {
             &ending.fin,
             &names.font_title,
             "~ fin ~",
-            LabelStyle {
+            &LabelStyle {
                 x: win_w / 2.0,
                 y: 260.0,
                 color: [0.95, 0.88, 0.7],

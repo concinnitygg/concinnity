@@ -104,7 +104,7 @@ impl VkContext {
         if let Err(e) = ssgi.pass.encode_resolve(
             &self.post_device(frame_idx),
             &cmd,
-            SsgiResolveInputs {
+            &SsgiResolveInputs {
                 normal_depth: gbuffer.normal_depth,
                 velocity: gbuffer.velocity,
                 occlusion,
@@ -154,7 +154,7 @@ impl VkContext {
         if let Err(e) = ssgi.pass.encode(
             &self.post_device(frame_idx),
             &cmd,
-            SsgiTraceInputs {
+            &SsgiTraceInputs {
                 scene: self.hdr_scene_attachment(frame_idx).view,
                 normal_depth: gbuffer.normal_depth,
                 velocity: gbuffer.velocity,

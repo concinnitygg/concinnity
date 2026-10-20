@@ -291,7 +291,7 @@ mod tests {
                 call["op"] = op;
             }
             assert_eq!(
-                engine.call("quality-set", call),
+                engine.call("quality-set", &call),
                 Ok(json!({ "queued": true }))
             );
             let seen = sent(&engine);
@@ -308,7 +308,7 @@ mod tests {
     fn quality_set_refuses_a_key_outside_the_quality_group() {
         let mut engine = Engine::new(World::new());
         for key in ["taa", "vsync", "exposure", "render_scale"] {
-            let error = engine.call("quality-set", json!({ "setting": key }));
+            let error = engine.call("quality-set", &json!({ "setting": key }));
             assert!(
                 error
                     .unwrap_err()
@@ -322,7 +322,7 @@ mod tests {
     fn rebind_resolves_the_key_variant() {
         let mut engine = Engine::new(World::new());
         let call = json!({ "setting": "key_forward", "key": "Space" });
-        assert_eq!(engine.call("rebind", call), Ok(json!({ "queued": true })));
+        assert_eq!(engine.call("rebind", &call), Ok(json!({ "queued": true })));
         let seen = sent(&engine);
         assert_eq!(seen[0].setting, SettingKey::KeyRebind(Bindable::Forward));
         assert_eq!(seen[0].op, SettingOp::Rebind(InputKey::Space));
@@ -339,7 +339,7 @@ mod tests {
             ("key_forward", "NotAKey", "unknown key 'NotAKey'"),
         ] {
             let call = json!({ "setting": setting, "key": key });
-            assert!(engine.call("rebind", call).unwrap_err().contains(needle));
+            assert!(engine.call("rebind", &call).unwrap_err().contains(needle));
         }
         assert!(sent(&engine).is_empty());
     }
@@ -359,7 +359,7 @@ mod tests {
             show: ShowFlags(0),
         });
         let mut engine = Engine::new(world);
-        let reply = engine.call("view-set", json!({ "mode": "motion" }));
+        let reply = engine.call("view-set", &json!({ "mode": "motion" }));
         assert_eq!(reply, Ok(json!({ "mode": "Motion" })));
         let view = engine.world.resource::<ViewOverrides>().copied();
         assert_eq!(
@@ -371,7 +371,7 @@ mod tests {
         );
         assert!(
             engine
-                .call("view-set", json!({ "mode": "sideways" }))
+                .call("view-set", &json!({ "mode": "sideways" }))
                 .is_err()
         );
     }
@@ -393,11 +393,11 @@ mod tests {
         let mut engine = Engine::new(world);
         let off = json!({ "flag": "reactive", "state": "off" });
         assert_eq!(
-            engine.call("show-set", off.clone()),
+            engine.call("show-set", &off),
             Ok(json!({ "flag": "Reactive mask", "on": false }))
         );
         // Turning a cleared flag off again leaves it cleared.
-        assert!(engine.call("show-set", off).is_ok());
+        assert!(engine.call("show-set", &off).is_ok());
         let view = engine.world.resource::<ViewOverrides>().copied();
         assert_eq!(
             view,
@@ -407,14 +407,14 @@ mod tests {
             })
         );
         let on = json!({ "flag": "reactive", "state": "on" });
-        assert!(engine.call("show-set", on).is_ok());
+        assert!(engine.call("show-set", &on).is_ok());
         let view = engine.world.resource::<ViewOverrides>().copied();
         assert_eq!(view.map(|v| v.show), Some(ShowFlags::all()));
         for bad in [
             json!({ "flag": "sideways", "state": "on" }),
             json!({ "flag": "fog", "state": "maybe" }),
         ] {
-            assert!(engine.call("show-set", bad).is_err());
+            assert!(engine.call("show-set", &bad).is_err());
         }
     }
 }

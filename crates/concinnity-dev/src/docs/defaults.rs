@@ -15,7 +15,7 @@ impl Defaults {
             container: schema
                 .default
                 .and_then(|default| default())
-                .and_then(to_json),
+                .and_then(|value| to_json(&value)),
         }
     }
 
@@ -35,7 +35,7 @@ impl Defaults {
                 .container
                 .as_ref()
                 .map(|container| container.get(field.key).cloned().unwrap_or(Value::Null)),
-            FieldDefault::Value(default) => default().and_then(to_json),
+            FieldDefault::Value(default) => default().and_then(|value| to_json(&value)),
         }
     }
 }
@@ -43,8 +43,8 @@ impl Defaults {
 // Serialize through JSON text rather than `serde_json::to_value`: the text form
 // writes an `f32` at its own shortest precision (`0.1`), where the value form
 // widens it to the `f64` beside it (`0.10000000149011612`).
-fn to_json(value: DefaultValue) -> Option<Value> {
-    serde_json::to_string(&*value)
+fn to_json(value: &DefaultValue) -> Option<Value> {
+    serde_json::to_string(&**value)
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
 }

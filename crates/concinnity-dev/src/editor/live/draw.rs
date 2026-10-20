@@ -61,7 +61,7 @@ pub(super) fn plan(
 }
 
 /// Perform a planned draw rewrite.
-pub(super) fn commit(world: &mut World, change: DrawChange) {
+pub(super) fn commit(world: &mut World, change: &DrawChange) {
     if let Some(material) = change.material {
         draw_preview::apply_material(world, change.entity, material);
     }
@@ -87,7 +87,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn args(v: Value) -> Map<String, Value> {
+    fn args(v: &Value) -> Map<String, Value> {
         v.as_object().cloned().unwrap()
     }
 
@@ -113,7 +113,7 @@ mod tests {
                     &world,
                     ct,
                     "crate_a",
-                    &args(json!({ changed: "x" })),
+                    &args(&json!({ changed: "x" })),
                     &keys(&[changed]),
                 )
                 .is_none(),
@@ -133,7 +133,7 @@ mod tests {
                 &world,
                 RegisteredType::Prop,
                 "crate_a",
-                &args(json!({ "material": "steel" })),
+                &args(&json!({ "material": "steel" })),
                 &keys(&["material"]),
             )
             .is_none()
@@ -143,7 +143,7 @@ mod tests {
                 &world,
                 RegisteredType::Prop,
                 "crate_a",
-                &args(json!({ "cull_distance": 40.0 })),
+                &args(&json!({ "cull_distance": 40.0 })),
                 &keys(&["cull_distance"]),
             )
             .is_none()

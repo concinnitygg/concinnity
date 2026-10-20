@@ -58,7 +58,7 @@ impl VkContext {
         bloom.encode(
             &self.post_device(frame_idx),
             &cmd,
-            BloomInputs {
+            &BloomInputs {
                 scene: self.scene_color_view(frame_idx),
                 top,
                 top_ref: view,

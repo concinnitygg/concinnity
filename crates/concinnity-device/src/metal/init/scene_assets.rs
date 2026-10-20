@@ -23,6 +23,7 @@ use crate::metal::texture::{
     upload_texture, upload_texture_image,
 };
 
+#[derive(Clone, Copy)]
 pub(super) struct SceneInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
     pub(super) media: &'a MediaPayloads<'a>,

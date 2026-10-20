@@ -114,18 +114,18 @@ pub(super) fn toasts(h: &EditorHook) -> Vec<String> {
 }
 
 // Click the row standing for `kind`.
-pub(super) fn click(h: &mut EditorHook, world: &mut World, kind: RowKind) {
+pub(super) fn click(h: &mut EditorHook, world: &mut World, kind: &RowKind) {
     let rows = h.shader_rows().to_vec();
-    let i = rows.iter().position(|r| r.kind == kind).expect("listed");
+    let i = rows.iter().position(|r| r.kind == *kind).expect("listed");
     h.apply_shaders_action(ShadersAction::Row(i), &rows, world);
 }
 
 // Open the menu on the row standing for `kind` and pick `item`.
-pub(super) fn pick(h: &mut EditorHook, world: &mut World, kind: RowKind, item: MenuItem) {
+pub(super) fn pick(h: &mut EditorHook, world: &mut World, kind: &RowKind, item: MenuItem) {
     let rows = h.shader_rows().to_vec();
-    let i = rows.iter().position(|r| r.kind == kind).expect("listed");
+    let i = rows.iter().position(|r| r.kind == *kind).expect("listed");
     h.apply_shaders_action(ShadersAction::OpenMenu(i), &rows, world);
-    assert_eq!(h.shaders.menu.as_ref(), Some(&kind));
+    assert_eq!(h.shaders.menu.as_ref(), Some(kind));
     h.apply_shaders_action(ShadersAction::Menu(item), &rows, world);
     assert!(h.shaders.menu.is_none());
 }

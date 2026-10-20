@@ -440,7 +440,7 @@ mod tests {
             ("cull-status", json!({}), "read_cull_status: not supported"),
         ];
         for (verb, args, needle) in cases {
-            let error = engine.call(verb, args).expect_err(verb);
+            let error = engine.call(verb, &args).expect_err(verb);
             assert!(error.contains(needle), "{verb}: {error}");
         }
     }
@@ -467,7 +467,7 @@ mod tests {
         let mut engine = Engine::new(World::new());
         for path in ["/tmp/out.rs", "/tmp/out", " shot.jpg "] {
             assert_eq!(
-                engine.call("screenshot", json!({ "path": path })),
+                engine.call("screenshot", &json!({ "path": path })),
                 Err("screenshot: 'path' must end in .png".to_string()),
                 "{path}"
             );
@@ -498,12 +498,15 @@ mod tests {
         let mut engine = Engine::new(World::new());
         for count in [0, MAX_BURST + 1] {
             let error = engine
-                .call("screenshot-burst", json!({ "dir": "out", "count": count }))
+                .call("screenshot-burst", &json!({ "dir": "out", "count": count }))
                 .unwrap_err();
             assert!(error.contains("'count' must be"), "{count}: {error}");
         }
         let error = engine
-            .call("screenshot-burst", json!({ "dir": "out", "prefix": "a/b" }))
+            .call(
+                "screenshot-burst",
+                &json!({ "dir": "out", "prefix": "a/b" }),
+            )
             .unwrap_err();
         assert!(error.contains("'prefix' must be a file name"), "{error}");
     }

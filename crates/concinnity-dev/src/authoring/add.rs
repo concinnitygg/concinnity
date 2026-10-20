@@ -386,10 +386,10 @@ fn validated_entry(
             .default_args
             .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
         if let (serde_json::Value::Object(base), serde_json::Value::Object(supplied)) =
-            (&mut resolved, &args)
+            (&mut resolved, args)
         {
             for (k, v) in supplied {
-                base.insert(k.clone(), v.clone());
+                base.insert(k, v);
             }
         }
         return Ok(serde_json::json!({
@@ -398,13 +398,13 @@ fn validated_entry(
         }));
     }
 
+    let resolved_args = normalized_args_value(asset_type, &args);
     let req = AssetRequest {
         asset_type: asset_type.to_string(),
-        args: Some(args.clone()),
+        args: Some(args),
     };
     create_asset_def(&req)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
-    let resolved_args = normalized_args_value(asset_type, &args);
 
     Ok(serde_json::json!({
         "type": asset_type,

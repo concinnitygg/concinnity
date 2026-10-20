@@ -1625,6 +1625,7 @@ impl RtAccelData {
 // Everything one skinned rebuild reads beyond the accel itself: the allocator,
 // the command list it records onto, the frame's draw list + skinned inputs, and
 // which ring slot to build into.
+#[derive(Clone, Copy)]
 struct SkinnedRebuild<'a> {
     alloc: &'a DeviceAllocator,
     cmd: &'a ID3D12GraphicsCommandList,

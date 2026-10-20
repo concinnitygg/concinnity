@@ -253,13 +253,13 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
 mod tests {
     use super::*;
 
-    fn expanded(input: DeriveInput) -> String {
-        expand(&input).expect("the input derives").to_string()
+    fn expanded(input: &DeriveInput) -> String {
+        expand(input).expect("the input derives").to_string()
     }
 
     #[test]
     fn every_authored_field_gets_one_probe_under_its_key() {
-        let out = expanded(syn::parse_quote! {
+        let out = expanded(&syn::parse_quote! {
             struct S {
                 #[serde(skip)]
                 asset_id: AssetId,
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn only_core_and_the_engine_crate_are_named() {
-        let out = expanded(syn::parse_quote! { struct S { x: f32 } });
+        let out = expanded(&syn::parse_quote! { struct S { x: f32 } });
         assert!(!out.contains("std ::"), "{out}");
         assert!(!out.contains("alloc ::"), "{out}");
         assert!(
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn an_owned_file_is_recorded_under_its_key() {
-        let out = expanded(syn::parse_quote! {
+        let out = expanded(&syn::parse_quote! {
             struct S {
                 #[asset(owned_file)]
                 #[serde(rename = "src")]
@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn a_parameter_is_listed_clamped_and_compared_under_its_key() {
-        let out = expanded(syn::parse_quote! {
+        let out = expanded(&syn::parse_quote! {
             struct Bloom {
                 #[asset(default = 0.6, min = 0.0, max = 4, apply = live)]
                 #[serde(rename = "strength")]
@@ -370,7 +370,7 @@ mod tests {
 
     #[test]
     fn a_schema_without_parameters_keeps_the_trait_defaults() {
-        let out = expanded(syn::parse_quote! { struct S { #[asset(default = 2)] x: f32 } });
+        let out = expanded(&syn::parse_quote! { struct S { #[asset(default = 2)] x: f32 } });
         assert!(!out.contains("PARAMS"), "{out}");
         assert!(!out.contains("fn clamp_params"), "{out}");
         assert!(!out.contains("fn changed_params"), "{out}");
@@ -387,13 +387,13 @@ mod tests {
 
     #[test]
     fn a_fieldless_schema_touches_no_probe() {
-        let out = expanded(syn::parse_quote! { struct NoArgs {} });
+        let out = expanded(&syn::parse_quote! { struct NoArgs {} });
         assert!(!out.contains("Probe"), "{out}");
     }
 
     #[test]
     fn the_schema_sits_behind_the_consumers_feature() {
-        let out = expanded(syn::parse_quote! {
+        let out = expanded(&syn::parse_quote! {
             /// A widget.
             #[serde(default)]
             struct Widget {
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn a_field_with_no_default_is_required_unless_it_is_an_option() {
-        let out = expanded(syn::parse_quote! {
+        let out = expanded(&syn::parse_quote! {
             struct S {
                 a: u8,
                 b: Option<u8>,
@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn generics_carry_through_to_the_impl() {
-        let out = expanded(syn::parse_quote! { struct S<T: Clone> { x: T } });
+        let out = expanded(&syn::parse_quote! { struct S<T: Clone> { x: T } });
         assert!(out.contains("impl < T : Clone >"), "{out}");
         assert!(out.contains("for S < T >"), "{out}");
     }

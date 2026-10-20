@@ -151,7 +151,7 @@ impl PhysicsSystem {
 
     /// Build the simulation from the world's `PhysicsConfig`. Bodies,
     /// colliders and the ground are added from the ECS in [`System::init`].
-    pub fn new(config: PhysicsConfig) -> Self {
+    pub fn new(config: &PhysicsConfig) -> Self {
         Self {
             floor_y: config.floor_y,
             world: None,
@@ -166,7 +166,7 @@ impl PhysicsSystem {
             sensor_scratch: Vec::new(),
             held: None,
             sensor_filters: SortedMap::default(),
-            layers: LayerTable::new(&config),
+            layers: LayerTable::new(config),
             contact_min_impulse: config.contact_min_impulse.max(0.0),
             contact_batch: ContactBatch::default(),
             contact_gate: ContactGate::default(),
@@ -266,7 +266,7 @@ impl PhysicsSystem {
             .collect();
 
         for (entity, snap) in snaps {
-            let Some(handle) = self.props.add(&self.layers, world, entity, snap) else {
+            let Some(handle) = self.props.add(&self.layers, world, entity, &snap) else {
                 continue;
             };
             if let Some(identity) = ctx.get::<Identity>(entity) {
@@ -282,7 +282,7 @@ impl PhysicsSystem {
     /// character capsule. A world with content but no config (one built
     /// directly rather than cooked) gets the flat-floor default.
     pub fn for_world(world: &World) -> Option<Self> {
-        Self::config_for(world).map(Self::new)
+        Self::config_for(world).map(|config| Self::new(&config))
     }
 
     fn config_for(world: &World) -> Option<PhysicsConfig> {
@@ -659,7 +659,7 @@ impl System for PhysicsSystem {
             snap.pickup = ctx.get::<Pickup>(entity).is_some();
             snap.dynamics = ctx.get::<BodyDynamics>(entity).copied();
             self.props
-                .adopt(&self.layers, world, entity, snap, self.body_cap);
+                .adopt(&self.layers, world, entity, &snap, self.body_cap);
         }
 
         // Wake the bodies behaviors asked for, after the adopt so a copy
@@ -1025,14 +1025,14 @@ mod tests {
             ..CameraController::default()
         });
         world.push(camera);
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
         assert!(physics.player.is_none(), "no capsule for the orbit camera");
 
         // First-person camera keeps its capsule.
         let mut world = World::new();
         world.push(controlled_camera());
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
         assert!(
             physics.player.is_some(),
@@ -1078,7 +1078,7 @@ mod tests {
         let authored = LocalFrame::AUTHORED;
         publish(&mut world, &authored, [400.0, 0.0, 0.0], 0);
         world.insert_resource(FrameRebases::default());
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
         for _ in 0..180 {
             physics.step(&mut world.context());
@@ -1156,7 +1156,7 @@ mod tests {
         let entity = spawn_prop(&mut world, id, [0.0, 5.0, 0.0], false);
         make_dynamic(&mut world, entity);
 
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
         for _ in 0..10 {
             physics.step(&mut world.context());
@@ -1180,7 +1180,7 @@ mod tests {
         let entity = spawn_prop(&mut world, id, [0.0, 5.0, 0.0], false);
         make_dynamic(&mut world, entity);
 
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
 
         // Paused: the body stays put however many frames pass.
@@ -1216,7 +1216,7 @@ mod tests {
         let entity = spawn_prop(&mut world, id, [0.0, 5.0, 0.0], false);
         make_dynamic(&mut world, entity);
 
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
 
         let tick = |ticks, alpha| SimTiming {
@@ -1262,7 +1262,7 @@ mod tests {
             let entity = spawn_prop(&mut world, id, [0.3, 5.0, 0.1], false);
             make_dynamic(&mut world, entity);
 
-            let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+            let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
             physics.init(&mut world.context());
             for &ticks in frames {
                 world.insert_resource(SimTiming {
@@ -1296,7 +1296,7 @@ mod tests {
         let ball = spawn_prop(&mut world, id, [0.0, 5.0, 0.0], false);
         make_dynamic(&mut world, ball);
 
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
 
         // Settle so the body is live and falling.
@@ -1330,7 +1330,7 @@ mod tests {
         make_dynamic(&mut world, carriable);
         world.push(interacting_camera([0.0, 1.0, 0.0]));
 
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
 
         physics.step(&mut world.context());
@@ -1349,7 +1349,7 @@ mod tests {
     #[test]
     fn runtime_spawned_prop_gets_a_body_and_falls() {
         let mut world = World::new();
-        let mut physics = PhysicsSystem::new(PhysicsConfig {
+        let mut physics = PhysicsSystem::new(&PhysicsConfig {
             spawn_headroom: 1,
             ..PhysicsConfig::default()
         });
@@ -1387,7 +1387,7 @@ mod tests {
         let mut world = World::new();
         let ball = spawn_prop(&mut world, AssetId(1), [0.0, 5.0, 0.0], false);
         make_dynamic(&mut world, ball);
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
         for _ in 0..30 {
             physics.step(&mut world.context());
@@ -1415,7 +1415,7 @@ mod tests {
     #[test]
     fn spawn_despawn_respawn_cycle_is_leak_free() {
         let mut world = World::new();
-        let mut physics = PhysicsSystem::new(PhysicsConfig {
+        let mut physics = PhysicsSystem::new(&PhysicsConfig {
             spawn_headroom: 1,
             ..PhysicsConfig::default()
         });
@@ -1460,7 +1460,7 @@ mod tests {
         assert_eq!(budget.kinematic, 1, "the first-person camera capsule");
         world.insert_resource(WorldPhysicsBudget(record_of(&budget)));
 
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
         assert_eq!(physics.body_cap, budget.body_cap());
         assert_eq!(
@@ -1483,7 +1483,7 @@ mod tests {
         let entity = spawn_prop(&mut world, AssetId(1), [0.0, 3.0, 0.0], false);
         make_dynamic(&mut world, entity);
 
-        let mut physics = PhysicsSystem::new(PhysicsConfig {
+        let mut physics = PhysicsSystem::new(&PhysicsConfig {
             spawn_headroom: 4,
             ..PhysicsConfig::default()
         });
@@ -1511,7 +1511,7 @@ mod tests {
         let budget = PhysicsBudget::derive(&counts, 0);
         world.insert_resource(WorldPhysicsBudget(record_of(&budget)));
 
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
         let full = physics.physics_body_count();
         assert_eq!(full, budget.body_cap() as usize, "the budget is spent");
@@ -1558,7 +1558,7 @@ mod tests {
             0.3,
         ));
 
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
         let rig_y = |world: &mut World| {
             world
@@ -1602,7 +1602,7 @@ mod tests {
         let entity = spawn_prop(&mut world, id, [0.0, 5.0, 0.0], false);
         make_dynamic(&mut world, entity);
 
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
 
         let mut cursor = EventCursor::default();
@@ -1660,7 +1660,7 @@ mod tests {
         let ball = spawn_prop(&mut world, AssetId(1), [0.0, 6.0, 0.0], false);
         make_dynamic(&mut world, ball);
 
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
 
         let mut cursor = EventCursor::default();
@@ -1697,7 +1697,7 @@ mod tests {
             ..Default::default()
         });
 
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
         for _ in 0..240 {
             physics.step(&mut world.context());
@@ -1731,7 +1731,7 @@ mod tests {
         make_dynamic(&mut world, entity);
         world.get_mut::<Collider>(entity).unwrap().0.layer = "ghost".to_string();
 
-        let mut physics = PhysicsSystem::new(config);
+        let mut physics = PhysicsSystem::new(&config);
         physics.init(&mut world.context());
         for _ in 0..240 {
             physics.step(&mut world.context());
@@ -1755,7 +1755,7 @@ mod tests {
     #[test]
     fn a_world_without_terrain_stands_on_a_level_slab() {
         let mut world = World::new();
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
 
         let a = floor_height(&physics, 0.0, 0.0).expect("the ray meets the floor");
@@ -1770,7 +1770,7 @@ mod tests {
     fn an_unreadable_terrain_falls_back_to_the_slab() {
         let mut world = World::new();
         world.push(crate::components::Terrain::default());
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
         assert_eq!(floor_height(&physics, 3.0, 4.0), Some(0.0));
     }
@@ -1794,7 +1794,7 @@ mod tests {
         camera.jump_requested = true;
         world.push(camera);
 
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
         assert!(
             physics.player.as_ref().expect("a capsule").has_gravity,
@@ -1839,7 +1839,7 @@ mod tests {
         make_dynamic(&mut world, carriable);
         world.push(interacting_camera([0.0, 1.0, 0.0]));
 
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
 
         physics.step(&mut world.context());
@@ -1877,7 +1877,7 @@ mod tests {
         let ball = spawn_prop(&mut world, AssetId(1), [0.0, 6.0, 0.0], false);
         make_dynamic(&mut world, ball);
 
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
 
         let mut cursor = EventCursor::default();
@@ -1926,7 +1926,7 @@ mod tests {
             ..controlled_camera()
         });
 
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
 
         let mut cursor = EventCursor::default();
@@ -1963,7 +1963,7 @@ mod tests {
             },
         );
 
-        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
         physics.init(&mut world.context());
         let height = |world: &mut World| {
             world

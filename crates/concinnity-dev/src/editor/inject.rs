@@ -238,18 +238,18 @@ fn inject_top_bar(world: &mut World, font: Option<FontHandle>) {
 // own accept path (serde over the spec's args) -- the same conversion the cook
 // pipeline runs on a world line. The reused font is set by the caller afterward
 // (it is not part of the spec's args), and the reserved id is given at push.
-fn materialize<T: serde::de::DeserializeOwned>(spec: AssetSpec) -> T {
-    serde_json::from_value(crate::authoring::spec_args(&spec))
+fn materialize<T: serde::de::DeserializeOwned>(spec: &AssetSpec) -> T {
+    serde_json::from_value(crate::authoring::spec_args(spec))
         .expect("editor HUD spec deserializes into its component")
 }
 
 fn button_sprite(rect: [f32; 4], tint: [f32; 4], visible: bool) -> Sprite {
-    materialize(asset::sprite("", rect, tint).set("visible", visible))
+    materialize(&asset::sprite("", rect, tint).set("visible", visible))
 }
 
 fn centered_label(content: &str, rect: [f32; 4], font: Option<FontHandle>) -> TextLabel {
     let pos = [rect[0] + rect[2] * 0.5, rect[1] + hud::LABEL_TOP];
-    let mut l: TextLabel = materialize(asset::text_label(
+    let mut l: TextLabel = materialize(&asset::text_label(
         "",
         content,
         pos,
@@ -264,7 +264,7 @@ fn centered_label(content: &str, rect: [f32; 4], font: Option<FontHandle>) -> Te
 fn row_label(content: &str, rect: [f32; 4], font: Option<FontHandle>, visible: bool) -> TextLabel {
     let pos = [rect[0] + 12.0, rect[1] + 10.0];
     let mut l: TextLabel = materialize(
-        asset::text_label("", content, pos, [0.9, 0.9, 0.92], "left").set("visible", visible),
+        &asset::text_label("", content, pos, [0.9, 0.9, 0.92], "left").set("visible", visible),
     );
     l.font = font;
     l.scale = theme::TEXT_SCALE;
@@ -280,7 +280,7 @@ fn code_label(font: Option<FontHandle>) -> TextLabel {
 
 fn text_field(placeholder: &str, font: Option<FontHandle>) -> TextInput {
     let mut t: TextInput = materialize(
-        asset::text_input("", placeholder)
+        &asset::text_input("", placeholder)
             .set("background", [0.14, 0.15, 0.20, 1.0])
             .set("max_len", 48u32)
             .set("visible", false),

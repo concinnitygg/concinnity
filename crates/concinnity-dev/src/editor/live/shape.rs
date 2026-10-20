@@ -76,14 +76,14 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn args(v: Value) -> Map<String, Value> {
+    fn args(v: &Value) -> Map<String, Value> {
         v.as_object().cloned().unwrap()
     }
 
     #[test]
     fn shape_values_build_the_component_against_its_target() {
         let shape = shape_of(
-            &args(json!({
+            &args(&json!({
                 "target": "hero_mesh",
                 "sliders": [{ "name": "weight", "value": 0.4 }],
                 "proportions": [{ "joint": "spine", "scale": 1.1, "length": 0.0 }],
@@ -102,7 +102,7 @@ mod tests {
     #[test]
     fn absent_lists_build_an_empty_shape() {
         let shape = shape_of(
-            &args(json!({ "target": "hero_mesh" })),
+            &args(&json!({ "target": "hero_mesh" })),
             SkinnedMeshHandle::new(0),
         )
         .expect("an empty shape builds");
@@ -113,7 +113,7 @@ mod tests {
     fn a_malformed_list_declines() {
         assert!(
             shape_of(
-                &args(json!({ "sliders": "not a list" })),
+                &args(&json!({ "sliders": "not a list" })),
                 SkinnedMeshHandle::new(0)
             )
             .is_none()
@@ -145,7 +145,7 @@ mod tests {
     #[test]
     fn retargeting_and_baking_decline() {
         let world = World::new();
-        let shape = args(json!({ "target": "hero_mesh", "sliders": [] }));
+        let shape = args(&json!({ "target": "hero_mesh", "sliders": [] }));
         assert!(plan(&world, &[], &shape, &["target".to_string()]).is_none());
         assert!(plan(&world, &[], &shape, &["bake".to_string()]).is_none());
     }
@@ -158,7 +158,7 @@ mod tests {
             plan(
                 &world,
                 &[],
-                &args(json!({ "target": "hero_mesh", "sliders": [] })),
+                &args(&json!({ "target": "hero_mesh", "sliders": [] })),
                 &["sliders".to_string()],
             )
             .is_none()

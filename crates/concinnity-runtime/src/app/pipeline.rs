@@ -94,7 +94,7 @@ pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
         })
         .expect("failed to spawn the sim thread");
 
-    let rendered = render_half(backend.as_mut(), go, snapshot_rx, &feedback_tx, &shutdown);
+    let rendered = render_half(backend.as_mut(), &go, &snapshot_rx, &feedback_tx, &shutdown);
     // What the run actually drew, which `--frames N` only requested: a pixel A/B
     // of a temporal world is a comparison of the frame it stopped on, so the
     // capture harness reads this back and refuses a run that stopped elsewhere.
@@ -135,8 +135,8 @@ pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
 // reached the backend.
 fn render_half(
     backend: &mut dyn RenderBackend,
-    go: FrameGo,
-    snapshot_rx: Receiver<RenderSnapshot>,
+    go: &FrameGo,
+    snapshot_rx: &Receiver<RenderSnapshot>,
     feedback_tx: &Sender<FrameFeedback>,
     shutdown: &ShutdownToken,
 ) -> RenderHalfOutcome {
@@ -154,17 +154,17 @@ fn render_half(
             let prepared = Instant::now();
             backend.prepare_frame();
             prepare_us = micros_since(prepared);
-            if !let_step_go(&go, backend) {
+            if !let_step_go(go, backend) {
                 return RenderHalfOutcome::stopped(submitted);
             }
         }
-        let Some(mut snapshot) = wait_for_snapshot(&snapshot_rx, shutdown) else {
+        let Some(mut snapshot) = wait_for_snapshot(snapshot_rx, shutdown) else {
             return RenderHalfOutcome::stopped(submitted);
         };
         // A loop that is not waiting on the GPU has no wait to move: the next
         // step goes now and overlaps this frame's submit. A simulation already
         // gone ends the loop at the next snapshot wait.
-        went = !timing.just_in_time() && let_step_go(&go, backend);
+        went = !timing.just_in_time() && let_step_go(go, backend);
 
         let outcome = submit(&mut policy, &mut snapshot, backend);
         submitted += 1;

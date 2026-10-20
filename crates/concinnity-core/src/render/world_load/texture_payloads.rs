@@ -20,6 +20,7 @@ pub struct TexturePayloads {
 }
 
 /// The slots that enter the pool as placeholders rather than their images.
+#[derive(Clone, Copy)]
 pub struct TextureSlotSkips<'a> {
     /// Owned by a scene other than the start scene: the streamer decodes them
     /// once their scene pins.

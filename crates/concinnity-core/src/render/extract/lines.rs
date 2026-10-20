@@ -11,6 +11,7 @@ use crate::gfx::lines::{Line, LineCamera, build_vertices_into};
 use crate::gfx::render_types::LineVertex;
 
 // The camera + space this frame draws with.
+#[derive(Clone, Copy)]
 pub(super) struct LineFrame {
     pub view: [[f32; 4]; 4],
     pub cam_pos: [f32; 3],

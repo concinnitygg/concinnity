@@ -84,7 +84,12 @@ pub(super) struct LabelStyle {
     pub(super) fit: Option<&'static str>,
 }
 
-pub(super) fn label(name: &str, font: &str, content: &str, style: LabelStyle) -> serde_json::Value {
+pub(super) fn label(
+    name: &str,
+    font: &str,
+    content: &str,
+    style: &LabelStyle,
+) -> serde_json::Value {
     let mut spec = AssetSpec::new(name, "TextLabel")
         .set("font", font)
         .set("content", content)
@@ -178,7 +183,7 @@ pub(super) fn button(
             &names.label,
             font,
             text,
-            LabelStyle {
+            &LabelStyle {
                 x: x + w / 2.0,
                 y: y + 6.0,
                 color: [0.92, 0.92, 0.92],
@@ -214,7 +219,7 @@ pub(super) fn title_button(
             &names.label,
             font,
             text,
-            LabelStyle {
+            &LabelStyle {
                 x: win_w / 2.0,
                 y: y + 6.0,
                 color: [0.92, 0.92, 0.92],

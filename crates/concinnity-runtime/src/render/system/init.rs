@@ -130,7 +130,7 @@ impl GraphicsSystem {
         ctx: &mut PipelineContext<'_>,
         launch: &LaunchRequest,
         persisted: &concinnity_core::settings::StoredSettings,
-        quality: DetectedQuality,
+        quality: &DetectedQuality,
     ) -> (ResolvedRenderConfig, SettingsState) {
         let window = ctx.drain::<Window>().into_iter().next();
         self.frames = FrameCounter::new(launch.args.frames);
@@ -343,7 +343,7 @@ impl GraphicsSystem {
                 world_ambient_intensity,
             },
             mut settings,
-        ) = self.init_render_settings(ctx, &launch, &persisted, quality);
+        ) = self.init_render_settings(ctx, &launch, &persisted, &quality);
         // Infinite-world chunk streaming. The first declared VoxelWorld wins;
         // with none declared, no chunks stream. BlockTypes are drained here so
         // the runtime can resolve the VoxelWorld palette to chunk-mesh data.

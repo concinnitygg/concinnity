@@ -132,6 +132,7 @@ pub(in crate::directx) fn upload_record(
 // The geometry, uniform payload and per-record state one producer hands over for
 // a `TransparentRecord`. Keeps the buffer uploads in one place instead of once
 // per producer.
+#[derive(Clone, Copy)]
 pub(in crate::directx) struct RecordUpload<'a> {
     pub vertices: &'a [Vertex],
     pub indices: &'a [u16],

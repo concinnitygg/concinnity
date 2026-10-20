@@ -573,7 +573,7 @@ mod tests {
 
     #[test]
     fn fbx_animation_names_reports_a_file_without_an_objects_section() {
-        let file = fx::write(vec![fx::node("Definitions")]);
+        let file = fx::write(&[fx::node("Definitions")]);
         let err = fbx_animation_names(file.path()).expect_err("no Objects section");
         assert!(err.contains("FBX has no Objects section"), "got: {err}");
     }

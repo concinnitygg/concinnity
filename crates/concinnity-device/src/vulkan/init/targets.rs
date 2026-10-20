@@ -10,6 +10,7 @@ use crate::vulkan::context::{HDR_FORMAT, SwapchainState, VkTargets};
 use crate::vulkan::render_pass::create_main_render_pass;
 use crate::vulkan::swapchain::{AttachmentDeviceCtx, create_attachments, create_main_framebuffers};
 
+#[derive(Clone, Copy)]
 pub(super) struct TargetInputs<'a> {
     pub(super) swapchain: &'a SwapchainState,
     pub(super) features: &'a Features,

@@ -97,8 +97,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn leaves(args: Value, path: &str) -> Vec<(String, String)> {
-        string_leaves(&args, path)
+    fn leaves(args: &Value, path: &str) -> Vec<(String, String)> {
+        string_leaves(args, path)
             .into_iter()
             .map(|(at, s)| (at, s.to_string()))
             .collect()
@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn a_top_level_field_reads_its_string() {
         assert_eq!(
-            leaves(json!({"screen": "menu"}), "screen"),
+            leaves(&json!({"screen": "menu"}), "screen"),
             [pair("screen", "menu")]
         );
     }
@@ -125,7 +125,7 @@ mod tests {
             json!({"screen": 4}),
             json!({"screen": {"nested": "x"}}),
         ] {
-            assert!(leaves(args, "screen").is_empty());
+            assert!(leaves(&args, "screen").is_empty());
         }
     }
 
@@ -133,27 +133,27 @@ mod tests {
     fn a_nested_path_walks_objects() {
         let args = json!({"controller": {"follow": {"target": "hero"}}});
         assert_eq!(
-            leaves(args, "controller.follow.target"),
+            leaves(&args, "controller.follow.target"),
             [pair("controller.follow.target", "hero")]
         );
-        assert!(leaves(json!({"controller": null}), "controller.follow.target").is_empty());
+        assert!(leaves(&json!({"controller": null}), "controller.follow.target").is_empty());
     }
 
     #[test]
     fn lists_are_walked_with_their_indices() {
         assert_eq!(
-            leaves(json!({"palette": ["stone", "", "dirt"]}), "palette"),
+            leaves(&json!({"palette": ["stone", "", "dirt"]}), "palette"),
             [pair("palette[0]", "stone"), pair("palette[2]", "dirt")]
         );
         assert_eq!(
             leaves(
-                json!({"meshes": [{"mesh": "a"}, {"mesh": "b", "material": "m"}]}),
+                &json!({"meshes": [{"mesh": "a"}, {"mesh": "b", "material": "m"}]}),
                 "meshes.material"
             ),
             [pair("meshes[1].material", "m")]
         );
         assert_eq!(
-            leaves(json!({"rows": [["a", "b"], ["c"]]}), "rows"),
+            leaves(&json!({"rows": [["a", "b"], ["c"]]}), "rows"),
             [
                 pair("rows[0][0]", "a"),
                 pair("rows[0][1]", "b"),

@@ -677,7 +677,7 @@ mod tests {
     // it actually has to hold rather than against the shorter "then".
     #[test]
     fn a_pin_label_clears_both_the_cards_and_its_own_wire() {
-        check_wire_labels(branching());
+        check_wire_labels(&branching());
     }
 
     #[test]
@@ -686,13 +686,13 @@ mod tests {
         for wire in &mut chart.wires {
             wire.label = Some("reads".to_string());
         }
-        check_wire_labels(chart);
+        check_wire_labels(&chart);
     }
 
-    fn check_wire_labels(chart: Chart) {
+    fn check_wire_labels(chart: &Chart) {
         let mut world = injected_world();
         let band = [100.0, 200.0, 2_000.0, 600.0];
-        place(&mut world, &view(&chart, [0.0, 0.0]), band);
+        place(&mut world, &view(chart, [0.0, 0.0]), band);
 
         let cards: Vec<[f32; 4]> = chart
             .cards

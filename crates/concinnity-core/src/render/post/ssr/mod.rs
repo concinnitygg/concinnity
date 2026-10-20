@@ -94,7 +94,7 @@ impl<Pipeline> SsrPass<Pipeline> {
         &self,
         device: &D,
         rec: &D::Recorder,
-        inputs: SsrInputs<'_, D>,
+        inputs: &SsrInputs<'_, D>,
         params: &SsrParams,
     ) -> RenderResult<()>
     where
@@ -173,7 +173,7 @@ mod tests {
         pass.encode(
             &device,
             &(),
-            SsrInputs {
+            &SsrInputs {
                 target: MockTexture::External(9),
                 scene: MockTexture::External(1),
                 normal_depth: MockTexture::External(2),

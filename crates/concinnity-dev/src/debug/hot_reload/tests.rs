@@ -355,7 +355,7 @@ fn decode_asset_batch_with_empty_inputs_returns_empty_batch() {
     // The worker body must handle the no-sources case cleanly so an
     // accidentally-spawned worker on a world without any file-backed
     // assets exits quickly with nothing to apply.
-    let batch = decode_asset_batch(Vec::new(), None, Vec::new(), Vec::new());
+    let batch = decode_asset_batch(&[], None, &[], &[]);
     assert!(batch.textures.is_empty());
     assert!(batch.color_lut.is_none());
     assert!(batch.meshes.is_empty());
@@ -979,7 +979,7 @@ fn decode_asset_batch_decodes_a_png_texture() {
         image_index: 0,
         slot: 3,
     };
-    let batch = decode_asset_batch(vec![entry], None, Vec::new(), Vec::new());
+    let batch = decode_asset_batch(&[entry], None, &[], &[]);
     assert_eq!(batch.decode_failures, 0);
     assert_eq!(batch.textures.len(), 1);
     let tex = &batch.textures[0];
@@ -1000,7 +1000,7 @@ fn decode_asset_batch_counts_a_missing_texture_as_a_failure() {
         image_index: 0,
         slot: 0,
     };
-    let batch = decode_asset_batch(vec![entry], None, Vec::new(), Vec::new());
+    let batch = decode_asset_batch(&[entry], None, &[], &[]);
     assert!(batch.textures.is_empty());
     assert_eq!(batch.decode_failures, 1);
 }
@@ -1020,7 +1020,7 @@ fn decode_asset_batch_mixes_successes_and_failures() {
         image_index: 0,
         slot: 2,
     };
-    let batch = decode_asset_batch(vec![good, bad], None, Vec::new(), Vec::new());
+    let batch = decode_asset_batch(&[good, bad], None, &[], &[]);
     assert_eq!(batch.textures.len(), 1);
     assert_eq!(batch.decode_failures, 1);
 }
@@ -1037,7 +1037,7 @@ fn decode_asset_batch_counts_an_unparseable_glb_texture_as_a_failure() {
         image_index: 0,
         slot: 0,
     };
-    let batch = decode_asset_batch(vec![entry], None, Vec::new(), Vec::new());
+    let batch = decode_asset_batch(&[entry], None, &[], &[]);
     assert!(batch.textures.is_empty());
     assert_eq!(batch.decode_failures, 1);
 }
@@ -1050,7 +1050,7 @@ fn decode_asset_batch_decodes_a_cube_lut() {
     let lut = ColorLutSource {
         resolved_path: cube.to_string_lossy().into_owned(),
     };
-    let batch = decode_asset_batch(Vec::new(), Some(lut), Vec::new(), Vec::new());
+    let batch = decode_asset_batch(&[], Some(lut), &[], &[]);
     assert_eq!(batch.decode_failures, 0);
     let lut = batch.color_lut.expect("decoded lut");
     assert_eq!(lut.size, 2);
@@ -1063,7 +1063,7 @@ fn decode_asset_batch_counts_a_missing_lut_as_a_failure() {
     let lut = ColorLutSource {
         resolved_path: dir.path().join("gone.cube").to_string_lossy().into_owned(),
     };
-    let batch = decode_asset_batch(Vec::new(), Some(lut), Vec::new(), Vec::new());
+    let batch = decode_asset_batch(&[], Some(lut), &[], &[]);
     assert!(batch.color_lut.is_none());
     assert_eq!(batch.decode_failures, 1);
 }
@@ -1078,7 +1078,7 @@ fn decode_asset_batch_counts_a_missing_mesh_source_as_a_failure() {
         lod_distances: Vec::new(),
         draw_indices: vec![DrawIndex(0)],
     };
-    let batch = decode_asset_batch(Vec::new(), None, vec![entry], Vec::new());
+    let batch = decode_asset_batch(&[], None, &[entry], &[]);
     assert!(batch.meshes.is_empty());
     assert_eq!(batch.decode_failures, 1);
 }
@@ -1095,7 +1095,7 @@ fn decode_asset_batch_counts_a_missing_skinned_source_as_a_failure() {
         index_count: 24,
         joint_count: 2,
     };
-    let batch = decode_asset_batch(Vec::new(), None, Vec::new(), vec![entry]);
+    let batch = decode_asset_batch(&[], None, &[], &[entry]);
     assert!(batch.skinned_meshes.is_empty());
     assert_eq!(batch.decode_failures, 1);
 }

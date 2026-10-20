@@ -334,7 +334,7 @@ impl EditorHook {
         self.mark_changed();
         let prev_fault = self.behavior_fault_message();
         self.refresh_behavior_status();
-        self.notify_behavior_fault(prev_fault);
+        self.notify_behavior_fault(prev_fault.as_deref());
         self.seed_behavior_value(world);
     }
 

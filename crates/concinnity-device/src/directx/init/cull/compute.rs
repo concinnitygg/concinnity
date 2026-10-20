@@ -31,6 +31,7 @@ pub(super) struct ComputeCull {
     pub(super) hiz: Option<HiZResources>,
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct ComputeInputs<'a> {
     pub(super) bindless: &'a BindlessPass,
     pub(super) plan: &'a CullPlan,

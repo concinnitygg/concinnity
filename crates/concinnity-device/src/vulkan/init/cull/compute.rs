@@ -29,6 +29,7 @@ pub(super) struct ComputeCull {
     pub(super) hiz: Option<crate::vulkan::hiz::HiZResources>,
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct ComputeInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
     pub(super) scene: &'a VkSceneAssets,

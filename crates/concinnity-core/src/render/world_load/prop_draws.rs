@@ -16,6 +16,7 @@ use crate::render::terrain::LoadedTerrain;
 use crate::transform::propagation;
 
 /// The decoded geometry and materials the draw list resolves props against.
+#[derive(Clone, Copy)]
 pub struct PropDrawInputs<'a> {
     /// Each model's sub-meshes, by asset id.
     pub model_map: &'a HashMap<AssetId, Vec<SubMeshRef>>,

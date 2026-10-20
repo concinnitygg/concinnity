@@ -68,7 +68,7 @@ mod tests {
         world
     }
 
-    fn args(v: Value) -> Map<String, Value> {
+    fn args(v: &Value) -> Map<String, Value> {
         v.as_object().cloned().unwrap()
     }
 
@@ -84,7 +84,7 @@ mod tests {
         let plan = plan(
             &world,
             "crate_a",
-            &args(json!({ "position": [4.0, 5.0, 6.0] })),
+            &args(&json!({ "position": [4.0, 5.0, 6.0] })),
             &["position".to_string()],
         )
         .expect("a placement edit plans");
@@ -102,7 +102,7 @@ mod tests {
         let plan = plan(
             &world,
             "crate_b",
-            &args(json!({
+            &args(&json!({
                 "position": [1.0, 0.0, 0.0],
                 "rotation_deg": [0.0, 45.0, 0.0],
                 "scale": [3.0, 3.0, 3.0],
@@ -130,7 +130,7 @@ mod tests {
             plan(
                 &world,
                 "crate_c",
-                &args(json!({ "position": [1.0, 0.0, 0.0], "material": "steel" })),
+                &args(&json!({ "position": [1.0, 0.0, 0.0], "material": "steel" })),
                 &["position".to_string(), "material".to_string()],
             )
             .is_none()
@@ -145,7 +145,7 @@ mod tests {
             plan(
                 &world,
                 "not_in_the_world",
-                &args(json!({ "position": [1.0, 0.0, 0.0] })),
+                &args(&json!({ "position": [1.0, 0.0, 0.0] })),
                 &["position".to_string()],
             )
             .is_none()
@@ -160,7 +160,7 @@ mod tests {
             plan(
                 &world,
                 "crate_e",
-                &args(json!({ "position": [1.0, 0.0] })),
+                &args(&json!({ "position": [1.0, 0.0] })),
                 &["position".to_string()],
             )
             .is_none()

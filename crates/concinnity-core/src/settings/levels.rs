@@ -71,7 +71,7 @@ impl<T: Copy> Levels<T> {
 }
 
 // The index holding exactly `value`.
-fn exact<T: PartialEq>(values: &[T], value: T) -> Option<usize> {
+fn exact<T: PartialEq + Copy>(values: &[T], value: T) -> Option<usize> {
     values.iter().position(|v| *v == value)
 }
 

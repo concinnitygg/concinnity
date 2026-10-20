@@ -218,7 +218,7 @@ mod tests {
     fn anim_state_reports_the_live_graph_state() {
         let _guard = test_support::lock();
         let mut engine = Engine::new(graph_world());
-        let reply = engine.call("anim-state", json!({ "target": "hero" }));
+        let reply = engine.call("anim-state", &json!({ "target": "hero" }));
         let reply = reply.expect("the graph target reports");
         assert_eq!(reply["state"], "idle");
         assert_eq!(reply["params"], json!({ "speed": 0.0 }));
@@ -230,7 +230,7 @@ mod tests {
         let mut engine = Engine::new(graph_world());
         let reply = engine.call(
             "anim-param",
-            json!({ "target": "hero", "name": "speed", "value": 1.0 }),
+            &json!({ "target": "hero", "name": "speed", "value": 1.0 }),
         );
         assert_eq!(reply, Ok(json!({ "queued": true })));
     }
@@ -241,7 +241,7 @@ mod tests {
         let mut engine = Engine::new(graph_world());
         let reply = engine.call(
             "anim-param",
-            json!({ "target": "hero", "name": "altitude", "value": 1.0 }),
+            &json!({ "target": "hero", "name": "altitude", "value": 1.0 }),
         );
         assert!(reply.unwrap_err().contains("no parameter 'altitude'"));
     }
@@ -252,7 +252,7 @@ mod tests {
         let mut engine = Engine::new(flat_world());
         let reply = engine.call(
             "anim-crossfade",
-            json!({ "target": "hero", "weights": [0.0, 1.0], "duration_secs": 0.5 }),
+            &json!({ "target": "hero", "weights": [0.0, 1.0], "duration_secs": 0.5 }),
         );
         assert_eq!(reply, Ok(json!({ "queued": true })));
     }
@@ -263,7 +263,7 @@ mod tests {
         let mut engine = Engine::new(graph_world());
         let reply = engine.call(
             "anim-crossfade",
-            json!({ "target": "hero", "weights": [1.0, 0.0] }),
+            &json!({ "target": "hero", "weights": [1.0, 0.0] }),
         );
         assert!(reply.unwrap_err().contains("graph-driven"));
     }
@@ -274,7 +274,7 @@ mod tests {
         let mut engine = Engine::new(graph_world());
         for verb in ["anim-crossfade", "anim-state"] {
             assert_eq!(
-                engine.call(verb, json!({ "target": "villain" })),
+                engine.call(verb, &json!({ "target": "villain" })),
                 Err(format!("{verb}: unknown asset name 'villain'"))
             );
         }
@@ -287,7 +287,7 @@ mod tests {
         asset_id::intern_all(&["hero"]);
         let mut engine = Engine::new(World::new());
         assert_eq!(
-            engine.call("anim-state", json!({ "target": "hero" })),
+            engine.call("anim-state", &json!({ "target": "hero" })),
             Err("anim-state: no AnimationSystem in this world".to_string())
         );
     }

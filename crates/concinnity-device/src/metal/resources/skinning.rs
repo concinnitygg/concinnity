@@ -371,14 +371,14 @@ impl MtlContext {
     // template's `Arc`, so each unique entry set becomes one GPU buffer.
     pub(crate) fn upload_skinned_morphs(
         &mut self,
-        morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>,
+        morphs: &[Option<std::sync::Arc<mesh_payload::PayloadMorphs>>],
     ) -> RenderResult<()> {
         use std::collections::HashMap;
 
         let mut by_source: HashMap<usize, MorphBinding> = HashMap::new();
         let mut bindings: Vec<Option<MorphBinding>> = Vec::with_capacity(morphs.len());
         let mut weights: Vec<Vec<f32>> = Vec::with_capacity(morphs.len());
-        for m in &morphs {
+        for m in morphs {
             let binding = match m {
                 None => None,
                 Some(data) => {

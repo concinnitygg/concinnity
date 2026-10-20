@@ -712,6 +712,7 @@ fn create_rtv_heap(
 
 // Render dimensions, sample count and RTV heap slots for building the planar
 // color attachment(s) over a set's per-plane resolves.
+#[derive(Clone, Copy)]
 struct PlanarColorBuild<'a> {
     width: u32,
     height: u32,

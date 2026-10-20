@@ -28,6 +28,7 @@ pub(super) struct AcquiredFrame {
 }
 
 // The per-frame inputs `plan_frame` plans from.
+#[derive(Clone, Copy)]
 pub(super) struct PlanArgs<'a> {
     pub(super) camera: CameraInputs,
     pub(super) elapsed: f32,
@@ -47,6 +48,7 @@ pub(super) struct PresentFrame {
 }
 
 // The per-frame inputs the scene buffer builds read.
+#[derive(Clone, Copy)]
 pub(super) struct SceneBufferArgs<'a> {
     pub(super) ring_slot: usize,
     pub(super) frame_id: u64,

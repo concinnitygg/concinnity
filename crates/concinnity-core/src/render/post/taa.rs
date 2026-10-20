@@ -215,7 +215,7 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
         device: &D,
         rec: &D::Recorder,
         write: usize,
-        inputs: TaaInputs<'t, D>,
+        inputs: &TaaInputs<'t, D>,
     ) -> RenderResult<()>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,

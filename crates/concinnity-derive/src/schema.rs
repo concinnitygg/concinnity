@@ -34,7 +34,7 @@ pub(crate) fn struct_schema(
     let default = match &container.default {
         None => quote!(::core::option::Option::None),
         Some(default) => {
-            let value = default_value(quote!(Self), default);
+            let value = default_value(&quote!(Self), default);
             quote!(::core::option::Option::Some(|| #value))
         }
     };
@@ -46,7 +46,7 @@ pub(crate) fn struct_schema(
             default: #default,
         }
     };
-    Ok(schema_impls(input, &body, quote!(Nested)))
+    Ok(schema_impls(input, &body, &quote!(Nested)))
 }
 
 /// The `Schema` impl holding `body`, and the `Described` impl that describes
@@ -55,7 +55,7 @@ pub(crate) fn struct_schema(
 pub(crate) fn schema_impls(
     input: &DeriveInput,
     body: &TokenStream,
-    kind: TokenStream,
+    kind: &TokenStream,
 ) -> TokenStream {
     let schema = schema_path();
     let ident = &input.ident;
@@ -86,7 +86,7 @@ fn field_entry(f: &AuthoredField<'_>, container: &ContainerAttrs) -> syn::Result
     let ty_expr = type_expr(ty);
     let default = match &f.attrs.default {
         Some(default) => {
-            let value = default_value(quote!(#ty), default);
+            let value = default_value(&quote!(#ty), default);
             quote!(#schema::FieldDefault::Value(|| #value))
         }
         None if container.default.is_some() => quote!(#schema::FieldDefault::Container),
@@ -109,7 +109,7 @@ fn field_entry(f: &AuthoredField<'_>, container: &ContainerAttrs) -> syn::Result
 
 // The default a serde `default` attribute names, boxed for serializing when
 // `ty` can be serialized.
-fn default_value(ty: TokenStream, default: &SerdeDefault) -> TokenStream {
+fn default_value(ty: &TokenStream, default: &SerdeDefault) -> TokenStream {
     let schema = schema_path();
     let make = match default {
         SerdeDefault::Trait => quote!(<#ty as ::core::default::Default>::default()),

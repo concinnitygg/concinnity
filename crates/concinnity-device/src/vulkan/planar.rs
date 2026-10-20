@@ -127,6 +127,7 @@ pub(in crate::vulkan) struct PlanarReflectionSet {
 // layout, the build-time object count, and -- when the world runs Hi-Z -- the Hi-Z
 // read-set layout + pyramid view so a hiz_enabled = 0 set can be bound
 // (the cull pipeline layout statically references set 1).
+#[derive(Clone, Copy)]
 pub(in crate::vulkan) struct PlanarCullSources<'a> {
     pub(in crate::vulkan) frame_object_buffers: &'a [PooledBuffer],
     pub(in crate::vulkan) frame_draw_args_buffers: &'a [PooledBuffer],
@@ -266,6 +267,7 @@ fn create_targets(
 // pass, the MSAA sample count, the shared color (MSAA only) + shared depth reused
 // across planes, the per-plane targets (one framebuffer each), and the pixel
 // dimensions.
+#[derive(Clone, Copy)]
 struct PlanarFramebufferInputs<'a> {
     main_render_pass: vk::RenderPass,
     sample_count: vk::SampleCountFlags,

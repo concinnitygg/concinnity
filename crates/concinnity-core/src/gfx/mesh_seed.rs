@@ -83,6 +83,7 @@ pub fn plan_seed_bytes(mesh_byte_sizes: &[(u64, u64)], cap: usize) -> Option<(u6
 // A geometry region to relocate: its vertex byte offset and count in the
 // source buffer, its LOD0 (index offset, count), and each alternate LOD's
 // (index offset, count) in input order.
+#[derive(Clone, Copy)]
 struct Region<'a> {
     v_off_bytes: usize,
     v_count: usize,

@@ -116,7 +116,7 @@ fn camera_and_ui_share_frame_input() {
     let mut cursor = EventCursor::default();
     let cmd = world
         .events::<ScreenCommand>()
-        .and_then(|e| e.read(&mut cursor).next().cloned());
+        .and_then(|e| e.read(&mut cursor).next().copied());
     assert!(
         matches!(cmd, Some(ScreenCommand::Toggle(AssetId(50)))),
         "UiInputSystem must still process Escape when a camera is present"

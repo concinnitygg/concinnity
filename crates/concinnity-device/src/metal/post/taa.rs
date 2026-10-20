@@ -89,7 +89,7 @@ impl MtlContext {
             &device,
             cmd_buf,
             pass.ring().write(),
-            TaaInputs {
+            &TaaInputs {
                 scene: scene_input,
                 velocity,
                 reactive: reactive_written.then(|| self.targets.hdr.reactive_mask.as_ref()),

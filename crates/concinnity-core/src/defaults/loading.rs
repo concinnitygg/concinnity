@@ -137,15 +137,10 @@ fn sprite(
     ctx: &mut PipelineContext<'_>,
     minter: &mut Minter,
     screen: AssetId,
-    sprite: Sprite,
+    mut sprite: Sprite,
 ) -> Result<Ref<Sprite>, WorldError> {
     let id = minter.id()?;
-    ctx.push_identified(
-        id,
-        Sprite {
-            screen: Some(Ref::new(screen)),
-            ..sprite
-        },
-    );
+    sprite.screen = Some(Ref::new(screen));
+    ctx.push_identified(id, sprite);
     Ok(Ref::new(id))
 }

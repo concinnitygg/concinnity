@@ -84,25 +84,25 @@ pub(crate) fn synthesize(
                 &target.name,
                 target.polarity,
                 &input,
-                synth::girth::displace(&input),
+                &synth::girth::displace(&input),
             ),
             "taper" => synth::polarized(
                 &target.name,
                 target.polarity,
                 &input,
-                synth::taper::displace(&input),
+                &synth::taper::displace(&input),
             ),
             "bulge" => synth::polarized(
                 &target.name,
                 target.polarity,
                 &input,
-                synth::bulge::displace(&input),
+                &synth::bulge::displace(&input),
             ),
             "surface_offset" => synth::polarized(
                 &target.name,
                 target.polarity,
                 &input,
-                synth::surface_offset::displace(&input),
+                &synth::surface_offset::displace(&input),
             ),
             "mirror" | "blend_mask" => {
                 let mut out = Vec::new();

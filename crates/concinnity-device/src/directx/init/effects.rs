@@ -668,6 +668,7 @@ pub(super) fn build_planar_reflection(
     Ok(planar_reflection)
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct TransparentInputs<'a> {
     pub(super) descriptors: &'a DxDescriptors,
     pub(super) targets: &'a DxTargets,

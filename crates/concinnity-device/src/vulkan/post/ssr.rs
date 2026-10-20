@@ -90,7 +90,7 @@ impl VkContext {
         if let Err(e) = ssr.pass.encode(
             &device,
             &cmd,
-            SsrInputs {
+            &SsrInputs {
                 target: device.target_attachment(&ssr.output),
                 scene: scene.view,
                 normal_depth: gbuffer.normal_depth,

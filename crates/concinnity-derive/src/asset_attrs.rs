@@ -128,7 +128,7 @@ pub(crate) fn asset_attrs(attrs: &[Attribute]) -> syn::Result<AssetAttrs> {
 mod tests {
     use super::*;
 
-    fn attrs(field: syn::Field) -> syn::Result<AssetAttrs> {
+    fn attrs(field: &syn::Field) -> syn::Result<AssetAttrs> {
         asset_attrs(&field.attrs)
     }
 
@@ -139,9 +139,9 @@ mod tests {
             #[asset(owned_file)]
             source: String
         };
-        assert!(attrs(field).unwrap().owned_file);
+        assert!(attrs(&field).unwrap().owned_file);
         let plain: syn::Field = syn::parse_quote! { #[serde(default)] source: String };
-        let plain = attrs(plain).unwrap();
+        let plain = attrs(&plain).unwrap();
         assert!(!plain.owned_file && plain.default.is_none() && !plain.is_param());
     }
 
@@ -151,13 +151,13 @@ mod tests {
             #[asset(default = [0.0, 4.0, 0.0])]
             position: [f32; 3]
         };
-        let default = attrs(field).unwrap().default.expect("a default");
+        let default = attrs(&field).unwrap().default.expect("a default");
         assert_eq!(quote::quote!(#default).to_string(), "[0.0 , 4.0 , 0.0]");
         let field: syn::Field = syn::parse_quote! {
             #[asset(owned_file, default = "a.glb")]
             source: String
         };
-        let both = attrs(field).unwrap();
+        let both = attrs(&field).unwrap();
         assert!(both.owned_file && both.default.is_some());
     }
 
@@ -167,7 +167,7 @@ mod tests {
             #[asset(default = 1.0, min = -LIMIT, max = 4, apply = live)]
             strength: f32
         };
-        let a = attrs(field).unwrap();
+        let a = attrs(&field).unwrap();
         assert!(a.is_param() && a.is_ranged());
         let min = a.min.as_ref().expect("a min");
         assert_eq!(quote::quote!(#min).to_string(), "- LIMIT");
@@ -184,7 +184,7 @@ mod tests {
         assert!(meta.contains("ApplyClass :: Live"), "{meta}");
 
         let field: syn::Field = syn::parse_quote! { #[asset(apply = restart)] hdr: bool };
-        let a = attrs(field).unwrap();
+        let a = attrs(&field).unwrap();
         assert!(a.is_param() && !a.is_ranged());
         let meta = a.meta_expr().to_string();
         assert!(
@@ -199,7 +199,7 @@ mod tests {
         for class in ["live", "rebuild", "variant", "restart"] {
             let class = Ident::new(class, proc_macro2::Span::call_site());
             let field: syn::Field = syn::parse_quote! { #[asset(apply = #class)] x: u32 };
-            assert!(attrs(field).unwrap().apply.is_some());
+            assert!(attrs(&field).unwrap().apply.is_some());
         }
     }
 
@@ -213,7 +213,7 @@ mod tests {
             syn::parse_quote! { #[asset(apply = live, apply = restart)] n: u8 },
         ];
         for field in refused {
-            assert!(attrs(field).is_err());
+            assert!(attrs(&field).is_err());
         }
     }
 }

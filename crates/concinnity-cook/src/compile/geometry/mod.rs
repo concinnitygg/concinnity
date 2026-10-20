@@ -66,7 +66,7 @@ pub(crate) fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
         other => return Err(format!("unknown mesh generator '{other}'")),
     };
 
-    finish_mesh_payload(vertices, indices, args)
+    finish_mesh_payload(vertices, &indices, args)
 }
 
 // Shared payload tail for every generator, parsed from `args` and delegated
@@ -76,7 +76,7 @@ pub(crate) fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
 // payload byte-for-byte.
 fn finish_mesh_payload(
     vertices: Vec<Vert>,
-    indices: Vec<u16>,
+    indices: &[u16],
     args: &serde_json::Value,
 ) -> Result<Vec<u8>, String> {
     let lod_levels = u32_arg(args, "lod_levels", 1)?;
@@ -308,7 +308,7 @@ where
     }
 
     let (vertices, indices) = build_voxel_mesh(dim, block_size, &blocks, &palette)?;
-    finish_mesh_payload(vertices, indices, args)
+    finish_mesh_payload(vertices, &indices, args)
 }
 
 fn resolve_block_type(bt_args: &serde_json::Value) -> Option<PaletteSlot> {
@@ -384,7 +384,7 @@ pub(crate) fn compile_room_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
 
     let (vertices, indices) =
         concinnity_core::geometry::build_room_geometry(half_width, half_depth, 0.0, ceiling_height);
-    finish_mesh_payload(vertices, indices, args)
+    finish_mesh_payload(vertices, &indices, args)
 }
 
 // Builds geometry from inline vertex/index data in the blob JSON.
@@ -1135,7 +1135,7 @@ mod tests {
         );
     }
 
-    fn voxel_args(dim: [u32; 3], blocks: Vec<u32>) -> serde_json::Value {
+    fn voxel_args(dim: [u32; 3], blocks: &[u32]) -> serde_json::Value {
         serde_json::json!({
             "dim": dim,
             "palette": ["stone"],
@@ -1145,7 +1145,7 @@ mod tests {
 
     #[test]
     fn voxel_chunk_single_block_emits_six_faces() {
-        let args = voxel_args([1, 1, 1], vec![0]);
+        let args = voxel_args([1, 1, 1], &[0]);
         let lookup = |_: &str| Some(serde_json::json!({"solid": true}));
         let payload = compile_voxel_chunk_payload(&args, lookup).unwrap();
         let (verts, indices) = deserialize(&payload).unwrap();
@@ -1155,7 +1155,7 @@ mod tests {
 
     #[test]
     fn voxel_chunk_air_palette_emits_no_geometry() {
-        let args = voxel_args([1, 1, 1], vec![0]);
+        let args = voxel_args([1, 1, 1], &[0]);
         let lookup = |_: &str| Some(serde_json::json!({"solid": false}));
         let payload = compile_voxel_chunk_payload(&args, lookup).unwrap();
         let (verts, indices) = deserialize(&payload).unwrap();
@@ -1184,15 +1184,14 @@ mod tests {
             .is_err()
         );
         // The blocks length must match the dim.
-        assert!(compile_voxel_chunk_payload(&voxel_args([2, 1, 1], vec![0]), solid).is_err());
+        assert!(compile_voxel_chunk_payload(&voxel_args([2, 1, 1], &[0]), solid).is_err());
         // Block ids must index the palette.
-        assert!(compile_voxel_chunk_payload(&voxel_args([1, 1, 1], vec![3]), solid).is_err());
+        assert!(compile_voxel_chunk_payload(&voxel_args([1, 1, 1], &[3]), solid).is_err());
         // Block ids must be non-negative integers.
         let bad = serde_json::json!({"dim": [1, 1, 1], "palette": ["stone"], "blocks": [1.5]});
         assert!(compile_voxel_chunk_payload(&bad, solid).is_err());
         // Unresolvable palette entries name the missing BlockType.
-        let err =
-            compile_voxel_chunk_payload(&voxel_args([1, 1, 1], vec![0]), |_| None).unwrap_err();
+        let err = compile_voxel_chunk_payload(&voxel_args([1, 1, 1], &[0]), |_| None).unwrap_err();
         assert!(err.contains("stone"), "error was: {err}");
         // A valid dim with no palette at all is reported against `palette`.
         let no_palette = serde_json::json!({"dim": [1, 1, 1], "blocks": [0]});
@@ -1205,7 +1204,7 @@ mod tests {
 
     #[test]
     fn voxel_chunk_surfaces_lod_configuration_errors() {
-        let mut args = voxel_args([1, 1, 1], vec![0]);
+        let mut args = voxel_args([1, 1, 1], &[0]);
         args["lod_levels"] = serde_json::json!(3);
         args["lod_distances"] = serde_json::json!([10.0]);
         let err =

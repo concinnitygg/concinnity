@@ -295,7 +295,7 @@ mod tests {
     }
 
     // The payload's cache key, as the resource pack derives it.
-    fn payload_key(args: serde_json::Value) -> String {
+    fn payload_key(args: &serde_json::Value) -> String {
         let rt = crate::authoring::registry::RegisteredType::EnvironmentMap;
         let ctx = crate::asset::BuildCtx {
             name: "env",
@@ -307,7 +307,7 @@ mod tests {
         };
         crate::cache::payload_key(
             1,
-            &rt.payload_key_args(&args),
+            &rt.payload_key_args(args),
             &ctx,
             &crate::asset::CacheInputs::extra(Vec::new()),
         )
@@ -319,12 +319,12 @@ mod tests {
     fn a_display_field_shares_the_payload_key() {
         let shown = serde_json::json!({"generator": "sky"});
         let hidden = serde_json::json!({"generator": "sky", "background": false});
-        assert_eq!(payload_key(shown.clone()), payload_key(hidden));
+        assert_eq!(payload_key(&shown), payload_key(&hidden));
         // A bake input still re-keys it, and a default spelled out does not.
         let sharper = serde_json::json!({"generator": "sky", "prefilter_face_size": 256});
-        assert_ne!(payload_key(shown.clone()), payload_key(sharper));
+        assert_ne!(payload_key(&shown), payload_key(&sharper));
         let spelled = serde_json::json!({"generator": "sky", "prefilter_face_size": 512});
-        assert_eq!(payload_key(shown), payload_key(spelled));
+        assert_eq!(payload_key(&shown), payload_key(&spelled));
     }
 
     #[test]

@@ -1577,6 +1577,7 @@ pub fn normal_pool_index(normal_map_slot: usize, texture_count: u32) -> u32 {
 // The world bound and per-object cull range a packed record carries. The
 // main-pass shaders ignore both; a GPU-driven compute cull reads object bounds
 // straight from this buffer, so every packer fills them.
+#[derive(Clone, Copy)]
 pub(crate) struct RecordBounds {
     pub bb_min: [f32; 3],
     pub bb_max: [f32; 3],

@@ -16,6 +16,7 @@ use crate::metal::raytrace::{
     build_rt_accel, build_rt_skin_pipeline, raytracing_supported,
 };
 
+#[derive(Clone, Copy)]
 pub(super) struct RtInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
     pub(super) scene: &'a MtlSceneAssets,

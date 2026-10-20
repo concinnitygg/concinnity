@@ -118,6 +118,7 @@ pub(crate) use crate::metal::pass_timing::PassTimer;
 // The per-pass setup a fullscreen-triangle encode needs: the color target it
 // writes, that attachment's load action, where the pass sits in the GPU-timing
 // span, the pipeline it runs, and the encoder debug label.
+#[derive(Clone, Copy)]
 pub(in crate::metal) struct FullscreenPass<'a> {
     pub target: &'a ProtocolObject<dyn MTLTexture>,
     pub load: MTLLoadAction,

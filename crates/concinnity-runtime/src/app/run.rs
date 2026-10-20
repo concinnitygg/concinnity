@@ -85,13 +85,13 @@ pub fn run(tree: &StateTree, options: RunOptions) -> std::io::Result<()> {
         .with_launch(options.launch);
     let data_dir = tree.data_dir();
     if let Err(error) = load_world(&mut runtime, &BlobSource::Directory(data_dir)) {
-        return Err(report_startup_error(error));
+        return Err(report_startup_error(&error));
     }
-    start_runtime(runtime, options).map_err(start_failure)
+    start_runtime(runtime, options).map_err(|e| start_failure(&e))
 }
 
 // A refused start, in the form a process exit status is built from.
-fn start_failure(e: WorldError) -> std::io::Error {
+fn start_failure(e: &WorldError) -> std::io::Error {
     std::io::Error::other(format!("failed to start app: {e}"))
 }
 
@@ -100,7 +100,7 @@ fn start_failure(e: WorldError) -> std::io::Error {
 // something rather than exiting silently. The screen blocks until dismissed.
 // The process still exits non-zero with the returned error: the screen is how
 // the user learns what happened, not a substitute for failing.
-fn report_startup_error(error: StartupError) -> std::io::Error {
+fn report_startup_error(error: &StartupError) -> std::io::Error {
     tracing::error!("{error}");
     if !crate::render::error_screen::show("Concinnity", &error.user_message()) {
         // No window, so the log line above is the whole report; repeat it on
@@ -124,14 +124,14 @@ fn load_world(runtime: &mut Runtime, source: &BlobSource) -> Result<(), StartupE
 /// missing blob is a hard error rather than a silent no-op -- a packaged app
 /// without its data cannot do anything useful. The concinnity-run binary
 /// calls this.
-pub fn run_from(tree: &StateTree, blob: BlobSource) -> std::io::Result<()> {
+pub fn run_from(tree: &StateTree, blob: &BlobSource) -> std::io::Result<()> {
     init_logging();
 
     let mut runtime = Runtime::new().in_tree(tree.clone());
-    if let Err(error) = load_world(&mut runtime, &blob) {
-        return Err(report_startup_error(error));
+    if let Err(error) = load_world(&mut runtime, blob) {
+        return Err(report_startup_error(&error));
     }
-    start_runtime(runtime, RunOptions::default()).map_err(start_failure)
+    start_runtime(runtime, RunOptions::default()).map_err(|e| start_failure(&e))
 }
 
 // Startup and loop entry once the Runtime's world is populated. Registers the
@@ -141,6 +141,12 @@ pub fn run_from(tree: &StateTree, blob: BlobSource) -> std::io::Result<()> {
 // world, or CTRL+C is received. External callers reach this through
 // `Runtime::run` / `Runtime::run_with`.
 pub(crate) fn start_runtime(mut runtime: Runtime, options: RunOptions) -> Result<(), WorldError> {
+    let RunOptions {
+        mode,
+        schedule,
+        screenshot,
+        ..
+    } = options;
     // A host that installed its own subscriber keeps it (`try_init` no-ops),
     // so an embedded app gets logs without wiring any up itself.
     init_logging();
@@ -152,10 +158,10 @@ pub(crate) fn start_runtime(mut runtime: Runtime, options: RunOptions) -> Result
     // same answer rather than probing the GPU twice.
     let renders = runtime.render_mode().renders();
 
-    if options.screenshot.is_some() {
+    if screenshot.is_some() {
         runtime.launch_mut().capture = true;
     }
-    runtime.world_mut().insert_resource(options.schedule);
+    runtime.world_mut().insert_resource(schedule);
 
     #[cfg(target_os = "macos")]
     if renders {
@@ -174,16 +180,16 @@ pub(crate) fn start_runtime(mut runtime: Runtime, options: RunOptions) -> Result
         return Err(e);
     }
 
-    match options.mode.effective(renders) {
+    match mode.effective(renders) {
         PipelineMode::Pipelined => {
-            crate::app::pipeline::run_pipelined(runtime, options.screenshot.as_deref());
+            crate::app::pipeline::run_pipelined(runtime, screenshot.as_deref());
         }
         PipelineMode::Serial => {
             // The serial loop: no per-tick hook; a rendering macOS world pumps
             // the Cocoa run loop, every other case uses the tight loop.
             runloop::run_loop(&mut runtime, cfg!(target_os = "macos") && renders, |_| {});
             finish_frame_captures(&mut runtime);
-            capture_exit_screenshot(&mut runtime, options.screenshot.as_deref());
+            capture_exit_screenshot(&mut runtime, screenshot.as_deref());
         }
     }
 

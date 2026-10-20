@@ -68,6 +68,7 @@ pub(in crate::directx) const SKY_CUBE_SLOTS: usize = PrefilterSlots::span(SKY_CU
 
 // The CPU and GPU handles of the atmosphere's heap slots, the environment's
 // irradiance slot, and the main depth SRV the haze pass reads.
+#[derive(Clone, Copy)]
 pub(in crate::directx) struct AtmosphereSlots {
     pub srv_cpu: [D3D12_CPU_DESCRIPTOR_HANDLE; ATMOSPHERE_SRV_SLOTS],
     pub srv_gpu: [SrvSlot; ATMOSPHERE_SRV_SLOTS],

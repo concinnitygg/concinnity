@@ -50,7 +50,7 @@ pub(super) fn emit_stage(names: &StoryNames) -> Vec<serde_json::Value> {
         &stage.name_label,
         &names.font_menu,
         "",
-        LabelStyle {
+        &LabelStyle {
             x: DIALOG_BOX.0 + 30.0,
             y: DIALOG_BOX.1 + 14.0,
             color: [1.0, 1.0, 1.0],
@@ -62,7 +62,7 @@ pub(super) fn emit_stage(names: &StoryNames) -> Vec<serde_json::Value> {
         &stage.text_label,
         &names.font_dialog,
         "",
-        LabelStyle {
+        &LabelStyle {
             x: DIALOG_BOX.0 + 30.0,
             y: DIALOG_BOX.1 + 58.0,
             color: [1.0, 0.95, 0.85],

@@ -25,7 +25,7 @@ pub(super) fn emit_overlay(names: &StoryNames) -> Vec<serde_json::Value> {
             &stage.history,
             &names.font_dialog,
             "",
-            LabelStyle {
+            &LabelStyle {
                 x: 100.0,
                 y: 70.0,
                 color: [0.92, 0.92, 0.92],
@@ -36,7 +36,7 @@ pub(super) fn emit_overlay(names: &StoryNames) -> Vec<serde_json::Value> {
             &stage.slot_title,
             &names.font_menu,
             "",
-            LabelStyle {
+            &LabelStyle {
                 x: win_w / 2.0,
                 y: 160.0,
                 color: [1.0, 0.92, 0.78],

@@ -332,6 +332,7 @@ impl FfxEntryPoints {
 /// The raw API handles of one upscale dispatch: the command list it records
 /// onto and the textures it reads and writes, each as the pointer-sized value
 /// `ffx_api` takes.
+#[derive(Clone, Copy)]
 pub(crate) struct FfxDispatchHandles {
     pub(crate) command_list: *mut c_void,
     pub(crate) color: *mut c_void,

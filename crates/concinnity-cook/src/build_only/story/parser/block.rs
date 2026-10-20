@@ -25,7 +25,7 @@ impl StoryParser {
         if level != HeadingLevel::H1 {
             return self.err(
                 range,
-                format!(
+                &format!(
                     "'{}' heading: only `#` headings (nodes) are supported",
                     "#".repeat(level as usize)
                 ),
@@ -39,7 +39,7 @@ impl StoryParser {
         let text = self.inline.heading.take().unwrap_or_default();
         let s = slug(&text);
         if s.is_empty() {
-            return self.err(range, format!("heading '{text}' produces an empty anchor"));
+            return self.err(range, &format!("heading '{text}' produces an empty anchor"));
         }
         if let Some(node) = self.cur_node.take() {
             let line = self.line_of(range);
@@ -99,14 +99,11 @@ impl StoryParser {
         range: &Range<usize>,
     ) -> Result<(), String> {
         if ordered.is_some() {
-            return self.err(
-                range,
-                "choices must be a bullet list, not numbered".to_string(),
-            );
+            return self.err(range, "choices must be a bullet list, not numbered");
         }
         self.require_open_node(range)?;
         if self.list.active {
-            return self.err(range, "nested lists are not supported".to_string());
+            return self.err(range, "nested lists are not supported");
         }
         self.list.active = true;
         Ok(())
@@ -134,7 +131,7 @@ impl StoryParser {
         if self.list.item_links.len() != 1 || self.list.item_has_text {
             return self.err(
                 range,
-                "each choice must be exactly one link, e.g. `- [Go](#node)`".to_string(),
+                "each choice must be exactly one link, e.g. `- [Go](#node)`",
             );
         }
         let (target, label, condition) = self.list.item_links.pop().expect("length checked");
@@ -158,13 +155,13 @@ impl StoryParser {
         let lang = match kind {
             CodeBlockKind::Fenced(lang) => lang.to_string(),
             CodeBlockKind::Indented => {
-                return self.err(range, "indented code blocks are not supported".to_string());
+                return self.err(range, "indented code blocks are not supported");
             }
         };
         if lang != "story" {
             return self.err(
                 range,
-                format!("code fence '{lang}' is not supported; script blocks use ```story"),
+                &format!("code fence '{lang}' is not supported; script blocks use ```story"),
             );
         }
         self.require_open_node(range)?;

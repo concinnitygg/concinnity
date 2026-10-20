@@ -19,6 +19,7 @@ use crate::directx::texture::{
 };
 use crate::directx::transient_pool::TransientResourcePool;
 
+#[derive(Clone, Copy)]
 pub(super) struct TargetInputs<'a> {
     pub(super) descriptors: &'a DxDescriptors,
     pub(super) swapchain: &'a SwapchainState,

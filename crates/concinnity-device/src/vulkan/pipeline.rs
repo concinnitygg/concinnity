@@ -278,6 +278,7 @@ const TEXT_VERTEX_ATTRS: [vk::VertexInputAttributeDescription; 4] = [
 // Render pass, pipeline layout, and the vertex + fragment SPIR-V a mesh
 // pipeline (main / instanced / skinned) is built against. Borrows the shader
 // byte slices for the duration of the build.
+#[derive(Clone, Copy)]
 pub(super) struct MeshPipelineTargets<'a> {
     pub render_pass: vk::RenderPass,
     pub layout: vk::PipelineLayout,

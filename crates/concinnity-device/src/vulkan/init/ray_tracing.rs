@@ -20,6 +20,7 @@ use crate::vulkan::post::reflection_composite::{
 use crate::vulkan::post::rt_reflections::RtReflectionsResources;
 use concinnity_core::render::post::reflection_path::ReflectionPath;
 
+#[derive(Clone, Copy)]
 pub(super) struct RtInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
     pub(super) geometry: &'a VkGeometry,

@@ -128,16 +128,16 @@ fn low() -> QualityCeiling {
 }
 
 // The world a sparse `GraphicsConfig` authors.
-fn authored(graphics: GraphicsConfig) -> WorldSettings {
+fn authored(graphics: &GraphicsConfig) -> WorldSettings {
     WorldSettings::new(WorldAssets {
-        graphics: Some(&graphics),
+        graphics: Some(graphics),
         ..Default::default()
     })
 }
 
 #[test]
 fn a_user_override_beats_the_world_value() {
-    let world = authored(GraphicsConfig {
+    let world = authored(&GraphicsConfig {
         frame_pacing: FramePacingOverrides {
             vsync: Some(true),
             fps_cap: Some(60),
@@ -181,7 +181,7 @@ fn a_user_override_beats_the_world_value() {
 
 #[test]
 fn the_ceiling_clamps_only_a_knob_the_user_left_alone() {
-    let world = authored(GraphicsConfig {
+    let world = authored(&GraphicsConfig {
         shadows: ShadowsOverrides::from(Shadows {
             map_size: 4096,
             update: ShadowUpdate::EveryFrame,
@@ -218,7 +218,7 @@ fn the_ceiling_clamps_only_a_knob_the_user_left_alone() {
 
 #[test]
 fn a_frames_in_flight_override_clamps_to_three() {
-    let world = authored(GraphicsConfig {
+    let world = authored(&GraphicsConfig {
         frame_pacing: FramePacingOverrides {
             frames_in_flight: Some(7),
             ..Default::default()
@@ -246,7 +246,7 @@ fn a_frames_in_flight_override_clamps_to_three() {
 #[test]
 fn render_scale_takes_the_more_aggressive_of_world_and_ceiling() {
     let scale = |world: UpscaleQuality, user: Option<UpscaleQuality>| {
-        let world = authored(GraphicsConfig {
+        let world = authored(&GraphicsConfig {
             anti_aliasing: AntiAliasingOverrides {
                 upscale_quality: Some(world),
                 ..Default::default()
@@ -289,8 +289,8 @@ fn an_unset_field_resolves_like_its_default_set_explicitly() {
     };
     for ceiling in [low(), QualityCeiling::NONE] {
         let bare = resolve_settings(&WorldSettings::default(), &none, &ceiling);
-        let empty = resolve_settings(&authored(GraphicsConfig::default()), &none, &ceiling);
-        let set = resolve_settings(&authored(every.clone()), &none, &ceiling);
+        let empty = resolve_settings(&authored(&GraphicsConfig::default()), &none, &ceiling);
+        let set = resolve_settings(&authored(&every), &none, &ceiling);
         assert!(bare.graphics.culling.two_pass_occlusion);
         for r in [&empty, &set] {
             assert_eq!(
@@ -353,7 +353,7 @@ fn the_fxaa_flag_follows_the_clamped_aa_mode() {
 // A world authoring every quality-governed section as `effects` sets it.
 fn effects_world(effects: &ResolvedGraphics) -> WorldSettings {
     let e = effects.clone();
-    authored(GraphicsConfig {
+    authored(&GraphicsConfig {
         ambient_occlusion: e.ambient_occlusion.into(),
         reflections: e.reflections.into(),
         indirect_lighting: e.indirect_lighting.into(),
@@ -413,7 +413,7 @@ fn upscale_scale_follows_the_render_scale_without_a_section() {
 // overrides still carries the user's sub-quality sliders.
 #[test]
 fn the_quality_group_keeps_the_look_tuning_sliders() {
-    let world = authored(GraphicsConfig {
+    let world = authored(&GraphicsConfig {
         ambient_occlusion: AmbientOcclusionOverrides {
             radius: Some(0.5),
             ..Default::default()
@@ -433,7 +433,7 @@ fn the_quality_group_keeps_the_look_tuning_sliders() {
 // session override beats the user.
 #[test]
 fn each_layer_beats_the_one_below_it() {
-    let world = authored(GraphicsConfig {
+    let world = authored(&GraphicsConfig {
         shadows: ShadowsOverrides {
             distance: Some(60),
             ..Default::default()
@@ -496,7 +496,7 @@ fn each_layer_beats_the_one_below_it() {
 // not, show through.
 #[test]
 fn a_scene_replaces_only_the_fields_it_sets() {
-    let world = authored(GraphicsConfig {
+    let world = authored(&GraphicsConfig {
         ambient_occlusion: AmbientOcclusionOverrides {
             radius: Some(2.0),
             ..Default::default()
@@ -529,7 +529,7 @@ fn a_scene_replaces_only_the_fields_it_sets() {
 // the user.
 #[test]
 fn a_sparse_world_layers_between_the_defaults_and_the_ceiling() {
-    let world = authored(GraphicsConfig {
+    let world = authored(&GraphicsConfig {
         shadows: ShadowsOverrides {
             map_size: Some(8192),
             ..Default::default()
@@ -818,7 +818,7 @@ fn the_planet_cell_size_resolves_under_the_ceiling() {
     let bare = WorldSettings::default();
     assert_eq!(cells(&bare, &QualityCeiling::NONE), 1);
     assert_eq!(cells(&bare, &low()), 4);
-    let medium = authored(GraphicsConfig {
+    let medium = authored(&GraphicsConfig {
         planet_detail: PlanetDetailOverrides {
             finest_cell_size: Some(3),
         },
@@ -827,7 +827,7 @@ fn the_planet_cell_size_resolves_under_the_ceiling() {
     assert_eq!(cells(&medium, &QualityCeiling::NONE), 3);
     assert_eq!(cells(&medium, &QualityCeiling::HIGH), 3);
     assert_eq!(cells(&medium, &low()), 4);
-    let coarse = authored(GraphicsConfig {
+    let coarse = authored(&GraphicsConfig {
         planet_detail: PlanetDetailOverrides {
             finest_cell_size: Some(8),
         },
@@ -918,7 +918,7 @@ fn a_slider_sets_its_section_field() {
 // the one the world authored.
 #[test]
 fn auto_exposure_meters_for_the_resolved_display() {
-    let world = authored(GraphicsConfig {
+    let world = authored(&GraphicsConfig {
         display: DisplayOverrides {
             hdr: Some(true),
             ..Default::default()
@@ -943,7 +943,7 @@ fn auto_exposure_meters_for_the_resolved_display() {
 // adapt with, and applies live.
 #[test]
 fn night_vision_resolves_into_the_auto_exposure() {
-    let world = authored(GraphicsConfig {
+    let world = authored(&GraphicsConfig {
         exposure: crate::components::ExposureOverrides {
             auto: Some(true),
             auto_night_ev: Some(-3.0),
@@ -957,7 +957,7 @@ fn night_vision_resolves_into_the_auto_exposure() {
     let ae = on.graphics.auto_exposure().expect("auto-exposure on");
     assert_eq!(ae.night_vision, 0.75);
     assert_eq!(ae.night_bias_ev, -3.0);
-    let world_off = authored(GraphicsConfig {
+    let world_off = authored(&GraphicsConfig {
         exposure: crate::components::ExposureOverrides {
             auto: Some(true),
             auto_night_ev: Some(-3.0),
@@ -990,7 +990,7 @@ fn adopting_a_quality_group_keeps_the_rest() {
     let mut r = SettingsLayers::new(&world, &QualityCeiling::NONE, &user).resolve();
     let quality =
         SettingsLayers::new(&world, &low(), &UserGraphicsSettings::default()).resolve_quality();
-    r.set_quality(quality.clone());
+    r.set_quality(&quality);
     assert_eq!(r.graphics.anti_aliasing.mode, quality.anti_aliasing.mode);
     assert_eq!(r.graphics.shadows.map_size, quality.shadows.map_size);
     assert_eq!(

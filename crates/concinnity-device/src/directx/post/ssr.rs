@@ -174,7 +174,7 @@ impl DxContext {
         if let Err(e) = resolve.pass.encode(
             &device,
             cmd,
-            SsrInputs {
+            &SsrInputs {
                 target: device.target_attachment(&resolve.output),
                 scene: self.targets.hdr.srv_gpu,
                 normal_depth: gbuffer.normal_depth_srv_gpu,

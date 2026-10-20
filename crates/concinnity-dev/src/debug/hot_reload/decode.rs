@@ -78,7 +78,8 @@ fn spawn_asset_decode_worker(state: &AssetHotReloadState) {
             // dispatches to the bounded `available_parallelism() - 1` pool
             // (mirroring the envmap worker). decode_asset_batch itself uses
             // par_iter to fan textures across cores.
-            let batch = pool().scope(|| decode_asset_batch(textures, color_lut, meshes, skinned));
+            let batch =
+                pool().scope(|| decode_asset_batch(&textures, color_lut, &meshes, &skinned));
             // Receiver dropped means the asset state went away before the
             // decode finished; the send fails silently and the worker exits.
             let _ = tx.send(batch);
@@ -171,10 +172,10 @@ fn spawn_envmap_worker(state: &AssetHotReloadState) {
 // world fans 43 textures + 35 meshes out of a single 43 MB ABeautifulGame
 // chess set, so without the cache the parse cost dominates the worker).
 pub(super) fn decode_asset_batch(
-    textures: Vec<TextureSourceEntry>,
+    textures: &[TextureSourceEntry],
     color_lut: Option<ColorLutSource>,
-    meshes: Vec<MeshSourceEntry>,
-    skinned: Vec<SkinnedMeshSourceEntry>,
+    meshes: &[MeshSourceEntry],
+    skinned: &[SkinnedMeshSourceEntry],
 ) -> DecodedAssetBatch {
     use rayon::prelude::*;
     use std::sync::Mutex;

@@ -131,6 +131,7 @@ pub(super) fn shared_post_device<'a>(
     }
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct ScreenSpaceInputs<'a> {
     pub(super) graphics: &'a ResolvedGraphics,
     pub(super) features: &'a Features,
@@ -247,6 +248,7 @@ pub(super) fn build_screen_space(
     })
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct SceneInputWiring<'a> {
     pub(super) features: &'a Features,
     pub(super) targets: &'a VkTargets,
@@ -326,6 +328,7 @@ pub(super) fn build_taa_and_wire_scene_inputs(
     Ok(taa)
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct WorldEffectInputs<'a> {
     pub(super) targets: &'a VkTargets,
     pub(super) descriptors: &'a VkDescriptors,

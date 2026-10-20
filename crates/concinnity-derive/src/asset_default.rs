@@ -54,13 +54,13 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
 mod tests {
     use super::*;
 
-    fn expanded(input: DeriveInput) -> String {
-        expand(&input).expect("the input derives").to_string()
+    fn expanded(input: &DeriveInput) -> String {
+        expand(input).expect("the input derives").to_string()
     }
 
     #[test]
     fn a_stated_default_is_used_and_the_rest_take_their_types() {
-        let out = expanded(syn::parse_quote! {
+        let out = expanded(&syn::parse_quote! {
             struct Light {
                 #[asset(default = [0.0, 4.0, 0.0])]
                 position: [f32; 3],
@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn a_string_literal_converts_into_the_field() {
-        let out = expanded(syn::parse_quote! {
+        let out = expanded(&syn::parse_quote! {
             struct App {
                 #[asset(default = "Concinnity")]
                 name: String,
@@ -94,14 +94,14 @@ mod tests {
 
     #[test]
     fn only_core_is_named() {
-        let out = expanded(syn::parse_quote! { struct S { x: f32 } });
+        let out = expanded(&syn::parse_quote! { struct S { x: f32 } });
         assert!(!out.contains("std ::"), "{out}");
         assert!(!out.contains("alloc ::"), "{out}");
     }
 
     #[test]
     fn generics_carry_through_to_the_impl() {
-        let out = expanded(syn::parse_quote! { struct S<T: Default> { x: T } });
+        let out = expanded(&syn::parse_quote! { struct S<T: Default> { x: T } });
         assert!(out.contains("impl < T : Default >"), "{out}");
         assert!(out.contains("for S < T >"), "{out}");
     }

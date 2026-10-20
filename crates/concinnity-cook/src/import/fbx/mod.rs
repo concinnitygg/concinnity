@@ -1004,14 +1004,12 @@ mod tests {
 
     #[test]
     fn array_accessors_only_accept_their_own_element_type() {
-        let tree = fx::tree(vec![
-            fx::node("Arrays")
-                .child(fx::node("F64").arr_f64(vec![1.0, 2.0]))
-                .child(fx::node("I32").arr_i32(vec![3, 4]))
-                .child(fx::node("I64").arr_i64(vec![5, 6]))
-                .child(fx::node("F32").arr_f32(vec![7.0, 8.0]))
-                .child(fx::node("NoAttributes")),
-        ]);
+        let tree = fx::tree(&[fx::node("Arrays")
+            .child(fx::node("F64").arr_f64(vec![1.0, 2.0]))
+            .child(fx::node("I32").arr_i32(vec![3, 4]))
+            .child(fx::node("I64").arr_i64(vec![5, 6]))
+            .child(fx::node("F32").arr_f32(vec![7.0, 8.0]))
+            .child(fx::node("NoAttributes"))]);
         let arrays = tree.root().first_child_by_name("Arrays").expect("Arrays");
         let by = |name: &str| arrays.first_child_by_name(name).expect("child node");
 
@@ -1033,7 +1031,7 @@ mod tests {
 
     #[test]
     fn child_str_reads_the_first_string_of_a_named_child() {
-        let tree = fx::tree(vec![fx::texture(1, "Tex", "textures/wall.png")]);
+        let tree = fx::tree(&[fx::texture(1, "Tex", "textures/wall.png")]);
         let tex = tree.root().first_child_by_name("Texture").expect("Texture");
         assert_eq!(
             child_str(&tex, "RelativeFilename"),
@@ -1044,7 +1042,7 @@ mod tests {
 
     #[test]
     fn object_name_strips_the_class_suffix() {
-        let tree = fx::tree(vec![fx::model(77, "Cube", "Mesh"), fx::node("Model")]);
+        let tree = fx::tree(&[fx::model(77, "Cube", "Mesh"), fx::node("Model")]);
         let mut models = tree.root().children_by_name("Model");
         let named = models.next().expect("first Model");
         assert_eq!(object_id(&named), Some(77));
@@ -1057,7 +1055,7 @@ mod tests {
 
     #[test]
     fn properties70_lookups_read_vectors_and_scalars() {
-        let tree = fx::tree(vec![fx::properties70(vec![
+        let tree = fx::tree(&[fx::properties70(vec![
             fx::p_vec3("Lcl Translation", [1.0, 2.0, 3.0]),
             fx::p_scalar("RotationOrder", 4.0),
             fx::node("P").text("Truncated").text("Vector3D"),
@@ -1110,13 +1108,13 @@ mod tests {
 
     #[test]
     fn node_scene_local_scales_then_rotates_then_translates() {
-        let tree = fx::tree(vec![fx::model(1, "Joint", "LimbNode").child(
-            fx::properties70(vec![
+        let tree = fx::tree(&[
+            fx::model(1, "Joint", "LimbNode").child(fx::properties70(vec![
                 fx::p_vec3("Lcl Translation", [0.0, 1.0, 0.0]),
                 fx::p_vec3("Lcl Rotation", [0.0, 0.0, 90.0]),
                 fx::p_vec3("Lcl Scaling", [2.0, 2.0, 2.0]),
-            ]),
-        )]);
+            ])),
+        ]);
         let model = tree.root().first_child_by_name("Model").expect("Model");
         // (1,0,0) scales to (2,0,0), rotates about Z to (0,2,0), translates up.
         assert_vec3_eq(
@@ -1127,12 +1125,12 @@ mod tests {
 
     #[test]
     fn node_scene_local_applies_prerotation_before_the_local_rotation() {
-        let tree = fx::tree(vec![fx::model(1, "Joint", "LimbNode").child(
-            fx::properties70(vec![
+        let tree = fx::tree(&[
+            fx::model(1, "Joint", "LimbNode").child(fx::properties70(vec![
                 fx::p_vec3("Lcl Rotation", [0.0, 0.0, 90.0]),
                 fx::p_vec3("PreRotation", [90.0, 0.0, 0.0]),
-            ]),
-        )]);
+            ])),
+        ]);
         let model = tree.root().first_child_by_name("Model").expect("Model");
         // Rz90 takes +X to +Y, then the PreRotation Rx90 takes +Y to +Z.
         assert_vec3_eq(
@@ -1143,12 +1141,12 @@ mod tests {
 
     #[test]
     fn node_scene_local_honors_the_rotation_order_property() {
-        let tree = fx::tree(vec![fx::model(1, "Joint", "LimbNode").child(
-            fx::properties70(vec![
+        let tree = fx::tree(&[
+            fx::model(1, "Joint", "LimbNode").child(fx::properties70(vec![
                 fx::p_vec3("Lcl Rotation", [90.0, 0.0, 90.0]),
                 fx::p_scalar("RotationOrder", 5.0),
-            ]),
-        )]);
+            ])),
+        ]);
         let model = tree.root().first_child_by_name("Model").expect("Model");
         // ZYX applies Z first: +X to +Y, then Rx90 to +Z. XYZ would end at +Y.
         assert_vec3_eq(
@@ -1159,14 +1157,14 @@ mod tests {
 
     #[test]
     fn node_scene_local_without_properties_is_identity() {
-        let tree = fx::tree(vec![fx::model(1, "Bare", "Null")]);
+        let tree = fx::tree(&[fx::model(1, "Bare", "Null")]);
         let model = tree.root().first_child_by_name("Model").expect("Model");
         assert_eq!(node_scene_local(&model), IDENTITY);
     }
 
     #[test]
     fn local_matrices_separate_the_node_and_geometric_transforms() {
-        let tree = fx::tree(vec![
+        let tree = fx::tree(&[
             fx::model(1, "Mesh", "Mesh").child(fx::properties70(vec![
                 fx::p_vec3("Lcl Translation", [5.0, 0.0, 0.0]),
                 fx::p_vec3("GeometricTranslation", [0.0, 0.0, 2.0]),
@@ -1193,18 +1191,18 @@ mod tests {
 
     #[test]
     fn unit_scale_to_meters_reads_the_global_unit_factor() {
-        let meters = fx::tree(vec![fx::global_settings(100.0)]);
+        let meters = fx::tree(&[fx::global_settings(100.0)]);
         assert!((unit_scale_to_meters(&meters.root()) - 1.0).abs() < 1e-6);
-        let centimeters = fx::tree(vec![fx::global_settings(1.0)]);
+        let centimeters = fx::tree(&[fx::global_settings(1.0)]);
         assert!((unit_scale_to_meters(&centimeters.root()) - 0.01).abs() < 1e-6);
         // No GlobalSettings: FBX's native centimeter unit.
-        let bare = fx::tree(vec![fx::node("Objects")]);
+        let bare = fx::tree(&[fx::node("Objects")]);
         assert!((unit_scale_to_meters(&bare.root()) - 0.01).abs() < 1e-6);
     }
 
     #[test]
     fn resolve_texture_path_rebases_onto_the_fbx_directory() {
-        let tree = fx::tree(vec![
+        let tree = fx::tree(&[
             fx::texture(1, "Backslashes", "textures\\wall.png"),
             fx::object("Texture", 2, "Absolute", "")
                 .child(fx::node("FileName").text("/authors/machine/wall.png")),
@@ -1226,7 +1224,7 @@ mod tests {
 
     #[test]
     fn parse_fbx_reports_a_file_without_an_objects_section() {
-        let file = fx::write(vec![fx::node("Definitions")]);
+        let file = fx::write(&[fx::node("Definitions")]);
         let err = parse_fbx(file.path()).err().expect("no Objects section");
         assert!(err.contains("FBX has no Objects section"), "got: {err}");
     }
@@ -1325,11 +1323,7 @@ mod tests {
     }
 
     // A single-triangle mesh whose polygons carry the given material layer.
-    fn material_layer_scene(
-        layer: Option<fx::Node>,
-        pvi: Vec<i32>,
-        materials: Vec<i64>,
-    ) -> FbxScene {
+    fn material_layer_scene(layer: Option<fx::Node>, pvi: Vec<i32>, materials: &[i64]) -> FbxScene {
         let mut geom = fx::geometry(
             100,
             "mesh",
@@ -1342,7 +1336,7 @@ mod tests {
         let mut doc = fx::doc();
         doc.objects = vec![geom, fx::model(200, "Mesh", "Mesh")];
         doc.connections = vec![fx::oo(100, 200), fx::oo(200, 0)];
-        for id in &materials {
+        for id in materials {
             doc.objects.push(fx::material(*id, "M"));
             doc.connections.push(fx::oo(*id, 200));
         }
@@ -1355,7 +1349,7 @@ mod tests {
         let scene = material_layer_scene(
             Some(fx::material_layer("AllSame", vec![1])),
             vec![0, 1, -3, 0, 2, -4],
-            vec![300, 301],
+            &[300, 301],
         );
         assert_eq!(scene.primitives.len(), 1);
         assert_eq!(scene.primitives[0].material, Some(1));
@@ -1364,7 +1358,7 @@ mod tests {
 
     #[test]
     fn parse_fbx_leaves_geometry_without_a_material_layer_unassigned() {
-        let scene = material_layer_scene(None, vec![0, 1, -3], vec![300]);
+        let scene = material_layer_scene(None, vec![0, 1, -3], &[300]);
         assert_eq!(scene.primitives.len(), 1);
         assert_eq!(scene.primitives[0].material, None);
     }
@@ -1376,7 +1370,7 @@ mod tests {
         let scene = material_layer_scene(
             Some(fx::material_layer("ByPolygon", vec![-1, 0, 5])),
             vec![0, 1, -3, 0, 2, -4, 1, 2, -4],
-            vec![300],
+            &[300],
         );
         assert_eq!(scene.primitives.len(), 2);
         assert_eq!(scene.primitives[0].material, Some(0));
@@ -1387,7 +1381,7 @@ mod tests {
 
     #[test]
     fn parse_fbx_triangulates_a_quad_as_a_fan() {
-        let scene = material_layer_scene(None, vec![0, 1, 2, -4], Vec::new());
+        let scene = material_layer_scene(None, vec![0, 1, 2, -4], &[]);
         assert_eq!(scene.primitives.len(), 1);
         assert_eq!(scene.primitives[0].vertices.len(), 4);
         assert_eq!(scene.primitives[0].indices, vec![0, 1, 2, 0, 2, 3]);
@@ -1396,7 +1390,7 @@ mod tests {
     #[test]
     fn parse_fbx_drops_polygons_with_fewer_than_three_corners() {
         // Two corners produce no triangles, so the model contributes no prop.
-        let scene = material_layer_scene(None, vec![0, -2], Vec::new());
+        let scene = material_layer_scene(None, vec![0, -2], &[]);
         assert!(scene.primitives.is_empty());
         assert!(scene.props.is_empty());
         assert!(scene.aabb.is_none());
@@ -1554,7 +1548,7 @@ mod tests {
             fx::model(200, "Mesh", "Mesh"),
             fx::material(300, "Red"),
         ];
-        let file = fx::write(vec![fx::objects(doc.objects)]);
+        let file = fx::write(&[fx::objects(doc.objects)]);
         let scene = parse_fbx(file.path()).expect("parse");
         assert_eq!(scene.materials.len(), 1);
         assert!(scene.props.is_empty());

@@ -48,7 +48,7 @@ fn claims(ct: RegisteredType, keys: &[String]) -> bool {
 }
 
 /// Perform a planned parameter rewrite.
-pub(super) fn commit(world: &mut World, change: ParamsChange) {
+pub(super) fn commit(world: &mut World, change: &ParamsChange) {
     material_preview::apply_params(world, change.name, change.params);
 }
 
@@ -74,7 +74,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn args(v: Value) -> Map<String, Value> {
+    fn args(v: &Value) -> Map<String, Value> {
         v.as_object().cloned().unwrap()
     }
 
@@ -116,6 +116,6 @@ mod tests {
         let world = World::new();
         let params = json!({ "params": [0, 0, 0, 0, 0, 0, 0, 1] });
         let ct = RegisteredType::parse("Material").expect("a registered type");
-        assert!(plan(&world, ct, "steel", &args(params), &keys(&["params"])).is_none());
+        assert!(plan(&world, ct, "steel", &args(&params), &keys(&["params"])).is_none());
     }
 }

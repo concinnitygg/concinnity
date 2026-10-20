@@ -122,12 +122,12 @@ impl FbxFile {
     }
 }
 
-pub(super) fn write(roots: Vec<Node>) -> FbxFile {
+pub(super) fn write(roots: &[Node]) -> FbxFile {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("fixture.fbx");
     let sink = std::fs::File::create(&path).expect("create fbx");
     let mut w = Writer::new(BufWriter::new(sink), FbxVersion::V7_4).expect("fbx writer");
-    for n in &roots {
+    for n in roots {
         emit(&mut w, n);
     }
     w.finalize_and_flush(&FbxFooter::default())
@@ -140,7 +140,7 @@ pub(super) fn write(roots: Vec<Node>) -> FbxFile {
 
 // Write and immediately reload; the tree owns its data, so the file is not
 // needed afterwards.
-pub(super) fn tree(roots: Vec<Node>) -> Tree {
+pub(super) fn tree(roots: &[Node]) -> Tree {
     let file = write(roots);
     super::load_tree(file.path()).expect("load tree")
 }
@@ -396,7 +396,7 @@ impl Doc {
     }
 
     pub(super) fn write(self) -> FbxFile {
-        write(self.roots())
+        write(&self.roots())
     }
 }
 

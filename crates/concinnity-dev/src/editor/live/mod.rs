@@ -105,8 +105,8 @@ pub(crate) fn commit(world: &mut World, plan: Vec<Apply>) {
             }
             Apply::Sun { entity, light } => lighting::commit_sun(world, entity, light),
             Apply::RenderConfig(config) => lighting::commit(world, config),
-            Apply::Draw(change) => draw::commit(world, change),
-            Apply::MaterialParams(change) => material::commit(world, change),
+            Apply::Draw(change) => draw::commit(world, &change),
+            Apply::MaterialParams(change) => material::commit(world, &change),
         }
     }
 }
@@ -138,7 +138,7 @@ mod tests {
     use concinnity_host::thread::asset_id;
     use serde_json::json;
 
-    fn change(name: &str, ty: &str, args: Value, keys: &[&str]) -> diff::ArgsChange {
+    fn change(name: &str, ty: &str, args: &Value, keys: &[&str]) -> diff::ArgsChange {
         diff::ArgsChange {
             name: name.to_string(),
             ty: ty.to_string(),
@@ -162,7 +162,7 @@ mod tests {
         let changes = [change(
             "badge",
             "Sprite",
-            json!({ "width": 16.0, "height": 8.0 }),
+            &json!({ "width": 16.0, "height": 8.0 }),
             &["width"],
         )];
         let plan = plan(&world, &[], &changes).expect("plans");
@@ -178,11 +178,11 @@ mod tests {
     fn one_unplannable_change_abandons_the_batch() {
         let world = world_with_sprite("badge");
         let changes = [
-            change("badge", "Sprite", json!({ "width": 16.0 }), &["width"]),
+            change("badge", "Sprite", &json!({ "width": 16.0 }), &["width"]),
             change(
                 "lamp",
                 "PointLight",
-                json!({ "intensity": 3.0 }),
+                &json!({ "intensity": 3.0 }),
                 &["intensity"],
             ),
         ];
@@ -210,7 +210,7 @@ mod tests {
     #[test]
     fn an_unknown_type_declines() {
         let world = world_with_sprite("badge");
-        let changes = [change("badge", "NotAType", json!({ "a": 1 }), &["a"])];
+        let changes = [change("badge", "NotAType", &json!({ "a": 1 }), &["a"])];
         assert!(plan(&world, &[], &changes).is_none());
     }
 
@@ -225,7 +225,7 @@ mod tests {
         let changes = [change(
             "hero",
             "CharacterModel",
-            json!({ "position": [1.0, 0.0, 0.0] }),
+            &json!({ "position": [1.0, 0.0, 0.0] }),
             &["position"],
         )];
         assert!(plan(&world, &[], &changes).is_none());

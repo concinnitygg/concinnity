@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use super::{FieldKind, FormField, NONE_LABEL, assemble, fields_for, set_action_options};
 
-fn action_field(ty: &str, seed: Value, key: &str) -> (Vec<FormField>, usize) {
+fn action_field(ty: &str, seed: &Value, key: &str) -> (Vec<FormField>, usize) {
     let seed = seed.as_object().cloned().unwrap_or_default();
     let mut fields = fields_for(ty, Some(&seed));
     for field in &mut fields {
@@ -25,7 +25,7 @@ fn saved(ty: &str, fields: &[FormField]) -> serde_json::Map<String, Value> {
 
 #[test]
 fn every_action_the_world_allows_is_offered() {
-    let (fields, at) = action_field("HitRegion", json!({}), "action");
+    let (fields, at) = action_field("HitRegion", &json!({}), "action");
     let field = &fields[at];
     assert_eq!(field.kind, FieldKind::Action { extras: &[] });
     assert_eq!(
@@ -49,8 +49,11 @@ fn every_action_the_world_allows_is_offered() {
 
 #[test]
 fn the_current_action_is_selected_and_written_back() {
-    let (mut fields, at) =
-        action_field("HitRegion", json!({"action": {"scene": "level"}}), "action");
+    let (mut fields, at) = action_field(
+        "HitRegion",
+        &json!({"action": {"scene": "level"}}),
+        "action",
+    );
     assert_eq!(fields[at].variants[fields[at].variant_idx], "scene level");
     assert_eq!(
         saved("HitRegion", &fields)["action"],
@@ -75,7 +78,7 @@ fn the_current_action_is_selected_and_written_back() {
 #[test]
 fn an_action_the_list_does_not_offer_is_kept() {
     let choose = json!({"story": {"choose": 2}});
-    let (fields, at) = action_field("KeyBinding", json!({"action": choose}), "action");
+    let (fields, at) = action_field("KeyBinding", &json!({"action": choose}), "action");
     let field = &fields[at];
     assert_eq!(field.choices[field.variant_idx], choose);
     assert_eq!(field.variants[field.variant_idx], choose.to_string());
@@ -89,7 +92,7 @@ fn a_menu_item_offers_its_extra_names() {
         {"label": "Options", "action": "settings"},
         {"label": "Go", "action": {"show": "pause"}},
     ]});
-    let (fields, at) = action_field("MainMenu", seed, "items.0.action");
+    let (fields, at) = action_field("MainMenu", &seed, "items.0.action");
     let options = &fields[at];
     assert_eq!(
         options.kind,

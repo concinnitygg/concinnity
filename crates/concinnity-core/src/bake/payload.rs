@@ -103,7 +103,7 @@ pub fn procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, String> {
         "" => return Err("a ProceduralMesh needs a `generator`".to_string()),
         other => return Err(alloc::format!("unknown mesh generator '{other}'")),
     };
-    let bytes = finish_mesh_payload(vertices, indices, mesh.lod_levels, &mesh.lod_distances)?;
+    let bytes = finish_mesh_payload(vertices, &indices, mesh.lod_levels, &mesh.lod_distances)?;
     Ok(MeshPayload {
         bytes,
         procedural: Some(mesh),
@@ -131,7 +131,7 @@ pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, String> {
     let vertices = vertices_from_data(&mesh.vertices, &mesh.indices)?;
     let bytes = finish_mesh_payload(
         vertices,
-        mesh.indices.clone(),
+        &mesh.indices,
         mesh.lod_levels,
         &mesh.lod_distances,
     )?;
@@ -232,7 +232,7 @@ mod tests {
     fn an_unset_optional_argument_falls_back_to_the_authored_default() {
         let payload = procedural_mesh(mesh("box")).expect("a box bakes");
         let (vertices, indices) = build_box(BOX_HALF_EXTENTS);
-        let expected = finish_mesh_payload(vertices, indices, 1, &[]).expect("the same box packs");
+        let expected = finish_mesh_payload(vertices, &indices, 1, &[]).expect("the same box packs");
         assert_eq!(payload.as_bytes(), expected);
     }
 

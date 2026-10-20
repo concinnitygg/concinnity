@@ -407,7 +407,7 @@ mod tests {
         asset(name, RegisteredType::Spawner, args)
     }
 
-    fn bounded_world(headroom: serde_json::Value) -> Vec<WorldJsonlAsset> {
+    fn bounded_world(headroom: &serde_json::Value) -> Vec<WorldJsonlAsset> {
         vec![
             physics_config(serde_json::json!({"spawn_headroom": headroom})),
             prop("crate_a", true),
@@ -421,7 +421,7 @@ mod tests {
 
     #[test]
     fn a_bounded_spawner_reserves_its_steady_state_population() {
-        let assets = bounded_world(serde_json::json!(0));
+        let assets = bounded_world(&serde_json::json!(0));
         let reservation = spawn_reservation(&assets);
         assert_eq!(reservation.floor, BOUNDED_FLOOR);
         assert_eq!(
@@ -526,7 +526,7 @@ mod tests {
     // it came from is never rewritten.
     #[test]
     fn an_authored_headroom_above_the_floor_wins_and_the_config_is_untouched() {
-        let assets = bounded_world(serde_json::json!(8));
+        let assets = bounded_world(&serde_json::json!(8));
         assert_eq!(compute(&assets).expect("a budget").spawn_headroom, 8);
 
         let before: Vec<serde_json::Value> = assets.iter().map(|a| a.args.clone()).collect();
@@ -570,7 +570,7 @@ mod tests {
     // a behavior spawn node has no cadence to count and still warns.
     #[test]
     fn a_reserved_world_builds_clean_and_an_uncountable_source_still_warns() {
-        let bounded = bounded_world(serde_json::json!(0));
+        let bounded = bounded_world(&serde_json::json!(0));
         assert_eq!(count_warnings(|| report_spawn_reservation(&bounded)), 0);
 
         let mut with_behavior = bounded;
@@ -586,7 +586,7 @@ mod tests {
         );
 
         // An authored headroom says the author accounted for the rest.
-        let mut covered = bounded_world(serde_json::json!(8));
+        let mut covered = bounded_world(&serde_json::json!(8));
         covered.push(with_behavior.pop().expect("the behavior"));
         assert_eq!(count_warnings(|| report_spawn_reservation(&covered)), 0);
     }
@@ -596,7 +596,7 @@ mod tests {
     #[test]
     fn only_uncomputable_sources_are_left_to_warn_about() {
         assert!(
-            spawn_reservation(&bounded_world(serde_json::json!(0)))
+            spawn_reservation(&bounded_world(&serde_json::json!(0)))
                 .unbounded
                 .is_empty(),
             "a bounded spawner is handled, not warned about"
@@ -604,7 +604,7 @@ mod tests {
 
         // A behavior spawn node has no cadence to count, so it still warns
         // even alongside a bounded spawner that was reserved for.
-        let mut mixed = bounded_world(serde_json::json!(0));
+        let mut mixed = bounded_world(&serde_json::json!(0));
         mixed.push(asset(
             "thrower",
             RegisteredType::Behavior,

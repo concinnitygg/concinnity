@@ -99,7 +99,7 @@ impl DxOceanSim {
     pub(in crate::directx) fn new<F: Fn(usize) -> D3D12_CPU_DESCRIPTOR_HANDLE>(
         alloc: &DeviceAllocator,
         plan: &OceanPlan,
-        slots: OceanSlots<F>,
+        slots: &OceanSlots<F>,
         hot_reload: bool,
     ) -> RenderResult<Self> {
         let device = alloc.device();

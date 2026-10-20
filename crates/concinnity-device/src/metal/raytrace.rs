@@ -244,6 +244,7 @@ struct RetiredRt {
 // The per-frame skinned-geometry inputs `build_rt_accel` needs to deform and
 // add skinned objects to the BVH. Assembled from the context's skinned state;
 // `None` skips skinned geometry entirely (the static-only path).
+#[derive(Clone, Copy)]
 pub(crate) struct SkinnedRtInputs<'a> {
     // One entry per skinned mesh (only `visible`, real-triangle objects build).
     pub objects: &'a [SkinnedDrawObject],
@@ -551,6 +552,7 @@ fn dispatch_skin(
 }
 
 // Where the skin dispatch gets each object's joint palette.
+#[derive(Clone, Copy)]
 enum SkinPalettes<'a> {
     // Upload one transient buffer per object. Used by the one-time seed, which
     // runs before any per-frame palette buffer exists; the caller keeps the

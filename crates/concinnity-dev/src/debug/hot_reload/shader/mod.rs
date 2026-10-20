@@ -73,13 +73,13 @@ impl ShaderReload {
     pub(crate) fn request(
         &mut self,
         pending: &PendingShaders,
-        builder: Option<Arc<dyn PipelineBuilder>>,
+        builder: Option<&Arc<dyn PipelineBuilder>>,
     ) -> Vec<ReloadReport> {
         let mut failed = Vec::new();
         for entry in self.catalog.entries.iter().filter(|e| pending.wants(&e.id)) {
             let started = ShaderTexts::read(entry).and_then(|texts| {
                 let compiler = Arc::clone(&self.compiler);
-                let builder = builder.clone();
+                let builder = builder.cloned();
                 let name = entry.name.clone();
                 let bucket = entry.bucket;
                 self.compiles.submit(entry.id, move || {

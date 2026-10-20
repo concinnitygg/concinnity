@@ -349,7 +349,7 @@ fn every_volume_of_a_group_is_handed_its_own_worker_built_pipelines() {
     f.write("cloud.hlsl", "cloud v2");
     f.reload.request(
         &pending(&["cloud_a", "cloud_b", "cloud_caster"]),
-        builder(false),
+        builder(false).as_ref(),
     );
     let reports = poll_for(&f.reload, &mut backend, 3);
     assert_eq!(outcomes(&reports).len(), 3);
@@ -383,7 +383,7 @@ fn pipelines_the_builder_refuses_are_never_swapped() {
     let mut f = Fixture::new();
     let mut backend = backend(&[0, 1]);
     f.reload
-        .request(&pending(&["cloud_a", "cloud_b"]), builder(true));
+        .request(&pending(&["cloud_a", "cloud_b"]), builder(true).as_ref());
     let reports = poll_for(&f.reload, &mut backend, 2);
     assert_eq!(
         outcomes(&reports),

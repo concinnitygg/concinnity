@@ -214,13 +214,13 @@ pub(crate) fn section_twin(
 mod tests {
     use crate::asset_fields::expand;
 
-    fn expanded(input: syn::DeriveInput) -> String {
-        expand(&input).expect("the input derives").to_string()
+    fn expanded(input: &syn::DeriveInput) -> String {
+        expand(input).expect("the input derives").to_string()
     }
 
     #[test]
     fn a_section_gets_an_optional_twin_with_the_same_keys() {
-        let out = expanded(syn::parse_quote! {
+        let out = expanded(&syn::parse_quote! {
             /// Shadows.
             #[asset(section)]
             #[serde(default)]
@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn a_section_field_clamps_under_its_key() {
-        let out = expanded(syn::parse_quote! {
+        let out = expanded(&syn::parse_quote! {
             struct GraphicsConfig {
                 #[asset(section)]
                 #[serde(default)]

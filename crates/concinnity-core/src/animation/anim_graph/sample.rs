@@ -88,17 +88,18 @@ fn sample_state_into<'a>(
     out: &mut Vec<Mat4>,
     bufs: BlendBufs<'_>,
 ) {
-    state.play.weights_into(params, bufs.weights);
+    let BlendBufs { clip, weights } = bufs;
+    state.play.weights_into(params, weights);
     let members = state.play.members();
 
     let mut fold = PoseBlend::new(out);
-    for (member, &w) in members.iter().zip(bufs.weights.iter()) {
+    for (member, &w) in members.iter().zip(weights.iter()) {
         if w <= 0.0 {
             continue;
         }
         let t = member_time(state, member.duration_secs, clock);
-        clip_at(member.clip).sample_looped_into(t, state.looping, skeleton, bufs.clip);
-        fold.add(bufs.clip, w);
+        clip_at(member.clip).sample_looped_into(t, state.looping, skeleton, clip);
+        fold.add(clip, w);
     }
     if !fold.seeded() {
         // Unreachable with a compiled graph (weights always mark at least

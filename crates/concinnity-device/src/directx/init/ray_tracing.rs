@@ -80,6 +80,7 @@ pub(super) fn build_rt_reflections(
     }
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct RtInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
     pub(super) scene: &'a DxSceneAssets,

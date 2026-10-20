@@ -430,12 +430,14 @@ pub(in crate::directx) fn build_prepass_for(
 }
 
 // Where a bucket's pre-pass stages come from.
+#[derive(Clone, Copy)]
 pub(in crate::directx) enum PrepassSource<'a> {
     World(&'a concinnity_core::components::ShaderPrograms, bool),
     Engine(&'a BindlessMainShaders),
 }
 
 // The four compiled stages one bucket's PSOs take.
+#[derive(Clone, Copy)]
 struct BucketStages<'a> {
     vs: &'a [u8],
     ps: &'a [u8],

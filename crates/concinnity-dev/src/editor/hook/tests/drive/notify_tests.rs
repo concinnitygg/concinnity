@@ -68,8 +68,8 @@ fn behavior_fault_toasts_only_on_a_new_fault() {
     assert!(!h.notifier.is_empty(), "a fresh fault toasts");
     h.notifier.click_card(0);
     let prev = h.behavior_fault_message();
-    h.notify_behavior_fault(prev);
+    h.notify_behavior_fault(prev.as_deref());
     assert!(h.notifier.is_empty(), "the same fault stays quiet");
-    h.notify_behavior_fault(Some("a different complaint".to_string()));
+    h.notify_behavior_fault(Some("a different complaint"));
     assert!(!h.notifier.is_empty(), "a changed fault toasts again");
 }

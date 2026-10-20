@@ -190,6 +190,7 @@ fn write_cnb(meta: &BlobMeta, payload: &[u8], path: &str) -> std::io::Result<()>
 // The record streams one build produces, packed into blob 0's metadata block.
 // Grouped because they travel together: every one of them is derived from the
 // same compiled asset list and is written exactly once.
+#[derive(Clone, Copy)]
 pub(crate) struct BlobStreams<'a> {
     pub(crate) defs: &'a [BlobAssetDef],
     pub(crate) resources: &'a [ResourceRecord],

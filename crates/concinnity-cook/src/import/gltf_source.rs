@@ -73,7 +73,7 @@ impl GltfDoc {
 
     // Bytes for one glTF buffer, or `None` when it did not resolve. Shaped for
     // the `gltf` crate's reader closures: `primitive.reader(|b| doc.buffer_bytes(b))`.
-    pub(crate) fn buffer_bytes(&self, buffer: gltf::Buffer<'_>) -> Option<&[u8]> {
+    pub(crate) fn buffer_bytes(&self, buffer: &gltf::Buffer<'_>) -> Option<&[u8]> {
         self.buffers.get(buffer.index()).and_then(|b| b.as_deref())
     }
 
@@ -101,7 +101,7 @@ impl GltfDoc {
 
         match image.source() {
             gltf::image::Source::View { view, mime_type } => {
-                let backing = self.buffer_bytes(view.buffer()).ok_or_else(|| {
+                let backing = self.buffer_bytes(&view.buffer()).ok_or_else(|| {
                     format!(
                         "image {image_index} references buffer data the container does not carry"
                     )
@@ -574,7 +574,7 @@ mod tests {
 
         let doc = GltfDoc::parse_file(gltf_path.to_str().unwrap()).expect("parse");
         let buffer = doc.doc.document.buffers().next().unwrap();
-        assert_eq!(doc.buffer_bytes(buffer), Some(bin.as_slice()));
+        assert_eq!(doc.buffer_bytes(&buffer), Some(bin.as_slice()));
     }
 
     #[test]
@@ -595,7 +595,7 @@ mod tests {
 
         let doc = GltfDoc::parse_file(gltf_path.to_str().unwrap()).expect("parse");
         let buffer = doc.doc.document.buffers().next().unwrap();
-        assert_eq!(doc.buffer_bytes(buffer), Some(bin.as_slice()));
+        assert_eq!(doc.buffer_bytes(&buffer), Some(bin.as_slice()));
     }
 
     #[test]
@@ -617,7 +617,7 @@ mod tests {
         let glb = crate::import::glb::test_fixtures::static_triangle_glb();
         let doc = GltfDoc::from_slice(&glb, None, "t.glb").expect("parse");
         let buffer = doc.doc.document.buffers().next().unwrap();
-        assert!(doc.buffer_bytes(buffer).is_some());
+        assert!(doc.buffer_bytes(&buffer).is_some());
     }
 
     #[test]
@@ -628,7 +628,7 @@ mod tests {
         );
         let doc = GltfDoc::from_slice(&glb, None, "t.glb").expect("parse");
         let buffer = doc.doc.document.buffers().next().unwrap();
-        assert!(doc.buffer_bytes(buffer).is_none());
+        assert!(doc.buffer_bytes(&buffer).is_none());
     }
 
     // referenced_files

@@ -108,6 +108,7 @@ const WATER_SHADOW_SAMPLER_INDEX: usize = 5;
 
 // What the transparent pass takes for the frame: the view and RT inputs its
 // encoders bind, and how it treats the reactive mask.
+#[derive(Clone, Copy)]
 pub(in crate::metal) struct TransparentFrame<'a> {
     pub(in crate::metal) view: &'a TransparentView,
     pub(in crate::metal) rt_params: Option<&'a render_types::RtParams>,

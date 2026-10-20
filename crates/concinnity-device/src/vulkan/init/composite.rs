@@ -24,6 +24,7 @@ use crate::vulkan::swapchain::{create_composite_framebuffers, write_composite_se
 // Sources the composite fragment samples, each through a sampler of its own.
 pub(super) const COMPOSITE_SOURCES: u32 = 8;
 
+#[derive(Clone, Copy)]
 pub(super) struct CompositeInputs<'a> {
     pub(super) swapchain: &'a SwapchainState,
     pub(super) descriptors: &'a VkDescriptors,

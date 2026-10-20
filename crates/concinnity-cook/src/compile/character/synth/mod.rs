@@ -92,9 +92,9 @@ pub(crate) fn polarized(
     name: &str,
     polarity: KeyPolarity,
     input: &SynthInput<'_>,
-    displacement: Vec<[f32; 3]>,
+    displacement: &[[f32; 3]],
 ) -> Vec<(String, Vec<MorphDelta>)> {
-    let plus = finish(input.vertices, input.indices, input.normals, &displacement);
+    let plus = finish(input.vertices, input.indices, input.normals, displacement);
     match polarity {
         KeyPolarity::Unipolar => vec![(name.to_string(), plus)],
         KeyPolarity::Bipolar => {
@@ -273,7 +273,7 @@ mod tests {
         let mut disp = vec![[0.0; 3]; fx.vertices.len()];
         let top = fx.vertices.len() - 1;
         disp[top] = [0.0, -0.5, 0.0];
-        let out = polarized("cap", KeyPolarity::Bipolar, &fx.input(), disp.clone());
+        let out = polarized("cap", KeyPolarity::Bipolar, &fx.input(), &disp);
         assert_eq!(out[0].0, "cap+");
         assert_eq!(out[1].0, "cap-");
         assert_eq!(out[0].1[top].position, [0.0, -0.5, 0.0]);
@@ -286,7 +286,7 @@ mod tests {
         let n_minus = out[1].1[ring].normal;
         assert!(n_plus[0] < 0.0, "{n_plus:?}");
         assert!(n_minus[0] > 0.0, "{n_minus:?}");
-        let uni = polarized("cap", KeyPolarity::Unipolar, &fx.input(), disp);
+        let uni = polarized("cap", KeyPolarity::Unipolar, &fx.input(), &disp);
         assert_eq!(uni.len(), 1);
         assert_eq!(uni[0].0, "cap");
     }

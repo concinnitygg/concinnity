@@ -71,14 +71,14 @@ impl SdfReload {
     pub(crate) fn request(
         &mut self,
         pending: &PendingSdfVolumes,
-        builder: Option<Arc<dyn PipelineBuilder>>,
+        builder: Option<&Arc<dyn PipelineBuilder>>,
     ) -> Vec<ReloadReport> {
         let mut failed = Vec::new();
         for (key, volumes) in groups(&self.catalog, pending) {
             let names: Vec<&str> = volumes.iter().map(|v| v.name.as_str()).collect();
             let started = read_field(&key.path).and_then(|field| {
                 let compiler = Arc::clone(&self.compiler);
-                let builder = builder.clone();
+                let builder = builder.cloned();
                 let name = names[0].to_string();
                 let job_key = key.clone();
                 let targets: Vec<(usize, String)> =

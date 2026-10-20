@@ -12,6 +12,7 @@ use crate::vulkan::post::PostSupport;
 use crate::vulkan::post::bloom::VkBloomPass;
 use crate::vulkan::post::post_device::post_extent;
 
+#[derive(Clone, Copy)]
 pub(super) struct BloomInputs<'a> {
     pub(super) extent: vk::Extent2D,
     pub(super) post: &'a PostSupport,

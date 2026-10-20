@@ -160,7 +160,7 @@ pub(crate) fn read_primitive_geometry(
         ));
     }
 
-    let reader = primitive.reader(|b| doc.buffer_bytes(b));
+    let reader = primitive.reader(|b| doc.buffer_bytes(&b));
 
     let positions: Vec<[f32; 3]> = reader
         .read_positions()
@@ -422,7 +422,7 @@ fn import_geometry(
     let mut tangent_deltas_seen = false;
 
     for primitive in mesh.primitives() {
-        let reader = primitive.reader(|b| doc.buffer_bytes(b));
+        let reader = primitive.reader(|b| doc.buffer_bytes(&b));
 
         // A primitive with no JOINTS_0 is static geometry, skip it; the
         // SkinnedMesh asset only carries skinned vertices.
@@ -729,7 +729,7 @@ fn import_animation(
         if target_node == mesh_node
             && channel.target().property() == gltf::animation::Property::MorphTargetWeights
         {
-            let reader = channel.reader(|b| doc.buffer_bytes(b));
+            let reader = channel.reader(|b| doc.buffer_bytes(&b));
             let times: Vec<f32> = match reader.read_inputs() {
                 Some(t) => t.collect(),
                 None => continue,
@@ -778,7 +778,7 @@ fn import_animation(
             .get(skin_joint)
             .copied()
             .unwrap_or(skin_joint);
-        let reader = channel.reader(|b| doc.buffer_bytes(b));
+        let reader = channel.reader(|b| doc.buffer_bytes(&b));
         let times: Vec<f32> = match reader.read_inputs() {
             Some(t) => t.collect(),
             None => continue,
@@ -1616,7 +1616,7 @@ mod tests {
     // indexed and declares two targets (one carrying tangent deltas, which the
     // importer drops); the second is non-indexed and declares only the first
     // target, so the importer must pad the second with zero deltas.
-    fn morph_glb(extras: serde_json::Value) -> Vec<u8> {
+    fn morph_glb(extras: &serde_json::Value) -> Vec<u8> {
         let mut f = Fixture::new();
         let pos = f.positions(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
         let idx = f.accessor(&u16s(&[0, 1, 2]), 5123, 3, "SCALAR");
@@ -1667,7 +1667,9 @@ mod tests {
 
     #[test]
     fn import_skinned_concatenates_primitives_and_pads_absent_morph_targets() {
-        let doc = parse(&morph_glb(serde_json::json!({"targetNames": ["bulge", 7]})));
+        let doc = parse(&morph_glb(
+            &serde_json::json!({"targetNames": ["bulge", 7]}),
+        ));
         let mesh = import_skinned_from_doc(&doc, "m.glb", 0).expect("skinned import");
 
         // Both primitives contribute; the non-indexed one draws sequentially
@@ -1703,7 +1705,7 @@ mod tests {
             serde_json::json!({"targetNames": "not an array"}),
             serde_json::json!({"unrelated": 1}),
         ] {
-            let doc = parse(&morph_glb(extras.clone()));
+            let doc = parse(&morph_glb(&extras));
             let mesh = import_skinned_from_doc(&doc, "m.glb", 0).expect("skinned import");
             assert_eq!(
                 mesh.morph_target_names,

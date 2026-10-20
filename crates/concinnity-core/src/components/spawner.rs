@@ -57,6 +57,10 @@ impl Spawner {
     /// Translate the authored args into the runtime spawner: clamp the timing
     /// knobs and zero the runtime counters. Run by cook at build time (the
     /// baked blob record carries the result).
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the cook registry calls every component's `bake` with owned args"
+    )]
     pub fn bake(args: SpawnerArgs) -> Self {
         Self {
             template: args.template.id(),

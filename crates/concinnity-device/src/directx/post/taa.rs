@@ -78,7 +78,7 @@ impl DxContext {
             &device,
             cmd,
             taa.output_index(),
-            TaaInputs {
+            &TaaInputs {
                 scene: self.scene_srv_for_post(),
                 velocity: gbuffer.velocity_srv_gpu,
                 reactive: reactive_written.then(|| self.targets.reactive_mask.srv_gpu()),

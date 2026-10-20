@@ -65,7 +65,7 @@ impl StoryParser {
         self.line_starts.partition_point(|&s| s <= range.start)
     }
 
-    fn err<T>(&self, range: &Range<usize>, msg: String) -> Result<T, String> {
+    fn err<T>(&self, range: &Range<usize>, msg: &str) -> Result<T, String> {
         Err(format!("line {}: {}", self.line_of(range), msg))
     }
 
@@ -73,12 +73,12 @@ impl StoryParser {
     // node's choices.
     fn require_open_node(&self, range: &Range<usize>) -> Result<&Node, String> {
         let Some(node) = self.cur_node.as_ref() else {
-            return self.err(range, "content before the first `#` heading".to_string());
+            return self.err(range, "content before the first `#` heading");
         };
         if !node.choices.is_empty() {
             return self.err(
                 range,
-                format!("node '{}': choices must be its last content", node.heading),
+                &format!("node '{}': choices must be its last content", node.heading),
             );
         }
         Ok(node)
@@ -146,7 +146,7 @@ impl StoryParser {
             }
             other => format!("unsupported Markdown construct: {other:?}"),
         };
-        self.err(range, msg)
+        self.err(range, &msg)
     }
 
     pub(super) fn finish(mut self) -> Result<Story, String> {

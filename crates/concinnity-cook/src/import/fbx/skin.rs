@@ -886,7 +886,7 @@ mod tests {
     #[test]
     fn import_skinned_fbx_reports_a_skin_in_a_file_without_connections() {
         let doc = fx::two_bone_rig(100.0);
-        let file = fx::write(vec![fx::objects(doc.objects)]);
+        let file = fx::write(&[fx::objects(doc.objects)]);
         let err = import_skinned_fbx(file.path(), 0)
             .err()
             .expect("no connections");
@@ -949,7 +949,7 @@ mod tests {
 
     #[test]
     fn import_skinned_fbx_reports_a_file_without_an_objects_section() {
-        let file = fx::write(vec![fx::node("Definitions")]);
+        let file = fx::write(&[fx::node("Definitions")]);
         let err = import_skinned_fbx(file.path(), 0)
             .err()
             .expect("no Objects section");

@@ -5,7 +5,7 @@ use crate::ecs::asset_id::AssetId;
 /// `UiInputSystem` reads these from its `Events<ScreenCommand>` queue on the next
 /// step and applies the stack transition. World authors never declare this type
 /// directly.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ScreenCommand {
     /// Replace the top of the stack (menu navigation).
     Show(AssetId),

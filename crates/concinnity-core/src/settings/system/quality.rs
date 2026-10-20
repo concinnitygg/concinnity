@@ -47,7 +47,7 @@ impl SettingsState {
         cfg.graphics.anisotropy = None;
         cfg.graphics.render_scale = None;
         self.resolved
-            .set_quality(self.resolve_quality(&cfg.graphics, &ceiling));
+            .set_quality(&self.resolve_quality(&cfg.graphics, &ceiling));
 
         self.relabel_preset_dependents(ctx);
         // The master row's own label carries the Auto(tier) suffix.

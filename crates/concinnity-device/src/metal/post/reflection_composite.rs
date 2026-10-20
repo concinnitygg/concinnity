@@ -57,7 +57,7 @@ impl MtlContext {
         pass.encode(
             &self.post_device(),
             cmd_buf,
-            ReflectionCompositeInputs {
+            &ReflectionCompositeInputs {
                 reflection: reflection.as_ref(),
                 scene: self.targets.hdr.hdr_resolve.as_ref(),
                 normal_depth,

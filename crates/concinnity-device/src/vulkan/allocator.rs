@@ -745,6 +745,10 @@ impl DeviceAllocator {
     // Return a reservation whose bind failed. The range was never visible to
     // the GPU, so it goes back through the normal deferred path for simplicity,
     // not because it needs the delay.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "consuming the reservation keeps it from being leased or released twice"
+    )]
     fn release(&self, reservation: Reservation) {
         let mut inner = self.inner.borrow_mut();
         let retire = inner.frame + inner.retire_depth;
@@ -753,6 +757,10 @@ impl DeviceAllocator {
         }
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "consuming the reservation keeps it from being leased or released twice"
+    )]
     fn lease(&self, reservation: Reservation, handle: PooledHandle) -> Lease {
         Lease {
             owner: Rc::downgrade(&self.inner),

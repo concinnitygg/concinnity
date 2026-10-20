@@ -41,12 +41,12 @@
 //!
 //! fn main() {
 //!     let world = cook::world()
-//!         .add("sun", DirectionalLight {
+//!         .add("sun", &DirectionalLight {
 //!             color: [1.0, 0.96, 0.86],
 //!             direction: [-0.35, 0.85, 0.35],
 //!             intensity: 2.2,
 //!         })
-//!         .add("room", cook::Room {
+//!         .add("room", &cook::Room {
 //!             size: Some([16.0, 20.0, 5.0]),
 //!             ..Default::default()
 //!         })
@@ -65,8 +65,8 @@
 //! # use concinnity::components::Prop;
 //! # use concinnity::cook;
 //! cook::world()
-//!     .add("stone", cook::Material { roughness: 0.9, ..Default::default() })
-//!     .add("pillar", Prop::default())
+//!     .add("stone", &cook::Material { roughness: 0.9, ..Default::default() })
+//!     .add("pillar", &Prop::default())
 //!     .reference("material", "stone");
 //! ```
 //!
@@ -90,7 +90,7 @@
 //! # use concinnity::components::DirectionalLight;
 //! # use concinnity::cook;
 //! cook::world()
-//!     .add("sun", DirectionalLight::default())
+//!     .add("sun", &DirectionalLight::default())
 //!     .write_blob("data/0")
 //!     .expect("the world is written to data/0");
 //! ```
@@ -143,7 +143,7 @@ impl WorldBuilder {
     /// Declare `value` under the `$id` `id`, the name a reference to it uses.
     /// The asset type comes from the value's own [`Authored`] impl, so it
     /// cannot disagree with the fields.
-    pub fn add<T: Authored>(&mut self, id: impl Into<String>, value: T) -> &mut Self {
+    pub fn add<T: Authored>(&mut self, id: impl Into<String>, value: &T) -> &mut Self {
         self.0.add(id, value);
         self
     }
@@ -213,7 +213,7 @@ impl WorldBuilder {
     /// cook::world()
     ///     .add(
     ///         "hero_shape",
-    ///         CharacterShape {
+    ///         &CharacterShape {
     ///             sliders: vec![ShapeSlider { name: "weight".into(), value: 0.4 }],
     ///             ..Default::default()
     ///         },
@@ -256,14 +256,14 @@ mod tests {
         let world = world()
             .add(
                 "sun",
-                DirectionalLight {
+                &DirectionalLight {
                     intensity: 2.2,
                     ..Default::default()
                 },
             )
             .add(
                 "room",
-                Room {
+                &Room {
                     size: Some([16.0, 20.0, 5.0]),
                     ..Default::default()
                 },
@@ -285,8 +285,8 @@ mod tests {
     fn declared_reports_names_and_types_in_order() {
         let mut spec = world();
         spec.assets_in("project/assets")
-            .add("menu", concinnity_core::components::Scene::default())
-            .add("sun", DirectionalLight::default());
+            .add("menu", &concinnity_core::components::Scene::default())
+            .add("sun", &DirectionalLight::default());
         assert_eq!(spec.assets_dir(), Some(Path::new("project/assets")));
         let declared: Vec<_> = spec.declared().collect();
         assert_eq!(declared, [("menu", "Scene"), ("sun", "DirectionalLight")]);
@@ -299,7 +299,7 @@ mod tests {
         // declared, which validation rejects.
         spec.add(
             "orphan",
-            concinnity_core::components::CharacterShape::default(),
+            &concinnity_core::components::CharacterShape::default(),
         )
         .reference("target", "no_such_body");
         let err = spec.compile().expect_err("an unresolved reference fails");
@@ -341,7 +341,7 @@ mod tests {
         let primary = tree.join("data/0");
 
         world()
-            .add("sun", DirectionalLight::default())
+            .add("sun", &DirectionalLight::default())
             .write_blob(&primary)
             .expect("the world is written");
 

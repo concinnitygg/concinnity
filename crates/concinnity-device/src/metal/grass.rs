@@ -348,6 +348,7 @@ fn build_shadow_pipeline(
 }
 
 // What a frame's grass is prepared from.
+#[derive(Clone, Copy)]
 pub(in crate::metal) struct GrassRequest<'a> {
     pub cam_pos: [f32; 3],
     // The unjittered view-projection.

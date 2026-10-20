@@ -1166,6 +1166,7 @@ pub(in crate::vulkan) struct RtDeviceCtx<'a> {
 // initial BVH: the shared static vertex / index buffers, the participating draw
 // objects + instanced clusters, and the pool counts the geometry-table indices
 // offset against. Borrowed for the duration of the build.
+#[derive(Clone, Copy)]
 pub(in crate::vulkan) struct RtSceneGeometry<'a> {
     // The shared vertex / index buffers the draw and cluster BLAS read.
     pub(in crate::vulkan) shared: SharedGeometry,

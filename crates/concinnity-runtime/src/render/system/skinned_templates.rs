@@ -28,7 +28,7 @@ fn upload_skinned_geometry(
 ) -> RenderResult<()> {
     backend.upload_skinned(&upload.vertices, &upload.indices, upload.draw_objects)?;
     if upload.morphs.iter().any(Option::is_some) {
-        backend.upload_skinned_morphs(upload.morphs)?;
+        backend.upload_skinned_morphs(&upload.morphs)?;
     }
     Ok(())
 }

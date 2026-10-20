@@ -72,9 +72,9 @@ impl WorldBuilder {
     /// Declare `value` under the `$id` `id`, the name a reference to it uses.
     /// The asset type comes from the value's own [`Authored`] impl, so it
     /// cannot disagree with the fields.
-    pub fn add<T: Authored>(&mut self, id: impl Into<String>, value: T) -> &mut Self {
+    pub fn add<T: Authored>(&mut self, id: impl Into<String>, value: &T) -> &mut Self {
         let id = id.into();
-        match asset_entry(&id, &value) {
+        match asset_entry(&id, value) {
             Ok(entry) => {
                 self.entries.push(entry);
                 self.declared.push((id, T::TYPE));
@@ -261,7 +261,7 @@ impl WorldBuilder {
     /// a world written to `data/0` may also write `data/1`, `data/2`, ...
     pub fn write_blob(&self, path: impl AsRef<Path>) -> Result<(), WorldBuildError> {
         let result = self.build()?;
-        write_blobs_to(&result, path.as_ref()).map_err(from_io)?;
+        write_blobs_to(&result, path.as_ref()).map_err(|e| from_io(&e))?;
         Ok(())
     }
 
@@ -280,10 +280,10 @@ impl WorldBuilder {
         // (`assets_in`). Without one there is no tree to search, so only paths
         // that stand on their own resolve.
         let assets_dir = self.assets_dir.clone();
-        let text = write_world_jsonl(&self.entries).map_err(from_io)?;
+        let text = write_world_jsonl(&self.entries).map_err(|e| from_io(&e))?;
         let loaded: LoadedWorld =
             prepare_world(&text, assets_dir.as_deref()).map_err(WorldBuildError::Validation)?;
-        build_compiled(loaded.assets, assets_dir.as_deref(), self.targets).map_err(from_io)
+        build_compiled(loaded.assets, assets_dir.as_deref(), self.targets).map_err(|e| from_io(&e))
     }
 }
 
@@ -327,7 +327,7 @@ mod tests {
         let world = builder()
             .add(
                 "sun",
-                DirectionalLight {
+                &DirectionalLight {
                     color: [1.0, 0.96, 0.86],
                     direction: [-0.35, 0.85, 0.35],
                     intensity: 2.2,
@@ -337,7 +337,7 @@ mod tests {
             // name the query below reads back.
             .add(
                 "room",
-                Room {
+                &Room {
                     size: Some([16.0, 20.0, 5.0]),
                     ..Default::default()
                 },
@@ -366,7 +366,7 @@ mod tests {
         // declared, which validation rejects.
         spec.add(
             "orphan",
-            concinnity_core::components::CharacterShape::default(),
+            &concinnity_core::components::CharacterShape::default(),
         )
         .reference("target", "no_such_body");
         let err = spec.compile().expect_err("an unresolved reference fails");
@@ -446,21 +446,21 @@ mod tests {
         let world = builder()
             .add(
                 "floor_mat",
-                Material {
+                &Material {
                     roughness: 0.8,
                     ..Default::default()
                 },
             )
             .add(
                 "floor_mesh",
-                ProceduralMesh {
+                &ProceduralMesh {
                     generator: "plane".into(),
                     half_width: 4.0,
                     half_depth: 4.0,
                     ..Default::default()
                 },
             )
-            .add("floor", Prop::default())
+            .add("floor", &Prop::default())
             .reference("mesh", "floor_mesh")
             .reference("material", "floor_mat")
             .compile()
@@ -484,8 +484,8 @@ mod tests {
     #[test]
     fn declared_reports_names_and_types_in_order() {
         let mut spec = builder();
-        spec.add("menu", concinnity_core::components::Scene::default())
-            .add("sun", DirectionalLight::default());
+        spec.add("menu", &concinnity_core::components::Scene::default())
+            .add("sun", &DirectionalLight::default());
         let declared: Vec<_> = spec.declared().collect();
         assert_eq!(declared, [("menu", "Scene"), ("sun", "DirectionalLight")]);
     }
@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn world_file_text_declares_its_entries_in_order() {
         let mut spec = builder();
-        spec.add("sun", DirectionalLight::default()).add_jsonl(
+        spec.add("sun", &DirectionalLight::default()).add_jsonl(
             "// a comment line\n\
              [\"Material\",{\"$id\":\"stone\",\"roughness\":0.9}]\n\
              \n\
@@ -597,7 +597,7 @@ mod tests {
         builder()
             .add(
                 "sun",
-                DirectionalLight {
+                &DirectionalLight {
                     intensity: 3.5,
                     ..Default::default()
                 },

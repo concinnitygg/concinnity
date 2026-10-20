@@ -224,8 +224,8 @@ pub struct ResolvedSettings {
 
 impl ResolvedSettings {
     /// Adopt a re-resolved quality group.
-    pub fn set_quality(&mut self, quality: ResolvedGraphics) {
-        self.graphics.adopt_quality(&quality);
+    pub fn set_quality(&mut self, quality: &ResolvedGraphics) {
+        self.graphics.adopt_quality(quality);
     }
 
     /// What changed since `previous`, grouped by when each change applies.

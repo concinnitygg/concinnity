@@ -242,7 +242,7 @@ pub fn glint_sun(uniforms: &LightUniforms) -> ([f32; 4], [f32; 4]) {
 /// `local_lights` is the buffer `build_light_data` produced; its length is the
 /// authoritative `num_local_lights` the forward pass iterates.
 pub fn build_light_uniforms(
-    dir_lights: Vec<DirectionalLight>,
+    dir_lights: &[DirectionalLight],
     pt_lights: Vec<PointLight>,
     local_lights: &[GpuLight],
     ambient_intensity: f32,
@@ -254,7 +254,7 @@ pub fn build_light_uniforms(
         };
     }
 
-    let (directional, num_directional) = directional_light_data(&dir_lights);
+    let (directional, num_directional) = directional_light_data(dir_lights);
     // The `point` array is the subset world Shader hooks read as `LIGHTS.pt`;
     // the forward pass reads every light from the GpuLight buffer instead
     // (see build_light_data), so exceeding MAX_POINT_LIGHTS is not an error.
@@ -346,7 +346,7 @@ mod tests {
     }
 
     // The uniforms every test that does not exercise the local buffer wants.
-    fn uniforms(dir_lights: Vec<DirectionalLight>, pt_lights: Vec<PointLight>) -> LightUniforms {
+    fn uniforms(dir_lights: &[DirectionalLight], pt_lights: Vec<PointLight>) -> LightUniforms {
         let local = build_light_data(&pt_lights, &[], &[]).lights;
         build_light_uniforms(dir_lights, pt_lights, &local, 1.0)
     }
@@ -360,7 +360,7 @@ mod tests {
             dir([0.1, -1.0, 0.0], [0.2, 0.3, 0.4], 0.5),
         ];
         let (packed, count) = directional_light_data(&lights);
-        let built = uniforms(lights, vec![]);
+        let built = uniforms(&lights, vec![]);
         assert_eq!(count, built.num_directional);
         assert_eq!(packed, built.directional);
     }
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn empty_inputs_return_default() {
-        let u = uniforms(vec![], vec![]);
+        let u = uniforms(&[], vec![]);
         assert_eq!(u.num_directional, LightUniforms::DEFAULT.num_directional);
         assert_eq!(u.num_point, LightUniforms::DEFAULT.num_point);
     }
@@ -399,20 +399,16 @@ mod tests {
     fn ambient_intensity_carried_in_both_branches() {
         // Empty (DEFAULT) branch and the populated branch both honor the
         // authored multiplier.
-        let empty = build_light_uniforms(vec![], vec![], &[], 2.5);
+        let empty = build_light_uniforms(&[], vec![], &[], 2.5);
         assert!((empty.ambient_intensity - 2.5).abs() < 1e-6);
-        let populated = build_light_uniforms(
-            vec![dir([-0.3, 0.85, 0.4], [1.0; 3], 1.0)],
-            vec![],
-            &[],
-            3.0,
-        );
+        let populated =
+            build_light_uniforms(&[dir([-0.3, 0.85, 0.4], [1.0; 3], 1.0)], vec![], &[], 3.0);
         assert!((populated.ambient_intensity - 3.0).abs() < 1e-6);
     }
 
     #[test]
     fn single_directional_light_fields_mapped() {
-        let u = uniforms(vec![dir([-0.3, 0.85, 0.4], [1.0, 0.95, 0.8], 1.5)], vec![]);
+        let u = uniforms(&[dir([-0.3, 0.85, 0.4], [1.0, 0.95, 0.8], 1.5)], vec![]);
         assert_eq!(u.num_directional, 1);
         assert_eq!(u.num_point, 0);
         assert_eq!(u.directional[0].direction, [-0.3, 0.85, 0.4]);
@@ -422,7 +418,7 @@ mod tests {
 
     #[test]
     fn single_point_light_fields_mapped() {
-        let u = uniforms(vec![], vec![pt([2.0, 3.0, 4.0], [1.0, 0.8, 0.5], 8.0, 6.0)]);
+        let u = uniforms(&[], vec![pt([2.0, 3.0, 4.0], [1.0, 0.8, 0.5], 8.0, 6.0)]);
         assert_eq!(u.num_directional, 0);
         assert_eq!(u.num_point, 1);
         assert_eq!(u.point[0].position, [2.0, 3.0, 4.0]);
@@ -436,7 +432,7 @@ mod tests {
         let lights: Vec<DirectionalLight> = (0..MAX_DIRECTIONAL_LIGHTS + 2)
             .map(|i| dir([i as f32, 0.0, 0.0], [1.0; 3], 1.0))
             .collect();
-        let u = uniforms(lights, vec![]);
+        let u = uniforms(&lights, vec![]);
         assert_eq!(
             u.num_directional,
             i32::saturating_from(MAX_DIRECTIONAL_LIGHTS)
@@ -450,7 +446,7 @@ mod tests {
         let lights: Vec<PointLight> = (0..MAX_POINT_LIGHTS + 2)
             .map(|i| pt([i as f32, 0.0, 0.0], [1.0; 3], 1.0, 5.0))
             .collect();
-        let u = uniforms(vec![], lights);
+        let u = uniforms(&[], lights);
         assert_eq!(u.num_point, i32::saturating_from(MAX_POINT_LIGHTS));
         assert_eq!(
             u.num_local_lights,
@@ -464,7 +460,7 @@ mod tests {
     fn num_local_lights_counts_spot_lights() {
         let local =
             build_light_data(&[], &[spot([0.0; 3], [0.0, -1.0, 0.0], 10.0, 20.0)], &[]).lights;
-        let u = build_light_uniforms(vec![], vec![], &local, 1.0);
+        let u = build_light_uniforms(&[], vec![], &local, 1.0);
         assert_eq!(u.num_point, 0);
         assert_eq!(u.num_local_lights, 1);
     }
@@ -677,7 +673,7 @@ mod tests {
     #[test]
     fn the_sun_is_the_first_declared_directional_light() {
         let u = uniforms(
-            vec![
+            &[
                 dir([-0.3, 0.85, 0.4], [1.0, 0.5, 0.25], 2.0),
                 dir([0.1, -1.0, 0.0], [0.0, 1.0, 0.0], 9.0),
             ],
@@ -692,7 +688,7 @@ mod tests {
     // to integrate against, so both fall back to the neutral sun.
     #[test]
     fn a_world_with_no_directional_light_falls_back_to_a_neutral_sun() {
-        let u = uniforms(vec![], vec![pt([0.0, 2.0, 0.0], [1.0; 3], 1.0, 10.0)]);
+        let u = uniforms(&[], vec![pt([0.0, 2.0, 0.0], [1.0; 3], 1.0, 10.0)]);
         assert_eq!(u.num_directional, 0);
         assert_eq!(
             sun_direction(&u),
@@ -706,7 +702,7 @@ mod tests {
     // the color by intensity the way the fog sun does.
     #[test]
     fn the_glint_lanes_carry_a_unit_direction_and_a_weighted_color() {
-        let u = uniforms(vec![dir([0.0, 3.0, 4.0], [0.5, 1.0, 0.75], 8.0)], vec![]);
+        let u = uniforms(&[dir([0.0, 3.0, 4.0], [0.5, 1.0, 0.75], 8.0)], vec![]);
         let (sun_dir, sun_color) = glint_sun(&u);
         assert_eq!(sun_dir, [0.0, 0.6, 0.8, 0.0]);
         assert_eq!(sun_color, [4.0, 8.0, 6.0, 0.0]);
@@ -716,7 +712,7 @@ mod tests {
     // a neutral fallback would draw a white sun path on water under a starfield.
     #[test]
     fn a_world_with_no_directional_light_glints_not_at_all() {
-        let u = uniforms(vec![], vec![pt([0.0, 2.0, 0.0], [1.0; 3], 1.0, 10.0)]);
+        let u = uniforms(&[], vec![pt([0.0, 2.0, 0.0], [1.0; 3], 1.0, 10.0)]);
         assert_eq!(glint_sun(&u), ([0.0; 4], [0.0; 4]));
     }
 
@@ -724,7 +720,7 @@ mod tests {
     // nothing rather than dividing by its own zero length.
     #[test]
     fn a_directionless_light_glints_not_at_all() {
-        let u = uniforms(vec![dir([0.0; 3], [1.0; 3], 5.0)], vec![]);
+        let u = uniforms(&[dir([0.0; 3], [1.0; 3], 5.0)], vec![]);
         assert_eq!(u.num_directional, 1);
         assert_eq!(glint_sun(&u), ([0.0; 4], [0.0; 4]));
     }

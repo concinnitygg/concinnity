@@ -380,7 +380,7 @@ impl DxContext {
     // carries morphs. Called once after `upload_skinned`.
     pub(in crate::directx) fn upload_skinned_morphs(
         &mut self,
-        morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>,
+        morphs: &[Option<std::sync::Arc<mesh_payload::PayloadMorphs>>],
     ) -> RenderResult<()> {
         use std::collections::HashMap;
 

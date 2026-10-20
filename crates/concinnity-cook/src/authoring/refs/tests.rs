@@ -164,7 +164,7 @@ fn rename_in(world: &mut [serde_json::Value], from: &str, to: &str) -> usize {
         .sum()
 }
 
-fn entry(ty: &str, args: serde_json::Value) -> serde_json::Value {
+fn entry(ty: &str, args: &serde_json::Value) -> serde_json::Value {
     serde_json::json!({"type": ty, "args": args})
 }
 
@@ -174,70 +174,70 @@ fn entry(ty: &str, args: serde_json::Value) -> serde_json::Value {
 #[test]
 fn a_rename_follows_every_build_only_reference() {
     let mut world = vec![
-        entry("Screen", serde_json::json!({"$id": "pause"})),
-        entry("Font", serde_json::json!({"$id": "body"})),
-        entry("Scene", serde_json::json!({"$id": "level"})),
-        entry("Texture", serde_json::json!({"$id": "stone"})),
-        entry("DirectionalLight", serde_json::json!({"$id": "sun"})),
-        entry("PointLight", serde_json::json!({"$id": "fill"})),
-        entry("Model", serde_json::json!({"$id": "mdl", "meshes": []})),
-        entry("Material", serde_json::json!({"$id": "mat"})),
+        entry("Screen", &serde_json::json!({"$id": "pause"})),
+        entry("Font", &serde_json::json!({"$id": "body"})),
+        entry("Scene", &serde_json::json!({"$id": "level"})),
+        entry("Texture", &serde_json::json!({"$id": "stone"})),
+        entry("DirectionalLight", &serde_json::json!({"$id": "sun"})),
+        entry("PointLight", &serde_json::json!({"$id": "fill"})),
+        entry("Model", &serde_json::json!({"$id": "mdl", "meshes": []})),
+        entry("Material", &serde_json::json!({"$id": "mat"})),
         entry(
             "ProceduralMesh",
-            serde_json::json!({"$id": "box", "generator": "box"}),
+            &serde_json::json!({"$id": "box", "generator": "box"}),
         ),
-        entry("Prop", serde_json::json!({"$id": "base"})),
-        entry("CharacterSchema", serde_json::json!({"$id": "sk"})),
+        entry("Prop", &serde_json::json!({"$id": "base"})),
+        entry("CharacterSchema", &serde_json::json!({"$id": "sk"})),
         entry(
             "Prefab",
-            serde_json::json!({"$id": "lantern", "props": [
+            &serde_json::json!({"$id": "lantern", "props": [
                 {"name": "body", "mesh": "box", "material": "mat", "parent": "base"},
                 {"name": "shade", "model": "mdl"},
             ]}),
         ),
         entry(
             "Prefab",
-            serde_json::json!({"$id": "post", "props": [
+            &serde_json::json!({"$id": "post", "props": [
                 {"name": "top", "kind": "prefab", "prefab": "lantern"},
             ]}),
         ),
         entry(
             "Prop",
-            serde_json::json!({"$id": "lamp_1", "prefab": "lantern"}),
+            &serde_json::json!({"$id": "lamp_1", "prefab": "lantern"}),
         ),
         entry(
             "Panel",
-            serde_json::json!({
+            &serde_json::json!({
                 "$id": "card", "screen": "pause", "title": "pause", "title_font": "body",
             }),
         ),
         entry(
             "OptionSelect",
-            serde_json::json!({"$id": "vsync", "screen": "pause", "font": "body"}),
+            &serde_json::json!({"$id": "vsync", "screen": "pause", "font": "body"}),
         ),
         entry(
             "Slider",
-            serde_json::json!({"$id": "gain", "screen": "pause", "font": "body"}),
+            &serde_json::json!({"$id": "gain", "screen": "pause", "font": "body"}),
         ),
         entry(
             "MainMenu",
-            serde_json::json!({"$id": "menu", "font": "body"}),
+            &serde_json::json!({"$id": "menu", "font": "body"}),
         ),
         entry(
             "CharacterModel",
-            serde_json::json!({"$id": "hero", "schema": "sk"}),
+            &serde_json::json!({"$id": "hero", "schema": "sk"}),
         ),
         entry(
             "SceneImport",
-            serde_json::json!({"$id": "city", "source": "a.glb", "scene": "level"}),
+            &serde_json::json!({"$id": "city", "source": "a.glb", "scene": "level"}),
         ),
         entry(
             "LightRig",
-            serde_json::json!({"$id": "rig", "lights": ["sun", "fill"]}),
+            &serde_json::json!({"$id": "rig", "lights": ["sun", "fill"]}),
         ),
         entry(
             "MaterialPalette",
-            serde_json::json!({"$id": "pal", "entries": [
+            &serde_json::json!({"$id": "pal", "entries": [
                 {"alias": "wall", "albedo": "stone", "normal_map": "stone"},
             ]}),
         ),
@@ -304,7 +304,7 @@ fn a_prefab_mesh_is_a_reference_only_where_the_entry_draws_it() {
     let mesh = serde_json::json!({"generator": "box"});
     let mut prefab = entry(
         "Prefab",
-        serde_json::json!({"$id": "p", "props": [
+        &serde_json::json!({"$id": "p", "props": [
             {"name": "a", "mesh": "box", "model": "m"},
             {"name": "b", "kind": "point_light", "mesh": "box"},
             {"name": "c", "kind": "prop", "mesh": "box"},
@@ -333,7 +333,7 @@ fn counting_references_matches_what_a_rename_moves() {
     let mesh = serde_json::json!({"generator": "box"});
     let prop = entry(
         "Prop",
-        serde_json::json!({"$id": "p", "mesh": "box", "material": "box"}),
+        &serde_json::json!({"$id": "p", "mesh": "box", "material": "box"}),
     );
     assert_eq!(
         count_references(&prop, RegisteredType::ProceduralMesh, &mesh, "box"),
@@ -341,7 +341,7 @@ fn counting_references_matches_what_a_rename_moves() {
     );
     let panel = entry(
         "Panel",
-        serde_json::json!({"$id": "c", "screen": "pause", "title": "pause"}),
+        &serde_json::json!({"$id": "c", "screen": "pause", "title": "pause"}),
     );
     let screen = serde_json::json!({});
     assert_eq!(
@@ -355,7 +355,7 @@ fn counting_references_matches_what_a_rename_moves() {
 
     let mut untouched = entry(
         "Behavior",
-        serde_json::json!({"$id": "b", "on": {"enter": "gate"}}),
+        &serde_json::json!({"$id": "b", "on": {"enter": "gate"}}),
     );
     let before = untouched.clone();
     assert_eq!(
@@ -376,47 +376,47 @@ fn counting_references_matches_what_a_rename_moves() {
 #[test]
 fn a_renamed_world_still_builds() {
     let mut world = vec![
-        entry("GraphicsConfig", serde_json::json!({"$id": "gfx"})),
-        entry("Screen", serde_json::json!({"$id": "pause"})),
-        entry("Font", serde_json::json!({"$id": "body", "size_px": 20})),
+        entry("GraphicsConfig", &serde_json::json!({"$id": "gfx"})),
+        entry("Screen", &serde_json::json!({"$id": "pause"})),
+        entry("Font", &serde_json::json!({"$id": "body", "size_px": 20})),
         entry(
             "Texture",
-            serde_json::json!({"$id": "stone", "generator": "brick"}),
+            &serde_json::json!({"$id": "stone", "generator": "brick"}),
         ),
-        entry("PointLight", serde_json::json!({"$id": "fill"})),
+        entry("PointLight", &serde_json::json!({"$id": "fill"})),
         entry(
             "ProceduralMesh",
-            serde_json::json!({"$id": "box", "generator": "box"}),
+            &serde_json::json!({"$id": "box", "generator": "box"}),
         ),
         entry(
             "Prefab",
-            serde_json::json!({"$id": "lantern", "props": [
+            &serde_json::json!({"$id": "lantern", "props": [
                 {"name": "body", "mesh": "box"},
             ]}),
         ),
         entry(
             "Prop",
-            serde_json::json!({"$id": "lamp_1", "prefab": "lantern"}),
+            &serde_json::json!({"$id": "lamp_1", "prefab": "lantern"}),
         ),
         entry(
             "Panel",
-            serde_json::json!({
+            &serde_json::json!({
                 "$id": "card", "screen": "pause", "title": "Paused", "title_font": "body",
             }),
         ),
         entry(
             "Slider",
-            serde_json::json!({
+            &serde_json::json!({
                 "$id": "gain", "setting": "exposure", "screen": "pause", "font": "body",
             }),
         ),
         entry(
             "LightRig",
-            serde_json::json!({"$id": "rig", "lights": ["fill"]}),
+            &serde_json::json!({"$id": "rig", "lights": ["fill"]}),
         ),
         entry(
             "MaterialPalette",
-            serde_json::json!({"$id": "pal", "entries": [
+            &serde_json::json!({"$id": "pal", "entries": [
                 {"alias": "wall", "albedo": "stone"},
             ]}),
         ),
@@ -459,19 +459,19 @@ fn a_renamed_world_still_builds() {
 #[test]
 fn a_rename_follows_action_targets() {
     let mut world = vec![
-        entry("Screen", serde_json::json!({"$id": "pause"})),
-        entry("Scene", serde_json::json!({"$id": "level"})),
+        entry("Screen", &serde_json::json!({"$id": "pause"})),
+        entry("Scene", &serde_json::json!({"$id": "level"})),
         entry(
             "HitRegion",
-            serde_json::json!({"$id": "go", "action": {"scene": "level"}}),
+            &serde_json::json!({"$id": "go", "action": {"scene": "level"}}),
         ),
         entry(
             "KeyBinding",
-            serde_json::json!({"$id": "esc", "action": {"toggle": "pause"}}),
+            &serde_json::json!({"$id": "esc", "action": {"toggle": "pause"}}),
         ),
         entry(
             "MainMenu",
-            serde_json::json!({
+            &serde_json::json!({
                 "$id": "menu",
                 "items": [
                     {"label": "Play", "action": {"scene": "level"}},

@@ -273,6 +273,7 @@ pub(in crate::directx) struct GbufferExtent {
 // The RTV + SRV descriptor slots the three pooled color targets are viewed
 // through. Built from `GbufferSlots` at construction and from the stored
 // handles at resize, so one routine writes the views in both paths.
+#[derive(Clone, Copy)]
 struct GbufferViewSlots {
     normal_depth: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_CPU_DESCRIPTOR_HANDLE),
     roughness: (D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_CPU_DESCRIPTOR_HANDLE),
@@ -423,6 +424,7 @@ impl GbufferResources {
 
 // Camera + view-projection inputs for the G-buffer pre-pass. The two VPs drive
 // rasterization (jittered) and motion vectors (un-jittered current vs previous).
+#[derive(Clone, Copy)]
 pub(in crate::directx) struct GbufferPrepassView<'a> {
     // Jittered view-projection (the sky's rasterization target).
     pub jittered_vp: [[f32; 4]; 4],
@@ -435,6 +437,7 @@ pub(in crate::directx) struct GbufferPrepassView<'a> {
 
 // Per-frame decisions the G-buffer pre-pass takes as data, made on the main
 // thread before the encode fan-out.
+#[derive(Clone, Copy)]
 pub(in crate::directx) struct GbufferPrepassFrame<'a> {
     // The frame's planned view block. When no consumer (TAA, FSR or SSGI) reads
     // motion its previous frame is this one, so the motion channel is a harmless

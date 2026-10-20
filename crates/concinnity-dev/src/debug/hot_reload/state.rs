@@ -339,14 +339,14 @@ pub(crate) fn run_frame(
     if !pending_shaders.is_empty() {
         reload_reports = state
             .shaders
-            .request(&pending_shaders, backend.pipeline_builder());
+            .request(&pending_shaders, backend.pipeline_builder().as_ref());
     }
     let pending_volumes = state.signals.take_sdf_volumes();
     if !pending_volumes.is_empty() {
         reload_reports.extend(
             state
                 .sdf_fields
-                .request(&pending_volumes, backend.pipeline_builder()),
+                .request(&pending_volumes, backend.pipeline_builder().as_ref()),
         );
     }
     if let Some(edit) = backend.live_edit() {

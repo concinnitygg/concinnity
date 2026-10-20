@@ -217,7 +217,7 @@ mod tests {
     use super::*;
 
     fn doc_with(png: Vec<u8>) -> GltfDoc {
-        let glb = panorama_glb_with(PanoramaShape {
+        let glb = panorama_glb_with(&PanoramaShape {
             png,
             ..Default::default()
         });

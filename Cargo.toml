@@ -178,7 +178,6 @@ maybe_infinite_iter = "allow"
 float_cmp = "allow"
 # Not yet enforced: each call site needs a decision, not a mechanical fix.
 too_many_lines = "allow"
-needless_pass_by_value = "allow"
 # Nursery and restriction lints adopted one by one.
 use_self = "warn"
 redundant_clone = "warn"

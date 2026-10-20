@@ -23,11 +23,11 @@ pub struct FpsCounterSystem {
 impl FpsCounterSystem {
     /// The system for a world that declares an `FpsCounter`.
     pub fn for_world(world: &World) -> Option<Self> {
-        world.query::<FpsCounter>().next().cloned().map(Self::new)
+        world.query::<FpsCounter>().next().map(Self::new)
     }
 
     /// Build the counter from a world's `FpsCounter` request component.
-    pub fn new(config: FpsCounter) -> Self {
+    pub fn new(config: &FpsCounter) -> Self {
         Self {
             window: RateWindow::default(),
             label: config.label.map(Ref::id),
@@ -74,7 +74,7 @@ mod tests {
             &mut world,
             Phase::Late,
             "FpsCounterSystem",
-            FpsCounterSystem::new(config),
+            FpsCounterSystem::new(&config),
         );
 
         // Two half-second frames: the second closes the 1s window.

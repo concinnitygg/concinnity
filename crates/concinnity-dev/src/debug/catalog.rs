@@ -167,7 +167,7 @@ mod tests {
                 .iter()
                 .map(|p| (p.name.to_string(), sample(p.kind)))
                 .collect();
-            if let Err(error) = engine.call(verb.name, Value::Object(call)) {
+            if let Err(error) = engine.call(verb.name, &Value::Object(call)) {
                 assert!(!error.contains("invalid arguments"), "{error}");
                 assert!(!error.contains("must be"), "{error}");
             }

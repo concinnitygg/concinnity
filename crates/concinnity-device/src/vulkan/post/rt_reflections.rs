@@ -263,6 +263,7 @@ pub(in crate::vulkan) fn rebuild_rt_pipelines(
 // output-target extent, and the number of frames in flight (per-frame UBOs +
 // descriptor sets). Everything `create_buffer` / `create_image` / `build_targets`
 // need to size and place the pass's GPU memory.
+#[derive(Clone, Copy)]
 pub(in crate::vulkan) struct RtBuild<'a> {
     pub alloc: &'a DeviceAllocator,
     pub device: &'a VkDevice,
@@ -275,6 +276,7 @@ pub(in crate::vulkan) struct RtBuild<'a> {
 // the scene vertex/index SSBOs and the per-frame HDR scene / G-buffer /
 // roughness views. Wired by `wire_static` (at init and on resize) into every
 // frame's set. The IBL prefilter cube is the global set's.
+#[derive(Clone, Copy)]
 pub(in crate::vulkan) struct RtStaticInputs<'a> {
     pub vertex_buffer: vk::Buffer,
     pub index_buffer: vk::Buffer,

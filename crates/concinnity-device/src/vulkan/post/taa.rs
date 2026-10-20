@@ -87,7 +87,7 @@ impl VkContext {
             &device,
             &cmd,
             frame_idx,
-            TaaInputs {
+            &TaaInputs {
                 scene: self.post_scene_image(frame_idx).view,
                 velocity,
                 reactive: self

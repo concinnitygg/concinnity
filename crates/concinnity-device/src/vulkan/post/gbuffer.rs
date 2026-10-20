@@ -331,6 +331,7 @@ pub(in crate::vulkan) struct GbufferBindlessRecords<'a> {
 // Scene sizing that dimensions the per-frame model-history SSBOs: `n_cull` is
 // the cull-record count they hold one matrix each for, and `frames` the number
 // of frames in flight the ring is deep.
+#[derive(Clone, Copy)]
 pub(in crate::vulkan) struct GbufferBindlessScene {
     pub n_cull: usize,
     pub frames: usize,
@@ -759,6 +760,7 @@ impl GbufferResources {
 // Camera / view state the G-buffer pre-pass's raymarched surfaces rasterize
 // with. `jittered_vp` is the jittered VP that rasterizes (matching the main
 // pass).
+#[derive(Clone, Copy)]
 pub(in crate::vulkan) struct GbufferPrepassView<'a> {
     pub jittered_vp: [[f32; 4]; 4],
     // The main pass's clock and camera position, which a vertex hook reads.

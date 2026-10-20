@@ -96,7 +96,7 @@ impl PropBodies {
         layers: &LayerTable,
         world: &mut Simulation,
         entity: Entity,
-        snap: PropCollSnap,
+        snap: &PropCollSnap,
     ) -> Option<BodyHandle> {
         let pose = PoseInterp::new(snap.position, quat_from_euler_deg(snap.rotation_deg));
         let layer_or = |default: &'static str| {
@@ -152,7 +152,7 @@ impl PropBodies {
         layers: &LayerTable,
         world: &mut Simulation,
         entity: Entity,
-        snap: PropCollSnap,
+        snap: &PropCollSnap,
         body_cap: u32,
     ) {
         let full = u32::saturating_from(world.body_count()) >= body_cap;
@@ -356,7 +356,12 @@ mod tests {
         let mut props = PropBodies::default();
         for (i, &entity) in entities.iter().enumerate() {
             props
-                .add(&layers, &mut world, entity, ball_snap([i as f32, 2.0, 0.0]))
+                .add(
+                    &layers,
+                    &mut world,
+                    entity,
+                    &ball_snap([i as f32, 2.0, 0.0]),
+                )
                 .expect("room in the pool");
         }
         (world, layers, props, entities)
@@ -389,7 +394,7 @@ mod tests {
         let mut storage = ComponentStorage::default();
         let late = mint_entities(&mut storage, 1)[0];
         let handle = props
-            .add(&layers, &mut world, late, ball_snap([9.0, 2.0, 0.0]))
+            .add(&layers, &mut world, late, &ball_snap([9.0, 2.0, 0.0]))
             .expect("room in the pool");
         assert_eq!(props.entity_of(handle), Some(late));
         let first = props.get(0).expect("body 0").handle;
@@ -408,10 +413,10 @@ mod tests {
             dynamics.asleep = true;
         }
         let asleep = props
-            .add(&layers, &mut world, sleeper, snap)
+            .add(&layers, &mut world, sleeper, &snap)
             .expect("room in the pool");
         let awake = props
-            .add(&layers, &mut world, waker, ball_snap([0.0, 8.0, 8.0]))
+            .add(&layers, &mut world, waker, &ball_snap([0.0, 8.0, 8.0]))
             .expect("room in the pool");
         assert_eq!(world.is_sleeping(asleep), Some(true));
         assert_eq!(world.is_sleeping(awake), Some(false));
@@ -467,7 +472,12 @@ mod tests {
         let mut props = PropBodies::default();
         for (i, &entity) in entities.iter().take(3).enumerate() {
             props
-                .add(&layers, &mut world, entity, ball_snap([i as f32, 2.0, 0.0]))
+                .add(
+                    &layers,
+                    &mut world,
+                    entity,
+                    &ball_snap([i as f32, 2.0, 0.0]),
+                )
                 .expect("room in the pool");
         }
         (world, layers, props, entities)
@@ -482,14 +492,14 @@ mod tests {
         let late = entities[3];
 
         let cap = u32::saturating_from(bodies_before);
-        props.adopt(&layers, &mut world, late, ball_snap([9.0, 2.0, 0.0]), cap);
+        props.adopt(&layers, &mut world, late, &ball_snap([9.0, 2.0, 0.0]), cap);
         assert_eq!(props.len(), 3, "the refused entity got no body");
         assert_eq!(world.body_count(), bodies_before, "and none was built");
         assert!(props.is_refused(late), "so the next scan skips it");
         assert!(!props.is_tracked(late));
 
         // Refusing again is a no-op: the entity is already remembered.
-        props.adopt(&layers, &mut world, late, ball_snap([9.0, 2.0, 0.0]), cap);
+        props.adopt(&layers, &mut world, late, &ball_snap([9.0, 2.0, 0.0]), cap);
         assert_eq!(world.body_count(), bodies_before);
 
         // Room under the cap is taken normally.
@@ -497,7 +507,7 @@ mod tests {
             &layers,
             &mut world,
             late,
-            ball_snap([9.0, 2.0, 0.0]),
+            &ball_snap([9.0, 2.0, 0.0]),
             cap + 1,
         );
         assert_eq!(props.len(), 4);
@@ -511,7 +521,7 @@ mod tests {
         let (mut world, layers, mut props, entities) = three_props_and_a_spare();
         let late = entities[3];
         let cap = u32::saturating_from(world.body_count());
-        props.adopt(&layers, &mut world, late, ball_snap([9.0, 2.0, 0.0]), cap);
+        props.adopt(&layers, &mut world, late, &ball_snap([9.0, 2.0, 0.0]), cap);
         assert!(props.is_refused(late));
 
         // Everything but the refused entity is still alive: the refusal stays.
@@ -615,7 +625,7 @@ mod tests {
         let mut snap = ball_snap([0.0, 2.0, 0.0]);
         snap.dynamics = None;
         props
-            .add(&layers, &mut world, entity, snap)
+            .add(&layers, &mut world, entity, &snap)
             .expect("room in the pool");
 
         props.sync_external_poses(&mut world, |_| Some(([0.0, 6.0, 0.0], [0.0; 3])));
@@ -651,12 +661,12 @@ mod tests {
         let layers = LayerTable::new(&PhysicsConfig::default());
         let mut props = PropBodies::default();
         props
-            .add(&layers, &mut world, ids[0], ball_snap([0.0, 2.0, 0.0]))
+            .add(&layers, &mut world, ids[0], &ball_snap([0.0, 2.0, 0.0]))
             .expect("room in the pool");
         let mut static_snap = ball_snap([3.0, 2.0, 0.0]);
         static_snap.dynamics = None;
         props
-            .add(&layers, &mut world, ids[1], static_snap)
+            .add(&layers, &mut world, ids[1], &static_snap)
             .expect("room in the pool");
 
         assert_eq!(props.dynamic_count(), 1);

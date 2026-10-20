@@ -6,7 +6,7 @@ use serde_json::{Map, Value, json};
 use super::{FieldKind, assemble, fields_for, set_action_options};
 
 // `args` as the form saves them with every reference field at `(none)`.
-fn saved_with_no_references(ty: &str, seed: Value) -> Map<String, Value> {
+fn saved_with_no_references(ty: &str, seed: &Value) -> Map<String, Value> {
     let seed = seed.as_object().cloned().unwrap_or_default();
     let mut fields = fields_for(ty, Some(&seed));
     let mut refs = 0;
@@ -61,7 +61,7 @@ fn a_shorthand_with_references_at_none_still_builds() {
         json!({"generator": "box"}).as_object().cloned().unwrap(),
     );
     for (i, (ty, seed)) in saved.into_iter().enumerate() {
-        let args = saved_with_no_references(ty, seed);
+        let args = saved_with_no_references(ty, &seed);
         world += &line(ty, &format!("x{i}"), args);
     }
     if let Err(errors) = concinnity_cook::prepare_world(world.as_str(), None) {
@@ -74,11 +74,11 @@ fn a_shorthand_with_references_at_none_still_builds() {
 #[test]
 fn an_unbuildable_entry_with_references_at_none_still_reads() {
     use concinnity_cook::authoring::registry::build_only::{CharacterModel, SceneImport};
-    let import = saved_with_no_references("SceneImport", json!({"source": "a.glb", "scene": "s"}));
+    let import = saved_with_no_references("SceneImport", &json!({"source": "a.glb", "scene": "s"}));
     serde_json::from_value::<SceneImport>(Value::Object(import)).expect("SceneImport args");
-    let model = saved_with_no_references("CharacterModel", json!({"source": "a.glb"}));
+    let model = saved_with_no_references("CharacterModel", &json!({"source": "a.glb"}));
     serde_json::from_value::<CharacterModel>(Value::Object(model)).expect("CharacterModel args");
-    let prop = saved_with_no_references("Prop", json!({"prefab": "p"}));
+    let prop = saved_with_no_references("Prop", &json!({"prefab": "p"}));
     let prop = serde_json::from_value::<concinnity_core::components::Prop>(Value::Object(prop))
         .expect("Prop args");
     assert!(prop.prefab.is_empty());

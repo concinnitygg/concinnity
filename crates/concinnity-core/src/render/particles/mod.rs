@@ -726,8 +726,8 @@ mod tests {
         assert!((radius - expected).abs() < 1e-5);
     }
 
-    fn one_record(emitter: ParticleEmitter) -> ParticleEmitterRecord {
-        *build_particle_records(&[&emitter], 4)
+    fn one_record(emitter: &ParticleEmitter) -> ParticleEmitterRecord {
+        *build_particle_records(&[emitter], 4)
             .first()
             .expect("a visible emitter with a pool makes a record")
     }
@@ -737,7 +737,7 @@ mod tests {
     // as a kernel reading a stale or zeroed value.
     #[test]
     fn the_per_frame_uniform_carries_the_records_fields() {
-        let record = one_record(ParticleEmitter::default());
+        let record = one_record(&ParticleEmitter::default());
         let params = record.params(0.016, ParticleSpawns { first: 7, count: 5 }, 42);
 
         assert_eq!(params.position, record.position);
@@ -764,7 +764,7 @@ mod tests {
     // one, rather than pulling every live particle back along its velocity.
     #[test]
     fn a_backwards_step_integrates_as_a_stopped_one() {
-        let record = one_record(ParticleEmitter::default());
+        let record = one_record(&ParticleEmitter::default());
         assert_eq!(record.params(-1.0, ParticleSpawns::default(), 0).dt, 0.0);
     }
 

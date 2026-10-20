@@ -44,7 +44,7 @@ impl MtlContext {
         pass.encode(
             &self.post_device(),
             cmd_buf,
-            BloomInputs {
+            &BloomInputs {
                 scene: scene_color,
                 top,
                 top_ref: top,

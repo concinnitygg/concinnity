@@ -296,14 +296,14 @@ mod tests {
         assert!(prepare("{ not json\n".into()).is_err());
     }
 
-    fn asset(json: serde_json::Value) -> concinnity_cook::authoring::world::WorldJsonlAsset {
-        concinnity_cook::authoring::world::WorldJsonlAsset::from_value(&json).expect("typed asset")
+    fn asset(json: &serde_json::Value) -> concinnity_cook::authoring::world::WorldJsonlAsset {
+        concinnity_cook::authoring::world::WorldJsonlAsset::from_value(json).expect("typed asset")
     }
 
     #[test]
     fn the_lut_scan_takes_the_first_source() {
         let assets = [asset(
-            serde_json::json!({"type":"ColorLut","args":{"$id":"grade","source":"luts/warm.cube"}}),
+            &serde_json::json!({"type":"ColorLut","args":{"$id":"grade","source":"luts/warm.cube"}}),
         )];
         assert_eq!(
             scan_color_lut_source(&assets),
@@ -312,8 +312,10 @@ mod tests {
 
         // Only the first is used: the runtime binds handle 0.
         let assets = [
-            asset(serde_json::json!({"type":"ColorLut","args":{"$id":"a","source":"first.cube"}})),
-            asset(serde_json::json!({"type":"ColorLut","args":{"$id":"b","source":"second.cube"}})),
+            asset(&serde_json::json!({"type":"ColorLut","args":{"$id":"a","source":"first.cube"}})),
+            asset(
+                &serde_json::json!({"type":"ColorLut","args":{"$id":"b","source":"second.cube"}}),
+            ),
         ];
         assert_eq!(
             scan_color_lut_source(&assets),
@@ -326,15 +328,15 @@ mod tests {
     fn the_lut_scan_yields_nothing_without_a_source() {
         assert_eq!(scan_color_lut_source(&[]), None);
         let no_source = [asset(
-            serde_json::json!({"type":"ColorLut","args":{"$id":"grade"}}),
+            &serde_json::json!({"type":"ColorLut","args":{"$id":"grade"}}),
         )];
         assert_eq!(scan_color_lut_source(&no_source), None);
         let empty = [asset(
-            serde_json::json!({"type":"ColorLut","args":{"$id":"grade","source":""}}),
+            &serde_json::json!({"type":"ColorLut","args":{"$id":"grade","source":""}}),
         )];
         assert_eq!(scan_color_lut_source(&empty), None);
         let other_kind = [asset(
-            serde_json::json!({"type":"EnvironmentMap","args":{"$id":"sky","source":"x.hdr"}}),
+            &serde_json::json!({"type":"EnvironmentMap","args":{"$id":"sky","source":"x.hdr"}}),
         )];
         assert_eq!(scan_color_lut_source(&other_kind), None);
     }
@@ -345,7 +347,7 @@ mod tests {
     #[test]
     fn the_environment_map_scan_defaults_the_unset_bake_inputs() {
         let assets = [asset(
-            serde_json::json!({"type":"EnvironmentMap","args":{"$id":"sky","source":"studio.hdr"}}),
+            &serde_json::json!({"type":"EnvironmentMap","args":{"$id":"sky","source":"studio.hdr"}}),
         )];
         let info = scan_environment_map_source(&assets).expect("a file-backed map");
         assert_eq!(info.source, "studio.hdr");
@@ -357,7 +359,7 @@ mod tests {
 
     #[test]
     fn the_environment_map_scan_carries_the_authored_bake_inputs() {
-        let assets = [asset(serde_json::json!({
+        let assets = [asset(&serde_json::json!({
             "type":"EnvironmentMap","args":{
                 "$id":"sky",
                 "source":"studio.hdr",
@@ -378,19 +380,19 @@ mod tests {
     // even when a stale `source` is still authored alongside the generator.
     #[test]
     fn the_environment_map_scan_skips_a_procedural_map() {
-        let generated = [asset(serde_json::json!({
+        let generated = [asset(&serde_json::json!({
             "type":"EnvironmentMap","args":{"$id":"sky","generator":"sky"}
         }))];
         assert!(scan_environment_map_source(&generated).is_none());
 
-        let both = [asset(serde_json::json!({
+        let both = [asset(&serde_json::json!({
             "type":"EnvironmentMap","args":{"$id":"sky","generator":"sky","source":"studio.hdr"}
         }))];
         assert!(scan_environment_map_source(&both).is_none());
 
         assert!(scan_environment_map_source(&[]).is_none());
         let no_source = [asset(
-            serde_json::json!({"type":"EnvironmentMap","args":{"$id":"sky"}}),
+            &serde_json::json!({"type":"EnvironmentMap","args":{"$id":"sky"}}),
         )];
         assert!(scan_environment_map_source(&no_source).is_none());
     }

@@ -41,6 +41,7 @@ pub(super) struct BindlessPass {
     pub(super) main_spv: BindlessSpv,
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct BindlessInputs<'a> {
     pub(super) world_shaders: &'a [WorldShader<'a>],
     pub(super) plan: &'a CullPlan,

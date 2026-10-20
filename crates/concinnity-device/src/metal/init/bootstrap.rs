@@ -48,6 +48,7 @@ pub(crate) struct WindowSetup {
 // bar is drawn, whether the world is geometry-less (clamps the initial HDR
 // targets to 1x1), whether frame capture is enabled (drives `framebufferOnly`
 // on the MTKView), and the host view to embed into instead of a window.
+#[derive(Clone, Copy)]
 pub(crate) struct WindowConfig<'a> {
     pub title: &'a str,
     pub width: u32,

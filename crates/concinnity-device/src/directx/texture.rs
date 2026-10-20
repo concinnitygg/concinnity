@@ -1393,6 +1393,7 @@ pub(super) fn create_fallback_cubemap(
 
 // The two IBL cubes for an EnvironmentMap upload: the irradiance cube and the
 // multi-mip prefiltered radiance cube (both RGBA32F).
+#[derive(Clone, Copy)]
 pub(super) struct EnvironmentMapPayload<'a> {
     // Mip-0 face size of the irradiance cube.
     pub irradiance_face: u32,

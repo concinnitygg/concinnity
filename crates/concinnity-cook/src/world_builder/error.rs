@@ -32,7 +32,7 @@ pub enum WorldBuildError {
 
 // A free function rather than a `From` impl, which would let any io failure
 // pass as a build failure.
-pub(super) fn from_io(error: std::io::Error) -> WorldBuildError {
+pub(super) fn from_io(error: &std::io::Error) -> WorldBuildError {
     WorldBuildError::Build {
         kind: error.kind(),
         message: error.to_string(),
@@ -57,7 +57,7 @@ mod tests {
     // the io failure the build step reported.
     #[test]
     fn an_io_failure_keeps_its_kind_and_message() {
-        let error = from_io(std::io::Error::new(
+        let error = from_io(&std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             "data/0 is read-only",
         ));

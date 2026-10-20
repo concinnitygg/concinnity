@@ -53,20 +53,20 @@ pub fn vertices_from_data(data: &[VertexData], indices: &[u16]) -> Result<Vec<Ve
 /// default) produces no trailer and emits the single-LOD payload.
 pub fn finish_mesh_payload(
     vertices: Vec<Vert>,
-    indices: Vec<u16>,
+    indices: &[u16],
     lod_levels: u32,
     lod_distances: &[f32],
 ) -> Result<Vec<u8>, String> {
-    let tangents = compute_tangents(&vertices, &indices);
+    let tangents = compute_tangents(&vertices, indices);
     let verts5: Vec<VertT> = vertices
         .into_iter()
         .zip(tangents)
         .map(|((pos, normal, color, uv), tangent)| (pos, normal, tangent, color, uv))
         .collect();
-    let alternates = build_lod_alternates(lod_levels, lod_distances, &verts5, &indices)?;
+    let alternates = build_lod_alternates(lod_levels, lod_distances, &verts5, indices)?;
     Ok(crate::gfx::mesh_payload::serialize_with_lods(
         &verts5,
-        &indices,
+        indices,
         &alternates,
     ))
 }
@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn single_lod_payload_carries_no_alternates() {
         let (verts, indices) = build_box([0.5, 0.5, 0.5]);
-        let payload = finish_mesh_payload(verts, indices, 1, &[]).unwrap();
+        let payload = finish_mesh_payload(verts, &indices, 1, &[]).unwrap();
         let (out, lod0, alternates) = deserialize_with_lods(&payload).unwrap();
         assert_eq!(out.len(), 24);
         assert_eq!(lod0.len(), 36);
@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn lod_levels_emit_decimated_alternates_with_rising_distances() {
         let (verts, indices) = build_sphere(1.0, 16, 24).unwrap();
-        let payload = finish_mesh_payload(verts, indices, 3, &[]).unwrap();
+        let payload = finish_mesh_payload(verts, &indices, 3, &[]).unwrap();
         let (_, lod0, alternates) = deserialize_with_lods(&payload).unwrap();
         assert_eq!(alternates.len(), 2);
         assert!(alternates[0].1.len() < lod0.len());
@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn lod_distance_count_must_match_lod_levels() {
         let (verts, indices) = build_box([0.5, 0.5, 0.5]);
-        let err = finish_mesh_payload(verts, indices, 3, &[10.0]).unwrap_err();
+        let err = finish_mesh_payload(verts, &indices, 3, &[10.0]).unwrap_err();
         assert!(err.contains("lod_distances"), "error was: {err}");
     }
 

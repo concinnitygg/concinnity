@@ -103,7 +103,7 @@ pub(super) fn compile_nodes(
 pub(super) fn story_entry(
     names: &StoryNames,
     story: &Story,
-    nodes: Vec<serde_json::Value>,
+    nodes: &[serde_json::Value],
     text_speed: f32,
 ) -> serde_json::Value {
     serde_json::json!({

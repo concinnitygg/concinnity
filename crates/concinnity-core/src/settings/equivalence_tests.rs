@@ -568,7 +568,7 @@ fn case_text(
 
     let cleared = preset_cleared(user);
     let mut after_preset = resolved.clone();
-    after_preset.set_quality(layers(&cleared).resolve_quality());
+    after_preset.set_quality(&layers(&cleared).resolve_quality());
     let (bare, two_pass, after_two_pass) = if world_name == "bare" {
         let render_scale = user.render_scale.unwrap_or_else(|| {
             more_aggressive_upscale(UpscaleQuality::default(), ceiling.min_upscale)

@@ -504,7 +504,7 @@ impl SkinnedDraws for RecordingBackend {
 
     fn upload_skinned_morphs(
         &mut self,
-        _morphs: Vec<Option<Arc<crate::gfx::mesh_payload::PayloadMorphs>>>,
+        _morphs: &[Option<Arc<crate::gfx::mesh_payload::PayloadMorphs>>],
     ) -> RenderResult<()> {
         let mut s = self.state.lock();
         s.calls.push(Call::UploadSkinnedMorphs);

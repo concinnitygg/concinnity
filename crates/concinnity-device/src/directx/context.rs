@@ -1655,7 +1655,7 @@ impl FrameDevice for DxContext {
         let started = std::time::Instant::now();
         let mut pass_lists = recorded.pass_cmd_lists;
         let submitted = self.close_end_list(frame).and_then(|()| {
-            self.submit_and_present(start_cmd, &pass_lists, back_idx, frame, gpu_wait)
+            self.submit_and_present(&start_cmd, &pass_lists, back_idx, frame, gpu_wait)
         });
         // The lists stay alive in their pool; only this frame's references drop.
         pass_lists.clear();

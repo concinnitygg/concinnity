@@ -28,6 +28,7 @@ pub(super) fn stage_limits(hw: &VkHardware) -> StageDescriptors {
     crate::vulkan::descriptor_layout::stage_limits(&properties.limits)
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct SetPoolInputs<'a> {
     pub(super) instanced_clusters: &'a [InstancedCluster],
     pub(super) text_atlas_count: usize,

@@ -32,9 +32,9 @@ mod tests {
     use super::*;
     use crate::components::AntiAliasing;
 
-    fn tunables(bloom: Bloom, vignette: f32, lut: f32, aa: AaMode) -> PostProcessTunables {
+    fn tunables(bloom: &Bloom, vignette: f32, lut: f32, aa: AaMode) -> PostProcessTunables {
         post_process_tunables(
-            &bloom,
+            bloom,
             &Exposure::default(),
             &Vignette { strength: vignette },
             lut,
@@ -62,7 +62,7 @@ mod tests {
             threshold: -1.0,
             knee: -0.2,
         };
-        let p = tunables(bloom, 5.0, -2.0, AaMode::Fxaa);
+        let p = tunables(&bloom, 5.0, -2.0, AaMode::Fxaa);
         assert_eq!(p.bloom_intensity, 0.0);
         assert_eq!(p.bloom_threshold, 0.0);
         assert_eq!(p.bloom_knee, 0.0);
@@ -72,7 +72,7 @@ mod tests {
 
     #[test]
     fn the_fxaa_gate_follows_the_aa_mode() {
-        assert_eq!(tunables(Bloom::default(), 0.0, 1.0, AaMode::Off).fxaa, 0.0);
-        assert_eq!(tunables(Bloom::default(), 0.0, 1.0, AaMode::Taa).fxaa, 1.0);
+        assert_eq!(tunables(&Bloom::default(), 0.0, 1.0, AaMode::Off).fxaa, 0.0);
+        assert_eq!(tunables(&Bloom::default(), 0.0, 1.0, AaMode::Taa).fxaa, 1.0);
     }
 }

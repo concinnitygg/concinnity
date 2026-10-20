@@ -353,6 +353,7 @@ impl Partition {
 }
 
 /// What one partition reads.
+#[derive(Clone, Copy)]
 pub(crate) struct Work<'a> {
     pub(crate) bodies: &'a [SolverBody],
     pub(crate) taken: &'a [bool],

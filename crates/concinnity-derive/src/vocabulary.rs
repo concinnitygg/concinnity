@@ -69,7 +69,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             default: ::core::option::Option::None,
         }
     };
-    let schema_impls = schema_impls(input, &body, quote!(Enum));
+    let schema_impls = schema_impls(input, &body, &quote!(Enum));
 
     Ok(quote! {
         impl #impl_generics #ident #ty_generics #where_clause {
@@ -124,13 +124,13 @@ fn has_serde_naming(input: &DeriveInput, variant: &syn::Variant) -> bool {
 mod tests {
     use super::*;
 
-    fn expanded(input: DeriveInput) -> String {
-        expand(&input).expect("the input derives").to_string()
+    fn expanded(input: &DeriveInput) -> String {
+        expand(input).expect("the input derives").to_string()
     }
 
     #[test]
     fn each_variant_carries_its_name_and_doc() {
-        let out = expanded(syn::parse_quote! {
+        let out = expanded(&syn::parse_quote! {
             #[serde(rename_all = "snake_case")]
             enum Quality {
                 /// Best.
@@ -159,7 +159,7 @@ mod tests {
         );
 
         // With serde's impls built by hand, the name is whatever `vocab` says.
-        let out = expanded(syn::parse_quote! {
+        let out = expanded(&syn::parse_quote! {
             enum Transition { #[vocab("FadeBlack")] FadeBlack, #[vocab("cut")] Cut }
         });
         assert!(out.contains("[\"FadeBlack\" , \"cut\"]"), "{out}");
@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn the_schema_sits_behind_the_consumers_feature() {
-        let out = expanded(syn::parse_quote! { enum E { #[vocab("a")] A } });
+        let out = expanded(&syn::parse_quote! { enum E { #[vocab("a")] A } });
         assert!(out.contains("# [cfg (feature = \"schema\")]"), "{out}");
         assert!(out.contains("FieldType :: Enum"), "{out}");
         assert!(

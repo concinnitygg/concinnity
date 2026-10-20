@@ -470,7 +470,7 @@ impl System for UiInputSystem {
         if let Some(id) = initial
             && let Some(transition) = self.screens.apply(ScreenCommand::Show(id))
         {
-            self.apply_transition(transition, ctx);
+            self.apply_transition(&transition, ctx);
         }
         self.publish_screen_stack(ctx);
 
@@ -537,7 +537,7 @@ impl System for UiInputSystem {
 
         let bands = ctx.frame.collect(self.panels.iter().map(|p| p.band));
         let frame = RegionFrame::new(input.viewport, active_screen, thumb_active, overlay, bands);
-        let outcome = self.hit_test_regions(&input, &intent, frame, ctx);
+        let outcome = self.hit_test_regions(&input, &intent, &frame, ctx);
         if let Some(result) = outcome.fired {
             return result;
         }
@@ -545,7 +545,7 @@ impl System for UiInputSystem {
             self.begin_capture(setting_key, value_label, ctx);
         }
         if let Some(req) = outcome.start_open {
-            self.open_dropdown = Self::build_open_dropdown(req, ctx);
+            self.open_dropdown = Self::build_open_dropdown(&req, ctx);
         }
         if let Some(gid) = outcome.toggle_group {
             self.toggle_group(active_screen, gid);
@@ -704,7 +704,7 @@ impl UiInputSystem {
     // value from the row's value label to seed the selection. Returns `None`
     // (stays closed) when the setting has no options to offer.
     fn build_open_dropdown(
-        req: OpenRequest,
+        req: &OpenRequest,
         ctx: &PipelineContext<'_>,
     ) -> Option<OpenDropdownState> {
         let options: Vec<String> = if req.setting == SettingKey::GraphicsApi {
@@ -920,7 +920,7 @@ impl UiInputSystem {
     // hit-testing. They are cloned out to release the ctx borrow for the apply.
     fn apply_pending_screen_commands(&mut self, ctx: &mut PipelineContext<'_>) {
         let screen_cmds: Vec<ScreenCommand> = match ctx.events::<ScreenCommand>() {
-            Some(events) => events.read(&mut self.screen_cmd_cursor).cloned().collect(),
+            Some(events) => events.read(&mut self.screen_cmd_cursor).copied().collect(),
             None => Vec::new(),
         };
         for cmd in screen_cmds {
@@ -936,7 +936,7 @@ impl UiInputSystem {
         // neither lingers over a different screen.
         self.open_dropdown = None;
         self.focus = None;
-        self.apply_transition(transition, ctx);
+        self.apply_transition(&transition, ctx);
         self.publish_screen_stack(ctx);
     }
 
@@ -945,7 +945,7 @@ impl UiInputSystem {
     // `focus` field, and announce the newly-topmost screen (AudioCue).
     fn apply_transition(
         &self,
-        transition: screen::ScreenTransition,
+        transition: &screen::ScreenTransition,
         ctx: &mut PipelineContext<'_>,
     ) {
         for id in &transition.hidden {
@@ -1303,6 +1303,7 @@ impl UiInputSystem {
 
 // The one-shot edges an open dropdown reacts to this frame: pick the hovered
 // option, dismiss the list, or re-hover from a cursor move.
+#[derive(Clone, Copy)]
 struct DropdownPulses {
     confirm: bool,
     escape: bool,
@@ -1380,7 +1381,7 @@ fn fire_action(
             // new context, so the whole overlay stack clears.
             ctx.events_mut::<ScreenCommand>().send(ScreenCommand::Clear);
         }
-        UiAction::Screen(cmd) => ctx.events_mut::<ScreenCommand>().send(cmd.clone()),
+        UiAction::Screen(cmd) => ctx.events_mut::<ScreenCommand>().send(*cmd),
         UiAction::Story(cmd) => ctx.events_mut::<StoryCommand>().send(cmd.clone()),
         UiAction::Screenshot(frames) => {
             ctx.insert_resource(crate::ecs::ScreenshotRequest(*frames));
@@ -1455,7 +1456,7 @@ mod tests {
         let mut cursor = EventCursor::default();
         world
             .events::<ScreenCommand>()
-            .and_then(|e| e.read(&mut cursor).next().cloned())
+            .and_then(|e| e.read(&mut cursor).next().copied())
     }
 
     // Every SettingCommand the system sent, read with a fresh cursor (in send
@@ -3554,7 +3555,7 @@ mod tests {
         let mut cursor = EventCursor::default();
         let sent: Vec<ScreenCommand> = world
             .events::<ScreenCommand>()
-            .map(|e| e.read(&mut cursor).cloned().collect())
+            .map(|e| e.read(&mut cursor).copied().collect())
             .unwrap_or_default();
         assert!(
             sent.iter()

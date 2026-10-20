@@ -66,7 +66,8 @@ pub fn validate_asset(
 /// sources and presets against. Every problem found is reported in a single
 /// newline-joined error.
 pub fn validate_world_jsonl(content: &str, assets_dir: Option<&Path>) -> std::io::Result<()> {
-    let loaded = crate::build_only::prepare_world(content, assets_dir).map_err(errors_to_io)?;
+    let loaded = crate::build_only::prepare_world(content, assets_dir)
+        .map_err(|errors| errors_to_io(&errors))?;
 
     let mut errors: Vec<String> = Vec::new();
     for asset in &loaded.assets {
@@ -87,7 +88,7 @@ pub fn validate_world_jsonl(content: &str, assets_dir: Option<&Path>) -> std::io
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(errors_to_io(errors))
+        Err(errors_to_io(&errors))
     }
 }
 

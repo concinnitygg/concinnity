@@ -54,7 +54,7 @@ impl DxContext {
         if let Err(e) = rc.encode(
             &self.post_device(frame_idx),
             cmd,
-            ReflectionCompositeInputs {
+            &ReflectionCompositeInputs {
                 reflection: reflection_srv,
                 scene: self.targets.hdr.srv_gpu,
                 normal_depth: gbuffer.normal_depth_srv_gpu,

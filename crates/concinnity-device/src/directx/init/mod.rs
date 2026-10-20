@@ -399,7 +399,7 @@ impl DxContext {
                 super::water_sim::DxOceanSim::new(
                     &gpu.hw.alloc,
                     &fx.ocean,
-                    super::water_sim::OceanSlots {
+                    &super::water_sim::OceanSlots {
                         cpu: |i| descriptors.slot_cpu(base + i),
                         gpu: descriptors.slot_gpu(base),
                         stride: descriptors.srv_descriptor_size,

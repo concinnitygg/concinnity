@@ -83,6 +83,15 @@ pub enum InstanceBlas<'a, B> {
     },
 }
 
+// Manual so the BLAS type itself need not be `Copy`: only a reference to it is held.
+impl<B> Clone for InstanceBlas<'_, B> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<B> Copy for InstanceBlas<'_, B> {}
+
 /// A refresh of the draw BLAS head, planned against the current draw list.
 pub struct HeadRefresh {
     indices: Vec<usize>,

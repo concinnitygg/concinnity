@@ -176,7 +176,7 @@ impl<Pipeline, Target> BloomPass<Pipeline, Target> {
         &'t self,
         device: &D,
         rec: &D::Recorder,
-        inputs: BloomInputs<'t, D>,
+        inputs: &BloomInputs<'t, D>,
         post: &PostProcessParams,
     ) -> RenderResult<()>
     where
@@ -356,7 +356,7 @@ mod tests {
         pass.encode(
             device,
             &(),
-            BloomInputs {
+            &BloomInputs {
                 scene: SCENE,
                 top: TOP,
                 top_ref: TOP,

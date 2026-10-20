@@ -110,6 +110,7 @@ pub(super) fn plan_cull(
     }
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct CullInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
     pub(super) world_shaders: &'a [WorldShader<'a>],

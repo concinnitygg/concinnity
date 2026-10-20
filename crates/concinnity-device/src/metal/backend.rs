@@ -83,7 +83,7 @@ impl RenderBackend for MtlContext {
 
 impl SkinnedDraws for MtlContext {
     forward! { assert = debug_assert_main_thread;
-        fn upload_skinned_morphs(&mut self, morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>) -> RenderResult<()>;
+        fn upload_skinned_morphs(&mut self, morphs: &[Option<std::sync::Arc<mesh_payload::PayloadMorphs>>]) -> RenderResult<()>;
         fn upload_skinned(&mut self, vertices: &[SkinnedVertex], indices: &[u32], draw_objects: Vec<SkinnedDrawObject>) -> RenderResult<()>;
     }
 }

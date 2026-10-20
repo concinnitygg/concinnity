@@ -278,7 +278,7 @@ mod tests {
         let mut engine = Engine::new(camera_world());
         let reply = engine.call(
             "camera-set",
-            json!({ "position": [10.0, 20.0, 30.0], "yaw": 1.0, "pitch": -0.5, "fov_y_degrees": 50.0 }),
+            &json!({ "position": [10.0, 20.0, 30.0], "yaw": 1.0, "pitch": -0.5, "fov_y_degrees": 50.0 }),
         );
         assert_eq!(reply, Ok(json!({ "set": true })));
         let cam = camera(&engine);
@@ -293,7 +293,7 @@ mod tests {
     fn camera_set_raises_a_camera_cut_and_camera_move_does_not() {
         let mut engine = Engine::new(camera_world());
         let taken = |engine: &mut Engine| PendingHistoryReset::take(&mut engine.world.context());
-        let reply = engine.call("camera-set", json!({ "position": [400.0, 0.0, 0.0] }));
+        let reply = engine.call("camera-set", &json!({ "position": [400.0, 0.0, 0.0] }));
         assert!(reply.is_ok(), "{reply:?}");
         assert_eq!(taken(&mut engine), HistoryResetCauses::CAMERA_CUT);
 
@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn camera_set_keeps_the_field_of_view_when_omitted() {
         let mut engine = Engine::new(camera_world());
-        let reply = engine.call("camera-set", json!({ "position": [1.0, 1.0, 1.0] }));
+        let reply = engine.call("camera-set", &json!({ "position": [1.0, 1.0, 1.0] }));
         assert!(reply.is_ok(), "{reply:?}");
         assert_eq!(camera(&engine).fov_y_degrees, 75.0);
     }
@@ -324,7 +324,7 @@ mod tests {
             ("camera-set", json!({})),
             ("camera-move", json!({ "forward": 1.0 })),
         ] {
-            let error = engine.call(verb, args);
+            let error = engine.call(verb, &args);
             assert_eq!(error, Err(format!("{verb}: no Camera3D in world")));
         }
         assert!(engine.motion.is_none(), "a refused move installs nothing");
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn camera_move_installs_a_finite_motion() {
         let mut engine = Engine::new(camera_world());
-        let reply = engine.call("camera-move", json!({ "forward": 1.5, "frames": 4 }));
+        let reply = engine.call("camera-move", &json!({ "forward": 1.5, "frames": 4 }));
         assert_eq!(reply, Ok(json!({ "frames": 4, "holding": false })));
         let motion = engine.motion.clone().expect("motion installed");
         assert_eq!((motion.forward, motion.frames_left), (1.5, Some(4)));
@@ -342,12 +342,12 @@ mod tests {
     #[test]
     fn camera_move_defaults_to_an_indefinite_hold_until_camera_stop() {
         let mut engine = Engine::new(camera_world());
-        let reply = engine.call("camera-move", json!({}));
+        let reply = engine.call("camera-move", &json!({}));
         assert_eq!(reply, Ok(json!({ "frames": 0, "holding": true })));
         assert_eq!(engine.motion.as_ref().map(|m| m.frames_left), Some(None));
 
         assert_eq!(
-            engine.call("camera-stop", json!({})),
+            engine.call("camera-stop", &json!({})),
             Ok(json!({ "stopped": true }))
         );
         assert!(engine.motion.is_none());

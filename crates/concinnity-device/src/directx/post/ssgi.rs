@@ -113,7 +113,7 @@ impl DxContext {
         if let Err(e) = ssgi.pass.encode_resolve(
             &self.post_device(frame_idx),
             cmd,
-            SsgiResolveInputs {
+            &SsgiResolveInputs {
                 normal_depth: gbuffer.normal_depth_srv_gpu,
                 velocity: gbuffer.velocity_srv_gpu,
                 occlusion: self.ssao_ao_srv_gpu(),
@@ -141,7 +141,7 @@ impl DxContext {
         if let Err(e) = ssgi.pass.encode(
             &self.post_device(frame_idx),
             cmd,
-            SsgiTraceInputs {
+            &SsgiTraceInputs {
                 scene: self.targets.hdr.srv_gpu,
                 normal_depth: gbuffer.normal_depth_srv_gpu,
                 velocity: gbuffer.velocity_srv_gpu,

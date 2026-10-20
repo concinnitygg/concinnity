@@ -18,6 +18,7 @@ use crate::ecs::{Access, ComponentId};
 /// What a context accessor touched. Component ids are the registry
 /// discriminants; resources and events report their `TypeId` for the client's
 /// id registry to resolve.
+#[derive(Clone, Copy)]
 pub enum Touch {
     /// A component column was read.
     ComponentRead {

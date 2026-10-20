@@ -566,6 +566,7 @@ pub fn load_room_geometry(ctx: &mut PipelineContext<'_>) -> Option<(Vec<RoomGeom
 /// The read-only scene lookup tables consumed by [`build_draw_list`]: the
 /// renderable items and instanced props plus every catalog needed to resolve
 /// their geometry, textures, and materials.
+#[derive(Clone, Copy)]
 pub struct DrawListInputs<'a> {
     /// The placements to draw.
     pub items: &'a [RenderableItem],

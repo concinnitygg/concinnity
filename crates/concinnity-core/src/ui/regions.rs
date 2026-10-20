@@ -181,7 +181,7 @@ impl UiInputSystem {
         &mut self,
         input: &FrameInput,
         intent: &UiIntent,
-        frame: RegionFrame<'_>,
+        frame: &RegionFrame<'_>,
         ctx: &mut PipelineContext<'_>,
     ) -> RegionOutcome {
         self.resolve_follow_labels(ctx);

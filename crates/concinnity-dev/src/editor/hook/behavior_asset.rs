@@ -91,7 +91,7 @@ impl EditorHook {
         // re-read under the new one rather than left quoting the old.
         let prev_fault = self.behavior_fault_message();
         self.refresh_behavior_status();
-        self.notify_behavior_fault(prev_fault);
+        self.notify_behavior_fault(prev_fault.as_deref());
         self.seed_behavior_name(world);
     }
 }

@@ -52,7 +52,7 @@ pub(super) fn emit_title_screen(
         &title.heading,
         &names.font_title,
         &story.title,
-        LabelStyle {
+        &LabelStyle {
             x: win_w / 2.0,
             y: 180.0,
             color: [1.0, 0.92, 0.78],

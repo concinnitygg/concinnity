@@ -145,7 +145,7 @@ fn named_world(assets: Vec<(&str, ComponentAsset)>) -> World {
     world
 }
 
-fn behavior_args(nodes: serde_json::Value) -> serde_json::Value {
+fn behavior_args(nodes: &serde_json::Value) -> serde_json::Value {
     serde_json::json!({ "on": "tick", "do": nodes })
 }
 
@@ -158,7 +158,7 @@ fn a_behavior_body_edit_is_written_into_the_running_world() {
     let mut h = playing_hook(vec![entry_with_args(
         "counter",
         "Behavior",
-        behavior_args(serde_json::json!([set_node("n")])),
+        behavior_args(&serde_json::json!([set_node("n")])),
     )]);
     h.world_shadows = Some(Default::default());
     let mut world = named_world(vec![(
@@ -168,7 +168,7 @@ fn a_behavior_body_edit_is_written_into_the_running_world() {
 
     replace_args(
         &mut h.entries[0],
-        behavior_args(serde_json::json!([set_node("n"), set_node("m")])),
+        behavior_args(&serde_json::json!([set_node("n"), set_node("m")])),
     );
     h.mark_changed();
     assert!(
@@ -189,7 +189,7 @@ fn a_behavior_body_edit_is_written_into_the_running_world() {
 #[test]
 fn a_behavior_edit_that_moves_a_reference_rebuilds() {
     let spawning = |template: &str| {
-        behavior_args(serde_json::json!([
+        behavior_args(&serde_json::json!([
             { "spawn": { "template": template } },
         ]))
     };

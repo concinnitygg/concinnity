@@ -52,11 +52,11 @@ impl Camera3DSystem {
     /// `follow` block.
     pub fn for_world(world: &crate::ecs::World) -> Option<Self> {
         let controller = super::controlled_camera(world)?;
-        controller.follow.is_none().then(|| Self::new(controller))
+        controller.follow.is_none().then(|| Self::new(&controller))
     }
 
     /// Build a controller from a `Camera3D`'s controller settings.
-    pub fn new(c: CameraController) -> Self {
+    pub fn new(c: &CameraController) -> Self {
         Self {
             free_fly: c.free_fly,
             move_speed: c.move_speed,
@@ -467,7 +467,7 @@ mod tests {
     // not drift the next step.
     #[test]
     fn reset_velocity_zeroes_smoothed_velocity() {
-        let mut sys = Camera3DSystem::new(CameraController::default());
+        let mut sys = Camera3DSystem::new(&CameraController::default());
         sys.velocity = [1.0, -2.0, 3.0];
         sys.reset_velocity();
         assert_eq!(sys.velocity, [0.0; 3]);

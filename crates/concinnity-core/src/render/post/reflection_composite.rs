@@ -189,7 +189,7 @@ impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
         &'t self,
         device: &D,
         rec: &D::Recorder,
-        inputs: ReflectionCompositeInputs<'t, D>,
+        inputs: &ReflectionCompositeInputs<'t, D>,
     ) -> RenderResult<()>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target> + 't,
@@ -273,7 +273,7 @@ mod tests {
         pass.encode(
             device,
             &(),
-            ReflectionCompositeInputs {
+            &ReflectionCompositeInputs {
                 reflection: REFLECTION,
                 scene: SCENE,
                 normal_depth: NORMAL_DEPTH,

@@ -56,7 +56,7 @@ impl MtlContext {
         pass.encode_resolve(
             &self.post_device(),
             cmd_buf,
-            SsgiResolveInputs {
+            &SsgiResolveInputs {
                 normal_depth,
                 velocity: self.ssgi_velocity()?,
                 occlusion: self.ao_output_texture(),
@@ -81,7 +81,7 @@ impl MtlContext {
         pass.encode(
             &self.post_device(),
             cmd_buf,
-            SsgiTraceInputs {
+            &SsgiTraceInputs {
                 scene: self.targets.hdr.hdr_resolve.as_ref(),
                 normal_depth,
                 velocity: self.ssgi_velocity()?,

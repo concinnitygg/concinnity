@@ -63,6 +63,7 @@ pub(super) fn apply_label_layout(
 const MARGIN: f32 = 10.0;
 
 // The axis a chip strip packs along, with its gap between chips.
+#[derive(Clone, Copy)]
 enum ChipStrip {
     // Stack downward from the top-right corner, each chip right-anchored.
     DownFromRight { win_w: f32, gap: f32 },

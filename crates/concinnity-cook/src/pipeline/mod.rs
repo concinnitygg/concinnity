@@ -43,6 +43,6 @@ pub use validate::{validate_asset, validate_world_jsonl};
 // Collapse a list of validation errors into a single io::Error. The messages
 // are newline-joined so an upstream caller (e.g. the infra agentic loop) sees
 // every problem from one call.
-fn errors_to_io(errors: Vec<String>) -> std::io::Error {
+fn errors_to_io(errors: &[String]) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, errors.join("\n"))
 }

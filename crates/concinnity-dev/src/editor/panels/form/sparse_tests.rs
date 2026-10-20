@@ -5,7 +5,7 @@ use serde_json::{Map, Value, json};
 
 use super::{AUTO_LABEL, FieldKind, FormField, assemble, fields_for};
 
-fn args(v: Value) -> Map<String, Value> {
+fn args(v: &Value) -> Map<String, Value> {
     v.as_object().cloned().unwrap_or_default()
 }
 
@@ -23,7 +23,7 @@ fn field<'a>(fields: &'a [FormField], key: &str) -> &'a FormField {
 
 #[test]
 fn every_section_leaf_is_listed_and_the_unset_ones_are_tagged() {
-    let seed = args(json!({ "shadows": { "map_size": 2048 } }));
+    let seed = args(&json!({ "shadows": { "map_size": 2048 } }));
     let fields = fields_for("GraphicsConfig", Some(&seed));
     let set = field(&fields, "shadows.map_size");
     assert!(set.sparse && !set.unset);
@@ -39,7 +39,7 @@ fn every_section_leaf_is_listed_and_the_unset_ones_are_tagged() {
 
 #[test]
 fn an_untouched_form_writes_back_only_what_was_set() {
-    let seed = args(json!({ "shadows": { "map_size": 2048 } }));
+    let seed = args(&json!({ "shadows": { "map_size": 2048 } }));
     let fields = fields_for("GraphicsConfig", Some(&seed));
     let out = assemble("GraphicsConfig", Some(&seed), &fields, &seeded(&fields));
     assert_eq!(
@@ -50,7 +50,7 @@ fn an_untouched_form_writes_back_only_what_was_set() {
 
 #[test]
 fn a_changed_leaf_is_set_and_a_cleared_one_unset() {
-    let seed = args(json!({ "shadows": { "map_size": 2048 } }));
+    let seed = args(&json!({ "shadows": { "map_size": 2048 } }));
     let mut fields = fields_for("GraphicsConfig", Some(&seed));
     let mut texts = seeded(&fields);
     for (i, f) in fields.iter_mut().enumerate() {
@@ -73,7 +73,7 @@ fn a_changed_leaf_is_set_and_a_cleared_one_unset() {
 
 #[test]
 fn picking_auto_unsets_a_set_choice() {
-    let seed = args(json!({ "anti_aliasing": { "mode": "fxaa" } }));
+    let seed = args(&json!({ "anti_aliasing": { "mode": "fxaa" } }));
     let mut fields = fields_for("GraphicsConfig", Some(&seed));
     let mode = fields
         .iter()

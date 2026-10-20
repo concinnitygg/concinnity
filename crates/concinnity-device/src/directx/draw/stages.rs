@@ -24,6 +24,7 @@ use crate::directx::error::{self, map_hresult};
 use crate::gpu_wait::GpuWait;
 
 // The per-frame inputs `plan_frame` plans from.
+#[derive(Clone, Copy)]
 pub(in crate::directx) struct PlanArgs<'a> {
     pub(in crate::directx) camera: CameraInputs,
     pub(in crate::directx) elapsed: f32,
@@ -362,7 +363,7 @@ impl DxContext {
 
     pub(in crate::directx) fn submit_and_present(
         &mut self,
-        start_cmd: ID3D12GraphicsCommandList,
+        start_cmd: &ID3D12GraphicsCommandList,
         pass_cmd_lists: &[ID3D12GraphicsCommandList],
         back_idx: usize,
         frame: usize,

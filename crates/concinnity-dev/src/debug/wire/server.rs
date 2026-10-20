@@ -65,7 +65,7 @@ impl DebugServer {
             .name("debug-server".to_string())
             .spawn(move || {
                 set_current_thread_role(ThreadRole::Background);
-                serve(listener, shared_for_thread);
+                serve(&listener, shared_for_thread);
             })?;
 
         tracing::info!("debug server listening on http://127.0.0.1:{port}/mcp");
@@ -270,7 +270,7 @@ impl FrameHook for DebugServer {
 // blocks in `accept` for the life of the process, which exits out from under
 // it. Errors are logged and dropped: a debug client disconnecting is routine,
 // not a fault.
-fn serve(listener: TcpListener, shared: Arc<Mutex<DebugState>>) {
+fn serve(listener: &TcpListener, shared: Arc<Mutex<DebugState>>) {
     let server = Arc::new(AppServer::new(shared));
     for stream in listener.incoming() {
         let stream = match stream {

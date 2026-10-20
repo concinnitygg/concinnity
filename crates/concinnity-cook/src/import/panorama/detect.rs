@@ -86,7 +86,7 @@ pub(crate) fn detect(doc: &GltfDoc) -> Result<PanoramaSphere, String> {
     let material = document.materials().next().expect("one material");
     check_emissive_only(&material)?;
 
-    let reader = primitive.reader(|b| doc.buffer_bytes(b));
+    let reader = primitive.reader(|b| doc.buffer_bytes(&b));
     let positions: Vec<[f32; 3]> = match reader.read_positions() {
         Some(p) => p.collect(),
         None => return Err("mesh has no POSITION data".to_string()),
@@ -308,7 +308,7 @@ pub(crate) mod test_fixtures {
 
     // Assemble a panorama-sphere `.glb` from `shape`. Buffer layout, in order:
     // positions, UVs, indices, then the PNG.
-    pub(crate) fn panorama_glb_with(shape: PanoramaShape) -> Vec<u8> {
+    pub(crate) fn panorama_glb_with(shape: &PanoramaShape) -> Vec<u8> {
         let (positions, uvs) = uv_sphere(shape.segments, shape.rings);
         let scaled: Vec<[f32; 2]> = uvs
             .iter()
@@ -379,7 +379,7 @@ pub(crate) mod test_fixtures {
     }
 
     pub(crate) fn panorama_glb() -> Vec<u8> {
-        panorama_glb_with(PanoramaShape::default())
+        panorama_glb_with(&PanoramaShape::default())
     }
 
     // An ordinary two-mesh scene: what must keep importing as geometry.
@@ -407,7 +407,7 @@ mod tests {
         GltfDoc::from_slice(bytes, None, "test.glb").expect("parse")
     }
 
-    fn reject(shape: PanoramaShape) -> String {
+    fn reject(shape: &PanoramaShape) -> String {
         detect(&doc(&panorama_glb_with(shape))).unwrap_err()
     }
 
@@ -424,7 +424,7 @@ mod tests {
             png: panorama_png16(4, 2, 30000),
             ..Default::default()
         };
-        detect(&doc(&panorama_glb_with(shape))).expect("panorama");
+        detect(&doc(&panorama_glb_with(&shape))).expect("panorama");
     }
 
     #[test]
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn a_lit_sphere_is_rejected_for_its_base_color() {
-        let err = reject(PanoramaShape {
+        let err = reject(&PanoramaShape {
             base_color: [0.8, 0.8, 0.8, 1.0],
             ..Default::default()
         });
@@ -451,7 +451,7 @@ mod tests {
 
     #[test]
     fn a_sphere_with_no_emissive_output_is_rejected() {
-        let err = reject(PanoramaShape {
+        let err = reject(&PanoramaShape {
             emissive_factor: [0.0, 0.0, 0.0],
             ..Default::default()
         });
@@ -460,7 +460,7 @@ mod tests {
 
     #[test]
     fn a_coarse_mesh_is_rejected() {
-        let err = reject(PanoramaShape {
+        let err = reject(&PanoramaShape {
             segments: 4,
             rings: 3,
             ..Default::default()
@@ -470,7 +470,7 @@ mod tests {
 
     #[test]
     fn tiled_uvs_are_rejected() {
-        let err = reject(PanoramaShape {
+        let err = reject(&PanoramaShape {
             uv_scale: 4.0,
             ..Default::default()
         });
@@ -479,7 +479,7 @@ mod tests {
 
     #[test]
     fn a_square_texture_is_rejected() {
-        let err = reject(PanoramaShape {
+        let err = reject(&PanoramaShape {
             png: panorama_png(4, 4, 128),
             ..Default::default()
         });

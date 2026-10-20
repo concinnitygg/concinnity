@@ -71,7 +71,7 @@ pub(crate) fn emit_story(
         title_screen_name.as_deref().unwrap_or(""),
     ));
     let nodes = compile_nodes(story, &mut media, image_dims)?;
-    out.push(story_entry(&names, story, nodes, text_speed));
+    out.push(story_entry(&names, story, &nodes, text_speed));
     for group in [
         emit_stage(&names),
         emit_quick_row(&names),

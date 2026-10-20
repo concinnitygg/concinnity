@@ -49,7 +49,7 @@ impl RenderBackend for DxContext {
 
 impl SkinnedDraws for DxContext {
     forward! { assert = debug_assert_main_thread;
-        fn upload_skinned_morphs(&mut self, morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>) -> RenderResult<()>;
+        fn upload_skinned_morphs(&mut self, morphs: &[Option<std::sync::Arc<mesh_payload::PayloadMorphs>>]) -> RenderResult<()>;
         // Every skinned stage is the engine's own here: the world's fragment is
         // shader model 5.1, which D3D12 cannot pair with the engine's 6.0
         // vertex (see `compile_skinned_shaders`).

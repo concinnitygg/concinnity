@@ -410,7 +410,7 @@ impl EditorHook {
     fn after_variables_change(&mut self) {
         let prev_fault = self.behavior_fault_message();
         self.refresh_behavior_status();
-        self.notify_behavior_fault(prev_fault);
+        self.notify_behavior_fault(prev_fault.as_deref());
     }
 
     fn seed_variables_fields(&self, world: &mut World) {

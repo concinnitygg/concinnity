@@ -46,7 +46,7 @@ fn a_field_kind_creates_a_volume_with_its_starter_file() {
     in_project(|root| {
         let mut h = hook(Vec::new());
         let mut world = form_world();
-        click(&mut h, &mut world, RowKind::New);
+        click(&mut h, &mut world, &RowKind::New);
         type_name(&mut world, "blob");
         assert_eq!(kind(&h, &world), 0);
 
@@ -101,7 +101,7 @@ fn the_kinds_cycle_through_volumetric_and_back_to_a_shader() {
     in_project(|root| {
         let mut h = hook(Vec::new());
         let mut world = form_world();
-        click(&mut h, &mut world, RowKind::New);
+        click(&mut h, &mut world, &RowKind::New);
         type_name(&mut world, "fog");
         press(&mut h, &mut world, "Kind", true);
         press(&mut h, &mut world, "Kind", true);
@@ -115,7 +115,7 @@ fn the_kinds_cycle_through_volumetric_and_back_to_a_shader() {
             sdf_templates::VOLUMETRIC[1].text
         );
 
-        click(&mut h, &mut world, RowKind::New);
+        click(&mut h, &mut world, &RowKind::New);
         press(&mut h, &mut world, "Kind", true);
         press(&mut h, &mut world, "Kind", true);
         press(&mut h, &mut world, "Kind", true);
@@ -135,7 +135,7 @@ fn a_new_volume_lands_at_the_middle_of_the_view() {
     );
     let mut h = hook(Vec::new());
     h.viewport = VP;
-    click(&mut h, &mut world, RowKind::New);
+    click(&mut h, &mut world, &RowKind::New);
     press(&mut h, &mut world, "Kind", true);
     let center = h.form.args["center"].clone();
     assert_eq!(center[0], 0.0, "{center}");
@@ -153,7 +153,7 @@ fn the_shader_limit_leaves_the_field_kinds_open() {
     let mut world = form_world();
     let last = h.shader_rows().last().cloned().unwrap();
     assert_eq!(last.kind, RowKind::New);
-    click(&mut h, &mut world, RowKind::New);
+    click(&mut h, &mut world, &RowKind::New);
     assert_eq!(h.form.selected_type.as_deref(), Some("SdfVolume"));
     assert_eq!(h.form.host, PanelKey::Shaders);
     type_name(&mut world, "blob");
@@ -174,7 +174,7 @@ fn a_volume_row_opens_its_form_naming_who_shares_the_field() {
     click(
         &mut h,
         &mut world,
-        RowKind::FieldVolume("right".to_string()),
+        &RowKind::FieldVolume("right".to_string()),
     );
     assert_eq!(h.form.selected_type.as_deref(), Some("SdfVolume"));
     assert!(matches!(h.form.target, FormTarget::Entry(_)));

@@ -85,7 +85,7 @@ pub(crate) fn declare(builder: &mut WorldBuilder, world: &str) -> Result<(), Str
     let path = Path::new(&declared.planet, |seconds| sun(&declared, warmup + seconds));
     builder.add(
         "benchmark",
-        BenchmarkConfig {
+        &BenchmarkConfig {
             warmup_seconds: WARMUP_SECONDS,
             start: Some(CameraPose {
                 position: path.start,

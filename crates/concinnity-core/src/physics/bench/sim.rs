@@ -87,6 +87,7 @@ struct Fixture {
 // stepped. Determinism holds at any size, so the single-run pace walks every
 // fixture at a fraction of the count: the claim stays true, and only the odds
 // of a broken step showing up in it drop.
+#[derive(Clone, Copy)]
 struct Determinism {
     bodies: usize,
     chains: usize,

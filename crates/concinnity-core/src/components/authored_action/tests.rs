@@ -3,7 +3,7 @@ use serde_json::json;
 
 use super::*;
 
-fn named(json: serde_json::Value) -> NamedAction {
+fn named(json: &serde_json::Value) -> NamedAction {
     serde_json::from_value(json.clone()).unwrap_or_else(|e| panic!("{json}: {e}"))
 }
 
@@ -48,7 +48,7 @@ fn every_action_round_trips_through_its_authored_form() {
         ),
     ];
     for (json, action) in cases {
-        assert_eq!(named(json.clone()), action, "{json}");
+        assert_eq!(named(&json), action, "{json}");
         assert_eq!(serde_json::to_value(&action).unwrap(), json);
     }
 }
@@ -137,7 +137,7 @@ fn the_schema_documents_every_variant() {
         .and_then(|v| v.payload)
         .unwrap()());
     for v in actions {
-        named(example(v));
+        named(&example(v));
     }
     for v in story {
         let value = example(v);

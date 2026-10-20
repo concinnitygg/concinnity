@@ -35,6 +35,7 @@ use crate::metal::scoped_encoder::ScopedEncoder;
 // its light-space matrix, which of their `light_vps` the vertex shader projects
 // through, and the set + region its commands live in. A cascade and a spot
 // slice differ only in these.
+#[derive(Clone, Copy)]
 pub(in crate::metal) struct ShadowView<'a> {
     pub uniforms: &'a ShadowUniforms,
     pub vp_index: u32,

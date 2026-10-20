@@ -13,10 +13,7 @@ impl StoryParser {
         range: &Range<usize>,
     ) -> Result<(), String> {
         if self.inline.image.is_some() {
-            return self.err(
-                range,
-                "links are not supported in image alt text".to_string(),
-            );
+            return self.err(range, "links are not supported in image alt text");
         }
         self.inline.link = Some((target.to_string(), title.to_string(), String::new()));
         Ok(())
@@ -25,13 +22,13 @@ impl StoryParser {
     pub(super) fn on_link_end(&mut self, range: &Range<usize>) -> Result<(), String> {
         let (target, title, label) = self.inline.link.take().unwrap_or_default();
         if label.trim().is_empty() {
-            return self.err(range, format!("link to '{target}' has no label text"));
+            return self.err(range, &format!("link to '{target}' has no label text"));
         }
         if self.list.active {
             let Some(anchor) = target.strip_prefix('#') else {
                 return self.err(
                     range,
-                    format!("choice '{}' must link to a `#heading`", label.trim()),
+                    &format!("choice '{}' must link to a `#heading`", label.trim()),
                 );
             };
             // The optional link title gates the option: `- [Ask](#ask "if asked")`.
@@ -40,7 +37,7 @@ impl StoryParser {
             } else {
                 match parse_condition(title.trim()) {
                     Ok(c) => Some(c),
-                    Err(e) => return self.err(range, e),
+                    Err(e) => return self.err(range, &e),
                 }
             };
             self.list
@@ -50,15 +47,12 @@ impl StoryParser {
             if !title.trim().is_empty() {
                 return self.err(
                     range,
-                    "link titles (conditions) are only supported on choices".to_string(),
+                    "link titles (conditions) are only supported on choices",
                 );
             }
             acc.links.push((label.trim().to_string(), target));
         } else {
-            return self.err(
-                range,
-                "links may only appear in paragraphs or choice lists".to_string(),
-            );
+            return self.err(range, "links may only appear in paragraphs or choice lists");
         }
         Ok(())
     }
@@ -72,8 +66,7 @@ impl StoryParser {
             return self.err(
                 range,
                 "bold is reserved for speaker attribution at the start of a \
-                 paragraph (`**id:** text`)"
-                    .to_string(),
+                 paragraph (`**id:** text`)",
             );
         }
         self.inline.strong = Some(String::new());
@@ -85,7 +78,7 @@ impl StoryParser {
         let Some(id) = text.trim().strip_suffix(':') else {
             return self.err(
                 range,
-                format!(
+                &format!(
                     "bold '{}' must be a speaker attribution ending in ':'",
                     text.trim()
                 ),
@@ -95,7 +88,7 @@ impl StoryParser {
         if !self.story.characters.contains_key(&id) {
             return self.err(
                 range,
-                format!("speaker '{id}' is not declared in the frontmatter `characters`"),
+                &format!("speaker '{id}' is not declared in the frontmatter `characters`"),
             );
         }
         self.inline
@@ -147,10 +140,7 @@ impl StoryParser {
         range: &Range<usize>,
     ) -> Result<(), String> {
         if self.inline.para.is_none() || self.list.active {
-            return self.err(
-                range,
-                "images may only appear alone in their own paragraph".to_string(),
-            );
+            return self.err(range, "images may only appear alone in their own paragraph");
         }
         self.inline.image = Some((target.to_string(), String::new()));
         Ok(())

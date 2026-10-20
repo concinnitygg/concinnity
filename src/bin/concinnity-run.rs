@@ -65,7 +65,7 @@ fn main() -> std::io::Result<()> {
         )
     })?;
 
-    concinnity_runtime::run_from(&tree, blob)
+    concinnity_runtime::run_from(&tree, &blob)
 }
 
 // The platform base for per-user application state, from the environment the

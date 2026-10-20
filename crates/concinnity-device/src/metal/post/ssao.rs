@@ -56,7 +56,7 @@ impl MtlContext {
         pass.encode(
             &self.post_device(),
             cmd_buf,
-            SsaoInputs {
+            &SsaoInputs {
                 normal_depth,
                 output,
             },

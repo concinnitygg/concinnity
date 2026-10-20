@@ -66,7 +66,7 @@ pub trait SkinnedDraws: SceneHost {
     /// attach, for a backend without a morph deformation path.
     fn upload_skinned_morphs(
         &mut self,
-        morphs: Vec<Option<alloc::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>>,
+        morphs: &[Option<alloc::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>],
     ) -> RenderResult<()> {
         let _ = morphs;
         Ok(())

@@ -195,7 +195,7 @@ impl VkContext {
     // once after `upload_skinned`. Mirrors the DirectX `upload_skinned_morphs`.
     pub(in crate::vulkan) fn upload_skinned_morphs(
         &mut self,
-        morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>,
+        morphs: &[Option<std::sync::Arc<mesh_payload::PayloadMorphs>>],
     ) -> RenderResult<()> {
         use std::collections::HashMap;
 

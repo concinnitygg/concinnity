@@ -404,6 +404,10 @@ impl DeviceAllocator {
         })
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "consuming the reservation keeps it from being leased or released twice"
+    )]
     fn lease(&self, reservation: Reservation) -> Lease {
         Lease {
             owner: Rc::downgrade(&self.inner),
@@ -415,6 +419,10 @@ impl DeviceAllocator {
 
     // Hand a reservation back when the placement call it was made for failed.
     // Retired immediately: no command buffer ever saw a resource there.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "consuming the reservation keeps it from being leased or released twice"
+    )]
     fn release(&self, reservation: Reservation) {
         let mut inner = self.inner.borrow_mut();
         if let Some(pool) = inner.pools.get_mut(&reservation.key) {

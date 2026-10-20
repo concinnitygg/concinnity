@@ -23,6 +23,7 @@ mod bindless;
 mod compute;
 mod shadow;
 
+#[derive(Clone, Copy)]
 pub(super) struct CullInputs<'a> {
     pub(super) world_shaders: &'a [WorldShader<'a>],
     pub(super) vert_desc: &'a MTLVertexDescriptor,

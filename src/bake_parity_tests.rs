@@ -62,11 +62,11 @@ fn sky() -> bake::EnvironmentMap {
 // held to.
 fn cooked_world() -> World {
     let mut spec = cook::world();
-    spec.add("camera", camera_args())
-        .add("sky", sky())
-        .add("cube_mesh", cube_mesh())
-        .add("cube_material", cube_material())
-        .add("cube", Prop::default())
+    spec.add("camera", &camera_args())
+        .add("sky", &sky())
+        .add("cube_mesh", &cube_mesh())
+        .add("cube_material", &cube_material())
+        .add("cube", &Prop::default())
         .reference("mesh", "cube_mesh")
         .reference("material", "cube_material");
     spec.compile().expect("the declared world cooks")

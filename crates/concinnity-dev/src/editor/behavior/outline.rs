@@ -120,7 +120,7 @@ pub(crate) fn rows(args: &Value) -> Vec<Row> {
     scope_rows(args, &mut out);
     local_rows(args, &mut out);
     query_rows(args, &mut out);
-    node_list(args.get("do"), 0, vec![field("do")], "do", &mut out);
+    node_list(args.get("do"), 0, &[field("do")], "do", &mut out);
     out
 }
 
@@ -286,17 +286,17 @@ fn query_rows(args: &Value, out: &mut Vec<Row>) {
 
 // A node list (`do`, an `if` branch, a `for_each` body): its heading row and
 // every node under it.
-fn node_list(value: Option<&Value>, depth: usize, path: Path, label: &str, out: &mut Vec<Row>) {
+fn node_list(value: Option<&Value>, depth: usize, path: &[Step], label: &str, out: &mut Vec<Row>) {
     let items = array(value);
     out.push(Row::new(
         depth,
         label,
         count_text(items.len()),
         Kind::List(List::Nodes),
-        path.clone(),
+        path.to_vec(),
     ));
     for (i, node) in items.iter().enumerate() {
-        node_rows(node, depth + 1, child(&path, Step::Index(i)), out);
+        node_rows(node, depth + 1, child(path, Step::Index(i)), out);
     }
 }
 
@@ -339,7 +339,7 @@ impl<'a> Fields<'a> {
     }
 
     fn nodes(&self, out: &mut Vec<Row>, key: &str) {
-        node_list(self.at(key), self.depth, self.path(key), key, out);
+        node_list(self.at(key), self.depth, &self.path(key), key, out);
     }
 
     fn flag(&self, out: &mut Vec<Row>, key: &str) {

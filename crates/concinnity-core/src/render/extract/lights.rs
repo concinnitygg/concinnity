@@ -23,7 +23,7 @@ pub fn gather_lights(
     let rect_lights: Vec<RectAreaLight> = ctx.query::<RectAreaLight>().cloned().collect();
     let data = lights::build_light_data(&pt_lights, &spot_lights, &rect_lights);
     let uniforms =
-        lights::build_light_uniforms(dir_lights, pt_lights, &data.lights, ambient_intensity);
+        lights::build_light_uniforms(&dir_lights, pt_lights, &data.lights, ambient_intensity);
     (data, uniforms)
 }
 

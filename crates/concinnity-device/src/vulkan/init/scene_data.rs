@@ -49,6 +49,7 @@ pub(super) fn build_area_lights(
     })
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct SceneInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
     pub(super) local_lights: &'a [GpuLight],

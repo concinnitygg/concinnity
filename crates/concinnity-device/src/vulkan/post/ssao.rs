@@ -85,7 +85,7 @@ impl VkContext {
         ssao.pass.encode(
             &self.post_device(frame_idx),
             &cmd,
-            SsaoInputs {
+            &SsaoInputs {
                 normal_depth: gbuffer.normal_depth,
                 output: VkAttachment {
                     view,

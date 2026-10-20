@@ -341,7 +341,7 @@ mod tests {
         backend.reveal_skinned_instance(SkinnedIndex(0), IDENTITY);
         backend.retire_skinned_draw_object(SkinnedIndex(0));
         // No morph deformation path: nothing to attach.
-        assert!(backend.upload_skinned_morphs(vec![]).is_ok());
+        assert!(backend.upload_skinned_morphs(&[]).is_ok());
 
         // Streaming + cursor + capture no-ops.
         backend.seed_mesh_streaming(0, 0, 0, 0);

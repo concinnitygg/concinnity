@@ -371,7 +371,7 @@ impl EditorHook {
         }
         let args_val = serde_json::Value::Object(args);
         if self.form.extras.is_some() {
-            self.commit_with_extras(&ty, &typed, args_val, files);
+            self.commit_with_extras(&ty, &typed, args_val, &files);
             return;
         }
         // A template-derived asset commits the minimal patch against its

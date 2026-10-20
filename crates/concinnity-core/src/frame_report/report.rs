@@ -322,9 +322,9 @@ mod tests {
         }
     }
 
-    fn report_of(run: FrameRun) -> Report {
+    fn report_of(run: &FrameRun) -> Report {
         Report::of(
-            &run,
+            run,
             ReduceOptions {
                 warmup_seconds: 0.0,
                 ..Default::default()
@@ -343,7 +343,7 @@ mod tests {
             system_names: Vec::new(),
             completed: true,
         };
-        to_text(&report_of(run))
+        to_text(&report_of(&run))
     }
 
     #[test]
@@ -391,7 +391,7 @@ mod tests {
             system_names: Vec::new(),
             completed: true,
         };
-        let text = to_text(&report_of(run));
+        let text = to_text(&report_of(&run));
         let main = text.find("\n  main ").expect("main row");
         let sky = text.find("\n    sky ").expect("indented sky row");
         assert!(main < sky, "{text}");
@@ -410,7 +410,7 @@ mod tests {
             system_names: Vec::new(),
             completed: true,
         };
-        let text = to_text(&report_of(run));
+        let text = to_text(&report_of(&run));
         assert!(text.contains("\n  gaps "), "{text}");
         assert!(text.contains("\n  light_cull (async) "), "{text}");
     }
@@ -427,7 +427,7 @@ mod tests {
             system_names: Vec::new(),
             completed: true,
         };
-        let text = to_text(&report_of(run));
+        let text = to_text(&report_of(&run));
         assert!(
             text.contains("  overlap with previous frame  -1.500 ms  -30.0% of the GPU frame"),
             "{text}"
@@ -456,7 +456,7 @@ mod tests {
             system_names: Vec::new(),
             completed: true,
         };
-        let text = to_text(&report_of(run));
+        let text = to_text(&report_of(&run));
         assert!(
             text.contains("input latency, input sample to GPU work done:"),
             "{text}"
@@ -495,7 +495,7 @@ mod tests {
             system_names: Vec::new(),
             completed: false,
         };
-        let text = to_text(&report_of(run));
+        let text = to_text(&report_of(&run));
         let note = text.find("ended before its last phase").expect("the note");
         assert!(note < text.find("\nphase ").expect("the table"), "{text}");
     }
@@ -517,7 +517,7 @@ mod tests {
             system_names: vec!["PhysicsSystem".to_string()],
             completed: true,
         };
-        let text = to_text(&report_of(run));
+        let text = to_text(&report_of(&run));
         let heading = text.find("slowest frames:").expect("the list");
         let hitch_line = text
             .find(
@@ -550,7 +550,7 @@ mod tests {
             system_names: vec!["PhysicsSystem".to_string()],
             completed: true,
         };
-        let text = to_text(&report_of(run));
+        let text = to_text(&report_of(&run));
         assert!(text.contains("approach CPU work, mean 1.00 ms:"), "{text}");
         assert!(text.contains("40.0% of the CPU work"), "{text}");
     }
@@ -577,7 +577,7 @@ mod tests {
             system_names: vec!["BehaviorSystem".to_string()],
             completed: true,
         };
-        let text = to_text(&report_of(run));
+        let text = to_text(&report_of(&run));
         assert!(
             text.contains("approach fan-outs, mean ms waited against work:"),
             "{text}"
@@ -616,7 +616,7 @@ mod tests {
             system_names: Vec::new(),
             completed: true,
         };
-        let text = to_text(&report_of(run));
+        let text = to_text(&report_of(&run));
         assert!(!text.contains("GPU passes:"), "{text}");
         assert!(text.contains("approach"), "{text}");
     }

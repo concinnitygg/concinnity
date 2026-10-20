@@ -156,6 +156,7 @@ pub(in crate::directx) struct RtReflectionsResources {
 
 // Device + render extent for building the RT-reflection resources; the output
 // target is that extent reduced to the trace resolution.
+#[derive(Clone, Copy)]
 pub(in crate::directx) struct RtBuildContext<'a> {
     pub alloc: &'a DeviceAllocator,
     pub width: u32,
@@ -171,6 +172,7 @@ pub(in crate::directx) struct RtOutputDescriptors {
 }
 
 // Optional debug info queue plus the shader hot-reload toggle for the build.
+#[derive(Clone, Copy)]
 pub(in crate::directx) struct RtBuildInit<'a> {
     pub info_queue: Option<&'a ID3D12InfoQueue>,
     pub hot_reload: bool,

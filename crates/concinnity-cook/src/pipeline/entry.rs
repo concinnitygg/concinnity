@@ -34,8 +34,8 @@ pub fn build_from_path(
 ) -> std::io::Result<BuildReport> {
     let content = std::fs::read_to_string(json_path)?;
     let source = crate::authoring::world::WorldSource::file(&content, Path::new(json_path));
-    let loaded =
-        crate::build_only::prepare_world(source, Some(&tree.assets_dir())).map_err(errors_to_io)?;
+    let loaded = crate::build_only::prepare_world(source, Some(&tree.assets_dir()))
+        .map_err(|errors| errors_to_io(&errors))?;
     build_loaded(tree, loaded, targets, None)
 }
 
@@ -175,7 +175,8 @@ pub fn build_pipeline_from_str(
     assets_dir: Option<&Path>,
     targets: PlatformSet,
 ) -> std::io::Result<PipelineResult> {
-    let loaded = crate::build_only::prepare_world(content, assets_dir).map_err(errors_to_io)?;
+    let loaded = crate::build_only::prepare_world(content, assets_dir)
+        .map_err(|errors| errors_to_io(&errors))?;
     build_compiled(loaded.assets, assets_dir, targets)
 }
 

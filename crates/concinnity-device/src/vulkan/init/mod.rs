@@ -592,6 +592,7 @@ impl VkContext {
 // layouts and reading its Hi-Z pyramid. A world without that pass draws no
 // grass.
 // What the grass draws extend and render into.
+#[derive(Clone, Copy)]
 struct GrassInit<'a> {
     descriptors: &'a VkDescriptors,
     cull: &'a VkCull,

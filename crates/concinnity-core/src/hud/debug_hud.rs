@@ -162,11 +162,11 @@ pub struct DebugHudSystem {
 impl DebugHudSystem {
     /// The system for a world that declares a `DebugHud`.
     pub fn for_world(world: &World) -> Option<Self> {
-        world.query::<DebugHud>().next().cloned().map(Self::new)
+        world.query::<DebugHud>().next().map(Self::new)
     }
 
     /// Build the debug HUD from a world's `DebugHud` request component.
-    pub fn new(config: DebugHud) -> Self {
+    pub fn new(config: &DebugHud) -> Self {
         Self {
             passes_label: config.passes_label.map(Ref::id),
             mouse_label: config.mouse_label.map(Ref::id),
@@ -297,7 +297,7 @@ mod tests {
             world,
             Phase::Late,
             "DebugHudSystem",
-            DebugHudSystem::new(config),
+            DebugHudSystem::new(&config),
         );
     }
 

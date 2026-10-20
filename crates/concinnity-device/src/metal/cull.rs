@@ -42,6 +42,7 @@ pub(crate) struct ShadowViewIcb {
 
 // The views of one set a frame refreshes, as (region, light frustum) pairs, plus
 // how many regions the set holds and which of them refresh.
+#[derive(Clone, Copy)]
 struct ViewSet<'a> {
     views: &'a [(usize, Frustum)],
     region_count: usize,
@@ -309,6 +310,7 @@ pub(super) struct RecordBuffers {
 
 // The per-frame cull IO buffers: the packed DrawObject records the kernel tests
 // and the indirect draw-args table it reads each survivor's index range from.
+#[derive(Clone, Copy)]
 struct CullSceneBuffers<'a> {
     object_buffer: &'a ProtocolObject<dyn objc2_metal::MTLBuffer>,
     draw_args_buffer: &'a ProtocolObject<dyn objc2_metal::MTLBuffer>,
@@ -319,6 +321,7 @@ struct CullSceneBuffers<'a> {
 
 // The camera the cull kernel tests records against: the frustum planes plus the
 // eye position for the distance-based LOD pick.
+#[derive(Clone, Copy)]
 struct CullView<'a> {
     frustum: &'a Frustum,
     cam_pos: [f32; 3],
@@ -327,6 +330,7 @@ struct CullView<'a> {
 // The output the cull kernel encodes survivors into: the target ICB, its
 // argument buffer, and the per-object status scratch it writes each record's
 // cull outcome to.
+#[derive(Clone, Copy)]
 struct CullOutputTarget<'a> {
     // One ICB per shader bucket, encoded at matching indices in `arg_buf`;
     // the dispatch's `bucket_count` is this slice's length. Single-stream
@@ -339,6 +343,7 @@ struct CullOutputTarget<'a> {
 // One planar mirror's cull: the frame's object records, the mirror frustum and
 // reflected eye to test them against, the mirror slot whose ICB receives the
 // survivors, and where the dispatch sits in the planar pass's timing span.
+#[derive(Clone, Copy)]
 pub(in crate::metal) struct MirrorCull<'a> {
     pub(in crate::metal) object_buffer: &'a ProtocolObject<dyn objc2_metal::MTLBuffer>,
     pub(in crate::metal) draw_args_buffer: &'a ProtocolObject<dyn objc2_metal::MTLBuffer>,
@@ -351,6 +356,7 @@ pub(in crate::metal) struct MirrorCull<'a> {
 // Per-dispatch cull knobs: whether to consult the Hi-Z pyramid (off for the
 // mirror cull, whose pyramid is the wrong screen space), where the dispatch sits
 // in a pass's timing span, and the encoder debug label.
+#[derive(Clone, Copy)]
 struct CullDispatchOptions<'a> {
     use_hiz: bool,
     timing: super::pass_timing::PassTimer,

@@ -126,7 +126,7 @@ impl<Pipeline, Target> SsaoPass<Pipeline, Target> {
         &'t self,
         device: &D,
         rec: &D::Recorder,
-        inputs: SsaoInputs<'t, D>,
+        inputs: &SsaoInputs<'t, D>,
         params: &SsaoParams,
     ) -> RenderResult<()>
     where
@@ -217,7 +217,7 @@ mod tests {
         pass.encode(
             device,
             &(),
-            SsaoInputs {
+            &SsaoInputs {
                 normal_depth: NORMAL_DEPTH,
                 output: OUTPUT,
             },

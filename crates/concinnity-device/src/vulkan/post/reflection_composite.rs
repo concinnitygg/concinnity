@@ -124,7 +124,7 @@ impl VkContext {
         if let Err(e) = rc.encode(
             &self.post_device(frame_idx),
             &cmd,
-            ReflectionCompositeInputs {
+            &ReflectionCompositeInputs {
                 reflection: reflection_view,
                 scene: scene.view,
                 normal_depth: gbuffer.normal_depth,
