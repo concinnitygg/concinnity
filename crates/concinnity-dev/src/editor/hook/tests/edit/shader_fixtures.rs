@@ -146,10 +146,12 @@ pub(super) fn in_project(test: impl FnOnce(&Path)) {
         }
     }
 
-    let state = crate::test_support::in_temp_cwd();
-    // Canonical, as the working directory reads back: on macOS the temporary
-    // directory sits behind the `/private` symlink.
-    let root = state.root().canonicalize().expect("the tree resolves");
+    let _state = crate::test_support::in_temp_cwd();
+    // The working directory as it reads back, which project-relative paths are
+    // stripped against: on macOS the temporary directory sits behind the
+    // `/private` symlink, and `canonicalize` on Windows would add a `\\?\`
+    // prefix the working directory does not carry.
+    let root = std::env::current_dir().expect("the working directory reads back");
     let _reopen = Reopen;
     crate::project::open(StateTree::at(&root));
     test(&root);
