@@ -8,7 +8,6 @@ use concinnity_core::components::{
     BackgroundOverrides, Camera3D, CharacterRig, FrameInput, GlobalTransform, GraphicsConfig,
     HitRegion, Material, Prop, RenderHandle, Scene, SceneCommand, Shader, ShaderPrograms,
     SkeletonPose, SkinnedMesh, Sprite, StreamingConfig, TextLabel, UiAction, Window,
-    assets::compiled_programs,
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
@@ -22,6 +21,7 @@ use concinnity_core::launch::{LaunchArgs, LaunchRequest};
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend::init::SwapchainConfig;
 use concinnity_core::render::backend::{GpuProfile, GpuTier, GpuVendor};
+use concinnity_core::render::shader::compiled::CompiledProgram;
 use concinnity_core::render::{backend, backend::error, overlay::text};
 use concinnity_core::resource::{
     ColorLutTable, EnvironmentMapTable, FontTable, MaterialTable, MeshTable, SkinnedMeshTable,
@@ -130,7 +130,7 @@ impl WorldBuilder {
             },
             programs: entries
                 .iter()
-                .map(|e| compiled_programs::CompiledProgram {
+                .map(|e| CompiledProgram {
                     entry: e.to_string(),
                     source_digest: 1,
                     artifact: b"program-bytes".to_vec(),

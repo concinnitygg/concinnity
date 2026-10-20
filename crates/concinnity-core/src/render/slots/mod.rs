@@ -4,6 +4,7 @@
 pub mod draw_slot;
 pub(crate) mod frame_dirty;
 pub mod geometry_repack;
+pub(crate) mod render_handle;
 pub mod render_slots;
 pub mod rewrites;
 pub(crate) mod skinned_pool;

@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 use core::fmt::{self, Write};
 
 use crate::benchmark::BenchmarkRun;
-use crate::camera_track::CameraTrackStatus;
+use crate::camera::track::CameraTrackStatus;
 use crate::components::FrameCapture;
 use crate::planet::FrameRebases;
 use crate::profile::RenderStats;
@@ -279,7 +279,7 @@ impl Drop for FrameReportSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::camera_track::CameraTrackSystem;
+    use crate::camera::track::CameraTrackSystem;
     use crate::components::cook::{Camera3D as Camera3DArgs, CameraTrack as CameraTrackArgs};
     use crate::components::{BenchmarkConfig, BenchmarkPhase, Camera3D, CameraTrack, CameraTravel};
     use crate::ecs::World;

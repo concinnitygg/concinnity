@@ -20,7 +20,7 @@ use crate::math::vec3::length;
 /// no depth to cast from. The step-count bounds stay with the schema: they
 /// double as the runtime kernel's loop bound.
 pub fn sdf_volume(mut v: SdfVolume) -> SdfVolume {
-    use crate::components::assets::sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
+    use crate::render::sdf::volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
     // Extents must be positive: a zero or negative extent would produce an
     // inside-out bounding box no fragment ever enters.
     for axis in &mut v.extent {
@@ -113,7 +113,7 @@ pub fn camera_track(mut args: CameraTrackArgs) -> CameraTrackArgs {
             }
         }
         if length(leg.direction) < 1e-6 {
-            leg.seconds = crate::components::camera::track::travel_seconds(leg);
+            leg.seconds = crate::camera::track::travel_seconds(leg);
             leg.distance = 0.0;
         }
     }

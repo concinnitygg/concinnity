@@ -9,6 +9,7 @@
 //! it as a transform for the hierarchy to compose.
 
 mod orientation;
+pub(crate) mod rotation;
 mod system;
 
 pub use orientation::SkyOrientation;

@@ -422,7 +422,7 @@ mod tests {
     // renderer's init. A missing source is a hard error, not an empty payload.
     #[test]
     fn compile_entry_sdf_volume_compiles_the_declared_field() {
-        use concinnity_core::components::assets::sdf_programs::SdfPrograms;
+        use concinnity_core::render::sdf::programs::SdfPrograms;
         concinnity_shader::require_dxc!();
         let dir = tempfile::tempdir().expect("tempdir");
         let field = dir.path().join("blob.hlsl");

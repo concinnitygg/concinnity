@@ -13,7 +13,7 @@ use crate::animation::AnimationSystem;
 use crate::audio::out::AudioOut;
 use crate::audio::system::AudioSystem;
 use crate::behavior::{BehaviorStore, BehaviorSystem};
-use crate::camera_track::CameraTrackSystem;
+use crate::camera::track::CameraTrackSystem;
 use crate::controller::camera::Camera3DSystem;
 use crate::controller::third_person::ThirdPersonSystem;
 use crate::ecs::{Phase, System, SystemEntry, SystemTable, World, boxed};

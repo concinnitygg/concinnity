@@ -264,8 +264,8 @@ fn sync_prepass(
 mod tests {
     use super::*;
     use concinnity_core::components::ShaderSource;
-    use concinnity_core::components::assets::compiled_programs::CompiledProgram;
     use concinnity_core::platform::Platform;
+    use concinnity_core::render::shader::compiled::CompiledProgram;
     use concinnity_core::render::shader::programs::surface;
     use concinnity_core::render::shader::source;
     use objc2_metal::MTLCreateSystemDefaultDevice;

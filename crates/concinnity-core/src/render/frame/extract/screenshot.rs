@@ -5,7 +5,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use core::fmt;
 
-use crate::camera_track::CameraTrackStatus;
+use crate::camera::track::CameraTrackStatus;
 use crate::ecs::PipelineContext;
 use crate::render::frame::snapshot::RenderSnapshot;
 

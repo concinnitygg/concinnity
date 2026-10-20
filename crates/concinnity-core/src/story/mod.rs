@@ -34,6 +34,8 @@ mod title;
 
 pub use store::{SaveSlot, StorySave, StoryStore};
 
+pub(crate) mod command;
+pub(crate) mod definition;
 #[cfg(test)]
 mod tests;
 

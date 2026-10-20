@@ -8,12 +8,20 @@
 //! development source catalogs ([`MeshSources`] and its siblings) sit beside
 //! them.
 
-mod environment_map;
+pub(crate) mod audio_clip;
+pub(crate) mod color_lut;
+pub(crate) mod cubemap_texture;
+pub(crate) mod environment_map;
+pub(crate) mod file;
+pub(crate) mod font;
 mod handles;
 mod install;
+pub(crate) mod material;
+pub(crate) mod mesh;
 mod runtime;
+pub(crate) mod skinned_mesh;
 mod sources;
-mod texture;
+pub(crate) mod texture;
 
 use crate::math::SaturatingFrom;
 pub use environment_map::EnvironmentMapRecord;

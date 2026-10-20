@@ -21,6 +21,7 @@ use crate::gfx::lod::camera_distance;
 use crate::gfx::render_types::DrawObject;
 use crate::render::uniforms::GlassMeshParams;
 
+pub(crate) mod glass_panel;
 mod plan;
 pub mod producer;
 pub use plan::TransparentFramePlan;

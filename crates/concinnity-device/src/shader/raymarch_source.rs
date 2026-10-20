@@ -11,11 +11,11 @@
 // checkout, digests differently, and recompiles. A machine with no compiler
 // says so, naming the volume, rather than drawing nothing.
 
-use concinnity_core::components::assets::sdf_programs::SdfPrograms;
 use concinnity_core::platform::Platform;
 #[cfg(any(backend_dx, backend_vk))]
 use concinnity_core::render::backend::error::RenderError;
 use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::sdf::programs::SdfPrograms;
 use concinnity_core::render::shader::programs::raymarch::{self, Family};
 use concinnity_core::render::shader::source::{self, SourceFile};
 use std::borrow::Cow;
@@ -166,8 +166,8 @@ fn source(family: Family, platform: Platform, field: SourceFile<'_>, hot_reload:
 mod tests {
     use super::*;
     use concinnity_core::components::ShaderSource;
-    use concinnity_core::components::assets::compiled_programs::CompiledProgram;
     use concinnity_core::render::backend::error::RenderError;
+    use concinnity_core::render::shader::compiled::CompiledProgram;
 
     const FIELD: SourceFile<'static> = SourceFile {
         path: "shaders/blob.hlsl",

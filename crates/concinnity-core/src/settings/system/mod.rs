@@ -32,7 +32,7 @@ use crate::platform::GraphicsApiStatus;
 use crate::render::backend::error::RenderError;
 use crate::render::frame::ops::RenderOps;
 use crate::render::frame::queues::ActiveRenderQueues;
-use crate::render::{backend, frame::snapshot, scene_flow};
+use crate::render::{backend, frame::snapshot, scene::flow};
 use crate::settings::apply::{ApplyPlan, plan_apply};
 use crate::settings::quality::resolve_ceiling;
 use crate::settings::{
@@ -433,21 +433,21 @@ impl SettingsState {
         // Source scene-jump visibility from the per-entity components,
         // snapshotting once for the whole command batch (jumps are rare edges,
         // so a local snapshot is fine here).
-        let mut scratch = scene_flow::SceneVisibilityScratch::default();
-        scene_flow::refresh_visibility_snapshot(ctx, &mut scratch);
+        let mut scratch = flow::SceneVisibilityScratch::default();
+        flow::refresh_visibility_snapshot(ctx, &mut scratch);
         let now = ctx
             .resource::<crate::ecs::FrameTime>()
             .copied()
             .unwrap_or_default()
             .elapsed;
-        let Some(slot) = ctx.resources.get_mut::<scene_flow::ActiveSceneFlow>() else {
+        let Some(slot) = ctx.resources.get_mut::<flow::ActiveSceneFlow>() else {
             return;
         };
         let elapsed = slot.elapsed(now);
         let mut scene_ops: Vec<snapshot::SceneOp> = Vec::new();
         for cmd in scene_cmds {
             let mut recorder = snapshot::SceneOpRecorder(&mut scene_ops);
-            if let Err(rejection) = scene_flow::jump_to_scene(
+            if let Err(rejection) = flow::jump_to_scene(
                 &mut slot.flow,
                 &scratch.visibility,
                 elapsed,

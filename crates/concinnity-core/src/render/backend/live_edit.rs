@@ -7,12 +7,12 @@
 //! whether the cheap in-place write fits before it asks for the rebuild.
 
 use crate::components::ShaderPrograms;
-use crate::components::assets::sdf_programs::SdfPrograms;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::{DrawIndex, MATERIAL_PARAM_COUNT, MaterialUniforms, SkinnedIndex};
 use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::backend::init::{BackendInit, SwapchainConfig};
 use crate::render::backend::{PreparedPipelines, SceneHost};
+use crate::render::sdf::programs::SdfPrograms;
 use alloc::vec::Vec;
 
 /// What a pipeline rebuild from fresh programs did

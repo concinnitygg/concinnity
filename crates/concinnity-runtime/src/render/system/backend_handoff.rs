@@ -9,7 +9,7 @@ use concinnity_core::render::backend::init::BackendInit;
 use concinnity_core::render::environment::volumetric_fog::{FogSettings, PushedFogSettings};
 use concinnity_core::render::frame::queues::{ActiveRenderQueues, RenderQueues};
 use concinnity_core::render::overlay::OverlayAssets;
-use concinnity_core::render::scene_flow::ActiveSceneFlow;
+use concinnity_core::render::scene::flow::ActiveSceneFlow;
 use concinnity_core::render::slots::render_slots::RenderSlots;
 use concinnity_core::render::world_load::source_maps::TextureNameSlots;
 

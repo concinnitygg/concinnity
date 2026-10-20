@@ -8,7 +8,7 @@
 use crate::gfx::render_types::{DrawIndex, LineVertex, SkinnedIndex, TextDrawCall};
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
 use crate::math::SaturatingFrom;
-use crate::render::scene_flow::SceneControl;
+use crate::render::scene::flow::SceneControl;
 use alloc::string::String;
 use alloc::vec::Vec;
 

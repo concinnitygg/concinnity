@@ -13,8 +13,10 @@
 
 pub mod api_trial;
 pub mod apply;
+pub(crate) mod command;
 #[cfg(test)]
 mod equivalence_tests;
+pub(crate) mod graphics;
 mod key;
 pub mod levels;
 pub mod quality;

@@ -78,7 +78,7 @@ pub use window::WindowControl;
 use crate::gfx::render_types::{LineVertex, TextDrawCall};
 use crate::input::snapshot::InputSnapshot;
 use crate::render::backend::error::RenderResult;
-use crate::render::scene_flow::SceneControl;
+use crate::render::scene::flow::SceneControl;
 
 /// Per-frame inputs for [`RenderBackend::draw_frame`]. `world_hidden` is set when
 /// an opaque menu backdrop covers the scene: the backend skips every world pass

@@ -19,7 +19,7 @@ use crate::render::frame::extract::CameraRelativeView;
 use crate::render::frame::ops::OpFailure;
 use crate::render::frame::queues::{ActiveRenderQueues, RenderQueues};
 use crate::render::overlay::OverlayFrame;
-use crate::render::scene_flow::{ActiveSceneFlow, SceneFlow, ScenePins};
+use crate::render::scene::flow::{ActiveSceneFlow, SceneFlow, ScenePins};
 use crate::render::streaming::scene_residency::{SceneLoadState, SceneResidencyStatus};
 use crate::settings::system::planet_finest_cell_size;
 use crate::transform::IDENTITY;

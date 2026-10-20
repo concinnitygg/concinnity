@@ -22,8 +22,6 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components::assets::sdf_programs::SdfPrograms;
-use concinnity_core::components::assets::sdf_volume::SdfVolume;
 use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::mesh_payload::Vertex;
@@ -31,6 +29,8 @@ use concinnity_core::gfx::render_types::LightUniforms;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::sdf::programs::SdfPrograms;
+use concinnity_core::render::sdf::volume::SdfVolume;
 use concinnity_core::render::shader::programs::raymarch::{Family, ProxyFaces, VolumeFlags};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

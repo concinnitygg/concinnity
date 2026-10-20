@@ -78,6 +78,8 @@ mod user_system;
 mod waves;
 mod world;
 
+pub(crate) mod entity_target;
+pub(crate) mod identity;
 #[cfg(test)]
 mod tests;
 

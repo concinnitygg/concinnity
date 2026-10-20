@@ -17,6 +17,7 @@ mod alloc_guard;
 mod driver;
 mod fixed_timestep;
 
+pub(crate) mod config;
 #[cfg(test)]
 mod driver_tests;
 #[cfg(test)]

@@ -1,12 +1,13 @@
 use super::build::ShaderInstall;
 use super::*;
-use concinnity_core::components::assets::sdf_programs::SdfPrograms;
-use concinnity_core::components::{ShaderPrograms, ShaderSource, assets::compiled_programs};
+use concinnity_core::components::{ShaderPrograms, ShaderSource};
 use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::backend::recording::{
     Call, RecordingBackend, RecordingPipeline, SharedRecording, recording_backend,
 };
 use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
+use concinnity_core::render::sdf::programs::SdfPrograms;
+use concinnity_core::render::shader::compiled::CompiledProgram;
 use concinnity_core::render::shader::programs::raymarch::VolumeFlags;
 use std::io::Write;
 use std::sync::Mutex;
@@ -19,7 +20,7 @@ fn programs(name: &str) -> ShaderPrograms {
             path: "shaders/wall.hlsl".into(),
             text: "float4 shade(VertexOut v, GpuObjectData od) { return 1.0; }".into(),
         },
-        programs: vec![compiled_programs::CompiledProgram {
+        programs: vec![CompiledProgram {
             entry: "fragment_main_bindless".into(),
             source_digest: 1,
             artifact: vec![4, 5],

@@ -17,5 +17,14 @@ pub use template::{
     DueSpawn, spawn_from_template, spawn_skinned_from_template, tick_lifetimes, tick_spawners,
 };
 
+pub(crate) mod despawn_request;
+pub(crate) mod hidden;
+pub(crate) mod lifetime;
+pub(crate) mod prop;
+pub(crate) mod prop_instance;
+pub(crate) mod reparent_request;
+pub(crate) mod spawn_request;
+pub(crate) mod spawner;
 #[cfg(test)]
 mod tests;
+pub(crate) mod visibility_request;

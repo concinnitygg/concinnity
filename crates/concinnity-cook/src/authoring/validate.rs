@@ -410,9 +410,7 @@ mod tests {
 
     mod sdf_volume {
         use super::*;
-        use concinnity_core::components::assets::sdf_volume::{
-            SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR,
-        };
+        use concinnity_core::render::sdf::volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
 
         #[test]
         fn clamps_steps() {

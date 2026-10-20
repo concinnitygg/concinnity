@@ -3,15 +3,25 @@
 //! contains any `HitRegion`, `Screen`, or `KeyBinding`, then it processes
 //! hover/click, screen overlays, and key bindings each frame.
 
+pub(crate) mod authored_action;
 mod capture;
 pub(crate) mod dropdown;
 mod focus;
+pub(crate) mod hit_region;
 mod intent;
 mod key_bindings;
+pub(crate) mod layout_container;
 mod regions;
-mod screen;
+pub(crate) mod screen;
+pub(crate) mod screen_command;
+pub(crate) mod screen_shown;
 mod scroll_layout;
+pub(crate) mod scroll_panel;
 mod slider;
+pub(crate) mod sprite;
+pub(crate) mod text_input;
+pub(crate) mod text_label;
+pub(crate) mod ui_action;
 
 use crate::ecs::{
     Access, DropdownView, EventCursor, FontHandle, OpenDropdown, PipelineContext, Ref, ScreenStack,

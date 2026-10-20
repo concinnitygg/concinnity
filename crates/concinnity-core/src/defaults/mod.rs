@@ -115,5 +115,6 @@ impl Minter {
     }
 }
 
+pub(crate) mod engine;
 #[cfg(test)]
 mod tests;

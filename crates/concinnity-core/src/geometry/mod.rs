@@ -12,15 +12,19 @@
 
 // Procedural voxel-chunk generation, consumed by the backends' chunk-streaming
 // path.
+pub(crate) mod block_type;
 pub mod chunk_coord;
 mod chunk_gen;
 mod extrude;
 pub mod glass_quad;
 mod grid;
 mod primitives;
+pub mod procedural_mesh;
 pub mod proxy_cube;
-mod room;
+pub(crate) mod room;
 mod voxel;
+pub(crate) mod voxel_chunk;
+pub(crate) mod voxel_world;
 pub mod water_grid;
 
 use crate::math::SaturatingFrom;

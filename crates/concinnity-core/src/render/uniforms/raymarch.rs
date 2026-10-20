@@ -6,7 +6,7 @@
 //! copies apiece, kept in step by hand.
 
 use super::{GBufferView, PassCamera};
-use crate::components::assets::sdf_volume::SDF_PARAMS_LEN;
+use crate::render::sdf::volume::SDF_PARAMS_LEN;
 
 /// Per-frame view inputs, 416 bytes. Every field after `inv_vp` is a `float4`
 /// lane or smaller, which is what keeps the three targets agreeing: a `float3`

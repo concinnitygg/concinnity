@@ -43,8 +43,9 @@ pub mod probe;
 pub mod record_pack;
 pub mod render_graph;
 pub mod rt_accel;
-pub mod scene_flow;
+pub mod scene;
 pub mod scene_state;
+pub mod sdf;
 pub mod shader;
 pub mod shadow;
 pub mod slots;
@@ -52,6 +53,10 @@ pub mod streaming;
 pub mod temporal;
 pub mod transparent;
 
+pub(crate) mod instanced_prop;
+pub(crate) mod mesh_renderer;
+pub(crate) mod model;
+pub(crate) mod model_renderer;
 /// The `#[repr(C)]` blocks the CPU uploads into the shaders, declared once for
 /// every backend except where only one backend binds a block.
 pub mod uniforms;

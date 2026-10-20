@@ -16,12 +16,14 @@
 //! persists nothing.
 
 mod compile;
+pub(crate) mod definition;
 mod position;
 mod program;
 mod run;
 pub(crate) mod spatial;
 mod system;
 mod value;
+pub(crate) mod variables;
 
 pub use compile::compile;
 pub use position::camera_driver;

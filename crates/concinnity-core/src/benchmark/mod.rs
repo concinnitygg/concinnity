@@ -6,6 +6,7 @@
 //! publishes a [`BenchmarkRun`] that the measurement reads its phases from.
 
 mod arm;
+pub(crate) mod config;
 mod run;
 
 pub use arm::arm;

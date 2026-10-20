@@ -11,7 +11,7 @@ use hashbrown::HashSet;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{BlobMeshBounds, BlobSceneGroups, PipelineContext, ResourceKind};
 use crate::render::draw_list::DeferredMeshSources;
-use crate::render::scene_flow::start_scene;
+use crate::render::scene::flow::start_scene;
 
 /// Texture slots (below `slot_count`) whose payloads init skips.
 pub fn deferred_texture_slots(

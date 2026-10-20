@@ -318,10 +318,10 @@ fn a_reissued_reset_lands_on_the_next_frame() {
 #[test]
 fn extraction_records_fade_effects_as_scene_ops() {
     let mut world = World::new();
-    world.insert_resource(ActiveSceneFlow::new(Some(scene_flow::SceneFlow {
+    world.insert_resource(ActiveSceneFlow::new(Some(flow::SceneFlow {
         scenes: vec![AssetId(1), AssetId(2)],
         current: AssetId(1),
-        fade: scene_flow::FadePhase::ToBlack {
+        fade: flow::FadePhase::ToBlack {
             started_at: 0.0,
             next: AssetId(2),
         },
@@ -335,7 +335,7 @@ fn extraction_records_fade_effects_as_scene_ops() {
 
     // Clear the fade: nothing is recorded on an idle flow.
     if let Some(slot) = world.resource_mut::<ActiveSceneFlow>() {
-        slot.flow.as_mut().unwrap().fade = scene_flow::FadePhase::None;
+        slot.flow.as_mut().unwrap().fade = flow::FadePhase::None;
     }
     let snap = extract_once(&mut fx, &mut world);
     assert!(snap.scene_ops.is_empty());

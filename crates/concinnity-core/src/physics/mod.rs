@@ -65,6 +65,18 @@ mod types;
 mod bench;
 #[cfg(test)]
 mod tests;
+// Per-instance components an entity is composed from: its placement, render
+// description, collision, hierarchy, and gameplay tags.
+pub(crate) mod body_dynamics;
+pub(crate) mod collider;
+pub(crate) mod config;
+pub(crate) mod contact_event;
+pub(crate) mod joint;
+pub(crate) mod prop_body;
+pub(crate) mod rigid_body;
+pub(crate) mod trigger_volume;
+pub(crate) mod volume_event;
+pub(crate) mod wake_request;
 
 pub use capacity::{PhysicsBudget, PhysicsCounts};
 pub use character::{CharacterMove, CharacterMoveInput};

@@ -55,7 +55,7 @@ pub mod behavior;
 pub mod benchmark;
 pub mod blob;
 pub mod budget;
-pub(crate) mod camera_track;
+pub mod camera;
 pub mod components;
 pub mod controller;
 pub mod defaults;

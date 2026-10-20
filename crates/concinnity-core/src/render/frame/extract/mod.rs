@@ -22,7 +22,7 @@ use crate::render::environment::atmosphere::AtmosphereSettings;
 use crate::render::frame::queues::ActiveRenderQueues;
 use crate::render::frame::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
 use crate::render::overlay::{OverlayFrame, OverlayRecycle};
-use crate::render::scene_flow::{self, ActiveSceneFlow, SceneVisibilityScratch};
+use crate::render::scene::flow::{self, ActiveSceneFlow, SceneVisibilityScratch};
 use crate::render::temporal::history_reset::{
     FrameClock, HistoryResetCauses, HistoryResetTracker, HistoryView, PendingHistoryReset,
 };
@@ -369,15 +369,15 @@ impl FrameExtractor {
         let fading = ctx
             .resource::<ActiveSceneFlow>()
             .and_then(|f| f.flow.as_ref())
-            .is_some_and(|f| !matches!(f.fade, scene_flow::FadePhase::None));
+            .is_some_and(|f| !matches!(f.fade, flow::FadePhase::None));
         if !fading {
             return;
         }
-        scene_flow::refresh_visibility_snapshot(ctx, &mut self.scene_visibility);
+        flow::refresh_visibility_snapshot(ctx, &mut self.scene_visibility);
         if let Some(slot) = ctx.resources.get_mut::<ActiveSceneFlow>() {
             let flow_elapsed = slot.elapsed(elapsed);
             let mut recorder = SceneOpRecorder(&mut snap.scene_ops);
-            scene_flow::tick_transitions(
+            flow::tick_transitions(
                 &mut slot.flow,
                 &self.scene_visibility.visibility,
                 flow_elapsed,

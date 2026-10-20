@@ -12,6 +12,7 @@ use crate::math::{cos, floor};
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
+pub(crate) mod emitter;
 mod system;
 pub use system::{ActiveEmitter, ParticleFrame, ParticleSystem};
 

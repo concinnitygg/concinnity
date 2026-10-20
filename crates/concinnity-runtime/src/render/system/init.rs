@@ -23,7 +23,7 @@ use concinnity_core::settings::apply::{ApplyPlan, LiveChanges};
 use super::backend_handoff::RuntimeHandoff;
 use super::skinned_templates::SkinnedUpload;
 use super::streaming::StreamingSetup;
-use super::{FrameCounter, GraphicsSystem, RenderInitFailure, maps, scene_flow};
+use super::{FrameCounter, GraphicsSystem, RenderInitFailure, flow, maps};
 use crate::live_edit::hot_reload_sources::{
     HotReloadSources, procedural_mesh_snapshot, resolve_sdf_fields,
 };
@@ -602,7 +602,7 @@ impl GraphicsSystem {
 
         self.finalize_backend_config(ctx, &mut settings);
 
-        self.scene_flow = scene_flow::start_flow(
+        self.scene_flow = flow::start_flow(
             ctx,
             self.extractor.scene_visibility_mut(),
             self.backend.as_deref_mut(),

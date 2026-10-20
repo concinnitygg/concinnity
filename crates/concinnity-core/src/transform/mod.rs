@@ -3,9 +3,15 @@
 //! it, the `T * R(YXZ) * S` composition joints and props both build their matrix
 //! through, and the quaternion conversions that let a rotation be interpolated
 //! along the shorter arc rather than component-wise through its Euler angles.
+//!
+//! The placement components live here too: an entity's local `Transform`,
+//! the world-space `GlobalTransform` [`propagation`] resolves it into, and the
+//! `Parent` / `Children` links that hierarchy follows.
 
 #[cfg(test)]
 mod bench;
+pub(crate) mod children;
+pub(crate) mod parent;
 pub mod propagation;
 
 use crate::math::{acos, sin, sin_cos, sqrt};
@@ -337,6 +343,49 @@ pub fn blend_matrices(a: Mat4, b: Mat4, f: f32) -> Mat4 {
 /// roll.
 pub fn euler_yxz_from_quat(q: Quat) -> [f32; 3] {
     crate::math::euler_yxz_deg_from_quat(q)
+}
+
+/// World-space placement of an entity: translation, rotation, and scale.
+///
+/// Runtime-only placement state. Physics and interaction systems mutate it and
+/// the renderer reads it to position draws. Not authored directly in a world
+/// file; it carries the same transform fields a `Prop` declares.
+#[derive(Debug, Clone, Copy, crate::ecs::AssetDefault)]
+pub struct Transform {
+    /// World-space position [x, y, z].
+    pub position: [f32; 3],
+    /// Euler rotation in degrees [pitch, yaw, roll], applied in YXZ order.
+    pub rotation_deg: [f32; 3],
+    /// Non-uniform scale [x, y, z].
+    #[asset(default = [1.0, 1.0, 1.0])]
+    pub scale: [f32; 3],
+}
+
+impl Transform {
+    /// Build a column-major model matrix from this transform.
+    /// Order: scale, then YXZ Euler rotation, then translation.
+    pub fn model_matrix(&self) -> [[f32; 4]; 4] {
+        trs_matrix(self.position, self.rotation_deg, self.scale)
+    }
+}
+
+/// Composed world matrix for an entity, after parent transforms are applied.
+///
+/// Runtime-only. A transform-propagation pass writes it from an entity's
+/// `Transform` and its parent chain; the renderer reads it to place draws. For
+/// a root (parentless) entity it equals `Transform::model_matrix`.
+#[derive(Debug, Clone, Copy)]
+pub struct GlobalTransform(pub [[f32; 4]; 4]);
+
+impl Default for GlobalTransform {
+    fn default() -> Self {
+        Self([
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ])
+    }
 }
 
 #[cfg(test)]

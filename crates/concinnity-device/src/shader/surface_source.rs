@@ -71,8 +71,8 @@ fn source(program: &surface::Program, req: Request, sources: &Sources<'_>) -> St
 mod tests {
     use super::*;
     use concinnity_core::components::ShaderSource;
-    use concinnity_core::components::assets::compiled_programs::CompiledProgram;
     use concinnity_core::render::backend::error::RenderError;
+    use concinnity_core::render::shader::compiled::CompiledProgram;
 
     const SHADE: &str = "float4 shade(VertexOut v, GpuObjectData od) { return (float4)(1.0); }";
 

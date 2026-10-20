@@ -55,6 +55,10 @@ pub fn try_normalize(v: [f32; 3], min_len: f32) -> Option<[f32; 3]> {
     (len > min_len && len.is_finite()).then(|| [v[0] / len, v[1] / len, v[2] / len])
 }
 
+/// The length below which an authored normal or direction has no direction
+/// and takes its fallback.
+pub(crate) const MIN_DIRECTION_LEN: f32 = 1e-6;
+
 /// Unit-length `v`, or `fallback` when its length is not a finite value above
 /// `min_len`.
 pub fn normalize_or(v: [f32; 3], min_len: f32, fallback: [f32; 3]) -> [f32; 3] {

@@ -24,7 +24,6 @@
 
 use ash::vk;
 use concinnity_core::components::SdfVolume;
-use concinnity_core::components::assets::sdf_programs::SdfPrograms;
 use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::mesh_payload::Vertex;
@@ -33,6 +32,7 @@ use concinnity_core::math::{SaturatingFrom, saturating_u32};
 use concinnity_core::platform::Platform;
 use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::backend::init::SdfVolumeSource;
+use concinnity_core::render::sdf::programs::SdfPrograms;
 use concinnity_core::render::shader::programs::raymarch::{Family, ProxyFaces, VolumeFlags};
 use concinnity_core::transform::mat4_inverse;
 

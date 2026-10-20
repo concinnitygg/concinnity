@@ -13,7 +13,9 @@ use concinnity_core::render::frame::outcome::FrameCounter;
 use concinnity_core::render::frame::submit::FramePolicy;
 use concinnity_core::render::streaming::pools::StreamingPools;
 use concinnity_core::render::world_load::scene_deferral::ShaderDeferral;
-use concinnity_core::render::{backend, frame::snapshot, overlay::maps, overlay::text, scene_flow};
+use concinnity_core::render::{
+    backend, frame::snapshot, overlay::maps, overlay::text, scene::flow,
+};
 use concinnity_host::store::paths::StateTree;
 
 /// Why the renderer could not be built, left by `GraphicsSystem`'s init for
@@ -47,7 +49,7 @@ pub(crate) struct GraphicsSystem {
     // active scene-flow bookkeeping while init builds it; handed to the shared
     // `ActiveSceneFlow` resource at the end of init (SettingsSystem jumps it,
     // this system ticks it). None when no Scene assets were declared.
-    scene_flow: Option<scene_flow::SceneFlow>,
+    scene_flow: Option<flow::SceneFlow>,
     // Overlay build inputs assembled during init() and handed to OverlaySystem
     // (as the `OverlayAssets` resource) at its end; empty afterwards. Fonts is
     // the atlas data keyed by handle; sprite_texture_slots maps a Sprite's

@@ -10,9 +10,9 @@
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard};
 
 use concinnity_core::components::ShaderPrograms;
-use concinnity_core::components::assets::sdf_programs::SdfPrograms;
 use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
+use concinnity_core::render::sdf::programs::SdfPrograms;
 use concinnity_core::render::shader::programs::raymarch::VolumeFlags;
 use concinnity_core::render::shader::programs::surface::GrassShading;
 

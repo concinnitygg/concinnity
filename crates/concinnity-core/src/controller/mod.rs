@@ -4,7 +4,11 @@
 /// First-person / fly-through camera controller. `pub` so the editor crate can
 /// zero the controller's velocity behind an externally driven pose.
 pub mod camera;
+pub(crate) mod held;
+pub(crate) mod interact_event;
+pub(crate) mod interactable;
 mod look_controls;
+pub(crate) mod pickup;
 /// Third-person character controller, built instead of the first-person one
 /// when the controlling camera's controller has a `follow` block.
 pub mod third_person;
