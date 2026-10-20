@@ -1,4 +1,4 @@
-//! The environment drawn as the background (see `concinnity_core::render::sky`):
+//! The environment drawn as the background (see `concinnity_core::render::environment::sky`):
 //! a fullscreen draw at the tail of each opaque scene pass (the main camera, a
 //! reflection-probe face, a planar mirror), and one at the tail of the G-buffer
 //! pre-pass for the sky's motion. Both ride the encoder the pass already has
@@ -6,8 +6,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::view_modes::ViewMode;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::sky;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::environment::sky;
 use concinnity_core::render::uniforms::{GBufferView, ViewUniforms};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

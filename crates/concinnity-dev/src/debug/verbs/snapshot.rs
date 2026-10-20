@@ -317,7 +317,7 @@ mod tests {
     };
     use crate::debug::verbs::testing::ask;
     use concinnity_core::profile::RenderStats;
-    use concinnity_core::render::stream_pools::StreamingStats;
+    use concinnity_core::render::streaming::pools::StreamingStats;
     use concinnity_core::shutdown::ShutdownToken;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;

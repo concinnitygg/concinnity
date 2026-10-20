@@ -5,9 +5,9 @@
 // by a scene other than the start scene). The streaming pump calls in here as
 // those scenes pin and unpin, handing over a pipeline its worker already built.
 
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::shader_programs::surface::GrassShading;
+use concinnity_core::render::shader::programs::surface::GrassShading;
 use std::sync::Arc;
 
 use super::MtlContext;

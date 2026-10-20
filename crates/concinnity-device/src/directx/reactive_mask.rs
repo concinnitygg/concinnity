@@ -5,8 +5,8 @@
 // frame it is not, its writers bind a null view in its place, so their writes
 // go nowhere and it never leaves that state.
 
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::reactive_mask::ReactiveWrite;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::temporal::reactive_mask::ReactiveWrite;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 

@@ -11,7 +11,7 @@
 //! to the heap cascade.
 
 use crate::directx::descriptor_slot::SrvSlot;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use windows::Win32::Graphics::Direct3D12::*;

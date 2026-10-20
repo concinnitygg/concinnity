@@ -5,7 +5,7 @@
 use crate::components::{
     AaMode, PassResolution, ShadowUpdate, UpscaleQuality, UpscalerBackend, WindowMode,
 };
-use crate::render::dlss::DlssPreset;
+use crate::render::output::dlss::DlssPreset;
 use crate::settings::QualityPreset;
 
 /// A cycle row's options in menu order: a label and a value for each index.

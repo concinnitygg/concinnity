@@ -14,8 +14,8 @@
 use concinnity_core::components::ShaderSource;
 use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::platform::Platform;
-use concinnity_core::render::shader_programs::raymarch::{self, Family};
-use concinnity_core::render::shader_source::SourceFile;
+use concinnity_core::render::shader::programs::raymarch::{self, Family};
+use concinnity_core::render::shader::source::SourceFile;
 use concinnity_shader::diagnostics::Diagnostic;
 
 use crate::compile::program::{self, ProgramError};

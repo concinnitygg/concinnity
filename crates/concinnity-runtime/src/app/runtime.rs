@@ -20,7 +20,7 @@ use concinnity_core::ecs::ActiveRenderBackend;
 use concinnity_core::input::mailbox::InputMailbox;
 use concinnity_core::launch::LaunchRequest;
 use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::render_mode::{RenderMode, Resolution};
+use concinnity_core::render::backend::render_mode::{RenderMode, Resolution};
 use concinnity_core::shutdown::ShutdownToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

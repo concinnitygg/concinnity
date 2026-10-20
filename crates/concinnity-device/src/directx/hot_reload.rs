@@ -7,9 +7,11 @@
 //! called with `hot_reload = true`. Production `cn run` never sets it. Mirrors
 //! `src/metal/hot_reload.rs`.
 
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::surface::GrassShading;
-use concinnity_core::render::world_pipelines::{BucketSource, check_rebuild, replace_bucket};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::shader::programs::surface::GrassShading;
+use concinnity_core::render::shader::world_pipelines::{
+    BucketSource, check_rebuild, replace_bucket,
+};
 
 use super::context::DxContext;
 use super::init::pipelines::{BucketPipelineTargets, BucketPsos, build_bucket_pipeline};

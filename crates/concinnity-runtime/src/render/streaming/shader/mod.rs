@@ -13,8 +13,8 @@ mod build;
 #[cfg(test)]
 mod tests;
 
-use concinnity_core::render::ops::RenderOps;
-use concinnity_core::render::stream_pools::{Due, Finished, ShaderPump, ShaderResidency};
+use concinnity_core::render::frame::ops::RenderOps;
+use concinnity_core::render::streaming::pools::{Due, Finished, ShaderPump, ShaderResidency};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 

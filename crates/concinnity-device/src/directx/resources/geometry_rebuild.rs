@@ -7,8 +7,8 @@
 
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::{backend, geometry_repack, rt_geom};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::{backend, rt_accel::geom, slots::geometry_repack};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT;
 
@@ -328,7 +328,7 @@ impl DxContext {
         let new_v_bytes = size_of_val(new_vertices.as_slice()) as u64;
         let new_i_bytes = size_of_val(new_indices.as_slice()) as u64;
         // Whole u32 words for the index buffer; see `upload_skinned`.
-        let ibuf_bytes = rt_geom::skinned_index_buffer_bytes(new_indices.len()) as u64;
+        let ibuf_bytes = geom::skinned_index_buffer_bytes(new_indices.len()) as u64;
         let new_vbuf = self.hw.alloc.alloc_buffer(
             new_v_bytes,
             D3D12_HEAP_TYPE_DEFAULT,

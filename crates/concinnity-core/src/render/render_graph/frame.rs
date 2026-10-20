@@ -277,7 +277,7 @@ pub struct FrameGraphInputs {
     /// [`FrameGraphInputs::reactive_mask_live`]).
     pub reactive_mask_enabled: bool,
     /// `true` when the upscaler takes the reactive mask (see
-    /// [`crate::render::reactive_mask::ReactiveReader::reads`]). No effect while
+    /// [`crate::render::temporal::reactive_mask::ReactiveReader::reads`]). No effect while
     /// `upscale_enabled` is false.
     pub upscale_reads_reactive: bool,
     /// `true` when the world grows a grass field and the backend built its
@@ -1264,7 +1264,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
 fn atmosphere_luts_desc() -> TextureDesc {
     // Stands for the atmosphere's whole table set, whose largest member is the
     // aerial-perspective volume; the backend owns and transitions the tables.
-    use crate::render::atmosphere::AERIAL_SIZE;
+    use crate::render::environment::atmosphere::AERIAL_SIZE;
     TextureDesc::volume_3d(
         TextureSize::Absolute(AERIAL_SIZE),
         TextureSize::Absolute(AERIAL_SIZE),
@@ -1277,8 +1277,8 @@ fn atmosphere_luts_desc() -> TextureDesc {
 fn water_cascades_desc() -> TextureDesc {
     // Stands for both cascade arrays of every simulation, at the finest
     // quality; the backend owns them and transitions them itself.
+    use crate::render::environment::water::ocean::OceanQuality;
     use crate::render::uniforms::ocean::ocean_mip_levels;
-    use crate::render::water::ocean::OceanQuality;
     let size = OceanQuality::FULL.size;
     TextureDesc::texture_2d(
         TextureSize::Absolute(size),

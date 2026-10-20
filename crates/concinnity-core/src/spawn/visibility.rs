@@ -7,7 +7,7 @@
 use crate::components::{Hidden, RenderHandle};
 use crate::ecs::{Entity, PipelineContext};
 use crate::gfx::render_types::DrawIndex;
-use crate::render::ops::RenderOps;
+use crate::render::frame::ops::RenderOps;
 
 pub(super) fn set_subtree_visibility(
     ctx: &mut PipelineContext<'_>,

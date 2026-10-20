@@ -6,7 +6,7 @@ use concinnity_core::components::{
 };
 use concinnity_core::ecs::ResourceKind;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::reflection_probe::ProbePlacement;
+use concinnity_core::render::probe::capture::ProbePlacement;
 use concinnity_core::terrain::TerrainGrid;
 use concinnity_core::terrain::payload::TerrainPayload;
 
@@ -337,7 +337,8 @@ fn volumetric_fog_resolves_into_the_backend_init() {
     );
     // The fog a world reload dedupes against is parked beside the backend,
     // seeded from whatever was passed into the backend constructor.
-    let pushed = world.resource::<concinnity_core::render::volumetric_fog::PushedFogSettings>();
+    let pushed =
+        world.resource::<concinnity_core::render::environment::volumetric_fog::PushedFogSettings>();
     assert!(pushed.is_some_and(|fog| fog.0.is_some()));
 }
 
@@ -357,7 +358,8 @@ fn disabled_volumetric_fog_skips_the_fog_pass() {
 
     assert!(!gs.failed);
     assert!(!lock(&state).init.as_ref().unwrap().fog);
-    let pushed = world.resource::<concinnity_core::render::volumetric_fog::PushedFogSettings>();
+    let pushed =
+        world.resource::<concinnity_core::render::environment::volumetric_fog::PushedFogSettings>();
     assert!(pushed.is_some_and(|fog| fog.0.is_none()));
 }
 

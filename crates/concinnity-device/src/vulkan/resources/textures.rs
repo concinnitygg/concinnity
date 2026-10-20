@@ -7,7 +7,7 @@
 use ash::vk;
 use concinnity_core::bake;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 
 use super::super::context::VkContext;
 use super::super::descriptor_layout::{IRRADIANCE_CUBE_BINDING, PREFILTER_CUBE_BINDING};

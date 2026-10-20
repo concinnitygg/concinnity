@@ -17,10 +17,10 @@
 //! fundamentally incompatible with our usage on this hardware / macOS 26.4
 //! combo.
 use concinnity_core::gfx::render_types;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PixelRect;
 use concinnity_core::render::post::reflection_path::ReflectionPath;
-use concinnity_core::render::radiance_storage::FaceStorage;
+use concinnity_core::render::probe::radiance::FaceStorage;
 use concinnity_core::render::uniforms::{FaceCamera, ViewUniforms};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -677,7 +677,7 @@ impl MtlContext {
         enc.set_vertex_buffer(
             &self.scene.vertex_buffer,
             0,
-            concinnity_core::render::shader_programs::metal::MAIN_MESH_VERTICES_BUFFER,
+            concinnity_core::render::shader::programs::metal::MAIN_MESH_VERTICES_BUFFER,
         );
         enc.set_fragment_value(self.lights.uniforms(), 4);
         enc.set_fragment_value(&self.canopy, 21);

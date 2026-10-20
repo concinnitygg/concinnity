@@ -14,7 +14,7 @@ use crate::components::{
     AaMode, PassResolution, ShadowUpdate, UpscaleQuality, UpscalerBackend, WindowMode,
 };
 use crate::platform::Platform;
-use crate::render::dlss::DlssPreset;
+use crate::render::output::dlss::DlssPreset;
 use crate::settings::quality::QualityPreset;
 
 /// Persisted overrides for graphics settings. Missing fields stay `None` and

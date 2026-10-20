@@ -7,7 +7,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::decode::{ByteReader, checked_product};
-use crate::render::text::{FontMetrics, LoadedFont, derive_cap_px};
+use crate::render::overlay::text::{FontMetrics, LoadedFont, derive_cap_px};
 
 // Bytes each glyph's metrics occupy in the payload: char code, four atlas
 // coordinates, advance, and two bearings.

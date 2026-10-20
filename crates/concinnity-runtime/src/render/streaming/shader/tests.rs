@@ -2,12 +2,12 @@ use super::build::ShaderInstall;
 use super::*;
 use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::components::{ShaderPrograms, ShaderSource, compiled_programs};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::backend::recording::{
     Call, RecordingBackend, RecordingPipeline, SharedRecording, recording_backend,
 };
 use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
+use concinnity_core::render::shader::programs::raymarch::VolumeFlags;
 use std::io::Write;
 use std::sync::Mutex;
 

@@ -5,7 +5,7 @@ use concinnity_cook::compile::sdf_field::CompiledField;
 use concinnity_core::components::ShaderSource;
 use concinnity_core::fanout::Fanout;
 use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
-use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
+use concinnity_core::render::shader::programs::raymarch::VolumeFlags;
 use concinnity_core::render::world_load::source_maps::SdfFieldEntry;
 use std::collections::HashMap;
 

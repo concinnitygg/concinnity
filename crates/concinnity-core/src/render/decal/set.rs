@@ -7,8 +7,8 @@ use core::cell::Cell;
 
 use crate::gfx::frustum::Frustum;
 use crate::render::decal::DecalRecord;
-use crate::render::frame_dirty::FrameDirty;
-use crate::render::slot_table::{AtCapacity, RemoveError, SlotTable};
+use crate::render::slots::frame_dirty::FrameDirty;
+use crate::render::slots::table::{AtCapacity, RemoveError, SlotTable};
 use crate::render::uniforms::DecalParams;
 
 /// Exponent of the decal's edge-fade curve, applied by the fragment shader to

@@ -13,7 +13,7 @@
 //! backend that creates it through the seam.
 
 use crate::gfx::render_types::SsrParams;
-use crate::render::error::RenderResult;
+use crate::render::backend::error::RenderResult;
 use crate::render::render_graph::{
     ClearValue, PassId, PixelFormat, TextureDesc, TextureSize, TextureUsage,
 };

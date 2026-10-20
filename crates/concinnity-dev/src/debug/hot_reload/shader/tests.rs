@@ -4,10 +4,10 @@ use concinnity_cook::compile::program::{CompileFailure, Diagnostic, EntryFailure
 use concinnity_cook::compile::shader::CompiledShader;
 use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::components::{ShaderPrograms, ShaderStage};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::backend::{GeometryEdit, PreparedPipelines, SceneHost};
-use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
+use concinnity_core::render::shader::programs::raymarch::VolumeFlags;
 use concinnity_core::render::world_load::source_maps::ShaderFile;
 use std::collections::HashSet;
 use std::path::Path;

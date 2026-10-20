@@ -22,12 +22,12 @@ mod stages;
 
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_core::render::backend::FrameParams;
-use concinnity_core::render::frame_plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
-use concinnity_core::render::grass::lod as grass_lod;
+use concinnity_core::render::environment::grass::lod as grass_lod;
+use concinnity_core::render::frame::plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::rt_accel::RtUpdate;
 use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::{error, render_graph};
+use concinnity_core::render::{backend::error, render_graph};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLCommandQueue as _};
@@ -385,7 +385,7 @@ impl FrameDevice for MtlContext {
                         super::pass_timing::frame_span(&buf.0, mask, async_mask)
                     {
                         let previous = span_end.fetch_max(end, AtomicOrdering::Relaxed);
-                        let span = concinnity_core::render::pass_timing::FrameSpan::after(
+                        let span = concinnity_core::render::backend::pass_timing::FrameSpan::after(
                             start, end, previous,
                         );
                         let micros = |ns: u64| u32::saturating_from(ns / 1000);

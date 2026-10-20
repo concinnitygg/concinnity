@@ -11,7 +11,7 @@ use crate::components::{
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{MenuOverride, PipelineContext, Ref};
-use crate::render::grass::PlanetGrass;
+use crate::render::environment::grass::PlanetGrass;
 use crate::resource::ColorLutTable;
 
 /// How a world holds the cursor from its first frame.

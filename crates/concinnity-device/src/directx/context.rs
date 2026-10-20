@@ -10,15 +10,15 @@ use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_core::render::backend::FrameParams;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::frame_plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::buffers::retire_pool::RetirePool;
+use concinnity_core::render::frame::plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
 use concinnity_core::render::post::reflection_path::ReflectionPath;
-use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::retire_pool::RetirePool;
+use concinnity_core::render::probe::book::ProbeBook;
 use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::shader_reload::ShaderReload;
+use concinnity_core::render::shader::reload::ShaderReload;
 use concinnity_core::render::{
-    backend, backend_init, hdr_output, lights, pass_timing, slot_rewrites,
+    backend, backend::init, backend::pass_timing, light::lights, output::hdr, slots::rewrites,
 };
 use concinnity_core::window::display_mode;
 use concinnity_core::{components, profile};
@@ -83,7 +83,7 @@ pub(super) fn build_timestamp_resources(
     }
     // Heap holds one block of [whole_frame_start, whole_frame_end, then
     // PASS_COUNT (start, end) pairs] per in-flight frame. See
-    // `concinnity_core::render::pass_timing` for the slot layout.
+    // `concinnity_core::render::backend::pass_timing` for the slot layout.
     //
     // Timing: `execute_graph` issues an EndQuery before and after each pass's
     // encode, and the resolve at the end of the command list copies the whole block
@@ -203,7 +203,7 @@ pub(super) struct DxUniforms {
     // The values the light ring carries, which slots of it are stale, and the
     // local lights' reach. `record_frame` writes the frame's own slot, so no
     // in-flight read is raced.
-    pub lights: concinnity_core::render::light_state::LightState,
+    pub lights: concinnity_core::render::light::state::LightState,
     pub shadow_ubo_resources: Vec<PooledBuffer>,
     pub shadow_ubo_ptrs: Vec<*mut u8>,
     // Per-frame CBVs holding the live probe count, bound at root param [11] by
@@ -388,7 +388,7 @@ impl ProbeState {
 // every copy has been re-pointed, every list recorded against the old resource
 // has retired, and the tick's fence wait covers the upload submission itself.
 pub(super) struct StreamState {
-    pub pool_rewrites: slot_rewrites::SlotRewriteQueue,
+    pub pool_rewrites: rewrites::SlotRewriteQueue,
     pub frame: u64,
     pub retires: RetirePool<StreamedUploadRetire>,
     // `frames + 1`: a swap lands between frames, after the previous frame's
@@ -400,7 +400,7 @@ pub(super) struct StreamState {
 impl StreamState {
     pub(super) fn new(frames: usize) -> Self {
         Self {
-            pool_rewrites: slot_rewrites::SlotRewriteQueue::new(frames),
+            pool_rewrites: rewrites::SlotRewriteQueue::new(frames),
             frame: 0,
             retires: RetirePool::new(),
             retire_depth: frames as u64 + 1,
@@ -559,7 +559,7 @@ pub(super) struct DxRayTracing {
     pub accel: Option<super::raytrace::RtAccelData>,
     // How the acceleration structure is kept current as props move (the
     // launch's `--rt-dynamic` request; `Auto` by default).
-    pub dynamic_mode: concinnity_core::render::rt_geom::RtDynamicMode,
+    pub dynamic_mode: concinnity_core::render::rt_accel::geom::RtDynamicMode,
     // Whether the per-frame BVH update is failing, so a failure is logged once
     // per streak rather than every frame.
     pub update_streak: concinnity_core::render::rt_accel::FailureStreak,
@@ -598,11 +598,11 @@ pub(super) struct DxHardware {
     // capability and checked again before any RT build.
     pub rt_capable: bool,
     // The resolved HDR-output mode. (The DXGI format is in `swapchain.format`.)
-    pub hdr_mode: hdr_output::HdrOutputMode,
+    pub hdr_mode: hdr::HdrOutputMode,
     // The swapchain config (ring depth + HDR request) this context was built
     // with, reported by `hot_swap_config` so a live editor reload reuses this
     // hardware only when the new world's config still matches.
-    pub swapchain_config: backend_init::SwapchainConfig,
+    pub swapchain_config: init::SwapchainConfig,
     // The user's chosen fullscreen display mode, held on the monitor while the
     // window is in (borderless) fullscreen and restored on exit / drop.
     // Reconciled once per frame in `window_closed`.
@@ -651,16 +651,16 @@ impl DxHardware {
     // Maximum extended-range multiplier on the HDR path, `None` on SDR.
     pub(super) fn max_edr(&self) -> Option<f32> {
         match self.hdr_mode {
-            hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
-            hdr_output::HdrOutputMode::Sdr => None,
+            hdr::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
+            hdr::HdrOutputMode::Sdr => None,
         }
     }
 
     // HDR encoding (scRGB-linear vs PQ) on the HDR path, `None` on SDR.
-    pub(super) fn hdr_encoding(&self) -> Option<hdr_output::HdrEncoding> {
+    pub(super) fn hdr_encoding(&self) -> Option<hdr::HdrEncoding> {
         match self.hdr_mode {
-            hdr_output::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
-            hdr_output::HdrOutputMode::Sdr => None,
+            hdr::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
+            hdr::HdrOutputMode::Sdr => None,
         }
     }
 }
@@ -838,7 +838,7 @@ pub(crate) struct DxContext {
     pub(super) grass: Option<super::grass::GrassResources>,
     // How this frame's view resolves the grass: where it coarsens, thins and
     // hands over to the canopy. `None` without grass.
-    pub(super) grass_lod: Cell<Option<concinnity_core::render::grass::GrassLodView>>,
+    pub(super) grass_lod: Cell<Option<concinnity_core::render::environment::grass::GrassLodView>>,
     // The far field's canopy block, one copy per frame in flight. See
     // [`super::canopy`].
     pub(super) canopy: super::canopy::DxCanopy,
@@ -1361,7 +1361,7 @@ impl DxContext {
         self.spot_shadow.frusta = data
             .spot_shadows
             .iter()
-            .map(concinnity_core::render::spot_shadow::slice_frustum)
+            .map(concinnity_core::render::shadow::spot::slice_frustum)
             .collect();
         self.state.planner.shadow.reset_spots();
         self.uniforms.lights.move_local(&data.lights, uniforms);
@@ -1376,7 +1376,7 @@ impl DxContext {
         self.uniforms.lights.set_directional(lights);
     }
 
-    pub(crate) fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {
+    pub(crate) fn set_shadow_cadence(&mut self, cadence: init::ShadowCadence) {
         self.state.planner.shadow.cadence = cadence;
     }
 

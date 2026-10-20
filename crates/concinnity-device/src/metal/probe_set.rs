@@ -11,8 +11,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types::ClusterParams;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::reflection_probe::PrefilterPlan;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::probe::capture::PrefilterPlan;
 use concinnity_core::render::uniforms::{ProbeSet, ProbeUniforms, grown_probe_capacity};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

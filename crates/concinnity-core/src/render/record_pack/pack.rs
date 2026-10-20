@@ -7,8 +7,8 @@ use crate::gfx::render_types::{
 };
 use crate::math::SaturatingFrom;
 use crate::planet::{Horizon, TileMorphFrame};
-use crate::render::model_history::HistoryWindow;
-use crate::render::world_pipelines::GrassTwins;
+use crate::render::shader::world_pipelines::GrassTwins;
+use crate::render::temporal::model_history::HistoryWindow;
 
 /// What every chunk of one frame's pack reads besides its own draws.
 #[derive(Clone, Copy, Debug)]
@@ -39,7 +39,7 @@ impl PackView {
 }
 
 /// Where a frame's draws growing grass route: the default Shader's grass twins
-/// (see [`crate::render::world_pipelines`]) and where the blades start handing
+/// (see [`crate::render::shader::world_pipelines`]) and where the blades start handing
 /// the field to the canopy this frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct GrassRoute {
@@ -47,7 +47,7 @@ pub struct GrassRoute {
     pub twins: GrassTwins,
     /// Distance from the eye, in meters, where the blades start thinning out
     /// and the ground's canopy starts to show
-    /// ([`GrassLodView::fade_start`](crate::render::grass::GrassLodView::fade_start));
+    /// ([`GrassLodView::fade_start`](crate::render::environment::grass::GrassLodView::fade_start));
     /// 0 routes every draw growing grass to the canopy twin.
     pub far_start: f32,
 }
@@ -228,8 +228,8 @@ mod tests {
         DrawArgsFlags, DrawIndex, FarFieldTint, LodSlice, PlanetTileDraw, draw_args_no_history,
     };
     use crate::planet::HorizonOccluder;
-    use crate::render::model_history::{HistoryMode, ModelHistory};
     use crate::render::record_pack::MAX_PACK_CHUNKS;
+    use crate::render::temporal::model_history::{HistoryMode, ModelHistory};
     use crate::test_support;
 
     const TEXTURES: u32 = 64;

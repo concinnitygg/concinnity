@@ -4,9 +4,9 @@
 use super::CullInputs;
 use crate::metal::init::InitGpu;
 use crate::metal::init::pipelines::{self, BucketPipelines};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::surface::GrassShading;
-use concinnity_core::render::world_pipelines::{BucketPlan, WorldPipelines};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::shader::programs::surface::GrassShading;
+use concinnity_core::render::shader::world_pipelines::{BucketPlan, WorldPipelines};
 
 pub(super) struct BindlessPass {
     pub(super) active: bool,

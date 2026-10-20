@@ -11,8 +11,11 @@
 
 mod book;
 mod drive;
+pub mod geom;
 mod plan;
+pub mod refit;
 mod rings;
+pub mod topology;
 
 pub use book::{AccelBook, HeadRefresh, InstanceBlas, SeedSet};
 pub use drive::{RefreshStep, RtAccelSteps, RtDriveInputs, drive_update};

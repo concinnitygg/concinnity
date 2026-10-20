@@ -20,12 +20,18 @@ use crate::ecs::{
     OpenDropdown, PipelineContext, ScreenStack, StepResult, System, World,
 };
 use crate::gfx::render_types;
-use crate::render::overlay_maps::Placement;
-use crate::render::render_mode::RenderMode;
-use crate::render::{call_buffer, cursor, overlay_maps, sprite as gfx_sprite, text};
+use crate::render::backend::render_mode::RenderMode;
+use crate::render::overlay::maps::Placement;
+
 use alloc::vec::Vec;
 
+pub(crate) mod call_buffer;
+pub(crate) mod cursor;
+pub mod error_screen;
 mod hud_layout;
+pub mod maps;
+pub(crate) mod sprite;
+pub mod text;
 mod widgets;
 
 // Base of the reserved draw-layer band `HudLayers` overrides sit in: far above
@@ -48,13 +54,13 @@ pub struct OverlayAssets {
     /// The loaded font atlases.
     pub fonts: text::FontSet,
     /// Each sprite texture's pool slot.
-    pub sprite_texture_slots: overlay_maps::TextureSlots,
+    pub sprite_texture_slots: maps::TextureSlots,
     /// The `DebugHud` chip label ids, top to bottom.
     pub debug_hud_chips: Vec<AssetId>,
     /// The `StatHud` chip label ids, top to bottom.
     pub stat_hud_chips: Vec<AssetId>,
     /// The scroll-panel clip bands.
-    pub clip_rects: overlay_maps::ClipRects,
+    pub clip_rects: maps::ClipRects,
     /// The backend's logical size at init, the viewport used until the first
     /// input poll publishes a live one (`FrameInput.viewport`).
     pub initial_viewport: (f32, f32),
@@ -87,7 +93,7 @@ pub struct OverlaySystem {
     // Seconds of frame time since the first built frame, the caret-blink clock.
     elapsed: f32,
     // Scratch for the per-element draw-layer merge, reused across frames.
-    layers: overlay_maps::OverlayLayers,
+    layers: maps::OverlayLayers,
     // Scratch for the LayoutContainer label reflow, reused across frames.
     hud_scratch: hud_layout::LabelLayoutScratch,
     // Buffers the synthesized dropdown / text-input elements are built into,
@@ -253,7 +259,7 @@ impl OverlaySystem {
             Placement::of(id, &assets.clip_rects, hud_layers)
         };
 
-        gfx_sprite::build_sprite_calls_into(
+        sprite::build_sprite_calls_into(
             &mut self.buffer,
             ctx.query_with_entity::<Sprite>()
                 .map(|(entity, s)| (s, placement(entity))),
@@ -282,7 +288,7 @@ impl OverlaySystem {
                 clip: None,
                 layer: DROPDOWN_LAYER,
             };
-            gfx_sprite::build_sprite_calls_into(
+            sprite::build_sprite_calls_into(
                 &mut self.buffer,
                 self.widget_scratch.sprites.iter().map(|s| (s, on_top)),
                 default_atlas_slot,
@@ -319,7 +325,7 @@ impl OverlaySystem {
             // own placement; otherwise a focused panel's text fields would
             // sink below it.
             let field = placement(entity);
-            gfx_sprite::build_sprite_calls_into(
+            sprite::build_sprite_calls_into(
                 &mut self.buffer,
                 self.widget_scratch.sprites.iter().map(|s| (s, field)),
                 default_atlas_slot,
@@ -374,7 +380,7 @@ impl OverlaySystem {
         // does not qualify.
         let world_hidden = menu_active
             && sprites.iter().any(|s| {
-                !s.follow_cursor && s.visible && s.tint[3] >= 1.0 && gfx_sprite::covers_canvas(s)
+                !s.follow_cursor && s.visible && s.tint[3] >= 1.0 && sprite::covers_canvas(s)
             });
         // Reorder the overlay by layer when any call carries one (an active screen
         // stack, the editor's focus-stack overrides, an open dropdown, the cursor).
@@ -451,10 +457,10 @@ mod tests {
     fn assets() -> OverlayAssets {
         OverlayAssets {
             fonts: loaded_fonts(),
-            sprite_texture_slots: overlay_maps::TextureSlots::new(),
+            sprite_texture_slots: maps::TextureSlots::new(),
             debug_hud_chips: Vec::new(),
             stat_hud_chips: Vec::new(),
-            clip_rects: overlay_maps::ClipRects::new(),
+            clip_rects: maps::ClipRects::new(),
             initial_viewport: (REF_W, REF_H),
         }
     }

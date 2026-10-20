@@ -8,8 +8,8 @@ use alloc::vec::Vec;
 
 use crate::ecs::asset_fields::{ApplyClass, ParamChange};
 use crate::gfx::render_types::PostProcessTunables;
-use crate::render::backend_init::ShadowCadence;
-use crate::render::error::RenderResult;
+use crate::render::backend::error::RenderResult;
+use crate::render::backend::init::ShadowCadence;
 use crate::settings::{ResolvedGraphics, SettingsDiff};
 
 /// The live values a change moved, each pushed to the frame's uniforms.

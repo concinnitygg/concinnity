@@ -19,10 +19,10 @@
 
 use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::frame_plan::FogBlocks;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::environment::volumetric_fog;
+use concinnity_core::render::frame::plan::FogBlocks;
 use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
-use concinnity_core::render::volumetric_fog;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;

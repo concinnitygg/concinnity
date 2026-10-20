@@ -9,7 +9,7 @@
 
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::auto_exposure::HISTOGRAM_BINS;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::uniforms::{AutoExposureParams, ExposureMeasurement};
 use windows::Win32::Graphics::Direct3D12::*;
 

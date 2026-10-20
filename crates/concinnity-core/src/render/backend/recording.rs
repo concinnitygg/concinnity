@@ -21,14 +21,14 @@ use crate::gfx::render_types::{
 use crate::gfx::{render_types, view_modes};
 use crate::input::keymap;
 use crate::input::snapshot::InputSnapshot;
+use crate::render::backend::error::{RenderError, RenderResult};
+use crate::render::backend::init::{BackendInit, ShadowCadence, ShadowParams, SwapchainConfig};
 use crate::render::backend::{
     BackendProbe, ChunkMesh, DeviceCapabilities, DrawStreaming, FrameParams, LiveEdit,
     RenderBackend, RenderTuning, SceneEffects, SkinnedDraws, SkinnedFrame, WindowControl,
 };
-use crate::render::backend_init::{BackendInit, ShadowCadence, ShadowParams, SwapchainConfig};
-use crate::render::error::{RenderError, RenderResult};
 use crate::render::scene_state::SceneState;
-use crate::render::{backend, draw_slot, reflection_probe, volumetric_fog};
+use crate::render::{backend, environment::volumetric_fog, probe::capture, slots::draw_slot};
 use crate::settings::ResolvedGraphics;
 use crate::settings::apply::{ApplyPlan, SettingsTarget, apply_plan};
 use crate::window::display_mode;
@@ -84,11 +84,11 @@ pub struct InitSnapshot {
     /// Whether ray-traced reflections run.
     pub rt_reflections_on: bool,
     /// The ray-tracing dynamic-geometry mode.
-    pub rt_dynamic: crate::render::rt_geom::RtDynamicMode,
+    pub rt_dynamic: crate::render::rt_accel::geom::RtDynamicMode,
     /// Whether skinned geometry joins the acceleration structure.
     pub rt_skinned_geometry: bool,
     /// The DLSS preset.
-    pub dlss_preset: crate::render::dlss::DlssPreset,
+    pub dlss_preset: crate::render::output::dlss::DlssPreset,
     /// Per shader bucket, how many compiled programs the payload carries. A
     /// bucket with none is a world that declared no Shader for it, which every
     /// backend reads as "use the engine's own main-pass program".
@@ -151,7 +151,7 @@ pub enum Call {
     SetUiCursorHidden(bool),
     SetMenuMode(bool),
     SetCameraCapture(bool),
-    SetReflectionProbes(Vec<reflection_probe::ProbePlacement>),
+    SetReflectionProbes(Vec<capture::ProbePlacement>),
     SetVsync(bool),
     SetWindowMode(WindowMode),
     SetWindowSize(u32, u32),
@@ -684,7 +684,7 @@ impl RenderTuning for RecordingBackend {
         apply_plan(self, graphics, plan)
     }
 
-    fn set_reflection_probes(&mut self, probes: &[reflection_probe::ProbePlacement]) {
+    fn set_reflection_probes(&mut self, probes: &[capture::ProbePlacement]) {
         self.record(Call::SetReflectionProbes(probes.to_vec()));
     }
 

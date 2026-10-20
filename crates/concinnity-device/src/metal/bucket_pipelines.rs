@@ -5,10 +5,10 @@
 // fails to build costs that bucket its G-buffer draws, never its shading.
 
 use concinnity_core::components::ShaderPrograms;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::surface::GrassShading;
-use concinnity_core::render::shader_programs::{ShaderProgram, shared, surface};
-use concinnity_core::render::world_pipelines::replace_bucket;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::shader::programs::surface::GrassShading;
+use concinnity_core::render::shader::programs::{ShaderProgram, shared, surface};
+use concinnity_core::render::shader::world_pipelines::replace_bucket;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice, MTLFunction, MTLRenderPipelineState, MTLVertexDescriptor};
@@ -266,8 +266,8 @@ mod tests {
     use concinnity_core::components::ShaderSource;
     use concinnity_core::components::compiled_programs::CompiledProgram;
     use concinnity_core::platform::Platform;
-    use concinnity_core::render::shader_programs::surface;
-    use concinnity_core::render::shader_source;
+    use concinnity_core::render::shader::programs::surface;
+    use concinnity_core::render::shader::source;
     use objc2_metal::MTLCreateSystemDefaultDevice;
 
     const SHADE: &str =
@@ -304,7 +304,7 @@ mod tests {
         );
         programs.programs.push(CompiledProgram {
             entry: surface::PREPASS_VERTEX.entry.to_string(),
-            source_digest: shader_source::source_digest(&source),
+            source_digest: source::source_digest(&source),
             artifact: b"not a shader".to_vec(),
         });
         programs

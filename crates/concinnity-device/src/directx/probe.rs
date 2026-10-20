@@ -7,7 +7,7 @@
 //! never replaced.
 //!
 //! The cube math + the staggered-bake state machine are backend-agnostic
-//! (`concinnity_core::render::reflection_probe`); this module drives the GPU capture, mirroring
+//! (`concinnity_core::render::probe::capture`); this module drives the GPU capture, mirroring
 //! `crate::metal::probe`. The bake is STAGGERED + ASYNCHRONOUS across frames so the
 //! render thread never blocks: one probe is in flight at a time, its six cube faces
 //! submitted one per frame into a capture cube, then convolved into the probe cube
@@ -40,15 +40,15 @@
 
 use concinnity_core::gfx::render_types;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PixelRect;
-use concinnity_core::render::probe_bake::{
+use concinnity_core::render::probe::bake::{
     CAPTURE_FACES, ProbeBake, ProbeBakeDevice, capture_ring_slot,
 };
-use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::radiance_storage::FaceStorage;
-use concinnity_core::render::reflection_probe::{self, PrefilterPlan, ProbePlacement};
+use concinnity_core::render::probe::book::ProbeBook;
+use concinnity_core::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
+use concinnity_core::render::probe::radiance::FaceStorage;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -246,7 +246,7 @@ impl DxContext {
         self.build_record_buffers(
             slot,
             eye,
-            concinnity_core::render::model_history::HistoryMode::Untracked,
+            concinnity_core::render::temporal::model_history::HistoryMode::Untracked,
         );
         if let Some(params) = self.cull.material_params.as_mut() {
             params.upload(slot);
@@ -320,8 +320,8 @@ impl DxContext {
         let mut view_cbvs = Vec::with_capacity(CAPTURE_FACES);
         let mut view_gvas = Vec::with_capacity(CAPTURE_FACES);
         for face in 0..CAPTURE_FACES {
-            let vp = reflection_probe::face_view_projection(eye, face);
-            let view_mat = reflection_probe::face_view_matrix(eye, face);
+            let vp = capture::face_view_projection(eye, face);
+            let view_mat = capture::face_view_matrix(eye, face);
             let view =
                 super::draw::ViewUniforms::face(concinnity_core::render::uniforms::FaceCamera {
                     vp,
@@ -409,7 +409,7 @@ impl DxContext {
             bake.shadow_gva,
         );
 
-        let frustum = reflection_probe::face_frustum(eye, face, bake.capture_distance);
+        let frustum = capture::face_frustum(eye, face, bake.capture_distance);
 
         // A fresh allocator + list per face, held until the fence proves the face
         // retired, so no in-flight allocator is ever reset.

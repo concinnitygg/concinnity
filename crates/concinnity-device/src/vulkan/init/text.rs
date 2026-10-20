@@ -2,8 +2,8 @@
 //! and the text pipeline that draws in the composite pass.
 
 use ash::vk;
-use concinnity_core::render::backend_init::MediaPayloads;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::backend::init::MediaPayloads;
 
 use super::InitGpu;
 use crate::vulkan::context::{CompositeState, TextState, VkDescriptors};

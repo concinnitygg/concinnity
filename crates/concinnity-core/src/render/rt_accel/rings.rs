@@ -23,7 +23,7 @@
 use alloc::vec::Vec;
 use core::mem;
 
-use crate::render::error::{RenderError, RenderResult};
+use crate::render::backend::error::{RenderError, RenderResult};
 
 /// Which slot of a frame-indexed ring the live TLAS was built from, and when
 /// each stopped being live, so a slot is rewritten only once no frame still in

@@ -19,8 +19,8 @@ use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types::MAX_SHADOWED_SPOTS;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::profile::FanOutTiming;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::model_history::HistoryMode;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::temporal::model_history::HistoryMode;
 use concinnity_core::render::uniforms::directx::CullParams;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -68,7 +68,7 @@ pub(in crate::directx) struct CullState {
     // pre-pass. `None` marks a bucket whose Shader is not resident yet: its
     // scene has not pinned, so both passes skip those draws (see
     // `world_shaders.rs`).
-    pub world_pipelines: concinnity_core::render::world_pipelines::WorldPipelines<
+    pub world_pipelines: concinnity_core::render::shader::world_pipelines::WorldPipelines<
         super::init::pipelines::BucketPsos,
     >,
     // Commands reserved per shader-bucket region in the indirect buffers, fixed

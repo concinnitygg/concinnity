@@ -13,9 +13,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams};
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::environment::volumetric_fog::FogSettings;
 use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
-use concinnity_core::render::volumetric_fog::FogSettings;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;

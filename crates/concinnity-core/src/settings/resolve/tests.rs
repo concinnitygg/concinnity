@@ -7,7 +7,7 @@ use crate::components::{
 };
 use crate::ecs::asset_fields::ApplyClass;
 use crate::render::backend::{GpuProfile, GpuTier};
-use crate::render::dlss::DlssPreset;
+use crate::render::output::dlss::DlssPreset;
 use crate::settings::quality::{QualityPreset, resolve_ceiling};
 use alloc::vec::Vec;
 
@@ -680,7 +680,7 @@ fn capabilities_clamp_after_every_layer() {
 // half differs.
 #[test]
 fn ray_tracing_gives_way_to_xess_where_they_cannot_share_the_device() {
-    use crate::render::upscaler::UpscalerAvailability;
+    use crate::render::output::upscaler::UpscalerAvailability;
     let world = WorldSettings::default();
     let rt_with = |upscaling: bool, upscaler: UpscalerBackend, caps: DeviceCapabilities| {
         let user = UserGraphicsSettings {

@@ -1,6 +1,6 @@
 //! Which ring slots hold a current copy of records written once per change.
 
-use crate::render::frame_dirty::{FrameDirty, MAX_TRACKED_FRAMES};
+use crate::render::slots::frame_dirty::{FrameDirty, MAX_TRACKED_FRAMES};
 
 // The key recorded for a slot nothing has been written into.
 const UNWRITTEN: u64 = u64::MAX;

@@ -3,8 +3,8 @@
 //! shadow, G-buffer and two-pass occlusion passes built over them.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend_init::{SceneData, WorldShader};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::backend::init::{SceneData, WorldShader};
 
 use super::InitGpu;
 use crate::directx::context::{DxDescriptors, DxTargets};

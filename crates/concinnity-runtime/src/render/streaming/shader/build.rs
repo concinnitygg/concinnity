@@ -4,8 +4,8 @@
 // installed on the frame thread by `BuiltShader::install`.
 
 use concinnity_core::components::ShaderPrograms;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines, RenderBackend};
-use concinnity_core::render::error::RenderResult;
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 use std::sync::Arc;
 use std::sync::mpsc::Sender;

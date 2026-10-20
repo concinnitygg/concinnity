@@ -1,5 +1,5 @@
 use super::*;
-use concinnity_core::render::stream_pools::{StreamingRuntime, StreamingStats};
+use concinnity_core::render::streaming::pools::{StreamingRuntime, StreamingStats};
 
 // The streaming pools graphics init publishes, for the streaming assertions.
 fn streaming_stats(world: &World) -> StreamingStats {
@@ -188,7 +188,7 @@ fn hot_reload_seams_park_the_fog_beside_the_backend() {
     let resources = world.context().resources;
     let (backend, fog, slots) = resources.get_disjoint_mut::<
         concinnity_core::ecs::ActiveRenderBackend,
-        concinnity_core::render::volumetric_fog::PushedFogSettings,
+        concinnity_core::render::environment::volumetric_fog::PushedFogSettings,
         concinnity_core::render::world_load::source_maps::TextureNameSlots,
     >();
     assert!(

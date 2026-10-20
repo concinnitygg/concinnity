@@ -58,16 +58,16 @@
 use ash::vk;
 use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::buffers::retire_pool::RetirePool;
 use concinnity_core::render::fullscreen::align_up;
-use concinnity_core::render::retire_pool::RetirePool;
+use concinnity_core::render::rt_accel::geom::{RtDynamicMode, pack_row_major_3x4};
+use concinnity_core::render::rt_accel::refit::{BlasUpdate, SkinnedRefit};
+use concinnity_core::render::rt_accel::topology::blas_vertex_count;
 use concinnity_core::render::rt_accel::{
     AccelBook, EmptyHead, FrameRing, HeadRefresh, InstanceBlas, RefreshMode, RefreshStep,
     RtAccelSteps, RtDriveInputs, RtUpdate, ScratchRing, SeedSet, StaticRing, drive_update,
 };
-use concinnity_core::render::rt_geom::{RtDynamicMode, pack_row_major_3x4};
-use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedRefit};
-use concinnity_core::render::rt_topology::blas_vertex_count;
 use concinnity_core::render::uniforms::SkinParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};

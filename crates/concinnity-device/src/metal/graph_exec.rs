@@ -85,16 +85,16 @@ use concinnity_core::gfx::render_types::{
     TextDrawCall,
 };
 use concinnity_core::math::narrow_f32;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::particles::ParticleFrame;
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
-use concinnity_core::render::reactive_mask::ReactiveMaskPlan;
 #[cfg(debug_assertions)]
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{
     CompiledGraph, CompiledPass, PassId, PassQueue, PassRecorder, PassScratch, execute_passes,
     presenter_index,
 };
+use concinnity_core::render::temporal::reactive_mask::ReactiveMaskPlan;
 use concinnity_core::render::uniforms::{GBufferView, PassCamera};
 use concinnity_host::thread::jobs;
 use objc2::rc::Retained;

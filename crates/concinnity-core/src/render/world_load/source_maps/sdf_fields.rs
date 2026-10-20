@@ -4,7 +4,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::render::backend_init::SdfVolumeSource;
+use crate::render::backend::init::SdfVolumeSource;
 
 /// One volume as a reload entry: its name, where the backend holds it, the
 /// flags that decide which entries its field compiles, and the field's file.

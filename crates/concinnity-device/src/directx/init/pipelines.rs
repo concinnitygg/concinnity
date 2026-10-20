@@ -9,10 +9,10 @@
 //! in `directx/cull.rs`.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::surface::{self, GrassShading};
-use concinnity_core::render::shadow_bias;
-use concinnity_core::render::world_pipelines::BucketSource;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::shader::programs::surface::{self, GrassShading};
+use concinnity_core::render::shader::world_pipelines::BucketSource;
+use concinnity_core::render::shadow::bias;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -237,9 +237,9 @@ pub(in crate::directx) fn create_shadow_pso(
         // shadows correctly.
         .raster(Raster {
             bias: DepthBias {
-                constant: i32::saturating_from(shadow_bias::RASTER_CONSTANT),
-                clamp: shadow_bias::RASTER_CLAMP,
-                slope: shadow_bias::RASTER_SLOPE,
+                constant: i32::saturating_from(bias::RASTER_CONSTANT),
+                clamp: bias::RASTER_CLAMP,
+                slope: bias::RASTER_SLOPE,
             },
             ..Raster::default()
         })

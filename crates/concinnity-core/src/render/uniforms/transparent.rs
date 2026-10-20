@@ -6,13 +6,13 @@ use super::PassCamera;
 use crate::components::GlassPanel;
 use crate::gfx::render_types::LightUniforms;
 use crate::math::{SaturatingFrom, narrow_f32};
-use crate::render::lights::glint_sun;
-use crate::render::water::motion::BodyMotion;
-use crate::render::water::ocean::foam::FOAM_CASCADES;
-use crate::render::water::ocean::{BodyOcean, MAX_OCEAN_CASCADES};
-use crate::render::water::ripples::{RIPPLES, Ripple};
-use crate::render::water::sea::{SEA_FACES, SeaFaceMotion, SeaMotion, SeaSphere};
-use crate::render::water::{BodyWave, WaterBody};
+use crate::render::environment::water::motion::BodyMotion;
+use crate::render::environment::water::ocean::foam::FOAM_CASCADES;
+use crate::render::environment::water::ocean::{BodyOcean, MAX_OCEAN_CASCADES};
+use crate::render::environment::water::ripples::{RIPPLES, Ripple};
+use crate::render::environment::water::sea::{SEA_FACES, SeaFaceMotion, SeaMotion, SeaSphere};
+use crate::render::environment::water::{BodyWave, WaterBody};
+use crate::render::light::lights::glint_sun;
 
 /// Per-frame view inputs shared by every draw in the transparent pass (water,
 /// glass), bound once for the whole pass. Matches `TransparentView` in
@@ -150,7 +150,7 @@ pub struct GlassMeshParams {
 
 /// Maximum waves summed per `WaterParams`: the wind sea plus the authored
 /// swell. Mirrors `WATER_MAX_WAVES` in `shaders/water.hlsl`.
-pub const WATER_MAX_WAVES: usize = crate::render::water::MAX_WAVES;
+pub const WATER_MAX_WAVES: usize = crate::render::environment::water::MAX_WAVES;
 
 /// One wave of the sum, packed into two `float4` lanes so the layout is
 /// identical on every target. Matches `WaterWave` in `shaders/water.hlsl`.
@@ -513,16 +513,16 @@ fn anchor_lane(motion: &BodyMotion) -> [f32; 4] {
 mod tests {
     use super::*;
     use crate::components::{WaterSurface, WaterWave, Wind};
-    use crate::render::water::spectrum::Wave;
-    use crate::render::wind::WindField;
+    use crate::render::environment::water::spectrum::Wave;
+    use crate::render::environment::wind::WindField;
     use alloc::vec;
     use core::mem::{offset_of, size_of};
 
     #[test]
     fn the_wave_count_matches_the_shader() {
-        let src = crate::render::shaders::WATER;
+        let src = crate::render::shader::embedded::WATER;
         assert_eq!(
-            crate::render::shader_consts::uint(src, "WATER_MAX_WAVES"),
+            crate::render::shader::consts::uint(src, "WATER_MAX_WAVES"),
             WATER_MAX_WAVES
         );
     }
@@ -671,9 +671,9 @@ mod tests {
     // a body without whitecaps.
     #[test]
     fn an_ocean_block_names_its_whitecapping_cascades() {
-        use crate::render::water::ocean::cascades::Cascades;
-        use crate::render::water::ocean::grid::OceanGrid;
-        use crate::render::water::ocean::{OceanQuality, foam::FOAM_CASCADES};
+        use crate::render::environment::water::ocean::cascades::Cascades;
+        use crate::render::environment::water::ocean::grid::OceanGrid;
+        use crate::render::environment::water::ocean::{OceanQuality, foam::FOAM_CASCADES};
         let body = |cascades: u32| BodyOcean {
             simulation: 0,
             cascades: Cascades::new(

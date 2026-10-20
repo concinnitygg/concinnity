@@ -2,7 +2,7 @@
 //! tables, replaced rather than rewritten when they change, so a frame in
 //! flight keeps reading the one it bound.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice};

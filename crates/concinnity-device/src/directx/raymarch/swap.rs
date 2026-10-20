@@ -6,9 +6,9 @@
 // queue for it costs nothing that matters.
 
 use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::backend::{PipelineSwap, PreparedPipelines};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
+use concinnity_core::render::shader::programs::raymarch::VolumeFlags;
 
 use super::{VolumePsoTargets, VolumePsos, build_volume_psos};
 use crate::directx::context::DxContext;

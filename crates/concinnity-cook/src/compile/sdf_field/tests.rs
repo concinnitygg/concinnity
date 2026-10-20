@@ -1,6 +1,6 @@
 use super::*;
 use crate::compile::program::CompileFailure;
-use concinnity_core::render::shader_source;
+use concinnity_core::render::shader::source;
 
 const PATH: &str = "shaders/blob.hlsl";
 
@@ -59,7 +59,7 @@ fn every_host_cooks_one_artifact_per_entry_for_every_target() {
         );
         for program in raymarch::programs(false, true) {
             let source = raymarch::source(program.family, platform, programs.field.as_file());
-            let digest = shader_source::source_digest(&source);
+            let digest = source::source_digest(&source);
             let bytes = programs
                 .artifact(program.entry, digest)
                 .unwrap_or_else(|| panic!("{platform:?}: no artifact for {}", program.entry));

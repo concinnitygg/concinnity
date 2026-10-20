@@ -40,15 +40,17 @@
 
 use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::rt_accel::geom::{
+    RtDynamicMode, instance_id_and_mask, pack_row_major_3x4,
+};
+use concinnity_core::render::rt_accel::refit::{BlasUpdate, SkinnedRefit};
+use concinnity_core::render::rt_accel::topology::blas_vertex_count;
 use concinnity_core::render::rt_accel::{
     AccelBook, EmptyHead, FrameRing, HeadRefresh, InstanceBlas, RefreshMode, RefreshStep,
     RtAccelSteps, RtDriveInputs, RtUpdate, ScratchRing, SeedSet, StaticRing, drive_update,
     seed_wanted,
 };
-use concinnity_core::render::rt_geom::{RtDynamicMode, instance_id_and_mask, pack_row_major_3x4};
-use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedRefit};
-use concinnity_core::render::rt_topology::blas_vertex_count;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;

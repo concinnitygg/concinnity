@@ -7,7 +7,7 @@ use std::sync::atomic::AtomicBool;
 
 use concinnity_core::ecs::{ActiveRenderBackend, World};
 use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::volumetric_fog::PushedFogSettings;
+use concinnity_core::render::environment::volumetric_fog::PushedFogSettings;
 use concinnity_core::render::world_load::source_maps::TextureNameSlots;
 
 /// Disjoint borrows of the parked render backend and the init-captured state
@@ -47,7 +47,7 @@ mod tests {
     use super::*;
     use concinnity_core::components::VolumetricFog;
     use concinnity_core::ecs::asset_id::AssetId;
-    use concinnity_core::render::volumetric_fog::resolve_asset;
+    use concinnity_core::render::environment::volumetric_fog::resolve_asset;
 
     // A world that never built a backend has none to yield or flag, and the
     // handoff borrow reports every parked piece absent.

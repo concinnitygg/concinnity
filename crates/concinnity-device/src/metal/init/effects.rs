@@ -7,7 +7,7 @@
 use crate::metal::post::upscale::UpscaleJitter;
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::auto_exposure::{AutoExposureSettings, ExposureAdaptation};
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
 use concinnity_core::render::post::ssao::SsaoPass;

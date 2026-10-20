@@ -2,13 +2,13 @@ use super::*;
 use crate::render::streaming::texture::{self, PayloadSource};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::render::backend::recording::{Call, recording_backend};
-use concinnity_core::render::ops::RenderOps;
-use concinnity_core::render::queues::RenderQueues;
-use concinnity_core::render::render_slots::RenderSlots;
-use concinnity_core::render::scene_residency::{CHANNEL_SHADER, SceneResidency};
-use concinnity_core::render::stream_pools::{
+use concinnity_core::render::frame::ops::RenderOps;
+use concinnity_core::render::frame::queues::RenderQueues;
+use concinnity_core::render::slots::render_slots::RenderSlots;
+use concinnity_core::render::streaming::pools::{
     DriveView, StreamPool, StreamingPools, StreamingRuntime,
 };
+use concinnity_core::render::streaming::scene_residency::{CHANNEL_SHADER, SceneResidency};
 use std::sync::Arc;
 
 // A source yielding a fixed 1x1 texture for any id.
@@ -139,7 +139,7 @@ fn a_pinned_scene_loads_once_its_shader_bucket_is_installed() {
 // A pool that records the requests it had reverted or retired.
 #[derive(Default)]
 struct RecordingPool {
-    mail: concinnity_core::render::stream_pools::Mailbox<usize, usize>,
+    mail: concinnity_core::render::streaming::pools::Mailbox<usize, usize>,
     refused: Vec<usize>,
     failed: Vec<usize>,
 }
@@ -148,7 +148,7 @@ impl LoadPool for RecordingPool {
     type Request = usize;
     type Result = usize;
 
-    fn mailbox(&mut self) -> &mut concinnity_core::render::stream_pools::Mailbox<usize, usize> {
+    fn mailbox(&mut self) -> &mut concinnity_core::render::streaming::pools::Mailbox<usize, usize> {
         &mut self.mail
     }
 

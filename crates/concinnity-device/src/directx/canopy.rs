@@ -3,8 +3,8 @@
 // main pass's root CBV at b8, and its layers' view tables beside it, rewritten
 // only when they change and bound as the root SRV at t24.
 
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::grass::canopy_table::MAX_CANOPY_TABLE_ROWS;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::environment::grass::canopy_table::MAX_CANOPY_TABLE_ROWS;
 use concinnity_core::render::uniforms::canopy::CanopyParams;
 use windows::Win32::Graphics::Direct3D12::*;
 

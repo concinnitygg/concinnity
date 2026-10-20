@@ -3,8 +3,8 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::hdr_output;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::output::hdr;
 use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 
 use super::allocator::DeviceAllocator;
@@ -750,7 +750,7 @@ pub(super) struct SwapchainConfig {
     // resolve in init.rs), so the chosen encoding and color space stay in
     // sync. Each arm falls back through scRGB to the SDR default if its
     // preferred pair is unexpectedly absent.
-    pub hdr_mode: hdr_output::HdrOutputMode,
+    pub hdr_mode: hdr::HdrOutputMode,
     // Lock presentation to the display refresh. `true` forces FIFO (always
     // present, vsync); `false` prefers MAILBOX (uncapped render loop, no
     // tearing), then IMMEDIATE, falling back to FIFO when neither is offered.
@@ -808,7 +808,7 @@ pub(super) fn create_swapchain_inner(
         hdr_mode,
         vsync,
     } = config;
-    use concinnity_core::render::hdr_output::{HdrEncoding, HdrOutputMode};
+    use concinnity_core::render::output::hdr::{HdrEncoding, HdrOutputMode};
     // SAFETY: a property query on a live handle; it only reads.
     let caps = unsafe { surface_loader.get_physical_device_surface_capabilities(pd, surface) }
         .map_err(|e| super::error::map_vk_result(e, "surface caps"))?;

@@ -1,7 +1,7 @@
 //! The textures `MtlContext::draw_frame` hands the post-decoration stack as the
 //! scene.
 
-use concinnity_core::render::error;
+use concinnity_core::render::backend::error;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLTexture;

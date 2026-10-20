@@ -78,9 +78,9 @@ pub struct CanopyParams {
     /// Height octaves summed; 0 off a planet.
     pub ground_octaves: u32,
     /// This frame's hand-off from the blades
-    /// ([`GrassLodView`](crate::render::grass::GrassLodView)): where it
+    /// ([`GrassLodView`](crate::render::environment::grass::GrassLodView)): where it
     /// starts, where the blades end, and its phase
-    /// ([`GrassHistory::crossfade_phase`](crate::render::grass::GrassHistory::crossfade_phase));
+    /// ([`GrassHistory::crossfade_phase`](crate::render::environment::grass::GrassHistory::crossfade_phase));
     /// `w` unused.
     pub band: [f32; 4],
 }

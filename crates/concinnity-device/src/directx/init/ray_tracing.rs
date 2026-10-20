@@ -3,8 +3,8 @@
 //! acceleration structure they trace.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend_init::{RenderLaunch, SceneData};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::backend::init::{RenderLaunch, SceneData};
 use concinnity_core::settings::ResolvedGraphics;
 
 use super::InitGpu;

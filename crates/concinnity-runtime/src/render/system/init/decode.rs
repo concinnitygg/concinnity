@@ -10,8 +10,8 @@ use super::{
     retained_blobs, skinned, skinned_mesh_source_map, tables, texture, texture_catalog,
 };
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::overlay_maps::{Atlas, AtlasPool};
-use concinnity_core::render::terrain::LoadedTerrain;
+use concinnity_core::render::environment::terrain::LoadedTerrain;
+use concinnity_core::render::overlay::maps::{Atlas, AtlasPool};
 use concinnity_core::render::world_load::scene_deferral::ShaderDeferral;
 
 // One world Shader as decoded at init: its compiled programs, or nothing for
@@ -457,7 +457,7 @@ impl GraphicsSystem {
         // live in the same blob and must be consumed before it is released
         let (room_geometry, room_blob_indices) = draw_list::load_room_geometry(ctx)?;
         let (terrains, terrain_blob_indices) =
-            concinnity_core::render::terrain::load_terrains(ctx)?;
+            concinnity_core::render::environment::terrain::load_terrains(ctx)?;
 
         let shaders = self.decode_shaders(ctx, streaming, capture_sources)?;
 

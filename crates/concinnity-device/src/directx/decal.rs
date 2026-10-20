@@ -12,8 +12,8 @@
 use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::decal::{DecalRecord, DecalSet};
-use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::transform::mat4_inverse;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;

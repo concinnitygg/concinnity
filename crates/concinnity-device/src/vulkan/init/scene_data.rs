@@ -4,9 +4,9 @@
 use ash::vk;
 use concinnity_core::gfx::render_types::{AreaLightData, GpuLight, LightUniforms};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend_init::SceneData;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::ltc;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::backend::init::SceneData;
+use concinnity_core::render::light::ltc;
 
 use super::InitGpu;
 use crate::vulkan::context::{VkAreaLight, VkGeometry, VkUniforms};
@@ -193,7 +193,7 @@ pub(super) fn build_scene_resources(
             probe_set_ubo_buffers,
             light_ubo_buffers,
             local_light_buffer,
-            lights: concinnity_core::render::light_state::LightState::new(
+            lights: concinnity_core::render::light::state::LightState::new(
                 light_uniforms,
                 local_lights,
                 frames,

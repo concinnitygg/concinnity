@@ -3,8 +3,8 @@
 //! The resolved graphics settings, applied through one plan per change, plus
 //! the lights and the fog the editor moves live.
 
-use crate::render::error::{RenderError, RenderResult};
-use crate::render::volumetric_fog::FogSettings;
+use crate::render::backend::error::{RenderError, RenderResult};
+use crate::render::environment::volumetric_fog::FogSettings;
 use crate::settings::ResolvedGraphics;
 use crate::settings::apply::ApplyPlan;
 
@@ -21,10 +21,7 @@ pub trait RenderTuning {
     /// nearest for the specular reflection.
     /// Pushed once after construction. Default no-op: a backend without probe
     /// support keeps the sky reflection.
-    fn set_reflection_probes(
-        &mut self,
-        probes: &[crate::render::reflection_probe::ProbePlacement],
-    ) {
+    fn set_reflection_probes(&mut self, probes: &[crate::render::probe::capture::ProbePlacement]) {
         let _ = probes;
     }
 
@@ -73,7 +70,7 @@ pub trait RenderTuning {
     /// not match the lights built at init.
     fn move_local_lights(
         &mut self,
-        lights: &crate::render::lights::LightData,
+        lights: &crate::render::light::lights::LightData,
         uniforms: &crate::gfx::render_types::LightUniforms,
     ) -> RenderResult<()> {
         let _ = (lights, uniforms);

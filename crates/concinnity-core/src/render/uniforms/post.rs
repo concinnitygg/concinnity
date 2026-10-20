@@ -11,7 +11,7 @@ pub struct TaaParams {
     /// 0 on the first frame / after a resize, 1.0 otherwise.
     pub history_valid: f32,
     /// The mask value past which the reactive mask removes no more history
-    /// ([`crate::render::reactive_mask::ReactiveReader::cap`]), or 0 when
+    /// ([`crate::render::temporal::reactive_mask::ReactiveReader::cap`]), or 0 when
     /// no mask was written this frame and the resolve ignores the bound one.
     pub reactive_max: f32,
     /// Thin-feature lock lost per frame the feature is not seen: one over

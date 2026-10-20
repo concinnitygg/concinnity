@@ -7,7 +7,7 @@
 //! `ProbeSet` a missed ray falls back to.
 
 use concinnity_core::gfx::render_types::SsrParams;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::post::device::{PostExtent, PostPassDevice};
 use concinnity_core::render::post::ssr::settings::SsrSettings;
 use concinnity_core::render::post::ssr::{SsrInputs, SsrPass, target_desc};

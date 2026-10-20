@@ -5,11 +5,11 @@ use concinnity_core::gfx::render_types::LineVertex;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::profile;
 use concinnity_core::profile::PassTiming;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::frame_plan::{
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::backend::pass_timing;
+use concinnity_core::render::frame::plan::{
     CameraInputs, EffectInputs, FramePlan, PlanInputs, SurfaceInputs,
 };
-use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
@@ -279,7 +279,7 @@ impl DxContext {
         // `draw_calls` through `inc_draw_calls` (an interior-mutability path
         // because the encoders run through `&self`); the rest is filled here
         // from context state.
-        let counts = concinnity_core::render::object_counts::object_counts(
+        let counts = concinnity_core::render::backend::object_counts::object_counts(
             self.state.draw.objects.len(),
             self.instanced.clusters.iter().map(|c| c.instances.len()),
             self.state.skinned.draw_objects.iter().map(|o| o.visible),

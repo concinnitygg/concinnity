@@ -21,10 +21,10 @@ use crate::ecs::{
     Entity, EventCursor, FrameTime, MenuActive, PipelineContext, StepResult, System, World,
 };
 use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
-use crate::render::ops::RenderOps;
-use crate::render::queues::ActiveRenderQueues;
-use crate::render::render_mode::RenderMode;
-use crate::render::render_slots::RenderSlots;
+use crate::render::backend::render_mode::RenderMode;
+use crate::render::frame::ops::RenderOps;
+use crate::render::frame::queues::ActiveRenderQueues;
+use crate::render::slots::render_slots::RenderSlots;
 use crate::transform::propagation;
 
 // Resolve a request target to a live entity. A named target goes through the

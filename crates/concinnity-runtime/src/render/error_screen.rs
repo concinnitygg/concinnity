@@ -10,9 +10,9 @@
 use concinnity_core::components::Window;
 use concinnity_core::ecs::FontHandle;
 use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::backend_init::BackendInit;
-use concinnity_core::render::error_screen::{self, dismissed};
-use concinnity_core::render::text::{FontSet, build_text_calls};
+use concinnity_core::render::backend::init::BackendInit;
+use concinnity_core::render::overlay::error_screen::{self, dismissed};
+use concinnity_core::render::overlay::text::{FontSet, build_text_calls};
 
 // The single atlas slot the embedded face occupies: this screen uploads it
 // alone, with no world fonts beside it.

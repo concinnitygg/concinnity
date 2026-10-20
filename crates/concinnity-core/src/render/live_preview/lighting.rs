@@ -17,9 +17,9 @@ use crate::components::{
     PlanetDetail, Reflections, Shadows, Vignette, VolumetricFog,
 };
 use crate::ecs::{AssetFields, World};
-use crate::render::ops::RenderOps;
-use crate::render::queues::ActiveRenderQueues;
-use crate::render::volumetric_fog;
+use crate::render::environment::volumetric_fog;
+use crate::render::frame::ops::RenderOps;
+use crate::render::frame::queues::ActiveRenderQueues;
 use crate::settings::system::{SettingsSlot, SettingsState};
 use crate::settings::{ResolvedGraphics, WorldAssets, WorldSettings};
 

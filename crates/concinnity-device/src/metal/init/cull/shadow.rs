@@ -1,7 +1,7 @@
 //! The GPU-driven shadow views, cascades and spot slices alike: the
 //! frustum-only decision kernel and the depth-only bindless shadow pipeline.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLComputePipelineState, MTLRenderPipelineState, MTLVertexDescriptor};

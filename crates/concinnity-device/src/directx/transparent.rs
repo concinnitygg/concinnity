@@ -40,9 +40,9 @@ use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::planet::Rebase;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reactive_mask::ReactiveWrite;
+use concinnity_core::render::temporal::reactive_mask::ReactiveWrite;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -771,7 +771,7 @@ pub(in crate::directx) struct TransparentSceneTargets {
 pub(in crate::directx) struct TransparentContent<'a> {
     pub glass_panels: &'a [GlassPanel],
     pub glass_planar_slots: &'a [Option<usize>],
-    pub water_surfaces: &'a [concinnity_core::render::water::WaterBody],
+    pub water_surfaces: &'a [concinnity_core::render::environment::water::WaterBody],
     pub water_planar_slots: &'a [Option<usize>],
     // Indices into the context's draw objects of every see-through material.
     // Empty when no material opted in; those meshes then render opaque.

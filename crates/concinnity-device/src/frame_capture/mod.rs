@@ -13,7 +13,7 @@ pub(crate) use image::{CaptureImage, save_png};
 pub(crate) use readback::Mapped;
 pub(crate) use writer::{PendingCapture, RetiredCapture};
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 
 use readback::ReadbackPool;
 use writer::CaptureWriter;

@@ -5,7 +5,7 @@
 //! resource says nothing drawn can be seen.
 
 use concinnity_core::ecs::{WindowMinimized, World};
-use concinnity_core::render::frame_submit::{FramePace, PaceWait, frame_cap};
+use concinnity_core::render::frame::submit::{FramePace, PaceWait, frame_cap};
 use std::time::Instant;
 
 // Holds each frame's start to the deadline core's `FramePace` plans: sleeps to

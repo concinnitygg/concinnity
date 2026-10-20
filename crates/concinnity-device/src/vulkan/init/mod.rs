@@ -21,11 +21,11 @@ use crate::vulkan::pipeline_builder::PipelineGate;
 use crate::vulkan::wireframe::VkWireframe;
 use ash::vk;
 use concinnity_core::gfx::render_types::PostProcessParams;
-use concinnity_core::render::backend_init::{BackendInit, WorldShader};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::feature_plan::{BackendFacts, FeaturePlan};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::feature_plan::{BackendFacts, FeaturePlan};
+use concinnity_core::render::backend::init::{BackendInit, WorldShader};
 use concinnity_core::render::scene_state::{DrawList, SceneState};
-use concinnity_core::render::shader_reload::ShaderReload;
+use concinnity_core::render::shader::reload::ShaderReload;
 use concinnity_core::settings::ResolvedGraphics;
 use std::cell::Cell;
 
@@ -139,7 +139,7 @@ impl VkContext {
     }
 
     // Construct from the assembled backend inputs (see
-    // `concinnity_core::render::backend_init::BackendInit` for per-field docs).
+    // `concinnity_core::render::backend::init::BackendInit` for per-field docs).
     //
     // `reuse` is `Some` only on a live editor `reload_world` (see
     // `apply_world_reload`): the hardware and swapchain are inherited from the
@@ -235,7 +235,7 @@ impl VkContext {
                 scene.env_map.irradiance = images.irradiance;
                 scene.env_map.prefilter = images.prefilter;
                 scene.prefilter_mip_count =
-                    concinnity_core::render::atmosphere::SKY_CUBE_PLAN.mips();
+                    concinnity_core::render::environment::atmosphere::SKY_CUBE_PLAN.mips();
                 Some(cubes)
             }
             None => None,
@@ -602,7 +602,7 @@ struct GrassInit<'a> {
 
 fn build_grass(
     gpu: &InitGpu<'_>,
-    field: Option<concinnity_core::render::grass::GrassField>,
+    field: Option<concinnity_core::render::environment::grass::GrassField>,
     vertices: (vk::Buffer, u64),
     passes: GrassInit<'_>,
 ) -> RenderResult<Option<super::grass::GrassResources>> {

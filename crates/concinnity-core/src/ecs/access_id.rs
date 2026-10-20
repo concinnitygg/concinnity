@@ -207,7 +207,7 @@ crate::define_access_ids! {
         crate::ecs::ScreenshotRequest,
         crate::ecs::FrameCaptureRequest,
         crate::render::scene_flow::ActiveSceneFlow,
-        crate::render::scene_residency::SceneResidencyStatus,
+        crate::render::streaming::scene_residency::SceneResidencyStatus,
         crate::budget::MemoryBudget,
         crate::budget::ThreadBudget,
         crate::budget::ResidentMemory,

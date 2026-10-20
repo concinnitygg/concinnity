@@ -582,7 +582,7 @@ pub struct DrawListInputs<'a> {
     /// Every room's decoded geometry.
     pub room_geometry: &'a [RoomGeometry],
     /// Every terrain, appended as static culled chunks.
-    pub terrains: &'a [crate::render::terrain::LoadedTerrain],
+    pub terrains: &'a [crate::render::environment::terrain::LoadedTerrain],
     /// Size of the shared texture pool; a texture handle is in range when its
     /// index is below this. A legacy texture-on-mesh reference past it falls back
     /// to slot 0.
@@ -969,7 +969,7 @@ pub fn build_draw_list(inputs: DrawListInputs<'_>) -> Option<DrawListData> {
                 return None;
             }
         };
-        crate::render::terrain::append_terrain_draws(
+        crate::render::environment::terrain::append_terrain_draws(
             terrain,
             material,
             &mut all_vertices,

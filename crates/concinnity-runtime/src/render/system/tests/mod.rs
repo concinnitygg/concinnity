@@ -19,9 +19,9 @@ use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_core::gfx::{chunk_coord, mesh_payload};
 use concinnity_core::launch::{LaunchArgs, LaunchRequest};
 use concinnity_core::math::SaturatingFrom;
+use concinnity_core::render::backend::init::SwapchainConfig;
 use concinnity_core::render::backend::{GpuProfile, GpuTier, GpuVendor};
-use concinnity_core::render::backend_init::SwapchainConfig;
-use concinnity_core::render::{backend, error, text};
+use concinnity_core::render::{backend, backend::error, overlay::text};
 use concinnity_core::resource::{
     ColorLutTable, EnvironmentMapTable, FontTable, MaterialTable, MeshTable, SkinnedMeshTable,
     TextureTable,
@@ -318,7 +318,7 @@ fn step(gs: &mut GraphicsSystem, world: &mut World) -> StepResult {
     concinnity_core::render::overlay::OverlaySystem::new().step(&mut ctx);
     concinnity_core::spawn::SpawnSystem::new().step(&mut ctx);
     concinnity_core::settings::system::SettingsSystem::new().step(&mut ctx);
-    concinnity_core::render::stream_pools::StreamingSystem::default().step(&mut ctx);
+    concinnity_core::render::streaming::pools::StreamingSystem::default().step(&mut ctx);
     let result = gs.run_step(&mut ctx);
     if result != StepResult::Stop {
         // InputSystem's init seeds the one FrameInput row; the fresh

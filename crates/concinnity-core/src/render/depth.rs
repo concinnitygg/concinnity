@@ -291,7 +291,7 @@ mod tests {
     // direction the write test implies.
     #[test]
     fn the_shader_convention_matches() {
-        let src = crate::render::shaders::DEPTH_CONVENTION;
+        let src = crate::render::shader::embedded::DEPTH_CONVENTION;
         assert!(src.contains(&alloc::format!("#define DEPTH_NEAR {DEPTH_NEAR:?}\n")));
         assert!(src.contains(&alloc::format!("#define DEPTH_FAR {DEPTH_FAR:?}\n")));
         let reversed = DEPTH_NEAR > DEPTH_FAR;

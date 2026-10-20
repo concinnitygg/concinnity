@@ -7,10 +7,10 @@
 
 use concinnity_core::components::ShaderPrograms;
 use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
-use concinnity_core::render::shader_programs::surface::GrassShading;
+use concinnity_core::render::shader::programs::raymarch::VolumeFlags;
+use concinnity_core::render::shader::programs::surface::GrassShading;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLDevice;

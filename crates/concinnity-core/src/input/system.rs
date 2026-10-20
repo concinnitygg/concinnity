@@ -22,7 +22,7 @@ use crate::input::compose::{compose_frame_input, nav_dt};
 use crate::input::mailbox::InputMailbox;
 use crate::input::nav::NavRepeat;
 use crate::input::pad::PadState;
-use crate::render::render_mode::RenderMode;
+use crate::render::backend::render_mode::RenderMode;
 use crate::settings::StoredSettings;
 use crate::settings::registry::DEFAULT_GAMEPAD_DEADZONE;
 

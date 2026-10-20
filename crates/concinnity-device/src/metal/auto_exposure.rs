@@ -20,7 +20,7 @@
 
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::auto_exposure::ExposureAdaptation;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::{AutoExposureParams, ExposureMeasurement};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

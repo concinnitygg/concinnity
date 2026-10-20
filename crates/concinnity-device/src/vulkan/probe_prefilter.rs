@@ -25,8 +25,8 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reflection_probe::PrefilterPlan;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::probe::capture::PrefilterPlan;
 use concinnity_core::render::uniforms::ProbePrefilterParams;
 
 use super::allocator::{DeviceAllocator, PooledImage};

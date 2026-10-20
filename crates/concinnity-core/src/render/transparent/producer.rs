@@ -6,9 +6,9 @@
 use alloc::vec::Vec;
 
 use crate::planet::Rebase;
+use crate::render::environment::water::frame::WaterMotion;
 use crate::render::transparent::Producer;
 use crate::render::uniforms::WaterParams;
-use crate::render::water::frame::WaterMotion;
 
 /// A backend record that accepts a water surface's per-frame params into its
 /// frame slot's copy.
@@ -226,9 +226,9 @@ mod tests {
     use super::*;
     use crate::components::WaterSurface;
     use crate::math::SaturatingFrom;
-    use crate::render::water::WaterBody;
-    use crate::render::water::sea::{SeaBody, SeaSphere};
-    use crate::render::wind::WindField;
+    use crate::render::environment::water::WaterBody;
+    use crate::render::environment::water::sea::{SeaBody, SeaSphere};
+    use crate::render::environment::wind::WindField;
     use core::cell::Cell;
 
     fn shape(base: u8, flat: Option<u8>, tex: Option<u8>) -> ShapePipelines<u8> {

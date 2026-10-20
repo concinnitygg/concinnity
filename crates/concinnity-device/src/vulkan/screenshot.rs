@@ -20,8 +20,8 @@
 
 use ash::vk;
 use concinnity_core::gfx::image_decode::PixelLayout;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::hdr_output::{HdrEncoding, HdrOutputMode};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::output::hdr::{HdrEncoding, HdrOutputMode};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;

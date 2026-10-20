@@ -127,7 +127,7 @@ mod tests {
     use crate::editor::panels::shader_reference::Reference;
     use concinnity_core::components::{Sprite, TextLabel};
     use concinnity_core::ecs::asset_id::AssetId;
-    use concinnity_core::render::shader_programs::vocabulary::ENTRIES;
+    use concinnity_core::render::shader::programs::vocabulary::ENTRIES;
 
     const RECT: [f32; 4] = [100.0, 50.0, COLUMN_W, 10.0 * ROW_H + 2.0 * INSET];
 

@@ -8,8 +8,8 @@
 //! one.
 
 use crate::profile::RenderStats;
-use crate::render::error::{RenderError, RenderResult};
-use crate::render::upscaler::UpscalerAvailability;
+use crate::render::backend::error::{RenderError, RenderResult};
+use crate::render::output::upscaler::UpscalerAvailability;
 use alloc::string::String;
 use alloc::vec::Vec;
 

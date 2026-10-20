@@ -19,7 +19,7 @@
 use crate::ecs::{
     EventCursor, HudPrefs, Parked, PipelineContext, Resources, StepResult, System, World,
 };
-use crate::render::render_mode::RenderMode;
+use crate::render::backend::render_mode::RenderMode;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
@@ -29,10 +29,10 @@ use crate::components::{
 use crate::ecs::asset_id::AssetId;
 use crate::input::keymap;
 use crate::platform::GraphicsApiStatus;
-use crate::render::error::RenderError;
-use crate::render::ops::RenderOps;
-use crate::render::queues::ActiveRenderQueues;
-use crate::render::{backend, scene_flow, snapshot};
+use crate::render::backend::error::RenderError;
+use crate::render::frame::ops::RenderOps;
+use crate::render::frame::queues::ActiveRenderQueues;
+use crate::render::{backend, frame::snapshot, scene_flow};
 use crate::settings::apply::{ApplyPlan, plan_apply};
 use crate::settings::quality::resolve_ceiling;
 use crate::settings::{
@@ -286,7 +286,7 @@ impl SettingsState {
     // they exercise.
     #[cfg(test)]
     pub(crate) fn for_tests() -> Self {
-        let shadow_cadence = crate::render::backend_init::ShadowCadence {
+        let shadow_cadence = backend::init::ShadowCadence {
             update: Default::default(),
             distance: 200,
             cascades: 4,

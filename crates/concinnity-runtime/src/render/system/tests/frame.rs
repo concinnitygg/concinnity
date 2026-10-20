@@ -157,7 +157,9 @@ fn window_close_stops_after_wait_idle() {
 // next frame draws it instead, and only the drawn one is logged.
 #[test]
 fn a_dropped_frame_hands_its_history_reset_to_the_next() {
-    use concinnity_core::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
+    use concinnity_core::render::temporal::history_reset::{
+        HistoryResetCauses, PendingHistoryReset,
+    };
 
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();

@@ -31,9 +31,9 @@ use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_core::math::{SaturatingFrom, saturating_u32};
 use concinnity_core::platform::Platform;
-use concinnity_core::render::backend_init::SdfVolumeSource;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::raymarch::{Family, ProxyFaces, VolumeFlags};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::init::SdfVolumeSource;
+use concinnity_core::render::shader::programs::raymarch::{Family, ProxyFaces, VolumeFlags};
 use concinnity_core::transform::mat4_inverse;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};

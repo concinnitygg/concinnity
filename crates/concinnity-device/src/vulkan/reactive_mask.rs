@@ -12,8 +12,8 @@
 // so there the writers draw the scene alone and the mask is off for the run.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::reactive_mask::ReactiveWrite;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::temporal::reactive_mask::ReactiveWrite;
 
 use super::allocator::DeviceAllocator;
 use super::owned::{OwnedRenderPass, VkDevice};

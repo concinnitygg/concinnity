@@ -13,7 +13,7 @@ include!(concat!(env!("OUT_DIR"), "/engine_metallibs.rs"));
 mod tests {
     use super::embedded_metallib;
     use concinnity_core::platform::Platform;
-    use concinnity_core::render::shader_programs::metal::TABLE;
+    use concinnity_core::render::shader::programs::metal::TABLE;
 
     // A shader the build script always compiles when the Metal toolchain is
     // present, so its absence means the stub lookup and nothing else.
@@ -48,7 +48,7 @@ mod tests {
     // installed `cn editor` demand a shader compiler at startup.
     #[test]
     fn every_embedded_digest_matches_the_assembled_source() {
-        use concinnity_core::render::shader_source::source_digest;
+        use concinnity_core::render::shader::source::source_digest;
 
         if embedded_metallib(TOOLCHAIN_SENTINEL).is_none() {
             return;
@@ -70,7 +70,7 @@ mod tests {
     // checkout, and equals it trivially for an install with no checkout at all.
     #[test]
     fn an_unedited_hot_reload_assembly_still_matches_the_embedded_digest() {
-        use concinnity_core::render::shader_source::source_digest;
+        use concinnity_core::render::shader::source::source_digest;
 
         if embedded_metallib(TOOLCHAIN_SENTINEL).is_none() {
             return;
@@ -90,7 +90,7 @@ mod tests {
     // build-time copy. Same comparison the renderer makes, over changed text.
     #[test]
     fn an_edited_source_does_not_match_the_embedded_digest() {
-        use concinnity_core::render::shader_source::source_digest;
+        use concinnity_core::render::shader::source::source_digest;
 
         if embedded_metallib(TOOLCHAIN_SENTINEL).is_none() {
             return;

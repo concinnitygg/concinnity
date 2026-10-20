@@ -3,7 +3,7 @@ use concinnity_core::components::sdf_programs::SdfPrograms;
 #[cfg(test)]
 use concinnity_core::platform::Platform;
 use concinnity_core::platform::PlatformSet;
-use concinnity_core::render::shader_source::SourceFile;
+use concinnity_core::render::shader::source::SourceFile;
 
 use crate::asset::BuildCtx;
 use crate::authoring::source_args::sdf_volume_source_path;

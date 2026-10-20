@@ -13,8 +13,8 @@
 use crate::components::ShaderPrograms;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{DrawIndex, MaterialUniforms};
+use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::backend::{PipelineBuilder, PreparedPipelines, SceneHost};
-use crate::render::error::{RenderError, RenderResult};
 use alloc::sync::Arc;
 
 /// One streamed chunk's geometry plus placement, supplied to
@@ -136,7 +136,7 @@ pub trait DrawStreaming: SceneHost {
     fn add_chunk_mesh(
         &mut self,
         mesh: ChunkMesh<'_>,
-        dst: crate::render::draw_slot::SlotAlloc,
+        dst: crate::render::slots::draw_slot::SlotAlloc,
     ) -> RenderResult<()> {
         self.edit_geometry(&mut |scene, writer| scene.add_chunk_mesh(mesh, dst, writer))
             .unwrap_or(Err(RenderError::Unsupported {
@@ -180,7 +180,7 @@ pub trait DrawStreaming: SceneHost {
         &mut self,
         src_draw_idx: DrawIndex,
         model: [[f32; 4]; 4],
-        dst: crate::render::draw_slot::SlotAlloc,
+        dst: crate::render::slots::draw_slot::SlotAlloc,
     ) -> RenderResult<()> {
         match self.scene_mut() {
             Some(scene) => scene.clone_static_draw_object(src_draw_idx, model, dst),

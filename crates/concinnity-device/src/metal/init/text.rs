@@ -1,7 +1,7 @@
 //! The HUD text state: the glyph atlases, the text pipeline, its sampler, and
 //! the per-frame geometry ring.
 
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use objc2_metal::{
     MTLDevice as _, MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
 };

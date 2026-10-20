@@ -4,7 +4,7 @@
 use crate::components::{ControlsCommand, GamepadAction, GamepadButton, InputKey};
 use crate::ecs::PipelineContext;
 use crate::input::keymap::Bindable;
-use crate::render::ops::RenderOps;
+use crate::render::frame::ops::RenderOps;
 
 use super::SettingsState;
 use super::rows::set_label_content;

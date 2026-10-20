@@ -4,7 +4,7 @@
 
 use crate::components::{Sprite, SpriteFit, TextAlign, TextInput, TextLabel};
 use crate::ecs::{DropdownView, Ref};
-use crate::render::text;
+use crate::render::overlay::text;
 use alloc::string::String;
 use alloc::vec::Vec;
 

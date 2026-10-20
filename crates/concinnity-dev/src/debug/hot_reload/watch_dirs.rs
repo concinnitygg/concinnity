@@ -51,7 +51,7 @@ mod tests {
     use concinnity_core::components::{SdfVolume, Shader};
     use concinnity_core::ecs::asset_id::AssetId;
     use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
-    use concinnity_core::render::backend_init::SdfVolumeSource;
+    use concinnity_core::render::backend::init::SdfVolumeSource;
     use concinnity_core::render::world_load::source_maps::{
         MeshSourceEntry, MeshSourceMap, SkinnedMeshSourceEntry, SkinnedMeshSourceMap,
         TextureSourceMap,

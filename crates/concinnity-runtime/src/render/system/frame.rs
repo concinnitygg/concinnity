@@ -8,8 +8,8 @@ use concinnity_core::ecs::ActiveRenderBackend;
 use concinnity_core::ecs::{Clock, PipelineContext, StepResult};
 use concinnity_core::input::mailbox::InputMailbox;
 use concinnity_core::input::snapshot::InputPacket;
-use concinnity_core::render::frame_outcome::{self, Submitted};
-use concinnity_core::render::snapshot::RenderSnapshot;
+use concinnity_core::render::frame::outcome::{self, Submitted};
+use concinnity_core::render::frame::snapshot::RenderSnapshot;
 use concinnity_host::clock::micros_since;
 use std::time::Instant;
 
@@ -45,7 +45,7 @@ impl GraphicsSystem {
         let submitted = Instant::now();
         let outcome = submit::submit(&mut self.frame_policy, &mut snapshot, backend.as_mut());
         ctx.profile.record_render_handoff(micros_since(submitted));
-        frame_outcome::settle(
+        outcome::settle(
             ctx,
             &mut self.extractor,
             self.frames.frames(),
@@ -104,7 +104,7 @@ impl GraphicsSystem {
             stop |= feedback.stop;
             // A dropped frame's reset is redrawn on the next frame this side
             // extracts, a frame later than serial execution manages.
-            frame_outcome::settle(
+            outcome::settle(
                 ctx,
                 &mut self.extractor,
                 self.frames.frames(),
@@ -150,7 +150,7 @@ mod tests {
     use concinnity_core::components::{GlobalTransform, RenderHandle};
     use concinnity_core::ecs::World;
     use concinnity_core::gfx::render_types::DrawIndex;
-    use concinnity_core::render::feedback;
+    use concinnity_core::render::frame::feedback;
 
     fn translated(x: f32) -> [[f32; 4]; 4] {
         [

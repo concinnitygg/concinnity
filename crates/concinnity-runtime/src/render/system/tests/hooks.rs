@@ -3,10 +3,10 @@
 //! `init_backend`. A test's settings store is the `StoredSettings` resource it
 //! inserts into the world.
 
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::backend::init::BackendInit;
 use concinnity_core::render::backend::recording::{RecordingBackend, SharedRecording};
 use concinnity_core::render::backend::{GpuProfile, RenderBackend};
-use concinnity_core::render::backend_init::BackendInit;
-use concinnity_core::render::error::RenderResult;
 use std::sync::Arc;
 
 // Everything a test injects into GraphicsSystem before init: the GPU profile

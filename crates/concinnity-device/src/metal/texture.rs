@@ -3,9 +3,9 @@
 use super::error::allocation_failed;
 use concinnity_core::bake::texture::{TextureFormat, TextureImage};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::output::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureType, MTLTextureUsage};

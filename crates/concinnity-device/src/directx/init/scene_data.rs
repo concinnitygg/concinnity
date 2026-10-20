@@ -2,8 +2,8 @@
 //! static local-light buffer, and the clustered light binning.
 
 use concinnity_core::gfx::render_types::{GpuLight, LightUniforms, ShadowUniforms};
-use concinnity_core::render::csm;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::shadow::csm;
 use concinnity_core::render::uniforms::{ProbeSet, ViewUniforms};
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -182,7 +182,7 @@ pub(super) fn build_uniforms(
         light_ubo_resources,
         light_ubo_ptrs,
         local_light_buffer,
-        lights: concinnity_core::render::light_state::LightState::new(
+        lights: concinnity_core::render::light::state::LightState::new(
             light_uniforms,
             local_lights,
             frames,

@@ -1,6 +1,6 @@
 //! Consuming an upscaler's history reset, the same on every backend.
 
-use concinnity_core::render::history_reset::{ConsumedReset, UpscalerResetLatch};
+use concinnity_core::render::temporal::history_reset::{ConsumedReset, UpscalerResetLatch};
 
 /// Whether this dispatch discards the upscaler's history. A reset a frame
 /// requested logs one line, which is what tells a run the reset reached the

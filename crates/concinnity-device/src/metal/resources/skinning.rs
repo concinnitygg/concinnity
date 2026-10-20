@@ -7,8 +7,8 @@ use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::SkinnedVertex;
 use concinnity_core::gfx::render_types::{SkinnedDrawObject, SkinnedIndex};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::{backend, geometry_repack, rt_geom};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::{backend, rt_accel::geom, slots::geometry_repack};
 use concinnity_core::transform::IDENTITY;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -26,7 +26,7 @@ fn upload_skinned_index_buffer(
 ) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>> {
     let buffer = device
         .newBufferWithLength_options(
-            rt_geom::skinned_index_buffer_bytes(indices.len()),
+            geom::skinned_index_buffer_bytes(indices.len()),
             MTLResourceOptions::StorageModeShared,
         )
         .ok_or_else(|| allocation_failed(format_args!("{label} skinned index buffer")))?;

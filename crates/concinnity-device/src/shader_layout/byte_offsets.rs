@@ -34,7 +34,7 @@ mod tests {
     use super::shader_const;
     use concinnity_core::animation::morph_targets::MorphEntry;
     use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
-    use concinnity_core::render::shaders::{RT_SKIN, RT_TRACE, TILE_MORPH};
+    use concinnity_core::render::shader::embedded::{RT_SKIN, RT_TRACE, TILE_MORPH};
     use std::mem::{offset_of, size_of};
 
     // Every offset the skin kernel reads or writes a mesh payload at, against

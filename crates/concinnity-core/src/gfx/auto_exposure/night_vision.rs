@@ -127,8 +127,8 @@ mod tests {
     // and the tint is chromaticity (0.25, 0.25) at unit luminance.
     #[test]
     fn composite_constants_match_their_derivation() {
-        let src = crate::render::shaders::COMPOSITE;
-        let scale = crate::render::shader_consts::float(src, "SCOTOPIC_WHITE_SCALE");
+        let src = crate::render::shader::embedded::COMPOSITE;
+        let scale = crate::render::shader::consts::float(src, "SCOTOPIC_WHITE_SCALE");
         assert!((scale * rods([1.0; 3]) - 1.0).abs() < 1e-5, "{scale}");
         // Under the rods red goes dark and blue stays light.
         assert!(scale * rods([1.0, 0.0, 0.0]) < 0.5 * 0.2126);
@@ -142,7 +142,7 @@ mod tests {
             [0.0557, -0.2040, 1.0570],
         ]
         .map(|r| r[0] * xyz[0] + r[1] * xyz[1] + r[2] * xyz[2]);
-        let text = crate::render::shader_consts::literal(src, "SCOTOPIC_TINT");
+        let text = crate::render::shader::consts::literal(src, "SCOTOPIC_TINT");
         let tint: alloc::vec::Vec<f32> = text
             .trim_start_matches("float3(")
             .trim_end_matches(')')

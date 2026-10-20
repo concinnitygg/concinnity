@@ -2,9 +2,9 @@
 //! material-referenced shader buckets, and the per-frame object buffers.
 
 use concinnity_core::gfx::render_types;
-use concinnity_core::render::backend_init::{SceneData, WorldShader};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::world_pipelines::{BucketPlan, WorldPipelines};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::init::{SceneData, WorldShader};
+use concinnity_core::render::shader::world_pipelines::{BucketPlan, WorldPipelines};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::CullPlan;

@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 
 use super::image::{CaptureImage, save_png};
@@ -240,7 +240,7 @@ mod tests {
     use super::*;
     use crate::frame_capture::readback::{Mapped, ReadbackPool};
     use concinnity_core::gfx::image_decode::PixelLayout;
-    use concinnity_core::render::error::RenderError;
+    use concinnity_core::render::backend::error::RenderError;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     // Host bytes standing in for one mapped read-back buffer.

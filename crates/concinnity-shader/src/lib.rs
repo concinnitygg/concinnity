@@ -1,7 +1,7 @@
 //! The HLSL shader toolchain, shared by build scripts and the renderer.
 //!
 //! The engine's single-source shaders
-//! (`crates/concinnity-core/src/render/shaders/*.hlsl`) compile through one
+//! (`crates/concinnity-core/src/render/shader/hlsl/*.hlsl`) compile through one
 //! pipeline: `dxc` emits DXIL for D3D12 and SPIR-V for Vulkan, and the Metal
 //! leg takes that same SPIR-V through spirv-cross to MSL and the Metal
 //! toolchain to a metallib (see [`metallib`], the only caller of that

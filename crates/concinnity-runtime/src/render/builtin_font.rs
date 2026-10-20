@@ -7,7 +7,7 @@
 // is the engine's one answer to that whichever way the world was assembled.
 
 use concinnity_core::ecs::FontHandle;
-use concinnity_core::render::text::LoadedFont;
+use concinnity_core::render::overlay::text::LoadedFont;
 
 const BAKED_ATLAS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtin_font.bin"));
 

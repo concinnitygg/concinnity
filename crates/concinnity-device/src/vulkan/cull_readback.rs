@@ -13,7 +13,7 @@
 use ash::vk;
 use concinnity_core::gfx::cull_status;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 
 use super::context::VkContext;
 use super::texture::one_shot_submit;

@@ -5,7 +5,7 @@
 //! `DxPostDevice`.
 
 use concinnity_core::gfx::render_types::SsgiParams;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::ssgi::settings::{SsgiFrame, SsgiSettings};
 use concinnity_core::render::post::ssgi::{

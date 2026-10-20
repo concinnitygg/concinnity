@@ -4,7 +4,7 @@
 //! `concinnity_core::render::post::bloom` and reaches D3D12 through
 //! `DxPostDevice`.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::post::bloom::{BloomPass, BloomPipelines, top_extent};
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::render_graph::PixelFormat;

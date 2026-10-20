@@ -11,7 +11,7 @@
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::spot_shadow;
+use concinnity_core::render::shadow::spot;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::shadow::ShadowView;
@@ -59,7 +59,7 @@ impl SpotShadowState {
 
     // Slices that re-render this frame.
     pub(crate) fn refreshed_slices(&self) -> impl Iterator<Item = u32> {
-        spot_shadow::refreshed_slices(self.render_mask, self.count())
+        spot::refreshed_slices(self.render_mask, self.count())
     }
 
     // GPU address of slice `slice`'s baked `ShadowUniforms`.

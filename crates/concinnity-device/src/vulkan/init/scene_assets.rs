@@ -3,8 +3,8 @@
 //! fallback.
 
 use concinnity_core::bake;
-use concinnity_core::render::backend_init::MediaPayloads;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::init::MediaPayloads;
 
 use super::InitGpu;
 use crate::vulkan::context::VkSceneAssets;

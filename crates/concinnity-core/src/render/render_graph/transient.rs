@@ -34,7 +34,7 @@ use super::alias::plan_aliasing_for;
 use super::compile::CompiledGraph;
 use super::frame::FrameGraphInputs;
 use super::types::{ClearValue, PixelFormat, TextureUsage};
-use crate::render::error::{RenderError, RenderResult};
+use crate::render::backend::error::{RenderError, RenderResult};
 use alloc::string::ToString;
 use alloc::vec::Vec;
 

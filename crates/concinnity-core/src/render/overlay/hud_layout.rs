@@ -5,7 +5,7 @@
 use crate::components::{Identity, LabelBox, LabelPlacement, LayoutContainer, TextLabel};
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
-use crate::render::text;
+use crate::render::overlay::text;
 use alloc::vec::Vec;
 
 // Scratch for the per-frame label layout, kept on the overlay system so the

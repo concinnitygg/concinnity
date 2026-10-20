@@ -13,7 +13,7 @@
 //! copy and the raw occlusion are owned here.
 
 use crate::gfx::render_types::SsaoParams;
-use crate::render::error::RenderResult;
+use crate::render::backend::error::RenderResult;
 use crate::render::render_graph::PassId;
 
 use super::device::{

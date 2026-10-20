@@ -111,8 +111,8 @@ fn templates_spawn_posed_and_rigged_and_pickable() {
 #[test]
 fn a_pickable_template_follows_its_transform_into_the_index_and_the_model() {
     use crate::components::Transform;
-    use crate::render::extract::FrameExtractor;
-    use crate::render::snapshot::RenderSnapshot;
+    use crate::render::frame::extract::FrameExtractor;
+    use crate::render::frame::snapshot::RenderSnapshot;
 
     let mut placed = geometry(0, 0, None);
     placed.mesh.position = [5.0, 0.0, 0.0];

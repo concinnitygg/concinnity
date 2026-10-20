@@ -10,7 +10,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::cell::{Cell, RefCell};
 
-use crate::render::error::{RenderError, RenderResult};
+use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::render_graph::{PixelFormat, TextureDesc};
 
 use super::device::{

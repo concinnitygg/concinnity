@@ -2,7 +2,7 @@
 //! one, at the output (swapchain) resolution.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::post::bloom::BloomPass;
 
 use super::InitGpu;

@@ -13,7 +13,7 @@
 use ash::vk;
 use concinnity_core::gfx::auto_exposure::HISTOGRAM_BINS;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::uniforms::{AutoExposureParams, ExposureMeasurement};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};

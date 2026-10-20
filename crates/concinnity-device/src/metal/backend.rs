@@ -7,13 +7,13 @@ use concinnity_core::gfx::render_types::{MATERIAL_PARAM_COUNT, SkinnedDrawObject
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::profile::RenderStats;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::backend::{
     BackendProbe, DrawStreaming, FrameParams, LiveEdit, RenderBackend, RenderTuning, SceneEffects,
     SkinnedDraws, SkinnedIndex, WindowControl,
 };
-use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::{
-    backend, backend_init, decal, particles, reflection_probe, volumetric_fog,
+    backend, backend::init, decal, environment::volumetric_fog, particles, probe::capture,
 };
 use concinnity_core::window::clipboard::Clipboard;
 use concinnity_core::window::display_mode;
@@ -133,9 +133,9 @@ impl WindowControl for MtlContext {
 impl RenderTuning for MtlContext {
     forward! { assert = debug_assert_main_thread;
         fn apply_settings(&mut self, graphics: &concinnity_core::settings::ResolvedGraphics, plan: &concinnity_core::settings::apply::ApplyPlan) -> RenderResult<()>;
-        fn set_reflection_probes(&mut self, probes: &[reflection_probe::ProbePlacement]);
+        fn set_reflection_probes(&mut self, probes: &[capture::ProbePlacement]);
         fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]);
-        fn move_local_lights(&mut self, lights: &concinnity_core::render::lights::LightData, uniforms: &concinnity_core::gfx::render_types::LightUniforms) -> RenderResult<()>;
+        fn move_local_lights(&mut self, lights: &concinnity_core::render::light::lights::LightData, uniforms: &concinnity_core::gfx::render_types::LightUniforms) -> RenderResult<()>;
         fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>);
     }
 }
@@ -160,13 +160,13 @@ impl LiveEdit for MtlContext {
     // ring depth plus the HDR-output request it was built with. A live `cn editor`
     // reload reuses this backend (via `reload_world`) only when the new world's
     // `swapchain_config` matches; otherwise the swap does a full rebuild.
-    fn hot_swap_config(&self) -> Option<backend_init::SwapchainConfig> {
+    fn hot_swap_config(&self) -> Option<init::SwapchainConfig> {
         Some(self.hw.swapchain_config)
     }
 
     // Inherent method is named `apply_world_reload` so this forwarder does not
     // shadow-and-recurse (mirrors `screenshot` / `capture_screenshot`).
-    fn reload_world(&mut self, init: backend_init::BackendInit<'_>) -> RenderResult<()> {
+    fn reload_world(&mut self, init: init::BackendInit<'_>) -> RenderResult<()> {
         debug_assert_main_thread("reload_world");
         self.apply_world_reload(init)
     }

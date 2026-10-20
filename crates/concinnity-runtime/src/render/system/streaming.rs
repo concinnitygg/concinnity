@@ -14,14 +14,14 @@ use concinnity_core::gfx::mesh_seed;
 use concinnity_core::gfx::render_types::DrawIndex;
 use concinnity_core::planet::MAX_RESIDENT_TILES;
 use concinnity_core::render::draw_list::DeferredMeshSeed;
-use concinnity_core::render::grass::CanopyRange;
+use concinnity_core::render::environment::grass::CanopyRange;
 use concinnity_core::render::material_entry::MaterialEntry;
-use concinnity_core::render::scene_members::{self, StreamedContent};
-use concinnity_core::render::scene_residency::SceneResidency;
-use concinnity_core::render::stream_pools::{
+use concinnity_core::render::streaming::pools::{
     ChunkSource, DecodedMesh, DeferredMeshPayload, PlanetStream, StreamPool, StreamingRuntime,
     StreamingState, VoxelStream, streamed_texture_slots,
 };
+use concinnity_core::render::streaming::scene_members::{self, StreamedContent};
+use concinnity_core::render::streaming::scene_residency::SceneResidency;
 use concinnity_core::render::world_load::stream_seed::StreamSeed;
 
 use super::GraphicsSystem;
@@ -111,7 +111,7 @@ impl GraphicsSystem {
         }
         // Per-stream-id payload refs for the deferred meshes, so the worker
         // can decode them from the blob payload when their scene pins.
-        let deferred_payloads = concinnity_core::render::stream_pools::deferred_mesh_payloads(
+        let deferred_payloads = concinnity_core::render::streaming::pools::deferred_mesh_payloads(
             deferred_mesh_seeds,
             &seed.draw_to_handle,
             &seed.mesh.draw_indices,

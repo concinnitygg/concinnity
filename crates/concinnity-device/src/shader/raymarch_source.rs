@@ -14,10 +14,10 @@
 use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::platform::Platform;
 #[cfg(any(backend_dx, backend_vk))]
-use concinnity_core::render::error::RenderError;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::shader_programs::raymarch::{self, Family};
-use concinnity_core::render::shader_source::{self, SourceFile};
+use concinnity_core::render::backend::error::RenderError;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::shader::programs::raymarch::{self, Family};
+use concinnity_core::render::shader::source::{self, SourceFile};
 use std::borrow::Cow;
 
 /// Decode a volume's payload. A payload that does not decode is a build the
@@ -67,7 +67,7 @@ pub(crate) fn artifact<'a>(
         programs.field.as_file(),
         req.hot_reload,
     );
-    let digest = shader_source::source_digest(&source);
+    let digest = source::source_digest(&source);
     if let Some(bytes) = programs.artifact(entry, digest) {
         return Ok(Cow::Borrowed(bytes));
     }
@@ -167,7 +167,7 @@ mod tests {
     use super::*;
     use concinnity_core::components::ShaderSource;
     use concinnity_core::components::compiled_programs::CompiledProgram;
-    use concinnity_core::render::error::RenderError;
+    use concinnity_core::render::backend::error::RenderError;
 
     const FIELD: SourceFile<'static> = SourceFile {
         path: "shaders/blob.hlsl",
@@ -183,7 +183,7 @@ mod tests {
             },
             programs: vec![CompiledProgram {
                 entry: entry.to_string(),
-                source_digest: shader_source::source_digest(&src),
+                source_digest: source::source_digest(&src),
                 artifact: bytes.to_vec(),
             }],
         }
@@ -265,19 +265,13 @@ mod tests {
         let src_other_host = raymarch::source(Family::Surface, Platform::DirectX, FIELD);
         assert!(
             metal_surface
-                .artifact(
-                    "raymarch_vertex",
-                    shader_source::source_digest(&src_other_host)
-                )
+                .artifact("raymarch_vertex", source::source_digest(&src_other_host))
                 .is_none()
         );
         let src_other_family = raymarch::source(Family::Shadow, Platform::Metal, FIELD);
         assert!(
             metal_surface
-                .artifact(
-                    "raymarch_vertex",
-                    shader_source::source_digest(&src_other_family)
-                )
+                .artifact("raymarch_vertex", source::source_digest(&src_other_family))
                 .is_none()
         );
     }
@@ -293,7 +287,7 @@ mod tests {
             b"stored bytes",
         );
         let src = raymarch::source(Family::Surface, Platform::Metal, FIELD);
-        let digest = shader_source::source_digest(&src);
+        let digest = source::source_digest(&src);
         assert!(
             programs
                 .artifact("raymarch_shadow_vertex", digest)

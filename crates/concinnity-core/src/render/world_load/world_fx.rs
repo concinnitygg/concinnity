@@ -10,15 +10,15 @@ use crate::components::{
 };
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
-use crate::render::atmosphere::AtmosphereSettings;
-use crate::render::backend_init::{SdfVolumeSource, WorldFx};
-use crate::render::grass::{GrassField, PlanetGrass};
-use crate::render::night_sky::NightSkySettings;
-use crate::render::terrain::{LoadedTerrain, grass_terrains};
-use crate::render::water::WaterBody;
-use crate::render::water::ocean::OceanQuality;
-use crate::render::wind::WindField;
-use crate::render::{decal, particles, volumetric_fog};
+use crate::render::backend::init::{SdfVolumeSource, WorldFx};
+use crate::render::environment::atmosphere::AtmosphereSettings;
+use crate::render::environment::grass::{GrassField, PlanetGrass};
+use crate::render::environment::night_sky::NightSkySettings;
+use crate::render::environment::terrain::{LoadedTerrain, grass_terrains};
+use crate::render::environment::water::WaterBody;
+use crate::render::environment::water::ocean::OceanQuality;
+use crate::render::environment::wind::WindField;
+use crate::render::{decal, environment::volumetric_fog, particles};
 
 /// Drain every effect component into the backend's effect inputs. Each record
 /// is resolved once here (texture slots, inverted decal matrices, clamped

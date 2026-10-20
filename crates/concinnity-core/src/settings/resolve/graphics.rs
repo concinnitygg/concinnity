@@ -8,8 +8,8 @@ use crate::components::{
 };
 use crate::gfx::auto_exposure::AutoExposureSettings;
 use crate::gfx::render_types::PostProcessTunables;
-use crate::render::backend_init::{ShadowCadence, ShadowParams};
-use crate::render::dlss::DlssPreset;
+use crate::render::backend::init::{ShadowCadence, ShadowParams};
+use crate::render::output::dlss::DlssPreset;
 use crate::render::post::rt_reflections::RtReflectionSettings;
 use crate::render::post::ssao::settings::SsaoSettings;
 use crate::render::post::ssgi::settings::SsgiSettings;

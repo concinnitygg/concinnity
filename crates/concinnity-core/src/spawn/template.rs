@@ -222,8 +222,8 @@ mod tests {
 
     use crate::animation::skeleton::Skeleton;
     use crate::ecs::{SkinnedMeshHandle, World};
-    use crate::render::draw_slot::DrawSlotAllocator;
-    use crate::render::skinned_pool::SkinnedInstancePool;
+    use crate::render::slots::draw_slot::DrawSlotAllocator;
+    use crate::render::slots::skinned_pool::SkinnedInstancePool;
 
     // Build an isolated PipelineContext over a fresh world, mirroring the
     // despawn tests, so the spawn/despawn loop can run without a backend.

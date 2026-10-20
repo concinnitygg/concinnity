@@ -1,7 +1,7 @@
 use super::*;
 use crate::gfx::render_types::MaterialUniforms;
 use crate::math::SaturatingFrom;
-use crate::render::rt_geom::RT_SKINNED_FLAG;
+use crate::render::rt_accel::geom::RT_SKINNED_FLAG;
 use crate::test_support::{draw_object, skinned_draw_object};
 
 // A BLAS stands in as a label, so a test can tell which one an instance names.

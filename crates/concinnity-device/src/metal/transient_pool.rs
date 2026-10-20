@@ -34,7 +34,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use super::error::allocation_failed;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::render_graph::{
     PixelFormat, TextureUsage, TransientSlot, TransientTexture,
 };

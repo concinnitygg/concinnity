@@ -16,7 +16,7 @@ use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::mesh_seed::{self, MeshSeedRegion};
 use crate::gfx::render_types::{DrawIndex, DrawObject, InstancedCluster};
 
-use crate::render::stream_pools::DecodedMesh;
+use crate::render::streaming::pools::DecodedMesh;
 
 // Mesh streaming and LOD alternates don't yet cooperate: upload_mesh writes only
 // LOD0 to its newly-allocated region, but `lod_alternates` still carries the

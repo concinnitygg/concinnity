@@ -184,7 +184,7 @@ mod tests {
     // silently mis-tallying a readback.
     #[test]
     fn constants_match_the_cull_shader() {
-        let declared = parse_shader_statuses(crate::render::shaders::CULL);
+        let declared = parse_shader_statuses(crate::render::shader::embedded::CULL);
         let expected = [
             ("STATUS_DRAWN", CullStatus::DRAWN),
             ("STATUS_HIZ_CANDIDATE", CullStatus::HIZ_CANDIDATE),

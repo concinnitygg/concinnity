@@ -21,7 +21,7 @@
 //! otherwise and the consumer falls back exactly as it did before.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::render_graph::{
     PixelFormat, TextureUsage, TransientSlot, TransientTexture,
 };

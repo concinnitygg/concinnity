@@ -12,14 +12,15 @@ use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend::FrameParams;
-use concinnity_core::render::frame_plan::drive_frame;
-use concinnity_core::render::lights::LightData;
-use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::retire_pool::RetirePool;
+use concinnity_core::render::buffers::retire_pool::RetirePool;
+use concinnity_core::render::frame::plan::drive_frame;
+use concinnity_core::render::light::lights::LightData;
+use concinnity_core::render::probe::book::ProbeBook;
 use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::shader_reload::ShaderReload;
+use concinnity_core::render::shader::reload::ShaderReload;
 use concinnity_core::render::{
-    backend, backend_init, decal, error, hdr_output, slot_rewrites, spot_shadow, volumetric_fog,
+    backend, backend::error, backend::init, decal, environment::volumetric_fog, output::hdr,
+    shadow::spot, slots::rewrites,
 };
 use concinnity_core::window::display_mode;
 use concinnity_core::{components, profile};
@@ -117,7 +118,7 @@ impl VkSpotShadow {
 
     // Slices that re-render this frame.
     pub(super) fn refreshed_slices(&self) -> impl Iterator<Item = u32> {
-        spot_shadow::refreshed_slices(self.render_mask, self.count())
+        spot::refreshed_slices(self.render_mask, self.count())
     }
 
     // Destroy every owned GPU object. Called from `VkContext::drop` after
@@ -341,8 +342,9 @@ pub(super) struct VkCull {
     // GPU-culled command buffer through the shared bindless pipeline layout.
     // `None` marks a bucket whose Shader is not resident yet: its scene has not
     // pinned, so the pass skips those draws (see `world_shaders.rs`).
-    pub(super) world_pipelines:
-        concinnity_core::render::world_pipelines::WorldPipelines<super::pipeline::BucketPipelines>,
+    pub(super) world_pipelines: concinnity_core::render::shader::world_pipelines::WorldPipelines<
+        super::pipeline::BucketPipelines,
+    >,
     // Commands reserved per shader-bucket region in the indirect buffers, fixed at
     // init to the record capacity the buffers were sized for. Bucket `b`'s region
     // starts at command `b * bucket_stride`.
@@ -597,7 +599,7 @@ pub(super) struct VkUniforms {
     // The values the ring carries, which slots of it are stale, and the local
     // lights' reach. `record_frame` writes the frame's own slot, so no
     // in-flight read is ever raced.
-    pub(super) lights: concinnity_core::render::light_state::LightState,
+    pub(super) lights: concinnity_core::render::light::state::LightState,
     // Per-frame-in-flight canopy block (global set 0 binding 21), persistently
     // mapped and rewritten each frame, and the block last written, which a
     // probe capture snapshots.
@@ -734,7 +736,7 @@ impl ProbeState {
 // covers it is the one signaled by the NEXT draw, and a frame-slot-keyed drain
 // would free it too soon).
 pub(super) struct StreamState {
-    pub pool_rewrites: slot_rewrites::SlotRewriteQueue,
+    pub pool_rewrites: rewrites::SlotRewriteQueue,
     pub frame: u64,
     pub retires: RetirePool<StreamedUploadRetire>,
     pub retire_depth: u64,
@@ -743,7 +745,7 @@ pub(super) struct StreamState {
 impl StreamState {
     pub(super) fn new(frames: usize) -> Self {
         Self {
-            pool_rewrites: slot_rewrites::SlotRewriteQueue::new(frames),
+            pool_rewrites: rewrites::SlotRewriteQueue::new(frames),
             frame: 0,
             retires: RetirePool::new(),
             retire_depth: frames as u64 + 1,
@@ -861,7 +863,7 @@ pub(super) struct VkRayTracing {
     // How the TLAS is kept current when props move (the launch's `--rt-dynamic`
     // request); read by the per-frame `rt_dynamic_update`. Inert when `accel`
     // is `None`.
-    pub(super) dynamic_mode: concinnity_core::render::rt_geom::RtDynamicMode,
+    pub(super) dynamic_mode: concinnity_core::render::rt_accel::geom::RtDynamicMode,
     // Whether skinned meshes join the TLAS (the launch's `--rt-skinned-geometry`
     // request; in by default). Clear it and the BVH covers static + instanced
     // geometry only, isolating the skinned trace path.
@@ -940,7 +942,7 @@ pub(super) struct VkHardware {
     // in `BGRA8_UNORM` + sRGB-nonlinear and the ACES + gamma + FXAA + LUT path
     // runs unchanged. Mirrors `DxHardware::hdr_mode`. Stored so the swapchain
     // rebuild path preserves the format + color space on resize.
-    pub(super) hdr_mode: hdr_output::HdrOutputMode,
+    pub(super) hdr_mode: hdr::HdrOutputMode,
     // Lock presentation to the display refresh. Captured so `rebuild_swapchain`
     // re-selects the same present mode (FIFO vsync vs MAILBOX uncapped) on resize.
     pub(super) vsync: bool,
@@ -949,7 +951,7 @@ pub(super) struct VkHardware {
     // (`reload_world`) reuses this backend in place only when the new world's
     // `swapchain_config` still matches; a mismatch routes to a full rebuild.
     // Mirrors `DxHardware::swapchain_config`.
-    pub(super) swapchain_config: backend_init::SwapchainConfig,
+    pub(super) swapchain_config: init::SwapchainConfig,
     // Window + input (native Win32 on Windows, AppKit on macOS, GLFW on Linux).
     // `Option` so a `reload_world` can MOVE the live window (with its cursor /
     // menu / keymap state) into the successor context instead of opening a new
@@ -1161,7 +1163,7 @@ pub(crate) struct VkContext {
     pub(super) grass: Option<super::grass::GrassResources>,
     // How this frame's view resolves the grass: where it coarsens, thins and
     // hands over to the canopy. `None` without grass.
-    pub(super) grass_lod: Option<concinnity_core::render::grass::GrassLodView>,
+    pub(super) grass_lod: Option<concinnity_core::render::environment::grass::GrassLodView>,
 
     // Auto-exposure (EV adaptation). See [`AutoExposureState`].
     pub(super) auto_exposure: AutoExposureState,
@@ -1576,7 +1578,7 @@ impl VkContext {
         Ok(())
     }
 
-    pub(crate) fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {
+    pub(crate) fn set_shadow_cadence(&mut self, cadence: init::ShadowCadence) {
         self.state.planner.shadow.cadence = cadence;
     }
 

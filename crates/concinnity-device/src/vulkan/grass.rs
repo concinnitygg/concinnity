@@ -1,4 +1,4 @@
-//! The grass field on Vulkan (see `concinnity_core::render::grass`): the bend
+//! The grass field on Vulkan (see `concinnity_core::render::environment::grass`): the bend
 //! pass that relaxes and stamps the trampling field, the kernel that places
 //! this frame's visible blades and, a second time, the nearest shadow
 //! cascade's, the indirect draws, one per detail level, that render them at the
@@ -20,10 +20,12 @@
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::planet::Rebase;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::grass::bend::GRASS_BEND_WORDS;
-use concinnity_core::render::grass::lod::{GRASS_BAND_REGION, GRASS_LOD_COUNT, GRASS_REGION_COUNT};
-use concinnity_core::render::grass::{
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::environment::grass::bend::GRASS_BEND_WORDS;
+use concinnity_core::render::environment::grass::lod::{
+    GRASS_BAND_REGION, GRASS_LOD_COUNT, GRASS_REGION_COUNT,
+};
+use concinnity_core::render::environment::grass::{
     FRAME_PLANET_TILE_RECORDS, FRAME_TILE_RECORDS, GrassBender, GrassCamera, GrassField,
     GrassFrameState, GrassPass, GrassShadowView, GrassView,
 };
@@ -32,7 +34,7 @@ use concinnity_core::render::uniforms::grass::{
     GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassBendParams, GrassParams, GrassTileGpu,
     PlanetGrassTileGpu, grass_args_offset,
 };
-use concinnity_core::render::{pass_timing, shadow_bias};
+use concinnity_core::render::{backend::pass_timing, shadow::bias};
 
 use super::allocator::PooledBuffer;
 use super::builtin_shaders::{self, CompileProgram};
@@ -161,9 +163,9 @@ impl GrassPipelines {
             topology: vk::PrimitiveTopology::TRIANGLE_STRIP,
             raster: Raster {
                 bias: Some(DepthBias {
-                    constant: shadow_bias::RASTER_CONSTANT,
+                    constant: bias::RASTER_CONSTANT,
                     clamp: targets.shadow_bias_clamp,
-                    slope: shadow_bias::RASTER_SLOPE,
+                    slope: bias::RASTER_SLOPE,
                 }),
                 ..Raster::default()
             },

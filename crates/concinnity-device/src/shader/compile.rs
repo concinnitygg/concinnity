@@ -10,7 +10,7 @@
 // under the same name.
 
 use concinnity_core::platform::Platform;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_shader::HlslTarget;
 
 /// What the content-addressed shader cache records as the toolchain behind an

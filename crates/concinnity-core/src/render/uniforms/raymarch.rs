@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn the_gbuffer_block_rasterizes_jittered_and_reprojects_unjittered() {
-        use crate::render::view_history::ViewFrame;
+        use crate::render::temporal::view_history::ViewFrame;
         let m = |k: f32| [[k; 4]; 4];
         let frame = |k: f32| ViewFrame {
             vp: m(k),

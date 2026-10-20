@@ -84,9 +84,9 @@ pub struct ViewUniforms {
     /// The scale the pass's color target is written at
     /// ([`crate::gfx::auto_exposure::PreExposure`]): the frame's pre-exposure
     /// for the main pass, the probes' storage scale for a probe face
-    /// ([`crate::render::radiance_storage::PROBE_STORAGE_SCALE`]), the frame's
+    /// ([`crate::render::probe::radiance::PROBE_STORAGE_SCALE`]), the frame's
     /// pre-exposure again for a planar mirror
-    /// ([`crate::render::radiance_storage::FaceStorage`]). Occupies what was pad space, so the
+    /// ([`crate::render::probe::radiance::FaceStorage`]). Occupies what was pad space, so the
     /// offsets in the user-shader binding contract are unchanged.
     pub pre_exposure: f32,
     /// 1.0 when the screen-space indirect target the main pass samples carries
@@ -184,8 +184,8 @@ impl GBufferView {
     pub fn new(
         jittered_vp: [[f32; 4]; 4],
         view: [[f32; 4]; 4],
-        cur: crate::render::view_history::ViewFrame,
-        prev: crate::render::view_history::ViewFrame,
+        cur: crate::render::temporal::view_history::ViewFrame,
+        prev: crate::render::temporal::view_history::ViewFrame,
         motion: bool,
     ) -> Self {
         let prev = if motion { prev } else { cur };
@@ -302,7 +302,7 @@ mod tests {
         reason = "the test checks the padding stays zero"
     )]
     fn gbuffer_view_takes_the_previous_frame_from_its_history() {
-        use crate::render::view_history::ViewFrame;
+        use crate::render::temporal::view_history::ViewFrame;
         let m = |k: f32| [[k; 4]; 4];
         let cur = ViewFrame {
             vp: m(2.0),
@@ -328,7 +328,7 @@ mod tests {
     // With nothing reading motion the previous frame collapses onto this one.
     #[test]
     fn gbuffer_view_without_motion_reprojects_onto_itself() {
-        use crate::render::view_history::ViewFrame;
+        use crate::render::temporal::view_history::ViewFrame;
         let m = |k: f32| [[k; 4]; 4];
         let cur = ViewFrame {
             vp: m(2.0),

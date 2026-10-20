@@ -12,9 +12,9 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::probe::capture::PrefilterPlan;
 use concinnity_core::render::record_pack::StaticSlots;
-use concinnity_core::render::reflection_probe::PrefilterPlan;
 use concinnity_core::render::uniforms::{ProbeSet, ProbeUniforms, grown_probe_capacity};
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};

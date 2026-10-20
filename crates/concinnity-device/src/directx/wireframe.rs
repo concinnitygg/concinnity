@@ -10,7 +10,7 @@
 //! so the one twin stands in for every bucket's PSO while the mode is on, as
 //! Metal's encoder-state fill mode does.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::context::{DxContext, dump_on_err};

@@ -13,10 +13,10 @@ use std::borrow::Cow;
 
 #[cfg(any(backend_dx, backend_vk))]
 use concinnity_core::platform::Platform;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 #[cfg(any(backend_dx, backend_vk))]
-use concinnity_core::render::shader_programs::{ShaderProgram, Variant};
-use concinnity_core::render::shader_source::source_digest;
+use concinnity_core::render::shader::programs::{ShaderProgram, Variant};
+use concinnity_core::render::shader::source::source_digest;
 #[cfg(any(backend_dx, backend_vk))]
 use concinnity_shader::HlslTarget;
 
@@ -124,7 +124,7 @@ impl Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::error::RenderError;
+    use concinnity_core::render::backend::error::RenderError;
 
     const SOURCE: &str = "#define A 1\nBODY\n";
     static EMBEDDED: &[u8] = b"embedded bytes";

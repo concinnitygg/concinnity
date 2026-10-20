@@ -7,7 +7,7 @@
 //! never replaced.
 //!
 //! The cube math + the staggered-bake state machine are backend-agnostic
-//! (`concinnity_core::render::reflection_probe`); this module drives the placement intake + the
+//! (`concinnity_core::render::probe::capture`); this module drives the placement intake + the
 //! GPU capture, mirroring `crate::directx::probe` / `crate::metal::probe`.
 //!
 //! `set_reflection_probes` converts the graphics-system placements (auto-seeding a
@@ -28,11 +28,11 @@ use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::probe_bake::{CAPTURE_FACES, ProbeBake, ProbeBakeDevice};
-use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::radiance_storage::FaceStorage;
-use concinnity_core::render::reflection_probe::{self, PrefilterPlan, ProbePlacement};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::probe::bake::{CAPTURE_FACES, ProbeBake, ProbeBakeDevice};
+use concinnity_core::render::probe::book::ProbeBook;
+use concinnity_core::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
+use concinnity_core::render::probe::radiance::FaceStorage;
 
 use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
@@ -283,7 +283,7 @@ impl VkContext {
                 );
             }
         }
-        let frustum = reflection_probe::face_frustum(eye, face, capture.capture_distance);
+        let frustum = capture::face_frustum(eye, face, capture.capture_distance);
         self.encode_probe_cull(cmd, cull_set, hiz_set, &frustum, eye);
         self.encode_main_into_face(
             cmd,
@@ -706,7 +706,7 @@ impl ProbeBakeDevice for VkContext {
             &bake.object_buf,
             &bake.draw_args_buf,
             eye,
-            concinnity_core::render::model_history::HistoryMode::Untracked,
+            concinnity_core::render::temporal::model_history::HistoryMode::Untracked,
         );
 
         // The capture cube each face copies into, and the probe cube the
@@ -895,8 +895,8 @@ impl RenderingBake {
         let eye = self.eye;
         for (face, buf) in self.bake.view_bufs.iter().enumerate() {
             let view = ViewUniforms::face(FaceCamera {
-                vp: reflection_probe::face_view_projection(eye, face),
-                view: reflection_probe::face_view_matrix(eye, face),
+                vp: capture::face_view_projection(eye, face),
+                view: capture::face_view_matrix(eye, face),
                 cam_pos: eye,
                 elapsed: self.elapsed,
                 prefilter_mip_count: prefilter_mip_count as f32,

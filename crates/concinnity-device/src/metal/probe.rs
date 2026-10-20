@@ -56,12 +56,12 @@
 //!     direct + ambient lighting without contact shadows.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::probe_bake::{
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::probe::bake::{
     CAPTURE_FACES, ProbeBake, ProbeBakeDevice, capture_ring_slot,
 };
-use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::reflection_probe::{self, PrefilterPlan, ProbePlacement};
+use concinnity_core::render::probe::book::ProbeBook;
+use concinnity_core::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -235,7 +235,7 @@ impl MtlContext {
             .build_record_buffers(
                 slot,
                 eye,
-                concinnity_core::render::model_history::HistoryMode::Untracked,
+                concinnity_core::render::temporal::model_history::HistoryMode::Untracked,
             )?
             .ok_or_else(|| RenderError::Other("probe: no static geometry to bake".into()))?;
         let (object_buffer, draw_args) = (records.objects, records.draw_args);
@@ -314,9 +314,9 @@ impl MtlContext {
         // the face's cull encodes into it.
         self.ensure_icb_capacity(counts.total)?;
 
-        let vp = reflection_probe::face_view_projection(eye, face);
-        let view = reflection_probe::face_view_matrix(eye, face);
-        let frustum = reflection_probe::face_frustum(eye, face, bake.capture_distance);
+        let vp = capture::face_view_projection(eye, face);
+        let view = capture::face_view_matrix(eye, face);
+        let frustum = capture::face_frustum(eye, face, bake.capture_distance);
 
         let RenderingBake { done, gpu, .. } = bake;
 

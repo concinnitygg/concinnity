@@ -21,7 +21,7 @@
 //! the consumer keeps its disabled-feature fallback.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::render_graph::{
     ClearValue, PixelFormat, TextureUsage, TransientSlot, TransientTexture,
 };

@@ -7,7 +7,7 @@
 use concinnity_core::components::Camera3D;
 use concinnity_core::ecs::World;
 use concinnity_core::fanout::Fanout;
-use concinnity_core::render::stream_pools::{StreamingPressure, StreamingRuntime};
+use concinnity_core::render::streaming::pools::{StreamingPressure, StreamingRuntime};
 use concinnity_core::shutdown::ShutdownToken;
 use concinnity_host::thread::{ThreadRole, asset_id, set_current_thread_role};
 use std::io::BufReader;

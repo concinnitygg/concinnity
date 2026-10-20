@@ -1,16 +1,16 @@
-// The host half of frame submission: core's `frame_submit::submit` timed by
+// The host half of frame submission: core's `submit::submit` timed by
 // the monotonic clock, with a device loss reported to the crash handler.
 
 use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::frame_submit::{self, FramePolicy, SubmitOutcome};
-use concinnity_core::render::snapshot::RenderSnapshot;
+use concinnity_core::render::frame::snapshot::RenderSnapshot;
+use concinnity_core::render::frame::submit::{self, FramePolicy, SubmitOutcome};
 
 pub(crate) fn submit(
     policy: &mut FramePolicy,
     snap: &mut RenderSnapshot,
     backend: &mut dyn RenderBackend,
 ) -> SubmitOutcome {
-    let outcome = frame_submit::submit(
+    let outcome = submit::submit(
         policy,
         snap,
         backend,

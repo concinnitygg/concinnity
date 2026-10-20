@@ -5,7 +5,7 @@
 use concinnity_core::gfx::render_types::{
     CompositeParams, PostProcessParams, SsaoParams, SsgiParams, SsrParams,
 };
-use concinnity_core::render::atmosphere::AtmosphereParams;
+use concinnity_core::render::environment::atmosphere::AtmosphereParams;
 use concinnity_core::render::uniforms::{
     AutoExposureParams, ExposureMeasurement, HizParams, TaaParams,
 };

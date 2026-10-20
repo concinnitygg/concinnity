@@ -10,7 +10,7 @@
 //! implemented three times. A backend answers with its scene and with a
 //! [`GeometryWriter`] for its buffers; everything else stays its own.
 
-use crate::render::error::RenderResult;
+use crate::render::backend::error::RenderResult;
 use crate::render::scene_state::{GeometryWriter, SceneState};
 
 /// An edit of the scene that may write geometry bytes through the writer.
@@ -22,7 +22,7 @@ pub type GeometryEdit<'a> =
 ///
 /// A backend with no scene of its own, such as a test double, answers `None`
 /// throughout; the defaults then do nothing, or report
-/// [`RenderError::Unsupported`](crate::render::error::RenderError::Unsupported)
+/// [`RenderError::Unsupported`](crate::render::backend::error::RenderError::Unsupported)
 /// where the operation is fallible.
 pub trait SceneHost {
     /// The scene, for the defaulted queries.
@@ -44,8 +44,8 @@ mod tests {
         BackendProbe, DeviceCapabilities, DrawStreaming, FrameParams, LiveEdit, RenderBackend,
         RenderTuning, SceneEffects, SkinnedDraws, SkinnedFrame, WindowControl,
     };
-    use crate::render::draw_slot::SlotAlloc;
     use crate::render::scene_state::{DrawList, GeometryBuffer};
+    use crate::render::slots::draw_slot::SlotAlloc;
     use crate::test_support::draw_object;
     use alloc::vec;
     use alloc::vec::Vec;
@@ -189,9 +189,9 @@ mod tests {
     #[test]
     fn the_skinned_pushes_land_in_the_slots() {
         let mut b = Hosted::new();
-        let mut poses = crate::render::snapshot::SpanBuffer::default();
+        let mut poses = crate::render::frame::snapshot::SpanBuffer::default();
         poses.push(SkinnedIndex(0), &[MOVED, MOVED]);
-        let mut morphs = crate::render::snapshot::SpanBuffer::default();
+        let mut morphs = crate::render::frame::snapshot::SpanBuffer::default();
         morphs.push(SkinnedIndex(0), &[0.5]);
         b.update_skinned(SkinnedFrame {
             poses: &poses,

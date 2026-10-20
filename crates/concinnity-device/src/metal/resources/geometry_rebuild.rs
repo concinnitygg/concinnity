@@ -3,8 +3,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::{backend, geometry_repack};
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::{backend, slots::geometry_repack};
 use objc2_metal::{MTLBuffer as _, MTLResourceOptions};
 
 use crate::metal::context::{MtlContext, bytes_of_slice};

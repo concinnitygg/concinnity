@@ -17,8 +17,8 @@ use crate::components::{Material, MeshRenderer, ModelRenderer, RenderHandle};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, MaterialHandle, World};
 use crate::gfx::render_types::DrawIndex;
+use crate::render::frame::queues::ActiveDeviceCaps;
 use crate::render::material_entry::{self, MaterialEntry};
-use crate::render::queues::ActiveDeviceCaps;
 use crate::resource::{MaterialNames, MaterialTable, TextureTable};
 
 use super::{has_queue, with_ops};

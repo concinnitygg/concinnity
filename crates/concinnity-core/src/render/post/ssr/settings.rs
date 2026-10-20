@@ -139,26 +139,23 @@ impl SsrSettings {
 mod tests {
     use super::*;
     use crate::gfx::camera::MIN_ASPECT;
-    use crate::render::shader_consts;
+    use crate::render::shader::consts;
     use crate::sky::SkyOrientation;
     use crate::transform::IDENTITY;
 
     #[test]
     fn the_roughness_cut_matches_the_shader() {
-        let src = crate::render::shaders::REFLECTION_CUT;
+        let src = crate::render::shader::embedded::REFLECTION_CUT;
         assert_eq!(
-            shader_consts::float(src, "REFLECTION_ROUGHNESS_CUT"),
+            consts::float(src, "REFLECTION_ROUGHNESS_CUT"),
             REFLECTION_ROUGHNESS_CUT
         );
     }
 
     #[test]
     fn the_march_step_count_matches_the_shader() {
-        let src = crate::render::shaders::SSR;
-        assert_eq!(
-            shader_consts::uint(src, "SSR_MAX_STEPS"),
-            MAX_STEPS as usize
-        );
+        let src = crate::render::shader::embedded::SSR;
+        assert_eq!(consts::uint(src, "SSR_MAX_STEPS"), MAX_STEPS as usize);
     }
 
     #[test]

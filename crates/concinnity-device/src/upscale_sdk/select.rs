@@ -2,9 +2,11 @@
 //! fall back through when one fails to initialize.
 
 use concinnity_core::components::UpscalerBackend;
-use concinnity_core::render::dlss::DlssPreset;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::upscaler::{UpscalerAvailability, VendorUpscaler, upscaler_order};
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::output::dlss::DlssPreset;
+use concinnity_core::render::output::upscaler::{
+    UpscalerAvailability, VendorUpscaler, upscaler_order,
+};
 use concinnity_core::settings::ResolvedGraphics;
 
 /// What temporal upscaling was asked for: the upscaler, and the render preset

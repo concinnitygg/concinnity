@@ -8,7 +8,7 @@ use concinnity_cook::authoring::world::take_entry_id;
 use concinnity_core::components::{ProceduralMesh, Story, VolumetricFog};
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::render::world_load::source_maps::ProceduralMeshSourceMap;
-use concinnity_core::render::{backend, volumetric_fog};
+use concinnity_core::render::{backend, environment::volumetric_fog};
 use concinnity_host::thread::asset_id;
 
 // Per-reload tally for the volumetric-fog path. Counts are surfaced separately
@@ -24,7 +24,7 @@ pub(crate) struct FogReloadResult {
 // [`RenderBackend::update_fog_settings`]. Disabled / missing assets push
 // `None`. Each authored asset runs through the same clamp chain as init:
 // [`concinnity_core::components::VolumetricFog::from_args`] (asset-side floors) then
-// [`concinnity_core::render::volumetric_fog::FogSettings::resolve`] (gfx-side ceilings),
+// [`concinnity_core::render::environment::volumetric_fog::FogSettings::resolve`] (gfx-side ceilings),
 // so a reload cannot land out-of-range values.
 //
 // `last_pushed` is the dedupe state owned by the caller; the function

@@ -36,7 +36,7 @@ use concinnity_core::ecs::World;
 use concinnity_core::math::narrow_f32;
 use concinnity_core::memory::{LedgerSnapshot, MemStats, MemTag, Realm, SizeClass};
 use concinnity_core::render::backend::GpuProfile;
-use concinnity_core::render::stream_pools::StreamingRuntime;
+use concinnity_core::render::streaming::pools::StreamingRuntime;
 use concinnity_host::sys::cpu::CpuSampler;
 use concinnity_host::sys::memory;
 use std::time::{Duration, Instant};

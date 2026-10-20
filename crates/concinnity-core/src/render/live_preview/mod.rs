@@ -9,8 +9,8 @@ pub mod material;
 pub mod shape;
 
 use crate::ecs::World;
-use crate::render::ops::RenderOps;
-use crate::render::queues::ActiveRenderQueues;
+use crate::render::frame::ops::RenderOps;
+use crate::render::frame::queues::ActiveRenderQueues;
 
 // Run `f` against the frame's op queue. `None` when the world has no queue to
 // record into, which leaves the backend exactly as it was.
@@ -33,9 +33,9 @@ mod test_support {
     use crate::render::backend::recording::{
         Call, RecordingBackend, SharedRecording, recording_backend,
     };
-    use crate::render::ops::RenderOps;
-    use crate::render::queues::{ActiveRenderQueues, RenderQueues};
-    use crate::render::render_slots::RenderSlots;
+    use crate::render::frame::ops::RenderOps;
+    use crate::render::frame::queues::{ActiveRenderQueues, RenderQueues};
+    use crate::render::slots::render_slots::RenderSlots;
 
     fn with_queue(world: &mut World) {
         world.insert_resource(ActiveRenderQueues::new(RenderQueues {

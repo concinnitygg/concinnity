@@ -7,9 +7,9 @@ use super::visibility::{PlanarFramePlan, PlanarReflector, ReflectorHull};
 use crate::components::{GlassPanel, PassResolution, WaterSurface};
 use crate::geometry::glass_quad::plane_basis;
 use crate::math::vec3::normalize_or;
-use crate::render::backend_init::PlanarBudget;
+use crate::render::backend::init::PlanarBudget;
+use crate::render::environment::water::WaterBody;
 use crate::render::uniforms::WaterParams;
-use crate::render::water::WaterBody;
 use crate::transform::Mat4;
 use alloc::vec::Vec;
 
@@ -140,7 +140,7 @@ mod tests {
     use super::*;
     use crate::components::WaterWave;
     use crate::render::depth::camera_projection;
-    use crate::render::wind::WindField;
+    use crate::render::environment::wind::WindField;
     use crate::transform::mat4_mul;
     use alloc::vec;
 
@@ -195,7 +195,7 @@ mod tests {
         let (mut water, _) = WaterBody::resolve_all(
             [&sea],
             &WindField::STILL,
-            crate::render::water::ocean::OceanQuality::FULL,
+            crate::render::environment::water::ocean::OceanQuality::FULL,
             Some(&planet),
         );
         water.push(pool([0.0, 2.0, 0.0]));

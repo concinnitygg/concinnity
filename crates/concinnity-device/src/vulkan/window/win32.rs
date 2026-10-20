@@ -10,7 +10,7 @@ use ash::vk;
 use concinnity_core::components::WindowMode;
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::window::clipboard::Clipboard;
 use concinnity_core::window::display_mode::DisplayMode;
 

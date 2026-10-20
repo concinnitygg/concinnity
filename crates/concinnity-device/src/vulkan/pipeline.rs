@@ -3,10 +3,10 @@
 // cooked artifacts.
 
 use ash::vk;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::surface::{self, GrassShading};
-use concinnity_core::render::shadow_bias;
-use concinnity_core::render::world_pipelines::BucketSource;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::shader::programs::surface::{self, GrassShading};
+use concinnity_core::render::shader::world_pipelines::BucketSource;
+use concinnity_core::render::shadow::bias;
 
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{OwnedPipeline, VkDevice};
@@ -523,9 +523,9 @@ pub(super) fn create_shadow_pipeline(
             // The clamp needs the optional depthBiasClamp feature; it is 0.0
             // (unclamped) on a device without it.
             bias: Some(DepthBias {
-                constant: shadow_bias::RASTER_CONSTANT,
+                constant: bias::RASTER_CONSTANT,
                 clamp: device.depth_bias_clamp(),
-                slope: shadow_bias::RASTER_SLOPE,
+                slope: bias::RASTER_SLOPE,
             }),
             ..Raster::default()
         },
@@ -691,7 +691,7 @@ mod tests {
             },
             programs: Vec::new(),
         };
-        let compiled: Vec<Vec<u8>> = concinnity_core::render::shader_programs::surface::ALL
+        let compiled: Vec<Vec<u8>> = concinnity_core::render::shader::programs::surface::ALL
             .iter()
             .map(|p| world_entry(&programs, p, false).unwrap())
             .collect();

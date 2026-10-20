@@ -11,9 +11,9 @@
 //! particle-sim reset and no multi-second geometry re-upload).
 
 use concinnity_core::gfx::render_types;
-use concinnity_core::render::backend_init;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::feature_plan::{BackendFacts, FeaturePlan};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::feature_plan::{BackendFacts, FeaturePlan};
+use concinnity_core::render::backend::init;
 use concinnity_core::render::render_graph::{BackendTraits, BuildStatus, FeatureGates};
 use concinnity_core::settings::ResolvedGraphics;
 use concinnity_core::settings::apply::{ApplyPlan, SettingsTarget, apply_plan};
@@ -93,7 +93,7 @@ impl MtlContext {
         self.lights.set_ambient(value);
     }
 
-    pub(crate) fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {
+    pub(crate) fn set_shadow_cadence(&mut self, cadence: init::ShadowCadence) {
         self.state.planner.shadow.cadence = cadence;
     }
 
@@ -337,7 +337,7 @@ impl SettingsTarget for MtlContext {
         self.set_ambient_intensity(value);
     }
 
-    fn push_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {
+    fn push_shadow_cadence(&mut self, cadence: init::ShadowCadence) {
         self.set_shadow_cadence(cadence);
     }
 

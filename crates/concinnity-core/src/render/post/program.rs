@@ -17,8 +17,8 @@
 //! [`PostProgram::program`] names, and builds its layout from the counts below,
 //! so a host cannot invent a binding model the others do not share.
 
-use crate::render::shader_programs::ShaderProgram;
-use crate::render::shader_programs::shared::{
+use crate::render::shader::programs::ShaderProgram;
+use crate::render::shader::programs::shared::{
     BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, REFLECTION_BLUR, REFLECTION_COMPOSITE,
     SSAO_BLUR, SSAO_DEPTH, SSAO_KERNEL, SSGI_ACCUMULATE, SSGI_AGE, SSGI_DEPTH, SSGI_REDUCE,
     SSGI_RESOLVE, SSGI_TRACE, SSR_RESOLVE, TAA_FRAG,
@@ -237,7 +237,7 @@ mod tests {
     use super::*;
     use crate::gfx::render_types::{PostProcessParams, SsaoParams, SsgiParams, SsrParams};
     use crate::math::SaturatingFrom;
-    use crate::render::shaders;
+    use crate::render::shader::embedded;
     use crate::render::uniforms::TaaParams;
     use alloc::vec::Vec;
 
@@ -400,7 +400,7 @@ mod tests {
         // Vulkan builds each program's set 0 from the texture count alone: the
         // images at 0..n, then their samplers in the same order at n..2n.
         for (program, file, defines) in programs() {
-            let src = shaders::embedded(file).expect("the program's source is embedded");
+            let src = embedded::embedded(file).expect("the program's source is embedded");
             let lines = active_lines(src, defines);
             let n = u32::saturating_from(program.bindings().textures);
             assert_eq!(
@@ -436,7 +436,7 @@ mod tests {
         // their descriptor layouts from, so it has to be the source's count and
         // not a number somebody typed.
         for (program, file, defines) in programs() {
-            let src = shaders::embedded(file).expect("the program's source is embedded");
+            let src = embedded::embedded(file).expect("the program's source is embedded");
             let lines = active_lines(src, defines);
             assert_eq!(
                 declared_sources(&lines),
@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn the_declared_probe_set_matches_the_shader_source() {
         for (program, file, defines) in programs() {
-            let src = shaders::embedded(file).expect("the program's source is embedded");
+            let src = embedded::embedded(file).expect("the program's source is embedded");
             assert_eq!(
                 declares_probes(&active_lines(src, defines)),
                 program.bindings().probes,
@@ -463,7 +463,7 @@ mod tests {
         // Every backend binds the cluster grid beside the probe set, so the two
         // declarations travel together.
         for (program, file, defines) in programs() {
-            let src = shaders::embedded(file).expect("the program's source is embedded");
+            let src = embedded::embedded(file).expect("the program's source is embedded");
             assert_eq!(
                 declares_cluster_grid(&active_lines(src, defines)),
                 program.bindings().probes,

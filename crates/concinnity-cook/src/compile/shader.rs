@@ -3,7 +3,7 @@
 //!
 //! A world Shader defines hooks the engine's own main-pass entries call, so it
 //! compiles as those programs do: each entry in
-//! `concinnity_core::render::shader_programs::surface` is assembled from the
+//! `concinnity_core::render::shader::programs::surface` is assembled from the
 //! engine's template with the world's files spliced at the hook markers and
 //! compiled for the host's target (see `program`).
 //!
@@ -12,8 +12,8 @@
 
 use concinnity_core::components::{ShaderPrograms, ShaderSource};
 use concinnity_core::platform::Platform;
-use concinnity_core::render::shader_programs::surface::{self, Sources};
-use concinnity_core::render::shader_source::SourceFile;
+use concinnity_core::render::shader::programs::surface::{self, Sources};
+use concinnity_core::render::shader::source::SourceFile;
 use concinnity_shader::diagnostics::Diagnostic;
 
 use crate::compile::program::{self, ProgramError};
@@ -106,7 +106,7 @@ pub fn read_shader_source(source_path: &str) -> Result<String, std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::shader_source;
+    use concinnity_core::render::shader::source;
 
     const SHADE: &str =
         "float4 shade(VertexOut v, GpuObjectData od) { return float4(1.0, 0.0, 1.0, 1.0); }\n";
@@ -176,7 +176,7 @@ mod tests {
             assert!(compiled.warnings.is_empty());
             for program in surface::ALL {
                 let source = surface::source(program, platform, &programs.sources());
-                let digest = shader_source::source_digest(&source);
+                let digest = source::source_digest(&source);
                 let bytes = programs
                     .artifact(program.entry, digest)
                     .unwrap_or_else(|| panic!("{platform:?}: no artifact for {}", program.entry));

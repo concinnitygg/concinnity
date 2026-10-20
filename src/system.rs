@@ -141,7 +141,9 @@ pub use concinnity_core::ecs::{
 /// Mark this tick's move of the camera, or of what it follows, as a cut: the
 /// first frame drawn from the moved camera starts its temporal history afresh.
 pub fn raise_camera_cut(ctx: &mut PipelineContext<'_>) {
-    use concinnity_core::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
+    use concinnity_core::render::temporal::history_reset::{
+        HistoryResetCauses, PendingHistoryReset,
+    };
     PendingHistoryReset::raise(ctx, HistoryResetCauses::CAMERA_CUT);
 }
 
@@ -181,7 +183,9 @@ mod tests {
     // A host can mark a camera cut, and nothing but a camera cut.
     #[test]
     fn raise_camera_cut_queues_a_camera_cut() {
-        use concinnity_core::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
+        use concinnity_core::render::temporal::history_reset::{
+            HistoryResetCauses, PendingHistoryReset,
+        };
 
         let mut world = concinnity_core::ecs::World::new();
         let mut ctx = world.context();

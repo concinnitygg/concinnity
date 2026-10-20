@@ -3,8 +3,8 @@ use concinnity_core::benchmark::BenchmarkRun;
 use concinnity_core::components::{
     BenchmarkConfig, FrameCapture, KeyBinding, UiAction, WindowMode,
 };
-use concinnity_core::render::backend_init::EmbeddedSurface;
-use concinnity_core::render::rt_geom::RtDynamicMode;
+use concinnity_core::render::backend::init::EmbeddedSurface;
+use concinnity_core::render::rt_accel::geom::RtDynamicMode;
 use concinnity_core::window::display_mode::DisplayMode;
 
 // The `--quality-preset` launch flag has to reach the CEILING, not merely the

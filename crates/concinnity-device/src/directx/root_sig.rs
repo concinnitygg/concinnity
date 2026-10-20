@@ -6,7 +6,7 @@
 
 use bytemuck::NoUninit;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::depth::shadow_sample_compare;

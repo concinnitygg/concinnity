@@ -467,12 +467,12 @@ impl ClusterParams {
     };
 
     /// The main camera's params for this frame. `use_clusters` is set while
-    /// [`clustering_active`](crate::render::lights::clustering_active) holds for
+    /// [`clustering_active`](crate::render::light::lights::clustering_active) holds for
     /// the counts; a negative `num_local_lights` bins none.
     pub fn for_camera(camera: &ClusterCamera, num_local_lights: i32, num_probes: u32) -> Self {
         Self {
             num_lights: u32::saturating_from(num_local_lights),
-            use_clusters: u32::from(crate::render::lights::clustering_active(
+            use_clusters: u32::from(crate::render::light::lights::clustering_active(
                 num_local_lights,
                 num_probes as usize,
             )),
@@ -1951,7 +1951,7 @@ impl SkinnedDrawObject {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::shader_consts;
+    use crate::render::shader::consts;
     use crate::test_support::draw_object;
     use alloc::vec;
     use core::mem::{offset_of, size_of};
@@ -2199,7 +2199,7 @@ mod tests {
     // buffer with.
     #[test]
     fn cluster_list_constants_match_shaders() {
-        let src = crate::render::shaders::CLUSTER_TYPES;
+        let src = crate::render::shader::embedded::CLUSTER_TYPES;
         for (name, value) in [
             ("CLUSTER_LIGHT_LIST_STRIDE", CLUSTER_LIGHT_LIST_STRIDE),
             ("MAX_LIGHTS_PER_CLUSTER", MAX_LIGHTS_PER_CLUSTER),
@@ -2207,7 +2207,7 @@ mod tests {
             ("MAX_CLUSTERED_PROBES", MAX_CLUSTERED_PROBES),
         ] {
             assert_eq!(
-                shader_consts::uint(src, name),
+                consts::uint(src, name),
                 value as usize,
                 "cluster_types.hlsl {name} drifted from render_types"
             );
@@ -2218,26 +2218,26 @@ mod tests {
     // `light_types.hlsl` sizes them by.
     #[test]
     fn light_limits_match_shaders() {
-        let src = crate::render::shaders::LIGHT_TYPES;
+        let src = crate::render::shader::embedded::LIGHT_TYPES;
         for (name, value) in [
             ("MAX_DIRECTIONAL_LIGHTS", MAX_DIRECTIONAL_LIGHTS),
             ("MAX_POINT_LIGHTS", MAX_POINT_LIGHTS),
             ("NUM_SHADOW_CASCADES", NUM_SHADOW_CASCADES),
         ] {
-            assert_eq!(shader_consts::uint(src, name), value, "{name}");
+            assert_eq!(consts::uint(src, name), value, "{name}");
         }
     }
 
     #[test]
     fn draw_flags_match_shaders() {
-        let src = crate::render::shaders::OBJECT_COMMON;
+        let src = crate::render::shader::embedded::OBJECT_COMMON;
         for (name, value) in [
             ("DRAW_ENABLED", DrawArgsFlags::ENABLED),
             ("DRAW_CULLABLE", DrawArgsFlags::CULLABLE),
             ("DRAW_NO_HISTORY", DrawArgsFlags::NO_HISTORY),
             ("DRAW_BUCKET_SHIFT", DrawArgsFlags::BUCKET_SHIFT),
         ] {
-            assert_eq!(shader_consts::uint(src, name), value as usize, "{name}");
+            assert_eq!(consts::uint(src, name), value as usize, "{name}");
         }
     }
 

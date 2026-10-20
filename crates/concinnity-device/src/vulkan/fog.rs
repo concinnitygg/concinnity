@@ -20,10 +20,10 @@
 use ash::vk;
 use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::frame_plan::FogBlocks;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::environment::volumetric_fog;
+use concinnity_core::render::frame::plan::FogBlocks;
 use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
-use concinnity_core::render::volumetric_fog;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::context::VkContext;

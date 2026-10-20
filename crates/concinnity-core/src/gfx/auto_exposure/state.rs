@@ -225,17 +225,17 @@ mod tests {
 
     #[test]
     fn histogram_constants_match_the_shader() {
-        let src = crate::render::shaders::AUTO_EXPOSURE;
+        let src = crate::render::shader::embedded::AUTO_EXPOSURE;
         assert_eq!(
-            crate::render::shader_consts::uint(src, "HISTOGRAM_BINS"),
+            crate::render::shader::consts::uint(src, "HISTOGRAM_BINS"),
             HISTOGRAM_BINS
         );
         assert_eq!(
-            crate::render::shader_consts::float(src, "HIGHLIGHT_FRACTION"),
+            crate::render::shader::consts::float(src, "HIGHLIGHT_FRACTION"),
             HIGHLIGHT_FRACTION
         );
         assert_eq!(
-            crate::render::shader_consts::float(src, "METERED_RANGE_EV"),
+            crate::render::shader::consts::float(src, "METERED_RANGE_EV"),
             METERED_RANGE_EV
         );
     }

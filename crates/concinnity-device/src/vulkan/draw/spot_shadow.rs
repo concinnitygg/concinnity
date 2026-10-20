@@ -13,8 +13,8 @@
 use ash::vk;
 use concinnity_core::gfx::render_types::{ShadowUniforms, SpotShadowData};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::{csm, spot_shadow};
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::{shadow::csm, shadow::spot};
 
 use super::shadow::ShadowView;
 use crate::vulkan::allocator::{DeviceAllocator, PooledBuffer};
@@ -140,10 +140,7 @@ pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResu
         ubo_stride: stride,
         sets,
         _descriptor_pool: descriptor_pool,
-        frusta: spot_shadows
-            .iter()
-            .map(spot_shadow::slice_frustum)
-            .collect(),
+        frusta: spot_shadows.iter().map(spot::slice_frustum).collect(),
         render_mask: 0,
     })
 }
@@ -173,10 +170,7 @@ impl VkSpotShadow {
         }
         upload_records(&self.data_buffer, spot_shadows);
         upload_strided(&self.ubo, &slice_uniforms(spot_shadows), self.ubo_stride);
-        self.frusta = spot_shadows
-            .iter()
-            .map(spot_shadow::slice_frustum)
-            .collect();
+        self.frusta = spot_shadows.iter().map(spot::slice_frustum).collect();
     }
 }
 

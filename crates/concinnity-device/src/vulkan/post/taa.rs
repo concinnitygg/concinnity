@@ -11,7 +11,7 @@
 //! previous frame's output either way.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 
 use crate::vulkan::context::VkContext;

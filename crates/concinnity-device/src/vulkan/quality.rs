@@ -24,9 +24,9 @@
 
 use ash::vk;
 use concinnity_core::gfx::{auto_exposure, render_types};
-use concinnity_core::render::backend_init;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::feature_plan::{BackendFacts, FeatureChange, FeaturePlan};
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::backend::feature_plan::{BackendFacts, FeatureChange, FeaturePlan};
+use concinnity_core::render::backend::init;
 use concinnity_core::render::post::rt_reflections;
 use concinnity_core::render::render_graph::{
     BackendTraits, BuildStatus, FeatureGates, PoolGates, plan_pool_slots,
@@ -408,7 +408,7 @@ impl SettingsTarget for VkContext {
         self.set_ambient_intensity(value);
     }
 
-    fn push_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {
+    fn push_shadow_cadence(&mut self, cadence: init::ShadowCadence) {
         self.set_shadow_cadence(cadence);
     }
 

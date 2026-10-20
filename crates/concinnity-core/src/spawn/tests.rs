@@ -11,9 +11,9 @@ use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, MenuActive, SkinnedMeshHandle, System, World};
 use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
 use crate::render::backend::recording::{Call, RecordingBackend, recording_backend};
-use crate::render::ops::RenderOps;
-use crate::render::queues::{ActiveRenderQueues, RenderQueues};
-use crate::render::render_slots::RenderSlots;
+use crate::render::frame::ops::RenderOps;
+use crate::render::frame::queues::{ActiveRenderQueues, RenderQueues};
+use crate::render::slots::render_slots::RenderSlots;
 use crate::transform::propagation;
 
 const PROP: AssetId = AssetId(4);

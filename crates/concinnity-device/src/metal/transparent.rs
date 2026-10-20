@@ -22,8 +22,8 @@
 
 use concinnity_core::gfx::render_types;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reactive_mask::ReactiveWrite;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::temporal::reactive_mask::ReactiveWrite;
 use concinnity_core::render::transparent;
 use concinnity_core::render::uniforms::TransparentView;
 use objc2::rc::Retained;

@@ -6,14 +6,14 @@ use concinnity_core::components::Background;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{PipelineContext, StepResult, System, World};
 use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::error::RenderError;
-use concinnity_core::render::extract::FrameExtractor;
-use concinnity_core::render::frame_outcome::FrameCounter;
-use concinnity_core::render::frame_submit::FramePolicy;
-use concinnity_core::render::render_mode::RenderMode;
-use concinnity_core::render::stream_pools::StreamingPools;
+use concinnity_core::render::backend::error::RenderError;
+use concinnity_core::render::backend::render_mode::RenderMode;
+use concinnity_core::render::frame::extract::FrameExtractor;
+use concinnity_core::render::frame::outcome::FrameCounter;
+use concinnity_core::render::frame::submit::FramePolicy;
+use concinnity_core::render::streaming::pools::StreamingPools;
 use concinnity_core::render::world_load::scene_deferral::ShaderDeferral;
-use concinnity_core::render::{backend, overlay_maps, scene_flow, snapshot, text};
+use concinnity_core::render::{backend, frame::snapshot, overlay::maps, overlay::text, scene_flow};
 use concinnity_host::store::paths::StateTree;
 
 /// Why the renderer could not be built, left by `GraphicsSystem`'s init for
@@ -54,7 +54,7 @@ pub(crate) struct GraphicsSystem {
     // texture into the text-atlas pool (appended after the font atlases); the
     // chip id lists and scroll clip bands drive the per-frame HUD layout.
     loaded_fonts: text::FontSet,
-    sprite_texture_slots: overlay_maps::TextureSlots,
+    sprite_texture_slots: maps::TextureSlots,
     debug_hud_chips: Vec<AssetId>,
     stat_hud_chips: Vec<AssetId>,
     // Streaming pools built during init (shared albedo+normal texture pool,
@@ -72,7 +72,7 @@ pub(crate) struct GraphicsSystem {
     // band, so the draw path scissors it and off-band rows do not bleed over the
     // panel chrome. Empty when no ScrollPanel was declared; handed to
     // OverlaySystem (inside `OverlayAssets`) at the end of init.
-    clip_rects: overlay_maps::ClipRects,
+    clip_rects: maps::ClipRects,
     // Device capability flags, queried from the backend once it is built. Drives
     // the capability gating at init: a settings row whose feature the device
     // cannot provide (e.g. ray-traced reflections without hardware ray tracing)
@@ -121,13 +121,13 @@ impl GraphicsSystem {
             backend: None,
             scene_flow: None,
             loaded_fonts: text::FontSet::default(),
-            sprite_texture_slots: overlay_maps::TextureSlots::new(),
+            sprite_texture_slots: maps::TextureSlots::new(),
             debug_hud_chips: Vec::new(),
             stat_hud_chips: Vec::new(),
             stream_pools: StreamingPools::default(),
             stream_workers: Default::default(),
             shader_deferral: ShaderDeferral::default(),
-            clip_rects: overlay_maps::ClipRects::new(),
+            clip_rects: maps::ClipRects::new(),
             // All-capable until the backend reports otherwise at init.
             caps: backend::DeviceCapabilities::ALL,
             snapshot: snapshot::RenderSnapshot::default(),

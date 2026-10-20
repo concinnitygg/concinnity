@@ -25,11 +25,11 @@
 use ash::vk;
 use concinnity_core::gfx::render_types::ClusterParams;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::planar_reflection::{
     self, MirrorFrame, MirrorShading, MirrorView, PLANAR_CROP_MARGIN, PlanarReflectors,
 };
-use concinnity_core::render::radiance_storage::FaceStorage;
+use concinnity_core::render::probe::radiance::FaceStorage;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{HDR_FORMAT, VkContext};

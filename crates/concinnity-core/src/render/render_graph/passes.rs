@@ -1,7 +1,7 @@
 //! Stable identity for every render-graph pass. Used by:
 //!
 //!   - The graph itself, as the dispatch key the executor matches on.
-//!   - The per-pass GPU timer (`crate::render::pass_timing`), which keys its
+//!   - The per-pass GPU timer (`crate::render::backend::pass_timing`), which keys its
 //!     sample-buffer slots off the same integer.
 //!
 //! The `pass_ids!` invocation below is the single registration point: one line

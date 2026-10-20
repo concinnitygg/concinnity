@@ -108,7 +108,7 @@ impl ProbeSet {
 
 /// Records a probe record buffer is allocated with before a world asks for more:
 /// the automatic seeding budget, so a seeded world never grows it.
-pub const DEFAULT_PROBE_RECORD_CAPACITY: usize = crate::render::reflection_probe::AUTO_SEED_BUDGET;
+pub const DEFAULT_PROBE_RECORD_CAPACITY: usize = crate::render::probe::capture::AUTO_SEED_BUDGET;
 
 /// The capacity a probe resource must be reallocated to so it holds `required`
 /// entries, or `None` while `current` already does. A reallocation never goes
@@ -121,7 +121,7 @@ pub fn grown_probe_capacity(current: usize, required: usize, floor: usize) -> Op
 /// Per-dispatch params for the runtime reflection-probe prefilter kernels.
 /// Matches `ProbePrefilterParams` in `shaders/probe_prefilter.hlsl`. 32 bytes.
 ///
-/// Built by [`crate::render::reflection_probe::PrefilterPlan`], which is what
+/// Built by [`crate::render::probe::capture::PrefilterPlan`], which is what
 /// decides the sizes, the roughness per mip and the firefly clamp so the three
 /// backends dispatch identical work.
 #[derive(Copy, Clone, bytemuck::NoUninit)]

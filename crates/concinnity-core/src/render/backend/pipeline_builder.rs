@@ -15,8 +15,8 @@ use core::fmt;
 
 use crate::components::ShaderPrograms;
 use crate::components::sdf_programs::SdfPrograms;
-use crate::render::error::RenderResult;
-use crate::render::shader_programs::raymarch::VolumeFlags;
+use crate::render::backend::error::RenderResult;
+use crate::render::shader::programs::raymarch::VolumeFlags;
 
 /// Pipelines a [`PipelineBuilder`] built, opaque to everything but the backend
 /// that built them.

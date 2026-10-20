@@ -4,7 +4,7 @@
 
 use concinnity_core::components::ShaderStage;
 use concinnity_core::ecs::World;
-use concinnity_core::render::shader_programs::vocabulary::ENTRIES;
+use concinnity_core::render::shader::programs::vocabulary::ENTRIES;
 use std::path::Path;
 
 use crate::editor::hook::EditorHook;

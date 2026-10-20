@@ -11,10 +11,12 @@
 // Mirrors `metal/world_shaders.rs` and `directx/world_shaders.rs`.
 
 use ash::vk;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::surface::GrassShading;
-use concinnity_core::render::world_pipelines::{BucketSource, check_rebuild, replace_bucket};
+use concinnity_core::render::shader::programs::surface::GrassShading;
+use concinnity_core::render::shader::world_pipelines::{
+    BucketSource, check_rebuild, replace_bucket,
+};
 
 use super::context::VkContext;
 use super::pipeline::{

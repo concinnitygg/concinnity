@@ -45,8 +45,8 @@
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{ClusterParams, TextDrawCall};
 use concinnity_core::math::narrow_f32;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::frame_plan::{EffectBlocks, FogBlocks};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::frame::plan::{EffectBlocks, FogBlocks};
 use concinnity_core::render::particles::ParticleFrame;
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
 use concinnity_core::render::render_graph::{
@@ -54,7 +54,7 @@ use concinnity_core::render::render_graph::{
     PassRecorder, PassScratch, execute_passes,
 };
 use concinnity_core::render::uniforms::{GBufferView, PassCamera};
-use concinnity_core::render::{pass_timing, render_graph};
+use concinnity_core::render::{backend::pass_timing, render_graph};
 use concinnity_core::transform::mat4_inverse;
 use concinnity_host::thread::jobs;
 use std::mem::ManuallyDrop;
@@ -664,9 +664,9 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     pub effects: EffectBlocks,
     // How the particle and transparent passes treat the reactive mask, and
     // whether TAA, the upscaler or the reactive view reads it.
-    pub reactive: concinnity_core::render::reactive_mask::ReactiveMaskPlan,
+    pub reactive: concinnity_core::render::temporal::reactive_mask::ReactiveMaskPlan,
     // What may be trampling the grass this frame.
-    pub grass_benders: &'a [concinnity_core::render::grass::GrassBender],
+    pub grass_benders: &'a [concinnity_core::render::environment::grass::GrassBender],
     // This frame's particle clock, advanced before recording; `None` when the
     // particle passes are inert.
     pub particle: Option<ParticleFrame>,

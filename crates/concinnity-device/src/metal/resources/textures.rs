@@ -4,7 +4,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::bake;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 
 use crate::metal::context::MtlContext;
 use crate::metal::texture::{upload_texture, upload_texture_image};

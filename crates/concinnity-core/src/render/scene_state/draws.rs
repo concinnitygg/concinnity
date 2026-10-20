@@ -6,8 +6,8 @@ use alloc::vec::Vec;
 
 use super::SceneState;
 use crate::gfx::render_types::{DrawIndex, DrawObject, MaterialUniforms, SkinnedIndex};
-use crate::render::draw_slot::{self, SlotAlloc};
-use crate::render::error::{RenderError, RenderResult};
+use crate::render::backend::error::{RenderError, RenderResult};
+use crate::render::slots::draw_slot::{self, SlotAlloc};
 
 impl SceneState {
     /// Replace the camera's view matrix for the next frame.
@@ -175,8 +175,8 @@ impl SceneState {
 mod tests {
     use super::*;
     use crate::gfx::render_types::LodSlice;
-    use crate::render::model_history::HistoryMode;
     use crate::render::scene_state::DrawList;
+    use crate::render::temporal::model_history::HistoryMode;
     use crate::test_support::draw_object;
     use alloc::string::ToString;
     use alloc::vec;

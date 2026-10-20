@@ -6,10 +6,10 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::backend_init::{EmbeddedSurface, SwapchainConfig};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::hdr_output;
-use concinnity_core::render::hdr_output::HdrOutputMode;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::init::{EmbeddedSurface, SwapchainConfig};
+use concinnity_core::render::output::hdr;
+use concinnity_core::render::output::hdr::HdrOutputMode;
 use objc2::MainThreadOnly;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -388,7 +388,7 @@ pub(crate) fn set_display_sync(mtk_view: &MTKView, on: bool) {
 // layer is reported and treated as a no-op (the renderer then falls back to
 // the standard sRGB SDR path silently; we already log warn-level above when
 // EDR is requested but not achievable).
-fn configure_hdr_layer(mtk_view: &MTKView, encoding: hdr_output::HdrEncoding) {
+fn configure_hdr_layer(mtk_view: &MTKView, encoding: hdr::HdrEncoding) {
     let Some(layer) = mtk_view.layer() else {
         tracing::warn!(
             "HDR display requested but MTKView has no backing layer: falling back to SDR"
@@ -415,13 +415,13 @@ fn configure_hdr_layer(mtk_view: &MTKView, encoding: hdr_output::HdrEncoding) {
     //     directly; the panel decodes via the PQ EOTF. Same Display P3
     //     primaries as the linear path so the gamut situation is unchanged.
     let (name, label): (_, &str) = match encoding {
-        hdr_output::HdrEncoding::ExtendedLinear => (
+        hdr::HdrEncoding::ExtendedLinear => (
             // SAFETY: the CoreGraphics color-space name is a framework-owned static that outlives
             // this borrow.
             unsafe { kCGColorSpaceExtendedLinearDisplayP3 },
             "kCGColorSpaceExtendedLinearDisplayP3",
         ),
-        hdr_output::HdrEncoding::Pq => (
+        hdr::HdrEncoding::Pq => (
             // SAFETY: the CoreGraphics color-space name is a framework-owned static that outlives
             // this borrow.
             unsafe { kCGColorSpaceDisplayP3_PQ },

@@ -58,8 +58,8 @@ mod tests {
     use super::*;
     use concinnity_core::gfx::render_types::{FarFieldTint, GpuDrawArgs, MaterialUniforms};
     use concinnity_core::math::SaturatingFrom;
-    use concinnity_core::render::model_history::{HistoryMode, ModelHistory};
     use concinnity_core::render::record_pack::{MIN_CHUNK_RECORDS, pool_object_record};
+    use concinnity_core::render::temporal::model_history::{HistoryMode, ModelHistory};
 
     fn object(i: usize) -> DrawObject {
         let x = i as f32;

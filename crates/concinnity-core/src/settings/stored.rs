@@ -248,7 +248,7 @@ mod tests {
     use crate::components::{
         AaMode, GamepadButton, InputKey, PassResolution, ShadowUpdate, UpscalerBackend,
     };
-    use crate::render::dlss::DlssPreset;
+    use crate::render::output::dlss::DlssPreset;
     use crate::settings::QualityPreset;
     use alloc::string::ToString;
     use alloc::vec;

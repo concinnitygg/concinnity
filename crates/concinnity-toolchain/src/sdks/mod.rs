@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use concinnity_core::render::dlss::NGX_API_VERSION;
+use concinnity_core::render::output::dlss::NGX_API_VERSION;
 
 use crate::{Backend, BinaryTargets};
 

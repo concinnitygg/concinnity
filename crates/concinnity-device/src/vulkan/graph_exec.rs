@@ -34,17 +34,17 @@ use ash::{Device, vk};
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{ClusterParams, LineVertex, TextDrawCall};
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::frame_plan::{EffectBlocks, FogBlocks};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::frame::plan::{EffectBlocks, FogBlocks};
 use concinnity_core::render::particles::ParticleFrame;
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
-use concinnity_core::render::reactive_mask::{ReactiveMaskPlan, ReactiveWrite};
 use concinnity_core::render::render_graph::{
     AliasRows, BarrierOp, BarrierTable, CompiledGraph, CompiledPass, GraphResourceClass, PassId,
     PassRecorder, PassScratch, execute_passes,
 };
+use concinnity_core::render::temporal::reactive_mask::{ReactiveMaskPlan, ReactiveWrite};
 use concinnity_core::render::uniforms::GBufferView;
-use concinnity_core::render::{pass_timing, render_graph};
+use concinnity_core::render::{backend::pass_timing, render_graph};
 use concinnity_host::thread::jobs;
 
 use super::barrier_translate::{VkResting, vk_restore, vk_transition};
@@ -524,7 +524,7 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry
 // the frustum + camera position.
 pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // What may be trampling the grass this frame.
-    pub grass_benders: &'a [concinnity_core::render::grass::GrassBender],
+    pub grass_benders: &'a [concinnity_core::render::environment::grass::GrassBender],
     pub cmd: vk::CommandBuffer,
     pub image_index: u32,
     pub frame_idx: usize,

@@ -4,12 +4,12 @@ use alloc::{format, vec};
 
 use super::plan::{self, EmptyHead, LiveState, RefreshMode, RtStep, RtUpdatePlan};
 use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject};
-use crate::render::error::{RenderError, RenderResult};
-use crate::render::rt_geom::{
+use crate::render::backend::error::{RenderError, RenderResult};
+use crate::render::rt_accel::geom::{
     RtDynamicMode, cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry,
 };
-use crate::render::rt_refit::SkinnedShape;
-use crate::render::rt_topology::{
+use crate::render::rt_accel::refit::SkinnedShape;
+use crate::render::rt_accel::topology::{
     GeomSig, TopologyPlan, participates_in_bvh, plan_topology_refresh, traced_skinned,
 };
 

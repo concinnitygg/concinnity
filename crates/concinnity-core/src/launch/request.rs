@@ -3,8 +3,8 @@ use core::num::NonZeroU32;
 use super::LaunchArgs;
 use crate::ecs::{Resources, ViewOverrides, World};
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
-use crate::render::dlss::DlssPreset;
-use crate::render::rt_geom::RtDynamicMode;
+use crate::render::output::dlss::DlssPreset;
+use crate::render::rt_accel::geom::RtDynamicMode;
 use crate::settings::{QualityPreset, StoredSettings, UserGraphicsSettings};
 
 /// What the launch asked the host to arm, published as a world resource before

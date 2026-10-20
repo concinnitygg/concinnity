@@ -15,7 +15,7 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::shader_programs::metal::bindless_textures;
+use concinnity_core::render::shader::programs::metal::bindless_textures;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 use objc2::rc::Retained;

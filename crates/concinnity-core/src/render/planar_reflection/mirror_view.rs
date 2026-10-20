@@ -4,7 +4,7 @@
 
 use crate::gfx::frustum::Frustum;
 use crate::gfx::render_types::ClusterParams;
-use crate::render::cluster_range::ClusterReach;
+use crate::render::light::cluster_range::ClusterReach;
 use crate::render::planar_reflection::{
     PLANAR_CLIP_BIAS, PixelRect, PlanarMatrices, orient_plane_toward, planar_matrices,
 };

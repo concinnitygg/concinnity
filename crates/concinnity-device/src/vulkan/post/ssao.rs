@@ -12,7 +12,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::SsaoParams;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::post::ssao::settings::SsaoSettings;
 use concinnity_core::render::post::ssao::{OCCLUSION_FORMAT, SsaoInputs, SsaoPass};
 

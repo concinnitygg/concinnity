@@ -9,8 +9,8 @@
 use crate::support::Bench;
 use concinnity_core::components::{PointLight, RectAreaLight, SpotLight};
 use concinnity_core::gfx::render_types::DrawIndex;
-use concinnity_core::render::draw_slot::DrawSlotAllocator;
-use concinnity_core::render::lights::build_light_data;
+use concinnity_core::render::light::lights::build_light_data;
+use concinnity_core::render::slots::draw_slot::DrawSlotAllocator;
 use concinnity_core::render::streaming::StreamPlanner;
 
 const OBJECTS: usize = 10_000;

@@ -12,11 +12,11 @@
 //! as the DirectX and Metal hosts.
 
 use ash::vk;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::water::WaterBody;
-use concinnity_core::render::water::frame::WaterMotion;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::environment::water::WaterBody;
+use concinnity_core::render::environment::water::frame::WaterMotion;
 
-use concinnity_core::render::shader_programs::ShaderProgram;
+use concinnity_core::render::shader::programs::ShaderProgram;
 
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::transparent::{

@@ -29,7 +29,7 @@ use crate::launch::LaunchRequest;
 use crate::physics::PhysicsSystem;
 use crate::planet::{PlanetSystem, StartBuilder, inline_ground};
 use crate::render::overlay::OverlaySystem;
-use crate::render::stream_pools::StreamingSystem;
+use crate::render::streaming::pools::StreamingSystem;
 use crate::settings::system::{SettingsStore, SettingsSystem};
 use crate::sky::SkyRotationSystem;
 use crate::spawn::SpawnSystem;

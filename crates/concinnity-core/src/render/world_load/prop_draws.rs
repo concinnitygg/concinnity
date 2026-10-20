@@ -10,9 +10,9 @@ use crate::ecs::{Entity, MaterialHandle, PickIndex, PipelineContext};
 use crate::gfx::render_types::DrawIndex;
 use crate::memory::InlineVec;
 use crate::render::draw_list::{self, DrawListData, LoadedMesh, RoomGeometry};
-use crate::render::extract::PickCandidate;
+use crate::render::environment::terrain::LoadedTerrain;
+use crate::render::frame::extract::PickCandidate;
 use crate::render::material_entry::MaterialEntry;
-use crate::render::terrain::LoadedTerrain;
 use crate::transform::propagation;
 
 /// The decoded geometry and materials the draw list resolves props against.
@@ -104,8 +104,8 @@ mod tests {
     use crate::components::{InstanceTransform, Prop};
     use crate::ecs::{MeshHandle, World};
     use crate::gfx::mesh_payload::Vertex;
-    use crate::render::extract::FrameExtractor;
-    use crate::render::snapshot::RenderSnapshot;
+    use crate::render::frame::extract::FrameExtractor;
+    use crate::render::frame::snapshot::RenderSnapshot;
     use crate::test_support::vertex;
     use alloc::vec;
 

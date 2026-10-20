@@ -3,7 +3,7 @@
 //! the file, from one of the engine's vocabulary tables: a Shader's, or an
 //! `SdfVolume` distance field's.
 
-use concinnity_core::render::shader_programs::vocabulary::{
+use concinnity_core::render::shader::programs::vocabulary::{
     self, Entry, Kind, RECORD_STRUCT, VARYING_STRUCT,
 };
 

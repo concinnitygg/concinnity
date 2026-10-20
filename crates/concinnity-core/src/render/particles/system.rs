@@ -8,7 +8,7 @@ use crate::gfx::render_types::ParticleParams;
 use crate::render::particles::{
     MAX_EMITTERS, ParticleEmitterRecord, ParticleSpawnState, ParticleSpawns, spawn_seed,
 };
-use crate::render::slot_table::{AtCapacity, RemoveError, SlotTable};
+use crate::render::slots::table::{AtCapacity, RemoveError, SlotTable};
 
 /// The per-frame clock [`ParticleSystem::prepare`] advanced: the integration
 /// step and the frame counter the kernel's RNG seed mixes in. Each emitter's

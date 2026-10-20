@@ -8,7 +8,7 @@ use concinnity_core::behavior::camera_driver;
 use concinnity_core::components::Camera3D;
 use concinnity_core::controller::camera::Camera3DSystem;
 use concinnity_core::ecs::World;
-use concinnity_core::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
+use concinnity_core::render::temporal::history_reset::{HistoryResetCauses, PendingHistoryReset};
 use serde_json::json;
 
 use crate::debug::call::Call;

@@ -7,8 +7,8 @@
 //! changes which transforms the TLAS was built from: re-skin, rebuild the TLAS
 //! from the current transforms, or keep the live one.
 
-use crate::render::error::RenderResult;
-use crate::render::rt_geom::RtDynamicMode;
+use crate::render::backend::error::RenderResult;
+use crate::render::rt_accel::geom::RtDynamicMode;
 
 /// How the draw BLAS head is refreshed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -289,7 +289,7 @@ mod tests {
     }
 
     fn failed() -> RenderResult<RtUpdate> {
-        Err(crate::render::error::RenderError::Other(
+        Err(crate::render::backend::error::RenderError::Other(
             "build failed".into(),
         ))
     }

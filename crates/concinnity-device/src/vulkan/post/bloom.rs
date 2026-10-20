@@ -5,7 +5,7 @@
 //! `VkPostDevice`.
 
 use ash::vk;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::post::bloom::{BloomInputs, BloomPass, top_extent};
 use concinnity_core::render::render_graph::PixelFormat;
 

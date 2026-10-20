@@ -29,11 +29,11 @@
 
 use concinnity_core::gfx::render_types::ClusterParams;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::{
     self, MirrorFrame, MirrorShading, MirrorView, PLANAR_CROP_MARGIN, PixelRect, PlanarReflectors,
 };
-use concinnity_core::render::radiance_storage::FaceStorage;
+use concinnity_core::render::probe::radiance::FaceStorage;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 

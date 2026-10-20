@@ -226,7 +226,7 @@ fn complete(world: &mut concinnity_core::ecs::World) -> std::io::Result<()> {
 // from the world's content rather than from a GPU probe: a listing describes
 // the world, so it must not change with the machine that runs `cn list`.
 fn manifest_lines(world: &mut concinnity_core::ecs::World) -> Vec<String> {
-    let mode = concinnity_core::render::render_mode::from_content(world);
+    let mode = concinnity_core::render::backend::render_mode::from_content(world);
     world.insert_resource(mode);
     let manifest = world.system_manifest(concinnity_runtime::SYSTEMS);
     let width = manifest.iter().map(|n| n.len()).max().unwrap_or(0);

@@ -4,7 +4,7 @@
 //! result on the context for the next `draw_frame` to report.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{DeviceLostReason, RenderError, RenderResult};
+use concinnity_core::render::backend::error::{DeviceLostReason, RenderError, RenderResult};
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSError;
 use objc2_metal::{MTLCommandBuffer, MTLCommandBufferError, MTLCommandBufferStatus};

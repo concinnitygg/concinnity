@@ -6,9 +6,9 @@ use crate::metal::cull::ShadowViewIcb;
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types::{GpuDrawArgs, InstancedCluster, draw_args_flags};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend_init::WorldShader;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::probe_book::ProbeBook;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::backend::init::WorldShader;
+use concinnity_core::render::probe::book::ProbeBook;
 use concinnity_core::transform::IDENTITY;
 use objc2_metal::MTLVertexDescriptor;
 
@@ -17,7 +17,7 @@ use crate::metal::context::{InstancedState, ProbeState};
 use crate::metal::cull::{CullState, metal_instance_records};
 use crate::metal::probe_prefilter::ProbePrefilterPipelines;
 use crate::metal::probe_set::ProbeCubeArray;
-use concinnity_core::render::retire_pool::RetirePool;
+use concinnity_core::render::buffers::retire_pool::RetirePool;
 
 mod bindless;
 mod compute;

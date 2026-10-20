@@ -16,14 +16,14 @@ use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_core::profile::FanOutTiming;
 use concinnity_core::render::backend::FrameParams;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::frame_plan::{
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::backend::pass_timing;
+use concinnity_core::render::frame::plan::{
     CameraInputs, EffectInputs, FrameDevice, FramePlan, PlanInputs, SurfaceInputs, camera_inputs,
 };
-use concinnity_core::render::model_history::HistoryMode;
-use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
 use concinnity_core::render::scene_state::SceneState;
+use concinnity_core::render::temporal::model_history::HistoryMode;
 // `ViewUniforms` (the std140 main-pass `ViewBlock` UBO) is a GPU-free layout
 // struct that lives in `core::render`; re-export it so
 // `crate::vulkan::draw::ViewUniforms` is unchanged for the passes that fill it.
@@ -569,11 +569,12 @@ impl FrameDevice for VkContext {
         let extent = self.targets.render_extent;
         self.size_grass([extent.width, extent.height], frame_idx)?;
         self.grass_lod = self.grass.as_ref().map(|g| {
-            g.field
-                .lod_view(concinnity_core::render::grass::lod::focal_length(
+            g.field.lod_view(
+                concinnity_core::render::environment::grass::lod::focal_length(
                     extent.height,
                     params.fov_y_radians,
-                ))
+                ),
+            )
         });
 
         let start_cmd = self.record_frame_start(frame_idx, params.world_hidden)?;

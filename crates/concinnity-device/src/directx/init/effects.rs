@@ -6,14 +6,14 @@
 use concinnity_core::components::GlassPanel;
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::render_types::DrawObject;
-use concinnity_core::render::backend_init::{PlanarBudget, SdfVolumeSource, WorldFx};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::init::{PlanarBudget, SdfVolumeSource, WorldFx};
 use concinnity_core::render::decal::{self, DecalRecord};
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::environment::volumetric_fog::FogSettings;
 use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleSystem};
 use concinnity_core::render::planar_reflection::PlanarReflectors;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::ssao::settings::SsaoSettings;
-use concinnity_core::render::volumetric_fog::FogSettings;
 use concinnity_core::settings::ResolvedGraphics;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -501,14 +501,14 @@ pub(super) fn build_atmosphere(
     gpu: &InitGpu<'_>,
     descriptors: &DxDescriptors,
     scene: &DxSceneAssets,
-    settings: Option<concinnity_core::render::atmosphere::AtmosphereSettings>,
+    settings: Option<concinnity_core::render::environment::atmosphere::AtmosphereSettings>,
     msaa_samples: u32,
 ) -> RenderResult<Option<crate::directx::atmosphere::DxAtmosphere>> {
     use crate::directx::atmosphere::{
         ATMOSPHERE_SRV_SLOTS, ATMOSPHERE_UAV_SLOTS, AtmosphereSlots, DxAtmosphere, DxSkyCube,
     };
     use crate::directx::probe_prefilter::PrefilterSlots;
-    use concinnity_core::render::atmosphere::SKY_CUBE_PLAN;
+    use concinnity_core::render::environment::atmosphere::SKY_CUBE_PLAN;
     let Some(settings) = settings else {
         return Ok(None);
     };
@@ -677,7 +677,7 @@ pub(super) struct TransparentInputs<'a> {
     pub(super) reflection_divisor: u32,
     pub(super) planar_slots: &'a [Option<usize>],
     pub(super) glass_panels: &'a [GlassPanel],
-    pub(super) water_surfaces: &'a [concinnity_core::render::water::WaterBody],
+    pub(super) water_surfaces: &'a [concinnity_core::render::environment::water::WaterBody],
     pub(super) draw_objects: &'a [DrawObject],
 }
 

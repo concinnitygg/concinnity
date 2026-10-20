@@ -7,8 +7,8 @@ use crate::components::{
     AudioCommand, AudioTarget, ControlsCommand, SettingCommand, SettingOp, Sprite, WindowMode,
 };
 use crate::ecs::{FrameRateCap, PipelineContext};
-use crate::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
-use crate::render::ops::RenderOps;
+use crate::render::frame::ops::RenderOps;
+use crate::render::temporal::history_reset::{HistoryResetCauses, PendingHistoryReset};
 use crate::window::display_mode;
 
 use alloc::vec::Vec;

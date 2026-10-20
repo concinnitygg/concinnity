@@ -5,8 +5,8 @@
 use ash::vk;
 use concinnity_core::components;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::{backend_init, hdr_output, pass_timing};
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::{backend::init, backend::pass_timing, output::hdr};
 use concinnity_core::settings::ResolvedGraphics;
 use std::ffi::{CStr, CString, c_char};
 
@@ -30,8 +30,8 @@ impl HardwareRequest<'_> {
     // The swap-decision key for a future live reload of the context (see
     // `hot_swap_config`). Normalized `frames` (>=1) matches how
     // `BackendInit::swapchain_config` clamps it.
-    fn swapchain_config(&self) -> backend_init::SwapchainConfig {
-        backend_init::SwapchainConfig {
+    fn swapchain_config(&self) -> init::SwapchainConfig {
+        init::SwapchainConfig {
             frames_in_flight: self.frames,
             hdr_display: self.graphics.display.hdr,
             hdr_pq: self.graphics.display.pq,
@@ -437,7 +437,7 @@ fn resolve_hdr_mode(
     surface: vk::SurfaceKHR,
     swapchain_colorspace_ext_available: bool,
     graphics: &ResolvedGraphics,
-) -> hdr_output::HdrOutputMode {
+) -> hdr::HdrOutputMode {
     let (hdr_display, hdr_pq) = (graphics.display.hdr, graphics.display.pq);
     // HDR-output resolve. The world's `hdr_display` toggle is the
     // gate; even on a capable display, no HDR unless the asset opts
@@ -492,7 +492,7 @@ fn resolve_hdr_mode(
     } else {
         1.0
     };
-    let hdr_mode = hdr_output::HdrOutputMode::resolve(hdr_display, pq_capable, max_edr);
+    let hdr_mode = hdr::HdrOutputMode::resolve(hdr_display, pq_capable, max_edr);
     if hdr_display && !hdr_mode.is_hdr() {
         tracing::warn!(
             "HDR display requested but no surface format advertises an HDR color space \

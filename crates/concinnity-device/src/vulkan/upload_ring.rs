@@ -12,14 +12,14 @@
 //! (waited before a slot is reused) guarantees the GPU has finished reading a
 //! slot's buffer before the CPU overwrites or replaces it.
 //!
-//! The ring itself is `concinnity_core::render::upload_ring`; this binds it to
+//! The ring itself is `concinnity_core::render::buffers::upload_ring`; this binds it to
 //! pooled host-visible buffers. `metal/text_upload.rs` does the same job against
 //! one `StorageModeShared` buffer per slot.
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::upload_ring::{self, UploadBuffer};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::buffers::upload_ring::{self, UploadBuffer};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 

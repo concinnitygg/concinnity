@@ -8,8 +8,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::compiled_programs::CompiledProgram;
-use crate::render::shader_programs::surface::Sources;
-use crate::render::shader_source::SourceFile;
+use crate::render::shader::programs::surface::Sources;
+use crate::render::shader::source::SourceFile;
 
 /// One of the two files a [Shader](#shader) declares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]

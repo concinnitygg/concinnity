@@ -9,8 +9,8 @@
 
 use crate::metal::cull::ShadowViewIcb;
 use concinnity_core::gfx::mesh_payload;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::shader_programs::surface::GrassShading;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::shader::programs::surface::GrassShading;
 use objc2::rc::Retained;
 use objc2_metal::{MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction};
 

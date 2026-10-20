@@ -1,5 +1,5 @@
 //! The asset-streaming home: the load threads and payload sources behind
-//! core's streaming pools (`concinnity_core::render::stream_pools`).
+//! core's streaming pools (`concinnity_core::render::streaming::pools`).
 
 mod file_range;
 pub(crate) mod loaders;

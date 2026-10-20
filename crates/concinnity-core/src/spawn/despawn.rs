@@ -9,9 +9,9 @@ use alloc::vec::Vec;
 use crate::components::{Children, RenderHandle, SkeletonPose};
 use crate::ecs::{Entity, PipelineContext};
 use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
-use crate::render::ops::RenderOps;
+use crate::render::frame::ops::RenderOps;
 
-use crate::render::render_slots::RenderSlots;
+use crate::render::slots::render_slots::RenderSlots;
 
 // Collect an entity together with every descendant reachable through Children
 // edges, pre-order, de-duplicated. A read-only walk: the caller hides each

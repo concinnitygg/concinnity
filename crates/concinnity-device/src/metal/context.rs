@@ -4,11 +4,11 @@ use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::{ClusterParams, InstancedCluster, NUM_SHADOW_CASCADES};
 use concinnity_core::profile;
-use concinnity_core::render::probe_book::ProbeBook;
+use concinnity_core::render::probe::book::ProbeBook;
 use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::shader_reload::ShaderReload;
+use concinnity_core::render::shader::reload::ShaderReload;
 use concinnity_core::render::{
-    backend, backend_init, decal, error, hdr_output, particles, spot_shadow,
+    backend, backend::error, backend::init, decal, output::hdr, particles, shadow::spot,
 };
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -106,7 +106,8 @@ pub(super) struct ProbeState {
     // buffers may still be reading those buffers/textures, so they are parked
     // here and freed once the frames-in-flight fence guarantees the bake has
     // retired.
-    pub retire_pool: concinnity_core::render::retire_pool::RetirePool<super::probe::RetiredBake>,
+    pub retire_pool:
+        concinnity_core::render::buffers::retire_pool::RetirePool<super::probe::RetiredBake>,
 }
 
 // Cascaded shadow map resources + the cascade schedule. `enabled` is false when
@@ -147,7 +148,7 @@ pub(super) struct SpotShadowState {
 impl SpotShadowState {
     // Slices that re-render this frame.
     pub(super) fn refreshed_slices(&self) -> impl Iterator<Item = u32> {
-        spot_shadow::refreshed_slices(self.render_mask, self.count)
+        spot::refreshed_slices(self.render_mask, self.count)
     }
 }
 
@@ -374,13 +375,13 @@ pub(super) struct MtlHardware {
     // The resolved swapchain color-output mode. EDR negotiation can fall the
     // world's HDR request back to SDR, so this can disagree with
     // `swapchain_config`.
-    pub hdr_mode: hdr_output::HdrOutputMode,
+    pub hdr_mode: hdr::HdrOutputMode,
     // The swapchain config (ring depth + HDR request) this context was built
     // with, reported by `hot_swap_config` so a live editor reload reuses this
     // hardware only when the new world's config still matches. Holding the
     // request rather than the negotiated mode keeps a display without EDR
     // headroom from forcing a rebuild every save.
-    pub swapchain_config: backend_init::SwapchainConfig,
+    pub swapchain_config: init::SwapchainConfig,
     // `Option` so a live `cn editor` world reload can MOVE the window (and its
     // live cursor / keymap / fullscreen state) into the rebuilt context; a
     // normal context always holds `Some`. Access via `window`/`window_mut`.
@@ -410,16 +411,16 @@ impl MtlHardware {
     // Maximum extended-range multiplier on the HDR path, `None` on SDR.
     pub(super) fn max_edr(&self) -> Option<f32> {
         match self.hdr_mode {
-            hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
-            hdr_output::HdrOutputMode::Sdr => None,
+            hdr::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
+            hdr::HdrOutputMode::Sdr => None,
         }
     }
 
     // HDR encoding (scRGB-linear vs PQ) on the HDR path, `None` on SDR.
-    pub(super) fn hdr_encoding(&self) -> Option<hdr_output::HdrEncoding> {
+    pub(super) fn hdr_encoding(&self) -> Option<hdr::HdrEncoding> {
         match self.hdr_mode {
-            hdr_output::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
-            hdr_output::HdrOutputMode::Sdr => None,
+            hdr::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
+            hdr::HdrOutputMode::Sdr => None,
         }
     }
 }
@@ -583,13 +584,13 @@ pub(crate) struct MtlContext {
     pub(super) scene: MtlSceneAssets,
     // All scene lights packed and pushed to the fragment shader at buffer(4),
     // with the local lights' reach. Pushed every draw, so no copy is ever stale.
-    pub(super) lights: concinnity_core::render::light_state::LightState,
+    pub(super) lights: concinnity_core::render::light::state::LightState,
     // The far field's canopy block, refreshed each frame and pushed to the
     // fragment shader at buffer(21).
     pub(super) canopy: concinnity_core::render::uniforms::canopy::CanopyParams,
     // How this frame's view resolves the grass: where it coarsens, thins and
     // hands over to the canopy. `None` without grass.
-    pub(super) grass_lod: Option<concinnity_core::render::grass::GrassLodView>,
+    pub(super) grass_lod: Option<concinnity_core::render::environment::grass::GrassLodView>,
     // Its layers' view tables, at buffer(22).
     pub(super) canopy_tables: super::canopy::CanopyTables,
     // Cascaded shadow map + its schedule. See [`ShadowState`].

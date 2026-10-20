@@ -12,7 +12,7 @@
 //! `encode_reflection_composite` with that target's view.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::post::reflection_composite::{
     ReflectionCompositeInputs, ReflectionCompositePass,
 };

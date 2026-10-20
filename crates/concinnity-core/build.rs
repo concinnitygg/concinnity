@@ -1,6 +1,6 @@
 //! Generates the linearly-transformed-cosine lookup table the rectangular
 //! area-light shading path samples, by running the fitter in
-//! `src/render/ltc/fit.rs`. The table is pure offline data: it depends only on
+//! `src/render/light/ltc/fit.rs`. The table is pure offline data: it depends only on
 //! the fitter, never on the world being built, so generating it here means zero
 //! runtime cost and zero per-world build cost.
 //!
@@ -12,8 +12,8 @@
 // `alloc` for its collections.
 extern crate alloc;
 
-include!("src/render/ltc/size.rs");
-include!("src/render/ltc/fit.rs");
+include!("src/render/light/ltc/size.rs");
+include!("src/render/light/ltc/fit.rs");
 
 fn main() {
     generate_ltc_tables();
@@ -32,8 +32,8 @@ fn write_f32s(path: std::path::PathBuf, values: impl Iterator<Item = f32>) {
     reason = "cargo passes build-script inputs through the environment"
 )]
 fn generate_ltc_tables() {
-    println!("cargo::rerun-if-changed=src/render/ltc/fit.rs");
-    println!("cargo::rerun-if-changed=src/render/ltc/size.rs");
+    println!("cargo::rerun-if-changed=src/render/light/ltc/fit.rs");
+    println!("cargo::rerun-if-changed=src/render/light/ltc/size.rs");
 
     let (matrix, magnitude) = fit_table(LTC_LUT_SIZE);
     let dir = std::path::PathBuf::from(

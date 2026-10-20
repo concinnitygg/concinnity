@@ -9,7 +9,7 @@
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;
-use concinnity_core::render::shader_programs::vocabulary::ENTRIES;
+use concinnity_core::render::shader::programs::vocabulary::ENTRIES;
 
 use super::shaders_state::{SourceState, vocabulary_of};
 use crate::debug::hot_reload::ReloadSubject;

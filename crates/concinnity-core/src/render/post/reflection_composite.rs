@@ -13,7 +13,7 @@
 //! The pass does not own the reflection it reads. Either resolve writes one,
 //! and which one feeds the composite can change from frame to frame.
 
-use crate::render::error::RenderResult;
+use crate::render::backend::error::RenderResult;
 use crate::render::render_graph::{
     ClearValue, PassId, PixelFormat, TextureDesc, TextureSize, TextureUsage,
 };

@@ -136,7 +136,7 @@ pub(crate) fn text(volumetric: bool, i: usize) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::shader_source::SourceFile;
+    use concinnity_core::render::shader::source::SourceFile;
 
     // Compile `text` as a volume's field would, cleanly. A starter that fails
     // here would fail its world's build instead.

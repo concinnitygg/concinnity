@@ -9,7 +9,7 @@ use concinnity_core::components::{SkeletonJoint, Story};
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::render_types::SkinnedIndex;
 use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::volumetric_fog::PushedFogSettings;
+use concinnity_core::render::environment::volumetric_fog::PushedFogSettings;
 use concinnity_core::render::world_load::source_maps::{
     ColorLutSource, EnvironmentMapSource, MeshSourceMap, ProceduralMeshSourceMap,
     SkinnedMeshSourceMap, TextureSourceMap,

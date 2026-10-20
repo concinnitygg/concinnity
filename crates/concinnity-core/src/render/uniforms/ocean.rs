@@ -4,8 +4,8 @@
 //! reduction, which level it writes.
 
 use crate::math::SaturatingFrom;
-use crate::render::water::ocean::clock::time_fraction;
-use crate::render::water::ocean::{OCEAN_CHOPPINESS, OceanSimulation};
+use crate::render::environment::water::ocean::clock::time_fraction;
+use crate::render::environment::water::ocean::{OCEAN_CHOPPINESS, OceanSimulation};
 
 /// Threads in one FFT group: one butterfly per pair of points of the largest
 /// cascade. Mirrors `WATER_FFT_THREADS` in `shaders/water_fft.hlsl`.
@@ -26,7 +26,7 @@ pub struct OceanFftParams {
     /// Each cascade's side, in meters; zero past the cascades.
     pub lengths: [f32; 4],
     /// The Jacobian below which each cascade injects foam
-    /// ([`FoamCalibration`](crate::render::water::ocean::foam::FoamCalibration)).
+    /// ([`FoamCalibration`](crate::render::environment::water::ocean::foam::FoamCalibration)).
     pub foam_thresholds: [f32; 4],
     /// One over the Jacobian span each cascade's injection ramps over; zero
     /// for a cascade that never foams.
@@ -39,7 +39,7 @@ pub struct OceanFftParams {
     /// The side of the mip level a reduction writes; unused by the FFT.
     pub mip_size: u32,
     /// The share of last frame's foam that survives this one
-    /// ([`FoamClock::advance`](crate::render::water::ocean::foam::FoamClock::advance));
+    /// ([`FoamClock::advance`](crate::render::environment::water::ocean::foam::FoamClock::advance));
     /// zero restarts it from clear water.
     pub foam_keep: f32,
 }
@@ -91,10 +91,10 @@ pub fn ocean_mip_groups(mip_size: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::water::ocean::cascades::Cascades;
-    use crate::render::water::ocean::clock::OCEAN_REPEAT_SECONDS;
-    use crate::render::water::ocean::foam::FoamCalibration;
-    use crate::render::water::ocean::{OceanQuality, OceanSea};
+    use crate::render::environment::water::ocean::cascades::Cascades;
+    use crate::render::environment::water::ocean::clock::OCEAN_REPEAT_SECONDS;
+    use crate::render::environment::water::ocean::foam::FoamCalibration;
+    use crate::render::environment::water::ocean::{OceanQuality, OceanSea};
     use core::mem::{offset_of, size_of};
 
     #[test]
@@ -112,13 +112,13 @@ mod tests {
 
     #[test]
     fn the_constants_match_the_shader() {
-        let src = crate::render::shaders::WATER_FFT;
+        let src = crate::render::shader::embedded::WATER_FFT;
         assert_eq!(
-            crate::render::shader_consts::uint(src, "WATER_FFT_THREADS"),
+            crate::render::shader::consts::uint(src, "WATER_FFT_THREADS"),
             OCEAN_FFT_THREADS as usize
         );
         assert_eq!(
-            crate::render::shader_consts::uint(src, "WATER_MIP_GROUP"),
+            crate::render::shader::consts::uint(src, "WATER_MIP_GROUP"),
             OCEAN_MIP_GROUP as usize
         );
         assert_eq!(2 * OCEAN_FFT_THREADS, OceanQuality::MAX_SIZE);

@@ -1,4 +1,4 @@
-//! The simulated ocean on Vulkan (see `concinnity_core::render::water::ocean`):
+//! The simulated ocean on Vulkan (see `concinnity_core::render::environment::water::ocean`):
 //! the cascade arrays the water draw samples, and the `WaterSim` node that
 //! fills them each frame from the shared `water_fft.hlsl` kernels.
 //!
@@ -11,14 +11,14 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::shader_programs::ShaderProgram;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::environment::water::ocean::OceanPlan;
+use concinnity_core::render::environment::water::ocean::foam::FoamClock;
+use concinnity_core::render::environment::water::ocean::initial::initial_spectrum;
+use concinnity_core::render::shader::programs::ShaderProgram;
 use concinnity_core::render::uniforms::ocean::{
     OceanFftParams, ocean_mip_groups, ocean_mip_levels,
 };
-use concinnity_core::render::water::ocean::OceanPlan;
-use concinnity_core::render::water::ocean::foam::FoamClock;
-use concinnity_core::render::water::ocean::initial::initial_spectrum;
 use std::cell::Cell;
 
 use super::allocator::{PooledBuffer, PooledImage};

@@ -17,9 +17,9 @@ use super::SceneState;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{DrawIndex, DrawObject, PlanetTileDraw};
 use crate::render::backend::ChunkMesh;
-use crate::render::draw_slot::{self, SlotAlloc};
-use crate::render::error::{RenderError, RenderResult};
-use crate::render::range_alloc::RangeAllocator;
+use crate::render::backend::error::{RenderError, RenderResult};
+use crate::render::buffers::range_alloc::RangeAllocator;
+use crate::render::slots::draw_slot::{self, SlotAlloc};
 
 /// One of the two shared geometry buffers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

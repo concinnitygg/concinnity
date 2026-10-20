@@ -21,7 +21,7 @@
 
 use concinnity_core::gfx::render_types::TextDrawCall;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::fullscreen;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

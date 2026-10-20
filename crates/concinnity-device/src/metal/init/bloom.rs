@@ -1,6 +1,6 @@
 //! The bloom chain: its pipelines and the octaves below the pool's top one.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 
 use crate::metal::post::post_device::MtlPostDevice;
 use crate::metal::post::{MtlBloomPass, build_bloom_pass};

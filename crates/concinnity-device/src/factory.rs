@@ -6,8 +6,8 @@
 //! backend context.
 
 use concinnity_core::platform::Platform;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::{backend, backend_init};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::{backend, backend::init};
 
 /// The graphics APIs this build can render with, the target's native one
 /// first. Empty on a target with no window layer.
@@ -45,9 +45,7 @@ pub fn probe_device(platform: Platform) -> Option<backend::DeviceProbe> {
 
 /// Route the assembled `BackendInit` to the backend its `platform` names.
 /// Construction inputs are documented on `BackendInit` itself.
-pub fn init_backend(
-    init: backend_init::BackendInit<'_>,
-) -> RenderResult<Box<dyn backend::RenderBackend>> {
+pub fn init_backend(init: init::BackendInit<'_>) -> RenderResult<Box<dyn backend::RenderBackend>> {
     match init.platform {
         #[cfg(backend_dx)]
         Platform::DirectX => crate::directx::DxContext::new(init)

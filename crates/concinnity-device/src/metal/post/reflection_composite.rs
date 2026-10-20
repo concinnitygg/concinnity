@@ -5,7 +5,7 @@
 //! through `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::reflection_composite::{
     ReflectionCompositeInputs, ReflectionCompositePass,

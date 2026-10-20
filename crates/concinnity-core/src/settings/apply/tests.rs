@@ -244,7 +244,9 @@ impl SettingsTarget for Recorder {
     fn rebuild_features(&mut self, _: &ResolvedGraphics) -> RenderResult<()> {
         self.calls.push("rebuild".into());
         if self.fail_rebuild {
-            Err(crate::render::error::RenderError::Other("no".into()))
+            Err(crate::render::backend::error::RenderError::Other(
+                "no".into(),
+            ))
         } else {
             Ok(())
         }

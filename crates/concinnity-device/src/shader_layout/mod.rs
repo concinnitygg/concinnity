@@ -98,7 +98,7 @@ fn check(program: &Program, cases: &[Case]) {
 fn no_shader_redeclares_the_object_record() {
     const RECORD: &str = "struct GpuObjectData";
     let mut declarations = 0usize;
-    for (name, source) in concinnity_core::render::shaders::SOURCES {
+    for (name, source) in concinnity_core::render::shader::embedded::SOURCES {
         if source.contains(RECORD) {
             assert_eq!(
                 *name, "object_common.hlsl",
@@ -274,7 +274,7 @@ fn gbuffer_prepass_vertex_layouts_match_the_shader() {
 // shader actually reads them.
 #[test]
 fn the_metal_prepass_reads_its_buffers_where_the_host_binds_them() {
-    use concinnity_core::render::shader_programs::metal::prepass_buffers;
+    use concinnity_core::render::shader::programs::metal::prepass_buffers;
     concinnity_shader::require_dxc!();
     let stages = [
         (

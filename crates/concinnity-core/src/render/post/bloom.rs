@@ -16,7 +16,7 @@
 //! is also encodable in three pieces.
 
 use crate::gfx::render_types::PostProcessParams;
-use crate::render::error::RenderResult;
+use crate::render::backend::error::RenderResult;
 use crate::render::render_graph::{
     ClearValue, PassId, PixelFormat, TextureDesc, TextureSize, TextureUsage, bloom_top_desc,
     full_mip_levels,

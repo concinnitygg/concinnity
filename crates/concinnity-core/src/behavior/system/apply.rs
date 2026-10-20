@@ -13,7 +13,7 @@ use crate::components::{
 };
 use crate::ecs::{Entity, PipelineContext};
 use crate::math::SaturatingFrom;
-use crate::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
+use crate::render::temporal::history_reset::{HistoryResetCauses, PendingHistoryReset};
 
 impl BehaviorSystem {
     // Land one body's effects. Returns whether a `save` was requested.

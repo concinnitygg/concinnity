@@ -4,7 +4,7 @@
 // rewritten only after a row changed.
 
 use concinnity_core::gfx::render_types::{GpuMaterialParams, MATERIAL_PARAM_COUNT};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::material_params::MaterialParamTable;
 use windows::Win32::Graphics::Direct3D12::*;
 

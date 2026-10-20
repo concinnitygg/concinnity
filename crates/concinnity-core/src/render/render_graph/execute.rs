@@ -9,7 +9,7 @@ use core::sync::atomic::AtomicU32;
 use super::{CompiledGraph, CompiledPass, PassId};
 use crate::fanout::Fanout;
 use crate::profile::{FanOutTiming, MAX_PASS_TIMINGS};
-use crate::render::error::RenderResult;
+use crate::render::backend::error::RenderResult;
 
 /// Records one pass of a compiled graph into a command buffer of its own.
 /// Called from several threads at once, one pass each.
@@ -129,7 +129,7 @@ pub fn execute_passes<'s, R: PassRecorder, F: Fanout>(
 mod tests {
     use super::*;
     use crate::fanout::Inline;
-    use crate::render::error::RenderError;
+    use crate::render::backend::error::RenderError;
     use crate::render::render_graph::{FrameGraphInputs, build_frame_graph};
     use core::sync::atomic::{AtomicUsize, Ordering};
 

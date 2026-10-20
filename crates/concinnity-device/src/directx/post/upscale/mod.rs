@@ -15,10 +15,10 @@ use concinnity_core::math::narrow_f32;
 use std::cell::Cell;
 use std::ffi::{CStr, c_void};
 
-use concinnity_core::render::dlss::DlssPreset;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reactive_mask::ReactiveReader;
-use concinnity_core::render::upscaler::UpscalerAvailability;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::output::dlss::DlssPreset;
+use concinnity_core::render::output::upscaler::UpscalerAvailability;
+use concinnity_core::render::temporal::reactive_mask::ReactiveReader;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;

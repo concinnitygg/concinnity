@@ -7,7 +7,7 @@
 //! `write_mesh_scratch` (used by `cn run`, so the geometry never stays a second
 //! RAM copy past GPU upload).
 
-use concinnity_core::render::stream_pools::{
+use concinnity_core::render::streaming::pools::{
     DecodedMesh, DeferredMeshPayload, ItemLoad, decode_deferred_payload, decode_mesh, encode_mesh,
 };
 use std::fs::File;

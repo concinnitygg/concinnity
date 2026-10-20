@@ -5,7 +5,7 @@
 
 use concinnity_core::bake::texture::TextureImage;
 use concinnity_core::planet::{TileId, TileMesh};
-use concinnity_core::render::stream_pools::{
+use concinnity_core::render::streaming::pools::{
     ChunkLoad, ChunkRequest, DecodedMesh, ItemLoad, LoadPool, ShaderPump, StreamLoaders,
     StreamingState,
 };

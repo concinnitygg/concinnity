@@ -1,6 +1,6 @@
 use super::*;
 use crate::components::PassResolution;
-use crate::render::dlss::DlssPreset;
+use crate::render::output::dlss::DlssPreset;
 use crate::settings::levels::{SSGI_RAYS, TEXTURE_QUALITY};
 use crate::settings::rows::{quality_cycle, quality_toggle};
 use crate::settings::{SettingKind, options};

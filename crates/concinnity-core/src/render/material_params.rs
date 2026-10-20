@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 
 use crate::ecs::MaterialHandle;
 use crate::gfx::render_types::{GpuMaterialParams, MATERIAL_PARAM_COUNT};
-use crate::render::frame_dirty::FrameDirty;
+use crate::render::slots::frame_dirty::FrameDirty;
 
 /// The row a draw without a material reads: all zeros.
 pub const NO_MATERIAL_ROW: u32 = 0;

@@ -10,8 +10,8 @@
 use super::SceneHost;
 use crate::gfx::mesh_payload::SkinnedVertex;
 use crate::gfx::render_types::{SkinnedDrawObject, SkinnedIndex};
-use crate::render::error::RenderResult;
-use crate::render::snapshot::SpanBuffer;
+use crate::render::backend::error::RenderResult;
+use crate::render::frame::snapshot::SpanBuffer;
 use crate::transform::Mat4;
 use alloc::vec::Vec;
 

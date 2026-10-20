@@ -11,7 +11,9 @@ use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_core::gfx::{mesh_payload, render_types};
 use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::render::world_load::source_maps::*;
-use concinnity_core::render::{backend, draw_slot, error, scene_state, volumetric_fog};
+use concinnity_core::render::{
+    backend, backend::error, environment::volumetric_fog, scene_state, slots::draw_slot,
+};
 use concinnity_runtime::live_edit::hot_reload_sources::HotReloadSources;
 use notify::{Event, EventKind};
 use std::path::PathBuf;

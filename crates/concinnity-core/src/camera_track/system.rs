@@ -6,7 +6,7 @@ use crate::components::{Camera3D, CameraTrack, CameraTurnKey};
 use crate::ecs::{Entity, MenuActive, PipelineContext, SimTiming, StepResult, System, World};
 use crate::math::{quat_mul, quat_normalize, quat_rotate, shortest_turn, vec3};
 use crate::planet::{FrameRebases, RebaseCursor};
-use crate::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
+use crate::render::temporal::history_reset::{HistoryResetCauses, PendingHistoryReset};
 
 const FULL_TURN_DEG: f32 = 360.0;
 

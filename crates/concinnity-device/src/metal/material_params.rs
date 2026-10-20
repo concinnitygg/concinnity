@@ -3,7 +3,7 @@
 //! slot's copy rewritten only when it is fresh or behind a change.
 
 use concinnity_core::gfx::render_types::{GpuMaterialParams, MATERIAL_PARAM_COUNT};
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::material_params::MaterialParamTable;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

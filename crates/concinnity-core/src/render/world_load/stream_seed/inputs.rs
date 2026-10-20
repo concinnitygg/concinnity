@@ -12,7 +12,7 @@ use crate::gfx::render_types;
 use crate::gfx::render_types::DrawIndex;
 
 use crate::render::draw_list::DeferredMeshSeed;
-use crate::render::stream_pools::DecodedMesh;
+use crate::render::streaming::pools::DecodedMesh;
 use crate::render::world_load::draw_geometry::draw_object_position;
 
 /// Per-streamed-mesh data: the draw-object index of each streamed mesh, its

@@ -5,7 +5,7 @@ use hashbrown::HashMap;
 use concinnity_core::ecs::PayloadLocator;
 use concinnity_host::store::blob::{blob_path, payload_section_start};
 
-use concinnity_core::render::stream_pools::DeferredMeshPayload;
+use concinnity_core::render::streaming::pools::DeferredMeshPayload;
 
 // Blob `blob_index`'s file and where its payload section starts in it, so a
 // locator's payload-section offset becomes an absolute file offset.

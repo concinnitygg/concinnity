@@ -309,7 +309,7 @@ pub fn atmosphere(mut args: Atmosphere) -> Atmosphere {
 /// real size on a path that runs forward.
 pub fn night_sky(mut args: NightSky) -> NightSky {
     let defaults = NightSky::default();
-    let limits = crate::render::night_sky::LIMIT_RANGE;
+    let limits = crate::render::environment::night_sky::LIMIT_RANGE;
     args.star_brightness = finite_at_least(args.star_brightness, 0.0, 0.0);
     args.star_limit_magnitude = finite_or(args.star_limit_magnitude, defaults.star_limit_magnitude)
         .clamp(limits[0], limits[1]);
@@ -318,9 +318,9 @@ pub fn night_sky(mut args: NightSky) -> NightSky {
         finite_or(args.milky_way_tilt_deg, defaults.milky_way_tilt_deg).clamp(0.0, 180.0);
     args.milky_way_turn_deg = finite_or(args.milky_way_turn_deg, 0.0);
     args.milky_way_core_deg = finite_or(args.milky_way_core_deg, 0.0);
-    args.galaxies = args
-        .galaxies
-        .min(u32::saturating_from(crate::render::night_sky::MAX_GALAXIES));
+    args.galaxies = args.galaxies.min(u32::saturating_from(
+        crate::render::environment::night_sky::MAX_GALAXIES,
+    ));
     args.moon_start_deg = finite_or(args.moon_start_deg, defaults.moon_start_deg);
     args.moon_period_days = finite_at_least(args.moon_period_days, 0.0, 0.0);
     args.moon_inclination_deg = finite_or(args.moon_inclination_deg, 0.0).clamp(-90.0, 90.0);

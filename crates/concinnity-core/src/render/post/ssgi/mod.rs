@@ -35,7 +35,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::gfx::render_types::SsgiParams;
-use crate::render::error::{RenderError, RenderResult};
+use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::render_graph::{PassId, PixelFormat};
 
 use super::device::{

@@ -20,7 +20,7 @@
 
 use crate::gfx::render_types::TextDrawCall;
 use crate::math::{SaturatingFrom, ceil, floor};
-use crate::render::error::RenderResult;
+use crate::render::backend::error::RenderResult;
 
 /// Convert a `TextDrawCall.clip_rect` (a rectangle `[x, y, w, h]` in overlay
 /// units, already mapped through the overlay transform by
@@ -228,7 +228,7 @@ mod tests {
     use crate::gfx::render_types::TextDrawCall;
     use core::cell::RefCell;
 
-    use crate::render::error::RenderError;
+    use crate::render::backend::error::RenderError;
     use alloc::string::String;
     use alloc::vec::Vec;
     use alloc::{format, vec};

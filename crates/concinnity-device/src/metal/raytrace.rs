@@ -42,15 +42,15 @@
 
 use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::buffers::retire_pool::RetirePool;
 use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
-use concinnity_core::render::retire_pool::RetirePool;
+use concinnity_core::render::rt_accel::geom::RtDynamicMode;
+use concinnity_core::render::rt_accel::refit::{BlasUpdate, SkinnedShape};
 use concinnity_core::render::rt_accel::{
     AccelBook, EmptyHead, FailureStreak, InstanceBlas, RefreshMode, RefreshStep, RtAccelSteps,
     RtUpdate, SeedSet, SlotLiveness, StaticRing, empty_head,
 };
-use concinnity_core::render::rt_geom::RtDynamicMode;
-use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedShape};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSArray;

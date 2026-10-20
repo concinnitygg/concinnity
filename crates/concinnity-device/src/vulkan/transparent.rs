@@ -29,9 +29,9 @@ use concinnity_core::components::GlassPanel;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::fullscreen::align_up;
-use concinnity_core::render::reactive_mask::ReactiveWrite;
+use concinnity_core::render::temporal::reactive_mask::ReactiveWrite;
 pub(in crate::vulkan) use concinnity_core::render::uniforms::TransparentView;
 // `TransparentView` (the per-frame view UBO) is a GPU-free layout struct that
 // lives in `core::render`; re-export it so the encode path and the graph's
@@ -1237,7 +1237,7 @@ pub(in crate::vulkan) struct TransparentSceneTargets<'a> {
 pub(in crate::vulkan) struct TransparentContent<'a> {
     pub glass_panels: &'a [GlassPanel],
     pub glass_planar_slots: &'a [Option<usize>],
-    pub water_surfaces: &'a [concinnity_core::render::water::WaterBody],
+    pub water_surfaces: &'a [concinnity_core::render::environment::water::WaterBody],
     pub water_planar_slots: &'a [Option<usize>],
     // The simulated oceans' arrays, `None` for a world with no water.
     pub ocean: Option<OceanViews>,

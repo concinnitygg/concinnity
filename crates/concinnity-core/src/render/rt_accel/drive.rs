@@ -5,9 +5,9 @@
 //! here.
 
 use crate::gfx::render_types::{DrawObject, SkinnedDrawObject};
-use crate::render::error::RenderResult;
+use crate::render::backend::error::RenderResult;
+use crate::render::rt_accel::geom::RtDynamicMode;
 use crate::render::rt_accel::{AccelBook, EmptyHead, RefreshMode, RtStep, RtUpdate, empty_head};
-use crate::render::rt_geom::RtDynamicMode;
 
 /// The refresh step's inputs: how the head is refreshed, and what the frame's
 /// skinned step does with an emptied head.
@@ -121,7 +121,7 @@ pub fn drive_update<D: RtAccelSteps>(
 mod tests {
     use super::*;
     use crate::math::SaturatingFrom;
-    use crate::render::error::RenderError;
+    use crate::render::backend::error::RenderError;
     use crate::render::rt_accel::SeedSet;
     use crate::test_support::{draw_object, skinned_draw_object};
     use alloc::string::String;

@@ -9,10 +9,10 @@
 
 use concinnity_core::components::ShaderPrograms;
 use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
-use concinnity_core::render::shader_programs::surface::GrassShading;
+use concinnity_core::render::shader::programs::raymarch::VolumeFlags;
+use concinnity_core::render::shader::programs::surface::GrassShading;
 use windows::Win32::Graphics::Direct3D12::{ID3D12Device, ID3D12InfoQueue, ID3D12RootSignature};
 
 use super::init::pipelines::{BucketPsos, BucketRootSigs, WorldPsoTargets, build_world_shader_pso};

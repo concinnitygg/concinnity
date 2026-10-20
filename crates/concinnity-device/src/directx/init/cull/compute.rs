@@ -3,7 +3,7 @@
 //! the Hi-Z pyramid its occlusion test samples.
 
 use concinnity_core::gfx::render_types;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::CullPlan;

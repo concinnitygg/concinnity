@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use concinnity_core::render::shader_programs::vocabulary::{self, Entry};
+use concinnity_core::render::shader::programs::vocabulary::{self, Entry};
 
 use super::path_cache::PathCache;
 use crate::debug::hot_reload::{Latest, ReloadOutcome, ReloadReports, ReloadSubject, ReportBoard};

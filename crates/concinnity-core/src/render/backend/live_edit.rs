@@ -10,9 +10,9 @@ use crate::components::ShaderPrograms;
 use crate::components::sdf_programs::SdfPrograms;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::{DrawIndex, MATERIAL_PARAM_COUNT, MaterialUniforms, SkinnedIndex};
+use crate::render::backend::error::{RenderError, RenderResult};
+use crate::render::backend::init::{BackendInit, SwapchainConfig};
 use crate::render::backend::{PreparedPipelines, SceneHost};
-use crate::render::backend_init::{BackendInit, SwapchainConfig};
-use crate::render::error::{RenderError, RenderResult};
 use alloc::vec::Vec;
 
 /// What a pipeline rebuild from fresh programs did
@@ -327,7 +327,7 @@ pub trait LiveEdit: SceneHost {
     /// Rebuild one raymarched `SdfVolume`'s pipelines from a freshly compiled
     /// field. Driven by asset hot-reload (`cn debug` and `cn editor`) when the
     /// volume's field file is saved. `volume` is the volume's position in
-    /// [`WorldFx::sdf_volumes`](crate::render::backend_init::WorldFx::sdf_volumes),
+    /// [`WorldFx::sdf_volumes`](crate::render::backend::init::WorldFx::sdf_volumes),
     /// the order the backend built them in. Every pipeline the volume draws
     /// with is rebuilt from `programs`: its surface or volumetric pipeline, and
     /// its shadow caster when it casts one, keeping the flags it was built

@@ -3,7 +3,7 @@
 //! passes' descriptor block.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::heap_layout::{RtvHeapLayout, SrvHeapLayout, SrvHeapParams};

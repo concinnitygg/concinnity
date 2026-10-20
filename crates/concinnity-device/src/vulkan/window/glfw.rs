@@ -15,7 +15,7 @@ use concinnity_core::components::{InputKey, KeyEvent, KeyMods, KeyPress, WindowM
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::window::display_mode;
 use concinnity_core::window::display_mode::DisplayMode;
 

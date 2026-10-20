@@ -11,7 +11,7 @@
 //! over 64x64 tiles. Metal keeps the per-mip init + downsample chain because the
 //! tile win those two measured did not reproduce on this backend.
 //!
-//! Two compute kernels come from the single-source `src/render/shaders/hiz_build.hlsl`
+//! Two compute kernels come from the single-source `src/render/shader/hlsl/hiz_build.hlsl`
 //! (one precompiled variant library each):
 //!
 //!   * `hiz_init_msaa` / `hiz_init_single`: reduce the main-depth resource into
@@ -36,8 +36,8 @@
 
 use super::builtin_shaders::compute_pipeline;
 use super::error::allocation_failed;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::hiz_spd;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::hiz::spd;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSRange, ns_string};
@@ -159,7 +159,7 @@ impl HiZResources {
         hot_reload: bool,
         sample_count: u32,
     ) -> RenderResult<Self> {
-        let mip_count = hiz_spd::full_mip_count(width, height);
+        let mip_count = spd::full_mip_count(width, height);
         let (init_pipeline, downsample_pipeline) =
             build_hiz_pipelines(device, hot_reload, sample_count)?;
         let (texture, mip_views) = create_hiz_texture_and_views(device, width, height, mip_count)?;
@@ -184,7 +184,7 @@ impl HiZResources {
         width: u32,
         height: u32,
     ) -> RenderResult<()> {
-        let mip_count = hiz_spd::full_mip_count(width, height);
+        let mip_count = spd::full_mip_count(width, height);
         let (texture, mip_views) = create_hiz_texture_and_views(device, width, height, mip_count)?;
         self.texture = texture;
         self.mip_views = mip_views;

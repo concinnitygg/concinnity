@@ -14,8 +14,8 @@
 use ash::vk;
 use concinnity_core::gfx::render_types::LineVertex;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::buffer_growth::grow_capacity;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::buffers::growth::grow_capacity;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;

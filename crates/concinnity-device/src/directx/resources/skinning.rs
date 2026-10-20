@@ -8,8 +8,8 @@ use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_core::gfx::render_types::{MAX_JOINTS, SkinnedDrawObject, SkinnedIndex};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::{geometry_repack, rt_geom};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::{rt_accel::geom, slots::geometry_repack};
 use concinnity_core::transform::IDENTITY;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -130,7 +130,7 @@ impl DxContext {
         let skinned_index_buffer = upload_buffer_padded(
             &self.hw.alloc,
             idx_bytes,
-            rt_geom::skinned_index_buffer_bytes(indices.len()) as u64,
+            geom::skinned_index_buffer_bytes(indices.len()) as u64,
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
         self.skinned.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {

@@ -4,7 +4,7 @@
 //! gets back the index it will remove by. Neither is part of the draw set, so
 //! neither reaches the per-frame contract.
 
-use crate::render::error::{RenderError, RenderResult};
+use crate::render::backend::error::{RenderError, RenderResult};
 
 /// The projected-decal and particle-emitter slot tables.
 ///

@@ -8,7 +8,7 @@
 
 use crate::metal::error::allocation_failed;
 use concinnity_core::gfx::render_types;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::post::ssr::settings::SsrSettings;
 use concinnity_core::render::post::ssr::{SsrInputs, SsrPass};
 use objc2::rc::Retained;

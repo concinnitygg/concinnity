@@ -15,7 +15,7 @@
 use super::context::VkContext;
 use super::pipeline::{MeshPipelineTargets, create_main_pipeline_wireframe};
 use crate::vulkan::owned::OwnedPipeline;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 
 // The Wireframe twin of the GPU-driven main pipeline. `None` means the pass
 // it mirrors is not live either (or the build failed), in which case the pass

@@ -268,12 +268,12 @@ mod tests {
     // start the morph where the CPU does.
     #[test]
     fn the_shader_morph_shares_the_cell_count_and_start() {
-        let src = crate::render::shaders::TILE_MORPH;
-        let uint = |name| crate::render::shader_consts::uint(src, name);
+        let src = crate::render::shader::embedded::TILE_MORPH;
+        let uint = |name| crate::render::shader::consts::uint(src, name);
         assert_eq!(uint("PLANET_TILE_CELLS"), TILE_CELLS as usize);
-        let start = crate::render::shader_consts::float(src, "TILE_MORPH_START");
+        let start = crate::render::shader::consts::float(src, "TILE_MORPH_START");
         assert_eq!(start, narrow_f32(crate::planet::MORPH_START));
-        let ramp = crate::render::shader_consts::float(src, "TILE_SEAM_RAMP_CELLS");
+        let ramp = crate::render::shader::consts::float(src, "TILE_SEAM_RAMP_CELLS");
         assert_eq!(ramp, SEAM_RAMP_CELLS);
     }
 

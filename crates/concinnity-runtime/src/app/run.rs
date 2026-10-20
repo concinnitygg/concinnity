@@ -14,7 +14,7 @@
 
 use concinnity_core::ecs::ScheduleMode;
 use concinnity_core::error::WorldError;
-use concinnity_core::render::error::RenderError;
+use concinnity_core::render::backend::error::RenderError;
 use concinnity_host::store::paths::StateTree;
 use tracing_subscriber::EnvFilter;
 

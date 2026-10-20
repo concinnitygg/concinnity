@@ -6,7 +6,7 @@
 use concinnity_core::components::{Identity, ProceduralMesh};
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::render::backend_init::SdfVolumeSource;
+use concinnity_core::render::backend::init::SdfVolumeSource;
 use concinnity_core::render::world_load::source_maps::{
     ColorLutSource, EnvironmentMapSource, MeshSourceMap, ProceduralMeshSourceMap, SdfFieldMap,
     ShaderSourceMap, SkinnedMeshSourceMap, TextureSourceMap,

@@ -17,10 +17,10 @@ use crate::gfx::render_types::{DrawIndex, DrawObject, clone_reserve, runtime_res
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
 use crate::planet::{HorizonOccluder, TileMorphFrame};
 use crate::render::backend::PlanetChunk;
-use crate::render::frame_plan::FramePlanner;
-use crate::render::grass::{CanopyField, DrawnPlanetTile, GrassLodView};
-use crate::render::model_history::ModelHistory;
-use crate::render::skinned_slots::SkinnedSlots;
+use crate::render::environment::grass::{CanopyField, DrawnPlanetTile, GrassLodView};
+use crate::render::frame::plan::FramePlanner;
+use crate::render::slots::skinned_slots::SkinnedSlots;
+use crate::render::temporal::model_history::ModelHistory;
 use crate::render::uniforms::canopy::CanopyParams;
 use crate::sky::SkyOrientation;
 use crate::transform::IDENTITY;

@@ -15,11 +15,11 @@
 use alloc::vec::Vec;
 
 use crate::gfx::jitter::TAA_CYCLE;
-use crate::render::error::RenderResult;
-use crate::render::reactive_mask::ReactiveReader;
+use crate::render::backend::error::RenderResult;
 use crate::render::render_graph::{
     ClearValue, PassId, PixelFormat, TextureDesc, TextureSize, TextureUsage,
 };
+use crate::render::temporal::reactive_mask::ReactiveReader;
 use crate::render::uniforms::TaaParams;
 
 use super::device::{

@@ -16,7 +16,7 @@ use std::sync::{Mutex, OnceLock};
 
 use concinnity_core::ecs::StepResult;
 use concinnity_core::error::WorldError;
-use concinnity_core::render::backend_init::EmbeddedSurface;
+use concinnity_core::render::backend::init::EmbeddedSurface;
 use concinnity_host::store::paths::StateTree;
 use concinnity_runtime::{Runtime, StartupError};
 

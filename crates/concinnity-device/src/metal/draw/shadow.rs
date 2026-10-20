@@ -15,8 +15,8 @@
 
 use concinnity_core::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowPassPush, ShadowUniforms};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shadow_bias;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::shadow::bias;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -193,9 +193,9 @@ impl MtlContext {
         enc.set_pipeline(pipeline);
         enc.set_depth_stencil(&self.targets.depth_state);
         enc.setDepthBias_slopeScale_clamp(
-            shadow_bias::RASTER_CONSTANT,
-            shadow_bias::RASTER_SLOPE,
-            shadow_bias::RASTER_CLAMP,
+            bias::RASTER_CONSTANT,
+            bias::RASTER_SLOPE,
+            bias::RASTER_CLAMP,
         );
         // ShadowUniforms (vbuf 0), view-index push (vbuf 7), object buffer
         // (vbuf 9), static vertex buffer (vbuf 1). The ICB commands inherit
@@ -214,7 +214,7 @@ impl MtlContext {
         enc.set_vertex_buffer(
             &self.scene.vertex_buffer,
             0,
-            concinnity_core::render::shader_programs::metal::SHADOW_MESH_VERTICES_BUFFER,
+            concinnity_core::render::shader::programs::metal::SHADOW_MESH_VERTICES_BUFFER,
         );
 
         // This view's command slots live at `[v*stride, v*stride + stride)` in

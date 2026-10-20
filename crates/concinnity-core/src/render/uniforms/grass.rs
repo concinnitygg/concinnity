@@ -7,9 +7,11 @@
 
 #[cfg(test)]
 use crate::math::SaturatingFrom;
-use crate::render::grass::lod::GRASS_REGION_COUNT;
+use crate::render::environment::grass::lod::GRASS_REGION_COUNT;
 #[cfg(test)]
-use crate::render::grass::lod::{GRASS_LOD_VERTEX_STRIDE, GRASS_LOD_VERTICES, region_level};
+use crate::render::environment::grass::lod::{
+    GRASS_LOD_VERTEX_STRIDE, GRASS_LOD_VERTICES, region_level,
+};
 
 /// Draw-argument slots the args buffer holds. The kernel fills one each frame
 /// and resets the other for the next, so no separate clear runs.
@@ -23,7 +25,7 @@ pub const GRASS_ARGS_STRIDE: usize = 16;
 /// Bytes in one slot: one draw per region, the detail levels coarsening in
 /// order, then the band, then one record whose first word counts the blades
 /// the coarsest level and the band reserved together in the span they share
-/// (see [`GRASS_SPAN_COUNT`](crate::render::grass::lod::GRASS_SPAN_COUNT)).
+/// (see [`GRASS_SPAN_COUNT`](crate::render::environment::grass::lod::GRASS_SPAN_COUNT)).
 const GRASS_ARGS_SLOT_BYTES: usize = (GRASS_REGION_COUNT + 1) * GRASS_ARGS_STRIDE;
 
 /// Bytes in the whole args buffer.
@@ -87,10 +89,10 @@ pub struct GrassLayerGpu {
     pub clumping: f32,
     /// The side-on and top-down axes of the ellipse the blades' projection
     /// along a direct light follows
-    /// ([`projection_axes`](crate::render::grass::canopy::projection_axes)).
+    /// ([`projection_axes`](crate::render::environment::grass::canopy::projection_axes)).
     pub light_projection: [f32; 2],
     /// The blade layers a view ray straight down crosses
-    /// ([`blade_depth`](crate::render::grass::lod::blade_depth)), which the
+    /// ([`blade_depth`](crate::render::environment::grass::lod::blade_depth)), which the
     /// depth limit thins grazing rays by.
     pub depth: f32,
 }
@@ -130,12 +132,12 @@ pub struct GrassParams {
     pub lod_capacity: [u32; 4],
     /// Where the second and third levels start, the morph fraction, and the
     /// phase of the hand-off's per-pixel choice
-    /// ([`GrassHistory::crossfade_phase`](crate::render::grass::GrassHistory::crossfade_phase)).
+    /// ([`GrassHistory::crossfade_phase`](crate::render::environment::grass::GrassHistory::crossfade_phase)).
     pub lod_distances: [f32; 4],
     /// Thinning's scale (a layer keeps `width * x / distance` of its blades,
     /// at most all), the shrink band, where the blades start handing the
     /// field to the canopy, and where the depth limit takes full effect
-    /// ([`GrassLodView::keep`](crate::render::grass::GrassLodView::keep)).
+    /// ([`GrassLodView::keep`](crate::render::environment::grass::GrassLodView::keep)).
     pub thinning: [f32; 4],
     /// The first of this run's records in the tile buffer.
     pub tile_base: u32,
@@ -227,7 +229,7 @@ pub struct GrassTileGpu {
     /// counted from the world origin, on a planet within its drawn tile.
     pub tile: [i32; 2],
     /// The tile's level in the low 8 bits (see
-    /// [`nest`](crate::render::grass::nest)), the layer's slot in the next 8.
+    /// [`nest`](crate::render::environment::grass::nest)), the layer's slot in the next 8.
     pub level_layer: u32,
     /// On a planet, the drawn tile's index among the run's planet tile
     /// records; 0 on terrain.

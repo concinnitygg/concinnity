@@ -15,10 +15,10 @@ use std::ptr;
 
 use ash::vk;
 use concinnity_core::gfx::jitter;
-use concinnity_core::render::dlss::DlssPreset;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::history_reset::UpscalerResetLatch;
-use concinnity_core::render::reactive_mask::ReactiveReader;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::output::dlss::DlssPreset;
+use concinnity_core::render::temporal::history_reset::UpscalerResetLatch;
+use concinnity_core::render::temporal::reactive_mask::ReactiveReader;
 
 use super::{
     ImageViewInfo, OutputWrites, UpscaleImage, UpscaleInputs, UpscaleOutput, UpscalerGpu,

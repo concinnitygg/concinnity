@@ -4,7 +4,7 @@
 //! and the draw -- is written once in `concinnity_core::render::post::taa` and
 //! reaches D3D12 through `DxPostDevice`.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 use windows::Win32::Graphics::Direct3D12::*;

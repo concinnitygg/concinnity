@@ -13,10 +13,12 @@
 // Unlike Metal there is no on-disk GPU-binary cache behind the build: see
 // `docs/todos.md` for why the D3D12 pipeline-library equivalent is still open.
 
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::surface::GrassShading;
-use concinnity_core::render::world_pipelines::{BucketSource, check_rebuild, replace_bucket};
+use concinnity_core::render::shader::programs::surface::GrassShading;
+use concinnity_core::render::shader::world_pipelines::{
+    BucketSource, check_rebuild, replace_bucket,
+};
 use std::sync::Arc;
 use windows::Win32::Graphics::Direct3D12::*;
 

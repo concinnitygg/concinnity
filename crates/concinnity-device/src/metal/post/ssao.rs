@@ -8,7 +8,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::post::ssao::settings::SsaoSettings;
 use concinnity_core::render::post::ssao::{SsaoInputs, SsaoPass};
 use objc2::runtime::ProtocolObject;

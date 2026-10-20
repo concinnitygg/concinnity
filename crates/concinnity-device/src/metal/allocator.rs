@@ -58,11 +58,11 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::rc::{Rc, Weak};
 
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 
 use super::error::allocation_failed;
-use concinnity_core::render::block_alloc::Placement;
-use concinnity_core::render::block_pool::{BlockGrowth, BlockPool, ReserveError};
+use concinnity_core::render::buffers::block_alloc::Placement;
+use concinnity_core::render::buffers::block_pool::{BlockGrowth, BlockPool, ReserveError};
 
 const GROWTH: BlockGrowth = BlockGrowth::STANDARD;
 

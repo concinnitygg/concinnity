@@ -16,12 +16,12 @@
 use ash::vk;
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_core::math::SaturatingFrom;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::backend::{
     DrawGeometryUpdate, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
 };
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::range_alloc::RangeAllocator;
-use concinnity_core::render::{geometry_repack, rt_geom};
+use concinnity_core::render::buffers::range_alloc::RangeAllocator;
+use concinnity_core::render::{rt_accel::geom, slots::geometry_repack};
 
 use super::super::context::VkContext;
 use super::super::texture::one_shot_submit;
@@ -191,7 +191,7 @@ impl VkContext {
         )?;
         // Whole u32 words for the index buffer; see `upload_skinned`.
         let new_ibuf = self.hw.alloc.create_buffer(
-            rt_geom::skinned_index_buffer_bytes(new_indices.len()) as u64,
+            geom::skinned_index_buffer_bytes(new_indices.len()) as u64,
             vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | skinned_ib_rt,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;

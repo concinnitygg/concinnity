@@ -7,9 +7,9 @@
 //! probe reports.
 
 use concinnity_core::platform::Platform;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::backend::init::BackendInit;
 use concinnity_core::render::backend::{DeviceProbe, RenderBackend};
-use concinnity_core::render::backend_init::BackendInit;
-use concinnity_core::render::error::RenderResult;
 use std::sync::OnceLock;
 
 /// Whether a rendering backend compiles into this build. False leaves the
@@ -60,7 +60,11 @@ pub(crate) fn init_backend(init: BackendInit<'_>) -> RenderResult<Box<dyn Render
     #[cfg(not(any(backend_metal, backend_dx, backend_vk)))]
     {
         let _ = init;
-        Err(concinnity_core::render::error::RenderError::Unsupported { op: "init_backend" })
+        Err(
+            concinnity_core::render::backend::error::RenderError::Unsupported {
+                op: "init_backend",
+            },
+        )
     }
 }
 
@@ -70,7 +74,7 @@ pub(crate) fn init_backend(init: BackendInit<'_>) -> RenderResult<Box<dyn Render
 mod tests {
     use super::*;
     use concinnity_core::components::Window;
-    use concinnity_core::render::error::RenderError;
+    use concinnity_core::render::backend::error::RenderError;
 
     #[test]
     fn a_build_with_no_backend_reports_unsupported() {

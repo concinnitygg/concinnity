@@ -18,7 +18,7 @@
 
 use alloc::format;
 
-use crate::render::error::{RenderError, RenderResult};
+use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::render_graph::{PassId, PixelFormat, TextureDesc, TransientTexture};
 
 use super::program::{PostProgram, PostProgramBindings};

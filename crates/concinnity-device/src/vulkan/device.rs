@@ -2,7 +2,7 @@
 
 use ash::{Device, vk};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use std::ffi::{CStr, CString, c_void};
 
 use super::error::map_vk_result;

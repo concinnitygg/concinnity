@@ -4,7 +4,7 @@
 
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error;
+use concinnity_core::render::backend::error;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::super::com;

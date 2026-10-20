@@ -5,8 +5,8 @@ use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::profile;
 use concinnity_core::profile::PassTiming;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::{hdr_output, pass_timing};
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::{backend::pass_timing, output::hdr};
 
 use crate::gpu_wait::GpuWait;
 use crate::vulkan::context::VkContext;
@@ -234,7 +234,7 @@ impl VkContext {
         // `draw_calls` through `inc_draw_calls` (interior-mutability since
         // the encoders run through `&self`); the rest is filled here from
         // context state.
-        let counts = concinnity_core::render::object_counts::object_counts(
+        let counts = concinnity_core::render::backend::object_counts::object_counts(
             self.state.draw.objects.len(),
             self.instanced.clusters.iter().map(|c| c.instances.len()),
             self.state.skinned.draw_objects.iter().map(|o| o.visible),
@@ -274,8 +274,8 @@ impl VkContext {
             // synthesized placeholder set in `init`); `None` on SDR blanks the
             // chip. Mirrors `DxContext` / `MtlContext::render_stats`.
             max_edr: match self.hw.hdr_mode {
-                hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
-                hdr_output::HdrOutputMode::Sdr => None,
+                hdr::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
+                hdr::HdrOutputMode::Sdr => None,
             },
             ..profile::RenderStats::default()
         });

@@ -10,9 +10,9 @@
 // write state.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::probe::capture::PrefilterPlan;
 use concinnity_core::render::record_pack::StaticSlots;
-use concinnity_core::render::reflection_probe::PrefilterPlan;
 use concinnity_core::render::uniforms::{ProbeUniforms, grown_probe_capacity};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;

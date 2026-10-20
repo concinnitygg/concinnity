@@ -7,7 +7,7 @@
 //! unified G-buffer pre-pass.
 
 use concinnity_core::gfx::render_types::SsaoParams;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::ssao::settings::SsaoSettings;
 use concinnity_core::render::post::ssao::{OCCLUSION_FORMAT, SsaoInputs, SsaoPass, SsaoPipelines};

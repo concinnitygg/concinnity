@@ -34,7 +34,7 @@ use crate::components::{
 use crate::fnv::Fnv1a;
 use crate::launch::LaunchRequest;
 use crate::render::backend::{GpuProfile, GpuTier};
-use crate::render::dlss::DlssPreset;
+use crate::render::output::dlss::DlssPreset;
 use crate::settings::quality::{more_aggressive_upscale, resolve_ceiling};
 use crate::settings::{
     QualityPreset, ResolvedGraphics, ResolvedSettings, SettingsLayers, UserGraphicsSettings,

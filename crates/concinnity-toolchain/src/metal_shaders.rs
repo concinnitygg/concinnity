@@ -21,8 +21,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use concinnity_core::platform::Platform;
-use concinnity_core::render::shader_programs::{Table, Variant};
-use concinnity_core::render::shader_source;
+use concinnity_core::render::shader::programs::{Table, Variant};
+use concinnity_core::render::shader::source;
 use concinnity_shader::metallib;
 
 use crate::shader_artifacts::{embed, stub_lookup_source};
@@ -89,7 +89,7 @@ pub fn precompile_metal_shaders(shaders_dir: &Path, table: &Table) -> Option<Emi
         |job| {
             (
                 job.name.clone(),
-                shader_source::source_digest(&job.source),
+                source::source_digest(&job.source),
                 lib_path(&lib_dir, &job.name),
             )
         },
@@ -143,7 +143,7 @@ impl Job {
         // Assembly answers an unknown name with empty text, which would reach
         // the compiler as a missing entry point rather than a typo.
         assert!(
-            concinnity_core::render::shaders::embedded(file).is_some(),
+            concinnity_core::render::shader::embedded::embedded(file).is_some(),
             "no embedded shader named {file}"
         );
         Self {
@@ -256,13 +256,13 @@ mod tests {
     // the renderer assembles for it, so an unedited shader is a content hit.
     #[test]
     fn a_program_job_is_keyed_by_artifact_name_over_the_assembled_source() {
-        use concinnity_core::render::shader_programs::shared;
+        use concinnity_core::render::shader::programs::shared;
         let variant = shared::FOG_FRAG.at(false);
         let job = Job::program(variant);
         assert_eq!(job.name, "fog_frag.hlsl");
         assert_eq!(
             job.source,
-            shader_source::assemble("fog.hlsl", Platform::Metal, &[("USE_MSAA", "0")])
+            source::assemble("fog.hlsl", Platform::Metal, &[("USE_MSAA", "0")])
         );
     }
 

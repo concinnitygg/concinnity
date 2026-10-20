@@ -1,4 +1,4 @@
-//! The grass field on DirectX 12 (see `concinnity_core::render::grass`): the
+//! The grass field on DirectX 12 (see `concinnity_core::render::environment::grass`): the
 //! bend pass that relaxes and stamps the trampling field, the kernel that
 //! places this frame's visible blades and, a second time, the nearest shadow
 //! cascade's, the indirect draws, one per detail level, that render them at the
@@ -19,12 +19,12 @@ use concinnity_core::math::SaturatingFrom;
 use std::cell::RefCell;
 
 use concinnity_core::planet::Rebase;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::grass::bend::GRASS_BEND_WORDS;
-use concinnity_core::render::grass::lod::{
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::environment::grass::bend::GRASS_BEND_WORDS;
+use concinnity_core::render::environment::grass::lod::{
     GRASS_BAND_REGION, GRASS_LOD_COUNT, GRASS_LOD_VERTEX_STRIDE, GRASS_REGION_COUNT,
 };
-use concinnity_core::render::grass::{
+use concinnity_core::render::environment::grass::{
     FRAME_PLANET_TILE_RECORDS, FRAME_TILE_RECORDS, GrassBender, GrassCamera, GrassField,
     GrassFrameState, GrassPass, GrassShadowView, GrassView,
 };
@@ -33,7 +33,7 @@ use concinnity_core::render::uniforms::grass::{
     GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassBendParams, GrassParams, GrassTileGpu,
     PlanetGrassTileGpu, grass_args_offset,
 };
-use concinnity_core::render::{pass_timing, shadow_bias};
+use concinnity_core::render::{backend::pass_timing, shadow::bias};
 use windows::Win32::Graphics::Direct3D::{
     D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
 };
@@ -182,9 +182,9 @@ impl GrassPipelines {
             .depth(DXGI_FORMAT_D32_FLOAT, Depth::write())
             .raster(Raster {
                 bias: DepthBias {
-                    constant: i32::saturating_from(shadow_bias::RASTER_CONSTANT),
-                    clamp: shadow_bias::RASTER_CLAMP,
-                    slope: shadow_bias::RASTER_SLOPE,
+                    constant: i32::saturating_from(bias::RASTER_CONSTANT),
+                    clamp: bias::RASTER_CLAMP,
+                    slope: bias::RASTER_SLOPE,
                 },
                 ..Raster::default()
             })

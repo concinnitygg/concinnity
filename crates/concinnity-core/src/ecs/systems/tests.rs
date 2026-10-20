@@ -162,7 +162,7 @@ fn a_story_and_a_text_field_gate_their_systems() {
 // mode for.
 #[test]
 fn the_render_band_needs_a_rendered_run() {
-    use crate::render::render_mode::RenderMode;
+    use crate::render::backend::render_mode::RenderMode;
 
     let mut world = World::new();
     assert!(world.system_manifest(ALL).is_empty());

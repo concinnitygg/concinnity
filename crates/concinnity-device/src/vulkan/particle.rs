@@ -25,9 +25,9 @@ use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::ParticleParams;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::math::saturating_u32;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleFrame, ParticleSystem};
-use concinnity_core::render::reactive_mask::ReactiveWrite;
+use concinnity_core::render::temporal::reactive_mask::ReactiveWrite;
 use concinnity_core::render::uniforms::{GpuParticle, ParticleView};
 
 use super::allocator::PooledBuffer;

@@ -156,7 +156,7 @@ pub enum WorldError {
     /// renderer could not be built on it. Distinct from a machine with no GPU
     /// at all, which resolves to a headless run instead of failing.
     #[error("the renderer could not start: {0}")]
-    RenderUnavailable(#[source] crate::render::error::RenderError),
+    RenderUnavailable(#[source] crate::render::backend::error::RenderError),
 }
 
 #[cfg(test)]

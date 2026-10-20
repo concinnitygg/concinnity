@@ -8,7 +8,7 @@
 use concinnity_core::render::backend::{
     DeviceCapabilities, DeviceProbe, GpuClassInput, GpuProfile, GpuVendor, classify_tier,
 };
-use concinnity_core::render::upscaler::UpscalerAvailability;
+use concinnity_core::render::output::upscaler::UpscalerAvailability;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice, MTLGPUFamily};
 

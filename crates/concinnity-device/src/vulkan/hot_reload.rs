@@ -8,9 +8,11 @@
 //! `directx/hot_reload.rs` and `metal/hot_reload.rs`.
 
 use ash::vk;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::surface::GrassShading;
-use concinnity_core::render::world_pipelines::{BucketSource, check_rebuild, replace_bucket};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::shader::programs::surface::GrassShading;
+use concinnity_core::render::shader::world_pipelines::{
+    BucketSource, check_rebuild, replace_bucket,
+};
 
 use super::context::VkContext;
 use super::pipeline::{

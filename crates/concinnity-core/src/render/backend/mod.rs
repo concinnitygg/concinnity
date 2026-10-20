@@ -10,7 +10,7 @@
 //! is how a backend says it does not have that path, and the grouping is what
 //! tells a new backend author which subset is which.
 //!
-//! A fallible default returns [`RenderError::Unsupported`](crate::render::error::RenderError::Unsupported),
+//! A fallible default returns [`RenderError::Unsupported`](crate::render::backend::error::RenderError::Unsupported),
 //! never a silent `Ok`, unless doing nothing is the complete answer: a backend
 //! without a morph path has no morph data to attach. An infallible setter
 //! defaults to a no-op; a caller that must know whether one lands gates on
@@ -48,6 +48,13 @@ mod streaming;
 // The live render settings: quality, shadows, post-process, lighting.
 mod tuning;
 // The presentation surface and its input, as the settings menu sees it.
+pub mod error;
+pub mod feature_plan;
+pub mod init;
+pub mod object_counts;
+pub mod parallel_ctx;
+pub mod pass_timing;
+pub mod render_mode;
 mod window;
 
 pub use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
@@ -70,7 +77,7 @@ pub use window::WindowControl;
 
 use crate::gfx::render_types::{LineVertex, TextDrawCall};
 use crate::input::snapshot::InputSnapshot;
-use crate::render::error::RenderResult;
+use crate::render::backend::error::RenderResult;
 use crate::render::scene_flow::SceneControl;
 
 /// Per-frame inputs for [`RenderBackend::draw_frame`]. `world_hidden` is set when
@@ -113,7 +120,7 @@ pub struct FrameParams<'a> {
     /// Identity in a world with no `SkyRotation`.
     pub sky_rot: [[f32; 4]; 3],
     /// The temporal history the previous frames accumulated no longer matches
-    /// this one (see [`crate::render::history_reset`]): every temporal pass and
+    /// this one (see [`crate::render::temporal::history_reset`]): every temporal pass and
     /// upscaler starts over instead of reprojecting it.
     pub history_reset: bool,
     /// The world moved to another simulated frame since the last frame (a
@@ -123,10 +130,10 @@ pub struct FrameParams<'a> {
     pub rebase: Option<crate::planet::Rebase>,
     /// The characters and bodies that may be trampling grass this frame,
     /// stamped into the grass's bend field near the camera.
-    pub grass_benders: &'a [crate::render::grass::GrassBender],
+    pub grass_benders: &'a [crate::render::environment::grass::GrassBender],
     /// Where the camera and the sun are about the planet, in a world with an
     /// `Atmosphere`; the backend draws the sky and the haze from it.
-    pub atmosphere: Option<crate::render::atmosphere::AtmosphereFrame>,
+    pub atmosphere: Option<crate::render::environment::atmosphere::AtmosphereFrame>,
     /// The authored intensity of the world's sun (its first directional
     /// light), which stands for full sunlight when the scene's luminance is
     /// read in absolute units.
@@ -283,8 +290,8 @@ mod tests {
     use crate::gfx::render_types::MaterialUniforms;
     use crate::input::keymap::KeyMap;
     use crate::profile::RenderStats;
-    use crate::render::backend_init::BackendInit;
-    use crate::render::error::RenderError;
+    use crate::render::backend::error::RenderError;
+    use crate::render::backend::init::BackendInit;
     use alloc::vec;
 
     const IDENTITY: [[f32; 4]; 4] = [
@@ -329,9 +336,9 @@ mod tests {
         backend.update_view(IDENTITY);
         backend.update_models(&[(DrawIndex(0), IDENTITY)]);
         backend.retire_draw_object(DrawIndex(0));
-        let mut poses = crate::render::snapshot::SpanBuffer::default();
+        let mut poses = crate::render::frame::snapshot::SpanBuffer::default();
         poses.push(SkinnedIndex(0), &[IDENTITY]);
-        let mut morphs = crate::render::snapshot::SpanBuffer::default();
+        let mut morphs = crate::render::frame::snapshot::SpanBuffer::default();
         morphs.push(SkinnedIndex(0), &[1.0]);
         backend.update_skinned(SkinnedFrame {
             poses: &poses,
@@ -395,7 +402,7 @@ mod tests {
     // `Unsupported` naming itself, never a silent `Ok`.
     #[test]
     fn default_fallible_operations_report_unsupported() {
-        use crate::render::error::RenderError;
+        use crate::render::backend::error::RenderError;
 
         fn op<T>(result: RenderResult<T>) -> &'static str {
             match result {
@@ -451,7 +458,7 @@ mod tests {
                 op(backend.clone_static_draw_object(
                     DrawIndex(0),
                     IDENTITY,
-                    crate::render::draw_slot::SlotAlloc::Append(DrawIndex(0)),
+                    crate::render::slots::draw_slot::SlotAlloc::Append(DrawIndex(0)),
                 )),
             ),
             (
@@ -473,7 +480,7 @@ mod tests {
                         planet_tile: None,
                         bounds: None,
                     },
-                    crate::render::draw_slot::SlotAlloc::Append(DrawIndex(0)),
+                    crate::render::slots::draw_slot::SlotAlloc::Append(DrawIndex(0)),
                 )),
             ),
             (

@@ -6,8 +6,8 @@
 //! counterpart.
 
 use ash::vk;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::depth::{DEPTH_INCLUSIVE_COMPARE, DEPTH_WRITE_COMPARE};
-use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostBlend;
 
 use crate::vulkan::depth::compare_op;

@@ -2,8 +2,8 @@
 // layer below the command line carries a clap dependency.
 use concinnity_core::gfx::view_modes::ShowFlags;
 use concinnity_core::platform::Platform;
-use concinnity_core::render::dlss::DlssPreset;
-use concinnity_core::render::rt_geom::RtDynamicMode;
+use concinnity_core::render::output::dlss::DlssPreset;
+use concinnity_core::render::rt_accel::geom::RtDynamicMode;
 
 use crate::export::BundleFormat;
 

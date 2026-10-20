@@ -2,7 +2,7 @@
 //! Device removal is detected at Present; `classify_present_failure` refines
 //! the loss class with the device's own `GetDeviceRemovedReason` verdict.
 
-use concinnity_core::render::error::{DeviceLostReason, RenderError};
+use concinnity_core::render::backend::error::{DeviceLostReason, RenderError};
 use windows::Win32::Foundation::E_OUTOFMEMORY;
 use windows::Win32::Graphics::Dxgi::{
     DXGI_ERROR_DEVICE_HUNG, DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET,

@@ -8,8 +8,8 @@ use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::SkinnedVertex;
 use concinnity_core::gfx::render_types::{MAX_JOINTS, SkinnedDrawObject, SkinnedIndex};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::{geometry_repack, rt_geom};
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::{rt_accel::geom, slots::geometry_repack};
 use concinnity_core::transform::IDENTITY;
 
 use super::super::context::VkContext;
@@ -59,7 +59,7 @@ impl VkContext {
         // Never zero-length: the ray-traced hit path binds this as a storage
         // buffer of index words and its descriptor takes the whole size.
         let skinned_ibuf = self.hw.alloc.create_buffer(
-            rt_geom::skinned_index_buffer_bytes(indices.len()) as u64,
+            geom::skinned_index_buffer_bytes(indices.len()) as u64,
             vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | skinned_ib_rt,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;

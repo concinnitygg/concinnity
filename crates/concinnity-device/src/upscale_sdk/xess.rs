@@ -17,8 +17,8 @@ use std::ptr;
 
 use concinnity_core::components::UpscaleQuality;
 use concinnity_core::render::depth::{CAMERA_DEPTH, DepthMapping};
-use concinnity_core::render::history_reset::UpscalerResetLatch;
-use concinnity_core::render::reactive_mask::ReactiveReader;
+use concinnity_core::render::temporal::history_reset::UpscalerResetLatch;
+use concinnity_core::render::temporal::reactive_mask::ReactiveReader;
 
 use super::{SdkLibrary, UpscaleExtent, entry_point};
 

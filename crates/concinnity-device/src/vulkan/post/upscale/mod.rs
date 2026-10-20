@@ -23,10 +23,10 @@ use std::ffi::{CStr, CString, c_char, c_void};
 
 use ash::vk;
 use concinnity_core::components::UpscalerBackend;
-use concinnity_core::render::dlss::DlssPreset;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reactive_mask::ReactiveReader;
-use concinnity_core::render::upscaler::UpscalerAvailability;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::output::dlss::DlssPreset;
+use concinnity_core::render::output::upscaler::UpscalerAvailability;
+use concinnity_core::render::temporal::reactive_mask::ReactiveReader;
 
 use crate::upscale_sdk::{SdkLibrary, UpscaleCamera, UpscaleExtent, UpscaleRequest, preferred};
 use crate::vulkan::allocator::DeviceAllocator;

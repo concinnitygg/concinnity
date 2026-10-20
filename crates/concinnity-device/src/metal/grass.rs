@@ -1,4 +1,4 @@
-//! The grass field on Metal (see `concinnity_core::render::grass`): the bend
+//! The grass field on Metal (see `concinnity_core::render::environment::grass`): the bend
 //! pass that relaxes and stamps the trampling field, the kernel that places
 //! this frame's visible blades and, a second time, the nearest shadow
 //! cascade's, and the indirect draws, one per detail level, that render them at
@@ -13,15 +13,17 @@
 
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::planet::Rebase;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::grass::bend::GRASS_BEND_WORDS;
-use concinnity_core::render::grass::lod::{GRASS_BAND_REGION, GRASS_LOD_COUNT, GRASS_REGION_COUNT};
-use concinnity_core::render::grass::{
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::environment::grass::bend::GRASS_BEND_WORDS;
+use concinnity_core::render::environment::grass::lod::{
+    GRASS_BAND_REGION, GRASS_LOD_COUNT, GRASS_REGION_COUNT,
+};
+use concinnity_core::render::environment::grass::{
     FRAME_PLANET_TILE_RECORDS, FRAME_TILE_RECORDS, GrassBendPass, GrassBender, GrassCamera,
     GrassField, GrassFrameState, GrassPass, GrassShadowView, GrassView,
 };
-use concinnity_core::render::shader_programs::metal::prepass_buffers;
-use concinnity_core::render::shadow_bias;
+use concinnity_core::render::shader::programs::metal::prepass_buffers;
+use concinnity_core::render::shadow::bias;
 use concinnity_core::render::uniforms::grass::{
     GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassTileGpu, PlanetGrassTileGpu,
     grass_args_offset,
@@ -47,7 +49,7 @@ use super::encode::{ComputeEncode, RenderEncode};
 use super::error::allocation_failed;
 use super::pass_timing::PassId;
 use super::scoped_encoder::ScopedEncoder;
-use concinnity_core::render::shader_programs::ShaderProgram;
+use concinnity_core::render::shader::programs::ShaderProgram;
 
 // Where the grass draws read their block and blades (`grass.hlsl`), clear of
 // every main-pass and pre-pass slot.
@@ -561,9 +563,9 @@ impl MtlContext {
         enc.set_pipeline(&grass.pipelines.shadow);
         enc.set_depth_stencil(&self.targets.depth_state);
         enc.setDepthBias_slopeScale_clamp(
-            shadow_bias::RASTER_CONSTANT,
-            shadow_bias::RASTER_SLOPE,
-            shadow_bias::RASTER_CLAMP,
+            bias::RASTER_CONSTANT,
+            bias::RASTER_SLOPE,
+            bias::RASTER_CLAMP,
         );
         enc.setCullMode(MTLCullMode::None);
         enc.set_vertex_value(&pass.params, SHADOW_PARAMS_INDEX);
@@ -673,7 +675,7 @@ fn dispatch_groups(
         depth: z as usize,
     };
     let threads = MTLSize {
-        width: concinnity_core::render::grass::tiles::GRASS_GROUP_SIZE as usize,
+        width: concinnity_core::render::environment::grass::tiles::GRASS_GROUP_SIZE as usize,
         height: 1,
         depth: 1,
     };

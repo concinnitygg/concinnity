@@ -334,9 +334,9 @@ mod tests {
 
     #[test]
     fn the_filter_threshold_matches_the_shader() {
-        let src = crate::render::shaders::COMPOSITE;
+        let src = crate::render::shader::embedded::COMPOSITE;
         assert_eq!(
-            crate::render::shader_consts::uint(src, "LUT_FILTER_MIN_SIZE"),
+            crate::render::shader::consts::uint(src, "LUT_FILTER_MIN_SIZE"),
             LUT_FILTER_MIN_SIZE as usize
         );
         assert!((MIN_LUT_SIZE..=MAX_LUT_SIZE).contains(&LUT_FILTER_MIN_SIZE));

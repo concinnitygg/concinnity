@@ -10,9 +10,9 @@
 
 use concinnity_core::gfx::render_types::{LightUniforms, LineVertex, ShadowUniforms, TextDrawCall};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::frame_plan::FramePlan;
-use concinnity_core::render::pass_timing;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::backend::pass_timing;
+use concinnity_core::render::frame::plan::FramePlan;
 use concinnity_core::render::render_graph::PassId;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -60,7 +60,7 @@ pub(super) struct RecordFrameView<'a> {
     // lines, which also drops the pass from the graph.
     pub lines: &'a [LineVertex],
     // What may be trampling the grass this frame.
-    pub grass_benders: &'a [concinnity_core::render::grass::GrassBender],
+    pub grass_benders: &'a [concinnity_core::render::environment::grass::GrassBender],
     pub particle: Option<concinnity_core::render::particles::ParticleFrame>,
 }
 
@@ -222,11 +222,12 @@ impl DxContext {
             );
         }
         self.grass_lod.set(self.grass.as_ref().map(|g| {
-            g.field
-                .lod_view(concinnity_core::render::grass::lod::focal_length(
+            g.field.lod_view(
+                concinnity_core::render::environment::grass::lod::focal_length(
                     height,
                     fov_y_radians,
-                ))
+                ),
+            )
         }));
         self.upload_canopy(frame_idx);
 

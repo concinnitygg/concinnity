@@ -4,7 +4,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 
 use super::CullPlan;
 use super::bindless::BindlessPass;

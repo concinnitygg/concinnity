@@ -11,7 +11,7 @@ use alloc::format;
 use crate::components::{LoadingOverlay, ScreenCommand, Sprite, TextLabel};
 use crate::ecs::asset_id::AssetId;
 use crate::render::scene_flow::{ActiveSceneFlow, FadePhase};
-use crate::render::scene_residency::{SceneLoadState, SceneResidencyStatus};
+use crate::render::streaming::scene_residency::{SceneLoadState, SceneResidencyStatus};
 
 // Seconds the backdrop takes to fade out over the freshly resident scene.
 const FADE_OUT_SECS: f32 = 0.35;

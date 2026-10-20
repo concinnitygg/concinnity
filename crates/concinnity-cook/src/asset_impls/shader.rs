@@ -1,6 +1,6 @@
 use concinnity_core::components::{Shader, ShaderPrograms, ShaderStage};
-use concinnity_core::render::shader_programs::surface::Sources;
-use concinnity_core::render::shader_source::SourceFile;
+use concinnity_core::render::shader::programs::surface::Sources;
+use concinnity_core::render::shader::source::SourceFile;
 
 use crate::asset::BuildCtx;
 use crate::compile::shader::{compile_world_shader, read_shader_source};
@@ -182,8 +182,8 @@ mod tests {
     #[test]
     fn a_shader_cooked_for_several_targets_carries_each_targets_programs() {
         use concinnity_core::platform::{Platform, PlatformSet};
-        use concinnity_core::render::shader_programs::surface;
-        use concinnity_core::render::shader_source::source_digest;
+        use concinnity_core::render::shader::programs::surface;
+        use concinnity_core::render::shader::source::source_digest;
 
         concinnity_shader::require_dxc!();
         let sources = Sources {

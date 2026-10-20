@@ -1,7 +1,7 @@
 //! Two-pass occlusion: the phase-2 cull pipeline and the second
 //! indirect-command buffers its disocclusion draws consume.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::CullPlan;

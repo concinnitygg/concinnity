@@ -1,7 +1,7 @@
 //! The compute cull: the phase-1 and phase-2 decision kernels, the ICB encode
 //! kernel, and the Hi-Z depth pyramid the occlusion test reads.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLArgumentEncoder, MTLComputePipelineState};

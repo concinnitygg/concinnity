@@ -5,9 +5,9 @@
 
 use ash::vk;
 use concinnity_core::gfx::auto_exposure;
-use concinnity_core::render::backend_init::{PlanarBudget, WorldFx};
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::backend::init::{PlanarBudget, WorldFx};
 use concinnity_core::render::decal;
-use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::planar_reflection::PlanarReflectors;
 use concinnity_core::settings::ResolvedGraphics;
 

@@ -367,7 +367,7 @@ mod tests {
     use crate::editor::panels::shader_reference::{RefRow, Reference};
     use concinnity_core::components::TextLabel;
     use concinnity_core::ecs::asset_id::AssetId;
-    use concinnity_core::render::shader_programs::vocabulary::ENTRIES;
+    use concinnity_core::render::shader::programs::vocabulary::ENTRIES;
 
     const M: Metrics = Metrics {
         line_h: 20.0,

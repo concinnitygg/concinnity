@@ -18,8 +18,8 @@ use std::collections::BTreeMap;
 
 use crate::shader::source;
 use concinnity_core::platform::Platform;
-use concinnity_core::render::shader_programs::{ShaderProgram, metal, shared};
-use concinnity_core::render::shader_source::Splice;
+use concinnity_core::render::shader::programs::{ShaderProgram, metal, shared};
+use concinnity_core::render::shader::source::Splice;
 use concinnity_shader::layout::StructLayout;
 
 // The module whose decorations state `platform`'s layout. The split is the

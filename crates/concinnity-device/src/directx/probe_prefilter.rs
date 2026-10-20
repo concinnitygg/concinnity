@@ -24,8 +24,8 @@
 //! one subresource at a time, so the cubes other frames sample never move.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reflection_probe::PrefilterPlan;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::probe::capture::PrefilterPlan;
 use concinnity_core::render::uniforms::ProbePrefilterParams;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;

@@ -4,7 +4,7 @@
 //! driving) so the verbs stay unit-testable against a hand-built snapshot.
 
 use concinnity_core::profile;
-use concinnity_core::render::stream_pools::StreamingStats;
+use concinnity_core::render::streaming::pools::StreamingStats;
 use concinnity_core::shutdown::ShutdownToken;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -101,7 +101,7 @@ pub(crate) struct BudgetMemory {
 }
 
 // A read-only snapshot of the streaming RAM back-off valve (see
-// `concinnity_core::render::stream_pools::StreamingPressure`), served
+// `concinnity_core::render::streaming::pools::StreamingPressure`), served
 // alongside the `streaming` query so the valve is headless-verifiable.
 #[derive(Clone, Copy, Default, serde::Serialize)]
 pub(crate) struct PressureSnapshot {

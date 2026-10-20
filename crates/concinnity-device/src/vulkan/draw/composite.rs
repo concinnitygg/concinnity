@@ -14,7 +14,7 @@
 use ash::vk;
 use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::fullscreen;
 use concinnity_core::render::fullscreen::TextBindCache;
 

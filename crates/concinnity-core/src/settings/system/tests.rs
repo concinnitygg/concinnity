@@ -11,10 +11,10 @@ use crate::components::{
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{FrameRateCap, HudPrefs, StepResult, System, World};
 use crate::input::keymap::{Bindable, KeyMap};
+use crate::render::backend::init::ShadowCadence;
 use crate::render::backend::{GpuProfile, GpuVendor};
-use crate::render::backend_init::ShadowCadence;
-use crate::render::dlss::DlssPreset;
-use crate::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
+use crate::render::output::dlss::DlssPreset;
+use crate::render::temporal::history_reset::{HistoryResetCauses, PendingHistoryReset};
 use crate::settings::UserGraphicsSettings;
 use crate::settings::system::EventCursor;
 use crate::settings::system::RenderOps;
@@ -931,7 +931,7 @@ fn quality_cycle_knob_rebuilds_and_flips_to_custom() {
 // pressure for the streaming valve; any other failure only logs.
 #[test]
 fn quality_rebuild_out_of_memory_raises_memory_pressure() {
-    use crate::render::error::RenderError;
+    use crate::render::backend::error::RenderError;
 
     for (error, pressure) in [
         (
@@ -1404,10 +1404,10 @@ fn step_drains_into_the_op_queue_and_reparks() {
             .send(cycle(SettingKey::Vsync, SettingOp::Next));
     }
     f.world
-        .insert_resource(crate::render::queues::ActiveRenderQueues::new(
-            crate::render::queues::RenderQueues {
+        .insert_resource(crate::render::frame::queues::ActiveRenderQueues::new(
+            crate::render::frame::queues::RenderQueues {
                 ops: RenderOps::default(),
-                slots: crate::render::render_slots::RenderSlots::new(0, true, &[]),
+                slots: crate::render::slots::render_slots::RenderSlots::new(0, true, &[]),
             },
         ));
     f.world.insert_resource(super::SettingsSlot::new(f.state));
@@ -1416,8 +1416,9 @@ fn step_drains_into_the_op_queue_and_reparks() {
 
     assert!(f.world.context().resource::<HudPrefs>().is_some());
     assert!(super::SettingsSlot::get(f.world.context().resources).is_some());
-    let mut queues = crate::render::queues::ActiveRenderQueues::take(f.world.context().resources)
-        .expect("the op queue is parked again");
+    let mut queues =
+        crate::render::frame::queues::ActiveRenderQueues::take(f.world.context().resources)
+            .expect("the op queue is parked again");
     queues.ops.replay(&mut f.backend);
     assert!(
         f.calls.lock().saw(&Call::SetVsync(true)),

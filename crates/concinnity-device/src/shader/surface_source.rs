@@ -14,9 +14,9 @@
 
 use concinnity_core::components::ShaderPrograms;
 use concinnity_core::platform::Platform;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::shader_programs::surface::{self, Sources};
-use concinnity_core::render::shader_source;
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::shader::programs::surface::{self, Sources};
+use concinnity_core::render::shader::source;
 use std::borrow::Cow;
 
 /// Which host asks, and whether it assembles from the checkout.
@@ -43,7 +43,7 @@ pub(crate) fn artifact<'a>(
     let label = programs.name.as_str();
     let entry = program.entry;
     let source = source(program, req, &programs.sources());
-    let digest = shader_source::source_digest(&source);
+    let digest = source::source_digest(&source);
     if let Some(bytes) = programs.artifact(entry, digest) {
         return Ok(Cow::Borrowed(bytes));
     }
@@ -72,7 +72,7 @@ mod tests {
     use super::*;
     use concinnity_core::components::ShaderSource;
     use concinnity_core::components::compiled_programs::CompiledProgram;
-    use concinnity_core::render::error::RenderError;
+    use concinnity_core::render::backend::error::RenderError;
 
     const SHADE: &str = "float4 shade(VertexOut v, GpuObjectData od) { return (float4)(1.0); }";
 
@@ -100,7 +100,7 @@ mod tests {
         let src = surface::source(program, platform, &programs.sources());
         programs.programs.push(CompiledProgram {
             entry: program.entry.to_string(),
-            source_digest: shader_source::source_digest(&src),
+            source_digest: source::source_digest(&src),
             artifact: bytes.to_vec(),
         });
         programs
@@ -128,10 +128,7 @@ mod tests {
             surface::source(&surface::MAIN_FRAGMENT, Platform::Vulkan, &metal.sources());
         assert!(
             metal
-                .artifact(
-                    "fragment_main_bindless",
-                    shader_source::source_digest(&other_host)
-                )
+                .artifact("fragment_main_bindless", source::source_digest(&other_host))
                 .is_none()
         );
     }

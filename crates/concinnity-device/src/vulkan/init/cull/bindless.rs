@@ -5,10 +5,10 @@
 use ash::vk;
 use concinnity_core::gfx::render_types;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend_init::WorldShader;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::shader_programs::surface::GrassShading;
-use concinnity_core::render::world_pipelines::{BucketPlan, BucketSource, WorldPipelines};
+use concinnity_core::render::backend::error::RenderResult;
+use concinnity_core::render::backend::init::WorldShader;
+use concinnity_core::render::shader::programs::surface::GrassShading;
+use concinnity_core::render::shader::world_pipelines::{BucketPlan, BucketSource, WorldPipelines};
 
 use super::CullPlan;
 use crate::vulkan::context::{VkDescriptors, VkSceneAssets, VkTargets};

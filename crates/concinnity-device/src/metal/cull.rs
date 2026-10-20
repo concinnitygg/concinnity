@@ -7,9 +7,9 @@ use concinnity_core::gfx::cull_status::CullStatus;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::{lod, render_types};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::model_history::HistoryMode;
-use concinnity_core::render::shader_programs::metal::bindless_textures;
+use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_core::render::shader::programs::metal::bindless_textures;
+use concinnity_core::render::temporal::model_history::HistoryMode;
 use concinnity_core::transform::IDENTITY;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -85,7 +85,8 @@ pub(crate) struct CullState {
     // shader owned by a scene other than the start scene, and
     // `install_world_shader` builds it when that scene pins. Draws carrying a
     // `None` bucket are skipped.
-    pub world_pipelines: concinnity_core::render::world_pipelines::WorldPipelines<BucketPipelines>,
+    pub world_pipelines:
+        concinnity_core::render::shader::world_pipelines::WorldPipelines<BucketPipelines>,
     // The phase-1 decision kernel (`cull.hlsl`). `Some` only when `bindless`
     // is set; every other pipeline here is `Some` exactly when it is.
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
