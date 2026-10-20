@@ -6,9 +6,8 @@ use std::sync::{Arc, Condvar, Mutex, mpsc};
 use concinnity_core::render::error::RenderResult;
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 
-use super::image::CaptureImage;
+use super::image::{CaptureImage, save_png};
 use super::readback::ReadbackLease;
-use crate::png_encode::encode_png;
 
 // Captures recorded but not yet written, so the end of a run can wait them out.
 #[derive(Default)]
@@ -89,8 +88,8 @@ impl RetiredCapture {
     }
 }
 
-// Writes opaque RGBA8 of the given size to a path.
-type Encode = fn(&str, u32, u32, &[u8]) -> RenderResult<()>;
+// Writes read-back bytes laid out as the image to a path.
+type Encode = fn(&str, &CaptureImage, &[u8]) -> RenderResult<()>;
 
 /// Where retired captures go to be written. Cloned into whatever learns that a
 /// frame retired, such as a Metal completion handler.
@@ -110,8 +109,9 @@ struct Running {
     thread: std::thread::JoinHandle<()>,
 }
 
-/// The capture writer. Its thread starts on the first capture and, on drop,
-/// writes every capture already sent before it is joined.
+/// The capture writer. Its thread starts when the run enables capture, or else
+/// on the first capture, and on drop writes every capture already sent before it
+/// is joined.
 pub(crate) struct CaptureWriter {
     outstanding: Arc<Outstanding>,
     encode: Encode,
@@ -120,7 +120,7 @@ pub(crate) struct CaptureWriter {
 
 impl Default for CaptureWriter {
     fn default() -> Self {
-        Self::with_encode(encode_png)
+        Self::with_encode(save_png)
     }
 }
 
@@ -148,18 +148,28 @@ impl CaptureWriter {
         }
     }
 
-    /// The sender retired captures are written through, starting the thread on
-    /// first use.
-    pub(crate) fn sender(&mut self) -> CaptureSender {
+    /// Start the thread now, so the first capture does not.
+    pub(crate) fn start(&mut self) {
         if self.running.is_none() {
             self.running = spawn(self.encode);
         }
+    }
+
+    /// The sender retired captures are written through, starting the thread on
+    /// first use.
+    pub(crate) fn sender(&mut self) -> CaptureSender {
+        self.start();
         match &self.running {
             Some(running) => running.sender.clone(),
             // The thread could not start; a sender to nowhere abandons each
             // capture with a warning.
             None => CaptureSender(mpsc::channel().0),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_running(&self) -> bool {
+        self.running.is_some()
     }
 
     /// Block until every capture tracked so far is written or abandoned.
@@ -201,7 +211,8 @@ fn spawn(encode: Encode) -> Option<Running> {
     }
 }
 
-// Decode the capture, hand its buffer back, then compress and write the PNG.
+// Decode, compress and write the capture straight from its read-back buffer,
+// then hand the buffer back.
 fn write(capture: PendingCapture, encode: Encode) {
     let PendingCapture {
         path,
@@ -209,16 +220,16 @@ fn write(capture: PendingCapture, encode: Encode) {
         lease,
         _ticket,
     } = capture;
-    // SAFETY: a `RetiredCapture` is only built once its copy completed.
-    let rgba = image.to_rgba8(unsafe { lease.bytes() });
-    drop(lease);
     if let Some(dir) = std::path::Path::new(&path).parent()
         && !dir.as_os_str().is_empty()
         && let Err(e) = std::fs::create_dir_all(dir)
     {
         tracing::warn!("frame capture {path}: cannot create {}: {e}", dir.display());
     }
-    match rgba.and_then(|rgba| encode(&path, image.width, image.height, &rgba)) {
+    // SAFETY: a `RetiredCapture` is only built once its copy completed.
+    let saved = encode(&path, &image, unsafe { lease.bytes() });
+    drop(lease);
+    match saved {
         Ok(()) => tracing::info!("frame capture saved: {path}"),
         Err(e) => tracing::warn!("frame capture {path} failed: {e}"),
     }
@@ -308,7 +319,7 @@ mod tests {
     fn flush_waits_for_a_capture_still_on_the_writer_thread() {
         static BYTES: [u8; 8] = [0; 8];
         static SAVED: AtomicUsize = AtomicUsize::new(0);
-        fn slow_save(_: &str, _: u32, _: u32, _: &[u8]) -> RenderResult<()> {
+        fn slow_save(_: &str, _: &CaptureImage, _: &[u8]) -> RenderResult<()> {
             std::thread::sleep(std::time::Duration::from_millis(30));
             SAVED.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -328,7 +339,7 @@ mod tests {
     fn dropping_the_writer_finishes_captures_already_sent() {
         static BYTES: [u8; 8] = [0; 8];
         static SAVED: AtomicUsize = AtomicUsize::new(0);
-        fn slow_save(_: &str, _: u32, _: u32, _: &[u8]) -> RenderResult<()> {
+        fn slow_save(_: &str, _: &CaptureImage, _: &[u8]) -> RenderResult<()> {
             std::thread::sleep(std::time::Duration::from_millis(10));
             SAVED.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -358,7 +369,7 @@ mod tests {
     #[test]
     fn a_failed_save_still_returns_the_buffer_and_releases_flush() {
         static BYTES: [u8; 8] = [0; 8];
-        fn failing_save(_: &str, _: u32, _: u32, _: &[u8]) -> RenderResult<()> {
+        fn failing_save(_: &str, _: &CaptureImage, _: &[u8]) -> RenderResult<()> {
             Err(RenderError::Other("disk full".into()))
         }
         let mut pool = pool_over(&BYTES);

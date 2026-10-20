@@ -292,7 +292,7 @@ fn write_row(out: &mut impl Write, phase: &PhaseReport) -> fmt::Result {
 mod tests {
     use super::*;
     use crate::frame_report::reduce::ReduceOptions;
-    use crate::frame_report::sample::{FrameRun, FrameSample, MAX_SYSTEM_TIMINGS};
+    use crate::frame_report::sample::{FrameSample, MAX_SYSTEM_TIMINGS, Recorded};
     use crate::profile::{FanOutTiming, MAX_PASS_TIMINGS};
     use crate::render::render_graph::PassId;
     use alloc::string::ToString;
@@ -332,22 +332,19 @@ mod tests {
         }
     }
 
-    fn report_of(run: &FrameRun) -> Report {
-        Report::of(
-            run,
-            ReduceOptions {
-                warmup_seconds: 0.0,
-                ..Default::default()
-            },
-        )
+    fn report_of(run: &Recorded) -> Report {
+        run.reduce(ReduceOptions {
+            warmup_seconds: 0.0,
+            ..Default::default()
+        })
         .expect("measured frames")
     }
 
     fn rendered() -> String {
         let mut first = sample(0.0, Some(0), 10_000);
         first.pass_us[0] = 3_000;
-        let run = FrameRun {
-            samples: vec![first, sample(1.0, Some(1), 40_000)].into(),
+        let run = Recorded {
+            samples: vec![first, sample(1.0, Some(1), 40_000)],
             phases: vec!["approach".to_string(), "rays".to_string()],
             pass_names: vec!["main".to_string()],
             system_names: Vec::new(),
@@ -394,8 +391,8 @@ mod tests {
         let mut first = sample(0.0, Some(0), 10_000);
         first.pass_us[0] = 3_000;
         first.pass_us[1] = 500;
-        let run = FrameRun {
-            samples: vec![first].into(),
+        let run = Recorded {
+            samples: vec![first],
             phases: vec!["approach".to_string()],
             pass_names: vec!["main".to_string(), "sky".to_string()],
             system_names: Vec::new(),
@@ -413,8 +410,8 @@ mod tests {
         first.pass_us[0] = 3_000;
         first.pass_us[1] = 1_000;
         first.async_pass_mask = 0b10;
-        let run = FrameRun {
-            samples: vec![first].into(),
+        let run = Recorded {
+            samples: vec![first],
             phases: vec!["approach".to_string()],
             pass_names: vec!["main".to_string(), "light_cull".to_string()],
             system_names: Vec::new(),
@@ -430,8 +427,8 @@ mod tests {
         let mut first = sample(0.0, Some(0), 10_000);
         first.pass_us[0] = 6_000;
         first.gpu_overlap_us = 1_500;
-        let run = FrameRun {
-            samples: vec![first].into(),
+        let run = Recorded {
+            samples: vec![first],
             phases: vec!["approach".to_string()],
             pass_names: vec!["main".to_string()],
             system_names: Vec::new(),
@@ -459,8 +456,8 @@ mod tests {
                 f
             })
             .collect();
-        let run = FrameRun {
-            samples: frames.into(),
+        let run = Recorded {
+            samples: frames,
             phases: vec!["approach".to_string()],
             pass_names: Vec::new(),
             system_names: Vec::new(),
@@ -498,8 +495,8 @@ mod tests {
 
     #[test]
     fn a_run_that_did_not_finish_is_flagged_before_its_numbers() {
-        let run = FrameRun {
-            samples: vec![sample(0.0, Some(0), 10_000)].into(),
+        let run = Recorded {
+            samples: vec![sample(0.0, Some(0), 10_000)],
             phases: vec!["approach".to_string()],
             pass_names: Vec::new(),
             system_names: Vec::new(),
@@ -520,8 +517,8 @@ mod tests {
         hitch.pass_record_us[PassId::Main as usize] = 2_500;
         hitch.replay_us = 150;
         hitch.submit_present_us = 300;
-        let run = FrameRun {
-            samples: vec![sample(0.0, Some(0), 10_000), hitch].into(),
+        let run = Recorded {
+            samples: vec![sample(0.0, Some(0), 10_000), hitch],
             phases: vec!["approach".to_string(), "rays".to_string()],
             pass_names: vec!["main".to_string()],
             system_names: vec!["PhysicsSystem".to_string()],
@@ -553,8 +550,8 @@ mod tests {
         let mut only = sample(0.0, Some(0), 10_000);
         only.system_us[0] = 600;
         only.render_cpu_us = 400;
-        let run = FrameRun {
-            samples: vec![only].into(),
+        let run = Recorded {
+            samples: vec![only],
             phases: vec!["approach".to_string()],
             pass_names: Vec::new(),
             system_names: vec!["PhysicsSystem".to_string()],
@@ -580,8 +577,8 @@ mod tests {
             wall_us: 900,
             ..recording
         };
-        let run = FrameRun {
-            samples: vec![only].into(),
+        let run = Recorded {
+            samples: vec![only],
             phases: vec!["approach".to_string()],
             pass_names: Vec::new(),
             system_names: vec!["BehaviorSystem".to_string()],
@@ -619,8 +616,8 @@ mod tests {
     fn a_phase_with_no_pass_timings_lists_no_pass_block() {
         // A backend without timestamp support still gets a table, just no
         // per-pass breakdown under it.
-        let run = FrameRun {
-            samples: vec![sample(0.0, Some(0), 10_000)].into(),
+        let run = Recorded {
+            samples: vec![sample(0.0, Some(0), 10_000)],
             phases: vec!["approach".to_string()],
             pass_names: Vec::new(),
             system_names: Vec::new(),

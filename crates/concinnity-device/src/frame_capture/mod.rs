@@ -33,13 +33,18 @@ pub(crate) struct FrameCaptures<B, T> {
 }
 
 impl<B, T> FrameCaptures<B, T> {
-    /// Captures for a run that `enabled` frame capture, or did not.
+    /// Captures for a run that `enabled` frame capture, or did not. A run
+    /// that did starts its writer thread now, so no capture starts one.
     pub(crate) fn new(enabled: bool) -> Self {
+        let mut writer = CaptureWriter::default();
+        if enabled {
+            writer.start();
+        }
         Self {
             enabled,
             armed: None,
             in_flight: Vec::new(),
-            writer: CaptureWriter::default(),
+            writer,
             pool: ReadbackPool::default(),
         }
     }
@@ -169,6 +174,12 @@ mod tests {
     fn begin(captures: &mut FrameCaptures<(), u64>, path: &str) -> PendingCapture {
         let image = CaptureImage::tight(2, 1, PixelLayout::Rgba8);
         captures.begin(path.to_string(), image, host).unwrap().1
+    }
+
+    #[test]
+    fn a_run_that_captures_starts_its_writer_up_front() {
+        assert!(FrameCaptures::<(), u64>::new(true).writer.is_running());
+        assert!(!FrameCaptures::<(), u64>::new(false).writer.is_running());
     }
 
     #[test]

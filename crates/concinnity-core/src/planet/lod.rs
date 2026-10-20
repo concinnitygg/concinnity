@@ -56,7 +56,8 @@ const MAX_CACHED_BOUNDS: usize = 8 * super::MAX_RESIDENT_TILES;
 /// Each tile's bounds on one planet, computed the first time it is asked for.
 ///
 /// Bounds depend only on the planet and the tile, so a camera that revisits
-/// the quadtree every frame pays for each tile once.
+/// the quadtree every frame pays for each tile once. Room for every tile it
+/// can hold is reserved up front, so filling it never reallocates.
 #[derive(Debug, Clone)]
 pub struct TileBoundsCache {
     shape: PlanetShape,
@@ -68,7 +69,7 @@ impl TileBoundsCache {
     pub fn new(shape: PlanetShape) -> Self {
         Self {
             shape,
-            bounds: hashbrown::HashMap::new(),
+            bounds: hashbrown::HashMap::with_capacity(MAX_CACHED_BOUNDS),
         }
     }
 
@@ -399,6 +400,26 @@ mod tests {
         for &t in &sel.wanted {
             assert_eq!(c.get(t), tile_bounds(&l.shape, t));
         }
+    }
+
+    #[test]
+    fn a_full_cache_starts_over_in_the_room_it_reserved() {
+        let l = lod();
+        let mut c = cache(&l);
+        let reserved = c.bounds.capacity();
+        assert!(reserved >= MAX_CACHED_BOUNDS);
+        let side = 1u32 << 8;
+        let tiles = (0..side * side).map(|i| TileId {
+            face: CubeFace::ALL[0],
+            level: 8,
+            x: i % side,
+            y: i / side,
+        });
+        for tile in tiles.take(MAX_CACHED_BOUNDS + 1) {
+            c.get(tile);
+        }
+        assert_eq!(c.len(), 1);
+        assert_eq!(c.bounds.capacity(), reserved);
     }
 
     #[test]

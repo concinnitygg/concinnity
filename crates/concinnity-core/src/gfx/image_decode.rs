@@ -44,18 +44,25 @@ impl PixelLayout {
 /// classified layout. The alpha channel is forced to 255 so a saved image is
 /// opaque regardless of the composited alpha.
 pub fn decode_to_rgba8(raw: &[u8], layout: PixelLayout) -> Vec<u8> {
+    let mut out = Vec::with_capacity(raw.len() / layout.bytes_per_pixel() * 4);
+    decode_into_rgba8(raw, layout, &mut out);
+    out
+}
+
+/// Append `raw` decoded as [`decode_to_rgba8`] does to `out`, so a caller that
+/// decodes row by row reuses one buffer.
+pub fn decode_into_rgba8(raw: &[u8], layout: PixelLayout, out: &mut Vec<u8>) {
     match layout {
-        PixelLayout::Bgra8 => decode_8bit(raw, true),
-        PixelLayout::Rgba8 => decode_8bit(raw, false),
-        PixelLayout::Rgba16F { scrgb } => decode_rgba16f(raw, scrgb),
-        PixelLayout::A2b10g10r10 => decode_a2b10g10r10(raw),
+        PixelLayout::Bgra8 => decode_8bit(raw, true, out),
+        PixelLayout::Rgba8 => decode_8bit(raw, false, out),
+        PixelLayout::Rgba16F { scrgb } => decode_rgba16f(raw, scrgb, out),
+        PixelLayout::A2b10g10r10 => decode_a2b10g10r10(raw, out),
     }
 }
 
 // 8-bit-per-channel formats (4 B/px). `bgra` swizzles B and R; alpha is forced
 // opaque.
-fn decode_8bit(raw: &[u8], bgra: bool) -> Vec<u8> {
-    let mut out = Vec::with_capacity(raw.len());
+fn decode_8bit(raw: &[u8], bgra: bool, out: &mut Vec<u8>) {
     for px in raw.chunks_exact(4) {
         if bgra {
             out.extend_from_slice(&[px[2], px[1], px[0], 255]);
@@ -63,15 +70,13 @@ fn decode_8bit(raw: &[u8], bgra: bool) -> Vec<u8> {
             out.extend_from_slice(&[px[0], px[1], px[2], 255]);
         }
     }
-    out
 }
 
 // `RGBA16Float` HDR read-back (8 B/px, four halfs RGBA). On the scRGB-linear
 // path the stored values are linear extended-range (1.0 = SDR white), so apply
 // the sRGB OETF to get a valid (non-tonemapped) image. On the PQ path the stored
 // values are PQ code values already in [0, 1]; pass them through clamped.
-fn decode_rgba16f(raw: &[u8], scrgb: bool) -> Vec<u8> {
-    let mut out = Vec::with_capacity(raw.len() / 2);
+fn decode_rgba16f(raw: &[u8], scrgb: bool, out: &mut Vec<u8>) {
     for px in raw.chunks_exact(8) {
         let r = f16_to_f32(u16::from_le_bytes([px[0], px[1]]));
         let g = f16_to_f32(u16::from_le_bytes([px[2], px[3]]));
@@ -87,14 +92,12 @@ fn decode_rgba16f(raw: &[u8], scrgb: bool) -> Vec<u8> {
             out.extend_from_slice(&[unorm_to_u8(r), unorm_to_u8(g), unorm_to_u8(b), 255]);
         }
     }
-    out
 }
 
 // `A2B10G10R10_UNORM_PACK32` PQ fallback (4 B/px, one little-endian u32 per
 // texel: R in bits [9:0], G [19:10], B [29:20], A [31:30]). The values are PQ
 // code values, so this is not display-ready, but it is a valid image.
-fn decode_a2b10g10r10(raw: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(raw.len());
+fn decode_a2b10g10r10(raw: &[u8], out: &mut Vec<u8>) {
     for px in raw.chunks_exact(4) {
         let v = u32::from_le_bytes([px[0], px[1], px[2], px[3]]);
         let r = v & 0x3ff;
@@ -102,7 +105,6 @@ fn decode_a2b10g10r10(raw: &[u8]) -> Vec<u8> {
         let b = (v >> 20) & 0x3ff;
         out.extend_from_slice(&[u10_to_u8(r), u10_to_u8(g), u10_to_u8(b), 255]);
     }
-    out
 }
 
 // Decode an IEEE 754 half (binary16) to f32. Handles zero, subnormals, normals,
@@ -183,6 +185,13 @@ mod tests {
         let raw = [10u8, 20, 30, 40];
         let out = decode_to_rgba8(&raw, PixelLayout::Bgra8);
         assert_eq!(out, vec![30, 20, 10, 255]);
+    }
+
+    #[test]
+    fn decoding_into_a_buffer_appends_after_what_it_holds() {
+        let mut out = vec![1, 2, 3, 4];
+        decode_into_rgba8(&[10u8, 20, 30, 40], PixelLayout::Bgra8, &mut out);
+        assert_eq!(out, [1, 2, 3, 4, 30, 20, 10, 255]);
     }
 
     #[test]

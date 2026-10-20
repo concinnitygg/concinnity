@@ -4,7 +4,6 @@
 
 use ash::vk;
 use concinnity_core::bake::texture::TextureImage;
-use concinnity_core::gfx::render_types::clone_reserve;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend_init::{SceneData, WorldShader};
 use concinnity_core::render::error::RenderResult;
@@ -38,7 +37,6 @@ pub(super) fn plan_cull(
     textures: &[TextureImage],
 ) -> CullPlan {
     let hw = gpu.hw;
-    let draw_objects = &world.draw_objects;
     // Instanced props fold into the GPU-driven bindless cull buffers: each
     // instance becomes a `GpuObjectData` record appended after the `n_objects`
     // static records (written once at init), so the object / draw-args /
@@ -46,20 +44,12 @@ pub(super) fn plan_cull(
     // the cull kernel tests every instance independently. Skinned objects fold
     // in after the instances (a per-frame-rebuilt tail of `n_skinned` records),
     // so `n_cull` reserves their slots too. Mirrors `directx/init`.
-    let n_instances: usize = world
-        .instanced_clusters
-        .iter()
-        .map(|c| c.instances.len())
-        .sum();
+    let n_instances = world.instance_count();
     // Runtime record reserve (`[n_objects + n_instances, +n_runtime)`): the
     // worst-case resident streamed-chunk window plus the runtime-clone cap,
     // between the instances and the skinned tail; resident chunks fold in per
-    // frame. 0 for a non-voxel world.
-    let n_cull = draw_objects.len()
-        + n_instances
-        + world.n_chunk_max
-        + clone_reserve(draw_objects.len())
-        + world.n_skinned;
+    // frame.
+    let n_cull = world.cull_records();
 
     // GPU-driven static pass: active when there is anything to drive --
     // build-time static geometry, instances, streamed chunks, or skinned

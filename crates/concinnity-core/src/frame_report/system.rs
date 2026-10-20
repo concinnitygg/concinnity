@@ -52,7 +52,6 @@ pub struct FrameReportSystem {
     run: FrameRun,
     // The frame the previous step measured, waiting for its system timings.
     pending: Option<PendingFrame>,
-    options: ReduceOptions,
     benchmark: BenchmarkRun,
     // Where the report text goes.
     out: fn(&str),
@@ -95,13 +94,13 @@ impl FrameReportSystem {
     /// The system that measures `benchmark` and writes its report to `out`.
     pub fn new(benchmark: &BenchmarkRun, out: fn(&str)) -> Self {
         let config = &benchmark.config;
+        let options = ReduceOptions {
+            warmup_seconds: config.warmup_seconds,
+            budget_us: u32::saturating_from(config.budget_ms * MICROS_PER_MILLI),
+        };
         Self {
-            run: FrameRun::default(),
+            run: FrameRun::new(benchmark.phase_names().to_vec(), options),
             pending: None,
-            options: ReduceOptions {
-                warmup_seconds: config.warmup_seconds,
-                budget_us: u32::saturating_from(config.budget_ms * MICROS_PER_MILLI),
-            },
             benchmark: benchmark.clone(),
             out,
             reported: false,
@@ -138,12 +137,12 @@ impl FrameReportSystem {
     }
 
     fn write_text(&self, text: &mut impl Write) -> fmt::Result {
-        match Report::of(&self.run, self.options) {
+        match Report::of(&self.run) {
             Some(report) => write_report(text, &report)?,
             None => writeln!(
                 text,
                 "frame report: no frames past the {:.1}s warm-up, so there is nothing to measure",
-                self.options.warmup_seconds,
+                self.run.options.warmup_seconds,
             )?,
         }
         if self.hidden.total() > 0 {
@@ -178,10 +177,6 @@ impl FrameReportSystem {
 }
 
 impl System for FrameReportSystem {
-    fn init(&mut self, _ctx: &mut PipelineContext<'_>) {
-        self.run.phases = self.benchmark.phase_names().to_vec();
-    }
-
     fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         let now = ctx.resource::<Clock>().map_or(0, Clock::read);
         let started = *self.started.get_or_insert(now);
@@ -235,7 +230,7 @@ impl System for FrameReportSystem {
             render,
         };
         let hidden = ctx.resource::<WindowMinimized>().is_some_and(|m| m.0);
-        let past_warmup = run_seconds >= self.options.warmup_seconds;
+        let past_warmup = run_seconds >= self.run.options.warmup_seconds;
         let unseen = self
             .hidden
             .leaves_out(hidden, this_frame.timing.phase, past_warmup);
@@ -243,7 +238,7 @@ impl System for FrameReportSystem {
         if let Some(frame) = core::mem::replace(&mut self.pending, recorded) {
             let systems = ctx.profile.system_timings();
             self.run.capture_system_names(systems);
-            self.run.samples.push(&FrameSample::new(
+            self.run.record(&FrameSample::new(
                 frame.timing,
                 &frame.render,
                 systems,
@@ -368,8 +363,8 @@ mod tests {
             budget_ms: 8.0,
             ..Default::default()
         }));
-        assert_eq!(system.options.warmup_seconds, 4.5);
-        assert_eq!(system.options.budget_us, 8_000);
+        assert_eq!(system.run.options.warmup_seconds, 4.5);
+        assert_eq!(system.run.options.budget_us, 8_000);
     }
 
     #[test]
@@ -381,9 +376,9 @@ mod tests {
         system.init(&mut world.context());
         step(&mut world, &mut camera, &mut system);
         step(&mut world, &mut camera, &mut system);
-        assert!(system.run().samples.is_empty());
+        assert!(system.run().recorded.is_empty());
         step(&mut world, &mut camera, &mut system);
-        assert_eq!(system.run().samples.len(), 1);
+        assert_eq!(system.run().recorded.len(), 1);
     }
 
     // One step of the world as the report sees it: the profile rotated, the
@@ -419,12 +414,12 @@ mod tests {
         profiled_step(&mut world, &mut system, (450, 50), 100);
         profiled_step(&mut world, &mut system, (450, 50), 100);
 
-        let samples = &system.run().samples;
+        let samples = &system.run().recorded;
         assert_eq!(samples.len(), 2);
-        assert_eq!(samples.get(0).unwrap().gpu_wait_us, 29_800);
-        assert_eq!(samples.get(0).unwrap().system_us[0], 400);
-        assert_eq!(samples.get(1).unwrap().gpu_wait_us, 100);
-        assert_eq!(samples.get(1).unwrap().system_us[0], 400);
+        assert_eq!(samples[0].gpu_wait_us, 29_800);
+        assert_eq!(samples[0].system_us[0], 400);
+        assert_eq!(samples[1].gpu_wait_us, 100);
+        assert_eq!(samples[1].system_us[0], 400);
     }
 
     // The frame time is the step clock's interval, not this system's own.
@@ -440,7 +435,7 @@ mod tests {
             });
             profiled_step(&mut world, &mut system, (500, 0), 0);
         }
-        assert_eq!(system.run().samples.get(0).unwrap().frame_us, 25_000);
+        assert_eq!(system.run().recorded[0].frame_us, 25_000);
     }
 
     // A completed frame is paired with the pose its tick left, and the next
@@ -475,8 +470,8 @@ mod tests {
         }
         // Samples are recorded a step late: the last one is the fourth tick's,
         // which saw the second completion.
-        let samples = &system.run().samples;
-        let last = samples.get(samples.len() - 1).unwrap();
+        let samples = &system.run().recorded;
+        let last = samples[samples.len() - 1];
         assert_eq!(last.input_latency_us, 48_000);
         assert_eq!(last.shown_us, 25_000);
         assert!(
@@ -487,10 +482,8 @@ mod tests {
     }
 
     #[test]
-    fn the_runs_phase_names_are_captured_at_init() {
-        let mut world = World::new();
-        let mut system = report(&benchmark(&[("approach", 2.0), ("rays", 2.0)]));
-        system.init(&mut world.context());
+    fn the_runs_phase_names_are_captured_when_it_is_built() {
+        let system = report(&benchmark(&[("approach", 2.0), ("rays", 2.0)]));
         assert_eq!(system.run().phases, ["approach", "rays"]);
     }
 
@@ -502,9 +495,9 @@ mod tests {
         for _ in 0..3 {
             system.step(&mut world.context());
         }
-        assert_eq!(system.run().samples.len(), 1);
+        assert_eq!(system.run().recorded.len(), 1);
         // Inside the default warm-up, so in no phase yet.
-        assert_eq!(system.run().samples.get(0).unwrap().phase, None);
+        assert_eq!(system.run().recorded[0].phase, None);
         assert!(!system.run().completed);
     }
 
@@ -520,9 +513,9 @@ mod tests {
             step(&mut world, &mut camera, &mut system);
         }
         let run = system.run();
-        assert!(run.samples.iter().all(|s| s.phase == Some(0)));
+        assert!(run.recorded.iter().all(|s| s.phase == Some(0)));
         // Track time advances on the fixed step, so successive samples differ.
-        assert!(run.samples.get(1).unwrap().run_seconds > run.samples.get(0).unwrap().run_seconds);
+        assert!(run.recorded[1].run_seconds > run.recorded[0].run_seconds);
     }
 
     #[test]
@@ -553,7 +546,7 @@ mod tests {
         }
         let steps: Vec<(u32, bool)> = system
             .run()
-            .samples
+            .recorded
             .iter()
             .map(|s| (s.run_step_us, s.rebased))
             .collect();
@@ -616,7 +609,7 @@ mod tests {
         // and the one after it are both in.
         system.step(&mut world.context());
         system.step(&mut world.context());
-        assert_eq!(system.run().samples.len(), 2);
+        assert_eq!(system.run().recorded.len(), 2);
         assert!(world.resource::<FrameCaptureRequest>().is_none());
     }
 
@@ -667,10 +660,10 @@ mod tests {
             system.step(&mut world.context());
         }
         // Only the frame before the window hid made it in.
-        assert_eq!(system.run().samples.len(), 1);
+        assert_eq!(system.run().recorded.len(), 1);
         system.step(&mut world.context());
         system.step(&mut world.context());
-        assert_eq!(system.run().samples.len(), 2);
+        assert_eq!(system.run().recorded.len(), 2);
         assert_eq!(system.hidden.total(), 3 + RESTORE_DROPPED_FRAMES);
     }
 
@@ -732,7 +725,7 @@ mod tests {
         for _ in 0..3 {
             system.step(&mut world.context());
         }
-        let sample = system.run().samples.get(0).unwrap();
+        let sample = system.run().recorded[0];
         assert_eq!(sample.frame_us, 20_000);
         assert!((sample.run_seconds - 0.02).abs() < 1e-6);
     }

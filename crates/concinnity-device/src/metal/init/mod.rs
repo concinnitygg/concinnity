@@ -162,12 +162,9 @@ impl MtlContext {
             hot_reload,
             capture,
             embedded_surface,
-            // `n_skinned` and `n_chunk_max` are unused on Metal: the object /
-            // draw-args transient rings and the cull ICB auto-grow to
-            // `cull_count()` each frame (the skinned count is set later in
-            // `upload_skinned`, and resident chunks fold into the per-frame
-            // rebuild), so no init-time sizing is needed. DX/VK pre-size fixed
-            // buffers from these.
+            // The object / draw-args transient rings grow to `cull_count()`
+            // each frame; the cull ICBs are first built for the scene's whole
+            // record reserve, so streamed records never regrow them.
             scene: world,
             shaders: world_shaders,
             media,
@@ -264,6 +261,7 @@ impl MtlContext {
                 features: &features,
                 shadow_enabled: shadow.enabled,
                 occlusion_two_pass: graphics.culling.two_pass_occlusion,
+                reserved_records: world.cull_records(),
             },
         )?;
         let probe = cull::build_probe(&gpu, &cull)?;

@@ -56,6 +56,18 @@ struct ViewSet<'a> {
 // toggle, and the Hi-Z depth pyramid + the view-projection snapshots the
 // occlusion test reprojects through. All `Some`/active only when the world
 // has 3D scene content; a UI-only world leaves every field `None` / default.
+// Command slots for an ICB that must hold `needed` records: the whole
+// `reserved` count while that covers them, so it is built once, else the next
+// power of two so growth past the reserve rebuilds rarely.
+pub(super) fn icb_capacity(needed: usize, reserved: usize) -> usize {
+    if needed <= reserved {
+        reserved
+    } else {
+        needed.next_power_of_two()
+    }
+    .max(64)
+}
+
 pub(crate) struct CullState {
     // True when the GPU-driven main pass exists: a world with 3D scene
     // content. The static draw loop then reads each object from the per-frame
@@ -96,6 +108,9 @@ pub(crate) struct CullState {
     // Command capacity of each of `icbs`; 0 until first built. `icbs_2` +
     // `status_buffer` grow in lockstep with it.
     pub icb_capacity: usize,
+    // Records every ICB is sized for when first built (`SceneData::cull_records`),
+    // so streamed tiles and chunks fill it rather than regrowing it mid-run.
+    pub reserved_records: usize,
     // Second-pass decision kernel for two-pass occlusion. `Some` whenever
     // `pipeline` is; used only when `two_pass_occlusion` is on.
     pub pipeline_phase2: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
@@ -1288,6 +1303,29 @@ pub(super) fn build_shadow_cull_pipeline(
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLComputePipelineState>>> {
     compute_pipeline(device, &super::builtin_shaders::CULL_SHADOW, hot_reload)
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::icb_capacity;
+
+    #[test]
+    fn a_count_within_the_reserve_gets_the_whole_reserve() {
+        assert_eq!(icb_capacity(10, 4_300), 4_300);
+        assert_eq!(icb_capacity(4_300, 4_300), 4_300);
+    }
+
+    #[test]
+    fn growth_past_the_reserve_rounds_to_a_power_of_two() {
+        assert_eq!(icb_capacity(4_301, 4_300), 8_192);
+        assert_eq!(icb_capacity(100, 0), 128);
+    }
+
+    #[test]
+    fn a_tiny_capacity_is_raised_to_the_floor() {
+        assert_eq!(icb_capacity(1, 0), 64);
+        assert_eq!(icb_capacity(0, 10), 64);
+    }
 }
 
 #[cfg(test)]

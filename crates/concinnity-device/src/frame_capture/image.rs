@@ -3,7 +3,7 @@
 use concinnity_core::gfx::image_decode::{self, PixelLayout};
 use concinnity_core::render::error::{RenderError, RenderResult};
 
-use crate::png_encode::encode_png;
+use crate::png_encode::encode_png_rows;
 
 /// How a frame's pixels lie in read-back memory: `height` rows of `width`
 /// texels, each row starting `row_pitch` bytes after the last.
@@ -40,8 +40,9 @@ impl CaptureImage {
         }
     }
 
-    /// The image as opaque, tightly packed RGBA8.
-    pub(crate) fn to_rgba8(self, bytes: &[u8]) -> RenderResult<Vec<u8>> {
+    /// The texels of each row of `bytes`, top to bottom, padding left out.
+    /// Fails when `bytes` cannot hold the image at its pitch.
+    pub(crate) fn rows<'a>(&self, bytes: &'a [u8]) -> RenderResult<impl Iterator<Item = &'a [u8]>> {
         if bytes.len() < self.byte_len() || self.row_pitch < self.row_bytes() {
             return Err(RenderError::Other(format!(
                 "capture: {} bytes cannot hold a {}x{} image at a {}-byte pitch",
@@ -51,26 +52,21 @@ impl CaptureImage {
                 self.row_pitch
             )));
         }
-        let row = self.row_bytes();
-        if self.row_pitch == row {
-            return Ok(image_decode::decode_to_rgba8(
-                &bytes[..self.byte_len()],
-                self.layout,
-            ));
-        }
-        let mut packed = Vec::with_capacity(row * self.height as usize);
-        for y in 0..self.height as usize {
-            let start = y * self.row_pitch;
-            packed.extend_from_slice(&bytes[start..start + row]);
-        }
-        Ok(image_decode::decode_to_rgba8(&packed, self.layout))
+        let (pitch, row) = (self.row_pitch, self.row_bytes());
+        Ok((0..self.height as usize).map(move |y| &bytes[y * pitch..y * pitch + row]))
     }
 }
 
-/// Decode `bytes` laid out as `image` and write them to a PNG at `path`.
+/// Decode `bytes` laid out as `image` and write them to a PNG at `path`, a row
+/// at a time, so no full-size copy of the frame is made.
 pub(crate) fn save_png(path: &str, image: &CaptureImage, bytes: &[u8]) -> RenderResult<()> {
-    let rgba = image.to_rgba8(bytes)?;
-    encode_png(path, image.width, image.height, &rgba)
+    let mut rows = image.rows(bytes)?;
+    encode_png_rows(path, image.width, image.height, |_, out| {
+        if let Some(row) = rows.next() {
+            image_decode::decode_into_rgba8(row, image.layout, out);
+        }
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -105,8 +101,12 @@ mod tests {
             1, 2, 3, 0, 4, 5, 6, 0, 99, 99, 99, 99,
             7, 8, 9, 0, 10, 11, 12, 0,
         ];
+        let mut rgba = Vec::new();
+        for row in image.rows(&bytes).unwrap() {
+            image_decode::decode_into_rgba8(row, image.layout, &mut rgba);
+        }
         assert_eq!(
-            image.to_rgba8(&bytes).unwrap(),
+            rgba,
             [3, 2, 1, 255, 6, 5, 4, 255, 9, 8, 7, 255, 12, 11, 10, 255]
         );
     }
@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn a_short_read_back_is_an_error_not_a_panic() {
         let image = CaptureImage::tight(4, 4, PixelLayout::Rgba8);
-        assert!(image.to_rgba8(&[0; 63]).is_err());
+        assert!(image.rows(&[0; 63]).is_err());
     }
 
     #[test]
@@ -123,6 +123,6 @@ mod tests {
             row_pitch: 4,
             ..CaptureImage::tight(2, 1, PixelLayout::Rgba8)
         };
-        assert!(image.to_rgba8(&[0; 64]).is_err());
+        assert!(image.rows(&[0; 64]).is_err());
     }
 }

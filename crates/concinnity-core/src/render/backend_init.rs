@@ -11,7 +11,7 @@ use crate::components::{
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{
     AreaLightData, DrawObject, GpuLight, GpuMaterialParams, InstancedCluster, LightUniforms,
-    SpotShadowData,
+    SpotShadowData, clone_reserve,
 };
 use crate::platform::Platform;
 use crate::render::backend::RenderBackend;
@@ -40,16 +40,38 @@ pub struct SceneData<'a> {
     /// instances + skinned) at init; the skinned geometry itself is uploaded
     /// later via `upload_skinned`.
     pub n_skinned: usize,
-    /// Worst-case resident chunk count for a streaming `VoxelWorld` (0
-    /// otherwise). Reserves a chunk record region in the shared GPU-cull
-    /// buffers at init; resident chunks fold into the indirect path each
-    /// frame. Honored by DirectX + Vulkan; Metal's per-frame rebuild already
-    /// covers chunks, so it needs no reserve.
+    /// Worst-case resident chunk count for a streaming `VoxelWorld` or a
+    /// planet's tiles (0 otherwise). Reserves a chunk record region in the
+    /// shared GPU-cull buffers at init; resident chunks fold into the indirect
+    /// path each frame.
     pub n_chunk_max: usize,
     /// The material parameter table's rows (see
     /// [`crate::render::material_params`]): the zero row, then one per
     /// material in handle order. Every draw's `params_index` addresses it.
     pub material_params: Vec<GpuMaterialParams>,
+}
+
+impl SceneData<'_> {
+    /// Instances across every instanced cluster.
+    pub fn instance_count(&self) -> usize {
+        self.instanced_clusters
+            .iter()
+            .map(|c| c.instances.len())
+            .sum()
+    }
+
+    /// Records the GPU cull covers with every reserve full: the static
+    /// objects, the instances, the streamed-chunk window, the runtime-clone
+    /// budget, then the skinned objects. Backends size their cull buffers for
+    /// this many records at init.
+    pub fn cull_records(&self) -> usize {
+        let n_objects = self.draw_objects.len();
+        n_objects
+            + self.instance_count()
+            + self.n_chunk_max
+            + clone_reserve(n_objects)
+            + self.n_skinned
+    }
 }
 
 /// One world Shader as the backend receives it: the cook's compiled programs,
@@ -558,6 +580,19 @@ mod tests {
         let window = Window::default();
         let init = BackendInit::minimal(Platform::Metal, &window, Vec::new());
         assert!(init.embedded_surface.is_none());
+    }
+
+    #[test]
+    fn the_cull_reserve_covers_every_record_region() {
+        let mut scene = empty_scene();
+        assert_eq!(scene.cull_records(), 0);
+        scene.draw_objects = (0..3).map(|_| crate::test_support::draw_object()).collect();
+        scene.n_chunk_max = 4096;
+        scene.n_skinned = 2;
+        assert_eq!(
+            scene.cull_records(),
+            3 + 4096 + crate::gfx::render_types::MAX_CLONE_DRAWS + 2
+        );
     }
 
     #[test]

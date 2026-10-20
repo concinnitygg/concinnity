@@ -1,6 +1,5 @@
 // Samples in, report out. Pure: no clock, no world, no I/O.
 
-use crate::math::SaturatingFrom;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -9,7 +8,8 @@ use crate::render::render_graph::PassId;
 use serde::Serialize;
 
 use crate::frame_report::sample::{FrameRun, FrameSample};
-use crate::frame_report::stats::{Distribution, mean_u32, nearest_rank};
+use crate::frame_report::stats::Distribution;
+use crate::frame_report::tally::{FanOutMeans, PhaseTally};
 
 /// How many passes a phase lists. The tail is noise next to the handful that
 /// own the frame.
@@ -18,8 +18,8 @@ const PASSES_REPORTED: usize = 8;
 /// How many systems a phase lists, on the same reasoning.
 const SYSTEMS_REPORTED: usize = 6;
 
-/// The row for the graphics-queue passes that fell below the cut, as the
-/// median over the frames of what they came to together.
+/// The row for the graphics-queue passes that fell below the cut, as the sum
+/// of their medians.
 const OTHER_PASSES: &str = "other passes";
 
 /// The row for graphics-queue time no timed pass covers: a render pass's
@@ -51,9 +51,6 @@ const RENDER_RECORDING: &str = "render recording";
 /// The row for the render thread's packing of the per-draw cull records among
 /// the fan-outs.
 const RENDER_PACKING: &str = "render packing";
-
-/// How many of the run's slowest frames the report names.
-const SLOW_FRAMES_REPORTED: usize = 3;
 
 /// How many CPU rows, and how many passes, a slow frame lists.
 const SLOW_FRAME_ROWS: usize = 4;
@@ -286,26 +283,17 @@ pub(super) struct Pacing {
 }
 
 impl Pacing {
-    fn of(frames: &[&FrameSample]) -> Self {
-        // Thousandths, so the nearest-rank percentiles stay on frames that
-        // happened.
-        let shown: Vec<&&FrameSample> = frames.iter().filter(|s| s.shown_us > 0).collect();
-        let mut ratios: Vec<u32> = shown
-            .iter()
-            .map(|s| {
-                u32::saturating_from(u64::from(s.shown_step_us) * 1_000 / u64::from(s.shown_us))
-            })
-            .collect();
-        if ratios.is_empty() {
+    fn of(tally: &PhaseTally) -> Self {
+        if tally.pacing.count() == 0 {
             return Self::default();
         }
-        ratios.sort_unstable();
-        let at = |q| nearest_rank(&ratios, q) as f32 / 1_000.0;
+        // Thousandths, so the percentiles stay on frames that happened.
+        let at = |q| tally.pacing.percentile(q) as f32 / 1_000.0;
         Self {
             p5: at(0.05),
             p50: at(0.50),
             p95: at(0.95),
-            still_frames: shown.iter().filter(|s| s.shown_step_us == 0).count(),
+            still_frames: tally.still_frames,
         }
     }
 }
@@ -324,20 +312,11 @@ pub(super) struct InputLatency {
 }
 
 impl InputLatency {
-    fn of(frames: &[&FrameSample]) -> Self {
-        let mut latencies: Vec<u32> = frames
-            .iter()
-            .map(|s| s.input_latency_us)
-            .filter(|&us| us > 0)
-            .collect();
-        if latencies.is_empty() {
-            return Self::default();
-        }
-        latencies.sort_unstable();
+    fn of(tally: &PhaseTally) -> Self {
         Self {
-            p50_us: nearest_rank(&latencies, 0.50),
-            p95_us: nearest_rank(&latencies, 0.95),
-            frames: latencies.len(),
+            p50_us: tally.latency.percentile(0.50),
+            p95_us: tally.latency.percentile(0.95),
+            frames: tally.latency.count(),
         }
     }
 }
@@ -366,80 +345,68 @@ impl Report {
     /// Reduce a run. Returns `None` when the warm-up discard left nothing,
     /// which is a run too short to say anything about rather than a run of
     /// zeroes.
-    pub(super) fn of(run: &FrameRun, options: ReduceOptions) -> Option<Self> {
-        let measured: Vec<&FrameSample> = run
-            .samples
-            .iter()
-            .filter(|s| s.run_seconds >= options.warmup_seconds)
-            .collect();
-        if measured.is_empty() {
+    pub(super) fn of(run: &FrameRun) -> Option<Self> {
+        let tally = &run.tally;
+        if tally.overall.frames() == 0 {
             return None;
-        }
-        let mut phases = Vec::new();
-        for (index, name) in phase_order(&measured, run) {
-            let frames: Vec<&FrameSample> = measured
-                .iter()
-                .copied()
-                .filter(|s| s.phase == index)
-                .collect();
-            phases.push(summarize(name, &frames, run, options));
         }
         Some(Self {
             completed: run.completed,
-            warmup_dropped: run.samples.len() - measured.len(),
-            budget_us: options.budget_us,
-            overall: summarize("all".to_string(), &measured, run, options),
-            phases,
-            slowest: slowest_frames(&measured, run),
+            warmup_dropped: run.warmup_dropped,
+            budget_us: run.options.budget_us,
+            overall: summarize("all".to_string(), &tally.overall, run),
+            phases: tally
+                .entered()
+                .map(|(phase, stretch)| summarize(run.phase_name(phase).to_string(), stretch, run))
+                .collect(),
+            slowest: tally
+                .slowest
+                .iter()
+                .map(|sample| slow_frame(sample, run))
+                .collect(),
         })
     }
 }
 
-// The slowest frames, slowest first; the earlier of two equal ones first.
-fn slowest_frames(measured: &[&FrameSample], run: &FrameRun) -> Vec<SlowFrame> {
-    let mut by_time: Vec<&FrameSample> = measured.to_vec();
-    by_time.sort_by_key(|s| core::cmp::Reverse(s.frame_us));
-    by_time.truncate(SLOW_FRAMES_REPORTED);
-    by_time
-        .into_iter()
-        .map(|sample| SlowFrame {
-            run_seconds: sample.run_seconds,
-            phase: run.phase_name(sample.phase).to_string(),
-            frame_us: sample.frame_us,
-            cpu_us: stepped_us(sample, run),
-            gpu_wait_us: sample.gpu_wait_us,
-            gpu_frame_us: sample.gpu_frame_us,
-            cpu: largest(
-                named_slots(&run.system_names)
-                    .map(|(slot, name)| (name, sample.system_us[slot]))
-                    .chain(core::iter::once((RENDER_SUBMIT, sample.render_cpu_us))),
-            ),
-            passes: largest(
-                graphics_passes(sample, run).map(|(slot, name)| (name, sample.pass_us[slot])),
-            ),
-            gpu_gap_us: gap_us(sample, run),
-            gpu_overlap_us: sample.gpu_overlap_us,
-            run_step_us: sample.run_step_us,
-            rebased: sample.rebased,
-            fan_outs: fan_out_slots(run)
-                .map(|(slot, name)| FanOutCost::of(name, fan_out_in(sample, slot)))
-                .filter(|cost| cost.wall_us > 0)
-                .collect(),
-            recording: largest(
-                PassId::ALL
-                    .iter()
-                    .map(|id| (id.name(), sample.pass_record_us[*id as usize])),
-            ),
-            render: largest(
-                [
-                    ("replay", sample.replay_us),
-                    ("recording", sample.recording_fan_out.wall_us),
-                    ("submit and present", sample.submit_present_us),
-                ]
-                .into_iter(),
-            ),
-        })
-        .collect()
+// One of the slowest frames, broken down.
+fn slow_frame(sample: &FrameSample, run: &FrameRun) -> SlowFrame {
+    SlowFrame {
+        run_seconds: sample.run_seconds,
+        phase: run.phase_name(sample.phase).to_string(),
+        frame_us: sample.frame_us,
+        cpu_us: run.cpu_us(sample),
+        gpu_wait_us: sample.gpu_wait_us,
+        gpu_frame_us: sample.gpu_frame_us,
+        cpu: largest(
+            named_slots(&run.system_names)
+                .map(|(slot, name)| (name, sample.system_us[slot]))
+                .chain(core::iter::once((RENDER_SUBMIT, sample.render_cpu_us))),
+        ),
+        passes: largest(
+            graphics_passes(sample, run).map(|(slot, name)| (name, sample.pass_us[slot])),
+        ),
+        gpu_gap_us: gap_us(sample, run),
+        gpu_overlap_us: sample.gpu_overlap_us,
+        run_step_us: sample.run_step_us,
+        rebased: sample.rebased,
+        fan_outs: fan_out_slots(run)
+            .map(|(slot, name)| FanOutCost::of(name, fan_out_in(sample, slot)))
+            .filter(|cost| cost.wall_us > 0)
+            .collect(),
+        recording: largest(
+            PassId::ALL
+                .iter()
+                .map(|id| (id.name(), sample.pass_record_us[*id as usize])),
+        ),
+        render: largest(
+            [
+                ("replay", sample.replay_us),
+                ("recording", sample.recording_fan_out.wall_us),
+                ("submit and present", sample.submit_present_us),
+            ]
+            .into_iter(),
+        ),
+    }
 }
 
 // Where a sample keeps one fan-out's timing.
@@ -470,27 +437,29 @@ fn fan_out_in(sample: &FrameSample, slot: FanOutSlot) -> FanOutTiming {
     }
 }
 
+// A stretch's means for one fan-out slot.
+fn fan_out_means_in(tally: &PhaseTally, slot: FanOutSlot) -> &FanOutMeans {
+    let index = match slot {
+        FanOutSlot::Recording => 0,
+        FanOutSlot::Packing => 1,
+        FanOutSlot::System(slot) => 2 + slot,
+    };
+    &tally.fan_outs[index]
+}
+
 // The fan-outs over a stretch, each as means over the frames it ran in,
 // leaving out the ones that never ran.
-fn fan_out_means(frames: &[&FrameSample], run: &FrameRun) -> Vec<FanOutCost> {
+fn fan_out_means(tally: &PhaseTally, run: &FrameRun) -> Vec<FanOutCost> {
     fan_out_slots(run)
         .map(|(slot, name)| {
-            let mean = |field: fn(FanOutTiming) -> u32| {
-                mean_u32(
-                    frames
-                        .iter()
-                        .map(|s| fan_out_in(s, slot))
-                        .filter(|t| t.wall_us > 0)
-                        .map(field),
-                )
-            };
+            let means = fan_out_means_in(tally, slot);
             FanOutCost {
                 name: name.to_string(),
-                wall_us: mean(|t| t.wall_us),
-                first_job_us: mean(|t| t.first_job_us),
-                job_sum_us: mean(|t| t.job_sum_us),
-                longest_job_us: mean(|t| t.longest_job_us),
-                tail_us: mean(|t| t.tail_us),
+                wall_us: means.wall.get(),
+                first_job_us: means.first_job.get(),
+                job_sum_us: means.job_sum.get(),
+                longest_job_us: means.longest_job.get(),
+                tail_us: means.tail.get(),
             }
         })
         .filter(|cost| cost.wall_us > 0)
@@ -530,78 +499,37 @@ fn named_slots(names: &[String]) -> impl Iterator<Item = (usize, &str)> {
         .map(|(slot, name)| (slot, name.as_str()))
 }
 
-// The phases the measured frames fall in, in the order they were first
-// entered, so the report reads along the path rather than alphabetically.
-fn phase_order(measured: &[&FrameSample], run: &FrameRun) -> Vec<(Option<u32>, String)> {
-    let mut seen: Vec<(Option<u32>, String)> = Vec::new();
-    for sample in measured {
-        if !seen.iter().any(|(index, _)| *index == sample.phase) {
-            seen.push((sample.phase, run.phase_name(sample.phase).to_string()));
-        }
-    }
-    seen
-}
-
 // Reduce one stretch of frames.
-fn summarize(
-    name: String,
-    frames: &[&FrameSample],
-    run: &FrameRun,
-    options: ReduceOptions,
-) -> PhaseReport {
-    let mut frame_us: Vec<u32> = frames.iter().map(|s| s.frame_us).collect();
-    let mut cpu_us: Vec<u32> = frames.iter().map(|s| stepped_us(s, run)).collect();
-    let mut gpu_us: Vec<u32> = frames.iter().map(|s| s.gpu_frame_us).collect();
-    let gpu = Distribution::of(&mut gpu_us, options.budget_us);
-    let cpu = Distribution::of(&mut cpu_us, options.budget_us);
-    let frame = Distribution::of(&mut frame_us, options.budget_us);
+fn summarize(name: String, tally: &PhaseTally, run: &FrameRun) -> PhaseReport {
+    let gpu = tally.gpu.distribution();
     PhaseReport {
         name,
-        seconds: span_seconds(frames),
-        frame,
-        cpu,
+        seconds: tally.last_seconds - tally.first_seconds,
+        frame: tally.frame.distribution(),
+        cpu: tally.cpu.distribution(),
         gpu,
-        gpu_wait_mean_us: mean_u32(frames.iter().map(|s| s.gpu_wait_us)),
-        draw_calls_mean: mean_u32(frames.iter().map(|s| s.draw_calls)),
-        objects_mean: mean_u32(frames.iter().map(|s| s.objects)),
-        vram_peak_bytes: frames.iter().map(|s| s.vram_bytes).max().unwrap_or(0),
-        pacing: Pacing::of(frames),
-        input_latency: InputLatency::of(frames),
-        rebases: frames.iter().filter(|s| s.rebased).count(),
-        passes: pass_shares(frames, run, gpu.p50_us, options.budget_us),
-        systems: system_costs(frames, run),
-        fan_outs: fan_out_means(frames, run),
+        gpu_wait_mean_us: tally.gpu_wait.get(),
+        draw_calls_mean: tally.draw_calls.get(),
+        objects_mean: tally.objects.get(),
+        vram_peak_bytes: tally.vram_peak_bytes,
+        pacing: Pacing::of(tally),
+        input_latency: InputLatency::of(tally),
+        rebases: tally.rebases,
+        passes: pass_shares(tally, run, gpu.p50_us),
+        systems: system_costs(tally, run),
+        fan_outs: fan_out_means(tally, run),
     }
-}
-
-// What one frame's CPU work came to: its systems and its render submission.
-//
-// Taken from the work rather than from the wall clock: the wall delta is
-// measured on the thread that steps the world, while the wait is measured on
-// the one that submits, so subtracting the second from the first reports a
-// tick that outran the device as having done no work at all. A run whose host
-// named no systems has nothing to sum and falls back to that outside view.
-fn stepped_us(sample: &FrameSample, run: &FrameRun) -> u32 {
-    if run.system_names.is_empty() {
-        return sample.frame_us.saturating_sub(sample.gpu_wait_us);
-    }
-    named_slots(&run.system_names)
-        .map(|(slot, _)| sample.system_us[slot])
-        .fold(sample.render_cpu_us, u32::saturating_add)
 }
 
 // The systems and the render submission that owned the frame's CPU work,
 // largest first, measured against that work rather than against wall time.
-fn system_costs(frames: &[&FrameSample], run: &FrameRun) -> Vec<SystemCost> {
+fn system_costs(tally: &PhaseTally, run: &FrameRun) -> Vec<SystemCost> {
     if run.system_names.is_empty() {
         return Vec::new();
     }
     let means: Vec<(&str, u32)> = named_slots(&run.system_names)
-        .map(|(slot, name)| (name, mean_u32(frames.iter().map(|s| s.system_us[slot]))))
-        .chain(core::iter::once((
-            RENDER_SUBMIT,
-            mean_u32(frames.iter().map(|s| s.render_cpu_us)),
-        )))
+        .map(|(slot, name)| (name, tally.systems[slot].get()))
+        .chain(core::iter::once((RENDER_SUBMIT, tally.render_cpu.get())))
         .collect();
     let stepped: u32 = means.iter().map(|(_, us)| us).sum();
     if stepped == 0 {
@@ -626,14 +554,6 @@ fn system_costs(frames: &[&FrameSample], run: &FrameRun) -> Vec<SystemCost> {
     costs
 }
 
-// Track time from the first frame of a stretch to its last.
-fn span_seconds(frames: &[&FrameSample]) -> f32 {
-    match (frames.first(), frames.last()) {
-        (Some(first), Some(last)) => last.run_seconds - first.run_seconds,
-        _ => 0.0,
-    }
-}
-
 // The passes that owned the GPU frame, largest first, with each one's share of
 // it, and a pass timed inside another listed right below it. Passes that never
 // ran are left out rather than listed as zero.
@@ -641,12 +561,7 @@ fn span_seconds(frames: &[&FrameSample]) -> f32 {
 // The graphics-queue passes come first, closed by the passes below the cut and
 // the gaps between them, so those rows add up to the median GPU frame. The
 // async-queue passes follow: they ran beside the frame rather than inside it.
-fn pass_shares(
-    frames: &[&FrameSample],
-    run: &FrameRun,
-    gpu_median_us: u32,
-    budget_us: u32,
-) -> Vec<PassShare> {
+fn pass_shares(tally: &PhaseTally, run: &FrameRun, gpu_median_us: u32) -> Vec<PassShare> {
     let share_of = |us: u32| {
         if gpu_median_us == 0 {
             0.0
@@ -654,12 +569,9 @@ fn pass_shares(
             us as f32 / gpu_median_us as f32
         }
     };
-    let mut column: Vec<u32> = Vec::with_capacity(frames.len());
     let mut shares: Vec<PassShare> = named_slots(&run.pass_names)
         .filter_map(|(slot, name)| {
-            column.clear();
-            column.extend(frames.iter().map(|s| s.pass_us[slot]));
-            let median_us = Distribution::of(&mut column, budget_us).p50_us;
+            let median_us = tally.passes[slot].percentile(0.5);
             if median_us == 0 {
                 return None;
             }
@@ -668,29 +580,23 @@ fn pass_shares(
                 median_us,
                 share: share_of(median_us),
                 within: None,
-                async_queue: mostly_async(frames, slot),
+                async_queue: mostly_async(tally, slot),
             })
         })
         .collect();
     shares.sort_unstable_by_key(|p| core::cmp::Reverse(p.median_us));
     let (async_rows, graphics): (Vec<PassShare>, Vec<PassShare>) =
         shares.into_iter().partition(|p| p.async_queue);
-    let mut rows = nest(graphics);
+    let (mut rows, other) = nest(graphics);
     // A backend that timed nothing gets no closing rows: they correct a
     // partial list rather than standing in for one.
     if !rows.is_empty() {
-        let listed: Vec<&str> = rows.iter().map(|p| p.name.as_str()).collect();
-        column.clear();
-        column.extend(frames.iter().map(|s| unlisted_graphics_us(s, run, &listed)));
-        let other = Distribution::of(&mut column, budget_us).p50_us;
         let top: u32 = rows
             .iter()
             .filter(|p| p.within.is_none())
             .map(|p| p.median_us)
             .sum();
-        column.clear();
-        column.extend(frames.iter().map(|s| s.gpu_overlap_us));
-        let overlap = Distribution::of(&mut column, budget_us).p50_us;
+        let overlap = tally.overlap.percentile(0.5);
         let gaps = (gpu_median_us + overlap).saturating_sub(top + other);
         for (name, us, sign) in [
             (OTHER_PASSES, other, 1.0),
@@ -714,18 +620,8 @@ fn pass_shares(
 
 // Whether pass `slot` ran on the async queue in more than half the frames it
 // ran in.
-fn mostly_async(frames: &[&FrameSample], slot: usize) -> bool {
-    let bit = 1u64 << slot;
-    let (ran, on_async) = frames.iter().filter(|s| s.pass_us[slot] > 0).fold(
-        (0usize, 0usize),
-        |(ran, on_async), s| {
-            (
-                ran + 1,
-                on_async + usize::from(s.async_pass_mask & bit != 0),
-            )
-        },
-    );
-    on_async * 2 > ran
+fn mostly_async(tally: &PhaseTally, slot: usize) -> bool {
+    tally.pass_async[slot] * 2 > tally.pass_ran[slot]
 }
 
 // The pass slots one frame timed on the graphics queue at the top level: not
@@ -744,14 +640,6 @@ fn graphics_passes<'a>(
         .filter(move |(_, name)| counted_in(name, |outer| us(outer) > 0).is_none())
 }
 
-// What one frame's top-level graphics passes outside `listed` came to.
-fn unlisted_graphics_us(sample: &FrameSample, run: &FrameRun, listed: &[&str]) -> u32 {
-    graphics_passes(sample, run)
-        .filter(|(_, name)| !listed.contains(name))
-        .map(|(slot, _)| sample.pass_us[slot])
-        .fold(0, u32::saturating_add)
-}
-
 // The graphics-queue time one frame's timed passes leave uncovered, over its
 // whole span, the part shared with the previous frame included.
 fn gap_us(sample: &FrameSample, run: &FrameRun) -> u32 {
@@ -762,12 +650,18 @@ fn gap_us(sample: &FrameSample, run: &FrameRun) -> u32 {
 }
 
 // Cut a cost-ordered pass list to the passes a phase reports, each followed
-// by the passes timed inside it (see `counted_in`).
-fn nest(shares: Vec<PassShare>) -> Vec<PassShare> {
+// by the passes timed inside it (see `counted_in`), and sum the medians of the
+// top-level passes below the cut.
+fn nest(shares: Vec<PassShare>) -> (Vec<PassShare>, u32) {
     let ran: Vec<String> = shares.iter().map(|p| p.name.clone()).collect();
     let within = |name: &str| counted_in(name, |outer| ran.iter().any(|n| n == outer));
     let (mut inner, top): (Vec<PassShare>, Vec<PassShare>) =
         shares.into_iter().partition(|p| within(&p.name).is_some());
+    let other = top
+        .iter()
+        .skip(PASSES_REPORTED)
+        .map(|p| p.median_us)
+        .fold(0, u32::saturating_add);
     let mut out = Vec::with_capacity(top.len() + inner.len());
     for pass in top.into_iter().take(PASSES_REPORTED) {
         let outer = pass.name.clone();
@@ -777,13 +671,15 @@ fn nest(shares: Vec<PassShare>) -> Vec<PassShare> {
             out.push(p);
         }
     }
-    out
+    (out, other)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::frame_report::sample::MAX_SYSTEM_TIMINGS;
+    use crate::frame_report::sample::Recorded;
+    use crate::math::SaturatingFrom;
     use crate::profile::MAX_PASS_TIMINGS;
     use alloc::{format, vec};
 
@@ -817,9 +713,9 @@ mod tests {
         }
     }
 
-    fn run_of(samples: Vec<FrameSample>) -> FrameRun {
-        FrameRun {
-            samples: samples.into(),
+    fn run_of(samples: Vec<FrameSample>) -> Recorded {
+        Recorded {
+            samples,
             phases: vec!["shadows".to_string(), "rays".to_string()],
             pass_names: Vec::new(),
             system_names: Vec::new(),
@@ -847,7 +743,7 @@ mod tests {
         // Reporting zeroes here would read as a perfect run instead of an
         // absent one.
         let run = run_of(vec![sample(0.5, Some(0), 16_000)]);
-        assert!(Report::of(&run, ReduceOptions::default()).is_none());
+        assert!(run.reduce(ReduceOptions::default()).is_none());
     }
 
     #[test]
@@ -858,7 +754,9 @@ mod tests {
             sample(2.0, Some(0), 10_000),
             sample(3.0, Some(0), 12_000),
         ]);
-        let report = Report::of(&run, ReduceOptions::default()).expect("measured frames");
+        let report = run
+            .reduce(ReduceOptions::default())
+            .expect("measured frames");
         assert_eq!(report.warmup_dropped, 2);
         assert_eq!(report.overall.frame.count, 2);
         // The slow opening frames are gone, so they cannot drag the summary.
@@ -874,7 +772,7 @@ mod tests {
             sample(1.0, Some(0), 20_000),
             sample(2.0, Some(1), 11_000),
         ]);
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         let names: Vec<&str> = report.phases.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["rays", "shadows"]);
     }
@@ -889,7 +787,7 @@ mod tests {
             sample(2.0, Some(1), 40_000),
             sample(3.0, Some(1), 40_000),
         ]);
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         let shadows = &report.phases[0];
         let rays = &report.phases[1];
         assert_eq!(shadows.frame.mean_us, 10_000);
@@ -907,7 +805,7 @@ mod tests {
             sample(4.0, Some(0), 10_000),
             sample(5.0, Some(1), 10_000),
         ]);
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         assert_eq!(report.phases[0].seconds, 4.0);
         // One frame spans no time, which is honest rather than an error.
         assert_eq!(report.phases[1].seconds, 0.0);
@@ -916,7 +814,7 @@ mod tests {
     #[test]
     fn frames_in_no_phase_are_reported_under_a_placeholder() {
         let run = run_of(vec![sample(0.0, None, 10_000)]);
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         assert_eq!(report.phases[0].name, "(unnamed)");
     }
 
@@ -929,7 +827,7 @@ mod tests {
         first.pass_us[2] = 3_000;
         let mut run = run_of(vec![first]);
         run.pass_names = vec!["shadow".to_string(), "main".to_string(), "ssao".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         let passes = &report.overall.passes;
         assert_eq!(passes[0].name, "main");
         assert_eq!(passes[0].median_us, 6_000);
@@ -950,7 +848,7 @@ mod tests {
         only.pass_us[0] = 2_500;
         let mut run = run_of(vec![only]);
         run.pass_names = vec!["main".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         let passes = &report.overall.passes;
         assert_eq!(passes.len(), 2);
         assert_eq!(passes[1].name, GAPS);
@@ -970,7 +868,7 @@ mod tests {
         only.async_pass_mask = 0b10;
         let mut run = run_of(vec![only]);
         run.pass_names = vec!["main".to_string(), "light_cull".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         let rows: Vec<(&str, u32, bool)> = report
             .overall
             .passes
@@ -1007,7 +905,7 @@ mod tests {
         }
         let mut run = run_of(frames);
         run.pass_names = (0..=passes).map(|i| format!("pass{i}")).collect();
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         let phase = &report.overall;
         let frame: Vec<&PassShare> = phase.passes.iter().filter(|p| !p.async_queue).collect();
         assert_eq!(frame.len(), PASSES_REPORTED + 3);
@@ -1041,7 +939,7 @@ mod tests {
         }
         let mut run = run_of(frames);
         run.pass_names = vec!["hiz_build".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         assert!(!report.overall.passes[0].async_queue);
     }
 
@@ -1062,7 +960,7 @@ mod tests {
             "shadow".to_string(),
             "ocean".to_string(),
         ];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         let frame = &report.slowest[0];
         let names: Vec<&str> = frame.passes.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["main", "shadow"]);
@@ -1086,7 +984,7 @@ mod tests {
         }
         frames[5].shown_step_us = 0;
         frames[7].rebased = true;
-        let report = Report::of(&run_of(frames), no_warmup()).expect("measured frames");
+        let report = run_of(frames).reduce(no_warmup()).expect("measured frames");
         let pacing = report.overall.pacing;
         assert_eq!(pacing.p5, 0.0);
         assert!((pacing.p50 - 0.757).abs() < 1e-3, "{pacing:?}");
@@ -1102,23 +1000,25 @@ mod tests {
         let frames = (0..20)
             .map(|n| {
                 let mut f = sample(n as f32, Some(0), 16_000);
-                f.input_latency_us = if n % 2 == 0 { 0 } else { 40_000 + n * 100 };
+                f.input_latency_us = if n % 2 == 0 { 0 } else { 40_000 + n * 1_000 };
                 f
             })
             .collect();
-        let latency = Report::of(&run_of(frames), no_warmup())
+        let latency = run_of(frames)
+            .reduce(no_warmup())
             .expect("measured frames")
             .overall
             .input_latency;
         assert_eq!(latency.frames, 10);
-        assert_eq!(latency.p50_us, 40_900);
-        assert_eq!(latency.p95_us, 41_900);
+        assert_eq!(latency.p50_us, 49_000);
+        assert_eq!(latency.p95_us, 59_000);
     }
 
     #[test]
     fn a_run_with_no_latency_readings_reports_none() {
         let run = run_of((0..10).map(|n| sample(n as f32, Some(0), 16_000)).collect());
-        let latency = Report::of(&run, no_warmup())
+        let latency = run
+            .reduce(no_warmup())
             .expect("measured frames")
             .overall
             .input_latency;
@@ -1137,7 +1037,8 @@ mod tests {
                 f
             })
             .collect();
-        let pacing = Report::of(&run_of(frames), no_warmup())
+        let pacing = run_of(frames)
+            .reduce(no_warmup())
             .expect("measured frames")
             .overall
             .pacing;
@@ -1148,7 +1049,8 @@ mod tests {
     #[test]
     fn even_motion_paces_at_one() {
         let run = run_of((0..10).map(|n| sample(n as f32, Some(0), 16_000)).collect());
-        let pacing = Report::of(&run, no_warmup())
+        let pacing = run
+            .reduce(no_warmup())
             .expect("measured frames")
             .overall
             .pacing;
@@ -1168,7 +1070,7 @@ mod tests {
         nested.pass_us[2] = 1_000;
         let mut run = run_of(vec![nested]);
         run.pass_names = vec!["shadow".to_string(), "main".to_string(), "sky".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         let rows: Vec<(&str, Option<&str>, u32)> = report
             .overall
             .passes
@@ -1199,7 +1101,7 @@ mod tests {
         folded.pass_us[1] = 6_000;
         let mut run = run_of(vec![folded]);
         run.pass_names = vec!["shadow".to_string(), "main".to_string(), "sky".to_string()];
-        let metal = Report::of(&run, no_warmup()).expect("measured frames");
+        let metal = run.reduce(no_warmup()).expect("measured frames");
         let gaps = |r: &Report| r.overall.passes.last().map(|p| p.median_us);
         assert_eq!(gaps(&metal), gaps(&report));
     }
@@ -1211,7 +1113,7 @@ mod tests {
         only.pass_us[1] = 4_000;
         let mut run = run_of(vec![only]);
         run.pass_names = vec!["main".to_string(), "sky".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         let passes = &report.overall.passes;
         assert_eq!(passes[0].name, "sky");
         assert_eq!(passes[0].within, None);
@@ -1227,7 +1129,7 @@ mod tests {
         slow.pass_us[2] = 3_000;
         let mut run = run_of(vec![slow]);
         run.pass_names = vec!["main".to_string(), "sky".to_string(), "shadow".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         let names: Vec<&str> = report.slowest[0]
             .passes
             .iter()
@@ -1251,7 +1153,7 @@ mod tests {
         slow.pass_us[1] = 1_000;
         let mut run = run_of(vec![slow]);
         run.pass_names = vec!["main".to_string(), "sky".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         let names: Vec<&str> = report.slowest[0]
             .passes
             .iter()
@@ -1268,7 +1170,7 @@ mod tests {
         only.pass_us[0] = 10_000;
         let mut run = run_of(vec![only]);
         run.pass_names = vec!["main".to_string(), "fog".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         let names: Vec<&str> = report
             .overall
             .passes
@@ -1287,7 +1189,7 @@ mod tests {
         only.pass_us[0] = 5_000;
         let mut run = run_of(vec![only]);
         run.pass_names = vec!["main".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         assert_eq!(report.overall.passes[0].share, 0.0);
     }
 
@@ -1299,7 +1201,7 @@ mod tests {
         only.system_us[1] = 2_500;
         let mut run = run_of(vec![only]);
         run.system_names = vec!["PhysicsSystem".to_string(), "GraphicsSystem".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         let systems = &report.overall.systems;
         assert_eq!(systems[0].name, "GraphicsSystem");
         assert_eq!(systems[0].mean_us, 2_500);
@@ -1322,7 +1224,7 @@ mod tests {
         only.system_us[1] = 200;
         let mut run = run_of(vec![only]);
         run.system_names = vec!["PhysicsSystem".to_string(), "GraphicsSystem".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
 
         // Neither the wait nor the handoff is in it: 1ms of CPU work in a 10ms
         // frame.
@@ -1340,7 +1242,9 @@ mod tests {
         fast.gpu_wait_us = 2_000;
         let mut slow = sample(1.0, Some(0), 20_000);
         slow.gpu_wait_us = 1_000;
-        let report = Report::of(&run_of(vec![fast, slow]), no_warmup()).expect("measured frames");
+        let report = run_of(vec![fast, slow])
+            .reduce(no_warmup())
+            .expect("measured frames");
         assert!(run_of(vec![]).system_names.is_empty(), "nothing named");
         assert_eq!(report.overall.frame.mean_us, 15_000);
         assert_eq!(report.overall.cpu.mean_us, 13_500);
@@ -1358,7 +1262,7 @@ mod tests {
         busy.system_us[1] = 300;
         let mut run = run_of(vec![busy]);
         run.system_names = vec!["BehaviorSystem".to_string(), "GraphicsSystem".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         assert_eq!(report.overall.cpu.mean_us, 8_300);
         assert_eq!(report.overall.systems[0].name, "BehaviorSystem");
     }
@@ -1371,7 +1275,7 @@ mod tests {
         only.system_us[1] = 10;
         let mut run = run_of(vec![only]);
         run.system_names = vec!["PhysicsSystem".to_string(), "AudioSystem".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         let names: Vec<&str> = report
             .overall
             .systems
@@ -1387,7 +1291,7 @@ mod tests {
         // ranking of zeroes would be worse than saying nothing.
         let mut run = run_of(vec![sample(0.0, Some(0), 20_000)]);
         run.system_names = vec!["PhysicsSystem".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         assert!(report.overall.systems.is_empty());
     }
 
@@ -1411,7 +1315,7 @@ mod tests {
         b.system_fan_out[1] = fan_out(400);
         let mut run = run_of(vec![a, b]);
         run.system_names = vec!["PhysicsSystem".to_string(), "BehaviorSystem".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         // PhysicsSystem fanned nothing out, so it gets no row.
         assert_eq!(
             report.phases[0].fan_outs,
@@ -1435,7 +1339,7 @@ mod tests {
         b.packing_fan_out = fan_out(100);
         let mut run = run_of(vec![a, b]);
         run.system_names = vec!["BehaviorSystem".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         assert_eq!(
             report.overall.fan_outs,
             [
@@ -1453,7 +1357,7 @@ mod tests {
         let serial = sample(1.0, Some(0), 10_000);
         let mut run = run_of(vec![fanned, serial]);
         run.system_names = vec!["BehaviorSystem".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         assert_eq!(
             report.overall.fan_outs,
             [FanOutCost::of("BehaviorSystem", fan_out(800))]
@@ -1463,7 +1367,7 @@ mod tests {
     #[test]
     fn a_run_with_no_fan_outs_reports_none() {
         let run = run_of(vec![sample(0.0, Some(0), 10_000)]);
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         assert!(report.overall.fan_outs.is_empty());
         assert!(report.slowest[0].fan_outs.is_empty());
     }
@@ -1477,7 +1381,7 @@ mod tests {
         hitch.system_fan_out[0] = fan_out(2_400);
         let mut run = run_of(vec![quick, hitch]);
         run.system_names = vec!["BehaviorSystem".to_string()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         assert_eq!(
             report.slowest[0].fan_outs,
             [
@@ -1498,7 +1402,7 @@ mod tests {
         hitch.pass_record_us[PassId::Shadow as usize] = 3_000;
         hitch.pass_record_us[PassId::Bloom as usize] = 20;
         let run = run_of(vec![sample(0.0, Some(0), 10_000), hitch]);
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         let cost = |name: &str, us| FrameCost {
             name: name.to_string(),
             us,
@@ -1518,7 +1422,7 @@ mod tests {
     fn an_incomplete_run_says_so() {
         let mut run = run_of(vec![sample(0.0, Some(0), 10_000)]);
         run.completed = false;
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         assert!(!report.completed);
     }
 
@@ -1531,7 +1435,7 @@ mod tests {
             sample(3.0, Some(0), 40_000),
             sample(4.0, Some(1), 40_000),
         ]);
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         let slowest: Vec<(u32, f32, &str)> = report
             .slowest
             .iter()
@@ -1554,7 +1458,9 @@ mod tests {
             sample(0.5, Some(0), 90_000),
             sample(3.0, Some(0), 12_000),
         ]);
-        let report = Report::of(&run, ReduceOptions::default()).expect("measured frames");
+        let report = run
+            .reduce(ReduceOptions::default())
+            .expect("measured frames");
         assert_eq!(report.slowest.len(), 1);
         assert_eq!(report.slowest[0].frame_us, 12_000);
     }
@@ -1581,7 +1487,7 @@ mod tests {
             "GraphicsSystem".to_string(),
         ];
         run.pass_names = vec!["shadow".to_string(), "main".to_string(), String::new()];
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
 
         let frame = &report.slowest[0];
         assert_eq!(frame.frame_us, 300_000);
@@ -1623,7 +1529,7 @@ mod tests {
         }
         let mut run = run_of(vec![busy]);
         run.system_names = run_names;
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         let names: Vec<&str> = report.slowest[0]
             .cpu
             .iter()
@@ -1637,7 +1543,7 @@ mod tests {
         let mut early = sample(0.0, Some(0), 10_000);
         early.vram_bytes = 900 << 20;
         let run = run_of(vec![early, sample(1.0, Some(0), 10_000)]);
-        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let report = run.reduce(no_warmup()).expect("measured frames");
         assert_eq!(report.overall.vram_peak_bytes, 900 << 20);
     }
 }

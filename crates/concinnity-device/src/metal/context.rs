@@ -855,9 +855,9 @@ impl MtlContext {
     // Ensure the GPU-driven cull indirect command buffer has a command slot
     // for every one of `count` draw objects, rebuilding it (and re-encoding
     // its argument buffer) when the draw list has outgrown it. A no-op for
-    // non-bindless contexts, which have no cull pipeline. New capacity is
-    // rounded up to the next power of two so streamed chunks growing
-    // `draw.objects` do not rebuild the ICB every frame.
+    // non-bindless contexts, which have no cull pipeline. It is first built
+    // for the scene's record reserve; growth past that rounds up to the next
+    // power of two so streamed chunks do not rebuild it every frame.
     //
     // The per-object `cull_status_buffer` (always, for the phase-1 kernel's
     // buffer(5) binding) and (under two-pass occlusion) the phase-2 ICB
@@ -873,7 +873,7 @@ impl MtlContext {
         if !self.cull.icbs.is_empty() && count <= self.cull.icb_capacity {
             return Ok(());
         }
-        let new_cap = count.next_power_of_two().max(64);
+        let new_cap = super::cull::icb_capacity(count, self.cull.reserved_records);
         let bucket_count = self.cull.bucket_count.max(1);
 
         let mut icbs = Vec::with_capacity(bucket_count);
@@ -962,8 +962,8 @@ impl MtlContext {
     // live at `[v*count, (v+1)*count)`, the same stride `encode_shadow_culls`
     // writes at and the shadow render passes execute), for the cascades and
     // for the spot slices. A no-op for non-bindless / no-shadow contexts (no
-    // shadow decision pipeline). Rounded to the next power of two so a streamed
-    // chunk growing `cull_count()` does not rebuild an ICB every frame. Called
+    // shadow decision pipeline). First built for every view of the scene's
+    // record reserve; growth past that rounds to a power of two. Called
     // from `draw_frame` (where `&mut self` is available) right after
     // `ensure_icb_capacity`, so the encode pass only ever reads sized ICBs.
     pub(super) fn ensure_shadow_icb_capacity(&mut self, count: usize) -> error::RenderResult<()> {
@@ -995,7 +995,8 @@ impl MtlContext {
         if needed == 0 || (set.icb.is_some() && needed <= set.capacity) {
             return Ok(());
         }
-        let new_cap = needed.next_power_of_two().max(64);
+        let reserved = self.cull.reserved_records.saturating_mul(views);
+        let new_cap = super::cull::icb_capacity(needed, reserved);
         let icb = self.build_cull_icb(new_cap)?;
         let arg_buf = if let Some(buf) = set.arg_buffer.take() {
             buf
@@ -1058,7 +1059,7 @@ impl MtlContext {
         if self.cull.mirror_slots.len() == slot_count && count <= self.cull.mirror_icb_capacity {
             return Ok(());
         }
-        let new_cap = count.next_power_of_two().max(64);
+        let new_cap = super::cull::icb_capacity(count, self.cull.reserved_records);
         let mut slots = Vec::with_capacity(slot_count);
         for _ in 0..slot_count {
             let icb = self.build_cull_icb(new_cap)?;

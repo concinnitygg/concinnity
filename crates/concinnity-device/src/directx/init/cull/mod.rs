@@ -2,7 +2,6 @@
 //! shader buckets, the compute cull with its Hi-Z pyramid, and the GPU-driven
 //! shadow, G-buffer and two-pass occlusion passes built over them.
 
-use concinnity_core::gfx::render_types::clone_reserve;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend_init::{SceneData, WorldShader};
 use concinnity_core::render::error::RenderResult;
@@ -30,11 +29,7 @@ pub(super) struct CullPlan {
 pub(super) fn plan_cull(world: &SceneData<'_>) -> CullPlan {
     // Total instances across all clusters, folded into the GPU-driven bindless
     // pass as `GpuObjectData` records after the `n_objects` static objects.
-    let n_instances: usize = world
-        .instanced_clusters
-        .iter()
-        .map(|c| c.instances.len())
-        .sum();
+    let n_instances = world.instance_count();
     // Merged record count: static build-time objects, the instanced-cluster
     // instances, the runtime reserve, then the skinned objects. The per-frame
     // static fills write only the first `n_objects`; the instance records are
@@ -43,9 +38,7 @@ pub(super) fn plan_cull(world: &SceneData<'_>) -> CullPlan {
     // and `clone_reserve` the spawned-clone one; both live in the single
     // runtime reserve between the instances and the skinned tail (see
     // `DrawList::n_runtime`).
-    let n_objects = world.draw_objects.len();
-    let n_cull =
-        n_objects + n_instances + world.n_chunk_max + clone_reserve(n_objects) + world.n_skinned;
+    let n_cull = world.cull_records();
     CullPlan {
         n_instances,
         n_cull,

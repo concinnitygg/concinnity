@@ -5,7 +5,8 @@ use alloc::vec::Vec;
 
 use crate::profile::{FanOutTiming, MAX_PASS_TIMINGS, RenderStats};
 
-use crate::frame_report::sample_log::SampleLog;
+use crate::frame_report::reduce::ReduceOptions;
+use crate::frame_report::tally::RunTally;
 
 /// How many per-system CPU timings a sample carries. The engine's own table is
 /// well inside this, and a world registering its own systems has headroom.
@@ -170,13 +171,17 @@ pub(super) struct FrameTiming {
     pub(crate) shown: crate::frame_report::shown::Shown,
 }
 
-/// Everything one run recorded: the frames, the names for the two index
-/// spaces they refer to, and whether it reached the end of what it had to
-/// measure or was cut short.
-#[derive(Debug, Default)]
+/// Everything one run recorded: the tallies its measured frames went into,
+/// the names for the two index spaces they refer to, and whether it reached
+/// the end of what it had to measure or was cut short.
+#[derive(Debug)]
 pub(super) struct FrameRun {
-    /// The frames, in the order they were drawn.
-    pub samples: SampleLog,
+    /// The measured frames, tallied as they arrive.
+    pub tally: RunTally,
+    /// Frames drawn before the warm-up ended, left out of the tally.
+    pub warmup_dropped: usize,
+    /// What the frames are measured against.
+    pub options: ReduceOptions,
     /// The names of the stretches the run is cut into. A sample's `phase`
     /// indexes this.
     pub phases: Vec<String>,
@@ -190,9 +195,66 @@ pub(super) struct FrameRun {
     /// stopped early (the window closed, the frame cap hit) reports what it
     /// has, and says so rather than passing it off as a whole run.
     pub completed: bool,
+    /// Every frame handed to `record`, warm-up included.
+    #[cfg(test)]
+    pub recorded: Vec<FrameSample>,
+}
+
+impl Default for FrameRun {
+    fn default() -> Self {
+        Self::new(Vec::new(), ReduceOptions::default())
+    }
 }
 
 impl FrameRun {
+    /// A run cut into `phases`, with every tally it will fill allocated now.
+    pub(super) fn new(phases: Vec<String>, options: ReduceOptions) -> Self {
+        Self {
+            tally: RunTally::new(phases.len(), options.budget_us),
+            warmup_dropped: 0,
+            options,
+            phases,
+            pass_names: Vec::new(),
+            system_names: Vec::new(),
+            completed: false,
+            #[cfg(test)]
+            recorded: Vec::new(),
+        }
+    }
+
+    /// Tally one frame, or count it as warm-up.
+    pub(super) fn record(&mut self, sample: &FrameSample) {
+        #[cfg(test)]
+        self.recorded.push(*sample);
+        if sample.run_seconds < self.options.warmup_seconds {
+            self.warmup_dropped += 1;
+            return;
+        }
+        let cpu_us = self.cpu_us(sample);
+        self.tally.record(sample, cpu_us);
+    }
+
+    /// What one frame's CPU work came to: its systems and its render
+    /// submission.
+    ///
+    /// Taken from the work rather than from the wall clock: the wall delta is
+    /// measured on the thread that steps the world, while the wait is measured
+    /// on the one that submits, so subtracting the second from the first
+    /// reports a tick that outran the device as having done no work at all. A
+    /// run whose host named no systems has nothing to sum and falls back to
+    /// that outside view.
+    pub(super) fn cpu_us(&self, sample: &FrameSample) -> u32 {
+        if self.system_names.is_empty() {
+            return sample.frame_us.saturating_sub(sample.gpu_wait_us);
+        }
+        self.system_names
+            .iter()
+            .zip(sample.system_us)
+            .filter(|(name, _)| !name.is_empty())
+            .map(|(_, us)| us)
+            .fold(sample.render_cpu_us, u32::saturating_add)
+    }
+
     /// The name of phase `index`, or a placeholder when the world named
     /// none.
     pub(super) fn phase_name(&self, index: Option<u32>) -> &str {
@@ -228,6 +290,39 @@ impl FrameRun {
                 .map(|(name, _)| (*name).to_string())
                 .collect();
         }
+    }
+}
+
+/// Frames a test reduces, with the names they refer to: replayed through a
+/// real [`FrameRun`] in order, so the names are in place before any frame is.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(super) struct Recorded {
+    pub samples: Vec<FrameSample>,
+    pub phases: Vec<String>,
+    pub pass_names: Vec<String>,
+    pub system_names: Vec<String>,
+    pub completed: bool,
+}
+
+#[cfg(test)]
+impl Recorded {
+    pub(super) fn run(&self, options: ReduceOptions) -> FrameRun {
+        let mut run = FrameRun::new(self.phases.clone(), options);
+        run.pass_names.clone_from(&self.pass_names);
+        run.system_names.clone_from(&self.system_names);
+        run.completed = self.completed;
+        for sample in &self.samples {
+            run.record(sample);
+        }
+        run
+    }
+
+    pub(super) fn reduce(
+        &self,
+        options: ReduceOptions,
+    ) -> Option<crate::frame_report::reduce::Report> {
+        crate::frame_report::reduce::Report::of(&self.run(options))
     }
 }
 
@@ -384,10 +479,7 @@ mod tests {
 
     #[test]
     fn a_phase_with_no_name_reads_as_a_placeholder_rather_than_panicking() {
-        let run = FrameRun {
-            phases: vec!["approach".to_string()],
-            ..Default::default()
-        };
+        let run = FrameRun::new(vec!["approach".to_string()], ReduceOptions::default());
         assert_eq!(run.phase_name(Some(0)), "approach");
         assert_eq!(run.phase_name(None), "(unnamed)");
         // An index past the end is a world that changed under a stale sample.

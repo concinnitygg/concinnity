@@ -31,6 +31,8 @@ pub(super) struct CullInputs<'a> {
     // Whether the cascade shadow pipeline exists.
     pub(super) shadow_enabled: bool,
     pub(super) occlusion_two_pass: bool,
+    // Records the ICBs are sized for when first built.
+    pub(super) reserved_records: usize,
 }
 
 pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderResult<CullState> {
@@ -55,6 +57,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         icb_arg_encoder: compute.icb_arg_encoder,
         icb_arg_buffer: None,
         icb_capacity: 0,
+        reserved_records: inputs.reserved_records,
         pipeline_phase2: compute.pipeline_phase2,
         icbs_2: Vec::new(),
         icb_2_arg_buffer: None,
