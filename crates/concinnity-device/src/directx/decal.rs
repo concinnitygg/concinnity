@@ -383,38 +383,49 @@ impl DxContext {
 
         let w = self.targets.extent.render_width;
         let h = self.targets.extent.render_height;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        let vp = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: w as f32,
+            Height: h as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let scissor = RECT {
+            left: 0,
+            top: 0,
+            right: i32::saturating_from(w),
+            bottom: i32::saturating_from(h),
+        };
+        // SAFETY: the command list is recording, and the executor has put the scene behind
+        // `scene_rtv` in RENDER_TARGET for this pass.
+        unsafe { cmd.OMSetRenderTargets(1, Some(&raw const scene_rtv), false, None) };
+        // SAFETY: the viewport slice is a local that outlives the call.
+        unsafe { cmd.RSSetViewports(&[vp]) };
+        // SAFETY: the scissor slice is a local that outlives the call.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
+        // SAFETY: setting the topology only needs a recording command list.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&raw const scene_rtv), false, None);
-            let vp = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: w as f32,
-                Height: h as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp]);
-            let scissor = RECT {
-                left: 0,
-                top: 0,
-                right: i32::saturating_from(w),
-                bottom: i32::saturating_from(h),
-            };
-            cmd.RSSetScissorRects(&[scissor]);
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
-            cmd.IASetVertexBuffers(0, Some(&[decals.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&raw const decals.index_buffer_view));
-
-            cmd.SetPipelineState(&decals.pso);
-            cmd.SetGraphicsRootSignature(&decals.root_sig);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-            cmd.set_graphics_srv_table(2, decals.depth_srv_gpu);
         }
+        // SAFETY: the cube vertex buffer is owned by `decals` and outlives the frame.
+        unsafe { cmd.IASetVertexBuffers(0, Some(&[decals.vertex_buffer_view])) };
+        // SAFETY: the cube index buffer is owned by `decals`; the view is read during the call.
+        unsafe { cmd.IASetIndexBuffer(Some(&raw const decals.index_buffer_view)) };
+
+        // SAFETY: the decal PSO is owned by `decals` and outlives the recording.
+        unsafe { cmd.SetPipelineState(&decals.pso) };
+        // SAFETY: the decal root signature is owned by `decals` and matches the PSO above.
+        unsafe { cmd.SetGraphicsRootSignature(&decals.root_sig) };
+        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: `view_gva` addresses this frame's live view constant buffer.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(0, view_gva) };
+        // SAFETY: the depth SRV slot lives in the heap set above, and the depth is already in a
+        // shader-resource state.
+        unsafe { cmd.set_graphics_srv_table(2, decals.depth_srv_gpu) };
 
         // Base of this pass's per-decal albedo SRVs, written into the heap at
         // `decal_srv_base_slot + id` by `add_decal`. The heap start is fixed
@@ -450,13 +461,13 @@ impl DxContext {
             }
             let params_gva = params_base_gva + decal.id as u64 * decals.params_stride;
             let albedo_srv_gpu = albedo_base.offset(decal.id, self.descriptors.srv_descriptor_size);
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.SetGraphicsRootConstantBufferView(1, params_gva);
-                cmd.set_graphics_srv_table(3, albedo_srv_gpu);
-                cmd.DrawIndexedInstanced(36, 1, 0, 0, 0);
-            }
+            // SAFETY: `params_gva` stays inside this frame's params ring, since `add_decal` caps
+            // ids below `MAX_DECALS`.
+            unsafe { cmd.SetGraphicsRootConstantBufferView(1, params_gva) };
+            // SAFETY: `add_decal` wrote this decal's albedo SRV at its slot in the bound heap.
+            unsafe { cmd.set_graphics_srv_table(3, albedo_srv_gpu) };
+            // SAFETY: the cube buffers, pipeline and every root argument the draw reads are bound.
+            unsafe { cmd.DrawIndexedInstanced(36, 1, 0, 0, 0) };
             self.inc_draw_calls(1);
         }
     }

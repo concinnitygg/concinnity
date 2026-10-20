@@ -36,11 +36,12 @@ mod tests {
     fn current_qos_class() -> qos_class_t {
         let mut class = qos_class_t::QOS_CLASS_UNSPECIFIED;
         let mut relative = 0;
-        // SAFETY: both out-pointers are live locals, and `pthread_self` names
-        // the calling thread, which outlives the call.
-        let status = unsafe {
-            libc::pthread_get_qos_class_np(libc::pthread_self(), &raw mut class, &raw mut relative)
-        };
+        // SAFETY: `pthread_self` has no preconditions.
+        let thread = unsafe { libc::pthread_self() };
+        // SAFETY: both out-pointers are live locals, and `thread` names the
+        // calling thread, which outlives the call.
+        let status =
+            unsafe { libc::pthread_get_qos_class_np(thread, &raw mut class, &raw mut relative) };
         assert_eq!(status, 0);
         class
     }

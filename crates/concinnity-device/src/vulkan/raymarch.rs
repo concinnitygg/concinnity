@@ -131,8 +131,20 @@ fn copy_scene_snapshot(
             height: extent.height,
             depth: 1,
         });
-    // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice these
-    // commands name is live for the call.
+    let barriers = [
+        open(
+            hdr_resolve,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            vk::AccessFlags::TRANSFER_READ,
+        ),
+        open(
+            snapshot,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::AccessFlags::TRANSFER_WRITE,
+        ),
+    ];
+    // SAFETY: `cmd` is a command buffer in the recording state, and both images are the
+    // caller's live resolve and snapshot targets.
     unsafe {
         device.cmd_pipeline_barrier(
             cmd,
@@ -141,19 +153,11 @@ fn copy_scene_snapshot(
             vk::DependencyFlags::empty(),
             &[],
             &[],
-            &[
-                open(
-                    hdr_resolve,
-                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    vk::AccessFlags::TRANSFER_READ,
-                ),
-                open(
-                    snapshot,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    vk::AccessFlags::TRANSFER_WRITE,
-                ),
-            ],
+            &barriers,
         );
+    }
+    // SAFETY: the barrier above moved both images into the transfer layouts this copy names.
+    unsafe {
         device.cmd_copy_image(
             cmd,
             hdr_resolve,
@@ -163,6 +167,42 @@ fn copy_scene_snapshot(
             std::slice::from_ref(&region),
         );
     }
+}
+
+// Bind the shared proxy cube's vertex and index buffers on a recording `cmd`.
+fn bind_cube(device: &ash::Device, cmd: vk::CommandBuffer, rm: &RaymarchResources) {
+    let vertex_buffer = rm.cube_vb.buffer();
+    // SAFETY: `cmd` is recording and the cube vertex buffer is owned by `rm` for its lifetime.
+    unsafe { device.cmd_bind_vertex_buffers(cmd, 0, &[vertex_buffer], &[0]) };
+    // SAFETY: `cmd` is recording and the cube index buffer is owned by `rm` for its lifetime.
+    unsafe { device.cmd_bind_index_buffer(cmd, rm.cube_ib.buffer(), 0, vk::IndexType::UINT16) };
+}
+
+// Draw one volume's proxy cube under `pipeline` with its set bound at set 1. The
+// caller has bound the cube buffers, set 0 and the push constants on a recording `cmd`.
+fn draw_volume(
+    device: &ash::Device,
+    cmd: vk::CommandBuffer,
+    layout: vk::PipelineLayout,
+    pipeline: vk::Pipeline,
+    volume_set: vk::DescriptorSet,
+) {
+    // SAFETY: `cmd` is recording inside the caller's render pass, and `pipeline` is a live
+    // volume pipeline built against it.
+    unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline) };
+    // SAFETY: `volume_set` is the volume's own set, allocated against set 1 of `layout`.
+    unsafe {
+        device.cmd_bind_descriptor_sets(
+            cmd,
+            vk::PipelineBindPoint::GRAPHICS,
+            layout,
+            1,
+            std::slice::from_ref(&volume_set),
+            &[],
+        );
+    }
+    // SAFETY: the cube buffers, both sets and the pipeline are bound on `cmd`.
+    unsafe { device.cmd_draw_indexed(cmd, CUBE_INDEX_COUNT, 1, 0, 0, 0) };
 }
 
 // Per-`SdfVolume` GPU state: the compiled render pipeline, the static per-volume
@@ -1370,49 +1410,45 @@ impl VkContext {
             cascade_idx: u32::saturating_from(cascade_idx),
             _pad: [0; 3],
         };
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        let layout = rm.shadow_pipeline_layout.handle();
+        bind_cube(device, cmd, rm);
+        // SAFETY: `cmd` is recording inside the cascade's render pass, and this frame's shadow
+        // view set is owned by `rm`.
         unsafe {
-            device.cmd_bind_vertex_buffers(cmd, 0, &[rm.cube_vb.buffer()], &[0]);
-            device.cmd_bind_index_buffer(cmd, rm.cube_ib.buffer(), 0, vk::IndexType::UINT16);
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                rm.shadow_pipeline_layout.handle(),
+                layout,
                 0,
                 std::slice::from_ref(&rm.shadow_view_sets[frame_idx]),
                 &[],
             );
+        }
+        // SAFETY: the shadow layout declares the vertex + fragment cascade push range.
+        unsafe {
             cmd_push_constants(
                 device,
                 cmd,
-                rm.shadow_pipeline_layout.handle(),
+                layout,
                 vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                 &push,
             );
-            for vol in &rm.volumes {
-                let Some(shadow_pipeline) = vol.shadow_pipeline.as_ref() else {
-                    continue;
-                };
-                if !vol.visible {
-                    continue;
-                }
-                device.cmd_bind_pipeline(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    shadow_pipeline.handle(),
-                );
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    rm.shadow_pipeline_layout.handle(),
-                    1,
-                    std::slice::from_ref(&vol.volume_set),
-                    &[],
-                );
-                device.cmd_draw_indexed(cmd, CUBE_INDEX_COUNT, 1, 0, 0, 0);
-                self.inc_draw_calls(1);
+        }
+        for vol in &rm.volumes {
+            let Some(shadow_pipeline) = vol.shadow_pipeline.as_ref() else {
+                continue;
+            };
+            if !vol.visible {
+                continue;
             }
+            draw_volume(
+                device,
+                cmd,
+                layout,
+                shadow_pipeline.handle(),
+                vol.volume_set,
+            );
+            self.inc_draw_calls(1);
         }
     }
 
@@ -1458,11 +1494,10 @@ impl VkContext {
             cascade_idx: 0,
             _pad: [0; 3],
         };
-        // SAFETY: `cmd` is a command buffer recording inside the G-buffer pre-pass's render pass,
-        // and every handle and slice these commands name is live for the call.
+        bind_cube(device, cmd, rm);
+        // SAFETY: `cmd` is recording inside the G-buffer pre-pass's render pass, and `set` is
+        // this frame's pre-pass view set owned by `rm`.
         unsafe {
-            device.cmd_bind_vertex_buffers(cmd, 0, &[rm.cube_vb.buffer()], &[0]);
-            device.cmd_bind_index_buffer(cmd, rm.cube_ib.buffer(), 0, vk::IndexType::UINT16);
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -1471,6 +1506,9 @@ impl VkContext {
                 std::slice::from_ref(&set),
                 &[],
             );
+        }
+        // SAFETY: the shadow layout the pre-pass shares declares this vertex + fragment range.
+        unsafe {
             cmd_push_constants(
                 device,
                 cmd,
@@ -1478,19 +1516,10 @@ impl VkContext {
                 vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                 &push,
             );
-            for (pipeline, volume_set) in draws {
-                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    layout,
-                    1,
-                    std::slice::from_ref(&volume_set),
-                    &[],
-                );
-                device.cmd_draw_indexed(cmd, CUBE_INDEX_COUNT, 1, 0, 0, 0);
-                self.inc_draw_calls(1);
-            }
+        }
+        for (pipeline, volume_set) in draws {
+            draw_volume(device, cmd, layout, pipeline, volume_set);
+            self.inc_draw_calls(1);
         }
     }
 
@@ -1606,8 +1635,8 @@ impl VkContext {
             (true, true) => &image_barriers[..1],
             (true, false) => &image_barriers[..],
         };
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        // SAFETY: `cmd` is recording outside a render pass, and the barriers name this frame's
+        // resolve image and `rm`'s snapshot.
         unsafe {
             device.cmd_pipeline_barrier(
                 cmd,
@@ -1641,44 +1670,35 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        // SAFETY: `cmd` is recording outside a render pass, and `rm`'s render pass and this
+        // frame's framebuffer are live for the call.
+        unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
+        // SAFETY: `cmd` is recording inside the render pass begun above.
+        unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp)) };
+        // SAFETY: same recording `cmd`; `scissor` is a local that outlives the call.
+        unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor)) };
+        bind_cube(device, cmd, rm);
+        let layout = rm.pipeline_layout.handle();
+        // SAFETY: this frame's view set is owned by `rm` and matches set 0 of `layout`.
         unsafe {
-            device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_vertex_buffers(cmd, 0, &[rm.cube_vb.buffer()], &[0]);
-            device.cmd_bind_index_buffer(cmd, rm.cube_ib.buffer(), 0, vk::IndexType::UINT16);
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                rm.pipeline_layout.handle(),
+                layout,
                 0,
                 std::slice::from_ref(&rm.view_sets[frame_idx]),
                 &[],
             );
-            for vol in &rm.volumes {
-                if !vol.drawn(frustum) {
-                    continue;
-                }
-                device.cmd_bind_pipeline(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    vol.draw_pipeline(view),
-                );
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    rm.pipeline_layout.handle(),
-                    1,
-                    std::slice::from_ref(&vol.volume_set),
-                    &[],
-                );
-                device.cmd_draw_indexed(cmd, CUBE_INDEX_COUNT, 1, 0, 0, 0);
-                self.inc_draw_calls(1);
-            }
-            device.cmd_end_render_pass(cmd);
         }
+        for vol in &rm.volumes {
+            if !vol.drawn(frustum) {
+                continue;
+            }
+            draw_volume(device, cmd, layout, vol.draw_pipeline(view), vol.volume_set);
+            self.inc_draw_calls(1);
+        }
+        // SAFETY: closes the render pass begun above on the same `cmd`.
+        unsafe { device.cmd_end_render_pass(cmd) };
         Ok(())
     }
 }

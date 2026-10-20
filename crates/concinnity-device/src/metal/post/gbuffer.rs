@@ -251,49 +251,48 @@ impl MtlContext {
         };
 
         let desc = MTLRenderPassDescriptor::new();
-        // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-        // declares.
-        unsafe {
-            let ca0 = desc.colorAttachments().objectAtIndexedSubscript(0);
-            ca0.setTexture(Some(normal_depth));
-            ca0.setLoadAction(MTLLoadAction::Clear);
-            ca0.setStoreAction(MTLStoreAction::Store);
-            // Cleared alpha 0 marks "no geometry" for the SSR/SSAO/RT consumers.
-            ca0.setClearColor(MTLClearColor {
-                red: 0.0,
-                green: 0.0,
-                blue: 0.0,
-                alpha: 0.0,
-            });
-            let ca1 = desc.colorAttachments().objectAtIndexedSubscript(1);
-            ca1.setTexture(Some(roughness));
-            ca1.setLoadAction(MTLLoadAction::Clear);
-            ca1.setStoreAction(MTLStoreAction::Store);
-            // Background roughness 1.0 -> non-reflective, so the border emits no SSR.
-            ca1.setClearColor(MTLClearColor {
-                red: 1.0,
-                green: 0.0,
-                blue: 0.0,
-                alpha: 0.0,
-            });
-            let ca2 = desc.colorAttachments().objectAtIndexedSubscript(2);
-            ca2.setTexture(Some(velocity));
-            ca2.setLoadAction(MTLLoadAction::Clear);
-            ca2.setStoreAction(MTLStoreAction::Store);
-            // Zero motion for the cleared background.
-            ca2.setClearColor(MTLClearColor {
-                red: 0.0,
-                green: 0.0,
-                blue: 0.0,
-                alpha: 0.0,
-            });
-            let da = desc.depthAttachment();
-            da.setTexture(Some(targets.depth.as_ref()));
-            da.setLoadAction(MTLLoadAction::Clear);
-            da.setClearDepth(CLEAR_DEPTH);
-            // Stored (not DontCare): the MetalFX upscaler samples this depth.
-            da.setStoreAction(MTLStoreAction::Store);
-        }
+        // SAFETY: color attachment 0 (normal + depth) is one of the descriptor's fixed slots.
+        let ca0 = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+        ca0.setTexture(Some(normal_depth));
+        ca0.setLoadAction(MTLLoadAction::Clear);
+        ca0.setStoreAction(MTLStoreAction::Store);
+        // Cleared alpha 0 marks "no geometry" for the SSR/SSAO/RT consumers.
+        ca0.setClearColor(MTLClearColor {
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 0.0,
+        });
+        // SAFETY: slot 1 (roughness) is likewise within the color attachment array.
+        let ca1 = unsafe { desc.colorAttachments().objectAtIndexedSubscript(1) };
+        ca1.setTexture(Some(roughness));
+        ca1.setLoadAction(MTLLoadAction::Clear);
+        ca1.setStoreAction(MTLStoreAction::Store);
+        // Background roughness 1.0 -> non-reflective, so the border emits no SSR.
+        ca1.setClearColor(MTLClearColor {
+            red: 1.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 0.0,
+        });
+        // SAFETY: slot 2 (velocity) is within the array's eight color attachments.
+        let ca2 = unsafe { desc.colorAttachments().objectAtIndexedSubscript(2) };
+        ca2.setTexture(Some(velocity));
+        ca2.setLoadAction(MTLLoadAction::Clear);
+        ca2.setStoreAction(MTLStoreAction::Store);
+        // Zero motion for the cleared background.
+        ca2.setClearColor(MTLClearColor {
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 0.0,
+        });
+        let da = desc.depthAttachment();
+        da.setTexture(Some(targets.depth.as_ref()));
+        da.setLoadAction(MTLLoadAction::Clear);
+        da.setClearDepth(CLEAR_DEPTH);
+        // Stored (not DontCare): the MetalFX upscaler samples this depth.
+        da.setStoreAction(MTLStoreAction::Store);
         if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_render(&desc, crate::metal::pass_timing::PassId::GBufferPrepass);
         }

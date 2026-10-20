@@ -190,13 +190,11 @@ fn build_item(mtm: MainThreadMarker, spec: &ItemSpec, target: &MenuTarget) -> Re
         ItemKind::Command(command) => {
             item.setTag(command.tag());
             // SAFETY: `menuItemChosen:` is defined on MenuTarget above, taking
-            // the one NSMenuItem argument AppKit sends a menu action with, and
-            // the target outlives the menu: the AppMenu holding it owns both
-            // for the session.
-            unsafe {
-                item.setAction(Some(sel!(menuItemChosen:)));
-                item.setTarget(Some(target));
-            }
+            // the one NSMenuItem argument AppKit sends a menu action with.
+            unsafe { item.setAction(Some(sel!(menuItemChosen:))) };
+            // SAFETY: the target outlives the menu: the AppMenu holding it
+            // owns both for the session.
+            unsafe { item.setTarget(Some(target)) };
         }
     }
 

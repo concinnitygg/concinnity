@@ -99,16 +99,22 @@ pub(super) struct XessExtQuery {
 impl XessExtQuery {
     pub(super) fn load() -> Option<Self> {
         let library = open_library(LIBRARY)?;
-        // SAFETY: each type is the prototype `xess_vk.h` declares for that export, and the library
-        // they come from is held alongside them.
-        unsafe {
-            Some(Self {
-                get_instance_exts: entry_point(&library, c"xessVKGetRequiredInstanceExtensions")?,
-                get_device_exts: entry_point(&library, c"xessVKGetRequiredDeviceExtensions")?,
-                get_device_features: entry_point(&library, c"xessVKGetRequiredDeviceFeatures")?,
-                _library: library,
-            })
-        }
+        // SAFETY: the type is the prototype `xess_vk.h` declares for this export, and the library
+        // it comes from is held alongside it.
+        let get_instance_exts =
+            unsafe { entry_point(&library, c"xessVKGetRequiredInstanceExtensions")? };
+        // SAFETY: the header's prototype for the device-extension query; `library` is kept below.
+        let get_device_exts =
+            unsafe { entry_point(&library, c"xessVKGetRequiredDeviceExtensions")? };
+        // SAFETY: the header's prototype for the device-feature query; `library` is kept below.
+        let get_device_features =
+            unsafe { entry_point(&library, c"xessVKGetRequiredDeviceFeatures")? };
+        Some(Self {
+            get_instance_exts,
+            get_device_exts,
+            get_device_features,
+            _library: library,
+        })
     }
 
     // XeSS's required instance extensions and the minimum Vulkan API version
@@ -194,16 +200,21 @@ struct XessVkApi {
 
 impl XessVkApi {
     fn resolve(library: &impl SdkLibrary) -> Option<Self> {
-        // SAFETY: each type is the prototype `xess_vk.h` declares for that export.
-        unsafe {
-            Some(Self {
-                create_context: entry_point(library, c"xessVKCreateContext")?,
-                build_pipelines: entry_point(library, c"xessVKBuildPipelines")?,
-                init: entry_point(library, c"xessVKInit")?,
-                execute: entry_point(library, c"xessVKExecute")?,
-                common: XessCommonApi::resolve(library)?,
-            })
-        }
+        // SAFETY: the type is the prototype `xess_vk.h` declares for `xessVKCreateContext`.
+        let create_context = unsafe { entry_point(library, c"xessVKCreateContext")? };
+        // SAFETY: the type is the prototype `xess_vk.h` declares for `xessVKBuildPipelines`.
+        let build_pipelines = unsafe { entry_point(library, c"xessVKBuildPipelines")? };
+        // SAFETY: the type is the prototype `xess_vk.h` declares for `xessVKInit`.
+        let init = unsafe { entry_point(library, c"xessVKInit")? };
+        // SAFETY: the type is the prototype `xess_vk.h` declares for `xessVKExecute`.
+        let execute = unsafe { entry_point(library, c"xessVKExecute")? };
+        Some(Self {
+            create_context,
+            build_pipelines,
+            init,
+            execute,
+            common: XessCommonApi::resolve(library)?,
+        })
     }
 }
 

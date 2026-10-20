@@ -162,16 +162,13 @@ impl GeometryUploads {
         let begin = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         // SAFETY: `cmd` came from a pool created with RESET_COMMAND_BUFFER, and its last submit
-        // retired `depth` ticks ago, so it is not in flight; reset then begin puts it in the
-        // recording state.
-        unsafe {
-            device
-                .reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty())
-                .map_err(|e| map_vk_result(e, "geometry copy reset"))?;
-            device
-                .begin_command_buffer(cmd, &begin)
-                .map_err(|e| map_vk_result(e, "geometry copy begin"))?;
-        }
+        // retired `depth` ticks ago, so it is not in flight and may be reset.
+        unsafe { device.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty()) }
+            .map_err(|e| map_vk_result(e, "geometry copy reset"))?;
+        // SAFETY: the reset above left `cmd` in the initial state, and `begin` is borrowed for
+        // the call; this puts it in the recording state.
+        unsafe { device.begin_command_buffer(cmd, &begin) }
+            .map_err(|e| map_vk_result(e, "geometry copy begin"))?;
         record_copies(device, cmd, &self.queued, dest);
         // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
         unsafe { device.end_command_buffer(cmd) }
@@ -322,9 +319,12 @@ mod tests {
         }
 
         fn read(buffer: &PooledBuffer, offset: usize, len: usize) -> Vec<u8> {
-            // SAFETY: the buffer is host-visible and coherent, the queue idled after the copies,
-            // and `offset + len` stays inside the leased range every caller sized.
-            unsafe { std::slice::from_raw_parts(buffer.mapped_ptr().add(offset), len) }.to_vec()
+            // SAFETY: the buffer is host-visible, and `offset` stays inside the leased range every
+            // caller sized.
+            let start = unsafe { buffer.mapped_ptr().add(offset) };
+            // SAFETY: the mapping is coherent, the queue idled after the copies, and
+            // `offset + len` stays inside the leased range.
+            unsafe { std::slice::from_raw_parts(start, len) }.to_vec()
         }
 
         // Drop every pooled buffer, `uploads`' ring included, then free the

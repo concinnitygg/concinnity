@@ -372,19 +372,17 @@ fn prim_desc_for(
         MTLIndexType::UInt16 => 2,
         _ => 4,
     };
-    // SAFETY: plain descriptor property setters, all values in range.
-    let geo = unsafe {
-        let g = MTLAccelerationStructureTriangleGeometryDescriptor::descriptor();
-        g.setVertexBuffer(Some(vertex_buffer));
-        g.setVertexBufferOffset(base_vertex * VERTEX_STRIDE);
-        g.setVertexStride(VERTEX_STRIDE);
-        g.setVertexFormat(MTLAttributeFormat::Float3);
-        g.setIndexBuffer(Some(index_buffer));
-        g.setIndexBufferOffset(index_offset * index_bytes);
-        g.setIndexType(index_type);
-        g.setTriangleCount(index_count / 3);
-        g
-    };
+    let geo = MTLAccelerationStructureTriangleGeometryDescriptor::descriptor();
+    geo.setVertexBuffer(Some(vertex_buffer));
+    // SAFETY: `base_vertex` addresses a vertex inside `vertex_buffer`, so the offset is in range.
+    unsafe { geo.setVertexBufferOffset(base_vertex * VERTEX_STRIDE) };
+    geo.setVertexStride(VERTEX_STRIDE);
+    geo.setVertexFormat(MTLAttributeFormat::Float3);
+    geo.setIndexBuffer(Some(index_buffer));
+    // SAFETY: `index_offset` is the mesh's first index inside `index_buffer`, in range.
+    unsafe { geo.setIndexBufferOffset(index_offset * index_bytes) };
+    geo.setIndexType(index_type);
+    geo.setTriangleCount(index_count / 3);
     let geo_ref: &MTLAccelerationStructureGeometryDescriptor = &geo;
     let geos = NSArray::from_slice(&[geo_ref]);
     let prim = MTLPrimitiveAccelerationStructureDescriptor::descriptor();

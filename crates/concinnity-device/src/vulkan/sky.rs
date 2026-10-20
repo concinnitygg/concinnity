@@ -86,6 +86,26 @@ pub(in crate::vulkan) fn build_sky_pipeline(
     .build(device, "sky")
 }
 
+// Draw the fullscreen sky triangle under `pipeline` with `sets` bound from set 0, inside an open
+// render pass the pipeline is compatible with on a recording `cmd`.
+fn draw_sky_triangle(
+    device: &ash::Device,
+    cmd: vk::CommandBuffer,
+    pipeline: vk::Pipeline,
+    layout: vk::PipelineLayout,
+    sets: &[vk::DescriptorSet],
+) {
+    // SAFETY: `cmd` is recording inside a render pass the sky pipeline is compatible with, and
+    // the pipeline is owned by the context for the frame.
+    unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline) };
+    // SAFETY: `sets` are live and match `layout` from set 0, as each caller pairs them.
+    unsafe {
+        device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::GRAPHICS, layout, 0, sets, &[]);
+    }
+    // SAFETY: the sky pipeline and its sets are bound above; the vertex id builds the triangle.
+    unsafe { device.cmd_draw(cmd, 3, 1, 0, 0) };
+}
+
 impl VkContext {
     // Whether a view rendered in `mode` draws the sky: the atmosphere's once it
     // has a frame's inputs, else the environment map's.
@@ -111,41 +131,13 @@ impl VkContext {
     ) {
         let device = &self.hw.device;
         if let Some((pipeline, layout, atmosphere_set)) = self.atmosphere_sky(frame_idx) {
-            // SAFETY: as below, with the atmosphere's sky pipeline, whose layout
-            // takes the global set and the atmosphere's set.
-            unsafe {
-                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    layout,
-                    0,
-                    &[global_set, atmosphere_set],
-                    &[],
-                );
-                device.cmd_draw(cmd, 3, 1, 0, 0);
-            }
+            // The atmosphere's sky layout takes the global set and the atmosphere's set.
+            draw_sky_triangle(device, cmd, pipeline, layout, &[global_set, atmosphere_set]);
             self.inc_draw_calls(1);
             return;
         }
-        // SAFETY: `cmd` is a command buffer in the recording state inside a render pass the sky
-        // pipeline is compatible with, and every handle these commands name is live for the call.
-        unsafe {
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.sky.pipeline.handle(),
-            );
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.sky.layout(),
-                0,
-                &[global_set],
-                &[],
-            );
-            device.cmd_draw(cmd, 3, 1, 0, 0);
-        }
+        let pipeline = self.sky.pipeline.handle();
+        draw_sky_triangle(device, cmd, pipeline, self.sky.layout(), &[global_set]);
         self.inc_draw_calls(1);
     }
 

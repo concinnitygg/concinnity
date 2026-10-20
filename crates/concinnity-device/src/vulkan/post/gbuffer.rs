@@ -886,12 +886,10 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-        }
+        // SAFETY: `cmd` is recording inside the G-buffer render pass begun above.
+        unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp)) };
+        // SAFETY: same recording `cmd`; `scissor` is a local that outlives the call.
+        unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor)) };
 
         // The pre-pass is GPU-driven: it reuses the main pass's per-frame indirect
         // buffer (same camera frustum + active LOD) with two
@@ -952,8 +950,7 @@ impl VkContext {
             let Some(&set) = history.sets.get(frame_idx * frames + slot) else {
                 continue;
             };
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
+            // SAFETY: `cmd` is a command buffer in the recording state, as the barrier requires.
             unsafe {
                 self.model_history_barrier(
                     cmd,
@@ -965,11 +962,17 @@ impl VkContext {
                         vk::PipelineStageFlags::COMPUTE_SHADER,
                     ),
                 );
+            }
+            // SAFETY: `cmd` is recording and the history pipeline is owned by `self.cull`.
+            unsafe {
                 device.cmd_bind_pipeline(
                     cmd,
                     vk::PipelineBindPoint::COMPUTE,
                     history.pipeline.handle(),
                 );
+            }
+            // SAFETY: `set` was allocated against the history layout and outlives the frame.
+            unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::COMPUTE,
@@ -978,7 +981,11 @@ impl VkContext {
                     &[set],
                     &[],
                 );
-                device.cmd_dispatch(cmd, groups, 1, 1);
+            }
+            // SAFETY: `cmd` is recording with the history pipeline and its set bound above.
+            unsafe { device.cmd_dispatch(cmd, groups, 1, 1) };
+            // SAFETY: `cmd` is still recording; this releases the slot written by the dispatch.
+            unsafe {
                 self.model_history_barrier(
                     cmd,
                     slot,
@@ -1073,44 +1080,46 @@ impl VkContext {
         let stride = u32::saturating_from(size_of::<vk::DrawIndexedIndirectCommand>());
         let prefix = u32::saturating_from(self.state.draw.skinned_record_base());
 
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        let sets = [
+            self.descriptors.global_sets[frame_idx],
+            self.cull.bindless_sets[frame_idx],
+            gset,
+        ];
+        // SAFETY: `cmd` is recording inside the pre-pass render pass, and the three sets are
+        // this frame's, live until its fence signals.
         unsafe {
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
                 prepass.pipeline_layout.handle(),
                 0,
-                &[
-                    self.descriptors.global_sets[frame_idx],
-                    self.cull.bindless_sets[frame_idx],
-                    gset,
-                ],
+                &sets,
                 &[],
             );
+        }
 
-            // Static + instance prefix: the static VB bound to BOTH vertex bindings
-            // (prev_pos == cur_pos) + the static u32 IB.
-            device.cmd_bind_vertex_buffers(
-                cmd,
-                0,
-                &[
-                    self.geometry.vertex_buffer.buffer(),
-                    self.geometry.vertex_buffer.buffer(),
-                ],
-                &[0, 0],
-            );
+        // Static + instance prefix: the static VB bound to BOTH vertex bindings
+        // (prev_pos == cur_pos) + the static u32 IB.
+        let static_vb = self.geometry.vertex_buffer.buffer();
+        // SAFETY: the static vertex buffer is owned by `self.geometry` and outlives the frame.
+        unsafe { device.cmd_bind_vertex_buffers(cmd, 0, &[static_vb, static_vb], &[0, 0]) };
+        // SAFETY: the static index buffer is owned by `self.geometry` and outlives the frame.
+        unsafe {
             device.cmd_bind_index_buffer(
                 cmd,
                 self.geometry.index_buffer.buffer(),
                 0,
                 vk::IndexType::UINT32,
             );
-            if let (true, Some(pipeline)) = (prefix > 0, pipeline) {
+        }
+        if let (true, Some(pipeline)) = (prefix > 0, pipeline) {
+            // SAFETY: bucket 0's pre-pass pipeline is owned by `self.cull` and outlives the frame.
+            unsafe {
                 device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
-                device.cmd_draw_indexed_indirect(cmd, indirect, 0, prefix, stride);
-                self.inc_draw_calls(1);
             }
+            // SAFETY: `indirect` is this frame's indirect buffer, live until its fence signals.
+            unsafe { device.cmd_draw_indexed_indirect(cmd, indirect, 0, prefix, stride) };
+            self.inc_draw_calls(1);
         }
         // The material-referenced shader buckets write their own regions of the
         // command buffer, each drawn under its own pre-pass pipeline; a bucket
@@ -1142,23 +1151,32 @@ impl VkContext {
                 frame_idx
             };
             let prev = self.skinned.deformed.get(prev_idx).unwrap_or(cur);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
+            // Skinned records are always bucket 0.
+            // SAFETY: `cmd` is recording and bucket 0's pre-pass pipeline is owned by `self.cull`.
             unsafe {
-                // Skinned records are always bucket 0.
                 device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
-                device.cmd_bind_vertex_buffers(cmd, 0, &[cur.buffer, prev.buffer], &[0, 0]);
+            }
+            // SAFETY: both deformed vertex buffers are owned by `self.skinned`'s ring.
+            unsafe { device.cmd_bind_vertex_buffers(cmd, 0, &[cur.buffer, prev.buffer], &[0, 0]) };
+            // SAFETY: the skinned index buffer is owned by `self.skinned` and outlives the frame.
+            unsafe {
                 device.cmd_bind_index_buffer(
                     cmd,
                     self.skinned.index_buffer.buffer(),
                     0,
                     vk::IndexType::UINT32,
                 );
+            }
+            let skinned_offset = (self.state.draw.skinned_record_base() * stride as usize) as u64;
+            let skinned_count = u32::saturating_from(self.state.draw.n_skinned);
+            // SAFETY: `indirect` is this frame's indirect buffer, and the skinned tail starts at
+            // the skinned record base inside it.
+            unsafe {
                 device.cmd_draw_indexed_indirect(
                     cmd,
                     indirect,
-                    (self.state.draw.skinned_record_base() * stride as usize) as u64,
-                    u32::saturating_from(self.state.draw.n_skinned),
+                    skinned_offset,
+                    skinned_count,
                     stride,
                 );
             }

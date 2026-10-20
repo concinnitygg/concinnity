@@ -45,8 +45,8 @@ impl VkContext {
             |cmd| {
                 let vcopy = vk::BufferCopy::default().size(old_v);
                 let icopy = vk::BufferCopy::default().size(old_i);
-                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-                // slice these commands name is live for the call.
+                // SAFETY: `cmd` is recording, and both vertex buffers are live: the old one is
+                // still owned by `self.geometry`, the new one by this function.
                 unsafe {
                     self.hw.device.cmd_copy_buffer(
                         cmd,
@@ -54,6 +54,10 @@ impl VkContext {
                         new_vbuf.buffer(),
                         std::slice::from_ref(&vcopy),
                     );
+                }
+                // SAFETY: as above for the index buffers; the old one is replaced only after the
+                // one-shot submit completes.
+                unsafe {
                     self.hw.device.cmd_copy_buffer(
                         cmd,
                         self.geometry.index_buffer.buffer(),

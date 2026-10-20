@@ -499,18 +499,20 @@ impl VkFrameSync {
     // Destroy every owned semaphore + fence. Called from `VkContext::drop`
     // after `wait_idle`, so none are still in flight.
     pub(super) fn destroy(&self, device: &VkDevice) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            for &s in &self.image_available {
-                device.destroy_semaphore(s, None);
-            }
-            for &s in &self.render_finished {
-                device.destroy_semaphore(s, None);
-            }
-            for &f in &self.in_flight {
-                device.destroy_fence(f, None);
-            }
+        for &s in &self.image_available {
+            // SAFETY: the semaphore was created from this device and is destroyed exactly once;
+            // the caller has already idled the device, so no submission still waits on it.
+            unsafe { device.destroy_semaphore(s, None) };
+        }
+        for &s in &self.render_finished {
+            // SAFETY: owned by this frame-sync set like the ones above, and no present still
+            // waits on it after the caller's idle wait.
+            unsafe { device.destroy_semaphore(s, None) };
+        }
+        for &f in &self.in_flight {
+            // SAFETY: the fence belongs to this device, and the idle wait means no queue
+            // submission will still signal it.
+            unsafe { device.destroy_fence(f, None) };
         }
     }
 }
@@ -554,19 +556,19 @@ impl VkCommands {
     // Destroy every command pool, which frees the buffers allocated from it.
     // Called from `VkContext::drop` after `wait_idle`.
     pub(super) fn destroy(&self, device: &VkDevice) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            // The shared pool (also frees the per-frame "end" buffers).
-            device.destroy_command_pool(self.command_pool, None);
-            // The parallel-recording pools (each frees its own buffer).
-            for &pool in self
-                .start_command_pools
-                .iter()
-                .chain(self.pass_command_pools.iter())
-            {
-                device.destroy_command_pool(pool, None);
-            }
+        // The shared pool (also frees the per-frame "end" buffers).
+        // SAFETY: the pool was created from this device and is destroyed exactly once; the caller
+        // has already idled the device, so none of its buffers is still executing.
+        unsafe { device.destroy_command_pool(self.command_pool, None) };
+        // The parallel-recording pools (each frees its own buffer).
+        for &pool in self
+            .start_command_pools
+            .iter()
+            .chain(self.pass_command_pools.iter())
+        {
+            // SAFETY: each per-frame pool is owned here alone, and after the idle wait no worker
+            // records into it and no submission still runs its buffer.
+            unsafe { device.destroy_command_pool(pool, None) };
         }
     }
 }

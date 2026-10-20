@@ -461,7 +461,7 @@ impl DxContext {
         // slots. The `Fog` render pass below reads from the same slot, so
         // both passes see the same params this frame.
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
-        // init sized for this payload, and the source is a separate live value, so the ranges
+        // init sized for `FogParams`, and the source is a separate live value, so the ranges
         // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
@@ -469,6 +469,10 @@ impl DxContext {
                 fog.params_ubo_ptrs[frame_idx],
                 size_of::<FogParams>(),
             );
+        }
+        // SAFETY: the froxel ring slot is a separate UPLOAD-heap mapping sized for
+        // `FogFroxelParams`, and the source is a separate live value.
+        unsafe {
             std::ptr::copy_nonoverlapping(
                 std::ptr::from_ref::<FogFroxelParams>(froxel_params).cast::<u8>(),
                 fog.froxel_params_ubo_ptrs[frame_idx],
@@ -484,23 +488,30 @@ impl DxContext {
         // `UNORDERED_ACCESS`; the graph's Fog consumer barrier is what returns it
         // to a shader-resource state for the render pass.
 
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetComputeRootSignature(&fog.froxel_root_sig);
-            cmd.SetPipelineState(&fog.froxel_pso);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetComputeRootConstantBufferView(0, params_gva);
-            cmd.SetComputeRootConstantBufferView(1, froxel_params_gva);
-            cmd.SetComputeRootConstantBufferView(2, shadow_ubo_gva);
-            cmd.set_compute_srv_table(3, fog.shadow_srv_gpu);
-            cmd.set_compute_srv_table(4, fog.volume_uav_gpu);
+        // SAFETY: the command list is recording, and the froxel root signature is owned by `fog`.
+        unsafe { cmd.SetComputeRootSignature(&fog.froxel_root_sig) };
+        // SAFETY: the froxel PSO is owned by `fog` and matches the root signature above.
+        unsafe { cmd.SetPipelineState(&fog.froxel_pso) };
+        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: `params_gva` addresses this frame's `FogParams` ring slot written above.
+        unsafe { cmd.SetComputeRootConstantBufferView(0, params_gva) };
+        // SAFETY: `froxel_params_gva` addresses this frame's `FogFroxelParams` ring slot.
+        unsafe { cmd.SetComputeRootConstantBufferView(1, froxel_params_gva) };
+        // SAFETY: `shadow_ubo_gva` addresses this frame's live shadow constant buffer.
+        unsafe { cmd.SetComputeRootConstantBufferView(2, shadow_ubo_gva) };
+        // SAFETY: the shadow map's SRV lives in the heap set above, already in a non-pixel
+        // shader-resource state.
+        unsafe { cmd.set_compute_srv_table(3, fog.shadow_srv_gpu) };
+        // SAFETY: the froxel volume's UAV lives in that heap, and the volume is in
+        // UNORDERED_ACCESS.
+        unsafe { cmd.set_compute_srv_table(4, fog.volume_uav_gpu) };
 
-            // 8×8 threadgroups, one thread per (x, y) froxel.
-            let groups_x = FOG_FROXEL_X.div_ceil(8);
-            let groups_y = FOG_FROXEL_Y.div_ceil(8);
-            cmd.Dispatch(groups_x, groups_y, 1);
-        }
+        // 8×8 threadgroups, one thread per (x, y) froxel.
+        let groups_x = FOG_FROXEL_X.div_ceil(8);
+        let groups_y = FOG_FROXEL_Y.div_ceil(8);
+        // SAFETY: the froxel pipeline and every root argument it reads are bound above.
+        unsafe { cmd.Dispatch(groups_x, groups_y, 1) };
 
         // The shadow map stays in the state the graph's read run put it in; the
         // executor's end-of-frame restore returns it to resting.
@@ -534,39 +545,52 @@ impl DxContext {
 
         let w = self.targets.extent.render_width;
         let h = self.targets.extent.render_height;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        let vp_state = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: w as f32,
+            Height: h as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let scissor = RECT {
+            left: 0,
+            top: 0,
+            right: i32::saturating_from(w),
+            bottom: i32::saturating_from(h),
+        };
+        // SAFETY: the command list is recording, and the executor has put the scene behind
+        // `scene_rtv` in RENDER_TARGET.
+        unsafe { cmd.OMSetRenderTargets(1, Some(&raw const scene_rtv), false, None) };
+        // SAFETY: the viewport slice is a local that outlives the call.
+        unsafe { cmd.RSSetViewports(&[vp_state]) };
+        // SAFETY: the scissor slice is a local that outlives the call.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
+        // SAFETY: setting the topology only needs a recording command list.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&raw const scene_rtv), false, None);
-            let vp_state = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: w as f32,
-                Height: h as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp_state]);
-            let scissor = RECT {
-                left: 0,
-                top: 0,
-                right: i32::saturating_from(w),
-                bottom: i32::saturating_from(h),
-            };
-            cmd.RSSetScissorRects(&[scissor]);
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
-
-            cmd.SetPipelineState(&fog.pso);
-            cmd.SetGraphicsRootSignature(&fog.root_sig);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetGraphicsRootConstantBufferView(0, params_gva);
-            cmd.SetGraphicsRootConstantBufferView(1, froxel_params_gva);
-            cmd.set_graphics_srv_table(2, fog.depth_srv_gpu);
-            cmd.set_graphics_srv_table(3, fog.volume_srv_gpu);
-            cmd.DrawInstanced(3, 1, 0, 0);
         }
+
+        // SAFETY: the fog PSO is owned by `fog` and outlives the recording.
+        unsafe { cmd.SetPipelineState(&fog.pso) };
+        // SAFETY: the fog root signature is owned by `fog` and matches the PSO above.
+        unsafe { cmd.SetGraphicsRootSignature(&fog.root_sig) };
+        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: `params_gva` addresses the `FogParams` slot `encode_fog_froxel` wrote this frame.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(0, params_gva) };
+        // SAFETY: `froxel_params_gva` addresses this frame's live `FogFroxelParams` slot.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(1, froxel_params_gva) };
+        // SAFETY: the depth SRV lives in the heap set above, and the depth is in a
+        // shader-resource state for this pass.
+        unsafe { cmd.set_graphics_srv_table(2, fog.depth_srv_gpu) };
+        // SAFETY: the froxel volume SRV lives in that heap, and the executor closed the volume to
+        // PIXEL_SHADER_RESOURCE.
+        unsafe { cmd.set_graphics_srv_table(3, fog.volume_srv_gpu) };
+        // SAFETY: the target, pipeline and every root argument the draw reads are bound above.
+        unsafe { cmd.DrawInstanced(3, 1, 0, 0) };
 
         // The scene spine, main depth and the froxel volume are all graph
         // resources; nothing here is left to restore.

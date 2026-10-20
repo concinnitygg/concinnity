@@ -42,17 +42,13 @@ struct MappedUpload {
 
 impl UploadBuffer for MappedUpload {
     fn write(&self, offset: u64, bytes: &[u8]) {
-        // SAFETY: `base` is the persistent map of the buffer the ring sized, and
-        // the ring writes only inside that capacity. Every ring is reserved and
-        // pushed on the main thread only, and the frame fence retired the GPU's
-        // last read of this slot.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                self.base.add(usize::saturating_from(offset)),
-                bytes.len(),
-            );
-        }
+        // SAFETY: `base` is the persistent map of the buffer the ring sized, and the ring writes
+        // only inside that capacity, so `offset` stays in bounds.
+        let dst = unsafe { self.base.add(usize::saturating_from(offset)) };
+        // SAFETY: `dst` plus `bytes.len()` stays inside the ring's capacity. Every ring is reserved
+        // and pushed on the main thread only, and the frame fence retired the GPU's last read of
+        // this slot.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len()) };
     }
 }
 

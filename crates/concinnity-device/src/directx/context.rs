@@ -1270,8 +1270,12 @@ impl DxContext {
         window::set_window_mode(self.win_mut(), mode);
     }
 
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "`forward!` reaches it from the trait's `&mut self` method of the same name"
+    )]
     pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
-        window::set_window_size(self.win_mut(), width, height);
+        window::set_window_size(self.win(), width, height);
     }
 
     // The display modes (resolution + refresh rate) of the monitor the window

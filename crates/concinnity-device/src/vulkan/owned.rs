@@ -56,16 +56,40 @@ impl Retired {
     // exactly once, only owned wrappers built from this device push into it,
     // and it withholds every entry for `retire_depth` frame ticks.
     unsafe fn destroy(self, device: &ash::Device) {
-        // SAFETY: the caller upholds provenance, single-destruction and quiescence; see above.
-        unsafe {
-            match self {
-                Self::Pipeline(h) => device.destroy_pipeline(h, None),
-                Self::PipelineLayout(h) => device.destroy_pipeline_layout(h, None),
-                Self::SetLayout(h) => device.destroy_descriptor_set_layout(h, None),
-                Self::DescriptorPool(h) => device.destroy_descriptor_pool(h, None),
-                Self::RenderPass(h) => device.destroy_render_pass(h, None),
-                Self::Framebuffer(h) => device.destroy_framebuffer(h, None),
-                Self::Sampler(h) => device.destroy_sampler(h, None),
+        match self {
+            Self::Pipeline(h) => {
+                // SAFETY: the caller upholds provenance, single destruction and quiescence for
+                // this pipeline; see above.
+                unsafe { device.destroy_pipeline(h, None) };
+            }
+            Self::PipelineLayout(h) => {
+                // SAFETY: as for the pipeline arm; no in-flight submission still binds the layout.
+                unsafe { device.destroy_pipeline_layout(h, None) };
+            }
+            Self::SetLayout(h) => {
+                // SAFETY: the set layout came from `device` and is retired exactly once, past
+                // `retire_depth` ticks.
+                unsafe { device.destroy_descriptor_set_layout(h, None) };
+            }
+            Self::DescriptorPool(h) => {
+                // SAFETY: the retire window has passed, so no submission still reads a set
+                // allocated from this pool, and it is destroyed exactly once.
+                unsafe { device.destroy_descriptor_pool(h, None) };
+            }
+            Self::RenderPass(h) => {
+                // SAFETY: the render pass came from `device`, and no recording or in-flight
+                // submission still names it once its retire window passed.
+                unsafe { device.destroy_render_pass(h, None) };
+            }
+            Self::Framebuffer(h) => {
+                // SAFETY: the framebuffer is retired once, after every submission that drew into
+                // it has had `retire_depth` ticks to complete.
+                unsafe { device.destroy_framebuffer(h, None) };
+            }
+            Self::Sampler(h) => {
+                // SAFETY: the sampler came from `device`, is destroyed exactly once, and no
+                // in-flight descriptor read still uses it.
+                unsafe { device.destroy_sampler(h, None) };
             }
         }
     }

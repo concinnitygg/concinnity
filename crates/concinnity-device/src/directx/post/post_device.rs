@@ -174,16 +174,17 @@ impl DxPostProbes {
     // array table, the ProbeSet CBV, the records, the cluster params and the
     // cluster lists.
     pub(in crate::directx) fn bind(&self, cmd: &ID3D12GraphicsCommandList, first: u32) {
-        // SAFETY: the command list is in the recording state with the SRV heap
-        // bound, and the table slot and every buffer are live for the frame the
-        // list records.
-        unsafe {
-            cmd.set_graphics_srv_table(first, self.cube_table);
-            cmd.SetGraphicsRootConstantBufferView(first + 1, self.set_cbv);
-            cmd.SetGraphicsRootShaderResourceView(first + 2, self.records);
-            cmd.SetGraphicsRootConstantBufferView(first + 3, self.cluster_cbv);
-            cmd.SetGraphicsRootShaderResourceView(first + 4, self.cluster_list);
-        }
+        // SAFETY: the list is recording with the SRV heap bound, and the cube array slot is live
+        // for the frame the list records.
+        unsafe { cmd.set_graphics_srv_table(first, self.cube_table) };
+        // SAFETY: the list is recording, and this frame's ProbeSet constant buffer is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(first + 1, self.set_cbv) };
+        // SAFETY: the list is recording, and this frame's probe records buffer is live.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(first + 2, self.records) };
+        // SAFETY: the list is recording, and this frame's `ClusterParams` buffer is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(first + 3, self.cluster_cbv) };
+        // SAFETY: the list is recording, and the per-cluster lists are live for the frame.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(first + 4, self.cluster_list) };
     }
 }
 
@@ -387,60 +388,78 @@ impl PostPassDevice for DxPostDevice<'_> {
         // what the target holds.
         let owns_state = draw.state == PostTargetState::Pass;
         debug_assert!(matches!(draw.load, PostLoadOp::DontCare | PostLoadOp::Load));
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            if owns_state {
-                cmd.ResourceBarrier(&[subresource_transition_barrier(
-                    target.resource,
-                    target.subresource,
-                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                )]);
-            }
-            cmd.OMSetRenderTargets(1, Some(&raw const target.rtv), false, None);
-            let vp = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: target.extent.width as f32,
-                Height: target.extent.height as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp]);
-            cmd.RSSetScissorRects(&[windows::Win32::Foundation::RECT {
-                left: 0,
-                top: 0,
-                right: i32::saturating_from(target.extent.width),
-                bottom: i32::saturating_from(target.extent.height),
-            }]);
-            cmd.SetDescriptorHeaps(&[Some(self.srv_heap.clone())]);
-            cmd.SetPipelineState(&pipe.pso);
-            cmd.SetGraphicsRootSignature(&pipe.root_sig);
-            // Every source binds through a static sampler the root signature
-            // declared at its own slot, so a bind is just its table.
-            for (slot, bind) in draw.binds.iter().enumerate() {
-                cmd.set_graphics_srv_table(u32::saturating_from(slot), bind.texture);
-            }
-            if !draw.constants.is_empty() {
+        if owns_state {
+            let to_rt = subresource_transition_barrier(
+                target.resource,
+                target.subresource,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+            );
+            // SAFETY: the list is recording, and the barrier names the live target this pass owns.
+            unsafe { cmd.ResourceBarrier(&[to_rt]) };
+        }
+        // SAFETY: the list is recording, and `target.rtv` is a live descriptor the borrow keeps
+        // alive for the call.
+        unsafe { cmd.OMSetRenderTargets(1, Some(&raw const target.rtv), false, None) };
+        let vp = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: target.extent.width as f32,
+            Height: target.extent.height as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        // SAFETY: the list is recording, and the viewport slice is a live local.
+        unsafe { cmd.RSSetViewports(&[vp]) };
+        let scissor = windows::Win32::Foundation::RECT {
+            left: 0,
+            top: 0,
+            right: i32::saturating_from(target.extent.width),
+            bottom: i32::saturating_from(target.extent.height),
+        };
+        // SAFETY: the list is recording, and the scissor slice is a live local.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
+        // SAFETY: the list is recording, and the SRV heap is owned by the device for its lifetime.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.srv_heap.clone())]) };
+        // SAFETY: the list is recording, and the pipeline's PSO is live while `draw` borrows it.
+        unsafe { cmd.SetPipelineState(&pipe.pso) };
+        // SAFETY: the list is recording, and the pipeline's root signature is live.
+        unsafe { cmd.SetGraphicsRootSignature(&pipe.root_sig) };
+        // Every source binds through a static sampler the root signature
+        // declared at its own slot, so a bind is just its table.
+        for (slot, bind) in draw.binds.iter().enumerate() {
+            // SAFETY: the signature bound above declares a table at each source slot, the SRV
+            // heap is set, and the source's descriptor is live for the frame.
+            unsafe { cmd.set_graphics_srv_table(u32::saturating_from(slot), bind.texture) };
+        }
+        if !draw.constants.is_empty() {
+            // SAFETY: the signature bound above declares the pass constants at this parameter, and
+            // the slice is borrowed for the call.
+            unsafe {
                 cmd.set_graphics_root_constant_bytes(pipe.constants_parameter(), draw.constants);
             }
-            if let Some(probes) = probes {
-                probes.bind(cmd, pipe.probes_parameter());
-            }
-            cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            // The vertex stage builds the fullscreen triangle from SV_VertexID.
-            cmd.IASetVertexBuffers(0, None);
-            cmd.IASetIndexBuffer(None);
-            cmd.DrawInstanced(3, 1, 0, 0);
-            if owns_state {
-                cmd.ResourceBarrier(&[subresource_transition_barrier(
-                    target.resource,
-                    target.subresource,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                )]);
-            }
+        }
+        if let Some(probes) = probes {
+            probes.bind(cmd, pipe.probes_parameter());
+        }
+        // SAFETY: the list is recording; setting the topology names no resource.
+        unsafe { cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
+        // The vertex stage builds the fullscreen triangle from SV_VertexID.
+        // SAFETY: the list is recording; clearing the vertex buffers names no resource.
+        unsafe { cmd.IASetVertexBuffers(0, None) };
+        // SAFETY: the list is recording; clearing the index buffer names no resource.
+        unsafe { cmd.IASetIndexBuffer(None) };
+        // SAFETY: the target, pipeline and every table it reads are bound above and live.
+        unsafe { cmd.DrawInstanced(3, 1, 0, 0) };
+        if owns_state {
+            let to_srv = subresource_transition_barrier(
+                target.resource,
+                target.subresource,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            );
+            // SAFETY: the list is recording, and the barrier names the live target this pass owns.
+            unsafe { cmd.ResourceBarrier(&[to_srv]) };
         }
         Ok(())
     }

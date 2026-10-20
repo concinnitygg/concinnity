@@ -198,8 +198,8 @@ impl UpscaleOutput {
                 },
             },
         };
-        // SAFETY: the view descriptors and the resource they name are live for the calls, and the
-        // destination handles address slots init reserved for these views in a heap it owns.
+        // SAFETY: `uav` and the resource it names are live for the call, and `uav_cpu` addresses a
+        // slot init reserved for this view in a heap it owns.
         unsafe {
             device.CreateUnorderedAccessView(
                 &resource,
@@ -207,6 +207,10 @@ impl UpscaleOutput {
                 Some(&raw const uav),
                 descriptors.uav_cpu,
             );
+        }
+        // SAFETY: `srv` and the resource it names are live for the call, and `srv_cpu` addresses a
+        // slot init reserved for this view in a heap it owns.
+        unsafe {
             device.CreateShaderResourceView(&resource, Some(&raw const srv), descriptors.srv_cpu);
         }
         Ok(Self {

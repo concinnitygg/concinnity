@@ -181,27 +181,29 @@ pub(super) fn upload_cubemap(
 
     let bytes_per_row = (face_size as usize) * 4 * 4;
     let bytes_per_image = bytes_per_row * (face_size as usize);
-    // SAFETY: `region` covers one cube face and the caller-side length check proved `data` holds
-    // all six faces at `bytes_per_image` each.
-    unsafe {
-        use objc2_metal::MTLRegion;
-        let region = MTLRegion {
-            origin: objc2_metal::MTLOrigin { x: 0, y: 0, z: 0 },
-            size: objc2_metal::MTLSize {
-                width: face_size as usize,
-                height: face_size as usize,
-                depth: 1,
-            },
-        };
-        for face in 0..6 {
-            let face_start = face * face_bytes;
-            let face_ptr = bytes.as_ptr().add(face_start) as *mut std::ffi::c_void;
+    let region = objc2_metal::MTLRegion {
+        origin: objc2_metal::MTLOrigin { x: 0, y: 0, z: 0 },
+        size: objc2_metal::MTLSize {
+            width: face_size as usize,
+            height: face_size as usize,
+            depth: 1,
+        },
+    };
+    for face in 0..6 {
+        let face_start = face * face_bytes;
+        // SAFETY: the length check above proved `bytes` holds all six faces, so `face_start`
+        // stays inside the slice.
+        let face_ptr = unsafe { bytes.as_ptr().add(face_start) } as *mut std::ffi::c_void;
+        let face_ptr = std::ptr::NonNull::new(face_ptr)
+            .ok_or_else(|| RenderError::Other("cube face pointer is null".to_string()))?;
+        // SAFETY: `region` covers one cube face and `face_ptr` has `bytes_per_image` readable
+        // bytes for it; Metal only reads them during the call.
+        unsafe {
             texture.replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(
                 region,
                 0,
                 face,
-                std::ptr::NonNull::new(face_ptr)
-                    .ok_or_else(|| RenderError::Other("cube face pointer is null".to_string()))?,
+                face_ptr,
                 bytes_per_row,
                 bytes_per_image,
             );
@@ -395,28 +397,29 @@ fn upload_prefilter_cube(
         }
         let bytes_per_row = (mip_face_size as usize) * 4 * 4;
         let bytes_per_image = bytes_per_row * (mip_face_size as usize);
-        // SAFETY: `region` covers one face of mip `mip`, and the length check above proved that
-        // face's slice holds `bytes_per_image` bytes.
-        unsafe {
-            use objc2_metal::MTLRegion;
-            let region = MTLRegion {
-                origin: objc2_metal::MTLOrigin { x: 0, y: 0, z: 0 },
-                size: objc2_metal::MTLSize {
-                    width: mip_face_size as usize,
-                    height: mip_face_size as usize,
-                    depth: 1,
-                },
-            };
-            for face in 0..6 {
-                let face_start = face * face_bytes;
-                let face_ptr = bytes.as_ptr().add(face_start) as *mut std::ffi::c_void;
+        let region = objc2_metal::MTLRegion {
+            origin: objc2_metal::MTLOrigin { x: 0, y: 0, z: 0 },
+            size: objc2_metal::MTLSize {
+                width: mip_face_size as usize,
+                height: mip_face_size as usize,
+                depth: 1,
+            },
+        };
+        for face in 0..6 {
+            let face_start = face * face_bytes;
+            // SAFETY: the length check above proved this mip's `bytes` holds six faces of
+            // `face_bytes`, so `face_start` stays inside the slice.
+            let face_ptr = unsafe { bytes.as_ptr().add(face_start) } as *mut std::ffi::c_void;
+            let face_ptr = std::ptr::NonNull::new(face_ptr)
+                .ok_or_else(|| RenderError::Other("prefilter face pointer null".to_string()))?;
+            // SAFETY: `region` covers one face of mip `mip`, and that face's slice holds
+            // `bytes_per_image` bytes Metal reads only during the call.
+            unsafe {
                 texture.replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(
                     region,
                     mip,
                     face,
-                    std::ptr::NonNull::new(face_ptr).ok_or_else(|| {
-                        RenderError::Other("prefilter face pointer null".to_string())
-                    })?,
+                    face_ptr,
                     bytes_per_row,
                     bytes_per_image,
                 );

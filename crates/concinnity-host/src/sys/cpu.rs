@@ -89,11 +89,13 @@ mod imp {
         let mut exit = FILETIME::default();
         let mut kernel = FILETIME::default();
         let mut user = FILETIME::default();
+        // SAFETY: returns the constant current-process pseudo-handle, which needs no close.
+        let process = unsafe { GetCurrentProcess() };
         // SAFETY: all four out-params are valid FILETIME buffers, as the API
-        // requires; the current-process pseudo-handle needs no close.
+        // requires, and `process` is the pseudo-handle from the call above.
         unsafe {
             GetProcessTimes(
-                GetCurrentProcess(),
+                process,
                 &raw mut creation,
                 &raw mut exit,
                 &raw mut kernel,

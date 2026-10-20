@@ -178,15 +178,13 @@ impl RecordBuffers {
         let params_ptr = p.cast::<u8>();
         for frame in 0..frames {
             // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold one block per
-            // frame slot, `frame`'s block holds the payload, and the source is a separate
-            // allocation, so the ranges cannot overlap. Persistently mapped, never unmapped.
+            // frame slot, so `frame`'s block starts inside it.
+            let block = unsafe { params_ptr.add(frame * usize::saturating_from(params_block)) };
+            // SAFETY: `frame`'s block holds the payload, and the source is a separate allocation,
+            // so the ranges cannot overlap. Persistently mapped, never unmapped.
             unsafe {
-                std::ptr::copy_nonoverlapping(
-                    upload.params.as_ptr(),
-                    params_ptr.add(frame * usize::saturating_from(params_block)),
-                    upload.params.len(),
-                );
-            };
+                std::ptr::copy_nonoverlapping(upload.params.as_ptr(), block, upload.params.len());
+            }
         }
         let params_cbuffer_gva = com::gpu_va(&params_cbuffer);
 
@@ -216,12 +214,12 @@ impl WaterParamsSink for RecordBuffers {
     fn write_water_params(&self, frame_idx: usize, params: &WaterParams) {
         let bytes = bytemuck::bytes_of(params);
         let offset = (frame_idx % self.frames) * usize::saturating_from(self.params_block);
-        // SAFETY: the destination is `frame_idx`'s block of the persistent mapping, which this
-        // water record's upload sized (256-aligned) for one `WaterParams`, and the source is a
-        // separate live value, so the ranges cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.params_ptr.add(offset), bytes.len());
-        };
+        // SAFETY: `offset` is `frame_idx`'s block of the persistent mapping, which holds one
+        // block per frame slot.
+        let block = unsafe { self.params_ptr.add(offset) };
+        // SAFETY: this water record's upload sized the block (256-aligned) for one `WaterParams`,
+        // and the source is a separate live value, so the ranges cannot overlap.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), block, bytes.len()) };
     }
 }
 
@@ -1134,13 +1132,15 @@ impl DxContext {
             }
             let mesh = SeeThroughMesh::new(obj, cam, prefilter_mip_count);
             let offset = slot as u64 * block;
-            // SAFETY: the destination is `slot`'s block of the persistent mapping of an
-            // UPLOAD-heap buffer init sized for one block per mesh per frame, and the source is a
+            // SAFETY: init sized the persistent mapping for one block per mesh per frame, so
+            // `slot`'s block starts inside it.
+            let dst = unsafe { ring_ptr.add(usize::saturating_from(offset)) };
+            // SAFETY: `dst` is `slot`'s block of an UPLOAD-heap buffer, and the source is a
             // separate live local, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     (&raw const mesh.params).cast::<u8>(),
-                    ring_ptr.add(usize::saturating_from(offset)),
+                    dst,
                     size_of::<GlassMeshParams>(),
                 );
             }
@@ -1327,12 +1327,11 @@ impl DxContext {
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_COPY_DEST,
         );
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&[scene_to_copy, copy_to_dst]);
-            cmd.CopyResource(&transparent.scene_copy, scene_res);
-        }
+        // SAFETY: the list is recording, and the scene target and `scene_copy` are both live for
+        // the frame.
+        unsafe { cmd.ResourceBarrier(&[scene_to_copy, copy_to_dst]) };
+        // SAFETY: the barrier above put the scene in COPY_SOURCE and `scene_copy` in COPY_DEST.
+        unsafe { cmd.CopyResource(&transparent.scene_copy, scene_res) };
         let scene_to_rt = transition_barrier(
             self.post_scene_target(),
             D3D12_RESOURCE_STATE_COPY_SOURCE,
@@ -1353,12 +1352,10 @@ impl DxContext {
 
         let w = self.targets.extent.render_width;
         let h = self.targets.extent.render_height;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-        }
+        // SAFETY: the list is recording; setting the topology names no resource.
+        unsafe { cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
+        // SAFETY: the list is recording, and the SRV heap is owned by `self.descriptors`.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
 
         // Reflection sources frame-constant across every record (like Metal's
         // encode_transparent): the sky prefilter cube (t2), the probe cube array
@@ -1396,25 +1393,38 @@ impl DxContext {
         } else {
             &transparent.root_sig
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        // SAFETY: the list is recording, and the chosen root signature is owned by `transparent`.
+        unsafe { cmd.SetGraphicsRootSignature(root_sig) };
+        // SAFETY: both signatures declare the view CBV at 0, and this frame's view block is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(0, view_gva) };
+        // SAFETY: the SRV heap is set above, and the scene snapshot's descriptor is live.
+        unsafe { cmd.set_graphics_srv_table(2, transparent.scene_copy_srv_gpu) };
+        // SAFETY: the SRV heap is set above, and the depth descriptor `transparent` holds is live.
+        unsafe { cmd.set_graphics_srv_table(3, transparent.depth_srv_gpu) };
+        // SAFETY: the SRV heap is set above, and the sky prefilter cube's descriptor is live.
+        unsafe { cmd.set_graphics_srv_table(4, prefilter_srv) };
+        // SAFETY: the SRV heap is set above, and the probe cube array's descriptor is live.
+        unsafe { cmd.set_graphics_srv_table(5, probes.cube_table) };
+        // SAFETY: the list is recording, and this frame's ProbeSet constant buffer is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(6, probes.set_cbv) };
+        // SAFETY: the list is recording, and this frame's probe records buffer is live.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(probe_records_root, probes.records) };
+        // SAFETY: the list is recording, and this frame's `ClusterParams` buffer is live.
         unsafe {
-            cmd.SetGraphicsRootSignature(root_sig);
-            cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-            cmd.set_graphics_srv_table(2, transparent.scene_copy_srv_gpu);
-            cmd.set_graphics_srv_table(3, transparent.depth_srv_gpu);
-            cmd.set_graphics_srv_table(4, prefilter_srv);
-            cmd.set_graphics_srv_table(5, probes.cube_table);
-            cmd.SetGraphicsRootConstantBufferView(6, probes.set_cbv);
-            cmd.SetGraphicsRootShaderResourceView(probe_records_root, probes.records);
             cmd.SetGraphicsRootConstantBufferView(probe_records_root + 1, probes.cluster_cbv);
+        }
+        // SAFETY: the list is recording, and the per-cluster probe lists are live for the frame.
+        unsafe {
             cmd.SetGraphicsRootShaderResourceView(probe_records_root + 2, probes.cluster_list);
-            cmd.set_graphics_srv_table(body_light_root, self.body_light_srvs_gpu());
-            cmd.SetGraphicsRootConstantBufferView(body_light_root + 1, shadow_gva);
-            // The oceans' arrays, which exist wherever water does.
-            if let Some(ocean) = &self.water_sim {
-                cmd.set_graphics_srv_table(ocean_root, ocean.srv_table());
-            }
+        }
+        // SAFETY: the SRV heap is set above, and the body light tables this context owns are live.
+        unsafe { cmd.set_graphics_srv_table(body_light_root, self.body_light_srvs_gpu()) };
+        // SAFETY: the list is recording, and this frame's shadow constant buffer is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(body_light_root + 1, shadow_gva) };
+        // The oceans' arrays, which exist wherever water does.
+        if let Some(ocean) = &self.water_sim {
+            // SAFETY: the SRV heap is set above, and the ocean's array table is live.
+            unsafe { cmd.set_graphics_srv_table(ocean_root, ocean.srv_table()) };
         }
         if rt_live {
             // Sharp per-pixel trace. Bind the RT inputs once before the draw loop
@@ -1422,25 +1432,27 @@ impl DxContext {
             // root sig has no planar slot -- planar is the RT-off sharp path.
             let rt_params_gva = rt_params_gva.expect("rt_live uploaded RtParams");
             let accel = self.rt.accel.as_ref().expect("rt_reflections_active");
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.SetGraphicsRootConstantBufferView(7, rt_params_gva);
-                cmd.SetGraphicsRootShaderResourceView(8, accel.tlas_gva());
-                cmd.SetGraphicsRootShaderResourceView(
-                    9,
-                    com::gpu_va(&self.scene.geometry.vertex_buffer),
-                );
-                cmd.SetGraphicsRootShaderResourceView(
-                    10,
-                    com::gpu_va(&self.scene.geometry.index_buffer),
-                );
-                cmd.SetGraphicsRootShaderResourceView(11, accel.geom_table_gva());
-                cmd.SetGraphicsRootShaderResourceView(12, accel.deformed_verts_gva());
-                cmd.SetGraphicsRootShaderResourceView(13, accel.skinned_index_gva());
-                if textured {
-                    cmd.set_graphics_srv_table(14, self.cull.bindless_pool_gpu[self.current_frame]);
-                }
+            // SAFETY: the RT signature declares the params CBV at 7, and this frame's `RtParams`
+            // buffer is live.
+            unsafe { cmd.SetGraphicsRootConstantBufferView(7, rt_params_gva) };
+            // SAFETY: the list is recording, and the TLAS `accel` holds is live for the frame.
+            unsafe { cmd.SetGraphicsRootShaderResourceView(8, accel.tlas_gva()) };
+            let vertex_gva = com::gpu_va(&self.scene.geometry.vertex_buffer);
+            // SAFETY: the list is recording, and `self.scene.geometry` owns the vertex buffer.
+            unsafe { cmd.SetGraphicsRootShaderResourceView(9, vertex_gva) };
+            let index_gva = com::gpu_va(&self.scene.geometry.index_buffer);
+            // SAFETY: the list is recording, and `self.scene.geometry` owns the index buffer.
+            unsafe { cmd.SetGraphicsRootShaderResourceView(10, index_gva) };
+            // SAFETY: the list is recording, and the geometry table `accel` holds is live.
+            unsafe { cmd.SetGraphicsRootShaderResourceView(11, accel.geom_table_gva()) };
+            // SAFETY: the deformed vertex GVA is always a live buffer, a dummy without skinning.
+            unsafe { cmd.SetGraphicsRootShaderResourceView(12, accel.deformed_verts_gva()) };
+            // SAFETY: the skinned index GVA is always a live buffer, a dummy without skinning.
+            unsafe { cmd.SetGraphicsRootShaderResourceView(13, accel.skinned_index_gva()) };
+            if textured {
+                let pool = self.cull.bindless_pool_gpu[self.current_frame];
+                // SAFETY: the SRV heap is set above, and this frame's bindless pool table is live.
+                unsafe { cmd.set_graphics_srv_table(14, pool) };
             }
         }
 
@@ -1472,13 +1484,12 @@ impl DxContext {
                 );
             }
         }
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            let rtvs = [scene_rtv, self.targets.reactive_mask.rtv(reactive)];
-            cmd.OMSetRenderTargets(2, Some(rtvs.as_ptr()), false, None);
-            set_viewport(cmd, (w, h));
-        }
+        let rtvs = [scene_rtv, self.targets.reactive_mask.rtv(reactive)];
+        // SAFETY: the list is recording, and `rtvs` is a live local naming the scene target and
+        // the reactive mask, both live for the frame.
+        unsafe { cmd.OMSetRenderTargets(2, Some(rtvs.as_ptr()), false, None) };
+        // SAFETY: the list is recording, which is all `set_viewport` requires.
+        unsafe { set_viewport(cmd, (w, h)) };
 
         let mut bound: Option<&ID3D12PipelineState> = None;
         for &(kind, i) in order {
@@ -1521,25 +1532,34 @@ impl DxContext {
         let slots = &transparent.reflection_slots;
         for layer in 0..2 {
             let target = &layers.layers[layer];
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
+            let to_rt = transition_barrier(
+                target,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+            );
+            // SAFETY: the list is recording, and the reflection layer is owned by `layers`.
+            unsafe { cmd.ResourceBarrier(&[to_rt]) };
+            // SAFETY: the list is recording, and the layer's RTV and the shared DSV are slots this
+            // context reserved.
             unsafe {
-                cmd.ResourceBarrier(&[transition_barrier(
-                    target,
-                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                )]);
                 cmd.OMSetRenderTargets(
                     1,
                     Some(&raw const slots.rtv[layer]),
                     false,
                     Some(&raw const slots.dsv),
                 );
-                cmd.ClearRenderTargetView(slots.rtv[layer], &[0.0; 4], None);
-                cmd.ClearDepthStencilView(slots.dsv, D3D12_CLEAR_FLAG_DEPTH, DEPTH_CLEAR, 0, None);
-                set_viewport(cmd, layers.extent);
-                cmd.set_graphics_srv_table(GLASS_REFLECTION_ROOT_RT, slots.windows[layer]);
             }
+            // SAFETY: the barrier above put the layer in RENDER_TARGET, and its RTV is bound.
+            unsafe { cmd.ClearRenderTargetView(slots.rtv[layer], &[0.0; 4], None) };
+            // SAFETY: the list is recording, and the reflection DSV is bound above.
+            unsafe {
+                cmd.ClearDepthStencilView(slots.dsv, D3D12_CLEAR_FLAG_DEPTH, DEPTH_CLEAR, 0, None);
+            }
+            // SAFETY: the list is recording, which is all `set_viewport` requires.
+            unsafe { set_viewport(cmd, layers.extent) };
+            // SAFETY: the RT signature declares the reflection table here, and the layer's window
+            // descriptors are reserved by this context.
+            unsafe { cmd.set_graphics_srv_table(GLASS_REFLECTION_ROOT_RT, slots.windows[layer]) };
             for &(kind, i) in order {
                 let pso = match kind {
                     Producer::GlassMesh => transparent
@@ -1558,14 +1578,13 @@ impl DxContext {
                 unsafe { cmd.SetPipelineState(pso) };
                 self.draw_transparent_entry(transparent, frame, kind, i);
             }
+            let to_read = transition_barrier(
+                target,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            );
             // SAFETY: the command list is in the recording state, and the resource is live.
-            unsafe {
-                cmd.ResourceBarrier(&[transition_barrier(
-                    target,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                )]);
-            }
+            unsafe { cmd.ResourceBarrier(&[to_read]) };
         }
     }
 
@@ -1584,12 +1603,15 @@ impl DxContext {
         let cmd = frame.cmd;
         if kind == Producer::GlassMesh {
             let d = &frame.mesh_draws[i];
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
+            // SAFETY: the view names the scene vertex buffer `self.scene.geometry` owns.
+            unsafe { cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view])) };
+            // SAFETY: the view names the scene index buffer `self.scene.geometry` owns.
+            unsafe { cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view)) };
+            // SAFETY: the signature declares the per-draw CBV at 1, and this mesh's block of the
+            // params ring is live for the frame.
+            unsafe { cmd.SetGraphicsRootConstantBufferView(1, d.params_gva) };
+            // SAFETY: the draw's slice lies inside the scene buffers bound above.
             unsafe {
-                cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
-                cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view));
-                cmd.SetGraphicsRootConstantBufferView(1, d.params_gva);
                 cmd.DrawIndexedInstanced(d.index_count, 1, d.index_offset, d.base_vertex, 0);
             }
         } else {
@@ -1602,15 +1624,18 @@ impl DxContext {
                         .map(|set| set.resolve_srv_gpu(s))
                 })
                 .unwrap_or(transparent.scene_copy_srv_gpu);
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.IASetVertexBuffers(0, Some(&[r.gpu.vertex_buffer_view]));
-                cmd.IASetIndexBuffer(Some(&raw const r.gpu.index_buffer_view));
-                cmd.SetGraphicsRootConstantBufferView(1, r.gpu.params_gva(frame.frame_idx));
-                cmd.set_graphics_srv_table(frame.planar_root, planar_srv);
-                cmd.DrawIndexedInstanced(r.gpu.index_count, 1, 0, 0, 0);
-            }
+            // SAFETY: the view names the record's own vertex buffer, which `r.gpu` owns.
+            unsafe { cmd.IASetVertexBuffers(0, Some(&[r.gpu.vertex_buffer_view])) };
+            // SAFETY: the view names the record's own index buffer, which `r.gpu` owns.
+            unsafe { cmd.IASetIndexBuffer(Some(&raw const r.gpu.index_buffer_view)) };
+            let params_gva = r.gpu.params_gva(frame.frame_idx);
+            // SAFETY: the signature declares the per-draw CBV at 1, and this frame's params block
+            // of the record is live.
+            unsafe { cmd.SetGraphicsRootConstantBufferView(1, params_gva) };
+            // SAFETY: the SRV heap is set, and the planar resolve or scene snapshot is live.
+            unsafe { cmd.set_graphics_srv_table(frame.planar_root, planar_srv) };
+            // SAFETY: the record's buffers and every table its PSO reads are bound.
+            unsafe { cmd.DrawIndexedInstanced(r.gpu.index_count, 1, 0, 0, 0) };
         }
         self.inc_draw_calls(1);
     }
@@ -1645,10 +1670,8 @@ unsafe fn set_viewport(cmd: &ID3D12GraphicsCommandList, (w, h): (u32, u32)) {
         right: i32::saturating_from(w),
         bottom: i32::saturating_from(h),
     };
-    // SAFETY: the caller guarantees `cmd` is recording; the viewport and scissor slices are
-    // live for the call.
-    unsafe {
-        cmd.RSSetViewports(&[vp]);
-        cmd.RSSetScissorRects(&[scissor]);
-    }
+    // SAFETY: the caller guarantees `cmd` is recording; the viewport slice is live for the call.
+    unsafe { cmd.RSSetViewports(&[vp]) };
+    // SAFETY: as above, with the scissor slice a live local.
+    unsafe { cmd.RSSetScissorRects(&[scissor]) };
 }

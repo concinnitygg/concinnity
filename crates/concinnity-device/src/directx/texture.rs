@@ -164,31 +164,32 @@ pub(super) fn upload_buffer_padded(
     // receives the mapping.
     unsafe { upload.Map(0, None, Some(&raw mut ptr)) }
         .map_err(|e| map_hresult(e.code(), "upload map"))?;
-    // SAFETY: `Map` returned a CPU-visible mapping of the whole `size`-byte
-    // upload buffer, `data` is a distinct live allocation of `data.len()` bytes,
-    // and `data.len() <= size` holds by the clamp above, so both the copy and
-    // the pad write stay inside the mapping.
-    unsafe {
-        std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.cast::<u8>(), data.len());
-        let pad = usize::saturating_from(size) - data.len();
-        if pad > 0 {
-            std::ptr::write_bytes(ptr.cast::<u8>().add(data.len()), 0, pad);
-        }
-        upload.Unmap(0, None);
+    // SAFETY: `Map` returned a CPU-visible mapping of the whole `size`-byte upload buffer, `data`
+    // is a distinct live allocation, and `data.len() <= size` holds by the clamp above.
+    unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.cast::<u8>(), data.len()) };
+    let pad = usize::saturating_from(size) - data.len();
+    if pad > 0 {
+        // SAFETY: `data.len() < size`, so the offset stays inside the `size`-byte mapping.
+        let tail = unsafe { ptr.cast::<u8>().add(data.len()) };
+        // SAFETY: `tail` plus `pad` bytes ends exactly at the end of the mapping.
+        unsafe { std::ptr::write_bytes(tail, 0, pad) };
     }
+    // SAFETY: unmaps subresource 0 of `upload`, mapped above; the writes are done.
+    unsafe { upload.Unmap(0, None) };
 
     // Buffers are always created in COMMON regardless of requested state, so
     // pass COMMON explicitly to avoid the debug layer warning.
     let dest = alloc.alloc_buffer(size, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON)?;
 
-    // SAFETY: the command list is in the recording state, and every resource, descriptor and slice
-    // these commands name is live for the call.
-    one_shot_submit(alloc.device(), alloc.queue(), |cmd| unsafe {
-        cmd.CopyBufferRegion(&*dest, 0, &*upload, 0, size);
+    one_shot_submit(alloc.device(), alloc.queue(), |cmd| {
+        // SAFETY: the one-shot list is recording, both buffers are `size` bytes, and both outlive
+        // the fence-waited submit.
+        unsafe { cmd.CopyBufferRegion(&*dest, 0, &*upload, 0, size) };
         // CopyBufferRegion implicitly promotes the buffer COMMON -> COPY_DEST,
         // so the transition barrier's before-state must be COPY_DEST.
         let barrier = transition_barrier(&dest, D3D12_RESOURCE_STATE_COPY_DEST, usage_state);
-        cmd.ResourceBarrier(&[barrier]);
+        // SAFETY: the list is recording, and `dest` is a live local.
+        unsafe { cmd.ResourceBarrier(&[barrier]) };
     })?;
 
     Ok(dest)
@@ -654,12 +655,11 @@ pub(super) fn create_fallback_shadow_array(
     // receives the mapping.
     unsafe { upload.Map(0, None, Some(&raw mut map_ptr)) }
         .map_err(|e| map_hresult(e.code(), "map fallback shadow array"))?;
-    // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past this
-    // call.
-    unsafe {
-        *map_ptr.cast::<f32>() = DEPTH_CLEAR;
-        upload.Unmap(0, None);
-    }
+    // SAFETY: `map_ptr` is the mapping from the call above of a buffer at least one row long, and
+    // D3D12 mappings are page-aligned, so the `f32` write is in bounds and aligned.
+    unsafe { *map_ptr.cast::<f32>() = DEPTH_CLEAR };
+    // SAFETY: unmaps subresource 0 of `upload`, mapped above; nothing keeps the mapping.
+    unsafe { upload.Unmap(0, None) };
 
     one_shot_submit(device, alloc.queue(), |cmd| {
         let src = D3D12_TEXTURE_COPY_LOCATION {
@@ -676,17 +676,16 @@ pub(super) fn create_fallback_shadow_array(
                 SubresourceIndex: 0,
             },
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.CopyTextureRegion(&raw const dst, 0, 0, 0, &raw const src, None);
-            let barrier = transition_barrier(
-                &texture,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            );
-            cmd.ResourceBarrier(&[barrier]);
-        }
+        // SAFETY: the one-shot list is recording, the texture was created in COPY_DEST, and both
+        // locations borrow resources that outlive the fence-waited submit.
+        unsafe { cmd.CopyTextureRegion(&raw const dst, 0, 0, 0, &raw const src, None) };
+        let barrier = transition_barrier(
+            &texture,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        );
+        // SAFETY: the list is recording, and the copy above is ordered before the transition.
+        unsafe { cmd.ResourceBarrier(&[barrier]) };
     })?;
 
     let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
@@ -1805,17 +1804,16 @@ pub(super) fn upload_color_lut(
                 SubresourceIndex: 0,
             },
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.CopyTextureRegion(&raw const dst, 0, 0, 0, &raw const src, None);
-            let barrier = transition_barrier(
-                &texture,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            );
-            cmd.ResourceBarrier(&[barrier]);
-        }
+        // SAFETY: the one-shot list is recording, the new texture rests in COPY_DEST, and the
+        // upload buffer and texture both outlive the fence-waited submit.
+        unsafe { cmd.CopyTextureRegion(&raw const dst, 0, 0, 0, &raw const src, None) };
+        let barrier = transition_barrier(
+            &texture,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        );
+        // SAFETY: the list is recording, and the texture is a live local of this function.
+        unsafe { cmd.ResourceBarrier(&[barrier]) };
     })?;
 
     write_lut_srv(device, &texture, srv_cpu);
@@ -1942,17 +1940,16 @@ pub(super) fn upload_float_lut(
                 SubresourceIndex: 0,
             },
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.CopyTextureRegion(&raw const dst, 0, 0, 0, &raw const src, None);
-            let barrier = transition_barrier(
-                &texture,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            );
-            cmd.ResourceBarrier(&[barrier]);
-        }
+        // SAFETY: the one-shot list is recording, the texture starts in COPY_DEST, and `upload`
+        // holds its rows in the placed footprint until the fence wait returns.
+        unsafe { cmd.CopyTextureRegion(&raw const dst, 0, 0, 0, &raw const src, None) };
+        let barrier = transition_barrier(
+            &texture,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        );
+        // SAFETY: the list is recording, and `texture` stays owned by this function.
+        unsafe { cmd.ResourceBarrier(&[barrier]) };
     })?;
 
     let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {

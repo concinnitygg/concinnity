@@ -261,12 +261,11 @@ fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> Rend
     )?;
 
     let mut out: Vec<T> = Vec::with_capacity(count);
-    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `size`,
-    // which is at least the source length, so `mapped_ptr()` is a live mapping of that many bytes;
-    // the source is a separate live allocation, so the ranges cannot overlap.
-    unsafe {
-        std::ptr::copy_nonoverlapping(staging.mapped_ptr() as *const T, out.as_mut_ptr(), count);
-        out.set_len(count);
-    }
+    let src = staging.mapped_ptr() as *const T;
+    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `bytes`,
+    // so `src` is a live mapping of `count` values; `out` is a separate allocation that holds them.
+    unsafe { std::ptr::copy_nonoverlapping(src, out.as_mut_ptr(), count) };
+    // SAFETY: the copy above initialized all `count` elements within `out`'s capacity.
+    unsafe { out.set_len(count) };
     Ok(out)
 }

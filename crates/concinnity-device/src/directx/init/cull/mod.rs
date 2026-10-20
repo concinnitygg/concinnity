@@ -231,18 +231,26 @@ fn write_instance_records(
         .iter()
         .zip(compute.draw_args_ptrs.iter())
     {
-        // SAFETY: the buffers were sized for `n_objects + n_instances`
-        // records, so writing `records.len()` past the `n_objects` offset
-        // stays in bounds.
+        // SAFETY: the object buffer was sized for `n_objects + n_instances` records, so the
+        // `n_objects` offset stays in bounds.
+        let obj_dst = unsafe { obj_ptr.add(n_objects * obj_stride) };
+        // SAFETY: writing `records.len()` records from `obj_dst` stays inside that sizing, and
+        // the source is a separate allocation.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 records.as_ptr().cast::<u8>(),
-                obj_ptr.add(n_objects * obj_stride),
+                obj_dst,
                 records.len() * obj_stride,
             );
+        }
+        // SAFETY: the draw-args buffer has the same `n_objects + n_instances` record sizing.
+        let da_dst = unsafe { da_ptr.add(n_objects * da_stride) };
+        // SAFETY: one draw-args record per instance fits after `da_dst`, and the source is a
+        // separate allocation.
+        unsafe {
             std::ptr::copy_nonoverlapping(
                 draw_args.as_ptr().cast::<u8>(),
-                da_ptr.add(n_objects * da_stride),
+                da_dst,
                 draw_args.len() * da_stride,
             );
         }

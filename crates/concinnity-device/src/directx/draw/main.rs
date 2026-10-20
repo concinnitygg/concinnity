@@ -27,20 +27,144 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         params: super::LocalLightParams,
     ) {
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        let spot_gva = com::gpu_va(&self.spot_shadow.buffer);
+        // SAFETY: the command list is recording, and the spot projection buffer is owned by
+        // `self.spot_shadow` for the world's lifetime.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(params.spot_buffer, spot_gva) };
+        // SAFETY: the spot depth array's SRV is a static slot in the bound CBV/SRV/UAV heap.
+        unsafe { cmd.set_graphics_srv_table(params.spot_table, self.spot_shadow.srv_gpu) };
+        let area_gva = com::gpu_va(&self.scene.area_light.buffer);
+        // SAFETY: the area-light table is owned by `self.scene` for the world's lifetime.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(params.area_buffer, area_gva) };
+        let ltc = self.scene.area_light.ltc_table_gpu;
+        // SAFETY: the LTC lookups' SRVs are static slots in the bound CBV/SRV/UAV heap.
+        unsafe { cmd.set_graphics_srv_table(params.ltc_table, ltc) };
+    }
+
+    // Size the viewport and scissor to the full `width` x `height` target.
+    fn set_full_viewport(cmd: &ID3D12GraphicsCommandList, width: u32, height: u32) {
+        let vp = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: width as f32,
+            Height: height as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let scissor = RECT {
+            left: 0,
+            top: 0,
+            right: i32::saturating_from(width),
+            bottom: i32::saturating_from(height),
+        };
+        // SAFETY: the caller's command list is recording, and the viewport slice outlives the call.
+        unsafe { cmd.RSSetViewports(&[vp]) };
+        // SAFETY: the scissor slice is a local that outlives the call.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
+    }
+
+    // Pipeline-independent main-pass state: topology, the static geometry
+    // buffers and the shader-visible descriptor heaps.
+    fn bind_main_geometry(&self, cmd: &ID3D12GraphicsCommandList) {
+        // SAFETY: setting the topology only needs the caller's recording command list.
+        unsafe {
+            cmd.IASetPrimitiveTopology(
+                windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+            );
+        }
+        let geometry = &self.scene.geometry;
+        // SAFETY: the static vertex buffer is owned by `self.scene` and outlives the frame.
+        unsafe { cmd.IASetVertexBuffers(0, Some(&[geometry.vertex_buffer_view])) };
+        // SAFETY: the static index buffer is owned by `self.scene`; the view is read in the call.
+        unsafe { cmd.IASetIndexBuffer(Some(&raw const geometry.index_buffer_view)) };
+        // SAFETY: both heaps are owned by `self.descriptors` and outlive the frame.
+        unsafe {
+            cmd.SetDescriptorHeaps(&[
+                Some(self.descriptors.srv_heap.clone()),
+                Some(self.descriptors.sampler_heap.clone()),
+            ]);
+        }
+    }
+
+    // Bind every root argument the bindless main root signature declares, on a
+    // list that already has that root signature and the descriptor heaps set.
+    fn bind_main_root_args(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
+        gpu: FrameGpuBuffers,
+        object_gva: u64,
+    ) {
+        // SAFETY: `view_gva` addresses this frame's live view constant buffer.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(1, gpu.view_gva) };
+        // SAFETY: `light_gva` addresses this frame's live light constant buffer.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(2, gpu.light_gva) };
+        // [12] root SRV: per-scene GpuLight storage buffer (t1).
+        // SAFETY: the per-scene light list is static for the world's lifetime.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(12, gpu.local_lights_gva) };
+        // [13] ClusterParams (b5) + [14] the per-cluster light lists
+        // (t2). The main camera shades from its cluster's binned lights.
+        let cluster_params = self.cluster_params_gva(frame_idx, true);
+        // SAFETY: the cluster params for `frame_idx` live in a buffer the light cull owns.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(13, cluster_params) };
+        let cluster_list = self.cluster_list_gva();
+        // SAFETY: the per-cluster light lists live in a buffer the light cull owns.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(14, cluster_list) };
+        self.bind_local_light_tables(cmd, super::LocalLightParams::BINDLESS);
+        // SAFETY: `shadow_ubo_gva` addresses this frame's live shadow constant buffer.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(3, gpu.shadow_ubo_gva) };
+        // SAFETY: the shadow map SRV is a slot in the bound CBV/SRV/UAV heap.
+        unsafe { cmd.set_graphics_srv_table(4, self.shadow.srv_gpu) };
+        // [5] is the bindless texture pool (per-object SRV region base).
+        let pool = self.cull.bindless_pool_gpu[self.current_frame];
+        // SAFETY: the current frame's bindless pool region lives in the bound heap.
+        unsafe { cmd.set_graphics_srv_table(5, pool) };
+        // SAFETY: the shadow comparison sampler lives in the bound sampler heap.
+        unsafe { cmd.set_graphics_sampler_table(6, self.descriptors.shadow_sampler_gpu) };
+        // SAFETY: the linear sampler lives in the bound sampler heap.
+        unsafe { cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu) };
+        // [8] root SRV: this frame's StructuredBuffer<GpuObjectData>.
+        // SAFETY: `object_gva` addresses this frame's live object buffer.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(8, object_gva) };
+        let vertices_gva = com::gpu_va(&self.scene.geometry.vertex_buffer);
+        // SAFETY: the shared vertex stream is owned by `self.scene` and outlives the frame.
+        unsafe {
+            cmd.SetGraphicsRootShaderResourceView(super::MAIN_MESH_VERTICES_PARAM, vertices_gva);
+        }
+        let material_gva = self.material_params_gva(frame_idx);
+        // SAFETY: the material params for `frame_idx` live in a buffer the context owns.
         unsafe {
             cmd.SetGraphicsRootShaderResourceView(
-                params.spot_buffer,
-                com::gpu_va(&self.spot_shadow.buffer),
+                crate::directx::material_params::MATERIAL_PARAMS_ROOT_PARAM,
+                material_gva,
             );
-            cmd.set_graphics_srv_table(params.spot_table, self.spot_shadow.srv_gpu);
-            cmd.SetGraphicsRootShaderResourceView(
-                params.area_buffer,
-                com::gpu_va(&self.scene.area_light.buffer),
-            );
-            cmd.set_graphics_srv_table(params.ltc_table, self.scene.area_light.ltc_table_gpu);
         }
+        let canopy_gva = self.canopy.gpu_va(frame_idx);
+        // SAFETY: the canopy constants for `frame_idx` live in a buffer `self.canopy` owns.
+        unsafe {
+            cmd.SetGraphicsRootConstantBufferView(
+                crate::directx::canopy::CANOPY_ROOT_PARAM,
+                canopy_gva,
+            );
+        }
+        let canopy_tables_gva = self.canopy.tables_gpu_va(frame_idx);
+        // SAFETY: the canopy tables for `frame_idx` live in a buffer `self.canopy` owns.
+        unsafe {
+            cmd.SetGraphicsRootShaderResourceView(
+                crate::directx::canopy::CANOPY_TABLES_ROOT_PARAM,
+                canopy_tables_gva,
+            );
+        }
+        // [9] descriptor table: the screen-space indirect light (SSGI's
+        // visibility and bounce, SSAO's occlusion, or 1x1 white).
+        let indirect_light = self.screen_indirect_srv_gpu();
+        // SAFETY: the screen-space indirect light, or its white fallback, is a slot in the heap.
+        unsafe { cmd.set_graphics_srv_table(9, indirect_light) };
+        // [10] reflection-probe cube array + [11] the live count + [19]
+        // this frame's boxes. The forward shader box-projects + blends them
+        // for the specular reflection; count 0 keeps the sky.
+        let probes = self.probe_bindings(frame_idx);
+        self.bind_main_probe_set(cmd, probes.set_cbv, probes.records);
     }
 
     // Encode the GPU-driven main pass into `cmd`: the static + instance +
@@ -58,16 +182,11 @@ impl DxContext {
         grass: Option<&crate::directx::grass::GrassFrame>,
     ) {
         let MainPassExtent { width, height } = extent;
-        let FrameGpuBuffers {
-            view_gva,
-            light_gva,
-            local_lights_gva,
-            shadow_ubo_gva,
-        } = gpu;
+        let view_gva = gpu.view_gva;
         let depth_dsv = self.targets.depth.dsv;
 
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        // SAFETY: the command list is recording, and the HDR color and depth views are owned by
+        // `self.targets` and sit in their writable states for this pass.
         unsafe {
             cmd.OMSetRenderTargets(
                 1,
@@ -75,30 +194,15 @@ impl DxContext {
                 false,
                 Some(&raw const depth_dsv),
             );
-            cmd.ClearRenderTargetView(
-                self.targets.hdr.color_rtv,
-                &self.pre_exposure.clear_color(self.state.view.clear_color),
-                None,
-            );
-            cmd.ClearDepthStencilView(depth_dsv, D3D12_CLEAR_FLAG_DEPTH, DEPTH_CLEAR, 0, None);
-
-            let vp = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: width as f32,
-                Height: height as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp]);
-            let scissor = RECT {
-                left: 0,
-                top: 0,
-                right: i32::saturating_from(width),
-                bottom: i32::saturating_from(height),
-            };
-            cmd.RSSetScissorRects(&[scissor]);
         }
+        let clear_color = self.pre_exposure.clear_color(self.state.view.clear_color);
+        // SAFETY: the HDR color RTV is live and bound above; the clear color is a local.
+        unsafe { cmd.ClearRenderTargetView(self.targets.hdr.color_rtv, &clear_color, None) };
+        // SAFETY: the depth DSV is live and bound above, and no rects are passed.
+        unsafe {
+            cmd.ClearDepthStencilView(depth_dsv, D3D12_CLEAR_FLAG_DEPTH, DEPTH_CLEAR, 0, None);
+        }
+        Self::set_full_viewport(cmd, width, height);
 
         // Opaque menu backdrop: the render target was just cleared; skip every
         // draw so nothing of the world renders behind the menu (the bindless
@@ -108,22 +212,9 @@ impl DxContext {
             return;
         }
 
-        // Pipeline-independent main-pass state: topology, geometry buffers,
-        // and the shader-visible descriptor heaps. Survives root-signature
+        // Pipeline-independent main-pass state survives root-signature
         // changes, so it is set once before either sub-pass binds its pipeline.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.IASetPrimitiveTopology(
-                windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-            );
-            cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view));
-            cmd.SetDescriptorHeaps(&[
-                Some(self.descriptors.srv_heap.clone()),
-                Some(self.descriptors.sampler_heap.clone()),
-            ]);
-        }
+        self.bind_main_geometry(cmd);
 
         // SSAO (GTAO) ran ahead of this pass via the pre-graph
         // (`PassId::SsaoBlur` dispatches the bundled prepass + kernel +
@@ -180,66 +271,29 @@ impl DxContext {
             // Main bindless pass: issue the GPU-culled command buffer. The b0
             // object-id root constant is set per command by the command
             // signature, so it is not bound here.
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
+            // SAFETY: the command list is recording, and the bindless PSO is owned by `self.cull`.
+            unsafe { cmd.SetPipelineState(bindless_pso) };
+            // SAFETY: the bindless root signature is owned by `self.cull` alongside its PSO.
+            unsafe { cmd.SetGraphicsRootSignature(bindless_root) };
+            self.bind_main_root_args(cmd, frame_idx, gpu, object_gva);
+            // ExecuteIndirect #1: the static + instance prefix
+            // `[0, skinned_record_base())` against the static VB/IB (bound
+            // above). The skinned tail is drawn by a second ExecuteIndirect
+            // below (different bound VB/IB), reading the same indirect buffer
+            // from `skinned_record_base()` on.
+            //
+            // Once per shader bucket: bucket 0 runs under the bindless
+            // pipeline bound above, each later bucket under its material
+            // shader's own pipeline. The cull kernel wrote every record's
+            // command into exactly one bucket's region, so the regions never
+            // double-draw.
+            let prefix_count = u32::saturating_from(self.state.draw.skinned_record_base());
+            // SAFETY: the cull pass filled this frame's indirect buffer ahead of this pass, and
+            // the command signature matches the bindless root signature bound above.
             unsafe {
-                cmd.SetPipelineState(bindless_pso);
-                cmd.SetGraphicsRootSignature(bindless_root);
-                cmd.SetGraphicsRootConstantBufferView(1, view_gva);
-                cmd.SetGraphicsRootConstantBufferView(2, light_gva);
-                // [12] root SRV: per-scene GpuLight storage buffer (t1).
-                cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva);
-                // [13] ClusterParams (b5) + [14] the per-cluster light lists
-                // (t2). The main camera shades from its cluster's binned lights.
-                cmd.SetGraphicsRootConstantBufferView(13, self.cluster_params_gva(frame_idx, true));
-                cmd.SetGraphicsRootShaderResourceView(14, self.cluster_list_gva());
-                self.bind_local_light_tables(cmd, super::LocalLightParams::BINDLESS);
-                cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
-                cmd.set_graphics_srv_table(4, self.shadow.srv_gpu);
-                // [5] is the bindless texture pool (per-object SRV region base).
-                cmd.set_graphics_srv_table(5, self.cull.bindless_pool_gpu[self.current_frame]);
-                cmd.set_graphics_sampler_table(6, self.descriptors.shadow_sampler_gpu);
-                cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
-                // [8] root SRV: this frame's StructuredBuffer<GpuObjectData>.
-                cmd.SetGraphicsRootShaderResourceView(8, object_gva);
-                cmd.SetGraphicsRootShaderResourceView(
-                    super::MAIN_MESH_VERTICES_PARAM,
-                    com::gpu_va(&self.scene.geometry.vertex_buffer),
-                );
-                cmd.SetGraphicsRootShaderResourceView(
-                    crate::directx::material_params::MATERIAL_PARAMS_ROOT_PARAM,
-                    self.material_params_gva(frame_idx),
-                );
-                cmd.SetGraphicsRootConstantBufferView(
-                    crate::directx::canopy::CANOPY_ROOT_PARAM,
-                    self.canopy.gpu_va(frame_idx),
-                );
-                cmd.SetGraphicsRootShaderResourceView(
-                    crate::directx::canopy::CANOPY_TABLES_ROOT_PARAM,
-                    self.canopy.tables_gpu_va(frame_idx),
-                );
-                // [9] descriptor table: the screen-space indirect light (SSGI's
-                // visibility and bounce, SSAO's occlusion, or 1x1 white).
-                cmd.set_graphics_srv_table(9, self.screen_indirect_srv_gpu());
-                // [10] reflection-probe cube array + [11] the live count + [19]
-                // this frame's boxes. The forward shader box-projects + blends them
-                // for the specular reflection; count 0 keeps the sky.
-                let probes = self.probe_bindings(frame_idx);
-                self.bind_main_probe_set(cmd, probes.set_cbv, probes.records);
-                // ExecuteIndirect #1: the static + instance prefix
-                // `[0, skinned_record_base())` against the static VB/IB (bound
-                // above). The skinned tail is drawn by a second ExecuteIndirect
-                // below (different bound VB/IB), reading the same indirect buffer
-                // from `skinned_record_base()` on.
-                //
-                // Once per shader bucket: bucket 0 runs under the bindless
-                // pipeline bound above, each later bucket under its material
-                // shader's own pipeline. The cull kernel wrote every record's
-                // command into exactly one bucket's region, so the regions never
-                // double-draw.
                 cmd.ExecuteIndirect(
                     cull_sig,
-                    u32::saturating_from(self.state.draw.skinned_record_base()),
+                    prefix_count,
                     indirect,
                     0,
                     None::<&ID3D12Resource>,
@@ -283,67 +337,47 @@ impl DxContext {
             let indirect = &self.cull.indirect_cmd_buffers[frame_idx];
             let bindless_pso = self.wireframe_or(bindless_pso, self.wireframe.bindless.as_ref());
             let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
-            // SAFETY: the command list is in the recording state, and every resource,
-            // descriptor and slice these commands name is live for the call.
+            // SAFETY: the command list is recording, and the bindless PSO is owned by `self.cull`.
+            unsafe { cmd.SetPipelineState(bindless_pso) };
+            // SAFETY: the bindless root signature is owned by `self.cull` alongside its PSO.
+            unsafe { cmd.SetGraphicsRootSignature(bindless_root) };
+            // SAFETY: setting the topology only needs a recording command list.
             unsafe {
-                cmd.SetPipelineState(bindless_pso);
-                cmd.SetGraphicsRootSignature(bindless_root);
                 cmd.IASetPrimitiveTopology(
                     windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
                 );
-                // Bind the deformed verts + skinned IB; the records carry
-                // base_vertex = 0 (the deformed buffer mirrors global skinned
-                // indexing) and index offsets into the skinned IB.
-                cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv]));
-                cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view));
+            }
+            // Bind the deformed verts + skinned IB; the records carry
+            // base_vertex = 0 (the deformed buffer mirrors global skinned
+            // indexing) and index offsets into the skinned IB.
+            // SAFETY: the skin pass left this frame's deformed buffer in
+            // VERTEX_AND_CONSTANT_BUFFER, and `self.skinned` owns it.
+            unsafe { cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv])) };
+            // SAFETY: the skinned index buffer is owned by `self.skinned` and outlives the frame.
+            unsafe { cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view)) };
+            // SAFETY: both heaps are owned by `self.descriptors` and outlive the frame.
+            unsafe {
                 cmd.SetDescriptorHeaps(&[
                     Some(self.descriptors.srv_heap.clone()),
                     Some(self.descriptors.sampler_heap.clone()),
                 ]);
-                cmd.SetGraphicsRootConstantBufferView(1, view_gva);
-                cmd.SetGraphicsRootConstantBufferView(2, light_gva);
-                // [12] root SRV: per-scene GpuLight storage buffer (t1).
-                cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva);
-                // [13] ClusterParams (b5) + [14] the per-cluster light lists
-                // (t2). The main camera shades from its cluster's lights.
-                cmd.SetGraphicsRootConstantBufferView(13, self.cluster_params_gva(frame_idx, true));
-                cmd.SetGraphicsRootShaderResourceView(14, self.cluster_list_gva());
-                self.bind_local_light_tables(cmd, super::LocalLightParams::BINDLESS);
-                cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
-                cmd.set_graphics_srv_table(4, self.shadow.srv_gpu);
-                cmd.set_graphics_srv_table(5, self.cull.bindless_pool_gpu[self.current_frame]);
-                cmd.set_graphics_sampler_table(6, self.descriptors.shadow_sampler_gpu);
-                cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
-                cmd.SetGraphicsRootShaderResourceView(8, object_gva);
-                cmd.SetGraphicsRootShaderResourceView(
-                    super::MAIN_MESH_VERTICES_PARAM,
-                    com::gpu_va(&self.scene.geometry.vertex_buffer),
-                );
-                cmd.SetGraphicsRootShaderResourceView(
-                    crate::directx::material_params::MATERIAL_PARAMS_ROOT_PARAM,
-                    self.material_params_gva(frame_idx),
-                );
-                cmd.SetGraphicsRootConstantBufferView(
-                    crate::directx::canopy::CANOPY_ROOT_PARAM,
-                    self.canopy.gpu_va(frame_idx),
-                );
-                cmd.SetGraphicsRootShaderResourceView(
-                    crate::directx::canopy::CANOPY_TABLES_ROOT_PARAM,
-                    self.canopy.tables_gpu_va(frame_idx),
-                );
-                cmd.set_graphics_srv_table(9, self.screen_indirect_srv_gpu());
-                let probes = self.probe_bindings(frame_idx);
-                self.bind_main_probe_set(cmd, probes.set_cbv, probes.records);
-                // ExecuteIndirect #2: skinned tail
-                // `[skinned_record_base(), record_count())`, byte-offset into the
-                // same indirect command buffer.
+            }
+            self.bind_main_root_args(cmd, frame_idx, gpu, object_gva);
+            // ExecuteIndirect #2: skinned tail
+            // `[skinned_record_base(), record_count())`, byte-offset into the
+            // same indirect command buffer.
+            let skinned_count = u32::saturating_from(self.state.draw.n_skinned);
+            let skinned_offset = (self.state.draw.skinned_record_base()
+                * crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize)
+                as u64;
+            // SAFETY: the cull pass wrote the skinned tail at `skinned_offset` inside this frame's
+            // indirect buffer, and the bindless root signature is bound above.
+            unsafe {
                 cmd.ExecuteIndirect(
                     cull_sig,
-                    u32::saturating_from(self.state.draw.n_skinned),
+                    skinned_count,
                     indirect,
-                    (self.state.draw.skinned_record_base()
-                        * crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize)
-                        as u64,
+                    skinned_offset,
                     None::<&ID3D12Resource>,
                     0,
                 );
@@ -398,12 +432,11 @@ impl DxContext {
             D3D12_RESOURCE_STATE_RENDER_TARGET,
             D3D12_RESOURCE_STATE_RESOLVE_DEST,
         );
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&[color_to_src, resolve_to_dst]);
-            cmd.ResolveSubresource(hdr_resolve, 0, &self.targets.hdr.color, 0, HDR_FORMAT);
-        }
+        // SAFETY: the command list is recording, and both targets sit in RENDER_TARGET here.
+        unsafe { cmd.ResourceBarrier(&[color_to_src, resolve_to_dst]) };
+        // SAFETY: the barrier above put the color in RESOLVE_SOURCE and the resolve target in
+        // RESOLVE_DEST; both share `HDR_FORMAT`.
+        unsafe { cmd.ResolveSubresource(hdr_resolve, 0, &self.targets.hdr.color, 0, HDR_FORMAT) };
         let resolve_to_rt = transition_barrier(
             self.hdr_scene_target(),
             D3D12_RESOURCE_STATE_RESOLVE_DEST,
@@ -441,18 +474,12 @@ impl DxContext {
         height: u32,
         gpu: FrameGpuBuffers,
     ) {
-        let FrameGpuBuffers {
-            view_gva,
-            light_gva,
-            local_lights_gva,
-            shadow_ubo_gva,
-        } = gpu;
         let depth_dsv = self.targets.depth.dsv;
 
         // Load (do not clear) the phase-1 color + depth: Main2 composites the
         // disoccluded geometry on top.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        // SAFETY: the command list is recording, and phase 1 left the HDR color and depth these
+        // views name in their writable states.
         unsafe {
             cmd.OMSetRenderTargets(
                 1,
@@ -460,34 +487,9 @@ impl DxContext {
                 false,
                 Some(&raw const depth_dsv),
             );
-
-            let vp = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: width as f32,
-                Height: height as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp]);
-            let scissor = RECT {
-                left: 0,
-                top: 0,
-                right: i32::saturating_from(width),
-                bottom: i32::saturating_from(height),
-            };
-            cmd.RSSetScissorRects(&[scissor]);
-
-            cmd.IASetPrimitiveTopology(
-                windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-            );
-            cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view));
-            cmd.SetDescriptorHeaps(&[
-                Some(self.descriptors.srv_heap.clone()),
-                Some(self.descriptors.sampler_heap.clone()),
-            ]);
         }
+        Self::set_full_viewport(cmd, width, height);
+        self.bind_main_geometry(cmd);
 
         // Re-issue the bindless pass over the phase-2 indirect buffer. Same
         // bindings + the same static-prefix / skinned-tail split as the phase-1
@@ -501,50 +503,20 @@ impl DxContext {
         {
             let bindless_pso = self.wireframe_or(bindless_pso, self.wireframe.bindless.as_ref());
             let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
+            // SAFETY: the command list is recording, and the bindless PSO is owned by `self.cull`.
+            unsafe { cmd.SetPipelineState(bindless_pso) };
+            // SAFETY: the bindless root signature is owned by `self.cull` alongside its PSO.
+            unsafe { cmd.SetGraphicsRootSignature(bindless_root) };
+            self.bind_main_root_args(cmd, frame_idx, gpu, object_gva);
+            // ExecuteIndirect #1: static + instance prefix against the static
+            // VB/IB (bound above), once per shader bucket.
+            let prefix_count = u32::saturating_from(self.state.draw.skinned_record_base());
+            // SAFETY: the phase-2 cull filled this frame's second indirect buffer ahead of this
+            // pass, and the command signature matches the root signature bound above.
             unsafe {
-                cmd.SetPipelineState(bindless_pso);
-                cmd.SetGraphicsRootSignature(bindless_root);
-                cmd.SetGraphicsRootConstantBufferView(1, view_gva);
-                cmd.SetGraphicsRootConstantBufferView(2, light_gva);
-                // [12] root SRV: per-scene GpuLight storage buffer (t1).
-                cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva);
-                // [13] ClusterParams (b5) + [14] the per-cluster light lists
-                // (t2). The main camera shades from its cluster's binned lights.
-                cmd.SetGraphicsRootConstantBufferView(13, self.cluster_params_gva(frame_idx, true));
-                cmd.SetGraphicsRootShaderResourceView(14, self.cluster_list_gva());
-                self.bind_local_light_tables(cmd, super::LocalLightParams::BINDLESS);
-                cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
-                cmd.set_graphics_srv_table(4, self.shadow.srv_gpu);
-                cmd.set_graphics_srv_table(5, self.cull.bindless_pool_gpu[self.current_frame]);
-                cmd.set_graphics_sampler_table(6, self.descriptors.shadow_sampler_gpu);
-                cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
-                cmd.SetGraphicsRootShaderResourceView(8, object_gva);
-                cmd.SetGraphicsRootShaderResourceView(
-                    super::MAIN_MESH_VERTICES_PARAM,
-                    com::gpu_va(&self.scene.geometry.vertex_buffer),
-                );
-                cmd.SetGraphicsRootShaderResourceView(
-                    crate::directx::material_params::MATERIAL_PARAMS_ROOT_PARAM,
-                    self.material_params_gva(frame_idx),
-                );
-                cmd.SetGraphicsRootConstantBufferView(
-                    crate::directx::canopy::CANOPY_ROOT_PARAM,
-                    self.canopy.gpu_va(frame_idx),
-                );
-                cmd.SetGraphicsRootShaderResourceView(
-                    crate::directx::canopy::CANOPY_TABLES_ROOT_PARAM,
-                    self.canopy.tables_gpu_va(frame_idx),
-                );
-                cmd.set_graphics_srv_table(9, self.screen_indirect_srv_gpu());
-                let probes = self.probe_bindings(frame_idx);
-                self.bind_main_probe_set(cmd, probes.set_cbv, probes.records);
-                // ExecuteIndirect #1: static + instance prefix against the static
-                // VB/IB (bound above), once per shader bucket.
                 cmd.ExecuteIndirect(
                     cull_sig,
-                    u32::saturating_from(self.state.draw.skinned_record_base()),
+                    prefix_count,
                     indirect,
                     0,
                     None::<&ID3D12Resource>,
@@ -566,19 +538,27 @@ impl DxContext {
             if self.state.draw.n_skinned > 0
                 && let Some(deformed_vbv) = self.skinned.deformed_vbvs.get(frame_idx)
             {
-                // SAFETY: the command list is in the recording state, and every resource,
-                // descriptor and slice these commands name is live for the call.
+                // SAFETY: the command list is recording, and the bindless PSO is owned by
+                // `self.cull`.
+                unsafe { cmd.SetPipelineState(bindless_pso) };
+                // SAFETY: the skin pass left this frame's deformed buffer in
+                // VERTEX_AND_CONSTANT_BUFFER, and `self.skinned` owns it.
+                unsafe { cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv])) };
+                // SAFETY: the skinned index buffer is owned by `self.skinned` and outlives the
+                // frame.
+                unsafe { cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view)) };
+                let skinned_count = u32::saturating_from(self.state.draw.n_skinned);
+                let skinned_offset = (self.state.draw.skinned_record_base()
+                    * crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize)
+                    as u64;
+                // SAFETY: the phase-2 cull wrote the skinned tail at `skinned_offset` inside the
+                // second indirect buffer, and the root arguments set above persist.
                 unsafe {
-                    cmd.SetPipelineState(bindless_pso);
-                    cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv]));
-                    cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view));
                     cmd.ExecuteIndirect(
                         cull_sig,
-                        u32::saturating_from(self.state.draw.n_skinned),
+                        skinned_count,
                         indirect,
-                        (self.state.draw.skinned_record_base()
-                            * crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize)
-                            as u64,
+                        skinned_offset,
                         None::<&ID3D12Resource>,
                         0,
                     );

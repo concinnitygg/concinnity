@@ -87,20 +87,21 @@ impl DxContext {
         // that receives the mapping.
         unsafe { upload.Map(0, None, Some(&raw mut ptr)) }
             .map_err(|e| map_hresult(e.code(), "mesh region map"))?;
-        // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
-        // source is a separate allocation, so the ranges cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.cast::<u8>(), data.len());
-            upload.Unmap(0, None);
-        }
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
+        // SAFETY: `ptr` is the mapping from the call above, of a buffer created to hold `data`,
+        // which is a separate allocation, so the ranges cannot overlap.
+        unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.cast::<u8>(), data.len()) };
+        // SAFETY: unmaps subresource 0 of `upload`, mapped above; the copy is done.
+        unsafe { upload.Unmap(0, None) };
+        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| {
             let to_dst = transition_barrier(dest, usage_state, D3D12_RESOURCE_STATE_COPY_DEST);
-            cmd.ResourceBarrier(&[to_dst]);
-            cmd.CopyBufferRegion(dest, offset, &*upload, 0, data.len() as u64);
+            // SAFETY: the one-shot list is recording, and the caller's `dest` is live.
+            unsafe { cmd.ResourceBarrier(&[to_dst]) };
+            // SAFETY: `dest` is in COPY_DEST from the barrier above, and `upload` holds `data`
+            // and outlives the fence-waited submit.
+            unsafe { cmd.CopyBufferRegion(dest, offset, &*upload, 0, data.len() as u64) };
             let back = transition_barrier(dest, D3D12_RESOURCE_STATE_COPY_DEST, usage_state);
-            cmd.ResourceBarrier(&[back]);
+            // SAFETY: the list is recording, and `dest` is still live.
+            unsafe { cmd.ResourceBarrier(&[back]) };
         })
     }
 }

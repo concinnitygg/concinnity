@@ -278,12 +278,12 @@ fn write_table_views(
             },
         }
     };
-    // SAFETY: the view descriptors and the resource they name are live for the calls, and the
-    // destination handles address slots this context reserved in a heap it owns.
-    unsafe {
-        device.CreateShaderResourceView(resource, Some(&raw const srv), srv_cpu);
-        device.CreateUnorderedAccessView(resource, None, Some(&raw const uav), uav_cpu);
-    }
+    // SAFETY: `srv` and `resource` are live for the call, and `srv_cpu` addresses a slot this
+    // context reserved in a heap it owns.
+    unsafe { device.CreateShaderResourceView(resource, Some(&raw const srv), srv_cpu) };
+    // SAFETY: `uav` and `resource` are live for the call, and `uav_cpu` is another reserved slot
+    // in that same owned heap.
+    unsafe { device.CreateUnorderedAccessView(resource, None, Some(&raw const uav), uav_cpu) };
 }
 
 // The irradiance cube's SRV, at `srv_cpu`.
@@ -649,55 +649,65 @@ impl DxContext {
             transition_barrier(r, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, RESTING)
         };
         let dispatch = |k: usize, groups: [u32; 3]| {
-            // SAFETY: the command list is in the recording state with the kernel root signature
-            // bound, and every descriptor these commands name is live for the call.
-            unsafe {
-                cmd.SetPipelineState(&atmo.kernels[k]);
-                cmd.set_compute_srv_table(2, atmo.uav_gpu[k]);
-                cmd.Dispatch(groups[0], groups[1], groups[2]);
-            }
+            // SAFETY: the command list is recording and `atmo.kernels[k]` is a PSO the atmosphere
+            // owns for as long as it records.
+            unsafe { cmd.SetPipelineState(&atmo.kernels[k]) };
+            // SAFETY: the kernel root signature bound below declares table 2, and the UAV slot
+            // lives in the shader-visible heap set alongside it.
+            unsafe { cmd.set_compute_srv_table(2, atmo.uav_gpu[k]) };
+            // SAFETY: the pipeline, root signature and tables this dispatch reads were all bound
+            // just above.
+            unsafe { cmd.Dispatch(groups[0], groups[1], groups[2]) };
         };
         let [transmittance, multiscatter, sky_view, aerial] = &atmo.tables;
         atmo.readiness.note_recorded();
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call; each barrier's before-state is the state
-        // the resource rests in or was last moved to above.
-        unsafe {
-            cmd.SetComputeRootSignature(&atmo.kernel_root_sig);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetComputeRootConstantBufferView(0, params_gva);
-            cmd.set_compute_srv_table(1, atmo.srv_gpu[0]);
-            if atmo.air_tables.take_rebuild(ground) {
-                cmd.ResourceBarrier(&[open(transmittance)]);
-                dispatch(
-                    0,
-                    [
-                        TRANSMITTANCE_WIDTH.div_ceil(GROUP),
-                        TRANSMITTANCE_HEIGHT.div_ceil(GROUP),
-                        1,
-                    ],
-                );
-                cmd.ResourceBarrier(&[close(transmittance), open(multiscatter)]);
-                dispatch(1, [MULTISCATTER_SIZE, MULTISCATTER_SIZE, 1]);
-                cmd.ResourceBarrier(&[close(multiscatter)]);
-            }
-            cmd.ResourceBarrier(&[open(sky_view), open(aerial)]);
+        // SAFETY: the command list is recording and the kernel root signature is owned by `atmo`.
+        unsafe { cmd.SetComputeRootSignature(&atmo.kernel_root_sig) };
+        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: `params_gva` addresses this frame's live constant buffer, and root parameter 0
+        // is a CBV in the kernel root signature bound above.
+        unsafe { cmd.SetComputeRootConstantBufferView(0, params_gva) };
+        // SAFETY: table 1 of the bound root signature takes the table inputs, which live in the
+        // heap set above.
+        unsafe { cmd.set_compute_srv_table(1, atmo.srv_gpu[0]) };
+        if atmo.air_tables.take_rebuild(ground) {
+            // SAFETY: the transmittance table rests in `RESTING` and is owned by `atmo`.
+            unsafe { cmd.ResourceBarrier(&[open(transmittance)]) };
             dispatch(
-                2,
+                0,
                 [
-                    SKY_VIEW_WIDTH.div_ceil(GROUP),
-                    SKY_VIEW_HEIGHT.div_ceil(GROUP),
+                    TRANSMITTANCE_WIDTH.div_ceil(GROUP),
+                    TRANSMITTANCE_HEIGHT.div_ceil(GROUP),
                     1,
                 ],
             );
-            dispatch(
-                3,
-                [AERIAL_SIZE.div_ceil(GROUP), AERIAL_SIZE.div_ceil(GROUP), 1],
-            );
-            cmd.ResourceBarrier(&[close(sky_view), close(aerial), open(&atmo.irradiance)]);
-            dispatch(4, [1, 1, 1]);
-            cmd.ResourceBarrier(&[close(&atmo.irradiance)]);
+            // SAFETY: transmittance was opened for unordered access above; multiscatter rests in
+            // `RESTING`.
+            unsafe { cmd.ResourceBarrier(&[close(transmittance), open(multiscatter)]) };
+            dispatch(1, [MULTISCATTER_SIZE, MULTISCATTER_SIZE, 1]);
+            // SAFETY: multiscatter was opened for unordered access by the barrier above.
+            unsafe { cmd.ResourceBarrier(&[close(multiscatter)]) };
         }
+        // SAFETY: the sky-view and aerial tables rest in `RESTING` and are owned by `atmo`.
+        unsafe { cmd.ResourceBarrier(&[open(sky_view), open(aerial)]) };
+        dispatch(
+            2,
+            [
+                SKY_VIEW_WIDTH.div_ceil(GROUP),
+                SKY_VIEW_HEIGHT.div_ceil(GROUP),
+                1,
+            ],
+        );
+        dispatch(
+            3,
+            [AERIAL_SIZE.div_ceil(GROUP), AERIAL_SIZE.div_ceil(GROUP), 1],
+        );
+        // SAFETY: sky view and aerial were opened above; the irradiance cube rests in `RESTING`.
+        unsafe { cmd.ResourceBarrier(&[close(sky_view), close(aerial), open(&atmo.irradiance)]) };
+        dispatch(4, [1, 1, 1]);
+        // SAFETY: the irradiance cube was opened for unordered access by the barrier above.
+        unsafe { cmd.ResourceBarrier(&[close(&atmo.irradiance)]) };
         if let Some(cube) = &atmo.sky_cube {
             self.encode_sky_cube(cmd, cube);
         }
@@ -720,18 +730,17 @@ impl DxContext {
         };
         if work.capture {
             let groups = SKY_CUBE_FACE.div_ceil(GROUP);
-            // SAFETY: the command list is in the recording state with the kernel root signature,
-            // the constants and the table inputs still bound from the atmosphere's kernels, and
-            // every resource and descriptor these commands name is live for the call.
-            unsafe {
-                cmd.ResourceBarrier(&[open(&cube.capture), open(&cube.cube)]);
-                cmd.SetPipelineState(&cube.kernel);
-                cmd.set_compute_srv_table(
-                    2,
-                    self.descriptors.slot_gpu(cube.slots.capture_uav_base),
-                );
-                cmd.Dispatch(groups, groups, 6);
-            }
+            // SAFETY: the command list is recording, and the capture and cube rest in `RESTING`.
+            unsafe { cmd.ResourceBarrier(&[open(&cube.capture), open(&cube.cube)]) };
+            // SAFETY: the sky-cube kernel is owned by `cube`, which outlives the recording.
+            unsafe { cmd.SetPipelineState(&cube.kernel) };
+            let capture_uav = self.descriptors.slot_gpu(cube.slots.capture_uav_base);
+            // SAFETY: the atmosphere's kernel root signature is still bound and declares table 2;
+            // the capture UAV slot is live in the shader-visible heap.
+            unsafe { cmd.set_compute_srv_table(2, capture_uav) };
+            // SAFETY: the constants and table inputs are still bound from the atmosphere's kernels,
+            // and the capture UAV table was set just above.
+            unsafe { cmd.Dispatch(groups, groups, 6) };
             uav_barrier(cmd, &cube.capture);
             self.record_prefilter_pyramid(
                 cmd,
@@ -740,16 +749,16 @@ impl DxContext {
                 &cube.capture,
                 &SKY_CUBE_PLAN,
             );
-            // SAFETY: as above.
+            // SAFETY: the capture was opened for unordered access by the barrier above.
             unsafe { cmd.ResourceBarrier(&[close(&cube.capture)]) };
         } else {
-            // SAFETY: as above.
+            // SAFETY: the command list is recording, and the cube rests in `RESTING`.
             unsafe { cmd.ResourceBarrier(&[open(&cube.cube)]) };
         }
         for mip in work.ggx_mips() {
             self.record_prefilter_ggx(cmd, &cube.prefilter, cube.slots, &SKY_CUBE_PLAN, mip);
         }
-        // SAFETY: as above.
+        // SAFETY: both branches above left the cube open for unordered access.
         unsafe { cmd.ResourceBarrier(&[close(&cube.cube)]) };
     }
 
@@ -771,33 +780,46 @@ impl DxContext {
         let scene_rtv = self.hdr_scene_rtv();
         let w = self.targets.extent.render_width;
         let h = self.targets.extent.render_height;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.OMSetRenderTargets(1, Some(&raw const scene_rtv), false, None);
-            cmd.RSSetViewports(&[D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: w as f32,
-                Height: h as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            }]);
-            cmd.RSSetScissorRects(&[RECT {
-                left: 0,
-                top: 0,
-                right: i32::saturating_from(w),
-                bottom: i32::saturating_from(h),
-            }]);
-            cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            cmd.SetPipelineState(&atmo.aerial_pso);
-            cmd.SetGraphicsRootSignature(&atmo.aerial_root_sig);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetGraphicsRootConstantBufferView(0, params_gva);
-            cmd.set_graphics_srv_table(1, atmo.depth_srv_gpu);
-            cmd.set_graphics_srv_table(2, atmo.srv_gpu[3]);
-            cmd.DrawInstanced(3, 1, 0, 0);
-        }
+        let viewport = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: w as f32,
+            Height: h as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let scissor = RECT {
+            left: 0,
+            top: 0,
+            right: i32::saturating_from(w),
+            bottom: i32::saturating_from(h),
+        };
+        // SAFETY: the command list is recording, and `scene_rtv` is a live descriptor the
+        // executor has put in RENDER_TARGET for this pass.
+        unsafe { cmd.OMSetRenderTargets(1, Some(&raw const scene_rtv), false, None) };
+        // SAFETY: the viewport slice is a local that outlives the call.
+        unsafe { cmd.RSSetViewports(&[viewport]) };
+        // SAFETY: the scissor slice is a local that outlives the call.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
+        // SAFETY: setting the topology only needs a recording command list.
+        unsafe { cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
+        // SAFETY: the aerial PSO is owned by `atmo` and outlives the recording.
+        unsafe { cmd.SetPipelineState(&atmo.aerial_pso) };
+        // SAFETY: the aerial root signature is owned by `atmo` and matches the PSO set above.
+        unsafe { cmd.SetGraphicsRootSignature(&atmo.aerial_root_sig) };
+        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: `params_gva` addresses this frame's live constant buffer, and root parameter 0
+        // of the aerial root signature is a CBV.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(0, params_gva) };
+        // SAFETY: the depth SRV slot lives in the heap set above, and the executor has put the
+        // depth in a shader-resource state.
+        unsafe { cmd.set_graphics_srv_table(1, atmo.depth_srv_gpu) };
+        // SAFETY: the aerial volume's SRV slot lives in the heap set above.
+        unsafe { cmd.set_graphics_srv_table(2, atmo.srv_gpu[3]) };
+        // SAFETY: the target, pipeline, root signature and every table the draw reads are bound
+        // above.
+        unsafe { cmd.DrawInstanced(3, 1, 0, 0) };
     }
 
     // Draw the atmosphere's sky in place of the environment map's, when a
@@ -814,17 +836,21 @@ impl DxContext {
         let Some(params_gva) = atmo.params.get().and_then(|_| atmo.params_gva(frame_idx)) else {
             return false;
         };
-        // SAFETY: the command list is in the recording state with the CBV/SRV/UAV heap set, and
-        // the root signature bound here declares the two CBVs and the table these commands set.
-        unsafe {
-            cmd.SetPipelineState(&atmo.sky_pso);
-            cmd.SetGraphicsRootSignature(&atmo.sky_root_sig);
-            cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-            cmd.SetGraphicsRootConstantBufferView(1, params_gva);
-            cmd.set_graphics_srv_table(2, atmo.srv_gpu[2]);
-            cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            cmd.DrawInstanced(3, 1, 0, 0);
-        }
+        // SAFETY: the command list is recording, and the sky PSO is owned by `atmo`.
+        unsafe { cmd.SetPipelineState(&atmo.sky_pso) };
+        // SAFETY: the sky root signature is owned by `atmo` and declares the two CBVs and the
+        // table set below.
+        unsafe { cmd.SetGraphicsRootSignature(&atmo.sky_root_sig) };
+        // SAFETY: `view_gva` is the caller's live view block, bound to the CBV at parameter 0.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(0, view_gva) };
+        // SAFETY: `params_gva` addresses this frame's live atmosphere constants at parameter 1.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(1, params_gva) };
+        // SAFETY: the CBV/SRV/UAV heap is already set, and the sky-view table slot lives in it.
+        unsafe { cmd.set_graphics_srv_table(2, atmo.srv_gpu[2]) };
+        // SAFETY: setting the topology only needs a recording command list.
+        unsafe { cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
+        // SAFETY: the pipeline, root signature, constants and table the draw reads are bound above.
+        unsafe { cmd.DrawInstanced(3, 1, 0, 0) };
         self.inc_draw_calls(1);
         true
     }

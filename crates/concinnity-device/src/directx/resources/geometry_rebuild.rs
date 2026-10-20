@@ -56,9 +56,7 @@ impl DxContext {
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
         )?;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
+        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| {
             let v_src = transition_barrier(
                 &self.scene.geometry.vertex_buffer,
                 D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
@@ -69,21 +67,31 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
             );
-            cmd.ResourceBarrier(&[v_src, i_src]);
-            cmd.CopyBufferRegion(
-                &*v_readback,
-                0,
-                &*self.scene.geometry.vertex_buffer,
-                0,
-                old_v_bytes,
-            );
-            cmd.CopyBufferRegion(
-                &*i_readback,
-                0,
-                &*self.scene.geometry.index_buffer,
-                0,
-                old_i_bytes,
-            );
+            // SAFETY: the one-shot list is recording, and `wait_idle` above drained every reader
+            // of the scene buffers.
+            unsafe { cmd.ResourceBarrier(&[v_src, i_src]) };
+            // SAFETY: the vertex buffer is in COPY_SOURCE from the barrier above, and the staging
+            // buffer was sized `old_v_bytes` for it.
+            unsafe {
+                cmd.CopyBufferRegion(
+                    &*v_readback,
+                    0,
+                    &*self.scene.geometry.vertex_buffer,
+                    0,
+                    old_v_bytes,
+                );
+            }
+            // SAFETY: the index buffer is in COPY_SOURCE from the barrier above, and the staging
+            // buffer was sized `old_i_bytes` for it.
+            unsafe {
+                cmd.CopyBufferRegion(
+                    &*i_readback,
+                    0,
+                    &*self.scene.geometry.index_buffer,
+                    0,
+                    old_i_bytes,
+                );
+            }
             let v_back = transition_barrier(
                 &self.scene.geometry.vertex_buffer,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
@@ -94,7 +102,8 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
             );
-            cmd.ResourceBarrier(&[v_back, i_back]);
+            // SAFETY: the list is recording, and both buffers are live through the fence wait.
+            unsafe { cmd.ResourceBarrier(&[v_back, i_back]) };
         })?;
 
         // Map the readback staging buffers and copy into typed CPU Vecs.
@@ -149,11 +158,12 @@ impl DxContext {
         )?;
         write_upload_buffer(&v_upload, bytemuck::cast_slice(&new_vertices))?;
         write_upload_buffer(&i_upload, bytemuck::cast_slice(&new_indices))?;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
-            cmd.CopyBufferRegion(&*new_vbuf, 0, &*v_upload, 0, new_v_bytes);
-            cmd.CopyBufferRegion(&*new_ibuf, 0, &*i_upload, 0, new_i_bytes);
+        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| {
+            // SAFETY: the one-shot list is recording, the new buffer promotes from COMMON to
+            // COPY_DEST, and `v_upload` holds the vertices and outlives the fence wait.
+            unsafe { cmd.CopyBufferRegion(&*new_vbuf, 0, &*v_upload, 0, new_v_bytes) };
+            // SAFETY: as for the vertices, with `i_upload` holding the indices.
+            unsafe { cmd.CopyBufferRegion(&*new_ibuf, 0, &*i_upload, 0, new_i_bytes) };
             let v_dst = transition_barrier(
                 &new_vbuf,
                 D3D12_RESOURCE_STATE_COPY_DEST,
@@ -164,7 +174,8 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_COPY_DEST,
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
             );
-            cmd.ResourceBarrier(&[v_dst, i_dst]);
+            // SAFETY: the list is recording, and both new buffers are owned by this function.
+            unsafe { cmd.ResourceBarrier(&[v_dst, i_dst]) };
         })?;
 
         // Commit the swap: rewrite per-draw layouts, point the live views at
@@ -257,9 +268,7 @@ impl DxContext {
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
         )?;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
+        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| {
             let v_src = transition_barrier(
                 &v_buf,
                 D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
@@ -270,9 +279,13 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
             );
-            cmd.ResourceBarrier(&[v_src, i_src]);
-            cmd.CopyBufferRegion(&*v_readback, 0, &*v_buf, 0, old_v_bytes);
-            cmd.CopyBufferRegion(&*i_readback, 0, &*i_buf, 0, old_i_bytes);
+            // SAFETY: the one-shot list is recording, and `wait_idle` above drained every reader
+            // of the skinned buffers.
+            unsafe { cmd.ResourceBarrier(&[v_src, i_src]) };
+            // SAFETY: `v_buf` is in COPY_SOURCE, and its staging buffer holds `old_v_bytes`.
+            unsafe { cmd.CopyBufferRegion(&*v_readback, 0, &*v_buf, 0, old_v_bytes) };
+            // SAFETY: `i_buf` is in COPY_SOURCE, and its staging buffer holds `old_i_bytes`.
+            unsafe { cmd.CopyBufferRegion(&*i_readback, 0, &*i_buf, 0, old_i_bytes) };
             let v_back = transition_barrier(
                 &v_buf,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
@@ -283,7 +296,8 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
             );
-            cmd.ResourceBarrier(&[v_back, i_back]);
+            // SAFETY: the list is recording, and both buffers are live through the fence wait.
+            unsafe { cmd.ResourceBarrier(&[v_back, i_back]) };
         })?;
 
         // Skinned VB stride is `size_of::<SkinnedVertex>()`; skinned IB is
@@ -337,11 +351,12 @@ impl DxContext {
         )?;
         write_upload_buffer(&v_upload, bytemuck::cast_slice(new_vertices))?;
         write_upload_buffer(&i_upload, bytemuck::cast_slice(new_indices))?;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
-            cmd.CopyBufferRegion(&*new_vbuf, 0, &*v_upload, 0, new_v_bytes);
-            cmd.CopyBufferRegion(&*new_ibuf, 0, &*i_upload, 0, new_i_bytes);
+        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| {
+            // SAFETY: the one-shot list is recording, the new buffer promotes from COMMON to
+            // COPY_DEST, and `v_upload` holds the vertices and outlives the fence wait.
+            unsafe { cmd.CopyBufferRegion(&*new_vbuf, 0, &*v_upload, 0, new_v_bytes) };
+            // SAFETY: as for the vertices, with `i_upload` holding the indices.
+            unsafe { cmd.CopyBufferRegion(&*new_ibuf, 0, &*i_upload, 0, new_i_bytes) };
             let v_dst = transition_barrier(
                 &new_vbuf,
                 D3D12_RESOURCE_STATE_COPY_DEST,
@@ -352,7 +367,8 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_COPY_DEST,
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
             );
-            cmd.ResourceBarrier(&[v_dst, i_dst]);
+            // SAFETY: the list is recording, and both new buffers are owned by this function.
+            unsafe { cmd.ResourceBarrier(&[v_dst, i_dst]) };
         })?;
 
         // Commit: rewrite per-slot layouts, repoint the live views at the
@@ -398,13 +414,12 @@ fn read_typed_vec<T: Copy>(src: &ID3D12Resource, count: usize) -> RenderResult<V
         .map_err(|e| map_hresult(e.code(), "rebuild readback map"))?;
     let mut out: Vec<T> = Vec::with_capacity(count);
     // SAFETY: `Map` returned the live mapping of a READBACK buffer the assert above proved holds at
-    // least `count` `T`s, `out` reserved that many, and the two are separate allocations, so the
-    // ranges cannot overlap. `set_len` follows a copy that initialized every element.
-    unsafe {
-        std::ptr::copy_nonoverlapping(ptr as *const T, out.as_mut_ptr(), count);
-        out.set_len(count);
-        src.Unmap(0, None);
-    }
+    // least `count` `T`s, `out` reserved that many, and the two are separate allocations.
+    unsafe { std::ptr::copy_nonoverlapping(ptr as *const T, out.as_mut_ptr(), count) };
+    // SAFETY: the copy above initialized all `count` elements, within the reserved capacity.
+    unsafe { out.set_len(count) };
+    // SAFETY: unmaps subresource 0 of `src`, mapped above; the copy is done.
+    unsafe { src.Unmap(0, None) };
     Ok(out)
 }
 
@@ -425,9 +440,8 @@ fn write_upload_buffer(dest: &ID3D12Resource, bytes: &[u8]) -> RenderResult<()> 
     // SAFETY: `Map` returned the live mapping of an UPLOAD buffer the assert above proved is at
     // least `bytes.len()` long, and the source is a separate allocation, so the ranges cannot
     // overlap.
-    unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast::<u8>(), bytes.len());
-        dest.Unmap(0, None);
-    }
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast::<u8>(), bytes.len()) };
+    // SAFETY: unmaps subresource 0 of `dest`, mapped above; the write is done.
+    unsafe { dest.Unmap(0, None) };
     Ok(())
 }

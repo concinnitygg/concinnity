@@ -122,17 +122,19 @@ impl DxContext {
         if self.encode_atmosphere_sky(cmd, view_gva, frame_idx) {
             return;
         }
-        // SAFETY: the command list is in the recording state with the CBV/SRV/UAV heap set, and the
-        // root signature bound here declares the CBV and the one-entry table these commands set;
-        // every resource and descriptor they name is live for the call.
-        unsafe {
-            cmd.SetPipelineState(&self.sky.pso);
-            cmd.SetGraphicsRootSignature(&self.sky.root_sig);
-            cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-            cmd.set_graphics_srv_table(1, self.scene.env_map.prefilter.srv_gpu);
-            cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            cmd.DrawInstanced(3, 1, 0, 0);
-        }
+        // SAFETY: the list is recording, and the sky PSO is owned by `self.sky`.
+        unsafe { cmd.SetPipelineState(&self.sky.pso) };
+        // SAFETY: the list is recording, and the sky root signature is owned by `self.sky`.
+        unsafe { cmd.SetGraphicsRootSignature(&self.sky.root_sig) };
+        // SAFETY: the sky signature declares the view CBV at 0; the caller's view block is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(0, view_gva) };
+        // SAFETY: the sky signature declares a one-entry table at 1, the CBV/SRV/UAV heap is set,
+        // and the prefiltered environment's descriptor is live.
+        unsafe { cmd.set_graphics_srv_table(1, self.scene.env_map.prefilter.srv_gpu) };
+        // SAFETY: the list is recording; setting the topology names no resource.
+        unsafe { cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
+        // SAFETY: the pipeline and every binding the sky reads are set above.
+        unsafe { cmd.DrawInstanced(3, 1, 0, 0) };
         self.inc_draw_calls(1);
     }
 

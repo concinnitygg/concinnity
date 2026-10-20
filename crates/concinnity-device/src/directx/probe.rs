@@ -519,71 +519,79 @@ impl DxContext {
                 .resolve
                 .as_ref()
                 .expect("a multisampled probe bake has a resolve image");
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.ResourceBarrier(&[
-                    transition_barrier(
-                        &bake.color,
-                        D3D12_RESOURCE_STATE_RENDER_TARGET,
-                        D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
-                    ),
-                    transition_barrier(
-                        resolve,
-                        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                        D3D12_RESOURCE_STATE_RESOLVE_DEST,
-                    ),
-                ]);
-                cmd.ResolveSubresource(resolve, 0, &bake.color, 0, HDR_FORMAT);
-                cmd.ResourceBarrier(&[
-                    transition_barrier(
-                        resolve,
-                        D3D12_RESOURCE_STATE_RESOLVE_DEST,
-                        D3D12_RESOURCE_STATE_COPY_SOURCE,
-                    ),
-                    transition_barrier(
-                        &bake.color,
-                        D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
-                        D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    ),
-                ]);
-                let src_loc = D3D12_TEXTURE_COPY_LOCATION {
-                    pResource: com::borrowed(resolve),
-                    Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-                    Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-                        SubresourceIndex: 0,
-                    },
-                };
-                cmd.CopyTextureRegion(&raw const dst_loc, 0, 0, 0, &raw const src_loc, None);
-                cmd.ResourceBarrier(&[transition_barrier(
+            let to_resolve = [
+                transition_barrier(
+                    &bake.color,
+                    D3D12_RESOURCE_STATE_RENDER_TARGET,
+                    D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
+                ),
+                transition_barrier(
                     resolve,
-                    D3D12_RESOURCE_STATE_COPY_SOURCE,
                     D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                )]);
-            }
+                    D3D12_RESOURCE_STATE_RESOLVE_DEST,
+                ),
+            ];
+            // SAFETY: the list is recording, and the bake owns both the color and resolve images.
+            unsafe { cmd.ResourceBarrier(&to_resolve) };
+            // SAFETY: the barrier above put the color in RESOLVE_SOURCE and the resolve image in
+            // RESOLVE_DEST, and the bake keeps both alive.
+            unsafe { cmd.ResolveSubresource(resolve, 0, &bake.color, 0, HDR_FORMAT) };
+            let to_copy = [
+                transition_barrier(
+                    resolve,
+                    D3D12_RESOURCE_STATE_RESOLVE_DEST,
+                    D3D12_RESOURCE_STATE_COPY_SOURCE,
+                ),
+                transition_barrier(
+                    &bake.color,
+                    D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
+                    D3D12_RESOURCE_STATE_RENDER_TARGET,
+                ),
+            ];
+            // SAFETY: the list is recording, and both images are still owned by the bake.
+            unsafe { cmd.ResourceBarrier(&to_copy) };
+            let src_loc = D3D12_TEXTURE_COPY_LOCATION {
+                pResource: com::borrowed(resolve),
+                Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                    SubresourceIndex: 0,
+                },
+            };
+            // SAFETY: both locations borrow interfaces the bake keeps alive past the call, and the
+            // resolve image is in COPY_SOURCE from the barrier above.
+            unsafe { cmd.CopyTextureRegion(&raw const dst_loc, 0, 0, 0, &raw const src_loc, None) };
+            let to_rest = transition_barrier(
+                resolve,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            );
+            // SAFETY: the list is recording, and the resolve image is owned by the bake.
+            unsafe { cmd.ResourceBarrier(&[to_rest]) };
         } else {
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.ResourceBarrier(&[transition_barrier(
-                    &bake.color,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    D3D12_RESOURCE_STATE_COPY_SOURCE,
-                )]);
-                let src_loc = D3D12_TEXTURE_COPY_LOCATION {
-                    pResource: com::borrowed(&bake.color),
-                    Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-                    Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-                        SubresourceIndex: 0,
-                    },
-                };
-                cmd.CopyTextureRegion(&raw const dst_loc, 0, 0, 0, &raw const src_loc, None);
-                cmd.ResourceBarrier(&[transition_barrier(
-                    &bake.color,
-                    D3D12_RESOURCE_STATE_COPY_SOURCE,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                )]);
-            }
+            let to_copy = transition_barrier(
+                &bake.color,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+            );
+            // SAFETY: the list is recording, and the color image is owned by the bake.
+            unsafe { cmd.ResourceBarrier(&[to_copy]) };
+            let src_loc = D3D12_TEXTURE_COPY_LOCATION {
+                pResource: com::borrowed(&bake.color),
+                Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                    SubresourceIndex: 0,
+                },
+            };
+            // SAFETY: both locations borrow interfaces the bake keeps alive past the call, and the
+            // color image is in COPY_SOURCE from the barrier above.
+            unsafe { cmd.CopyTextureRegion(&raw const dst_loc, 0, 0, 0, &raw const src_loc, None) };
+            let to_rt = transition_barrier(
+                &bake.color,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+            );
+            // SAFETY: the list is recording, and the color image is owned by the bake.
+            unsafe { cmd.ResourceBarrier(&[to_rt]) };
         }
         Ok(())
     }
@@ -747,15 +755,13 @@ impl DxContext {
             .expect("cull command signature is live alongside the bindless PSO");
         let local_lights_gva = com::gpu_va(&self.uniforms.local_light_buffer);
 
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        // SAFETY: the list is recording, and `rtv` and `dsv` address the face's live targets.
+        unsafe { cmd.OMSetRenderTargets(1, Some(&raw const rtv), false, Some(&raw const dsv)) };
+        let clear_color = storage.clear_color(self.state.view.clear_color);
+        // SAFETY: the list is recording, `rtv` is bound above, and the color and rect are locals.
+        unsafe { cmd.ClearRenderTargetView(rtv, &clear_color, Some(&[scissor])) };
+        // SAFETY: the list is recording, `dsv` is bound above, and the rect is a live local.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&raw const rtv), false, Some(&raw const dsv));
-            cmd.ClearRenderTargetView(
-                rtv,
-                &storage.clear_color(self.state.view.clear_color),
-                Some(&[scissor]),
-            );
             cmd.ClearDepthStencilView(
                 dsv,
                 D3D12_CLEAR_FLAG_DEPTH,
@@ -763,74 +769,114 @@ impl DxContext {
                 0,
                 Some(&[scissor]),
             );
-            let vp = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: width as f32,
-                Height: height as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp]);
-            cmd.RSSetScissorRects(&[scissor]);
+        }
+        let vp = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: width as f32,
+            Height: height as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        // SAFETY: the list is recording, and the viewport slice is a live local.
+        unsafe { cmd.RSSetViewports(&[vp]) };
+        // SAFETY: the list is recording, and the scissor slice is a live local.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
 
-            cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view));
-            cmd.SetDescriptorHeaps(&[
-                Some(self.descriptors.srv_heap.clone()),
-                Some(self.descriptors.sampler_heap.clone()),
-            ]);
+        // SAFETY: the list is recording; setting the topology names no resource.
+        unsafe { cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
+        // SAFETY: the view names the scene vertex buffer `self.scene.geometry` owns.
+        unsafe { cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view])) };
+        // SAFETY: the view names the scene index buffer `self.scene.geometry` owns.
+        unsafe { cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view)) };
+        let heaps = [
+            Some(self.descriptors.srv_heap.clone()),
+            Some(self.descriptors.sampler_heap.clone()),
+        ];
+        // SAFETY: the list is recording, and both heaps are owned by `self.descriptors`.
+        unsafe { cmd.SetDescriptorHeaps(&heaps) };
 
-            cmd.SetPipelineState(bindless_pso);
-            cmd.SetGraphicsRootSignature(bindless_root);
-            cmd.SetGraphicsRootConstantBufferView(1, view_gva);
-            cmd.SetGraphicsRootConstantBufferView(2, light_gva);
-            cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
-            cmd.set_graphics_srv_table(4, self.shadow.srv_gpu);
-            cmd.set_graphics_srv_table(5, self.cull.bindless_pool_gpu[self.current_frame]);
-            cmd.set_graphics_sampler_table(6, self.descriptors.shadow_sampler_gpu);
-            cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
-            cmd.SetGraphicsRootShaderResourceView(8, object_gva);
+        // SAFETY: the list is recording, and the bindless PSO is live while `self.cull` holds it.
+        unsafe { cmd.SetPipelineState(bindless_pso) };
+        // SAFETY: the list is recording, and the bindless root signature lives beside its PSO.
+        unsafe { cmd.SetGraphicsRootSignature(bindless_root) };
+        // SAFETY: the bindless signature declares a CBV at 1, and the face's view block is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(1, view_gva) };
+        // SAFETY: the signature declares a CBV at 2, and the bake's light snapshot is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(2, light_gva) };
+        // SAFETY: the signature declares a CBV at 3, and the bake's shadow snapshot is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva) };
+        // SAFETY: the SRV heap is set above, and the shadow map's descriptor is live.
+        unsafe { cmd.set_graphics_srv_table(4, self.shadow.srv_gpu) };
+        let pool = self.cull.bindless_pool_gpu[self.current_frame];
+        // SAFETY: the SRV heap is set above, and this frame's bindless pool table is live.
+        unsafe { cmd.set_graphics_srv_table(5, pool) };
+        // SAFETY: the sampler heap is set above, and the shadow sampler slot is live.
+        unsafe { cmd.set_graphics_sampler_table(6, self.descriptors.shadow_sampler_gpu) };
+        // SAFETY: the sampler heap is set above, and the linear sampler slot is live.
+        unsafe { cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu) };
+        // SAFETY: the list is recording, and the face's object buffer is live for the bake.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(8, object_gva) };
+        let vertex_gva = com::gpu_va(&self.scene.geometry.vertex_buffer);
+        // SAFETY: the list is recording, and the vertex buffer is owned by `self.scene.geometry`.
+        unsafe {
             cmd.SetGraphicsRootShaderResourceView(
                 crate::directx::draw::MAIN_MESH_VERTICES_PARAM,
-                com::gpu_va(&self.scene.geometry.vertex_buffer),
+                vertex_gva,
             );
+        }
+        // SAFETY: the list is recording, and the material params buffer is live for the frame.
+        unsafe {
             cmd.SetGraphicsRootShaderResourceView(
                 super::material_params::MATERIAL_PARAMS_ROOT_PARAM,
                 material_params_gva,
             );
+        }
+        // SAFETY: the list is recording, and the canopy constant buffer is live for the frame.
+        unsafe {
             cmd.SetGraphicsRootConstantBufferView(super::canopy::CANOPY_ROOT_PARAM, canopy_gva);
+        }
+        // SAFETY: the list is recording, and the canopy tables buffer is live for the frame.
+        unsafe {
             cmd.SetGraphicsRootShaderResourceView(
                 super::canopy::CANOPY_TABLES_ROOT_PARAM,
                 canopy_tables_gva,
             );
-            // [12] per-scene GpuLight storage buffer (t1). Probe + planar faces
-            // reuse the bindless main PSO, which references it unconditionally.
-            cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva);
-            // [13] ClusterParams + [14] the per-cluster light lists: the face's
-            // own grid, or the `use_clusters = 0` copy that iterates every light.
-            cmd.SetGraphicsRootConstantBufferView(13, cluster_params_gva);
-            cmd.SetGraphicsRootShaderResourceView(14, cluster_list_gva);
-            // [15]..[18] the spot shadow projections + depth array and the
-            // area-light table + LTC lookups. Bound like any other main-pass
-            // face: a shadowed spot occludes a probe capture, and an area light
-            // lights it, exactly as they do for the main camera.
-            self.bind_local_light_tables(cmd, super::draw::LocalLightParams::BINDLESS);
-            cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
-            // [10] probe cube array + [11] the EMPTY ProbeSet (count 0) + [19] the
-            // stand-in records, so a probe face samples only the sky, not other
-            // probes, and never reads the live ring while it is rewritten.
-            self.bind_main_probe_set(
-                cmd,
-                com::gpu_va(&self.uniforms.probe_set_empty_cbv),
-                self.probe.gpu.stand_in_records.gpu_va(),
-            );
-            // Static + instance prefix `[0, skinned_record_base())`. Skinned tail
-            // omitted (not captured into the probe in V1).
+        }
+        // [12] per-scene GpuLight storage buffer (t1). Probe + planar faces
+        // reuse the bindless main PSO, which references it unconditionally.
+        // SAFETY: the list is recording, and the local light buffer is owned by `self.uniforms`.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva) };
+        // [13] ClusterParams + [14] the per-cluster light lists: the face's
+        // own grid, or the `use_clusters = 0` copy that iterates every light.
+        // SAFETY: the list is recording, and the chosen cluster params buffer is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(13, cluster_params_gva) };
+        // SAFETY: the list is recording, and the chosen cluster light lists are live.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(14, cluster_list_gva) };
+        // [15]..[18] the spot shadow projections + depth array and the
+        // area-light table + LTC lookups. Bound like any other main-pass
+        // face: a shadowed spot occludes a probe capture, and an area light
+        // lights it, exactly as they do for the main camera.
+        self.bind_local_light_tables(cmd, super::draw::LocalLightParams::BINDLESS);
+        // SAFETY: the SRV heap is set above, and the SSAO output's descriptor is live.
+        unsafe { cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu()) };
+        // [10] probe cube array + [11] the EMPTY ProbeSet (count 0) + [19] the
+        // stand-in records, so a probe face samples only the sky, not other
+        // probes, and never reads the live ring while it is rewritten.
+        self.bind_main_probe_set(
+            cmd,
+            com::gpu_va(&self.uniforms.probe_set_empty_cbv),
+            self.probe.gpu.stand_in_records.gpu_va(),
+        );
+        let max_commands = u32::saturating_from(self.state.draw.skinned_record_base());
+        // Static + instance prefix `[0, skinned_record_base())`. Skinned tail
+        // omitted (not captured into the probe in V1).
+        // SAFETY: the command signature lives beside the bindless PSO, and `indirect` is the
+        // cull's live argument buffer for this face.
+        unsafe {
             cmd.ExecuteIndirect(
                 cull_sig,
-                u32::saturating_from(self.state.draw.skinned_record_base()),
+                max_commands,
                 indirect,
                 u64::from(indirect_offset),
                 None::<&ID3D12Resource>,

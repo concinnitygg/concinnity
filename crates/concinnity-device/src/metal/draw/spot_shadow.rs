@@ -113,12 +113,12 @@ impl MtlContext {
     // memory the GPU only ever reads.
     fn spot_shadow_data(&self, slice: u32) -> SpotShadowData {
         debug_assert!(slice < self.spot_shadow.count);
+        let base = self.spot_shadow.buffer.contents().as_ptr() as *const SpotShadowData;
         // SAFETY: the buffer was created from a `&[SpotShadowData]` of exactly
-        // `spot_shadow.count` elements and is never resized; `slice` is bounded
-        // by that count above.
-        unsafe {
-            let base = self.spot_shadow.buffer.contents().as_ptr() as *const SpotShadowData;
-            *base.add(slice as usize)
-        }
+        // `spot_shadow.count` elements and is never resized; `slice` is below that count.
+        let entry = unsafe { base.add(slice as usize) };
+        // SAFETY: `entry` points at an initialized element of that Shared buffer,
+        // which the GPU only ever reads.
+        unsafe { *entry }
     }
 }

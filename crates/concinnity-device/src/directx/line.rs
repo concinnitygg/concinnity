@@ -355,36 +355,52 @@ impl DxContext {
 
         let w = self.targets.extent.render_width;
         let h = self.targets.extent.render_height;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        let viewport = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: w as f32,
+            Height: h as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let scissor = RECT {
+            left: 0,
+            top: 0,
+            right: i32::saturating_from(w),
+            bottom: i32::saturating_from(h),
+        };
+        // SAFETY: the command list is recording, and the executor has put the scene behind
+        // `scene_rtv` in RENDER_TARGET.
+        unsafe { cmd.OMSetRenderTargets(1, Some(&raw const scene_rtv), false, None) };
+        // SAFETY: the viewport slice is a local that outlives the call.
+        unsafe { cmd.RSSetViewports(&[viewport]) };
+        // SAFETY: the scissor slice is a local that outlives the call.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
+        // SAFETY: setting the topology only needs a recording command list.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&raw const scene_rtv), false, None);
-            cmd.RSSetViewports(&[D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: w as f32,
-                Height: h as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            }]);
-            cmd.RSSetScissorRects(&[RECT {
-                left: 0,
-                top: 0,
-                right: i32::saturating_from(w),
-                bottom: i32::saturating_from(h),
-            }]);
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
-            cmd.IASetVertexBuffers(0, Some(&[upload.vertex_buffer_view()]));
-
-            cmd.SetPipelineState(&lines.pso);
-            cmd.SetGraphicsRootSignature(&lines.root_sig);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-            cmd.set_graphics_srv_table(1, lines.depth_srv_gpu);
-            cmd.DrawInstanced(upload.vertex_count(), 1, 0, 0);
         }
+        let vbv = upload.vertex_buffer_view();
+        // SAFETY: the view covers this frame's placement in the line upload ring.
+        unsafe { cmd.IASetVertexBuffers(0, Some(&[vbv])) };
+
+        // SAFETY: the line PSO is owned by `lines` and outlives the recording.
+        unsafe { cmd.SetPipelineState(&lines.pso) };
+        // SAFETY: the line root signature is owned by `lines` and matches the PSO above.
+        unsafe { cmd.SetGraphicsRootSignature(&lines.root_sig) };
+        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: `view_gva` addresses this frame's view constants written above.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(0, view_gva) };
+        // SAFETY: the depth SRV lives in the heap set above, and main depth is already in a
+        // shader-resource state.
+        unsafe { cmd.set_graphics_srv_table(1, lines.depth_srv_gpu) };
+        let vertex_count = upload.vertex_count();
+        // SAFETY: the vertex buffer holds `vertex_count` vertices, and the pipeline and root
+        // arguments the draw reads are bound above.
+        unsafe { cmd.DrawInstanced(vertex_count, 1, 0, 0) };
         self.inc_draw_calls(1);
     }
 }

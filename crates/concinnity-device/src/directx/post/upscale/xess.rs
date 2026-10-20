@@ -76,16 +76,23 @@ struct XessD3D12Api {
 
 impl XessD3D12Api {
     fn resolve(library: &impl SdkLibrary) -> Option<Self> {
-        // SAFETY: each type is the prototype `xess_d3d12.h` declares for that export.
-        unsafe {
-            Some(Self {
-                create_context: entry_point(library, c"xessD3D12CreateContext")?,
-                build_pipelines: entry_point(library, c"xessD3D12BuildPipelines")?,
-                init: entry_point(library, c"xessD3D12Init")?,
-                execute: entry_point(library, c"xessD3D12Execute")?,
-                common: XessCommonApi::resolve(library)?,
-            })
-        }
+        // SAFETY: the type matches the `CreateContext` prototype in `xess_d3d12.h`.
+        let create_context: PfnXessD3D12CreateContext =
+            unsafe { entry_point(library, c"xessD3D12CreateContext") }?;
+        // SAFETY: the type matches the `BuildPipelines` prototype in `xess_d3d12.h`.
+        let build_pipelines: PfnXessD3D12BuildPipelines =
+            unsafe { entry_point(library, c"xessD3D12BuildPipelines") }?;
+        // SAFETY: the type matches the `Init` prototype in `xess_d3d12.h`.
+        let init: PfnXessD3D12Init = unsafe { entry_point(library, c"xessD3D12Init") }?;
+        // SAFETY: the type matches the `Execute` prototype in `xess_d3d12.h`.
+        let execute: PfnXessD3D12Execute = unsafe { entry_point(library, c"xessD3D12Execute") }?;
+        Some(Self {
+            create_context,
+            build_pipelines,
+            init,
+            execute,
+            common: XessCommonApi::resolve(library)?,
+        })
     }
 }
 

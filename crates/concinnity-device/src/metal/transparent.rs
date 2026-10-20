@@ -131,22 +131,23 @@ fn encode_transparent_draw(
     pipeline: &ProtocolObject<dyn MTLRenderPipelineState>,
 ) -> RenderResult<()> {
     enc.set_pipeline(pipeline);
-    // SAFETY: `params_ptr`/`d.params.len()` describe the record own parameter blob, and the
-    // index range is that record own slice of `d.index_buffer`.
+    enc.set_vertex_buffer(&d.vertex_buffer, 0, 1);
+    let params_ptr = std::ptr::NonNull::new(d.params.as_ptr() as *mut std::ffi::c_void)
+        .ok_or_else(|| RenderError::Other("transparent draw params blob is null".to_string()))?;
+    // SAFETY: `params_ptr`/`d.params.len()` describe the record's own parameter blob, which
+    // Metal copies during the call.
+    unsafe { enc.setVertexBytes_length_atIndex(params_ptr, d.params.len(), 6) };
+    // SAFETY: the same live blob, copied again for the fragment stage.
+    unsafe { enc.setFragmentBytes_length_atIndex(params_ptr, d.params.len(), 6) };
+    for (slot, tex) in &d.fragment_textures {
+        enc.set_fragment_texture(tex.as_ref(), *slot);
+    }
+    for (slot, samp) in &d.fragment_samplers {
+        enc.set_fragment_sampler(samp.as_ref(), *slot);
+    }
+    // SAFETY: the index range is the record's own slice of `d.index_buffer`, which the record
+    // keeps alive past the draw.
     unsafe {
-        enc.set_vertex_buffer(&d.vertex_buffer, 0, 1);
-        let params_ptr = std::ptr::NonNull::new(d.params.as_ptr() as *mut std::ffi::c_void)
-            .ok_or_else(|| {
-                RenderError::Other("transparent draw params blob is null".to_string())
-            })?;
-        enc.setVertexBytes_length_atIndex(params_ptr, d.params.len(), 6);
-        enc.setFragmentBytes_length_atIndex(params_ptr, d.params.len(), 6);
-        for (slot, tex) in &d.fragment_textures {
-            enc.set_fragment_texture(tex.as_ref(), *slot);
-        }
-        for (slot, samp) in &d.fragment_samplers {
-            enc.set_fragment_sampler(samp.as_ref(), *slot);
-        }
         enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount_baseVertex_baseInstance(
             MTLPrimitiveType::Triangle,
             d.index_count as usize,

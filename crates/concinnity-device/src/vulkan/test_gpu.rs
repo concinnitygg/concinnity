@@ -15,13 +15,12 @@ pub(in crate::vulkan) struct TestGpu {
 
 impl Drop for TestGpu {
     fn drop(&mut self) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the
-        // caller has already waited for the device to go idle, so no submission still
-        // references it.
-        unsafe {
-            self.device.destroy_device(None);
-            self.instance.destroy_instance(None);
-        }
+        // SAFETY: the device is destroyed exactly once here, and the test that owned it has
+        // already waited for it to go idle, so no submission still references it.
+        unsafe { self.device.destroy_device(None) };
+        // SAFETY: the device created from this instance is gone above, and nothing else derived
+        // from it outlives `self`.
+        unsafe { self.instance.destroy_instance(None) };
     }
 }
 

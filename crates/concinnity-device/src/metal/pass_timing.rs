@@ -224,22 +224,7 @@ impl PassTimingResources {
     pub(super) fn attach_render(&self, desc: &MTLRenderPassDescriptor, pass: PassId) {
         self.mark_attached(pass);
         let (start, end) = slot_pair(pass);
-        // SAFETY: All Metal sample-buffer accessors are marked unsafe by
-        // objc2-metal because they take `*mut self`-equivalent ObjC arrays.
-        // We hold a unique borrow of `desc` through the call, so no
-        // aliasing exists.
-        unsafe {
-            let arr = desc.sampleBufferAttachments();
-            let entry = arr.objectAtIndexedSubscript(0);
-            entry.setSampleBuffer(Some(self.active()));
-            // The fragment phase is the pass's occupancy; its vertex phase runs
-            // ahead of the passes before it and would make the reading a
-            // time-to-end-of-pass. See the module header.
-            entry.setStartOfVertexSampleIndex(NO_SAMPLE);
-            entry.setEndOfVertexSampleIndex(NO_SAMPLE);
-            entry.setStartOfFragmentSampleIndex(start);
-            entry.setEndOfFragmentSampleIndex(end);
-        }
+        self.sample_render(desc, start, end);
     }
 
     // Attach the FIRST encoder of a multi-encoder pass (e.g. shadow
@@ -249,16 +234,7 @@ impl PassTimingResources {
     pub(super) fn attach_render_first(&self, desc: &MTLRenderPassDescriptor, pass: PassId) {
         self.mark_attached(pass);
         let (start, _) = slot_pair(pass);
-        // SAFETY: see `attach_render`.
-        unsafe {
-            let arr = desc.sampleBufferAttachments();
-            let entry = arr.objectAtIndexedSubscript(0);
-            entry.setSampleBuffer(Some(self.active()));
-            entry.setStartOfVertexSampleIndex(NO_SAMPLE);
-            entry.setEndOfVertexSampleIndex(NO_SAMPLE);
-            entry.setStartOfFragmentSampleIndex(start);
-            entry.setEndOfFragmentSampleIndex(NO_SAMPLE);
-        }
+        self.sample_render(desc, start, NO_SAMPLE);
     }
 
     // Attach the LAST encoder of a multi-encoder pass. Writes only the
@@ -266,16 +242,7 @@ impl PassTimingResources {
     // [`attach_render_first`].
     pub(super) fn attach_render_last(&self, desc: &MTLRenderPassDescriptor, pass: PassId) {
         let (_, end) = slot_pair(pass);
-        // SAFETY: see `attach_render`.
-        unsafe {
-            let arr = desc.sampleBufferAttachments();
-            let entry = arr.objectAtIndexedSubscript(0);
-            entry.setSampleBuffer(Some(self.active()));
-            entry.setStartOfVertexSampleIndex(NO_SAMPLE);
-            entry.setEndOfVertexSampleIndex(NO_SAMPLE);
-            entry.setStartOfFragmentSampleIndex(NO_SAMPLE);
-            entry.setEndOfFragmentSampleIndex(end);
-        }
+        self.sample_render(desc, NO_SAMPLE, end);
     }
 
     // Attach a single-encoder compute pass to its start + end slot pair.
@@ -301,15 +268,36 @@ impl PassTimingResources {
         self.sample_compute(desc, NO_SAMPLE, end);
     }
 
+    // Point `desc`'s first sample attachment at the active buffer, sampling the
+    // fragment phase at `start` and `end`. The fragment phase is the pass's
+    // occupancy; its vertex phase runs ahead of the passes before it and would
+    // make the reading a time-to-end-of-pass. See the module header.
+    fn sample_render(&self, desc: &MTLRenderPassDescriptor, start: usize, end: usize) {
+        let arr = desc.sampleBufferAttachments();
+        // SAFETY: index 0 is within the descriptor's fixed sample-attachment array.
+        let entry = unsafe { arr.objectAtIndexedSubscript(0) };
+        entry.setSampleBuffer(Some(self.active()));
+        // SAFETY: `NO_SAMPLE` is Metal's don't-sample sentinel, valid for any buffer.
+        unsafe { entry.setStartOfVertexSampleIndex(NO_SAMPLE) };
+        // SAFETY: as above, the vertex phase is left unsampled.
+        unsafe { entry.setEndOfVertexSampleIndex(NO_SAMPLE) };
+        // SAFETY: `start` is a `slot_pair` index below `SAMPLE_COUNT`, the active
+        // buffer's sample count, or `NO_SAMPLE`.
+        unsafe { entry.setStartOfFragmentSampleIndex(start) };
+        // SAFETY: `end` is likewise in the active buffer's range or `NO_SAMPLE`.
+        unsafe { entry.setEndOfFragmentSampleIndex(end) };
+    }
+
     fn sample_compute(&self, desc: &MTLComputePassDescriptor, start: usize, end: usize) {
-        // SAFETY: see `attach_render`.
-        unsafe {
-            let arr = desc.sampleBufferAttachments();
-            let entry = arr.objectAtIndexedSubscript(0);
-            entry.setSampleBuffer(Some(self.active()));
-            entry.setStartOfEncoderSampleIndex(start);
-            entry.setEndOfEncoderSampleIndex(end);
-        }
+        let arr = desc.sampleBufferAttachments();
+        // SAFETY: index 0 is within the descriptor's fixed sample-attachment array.
+        let entry = unsafe { arr.objectAtIndexedSubscript(0) };
+        entry.setSampleBuffer(Some(self.active()));
+        // SAFETY: `start` is a `slot_pair` index below `SAMPLE_COUNT`, the active
+        // buffer's sample count, or `NO_SAMPLE`.
+        unsafe { entry.setStartOfEncoderSampleIndex(start) };
+        // SAFETY: `end` is likewise in the active buffer's range or `NO_SAMPLE`.
+        unsafe { entry.setEndOfEncoderSampleIndex(end) };
     }
 
     // Attach a render encoder at `timer`'s place in its pass's span.
@@ -396,13 +384,14 @@ fn read_samples(
     if data.len() < needed {
         return None;
     }
-    // SAFETY: `data` is at least `needed` bytes long, and the underlying buffer is
+    // SAFETY: `data` is an immutable NSData this function owns, so its bytes
+    // cannot be mutated while borrowed.
+    let bytes = unsafe { data.as_bytes_unchecked() };
+    // SAFETY: `bytes` is at least `needed` bytes long, and the underlying buffer is
     // `MTLCounterResultTimestamp` (one u64 per slot).
     let timestamps: &[MTLCounterResultTimestamp] = unsafe {
         std::slice::from_raw_parts(
-            data.as_bytes_unchecked()
-                .as_ptr()
-                .cast::<MTLCounterResultTimestamp>(),
+            bytes.as_ptr().cast::<MTLCounterResultTimestamp>(),
             SAMPLE_COUNT,
         )
     };

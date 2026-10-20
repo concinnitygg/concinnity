@@ -566,15 +566,17 @@ impl DxContext {
             return;
         };
         let [x, y, z] = frame.bend_dispatch;
-        // SAFETY: the command list is in the recording state, and every resource these commands
-        // name is live for the call.
-        unsafe {
-            cmd.SetComputeRootSignature(&grass.pipelines.bend_root_sig);
-            cmd.SetPipelineState(&grass.pipelines.bend);
-            cmd.SetComputeRootConstantBufferView(0, frame.bend_gva);
-            cmd.SetComputeRootUnorderedAccessView(1, com::gpu_va(&grass.bend_field));
-            cmd.Dispatch(x, y, z);
-        }
+        // SAFETY: the command list is recording, and the bend root signature is owned by `grass`.
+        unsafe { cmd.SetComputeRootSignature(&grass.pipelines.bend_root_sig) };
+        // SAFETY: the bend PSO is owned by `grass` and matches the root signature above.
+        unsafe { cmd.SetPipelineState(&grass.pipelines.bend) };
+        // SAFETY: `frame.bend_gva` addresses this frame's live bend constants.
+        unsafe { cmd.SetComputeRootConstantBufferView(0, frame.bend_gva) };
+        let bend_field_gva = com::gpu_va(&grass.bend_field);
+        // SAFETY: the bend field is owned by `grass` and already in UNORDERED_ACCESS.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(1, bend_field_gva) };
+        // SAFETY: the bend pipeline and both root arguments it reads are bound above.
+        unsafe { cmd.Dispatch(x, y, z) };
     }
 
     // Encode the `GrassShadow` node: place the blades the nearest cascade
@@ -609,16 +611,23 @@ impl DxContext {
         };
         let coarsest = shadow.args_offset + ((GRASS_LOD_COUNT - 1) * GRASS_ARGS_STRIDE) as u64;
         self.timed(cmd, frame_idx, PassId::GrassShadowDraw, || {
-            // SAFETY: the command list is in the recording state, and every resource these
-            // commands name is live for the call; the args buffer is in INDIRECT_ARGUMENT for
-            // this pass and the offset names one whole record of it.
+            // SAFETY: the command list is recording, and `dsv` names the nearest cascade's live
+            // slice.
+            unsafe { cmd.OMSetRenderTargets(0, None, false, Some(&raw const dsv)) };
+            // SAFETY: the shadow root signature is owned by `grass`.
+            unsafe { cmd.SetGraphicsRootSignature(&grass.pipelines.shadow_root_sig) };
+            // SAFETY: the shadow PSO is owned by `grass` and matches the root signature above.
+            unsafe { cmd.SetPipelineState(&grass.pipelines.shadow) };
+            // SAFETY: `shadow.params_gva` addresses the cascade's live placement constants.
+            unsafe { cmd.SetGraphicsRootConstantBufferView(0, shadow.params_gva) };
+            let blades_gva = com::gpu_va(&grass.shadow_blades);
+            // SAFETY: the shadow blade buffer is owned by `grass` and was filled by its placement.
+            unsafe { cmd.SetGraphicsRootShaderResourceView(1, blades_gva) };
+            // SAFETY: setting the topology only needs a recording command list.
+            unsafe { cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP) };
+            // SAFETY: the args buffer is in INDIRECT_ARGUMENT for this pass and `coarsest` names
+            // one whole record of it.
             unsafe {
-                cmd.OMSetRenderTargets(0, None, false, Some(&raw const dsv));
-                cmd.SetGraphicsRootSignature(&grass.pipelines.shadow_root_sig);
-                cmd.SetPipelineState(&grass.pipelines.shadow);
-                cmd.SetGraphicsRootConstantBufferView(0, shadow.params_gva);
-                cmd.SetGraphicsRootShaderResourceView(1, com::gpu_va(&grass.shadow_blades));
-                cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
                 cmd.ExecuteIndirect(
                     &grass.draw_signature,
                     1,
@@ -627,8 +636,9 @@ impl DxContext {
                     None::<&ID3D12Resource>,
                     0,
                 );
-                cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             }
+            // SAFETY: restoring the list topology only needs a recording command list.
+            unsafe { cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
         });
         self.inc_draw_calls(1);
     }
@@ -662,32 +672,48 @@ impl DxContext {
         (blades, args): (&ID3D12Resource, &ID3D12Resource),
     ) {
         let [x, y, z] = placement.dispatch;
-        // SAFETY: the command list is in the recording state, and every resource these commands
-        // name is live for the call.
+        // SAFETY: the command list is recording, and the generate root signature is owned by
+        // `grass`.
+        unsafe { cmd.SetComputeRootSignature(&grass.pipelines.generate_root_sig) };
+        // SAFETY: the generate PSO is owned by `grass` and matches the root signature above.
+        unsafe { cmd.SetPipelineState(&grass.pipelines.generate) };
+        // SAFETY: `placement.params_gva` addresses this placement's live constants.
+        unsafe { cmd.SetComputeRootConstantBufferView(0, placement.params_gva) };
+        let blades_gva = com::gpu_va(blades);
+        // SAFETY: the caller's blade buffer is owned by `grass` and outlives the dispatch.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(1, blades_gva) };
+        let args_gva = com::gpu_va(args);
+        // SAFETY: the caller's args buffer is owned by `grass` and outlives the dispatch.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(2, args_gva) };
+        let heights_gva = com::gpu_va(&grass.heights);
+        // SAFETY: the height field is owned by `grass`.
+        unsafe { cmd.SetComputeRootShaderResourceView(3, heights_gva) };
+        let masks_gva = com::gpu_va(&grass.masks);
+        // SAFETY: the placement masks are owned by `grass`.
+        unsafe { cmd.SetComputeRootShaderResourceView(4, masks_gva) };
+        let bend_field_gva = com::gpu_va(&grass.bend_field);
+        // SAFETY: the bend field is owned by `grass`, written by the bend pass ahead of this one.
+        unsafe { cmd.SetComputeRootShaderResourceView(KERNEL_BEND_PARAM, bend_field_gva) };
+        // SAFETY: `planet_tiles_gva` addresses this frame's live planet tile records.
         unsafe {
-            cmd.SetComputeRootSignature(&grass.pipelines.generate_root_sig);
-            cmd.SetPipelineState(&grass.pipelines.generate);
-            cmd.SetComputeRootConstantBufferView(0, placement.params_gva);
-            cmd.SetComputeRootUnorderedAccessView(1, com::gpu_va(blades));
-            cmd.SetComputeRootUnorderedAccessView(2, com::gpu_va(args));
-            cmd.SetComputeRootShaderResourceView(3, com::gpu_va(&grass.heights));
-            cmd.SetComputeRootShaderResourceView(4, com::gpu_va(&grass.masks));
-            cmd.SetComputeRootShaderResourceView(KERNEL_BEND_PARAM, com::gpu_va(&grass.bend_field));
             cmd.SetComputeRootShaderResourceView(KERNEL_PLANET_TILES_PARAM, planet_tiles_gva);
-            cmd.SetComputeRootShaderResourceView(KERNEL_TILES_PARAM, tiles_gva);
-            cmd.SetComputeRootShaderResourceView(
-                KERNEL_VERTICES_PARAM,
-                com::gpu_va(&self.scene.geometry.vertex_buffer),
-            );
-            // The pyramid's descriptor lives in the shader-visible SRV heap.
-            // Bound whenever it exists so the table always points at a live
-            // descriptor; the block's `hiz_enabled` gates the reads.
-            if let Some(hiz) = &self.cull.hiz {
-                cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-                cmd.set_compute_srv_table(KERNEL_HIZ_PARAM, hiz.srv_gpu);
-            }
-            cmd.Dispatch(x, y, z);
         }
+        // SAFETY: `tiles_gva` addresses this frame's live tile records.
+        unsafe { cmd.SetComputeRootShaderResourceView(KERNEL_TILES_PARAM, tiles_gva) };
+        let vertices_gva = com::gpu_va(&self.scene.geometry.vertex_buffer);
+        // SAFETY: the shared vertex stream is owned by `self.scene` and outlives the frame.
+        unsafe { cmd.SetComputeRootShaderResourceView(KERNEL_VERTICES_PARAM, vertices_gva) };
+        // The pyramid's descriptor lives in the shader-visible SRV heap.
+        // Bound whenever it exists so the table always points at a live
+        // descriptor; the block's `hiz_enabled` gates the reads.
+        if let Some(hiz) = &self.cull.hiz {
+            // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+            unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+            // SAFETY: the Hi-Z pyramid's SRV is a live slot in the heap set above.
+            unsafe { cmd.set_compute_srv_table(KERNEL_HIZ_PARAM, hiz.srv_gpu) };
+        }
+        // SAFETY: the generate pipeline and every root argument it reads are bound above.
+        unsafe { cmd.Dispatch(x, y, z) };
     }
 
     // Draw the blades into the G-buffer pre-pass bound on `cmd`, under the
@@ -706,20 +732,22 @@ impl DxContext {
         };
         let main_view_gva = com::gpu_va(&self.uniforms.view_ubo_resources[frame_idx]);
         self.timed(cmd, frame_idx, PassId::GrassPrepass, || {
-            // SAFETY: the command list is in the recording state, and every resource these
-            // commands name is live for the call; the root signature declares each parameter set.
+            // SAFETY: the command list is recording, and the pre-pass root signature is owned by
+            // `self.cull`.
+            unsafe { cmd.SetGraphicsRootSignature(root_sig) };
+            // SAFETY: `main_view_gva` addresses this frame's live main view constants.
+            unsafe { cmd.SetGraphicsRootConstantBufferView(1, main_view_gva) };
+            // SAFETY: `gb_view_gva` is the caller's live pre-pass view block.
+            unsafe { cmd.SetGraphicsRootConstantBufferView(2, gb_view_gva) };
+            let params_gva = frame.view.params_gva;
+            // SAFETY: the root signature declares the grass params CBV, and the block is live.
             unsafe {
-                cmd.SetGraphicsRootSignature(root_sig);
-                cmd.SetGraphicsRootConstantBufferView(1, main_view_gva);
-                cmd.SetGraphicsRootConstantBufferView(2, gb_view_gva);
-                cmd.SetGraphicsRootConstantBufferView(
-                    PREPASS_GRASS_PARAMS_PARAM,
-                    frame.view.params_gva,
-                );
-                cmd.SetGraphicsRootShaderResourceView(
-                    PREPASS_GRASS_BLADES_PARAM,
-                    com::gpu_va(&grass.blades),
-                );
+                cmd.SetGraphicsRootConstantBufferView(PREPASS_GRASS_PARAMS_PARAM, params_gva);
+            }
+            let blades_gva = com::gpu_va(&grass.blades);
+            // SAFETY: the root signature declares the blade SRV, and `grass` owns the buffer.
+            unsafe {
+                cmd.SetGraphicsRootShaderResourceView(PREPASS_GRASS_BLADES_PARAM, blades_gva);
             }
             self.draw_grass(cmd, grass, &grass.pipelines.prepass, frame);
         });
@@ -737,19 +765,13 @@ impl DxContext {
             return;
         };
         self.timed(cmd, frame_idx, PassId::GrassDraw, || {
-            // SAFETY: the command list is in the recording state, and every resource these
-            // commands name is live for the call; the bound root signature declares both
-            // parameters.
-            unsafe {
-                cmd.SetGraphicsRootConstantBufferView(
-                    MAIN_GRASS_PARAMS_PARAM,
-                    frame.view.params_gva,
-                );
-                cmd.SetGraphicsRootShaderResourceView(
-                    MAIN_GRASS_BLADES_PARAM,
-                    com::gpu_va(&grass.blades),
-                );
-            }
+            let params_gva = frame.view.params_gva;
+            // SAFETY: the main pass is recording on `cmd`, and its bound root signature declares
+            // the grass params CBV.
+            unsafe { cmd.SetGraphicsRootConstantBufferView(MAIN_GRASS_PARAMS_PARAM, params_gva) };
+            let blades_gva = com::gpu_va(&grass.blades);
+            // SAFETY: the bound root signature declares the blade SRV, and `grass` owns the buffer.
+            unsafe { cmd.SetGraphicsRootShaderResourceView(MAIN_GRASS_BLADES_PARAM, blades_gva) };
             self.draw_grass(cmd, grass, &grass.pipelines.main, frame);
         });
     }
@@ -766,29 +788,34 @@ impl DxContext {
         pipelines: &GrassDrawPipelines,
         frame: &GrassFrame,
     ) {
-        // SAFETY: the command list is in the recording state under a root signature whose
-        // parameter 0 is one root-constant DWORD; the args buffer is in INDIRECT_ARGUMENT for this
-        // pass and each offset names one whole record of it.
-        unsafe {
-            cmd.SetPipelineState(&pipelines.levels);
-            cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-            for region in 0..GRASS_REGION_COUNT {
-                if region == GRASS_BAND_REGION {
-                    cmd.SetPipelineState(&pipelines.band);
-                }
-                let first_vertex = u32::saturating_from(region) * GRASS_LOD_VERTEX_STRIDE;
-                cmd.set_graphics_root_constants(FIRST_VERTEX_PARAM, &first_vertex);
+        // SAFETY: the command list is recording, and the levels PSO is owned by `grass`.
+        unsafe { cmd.SetPipelineState(&pipelines.levels) };
+        // SAFETY: setting the topology only needs a recording command list.
+        unsafe { cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP) };
+        for region in 0..GRASS_REGION_COUNT {
+            if region == GRASS_BAND_REGION {
+                // SAFETY: the band PSO is owned by `grass` and shares the levels' root signature.
+                unsafe { cmd.SetPipelineState(&pipelines.band) };
+            }
+            let first_vertex = u32::saturating_from(region) * GRASS_LOD_VERTEX_STRIDE;
+            // SAFETY: parameter 0 of the bound root signature is one root-constant DWORD.
+            unsafe { cmd.set_graphics_root_constants(FIRST_VERTEX_PARAM, &first_vertex) };
+            let args_offset = frame.view.args_offset + (region * GRASS_ARGS_STRIDE) as u64;
+            // SAFETY: the args buffer is in INDIRECT_ARGUMENT for this pass, and `args_offset`
+            // names one whole record of it.
+            unsafe {
                 cmd.ExecuteIndirect(
                     &grass.draw_signature,
                     1,
                     &grass.args,
-                    frame.view.args_offset + (region * GRASS_ARGS_STRIDE) as u64,
+                    args_offset,
                     None::<&ID3D12Resource>,
                     0,
                 );
             }
-            cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         }
+        // SAFETY: restoring the list topology only needs a recording command list.
+        unsafe { cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
         self.inc_draw_calls(u32::saturating_from(GRASS_REGION_COUNT));
     }
 

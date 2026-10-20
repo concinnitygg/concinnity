@@ -354,14 +354,15 @@ impl VkContext {
                 height: PROBE_FACE_SIZE,
                 depth: 1,
             });
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        let all_barriers = [to_src, capture_to_dst];
+        let barriers = if face == 0 {
+            &all_barriers[..]
+        } else {
+            &all_barriers[..1]
+        };
+        // SAFETY: `cmd` is recording this face, and the barriers name the face color and the
+        // capture cube, both live until the bake's fences signal.
         unsafe {
-            let barriers = if face == 0 {
-                vec![to_src, capture_to_dst]
-            } else {
-                vec![to_src]
-            };
             device.cmd_pipeline_barrier(
                 cmd,
                 vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
@@ -370,8 +371,12 @@ impl VkContext {
                 vk::DependencyFlags::empty(),
                 &[],
                 &[],
-                &barriers,
+                barriers,
             );
+        }
+        // SAFETY: the barrier above moved the face color to TRANSFER_SRC; the capture cube
+        // went to TRANSFER_DST on face 0 and stays there for the later faces.
+        unsafe {
             device.cmd_copy_image(
                 cmd,
                 copy_src,
@@ -380,14 +385,16 @@ impl VkContext {
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 std::slice::from_ref(&copy),
             );
-            device
-                .end_command_buffer(cmd)
-                .map_err(|e| super::error::map_vk_result(e, "probe face end"))?;
-            let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
-            device
-                .queue_submit(self.hw.graphics_queue, std::slice::from_ref(&submit), fence)
-                .map_err(|e| super::error::map_vk_result(e, "probe face submit"))?;
         }
+        // SAFETY: `cmd` is in the recording state begun for this face.
+        unsafe { device.end_command_buffer(cmd) }
+            .map_err(|e| super::error::map_vk_result(e, "probe face end"))?;
+        let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
+        // SAFETY: `cmd` was ended above, and `fence` is the face's fresh, unsignaled fence.
+        unsafe {
+            device.queue_submit(self.hw.graphics_queue, std::slice::from_ref(&submit), fence)
+        }
+        .map_err(|e| super::error::map_vk_result(e, "probe face submit"))?;
 
         Ok(())
     }
@@ -440,19 +447,14 @@ impl VkContext {
         cmd: vk::CommandBuffer,
         fence: vk::Fence,
     ) -> RenderResult<()> {
-        // SAFETY: `cmd` is in the recording state and every handle these calls name belongs to this
-        // device; the fence is unsignaled and not already in use.
-        unsafe {
-            self.hw
-                .device
-                .end_command_buffer(cmd)
-                .map_err(|e| super::error::map_vk_result(e, "probe convolve end"))?;
-            let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
-            self.hw
-                .device
-                .queue_submit(self.hw.graphics_queue, std::slice::from_ref(&submit), fence)
-                .map_err(|e| super::error::map_vk_result(e, "probe convolve submit"))
-        }
+        let device = &self.hw.device;
+        // SAFETY: `cmd` is in the recording state and belongs to this device.
+        unsafe { device.end_command_buffer(cmd) }
+            .map_err(|e| super::error::map_vk_result(e, "probe convolve end"))?;
+        let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
+        // SAFETY: `cmd` was ended above; the fence is unsignaled and not already in use.
+        unsafe { device.queue_submit(self.hw.graphics_queue, std::slice::from_ref(&submit), fence) }
+            .map_err(|e| super::error::map_vk_result(e, "probe convolve submit"))
     }
 
     // Dispatch the compute cull for one probe face (or one planar mirror plane)
@@ -486,10 +488,11 @@ impl VkContext {
             cam_pos,
             u32::saturating_from(self.state.draw.record_count()),
         );
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        // SAFETY: `cmd` is recording outside a render pass, and the cull kernel pipeline is owned
+        // by `self.cull`.
+        unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle()) };
+        // SAFETY: the caller's `cull_set` was written against the cull layout's set 0.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle());
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
@@ -498,7 +501,10 @@ impl VkContext {
                 std::slice::from_ref(&cull_set),
                 &[],
             );
-            if let Some(hs) = hiz_set {
+        }
+        if let Some(hs) = hiz_set {
+            // SAFETY: the caller's Hi-Z set matches set 1, which the cull layout references.
+            unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::COMPUTE,
@@ -508,6 +514,9 @@ impl VkContext {
                     &[],
                 );
             }
+        }
+        // SAFETY: `cmd` is recording and `layout` is the bound cull kernel's layout.
+        unsafe {
             crate::vulkan::record::cmd_push_constants(
                 device,
                 cmd,
@@ -515,15 +524,15 @@ impl VkContext {
                 vk::ShaderStageFlags::COMPUTE,
                 &params,
             );
-            device.cmd_dispatch(
-                cmd,
-                u32::saturating_from(self.state.draw.record_count()).div_ceil(64),
-                1,
-                1,
-            );
-            let barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
+        }
+        let groups = u32::saturating_from(self.state.draw.record_count()).div_ceil(64);
+        // SAFETY: the cull pipeline, its sets and push constants are bound above.
+        unsafe { device.cmd_dispatch(cmd, groups, 1, 1) };
+        let barrier = vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
+        // SAFETY: `cmd` is still recording; this orders the cull's writes before the draw's read.
+        unsafe {
             device.cmd_pipeline_barrier(
                 cmd,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -595,20 +604,31 @@ impl VkContext {
             min_depth: 0.0,
             max_depth: 1.0,
         };
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        // SAFETY: `cmd` is recording outside a render pass, and the main render pass and the
+        // caller's `framebuffer` are live for the call.
+        unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
+        // SAFETY: `cmd` is recording inside the render pass begun above.
+        unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp)) };
+        // SAFETY: same recording `cmd`; `render_area` is a local that outlives the call.
+        unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&render_area)) };
+        let vertex_buffer = self.geometry.vertex_buffer.buffer();
+        // SAFETY: the static vertex buffer is owned by `self.geometry` and outlives the bake.
+        unsafe { device.cmd_bind_vertex_buffers(cmd, 0, &[vertex_buffer], &[0]) };
+        // SAFETY: the static index buffer is owned by `self.geometry` and outlives the bake.
         unsafe {
-            device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&render_area));
-            device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
             device.cmd_bind_index_buffer(
                 cmd,
                 self.geometry.index_buffer.buffer(),
                 0,
                 vk::IndexType::UINT32,
             );
+        }
+        // SAFETY: the face's bindless pipeline is compatible with the main render pass.
+        unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
+        }
+        // SAFETY: the face's global and bindless sets match sets 0 and 1 of the bindless layout.
+        unsafe {
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -617,14 +637,11 @@ impl VkContext {
                 &[global_set, bindless_set],
                 &[],
             );
-            device.cmd_draw_indexed_indirect(
-                cmd,
-                indirect,
-                0,
-                u32::saturating_from(self.state.draw.skinned_record_base()),
-                u32::saturating_from(size_of::<vk::DrawIndexedIndirectCommand>()),
-            );
         }
+        let draw_count = u32::saturating_from(self.state.draw.skinned_record_base());
+        let stride = u32::saturating_from(size_of::<vk::DrawIndexedIndirectCommand>());
+        // SAFETY: `indirect` is the caller's cull output, ordered before this read by its barrier.
+        unsafe { device.cmd_draw_indexed_indirect(cmd, indirect, 0, draw_count, stride) };
         // A face is always rendered lit, whatever the viewport shows.
         if self.draws_sky(concinnity_core::gfx::view_modes::ViewMode::Lit) {
             self.encode_sky(cmd, global_set, self.current_frame);
@@ -961,15 +978,15 @@ fn free_face_recordings(
     cmds: &[vk::CommandBuffer],
     fences: &[vk::Fence],
 ) {
-    // SAFETY: every handle was created from this device and is destroyed exactly once; the caller
-    // has already waited for the GPU to retire them, so no submission still references one.
-    unsafe {
-        if !cmds.is_empty() {
-            device.free_command_buffers(command_pool, cmds);
-        }
-        for &fence in fences {
-            device.destroy_fence(fence, None);
-        }
+    if !cmds.is_empty() {
+        // SAFETY: the buffers came from `command_pool` on this device, and the caller has waited
+        // for the GPU to retire them.
+        unsafe { device.free_command_buffers(command_pool, cmds) };
+    }
+    for &fence in fences {
+        // SAFETY: each fence was created from this device, is destroyed exactly once here, and no
+        // pending submission still references it.
+        unsafe { device.destroy_fence(fence, None) };
     }
 }
 

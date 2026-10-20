@@ -820,6 +820,34 @@ fn record_build(
     }
 }
 
+// Dispatch the skin kernel over one object's vertices: bind its set, push its
+// params, one thread per vertex. The caller has bound the skin pipeline on a
+// recording `cmd`.
+fn dispatch_skin(
+    device: &VkDevice,
+    cmd: vk::CommandBuffer,
+    layout: vk::PipelineLayout,
+    set: vk::DescriptorSet,
+    params: &SkinParams,
+) {
+    // SAFETY: `cmd` is recording and `set` is the object's skin set, allocated against `layout`.
+    unsafe {
+        device.cmd_bind_descriptor_sets(
+            cmd,
+            vk::PipelineBindPoint::COMPUTE,
+            layout,
+            0,
+            std::slice::from_ref(&set),
+            &[],
+        );
+    }
+    // SAFETY: the skin layout declares the compute `SkinParams` push range.
+    unsafe { cmd_push_constants(device, cmd, layout, vk::ShaderStageFlags::COMPUTE, params) };
+    let groups = params.vertex_count.div_ceil(64);
+    // SAFETY: the skin pipeline, this object's set and its params are bound on `cmd`.
+    unsafe { device.cmd_dispatch(cmd, groups, 1, 1) };
+}
+
 // Device address of a buffer (core in Vulkan 1.2; the device enables
 // `bufferDeviceAddress` for the RT path).
 fn buffer_address(device: &VkDevice, buffer: vk::Buffer) -> u64 {
@@ -2002,31 +2030,7 @@ impl RtAccelData {
                 joint_count: u32::saturating_from(obj.joint_count.max(1)),
                 target_count: 0,
             };
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::COMPUTE,
-                    pipeline_layout,
-                    0,
-                    std::slice::from_ref(&frame_sets[obj_idx]),
-                    &[],
-                );
-                cmd_push_constants(
-                    device,
-                    cmd,
-                    pipeline_layout,
-                    vk::ShaderStageFlags::COMPUTE,
-                    &params,
-                );
-                device.cmd_dispatch(
-                    cmd,
-                    u32::saturating_from(obj.vertex_count).div_ceil(64),
-                    1,
-                    1,
-                );
-            }
+            dispatch_skin(device, cmd, pipeline_layout, frame_sets[obj_idx], &params);
         }
 
         // Order the skin writes before the BLAS build (AS-build input geometry)
@@ -2035,14 +2039,13 @@ impl RtAccelData {
         // against a prior compute write to its input vertex buffer, so this
         // cross-pass residency barrier is required (Metal / DirectX document the
         // same).
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        let barrier = vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .dst_access_mask(
+                vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR | vk::AccessFlags::SHADER_READ,
+            );
+        // SAFETY: `cmd` is recording, and the barrier is a global memory barrier naming no resource.
         unsafe {
-            let barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(
-                    vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR | vk::AccessFlags::SHADER_READ,
-                );
             device.cmd_pipeline_barrier(
                 cmd,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -2694,31 +2697,13 @@ impl super::context::VkContext {
                     .copied()
                     .unwrap_or(0),
             };
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::COMPUTE,
-                    skin.pipeline_layout.handle(),
-                    0,
-                    std::slice::from_ref(&frame_sets[o]),
-                    &[],
-                );
-                cmd_push_constants(
-                    device,
-                    cmd,
-                    skin.pipeline_layout.handle(),
-                    vk::ShaderStageFlags::COMPUTE,
-                    &params,
-                );
-                device.cmd_dispatch(
-                    cmd,
-                    u32::saturating_from(obj.vertex_count).div_ceil(64),
-                    1,
-                    1,
-                );
-            }
+            dispatch_skin(
+                device,
+                cmd,
+                skin.pipeline_layout.handle(),
+                frame_sets[o],
+                &params,
+            );
         }
         // Order the skin writes before the main pass's vertex fetch of the
         // deformed buffer.

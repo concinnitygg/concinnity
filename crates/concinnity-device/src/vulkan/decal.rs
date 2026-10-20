@@ -601,18 +601,25 @@ impl VkContext {
         };
         let scissor = vk::Rect2D::default().extent(extent);
 
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        // SAFETY: `cmd` is recording outside any render pass, and the decal render pass and this
+        // frame's framebuffer are owned by `decals`, which outlives the frame.
+        unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
+        // SAFETY: the decal render pass just began on `cmd`; `vp_state` is borrowed for the call.
+        unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp_state)) };
+        // SAFETY: same open render pass; `scissor` is borrowed for the call.
+        unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor)) };
+        // SAFETY: the decal pipeline is owned by `decals` and was built against this render pass.
         unsafe {
-            device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp_state));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
             device.cmd_bind_pipeline(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
                 decals.pipeline.handle(),
             );
-            device.cmd_bind_vertex_buffers(cmd, 0, &[decals.vertex_buffer.buffer()], &[0]);
+        }
+        // SAFETY: the unit-cube vertex buffer is owned by `decals` and outlives the frame.
+        unsafe { device.cmd_bind_vertex_buffers(cmd, 0, &[decals.vertex_buffer.buffer()], &[0]) };
+        // SAFETY: the cube's 16-bit index buffer is owned by `decals` alongside the vertices.
+        unsafe {
             device.cmd_bind_index_buffer(
                 cmd,
                 decals.index_buffer.buffer(),
@@ -631,8 +638,8 @@ impl VkContext {
                 );
             }
             let dynamic_offset = u32::saturating_from(decal.id as u64 * PARAMS_STRIDE);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
+            // SAFETY: the frame's view set is owned by `decals`, and `dynamic_offset` selects
+            // this decal's record inside its params UBO, written above.
             unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
@@ -642,6 +649,10 @@ impl VkContext {
                     std::slice::from_ref(&decals.view_sets[frame_idx]),
                     std::slice::from_ref(&dynamic_offset),
                 );
+            }
+            // SAFETY: the decal's albedo set is owned by `decals` and points at a live scene
+            // texture view.
+            unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -650,8 +661,10 @@ impl VkContext {
                     std::slice::from_ref(&decals.albedo_sets[decal.id]),
                     &[],
                 );
-                device.cmd_draw_indexed(cmd, 36, 1, 0, 0, 0);
             }
+            // SAFETY: the pipeline, cube buffers and both sets are bound inside the open render
+            // pass; 36 indices is the cube's full index count.
+            unsafe { device.cmd_draw_indexed(cmd, 36, 1, 0, 0, 0) };
             self.inc_draw_calls(1);
         }
 

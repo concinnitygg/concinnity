@@ -358,69 +358,87 @@ impl DxContext {
         unsafe { cmd.ResourceBarrier(&[out_to_rt]) };
 
         let (w, h) = rt.extent;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.OMSetRenderTargets(1, Some(&raw const rt.output_rtv), false, None);
-            let vp = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: w as f32,
-                Height: h as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp]);
-            let scissor = RECT {
-                left: 0,
-                top: 0,
-                right: i32::saturating_from(w),
-                bottom: i32::saturating_from(h),
-            };
-            cmd.RSSetScissorRects(&[scissor]);
+        // SAFETY: the list is recording, and `rt.output_rtv` names the live trace output.
+        unsafe { cmd.OMSetRenderTargets(1, Some(&raw const rt.output_rtv), false, None) };
+        let vp = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: w as f32,
+            Height: h as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        // SAFETY: the list is recording, and the viewport slice is a live local.
+        unsafe { cmd.RSSetViewports(&[vp]) };
+        let scissor = RECT {
+            left: 0,
+            top: 0,
+            right: i32::saturating_from(w),
+            bottom: i32::saturating_from(h),
+        };
+        // SAFETY: the list is recording, and the scissor slice is a live local.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
 
-            cmd.SetPipelineState(pso);
-            cmd.SetGraphicsRootSignature(&rt.root_sig);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetGraphicsRootConstantBufferView(0, params_gva);
-            // Root SRVs: TLAS / vertex / index / geometry table (by GPU virtual
-            // address; inline ray tracing reads the TLAS through a root SRV).
-            cmd.SetGraphicsRootShaderResourceView(1, accel.tlas_gva());
-            cmd.SetGraphicsRootShaderResourceView(
-                2,
-                com::gpu_va(&self.scene.geometry.vertex_buffer),
-            );
-            cmd.SetGraphicsRootShaderResourceView(
-                3,
-                com::gpu_va(&self.scene.geometry.index_buffer),
-            );
-            cmd.SetGraphicsRootShaderResourceView(4, accel.geom_table_gva());
-            // Texture tables.
-            cmd.set_graphics_srv_table(5, self.targets.hdr.srv_gpu);
-            cmd.set_graphics_srv_table(6, gbuffer.normal_depth_srv_gpu);
-            cmd.set_graphics_srv_table(7, gbuffer.roughness_srv_gpu);
-            cmd.set_graphics_srv_table(8, self.prefilter_cube_srv_gpu());
-            if textured {
-                cmd.set_graphics_srv_table(9, self.cull.bindless_pool_gpu[self.current_frame]);
-            }
-            // Skinned-geometry root SRVs: the deformed (posed) vertex buffer +
-            // the skinned index buffer the trace fetches a skinned hit from.
-            // Both return a valid 1-element dummy GVA when there is no skinned
-            // geometry, so the binding is always live.
-            cmd.SetGraphicsRootShaderResourceView(10, accel.deformed_verts_gva());
-            cmd.SetGraphicsRootShaderResourceView(11, accel.skinned_index_gva());
-            // Reflection-probe miss fallback: the cube array table at t10 + the
-            // per-frame ProbeSet CBV at b4 + the per-frame records at t11, and
-            // the main camera's cluster grid binning them (b5, t12). count == 0
-            // keeps the sky path.
-            self.probe_bindings(frame_idx).bind(cmd, 12);
+        // SAFETY: the list is recording, and the chosen PSO is owned by `rt`.
+        unsafe { cmd.SetPipelineState(pso) };
+        // SAFETY: the list is recording, and the root signature is owned by `rt`.
+        unsafe { cmd.SetGraphicsRootSignature(&rt.root_sig) };
+        // SAFETY: the list is recording, and the SRV heap is owned by `self.descriptors`.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: the signature declares a CBV at 0, and this frame's params buffer is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(0, params_gva) };
+        // Root SRVs: TLAS / vertex / index / geometry table (by GPU virtual
+        // address; inline ray tracing reads the TLAS through a root SRV).
+        // SAFETY: the list is recording, and the TLAS `accel` holds is live for the frame.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(1, accel.tlas_gva()) };
+        let vertex_gva = com::gpu_va(&self.scene.geometry.vertex_buffer);
+        // SAFETY: the list is recording, and the vertex buffer is owned by `self.scene.geometry`.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(2, vertex_gva) };
+        let index_gva = com::gpu_va(&self.scene.geometry.index_buffer);
+        // SAFETY: the list is recording, and the index buffer is owned by `self.scene.geometry`.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(3, index_gva) };
+        // SAFETY: the list is recording, and the geometry table `accel` holds is live.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(4, accel.geom_table_gva()) };
+        // Texture tables.
+        // SAFETY: the SRV heap is set above, and the HDR target's descriptor is live.
+        unsafe { cmd.set_graphics_srv_table(5, self.targets.hdr.srv_gpu) };
+        // SAFETY: the SRV heap is set above, and the gbuffer's normal-depth descriptor is live.
+        unsafe { cmd.set_graphics_srv_table(6, gbuffer.normal_depth_srv_gpu) };
+        // SAFETY: the SRV heap is set above, and the gbuffer's roughness descriptor is live.
+        unsafe { cmd.set_graphics_srv_table(7, gbuffer.roughness_srv_gpu) };
+        // SAFETY: the SRV heap is set above, and the prefiltered cube's descriptor is live.
+        unsafe { cmd.set_graphics_srv_table(8, self.prefilter_cube_srv_gpu()) };
+        if textured {
+            let pool = self.cull.bindless_pool_gpu[self.current_frame];
+            // SAFETY: the textured PSO only runs when the bindless pool is populated, and this
+            // frame's pool table is live.
+            unsafe { cmd.set_graphics_srv_table(9, pool) };
+        }
+        // Skinned-geometry root SRVs: the deformed (posed) vertex buffer +
+        // the skinned index buffer the trace fetches a skinned hit from.
+        // Both return a valid 1-element dummy GVA when there is no skinned
+        // geometry, so the binding is always live.
+        // SAFETY: the list is recording, and the deformed vertex GVA is always a live buffer.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(10, accel.deformed_verts_gva()) };
+        // SAFETY: the list is recording, and the skinned index GVA is always a live buffer.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(11, accel.skinned_index_gva()) };
+        // Reflection-probe miss fallback: the cube array table at t10 + the
+        // per-frame ProbeSet CBV at b4 + the per-frame records at t11, and
+        // the main camera's cluster grid binning them (b5, t12). count == 0
+        // keeps the sky path.
+        self.probe_bindings(frame_idx).bind(cmd, 12);
+        // SAFETY: the list is recording; setting the topology names no resource.
+        unsafe {
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
-            cmd.IASetVertexBuffers(0, None);
-            cmd.IASetIndexBuffer(None);
-            cmd.DrawInstanced(3, 1, 0, 0);
         }
+        // SAFETY: the list is recording; clearing the vertex buffers names no resource.
+        unsafe { cmd.IASetVertexBuffers(0, None) };
+        // SAFETY: the list is recording; clearing the index buffer names no resource.
+        unsafe { cmd.IASetIndexBuffer(None) };
+        // SAFETY: the target, pipeline and every root binding the trace reads are set above.
+        unsafe { cmd.DrawInstanced(3, 1, 0, 0) };
 
         let out_to_psr = transition_barrier(
             &rt.output,

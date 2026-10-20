@@ -826,14 +826,17 @@ impl VkContext {
         };
         let device = &self.hw.device;
         let [x, y, z] = frame.bend_dispatch;
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle these commands
-        // name is live for the call.
+        // SAFETY: `cmd` is recording outside a render pass, and the bend pipeline is owned by
+        // `self.grass`, which outlives the frame.
         unsafe {
             device.cmd_bind_pipeline(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
                 grass.pipelines.bend.handle(),
             );
+        }
+        // SAFETY: the frame's bend set is owned by `grass` and was written against its bend layout.
+        unsafe {
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
@@ -842,8 +845,9 @@ impl VkContext {
                 &[grass.bend_sets[frame_idx]],
                 &[],
             );
-            device.cmd_dispatch(cmd, x, y, z);
         }
+        // SAFETY: the bend pipeline and its set are bound on this recording command buffer.
+        unsafe { device.cmd_dispatch(cmd, x, y, z) };
     }
 
     // Encode the `GrassShadow` node: place the blades the nearest cascade
@@ -880,15 +884,18 @@ impl VkContext {
         let device = &self.hw.device;
         let coarsest = shadow.args_offset + ((GRASS_LOD_COUNT - 1) * GRASS_ARGS_STRIDE) as u64;
         self.timed(cmd, frame_idx, PassId::GrassShadowDraw, || {
-            // SAFETY: `cmd` is a command buffer in the recording state inside the shadow render
-            // pass the pipeline was built against; every handle these commands name is live for
-            // the call, and the offset names one whole record of the args buffer.
+            // SAFETY: `cmd` is recording inside the shadow render pass the pipeline was built
+            // against, and the pipeline is owned by `grass`.
             unsafe {
                 device.cmd_bind_pipeline(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
                     grass.pipelines.shadow.handle(),
                 );
+            }
+            // SAFETY: the frame's shadow draw set is owned by `grass` and matches its shadow
+            // layout.
+            unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -897,8 +904,10 @@ impl VkContext {
                     &[grass.shadow_draw_sets[frame_idx]],
                     &[],
                 );
-                device.cmd_draw_indirect(cmd, grass.shadow_args.buffer(), coarsest, 1, 0);
             }
+            // SAFETY: the shadow args buffer is owned by `grass`, and `coarsest` names one whole
+            // record of it.
+            unsafe { device.cmd_draw_indirect(cmd, grass.shadow_args.buffer(), coarsest, 1, 0) };
         });
         self.inc_draw_calls(1);
     }
@@ -938,14 +947,18 @@ impl VkContext {
         };
         let device = &self.hw.device;
         let [x, y, z] = placement.dispatch;
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle these commands
-        // name is live for the call.
+        // SAFETY: `cmd` is recording outside a render pass, and the blade kernel is owned by
+        // `grass`, which outlives the frame.
         unsafe {
             device.cmd_bind_pipeline(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
                 grass.pipelines.generate.handle(),
             );
+        }
+        // SAFETY: `kernel_set` is one of `grass`'s live kernel sets, and the Hi-Z read set is
+        // owned by `self.cull.hiz`; both match the kernel layout.
+        unsafe {
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
@@ -954,8 +967,9 @@ impl VkContext {
                 &[kernel_set, hiz.read_sets[frame_idx]],
                 &[],
             );
-            device.cmd_dispatch(cmd, x, y, z);
         }
+        // SAFETY: the blade kernel and both of its sets are bound on this recording buffer.
+        unsafe { device.cmd_dispatch(cmd, x, y, z) };
     }
 
     // Draw the blades into the G-buffer pre-pass `cmd` has begun, over the
@@ -1028,15 +1042,17 @@ impl VkContext {
         sets: &[vk::DescriptorSet],
     ) {
         let device = &self.hw.device;
-        // SAFETY: `cmd` is a command buffer in the recording state inside a render pass the
-        // pipeline is compatible with; every handle these commands name is live for the call, and
-        // each offset names one whole record of the args buffer.
+        // SAFETY: `cmd` is recording inside a render pass the level pipeline is compatible with,
+        // and the pipeline is owned by `self.grass`.
         unsafe {
             device.cmd_bind_pipeline(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
                 pipelines.levels.handle(),
             );
+        }
+        // SAFETY: the caller passes live sets built against `layout`, borrowed for the call.
+        unsafe {
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -1045,17 +1061,23 @@ impl VkContext {
                 sets,
                 &[],
             );
-            for region in 0..GRASS_REGION_COUNT {
-                if region == GRASS_BAND_REGION {
+        }
+        for region in 0..GRASS_REGION_COUNT {
+            if region == GRASS_BAND_REGION {
+                // SAFETY: the band pipeline shares the level pipeline's layout and render pass, so
+                // the sets bound above stay valid under it.
+                unsafe {
                     device.cmd_bind_pipeline(
                         cmd,
                         vk::PipelineBindPoint::GRAPHICS,
                         pipelines.band.handle(),
                     );
                 }
-                let offset = frame.view.args_offset + (region * GRASS_ARGS_STRIDE) as u64;
-                device.cmd_draw_indirect(cmd, grass.args.buffer(), offset, 1, 0);
             }
+            let offset = frame.view.args_offset + (region * GRASS_ARGS_STRIDE) as u64;
+            // SAFETY: the args buffer is owned by `grass`, and `offset` names one whole record
+            // of it.
+            unsafe { device.cmd_draw_indirect(cmd, grass.args.buffer(), offset, 1, 0) };
         }
         self.inc_draw_calls(u32::saturating_from(GRASS_REGION_COUNT));
     }

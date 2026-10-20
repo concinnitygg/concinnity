@@ -576,12 +576,10 @@ fn enable_bindless_features(head: *mut c_void) {
 
     let mut node = head;
     while !node.is_null() {
-        // SAFETY: `head` is a Vulkan `pNext` chain, so every node begins with an
-        // `sType` / `pNext` pair, and the walk stops at the null terminator. The
-        // cast to `Vulkan12Features` happens only where `sType` names that struct,
-        // which is the contract Vulkan itself reads the chain under.
-        let (s_type, next) =
-            unsafe { ((*node.cast::<Node>()).s_type, (*node.cast::<Node>()).p_next) };
+        // SAFETY: `head` is a Vulkan `pNext` chain, so every non-null node begins with an
+        // `sType` / `pNext` pair, which is the contract Vulkan itself reads the chain under.
+        let header = unsafe { &*node.cast::<Node>() };
+        let (s_type, next) = (header.s_type, header.p_next);
         if s_type == vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_2_FEATURES {
             // SAFETY: `sType` names this struct, so the node is one, and it is
             // still mutable here: the chain is only read once `create_device`

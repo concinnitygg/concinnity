@@ -220,9 +220,8 @@ fn encode_copy(
         .buffer(readback.buffer())
         .offset(0)
         .size(vk::WHOLE_SIZE);
-    // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice these
-    // commands name is live for the call; the caller keeps the image and buffer alive until the
-    // buffer has executed.
+    // SAFETY: `cmd` is a command buffer in the recording state, and the caller keeps the
+    // swapchain image alive until the buffer has executed.
     unsafe {
         device.cmd_pipeline_barrier(
             cmd,
@@ -233,6 +232,10 @@ fn encode_copy(
             &[],
             &[to_src],
         );
+    }
+    // SAFETY: the barrier above moved `src_image` to TRANSFER_SRC_OPTIMAL, and the caller keeps
+    // `readback` alive until the buffer has executed.
+    unsafe {
         device.cmd_copy_image_to_buffer(
             cmd,
             src_image,
@@ -240,6 +243,9 @@ fn encode_copy(
             readback.buffer(),
             std::slice::from_ref(&region),
         );
+    }
+    // SAFETY: same recording `cmd`; this returns the image to present and the copy to the host.
+    unsafe {
         device.cmd_pipeline_barrier(
             cmd,
             vk::PipelineStageFlags::TRANSFER,

@@ -406,21 +406,27 @@ impl DxContext {
         size: u32,
     ) {
         let groups = size.div_ceil(PREFILTER_TILE).max(1);
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call; the root-constant count matches the
-        // signature's, both derived from `ProbePrefilterParams`.
-        unsafe {
-            cmd.SetPipelineState(pso);
-            cmd.set_compute_root_constants(0, params);
-            match srv_table {
-                Some(srv) => {
-                    cmd.set_compute_srv_table(1, srv);
-                    cmd.set_compute_srv_table(2, uav_table);
-                }
-                None => cmd.set_compute_srv_table(1, uav_table),
+        // SAFETY: the list is recording, and the caller's prefilter PSO is live for the call.
+        unsafe { cmd.SetPipelineState(pso) };
+        // SAFETY: the bound signature's root-constant count is derived from
+        // `ProbePrefilterParams`, the same type `params` borrows for the call.
+        unsafe { cmd.set_compute_root_constants(0, params) };
+        match srv_table {
+            Some(srv) => {
+                // SAFETY: the GGX signature declares the sampled capture's table at 1, and the
+                // capture's descriptor is live.
+                unsafe { cmd.set_compute_srv_table(1, srv) };
+                // SAFETY: the GGX signature declares the UAV table at 2, and its slots are live.
+                unsafe { cmd.set_compute_srv_table(2, uav_table) };
             }
-            cmd.Dispatch(groups, groups, 6);
+            None => {
+                // SAFETY: the mip signature declares the UAV pair table at 1, and its slots are
+                // live.
+                unsafe { cmd.set_compute_srv_table(1, uav_table) };
+            }
         }
+        // SAFETY: the pipeline, constants and tables the kernel reads are bound above.
+        unsafe { cmd.Dispatch(groups, groups, 6) };
     }
 }
 

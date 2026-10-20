@@ -91,22 +91,19 @@ fn run(pace: Pace) {
         // the tracked pair survives on its counter writes -- which would
         // compare real work against nothing.
         bench(pace, "memory/alloc_tracked/64B", 1, || {
-            // SAFETY: the layout has a non-zero size, and the block is freed
-            // through the same allocator and layout it was allocated with.
-            unsafe {
-                let ptr = core::hint::black_box(tracked.alloc(layout));
-                assert!(!ptr.is_null(), "system allocator returned null");
-                tracked.dealloc(ptr, layout);
-            }
+            // SAFETY: the layout has a non-zero size.
+            let ptr = core::hint::black_box(unsafe { tracked.alloc(layout) });
+            assert!(!ptr.is_null(), "system allocator returned null");
+            // SAFETY: `ptr` came from `tracked.alloc` with this same layout.
+            unsafe { tracked.dealloc(ptr, layout) };
         });
 
         bench(pace, "memory/alloc_untracked/64B", 1, || {
-            // SAFETY: as above, against the system allocator directly.
-            unsafe {
-                let ptr = core::hint::black_box(System.alloc(layout));
-                assert!(!ptr.is_null(), "system allocator returned null");
-                System.dealloc(ptr, layout);
-            }
+            // SAFETY: the layout has a non-zero size.
+            let ptr = core::hint::black_box(unsafe { System.alloc(layout) });
+            assert!(!ptr.is_null(), "system allocator returned null");
+            // SAFETY: `ptr` came from `System.alloc` with this same layout.
+            unsafe { System.dealloc(ptr, layout) };
         });
     }
 

@@ -195,6 +195,7 @@ fn_to_numeric_cast_any = "warn"
 unwrap_used = "warn"
 panic = "warn"
 undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
 unnecessary_safety_comment = "warn"
 unnecessary_safety_doc = "warn"
 # Suppressions state why, and stop compiling once they stop being needed:

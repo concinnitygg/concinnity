@@ -206,14 +206,15 @@ impl DxContext {
             };
             pass_timing::decode_frame_block(|start_slot, end_slot| {
                 // SAFETY: `decode_frame_block` only passes slots below `SLOTS_PER_FRAME`, so
-                // both reads stay inside this frame's block of the READBACK buffer, whose
-                // writes the `wait_frame_slot` fence wait retired.
-                let (ts_start, ts_end) = unsafe {
-                    (
-                        block_base.add(start_slot).read(),
-                        block_base.add(end_slot).read(),
-                    )
-                };
+                // `start_slot` stays inside this frame's block of the READBACK buffer.
+                let start_ptr = unsafe { block_base.add(start_slot) };
+                // SAFETY: `start_ptr` is inside the block, whose writes the `wait_frame_slot`
+                // fence wait retired.
+                let ts_start = unsafe { start_ptr.read() };
+                // SAFETY: `end_slot` is also below `SLOTS_PER_FRAME`, so it stays in the block.
+                let end_ptr = unsafe { block_base.add(end_slot) };
+                // SAFETY: `end_ptr` is inside that same retired block.
+                let ts_end = unsafe { end_ptr.read() };
                 if ts_end > ts_start {
                     ticks_to_micros(ts_end - ts_start)
                 } else {
@@ -236,9 +237,11 @@ impl DxContext {
         }
         let (_, end_slot) = pass_timing::whole_frame_pair(frame);
         // SAFETY: `readback_ptr` is the persistently-mapped base of a READBACK buffer holding
-        // every frame slot's block, `end_slot` lies inside this frame's block, and the
-        // `wait_frame_slot` fence wait retired the write.
-        let end_tick = unsafe { self.timestamps.readback_ptr.add(end_slot as usize).read() };
+        // every frame slot's block, and `end_slot` lies inside this frame's block.
+        let end_ptr = unsafe { self.timestamps.readback_ptr.add(end_slot as usize) };
+        // SAFETY: `end_ptr` is inside the mapping, and the `wait_frame_slot` fence wait retired
+        // the write.
+        let end_tick = unsafe { end_ptr.read() };
         if end_tick == 0 {
             return None;
         }
@@ -340,17 +343,22 @@ impl DxContext {
             self.timestamps.readback.as_ref(),
         ) {
             let (_, end_slot) = pass_timing::whole_frame_pair(frame);
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
+            // SAFETY: the end list is recording, and `end_slot` is inside the timestamp heap this
+            // context owns.
+            unsafe { end_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, end_slot) };
+            let block_base = pass_timing::frame_block_base(frame);
+            let slot_count = u32::saturating_from(pass_timing::SLOTS_PER_FRAME);
+            let readback_offset = pass_timing::frame_readback_byte_offset(frame);
+            // SAFETY: the frame's block of `SLOTS_PER_FRAME` queries lands at its own offset in
+            // the readback buffer, which is sized for every frame in flight.
             unsafe {
-                end_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, end_slot);
                 end_cmd.ResolveQueryData(
                     heap,
                     D3D12_QUERY_TYPE_TIMESTAMP,
-                    pass_timing::frame_block_base(frame),
-                    u32::saturating_from(pass_timing::SLOTS_PER_FRAME),
+                    block_base,
+                    slot_count,
                     &**readback,
-                    pass_timing::frame_readback_byte_offset(frame),
+                    readback_offset,
                 );
             }
         }

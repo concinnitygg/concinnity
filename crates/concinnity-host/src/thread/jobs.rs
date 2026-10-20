@@ -210,14 +210,12 @@ mod tests {
         let class = JobPool::new(1, FramePriority::Normal).scope(|| {
             let mut class = libc::qos_class_t::QOS_CLASS_UNSPECIFIED;
             let mut relative = 0;
-            // SAFETY: both out-pointers are live locals, and `pthread_self`
-            // names the calling worker, which outlives the call.
+            // SAFETY: `pthread_self` has no preconditions.
+            let thread = unsafe { libc::pthread_self() };
+            // SAFETY: both out-pointers are live locals, and `thread` names
+            // the calling worker, which outlives the call.
             let status = unsafe {
-                libc::pthread_get_qos_class_np(
-                    libc::pthread_self(),
-                    &raw mut class,
-                    &raw mut relative,
-                )
+                libc::pthread_get_qos_class_np(thread, &raw mut class, &raw mut relative)
             };
             (status, class as u32)
         });
@@ -237,9 +235,10 @@ mod tests {
 
         let worker_priority = |priority| {
             JobPool::new(1, priority).scope(|| {
-                // SAFETY: `GetCurrentThread` is a pseudo-handle valid for the
-                // calling worker.
-                unsafe { GetThreadPriority(GetCurrentThread()) }
+                // SAFETY: `GetCurrentThread` has no preconditions.
+                let thread = unsafe { GetCurrentThread() };
+                // SAFETY: `thread` is a pseudo-handle valid for the calling worker.
+                unsafe { GetThreadPriority(thread) }
             })
         };
         assert_eq!(

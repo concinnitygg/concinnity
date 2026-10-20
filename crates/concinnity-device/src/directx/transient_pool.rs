@@ -176,21 +176,18 @@ impl TransientResourcePool {
         if !to_init.is_empty() {
             one_shot_submit(device, queue, |cmd| {
                 for (res, resting) in &to_init {
-                    // SAFETY: the command list is in the recording state, and every resource,
-                    // descriptor and slice these commands name is live for the call.
-                    unsafe {
-                        cmd.ResourceBarrier(&[transition_barrier(
-                            res,
-                            *resting,
-                            D3D12_RESOURCE_STATE_RENDER_TARGET,
-                        )]);
-                        cmd.DiscardResource(res, None);
-                        cmd.ResourceBarrier(&[transition_barrier(
-                            res,
-                            D3D12_RESOURCE_STATE_RENDER_TARGET,
-                            *resting,
-                        )]);
-                    }
+                    let to_rt =
+                        transition_barrier(res, *resting, D3D12_RESOURCE_STATE_RENDER_TARGET);
+                    // SAFETY: the one-shot list is recording, and `to_init` keeps the placed
+                    // resource alive through the fence-waited submit.
+                    unsafe { cmd.ResourceBarrier(&[to_rt]) };
+                    // SAFETY: the barrier above put the resource in RENDER_TARGET, the state a
+                    // discard of a render target requires.
+                    unsafe { cmd.DiscardResource(res, None) };
+                    let back =
+                        transition_barrier(res, D3D12_RESOURCE_STATE_RENDER_TARGET, *resting);
+                    // SAFETY: the list is recording, and the resource is still held by `to_init`.
+                    unsafe { cmd.ResourceBarrier(&[back]) };
                 }
             })?;
         }

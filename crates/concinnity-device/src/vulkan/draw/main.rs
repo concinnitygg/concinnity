@@ -132,18 +132,18 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-        }
+        // SAFETY: the main render pass is open on `cmd`; `vp` is borrowed for the call.
+        unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp)) };
+        // SAFETY: same open main pass; `scissor` is borrowed for the call.
+        unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor)) };
 
         // Geometry buffers for the static + instance + runtime prefix.
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        // SAFETY: the shared vertex buffer is owned by `self.geometry`, which outlives the frame.
         unsafe {
             device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
+        }
+        // SAFETY: the shared 32-bit index buffer is owned by `self.geometry` beside the vertices.
+        unsafe {
             device.cmd_bind_index_buffer(
                 cmd,
                 self.geometry.index_buffer.buffer(),
@@ -177,10 +177,14 @@ impl VkContext {
                 .bindless_pipeline_layout
                 .as_ref()
                 .expect("bindless pipeline layout is live alongside its pipeline");
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
+            // SAFETY: the main pass is open on `cmd`, and the bindless (or wireframe) pipeline is
+            // owned by `self.cull` / `self.wireframe`, both outliving the frame.
             unsafe {
                 device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
+            }
+            // SAFETY: the global and bindless sets for this frame are owned by the descriptor
+            // pools in `self`, and match `layout`.
+            unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -192,16 +196,20 @@ impl VkContext {
                     ],
                     &[],
                 );
-                // Indirect draw #1: the static + instance prefix
-                // `[0, skinned_record_base())` against the static VB/IB bound above.
-                // The skinned tail is drawn by a second indirect draw below (deformed
-                // VB + skinned IB), reading the same indirect buffer from
-                // `skinned_record_base()` on.
-                //
-                // Once per shader bucket: bucket 0 runs under the bindless pipeline
-                // bound above, each later bucket under its material shader's own
-                // pipeline. The cull kernel wrote every record's command into
-                // exactly one bucket's region, so the regions never double-draw.
+            }
+            // Indirect draw #1: the static + instance prefix
+            // `[0, skinned_record_base())` against the static VB/IB bound above.
+            // The skinned tail is drawn by a second indirect draw below (deformed
+            // VB + skinned IB), reading the same indirect buffer from
+            // `skinned_record_base()` on.
+            //
+            // Once per shader bucket: bucket 0 runs under the bindless pipeline
+            // bound above, each later bucket under its material shader's own
+            // pipeline. The cull kernel wrote every record's command into
+            // exactly one bucket's region, so the regions never double-draw.
+            // SAFETY: the frame's indirect buffer is owned by `self.cull`, and the cull dispatch
+            // that filled it was barriered before this pass reads it.
+            unsafe {
                 device.cmd_draw_indexed_indirect(
                     cmd,
                     self.cull.indirect_buffers[frame_idx].buffer(),
@@ -247,15 +255,20 @@ impl VkContext {
                 self.skinned.deformed.get(frame_idx),
             )
         {
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-            // slice these commands name is live for the call.
+            let skinned_pipeline =
+                self.wireframe_or(bindless_pipeline, self.wireframe.bindless.as_ref());
+            // SAFETY: the main pass is open on `cmd`, and the chosen pipeline is owned by
+            // `self.cull` / `self.wireframe`, both outliving the frame.
             unsafe {
                 device.cmd_bind_pipeline(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    self.wireframe_or(bindless_pipeline, self.wireframe.bindless.as_ref())
-                        .handle(),
+                    skinned_pipeline.handle(),
                 );
+            }
+            // SAFETY: the same frame's global and bindless sets as the static draw, matching
+            // `bindless_layout`.
+            unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -267,24 +280,35 @@ impl VkContext {
                     ],
                     &[],
                 );
-                // Bind the deformed verts (base_vertex = 0, global skinned
-                // indexing) + the skinned IB.
+            }
+            // Bind the deformed verts (base_vertex = 0, global skinned
+            // indexing) + the skinned IB.
+            // SAFETY: this frame's deformed vertex buffer is owned by `self.skinned` and was
+            // posed by the skin compute pass ahead of this one.
+            unsafe {
                 device.cmd_bind_vertex_buffers(
                     cmd,
                     0,
                     std::slice::from_ref(&deformed.buffer),
                     &[0],
                 );
+            }
+            // SAFETY: the skinned index buffer is owned by `self.skinned` and outlives the frame.
+            unsafe {
                 device.cmd_bind_index_buffer(
                     cmd,
                     self.skinned.index_buffer.buffer(),
                     0,
                     vk::IndexType::UINT32,
                 );
-                // Indirect draw #2: the skinned tail
-                // `[skinned_record_base(), record_count())`, byte-offset into the
-                // same indirect command buffer.
-                let cmd_stride = size_of::<vk::DrawIndexedIndirectCommand>();
+            }
+            // Indirect draw #2: the skinned tail
+            // `[skinned_record_base(), record_count())`, byte-offset into the
+            // same indirect command buffer.
+            let cmd_stride = size_of::<vk::DrawIndexedIndirectCommand>();
+            // SAFETY: the offset addresses the skinned tail inside the frame's cull-written
+            // indirect buffer, owned by `self.cull`.
+            unsafe {
                 device.cmd_draw_indexed_indirect(
                     cmd,
                     self.cull.indirect_buffers[frame_idx].buffer(),
@@ -406,20 +430,32 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        // SAFETY: the phase-2 LOAD pass is open on `cmd`; `vp` is borrowed for the call.
+        unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp)) };
+        // SAFETY: same open phase-2 pass; `scissor` is borrowed for the call.
+        unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor)) };
+        // SAFETY: the shared vertex buffer is owned by `self.geometry`, which outlives the frame.
         unsafe {
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
             device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
+        }
+        // SAFETY: the shared 32-bit index buffer is owned by `self.geometry` beside the vertices.
+        unsafe {
             device.cmd_bind_index_buffer(
                 cmd,
                 self.geometry.index_buffer.buffer(),
                 0,
                 vk::IndexType::UINT32,
             );
+        }
 
+        // SAFETY: the bindless pipeline is owned by `self.cull` and is compatible with the
+        // phase-2 render pass it records into.
+        unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
+        }
+        // SAFETY: this frame's global and bindless sets are owned by the descriptor pools in
+        // `self`, and match `layout`.
+        unsafe {
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -431,8 +467,12 @@ impl VkContext {
                 ],
                 &[],
             );
-            // Indirect draw #1: the static + instance prefix against the static
-            // VB/IB bound above, once per shader bucket.
+        }
+        // Indirect draw #1: the static + instance prefix against the static
+        // VB/IB bound above, once per shader bucket.
+        // SAFETY: the phase-2 indirect buffer is owned by `self.cull` and was written by the
+        // phase-2 cull ahead of this pass.
+        unsafe {
             device.cmd_draw_indexed_indirect(
                 cmd,
                 self.cull.indirect_buffers2[frame_idx].buffer(),
@@ -456,22 +496,33 @@ impl VkContext {
             && let Some(deformed) = self.skinned.deformed.get(frame_idx)
         {
             let cmd_stride = size_of::<vk::DrawIndexedIndirectCommand>();
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
+            // SAFETY: the phase-2 pass is still open on `cmd`, and the bindless pipeline is owned
+            // by `self.cull`.
             unsafe {
                 device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
+            }
+            // SAFETY: this frame's deformed vertex buffer is owned by `self.skinned` and was posed
+            // by the skin compute pass earlier in the frame.
+            unsafe {
                 device.cmd_bind_vertex_buffers(
                     cmd,
                     0,
                     std::slice::from_ref(&deformed.buffer),
                     &[0],
                 );
+            }
+            // SAFETY: the skinned index buffer is owned by `self.skinned` and outlives the frame.
+            unsafe {
                 device.cmd_bind_index_buffer(
                     cmd,
                     self.skinned.index_buffer.buffer(),
                     0,
                     vk::IndexType::UINT32,
                 );
+            }
+            // SAFETY: the offset addresses the skinned tail inside the phase-2 indirect buffer,
+            // owned by `self.cull`.
+            unsafe {
                 device.cmd_draw_indexed_indirect(
                     cmd,
                     self.cull.indirect_buffers2[frame_idx].buffer(),

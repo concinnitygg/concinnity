@@ -374,17 +374,22 @@ impl crate::directx::context::DxContext {
         } else {
             &hiz.spd_single_pso
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetComputeRootSignature(&hiz.root_sig);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetPipelineState(pso);
-            cmd.set_compute_root_constants(0, &plan.phase1.params);
-            cmd.set_compute_srv_table(1, hiz.depth_srv_gpu);
-            cmd.set_compute_srv_table(2, hiz.mip_uav_gpus[0]);
-            cmd.Dispatch(plan.phase1.groups.0, plan.phase1.groups.1, 1);
-        }
+        // SAFETY: the command list is recording, and the phase-1 root signature is owned by `hiz`.
+        unsafe { cmd.SetComputeRootSignature(&hiz.root_sig) };
+        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: the chosen SPD PSO is owned by `hiz` and matches the root signature above.
+        unsafe { cmd.SetPipelineState(pso) };
+        // SAFETY: parameter 0 of the phase-1 root signature holds the plan's root constants.
+        unsafe { cmd.set_compute_root_constants(0, &plan.phase1.params) };
+        // SAFETY: the depth SRV lives in the heap set above, and the executor put main depth in a
+        // shader-resource state.
+        unsafe { cmd.set_compute_srv_table(1, hiz.depth_srv_gpu) };
+        // SAFETY: the mip UAV table starts at mip 0 in that heap, and the pyramid is in
+        // UNORDERED_ACCESS.
+        unsafe { cmd.set_compute_srv_table(2, hiz.mip_uav_gpus[0]) };
+        // SAFETY: the phase-1 pipeline and every root argument it reads are bound above.
+        unsafe { cmd.Dispatch(plan.phase1.groups.0, plan.phase1.groups.1, 1) };
 
         let Some(tail) = plan.tail else {
             return;
@@ -395,14 +400,16 @@ impl crate::directx::context::DxContext {
         // SAFETY: the command list is in the recording state, and the resource this barrier names
         // is live for the call.
         unsafe { cmd.ResourceBarrier(&[uav_barrier(&hiz.texture)]) };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetComputeRootSignature(&hiz.tail_root_sig);
-            cmd.SetPipelineState(&hiz.spd_tail_pso);
-            cmd.set_compute_root_constants(0, &tail.params);
-            cmd.set_compute_srv_table(1, hiz.mip_uav_gpus[tail.base_mip as usize]);
-            cmd.Dispatch(tail.groups.0, tail.groups.1, 1);
-        }
+        // SAFETY: the tail root signature is owned by `hiz`.
+        unsafe { cmd.SetComputeRootSignature(&hiz.tail_root_sig) };
+        // SAFETY: the tail PSO is owned by `hiz` and matches the root signature above.
+        unsafe { cmd.SetPipelineState(&hiz.spd_tail_pso) };
+        // SAFETY: parameter 0 of the tail root signature holds the tail's root constants.
+        unsafe { cmd.set_compute_root_constants(0, &tail.params) };
+        // SAFETY: the tail's base mip UAV lives in the heap set for phase 1, and the barrier above
+        // ordered phase 1's writes to it.
+        unsafe { cmd.set_compute_srv_table(1, hiz.mip_uav_gpus[tail.base_mip as usize]) };
+        // SAFETY: the tail pipeline and every root argument it reads are bound above.
+        unsafe { cmd.Dispatch(tail.groups.0, tail.groups.1, 1) };
     }
 }

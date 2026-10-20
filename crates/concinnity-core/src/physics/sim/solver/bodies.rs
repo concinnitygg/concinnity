@@ -186,11 +186,13 @@ impl<'a> Bodies<'a> {
             (slot as usize) < self.len,
             "body slot {slot} is out of range"
         );
-        // SAFETY: the index is in range, the pointer came from a live
-        // `&mut [SolverBody]` this handle borrows for `'a`, and the returned
-        // shared reference cannot outlive that borrow. Whoever else holds this
-        // slot at the same time only reads it, per `share`'s contract.
-        unsafe { &*self.at.add(slot as usize) }
+        // SAFETY: the index is in range of the `&mut [SolverBody]` this handle
+        // borrows for `'a`, so the offset stays inside that slice.
+        let body = unsafe { self.at.add(slot as usize) };
+        // SAFETY: `body` points into that live slice, and the returned shared
+        // reference cannot outlive the borrow. Whoever else holds this slot at
+        // the same time only reads it, per `share`'s contract.
+        unsafe { &*body }
     }
 
     pub(crate) fn get_mut(&mut self, slot: u32) -> &mut SolverBody {
@@ -198,11 +200,12 @@ impl<'a> Bodies<'a> {
             (slot as usize) < self.len,
             "body slot {slot} is out of range"
         );
-        // SAFETY: as above, and the returned exclusive reference borrows
-        // `self`, so one handle never hands out two at once. Two handles reach
-        // this slot only if `share`'s contract was met, which means no other
-        // holder touches it.
-        unsafe { &mut *self.at.add(slot as usize) }
+        // SAFETY: the index is in range of the borrowed slice, as in `get`.
+        let body = unsafe { self.at.add(slot as usize) };
+        // SAFETY: the returned exclusive reference borrows `self`, so one
+        // handle never hands out two at once. Two handles reach this slot only
+        // if `share`'s contract was met, which means no other holder touches it.
+        unsafe { &mut *body }
     }
 }
 

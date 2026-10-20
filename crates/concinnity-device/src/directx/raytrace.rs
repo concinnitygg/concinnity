@@ -296,16 +296,17 @@ fn upload_slice<T: Copy>(
     // receives the mapping.
     unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
         .map_err(|e| map_hresult(e.code(), &format!("map {label}")))?;
-    // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
-    // is a separate allocation, so the ranges cannot overlap.
+    // SAFETY: `ptr` is the mapping from the call above, of a buffer sized for at least `data`, and
+    // `data` is a separate allocation, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(
             data.as_ptr().cast::<u8>(),
             ptr.cast::<u8>(),
             size_of_val(data),
         );
-        buf.Unmap(0, None);
     }
+    // SAFETY: unmaps subresource 0 of `buf`, mapped above; the copy is done.
+    unsafe { buf.Unmap(0, None) };
     Ok(buf)
 }
 
@@ -420,6 +421,35 @@ fn create_skin_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootS
         .srv(2, All) // [4] t2 morph deltas (raw, dense target-major)
         .srv(3, All) // [5] t3 morph weights (raw, one f32 per target)
         .build(device, "rt skin root sig")
+}
+
+// One object's `rt_skin` inputs, in root-parameter order.
+struct SkinBindings {
+    params: SkinParams,
+    src_gva: u64,
+    joint_gva: u64,
+    dst_gva: u64,
+    delta_gva: u64,
+    weight_gva: u64,
+}
+
+// Bind `b` on the skin root signature the caller set and dispatch one thread per vertex.
+fn dispatch_skin(cmd: &ID3D12GraphicsCommandList, b: &SkinBindings) {
+    // SAFETY: the skin root signature declares `SkinParams` constants at 0, which `b.params` is.
+    unsafe { cmd.set_compute_root_constants(0, &b.params) };
+    // SAFETY: t0 takes the bind-pose skinned vertex buffer, live for the frame.
+    unsafe { cmd.SetComputeRootShaderResourceView(1, b.src_gva) };
+    // SAFETY: t1 takes the object's joint palette, live for the frame.
+    unsafe { cmd.SetComputeRootShaderResourceView(2, b.joint_gva) };
+    // SAFETY: u0 takes the deformed output, which the caller moved to UNORDERED_ACCESS.
+    unsafe { cmd.SetComputeRootUnorderedAccessView(3, b.dst_gva) };
+    // SAFETY: t2 takes the morph deltas, or a live dummy the kernel leaves unread.
+    unsafe { cmd.SetComputeRootShaderResourceView(4, b.delta_gva) };
+    // SAFETY: t3 takes the morph weights, or a live dummy the kernel leaves unread.
+    unsafe { cmd.SetComputeRootShaderResourceView(5, b.weight_gva) };
+    let groups = b.params.vertex_count.div_ceil(64);
+    // SAFETY: the skin PSO and every root binding the kernel reads are set.
+    unsafe { cmd.Dispatch(groups, 1, 1) };
 }
 
 // Build the `rt_skin` compute pipeline (root signature + PSO). dxc emits it
@@ -541,14 +571,17 @@ fn write_upload_ring<T: Copy>(
     }
     let buf = slot.clone().ok_or_else(missing_slot_buffer)?;
     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-    // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
-    // is a separate allocation, so the ranges cannot overlap.
+    // SAFETY: `buf` is a live UPLOAD-heap buffer, and `ptr` is a live local that receives the
+    // mapping.
+    unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
+        .map_err(|e| map_hresult(e.code(), &format!("{label} map")))?;
+    // SAFETY: `ptr` maps a slot grown to at least `len_bytes`, and `data` is a separate
+    // allocation, so the ranges cannot overlap.
     unsafe {
-        buf.Map(0, None, Some(&raw mut ptr))
-            .map_err(|e| map_hresult(e.code(), &format!("{label} map")))?;
         std::ptr::copy_nonoverlapping(data.as_ptr().cast::<u8>(), ptr.cast::<u8>(), len_bytes);
-        buf.Unmap(0, None);
     }
+    // SAFETY: unmaps subresource 0 of `buf`, mapped above; the copy is done.
+    unsafe { buf.Unmap(0, None) };
     Ok(buf)
 }
 
@@ -808,9 +841,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry<'_>) -> RenderResult<Optio
     // Record every BLAS build (UAV-barrier-serialized over the shared scratch),
     // then the TLAS build, on a one-shot command list; fence-wait so the BVH is
     // ready before the first trace.
-    // SAFETY: the command list is in the recording state, and every resource, descriptor and slice
-    // these commands name is live for the call.
-    record_builds(alloc, queue, |cmd4| unsafe {
+    record_builds(alloc, queue, |cmd4| {
         for (dest, geo) in book.head().iter().zip(&geo_descs) {
             let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
                 DestAccelerationStructureData: com::gpu_va(dest),
@@ -818,8 +849,11 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry<'_>) -> RenderResult<Optio
                 SourceAccelerationStructureData: 0,
                 ScratchAccelerationStructureData: scratch_gva,
             };
-            cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None);
-            cmd4.ResourceBarrier(&[uav_barrier()]);
+            // SAFETY: the one-shot list is recording, `geo` outlives the inputs pointing at it,
+            // and the BLAS and scratch buffers are live through the fence wait.
+            unsafe { cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None) };
+            // SAFETY: the one-shot list is recording, and a global UAV barrier names no resource.
+            unsafe { cmd4.ResourceBarrier(&[uav_barrier()]) };
         }
         let tlas_desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
             DestAccelerationStructureData: com::gpu_va(&tlas),
@@ -827,7 +861,9 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry<'_>) -> RenderResult<Optio
             SourceAccelerationStructureData: 0,
             ScratchAccelerationStructureData: scratch_gva,
         };
-        cmd4.BuildRaytracingAccelerationStructure(&raw const tlas_desc, None);
+        // SAFETY: the list is recording, the barrier above ordered every BLAS build, and the
+        // TLAS, instance and scratch buffers are live through the fence wait.
+        unsafe { cmd4.BuildRaytracingAccelerationStructure(&raw const tlas_desc, None) };
     })?;
 
     // Skinned geometry joins on the dynamic update (`rebuild_skinned`), so this
@@ -1144,28 +1180,30 @@ impl RtAccelData {
 
         // Record the fresh draw-BLAS builds (UAV-barrier-serialized over the shared
         // scratch), then the TLAS build. Infallible from here on.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            for (geo, dest) in &fresh_builds {
-                let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
-                    DestAccelerationStructureData: com::gpu_va(dest),
-                    Inputs: blas_inputs(geo),
-                    SourceAccelerationStructureData: 0,
-                    ScratchAccelerationStructureData: scratch_gva,
-                };
-                cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None);
-                cmd.ResourceBarrier(&[uav_barrier()]);
-            }
+        for (geo, dest) in &fresh_builds {
             let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
-                DestAccelerationStructureData: com::gpu_va(&tlas),
-                Inputs: tlas_inputs(instance_count, com::gpu_va(&instance_buffer)),
+                DestAccelerationStructureData: com::gpu_va(dest),
+                Inputs: blas_inputs(geo),
                 SourceAccelerationStructureData: 0,
                 ScratchAccelerationStructureData: scratch_gva,
             };
-            cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None);
-            cmd.ResourceBarrier(&[uav_barrier()]);
+            // SAFETY: the list is recording, `geo` outlives the inputs pointing at it, and the
+            // fresh BLAS and the retired scratch stay alive until the build completes.
+            unsafe { cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None) };
+            // SAFETY: the list is recording, and the null-resource UAV barrier borrows nothing.
+            unsafe { cmd.ResourceBarrier(&[uav_barrier()]) };
         }
+        let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
+            DestAccelerationStructureData: com::gpu_va(&tlas),
+            Inputs: tlas_inputs(instance_count, com::gpu_va(&instance_buffer)),
+            SourceAccelerationStructureData: 0,
+            ScratchAccelerationStructureData: scratch_gva,
+        };
+        // SAFETY: the list is recording, and the ring slot's TLAS and instance buffers stay live
+        // until the slot's trace retires a full cycle later.
+        unsafe { cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None) };
+        // SAFETY: the list is recording, and a global UAV barrier needs no live resource.
+        unsafe { cmd.ResourceBarrier(&[uav_barrier()]) };
 
         // Commit: swap in the refreshed head and the static TLAS over it. Any
         // skinned tail is dropped; `rebuild_skinned` re-adds it on the skinned path
@@ -1275,13 +1313,12 @@ impl RtAccelData {
             SourceAccelerationStructureData: 0,
             ScratchAccelerationStructureData: scratch_gva,
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None);
-            // Order the build before this frame's trace reads the TLAS / table.
-            cmd.ResourceBarrier(&[uav_barrier()]);
-        }
+        // SAFETY: the list is recording, and the slot's TLAS and instance buffers and this
+        // frame's scratch are live for the frame.
+        unsafe { cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None) };
+        // Order the build before this frame's trace reads the TLAS / table.
+        // SAFETY: the frame's start list is recording; the barrier's resource is null.
+        unsafe { cmd.ResourceBarrier(&[uav_barrier()]) };
 
         // Point the live BVH at this slot's buffers (clones AddRef the slot's
         // resources, not GPU allocations). A skinned tail still published from a
@@ -1413,24 +1450,20 @@ impl RtAccelData {
         } else {
             read_state
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&[transition_barrier(
-                &deformed_verts,
-                deformed_before,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            )]);
-        }
+        let to_uav = transition_barrier(
+            &deformed_verts,
+            deformed_before,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        );
+        // SAFETY: the list is recording, and the ring slot owns the deformed buffer.
+        unsafe { cmd.ResourceBarrier(&[to_uav]) };
 
         // Stage 1: skin dispatch per skinned object, writing the deformed buffer.
         let skin = skinned.skin;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetComputeRootSignature(&skin.root_sig);
-            cmd.SetPipelineState(&skin.pso);
-        }
+        // SAFETY: the list is recording, and the skin root signature is owned by `skin`.
+        unsafe { cmd.SetComputeRootSignature(&skin.root_sig) };
+        // SAFETY: the list is recording, and the skin PSO is owned by `skin`.
+        unsafe { cmd.SetPipelineState(&skin.pso) };
         let visible = self.book.visible_skinned();
         for &obj_idx in visible {
             let obj = &skinned.objects[obj_idx];
@@ -1451,17 +1484,17 @@ impl RtAccelData {
                 joint_count: u32::saturating_from(obj.joint_count.max(1)),
                 target_count: 0,
             };
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.set_compute_root_constants(0, &params);
-                cmd.SetComputeRootShaderResourceView(1, skinned.vertex_gva);
-                cmd.SetComputeRootShaderResourceView(2, joint_gva);
-                cmd.SetComputeRootUnorderedAccessView(3, deformed_gva);
-                cmd.SetComputeRootShaderResourceView(4, skinned.vertex_gva);
-                cmd.SetComputeRootShaderResourceView(5, skinned.vertex_gva);
-                cmd.Dispatch(u32::saturating_from(obj.vertex_count).div_ceil(64), 1, 1);
-            }
+            dispatch_skin(
+                cmd,
+                &SkinBindings {
+                    params,
+                    src_gva: skinned.vertex_gva,
+                    joint_gva,
+                    dst_gva: deformed_gva,
+                    delta_gva: skinned.vertex_gva,
+                    weight_gva: skinned.vertex_gva,
+                },
+            );
         }
         // Order the skin writes before the BLAS build reads them, then transition
         // the deformed buffer to a state both the BLAS build (NON_PIXEL_SHADER_
@@ -1469,16 +1502,15 @@ impl RtAccelData {
         // (PIXEL_SHADER_RESOURCE: the trace samples it as the t8 root SRV in a
         // pixel shader) accept. The combined read state satisfies both and is the
         // resting state of the deformed buffer thereafter.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&[uav_barrier()]);
-            cmd.ResourceBarrier(&[transition_barrier(
-                &deformed_verts,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                read_state,
-            )]);
-        }
+        // SAFETY: the list is recording, and the UAV barrier names no resource to keep alive.
+        unsafe { cmd.ResourceBarrier(&[uav_barrier()]) };
+        let to_read = transition_barrier(
+            &deformed_verts,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            read_state,
+        );
+        // SAFETY: the list is recording, and the ring slot owns the deformed buffer.
+        unsafe { cmd.ResourceBarrier(&[to_read]) };
 
         // Stage 2: one BLAS per skinned object over the deformed buffer, then
         // the TLAS over the static/cluster head + the skinned tail.
@@ -1579,33 +1611,35 @@ impl RtAccelData {
         // (`SourceAccelerationStructureData = 0`) into the ring buffer, overwriting
         // the prior frame's structure; a `Refit` names that same structure as the
         // source, which DXR defines as an in-place update.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            let SkinnedScratch { geo, blas_gvas } = &self.skinned_scratch;
-            for (geo, &dest) in geo.iter().zip(blas_gvas) {
-                let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
-                    DestAccelerationStructureData: dest,
-                    Inputs: skinned_blas_inputs(geo, update),
-                    SourceAccelerationStructureData: match update {
-                        BlasUpdate::Build => 0,
-                        BlasUpdate::Refit => dest,
-                    },
-                    ScratchAccelerationStructureData: scratch_gva,
-                };
-                cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None);
-                cmd.ResourceBarrier(&[uav_barrier()]);
-            }
-            let tlas_desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
-                DestAccelerationStructureData: com::gpu_va(&tlas),
-                Inputs: tlas_inputs(instance_count, com::gpu_va(&instance_buffer)),
-                SourceAccelerationStructureData: 0,
+        let SkinnedScratch { geo, blas_gvas } = &self.skinned_scratch;
+        for (geo, &dest) in geo.iter().zip(blas_gvas) {
+            let desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
+                DestAccelerationStructureData: dest,
+                Inputs: skinned_blas_inputs(geo, update),
+                SourceAccelerationStructureData: match update {
+                    BlasUpdate::Build => 0,
+                    BlasUpdate::Refit => dest,
+                },
                 ScratchAccelerationStructureData: scratch_gva,
             };
-            cmd4.BuildRaytracingAccelerationStructure(&raw const tlas_desc, None);
-            // Order the TLAS build before this frame's trace reads it.
-            cmd.ResourceBarrier(&[uav_barrier()]);
+            // SAFETY: the list is recording, `geo` in `self.skinned_scratch` outlives the inputs
+            // pointing at it, and the ring's BLAS and this frame's scratch are live for the frame.
+            unsafe { cmd4.BuildRaytracingAccelerationStructure(&raw const desc, None) };
+            // SAFETY: the list is recording, and this global barrier borrows no resource.
+            unsafe { cmd.ResourceBarrier(&[uav_barrier()]) };
         }
+        let tlas_desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
+            DestAccelerationStructureData: com::gpu_va(&tlas),
+            Inputs: tlas_inputs(instance_count, com::gpu_va(&instance_buffer)),
+            SourceAccelerationStructureData: 0,
+            ScratchAccelerationStructureData: scratch_gva,
+        };
+        // SAFETY: the list is recording, the barriers above ordered every BLAS update, and the
+        // ring's TLAS and instance buffers are live for the frame.
+        unsafe { cmd4.BuildRaytracingAccelerationStructure(&raw const tlas_desc, None) };
+        // Order the TLAS build before this frame's trace reads it.
+        // SAFETY: the list is recording; the TLAS barrier is global and names no resource.
+        unsafe { cmd.ResourceBarrier(&[uav_barrier()]) };
 
         // Point the live BVH at this frame's ring buffers (clones are AddRefs on
         // the persistent ring resources, not GPU allocations). The static/cluster
@@ -1726,17 +1760,18 @@ impl super::context::DxContext {
         let src_gva = com::gpu_va(vb);
         let dst_gva = com::gpu_va(deformed);
 
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&[transition_barrier(
-                deformed,
-                D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            )]);
-            cmd.SetComputeRootSignature(&skin.root_sig);
-            cmd.SetPipelineState(&skin.pso);
-        }
+        let to_uav = transition_barrier(
+            deformed,
+            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        );
+        // SAFETY: the list is recording, and this frame's deformed buffer is owned by
+        // `self.skinned`.
+        unsafe { cmd.ResourceBarrier(&[to_uav]) };
+        // SAFETY: the list is recording, and the skin root signature is owned by `skin`.
+        unsafe { cmd.SetComputeRootSignature(&skin.root_sig) };
+        // SAFETY: the list is recording, and the skin PSO is owned by `skin`.
+        unsafe { cmd.SetPipelineState(&skin.pso) };
         for (i, obj) in self.state.skinned.draw_objects.iter().enumerate() {
             let joint_gva = self.skinned_joint_gva(frame_idx, i);
             let target_count = self
@@ -1760,30 +1795,29 @@ impl super::context::DxContext {
                 .and_then(|b| b.as_ref())
                 .map_or(src_gva, |b| com::gpu_va(b));
             let weight_gva = self.morph_weight_gva(frame_idx, i).unwrap_or(src_gva);
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.set_compute_root_constants(0, &params);
-                cmd.SetComputeRootShaderResourceView(1, src_gva);
-                cmd.SetComputeRootShaderResourceView(2, joint_gva);
-                cmd.SetComputeRootUnorderedAccessView(3, dst_gva);
-                cmd.SetComputeRootShaderResourceView(4, delta_gva);
-                cmd.SetComputeRootShaderResourceView(5, weight_gva);
-                cmd.Dispatch(u32::saturating_from(obj.vertex_count).div_ceil(64), 1, 1);
-            }
+            dispatch_skin(
+                cmd,
+                &SkinBindings {
+                    params,
+                    src_gva,
+                    joint_gva,
+                    dst_gva,
+                    delta_gva,
+                    weight_gva,
+                },
+            );
         }
         // Orders the skin writes before the main pass's vertex fetch and returns
         // the buffer to its resting VERTEX_AND_CONSTANT_BUFFER state (read by both
         // Main and Main2's skinned ExecuteIndirect this frame).
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&[transition_barrier(
-                deformed,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
-            )]);
-        }
+        let to_vertex = transition_barrier(
+            deformed,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+        );
+        // SAFETY: the list is recording, and this frame's deformed buffer is owned by
+        // `self.skinned`.
+        unsafe { cmd.ResourceBarrier(&[to_vertex]) };
     }
 
     // Run the per-frame dynamic acceleration-structure update on `cmd` (the

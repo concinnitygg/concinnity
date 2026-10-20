@@ -284,20 +284,25 @@ impl DxContext {
         let output_gva = com::gpu_va(&resources.output_buf);
 
         // Build dispatch: 16×16 threadgroups, one thread per HDR pixel.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetComputeRootSignature(&resources.build_root_sig);
-            cmd.SetPipelineState(&resources.build_pso);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.set_compute_root_constants(0, &params);
-            cmd.set_compute_srv_table(1, self.targets.hdr.srv_gpu);
-            cmd.SetComputeRootUnorderedAccessView(2, histogram_gva);
+        // SAFETY: the command list is recording, and the build root signature is owned by
+        // `resources`.
+        unsafe { cmd.SetComputeRootSignature(&resources.build_root_sig) };
+        // SAFETY: the build PSO is owned by `resources` and matches the root signature above.
+        unsafe { cmd.SetPipelineState(&resources.build_pso) };
+        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: parameter 0 of the build root signature holds `params`-sized root constants.
+        unsafe { cmd.set_compute_root_constants(0, &params) };
+        // SAFETY: the HDR SRV slot lives in the heap set above, and the scene was moved to a
+        // compute-readable state by the barrier above.
+        unsafe { cmd.set_compute_srv_table(1, self.targets.hdr.srv_gpu) };
+        // SAFETY: `histogram_gva` addresses the live histogram buffer owned by `resources`.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(2, histogram_gva) };
 
-            let groups_x = self.targets.extent.render_width.div_ceil(16);
-            let groups_y = self.targets.extent.render_height.div_ceil(16);
-            cmd.Dispatch(groups_x, groups_y, 1);
-        }
+        let groups_x = self.targets.extent.render_width.div_ceil(16);
+        let groups_y = self.targets.extent.render_height.div_ceil(16);
+        // SAFETY: the build pipeline and every root argument it reads are bound above.
+        unsafe { cmd.Dispatch(groups_x, groups_y, 1) };
 
         // UAV barrier so the average dispatch sees the build kernel's writes.
         let barrier = uav_barrier(&resources.histogram);
@@ -306,16 +311,19 @@ impl DxContext {
         unsafe { cmd.ResourceBarrier(&[barrier]) };
 
         // Average dispatch: one threadgroup of 256 threads.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetComputeRootSignature(&resources.average_root_sig);
-            cmd.SetPipelineState(&resources.average_pso);
-            cmd.set_compute_root_constants(0, &params);
-            cmd.SetComputeRootUnorderedAccessView(1, histogram_gva);
-            cmd.SetComputeRootUnorderedAccessView(2, output_gva);
-            cmd.Dispatch(1, 1, 1);
-        }
+        // SAFETY: the command list is recording, and the average root signature is owned by
+        // `resources`.
+        unsafe { cmd.SetComputeRootSignature(&resources.average_root_sig) };
+        // SAFETY: the average PSO is owned by `resources` and matches the root signature above.
+        unsafe { cmd.SetPipelineState(&resources.average_pso) };
+        // SAFETY: parameter 0 of the average root signature holds `params`-sized root constants.
+        unsafe { cmd.set_compute_root_constants(0, &params) };
+        // SAFETY: the histogram is live and its build writes are ordered by the UAV barrier above.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(1, histogram_gva) };
+        // SAFETY: `output_gva` addresses the live output buffer owned by `resources`.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(2, output_gva) };
+        // SAFETY: the average pipeline and every root argument it reads are bound above.
+        unsafe { cmd.Dispatch(1, 1, 1) };
 
         // Copy the freshly-written average to this slot's readback buffer. A
         // later frame using the same slot reads it from the matching

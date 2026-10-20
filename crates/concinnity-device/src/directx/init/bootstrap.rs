@@ -60,12 +60,10 @@ pub(super) fn setup(
     // one happened: a verification pass that reports "0 errors" needs to know
     // the layer was there to report them.
     if validation {
+        let mut d: Option<ID3D12Debug> = None;
         // SAFETY: `d` is a live local the call fills with the debug interface when one is
         // available.
-        let debug = unsafe {
-            let mut d: Option<ID3D12Debug> = None;
-            D3D12GetDebugInterface(&raw mut d).ok().and(d)
-        };
+        let debug = unsafe { D3D12GetDebugInterface(&raw mut d) }.ok().and(d);
         if let Some(d) = debug {
             // SAFETY: `d` is the live debug interface the query above produced, and enabling
             // the layer borrows nothing.
@@ -88,13 +86,14 @@ pub(super) fn setup(
     // DXGI_CREATE_FACTORY_DEBUG requires the Windows "Graphics Tools" optional
     // feature; fall back silently if it isn't installed.
     let factory: IDXGIFactory4 = if validation {
-        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
-        // new COM object lands in a binding that owns it.
-        unsafe {
-            CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG)
-                .or_else(|_| CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)))
-        }
-        .map_err(|e| map_hresult(e.code(), "CreateDXGIFactory2"))?
+        // SAFETY: the call takes only flags, and the new COM object lands in a binding that owns
+        // it.
+        unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG) }
+            .or_else(|_| {
+                // SAFETY: the same flags-only call, retried without the debug flag.
+                unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) }
+            })
+            .map_err(|e| map_hresult(e.code(), "CreateDXGIFactory2"))?
     } else {
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
@@ -112,15 +111,8 @@ pub(super) fn setup(
     // Disable break-on-error so the debug layer doesn't terminate the process
     // before we can log the message via tracing.
     let info_queue: Option<ID3D12InfoQueue> = if validation {
-        // SAFETY: `iq` is the live info queue this closure was handed, and `filter` (with the
-        // `denied` array it points into) outlives the `AddStorageFilterEntries` call at the end of
-        // the block.
-        let iq = device.cast::<ID3D12InfoQueue>().ok().inspect(|iq| unsafe {
-            let unbroken = iq
-                .SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, false)
-                .and_then(|()| iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, false))
-                .and_then(|()| iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, false));
-            if let Err(e) = unbroken {
+        let iq = device.cast::<ID3D12InfoQueue>().ok().inspect(|iq| {
+            if let Err(e) = unbreak_info_queue(iq) {
                 tracing::warn!("d3d12 info queue: could not turn off break-on-severity: {e}");
             }
             // A pipeline-library miss is how `pso_library` asks whether the
@@ -143,7 +135,9 @@ pub(super) fn setup(
                 },
                 ..Default::default()
             };
-            if let Err(e) = iq.AddStorageFilterEntries(&raw const filter) {
+            // SAFETY: `iq` is the live info queue this closure was handed, and `filter` (with the
+            // `denied` array it points into) outlives the call.
+            if let Err(e) = unsafe { iq.AddStorageFilterEntries(&raw const filter) } {
                 tracing::warn!("d3d12 info queue: could not install the message filter: {e}");
             }
         });
@@ -356,6 +350,20 @@ pub(super) fn setup(
         allow_tearing,
     };
     Ok((hw, swapchain))
+}
+
+// Turn off the layer's break-on-severity at every level, stopping at the first
+// that fails.
+fn unbreak_info_queue(iq: &ID3D12InfoQueue) -> windows::core::Result<()> {
+    for severity in [
+        D3D12_MESSAGE_SEVERITY_CORRUPTION,
+        D3D12_MESSAGE_SEVERITY_ERROR,
+        D3D12_MESSAGE_SEVERITY_WARNING,
+    ] {
+        // SAFETY: `iq` is a live info queue, and the call borrows nothing else.
+        unsafe { iq.SetBreakOnSeverity(severity, false) }?;
+    }
+    Ok(())
 }
 
 // The flags a swapchain is created with, which every `ResizeBuffers` must

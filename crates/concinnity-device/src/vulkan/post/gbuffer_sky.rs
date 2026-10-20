@@ -113,11 +113,13 @@ impl GbufferSky {
         let Some(&set) = self.sets.get(frame_idx) else {
             return;
         };
-        // SAFETY: `cmd` is a command buffer in the recording state inside the pre-pass render pass
-        // the pipeline was built against, and every handle these commands name is live for the
-        // call.
+        // SAFETY: `cmd` is recording inside the pre-pass render pass the pipeline was built
+        // against, and `self` owns the pipeline.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline.handle());
+        }
+        // SAFETY: `set` is this frame's set from `self.sets`, allocated against `self.layout`.
+        unsafe {
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -126,7 +128,8 @@ impl GbufferSky {
                 &[set],
                 &[],
             );
-            device.cmd_draw(cmd, 3, 1, 0, 0);
         }
+        // SAFETY: the sky pipeline and its set are bound above on the recording `cmd`.
+        unsafe { device.cmd_draw(cmd, 3, 1, 0, 0) };
     }
 }

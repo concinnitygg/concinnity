@@ -183,21 +183,24 @@ fn encode_copy(
             SubresourceIndex: 0,
         },
     };
-    // SAFETY: the command list is in the recording state, and both resources are live for the
-    // call; the caller keeps them alive until the list has executed.
-    unsafe {
-        cmd.ResourceBarrier(&[transition_barrier(
-            back_buffer,
-            D3D12_RESOURCE_STATE_PRESENT,
-            D3D12_RESOURCE_STATE_COPY_SOURCE,
-        )]);
-        cmd.CopyTextureRegion(&raw const dst, 0, 0, 0, &raw const src, None);
-        cmd.ResourceBarrier(&[transition_barrier(
-            back_buffer,
-            D3D12_RESOURCE_STATE_COPY_SOURCE,
-            D3D12_RESOURCE_STATE_PRESENT,
-        )]);
-    }
+    let to_copy = transition_barrier(
+        back_buffer,
+        D3D12_RESOURCE_STATE_PRESENT,
+        D3D12_RESOURCE_STATE_COPY_SOURCE,
+    );
+    // SAFETY: the command list is in the recording state, and the caller keeps the back buffer
+    // alive until the list has executed.
+    unsafe { cmd.ResourceBarrier(&[to_copy]) };
+    // SAFETY: the back buffer is in COPY_SOURCE from the barrier above, and both locations borrow
+    // resources the caller keeps alive until the list has executed.
+    unsafe { cmd.CopyTextureRegion(&raw const dst, 0, 0, 0, &raw const src, None) };
+    let to_present = transition_barrier(
+        back_buffer,
+        D3D12_RESOURCE_STATE_COPY_SOURCE,
+        D3D12_RESOURCE_STATE_PRESENT,
+    );
+    // SAFETY: the list is recording, and the back buffer is still live.
+    unsafe { cmd.ResourceBarrier(&[to_present]) };
 }
 
 // A row of `row_bytes` padded to the pitch alignment a buffer copy needs.

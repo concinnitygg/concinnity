@@ -150,16 +150,14 @@ impl VkContext {
         // place across the job pool once that pays.
         let n_static = self.state.draw.n_objects.min(self.state.draw.objects.len());
         let static_draws = &self.state.draw.objects[..n_static];
-        // SAFETY: `objects` and `args` are this frame's copies (its fence has
-        // signaled) or bake buffers not yet submitted, so the GPU reads neither,
-        // and these are the only views of either range until the pack returns.
-        let packed = unsafe {
-            (
-                objects.records_mut::<GpuObjectData>(0, static_draws.len()),
-                args.records_mut::<GpuDrawArgs>(0, static_draws.len()),
-            )
-        };
-        let packing = if let (Some(records), Some(draw_args)) = packed {
+        // SAFETY: `objects` is this frame's copy (its fence has signaled) or a bake
+        // buffer not yet submitted, so the GPU does not read it, and this is the only
+        // view of the range until the pack returns.
+        let records = unsafe { objects.records_mut::<GpuObjectData>(0, static_draws.len()) };
+        // SAFETY: `args` is the same frame's draw-args copy under the same fence, and a
+        // separate buffer from `objects`, so this view is the range's only one.
+        let draw_args = unsafe { args.records_mut::<GpuDrawArgs>(0, static_draws.len()) };
+        let packing = if let (Some(records), Some(draw_args)) = (records, draw_args) {
             self.cull.packer.pack(
                 StaticPack {
                     objects: static_draws,
@@ -283,21 +281,16 @@ impl VkContext {
         // before the per-pass buffers. The query-pool reset must precede every
         // pass, hence it lives here at the head of the batch.
         let start_cmd = self.commands.start_command_buffers[frame_idx];
-        // SAFETY: `cmd` belongs to this frame slot, whose fence was already waited on, so it is not
-        // in flight; reset then begin puts it in the recording state, which is what the subsequent
-        // recording requires.
-        unsafe {
-            device
-                .reset_command_buffer(start_cmd, vk::CommandBufferResetFlags::empty())
-                .map_err(|e| crate::vulkan::error::map_vk_result(e, "reset start cmd buf"))?;
-            device
-                .begin_command_buffer(
-                    start_cmd,
-                    &vk::CommandBufferBeginInfo::default()
-                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-                )
-                .map_err(|e| crate::vulkan::error::map_vk_result(e, "begin start cmd buf"))?;
-        }
+        // SAFETY: `start_cmd` belongs to this frame slot, whose fence was already waited on, so
+        // it is not in flight and may be reset.
+        unsafe { device.reset_command_buffer(start_cmd, vk::CommandBufferResetFlags::empty()) }
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "reset start cmd buf"))?;
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        // SAFETY: the reset above left `start_cmd` in the initial state, and `begin_info` is
+        // borrowed for the call; this puts it in the recording state the code below relies on.
+        unsafe { device.begin_command_buffer(start_cmd, &begin_info) }
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "begin start cmd buf"))?;
         if let Some(pool) = self.hw.timestamp_query_pool {
             // Reset this frame's whole timestamp block (whole-frame pair + every
             // per-pass pair) here, before any per-pass buffer writes into it.
@@ -307,8 +300,8 @@ impl VkContext {
             // is the block's second slot, written in the end buffer below.
             let block_base = pass_timing::frame_block_base(frame_idx);
             let (wf_start, _) = pass_timing::whole_frame_pair(frame_idx);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
+            // SAFETY: `start_cmd` is recording, and the timestamp pool is owned by `self.hw`;
+            // the block for this frame slot is in range of the pool's slots.
             unsafe {
                 device.cmd_reset_query_pool(
                     start_cmd,
@@ -316,6 +309,9 @@ impl VkContext {
                     block_base,
                     u32::saturating_from(pass_timing::SLOTS_PER_FRAME),
                 );
+            }
+            // SAFETY: `wf_start` lies inside the block just reset on the same recording buffer.
+            unsafe {
                 device.cmd_write_timestamp(
                     start_cmd,
                     vk::PipelineStageFlags::TOP_OF_PIPE,
@@ -553,22 +549,19 @@ impl FrameDevice for VkContext {
         // after the "start" buffer and every per-pass buffer.
         let cmd = self.commands.command_buffers[frame_idx];
         // SAFETY: `cmd` belongs to this frame slot, whose fence was already waited on, so it is not
-        // in flight; reset then begin puts it in the recording state, which is what the subsequent
-        // recording requires.
+        // in flight and may be reset.
         unsafe {
             self.hw
                 .device
                 .reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty())
-                .map_err(|e| crate::vulkan::error::map_vk_result(e, "reset cmd buf"))?;
-            self.hw
-                .device
-                .begin_command_buffer(
-                    cmd,
-                    &vk::CommandBufferBeginInfo::default()
-                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-                )
-                .map_err(|e| crate::vulkan::error::map_vk_result(e, "begin cmd buf"))?;
         }
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "reset cmd buf"))?;
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        // SAFETY: the reset above left `cmd` in the initial state; beginning it puts it in the
+        // recording state the rest of the frame relies on.
+        unsafe { self.hw.device.begin_command_buffer(cmd, &begin_info) }
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "begin cmd buf"))?;
 
         // The scene rasterizes at render resolution (== swapchain extent unless
         // upscaling). Cascade / projection aspect, the HDR graph dims, and the

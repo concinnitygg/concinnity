@@ -73,8 +73,9 @@ pub(super) fn build_uniforms(
                 ptr.cast::<u8>(),
                 size_of::<ProbeSet>(),
             );
-            buf.Unmap(0, None);
         }
+        // SAFETY: `buf` was mapped by the `Map` call above, and the empty set is written.
+        unsafe { buf.Unmap(0, None) };
         buf
     };
 

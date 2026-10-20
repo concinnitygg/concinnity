@@ -468,13 +468,12 @@ impl super::context::VkContext {
         size: u32,
     ) {
         let groups = size.div_ceil(PREFILTER_TILE).max(1);
-        // SAFETY: `cmd` is in the recording state, and every handle these commands name belongs to
-        // this device; the push range matches the layout's, declared from the same type.
+        let device = &self.hw.device;
+        // SAFETY: `cmd` is in the recording state and `pipeline` belongs to this device.
+        unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline) };
+        // SAFETY: `set` was allocated against `layout` on this device.
         unsafe {
-            self.hw
-                .device
-                .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
-            self.hw.device.cmd_bind_descriptor_sets(
+            device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
                 layout,
@@ -482,15 +481,11 @@ impl super::context::VkContext {
                 std::slice::from_ref(&set),
                 &[],
             );
-            cmd_push_constants(
-                &self.hw.device,
-                cmd,
-                layout,
-                vk::ShaderStageFlags::COMPUTE,
-                params,
-            );
-            self.hw.device.cmd_dispatch(cmd, groups, groups, 6);
         }
+        // SAFETY: the push range matches the layout's, declared from the same type.
+        unsafe { cmd_push_constants(device, cmd, layout, vk::ShaderStageFlags::COMPUTE, params) };
+        // SAFETY: the kernel, its set and its constants are bound above on the recording `cmd`.
+        unsafe { device.cmd_dispatch(cmd, groups, groups, 6) };
     }
 }
 

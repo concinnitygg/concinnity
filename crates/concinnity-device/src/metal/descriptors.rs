@@ -1,6 +1,6 @@
 // Declarative construction for the two Metal descriptor shapes the backend
 // builds repeatedly: texture descriptors and vertex descriptors. Each builder
-// owns the one unsafe block the objc2 property setters require.
+// owns the unsafe objc2 property setters those shapes require.
 
 use objc2::rc::Retained;
 use objc2_metal::{
@@ -43,20 +43,22 @@ impl Default for TextureDesc {
 impl TextureDesc {
     pub(super) fn build(&self) -> Retained<MTLTextureDescriptor> {
         let desc = MTLTextureDescriptor::new();
-        // SAFETY: plain descriptor property setters on a freshly created
-        // descriptor, all values in range for their properties.
-        unsafe {
-            desc.setTextureType(self.kind);
-            desc.setPixelFormat(self.format);
-            desc.setWidth(self.width);
-            desc.setHeight(self.height);
-            desc.setDepth(self.depth);
-            desc.setMipmapLevelCount(self.mip_count);
-            desc.setSampleCount(self.sample_count);
-            desc.setArrayLength(self.array_length);
-            desc.setUsage(self.usage);
-            desc.setStorageMode(self.storage);
-        }
+        desc.setTextureType(self.kind);
+        desc.setPixelFormat(self.format);
+        // SAFETY: plain setter on a fresh descriptor; the width is in range for the property.
+        unsafe { desc.setWidth(self.width) };
+        // SAFETY: the height is likewise an in-range extent from the caller's shape.
+        unsafe { desc.setHeight(self.height) };
+        // SAFETY: the depth is an in-range extent; Metal's default of 1 unless stated.
+        unsafe { desc.setDepth(self.depth) };
+        // SAFETY: the mip count is an in-range level count for this descriptor.
+        unsafe { desc.setMipmapLevelCount(self.mip_count) };
+        // SAFETY: the sample count is an in-range value the caller chose for this shape.
+        unsafe { desc.setSampleCount(self.sample_count) };
+        // SAFETY: the array length is in range; Metal's default of 1 unless stated.
+        unsafe { desc.setArrayLength(self.array_length) };
+        desc.setUsage(self.usage);
+        desc.setStorageMode(self.storage);
         desc
     }
 }
@@ -82,20 +84,21 @@ pub(super) fn vertex_descriptor(
     layouts: &[VertexLayout],
 ) -> Retained<MTLVertexDescriptor> {
     let desc = MTLVertexDescriptor::new();
-    // SAFETY: plain descriptor property setters; every subscripted slot is one
-    // this descriptor declares via the lists.
-    unsafe {
-        for a in attrs {
-            let slot = desc.attributes().objectAtIndexedSubscript(a.index);
-            slot.setFormat(a.format);
-            slot.setOffset(a.offset);
-            slot.setBufferIndex(a.buffer_index);
-        }
-        for l in layouts {
-            let slot = desc.layouts().objectAtIndexedSubscript(l.buffer_index);
-            slot.setStride(l.stride);
-            slot.setStepFunction(l.step);
-        }
+    for a in attrs {
+        // SAFETY: `a.index` is an attribute slot this descriptor declares via the list.
+        let slot = unsafe { desc.attributes().objectAtIndexedSubscript(a.index) };
+        slot.setFormat(a.format);
+        // SAFETY: the offset is the attribute's in-range byte position, as the list declares.
+        unsafe { slot.setOffset(a.offset) };
+        // SAFETY: the buffer index is an in-range slot the layout list also declares.
+        unsafe { slot.setBufferIndex(a.buffer_index) };
+    }
+    for l in layouts {
+        // SAFETY: `l.buffer_index` is a layout slot this descriptor declares via the list.
+        let slot = unsafe { desc.layouts().objectAtIndexedSubscript(l.buffer_index) };
+        // SAFETY: the stride is an in-range per-vertex size from the declared layout.
+        unsafe { slot.setStride(l.stride) };
+        slot.setStepFunction(l.step);
     }
     desc
 }

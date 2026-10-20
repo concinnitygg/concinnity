@@ -569,13 +569,12 @@ mod tests {
             .expect("shared buffer places");
         // Aliased ranges are the failure mode a placement heap makes possible,
         // so check the contents rather than just the offsets.
-        // SAFETY: both are shared storage and at least 256 bytes long.
-        let (a_bytes, b_bytes) = unsafe {
-            (
-                std::slice::from_raw_parts(a.contents().as_ptr() as *const u8, 256),
-                std::slice::from_raw_parts(b.contents().as_ptr() as *const u8, 256),
-            )
-        };
+        // SAFETY: `a` is shared storage at least 256 bytes long and outlives the slice.
+        let a_bytes =
+            unsafe { std::slice::from_raw_parts(a.contents().as_ptr() as *const u8, 256) };
+        // SAFETY: `b` is likewise shared storage of at least 256 bytes, alive for the test.
+        let b_bytes =
+            unsafe { std::slice::from_raw_parts(b.contents().as_ptr() as *const u8, 256) };
         assert!(a_bytes.iter().all(|&x| x == 0xAA));
         assert!(b_bytes.iter().all(|&x| x == 0x55));
     }

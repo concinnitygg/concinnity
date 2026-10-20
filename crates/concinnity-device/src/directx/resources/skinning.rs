@@ -175,11 +175,13 @@ impl DxContext {
                     )
                     .map_err(|e| e.context("skinned joint buf"))?;
                 let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-                // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload,
-                // and the source is a separate allocation, so the ranges cannot overlap.
+                // SAFETY: `buf` is a live UPLOAD-heap buffer, and `ptr` is a live local that
+                // receives the persistent mapping.
+                unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
+                    .map_err(|e| map_hresult(e.code(), "map skinned joint buf"))?;
+                // SAFETY: `ptr` maps the `joint_buf_bytes` buffer from the call above, and the
+                // identity seed is a separate allocation, so the ranges cannot overlap.
                 unsafe {
-                    buf.Map(0, None, Some(&raw mut ptr))
-                        .map_err(|e| map_hresult(e.code(), "map skinned joint buf"))?;
                     std::ptr::copy_nonoverlapping(
                         identity_seed.as_ptr().cast::<u8>(),
                         ptr.cast::<u8>(),
@@ -249,9 +251,7 @@ impl DxContext {
             }
             // Move COMMON -> VERTEX_AND_CONSTANT_BUFFER so the per-frame skin
             // pass's VERTEX -> UAV -> VERTEX transition cycle is valid from frame 0.
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
+            one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| {
                 let barriers: Vec<D3D12_RESOURCE_BARRIER> = deformed_buffers
                     .iter()
                     .map(|b| {
@@ -262,7 +262,9 @@ impl DxContext {
                         )
                     })
                     .collect();
-                cmd.ResourceBarrier(&barriers);
+                // SAFETY: the one-shot list is recording, and every deformed buffer is a live
+                // local the fence-waited submit outlives.
+                unsafe { cmd.ResourceBarrier(&barriers) };
             })?;
             let skin = super::super::raytrace::build_rt_skin_pipeline(
                 &self.hw.device,
@@ -446,12 +448,12 @@ impl DxContext {
                         )
                         .map_err(|e| e.context("morph weight buf"))?;
                     let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-                    // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this
-                    // payload, and the source is a separate allocation, so the ranges cannot
-                    // overlap.
+                    // SAFETY: `buf` is a live UPLOAD-heap buffer, and `ptr` is a live local that
+                    // receives the persistent mapping.
+                    unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
+                        .map_err(|e| map_hresult(e.code(), "map morph weight buf"))?;
+                    // SAFETY: `ptr` maps the `bytes`-long buffer from the call above.
                     unsafe {
-                        buf.Map(0, None, Some(&raw mut ptr))
-                            .map_err(|e| map_hresult(e.code(), "map morph weight buf"))?;
                         std::ptr::write_bytes(ptr.cast::<u8>(), 0, usize::saturating_from(bytes));
                     }
                     frame_bufs.push(buf);

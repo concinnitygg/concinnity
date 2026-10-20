@@ -263,8 +263,8 @@ pub(in crate::vulkan) fn clear_outside_pass(
         .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
         .image(mask)
         .subresource_range(RANGE);
-    // SAFETY: `cmd` is recording outside a render pass, `mask` is a live mask image resting in
-    // SHADER_READ_ONLY_OPTIMAL, and every slice these commands name is live for the call.
+    // SAFETY: `cmd` is recording outside a render pass, and `mask` is a live mask image resting
+    // in SHADER_READ_ONLY_OPTIMAL.
     unsafe {
         device.cmd_pipeline_barrier(
             cmd,
@@ -275,6 +275,9 @@ pub(in crate::vulkan) fn clear_outside_pass(
             &[],
             std::slice::from_ref(&to_transfer),
         );
+    }
+    // SAFETY: the barrier above moved `mask` to TRANSFER_DST_OPTIMAL on this `cmd`.
+    unsafe {
         device.cmd_clear_color_image(
             cmd,
             mask,
@@ -282,6 +285,9 @@ pub(in crate::vulkan) fn clear_outside_pass(
             &vk::ClearColorValue { float32: [0.0; 4] },
             std::slice::from_ref(&RANGE),
         );
+    }
+    // SAFETY: `mask` is in TRANSFER_DST_OPTIMAL after the clear, as `back` declares.
+    unsafe {
         device.cmd_pipeline_barrier(
             cmd,
             vk::PipelineStageFlags::TRANSFER,

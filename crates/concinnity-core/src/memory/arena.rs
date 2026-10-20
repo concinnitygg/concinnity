@@ -140,10 +140,10 @@ impl Arena {
         // `T`, inside the arena and not overlapping any other live allocation
         // (the cursor only ever moves forward until `reset`, which needs
         // `&mut self` and so cannot run while this borrow lives).
-        unsafe {
-            ptr.write(value);
-            Some(&mut *ptr.as_ptr())
-        }
+        unsafe { ptr.write(value) };
+        // SAFETY: the write above initialized `*ptr`, and the region is this
+        // borrow's alone for the reason given there.
+        Some(unsafe { &mut *ptr.as_ptr() })
     }
 
     #[cfg(test)]
@@ -215,7 +215,7 @@ impl Arena {
         }
         // SAFETY: `start <= end <= cap`, so the offset stays inside the one
         // allocation `ptr` owns.
-        Some(unsafe { NonNull::new_unchecked(self.ptr.as_ptr().add(start)) })
+        Some(unsafe { self.ptr.add(start) })
     }
 }
 

@@ -873,13 +873,13 @@ impl VkContext {
                 base_array_layer: 0,
                 layer_count: 1,
             };
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-            // slice these commands name is live for the call.
-            unsafe {
-                device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-                device.cmd_clear_attachments(cmd, &[clear], &[rect]);
-                device.cmd_end_render_pass(cmd);
-            }
+            // SAFETY: `cmd` is recording outside any render pass, and the RT render pass and
+            // framebuffer are owned by `rt`.
+            unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
+            // SAFETY: `cmd` is inside the render pass begun above, whose color attachment is 0.
+            unsafe { device.cmd_clear_attachments(cmd, &[clear], &[rect]) };
+            // SAFETY: closes the render pass begun above on the same `cmd`.
+            unsafe { device.cmd_end_render_pass(cmd) };
             self.encode_reflection_composite(cmd, rt.output.view, frame_idx);
             return;
         }
@@ -911,13 +911,17 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        // SAFETY: `cmd` is recording outside any render pass, and the RT render pass and
+        // framebuffer are owned by `rt`.
+        unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
+        // SAFETY: `cmd` is recording inside the render pass begun above.
+        unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp)) };
+        // SAFETY: same recording `cmd`; `scissor` is a local that outlives the call.
+        unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor)) };
+        // SAFETY: `pso` is owned by `rt` and was built against its render pass.
+        unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pso.handle()) };
+        // SAFETY: this frame's resolve set is owned by `rt` and matches set 0 of `layout`.
         unsafe {
-            device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pso.handle());
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -926,7 +930,10 @@ impl VkContext {
                 std::slice::from_ref(&rt.resolve_sets[frame_idx]),
                 &[],
             );
-            // set 1: the global set, for the reflection-probe miss fallback.
+        }
+        // set 1: the global set, for the reflection-probe miss fallback.
+        // SAFETY: this frame's global set is owned by `self.descriptors` and outlives the frame.
+        unsafe {
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -935,7 +942,11 @@ impl VkContext {
                 std::slice::from_ref(&self.descriptors.global_sets[frame_idx]),
                 &[],
             );
-            if textured {
+        }
+        if textured {
+            // SAFETY: the textured layout has a set 2, and the bindless set is owned by
+            // `self.cull`.
+            unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -945,9 +956,11 @@ impl VkContext {
                     &[],
                 );
             }
-            device.cmd_draw(cmd, 3, 1, 0, 0);
-            device.cmd_end_render_pass(cmd);
         }
+        // SAFETY: the resolve pipeline and its sets are bound above on the recording `cmd`.
+        unsafe { device.cmd_draw(cmd, 3, 1, 0, 0) };
+        // SAFETY: closes the render pass begun above on the same `cmd`.
+        unsafe { device.cmd_end_render_pass(cmd) };
         // Blur the trace's radiance+weight by roughness and composite it over the
         // scene into the reflection composite's output (the scene image the post
         // stack consumes). No-op when the composite is absent.

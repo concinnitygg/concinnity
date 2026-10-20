@@ -307,16 +307,16 @@ impl TransientImagePool {
     // already idled the device and destroyed any framebuffer that referenced
     // these views.
     pub(super) fn destroy(&mut self, device: &VkDevice) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            for p in &self.images {
-                device.destroy_image_view(p.view, None);
-                device.destroy_image(p.image, None);
-            }
-            for &mem in &self.slot_memories {
-                device.free_memory(mem, None);
-            }
+        // The caller has idled the device, so no submission still references these handles.
+        for p in &self.images {
+            // SAFETY: the view was created from this device and is destroyed exactly once here.
+            unsafe { device.destroy_image_view(p.view, None) };
+            // SAFETY: the image was created from this device, and its view is destroyed above.
+            unsafe { device.destroy_image(p.image, None) };
+        }
+        for &mem in &self.slot_memories {
+            // SAFETY: every image bound to this slot memory was destroyed above.
+            unsafe { device.free_memory(mem, None) };
         }
         self.images.clear();
         self.slot_memories.clear();

@@ -457,35 +457,38 @@ impl PlanarReflectionSet {
             }
             return;
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor
-        // and slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&[
-                transition_barrier(
-                    color,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                    D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
-                ),
-                transition_barrier(
-                    resolve,
-                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                    D3D12_RESOURCE_STATE_RESOLVE_DEST,
-                ),
-            ]);
-            cmd.ResolveSubresource(resolve, 0, color, 0, HDR_FORMAT);
-            cmd.ResourceBarrier(&[
-                transition_barrier(
-                    resolve,
-                    D3D12_RESOURCE_STATE_RESOLVE_DEST,
-                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                ),
-                transition_barrier(
-                    color,
-                    D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
-                    D3D12_RESOURCE_STATE_RENDER_TARGET,
-                ),
-            ]);
-        }
+        let to_resolve = [
+            transition_barrier(
+                color,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
+            ),
+            transition_barrier(
+                resolve,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_RESOLVE_DEST,
+            ),
+        ];
+        // SAFETY: the command list is recording; the shared color sits in RENDER_TARGET and the
+        // plane's resolve in PIXEL_SHADER_RESOURCE, as this set leaves them.
+        unsafe { cmd.ResourceBarrier(&to_resolve) };
+        // SAFETY: the barrier above put the color in RESOLVE_SOURCE and the resolve in
+        // RESOLVE_DEST, and both share `HDR_FORMAT`.
+        unsafe { cmd.ResolveSubresource(resolve, 0, color, 0, HDR_FORMAT) };
+        let from_resolve = [
+            transition_barrier(
+                resolve,
+                D3D12_RESOURCE_STATE_RESOLVE_DEST,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            ),
+            transition_barrier(
+                color,
+                D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+            ),
+        ];
+        // SAFETY: both resources are in the resolve states the first barrier moved them to.
+        unsafe { cmd.ResourceBarrier(&from_resolve) };
     }
 }
 
@@ -567,13 +570,15 @@ impl DxContext {
                 self.probe.book.records(),
             );
             clustered[slot] = cluster_params.use_clusters != 0;
-            // SAFETY: the ring entry is `MIRROR_CBV_SIZE` bytes and `ClusterParams`
-            // (128) fits past `MIRROR_CLUSTER_OFFSET`; the entry is this frame's own,
-            // as for the view above.
+            // SAFETY: the ring entry is `MIRROR_CBV_SIZE` bytes, so `MIRROR_CLUSTER_OFFSET`
+            // stays inside it.
+            let cluster_dst = unsafe { set.view_ptrs[ring].add(MIRROR_CLUSTER_OFFSET) };
+            // SAFETY: `ClusterParams` (128) fits past `MIRROR_CLUSTER_OFFSET`; the entry is this
+            // frame's own, as for the view above.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     (&raw const cluster_params).cast::<u8>(),
-                    set.view_ptrs[ring].add(MIRROR_CLUSTER_OFFSET),
+                    cluster_dst,
                     size_of::<ClusterParams>(),
                 );
             }

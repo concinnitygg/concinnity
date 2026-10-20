@@ -320,12 +320,11 @@ pub(in crate::directx) fn zero_default_buffer(
         D3D12_RESOURCE_STATE_COMMON,
         D3D12_RESOURCE_STATE_COPY_DEST,
     );
-    // SAFETY: the command list is in the recording state, and every resource, descriptor and slice
-    // these commands name is live for the call.
-    unsafe {
-        list.ResourceBarrier(&[to_copy_dest]);
-        list.CopyBufferRegion(target, 0, &*upload, 0, bytes);
-    }
+    // SAFETY: the new list is in the recording state, and `target` is live in COMMON.
+    unsafe { list.ResourceBarrier(&[to_copy_dest]) };
+    // SAFETY: `target` is in COPY_DEST after the barrier above, and the zeroed upload buffer
+    // holds `bytes` bytes and stays alive until the fence wait below.
+    unsafe { list.CopyBufferRegion(target, 0, &*upload, 0, bytes) };
     let back_to_uav = transition_barrier(
         target,
         D3D12_RESOURCE_STATE_COPY_DEST,
@@ -409,13 +408,14 @@ impl DxContext {
             return;
         };
         for emitter in self.particle.system.emitters(frame) {
-            // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer
-            // that init sized for `MAX_EMITTERS` slots of this payload, and the source is a
-            // separate live value, so the ranges cannot overlap.
+            let offset = usize::saturating_from(emitter.id as u64 * resources.params_stride);
+            // SAFETY: init sized the persistent mapping for `MAX_EMITTERS` slots of
+            // `params_stride` bytes, and emitter ids stay below `MAX_EMITTERS`.
+            let dst = unsafe { resources.params_ubo_ptrs[frame_idx].add(offset) };
+            // SAFETY: `dst` starts this emitter's UPLOAD-heap slot, which holds one
+            // `ParticleParams`, and the source is a separate live value, so the ranges cannot
+            // overlap.
             unsafe {
-                let dst = resources.params_ubo_ptrs[frame_idx].add(usize::saturating_from(
-                    emitter.id as u64 * resources.params_stride,
-                ));
                 std::ptr::copy_nonoverlapping(
                     (&raw const emitter.params).cast::<u8>(),
                     dst,
@@ -450,22 +450,21 @@ impl DxContext {
         // through its root UAV. Each
         // emitter is independent so no UAV barrier is needed between dispatches
         // (resources are disjoint).
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetComputeRootSignature(&resources.simulate_root_sig);
-            cmd.SetPipelineState(&resources.simulate_pso);
-        }
+        // SAFETY: the command list is recording, and the simulate root signature is owned by
+        // `resources`.
+        unsafe { cmd.SetComputeRootSignature(&resources.simulate_root_sig) };
+        // SAFETY: the simulate PSO is owned by `resources` and matches the root signature above.
+        unsafe { cmd.SetPipelineState(&resources.simulate_pso) };
         for emitter in self.particle.system.emitters(&frame) {
             let params_gva = Self::particle_params_gva(resources, frame_idx, emitter.id);
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.SetComputeRootConstantBufferView(0, params_gva);
-                cmd.SetComputeRootUnorderedAccessView(1, com::gpu_va(&emitter.gpu.pool));
-                let groups = emitter.record.max_particles.div_ceil(64);
-                cmd.Dispatch(groups, 1, 1);
-            }
+            // SAFETY: `params_gva` addresses this emitter's slot in this frame's params ring.
+            unsafe { cmd.SetComputeRootConstantBufferView(0, params_gva) };
+            let pool_gva = com::gpu_va(&emitter.gpu.pool);
+            // SAFETY: the emitter's pool is live and already in UNORDERED_ACCESS.
+            unsafe { cmd.SetComputeRootUnorderedAccessView(1, pool_gva) };
+            let groups = emitter.record.max_particles.div_ceil(64);
+            // SAFETY: the simulate pipeline and both root arguments it reads are bound above.
+            unsafe { cmd.Dispatch(groups, 1, 1) };
         }
     }
 
@@ -529,49 +528,59 @@ impl DxContext {
 
             let w = self.targets.extent.render_width;
             let h = self.targets.extent.render_height;
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
+            let viewport = D3D12_VIEWPORT {
+                TopLeftX: 0.0,
+                TopLeftY: 0.0,
+                Width: w as f32,
+                Height: h as f32,
+                MinDepth: 0.0,
+                MaxDepth: 1.0,
+            };
+            let scissor = RECT {
+                left: 0,
+                top: 0,
+                right: i32::saturating_from(w),
+                bottom: i32::saturating_from(h),
+            };
+            // SAFETY: the command list is recording, and `rtvs` is a local array of two live
+            // RTVs that outlives the call.
+            unsafe { cmd.OMSetRenderTargets(2, Some(rtvs.as_ptr()), false, None) };
+            // SAFETY: the viewport slice is a local that outlives the call.
+            unsafe { cmd.RSSetViewports(&[viewport]) };
+            // SAFETY: the scissor slice is a local that outlives the call.
+            unsafe { cmd.RSSetScissorRects(&[scissor]) };
+            // SAFETY: setting the topology only needs a recording command list.
             unsafe {
-                cmd.OMSetRenderTargets(2, Some(rtvs.as_ptr()), false, None);
-                let viewport = D3D12_VIEWPORT {
-                    TopLeftX: 0.0,
-                    TopLeftY: 0.0,
-                    Width: w as f32,
-                    Height: h as f32,
-                    MinDepth: 0.0,
-                    MaxDepth: 1.0,
-                };
-                cmd.RSSetViewports(&[viewport]);
-                let scissor = RECT {
-                    left: 0,
-                    top: 0,
-                    right: i32::saturating_from(w),
-                    bottom: i32::saturating_from(h),
-                };
-                cmd.RSSetScissorRects(&[scissor]);
                 cmd.IASetPrimitiveTopology(
                     windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
                 );
-                cmd.SetPipelineState(&resources.render_pso);
-                cmd.SetGraphicsRootSignature(&resources.render_root_sig);
-                cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-                cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-                // Main depth is already in a shader-resource state: the graph
-                // declares this pass's depth read and emits the transition.
-                cmd.set_graphics_srv_table(4, resources.depth_srv_gpu);
             }
+            // SAFETY: the render PSO is owned by `resources` and outlives the recording.
+            unsafe { cmd.SetPipelineState(&resources.render_pso) };
+            // SAFETY: the render root signature is owned by `resources` and matches the PSO above.
+            unsafe { cmd.SetGraphicsRootSignature(&resources.render_root_sig) };
+            // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+            unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+            // SAFETY: `view_gva` addresses this frame's view constants written above.
+            unsafe { cmd.SetGraphicsRootConstantBufferView(0, view_gva) };
+            // Main depth is already in a shader-resource state: the graph
+            // declares this pass's depth read and emits the transition.
+            // SAFETY: the depth SRV is a live slot in the heap set above.
+            unsafe { cmd.set_graphics_srv_table(4, resources.depth_srv_gpu) };
 
             for emitter in visible {
                 let params_gva = Self::particle_params_gva(resources, frame_idx, emitter.id);
                 let albedo_srv_gpu = self.emitter_albedo_srv_gpu(emitter.id);
-                // SAFETY: the command list is in the recording state, and every resource,
-                // descriptor and slice these commands name is live for the call.
-                unsafe {
-                    cmd.SetGraphicsRootConstantBufferView(1, params_gva);
-                    cmd.SetGraphicsRootShaderResourceView(2, com::gpu_va(&emitter.gpu.pool));
-                    cmd.set_graphics_srv_table(3, albedo_srv_gpu);
-                    cmd.DrawInstanced(4, emitter.record.max_particles, 0, 0);
-                }
+                // SAFETY: `params_gva` addresses this emitter's slot in this frame's params ring.
+                unsafe { cmd.SetGraphicsRootConstantBufferView(1, params_gva) };
+                let pool_gva = com::gpu_va(&emitter.gpu.pool);
+                // SAFETY: the emitter's pool is live, and the graph moved it to a vertex-readable
+                // state for this pass.
+                unsafe { cmd.SetGraphicsRootShaderResourceView(2, pool_gva) };
+                // SAFETY: the emitter's albedo SRV is a live slot in the bound heap.
+                unsafe { cmd.set_graphics_srv_table(3, albedo_srv_gpu) };
+                // SAFETY: the pipeline and every root argument the draw reads are bound above.
+                unsafe { cmd.DrawInstanced(4, emitter.record.max_particles, 0, 0) };
                 self.inc_draw_calls(1);
             }
         }

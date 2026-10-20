@@ -90,12 +90,15 @@ pub(in crate::directx) fn write_spot_uniforms(
         let mut u = csm::empty_shadow_uniforms();
         u.light_vps[0] = sd.light_vp;
         u.active_cascades = 1;
-        // SAFETY: the mapping covers an UPLOAD-heap buffer created with a slot per slice,
-        // and the source is a separate allocation, so the ranges cannot overlap.
+        // SAFETY: the mapping covers an UPLOAD-heap buffer created with a slot per slice, so
+        // slot `i` at `stride` bytes apiece stays inside it.
+        let dst = unsafe { ptr.cast::<u8>().add(i * usize::saturating_from(stride)) };
+        // SAFETY: `dst` starts slot `i`, which holds one `ShadowUniforms`, and the source is a
+        // separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 (&raw const u).cast::<u8>(),
-                ptr.cast::<u8>().add(i * usize::saturating_from(stride)),
+                dst,
                 size_of::<ShadowUniforms>(),
             );
         }

@@ -124,8 +124,12 @@ impl Win32Window {
         window::set_window_mode(&mut self.win_state, mode);
     }
 
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "same receiver as the GLFW and AppKit windows the shared Vulkan code calls"
+    )]
     pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
-        window::set_window_size(&mut self.win_state, width, height);
+        window::set_window_size(&self.win_state, width, height);
     }
 
     // The display modes of the window's monitor, feeding the Resolution

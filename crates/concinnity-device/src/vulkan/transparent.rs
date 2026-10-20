@@ -2157,8 +2157,8 @@ impl VkContext {
             vk::AccessFlags::SHADER_READ,
             vk::AccessFlags::TRANSFER_WRITE,
         );
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        // SAFETY: `cmd` is recording outside a render pass, and the scene image and snapshot
+        // are live targets resting in SHADER_READ_ONLY_OPTIMAL.
         unsafe {
             device.cmd_pipeline_barrier(
                 cmd,
@@ -2170,24 +2170,27 @@ impl VkContext {
                 &[],
                 &[scene_to_src, snapshot_to_dst],
             );
-            let region = vk::ImageCopy::default()
-                .src_subresource(vk::ImageSubresourceLayers {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    mip_level: 0,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                })
-                .dst_subresource(vk::ImageSubresourceLayers {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    mip_level: 0,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                })
-                .extent(vk::Extent3D {
-                    width: extent.width,
-                    height: extent.height,
-                    depth: 1,
-                });
+        }
+        let region = vk::ImageCopy::default()
+            .src_subresource(vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .dst_subresource(vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .extent(vk::Extent3D {
+                width: extent.width,
+                height: extent.height,
+                depth: 1,
+            });
+        // SAFETY: the barrier above moved both images into the transfer layouts this copy names.
+        unsafe {
             device.cmd_copy_image(
                 cmd,
                 scene_image,
@@ -2267,12 +2270,10 @@ impl VkContext {
             .framebuffer(transparent.framebuffers[frame_idx].handle())
             .render_area(vk::Rect2D::default().extent(extent))
             .clear_values(&clears);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            set_flipped_viewport(device, cmd, extent);
-        }
+        // SAFETY: `cmd` is recording outside a render pass, and the render pass and this frame's
+        // framebuffer are owned by `transparent`.
+        unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
+        set_flipped_viewport(device, cmd, extent);
         self.bind_transparent_sets(transparent, &frame, transparent.view_sets[frame_idx].scene);
         let mut bound: Option<vk::Pipeline> = None;
         for &(kind, i) in order {
@@ -2330,12 +2331,12 @@ impl VkContext {
                 .framebuffer(layers.framebuffers[layer].handle())
                 .render_area(vk::Rect2D::default().extent(layers.extent))
                 .clear_values(&clears);
-            // SAFETY: `frame.cmd` is a command buffer in the recording state, and every handle
-            // and slice these commands name is live for the call.
+            // SAFETY: `frame.cmd` is recording outside a render pass, and the reflection render
+            // pass and this layer's framebuffer are live for the call.
             unsafe {
                 device.cmd_begin_render_pass(frame.cmd, &rp_begin, vk::SubpassContents::INLINE);
-                set_flipped_viewport(device, frame.cmd, layers.extent);
             }
+            set_flipped_viewport(device, frame.cmd, layers.extent);
             self.bind_transparent_sets(
                 transparent,
                 frame,
@@ -2427,11 +2428,11 @@ impl VkContext {
     ) {
         let device = &self.hw.device;
         let cmd = frame.cmd;
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            if kind == Producer::GlassMesh {
-                let d = &frame.mesh_draws[i];
+        if kind == Producer::GlassMesh {
+            let d = &frame.mesh_draws[i];
+            // SAFETY: `cmd` is recording inside the transparent render pass, and the mesh's
+            // params set matches set 1 of `frame.layout`.
+            unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -2440,21 +2441,29 @@ impl VkContext {
                     std::slice::from_ref(&d.params_set),
                     &[],
                 );
-                device.cmd_bind_vertex_buffers(
-                    cmd,
-                    0,
-                    &[self.geometry.vertex_buffer.buffer()],
-                    &[0],
-                );
+            }
+            let vertex_buffer = self.geometry.vertex_buffer.buffer();
+            // SAFETY: the scene vertex buffer is owned by `self.geometry` and outlives the frame.
+            unsafe { device.cmd_bind_vertex_buffers(cmd, 0, &[vertex_buffer], &[0]) };
+            // SAFETY: the scene index buffer is owned by `self.geometry` and outlives the frame.
+            unsafe {
                 device.cmd_bind_index_buffer(
                     cmd,
                     self.geometry.index_buffer.buffer(),
                     0,
                     vk::IndexType::UINT32,
                 );
+            }
+            // SAFETY: the mesh's set and the scene buffers are bound above, and `d` names its
+            // own slice of them.
+            unsafe {
                 device.cmd_draw_indexed(cmd, d.index_count, 1, d.index_offset, d.base_vertex, 0);
-            } else {
-                let r = &transparent.producer(kind).records[i];
+            }
+        } else {
+            let r = &transparent.producer(kind).records[i];
+            // SAFETY: `cmd` is recording inside the transparent render pass, and the record's
+            // per-frame params set matches set 1 of `frame.layout`.
+            unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -2463,15 +2472,21 @@ impl VkContext {
                     std::slice::from_ref(&r.gpu.params_sets[frame.frame_idx]),
                     &[],
                 );
-                device.cmd_bind_vertex_buffers(cmd, 0, &[r.gpu.vertex_buffer.buffer()], &[0]);
+            }
+            let vertex_buffer = r.gpu.vertex_buffer.buffer();
+            // SAFETY: the record's vertex buffer is owned by its GPU state for the frame.
+            unsafe { device.cmd_bind_vertex_buffers(cmd, 0, &[vertex_buffer], &[0]) };
+            // SAFETY: the record's index buffer is owned by its GPU state for the frame.
+            unsafe {
                 device.cmd_bind_index_buffer(
                     cmd,
                     r.gpu.index_buffer.buffer(),
                     0,
                     vk::IndexType::UINT16,
                 );
-                device.cmd_draw_indexed(cmd, r.gpu.index_count, 1, 0, 0, 0);
             }
+            // SAFETY: the record's set and its own buffers are bound above.
+            unsafe { device.cmd_draw_indexed(cmd, r.gpu.index_count, 1, 0, 0, 0) };
         }
         self.inc_draw_calls(1);
     }
@@ -2502,10 +2517,8 @@ fn set_flipped_viewport(device: &VkDevice, cmd: vk::CommandBuffer, extent: vk::E
         max_depth: 1.0,
     };
     let scissor = vk::Rect2D::default().extent(extent);
-    // SAFETY: `cmd` is a command buffer in the recording state, and the viewport and scissor
-    // slices are live for the call.
-    unsafe {
-        device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-        device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-    }
+    // SAFETY: `cmd` is a command buffer in the recording state, and `vp` is a live local.
+    unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp)) };
+    // SAFETY: same recording `cmd`; `scissor` is a live local.
+    unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor)) };
 }

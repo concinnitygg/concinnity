@@ -433,13 +433,11 @@ impl DeviceAllocator {
         device: &Device,
         frames_in_flight: usize,
     ) -> Self {
-        // SAFETY: property queries on a live handle; they only read.
-        let (memory_props, device_props) = unsafe {
-            (
-                instance.get_physical_device_memory_properties(physical_device),
-                instance.get_physical_device_properties(physical_device),
-            )
-        };
+        // SAFETY: `physical_device` was enumerated from this live instance; the query only reads.
+        let memory_props =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
+        // SAFETY: same live instance and physical device as above; a read-only property query.
+        let device_props = unsafe { instance.get_physical_device_properties(physical_device) };
         let max_allocations = device_props.limits.max_memory_allocation_count;
         Self {
             device: device.clone(),
@@ -678,15 +676,21 @@ impl DeviceAllocator {
     }
 
     fn destroy_retired(&self, retired: Retired) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
-        unsafe {
-            for view in retired.views {
-                self.device.destroy_image_view(view, None);
+        for view in retired.views {
+            // SAFETY: the view was created from this device and is destroyed exactly once; the
+            // caller has already waited for the device to go idle, so no submission references it.
+            unsafe { self.device.destroy_image_view(view, None) };
+        }
+        match retired.handle {
+            PooledHandle::Buffer(buffer) => {
+                // SAFETY: the buffer was created from this device and retired once; the caller's
+                // idle wait means no in-flight submission still reads it.
+                unsafe { self.device.destroy_buffer(buffer, None) };
             }
-            match retired.handle {
-                PooledHandle::Buffer(buffer) => self.device.destroy_buffer(buffer, None),
-                PooledHandle::Image(image) => self.device.destroy_image(image, None),
+            PooledHandle::Image(image) => {
+                // SAFETY: the image's views were destroyed above, and the idle device no longer
+                // references it, so this is its last use.
+                unsafe { self.device.destroy_image(image, None) };
             }
         }
     }
@@ -943,15 +947,22 @@ mod tests {
         // Each maps at its own offset, and the ranges do not overlap.
         assert!(!a.mapped_ptr().is_null());
         assert!(!b.mapped_ptr().is_null());
-        // SAFETY: both buffers are HOST_VISIBLE | HOST_COHERENT and were sized to at least the cull
-        // count's worth of records, so each mapped pointer covers the range being zeroed.
-        unsafe {
-            std::ptr::write_bytes(a.mapped_ptr(), 0xAA, 1024);
-            std::ptr::write_bytes(b.mapped_ptr(), 0xBB, 1024);
-            assert_eq!(*a.mapped_ptr(), 0xAA);
-            assert_eq!(*a.mapped_ptr().add(1023), 0xAA);
-            assert_eq!(*b.mapped_ptr(), 0xBB);
-        }
+        // SAFETY: `a` is HOST_VISIBLE | HOST_COHERENT and sized to 1024 bytes, so its mapping
+        // covers the range being filled.
+        unsafe { std::ptr::write_bytes(a.mapped_ptr(), 0xAA, 1024) };
+        // SAFETY: `b` is a separate 1024-byte host-visible lease, so its mapping covers the fill.
+        unsafe { std::ptr::write_bytes(b.mapped_ptr(), 0xBB, 1024) };
+        // SAFETY: byte 0 of `a`'s mapping was written by the fill above.
+        let a_first = unsafe { *a.mapped_ptr() };
+        assert_eq!(a_first, 0xAA);
+        // SAFETY: offset 1023 is the last byte inside `a`'s 1024-byte mapping.
+        let a_last = unsafe { a.mapped_ptr().add(1023) };
+        // SAFETY: `a_last` points at an initialized byte of `a`'s live mapping.
+        let a_last = unsafe { *a_last };
+        assert_eq!(a_last, 0xAA);
+        // SAFETY: byte 0 of `b`'s mapping was written by its fill above.
+        let b_first = unsafe { *b.mapped_ptr() };
+        assert_eq!(b_first, 0xBB);
 
         drop(a);
         drop(b);
@@ -976,20 +987,20 @@ mod tests {
         buffer.write_bytes(10, &[0xEE, 0xEE]);
         buffer.zero_bytes(10, 2);
         buffer.zero_bytes(12, 0);
-        // SAFETY: the buffer is HOST_VISIBLE | HOST_COHERENT, so its mapped
-        // pointer covers the 1024 requested bytes; every read is in range.
-        unsafe {
-            let p = buffer.mapped_ptr();
-            assert_eq!(*p, 0x11);
-            assert_eq!(*p.add(1), 0x22);
-            assert_eq!(
-                std::ptr::read_unaligned(p.add(4).cast::<u32>()),
-                0x3344_5566
-            );
-            assert_eq!(*p.add(8), 0x77);
-            assert_eq!(*p.add(9), 0x88);
-            assert_eq!(*p.add(10), 0);
-            assert_eq!(*p.add(11), 0);
+        // The buffer is HOST_VISIBLE | HOST_COHERENT, so its mapping covers the
+        // 1024 requested bytes and every read below is in range.
+        let bytes = buffer.mapped_ptr();
+        // SAFETY: offset 4 plus a `u32` stays inside the 1024-byte mapping.
+        let word = unsafe { bytes.add(4) }.cast::<[u8; 4]>();
+        // SAFETY: `word` points at 4 initialized bytes of the live mapping.
+        let word = unsafe { word.read() };
+        assert_eq!(u32::from_ne_bytes(word), 0x3344_5566);
+        for (offset, expected) in [(0, 0x11), (1, 0x22), (8, 0x77), (9, 0x88), (10, 0), (11, 0)] {
+            // SAFETY: every offset in the table is below the 1024-byte mapping length.
+            let byte = unsafe { bytes.add(offset) };
+            // SAFETY: `byte` points into the live mapping and the write calls above initialized it.
+            let byte = unsafe { *byte };
+            assert_eq!(byte, expected);
         }
 
         drop(buffer);

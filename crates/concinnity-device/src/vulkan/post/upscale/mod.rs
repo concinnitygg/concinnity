@@ -571,7 +571,9 @@ unsafe fn copy_ext_names(count: u32, exts: *const *const c_char) -> Vec<CString>
     let mut out = Vec::with_capacity(count as usize);
     for i in 0..count as usize {
         // SAFETY: `exts` points at `count` entries the SDK just wrote, and `i` is below `count`.
-        let p = unsafe { *exts.add(i) };
+        let slot = unsafe { exts.add(i) };
+        // SAFETY: `slot` is in bounds of the SDK's array per the offset above.
+        let p = unsafe { *slot };
         if !p.is_null() {
             // SAFETY: `p` is non-null per the check above and the SDK owns the NUL-terminated name
             // for the lifetime of the library; `to_owned` copies it out.

@@ -57,12 +57,15 @@ mod imp {
         let mut info: libc::mach_task_basic_info = unsafe { std::mem::zeroed() };
         let mut count: libc::mach_msg_type_number_t =
             saturating_u32(size_of::<libc::mach_task_basic_info>() / size_of::<libc::natural_t>());
+        // SAFETY: `mach_task_self_` is the current task port (the raw static
+        // behind the deprecated `mach_task_self()` wrapper), set before `main`
+        // and never written after.
+        let task = unsafe { libc::mach_task_self_ };
         // SAFETY: `info`/`count` are a correctly sized MACH_TASK_BASIC_INFO
-        // output buffer; `mach_task_self_` is the current task port (the raw
-        // static behind the deprecated `mach_task_self()` wrapper).
+        // output buffer, and `task` is the current task port.
         let rc = unsafe {
             libc::task_info(
-                libc::mach_task_self_,
+                task,
                 libc::MACH_TASK_BASIC_INFO,
                 &raw mut info as libc::task_info_t,
                 &raw mut count,
@@ -115,10 +118,13 @@ mod imp {
 
     pub(super) fn process_resident_bytes() -> Option<u64> {
         let mut counters = PROCESS_MEMORY_COUNTERS::default();
-        // SAFETY: the counters buffer is sized to its own type, as the API requires.
+        // SAFETY: returns the constant current-process pseudo-handle, which needs no close.
+        let process = unsafe { GetCurrentProcess() };
+        // SAFETY: the counters buffer is sized to its own type, as the API requires, and
+        // `process` is the pseudo-handle from the call above.
         let ok = unsafe {
             GetProcessMemoryInfo(
-                GetCurrentProcess(),
+                process,
                 &raw mut counters,
                 saturating_u32(size_of::<PROCESS_MEMORY_COUNTERS>()),
             )

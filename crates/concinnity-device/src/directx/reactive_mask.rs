@@ -121,11 +121,11 @@ impl ReactiveMask {
         );
         // SAFETY: the command list is in the recording state, and the mask rests in
         // PIXEL_SHADER_RESOURCE on a frame the graph does not carry it.
-        unsafe {
-            cmd.ResourceBarrier(&[to_rt]);
-            cmd.ClearRenderTargetView(self.slots.rtv, &[0.0_f32; 4], None);
-            cmd.ResourceBarrier(&[to_read]);
-        }
+        unsafe { cmd.ResourceBarrier(&[to_rt]) };
+        // SAFETY: the barrier above put the mask in RENDER_TARGET, and its RTV slot is live.
+        unsafe { cmd.ClearRenderTargetView(self.slots.rtv, &[0.0_f32; 4], None) };
+        // SAFETY: the list is recording, and the mask is still owned by `self`.
+        unsafe { cmd.ResourceBarrier(&[to_read]) };
     }
 
     // Return a mask `clear_outside_graph` prepared to its resting state.

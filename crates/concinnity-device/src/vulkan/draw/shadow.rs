@@ -128,12 +128,9 @@ impl VkContext {
             // Raymarched SDF shadow casters into this cascade's DSV, after the
             // rasterized casters and within the same render pass (no re-clear);
             // the depth write test keeps the nearer occluder.
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                self.encode_sdf_shadow_cascade(cmd, frame_idx, cascade_idx);
-                device.cmd_end_render_pass(cmd);
-            }
+            self.encode_sdf_shadow_cascade(cmd, frame_idx, cascade_idx);
+            // SAFETY: `cmd` is recording inside this cascade's render pass, begun above.
+            unsafe { device.cmd_end_render_pass(cmd) };
         }
 
         // shadow_map's transitions are fully graph-driven (over every cascade
@@ -168,24 +165,24 @@ impl VkContext {
             .framebuffer(framebuffer)
             .render_area(vk::Rect2D::default().extent(extent))
             .clear_values(std::slice::from_ref(&clear_depth));
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            // Negative-height viewport: Y-flips NDC so Y-up matches Metal, and
-            // matches the `-ndc.y` the forward sampler applies.
-            let vp = vk::Viewport {
-                x: 0.0,
-                y: size as f32,
-                width: size as f32,
-                height: -(size as f32),
-                min_depth: 0.0,
-                max_depth: 1.0,
-            };
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-            let scissor = vk::Rect2D::default().extent(extent);
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-        }
+        // SAFETY: `cmd` is recording outside a render pass, and the shadow render pass and the
+        // cascade's framebuffer are owned by `self.shadow`, which outlives the frame.
+        unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
+        // Negative-height viewport: Y-flips NDC so Y-up matches Metal, and
+        // matches the `-ndc.y` the forward sampler applies.
+        let vp = vk::Viewport {
+            x: 0.0,
+            y: size as f32,
+            width: size as f32,
+            height: -(size as f32),
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+        // SAFETY: the shadow render pass is open on `cmd`; `vp` is borrowed for the call.
+        unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp)) };
+        let scissor = vk::Rect2D::default().extent(extent);
+        // SAFETY: same open shadow pass; `scissor` is borrowed for the call.
+        unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor)) };
     }
 
     // GPU-driven body of one shadow view (inside the render pass the caller
@@ -209,10 +206,14 @@ impl VkContext {
         let stride = u32::saturating_from(size_of::<vk::DrawIndexedIndirectCommand>());
         let prefix = u32::saturating_from(self.state.draw.skinned_record_base());
 
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        // SAFETY: `cmd` is recording inside the caller's shadow render pass, and the depth-only
+        // bindless pipeline is owned by `self.cull`.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, sb_pipeline.handle());
+        }
+        // SAFETY: the view's uniforms set and this frame's bindless set are live descriptor-pool
+        // allocations matching `sb_layout`.
+        unsafe {
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -221,6 +222,10 @@ impl VkContext {
                 &[view.uniforms_set, self.cull.bindless_sets[frame_idx]],
                 &[],
             );
+        }
+        // SAFETY: `sb_layout` is the live layout of the pipeline bound above, and the view's
+        // `vp_index` is borrowed for the call.
+        unsafe {
             cmd_push_constants(
                 device,
                 cmd,
@@ -228,36 +233,54 @@ impl VkContext {
                 vk::ShaderStageFlags::VERTEX,
                 &view.vp_index,
             );
+        }
 
-            // Static + instance prefix against the static VB/IB.
+        // Static + instance prefix against the static VB/IB.
+        // SAFETY: the shared vertex buffer is owned by `self.geometry`, which outlives the frame.
+        unsafe {
             device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
+        }
+        // SAFETY: the shared 32-bit index buffer is owned by `self.geometry` beside the vertices.
+        unsafe {
             device.cmd_bind_index_buffer(
                 cmd,
                 self.geometry.index_buffer.buffer(),
                 0,
                 vk::IndexType::UINT32,
             );
-            if prefix > 0 {
-                device.cmd_draw_indexed_indirect(cmd, view.indirect, 0, prefix, stride);
-                self.inc_draw_calls(1);
-            }
+        }
+        if prefix > 0 {
+            // SAFETY: `view.indirect` is this view's cull-written indirect buffer, barriered
+            // ahead of the shadow pass; `prefix` records fit inside it.
+            unsafe { device.cmd_draw_indexed_indirect(cmd, view.indirect, 0, prefix, stride) };
+            self.inc_draw_calls(1);
+        }
 
-            // Skinned tail against the deformed VB + skinned IB.
-            if self.state.draw.n_skinned > 0
-                && let Some(deformed) = self.skinned.deformed.get(frame_idx)
-            {
+        // Skinned tail against the deformed VB + skinned IB.
+        if self.state.draw.n_skinned > 0
+            && let Some(deformed) = self.skinned.deformed.get(frame_idx)
+        {
+            // SAFETY: this frame's deformed vertex buffer is owned by `self.skinned` and was
+            // posed by the skin compute pass ahead of the shadow pass.
+            unsafe {
                 device.cmd_bind_vertex_buffers(
                     cmd,
                     0,
                     std::slice::from_ref(&deformed.buffer),
                     &[0],
                 );
+            }
+            // SAFETY: the skinned index buffer is owned by `self.skinned` and outlives the frame.
+            unsafe {
                 device.cmd_bind_index_buffer(
                     cmd,
                     self.skinned.index_buffer.buffer(),
                     0,
                     vk::IndexType::UINT32,
                 );
+            }
+            // SAFETY: the offset addresses the skinned tail inside the view's indirect buffer.
+            unsafe {
                 device.cmd_draw_indexed_indirect(
                     cmd,
                     view.indirect,
@@ -265,8 +288,8 @@ impl VkContext {
                     u32::saturating_from(self.state.draw.n_skinned),
                     stride,
                 );
-                self.inc_draw_calls(1);
             }
+            self.inc_draw_calls(1);
         }
     }
 }

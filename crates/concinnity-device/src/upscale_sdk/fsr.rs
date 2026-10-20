@@ -280,9 +280,14 @@ extern "C" fn ffx_message_sink(ty: u32, message: *const u16) {
         return;
     }
     let mut len = 0usize;
-    // SAFETY: FFX passes a NUL-terminated string that stays alive for the callback, so every unit
-    // up to and including the terminator is readable.
-    while unsafe { *message.add(len) } != 0 {
+    loop {
+        // SAFETY: FFX passes a NUL-terminated string that stays alive for the callback, and the
+        // scan has not passed the terminator, so offset `len` is inside it.
+        let unit = unsafe { message.add(len) };
+        // SAFETY: `unit` addresses a readable unit at or before the terminator.
+        if unsafe { *unit } == 0 {
+            break;
+        }
         len += 1;
     }
     // SAFETY: the scan above stopped at the terminator, so `len` initialized units start at
@@ -316,16 +321,25 @@ struct FfxEntryPoints {
 
 impl FfxEntryPoints {
     fn resolve(library: &impl SdkLibrary) -> Option<Self> {
-        // SAFETY: each type is the prototype `ffx_api.h` declares for that export.
-        unsafe {
-            Some(Self {
-                create_context: entry_point(library, c"ffxCreateContext")?,
-                destroy_context: entry_point(library, c"ffxDestroyContext")?,
-                configure: entry_point(library, c"ffxConfigure")?,
-                query: entry_point(library, c"ffxQuery")?,
-                dispatch: entry_point(library, c"ffxDispatch")?,
-            })
-        }
+        // SAFETY: `PfnFfxCreateContext` is the prototype `ffx_api.h` declares for this export.
+        let create_context: PfnFfxCreateContext =
+            unsafe { entry_point(library, c"ffxCreateContext") }?;
+        // SAFETY: `PfnFfxDestroyContext` matches the header's `ffxDestroyContext`.
+        let destroy_context: PfnFfxDestroyContext =
+            unsafe { entry_point(library, c"ffxDestroyContext") }?;
+        // SAFETY: `PfnFfxConfigure` matches the header's `ffxConfigure`.
+        let configure: PfnFfxConfigure = unsafe { entry_point(library, c"ffxConfigure") }?;
+        // SAFETY: `PfnFfxQuery` matches the header's `ffxQuery`.
+        let query: PfnFfxQuery = unsafe { entry_point(library, c"ffxQuery") }?;
+        // SAFETY: `PfnFfxDispatch` matches the header's `ffxDispatch`.
+        let dispatch: PfnFfxDispatch = unsafe { entry_point(library, c"ffxDispatch") }?;
+        Some(Self {
+            create_context,
+            destroy_context,
+            configure,
+            query,
+            dispatch,
+        })
     }
 }
 

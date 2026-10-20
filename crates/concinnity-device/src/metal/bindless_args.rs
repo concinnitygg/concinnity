@@ -68,11 +68,12 @@ impl<'a> ResourceIdWriter<'a> {
             "argument id {id} past a block of {} ids",
             self.ids
         );
-        // SAFETY: `id` is within the buffer's length in whole resource ids, the
-        // buffer is shared storage the CPU may write and outlives `self`, and
-        // its contents pointer is page-aligned, which satisfies
-        // `MTLResourceID`'s alignment.
-        unsafe { self.base.add(id).write(texture.gpuResourceID()) };
+        // SAFETY: `id` is within the buffer's length in whole resource ids, so the
+        // offset stays inside the allocation.
+        let slot = unsafe { self.base.add(id) };
+        // SAFETY: `slot` is in shared storage the CPU may write that outlives `self`,
+        // and the page-aligned contents pointer satisfies `MTLResourceID`'s alignment.
+        unsafe { slot.write(texture.gpuResourceID()) };
     }
 }
 

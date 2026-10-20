@@ -133,19 +133,21 @@ impl DxContext {
         //    the clear. Without this, `ResizeBuffers` fails with
         //    DXGI_ERROR_INVALID_CALL and the window can never be resized.
         for i in 0..self.hw.frames() {
+            let allocator = &self.commands.end_command_allocators[i];
+            let list = &self.commands.end_command_lists[i];
             // SAFETY: the fence for this frame slot was already waited on, so no submission still
-            // references what is being reset.
-            unsafe {
-                if let Err(e) = self.commands.end_command_allocators[i].Reset() {
-                    tracing::warn!("resize: could not reset an end command allocator: {e}");
-                }
-                if self.commands.end_command_lists[i]
-                    .Reset(&self.commands.end_command_allocators[i], None)
-                    .is_ok()
-                    && let Err(e) = self.commands.end_command_lists[i].Close()
-                {
-                    tracing::warn!("resize: could not close an end command list: {e}");
-                }
+            // references the allocator being reset.
+            if let Err(e) = unsafe { allocator.Reset() } {
+                tracing::warn!("resize: could not reset an end command allocator: {e}");
+            }
+            // SAFETY: the slot's GPU work is drained, so the list is not executing, and the
+            // allocator it records into is live.
+            if unsafe { list.Reset(allocator, None) }.is_err() {
+                continue;
+            }
+            // SAFETY: the reset above left the list recording, which is what `Close` requires.
+            if let Err(e) = unsafe { list.Close() } {
+                tracing::warn!("resize: could not close an end command list: {e}");
             }
         }
         self.swapchain.back_buffers.clear();

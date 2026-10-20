@@ -165,14 +165,14 @@ pub(crate) fn build_bindless_sampler_args(
     let buf = device
         .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
         .ok_or_else(|| allocation_failed("the sampler argument buffer"))?;
-    // SAFETY: `buf` was sized to the encoder's `encodedLength()`, and the
-    // indices 0..2 are the EngineSamplers member ids in declaration order.
-    unsafe {
-        encoder.setArgumentBuffer_offset(Some(&buf), 0);
-        encoder.setSamplerState_atIndex(Some(tex_sampler), 0);
-        encoder.setSamplerState_atIndex(Some(shadow_sampler), 1);
-        encoder.setSamplerState_atIndex(Some(cube_sampler), 2);
-    }
+    // SAFETY: `buf` was sized to the encoder's `encodedLength()`.
+    unsafe { encoder.setArgumentBuffer_offset(Some(&buf), 0) };
+    // SAFETY: id 0 is the first EngineSamplers member, the pool sampler, in `buf`.
+    unsafe { encoder.setSamplerState_atIndex(Some(tex_sampler), 0) };
+    // SAFETY: id 1 is the shadow compare sampler member, next in declaration order.
+    unsafe { encoder.setSamplerState_atIndex(Some(shadow_sampler), 1) };
+    // SAFETY: id 2 is the cube sampler, the last EngineSamplers member.
+    unsafe { encoder.setSamplerState_atIndex(Some(cube_sampler), 2) };
     Ok(buf)
 }
 

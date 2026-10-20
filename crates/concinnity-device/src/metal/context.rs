@@ -897,15 +897,13 @@ impl MtlContext {
             .icb_arg_buffer
             .as_ref()
             .expect("ICB argument buffer was just ensured");
-        // SAFETY: the argument buffer was sized to `encodedLength()`, and each
-        // bucket's ICB is encoded at its bucket index within the `icbs`
-        // `[[id(0)]]` array of the kernel's `ICBContainer` struct. Entries
-        // past `bucket_count` stay null; the kernel never touches them.
-        unsafe {
-            arg_encoder.setArgumentBuffer_offset(Some(arg_buf), 0);
-            for (b, icb) in icbs.iter().enumerate() {
-                arg_encoder.setIndirectCommandBuffer_atIndex(Some(icb), b);
-            }
+        // SAFETY: the argument buffer was sized to `encodedLength()`, so offset 0
+        // holds the kernel's whole `ICBContainer` struct.
+        unsafe { arg_encoder.setArgumentBuffer_offset(Some(arg_buf), 0) };
+        for (b, icb) in icbs.iter().enumerate() {
+            // SAFETY: bucket `b`'s ICB goes at its index of the `icbs` `[[id(0)]]`
+            // array; entries past `bucket_count` stay null and the kernel never reads them.
+            unsafe { arg_encoder.setIndirectCommandBuffer_atIndex(Some(icb), b) };
         }
 
         // Per-object status buffer: one u32 per command slot, private storage
@@ -943,14 +941,13 @@ impl MtlContext {
                 .icb_2_arg_buffer
                 .as_ref()
                 .expect("phase-2 ICB argument buffer was just ensured");
-            // SAFETY: same layout as the phase-1 set: each bucket's ICB at its
-            // index within the `icbs` `[[id(0)]]` array, and the argument
-            // buffer was sized to `encodedLength()`.
-            unsafe {
-                arg_encoder.setArgumentBuffer_offset(Some(arg_buf2), 0);
-                for (b, icb) in icbs_2.iter().enumerate() {
-                    arg_encoder.setIndirectCommandBuffer_atIndex(Some(icb), b);
-                }
+            // SAFETY: the phase-2 argument buffer was sized to `encodedLength()`,
+            // the same layout as the phase-1 set.
+            unsafe { arg_encoder.setArgumentBuffer_offset(Some(arg_buf2), 0) };
+            for (b, icb) in icbs_2.iter().enumerate() {
+                // SAFETY: as phase 1, each bucket's ICB at its index within the
+                // `icbs` `[[id(0)]]` array of the buffer bound just above.
+                unsafe { arg_encoder.setIndirectCommandBuffer_atIndex(Some(icb), b) };
             }
             self.cull.icbs_2 = icbs_2;
         }
@@ -1009,13 +1006,11 @@ impl MtlContext {
                 .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
                 .ok_or_else(|| super::error::allocation_failed("shadow view ICB argument buffer"))?
         };
-        // SAFETY: the argument buffer was sized to `encodedLength()`, and the ICB
-        // is encoded at slot 0 (the single `[[id(0)]]` member of the kernel's
-        // `ICBContainer` argument-buffer struct), exactly like the main ICB.
-        unsafe {
-            arg_encoder.setArgumentBuffer_offset(Some(&arg_buf), 0);
-            arg_encoder.setIndirectCommandBuffer_atIndex(Some(&icb), 0);
-        }
+        // SAFETY: the shadow view argument buffer was sized to `encodedLength()`.
+        unsafe { arg_encoder.setArgumentBuffer_offset(Some(&arg_buf), 0) };
+        // SAFETY: slot 0 is the single `[[id(0)]]` member of the kernel's
+        // `ICBContainer` struct in `arg_buf`, exactly like the main ICB.
+        unsafe { arg_encoder.setIndirectCommandBuffer_atIndex(Some(&icb), 0) };
         // One status word per command slot: each view's decision dispatch
         // writes its region, the encode dispatch reads them all back.
         let status = self
@@ -1073,14 +1068,12 @@ impl MtlContext {
                 .device
                 .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
                 .ok_or_else(|| super::error::allocation_failed("mirror ICB argument buffer"))?;
-            // SAFETY: the argument buffer is sized to `encodedLength()` and the
-            // ICB is encoded at slot 0, exactly like the main + shadow ICBs. Each
-            // slot re-points the shared encoder at its own (arg buffer, ICB) pair;
-            // the encoding is fully written before the next slot re-points it.
-            unsafe {
-                arg_encoder.setArgumentBuffer_offset(Some(&arg_buffer), 0);
-                arg_encoder.setIndirectCommandBuffer_atIndex(Some(&icb), 0);
-            }
+            // SAFETY: this slot's argument buffer is sized to `encodedLength()`; the
+            // previous slot's encoding was fully written before re-pointing the encoder.
+            unsafe { arg_encoder.setArgumentBuffer_offset(Some(&arg_buffer), 0) };
+            // SAFETY: the ICB goes at slot 0 of `arg_buffer`, the single `[[id(0)]]`
+            // member, exactly like the main + shadow ICBs.
+            unsafe { arg_encoder.setIndirectCommandBuffer_atIndex(Some(&icb), 0) };
             slots.push(super::cull::MirrorCullSlot { icb, arg_buffer });
         }
         // Shared single-pass status scratch: the mirror cull writes per-object
@@ -1394,13 +1387,12 @@ pub(super) fn write_buffer_region(
     if src.is_empty() {
         return Ok(());
     }
-    let dst = buffer.contents().as_ptr().cast::<u8>();
-    // SAFETY: `buffer` is shared storage so `contents()` is a live CPU mapping, and the bounds
-    // check above proved `offset + src.len()` is within its length. `src` is a separate borrow, so
-    // the ranges cannot overlap.
-    unsafe {
-        std::ptr::copy_nonoverlapping(src.as_ptr(), dst.add(offset), src.len());
-    }
+    let base = buffer.contents().as_ptr().cast::<u8>();
+    // SAFETY: the bounds check above proved `offset` is within the buffer's length.
+    let dst = unsafe { base.add(offset) };
+    // SAFETY: `buffer` is shared storage so `dst` is a live CPU mapping with `src.len()` bytes
+    // left, and `src` is a separate borrow, so the ranges cannot overlap.
+    unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len()) };
     Ok(())
 }
 
@@ -1423,12 +1415,12 @@ pub(super) fn zero_buffer_region(
     if len == 0 {
         return Ok(());
     }
-    let dst = buffer.contents().as_ptr().cast::<u8>();
-    // SAFETY: `buffer` is shared storage so `contents()` is a live CPU mapping, and the bounds
-    // check above proved `offset + len` is within its length.
-    unsafe {
-        std::ptr::write_bytes(dst.add(offset), 0, len);
-    }
+    let base = buffer.contents().as_ptr().cast::<u8>();
+    // SAFETY: the bounds check above proved `offset` is within the buffer's length.
+    let dst = unsafe { base.add(offset) };
+    // SAFETY: `buffer` is shared storage so `dst` is a live CPU mapping, and the bounds check
+    // proved `offset + len` fits, so all `len` bytes are writable.
+    unsafe { std::ptr::write_bytes(dst, 0, len) };
     Ok(())
 }
 

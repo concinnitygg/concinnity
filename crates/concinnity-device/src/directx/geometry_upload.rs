@@ -73,15 +73,11 @@ struct StagingBuffer {
 impl UploadBuffer for StagingBuffer {
     fn write(&self, offset: u64, bytes: &[u8]) {
         // SAFETY: `base` is the persistent map of the ring's UPLOAD-heap buffer,
-        // and the ring writes `bytes` at `offset` inside its capacity. The source
-        // is a separate borrow, so the ranges cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                self.base.add(usize::saturating_from(offset)),
-                bytes.len(),
-            );
-        }
+        // and the ring writes at `offset` inside its capacity.
+        let dst = unsafe { self.base.add(usize::saturating_from(offset)) };
+        // SAFETY: the ring fits `bytes` at `dst` inside the mapping, and the source is a
+        // separate borrow, so the ranges cannot overlap.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len()) };
     }
 }
 
@@ -179,14 +175,12 @@ impl GeometryUploads {
         list.sources.clear();
         let CopyList { allocator, cmd, .. } = &list;
         // SAFETY: the list's last submit retired `depth` ticks ago, so nothing in flight still
-        // references what is being reset.
-        unsafe {
-            allocator
-                .Reset()
-                .map_err(|e| map_hresult(e.code(), "geometry copy allocator reset"))?;
-            cmd.Reset(allocator, None)
-                .map_err(|e| map_hresult(e.code(), "geometry copy list reset"))?;
-        }
+        // references the allocator's memory.
+        unsafe { allocator.Reset() }
+            .map_err(|e| map_hresult(e.code(), "geometry copy allocator reset"))?;
+        // SAFETY: the list is closed from its last submit, and `allocator` was just reset.
+        unsafe { cmd.Reset(allocator, None) }
+            .map_err(|e| map_hresult(e.code(), "geometry copy list reset"))?;
         let targets = touched_targets(&self.queued);
         let to_copy: Vec<_> = targets
             .iter()
@@ -208,12 +202,13 @@ impl GeometryUploads {
                 )
             })
             .collect();
-        // SAFETY: the command list is in the recording state, and every resource these commands
-        // name is live for the call: the shared buffers through `dest`, each source ring through
-        // its queued copy.
-        unsafe {
-            cmd.ResourceBarrier(&to_copy);
-            for copy in &self.queued {
+        // SAFETY: the list was reset into the recording state above, and the shared buffers
+        // `dest` names are live and rest in the states the barriers leave from.
+        unsafe { cmd.ResourceBarrier(&to_copy) };
+        for copy in &self.queued {
+            // SAFETY: the target buffer is in COPY_DEST from the barrier above, and the source
+            // ring is kept alive by its queued copy until this list's submit retires.
+            unsafe {
                 cmd.CopyBufferRegion(
                     copy.target.pick(dest),
                     copy.dst_offset,
@@ -222,10 +217,12 @@ impl GeometryUploads {
                     copy.size,
                 );
             }
-            cmd.ResourceBarrier(&to_rest);
-            cmd.Close()
-                .map_err(|e| map_hresult(e.code(), "geometry copy list close"))?;
         }
+        // SAFETY: every touched target is in COPY_DEST, which these barriers leave from.
+        unsafe { cmd.ResourceBarrier(&to_rest) };
+        // SAFETY: the command list is live and in the recording state, which is what `Close`
+        // requires.
+        unsafe { cmd.Close() }.map_err(|e| map_hresult(e.code(), "geometry copy list close"))?;
         let submit: ID3D12CommandList = cmd
             .cast()
             .map_err(|e| map_hresult(e.code(), "geometry copy list cast"))?;
@@ -356,21 +353,17 @@ mod tests {
                 D3D12_RESOURCE_STATE_COPY_DEST,
             )
             .expect("readback places");
-        // SAFETY: the command list is in the recording state, and both resources are live for the
-        // call.
-        one_shot_submit(device, queue, |cmd| unsafe {
+        one_shot_submit(device, queue, |cmd| {
             let rest = target.resting_state();
-            cmd.ResourceBarrier(&[transition_barrier(
-                buffer,
-                rest,
-                D3D12_RESOURCE_STATE_COPY_SOURCE,
-            )]);
-            cmd.CopyBufferRegion(&*readback, 0, &**buffer, offset, len as u64);
-            cmd.ResourceBarrier(&[transition_barrier(
-                buffer,
-                D3D12_RESOURCE_STATE_COPY_SOURCE,
-                rest,
-            )]);
+            let to_src = transition_barrier(buffer, rest, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            // SAFETY: the command list is recording, and `buffer` is live in its resting state.
+            unsafe { cmd.ResourceBarrier(&[to_src]) };
+            // SAFETY: `buffer` is in COPY_SOURCE and `readback` is a live COPY_DEST buffer of
+            // `len` bytes.
+            unsafe { cmd.CopyBufferRegion(&*readback, 0, &**buffer, offset, len as u64) };
+            let to_rest = transition_barrier(buffer, D3D12_RESOURCE_STATE_COPY_SOURCE, rest);
+            // SAFETY: `buffer` was moved to COPY_SOURCE by the first barrier.
+            unsafe { cmd.ResourceBarrier(&[to_rest]) };
         })
         .expect("readback copy");
         let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();

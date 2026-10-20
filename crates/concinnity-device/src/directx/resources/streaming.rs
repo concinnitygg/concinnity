@@ -47,9 +47,7 @@ impl DxContext {
 
         // Copy the build-time geometry into the start of the grown buffers so
         // every existing draw's offsets stay valid.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
+        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| {
             let v_src = transition_barrier(
                 &self.scene.geometry.vertex_buffer,
                 D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
@@ -60,21 +58,31 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
             );
-            cmd.ResourceBarrier(&[v_src, i_src]);
-            cmd.CopyBufferRegion(
-                &*new_vbuf,
-                0,
-                &*self.scene.geometry.vertex_buffer,
-                0,
-                old_v_len,
-            );
-            cmd.CopyBufferRegion(
-                &*new_ibuf,
-                0,
-                &*self.scene.geometry.index_buffer,
-                0,
-                old_i_len,
-            );
+            // SAFETY: the one-shot list is recording, and the scene buffers are owned by
+            // `self.scene.geometry`.
+            unsafe { cmd.ResourceBarrier(&[v_src, i_src]) };
+            // SAFETY: the old vertex buffer is in COPY_SOURCE, and the new one is `new_v_len`
+            // long, which covers the `old_v_len` bytes copied.
+            unsafe {
+                cmd.CopyBufferRegion(
+                    &*new_vbuf,
+                    0,
+                    &*self.scene.geometry.vertex_buffer,
+                    0,
+                    old_v_len,
+                );
+            }
+            // SAFETY: the old index buffer is in COPY_SOURCE, and the new one is `new_i_len`
+            // long, which covers the `old_i_len` bytes copied.
+            unsafe {
+                cmd.CopyBufferRegion(
+                    &*new_ibuf,
+                    0,
+                    &*self.scene.geometry.index_buffer,
+                    0,
+                    old_i_len,
+                );
+            }
             let v_dst = transition_barrier(
                 &new_vbuf,
                 D3D12_RESOURCE_STATE_COPY_DEST,
@@ -85,7 +93,9 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_COPY_DEST,
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
             );
-            cmd.ResourceBarrier(&[v_dst, i_dst]);
+            // SAFETY: the list is recording, and both grown buffers outlive the fence-waited
+            // submit.
+            unsafe { cmd.ResourceBarrier(&[v_dst, i_dst]) };
         })?;
 
         self.scene.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {

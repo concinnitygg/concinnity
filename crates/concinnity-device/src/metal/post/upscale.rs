@@ -142,34 +142,40 @@ impl MetalFXUpscaler {
         // SAFETY: the designated initializer for a fresh MTLFXTemporalScalerDescriptor, which takes
         // no arguments.
         let descriptor = unsafe { MTLFXTemporalScalerDescriptor::new() };
-        // SAFETY: plain descriptor property setters, all values in range.
-        unsafe {
-            // Color: matches the engine's pre-TAA scene format (RGBA16Float
-            // single-sample, written by the SSR resolve or the HDR resolve
-            // depending on configuration).
-            descriptor.setColorTextureFormat(MTLPixelFormat::RGBA16Float);
-            // Depth: the velocity pre-pass writes a single-sample Depth32Float
-            // depth buffer at render-res that doubles as the scaler depth
-            // input. (The main pass's MSAA depth is not directly usable.)
-            descriptor.setDepthTextureFormat(MTLPixelFormat::Depth32Float);
-            // Motion: the velocity pre-pass writes RG16Float UV-space motion
-            // vectors at render-res. The scaler interprets them in input
-            // pixel coords once `motionVectorScale` rescales the UV delta.
-            descriptor.setMotionTextureFormat(MTLPixelFormat::RG16Float);
-            // Output: drawable-res RGBA16Float so the existing post stack
-            // (bloom, composite) can read it without an additional format
-            // conversion. Composite handles ACES + LUT + FXAA when SDR;
-            // skips them on the HDR path.
-            descriptor.setOutputTextureFormat(MTLPixelFormat::RGBA16Float);
-            descriptor.setInputWidth(input_width as usize);
-            descriptor.setInputHeight(input_height as usize);
-            descriptor.setOutputWidth(output_width as usize);
-            descriptor.setOutputHeight(output_height as usize);
-            // The input is linear HDR at the frame's pre-exposure, which each
-            // encode hands over through `preExposure`, so leave auto-exposure
-            // off and let MetalFX use its built-in heuristic.
-            descriptor.setAutoExposureEnabled(false);
-        }
+        // Color: matches the engine's pre-TAA scene format (RGBA16Float
+        // single-sample, written by the SSR resolve or the HDR resolve
+        // depending on configuration).
+        // SAFETY: a plain setter on the fresh descriptor; RGBA16Float is a color format.
+        unsafe { descriptor.setColorTextureFormat(MTLPixelFormat::RGBA16Float) };
+        // Depth: the velocity pre-pass writes a single-sample Depth32Float
+        // depth buffer at render-res that doubles as the scaler depth
+        // input. (The main pass's MSAA depth is not directly usable.)
+        // SAFETY: Depth32Float is a depth format, as the depth slot requires.
+        unsafe { descriptor.setDepthTextureFormat(MTLPixelFormat::Depth32Float) };
+        // Motion: the velocity pre-pass writes RG16Float UV-space motion
+        // vectors at render-res. The scaler interprets them in input
+        // pixel coords once `motionVectorScale` rescales the UV delta.
+        // SAFETY: RG16Float is a two-channel format MetalFX accepts for motion.
+        unsafe { descriptor.setMotionTextureFormat(MTLPixelFormat::RG16Float) };
+        // Output: drawable-res RGBA16Float so the existing post stack
+        // (bloom, composite) can read it without an additional format
+        // conversion. Composite handles ACES + LUT + FXAA when SDR;
+        // skips them on the HDR path.
+        // SAFETY: a plain setter; RGBA16Float is a renderable color format.
+        unsafe { descriptor.setOutputTextureFormat(MTLPixelFormat::RGBA16Float) };
+        // SAFETY: the input width was clamped to the device's supported scale range.
+        unsafe { descriptor.setInputWidth(input_width as usize) };
+        // SAFETY: the input height went through the same clamp.
+        unsafe { descriptor.setInputHeight(input_height as usize) };
+        // SAFETY: the output width is the caller's drawable extent.
+        unsafe { descriptor.setOutputWidth(output_width as usize) };
+        // SAFETY: the output height is likewise the drawable extent.
+        unsafe { descriptor.setOutputHeight(output_height as usize) };
+        // The input is linear HDR at the frame's pre-exposure, which each
+        // encode hands over through `preExposure`, so leave auto-exposure
+        // off and let MetalFX use its built-in heuristic.
+        // SAFETY: a plain boolean property setter on the fresh descriptor.
+        unsafe { descriptor.setAutoExposureEnabled(false) };
         // The reactive mask input arrived in macOS 14.4; on an older OS the
         // descriptor does not know the selector, and the scaler runs without it.
         let reactive_available = objc2::runtime::NSObjectProtocol::respondsToSelector(
@@ -177,12 +183,10 @@ impl MetalFXUpscaler {
             objc2::sel!(setReactiveMaskTextureEnabled:),
         );
         if reactive_available {
-            // SAFETY: plain descriptor property setters, guarded by the
-            // selector check above; R8Unorm is a single-channel color format.
-            unsafe {
-                descriptor.setReactiveMaskTextureEnabled(true);
-                descriptor.setReactiveMaskTextureFormat(REACTIVE_MASK_FORMAT);
-            }
+            // SAFETY: the selector check above proved the descriptor knows this setter.
+            unsafe { descriptor.setReactiveMaskTextureEnabled(true) };
+            // SAFETY: guarded by the same check; R8Unorm is a single-channel color format.
+            unsafe { descriptor.setReactiveMaskTextureFormat(REACTIVE_MASK_FORMAT) };
         }
 
         // SAFETY: `descriptor` is fully configured above and `device` is live; MetalFX returns None
@@ -273,57 +277,60 @@ impl MtlContext {
             )
         })?;
 
-        // SAFETY: every texture set here is owned by `self` or the upscaler and outlives the encode
-        // below, and each matches the format the descriptor declared for that slot.
-        unsafe {
-            upscaler
-                .scaler
-                .setColorTexture(Some(scene_pre_taa.as_ref()));
-            upscaler.scaler.setDepthTexture(Some(gbuf.depth.as_ref()));
-            upscaler.scaler.setMotionTexture(Some(velocity));
-            upscaler
-                .scaler
-                .setOutputTexture(Some(upscaler.output.as_ref()));
-            // A frame no particle or transparent pass wrote the mask for gives
-            // the scaler none, which it reads as no pixel being reactive.
-            if upscaler.reactive {
-                let mask = reactive_written.then(|| self.targets.hdr.reactive_mask.as_ref());
-                upscaler.scaler.setReactiveMaskTexture(mask);
-            }
-
-            // Motion vectors are stored as `prev_uv - cur_uv` in UV space
-            // (RG16Float). The scaler expects motion in input-pixel coords,
-            // so the per-axis scale is the input texture extent.
-            upscaler
-                .scaler
-                .setMotionVectorScaleX(upscaler.input_width as f32);
-            upscaler
-                .scaler
-                .setMotionVectorScaleY(upscaler.input_height as f32);
-
-            // The jitter the projection matrix applied this frame in input
-            // pixel space (each Halton sample is in [-0.5, 0.5] pixels).
-            // `draw_frame` stashes it on the context before fan-out.
-            let [jx, jy] = self
-                .upscale
-                .jitter
-                .load(std::sync::atomic::Ordering::Relaxed);
-            upscaler.scaler.setJitterOffsetX(jx);
-            upscaler.scaler.setJitterOffsetY(jy);
-
-            // `depthReversed` means near is device depth 1.
-            upscaler.scaler.setDepthReversed(CAMERA_DEPTH.reversed);
-
-            // MetalFX divides the input by this, so its history holds steady
-            // across exposure changes.
-            upscaler.scaler.setPreExposure(self.pre_exposure.value());
-
-            // The first frame after a rebuild or a history reset discards
-            // history. The latch is raised on the main thread between frames.
-            upscaler
-                .scaler
-                .setReset(crate::upscale_reset::consume(&self.upscale.reset));
+        let scaler = &upscaler.scaler;
+        // SAFETY: the pre-TAA scene texture is owned by `self`, outlives the encode below, and
+        // matches the RGBA16Float color format the descriptor declared.
+        unsafe { scaler.setColorTexture(Some(scene_pre_taa.as_ref())) };
+        // SAFETY: the G-buffer depth is feature-owned, alive past the encode, and Depth32Float.
+        unsafe { scaler.setDepthTexture(Some(gbuf.depth.as_ref())) };
+        // SAFETY: the pooled velocity texture stays alive through the encode and is RG16Float.
+        unsafe { scaler.setMotionTexture(Some(velocity)) };
+        // SAFETY: the output texture is owned by the upscaler and was built with the usage
+        // the scaler requires.
+        unsafe { scaler.setOutputTexture(Some(upscaler.output.as_ref())) };
+        // A frame no particle or transparent pass wrote the mask for gives
+        // the scaler none, which it reads as no pixel being reactive.
+        if upscaler.reactive {
+            let mask = reactive_written.then(|| self.targets.hdr.reactive_mask.as_ref());
+            // SAFETY: the scaler was built with the reactive mask enabled, and the mask is a
+            // `REACTIVE_MASK_FORMAT` target owned by `self.targets` that outlives the encode.
+            unsafe { scaler.setReactiveMaskTexture(mask) };
         }
+
+        // Motion vectors are stored as `prev_uv - cur_uv` in UV space
+        // (RG16Float). The scaler expects motion in input-pixel coords,
+        // so the per-axis scale is the input texture extent.
+        // SAFETY: a plain float property on the live scaler.
+        unsafe { scaler.setMotionVectorScaleX(upscaler.input_width as f32) };
+        // SAFETY: as X, the input height the scaler was built for.
+        unsafe { scaler.setMotionVectorScaleY(upscaler.input_height as f32) };
+
+        // The jitter the projection matrix applied this frame in input
+        // pixel space (each Halton sample is in [-0.5, 0.5] pixels).
+        // `draw_frame` stashes it on the context before fan-out.
+        let [jx, jy] = self
+            .upscale
+            .jitter
+            .load(std::sync::atomic::Ordering::Relaxed);
+        // SAFETY: the jitter is a finite sub-pixel offset in input pixels.
+        unsafe { scaler.setJitterOffsetX(jx) };
+        // SAFETY: as X, a finite offset within half a pixel.
+        unsafe { scaler.setJitterOffsetY(jy) };
+
+        // `depthReversed` means near is device depth 1.
+        // SAFETY: a plain boolean property on the live scaler.
+        unsafe { scaler.setDepthReversed(CAMERA_DEPTH.reversed) };
+
+        // MetalFX divides the input by this, so its history holds steady
+        // across exposure changes.
+        // SAFETY: a plain float property on the live scaler, read at encode time.
+        unsafe { scaler.setPreExposure(self.pre_exposure.value()) };
+
+        // The first frame after a rebuild or a history reset discards
+        // history. The latch is raised on the main thread between frames.
+        let reset = crate::upscale_reset::consume(&self.upscale.reset);
+        // SAFETY: the reset flag is a plain boolean the scaler reads at the encode below.
+        unsafe { scaler.setReset(reset) };
 
         // MetalFX's encode is a single dispatch that doesn't go through a render
         // or compute encoder we own, so the standard `attach_render` /
@@ -333,9 +340,7 @@ impl MtlContext {
 
         // SAFETY: the scaler's input, output, and parameter slots were all set above, and `cmd_buf`
         // is the live command buffer for this frame.
-        unsafe {
-            upscaler.scaler.encodeToCommandBuffer(cmd_buf);
-        }
+        unsafe { scaler.encodeToCommandBuffer(cmd_buf) };
         Ok(0)
     }
 }

@@ -696,15 +696,19 @@ impl MtlContext {
                 RenderError::Other("failed to get raymarch scene-copy blit encoder".into())
             })?;
             blit.pushDebugGroup(&NSString::from_str("raymarch_scene_copy"));
-            // SAFETY: each pair is `targets.hdr`-owned and created with the same format and
-            // dimensions, which is what a whole-texture blit copy requires.
-            unsafe {
-                if refractive {
+            if refractive {
+                // SAFETY: the color resolve and its copy are `targets.hdr`-owned and created with
+                // the same format and dimensions, which a whole-texture blit copy requires.
+                unsafe {
                     blit.copyFromTexture_toTexture(
                         self.targets.hdr.hdr_resolve.as_ref(),
                         self.targets.hdr.hdr_resolve_copy.as_ref(),
                     );
                 }
+            }
+            // SAFETY: the depth resolve and depth copy are likewise a `targets.hdr`-owned pair
+            // of matching format and dimensions.
+            unsafe {
                 blit.copyFromTexture_toTexture(
                     self.targets.hdr.depth_resolve.as_ref(),
                     self.targets.hdr.depth_copy.as_ref(),

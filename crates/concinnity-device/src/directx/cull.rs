@@ -580,32 +580,37 @@ impl DxContext {
         };
         cull_params.planes = frustum.packed_planes();
 
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetComputeRootSignature(cull_root);
-            cmd.SetPipelineState(cull_pso);
-            // The Hi-Z SRV lives in the global SRV heap; the descriptor table
-            // at root param [3] needs that heap bound. Bind it
-            // unconditionally: when Hi-Z is disabled the kernel just skips
-            // sampling, but the descriptor table still has to point at a
-            // valid (live) descriptor.
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.set_compute_root_constants(0, &cull_params);
-            cmd.SetComputeRootShaderResourceView(1, object_gva);
-            cmd.SetComputeRootShaderResourceView(2, draw_args_gva);
-            if let Some(srv) = hiz_srv {
-                cmd.set_compute_srv_table(3, srv);
-            }
-            cmd.SetComputeRootUnorderedAccessView(4, com::gpu_va(indirect));
-            cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva);
-            // One thread per build-time object, 64-wide threadgroups.
-            cmd.Dispatch(
-                u32::saturating_from(self.state.draw.record_count()).div_ceil(64),
-                1,
-                1,
-            );
+        // SAFETY: the command list is recording, and the cull root signature is owned by
+        // `self.cull` for the context's lifetime.
+        unsafe { cmd.SetComputeRootSignature(cull_root) };
+        // SAFETY: the cull PSO is owned by `self.cull` and matches the root signature above.
+        unsafe { cmd.SetPipelineState(cull_pso) };
+        // The Hi-Z SRV lives in the global SRV heap; the descriptor table
+        // at root param [3] needs that heap bound. Bind it
+        // unconditionally: when Hi-Z is disabled the kernel just skips
+        // sampling, but the descriptor table still has to point at a
+        // valid (live) descriptor.
+        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: parameter 0 of the cull root signature holds `CullParams`-sized root constants.
+        unsafe { cmd.set_compute_root_constants(0, &cull_params) };
+        // SAFETY: `object_gva` addresses this frame's live object buffer.
+        unsafe { cmd.SetComputeRootShaderResourceView(1, object_gva) };
+        // SAFETY: `draw_args_gva` addresses this frame's live draw-args buffer.
+        unsafe { cmd.SetComputeRootShaderResourceView(2, draw_args_gva) };
+        if let Some(srv) = hiz_srv {
+            // SAFETY: the Hi-Z SRV slot lives in the heap set above.
+            unsafe { cmd.set_compute_srv_table(3, srv) };
         }
+        let indirect_gva = com::gpu_va(indirect);
+        // SAFETY: the indirect buffer is owned by `self.cull` for this frame slot.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(4, indirect_gva) };
+        // SAFETY: the cull-status buffer rests in UNORDERED_ACCESS, so it binds with no transition.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva) };
+        // One thread per build-time object, 64-wide threadgroups.
+        let groups = u32::saturating_from(self.state.draw.record_count()).div_ceil(64);
+        // SAFETY: the cull pipeline and every root argument it reads are bound above.
+        unsafe { cmd.Dispatch(groups, 1, 1) };
     }
 
     // Cull one reflection-probe cube face into the reserved capture slot
@@ -656,36 +661,45 @@ impl DxContext {
         };
         cull_params.planes = frustum.packed_planes();
 
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&[transition_barrier(
-                indirect,
-                D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            )]);
-            cmd.SetComputeRootSignature(cull_root);
-            cmd.SetPipelineState(cull_pso);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.set_compute_root_constants(0, &cull_params);
-            cmd.SetComputeRootShaderResourceView(1, object_gva);
-            cmd.SetComputeRootShaderResourceView(2, draw_args_gva);
-            if let Some(srv) = hiz_srv {
-                cmd.set_compute_srv_table(3, srv);
-            }
-            cmd.SetComputeRootUnorderedAccessView(4, com::gpu_va(indirect));
-            cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva);
-            cmd.Dispatch(
-                u32::saturating_from(self.state.draw.record_count()).div_ceil(64),
-                1,
-                1,
-            );
-            cmd.ResourceBarrier(&[transition_barrier(
-                indirect,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
-            )]);
+        let to_uav = transition_barrier(
+            indirect,
+            D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        );
+        // SAFETY: the command list is recording, and the slot's indirect buffer rests in
+        // INDIRECT_ARGUMENT between uses.
+        unsafe { cmd.ResourceBarrier(&[to_uav]) };
+        // SAFETY: the cull root signature is owned by `self.cull` for the context's lifetime.
+        unsafe { cmd.SetComputeRootSignature(cull_root) };
+        // SAFETY: the cull PSO is owned by `self.cull` and matches the root signature above.
+        unsafe { cmd.SetPipelineState(cull_pso) };
+        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: parameter 0 of the cull root signature holds `CullParams`-sized root constants.
+        unsafe { cmd.set_compute_root_constants(0, &cull_params) };
+        // SAFETY: `object_gva` addresses the slot's live object buffer.
+        unsafe { cmd.SetComputeRootShaderResourceView(1, object_gva) };
+        // SAFETY: `draw_args_gva` addresses the slot's live draw-args buffer.
+        unsafe { cmd.SetComputeRootShaderResourceView(2, draw_args_gva) };
+        if let Some(srv) = hiz_srv {
+            // SAFETY: the Hi-Z SRV slot lives in the heap set above and stays a live descriptor.
+            unsafe { cmd.set_compute_srv_table(3, srv) };
         }
+        let indirect_gva = com::gpu_va(indirect);
+        // SAFETY: the indirect buffer was moved to UNORDERED_ACCESS by the barrier above.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(4, indirect_gva) };
+        // SAFETY: the slot's cull-status buffer is live and rests in UNORDERED_ACCESS.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva) };
+        let groups = u32::saturating_from(self.state.draw.record_count()).div_ceil(64);
+        // SAFETY: the cull pipeline and every root argument it reads are bound above.
+        unsafe { cmd.Dispatch(groups, 1, 1) };
+        let to_indirect = transition_barrier(
+            indirect,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+        );
+        // SAFETY: the indirect buffer was moved to UNORDERED_ACCESS by the first barrier.
+        unsafe { cmd.ResourceBarrier(&[to_indirect]) };
     }
 
     // Per-cascade GPU cull for the GPU-driven shadow pass, through the
@@ -873,54 +887,67 @@ impl DxContext {
             None => ([1.0, 1.0], 1, None),
         };
 
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&[transition_barrier(
-                pass.indirect,
-                D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            )]);
-            cmd.SetComputeRootSignature(cull_root);
-            cmd.SetPipelineState(pass.pso);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetComputeRootShaderResourceView(1, object_gva);
-            cmd.SetComputeRootShaderResourceView(2, draw_args_gva);
-            if let Some(srv) = hiz_srv {
-                cmd.set_compute_srv_table(3, srv);
-            }
-            cmd.SetComputeRootUnorderedAccessView(5, pass.status_gva);
-
-            for r in regions {
-                let mut cull_params = CullParams {
-                    planes: [[0.0; 4]; 6],
-                    cam_pos: r.eye,
-                    object_count: u32::saturating_from(n_cull),
-                    // Unused with Hi-Z disabled (the reprojection is never taken).
-                    prev_view_proj: [[0.0; 4]; 4],
-                    hiz_size,
-                    hiz_mip_count,
-                    hiz_enabled: 0,
-                    bucket_count: 1,
-                    bucket_stride: u32::saturating_from(pass.region_stride),
-                    _pad: [0; 2],
-                };
-                cull_params.planes = r.frustum.packed_planes();
-                cmd.set_compute_root_constants(0, &cull_params);
-                // Root UAV GPU addresses only need element alignment (the stride is
-                // a multiple of 4), like the instanced path's per-bucket root-SRV bumps.
-                let region_gva = base_gva
-                    + (r.region * pass.region_stride * INDIRECT_COMMAND_STRIDE as usize) as u64;
-                cmd.SetComputeRootUnorderedAccessView(4, region_gva);
-                cmd.Dispatch(u32::saturating_from(n_cull).div_ceil(64), 1, 1);
-            }
-
-            cmd.ResourceBarrier(&[transition_barrier(
-                pass.indirect,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
-            )]);
+        let to_uav = transition_barrier(
+            pass.indirect,
+            D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        );
+        // SAFETY: the command list is recording, and the pass's indirect buffer rests in
+        // INDIRECT_ARGUMENT between uses.
+        unsafe { cmd.ResourceBarrier(&[to_uav]) };
+        // SAFETY: the cull root signature is owned by `self.cull` for the context's lifetime.
+        unsafe { cmd.SetComputeRootSignature(cull_root) };
+        // SAFETY: the pass's PSO is a live cull kernel built against the root signature above.
+        unsafe { cmd.SetPipelineState(pass.pso) };
+        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: `object_gva` addresses this frame's live object buffer.
+        unsafe { cmd.SetComputeRootShaderResourceView(1, object_gva) };
+        // SAFETY: `draw_args_gva` addresses this frame's live draw-args buffer.
+        unsafe { cmd.SetComputeRootShaderResourceView(2, draw_args_gva) };
+        if let Some(srv) = hiz_srv {
+            // SAFETY: the Hi-Z SRV slot is a live descriptor in the heap set above.
+            unsafe { cmd.set_compute_srv_table(3, srv) };
         }
+        // SAFETY: `pass.status_gva` addresses the pass's live cull-status buffer.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(5, pass.status_gva) };
+
+        for r in regions {
+            let mut cull_params = CullParams {
+                planes: [[0.0; 4]; 6],
+                cam_pos: r.eye,
+                object_count: u32::saturating_from(n_cull),
+                // Unused with Hi-Z disabled (the reprojection is never taken).
+                prev_view_proj: [[0.0; 4]; 4],
+                hiz_size,
+                hiz_mip_count,
+                hiz_enabled: 0,
+                bucket_count: 1,
+                bucket_stride: u32::saturating_from(pass.region_stride),
+                _pad: [0; 2],
+            };
+            cull_params.planes = r.frustum.packed_planes();
+            // SAFETY: parameter 0 of the cull root signature holds `CullParams`-sized root
+            // constants.
+            unsafe { cmd.set_compute_root_constants(0, &cull_params) };
+            // Root UAV GPU addresses only need element alignment (the stride is
+            // a multiple of 4), like the instanced path's per-bucket root-SRV bumps.
+            let region_gva = base_gva
+                + (r.region * pass.region_stride * INDIRECT_COMMAND_STRIDE as usize) as u64;
+            // SAFETY: the live count fits the region stride, so the region's commands stay inside
+            // the indirect buffer opened for unordered access above.
+            unsafe { cmd.SetComputeRootUnorderedAccessView(4, region_gva) };
+            // SAFETY: the cull pipeline and every root argument it reads are bound above.
+            unsafe { cmd.Dispatch(u32::saturating_from(n_cull).div_ceil(64), 1, 1) };
+        }
+
+        let to_indirect = transition_barrier(
+            pass.indirect,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+        );
+        // SAFETY: the indirect buffer was moved to UNORDERED_ACCESS by the first barrier.
+        unsafe { cmd.ResourceBarrier(&[to_indirect]) };
     }
     // Dispatch the phase-2 cull compute pass for two-pass occlusion. Runs after
     // the Hi-Z pyramid has been rebuilt mid-frame from phase-1 depth (the
@@ -981,26 +1008,32 @@ impl DxContext {
         };
         cull_params.planes = frustum.packed_planes();
 
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetComputeRootSignature(cull_root);
-            cmd.SetPipelineState(cull_pso2);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.set_compute_root_constants(0, &cull_params);
-            cmd.SetComputeRootShaderResourceView(1, object_gva);
-            cmd.SetComputeRootShaderResourceView(2, draw_args_gva);
-            // The rebuilt Hi-Z pyramid (same all-mips SRV phase 1 sampled; the
-            // HizBuild node rewrote the texels in place).
-            cmd.set_compute_srv_table(3, hiz.srv_gpu);
-            cmd.SetComputeRootUnorderedAccessView(4, com::gpu_va(indirect));
-            cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva);
-            cmd.Dispatch(
-                u32::saturating_from(self.state.draw.record_count()).div_ceil(64),
-                1,
-                1,
-            );
-        }
+        // SAFETY: the command list is recording, and the cull root signature is owned by
+        // `self.cull` for the context's lifetime.
+        unsafe { cmd.SetComputeRootSignature(cull_root) };
+        // SAFETY: the phase-2 PSO is owned by `self.cull` and built against the root signature
+        // above.
+        unsafe { cmd.SetPipelineState(cull_pso2) };
+        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        // SAFETY: parameter 0 of the cull root signature holds `CullParams`-sized root constants.
+        unsafe { cmd.set_compute_root_constants(0, &cull_params) };
+        // SAFETY: `object_gva` addresses this frame's live object buffer.
+        unsafe { cmd.SetComputeRootShaderResourceView(1, object_gva) };
+        // SAFETY: `draw_args_gva` addresses this frame's live draw-args buffer.
+        unsafe { cmd.SetComputeRootShaderResourceView(2, draw_args_gva) };
+        // The rebuilt Hi-Z pyramid (same all-mips SRV phase 1 sampled; the
+        // HizBuild node rewrote the texels in place).
+        // SAFETY: the Hi-Z SRV slot is a live descriptor in the heap set above.
+        unsafe { cmd.set_compute_srv_table(3, hiz.srv_gpu) };
+        let indirect_gva = com::gpu_va(indirect);
+        // SAFETY: the indirect buffer is owned by `self.cull` for this frame slot.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(4, indirect_gva) };
+        // SAFETY: phase 1 wrote this frame's cull-status buffer, which rests in UNORDERED_ACCESS.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva) };
+        let groups = u32::saturating_from(self.state.draw.record_count()).div_ceil(64);
+        // SAFETY: the phase-2 pipeline and every root argument it reads are bound above.
+        unsafe { cmd.Dispatch(groups, 1, 1) };
     }
 
     // True when two-pass Hi-Z occlusion runs this frame: the world requested

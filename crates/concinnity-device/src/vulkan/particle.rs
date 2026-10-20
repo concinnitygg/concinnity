@@ -731,8 +731,8 @@ impl VkContext {
         }
         for emitter in self.particle.system.emitters(&frame) {
             let (rec, gpu, params) = (emitter.record, emitter.gpu, &emitter.params);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
+            // SAFETY: `cmd` is recording, and the emitter's compute set is owned by its GPU slot
+            // and matches the compute layout.
             unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
@@ -742,6 +742,10 @@ impl VkContext {
                     std::slice::from_ref(&gpu.compute_set),
                     &[],
                 );
+            }
+            // SAFETY: the compute layout is owned by `resources` and matches the bound pipeline;
+            // `params` is borrowed for the call.
+            unsafe {
                 cmd_push_constants(
                     device,
                     cmd,
@@ -749,9 +753,10 @@ impl VkContext {
                     vk::ShaderStageFlags::COMPUTE,
                     params,
                 );
-                let groups = rec.max_particles.div_ceil(64);
-                device.cmd_dispatch(cmd, groups, 1, 1);
             }
+            let groups = rec.max_particles.div_ceil(64);
+            // SAFETY: the sim pipeline, this emitter's set and its push constants are bound.
+            unsafe { device.cmd_dispatch(cmd, groups, 1, 1) };
         }
     }
 
@@ -829,17 +834,24 @@ impl VkContext {
         };
         let scissor = vk::Rect2D::default().extent(extent);
 
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        // SAFETY: `cmd` is recording outside a render pass, and the particle render pass and
+        // framebuffer named by `rp_begin` are owned by `resources`.
+        unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
+        // SAFETY: the particle render pass is open on `cmd`; `viewport` is borrowed for the call.
+        unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&viewport)) };
+        // SAFETY: same open render pass; `scissor` is borrowed for the call.
+        unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor)) };
+        // SAFETY: the particle render pipeline is owned by `resources` and was built against
+        // this render pass.
         unsafe {
-            device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&viewport));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
             device.cmd_bind_pipeline(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
                 resources.render_pipeline.handle(),
             );
+        }
+        // SAFETY: the frame's view set is owned by `resources` and matches the render layout.
+        unsafe {
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -852,8 +864,8 @@ impl VkContext {
 
         for emitter in visible {
             let (rec, gpu, params) = (emitter.record, emitter.gpu, &emitter.params);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
+            // SAFETY: the emitter's render set is owned by its GPU slot and reads the pool the
+            // sim pass wrote; it matches set 1 of the render layout.
             unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
@@ -863,6 +875,10 @@ impl VkContext {
                     std::slice::from_ref(&gpu.render_set),
                     &[],
                 );
+            }
+            // SAFETY: the render layout is owned by `resources` and matches the bound pipeline;
+            // `params` is borrowed for the call.
+            unsafe {
                 cmd_push_constants(
                     device,
                     cmd,
@@ -870,8 +886,10 @@ impl VkContext {
                     vk::ShaderStageFlags::VERTEX,
                     params,
                 );
-                device.cmd_draw(cmd, 4, rec.max_particles, 0, 0);
             }
+            // SAFETY: pipeline, both sets and push constants are bound inside the open pass; one
+            // instance per pool slot of `rec.max_particles`.
+            unsafe { device.cmd_draw(cmd, 4, rec.max_particles, 0, 0) };
             self.inc_draw_calls(1);
         }
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice

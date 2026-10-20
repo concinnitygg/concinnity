@@ -521,32 +521,43 @@ impl DxContext {
         // and the consumers' barrier takes them back out. `gb.depth` is not part
         // of it and stays in DEPTH_WRITE throughout.
         let rtvs = [gb.normal_depth_rtv, gb.roughness_rtv, gb.velocity_rtv];
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        let vp = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: w as f32,
+            Height: h as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let scissor = RECT {
+            left: 0,
+            top: 0,
+            right: i32::saturating_from(w),
+            bottom: i32::saturating_from(h),
+        };
+        // SAFETY: the command list is recording; `rtvs` is a local array of three live RTVs in
+        // RENDER_TARGET, and `gb.depth_dsv` names a depth target in DEPTH_WRITE.
         unsafe {
             cmd.OMSetRenderTargets(3, Some(rtvs.as_ptr()), false, Some(&raw const gb.depth_dsv));
-            // Cleared alpha 0 marks "no geometry"; roughness 1.0 = non-reflective
-            // background; velocity 0 = no motion.
-            cmd.ClearRenderTargetView(gb.normal_depth_rtv, &[0.0_f32; 4], None);
-            cmd.ClearRenderTargetView(gb.roughness_rtv, &GBUFFER_ROUGHNESS_CLEAR, None);
-            cmd.ClearRenderTargetView(gb.velocity_rtv, &[0.0_f32; 4], None);
+        }
+        // Cleared alpha 0 marks "no geometry"; roughness 1.0 = non-reflective
+        // background; velocity 0 = no motion.
+        // SAFETY: the normal-depth RTV is live and bound above, and the clear color is a constant.
+        unsafe { cmd.ClearRenderTargetView(gb.normal_depth_rtv, &[0.0_f32; 4], None) };
+        // SAFETY: the roughness RTV is live and bound above.
+        unsafe { cmd.ClearRenderTargetView(gb.roughness_rtv, &GBUFFER_ROUGHNESS_CLEAR, None) };
+        // SAFETY: the velocity RTV is live and bound above.
+        unsafe { cmd.ClearRenderTargetView(gb.velocity_rtv, &[0.0_f32; 4], None) };
+        // SAFETY: the G-buffer depth DSV is live and bound above, and no rects are passed.
+        unsafe {
             cmd.ClearDepthStencilView(gb.depth_dsv, D3D12_CLEAR_FLAG_DEPTH, DEPTH_CLEAR, 0, None);
-            let vp = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: w as f32,
-                Height: h as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp]);
-            let scissor = RECT {
-                left: 0,
-                top: 0,
-                right: i32::saturating_from(w),
-                bottom: i32::saturating_from(h),
-            };
-            cmd.RSSetScissorRects(&[scissor]);
+        }
+        // SAFETY: the viewport slice is a local that outlives the call.
+        unsafe { cmd.RSSetViewports(&[vp]) };
+        // SAFETY: the scissor slice is a local that outlives the call.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
+        // SAFETY: setting the topology only needs a recording command list.
+        unsafe {
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
@@ -604,26 +615,28 @@ impl DxContext {
             _pad: [0; 3],
         };
         let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
-        // SAFETY: the command list is in the recording state, and every resource and slice these
-        // commands name is live for the call.
-        unsafe {
-            cmd.SetPipelineState(pso);
-            cmd.SetComputeRootSignature(root_sig);
-            cmd.set_compute_root_constants(0, &params);
-            cmd.SetComputeRootShaderResourceView(1, object_gva);
-            for slot in slots {
-                let history = &self.cull.prev_model_buffers[slot];
-                cmd.SetComputeRootUnorderedAccessView(2, com::gpu_va(history));
-                cmd.Dispatch(
-                    u32::saturating_from(records).div_ceil(MODEL_HISTORY_THREADGROUP),
-                    1,
-                    1,
-                );
-                // A UAV barrier, not a transition: a buffer lives in COMMON and
-                // is promoted implicitly at each use, so this only has to order
-                // the write against the next frame's read of the same slot.
-                cmd.ResourceBarrier(&[uav_barrier(history)]);
-            }
+        // SAFETY: the command list is recording, and the model-history PSO is owned by
+        // `self.cull`.
+        unsafe { cmd.SetPipelineState(pso) };
+        // SAFETY: the model-history root signature is owned by `self.cull` and matches the PSO.
+        unsafe { cmd.SetComputeRootSignature(root_sig) };
+        // SAFETY: parameter 0 of the root signature holds `ModelHistoryParams` root constants.
+        unsafe { cmd.set_compute_root_constants(0, &params) };
+        // SAFETY: `object_gva` addresses this frame's live object buffer.
+        unsafe { cmd.SetComputeRootShaderResourceView(1, object_gva) };
+        let groups = u32::saturating_from(records).div_ceil(MODEL_HISTORY_THREADGROUP);
+        for slot in slots {
+            let history = &self.cull.prev_model_buffers[slot];
+            let history_gva = com::gpu_va(history);
+            // SAFETY: the history slot is a live buffer `self.cull` owns, promoted to a UAV on use.
+            unsafe { cmd.SetComputeRootUnorderedAccessView(2, history_gva) };
+            // SAFETY: the pipeline and every root argument the kernel reads are bound above.
+            unsafe { cmd.Dispatch(groups, 1, 1) };
+            // A UAV barrier, not a transition: a buffer lives in COMMON and
+            // is promoted implicitly at each use, so this only has to order
+            // the write against the next frame's read of the same slot.
+            // SAFETY: `history` is live, and a UAV barrier needs no before-state.
+            unsafe { cmd.ResourceBarrier(&[uav_barrier(history)]) };
         }
     }
 
@@ -672,52 +685,55 @@ impl DxContext {
         // Static + instance prefix: bind the static VB to BOTH vertex streams
         // (prev_pos == cur_pos) + the static u32 IB, then one `ExecuteIndirect`
         // per bucket over `[0, skinned_record_base())`.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        // SAFETY: the command list is recording, and both heaps are owned by `self.descriptors`.
         unsafe {
             cmd.SetDescriptorHeaps(&[
                 Some(self.descriptors.srv_heap.clone()),
                 Some(self.descriptors.sampler_heap.clone()),
             ]);
-            cmd.SetGraphicsRootSignature(root_sig);
-            cmd.IASetVertexBuffers(
-                0,
-                Some(&[
-                    self.scene.geometry.vertex_buffer_view,
-                    self.scene.geometry.vertex_buffer_view,
-                ]),
-            );
-            cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view));
-            cmd.SetGraphicsRootConstantBufferView(PREPASS_VIEW_PARAM, main_view_gva);
-            cmd.SetGraphicsRootConstantBufferView(PREPASS_GB_VIEW_PARAM, view_gva);
-            cmd.SetGraphicsRootShaderResourceView(PREPASS_OBJECTS_PARAM, object_gva);
-            cmd.SetGraphicsRootShaderResourceView(PREPASS_PREV_MODELS_PARAM, prev_model_gva);
-            cmd.SetGraphicsRootShaderResourceView(PREPASS_DRAW_ARGS_PARAM, draw_args_gva);
-            cmd.SetGraphicsRootShaderResourceView(
-                PREPASS_MESH_VERTICES_PARAM,
-                com::gpu_va(&self.scene.geometry.vertex_buffer),
-            );
-            cmd.SetGraphicsRootShaderResourceView(
-                PREPASS_MATERIAL_PARAMS_PARAM,
-                self.material_params_gva(frame_idx),
-            );
-            cmd.set_graphics_srv_table(
-                PREPASS_POOL_PARAM,
-                self.cull.bindless_pool_gpu[self.current_frame],
-            );
-            cmd.set_graphics_sampler_table(
-                PREPASS_SAMPLERS_PARAM,
-                self.descriptors.linear_sampler_gpu,
-            );
         }
+        // SAFETY: the pre-pass root signature is owned by `self.cull`.
+        unsafe { cmd.SetGraphicsRootSignature(root_sig) };
+        let static_vbv = self.scene.geometry.vertex_buffer_view;
+        // SAFETY: the static vertex buffer is owned by `self.scene` and outlives the frame.
+        unsafe { cmd.IASetVertexBuffers(0, Some(&[static_vbv, static_vbv])) };
+        // SAFETY: the static index buffer is owned by `self.scene`; the view is read in the call.
+        unsafe { cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view)) };
+        // SAFETY: `main_view_gva` addresses this frame's live main view constants.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(PREPASS_VIEW_PARAM, main_view_gva) };
+        // SAFETY: `view_gva` is the caller's live G-buffer view block.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(PREPASS_GB_VIEW_PARAM, view_gva) };
+        // SAFETY: `object_gva` addresses this frame's live object buffer.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(PREPASS_OBJECTS_PARAM, object_gva) };
+        // SAFETY: the previous frame's history slot is a live buffer `self.cull` owns.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(PREPASS_PREV_MODELS_PARAM, prev_model_gva) };
+        // SAFETY: `draw_args_gva` addresses this frame's live draw-args buffer.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(PREPASS_DRAW_ARGS_PARAM, draw_args_gva) };
+        let vertices_gva = com::gpu_va(&self.scene.geometry.vertex_buffer);
+        // SAFETY: the shared vertex stream is owned by `self.scene` and outlives the frame.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(PREPASS_MESH_VERTICES_PARAM, vertices_gva) };
+        let material_gva = self.material_params_gva(frame_idx);
+        // SAFETY: the material params for `frame_idx` live in a buffer the context owns.
+        unsafe {
+            cmd.SetGraphicsRootShaderResourceView(PREPASS_MATERIAL_PARAMS_PARAM, material_gva);
+        }
+        let pool = self.cull.bindless_pool_gpu[self.current_frame];
+        // SAFETY: the current frame's bindless pool region lives in the heap set above.
+        unsafe { cmd.set_graphics_srv_table(PREPASS_POOL_PARAM, pool) };
+        let sampler = self.descriptors.linear_sampler_gpu;
+        // SAFETY: the linear sampler lives in the sampler heap set above.
+        unsafe { cmd.set_graphics_sampler_table(PREPASS_SAMPLERS_PARAM, sampler) };
         if let Some(pso) = pso {
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
+            // SAFETY: bucket 0's pre-pass PSO is owned by `self.cull` and matches the root
+            // signature above.
+            unsafe { cmd.SetPipelineState(pso) };
+            let prefix_count = u32::saturating_from(prefix);
+            // SAFETY: the camera cull filled this frame's indirect buffer, and the command
+            // signature matches the pre-pass root signature bound above.
             unsafe {
-                cmd.SetPipelineState(pso);
                 cmd.ExecuteIndirect(
                     cmd_sig,
-                    u32::saturating_from(prefix),
+                    prefix_count,
                     indirect,
                     0,
                     None::<&ID3D12Resource>,
@@ -771,16 +787,21 @@ impl DxContext {
                 .get(prev_frame_idx)
                 .copied()
                 .unwrap_or(*cur_vbv);
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
+            // Skinned records are always bucket 0.
+            // SAFETY: the command list is recording, and bucket 0's pre-pass PSO is owned by
+            // `self.cull`.
+            unsafe { cmd.SetPipelineState(pso) };
+            // SAFETY: both deformed buffers are owned by `self.skinned` and outlive the frame.
+            unsafe { cmd.IASetVertexBuffers(0, Some(&[*cur_vbv, prev_vbv])) };
+            // SAFETY: the skinned index buffer is owned by `self.skinned` and outlives the frame.
+            unsafe { cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view)) };
+            let skinned_count = u32::saturating_from(self.state.draw.n_skinned);
+            // SAFETY: the cull wrote the skinned tail at `prefix * stride` inside this frame's
+            // indirect buffer, and the root arguments bound for the prefix persist.
             unsafe {
-                // Skinned records are always bucket 0.
-                cmd.SetPipelineState(pso);
-                cmd.IASetVertexBuffers(0, Some(&[*cur_vbv, prev_vbv]));
-                cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view));
                 cmd.ExecuteIndirect(
                     cmd_sig,
-                    u32::saturating_from(self.state.draw.n_skinned),
+                    skinned_count,
                     indirect,
                     (prefix * stride) as u64,
                     None::<&ID3D12Resource>,

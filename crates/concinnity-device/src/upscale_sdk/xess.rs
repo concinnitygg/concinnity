@@ -165,17 +165,20 @@ pub(crate) struct XessCommonApi {
 
 impl XessCommonApi {
     pub(crate) fn resolve(library: &impl SdkLibrary) -> Option<Self> {
-        // SAFETY: each type is the prototype `xess.h` declares for that export.
-        unsafe {
-            Some(Self {
-                destroy_context: entry_point(library, c"xessDestroyContext")?,
-                set_velocity_scale: entry_point(library, c"xessSetVelocityScale")?,
-                set_max_responsive_mask_value: entry_point(
-                    library,
-                    c"xessSetMaxResponsiveMaskValue",
-                )?,
-            })
-        }
+        // SAFETY: `PfnXessDestroyContext` is the prototype `xess.h` declares for this export.
+        let destroy_context: PfnXessDestroyContext =
+            unsafe { entry_point(library, c"xessDestroyContext") }?;
+        // SAFETY: `PfnXessSetVelocityScale` matches the header's `xessSetVelocityScale`.
+        let set_velocity_scale: PfnXessSetVelocityScale =
+            unsafe { entry_point(library, c"xessSetVelocityScale") }?;
+        // SAFETY: `PfnXessSetMaxResponsiveMaskValue` matches `xessSetMaxResponsiveMaskValue`.
+        let set_max_responsive_mask_value: PfnXessSetMaxResponsiveMaskValue =
+            unsafe { entry_point(library, c"xessSetMaxResponsiveMaskValue") }?;
+        Some(Self {
+            destroy_context,
+            set_velocity_scale,
+            set_max_responsive_mask_value,
+        })
     }
 }
 

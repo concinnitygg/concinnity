@@ -64,30 +64,34 @@ impl fullscreen::CompositeEncoder for DxContext {
             D3D12_RESOURCE_STATE_PRESENT,
             D3D12_RESOURCE_STATE_RENDER_TARGET,
         );
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        let vp = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: args.width as f32,
+            Height: args.height as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let scissor = RECT {
+            left: 0,
+            top: 0,
+            right: i32::saturating_from(args.width),
+            bottom: i32::saturating_from(args.height),
+        };
+        // SAFETY: the command list is recording, and the back buffer enters this pass in PRESENT.
+        unsafe { cmd.ResourceBarrier(&[to_rt]) };
+        // SAFETY: `back_buffer_rtv` is the live RTV of the back buffer moved to RENDER_TARGET
+        // just above.
+        unsafe { cmd.OMSetRenderTargets(1, Some(&raw const args.back_buffer_rtv), false, None) };
+        // SAFETY: the viewport slice is a local that outlives the call.
+        unsafe { cmd.RSSetViewports(&[vp]) };
+        // SAFETY: the scissor slice is a local that outlives the call.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
+        // The SRV + sampler heaps both the composite and the text pipeline
+        // draw from. Heap binding is command-list state independent of the
+        // root signature, so one bind covers the whole pass.
+        // SAFETY: both heaps are owned by `self.descriptors` and outlive the frame.
         unsafe {
-            cmd.ResourceBarrier(&[to_rt]);
-            cmd.OMSetRenderTargets(1, Some(&raw const args.back_buffer_rtv), false, None);
-            let vp = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: args.width as f32,
-                Height: args.height as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp]);
-            let scissor = RECT {
-                left: 0,
-                top: 0,
-                right: i32::saturating_from(args.width),
-                bottom: i32::saturating_from(args.height),
-            };
-            cmd.RSSetScissorRects(&[scissor]);
-            // The SRV + sampler heaps both the composite and the text pipeline
-            // draw from. Heap binding is command-list state independent of the
-            // root signature, so one bind covers the whole pass.
             cmd.SetDescriptorHeaps(&[
                 Some(self.descriptors.srv_heap.clone()),
                 Some(self.descriptors.sampler_heap.clone()),
@@ -96,74 +100,88 @@ impl fullscreen::CompositeEncoder for DxContext {
     }
 
     fn composite_draw(&self, cmd: &Self::Rec, args: &Self::Args) {
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetPipelineState(&self.composite.pso);
-            cmd.SetGraphicsRootSignature(&self.composite.root_sig);
-            // Root param [0]: scene SRV (t0): the TAA output when TAA is on,
-            // the HDR scene target otherwise.
-            cmd.set_graphics_srv_table(0, args.scene_srv);
-            // Root param [1]: the bloom chain's top octave (t1). The shader
-            // skips the sample while bloom is off, but the table must be valid.
-            let bloom = self.bloom.as_ref().map_or(
+        // SAFETY: the command list is recording, and the composite PSO is owned by `self`.
+        unsafe { cmd.SetPipelineState(&self.composite.pso) };
+        // SAFETY: the composite root signature is owned by `self` and matches the PSO above.
+        unsafe { cmd.SetGraphicsRootSignature(&self.composite.root_sig) };
+        // Root param [0]: scene SRV (t0): the TAA output when TAA is on,
+        // the HDR scene target otherwise.
+        // SAFETY: `begin_composite` set the SRV heap, and the scene SRV rests in a shader-resource
+        // state.
+        unsafe { cmd.set_graphics_srv_table(0, args.scene_srv) };
+        // Root param [1]: the bloom chain's top octave (t1). The shader
+        // skips the sample while bloom is off, but the table must be valid.
+        let bloom = self.bloom.as_ref().map_or(
+            self.ssao.white_srv_gpu,
+            super::super::post::bloom::BloomResources::top_srv_gpu,
+        );
+        // SAFETY: the bloom octave, or the white fallback, is a live slot in the bound heap.
+        unsafe { cmd.set_graphics_srv_table(1, bloom) };
+        // Root param [2]: CompositeParams (the post-process tunables plus
+        // the scene-transition fade, matching the root-sig declaration).
+        // Pushed verbatim so the HLSL cbuffer reads the same byte order as
+        // the Rust struct.
+        let (depth_near, depth_far) =
+            CompositeParams::depth_view_range(self.state.view.near, self.state.view.view_distance);
+        let composite = CompositeParams {
+            post: self.pre_exposure.post_params(&self.post_process),
+            fade: self.state.view.scene_fade,
+            view_mode: args.channel_view,
+            depth_near,
+            depth_far,
+            reactive_valid: if args.reactive_valid { 1.0 } else { 0.0 },
+            night_vision: self
+                .auto_exposure
+                .adaptation
+                .as_ref()
+                .map_or(0.0, |a| a.night_vision(self.state.view.sunlight)),
+        };
+        // SAFETY: root param 2 is declared as `CompositeParams`-sized root constants.
+        unsafe { cmd.set_graphics_root_constants(2, &composite) };
+        // Root param [3]: 3D color-grading LUT SRV (t2).
+        // SAFETY: the color LUT is owned by `self.scene`, and its SRV lives in the bound heap.
+        unsafe { cmd.set_graphics_srv_table(3, self.scene.color_lut.srv_gpu) };
+        // Root params [4..7]: the G-buffer channel sources the debug view
+        // modes visualize (t3 normal+depth, t4 roughness, t5 SSAO, t6
+        // motion). The fragment references all four statically, so they
+        // are bound on every frame, channel view or not.
+        let (nd_srv, rough_srv, motion_srv) = match self.gbuffer.as_ref() {
+            Some(g) => (
+                g.normal_depth_srv_gpu,
+                g.roughness_srv_gpu,
+                g.velocity_srv_gpu,
+            ),
+            None => (
                 self.ssao.white_srv_gpu,
-                super::super::post::bloom::BloomResources::top_srv_gpu,
-            );
-            cmd.set_graphics_srv_table(1, bloom);
-            // Root param [2]: CompositeParams (the post-process tunables plus
-            // the scene-transition fade, matching the root-sig declaration).
-            // Pushed verbatim so the HLSL cbuffer reads the same byte order as
-            // the Rust struct.
-            let (depth_near, depth_far) = CompositeParams::depth_view_range(
-                self.state.view.near,
-                self.state.view.view_distance,
-            );
-            let composite = CompositeParams {
-                post: self.pre_exposure.post_params(&self.post_process),
-                fade: self.state.view.scene_fade,
-                view_mode: args.channel_view,
-                depth_near,
-                depth_far,
-                reactive_valid: if args.reactive_valid { 1.0 } else { 0.0 },
-                night_vision: self
-                    .auto_exposure
-                    .adaptation
-                    .as_ref()
-                    .map_or(0.0, |a| a.night_vision(self.state.view.sunlight)),
-            };
-            cmd.set_graphics_root_constants(2, &composite);
-            // Root param [3]: 3D color-grading LUT SRV (t2).
-            cmd.set_graphics_srv_table(3, self.scene.color_lut.srv_gpu);
-            // Root params [4..7]: the G-buffer channel sources the debug view
-            // modes visualize (t3 normal+depth, t4 roughness, t5 SSAO, t6
-            // motion). The fragment references all four statically, so they
-            // are bound on every frame, channel view or not.
-            let (nd_srv, rough_srv, motion_srv) = match self.gbuffer.as_ref() {
-                Some(g) => (
-                    g.normal_depth_srv_gpu,
-                    g.roughness_srv_gpu,
-                    g.velocity_srv_gpu,
-                ),
-                None => (
-                    self.ssao.white_srv_gpu,
-                    self.ssao.white_srv_gpu,
-                    self.ssao.white_srv_gpu,
-                ),
-            };
-            cmd.set_graphics_srv_table(4, nd_srv);
-            cmd.set_graphics_srv_table(5, rough_srv);
-            cmd.set_graphics_srv_table(6, self.ssao_ao_srv_gpu());
-            cmd.set_graphics_srv_table(7, motion_srv);
-            cmd.set_graphics_srv_table(8, self.targets.reactive_mask.srv_gpu());
+                self.ssao.white_srv_gpu,
+                self.ssao.white_srv_gpu,
+            ),
+        };
+        // SAFETY: the normal-depth source, or the white fallback, is a live slot in the heap.
+        unsafe { cmd.set_graphics_srv_table(4, nd_srv) };
+        // SAFETY: the roughness source, or the white fallback, is a live slot in the heap.
+        unsafe { cmd.set_graphics_srv_table(5, rough_srv) };
+        let ao_srv = self.ssao_ao_srv_gpu();
+        // SAFETY: the SSAO output slot is owned by `self.ssao` and lives in the bound heap.
+        unsafe { cmd.set_graphics_srv_table(6, ao_srv) };
+        // SAFETY: the motion source, or the white fallback, is a live slot in the heap.
+        unsafe { cmd.set_graphics_srv_table(7, motion_srv) };
+        let reactive_srv = self.targets.reactive_mask.srv_gpu();
+        // SAFETY: the reactive mask is owned by `self.targets` and its SRV lives in the heap.
+        unsafe { cmd.set_graphics_srv_table(8, reactive_srv) };
+        // SAFETY: setting the topology only needs a recording command list.
+        unsafe {
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
-            // The composite VS builds the fullscreen triangle from SV_VertexID.
-            cmd.IASetVertexBuffers(0, None);
-            cmd.IASetIndexBuffer(None);
-            cmd.DrawInstanced(3, 1, 0, 0);
         }
+        // The composite VS builds the fullscreen triangle from SV_VertexID.
+        // SAFETY: unbinding vertex buffers borrows nothing.
+        unsafe { cmd.IASetVertexBuffers(0, None) };
+        // SAFETY: unbinding the index buffer borrows nothing.
+        unsafe { cmd.IASetIndexBuffer(None) };
+        // SAFETY: the pipeline, root signature and every root argument the draw reads are bound.
+        unsafe { cmd.DrawInstanced(3, 1, 0, 0) };
         self.inc_draw_calls(1);
     }
 
@@ -180,14 +198,14 @@ impl fullscreen::CompositeEncoder for DxContext {
             win_height: args.height as f32,
             _pad: [0.0; 2],
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetPipelineState(text_pso);
-            cmd.SetGraphicsRootSignature(&self.text.root_sig);
-            cmd.set_graphics_root_constants(0, &text_push);
-            cmd.set_graphics_sampler_table(2, self.descriptors.text_sampler_gpu);
-        }
+        // SAFETY: the command list is recording, and the text PSO is owned by `self.text`.
+        unsafe { cmd.SetPipelineState(text_pso) };
+        // SAFETY: the text root signature is owned by `self.text` and matches the PSO above.
+        unsafe { cmd.SetGraphicsRootSignature(&self.text.root_sig) };
+        // SAFETY: root param 0 of the text root signature holds 4 DWORDs of `TextUniforms`.
+        unsafe { cmd.set_graphics_root_constants(0, &text_push) };
+        // SAFETY: `begin_composite` set the sampler heap, which holds the text sampler.
+        unsafe { cmd.set_graphics_sampler_table(2, self.descriptors.text_sampler_gpu) };
         true
     }
 
@@ -242,25 +260,28 @@ impl fullscreen::CompositeEncoder for DxContext {
             Format: DXGI_FORMAT_R16_UINT,
         };
 
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            if binds.scissor_changed(scissor) {
-                let (x, y, w, h) = scissor;
-                cmd.RSSetScissorRects(&[RECT {
-                    left: x,
-                    top: y,
-                    right: x + i32::saturating_from(w),
-                    bottom: y + i32::saturating_from(h),
-                }]);
-            }
-            if binds.atlas_changed(atlas_idx) {
-                cmd.set_graphics_srv_table(1, self.text.atlas_srv_gpus[atlas_idx]);
-            }
-            cmd.IASetVertexBuffers(0, Some(&[vbv]));
-            cmd.IASetIndexBuffer(Some(&raw const ibv));
-            cmd.DrawIndexedInstanced(u32::saturating_from(call.indices.len()), 1, 0, 0, 0);
+        if binds.scissor_changed(scissor) {
+            let (x, y, w, h) = scissor;
+            let rect = RECT {
+                left: x,
+                top: y,
+                right: x + i32::saturating_from(w),
+                bottom: y + i32::saturating_from(h),
+            };
+            // SAFETY: the command list is recording, and the scissor slice outlives the call.
+            unsafe { cmd.RSSetScissorRects(&[rect]) };
         }
+        if binds.atlas_changed(atlas_idx) {
+            // SAFETY: `atlas_idx` is clamped to the atlas list, whose SRVs live in the bound heap.
+            unsafe { cmd.set_graphics_srv_table(1, self.text.atlas_srv_gpus[atlas_idx]) };
+        }
+        // SAFETY: `vbv` points into this slot's upload buffer, reserved for the whole frame's text.
+        unsafe { cmd.IASetVertexBuffers(0, Some(&[vbv])) };
+        // SAFETY: `ibv` points into that same reserved upload buffer.
+        unsafe { cmd.IASetIndexBuffer(Some(&raw const ibv)) };
+        let index_count = u32::saturating_from(call.indices.len());
+        // SAFETY: the text pipeline, atlas table and geometry the draw reads are all bound.
+        unsafe { cmd.DrawIndexedInstanced(index_count, 1, 0, 0, 0) };
         self.inc_draw_calls(1);
         Ok(())
     }

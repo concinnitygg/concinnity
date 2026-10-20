@@ -122,21 +122,21 @@ impl DxContext {
         if let Some(heap) = self.timestamps.query_heap.as_ref() {
             let (start_slot, _) = pass_timing::whole_frame_pair(frame);
             let block_base = u32::saturating_from(frame * pass_timing::SLOTS_PER_FRAME);
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                start_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, start_slot);
-                // Pre-init each per-pass (start, end) pair as **end then
-                // start** so inactive passes wind up with `ts_start >
-                // ts_end` and the readback's `ts_end > ts_start` check
-                // returns false (clean 0 µs reading).
-                let pass_count = pass_timing::SLOTS_PER_FRAME / 2 - 1;
-                for pass_idx in 0..u32::saturating_from(pass_count) {
-                    let pair_start = block_base + 2 + 2 * pass_idx;
-                    let pair_end = pair_start + 1;
-                    start_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, pair_end);
-                    start_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, pair_start);
-                }
+            // SAFETY: `start_cmd` was reset into the recording state above, and `start_slot` is
+            // inside the timestamp heap this context owns.
+            unsafe { start_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, start_slot) };
+            // Pre-init each per-pass (start, end) pair as **end then
+            // start** so inactive passes wind up with `ts_start >
+            // ts_end` and the readback's `ts_end > ts_start` check
+            // returns false (clean 0 µs reading).
+            let pass_count = pass_timing::SLOTS_PER_FRAME / 2 - 1;
+            for pass_idx in 0..u32::saturating_from(pass_count) {
+                let pair_start = block_base + 2 + 2 * pass_idx;
+                let pair_end = pair_start + 1;
+                // SAFETY: `pair_end` stays inside this frame's `SLOTS_PER_FRAME` block of the heap.
+                unsafe { start_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, pair_end) };
+                // SAFETY: `pair_start` is the slot just before `pair_end` in that same block.
+                unsafe { start_cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, pair_start) };
             }
         }
 
@@ -420,14 +420,15 @@ impl DxContext {
         records: u64,
     ) {
         use crate::directx::descriptor_slot::DescriptorTables as _;
-        // SAFETY: the command list is in the recording state with the SRV heap
-        // bound, and the table slot and both buffers are live for the frame the
-        // list records.
-        unsafe {
-            cmd.set_graphics_srv_table(MAIN_PROBE_CUBES_PARAM, self.probe_cube_table_gpu());
-            cmd.SetGraphicsRootConstantBufferView(MAIN_PROBE_SET_PARAM, set_cbv);
-            cmd.SetGraphicsRootShaderResourceView(MAIN_PROBE_RECORDS_PARAM, records);
-        }
+        let cubes = self.probe_cube_table_gpu();
+        // SAFETY: the command list is in the recording state with the SRV heap bound, and the
+        // probe cube table slot is live in it.
+        unsafe { cmd.set_graphics_srv_table(MAIN_PROBE_CUBES_PARAM, cubes) };
+        // SAFETY: `set_cbv` addresses a ProbeSet constant buffer live for the frame the list
+        // records.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(MAIN_PROBE_SET_PARAM, set_cbv) };
+        // SAFETY: `records` addresses the probe records live for that same frame.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(MAIN_PROBE_RECORDS_PARAM, records) };
     }
 }
 
@@ -450,7 +451,8 @@ pub(super) fn upload_static_records<T: Copy>(
     // is a separate allocation, so the ranges cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(records.as_ptr().cast::<u8>(), ptr.cast::<u8>(), bytes);
-        buffer.Unmap(0, None);
     }
+    // SAFETY: `buffer` was mapped by the `Map` call above, and the copy into it is complete.
+    unsafe { buffer.Unmap(0, None) };
     Ok(())
 }

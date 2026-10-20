@@ -425,13 +425,19 @@ impl PostPassDevice for VkPostDevice<'_> {
         };
         let scissor = vk::Rect2D::default().extent(extent);
         let device = self.device;
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        // SAFETY: `cmd` is recording outside any render pass, and `render_pass` and `framebuffer`
+        // are live for the call.
+        unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
+        // SAFETY: `cmd` is recording inside the render pass begun above.
+        unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp)) };
+        // SAFETY: same recording `cmd`; `scissor` is a local that outlives the call.
+        unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor)) };
+        // SAFETY: `pipe.pipeline` is live for the draw that names it.
         unsafe {
-            device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipe.pipeline.handle());
+        }
+        // SAFETY: `set` was allocated against `pipe.layout` and written above.
+        unsafe {
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -440,7 +446,10 @@ impl PostPassDevice for VkPostDevice<'_> {
                 std::slice::from_ref(&set),
                 &[],
             );
-            if let Some(global) = probe_set {
+        }
+        if let Some(global) = probe_set {
+            // SAFETY: `global` is this frame's probe set, which the pipeline's bindings declared.
+            unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -450,7 +459,10 @@ impl PostPassDevice for VkPostDevice<'_> {
                     &[],
                 );
             }
-            if !draw.constants.is_empty() {
+        }
+        if !draw.constants.is_empty() {
+            // SAFETY: `draw.constants` is a live slice for the call, pushed under `pipe.layout`.
+            unsafe {
                 device.cmd_push_constants(
                     cmd,
                     pipe.layout.handle(),
@@ -459,11 +471,13 @@ impl PostPassDevice for VkPostDevice<'_> {
                     draw.constants,
                 );
             }
-            // The vertex stage builds the fullscreen triangle from the vertex id,
-            // so the draw reads no vertex buffer.
-            device.cmd_draw(cmd, 3, 1, 0, 0);
-            device.cmd_end_render_pass(cmd);
         }
+        // The vertex stage builds the fullscreen triangle from the vertex id,
+        // so the draw reads no vertex buffer.
+        // SAFETY: the pipeline and its sets are bound above on the recording `cmd`.
+        unsafe { device.cmd_draw(cmd, 3, 1, 0, 0) };
+        // SAFETY: closes the render pass begun above on the same `cmd`.
+        unsafe { device.cmd_end_render_pass(cmd) };
         Ok(())
     }
 }

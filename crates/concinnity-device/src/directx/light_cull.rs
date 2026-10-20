@@ -135,14 +135,19 @@ pub(in crate::directx) fn build_cluster_params_buffers(
         let ptr = ptr.cast::<u8>();
         // Slot 1: the `use_clusters = 0` copy. Static for the context's life.
         let unclustered = ClusterParams::ZERO;
-        // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
-        // source is a separate allocation, so the ranges cannot overlap.
+        // SAFETY: the mapping is `CLUSTER_PARAMS_SLOT_STRIDE * 2` bytes, so the unclustered
+        // slot's offset stays inside it.
+        let slot = unsafe {
+            ptr.add(usize::saturating_from(
+                CLUSTER_SLOT_UNCLUSTERED * CLUSTER_PARAMS_SLOT_STRIDE,
+            ))
+        };
+        // SAFETY: `slot` holds one `ClusterParams` inside the UPLOAD-heap mapping, and the source
+        // is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 (&raw const unclustered).cast::<u8>(),
-                ptr.add(usize::saturating_from(
-                    CLUSTER_SLOT_UNCLUSTERED * CLUSTER_PARAMS_SLOT_STRIDE,
-                )),
+                slot,
                 size_of::<ClusterParams>(),
             );
         }
@@ -179,14 +184,19 @@ impl DxContext {
         params: &ClusterParams,
     ) {
         let dst = self.light_cull.params_ptrs[frame_idx];
-        // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
-        // source is a separate allocation, so the ranges cannot overlap.
+        // SAFETY: each frame's mapping holds two slots of `CLUSTER_PARAMS_SLOT_STRIDE` bytes, so
+        // the clustered slot's offset stays inside it.
+        let slot = unsafe {
+            dst.add(usize::saturating_from(
+                CLUSTER_SLOT_CLUSTERED * CLUSTER_PARAMS_SLOT_STRIDE,
+            ))
+        };
+        // SAFETY: `slot` holds one `ClusterParams` inside the UPLOAD-heap mapping, and the source
+        // is a separate allocation, so the ranges cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 std::ptr::from_ref::<ClusterParams>(params).cast::<u8>(),
-                dst.add(usize::saturating_from(
-                    CLUSTER_SLOT_CLUSTERED * CLUSTER_PARAMS_SLOT_STRIDE,
-                )),
+                slot,
                 size_of::<ClusterParams>(),
             );
         }
@@ -219,17 +229,22 @@ impl DxContext {
         let lights_gva = com::gpu_va(&self.uniforms.local_light_buffer);
         let records_gva = self.probe.gpu.records[frame_idx].gpu_va();
 
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetComputeRootSignature(&self.light_cull.root_sig);
-            cmd.SetPipelineState(&self.light_cull.pso);
-            cmd.SetComputeRootConstantBufferView(0, params_gva);
-            cmd.SetComputeRootShaderResourceView(1, lights_gva);
-            cmd.SetComputeRootUnorderedAccessView(2, com::gpu_va(cluster_buffer));
-            cmd.SetComputeRootShaderResourceView(3, records_gva);
-            // One thread per cluster, 64-wide threadgroups.
-            cmd.Dispatch(CLUSTER_COUNT.div_ceil(64), 1, 1);
-        }
+        // SAFETY: the command list is recording, and the light-cull root signature is owned by
+        // `self.light_cull`.
+        unsafe { cmd.SetComputeRootSignature(&self.light_cull.root_sig) };
+        // SAFETY: the light-cull PSO is owned by `self.light_cull` and matches the root signature.
+        unsafe { cmd.SetPipelineState(&self.light_cull.pso) };
+        // SAFETY: `params_gva` addresses the grid's live `ClusterParams` slot.
+        unsafe { cmd.SetComputeRootConstantBufferView(0, params_gva) };
+        // SAFETY: `lights_gva` addresses the live per-scene local-light buffer.
+        unsafe { cmd.SetComputeRootShaderResourceView(1, lights_gva) };
+        let lists_gva = com::gpu_va(cluster_buffer);
+        // SAFETY: the caller holds the grid's cluster lists live and in UNORDERED_ACCESS.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(2, lists_gva) };
+        // SAFETY: `records_gva` addresses this frame's live probe records.
+        unsafe { cmd.SetComputeRootShaderResourceView(3, records_gva) };
+        // One thread per cluster, 64-wide threadgroups.
+        // SAFETY: the light-cull pipeline and every root argument it reads are bound above.
+        unsafe { cmd.Dispatch(CLUSTER_COUNT.div_ceil(64), 1, 1) };
     }
 }

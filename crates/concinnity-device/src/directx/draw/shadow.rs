@@ -156,23 +156,27 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         size: u32,
     ) {
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        let viewport = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: size as f32,
+            Height: size as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        let scissor = RECT {
+            left: 0,
+            top: 0,
+            right: i32::saturating_from(size),
+            bottom: i32::saturating_from(size),
+        };
+        // SAFETY: the command list is recording, and the viewport slice is a local that outlives
+        // the call.
+        unsafe { cmd.RSSetViewports(&[viewport]) };
+        // SAFETY: the scissor slice is a local that outlives the call.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
+        // SAFETY: setting the topology only needs a recording command list.
         unsafe {
-            cmd.RSSetViewports(&[D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: size as f32,
-                Height: size as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            }]);
-            cmd.RSSetScissorRects(&[RECT {
-                left: 0,
-                top: 0,
-                right: i32::saturating_from(size),
-                bottom: i32::saturating_from(size),
-            }]);
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
@@ -185,10 +189,9 @@ impl DxContext {
         dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
     ) {
         // SAFETY: the command list is in the recording state, and the DSV names a live slice.
-        unsafe {
-            cmd.OMSetRenderTargets(0, None, false, Some(&raw const dsv));
-            cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, DEPTH_CLEAR, 0, None);
-        }
+        unsafe { cmd.OMSetRenderTargets(0, None, false, Some(&raw const dsv)) };
+        // SAFETY: `dsv` is the live slice just bound as the depth target, and no rects are passed.
+        unsafe { cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, DEPTH_CLEAR, 0, None) };
     }
 
     // Whether the GPU-driven shadow path has a pipeline and records to draw.
@@ -212,18 +215,16 @@ impl DxContext {
             return;
         };
         let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetPipelineState(pso);
-            cmd.SetGraphicsRootSignature(root_sig);
-            // [3] this frame's GpuObjectData, [4] the shared vertex stream.
-            cmd.SetGraphicsRootShaderResourceView(3, object_gva);
-            cmd.SetGraphicsRootShaderResourceView(
-                4,
-                com::gpu_va(&self.scene.geometry.vertex_buffer),
-            );
-        }
+        // SAFETY: the command list is recording, and the shadow PSO is owned by `self.cull`.
+        unsafe { cmd.SetPipelineState(pso) };
+        // SAFETY: the shadow root signature is owned by `self.cull` alongside its PSO.
+        unsafe { cmd.SetGraphicsRootSignature(root_sig) };
+        // [3] this frame's GpuObjectData, [4] the shared vertex stream.
+        // SAFETY: `object_gva` addresses this frame's live object buffer.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(3, object_gva) };
+        let vertices_gva = com::gpu_va(&self.scene.geometry.vertex_buffer);
+        // SAFETY: the shared vertex stream is owned by `self.scene` and outlives the frame.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(4, vertices_gva) };
     }
 
     // GPU-driven depth-only raster of one shadow view: one `ExecuteIndirect` for
@@ -244,20 +245,28 @@ impl DxContext {
         let prefix = self.state.draw.skinned_record_base();
         let stride = u64::from(crate::directx::cull::INDIRECT_COMMAND_STRIDE);
         let byte_off = |first: usize| first as u64 * stride;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        // SAFETY: the command list is recording, and the caller cleared the live slice `view.dsv`
+        // names.
+        unsafe { cmd.OMSetRenderTargets(0, None, false, Some(&raw const view.dsv)) };
+        // [1] the view's light_vps, [2] the slot of it this view projects through.
+        // SAFETY: `view.ubo_gva` addresses the view's live light_vps buffer.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(1, view.ubo_gva) };
+        // SAFETY: root param 2 of the shadow root signature is one root-constant DWORD.
+        unsafe { cmd.set_graphics_root_constants(2, &view.vp_index) };
+        // SAFETY: the static vertex buffer is owned by `self.scene` and outlives the frame.
+        unsafe { cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view])) };
+        // SAFETY: the static index buffer is owned by `self.scene`; the view is read in the call.
+        unsafe { cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view)) };
+        let prefix_count = u32::saturating_from(prefix);
+        let prefix_offset = byte_off(view.first_command);
+        // SAFETY: the view's region of the cull-written indirect buffer starts at `prefix_offset`,
+        // and `bind_shadow_views` bound the pipeline the command signature matches.
         unsafe {
-            cmd.OMSetRenderTargets(0, None, false, Some(&raw const view.dsv));
-            // [1] the view's light_vps, [2] the slot of it this view projects through.
-            cmd.SetGraphicsRootConstantBufferView(1, view.ubo_gva);
-            cmd.set_graphics_root_constants(2, &view.vp_index);
-            cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&raw const self.scene.geometry.index_buffer_view));
             cmd.ExecuteIndirect(
                 cmd_sig,
-                u32::saturating_from(prefix),
+                prefix_count,
                 view.indirect,
-                byte_off(view.first_command),
+                prefix_offset,
                 None::<&ID3D12Resource>,
                 0,
             );
@@ -269,16 +278,21 @@ impl DxContext {
         if self.state.draw.n_skinned > 0
             && let Some(deformed_vbv) = self.skinned.deformed_vbvs.get(frame_idx)
         {
-            // SAFETY: the command list is in the recording state, and every resource,
-            // descriptor and slice these commands name is live for the call.
+            // SAFETY: this frame's deformed buffer is owned by `self.skinned` and was posed by
+            // the skin pass.
+            unsafe { cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv])) };
+            // SAFETY: the skinned index buffer is owned by `self.skinned` and outlives the frame.
+            unsafe { cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view)) };
+            let skinned_count = u32::saturating_from(self.state.draw.n_skinned);
+            let skinned_offset = byte_off(view.first_command + prefix);
+            // SAFETY: the skinned tail of the view's region sits at `skinned_offset` in the same
+            // indirect buffer, under the pipeline bound for the prefix.
             unsafe {
-                cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv]));
-                cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view));
                 cmd.ExecuteIndirect(
                     cmd_sig,
-                    u32::saturating_from(self.state.draw.n_skinned),
+                    skinned_count,
                     view.indirect,
-                    byte_off(view.first_command + prefix),
+                    skinned_offset,
                     None::<&ID3D12Resource>,
                     0,
                 );

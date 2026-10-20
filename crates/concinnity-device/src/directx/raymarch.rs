@@ -629,29 +629,37 @@ fn build_cube_buffers(
         D3D12_HEAP_TYPE_UPLOAD,
         D3D12_RESOURCE_STATE_GENERIC_READ,
     )?;
-    // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the source
-    // is a separate allocation, so the ranges cannot overlap.
+    let mut p = std::ptr::null_mut::<c_void>();
+    // SAFETY: `vb` is a live UPLOAD-heap buffer, and `p` is a live local that receives the mapping.
+    unsafe { vb.Map(0, None, Some(&raw mut p)) }
+        .map_err(|e| map_hresult(e.code(), "raymarch cube vb map"))?;
+    // SAFETY: `p` is the mapping from the call above, sized `vb_bytes` for the corners, which are
+    // a separate allocation, so the ranges cannot overlap.
     unsafe {
-        let mut p = std::ptr::null_mut::<c_void>();
-        vb.Map(0, None, Some(&raw mut p))
-            .map_err(|e| map_hresult(e.code(), "raymarch cube vb map"))?;
         std::ptr::copy_nonoverlapping(
             corners.as_ptr().cast::<u8>(),
             p.cast::<u8>(),
             usize::saturating_from(vb_bytes),
         );
-        vb.Unmap(0, None);
+    }
+    // SAFETY: unmaps subresource 0 of `vb`, mapped above; the write is done.
+    unsafe { vb.Unmap(0, None) };
 
-        let mut p = std::ptr::null_mut::<c_void>();
-        ib.Map(0, None, Some(&raw mut p))
-            .map_err(|e| map_hresult(e.code(), "raymarch cube ib map"))?;
+    let mut p = std::ptr::null_mut::<c_void>();
+    // SAFETY: `ib` is a live UPLOAD-heap buffer, and `p` is a live local that receives the mapping.
+    unsafe { ib.Map(0, None, Some(&raw mut p)) }
+        .map_err(|e| map_hresult(e.code(), "raymarch cube ib map"))?;
+    // SAFETY: `p` is the mapping from the call above, sized `ib_bytes` for the indices, which are
+    // a separate allocation, so the ranges cannot overlap.
+    unsafe {
         std::ptr::copy_nonoverlapping(
             indices.as_ptr().cast::<u8>(),
             p.cast::<u8>(),
             usize::saturating_from(ib_bytes),
         );
-        ib.Unmap(0, None);
     }
+    // SAFETY: unmaps subresource 0 of `ib`, mapped above; the write is done.
+    unsafe { ib.Unmap(0, None) };
 
     let vbv = D3D12_VERTEX_BUFFER_VIEW {
         BufferLocation: com::gpu_va(&vb),
@@ -1196,13 +1204,14 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_COPY_DEST,
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             );
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.ResourceBarrier(&[snapshot_src_to_copy, snapshot_dst_to_copy]);
-                cmd.CopyResource(&rm.hdr_resolve_copy, self.hdr_scene_target());
-                cmd.ResourceBarrier(&[snapshot_src_back, snapshot_dst_to_psr]);
-            }
+            // SAFETY: the list is recording, and the scene target and the snapshot copy are both
+            // owned by this context.
+            unsafe { cmd.ResourceBarrier(&[snapshot_src_to_copy, snapshot_dst_to_copy]) };
+            // SAFETY: the barrier above put the scene target in COPY_SOURCE and the snapshot in
+            // COPY_DEST, and this context keeps both alive.
+            unsafe { cmd.CopyResource(&rm.hdr_resolve_copy, self.hdr_scene_target()) };
+            // SAFETY: the list is recording, and both resources are still live.
+            unsafe { cmd.ResourceBarrier(&[snapshot_src_back, snapshot_dst_to_psr]) };
         }
 
         // hdr_color is already in RENDER_TARGET: with MSAA on the graph rests it
@@ -1212,8 +1221,8 @@ impl DxContext {
 
         let w = self.targets.extent.render_width;
         let h = self.targets.extent.render_height;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+        // SAFETY: the list is recording, and the HDR color and depth descriptors are owned by
+        // `self.targets`.
         unsafe {
             cmd.OMSetRenderTargets(
                 1,
@@ -1221,49 +1230,51 @@ impl DxContext {
                 false,
                 Some(&raw const self.targets.depth.dsv),
             );
-            let vp = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: w as f32,
-                Height: h as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp]);
-            let scissor = windows::Win32::Foundation::RECT {
-                left: 0,
-                top: 0,
-                right: i32::saturating_from(w),
-                bottom: i32::saturating_from(h),
-            };
-            cmd.RSSetScissorRects(&[scissor]);
-            cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            cmd.IASetVertexBuffers(0, Some(&[rm.cube_vbv]));
-            cmd.IASetIndexBuffer(Some(&raw const rm.cube_ibv));
-
-            cmd.SetGraphicsRootSignature(&rm.root_sig);
-            cmd.SetDescriptorHeaps(&[
-                Some(self.descriptors.srv_heap.clone()),
-                Some(self.descriptors.sampler_heap.clone()),
-            ]);
-            cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-            cmd.SetGraphicsRootConstantBufferView(2, light_gva);
-            cmd.SetGraphicsRootConstantBufferView(3, shadow_gva);
-            cmd.set_graphics_srv_table(4, rm.srv_table_gpu);
-            cmd.set_graphics_sampler_table(5, rm.sampler_table_gpu);
         }
+        let vp = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: w as f32,
+            Height: h as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        // SAFETY: the list is recording, and the viewport slice is a live local.
+        unsafe { cmd.RSSetViewports(&[vp]) };
+        let scissor = windows::Win32::Foundation::RECT {
+            left: 0,
+            top: 0,
+            right: i32::saturating_from(w),
+            bottom: i32::saturating_from(h),
+        };
+        // SAFETY: the list is recording, and the scissor slice is a live local.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
+        rm.bind_cube(cmd);
+
+        // SAFETY: the list is recording, and the root signature is owned by `rm`.
+        unsafe { cmd.SetGraphicsRootSignature(&rm.root_sig) };
+        let heaps = [
+            Some(self.descriptors.srv_heap.clone()),
+            Some(self.descriptors.sampler_heap.clone()),
+        ];
+        // SAFETY: the list is recording, and both heaps are owned by `self.descriptors`.
+        unsafe { cmd.SetDescriptorHeaps(&heaps) };
+        // SAFETY: the signature declares the view CBV at 0, and this frame's view block is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(0, view_gva) };
+        // SAFETY: the signature declares the light CBV at 2, and this frame's lights are live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(2, light_gva) };
+        // SAFETY: the signature declares the shadow CBV at 3; this frame's shadow block is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(3, shadow_gva) };
+        // SAFETY: the SRV heap is set above, and the raymarch SRV table `rm` reserved is live.
+        unsafe { cmd.set_graphics_srv_table(4, rm.srv_table_gpu) };
+        // SAFETY: the sampler heap is set above, and the raymarch sampler table is live.
+        unsafe { cmd.set_graphics_sampler_table(5, rm.sampler_table_gpu) };
 
         for vol in &rm.volumes {
             if !vol.drawn(frustum) {
                 continue;
             }
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.SetPipelineState(vol.draw_pso(view));
-                cmd.SetGraphicsRootConstantBufferView(1, vol.volume_cbuffer_gva);
-                cmd.DrawIndexedInstanced(36, 1, 0, 0, 0);
-            }
+            draw_volume_cube(cmd, vol.draw_pso(view), vol.volume_cbuffer_gva);
             self.inc_draw_calls(1);
         }
 
@@ -1288,10 +1299,12 @@ impl DxContext {
                 D3D12_RESOURCE_STATE_RENDER_TARGET,
                 D3D12_RESOURCE_STATE_RESOLVE_DEST,
             );
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
+            // SAFETY: the list is recording, and the HDR color and resolve target are owned by
+            // `self.targets`.
+            unsafe { cmd.ResourceBarrier(&[hdr_color_to_resolve_src, resolve_to_dst]) };
+            // SAFETY: the barrier above put the HDR color in RESOLVE_SOURCE and the resolve target
+            // in RESOLVE_DEST.
             unsafe {
-                cmd.ResourceBarrier(&[hdr_color_to_resolve_src, resolve_to_dst]);
                 cmd.ResolveSubresource(
                     self.hdr_scene_target(),
                     0,
@@ -1378,32 +1391,39 @@ impl DxContext {
                 size_of::<RaymarchView>(),
             );
         }
-        // SAFETY: the command list is in the recording state with the pre-pass targets bound,
-        // and every resource these commands name is live for the call.
-        unsafe {
-            cmd.SetGraphicsRootSignature(&rm.shadow_root_sig);
-            cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            cmd.IASetVertexBuffers(0, Some(&[rm.cube_vbv]));
-            cmd.IASetIndexBuffer(Some(&raw const rm.cube_ibv));
-            cmd.SetGraphicsRootConstantBufferView(0, com::gpu_va(view_cb));
-            cmd.SetGraphicsRootConstantBufferView(2, com::gpu_va(lights));
-            cmd.SetGraphicsRootConstantBufferView(3, com::gpu_va(shadow));
-            cmd.set_graphics_root_constants(4, &[0u32; 4]);
-        }
+        // SAFETY: the list is recording with the pre-pass targets bound, and the shadow root
+        // signature is owned by `rm`.
+        unsafe { cmd.SetGraphicsRootSignature(&rm.shadow_root_sig) };
+        rm.bind_cube(cmd);
+        let view_gva = com::gpu_va(view_cb);
+        // SAFETY: the signature declares the view CBV at 0, and the pre-pass view buffer is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(0, view_gva) };
+        let light_gva = com::gpu_va(lights);
+        // SAFETY: the signature declares the light CBV at 2, and this frame's lights are live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(2, light_gva) };
+        let shadow_gva = com::gpu_va(shadow);
+        // SAFETY: the signature declares the shadow CBV at 3; this frame's shadow block is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(3, shadow_gva) };
+        // SAFETY: the signature declares four root constants at 4, which the array supplies.
+        unsafe { cmd.set_graphics_root_constants(4, &[0u32; 4]) };
         for (pso, volume_gva) in draws {
-            // SAFETY: the command list is in the recording state, and every resource these
-            // commands name is live for the call.
-            unsafe {
-                cmd.SetPipelineState(pso);
-                cmd.SetGraphicsRootConstantBufferView(1, volume_gva);
-                cmd.DrawIndexedInstanced(36, 1, 0, 0, 0);
-            }
+            draw_volume_cube(cmd, pso, volume_gva);
             self.inc_draw_calls(1);
         }
     }
 }
 
 impl RaymarchResources {
+    // Bind the shared unit-cube proxy as an indexed triangle list.
+    fn bind_cube(&self, cmd: &ID3D12GraphicsCommandList) {
+        // SAFETY: the list is recording; setting the topology names no resource.
+        unsafe { cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST) };
+        // SAFETY: `cube_vbv` names the cube vertex buffer `self` holds resident.
+        unsafe { cmd.IASetVertexBuffers(0, Some(&[self.cube_vbv])) };
+        // SAFETY: `cube_ibv` names the cube index buffer `self` holds resident.
+        unsafe { cmd.IASetIndexBuffer(Some(&raw const self.cube_ibv)) };
+    }
+
     // True when at least one volume both opted in to shadow casting at
     // init (`cast_shadows`, gated to `Some(shadow_pso)`) AND is visible
     // this frame. Drives the early-out for the shadow caster encoder
@@ -1468,39 +1488,39 @@ impl DxContext {
         let light_gva = com::gpu_va(&self.uniforms.light_ubo_resources[frame_idx]);
 
         let sm = self.shadow.map_size;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetGraphicsRootSignature(&rm.shadow_root_sig);
-            cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            cmd.IASetVertexBuffers(0, Some(&[rm.cube_vbv]));
-            cmd.IASetIndexBuffer(Some(&raw const rm.cube_ibv));
+        // SAFETY: the list is recording, and the shadow root signature is owned by `rm`.
+        unsafe { cmd.SetGraphicsRootSignature(&rm.shadow_root_sig) };
+        rm.bind_cube(cmd);
 
-            let vp = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: sm as f32,
-                Height: sm as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp]);
-            let scissor = windows::Win32::Foundation::RECT {
-                left: 0,
-                top: 0,
-                right: i32::saturating_from(sm),
-                bottom: i32::saturating_from(sm),
-            };
-            cmd.RSSetScissorRects(&[scissor]);
+        let vp = D3D12_VIEWPORT {
+            TopLeftX: 0.0,
+            TopLeftY: 0.0,
+            Width: sm as f32,
+            Height: sm as f32,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
+        };
+        // SAFETY: the list is recording, and the viewport slice is a live local.
+        unsafe { cmd.RSSetViewports(&[vp]) };
+        let scissor = windows::Win32::Foundation::RECT {
+            left: 0,
+            top: 0,
+            right: i32::saturating_from(sm),
+            bottom: i32::saturating_from(sm),
+        };
+        // SAFETY: the list is recording, and the scissor slice is a live local.
+        unsafe { cmd.RSSetScissorRects(&[scissor]) };
 
-            // Shared cbuffers (view (b0), lights (b2), shadow (b3)) stay
-            // bound across all cascades and all volumes. Volume cbuffer
-            // (b1) + cascade root constant (b4) + PSO get updated inside
-            // the loop.
-            cmd.SetGraphicsRootConstantBufferView(0, view_gva);
-            cmd.SetGraphicsRootConstantBufferView(2, light_gva);
-            cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva);
-        }
+        // Shared cbuffers (view (b0), lights (b2), shadow (b3)) stay
+        // bound across all cascades and all volumes. Volume cbuffer
+        // (b1) + cascade root constant (b4) + PSO get updated inside
+        // the loop.
+        // SAFETY: the signature declares the view CBV at 0, and the shared view ring is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(0, view_gva) };
+        // SAFETY: the signature declares the light CBV at 2, and this frame's lights are live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(2, light_gva) };
+        // SAFETY: the signature declares the shadow CBV at 3; the caller's shadow block is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(3, shadow_ubo_gva) };
 
         // Only cast into cascades the rasterized shadow pass re-rendered this
         // frame: a skipped cascade's slice must stay exactly as it was last fully
@@ -1517,13 +1537,11 @@ impl DxContext {
                 continue;
             }
             let dsv = self.shadow.dsvs[cascade_idx];
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.OMSetRenderTargets(0, None, false, Some(&raw const dsv));
-                let constants = [u32::saturating_from(cascade_idx), 0u32, 0u32, 0u32];
-                cmd.set_graphics_root_constants(4, &constants);
-            }
+            // SAFETY: the list is recording, and `dsv` addresses this cascade's live shadow slice.
+            unsafe { cmd.OMSetRenderTargets(0, None, false, Some(&raw const dsv)) };
+            let constants = [u32::saturating_from(cascade_idx), 0u32, 0u32, 0u32];
+            // SAFETY: the signature declares four root constants at 4, which `constants` supplies.
+            unsafe { cmd.set_graphics_root_constants(4, &constants) };
             for vol in &rm.volumes {
                 if !vol.visible || !vol.cast_shadows {
                     continue;
@@ -1531,18 +1549,25 @@ impl DxContext {
                 let Some(pso) = vol.shadow_pso.as_ref() else {
                     continue;
                 };
-                // SAFETY: the command list is in the recording state, and every resource,
-                // descriptor and slice these commands name is live for the call.
-                unsafe {
-                    cmd.SetPipelineState(pso);
-                    cmd.SetGraphicsRootConstantBufferView(1, vol.volume_cbuffer_gva);
-                    cmd.DrawIndexedInstanced(36, 1, 0, 0, 0);
-                }
+                draw_volume_cube(cmd, pso, vol.volume_cbuffer_gva);
                 self.inc_draw_calls(1);
             }
         }
         Ok(())
     }
+}
+
+// Draw one volume's proxy cube with `pso`, its constants bound at b1 from `volume_gva`, over the
+// cube geometry and shared bindings the caller set.
+fn draw_volume_cube(cmd: &ID3D12GraphicsCommandList, pso: &ID3D12PipelineState, volume_gva: u64) {
+    // SAFETY: the list is recording, and `pso` is a live volume pipeline.
+    unsafe { cmd.SetPipelineState(pso) };
+    // SAFETY: every raymarch signature declares the volume CBV at 1, and the volume's constant
+    // buffer is live for the frame.
+    unsafe { cmd.SetGraphicsRootConstantBufferView(1, volume_gva) };
+    // SAFETY: the cube geometry and the shared bindings are set by the caller, and the 36 indices
+    // are the cube's whole index buffer.
+    unsafe { cmd.DrawIndexedInstanced(36, 1, 0, 0, 0) };
 }
 
 // Silence the unused-import warning when no `SdfVolume` ships in a build.

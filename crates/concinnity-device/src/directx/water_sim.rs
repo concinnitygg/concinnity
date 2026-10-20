@@ -370,49 +370,70 @@ impl DxContext {
             }
             (barriers, filled)
         };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call; each barrier's before-state is the state
-        // the arrays rest in or were last moved to above. Every layer belongs to one simulation,
-        // so once each has handed back all of its mips the arrays rest again.
-        unsafe {
-            cmd.ResourceBarrier(
-                &arrays
-                    .map(|a| transition_barrier(a, RESTING, D3D12_RESOURCE_STATE_UNORDERED_ACCESS)),
-            );
-            cmd.SetComputeRootSignature(&k.root_sig);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetComputeRootShaderResourceView(SPECTRUM_ROOT, com::gpu_va(&k.spectrum));
-            cmd.SetComputeRootUnorderedAccessView(ROWS_ROOT, com::gpu_va(&k.row_data));
-            cmd.SetComputeRootUnorderedAccessView(FOAM_ROOT, com::gpu_va(&k.foam));
-            for sim in &k.plan.simulations {
-                let params = OceanFftParams::simulate(sim, time, keep);
-                let [size, _, first, cascades] = params.grid;
-                cmd.set_compute_root_constants(PARAMS_ROOT, &params);
-                cmd.set_compute_srv_table(MIPS_ROOT, k.mip_tables[0]);
-                cmd.SetPipelineState(&k.rows);
-                cmd.Dispatch(size, cascades, 1);
-                uav_barrier(cmd, &k.row_data);
-                cmd.SetPipelineState(if sim.foam.is_some() {
-                    &k.columns_foam
-                } else {
-                    &k.columns
-                });
-                cmd.Dispatch(size, cascades, 1);
-                cmd.SetPipelineState(&k.mip);
-                for level in 1..k.mips {
-                    let (barriers, filled) = written(level - 1, first, cascades);
-                    cmd.ResourceBarrier(&barriers[..filled]);
-                    let reduce = params.reduce(level);
-                    let groups = ocean_mip_groups(reduce.mip_size);
-                    cmd.set_compute_root_constants(PARAMS_ROOT, &reduce);
-                    cmd.set_compute_srv_table(MIPS_ROOT, k.mip_tables[level as usize]);
-                    cmd.Dispatch(groups, groups, cascades);
-                }
-                let (barriers, filled) = written(k.mips - 1, first, cascades);
-                cmd.ResourceBarrier(&barriers[..filled]);
-                uav_barrier(cmd, &k.row_data);
+        let to_uav =
+            arrays.map(|a| transition_barrier(a, RESTING, D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+        // SAFETY: the list is recording, and both arrays rest in `RESTING`, the barriers'
+        // before-state. Every layer belongs to one simulation, so once each has handed back all
+        // of its mips the arrays rest again.
+        unsafe { cmd.ResourceBarrier(&to_uav) };
+        // SAFETY: the list is recording, and the FFT root signature is owned by `k`.
+        unsafe { cmd.SetComputeRootSignature(&k.root_sig) };
+        // SAFETY: the list is recording, and the SRV heap is owned by `self.descriptors`.
+        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+        let spectrum_gva = com::gpu_va(&k.spectrum);
+        // SAFETY: the signature declares the spectrum SRV here, and `k` owns the buffer.
+        unsafe { cmd.SetComputeRootShaderResourceView(SPECTRUM_ROOT, spectrum_gva) };
+        let rows_gva = com::gpu_va(&k.row_data);
+        // SAFETY: the signature declares the row scratch UAV here, and `k` owns the buffer.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(ROWS_ROOT, rows_gva) };
+        let foam_gva = com::gpu_va(&k.foam);
+        // SAFETY: the signature declares the foam UAV here, and `k` owns the buffer.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(FOAM_ROOT, foam_gva) };
+        for sim in &k.plan.simulations {
+            let params = OceanFftParams::simulate(sim, time, keep);
+            let [size, _, first, cascades] = params.grid;
+            // SAFETY: the signature's root constants at `PARAMS_ROOT` are sized for
+            // `OceanFftParams`.
+            unsafe { cmd.set_compute_root_constants(PARAMS_ROOT, &params) };
+            // SAFETY: the SRV heap is set above, and the mip 0 table `k` reserved is live.
+            unsafe { cmd.set_compute_srv_table(MIPS_ROOT, k.mip_tables[0]) };
+            // SAFETY: the list is recording, and the row pass PSO is owned by `k`.
+            unsafe { cmd.SetPipelineState(&k.rows) };
+            // SAFETY: the row pass PSO and every binding it reads are set above.
+            unsafe { cmd.Dispatch(size, cascades, 1) };
+            uav_barrier(cmd, &k.row_data);
+            let columns = if sim.foam.is_some() {
+                &k.columns_foam
+            } else {
+                &k.columns
+            };
+            // SAFETY: the list is recording, and both column PSOs are owned by `k`.
+            unsafe { cmd.SetPipelineState(columns) };
+            // SAFETY: the column pass reads the rows the UAV barrier above made visible.
+            unsafe { cmd.Dispatch(size, cascades, 1) };
+            // SAFETY: the list is recording, and the mip reduction PSO is owned by `k`.
+            unsafe { cmd.SetPipelineState(&k.mip) };
+            for level in 1..k.mips {
+                let (barriers, filled) = written(level - 1, first, cascades);
+                // SAFETY: each barrier's before-state is the UNORDERED_ACCESS the arrays were
+                // moved to above, and both arrays are owned by `ocean`.
+                unsafe { cmd.ResourceBarrier(&barriers[..filled]) };
+                let reduce = params.reduce(level);
+                let groups = ocean_mip_groups(reduce.mip_size);
+                // SAFETY: the reduction parameters are an `OceanFftParams`, the type the root
+                // constants at `PARAMS_ROOT` are sized for.
+                unsafe { cmd.set_compute_root_constants(PARAMS_ROOT, &reduce) };
+                // SAFETY: the SRV heap is set above, and this level's mip table is live.
+                unsafe { cmd.set_compute_srv_table(MIPS_ROOT, k.mip_tables[level as usize]) };
+                // SAFETY: the reduction PSO and this level's bindings are set above.
+                unsafe { cmd.Dispatch(groups, groups, cascades) };
             }
-            uav_barrier(cmd, &k.foam);
+            let (barriers, filled) = written(k.mips - 1, first, cascades);
+            // SAFETY: the last mip's subresources are still in UNORDERED_ACCESS from the barrier
+            // at the top, and both arrays are owned by `ocean`.
+            unsafe { cmd.ResourceBarrier(&barriers[..filled]) };
+            uav_barrier(cmd, &k.row_data);
         }
+        uav_barrier(cmd, &k.foam);
     }
 }

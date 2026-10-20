@@ -35,17 +35,19 @@ pub(super) fn priority(role: ThreadRole) -> THREAD_PRIORITY {
 }
 
 pub(super) fn apply(role: ThreadRole) -> std::io::Result<()> {
-    // SAFETY: `GetCurrentThread` is a pseudo-handle valid for the calling
-    // thread, and the priority is one of the documented relative levels.
-    unsafe { SetThreadPriority(GetCurrentThread(), priority(role)) }
+    // SAFETY: returns the calling thread's constant pseudo-handle, which needs no close.
+    let thread = unsafe { GetCurrentThread() };
+    // SAFETY: `thread` is a pseudo-handle valid for the calling thread, and the
+    // priority is one of the documented relative levels.
+    unsafe { SetThreadPriority(thread, priority(role)) }
         .map_err(|e| std::io::Error::other(format!("SetThreadPriority: {e}")))?;
     let state = throttling_state(role);
-    // SAFETY: `GetCurrentThread` is a pseudo-handle valid for the calling
-    // thread, and `state` is a live `THREAD_POWER_THROTTLING_STATE` whose size
-    // is the one passed, as `ThreadPowerThrottling` requires.
+    // SAFETY: `thread` is still this thread's pseudo-handle, and `state` is a live
+    // `THREAD_POWER_THROTTLING_STATE` whose size is the one passed, as
+    // `ThreadPowerThrottling` requires.
     unsafe {
         SetThreadInformation(
-            GetCurrentThread(),
+            thread,
             ThreadPowerThrottling,
             (&raw const state).cast(),
             saturating_u32(size_of::<THREAD_POWER_THROTTLING_STATE>()),
@@ -66,9 +68,10 @@ mod tests {
         for role in EVERY_ROLE {
             let current = std::thread::spawn(move || {
                 apply(role).expect("the role applies");
-                // SAFETY: `GetCurrentThread` is a pseudo-handle valid for the
-                // calling thread.
-                unsafe { GetThreadPriority(GetCurrentThread()) }
+                // SAFETY: returns the spawned thread's constant pseudo-handle.
+                let thread = unsafe { GetCurrentThread() };
+                // SAFETY: `thread` is a pseudo-handle valid for the calling thread.
+                unsafe { GetThreadPriority(thread) }
             })
             .join()
             .expect("the thread runs");
