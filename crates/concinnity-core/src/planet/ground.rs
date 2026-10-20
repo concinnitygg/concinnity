@@ -4,7 +4,6 @@
 use crate::math::narrow_f32;
 use alloc::vec::Vec;
 
-use super::dvec;
 use super::frame::LocalFrame;
 use super::shape::PlanetShape;
 use crate::terrain::TerrainGrid;
@@ -70,7 +69,7 @@ pub fn ground_patch(
 fn ground_y(
     shape: &PlanetShape,
     frame: &LocalFrame,
-    center: dvec::DVec3,
+    center: crate::math::dvec3::DVec3,
     x: f64,
     z: f64,
 ) -> Option<f64> {

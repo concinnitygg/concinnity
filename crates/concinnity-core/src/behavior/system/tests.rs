@@ -9,7 +9,7 @@ use crate::ecs::{
     ExecutionTrace, HEADLESS_SYSTEMS, Ref, TraceEvent, TracePaths, TraceStep, TraceVal, World,
     asset_id::AssetId,
 };
-use crate::profile::FanOutTiming;
+use crate::fanout::FanOutTiming;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;

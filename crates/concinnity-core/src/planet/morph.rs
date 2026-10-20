@@ -164,7 +164,7 @@ mod tests {
     use super::*;
     use crate::math::SaturatingFrom;
     use crate::math::dvec3;
-    use crate::planet::dvec::DVec3;
+    use crate::math::dvec3::DVec3;
     use crate::planet::shape::{CubeFace, PlanetShape};
     use crate::planet::tile::{TileId, tile_mesh};
     use alloc::vec::Vec;

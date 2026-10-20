@@ -3,7 +3,8 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use crate::profile::{FanOutTiming, MAX_PASS_TIMINGS, RenderStats};
+use crate::fanout::FanOutTiming;
+use crate::profile::{MAX_PASS_TIMINGS, RenderStats};
 
 use crate::frame_report::reduce::ReduceOptions;
 use crate::frame_report::tally::RunTally;

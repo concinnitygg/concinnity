@@ -1,7 +1,7 @@
 //! The verbs answered from the per-frame snapshot, or from a handle it holds,
 //! without waiting on the engine.
 
-use concinnity_core::profile::FanOutTiming;
+use concinnity_core::fanout::FanOutTiming;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::atomic::Ordering;

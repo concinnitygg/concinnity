@@ -2,8 +2,9 @@
 // precision, and the single-precision frame around it whose +Y is the radial
 // up at the anchor.
 
-use super::dvec::{self, DMat3, DVec3};
 use super::rebase::Rebase;
+use crate::math::dmat3::{self, DMat3};
+use crate::math::dvec3::DVec3;
 use crate::math::{dvec3, narrow_f32};
 
 /// Where the simulated frame sits in the world it was authored in.
@@ -31,7 +32,7 @@ impl LocalFrame {
     /// The frame the world was authored in.
     pub const AUTHORED: Self = Self {
         origin: [0.0; 3],
-        basis: dvec::DMAT3_IDENTITY,
+        basis: dmat3::DMAT3_IDENTITY,
     };
 
     /// The frame's origin in authored coordinates.
@@ -41,12 +42,12 @@ impl LocalFrame {
 
     /// The frame's local point `p` in authored coordinates.
     pub fn to_world(&self, p: [f32; 3]) -> DVec3 {
-        dvec3::add(self.origin, dvec::mul_vec(&self.basis, dvec3::from_f32(p)))
+        dvec3::add(self.origin, dmat3::mul_vec(&self.basis, dvec3::from_f32(p)))
     }
 
     /// The authored point `w` in this frame, in double precision.
     pub fn to_local_f64(&self, w: DVec3) -> DVec3 {
-        dvec::mul_transpose_vec(&self.basis, dvec3::sub(w, self.origin))
+        dmat3::mul_transpose_vec(&self.basis, dvec3::sub(w, self.origin))
     }
 
     /// The authored point `w` in this frame.
@@ -56,12 +57,12 @@ impl LocalFrame {
 
     /// The authored direction `d` in this frame.
     pub fn dir_to_local(&self, d: DVec3) -> [f32; 3] {
-        dvec3::to_f32(dvec::mul_transpose_vec(&self.basis, d))
+        dvec3::to_f32(dmat3::mul_transpose_vec(&self.basis, d))
     }
 
     /// The local direction `d` in authored coordinates.
     pub fn dir_to_world(&self, d: [f32; 3]) -> DVec3 {
-        dvec::mul_vec(&self.basis, dvec3::from_f32(d))
+        dmat3::mul_vec(&self.basis, dvec3::from_f32(d))
     }
 
     /// The rotation taking an authored direction into this frame, column-major.
@@ -93,17 +94,17 @@ impl LocalFrame {
     /// axes carries across unchanged.
     pub fn recentered(&self, at: [f32; 3], up: DVec3) -> (Self, Rebase) {
         let up_local =
-            dvec3::normalize_or(dvec::mul_transpose_vec(&self.basis, up), [0.0, 1.0, 0.0]);
-        let turn = dvec::arc_from_up(up_local);
+            dvec3::normalize_or(dmat3::mul_transpose_vec(&self.basis, up), [0.0, 1.0, 0.0]);
+        let turn = dmat3::arc_from_up(up_local);
         let frame = Self {
             origin: self.to_world(at),
-            basis: dvec::orthonormalize(&dvec::mul(&self.basis, &turn)),
+            basis: dmat3::orthonormalize(&dmat3::mul(&self.basis, &turn)),
         };
         // new = turn^T (old - at)
         let inverse: DMat3 = core::array::from_fn(|c| core::array::from_fn(|r| turn[r][c]));
-        let shift = dvec::mul_vec(&inverse, dvec3::from_f32(at));
+        let shift = dmat3::mul_vec(&inverse, dvec3::from_f32(at));
         let rebase = Rebase {
-            rotation: dvec::quat_of(&inverse),
+            rotation: dmat3::quat_of(&inverse),
             translation: dvec3::to_f32(dvec3::scale(shift, -1.0)),
         };
         (frame, rebase)
@@ -116,10 +117,10 @@ impl LocalFrame {
     #[must_use]
     pub fn followed(&self, rebase: &Rebase) -> Self {
         // new = R old + t, so old = R^T (new - t).
-        let r = dvec::mat_of_quat(rebase.rotation);
+        let r = dmat3::mat_of_quat(rebase.rotation);
         let back: DMat3 = core::array::from_fn(|c| core::array::from_fn(|row| r[row][c]));
-        let basis = dvec::orthonormalize(&dvec::mul(&self.basis, &back));
-        let shift = dvec::mul_vec(&basis, dvec3::from_f32(rebase.translation));
+        let basis = dmat3::orthonormalize(&dmat3::mul(&self.basis, &back));
+        let shift = dmat3::mul_vec(&basis, dvec3::from_f32(rebase.translation));
         Self {
             origin: dvec3::sub(self.origin, shift),
             basis,

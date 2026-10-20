@@ -7,6 +7,7 @@
 //! check front-half, and blob writing) lives in the `concinnity-cook` crate
 //! and calls down into this module.
 pub mod color_lut;
+pub mod decode;
 pub mod environment_map;
 pub mod font;
 pub mod mesh;

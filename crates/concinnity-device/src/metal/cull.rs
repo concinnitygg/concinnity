@@ -321,7 +321,7 @@ fn copy_prefix<T: Copy>(dst: &mut [T], src: &[T]) {
 pub(super) struct RecordBuffers {
     pub objects: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
     pub draw_args: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
-    pub packing: concinnity_core::profile::FanOutTiming,
+    pub packing: concinnity_core::fanout::FanOutTiming,
 }
 
 // The per-frame cull IO buffers: the packed DrawObject records the kernel tests

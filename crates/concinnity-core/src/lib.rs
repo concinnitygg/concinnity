@@ -58,7 +58,6 @@ pub mod budget;
 pub(crate) mod camera_track;
 pub mod components;
 pub mod controller;
-pub mod decode;
 pub mod defaults;
 pub mod ecs;
 pub mod error;

@@ -11,10 +11,10 @@ use crate::math::dvec3;
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
-use super::dvec::DVec3;
 use super::seams::{DrawnTile, balance, seams};
 use super::shape::{CubeFace, PlanetShape};
 use super::tile::{MAX_TILE_LEVEL, TILE_CELLS, TileBounds, TileId, tile_bounds};
+use crate::math::dvec3::DVec3;
 
 /// Fewest nominal widths of its tiles a level's range spans. Nearer, a tile's
 /// own morph could still be under way where it gives way to its children,

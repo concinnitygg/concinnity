@@ -2,7 +2,7 @@ use core::fmt;
 
 use super::{Fanout, Inline, Lent};
 use crate::ecs::ScheduleMode;
-use crate::profile::FanOutTiming;
+use crate::fanout::FanOutTiming;
 
 // A pool as a system holds it: erased over the host's pool type, typed by the
 // items the system hands out, picked per schedule mode.

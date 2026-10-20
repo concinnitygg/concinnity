@@ -4,9 +4,9 @@
 use crate::math::{SaturatingFrom, dvec3, narrow_f32};
 use alloc::vec::Vec;
 
-use super::dvec::DVec3;
 use super::shape::{CubeFace, PlanetShape};
 use crate::gfx::mesh_payload::Vertex;
+use crate::math::dvec3::DVec3;
 
 /// Cells along each side of a tile's mesh, at every level.
 pub const TILE_CELLS: u32 = 16;

@@ -25,7 +25,7 @@
 //! readers keep working unchanged. `deserialize_with_lods` reads the trailer
 //! when present and returns the additional LODs alongside LOD0.
 
-use crate::decode::{ByteReader, checked_product};
+use crate::bake::decode::{ByteReader, checked_product};
 use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::{String, ToString};

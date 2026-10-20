@@ -3,7 +3,7 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use crate::profile::FanOutTiming;
+use crate::fanout::FanOutTiming;
 use crate::render::render_graph::PassId;
 use serde::Serialize;
 

@@ -7,13 +7,7 @@
 use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
-mod fan_out;
-mod gate;
-mod judge;
-
-pub use fan_out::{FanOutClock, FanOutTimer, FanOutTiming};
-pub use gate::FanOutGate;
-pub use judge::FanOutJudge;
+use crate::fanout::FanOutTiming;
 
 /// Maximum number of per-pass GPU timings tracked by [`RenderStats`]: one per
 /// render-graph `PassId`, which a compile-time assertion in

@@ -7,14 +7,14 @@
 //! the estimate. Scheduling never changes results, so a wrong guess costs one
 //! run's time and nothing else.
 
-use super::FanOutTiming;
+use crate::fanout::FanOutTiming;
 
 /// Fans work out once it is estimated at `MIN_WORK_NS` nanoseconds or more,
 /// from the per-unit cost the previous run measured. Below that, splitting
 /// does not pay for waking the workers.
 ///
 /// ```rust
-/// # use concinnity_core::profile::{FanOutGate, FanOutTiming};
+/// # use concinnity_core::fanout::{FanOutGate, FanOutTiming};
 /// let mut gate = FanOutGate::<500_000>::default();
 /// assert!(!gate.fans_out(10_000, 8), "unmeasured work stays inline");
 /// gate.observe(10_000, FanOutTiming { job_sum_us: 1_000, ..FanOutTiming::default() });

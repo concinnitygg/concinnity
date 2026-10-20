@@ -1,7 +1,7 @@
-// Double-precision rotations for positions on a planet, beside the vectors in
-// `math::dvec3`.
+//! Double-precision rotations for positions on a planet, beside the vectors in
+//! `math::dvec3`.
 
-pub use crate::math::dvec3::DVec3;
+use crate::math::dvec3::DVec3;
 use crate::math::dvec3::{cross, dot, normalize_or, scale, sub};
 use crate::math::narrow_f32;
 

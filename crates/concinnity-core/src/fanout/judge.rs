@@ -8,7 +8,7 @@
 //! clearly faster for the waiting thread and not much more work. Scheduling
 //! never changes results, so a wrong call costs one run's time.
 
-use super::FanOutTiming;
+use crate::fanout::FanOutTiming;
 
 // A split must hold the waiting thread for at most this share of the inline
 // time, in quarters, to count as faster.
@@ -56,7 +56,7 @@ impl Cost {
 /// always runs inline.
 ///
 /// ```rust
-/// # use concinnity_core::profile::{FanOutJudge, FanOutTiming};
+/// # use concinnity_core::fanout::{FanOutJudge, FanOutTiming};
 /// let timing = |wall: u32, work: u32| FanOutTiming { wall_us: wall, job_sum_us: work, ..Default::default() };
 /// let mut judge = FanOutJudge::<300_000>::default();
 /// assert!(!judge.fans_out(10_000, 8), "inline is measured first");

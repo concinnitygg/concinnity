@@ -21,7 +21,7 @@
 
 // What the simulation reserves for a world, derived from the counts the world
 // is measured by, and the ledger row reporting it.
-mod budget;
+mod capacity;
 // The move input a character rig is driven by and the result it reports.
 mod character;
 // Contact-event shaping: per-frame batching and the per-pair refractory.
@@ -66,7 +66,7 @@ mod bench;
 #[cfg(test)]
 mod tests;
 
-pub use budget::{PhysicsBudget, PhysicsCounts};
+pub use capacity::{PhysicsBudget, PhysicsCounts};
 pub use character::{CharacterMove, CharacterMoveInput};
 pub use events::{ContactHit, RayHit, SensorCrossing};
 pub use handle::BodyHandle;

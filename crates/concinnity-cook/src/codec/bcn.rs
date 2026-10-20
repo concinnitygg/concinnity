@@ -6,8 +6,8 @@
 // maps, so the blue channel is reconstructed as the unit-length Z and written
 // back in [0, 1] encoding, matching the RGB normal maps the shader already reads.
 
+use concinnity_core::bake::decode::checked_product;
 use concinnity_core::bake::texture::TextureFormat;
-use concinnity_core::decode::checked_product;
 use concinnity_core::math::SaturatingFrom;
 
 // Expand a 16-bit 565 color to RGB888.

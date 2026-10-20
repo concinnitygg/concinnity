@@ -2,13 +2,13 @@
 // conversions between them and the simulated frame.
 
 use super::PlanetFrame;
-#[cfg(test)]
-use super::dvec;
-use super::dvec::DVec3;
 use super::shape::PlanetShape;
 #[cfg(test)]
 use crate::math::Quat;
+#[cfg(test)]
+use crate::math::dmat3;
 use crate::math::dvec3;
+use crate::math::dvec3::DVec3;
 
 // The north pole's direction from the center, in authored coordinates.
 const NORTH: DVec3 = [0.0, 0.0, -1.0];
@@ -196,7 +196,7 @@ impl PlanetFrame {
         let right = dvec3::cross(forward, up);
         let local = |d: DVec3| dvec3::from_f32(self.frame.dir_to_local(d));
         let basis = [local(right), local(up), local(dvec3::scale(forward, -1.0))];
-        (self.frame.to_local(world), dvec::quat_of(&basis))
+        (self.frame.to_local(world), dmat3::quat_of(&basis))
     }
 
     /// The yaw that, at local point `p` and about the planet's up there (as

@@ -22,7 +22,7 @@
 //! The texel order matches both the Metal 3D-texture upload layout and the
 //! `.cube` data-line order, so the `.cube` path appends triplets verbatim.
 
-use crate::decode::{ByteReader, checked_product};
+use crate::bake::decode::{ByteReader, checked_product};
 use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::String;

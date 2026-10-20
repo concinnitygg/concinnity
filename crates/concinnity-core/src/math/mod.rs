@@ -5,6 +5,7 @@
 //! are authored and stepped in.
 mod angle;
 mod cast;
+pub mod dmat3;
 pub mod dvec3;
 mod interp;
 pub mod noise;

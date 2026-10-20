@@ -7,15 +7,19 @@
 //! pose sampling, bake rows and render-graph recording all reach the same pool
 //! through it. A caller that lends nothing gets [`Inline`].
 
+mod gate;
+mod judge;
 mod lent;
 mod pooled;
 #[cfg(test)]
 pub(crate) mod test_pools;
+mod timing;
 
+pub use gate::FanOutGate;
+pub use judge::FanOutJudge;
 pub use lent::Lent;
 pub(crate) use pooled::Pooled;
-
-use crate::profile::{FanOutClock, FanOutTimer, FanOutTiming};
+pub use timing::{FanOutClock, FanOutTimer, FanOutTiming};
 
 /// A caller's way of running independent work at the same time.
 ///

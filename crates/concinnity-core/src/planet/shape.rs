@@ -3,9 +3,10 @@
 // direction with no seams. Every consumer (render tiles, colliders) reads it
 // from here, so they cannot disagree about where the ground is.
 
-use super::dvec::{self, DMat3, DVec3};
 use crate::math::SaturatingFrom;
+use crate::math::dmat3::{self, DMat3};
 use crate::math::dvec3;
+use crate::math::dvec3::DVec3;
 use crate::math::noise::lcg_hash;
 
 /// Fewest octaves a planet's height noise sums.
@@ -59,10 +60,10 @@ impl PlanetShape {
         let mut sum = 0.0;
         let mut gradient = [0.0; 3];
         for octave in self.octave_lattices() {
-            let p = dvec3::add(dvec::mul_vec(&octave.to_lattice, dir), octave.offset);
+            let p = dvec3::add(dmat3::mul_vec(&octave.to_lattice, dir), octave.offset);
             let (value, grad) = value_noise(p, octave.salt);
             sum += value * octave.weight;
-            let along = dvec::mul_transpose_vec(&octave.to_lattice, grad);
+            let along = dmat3::mul_transpose_vec(&octave.to_lattice, grad);
             gradient = dvec3::add(gradient, dvec3::scale(along, octave.weight));
         }
         let k = self.noise_scale();
@@ -138,7 +139,7 @@ impl PlanetShape {
 
     fn octave_lattices(&self) -> impl Iterator<Item = OctaveLattice> {
         let base = self.base_frequency();
-        let mut to_lattice = dvec::scale_mat(&OCTAVE_TURN, base);
+        let mut to_lattice = dmat3::scale_mat(&OCTAVE_TURN, base);
         let mut weight = 1.0;
         (0..self.octave_count()).map(move |octave| {
             let salt = self.octave_salt(octave);
@@ -148,7 +149,7 @@ impl PlanetShape {
                 salt,
                 weight,
             };
-            to_lattice = dvec::scale_mat(&dvec::mul(&OCTAVE_TURN, &to_lattice), 2.0);
+            to_lattice = dmat3::scale_mat(&dmat3::mul(&OCTAVE_TURN, &to_lattice), 2.0);
             weight *= 0.5;
             lattice
         })

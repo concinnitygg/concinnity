@@ -1,6 +1,6 @@
 // The fan-out gate for a tick's behavior runs.
 
-use crate::profile::FanOutGate;
+use crate::fanout::FanOutGate;
 
 // Below this much estimated work a split does not pay. Measured on a 12-core
 // Mac with the workers asleep between ticks, as they are at frame rate: the

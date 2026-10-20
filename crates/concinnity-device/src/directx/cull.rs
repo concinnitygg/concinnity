@@ -14,11 +14,11 @@
 //! object id) followed by `D3D12_DRAW_INDEXED_ARGUMENTS`, matching the command
 //! signature built by `create_cull_command_signature`. Mirrors src/metal/cull.rs.
 
+use concinnity_core::fanout::FanOutTiming;
 use concinnity_core::gfx::frustum::{Frustum, Plane};
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types::MAX_SHADOWED_SPOTS;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::profile::FanOutTiming;
 use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::temporal::model_history::HistoryMode;
 use concinnity_core::render::uniforms::directx::CullParams;

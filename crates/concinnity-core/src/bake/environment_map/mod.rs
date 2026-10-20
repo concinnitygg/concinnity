@@ -40,7 +40,7 @@ pub mod bake;
 pub mod source;
 pub mod stars;
 
-use crate::decode::{ByteReader, checked_product};
+use crate::bake::decode::{ByteReader, checked_product};
 use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::String;

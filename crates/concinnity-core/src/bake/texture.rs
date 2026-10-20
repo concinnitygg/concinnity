@@ -22,7 +22,7 @@
 //! upload it verbatim, since no runtime `BCn` encoder exists.
 
 // Magic tagging every compiled 2D texture payload.
-use crate::decode::{ByteReader, checked_product};
+use crate::bake::decode::{ByteReader, checked_product};
 use crate::math::{SaturatingFrom, ceil};
 use alloc::string::String;
 use alloc::vec::Vec;

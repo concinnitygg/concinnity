@@ -291,9 +291,10 @@ fn write_row(out: &mut impl Write, phase: &PhaseReport) -> fmt::Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fanout::FanOutTiming;
     use crate::frame_report::reduce::ReduceOptions;
     use crate::frame_report::sample::{FrameSample, MAX_SYSTEM_TIMINGS, Recorded};
-    use crate::profile::{FanOutTiming, MAX_PASS_TIMINGS};
+    use crate::profile::MAX_PASS_TIMINGS;
     use crate::render::render_graph::PassId;
     use alloc::string::ToString;
     use alloc::vec;

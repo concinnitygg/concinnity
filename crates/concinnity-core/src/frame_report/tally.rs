@@ -3,8 +3,9 @@
 
 use alloc::vec::Vec;
 
+use crate::fanout::FanOutTiming;
 use crate::math::SaturatingFrom;
-use crate::profile::{FanOutTiming, MAX_PASS_TIMINGS};
+use crate::profile::MAX_PASS_TIMINGS;
 
 use crate::frame_report::histogram::Histogram;
 use crate::frame_report::sample::{FrameSample, MAX_SYSTEM_TIMINGS};

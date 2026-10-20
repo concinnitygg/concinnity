@@ -16,7 +16,7 @@ use crate::physics::{BodyHandle, ColliderShape, Simulation};
 use crate::components::BodyDynamics;
 use crate::ecs::Entity;
 
-use super::budget::DriverCapacities;
+use super::capacity::DriverCapacities;
 use super::convert::dynamic_params;
 use super::index::{SortedMap, SortedSet};
 use super::interp::PoseInterp;

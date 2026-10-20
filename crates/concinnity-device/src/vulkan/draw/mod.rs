@@ -11,10 +11,10 @@ pub(in crate::vulkan) mod spot_shadow;
 mod stages;
 
 use ash::vk;
+use concinnity_core::fanout::FanOutTiming;
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::profile::FanOutTiming;
 use concinnity_core::render::backend::FrameParams;
 use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::backend::pass_timing;

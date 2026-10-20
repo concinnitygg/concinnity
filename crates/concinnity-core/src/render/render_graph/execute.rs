@@ -7,8 +7,9 @@ use alloc::vec::Vec;
 use core::sync::atomic::AtomicU32;
 
 use super::{CompiledGraph, CompiledPass, PassId};
+use crate::fanout::FanOutTiming;
 use crate::fanout::Fanout;
-use crate::profile::{FanOutTiming, MAX_PASS_TIMINGS};
+use crate::profile::MAX_PASS_TIMINGS;
 use crate::render::backend::error::RenderResult;
 
 /// Records one pass of a compiled graph into a command buffer of its own.

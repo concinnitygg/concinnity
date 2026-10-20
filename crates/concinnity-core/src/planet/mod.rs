@@ -22,7 +22,6 @@
 //!   the camera, building ground on a host's [`GroundBuilder`].
 
 mod carry;
-pub(crate) mod dvec;
 mod follow;
 mod frame;
 mod geo;
@@ -36,8 +35,9 @@ mod shape;
 mod system;
 mod tile;
 
+pub use crate::math::dmat3::DMat3;
+pub use crate::math::dvec3::DVec3;
 pub use carry::carry_world;
-pub use dvec::{DMat3, DVec3};
 pub use follow::{PATCH_CELLS, PATCH_HALF_WIDTH, PatchPlan, PatchPurpose, build_patch, next_patch};
 pub use frame::LocalFrame;
 pub use geo::{CameraGeo, GeoPose, GeoPosition, geo_axes, geo_direction, geo_lat_lon};

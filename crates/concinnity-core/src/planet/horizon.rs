@@ -1,8 +1,8 @@
 // The planet as an occluder: the sphere of its lowest ground, seen from one
 // eye, hides everything wholly behind its horizon.
 
-use super::dvec::DVec3;
 use crate::math::dvec3;
+use crate::math::dvec3::DVec3;
 
 /// The planet's lowest ground seen from one eye: a sphere that hides whatever
 /// lies wholly inside the cone it subtends past the circle where the eye's
