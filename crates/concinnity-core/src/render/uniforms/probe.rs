@@ -108,7 +108,7 @@ impl ProbeSet {
 
 /// Records a probe record buffer is allocated with before a world asks for more:
 /// the automatic seeding budget, so a seeded world never grows it.
-pub const DEFAULT_PROBE_RECORD_CAPACITY: usize = crate::render::probe::capture::AUTO_SEED_BUDGET;
+pub const DEFAULT_PROBE_RECORD_CAPACITY: usize = crate::render::probe::seed::AUTO_SEED_BUDGET;
 
 /// The capacity a probe resource must be reallocated to so it holds `required`
 /// entries, or `None` while `current` already does. A reallocation never goes

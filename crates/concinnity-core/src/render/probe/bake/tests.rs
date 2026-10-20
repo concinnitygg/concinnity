@@ -465,3 +465,165 @@ fn the_capture_ring_slot_is_never_one_the_frame_cycles_through() {
         assert!(slot < frames_in_flight + 1, "a ring of frames + 1 holds it");
     }
 }
+
+#[test]
+fn bake_queue_hands_out_indices_in_order() {
+    let mut q = ProbeBakeQueue::new(3);
+    assert!(q.pending());
+    assert_eq!(q.take_next(), Some(0));
+    assert_eq!(q.take_next(), Some(1));
+    assert!(q.pending());
+    assert_eq!(q.take_next(), Some(2));
+    assert!(!q.pending());
+    assert_eq!(q.take_next(), None);
+}
+
+#[test]
+fn bake_queue_empty_is_never_pending() {
+    let mut q = ProbeBakeQueue::new(0);
+    assert!(!q.pending());
+    assert_eq!(q.take_next(), None);
+}
+
+#[test]
+fn bake_queue_abort_skips_the_remainder() {
+    let mut q = ProbeBakeQueue::new(4);
+    assert_eq!(q.take_next(), Some(0));
+    q.abort();
+    assert!(!q.pending());
+    assert_eq!(q.take_next(), None);
+}
+
+#[test]
+fn bake_action_idle_starts_only_when_pending_and_eligible() {
+    // Idle with work waiting and the world able to bake -> begin.
+    assert_eq!(
+        next_bake_action(
+            BakePhase::Idle,
+            BakeSignals {
+                queue_pending: true,
+                eligible: true,
+                ..Default::default()
+            }
+        ),
+        BakeAction::StartNext
+    );
+    // Idle but nothing queued -> stay put.
+    assert_eq!(
+        next_bake_action(
+            BakePhase::Idle,
+            BakeSignals {
+                eligible: true,
+                ..Default::default()
+            }
+        ),
+        BakeAction::Idle
+    );
+    // Idle with work queued but the world not eligible this frame (e.g. the
+    // cull is still empty while geometry streams in) -> wait, do not start.
+    assert_eq!(
+        next_bake_action(
+            BakePhase::Idle,
+            BakeSignals {
+                queue_pending: true,
+                ..Default::default()
+            }
+        ),
+        BakeAction::Idle
+    );
+}
+
+#[test]
+fn bake_action_rendering_submits_faces_before_waiting_for_completion() {
+    // While faces remain, submit the next one (one per frame) -- even if
+    // `faces_done` somehow read true, more_faces takes precedence so the
+    // capture finishes.
+    assert_eq!(
+        next_bake_action(
+            BakePhase::Rendering,
+            BakeSignals {
+                faces_done: true,
+                more_faces: true,
+                ..Default::default()
+            }
+        ),
+        BakeAction::RenderFace
+    );
+    // All six submitted, GPU not done yet -> wait.
+    assert_eq!(
+        next_bake_action(BakePhase::Rendering, BakeSignals::default()),
+        BakeAction::Idle
+    );
+    // All six submitted and the GPU completion flag set -> convolve them.
+    assert_eq!(
+        next_bake_action(
+            BakePhase::Rendering,
+            BakeSignals {
+                faces_done: true,
+                ..Default::default()
+            }
+        ),
+        BakeAction::StartPrefilter
+    );
+}
+
+#[test]
+fn bake_action_prefiltering_installs_only_once_every_mip_is_dispatched() {
+    // A mip still owed -> convolve it, never install early: installing here
+    // would publish a cube whose rough mips are still uninitialized.
+    assert_eq!(
+        next_bake_action(
+            BakePhase::Prefiltering,
+            BakeSignals {
+                more_mips: true,
+                mips_done: true,
+                ..Default::default()
+            }
+        ),
+        BakeAction::PrefilterMip
+    );
+    // Every mip dispatched but the GPU has not retired them -> wait. A backend
+    // that frees each dispatch's recording resources at install would free them
+    // out from under the GPU otherwise.
+    assert_eq!(
+        next_bake_action(BakePhase::Prefiltering, BakeSignals::default()),
+        BakeAction::Idle
+    );
+    // Dispatched and retired -> publish the cube.
+    assert_eq!(
+        next_bake_action(
+            BakePhase::Prefiltering,
+            BakeSignals {
+                mips_done: true,
+                ..Default::default()
+            }
+        ),
+        BakeAction::Install
+    );
+}
+
+#[test]
+fn bake_action_never_starts_a_second_bake_while_one_is_in_flight() {
+    // With a probe rendering or prefiltering, a pending queue must not trigger
+    // a second StartNext regardless of eligibility -- one bake in flight at a
+    // time per slot.
+    for phase in [BakePhase::Rendering, BakePhase::Prefiltering] {
+        for more_faces in [false, true] {
+            for more_mips in [false, true] {
+                assert_ne!(
+                    next_bake_action(
+                        phase,
+                        BakeSignals {
+                            queue_pending: true,
+                            eligible: true,
+                            more_faces,
+                            more_mips,
+                            ..Default::default()
+                        }
+                    ),
+                    BakeAction::StartNext
+                );
+            }
+        }
+    }
+}

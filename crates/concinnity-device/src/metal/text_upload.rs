@@ -22,7 +22,7 @@
 use concinnity_core::gfx::render_types::TextDrawCall;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::fullscreen;
+use concinnity_core::render::buffers;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
@@ -43,7 +43,7 @@ pub(super) struct TextRange {
 }
 
 fn align_up(offset: usize) -> usize {
-    usize::saturating_from(fullscreen::align_up(offset as u64, TEXT_UPLOAD_ALIGN))
+    usize::saturating_from(buffers::align_up(offset as u64, TEXT_UPLOAD_ALIGN))
 }
 
 // Lay out every call's vertex and index block back to back at aligned offsets,
@@ -211,7 +211,8 @@ mod tests {
         let calls = [glyph_call(4), glyph_call(1), glyph_call(120)];
         let mut ranges = Vec::new();
         let total = plan_text_upload(&calls, &mut ranges) as u64;
-        let reserved = fullscreen::text_upload_bytes(&calls, TEXT_UPLOAD_ALIGN);
+        let reserved =
+            concinnity_core::render::fullscreen::text_upload_bytes(&calls, TEXT_UPLOAD_ALIGN);
         assert!(
             total <= reserved,
             "planned {total} exceeded reserved {reserved}"

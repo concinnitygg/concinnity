@@ -8,7 +8,8 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::render::backend::error::{RenderError, RenderResult};
-use crate::render::probe::capture::{PrefilterPlan, ProbeBakeQueue, ProbePlacement};
+use crate::render::probe::bake::ProbeBakeQueue;
+use crate::render::probe::capture::{PrefilterPlan, ProbePlacement};
 use crate::render::uniforms::{ProbeSet, ProbeUniforms};
 
 /// A world's reflection probes: the placements, one parallax record per

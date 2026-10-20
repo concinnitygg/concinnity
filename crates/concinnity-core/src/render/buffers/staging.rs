@@ -7,7 +7,7 @@
 //! backend owns the buffer and records the copies, so this is pure policy like
 //! `block_alloc`.
 
-use crate::render::fullscreen::align_up;
+use super::align_up;
 use alloc::collections::VecDeque;
 
 /// Placement alignment in a ring. Buffer copies need none; 16 keeps every

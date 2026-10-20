@@ -30,7 +30,7 @@ use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::fullscreen::align_up;
+use concinnity_core::render::buffers::align_up;
 use concinnity_core::render::temporal::reactive_mask::ReactiveWrite;
 pub(in crate::vulkan) use concinnity_core::render::uniforms::TransparentView;
 // `TransparentView` (the per-frame view UBO) is a GPU-free layout struct that

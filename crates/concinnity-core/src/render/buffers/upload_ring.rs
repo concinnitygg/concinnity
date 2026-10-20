@@ -8,8 +8,8 @@ use core::cell::RefCell;
 
 use alloc::vec::Vec;
 
+use super::align_up;
 use crate::render::buffers::growth::grow_capacity;
-use crate::render::fullscreen::align_up;
 
 /// A backend's persistently mapped upload buffer.
 pub trait UploadBuffer {

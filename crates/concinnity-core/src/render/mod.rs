@@ -13,7 +13,7 @@
 //!
 //! Three crates consume it. The device backends (concinnity-device) implement
 //! it, and the runtime driver (concinnity-runtime) drives a frame through it,
-//! with simulation systems queueing their GPU mutations as [`ops`] so the
+//! with simulation systems queueing their GPU mutations as [`ops`](frame::ops) so the
 //! submit path replays them in record order. The dev tooling
 //! (concinnity-dev) is the third: asset hot-reload and the debug verbs call
 //! the backend directly from its per-frame hook on the render thread, outside

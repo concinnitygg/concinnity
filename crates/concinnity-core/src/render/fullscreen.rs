@@ -21,6 +21,7 @@
 use crate::gfx::render_types::TextDrawCall;
 use crate::math::{SaturatingFrom, ceil, floor};
 use crate::render::backend::error::RenderResult;
+use crate::render::buffers::align_up;
 
 /// Convert a `TextDrawCall.clip_rect` (a rectangle `[x, y, w, h]` in overlay
 /// units, already mapped through the overlay transform by
@@ -58,19 +59,6 @@ pub fn clip_rect_to_scissor(
         u32::saturating_from(x1 - x0),
         u32::saturating_from(y1 - y0),
     ))
-}
-
-/// Round `offset` up to the next multiple of `align` (a power of two). An
-/// `align` of 0 or 1 returns `offset` unchanged.
-pub fn align_up(offset: u64, align: u64) -> u64 {
-    if align <= 1 {
-        return offset;
-    }
-    debug_assert!(
-        align.is_power_of_two(),
-        "align_up: {align} is not a power of two"
-    );
-    (offset + align - 1) & !(align - 1)
 }
 
 /// Total bytes a frame's text geometry occupies in a backend's per-frame upload
@@ -330,20 +318,6 @@ mod tests {
             clip_rect: None,
             layer: 0,
         }
-    }
-
-    #[test]
-    fn align_up_rounds_to_multiple() {
-        assert_eq!(align_up(0, 16), 0);
-        assert_eq!(align_up(1, 16), 16);
-        assert_eq!(align_up(16, 16), 16);
-        assert_eq!(align_up(17, 16), 32);
-        assert_eq!(align_up(0, 256), 0);
-        assert_eq!(align_up(1, 256), 256);
-        assert_eq!(align_up(256, 256), 256);
-        assert_eq!(align_up(257, 256), 512);
-        assert_eq!(align_up(123, 1), 123);
-        assert_eq!(align_up(123, 0), 123);
     }
 
     #[test]

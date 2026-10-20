@@ -14,7 +14,7 @@
 use concinnity_core::gfx::render_types::LineVertex;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::fullscreen::align_up;
+use concinnity_core::render::buffers::align_up;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;

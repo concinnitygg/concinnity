@@ -123,7 +123,7 @@ impl EditorHook {
         }
         let fov = cam.fov_y_degrees.to_radians();
         let index = world.resource::<PickIndex>()?;
-        let (mn, mx) = concinnity_core::render::probe::capture::fold_world_bounds(
+        let (mn, mx) = concinnity_core::render::probe::seed::fold_world_bounds(
             index.entries.iter().map(|e| (e.bb_min, e.bb_max)),
         )?;
         Framing::new(mn, mx, fov, vp[0] / vp[1], home)

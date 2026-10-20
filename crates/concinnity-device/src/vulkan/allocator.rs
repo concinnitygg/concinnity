@@ -60,7 +60,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
-use concinnity_core::render::buffers::block_alloc::Placement;
+use concinnity_core::render::buffers::block_pool::Placement;
 use concinnity_core::render::buffers::block_pool::{BlockGrowth, BlockPool, ReserveError};
 
 const GROWTH: BlockGrowth = BlockGrowth::STANDARD;

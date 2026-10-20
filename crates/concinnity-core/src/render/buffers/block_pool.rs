@@ -1,4 +1,4 @@
-//! One pool of a backend's device allocator: the [`BlockAllocator`] placement
+//! One pool of a backend's device allocator: the `BlockAllocator` placement
 //! state, the device block behind each of its slots, and the ladder the next
 //! block's size climbs. The backend owns block creation and the bind; this owns
 //! which block a request lands in and when a block is opened or released.
@@ -6,7 +6,8 @@
 use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 
-use super::block_alloc::{BlockAllocator, Placement};
+use super::block_alloc::BlockAllocator;
+pub use super::block_alloc::Placement;
 
 /// How a pool's blocks grow as it fills.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,7 +77,7 @@ pub enum ReserveError<E> {
     Unhosted,
 }
 
-/// The blocks of one pool, named by index the way [`BlockAllocator`] names
+/// The blocks of one pool, named by index the way `BlockAllocator` names
 /// them. `B` is the backend's device block (a heap, a memory allocation).
 pub struct BlockPool<B> {
     placement: BlockAllocator,

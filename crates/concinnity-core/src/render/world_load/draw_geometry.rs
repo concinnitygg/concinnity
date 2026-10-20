@@ -7,7 +7,8 @@ use crate::components::{GlassPanel, ReflectionProbe, WaterSurface};
 use crate::ecs::PipelineContext;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types;
-use crate::render::probe::capture::{self, ProbePlacement};
+use crate::render::probe::capture::ProbePlacement;
+use crate::render::probe::seed;
 use crate::transform::mat4_transform_point;
 
 /// World-space position used to score a draw object for texture streaming:
@@ -148,16 +149,16 @@ fn auto_seed_probe_placements<'a>(
         .collect();
     let reflectors = water_surfaces
         .into_iter()
-        .map(|w| capture::reflector_bounds(w.center, [w.extent[0], 0.0, w.extent[1]]))
+        .map(|w| seed::reflector_bounds(w.center, [w.extent[0], 0.0, w.extent[1]]))
         .chain(glass_panels.iter().map(|g| {
             // A pane is an oriented quad; its longest half-side bounds it on
             // every axis whatever its normal.
             let r = g.half_size[0].max(g.half_size[1]);
-            capture::reflector_bounds(g.center, [r, r, r])
+            seed::reflector_bounds(g.center, [r, r, r])
         }));
     let tris = gather_auto_seed_triangles(draw_objects, vertices, indices).unwrap_or_default();
-    capture::fold_world_bounds(occupancy.iter().copied().chain(reflectors))
-        .map(|(mn, mx)| capture::auto_seed_probes_with_geometry(mn, mx, &occupancy, &tris))
+    seed::fold_world_bounds(occupancy.iter().copied().chain(reflectors))
+        .map(|(mn, mx)| seed::auto_seed_probes_with_geometry(mn, mx, &occupancy, &tris))
 }
 
 #[cfg(test)]

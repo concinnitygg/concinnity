@@ -60,7 +60,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::IUnknown;
 
-use concinnity_core::render::buffers::block_alloc::Placement;
+use concinnity_core::render::buffers::block_pool::Placement;
 use concinnity_core::render::buffers::block_pool::{BlockGrowth, BlockPool, ReserveError};
 
 // Placement granularity every heap size is rounded to. D3D12 places resources

@@ -16,9 +16,7 @@ use alloc::vec::Vec;
 use crate::gfx::cubemap::FACE_BASIS;
 use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::probe::book::{ProbeBook, ProbeProgress};
-use crate::render::probe::capture::{
-    BakeAction, BakePhase, BakeSignals, PrefilterPlan, ProbePlacement, next_bake_action,
-};
+use crate::render::probe::capture::{PrefilterPlan, ProbePlacement};
 
 /// Cube faces a capture renders, one per frame.
 pub const CAPTURE_FACES: usize = FACE_BASIS.len();
@@ -396,6 +394,153 @@ impl<C, P> ProbeBake<C, P> {
                 error,
                 kept: book.count(),
             }),
+        }
+    }
+}
+
+/// Tracks how far a staggered probe bake has progressed. Baking every probe on
+/// one frame stalls proportionally to the probe count; instead the renderer bakes
+/// a bounded budget per frame and walks this cursor, so the load cost is spread
+/// and unbaked probes fall back to the sky until their turn. Indices are handed
+/// out in order so the baked cube array stays aligned with the placement list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProbeBakeQueue {
+    total: usize,
+    next: usize,
+}
+
+impl ProbeBakeQueue {
+    /// A queue seeded with `total` probes waiting to bake.
+    pub fn new(total: usize) -> Self {
+        Self { total, next: 0 }
+    }
+
+    /// Whether any placement is still waiting to bake.
+    pub fn pending(&self) -> bool {
+        self.next < self.total
+    }
+
+    /// The next placement index to bake, advancing the cursor. `None` when done.
+    pub fn take_next(&mut self) -> Option<usize> {
+        (self.next < self.total).then(|| {
+            let i = self.next;
+            self.next += 1;
+            i
+        })
+    }
+
+    /// Abandon every remaining placement (e.g. a permanently ineligible world or
+    /// an unrecoverable bake error). Leaves the queue not `pending`.
+    pub fn abort(&mut self) {
+        self.next = self.total;
+    }
+}
+
+/// Phase of the single in-flight asynchronous bake. Exactly one probe is baked at
+/// a time, walking three phases across frames so the render thread never blocks on
+/// the capture: `Rendering` (six faces submitted, GPU running), `Prefiltering` (the
+/// GGX convolution dispatched one destination mip per frame), and `Idle` (nothing
+/// in flight). The renderer holds the GPU resources for the in-flight probe; this
+/// enum only names which phase it is in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BakePhase {
+    /// Nothing to bake.
+    Idle,
+    /// Rendering the probe's cube faces.
+    Rendering,
+    /// Convolving the captured faces into the probe cube's mip chain.
+    Prefiltering,
+}
+
+/// What one bake slot should do this frame.
+/// [`ProbeBake`] maps each variant to a
+/// step of the backend's device: `StartNext` builds the next
+/// placement's capture buffers + targets (no face submitted yet), `RenderFace`
+/// submits one cube face (the six are spread one-per-frame so no single frame
+/// pays the whole capture), `StartPrefilter` releases the capture's draw
+/// resources and builds the probe cube plus the capture pyramid the convolution
+/// reads, `PrefilterMip` dispatches one destination mip's convolution, `Install`
+/// publishes the finished cube and advances the queue, `Idle` does nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BakeAction {
+    /// Nothing to do this frame.
+    Idle,
+    /// Begin the next queued probe.
+    StartNext,
+    /// Render one cube face.
+    RenderFace,
+    /// Move a finished capture into the convolution, building its pyramid.
+    StartPrefilter,
+    /// Convolve one destination mip of the probe cube.
+    PrefilterMip,
+    /// Install the convolved cube into the probe pool.
+    Install,
+}
+
+/// What is known this frame about the bake in flight, as the pure
+/// transition table below reads it. Defaulted so a call site naming one slot's
+/// signals leaves the other slot's at "nothing happening" rather than spelling
+/// out a row of `false`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BakeSignals {
+    /// Every cube face has been submitted and the GPU has signaled completion.
+    pub faces_done: bool,
+    /// Every convolution dispatch has retired on the GPU. A backend whose queue
+    /// ordering already puts those writes before any frame that samples the cube,
+    /// and which has no per-dispatch recording resources to reclaim, has nothing
+    /// to wait for and reports this the moment the last mip is dispatched.
+    pub mips_done: bool,
+    /// A placement is still waiting to bake.
+    pub queue_pending: bool,
+    /// A capture can start this frame.
+    pub eligible: bool,
+    /// Cube faces remain to submit.
+    pub more_faces: bool,
+    /// Destination mips remain to convolve.
+    pub more_mips: bool,
+}
+
+/// Decide the next action for the single-in-flight asynchronous bake. Pure so the
+/// transition table is locked by unit tests without a GPU:
+///
+/// - while `Rendering`, submit the next cube face while `more_faces` remain
+///   (one per frame); once all six are submitted, do nothing until the GPU
+///   completion flag `faces_done` is set, then `StartPrefilter`;
+/// - while `Prefiltering`, convolve one destination mip per frame while
+///   `more_mips` remain, then wait for `mips_done` and `Install`;
+/// - while `Idle`, start the next placement only when one is `queue_pending`
+///   and the world is `eligible` to bake this frame; otherwise stay `Idle`.
+///
+/// The invariants this guarantees: never convolve before all six faces are
+/// submitted and the GPU signals completion, never install before every mip has
+/// been dispatched and retired, and never begin a second bake while one is
+/// already in flight.
+pub fn next_bake_action(phase: BakePhase, signals: BakeSignals) -> BakeAction {
+    match phase {
+        BakePhase::Rendering => {
+            if signals.more_faces {
+                BakeAction::RenderFace
+            } else if signals.faces_done {
+                BakeAction::StartPrefilter
+            } else {
+                BakeAction::Idle
+            }
+        }
+        BakePhase::Prefiltering => {
+            if signals.more_mips {
+                BakeAction::PrefilterMip
+            } else if signals.mips_done {
+                BakeAction::Install
+            } else {
+                BakeAction::Idle
+            }
+        }
+        BakePhase::Idle => {
+            if signals.queue_pending && signals.eligible {
+                BakeAction::StartNext
+            } else {
+                BakeAction::Idle
+            }
         }
     }
 }
