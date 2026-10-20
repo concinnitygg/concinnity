@@ -166,6 +166,14 @@ mod tests {
     }
 
     #[test]
+    fn an_unnormalized_quaternion_decomposes_the_same_way() {
+        let q = quat_from_euler_yxz_deg([12.0, 45.0, -30.0]);
+        let scaled = [q[0] * 4.0, q[1] * 4.0, q[2] * 4.0, q[3] * 4.0];
+        let (a, b) = (euler_yxz_deg_from_quat(q), euler_yxz_deg_from_quat(scaled));
+        assert!(close(a, b, 1e-2), "{a:?} != {b:?}");
+    }
+
+    #[test]
     fn pitch_at_gimbal_lock_pins_roll_to_zero() {
         for pitch in [-90.0, 90.0] {
             let got = euler_yxz_deg_from_quat(quat_from_euler_yxz_deg([pitch, 30.0, 40.0]));

@@ -15,7 +15,7 @@ use crate::components::BlockType;
 use crate::ecs::Ref;
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::chunk_coord::ChunkCoord;
-use crate::math::SaturatingFrom;
+use crate::math::{SaturatingFrom, lerp, smoothstep};
 use alloc::vec;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
@@ -223,16 +223,9 @@ fn value_noise(seed: u64, wx: i32, wz: i32, feature: i32) -> f32 {
     let v01 = hash01(seed, cell_x, cell_z + 1);
     let v11 = hash01(seed, cell_x + 1, cell_z + 1);
 
-    let sx = smoothstep(tx);
-    let sz = smoothstep(tz);
-    let a = v00 + (v10 - v00) * sx;
-    let b = v01 + (v11 - v01) * sx;
-    a + (b - a) * sz
-}
-
-// Hermite smoothstep `3t^2 - 2t^3`. Polynomial, so no `std`-only math.
-fn smoothstep(t: f32) -> f32 {
-    t * t * (3.0 - 2.0 * t)
+    let sx = smoothstep(0.0, 1.0, tx);
+    let sz = smoothstep(0.0, 1.0, tz);
+    lerp(lerp(v00, v10, sx), lerp(v01, v11, sx), sz)
 }
 
 // Hash an integer lattice point to a pseudo-random `f32` in `[0, 1)`.

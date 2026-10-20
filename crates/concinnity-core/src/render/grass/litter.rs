@@ -9,7 +9,7 @@
 //! line.
 
 use super::planet::density::grass_hash;
-use crate::math::{SaturatingFrom, floor};
+use crate::math::{SaturatingFrom, floor, lerp, smoothstep};
 
 /// The hue dead grass browns toward, at unit luminance.
 pub const LITTER_HUE: [f32; 3] = [1.38, 0.94, 0.52];
@@ -48,7 +48,6 @@ pub fn patch_noise(p: [f32; 3], salt: u32) -> f32 {
     });
     let c = cell.map(i32::saturating_from);
     let at = |dx: i32, dy: i32, dz: i32| patch_lattice([c[0] + dx, c[1] + dy, c[2] + dz], salt);
-    let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
     let x00 = lerp(at(0, 0, 0), at(1, 0, 0), f[0]);
     let x10 = lerp(at(0, 1, 0), at(1, 1, 0), f[0]);
     let x01 = lerp(at(0, 0, 1), at(1, 0, 1), f[0]);
@@ -68,11 +67,6 @@ pub fn litter_color(root_color: [f32; 3]) -> [f32; 3] {
         let brown = LITTER_HUE[i] * luma;
         (root_color[i] + (brown - root_color[i]) * LITTER_BROWNING) * LITTER_SHADE
     })
-}
-
-fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
-    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
 }
 
 /// What lies on the ground at fixed point `p` (meters) under a pixel covering

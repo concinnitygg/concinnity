@@ -4,7 +4,7 @@
 //! `PhysicsConfig`, and laying every `Terrain` down as ground.
 
 use alloc::boxed::Box;
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use crate::physics::{
@@ -21,7 +21,7 @@ use crate::ecs::{
     Entity, EventCursor, MenuActive, PipelineContext, ScheduleMode, SimTiming, StepResult, System,
     World, WorldPhysicsBudget,
 };
-use crate::math::vec3::{normalize_or, scale, sub};
+use crate::math::vec3::{add, normalize_or, scale, sub};
 use crate::math::{cos, sin, sqrt};
 use crate::planet::{FrameRebases, PlanetGravity, PlanetGround, RebaseCursor};
 
@@ -104,7 +104,7 @@ pub struct PhysicsSystem {
     // The planet's ground patch body and the revision it holds.
     planet_ground: Option<(BodyHandle, u64)>,
     // Props held off the planet's ground while the patch is elsewhere.
-    off_ground: super::held::HeldBodies,
+    off_ground: super::off_ground::OffGroundBodies,
     // Gravity's strength: the engine's, or the planet's.
     gravity: f32,
 }
@@ -175,7 +175,7 @@ impl PhysicsSystem {
             fanout: Box::new(Inline),
             rebases: RebaseCursor::default(),
             planet_ground: None,
-            off_ground: super::held::HeldBodies::default(),
+            off_ground: super::off_ground::OffGroundBodies::default(),
             gravity: GRAVITY,
         }
     }
@@ -222,7 +222,7 @@ impl PhysicsSystem {
     fn reserve(&mut self, budget: &PhysicsBudget) {
         let caps = DriverCapacities::derive(budget);
         self.props = PropBodies::with_capacity(&caps);
-        self.off_ground = super::held::HeldBodies::with_capacity(caps.props);
+        self.off_ground = super::off_ground::OffGroundBodies::with_capacity(caps.props);
         self.rigs = Vec::with_capacity(caps.rigs);
         self.new_props = Vec::with_capacity(caps.new_props);
         self.motion_scratch = Vec::with_capacity(caps.root_motions);
@@ -243,29 +243,8 @@ impl PhysicsSystem {
         world: &mut Simulation,
         body_handles: &mut BTreeMap<AssetId, BodyHandle>,
     ) {
-        let pickup: BTreeSet<Entity> = ctx.query_with_entity::<Pickup>().map(|(e, _)| e).collect();
-        let dynamics: BTreeMap<Entity, BodyDynamics> = ctx
-            .query_with_entity::<BodyDynamics>()
-            .map(|(e, b)| (e, *b))
-            .collect();
-        let snaps: Vec<(Entity, PropCollSnap)> = ctx
-            .join2::<Collider, Transform>()
-            .map(|(entity, collider, transform)| {
-                (
-                    entity,
-                    PropCollSnap {
-                        shape: collider_shape(&collider.0, transform.scale),
-                        layer: collider.0.layer.clone(),
-                        position: transform.position,
-                        rotation_deg: transform.rotation_deg,
-                        pickup: pickup.contains(&entity),
-                        dynamics: dynamics.get(&entity).copied(),
-                    },
-                )
-            })
-            .collect();
-
-        for (entity, snap) in snaps {
+        for (entity, collider, transform) in ctx.join2::<Collider, Transform>() {
+            let snap = prop_snap(ctx, entity, collider, transform);
             let Some(handle) = self.props.add(&self.layers, world, entity, &snap) else {
                 continue;
             };
@@ -325,9 +304,9 @@ impl PhysicsSystem {
                 volume.rotation_deg = rebase.apply_euler_deg(volume.rotation_deg);
             }
             for rig in &mut self.rigs {
-                let written = ctx
-                    .query::<crate::components::CharacterRig>()
-                    .find(|r| r.target == rig.target)
+                let written = rig
+                    .resolve(ctx)
+                    .and_then(|e| ctx.get::<crate::components::CharacterRig>(e))
                     .map(|r| r.position);
                 rig.rebase(&rebase, written);
             }
@@ -355,9 +334,29 @@ impl PhysicsSystem {
                 .filter(|p| p.dynamic)
                 .map(|p| p.handle)
                 .filter(move |h| Some(*h) != carried);
-            self.off_ground
-                .update(world, bodies, &super::held::Footprint::of(&ground.patch));
+            self.off_ground.update(
+                world,
+                bodies,
+                &super::off_ground::Footprint::of(&ground.patch),
+            );
         }
+    }
+}
+
+// The body-building view of one collider-bearing entity.
+fn prop_snap(
+    ctx: &PipelineContext<'_>,
+    entity: Entity,
+    collider: &Collider,
+    transform: &Transform,
+) -> PropCollSnap {
+    PropCollSnap {
+        shape: collider_shape(&collider.0, transform.scale),
+        layer: collider.0.layer.clone(),
+        position: transform.position,
+        rotation_deg: transform.rotation_deg,
+        pickup: ctx.get::<Pickup>(entity).is_some(),
+        dynamics: ctx.get::<BodyDynamics>(entity).copied(),
     }
 }
 
@@ -642,22 +641,10 @@ impl System for PhysicsSystem {
                     !self.props.is_tracked(*entity) && !self.props.is_refused(*entity)
                 })
                 .map(|(entity, collider, transform)| {
-                    (
-                        entity,
-                        PropCollSnap {
-                            shape: collider_shape(&collider.0, transform.scale),
-                            layer: collider.0.layer.clone(),
-                            position: transform.position,
-                            rotation_deg: transform.rotation_deg,
-                            pickup: false,
-                            dynamics: None,
-                        },
-                    )
+                    (entity, prop_snap(ctx, entity, collider, transform))
                 }),
         );
-        for (entity, mut snap) in self.new_props.drain(..) {
-            snap.pickup = ctx.get::<Pickup>(entity).is_some();
-            snap.dynamics = ctx.get::<BodyDynamics>(entity).copied();
+        for (entity, snap) in self.new_props.drain(..) {
             self.props
                 .adopt(&self.layers, world, entity, &snap, self.body_cap);
         }
@@ -679,27 +666,19 @@ impl System for PhysicsSystem {
             if let Some(held_idx) = self.held.take() {
                 // drop: hand the prop back to dynamic simulation with a throw.
                 let pp = self.props.get(held_idx).expect("held index is valid");
-                let throw = [
-                    fwd_full[0] * THROW_SPEED,
-                    fwd_full[1] * THROW_SPEED + 1.0,
-                    fwd_full[2] * THROW_SPEED,
-                ];
+                let throw = add(scale(fwd_full, THROW_SPEED), [0.0, 1.0, 0.0]);
                 world.make_dynamic(pp.handle, throw);
                 held_changed = Some((pp.entity, false));
             } else {
                 // pickup: nearest carriable prop within reach the player faces.
-                // Entity positions for the reach test, read from the Transform
-                // column only on the interact edge (not every frame).
-                let entity_positions: BTreeMap<Entity, [f32; 3]> = ctx
-                    .query_with_entity::<Transform>()
-                    .map(|(e, t)| (e, t.position))
-                    .collect();
                 let mut best: Option<(f32, usize)> = None;
                 for (idx, pp) in self.props.iter().enumerate() {
                     if !pp.pickup {
                         continue;
                     }
-                    let pos = entity_positions.get(&pp.entity).copied().unwrap_or(cam_pos);
+                    let pos = ctx
+                        .get::<Transform>(pp.entity)
+                        .map_or(cam_pos, |t| t.position);
                     let dx = pos[0] - cam_pos[0];
                     let dz = pos[2] - cam_pos[2];
                     let dist = sqrt(dx * dx + dz * dz);
@@ -734,11 +713,10 @@ impl System for PhysicsSystem {
 
         // The carried prop's hover point in front of the camera, refreshed
         // from this frame's camera pose.
-        let hold_pos = [
-            cam_pos[0] + fwd_full[0] * HOLD_DISTANCE,
-            cam_pos[1] + fwd_full[1] * HOLD_DISTANCE - HOLD_DROP,
-            cam_pos[2] + fwd_full[2] * HOLD_DISTANCE,
-        ];
+        let hold_pos = sub(
+            add(cam_pos, scale(fwd_full, HOLD_DISTANCE)),
+            [0.0, HOLD_DROP, 0.0],
+        );
 
         // Adopt prop transforms written from outside physics (a behavior's
         // `set_transform`, an editor drag): a Transform that differs from the
@@ -776,11 +754,7 @@ impl System for PhysicsSystem {
                 // Up is away from the pull, so the vertical speed rides it.
                 let center = player.center.current();
                 let up = up_at(world, center);
-                let desired = [
-                    desired_move[0] * dt + up[0] * player.vy * dt,
-                    desired_move[1] * dt + up[1] * player.vy * dt,
-                    desired_move[2] * dt + up[2] * player.vy * dt,
-                ];
+                let desired = add(scale(desired_move, dt), scale(scale(up, player.vy), dt));
                 let moved = world.move_character(
                     &player.shape,
                     &CharacterMoveInput {
@@ -791,11 +765,7 @@ impl System for PhysicsSystem {
                         mask: self.layers.mask(LAYER_CHARACTER),
                     },
                 );
-                let new_center = [
-                    center[0] + moved.translation[0],
-                    center[1] + moved.translation[1],
-                    center[2] + moved.translation[2],
-                ];
+                let new_center = add(center, moved.translation);
                 world.set_kinematic_translation(player.handle, new_center);
 
                 player.grounded = moved.grounded;
@@ -920,11 +890,7 @@ impl System for PhysicsSystem {
                 .world
                 .as_ref()
                 .map_or([0.0, 1.0, 0.0], |w| up_at(w, center));
-            let eye = [
-                center[0] + up[0] * player.eye_offset,
-                center[1] + up[1] * player.eye_offset,
-                center[2] + up[2] * player.eye_offset,
-            ];
+            let eye = add(center, scale(up, player.eye_offset));
             player.written_eye = Some(eye);
             grounded = player.grounded;
             for camera in ctx.query_mut::<Camera3D>() {

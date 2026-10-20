@@ -145,7 +145,7 @@ fn a_replaced_grid_carries_what_rests_on_it() {
         ground,
         5,
         5,
-        vec![0.0; 25],
+        &[0.0; 25],
         [20.0, 1.0, 20.0],
         [0.0, -2.0, 0.0]
     ));
@@ -155,5 +155,5 @@ fn a_replaced_grid_carries_what_rests_on_it() {
     assert_eq!(sim.body_count(), 2, "the same body, not a new one");
 
     // Only a grid can be replaced by a grid.
-    assert!(!sim.replace_heightfield(b, 5, 5, vec![0.0; 25], [20.0, 1.0, 20.0], [0.0; 3]));
+    assert!(!sim.replace_heightfield(b, 5, 5, &[0.0; 25], [20.0, 1.0, 20.0], [0.0; 3]));
 }

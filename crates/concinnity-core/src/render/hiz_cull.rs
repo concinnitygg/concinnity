@@ -9,22 +9,22 @@ use crate::render::depth;
 /// Widest footprint per axis, in texels, the cull gathers at the deepest mip of
 /// a pyramid shorter than the full chain: the last level of a 16384x16384
 /// target. A wider footprint keeps the object.
-pub const MAX_GATHER_SPAN: u32 = 16;
+pub(crate) const MAX_GATHER_SPAN: u32 = 16;
 
 /// The texels of one pyramid mip a screen rect covers, inclusive.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct Footprint {
+pub(crate) struct Footprint {
     /// Pyramid mip the rect is tested at.
-    pub mip: u32,
+    pub(crate) mip: u32,
     /// Top-left texel.
-    pub lo: [u32; 2],
+    pub(crate) lo: [u32; 2],
     /// Bottom-right texel.
-    pub hi: [u32; 2],
+    pub(crate) hi: [u32; 2],
 }
 
 /// How the cull reduces a [`Footprint`] to an occluder depth.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum Reduction {
+pub(crate) enum Reduction {
     /// The rect fits a 2x2 footprint: its four corners cover it.
     FourTap,
     /// The rect is wider than 2x2 at the deepest mip: every texel is read.
@@ -38,7 +38,12 @@ impl Footprint {
     /// `[0, 1]`) in a `mip_count`-deep pyramid over a `hiz_size` base. The mip
     /// is the one whose texels are about the rect's size, clamped to the
     /// deepest the pyramid has.
-    pub fn new(uv_min: [f32; 2], uv_max: [f32; 2], hiz_size: [f32; 2], mip_count: u32) -> Self {
+    pub(crate) fn new(
+        uv_min: [f32; 2],
+        uv_max: [f32; 2],
+        hiz_size: [f32; 2],
+        mip_count: u32,
+    ) -> Self {
         let max_dim = ((uv_max[0] - uv_min[0]) * hiz_size[0])
             .max((uv_max[1] - uv_min[1]) * hiz_size[1])
             .max(1.0);
@@ -61,12 +66,12 @@ impl Footprint {
     }
 
     /// Texels covered per axis.
-    pub fn span(&self) -> [u32; 2] {
+    pub(crate) fn span(&self) -> [u32; 2] {
         [self.hi[0] - self.lo[0] + 1, self.hi[1] - self.lo[1] + 1]
     }
 
     /// How the cull reads this footprint.
-    pub fn reduction(&self) -> Reduction {
+    pub(crate) fn reduction(&self) -> Reduction {
         let span = self.span();
         if span[0] <= 2 && span[1] <= 2 {
             Reduction::FourTap
@@ -79,7 +84,7 @@ impl Footprint {
 
     /// The farthest depth `load(x, y, mip)` holds over the footprint, or `None`
     /// when the footprint is too wide to test.
-    pub fn occluder_depth(&self, load: impl Fn(u32, u32, u32) -> f32) -> Option<f32> {
+    pub(crate) fn occluder_depth(&self, load: impl Fn(u32, u32, u32) -> f32) -> Option<f32> {
         let (lo, hi) = (self.lo, self.hi);
         let at = |x: u32, y: u32| load(x, y, self.mip);
         match self.reduction() {
@@ -98,7 +103,7 @@ impl Footprint {
 
     /// Whether an object whose nearest device depth is `nearest_depth` is
     /// hidden behind everything `load` holds over the footprint.
-    pub fn occludes(&self, nearest_depth: f32, load: impl Fn(u32, u32, u32) -> f32) -> bool {
+    pub(crate) fn occludes(&self, nearest_depth: f32, load: impl Fn(u32, u32, u32) -> f32) -> bool {
         self.occluder_depth(load)
             .is_some_and(|occluder| depth::behind(nearest_depth, occluder))
     }

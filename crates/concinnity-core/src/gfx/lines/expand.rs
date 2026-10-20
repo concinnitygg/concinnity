@@ -10,8 +10,9 @@
 
 use super::Line;
 use crate::gfx::render_types::LineVertex;
+use crate::math::lerp_array;
 use crate::math::tan;
-use crate::math::vec3::{cross, dot, lerp as lerp3, sub, try_normalize};
+use crate::math::vec3::{cross, dot, sub, try_normalize};
 use alloc::vec::Vec;
 
 // Vertices emitted per expanded segment: two triangles, unindexed.
@@ -63,15 +64,6 @@ impl LineCamera {
     }
 }
 
-fn lerp4(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
-    [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-        a[3] + (b[3] - a[3]) * t,
-    ]
-}
-
 // A segment trimmed to the part in front of the near plane, with its colors
 // interpolated to wherever the trim landed.
 struct Clipped {
@@ -100,17 +92,17 @@ fn clip_to_near(line: &Line, cam: &LineCamera) -> Option<Clipped> {
             let t = (d0 - near) / (d0 - d1);
             Some(Clipped {
                 start: line.start,
-                end: lerp3(line.start, line.end, t),
+                end: lerp_array(line.start, line.end, t),
                 start_color: line.start_color,
-                end_color: lerp4(line.start_color, line.end_color, t),
+                end_color: lerp_array(line.start_color, line.end_color, t),
             })
         }
         (false, true) => {
             let t = (near - d0) / (d1 - d0);
             Some(Clipped {
-                start: lerp3(line.start, line.end, t),
+                start: lerp_array(line.start, line.end, t),
                 end: line.end,
-                start_color: lerp4(line.start_color, line.end_color, t),
+                start_color: lerp_array(line.start_color, line.end_color, t),
                 end_color: line.end_color,
             })
         }

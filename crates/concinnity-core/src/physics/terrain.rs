@@ -48,9 +48,16 @@ fn add_heightfield(
     center: [f32; 3],
     mask: LayerMask,
 ) -> Result<(), String> {
-    let (rows, cols, heights, scale) = grid_field(grid);
+    let side = grid.side();
     world
-        .add_heightfield(rows, cols, heights, scale, center, mask)
+        .add_heightfield(
+            side,
+            side,
+            grid.heights().to_vec(),
+            grid_scale(grid),
+            center,
+            mask,
+        )
         .map(|_| ())
         .ok_or_else(|| String::from("the simulation declined the heightfield"))
 }
@@ -61,8 +68,16 @@ pub(super) fn add_patch(
     patch: &GroundPatch,
     mask: LayerMask,
 ) -> Option<BodyHandle> {
-    let (rows, cols, heights, scale) = grid_field(&patch.grid);
-    world.add_heightfield(rows, cols, heights, scale, patch.center, mask)
+    let side = patch.grid.side();
+    let heights = patch.grid.heights().to_vec();
+    world.add_heightfield(
+        side,
+        side,
+        heights,
+        grid_scale(&patch.grid),
+        patch.center,
+        mask,
+    )
 }
 
 // Put `patch` in place of the planet ground `handle` holds. Returns whether it
@@ -72,20 +87,21 @@ pub(super) fn replace_patch(
     handle: BodyHandle,
     patch: &GroundPatch,
 ) -> bool {
-    let (rows, cols, heights, scale) = grid_field(&patch.grid);
-    world.replace_heightfield(handle, rows, cols, heights, scale, patch.center)
+    let side = patch.grid.side();
+    world.replace_heightfield(
+        handle,
+        side,
+        side,
+        patch.grid.heights(),
+        grid_scale(&patch.grid),
+        patch.center,
+    )
 }
 
-// A grid as the simulation's heightfield arguments.
-fn grid_field(grid: &TerrainGrid) -> (usize, usize, Vec<f32>, [f32; 3]) {
-    let side = grid.side();
+// A grid's footprint as the simulation's heightfield scale.
+fn grid_scale(grid: &TerrainGrid) -> [f32; 3] {
     let [hx, hz] = grid.extent();
-    (
-        side,
-        side,
-        grid.heights().to_vec(),
-        [2.0 * hx, 1.0, 2.0 * hz],
-    )
+    [2.0 * hx, 1.0, 2.0 * hz]
 }
 
 #[cfg(test)]

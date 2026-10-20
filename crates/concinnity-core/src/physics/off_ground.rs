@@ -39,19 +39,26 @@ impl Footprint {
 
 /// The freely simulated bodies currently held off a planet's missing ground.
 #[derive(Debug, Default)]
-pub(super) struct HeldBodies {
+pub(super) struct OffGroundBodies {
+    // Sorted, so membership is a binary search.
     held: Vec<BodyHandle>,
+    // Per-update scratch: which held bodies stay held, and the newly held.
+    keep: Vec<bool>,
+    newly_held: Vec<BodyHandle>,
 }
 
-impl HeldBodies {
+impl OffGroundBodies {
     pub(super) fn with_capacity(capacity: usize) -> Self {
         Self {
             held: Vec::with_capacity(capacity),
+            keep: Vec::with_capacity(capacity),
+            newly_held: Vec::with_capacity(capacity),
         }
     }
 
+    #[cfg(test)]
     pub(super) fn is_held(&self, handle: BodyHandle) -> bool {
-        self.held.contains(&handle)
+        self.held.binary_search(&handle).is_ok()
     }
 
     /// Hold every body in `bodies` that has strayed off `footprint`, and let
@@ -61,25 +68,32 @@ impl HeldBodies {
     pub(super) fn update(
         &mut self,
         world: &mut Simulation,
-        bodies: impl Iterator<Item = BodyHandle> + Clone,
+        bodies: impl Iterator<Item = BodyHandle>,
         footprint: &Footprint,
     ) {
-        self.held
-            .retain(|h| bodies.clone().any(|b| b == *h) && world.body_pose_quat(*h).is_some());
+        self.keep.clear();
+        self.keep.resize(self.held.len(), false);
+        self.newly_held.clear();
         for handle in bodies {
             let Some((position, _)) = world.body_pose_quat(handle) else {
                 continue;
             };
-            let held = self.is_held(handle);
-            if !held && !footprint.covers(position, HOLD_INSET) {
-                if world.make_kinematic(handle) {
-                    self.held.push(handle);
+            match self.held.binary_search(&handle) {
+                Ok(_) if footprint.covers(position, RELEASE_INSET) => {
+                    world.make_dynamic(handle, [0.0; 3]);
                 }
-            } else if held && footprint.covers(position, RELEASE_INSET) {
-                world.make_dynamic(handle, [0.0; 3]);
-                self.held.retain(|h| *h != handle);
+                Ok(i) => self.keep[i] = true,
+                Err(_) => {
+                    if !footprint.covers(position, HOLD_INSET) && world.make_kinematic(handle) {
+                        self.newly_held.push(handle);
+                    }
+                }
             }
         }
+        let mut keep = self.keep.iter();
+        self.held.retain(|_| keep.next().copied().unwrap_or(false));
+        self.held.extend_from_slice(&self.newly_held);
+        self.held.sort_unstable();
     }
 }
 
@@ -143,7 +157,7 @@ mod tests {
 
     fn step(
         world: &mut Simulation,
-        held: &mut HeldBodies,
+        held: &mut OffGroundBodies,
         bodies: &[BodyHandle],
         at: &GroundPatch,
     ) {
@@ -160,7 +174,7 @@ mod tests {
     #[test]
     fn a_body_left_behind_stays_put() {
         let (mut world, ground, balls) = world_on([0.0; 3], &[[0.0, 0.6, 0.0]]);
-        let mut held = HeldBodies::default();
+        let mut held = OffGroundBodies::default();
         let here = patch([0.0; 3]);
         for _ in 0..90 {
             step(&mut world, &mut held, &balls, &here);
@@ -172,7 +186,7 @@ mod tests {
             ground,
             5,
             5,
-            vec![0.0; 25],
+            &[0.0; 25],
             [32.0, 1.0, 32.0],
             away.center
         ));
@@ -188,7 +202,7 @@ mod tests {
     #[test]
     fn a_body_the_patch_returns_over_settles() {
         let (mut world, ground, balls) = world_on([100.0, 0.0, 0.0], &[[0.0, 3.0, 0.0]]);
-        let mut held = HeldBodies::default();
+        let mut held = OffGroundBodies::default();
         let away = patch([100.0, 0.0, 0.0]);
         for _ in 0..120 {
             step(&mut world, &mut held, &balls, &away);
@@ -200,7 +214,7 @@ mod tests {
             ground,
             5,
             5,
-            vec![0.0; 25],
+            &[0.0; 25],
             [32.0, 1.0, 32.0],
             back.center
         ));
@@ -223,7 +237,7 @@ mod tests {
     fn a_body_inside_the_patch_is_unaffected() {
         let (mut with_rule, _, a) = world_on([0.0; 3], &[[3.0, 4.0, -2.0]]);
         let (mut without, _, b) = world_on([0.0; 3], &[[3.0, 4.0, -2.0]]);
-        let mut held = HeldBodies::default();
+        let mut held = OffGroundBodies::default();
         let here = patch([0.0; 3]);
         for _ in 0..120 {
             step(&mut with_rule, &mut held, &a, &here);

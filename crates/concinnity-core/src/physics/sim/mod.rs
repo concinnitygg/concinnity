@@ -30,10 +30,6 @@
 // that had to run anyway -- the sweep's pairs and the solved manifolds -- so a
 // world nobody is listening to pays for them in a threshold test and nothing
 // more.
-//
-// `pose` is the pair of rotation conversions the boundary is written in,
-// beside the math they are built on so the simulation and whoever blends its
-// poses share one convention.
 
 mod aabb;
 mod body;
@@ -50,7 +46,6 @@ mod joint;
 mod mass;
 mod math;
 mod narrow;
-mod pose;
 mod query;
 mod scene;
 mod sensor;
@@ -59,7 +54,6 @@ mod world;
 
 pub use character::CharacterCapsule;
 pub use config::SimConfig;
-pub use pose::{euler_deg_from_quat, quat_from_euler_deg};
 pub(crate) use query::ray_hit_distance;
 pub use query::{ShapeCast, ShapeCastHit};
 pub use world::Simulation;

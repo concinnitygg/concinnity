@@ -15,7 +15,7 @@ use super::{
 };
 use crate::fanout::Fanout;
 use crate::math::vec3::normalize_clamped;
-use crate::math::{acos, atan2, exp, floor, powi};
+use crate::math::{acos, atan2, exp, floor, lerp, powi};
 
 /// An equirectangular radiance image: linear RGB rows, top-down.
 #[derive(Debug, Clone)]
@@ -216,10 +216,6 @@ pub fn generate_sky_equirect() -> HdrImage {
         height,
         pixels,
     }
-}
-
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
 }
 
 #[cfg(test)]

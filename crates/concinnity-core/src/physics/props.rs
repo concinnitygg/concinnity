@@ -7,13 +7,11 @@
 // through `add` / `adopt` and leave through `reap`, so the indices have exactly
 // two places to stay honest.
 
-use crate::math::SaturatingFrom;
+use crate::math::{SaturatingFrom, euler_yxz_deg_from_quat, quat_from_euler_yxz_deg};
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::physics::{
-    BodyHandle, ColliderShape, Simulation, euler_deg_from_quat, quat_from_euler_deg,
-};
+use crate::physics::{BodyHandle, ColliderShape, Simulation};
 
 use crate::components::BodyDynamics;
 use crate::ecs::Entity;
@@ -98,7 +96,7 @@ impl PropBodies {
         entity: Entity,
         snap: &PropCollSnap,
     ) -> Option<BodyHandle> {
-        let pose = PoseInterp::new(snap.position, quat_from_euler_deg(snap.rotation_deg));
+        let pose = PoseInterp::new(snap.position, quat_from_euler_yxz_deg(snap.rotation_deg));
         let layer_or = |default: &'static str| {
             if snap.layer.is_empty() {
                 layers.mask(default)
@@ -257,7 +255,8 @@ impl PropBodies {
                 continue;
             }
             if world.teleport_body(prop.handle, position, rotation_deg) {
-                prop.pose.snap(position, quat_from_euler_deg(rotation_deg));
+                prop.pose
+                    .snap(position, quat_from_euler_yxz_deg(rotation_deg));
                 prop.written = (position, rotation_deg);
                 prop.rest_written = false;
             }
@@ -309,7 +308,7 @@ impl PropBodies {
             }
             prop.rest_written = still;
             let (pos, rot) = prop.pose.sample(alpha);
-            let rot = euler_deg_from_quat(rot);
+            let rot = euler_yxz_deg_from_quat(rot);
             prop.written = (pos, rot);
             Some((prop.entity, pos, rot))
         }));

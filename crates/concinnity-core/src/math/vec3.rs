@@ -70,11 +70,7 @@ pub fn normalize_clamped(v: [f32; 3], min_len: f32) -> [f32; 3] {
 
 /// Component-wise linear interpolation from `a` to `b`.
 pub fn lerp(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
-    [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-    ]
+    super::lerp_array(a, b, t)
 }
 
 /// Accumulate `src` into `dst` in place. Used by the smooth-normal passes, which

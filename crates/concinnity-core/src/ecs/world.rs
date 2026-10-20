@@ -438,13 +438,6 @@ impl World {
         &self.systems
     }
 
-    /// Mutable view of the active systems. Lets a caller holding the world
-    /// downcast one system out of the boxed set and drive it from outside the
-    /// per-system step (the `cn debug` hot-reload drive).
-    pub fn systems_mut(&mut self) -> &mut [BuiltSystem] {
-        &mut self.systems
-    }
-
     /// The built system of type `S`, if the world built one.
     pub fn system<S: System>(&self) -> Option<&S> {
         self.systems.iter().find_map(BuiltSystem::downcast_ref::<S>)

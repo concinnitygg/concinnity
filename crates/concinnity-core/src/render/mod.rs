@@ -52,7 +52,8 @@ pub mod geometry_repack;
 pub mod grass;
 pub mod hdr_output;
 pub mod history_reset;
-pub mod hiz_cull;
+#[cfg(test)]
+mod hiz_cull;
 pub mod hiz_spd;
 pub mod light_state;
 pub mod lights;

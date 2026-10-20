@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use crate::physics::{BodyHandle, CharacterCapsule, CharacterMoveInput, LayerMask, Simulation};
 
 use crate::components::{CharacterRig, RootMotionEvent};
-use crate::ecs::{EventCursor, PipelineContext, SkinnedMeshHandle};
+use crate::ecs::{Entity, EventCursor, PipelineContext, SkinnedMeshHandle};
 use crate::math::vec3::add;
 
 use super::interp::PointInterp;
@@ -19,6 +19,8 @@ use super::interp::PointInterp;
 #[derive(Debug)]
 pub(crate) struct RigPhysics {
     pub target: SkinnedMeshHandle,
+    // The entity carrying the rig component, re-found by `target` if it moves.
+    entity: Entity,
     pub handle: BodyHandle,
     // The capsule the tick's move is resolved against, resized when the rig
     // component's dimensions change.
@@ -38,6 +40,22 @@ impl RigPhysics {
     pub(crate) fn rebase(&mut self, rebase: &crate::planet::Rebase, written: Option<[f32; 3]>) {
         self.center.rebase(rebase);
         self.written_pos = written.or_else(|| self.written_pos.map(|p| rebase.apply_point(p)));
+    }
+
+    // The entity carrying this rig's component, looked up by `target` only when
+    // the recorded one no longer carries it.
+    pub(crate) fn resolve(&mut self, ctx: &PipelineContext<'_>) -> Option<Entity> {
+        if ctx
+            .get::<CharacterRig>(self.entity)
+            .is_some_and(|r| r.target == self.target)
+        {
+            return Some(self.entity);
+        }
+        let (entity, _) = ctx
+            .query_with_entity::<CharacterRig>()
+            .find(|(_, r)| r.target == self.target)?;
+        self.entity = entity;
+        Some(entity)
     }
 }
 
@@ -59,17 +77,21 @@ pub(crate) fn init_rigs(
     mask: LayerMask,
     rigs: &mut Vec<RigPhysics>,
 ) {
-    rigs.extend(ctx.query::<CharacterRig>().filter_map(|rig| {
-        let center = center_of(rig);
-        Some(RigPhysics {
-            target: rig.target,
-            handle: world.add_character(rig.half_height, rig.radius, center, mask)?,
-            shape: CharacterCapsule::new(rig.half_height, rig.radius),
-            vy: 0.0,
-            center: PointInterp::new(center),
-            written_pos: Some(rig.position),
-        })
-    }));
+    rigs.extend(
+        ctx.query_with_entity::<CharacterRig>()
+            .filter_map(|(entity, rig)| {
+                let center = center_of(rig);
+                Some(RigPhysics {
+                    target: rig.target,
+                    entity,
+                    handle: world.add_character(rig.half_height, rig.radius, center, mask)?,
+                    shape: CharacterCapsule::new(rig.half_height, rig.radius),
+                    vy: 0.0,
+                    center: PointInterp::new(center),
+                    written_pos: Some(rig.position),
+                })
+            }),
+    );
 }
 
 // Read the root-motion displacements published since last frame (by
@@ -91,9 +113,9 @@ pub(crate) fn drain_motions_into(
 // so the capsule snaps to it with no blend across the jump.
 pub(crate) fn sync_rigs(ctx: &PipelineContext<'_>, rigs: &mut [RigPhysics]) {
     for rig_body in rigs.iter_mut() {
-        let Some(rig) = ctx
-            .query::<CharacterRig>()
-            .find(|r| r.target == rig_body.target)
+        let Some(rig) = rig_body
+            .resolve(ctx)
+            .and_then(|e| ctx.get::<CharacterRig>(e))
         else {
             continue;
         };
@@ -116,10 +138,10 @@ pub(crate) fn tick_rigs(
     mask: LayerMask,
 ) {
     for rig_body in rigs.iter_mut() {
-        let Some(rig) = ctx
-            .query_mut::<CharacterRig>()
-            .find(|r| r.target == rig_body.target)
-        else {
+        let Some(entity) = rig_body.resolve(ctx) else {
+            continue;
+        };
+        let Some(rig) = ctx.get_mut::<CharacterRig>(entity) else {
             continue;
         };
         let mut local = [0.0f32; 3];
@@ -175,10 +197,10 @@ pub(crate) fn tick_rigs(
 // render follow.
 pub(crate) fn publish_rigs(ctx: &mut PipelineContext<'_>, rigs: &mut [RigPhysics], alpha: f32) {
     for rig_body in rigs.iter_mut() {
-        let Some(rig) = ctx
-            .query_mut::<CharacterRig>()
-            .find(|r| r.target == rig_body.target)
-        else {
+        let Some(entity) = rig_body.resolve(ctx) else {
+            continue;
+        };
+        let Some(rig) = ctx.get_mut::<CharacterRig>(entity) else {
             continue;
         };
         let center = rig_body.center.sample(alpha);

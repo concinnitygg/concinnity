@@ -68,6 +68,39 @@ impl Heightfield {
         scale: Vec3,
         origin: Vec3,
     ) -> Option<Self> {
+        let mut field = Self::checked(rows, cols, &heights, scale, origin)?;
+        field.heights = heights;
+        Some(field)
+    }
+
+    /// Replace the grid in place, reusing its height storage. Returns false,
+    /// leaving the grid untouched, for arguments [`Heightfield::new`] refuses.
+    pub(crate) fn refill(
+        &mut self,
+        rows: usize,
+        cols: usize,
+        heights: &[f32],
+        scale: Vec3,
+        origin: Vec3,
+    ) -> bool {
+        let Some(mut field) = Self::checked(rows, cols, heights, scale, origin) else {
+            return false;
+        };
+        field.heights = core::mem::take(&mut self.heights);
+        field.heights.clear();
+        field.heights.extend_from_slice(heights);
+        *self = field;
+        true
+    }
+
+    // The grid `heights` describes, with its height storage left empty.
+    fn checked(
+        rows: usize,
+        cols: usize,
+        heights: &[f32],
+        scale: Vec3,
+        origin: Vec3,
+    ) -> Option<Self> {
         if rows < 2 || cols < 2 || heights.len() != rows * cols {
             return None;
         }
@@ -79,7 +112,7 @@ impl Heightfield {
             return None;
         }
         let (mut lowest, mut highest) = (f32::INFINITY, f32::NEG_INFINITY);
-        for height in &heights {
+        for height in heights {
             if !height.is_finite() {
                 return None;
             }
@@ -95,7 +128,7 @@ impl Heightfield {
         Some(Self {
             rows,
             cols,
-            heights,
+            heights: Vec::new(),
             origin,
             half_width,
             half_depth,
@@ -317,12 +350,8 @@ impl Heightfields {
         u32::saturating_from(self.fields.len() - 1)
     }
 
-    /// Put `field` in place of the grid at `index`, which the body naming it
-    /// keeps naming. An index past the stored grids is ignored.
-    pub(crate) fn replace(&mut self, index: u32, field: Heightfield) {
-        if let Some(slot) = self.fields.get_mut(index as usize) {
-            *slot = field;
-        }
+    pub(crate) fn get_mut(&mut self, index: u32) -> Option<&mut Heightfield> {
+        self.fields.get_mut(index as usize)
     }
 
     pub(crate) fn get(&self, index: u32) -> Option<&Heightfield> {

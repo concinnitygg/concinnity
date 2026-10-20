@@ -5,7 +5,7 @@
 
 use super::hash::{night_hash, night_unit};
 use crate::math::vec3::{cross, dot, normalize_or, scale};
-use crate::math::{atan2, cos, exp, ln, powf, sin, sqrt};
+use crate::math::{atan2, cos, exp, ln, powf, sin, smoothstep, sqrt};
 
 /// The most galaxies a sky draws.
 pub const MAX_GALAXIES: usize = 16;
@@ -135,11 +135,6 @@ pub fn galaxy_coordinates(g: &Galaxy, c: [f32; 3]) -> Option<(f32, f32)> {
     let x = dot(c, g.major) / g.radius;
     let y = dot(c, minor) / (g.radius * g.axis_ratio);
     (x * x + y * y < 1.0).then_some((x, y))
-}
-
-fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
-    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
 }
 
 #[cfg(test)]

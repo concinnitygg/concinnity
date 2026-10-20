@@ -66,6 +66,7 @@ impl Quat {
     }
 
     /// Decompose back into engine Euler degrees `[pitch, yaw, roll]`.
+    #[cfg(test)]
     pub(crate) fn to_euler_deg(self) -> [f32; 3] {
         crate::math::euler_yxz_deg_from_quat(self.to_xyzw())
     }

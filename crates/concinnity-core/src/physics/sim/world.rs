@@ -861,7 +861,7 @@ impl Simulation {
         handle: BodyHandle,
         rows: usize,
         cols: usize,
-        heights: Vec<f32>,
+        heights: &[f32],
         scale: [f32; 3],
         pos: [f32; 3],
     ) -> bool {
@@ -874,12 +874,13 @@ impl Simulation {
             return false;
         };
         let origin = Vec3::from_array(pos);
-        let Some(field) = Heightfield::new(rows, cols, heights, Vec3::from_array(scale), origin)
-        else {
+        let Some(field) = self.fields.get_mut(index) else {
             return false;
         };
+        if !field.refill(rows, cols, heights, Vec3::from_array(scale), origin) {
+            return false;
+        }
         let bounds = field.bounds();
-        self.fields.replace(index, field);
         let Some(body) = self.bodies.get_mut(pool_handle(handle)) else {
             return false;
         };

@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 use core::f32::consts::PI;
 
 use super::source::HdrImage;
-use crate::math::{cos, exp, floor, powf, powi, sin, sin_cos};
+use crate::math::{cos, exp, floor, lerp, powf, powi, sin, sin_cos};
 
 // Four texels of width for every texel of a 1024-pixel cube face, so a star
 // survives the resample into the cube without landing between texels. Below
@@ -159,10 +159,6 @@ fn direction(u: f32, sin_theta: f32, cos_theta: f32) -> [f32; 3] {
 
 fn wrap_col(col: i32) -> u32 {
     col.rem_euclid(i32::saturating_from(WIDTH)) as u32
-}
-
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
 }
 
 // A cell's seed, and the independent [0, 1) draws taken from it.

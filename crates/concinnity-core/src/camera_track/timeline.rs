@@ -1,6 +1,7 @@
 // Track evaluation: a list of keys, a time, and the value the track holds.
 
 use crate::components::Ease;
+use crate::math::lerp_array;
 
 /// A point one track reaches: the value it holds at `end_seconds`, and how the
 /// run up to it is paced. `N` is the width of the value, 3 for a position
@@ -33,7 +34,7 @@ pub(super) fn sample<const N: usize>(start: [f32; N], keys: &[Key<N>], seconds: 
             } else {
                 1.0
             };
-            return lerp(from, key.value, key.ease.eval(t));
+            return lerp_array(from, key.value, key.ease.eval(t));
         }
         from = key.value;
         from_seconds = key.end_seconds;
@@ -59,7 +60,7 @@ pub(super) fn progress<const N: usize>(keys: &[Key<N>], leg: usize, seconds: f32
     } else {
         0.0
     };
-    lerp([0.0; N], key.value, key.ease.eval(t))
+    lerp_array([0.0; N], key.value, key.ease.eval(t))
 }
 
 /// Whether the clock moving from `from` to `to` seconds reaches a cut key. A
@@ -73,15 +74,6 @@ pub(super) fn cut_crossed<const N: usize>(keys: &[Key<N>], from: f32, to: f32) -
 /// How long a track runs, which is its last key's end.
 pub(super) fn duration<const N: usize>(keys: &[Key<N>]) -> f32 {
     keys.last().map_or(0.0, |key| key.end_seconds)
-}
-
-// Component-wise interpolation; `t` is already eased and clamped.
-fn lerp<const N: usize>(a: [f32; N], b: [f32; N], t: f32) -> [f32; N] {
-    let mut out = a;
-    for i in 0..N {
-        out[i] = a[i] + (b[i] - a[i]) * t;
-    }
-    out
 }
 
 #[cfg(test)]

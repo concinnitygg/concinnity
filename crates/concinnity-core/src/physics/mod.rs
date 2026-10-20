@@ -37,14 +37,14 @@ mod fanout;
 mod handle;
 // The sorted lookup containers the driver's indices are kept in.
 mod index;
-// Bodies held where they are while a planet's ground patch is elsewhere.
-mod held;
 // Prev/curr pose snapshots blended by the frame's accumulator alpha.
 mod interp;
 // The constraints two bodies can be tied together by, and their motors.
 mod joints;
 // The membership/filter bit pair, and the named layers resolved onto it.
 mod layers;
+// Bodies held where they are while a planet's ground patch is elsewhere.
+mod off_ground;
 // Raycast probe answering for animation IK and the follow camera.
 mod probes;
 // Prop bodies with their handle -> entity and tracked-entity indices.
@@ -72,10 +72,7 @@ pub use events::{ContactHit, RayHit, SensorCrossing};
 pub use handle::BodyHandle;
 pub use joints::{JointMotor, JointSpec};
 pub use layers::LayerMask;
-pub use sim::{
-    CharacterCapsule, ShapeCast, ShapeCastHit, SimConfig, Simulation, euler_deg_from_quat,
-    quat_from_euler_deg,
-};
+pub use sim::{CharacterCapsule, ShapeCast, ShapeCastHit, SimConfig, Simulation};
 pub use system::PhysicsSystem;
 pub use types::{ColliderShape, DynamicParams};
 
