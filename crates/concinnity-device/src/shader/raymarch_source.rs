@@ -11,7 +11,7 @@
 // checkout, digests differently, and recompiles. A machine with no compiler
 // says so, naming the volume, rather than drawing nothing.
 
-use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::components::assets::sdf_programs::SdfPrograms;
 use concinnity_core::platform::Platform;
 #[cfg(any(backend_dx, backend_vk))]
 use concinnity_core::render::backend::error::RenderError;
@@ -166,7 +166,7 @@ fn source(family: Family, platform: Platform, field: SourceFile<'_>, hot_reload:
 mod tests {
     use super::*;
     use concinnity_core::components::ShaderSource;
-    use concinnity_core::components::compiled_programs::CompiledProgram;
+    use concinnity_core::components::assets::compiled_programs::CompiledProgram;
     use concinnity_core::render::backend::error::RenderError;
 
     const FIELD: SourceFile<'static> = SourceFile {

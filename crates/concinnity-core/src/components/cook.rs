@@ -11,20 +11,20 @@
 //! are the other half of this namespace and live in
 //! `concinnity_cook::authoring::registry::build_only`.
 
-pub use super::app_config::AppConfigArgs as AppConfig;
-pub use super::audio_clip::AudioClip;
-pub use super::camera_track::CameraTrackArgs as CameraTrack;
-pub use super::camera3d::Camera3DArgs as Camera3D;
-pub use super::color_lut::ColorLut;
-pub use super::cubemap_texture::CubemapTexture;
-pub use super::environment_map::EnvironmentMap;
-pub use super::file::FileArgs as File;
-pub use super::font::Font;
-pub use super::material::Material;
-pub use super::mesh::{Mesh, VertexData};
-pub use super::room::RoomArgs as Room;
-pub use super::skinned_mesh::{
+pub use crate::components::animation::skinned_mesh::{
     CharacterCapsule, MorphDelta, SkeletonJoint, SkinnedMesh, SkinnedVertexData,
 };
-pub use super::spawner::SpawnerArgs as Spawner;
-pub use super::texture::Texture;
+pub use crate::components::app::app_config::AppConfigArgs as AppConfig;
+pub use crate::components::assets::file::FileArgs as File;
+pub use crate::components::assets::font::Font;
+pub use crate::components::assets::material::Material;
+pub use crate::components::assets::mesh::{Mesh, VertexData};
+pub use crate::components::assets::room::RoomArgs as Room;
+pub use crate::components::assets::texture::Texture;
+pub use crate::components::audio::clip::AudioClip;
+pub use crate::components::camera::camera3d::Camera3DArgs as Camera3D;
+pub use crate::components::camera::track::CameraTrackArgs as CameraTrack;
+pub use crate::components::gameplay::spawner::SpawnerArgs as Spawner;
+pub use crate::components::graphics::color_lut::ColorLut;
+pub use crate::components::light::cubemap_texture::CubemapTexture;
+pub use crate::components::light::environment_map::EnvironmentMap;

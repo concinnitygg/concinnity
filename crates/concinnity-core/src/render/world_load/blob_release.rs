@@ -3,7 +3,7 @@
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
-use crate::components::{sdf_volume, terrain};
+use crate::components::{assets::sdf_volume, environment::terrain};
 use crate::ecs::PipelineContext;
 use crate::resource::AudioClipTable;
 

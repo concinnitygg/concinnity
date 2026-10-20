@@ -21,7 +21,7 @@
 
 use std::path::Path;
 
-use concinnity_core::components::compiled_programs::CompiledProgram;
+use concinnity_core::components::assets::compiled_programs::CompiledProgram;
 use concinnity_core::platform::{Platform, PlatformSet};
 use concinnity_core::render::shader::source;
 use concinnity_shader::diagnostics;

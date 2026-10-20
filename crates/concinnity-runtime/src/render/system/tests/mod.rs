@@ -8,7 +8,7 @@ use concinnity_core::components::{
     BackgroundOverrides, Camera3D, CharacterRig, FrameInput, GlobalTransform, GraphicsConfig,
     HitRegion, Material, Prop, RenderHandle, Scene, SceneCommand, Shader, ShaderPrograms,
     SkeletonPose, SkinnedMesh, Sprite, StreamingConfig, TextLabel, UiAction, Window,
-    compiled_programs,
+    assets::compiled_programs,
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{

@@ -5,7 +5,7 @@
 // A save is a developer's edit, not a frame a player sees, so draining the
 // queue for it costs nothing that matters.
 
-use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::components::assets::sdf_programs::SdfPrograms;
 use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::backend::{PipelineSwap, PreparedPipelines};
 use concinnity_core::render::shader::programs::raymarch::VolumeFlags;

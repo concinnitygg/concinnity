@@ -7,7 +7,7 @@
 //! whether the cheap in-place write fits before it asks for the rebuild.
 
 use crate::components::ShaderPrograms;
-use crate::components::sdf_programs::SdfPrograms;
+use crate::components::assets::sdf_programs::SdfPrograms;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::{DrawIndex, MATERIAL_PARAM_COUNT, MaterialUniforms, SkinnedIndex};
 use crate::render::backend::error::{RenderError, RenderResult};

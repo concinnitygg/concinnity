@@ -6,7 +6,7 @@
 // only replaces a reference.
 
 use concinnity_core::components::ShaderPrograms;
-use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::components::assets::sdf_programs::SdfPrograms;
 use concinnity_core::render::backend::error::RenderResult;
 use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
 use concinnity_core::render::shader::programs::raymarch::VolumeFlags;

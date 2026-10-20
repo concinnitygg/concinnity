@@ -24,7 +24,7 @@
 
 use ash::vk;
 use concinnity_core::components::SdfVolume;
-use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::components::assets::sdf_programs::SdfPrograms;
 use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::mesh_payload::Vertex;

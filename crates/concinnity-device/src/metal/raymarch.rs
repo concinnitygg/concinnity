@@ -22,8 +22,8 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components::sdf_programs::SdfPrograms;
-use concinnity_core::components::sdf_volume::SdfVolume;
+use concinnity_core::components::assets::sdf_programs::SdfPrograms;
+use concinnity_core::components::assets::sdf_volume::SdfVolume;
 use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::mesh_payload::Vertex;

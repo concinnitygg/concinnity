@@ -1,7 +1,7 @@
 use super::build::ShaderInstall;
 use super::*;
-use concinnity_core::components::sdf_programs::SdfPrograms;
-use concinnity_core::components::{ShaderPrograms, ShaderSource, compiled_programs};
+use concinnity_core::components::assets::sdf_programs::SdfPrograms;
+use concinnity_core::components::{ShaderPrograms, ShaderSource, assets::compiled_programs};
 use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::backend::recording::{
     Call, RecordingBackend, RecordingPipeline, SharedRecording, recording_backend,

@@ -3,7 +3,7 @@ use crate::debug::hot_reload::report::SubjectKind;
 use concinnity_cook::compile::program::{CompileFailure, Diagnostic, EntryFailure, Severity};
 use concinnity_cook::compile::sdf_field::CompiledField;
 use concinnity_core::components::ShaderPrograms;
-use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::components::assets::sdf_programs::SdfPrograms;
 use concinnity_core::render::backend::error::{RenderError, RenderResult};
 use concinnity_core::render::backend::{GeometryEdit, SceneHost};
 use concinnity_core::render::scene_state::SceneState;

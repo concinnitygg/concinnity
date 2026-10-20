@@ -1,5 +1,5 @@
 use concinnity_core::components::SdfVolume;
-use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::components::assets::sdf_programs::SdfPrograms;
 #[cfg(test)]
 use concinnity_core::platform::Platform;
 use concinnity_core::platform::PlatformSet;

@@ -1,5 +1,5 @@
 //! Runtime `File` component. Its authored args and `FileKind` live in the schema
-//! crate (`concinnity_core::components::file`).
+//! crate (`concinnity_core::components::assets::file`).
 
 use crate::components::Vocabulary;
 use crate::ecs::PayloadLocator;
@@ -177,7 +177,7 @@ impl File {
         let kind = args
             .kind
             .clone()
-            .or_else(|| super::path_extension(&args.path).and_then(FileKind::from_ext));
+            .or_else(|| crate::components::path_extension(&args.path).and_then(FileKind::from_ext));
         Self {
             path: args.path,
             kind,

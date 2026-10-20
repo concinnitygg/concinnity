@@ -12,7 +12,7 @@
 //! recompiles through exactly the path the cook took.
 
 use concinnity_core::components::ShaderSource;
-use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::components::assets::sdf_programs::SdfPrograms;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::shader::programs::raymarch::{self, Family};
 use concinnity_core::render::shader::source::SourceFile;

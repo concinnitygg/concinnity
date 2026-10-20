@@ -463,7 +463,7 @@ mod tests {
         assert!(!baked.cast_shadows);
         assert_eq!(
             baked.max_steps,
-            crate::components::sdf_volume::SDF_MAX_STEPS_CEILING
+            crate::components::assets::sdf_volume::SDF_MAX_STEPS_CEILING
         );
     }
 

@@ -14,7 +14,7 @@ use core::any::Any;
 use core::fmt;
 
 use crate::components::ShaderPrograms;
-use crate::components::sdf_programs::SdfPrograms;
+use crate::components::assets::sdf_programs::SdfPrograms;
 use crate::render::backend::error::RenderResult;
 use crate::render::shader::programs::raymarch::VolumeFlags;
 
