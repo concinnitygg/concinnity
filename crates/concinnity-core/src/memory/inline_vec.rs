@@ -188,13 +188,13 @@ impl<T: fmt::Debug> fmt::Debug for InlineVec<T> {
 
 impl<T> From<Vec<T>> for InlineVec<T> {
     // Normalizes: a `Vec` of at most one element gives up its allocation.
-    fn from(values: Vec<T>) -> Self {
-        let mut values = values;
-        match values.len() {
-            0 => Self::new(),
-            1 => Self(Repr::One(values.pop().expect("length is one"))),
-            _ => Self(Repr::Spilled(values)),
+    fn from(mut values: Vec<T>) -> Self {
+        if values.len() > 1 {
+            return Self(Repr::Spilled(values));
         }
+        values
+            .pop()
+            .map_or_else(Self::new, |value| Self(Repr::One(value)))
     }
 }
 
