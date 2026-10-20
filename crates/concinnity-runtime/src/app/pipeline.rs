@@ -27,6 +27,7 @@ use concinnity_core::render::feedback::FrameFeedback;
 use concinnity_core::render::snapshot::RenderSnapshot;
 use concinnity_host::thread::set_current_thread_role;
 use std::sync::mpsc::{Receiver, Sender};
+use std::thread::JoinHandle;
 use std::time::Instant;
 
 use crate::app::budget::main_thread_role;
@@ -94,17 +95,17 @@ pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
         })
         .expect("failed to spawn the sim thread");
 
-    let rendered = render_half(backend.as_mut(), &go, &snapshot_rx, &feedback_tx, &shutdown);
+    let ends = RenderEnds {
+        go,
+        snapshot_rx,
+        feedback_tx,
+    };
+    let rendered = render_half(backend.as_mut(), &ends, &shutdown);
     // What the run actually drew, which `--frames N` only requested: a pixel A/B
     // of a temporal world is a comparison of the frame it stopped on, so the
     // capture harness reads this back and refuses a run that stopped elsewhere.
     tracing::info!("pipeline: {} frame(s) submitted", rendered.submitted);
-    // Whatever ended the render half, make the stop mutual: the sim exits at
-    // its next token check, and its blocked send (if any) already errored
-    // when the receiver dropped at the end of render_half.
-    shutdown.cancel();
-    drop(feedback_tx);
-    if let Err(payload) = sim.join() {
+    if let Err(payload) = join_sim(sim, ends, &shutdown) {
         // The crash hook already wrote the report on the sim thread; exit
         // through the same unwind a serial panic takes.
         std::panic::resume_unwind(payload);
@@ -124,6 +125,28 @@ pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
     }
 }
 
+// The render half's ends of its channels to the sim. Dropping them is what
+// wakes a sim blocked on its go-ahead or its snapshot send, so the render half
+// only borrows them and `join_sim` gives them up.
+struct RenderEnds {
+    go: FrameGo,
+    snapshot_rx: Receiver<RenderSnapshot>,
+    feedback_tx: Sender<FrameFeedback>,
+}
+
+// Make the stop mutual, whatever ended the render half: the sim exits at its
+// next token check, and closing the render half's ends errors a go-ahead wait
+// or snapshot send it is blocked in, so the join cannot hang.
+fn join_sim(
+    sim: JoinHandle<()>,
+    ends: RenderEnds,
+    shutdown: &ShutdownToken,
+) -> std::thread::Result<()> {
+    shutdown.cancel();
+    drop(ends);
+    sim.join()
+}
+
 // Drive frames until a stop or the sim side closes a channel. While frames
 // wait on the GPU, each one reserves its GPU slot first, pumps and samples the
 // window input, and only then lets the simulation step,
@@ -139,9 +162,7 @@ pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
 )]
 fn render_half(
     backend: &mut dyn RenderBackend,
-    go: &FrameGo,
-    snapshot_rx: &Receiver<RenderSnapshot>,
-    feedback_tx: &Sender<FrameFeedback>,
+    ends: &RenderEnds,
     shutdown: &ShutdownToken,
 ) -> RenderHalfOutcome {
     let mut policy = FramePolicy::default();
@@ -158,17 +179,17 @@ fn render_half(
             let prepared = Instant::now();
             backend.prepare_frame();
             prepare_us = micros_since(prepared);
-            if !let_step_go(go, backend) {
+            if !let_step_go(&ends.go, backend) {
                 return RenderHalfOutcome::stopped(submitted);
             }
         }
-        let Some(mut snapshot) = wait_for_snapshot(snapshot_rx, shutdown) else {
+        let Some(mut snapshot) = wait_for_snapshot(&ends.snapshot_rx, shutdown) else {
             return RenderHalfOutcome::stopped(submitted);
         };
         // A loop that is not waiting on the GPU has no wait to move: the next
         // step goes now and overlaps this frame's submit. A simulation already
         // gone ends the loop at the next snapshot wait.
-        went = !timing.just_in_time() && let_step_go(go, backend);
+        went = !timing.just_in_time() && let_step_go(&ends.go, backend);
 
         let outcome = submit(&mut policy, &mut snapshot, backend);
         submitted += 1;
@@ -183,7 +204,7 @@ fn render_half(
             stop,
             skipped: outcome.skipped,
         };
-        let _ = feedback_tx.send(feedback);
+        let _ = ends.feedback_tx.send(feedback);
         if stop {
             return RenderHalfOutcome {
                 device_lost: outcome.device_lost.is_some(),
@@ -268,5 +289,35 @@ mod tests {
             pumped.is_some() && pumped < sampled,
             "pump before sample: {calls:?}"
         );
+    }
+
+    // A sim blocked on its go-ahead or on its snapshot send ends once the
+    // render half stops, so closing the window never hangs the join.
+    #[test]
+    fn joining_the_sim_wakes_it_from_either_blocking_wait() {
+        for blocked_on_send in [false, true] {
+            let (go, gate) = crate::app::frame_gate::frame_gate();
+            let (snapshot_tx, snapshot_rx) = std::sync::mpsc::sync_channel(0);
+            let (feedback_tx, _feedback_rx) = std::sync::mpsc::channel();
+            let sim = std::thread::spawn(move || {
+                if blocked_on_send {
+                    assert!(snapshot_tx.send(RenderSnapshot::default()).is_err());
+                } else {
+                    assert!(gate.wait().is_none());
+                }
+            });
+            let ends = RenderEnds {
+                go,
+                snapshot_rx,
+                feedback_tx,
+            };
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let joined = join_sim(sim, ends, &ShutdownToken::new());
+                assert!(done_tx.send(joined.is_ok()).is_ok());
+            });
+            let joined = done_rx.recv_timeout(std::time::Duration::from_secs(10));
+            assert_eq!(joined, Ok(true), "blocked on send: {blocked_on_send}");
+        }
     }
 }
