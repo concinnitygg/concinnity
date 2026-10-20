@@ -9,6 +9,7 @@
 //! belongs in this file.
 
 pub(crate) mod chunk_window;
+pub mod mesh_seed;
 pub mod pools;
 pub mod scene_members;
 pub mod scene_residency;

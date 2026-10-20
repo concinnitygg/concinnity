@@ -1,7 +1,7 @@
 // Blob payload encoding for a compiled font atlas. The read half is
 // `decode::deserialize`; the two must agree field for field.
 
-use crate::gfx::font::GlyphMetrics;
+use crate::bake::font::metrics::GlyphMetrics;
 use crate::math::SaturatingFrom;
 use alloc::vec::Vec;
 

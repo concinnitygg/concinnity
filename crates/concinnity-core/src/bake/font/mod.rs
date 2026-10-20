@@ -14,6 +14,7 @@
 
 mod compile;
 mod decode;
+pub mod metrics;
 mod payload;
 mod sdf;
 

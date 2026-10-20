@@ -15,8 +15,9 @@ use concinnity_core::ecs::{
     ComponentSlot, FontHandle, FrameRateCap, MaterialHandle, MenuActive, MenuOverride, MeshHandle,
     PayloadLocator, Ref, ScreenStack, StepResult, TextureHandle, World,
 };
+use concinnity_core::geometry::chunk_coord;
+use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
-use concinnity_core::gfx::{chunk_coord, mesh_payload};
 use concinnity_core::launch::{LaunchArgs, LaunchRequest};
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::backend::init::SwapchainConfig;

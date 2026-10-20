@@ -14,7 +14,7 @@
 use crate::components::BlockType;
 use crate::ecs::Ref;
 use crate::ecs::asset_id::AssetId;
-use crate::gfx::chunk_coord::ChunkCoord;
+use crate::geometry::chunk_coord::ChunkCoord;
 use crate::math::{SaturatingFrom, lerp, smoothstep};
 use alloc::vec;
 use alloc::vec::Vec;

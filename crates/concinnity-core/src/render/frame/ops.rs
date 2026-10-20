@@ -5,7 +5,7 @@
 //! direct calls exactly. Ops own their payloads, so a queue can cross a thread
 //! boundary with the snapshot that carries it.
 
-use crate::gfx::chunk_coord::ChunkCoord;
+use crate::geometry::chunk_coord::ChunkCoord;
 use crate::render::backend::RenderBackend;
 use alloc::boxed::Box;
 use alloc::vec::Vec;

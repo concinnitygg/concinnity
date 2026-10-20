@@ -12,6 +12,7 @@
 
 // Procedural voxel-chunk generation, consumed by the backends' chunk-streaming
 // path.
+pub mod chunk_coord;
 mod chunk_gen;
 mod extrude;
 pub mod glass_quad;

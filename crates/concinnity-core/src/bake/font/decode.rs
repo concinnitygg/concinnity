@@ -1,7 +1,7 @@
 // Reads the compiled font payload back: the write half is `payload::serialize`,
 // and the two must agree field for field.
 
-use crate::gfx::font::GlyphMetrics;
+use crate::bake::font::metrics::GlyphMetrics;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;

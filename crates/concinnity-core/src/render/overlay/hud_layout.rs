@@ -153,9 +153,9 @@ fn position_chip_strip(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bake::font::metrics;
     use crate::components::{Justify, LayoutRow, SpriteFit, TextAlign};
     use crate::ecs::{FontHandle, Ref, World};
-    use crate::gfx::font;
     use alloc::string::ToString;
     use alloc::vec;
 
@@ -164,8 +164,8 @@ mod tests {
     // label is unmistakable.
     const SENTINEL: f32 = -999.0;
 
-    fn make_glyph(advance_px: f32) -> font::GlyphMetrics {
-        font::GlyphMetrics {
+    fn make_glyph(advance_px: f32) -> metrics::GlyphMetrics {
+        metrics::GlyphMetrics {
             char_code: 0,
             atlas_x: 0,
             atlas_y: 0,

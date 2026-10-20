@@ -18,7 +18,7 @@ use super::pressure::{self, StreamPressureStage};
 use super::stats_log::PoolHeartbeats;
 use crate::bake::texture::TextureImage;
 use crate::ecs::asset_id::AssetId;
-use crate::gfx::chunk_coord::{self, ChunkCoord};
+use crate::geometry::chunk_coord::{self, ChunkCoord};
 use crate::gfx::render_types::DrawIndex;
 use crate::memory::MemTag;
 use crate::planet::PlanetFrame;

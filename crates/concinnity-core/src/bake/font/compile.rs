@@ -4,7 +4,7 @@
 
 use super::payload;
 use super::sdf::{EdtScratch, SdfScratch, cell_coverage_to_sdf};
-use crate::gfx::font::GlyphMetrics;
+use crate::bake::font::metrics::GlyphMetrics;
 use crate::math::SaturatingFrom;
 use alloc::string::String;
 use alloc::vec::Vec;

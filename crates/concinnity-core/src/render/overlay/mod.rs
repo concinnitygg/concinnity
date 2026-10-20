@@ -401,12 +401,12 @@ impl OverlaySystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bake::font::metrics;
     use crate::components::{SpriteFit, TextAlign};
     use crate::ecs::{
         CursorState, DropdownView, FontHandle, HudLayers, MenuOverride, OpenDropdown, Ref,
         ScreenStack, World,
     };
-    use crate::gfx::font;
     use alloc::string::ToString;
     use alloc::vec;
 
@@ -417,8 +417,8 @@ mod tests {
     const REF_W: f32 = 1280.0;
     const REF_H: f32 = 720.0;
 
-    fn make_glyph(advance_px: f32) -> font::GlyphMetrics {
-        font::GlyphMetrics {
+    fn make_glyph(advance_px: f32) -> metrics::GlyphMetrics {
+        metrics::GlyphMetrics {
             char_code: 0,
             atlas_x: 0,
             atlas_y: 0,

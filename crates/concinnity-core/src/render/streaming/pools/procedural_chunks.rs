@@ -7,10 +7,10 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::decoded_mesh::DecodedMesh;
+use crate::geometry::chunk_coord::ChunkCoord;
 use crate::geometry::{
     ChunkBlockType, ChunkGenerator, build_chunk_impostor_mesh, build_chunk_mesh,
 };
-use crate::gfx::chunk_coord::ChunkCoord;
 use crate::render::streaming::chunk_window::ChunkDetail;
 
 /// A [`ChunkGenerator`] over a resolved block palette, meshing full chunks and

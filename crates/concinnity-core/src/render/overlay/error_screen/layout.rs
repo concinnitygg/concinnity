@@ -180,7 +180,7 @@ mod tests {
     // A fixed-width synthetic face over printable ASCII: every glyph 10px
     // wide in a 16px em.
     fn fonts() -> (FontSet, FontHandle) {
-        use crate::gfx::font::GlyphMetrics;
+        use crate::bake::font::metrics::GlyphMetrics;
         use crate::render::overlay::text::{FontMetrics, LoadedFont, derive_cap_px};
         let glyph = GlyphMetrics {
             char_code: 0,

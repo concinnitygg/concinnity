@@ -8,9 +8,9 @@ use hashbrown::HashMap;
 
 use crate::components::StreamingConfig;
 use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::mesh_seed::MeshSeedRegion;
 use crate::gfx::render_types::{DrawIndex, DrawObject, InstancedCluster};
 use crate::render::draw_list::DeferredMeshSeed;
+use crate::render::streaming::mesh_seed::MeshSeedRegion;
 
 mod compaction;
 mod inputs;

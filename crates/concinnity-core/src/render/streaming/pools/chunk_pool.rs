@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 use super::decoded_mesh::DecodedMesh;
 use super::{LoadPool, Mailbox};
-use crate::gfx::chunk_coord::ChunkCoord;
+use crate::geometry::chunk_coord::ChunkCoord;
 use crate::gfx::mesh_payload::Vertex;
 use crate::render::streaming::chunk_window::{ChunkDetail, ChunkWindow};
 

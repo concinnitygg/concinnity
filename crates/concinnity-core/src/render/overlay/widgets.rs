@@ -376,9 +376,9 @@ pub(super) fn build_text_input_overlay(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bake::font::metrics;
     use crate::ecs::asset_id::AssetId;
     use crate::ecs::{DropdownView, FontHandle, Ref};
-    use crate::gfx::font;
     use alloc::format;
     use alloc::string::ToString;
 
@@ -423,8 +423,8 @@ mod tests {
 
     const FONT: FontHandle = FontHandle::new(0);
 
-    fn make_glyph(advance_px: f32) -> font::GlyphMetrics {
-        font::GlyphMetrics {
+    fn make_glyph(advance_px: f32) -> metrics::GlyphMetrics {
+        metrics::GlyphMetrics {
             char_code: 0,
             atlas_x: 0,
             atlas_y: 0,

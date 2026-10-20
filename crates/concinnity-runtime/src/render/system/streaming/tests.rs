@@ -321,7 +321,7 @@ fn voxel_setup_without_a_material_falls_back_to_the_defaults() {
     assert_eq!(cs.material.normal_map_slot, NO_NORMAL_MAP_SLOT);
     assert_eq!(
         cs.origin_chunk,
-        concinnity_core::gfx::chunk_coord::ChunkCoord::new(0, 0)
+        concinnity_core::geometry::chunk_coord::ChunkCoord::new(0, 0)
     );
 }
 

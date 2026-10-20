@@ -21,7 +21,7 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
-use crate::gfx::chunk_coord::ChunkCoord;
+use crate::geometry::chunk_coord::ChunkCoord;
 
 // Extra chunk rings a chunk may drift beyond the view radius before it is
 // evicted. The gap between the load radius and the evict radius is hysteresis:

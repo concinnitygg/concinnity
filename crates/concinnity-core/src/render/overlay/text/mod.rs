@@ -18,7 +18,7 @@ use lines::laid_out;
 use runs::RunColors;
 
 /// One face's per-glyph metrics, keyed by Unicode code point.
-pub type FontMetrics = HashMap<u32, crate::gfx::font::GlyphMetrics>;
+pub type FontMetrics = HashMap<u32, crate::bake::font::metrics::GlyphMetrics>;
 
 /// Per-font data kept in memory after `init()` so `step()` can build text quads each frame.
 pub struct LoadedFont {
@@ -450,9 +450,9 @@ pub(crate) fn band_to_window(overlay: &OverlayTransform, band: [f32; 4]) -> [f32
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bake::font::metrics::GlyphMetrics;
     use crate::ecs::Ref;
     use crate::ecs::asset_id::AssetId;
-    use crate::gfx::font::GlyphMetrics;
 
     use alloc::string::{String, ToString};
     fn make_glyph(atlas_w: u16, atlas_h: u16, advance_px: f32) -> GlyphMetrics {

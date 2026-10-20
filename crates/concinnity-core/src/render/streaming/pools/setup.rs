@@ -18,7 +18,7 @@ use crate::components::{BlockType, Planet, StreamingConfig, VoxelWorld};
 use crate::ecs::MaterialHandle;
 use crate::ecs::asset_id::AssetId;
 use crate::geometry::ChunkBlockType;
-use crate::gfx::chunk_coord::ChunkCoord;
+use crate::geometry::chunk_coord::ChunkCoord;
 use crate::planet::{LocalFrame, PlanetFrame};
 use crate::render::environment::grass::CanopyRange;
 use crate::render::material_entry::MaterialEntry;

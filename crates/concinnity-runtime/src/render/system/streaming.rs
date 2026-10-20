@@ -10,12 +10,12 @@ use hashbrown::HashMap;
 use concinnity_core::components::{BlockType, Planet, StreamingConfig, VoxelWorld};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{MaterialHandle, PayloadLocator, PipelineContext};
-use concinnity_core::gfx::mesh_seed;
 use concinnity_core::gfx::render_types::DrawIndex;
 use concinnity_core::planet::MAX_RESIDENT_TILES;
 use concinnity_core::render::draw_list::DeferredMeshSeed;
 use concinnity_core::render::environment::grass::CanopyRange;
 use concinnity_core::render::material_entry::MaterialEntry;
+use concinnity_core::render::streaming::mesh_seed;
 use concinnity_core::render::streaming::pools::{
     ChunkSource, DecodedMesh, DeferredMeshPayload, PlanetStream, StreamPool, StreamingRuntime,
     StreamingState, VoxelStream, streamed_texture_slots,

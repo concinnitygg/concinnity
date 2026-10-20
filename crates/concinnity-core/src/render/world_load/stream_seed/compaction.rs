@@ -13,8 +13,8 @@ use alloc::vec::Vec;
 use hashbrown::HashMap;
 
 use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::mesh_seed::{self, MeshSeedRegion};
 use crate::gfx::render_types::{DrawIndex, DrawObject, InstancedCluster};
+use crate::render::streaming::mesh_seed::{self, MeshSeedRegion};
 
 use crate::render::streaming::pools::DecodedMesh;
 
