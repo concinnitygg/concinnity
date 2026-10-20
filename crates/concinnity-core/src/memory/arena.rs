@@ -52,7 +52,9 @@ pub struct Arena {
 )]
 impl Arena {
     /// Reserve `bytes` up front. The buffer is taken from the global allocator
-    /// once and held until the arena drops; nothing here allocates again.
+    /// once and held until the arena drops; nothing here allocates again. A
+    /// size no allocation can have gives an empty arena that declines every
+    /// request.
     pub fn with_capacity(bytes: usize) -> Self {
         Self::new(bytes, None)
     }
@@ -61,26 +63,22 @@ impl Arena {
     /// for as long as the arena lives. An arena's whole cost is its reservation,
     /// so it can account for itself rather than making its owner do it.
     pub fn tagged(bytes: usize, tag: MemTag) -> Self {
-        crate::memory::ledger().add(tag, Realm::Host, bytes as u64);
-        Self::new(bytes, Some(tag))
+        let arena = Self::new(bytes, Some(tag));
+        crate::memory::ledger().add(tag, Realm::Host, arena.capacity() as u64);
+        arena
     }
 
     fn new(bytes: usize, tag: Option<MemTag>) -> Self {
-        if bytes == 0 {
-            return Self {
-                ptr: NonNull::dangling(),
-                layout: Layout::new::<()>(),
-                used: Cell::new(0),
-                peak: Cell::new(0),
-                overflows: Cell::new(0),
-                tag,
-            };
-        }
-        let layout = Layout::from_size_align(bytes, ARENA_ALIGN).expect("arena layout");
-        // SAFETY: `layout` has a non-zero size.
-        let ptr = unsafe { alloc::alloc::alloc(layout) };
-        let Some(ptr) = NonNull::new(ptr) else {
-            alloc::alloc::handle_alloc_error(layout)
+        let (ptr, layout) = match Layout::from_size_align(bytes, ARENA_ALIGN) {
+            Ok(layout) if layout.size() > 0 => {
+                // SAFETY: `layout` has a non-zero size.
+                let ptr = unsafe { alloc::alloc::alloc(layout) };
+                let Some(ptr) = NonNull::new(ptr) else {
+                    alloc::alloc::handle_alloc_error(layout)
+                };
+                (ptr, layout)
+            }
+            _ => (NonNull::dangling(), Layout::new::<()>()),
         };
         Self {
             ptr,
@@ -402,6 +400,15 @@ mod tests {
         let arena = Arena::with_capacity(0);
         assert_eq!(arena.capacity(), 0);
         assert!(arena.alloc(1u8).is_none());
+    }
+
+    #[test]
+    fn an_unrepresentable_size_gives_an_empty_arena() {
+        let arena = Arena::with_capacity(usize::MAX);
+        assert_eq!(arena.capacity(), 0);
+        assert!(arena.alloc(1u8).is_none());
+        assert_eq!(arena.overflows(), 1);
+        assert_eq!(Arena::tagged(usize::MAX, MemTag::Scratch).capacity(), 0);
     }
 
     #[test]

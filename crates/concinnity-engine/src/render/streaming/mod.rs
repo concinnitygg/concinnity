@@ -89,7 +89,9 @@ pub struct StreamPlanner {
 
 // Room for the two id lists `plan` builds, each at most one entry per item.
 fn scratch_bytes(count: usize) -> usize {
-    (2 * count * size_of::<usize>()).max(size_of::<usize>())
+    count
+        .saturating_mul(2 * size_of::<usize>())
+        .max(size_of::<usize>())
 }
 
 impl StreamPlanner {
