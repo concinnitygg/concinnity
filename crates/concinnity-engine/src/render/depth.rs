@@ -291,7 +291,8 @@ mod tests {
     // direction the write test implies.
     #[test]
     fn the_shader_convention_matches() {
-        let src = crate::render::shader::embedded::DEPTH_CONVENTION;
+        // As written, whatever line endings the checkout gave the file.
+        let src = crate::render::shader::embedded::DEPTH_CONVENTION.replace("\r\n", "\n");
         assert!(src.contains(&alloc::format!("#define DEPTH_NEAR {DEPTH_NEAR:?}\n")));
         assert!(src.contains(&alloc::format!("#define DEPTH_FAR {DEPTH_FAR:?}\n")));
         let reversed = DEPTH_NEAR > DEPTH_FAR;
