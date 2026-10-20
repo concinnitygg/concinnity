@@ -286,8 +286,8 @@ fn digit_keys_map_to_bookmark_slots() {
 // to it from wherever the camera has since moved.
 #[test]
 fn a_saved_bookmark_recalls_the_pose_it_captured() {
-    isolate_state_dir();
     let _guard = crate::test_support::lock();
+    isolate_state_dir();
     let (mut world, _) = camera_world([1.0, 2.0, 3.0]);
     let mut h = hook();
 
@@ -324,8 +324,8 @@ fn recalling_an_empty_slot_does_nothing() {
 // write the pose in one frame.
 #[test]
 fn a_recall_cancels_an_in_flight_tumble() {
-    isolate_state_dir();
     let _guard = crate::test_support::lock();
+    isolate_state_dir();
     let (world, _) = camera_world([0.0, 0.0, 10.0]);
     let mut h = hook();
     select(&mut h, &["box"]);
