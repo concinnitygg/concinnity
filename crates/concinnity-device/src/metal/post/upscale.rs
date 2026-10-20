@@ -12,9 +12,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::depth::CAMERA_DEPTH;
-use concinnity_core::render::temporal::history_reset::UpscalerResetLatch;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::depth::CAMERA_DEPTH;
+use concinnity_engine::render::temporal::history_reset::UpscalerResetLatch;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureUsage};

@@ -6,8 +6,8 @@
 //! caller's thread (`writer`, `cbor`).
 //!
 //! This is the only home for filesystem knowledge below the runtime and cook
-//! crates. `concinnity_core::blob` owns the pure bytes <-> metadata
-//! transforms and performs no I/O; concinnity-core owns the runtime blob types
+//! crates. `concinnity_engine::blob` owns the pure bytes <-> metadata
+//! transforms and performs no I/O; concinnity-engine owns the runtime blob types
 //! and the `PayloadStore` seam and knows neither paths nor files. The reads that
 //! join the two live here.
 

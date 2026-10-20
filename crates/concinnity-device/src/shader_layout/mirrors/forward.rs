@@ -2,12 +2,12 @@
 //! declare `ClusterParams` and `GpuLight`; they are separate declarations that
 //! can drift apart, so each is checked against the same Rust mirror.
 
-use concinnity_core::gfx::render_types::{
+use concinnity_engine::gfx::render_types::{
     AreaLightData, ClusterParams, DirectionalLightData, GpuLight, GpuMaterialParams, GpuObjectData,
     LightUniforms, PointLightData, ShadowUniforms, SpotShadowData,
 };
-use concinnity_core::render::uniforms::ViewUniforms;
-use concinnity_core::render::uniforms::canopy::{CanopyLayerGpu, CanopyParams};
+use concinnity_engine::render::uniforms::ViewUniforms;
+use concinnity_engine::render::uniforms::canopy::{CanopyLayerGpu, CanopyParams};
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror};
 

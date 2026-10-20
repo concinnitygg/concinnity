@@ -1,7 +1,7 @@
 //! The world an application is assembled from.
 
-use concinnity_core::components::Material;
-use concinnity_core::ecs::RuntimeComponent;
+use concinnity_engine::components::Material;
+use concinnity_engine::ecs::RuntimeComponent;
 
 use crate::bake::{EnvironmentMapPayload, FontPayload, MeshPayload};
 use crate::system::{ComponentSlot, Entity, Phase, System};
@@ -12,7 +12,7 @@ use crate::{AssetId, EnvironmentMapHandle, FontHandle, MaterialHandle, MeshHandl
 // them, and needs no operating system to do either. What differs is what a tier
 // has to put in it -- the std build's `App` starts it against the engine's
 // system table.
-pub(crate) type Inner = concinnity_core::ecs::World;
+pub(crate) type Inner = concinnity_engine::ecs::World;
 
 /// A world: the components an application is built from.
 ///

@@ -3,9 +3,9 @@
 //! `StreamLoaders`. Graphics init builds them and publishes them inside the
 //! `StreamingRuntime` resource.
 
-use concinnity_core::bake::texture::TextureImage;
-use concinnity_core::planet::{TileId, TileMesh};
-use concinnity_core::render::streaming::pools::{
+use concinnity_engine::bake::texture::TextureImage;
+use concinnity_engine::planet::{TileId, TileMesh};
+use concinnity_engine::render::streaming::pools::{
     ChunkLoad, ChunkRequest, DecodedMesh, ItemLoad, LoadPool, ShaderPump, StreamLoaders,
     StreamingState,
 };

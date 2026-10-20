@@ -5,8 +5,8 @@
 //! The panel's edits are `shader_edits_tests.rs`, its form
 //! `shader_form_tests.rs`.
 
-use concinnity_core::components::ShaderStage;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::ShaderStage;
+use concinnity_engine::ecs::World;
 use std::cell::Cell;
 use std::path::Path;
 

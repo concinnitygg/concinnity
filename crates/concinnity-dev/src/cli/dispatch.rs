@@ -64,14 +64,14 @@ fn run_world(args: &RunArgs, tree: &StateTree) -> std::io::Result<()> {
         tree,
         concinnity_runtime::RunOptions {
             mode: if args.serial {
-                concinnity_core::launch::PipelineMode::Serial
+                concinnity_engine::launch::PipelineMode::Serial
             } else {
-                concinnity_core::launch::PipelineMode::Pipelined
+                concinnity_engine::launch::PipelineMode::Pipelined
             },
             schedule: if args.serial_schedule {
-                concinnity_core::ecs::ScheduleMode::Serial
+                concinnity_engine::ecs::ScheduleMode::Serial
             } else {
-                concinnity_core::ecs::ScheduleMode::Parallel
+                concinnity_engine::ecs::ScheduleMode::Parallel
             },
             screenshot: args.screenshot.clone(),
             launch: args.render.launch(args.validation, false),

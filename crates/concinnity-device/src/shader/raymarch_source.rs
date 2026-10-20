@@ -11,13 +11,13 @@
 // checkout, digests differently, and recompiles. A machine with no compiler
 // says so, naming the volume, rather than drawing nothing.
 
-use concinnity_core::platform::Platform;
+use concinnity_engine::platform::Platform;
 #[cfg(any(backend_dx, backend_vk))]
-use concinnity_core::render::backend::error::RenderError;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::sdf::programs::SdfPrograms;
-use concinnity_core::render::shader::programs::raymarch::{self, Family};
-use concinnity_core::render::shader::source::{self, SourceFile};
+use concinnity_engine::render::backend::error::RenderError;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::shader::programs::raymarch::{self, Family};
+use concinnity_engine::render::shader::source::{self, SourceFile};
 use std::borrow::Cow;
 
 /// Decode a volume's payload. A payload that does not decode is a build the
@@ -165,9 +165,9 @@ fn source(family: Family, platform: Platform, field: SourceFile<'_>, hot_reload:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::ShaderSource;
-    use concinnity_core::render::backend::error::RenderError;
-    use concinnity_core::render::shader::compiled::CompiledProgram;
+    use concinnity_engine::components::ShaderSource;
+    use concinnity_engine::render::backend::error::RenderError;
+    use concinnity_engine::render::shader::compiled::CompiledProgram;
 
     const FIELD: SourceFile<'static> = SourceFile {
         path: "shaders/blob.hlsl",

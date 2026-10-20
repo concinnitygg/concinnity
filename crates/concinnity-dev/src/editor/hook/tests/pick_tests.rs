@@ -4,8 +4,8 @@
 //! unpickable.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::components::{FrameInput, Sprite};
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, Sprite};
+use concinnity_engine::ecs::World;
 use concinnity_host::thread::asset_id;
 use std::collections::BTreeSet;
 

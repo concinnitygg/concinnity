@@ -2,9 +2,9 @@
 //! rows): a well at the right of the Shader source panel, one row per group
 //! heading or name, names in the code face, the hovered row highlighted.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
 
 use super::shader_reference::RefRow;
 use crate::editor::hud_ids::hud_ids;
@@ -125,9 +125,9 @@ pub(crate) fn place(world: &mut World, view: Option<&RefView<'_>>, rect: [f32; 4
 mod tests {
     use super::*;
     use crate::editor::panels::shader_reference::Reference;
-    use concinnity_core::components::{Sprite, TextLabel};
-    use concinnity_core::ecs::asset_id::AssetId;
-    use concinnity_core::render::shader::programs::vocabulary::ENTRIES;
+    use concinnity_engine::components::{Sprite, TextLabel};
+    use concinnity_engine::ecs::asset_id::AssetId;
+    use concinnity_engine::render::shader::programs::vocabulary::ENTRIES;
 
     const RECT: [f32; 4] = [100.0, 50.0, COLUMN_W, 10.0 * ROW_H + 2.0 * INSET];
 

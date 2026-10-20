@@ -17,9 +17,10 @@ include = [
 ]
 
 [features]
-schema = ["concinnity-core/schema"]
+schema = ["concinnity-engine/schema"]
 
 [dependencies]
+concinnity-engine = { workspace = true }
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
 concinnity-shader = { workspace = true, features = ["spirv-cross"] }

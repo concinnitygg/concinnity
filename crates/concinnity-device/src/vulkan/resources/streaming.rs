@@ -3,7 +3,7 @@
 //! moving and removing chunks is scene bookkeeping, done in `SceneState`.
 
 use ash::vk;
-use concinnity_core::render::backend::error;
+use concinnity_engine::render::backend::error;
 
 use super::super::context::VkContext;
 use super::super::texture;

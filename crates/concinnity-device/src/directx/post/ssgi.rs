@@ -1,14 +1,14 @@
 //! DirectX's share of screen-space global illumination, which is its settings
 //! and where the pass reads and writes this frame. Every stage -- the pipelines, the depth
 //! pyramids, the accumulation and all the draws -- is written once in
-//! `concinnity_core::render::post::ssgi` and reaches D3D12 through
+//! `concinnity_engine::render::post::ssgi` and reaches D3D12 through
 //! `DxPostDevice`.
 
-use concinnity_core::gfx::render_types::SsgiParams;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::post::ssgi::settings::{SsgiFrame, SsgiSettings};
-use concinnity_core::render::post::ssgi::{
+use concinnity_engine::gfx::render_types::SsgiParams;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::ssgi::settings::{SsgiFrame, SsgiSettings};
+use concinnity_engine::render::post::ssgi::{
     SsgiPass, SsgiPipelines, SsgiResolveInputs, SsgiTraceInputs,
 };
 use windows::Win32::Graphics::Direct3D12::*;

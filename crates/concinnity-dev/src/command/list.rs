@@ -208,7 +208,7 @@ fn list_systems(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()>
 // Run the table's own completion pass, the way `World::start` does before it
 // gates: a HUD or overlay the engine injects brings its own system with it, so
 // a manifest taken before the pass would be missing them.
-fn complete(world: &mut concinnity_core::ecs::World) -> std::io::Result<()> {
+fn complete(world: &mut concinnity_engine::ecs::World) -> std::io::Result<()> {
     let Some(complete) = concinnity_runtime::SYSTEMS.complete_world else {
         return Ok(());
     };
@@ -225,12 +225,12 @@ fn complete(world: &mut concinnity_core::ecs::World) -> std::io::Result<()> {
 // Publishes the run mode the render band gates on before taking the manifest,
 // from the world's content rather than from a GPU probe: a listing describes
 // the world, so it must not change with the machine that runs `cn list`.
-fn manifest_lines(world: &mut concinnity_core::ecs::World) -> Vec<String> {
-    let mode = concinnity_core::render::backend::render_mode::from_content(world);
+fn manifest_lines(world: &mut concinnity_engine::ecs::World) -> Vec<String> {
+    let mode = concinnity_engine::render::backend::render_mode::from_content(world);
     world.insert_resource(mode);
     let manifest = world.system_manifest(concinnity_runtime::SYSTEMS);
     let width = manifest.iter().map(|n| n.len()).max().unwrap_or(0);
-    let phase_width = concinnity_core::ecs::Phase::ALL
+    let phase_width = concinnity_engine::ecs::Phase::ALL
         .iter()
         .map(|p| p.as_str().len())
         .max()

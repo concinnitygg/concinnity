@@ -1,0 +1,332 @@
+//! Runtime behavior for the `SkinnedMesh` asset. The authored schema (`SkinnedMesh`,
+//! its `SkinnedVertexData` / `SkeletonJoint` / `CharacterCapsule`, and their Defaults) lives
+//! above; `SkinnedMesh` is a resource (compiled by cook into the
+//! blob's resource stream, no `Component` impl), so this file keeps only the
+//! skeleton builder and the model matrix, both built through `animation::skeleton`.
+
+use crate::ecs::{MaterialHandle, PayloadLocator};
+use alloc::string::String;
+use alloc::vec::Vec;
+use concinnity_core::math::SaturatingFrom;
+
+fn white() -> [f32; 3] {
+    [1.0, 1.0, 1.0]
+}
+
+fn first_weight() -> [f32; 4] {
+    [1.0, 0.0, 0.0, 0.0]
+}
+
+/// One vertex of a skinned mesh. Beyond position / color / uv it carries up
+/// to four joint bindings: `joints[k]` indexes the skeleton, `weights[k]` is
+/// its blend weight. Weights are normalized at build time.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+pub struct SkinnedVertexData {
+    /// Vertex position `[x, y, z]` in model space.
+    pub pos: [f32; 3],
+    /// Vertex color `[r, g, b]` in [0, 1]. Defaults to white.
+    #[serde(default = "white")]
+    pub color: [f32; 3],
+    /// Texture coordinates in [0, 1] space. Defaults to [0, 0].
+    #[serde(default)]
+    pub uv: [f32; 2],
+    /// Joint indices this vertex is bound to. Unused slots can be 0.
+    #[serde(default)]
+    pub joints: [u32; 4],
+    /// Blend weights parallel to `joints`. Defaults to fully bound to joint 0.
+    #[serde(default = "first_weight")]
+    pub weights: [f32; 4],
+}
+
+/// One morph-target vertex delta: offsets added to the bind-pose position and
+/// normal, scaled by the target's weight at runtime.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
+#[serde(default)]
+pub struct MorphDelta {
+    /// Position offset `[x, y, z]` in model space.
+    pub position: [f32; 3],
+    /// Normal offset; the deformed normal is re-normalized after adding it.
+    pub normal: [f32; 3],
+}
+
+/// One joint of a skeleton's bind pose.
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
+#[serde(default)]
+pub struct SkeletonJoint {
+    /// Human-readable joint name (animation tracks may reference it later).
+    pub name: String,
+    /// Parent joint index, or -1 for a root. Parents must appear before their
+    /// children in the `skeleton` list.
+    #[asset(default = -1)]
+    pub parent: i32,
+    /// Local bind translation relative to the parent.
+    pub translation: [f32; 3],
+    /// Local bind rotation, Euler degrees [pitch, yaw, roll], YXZ order.
+    pub rotation_deg: [f32; 3],
+    /// Local bind scale.
+    #[asset(default = [1.0, 1.0, 1.0])]
+    pub scale: [f32; 3],
+}
+
+/// A skeletally animated mesh placed directly in the world.
+///
+/// Unlike a [Mesh](#mesh), a `SkinnedMesh` carries its own world transform and a
+/// `skeleton` (a joint hierarchy with a bind pose). Each vertex is bound to up
+/// to four joints; an [Animation](#animation) targeting this mesh deforms it at
+/// runtime. With no animation the mesh renders in its bind pose.
+///
+/// The geometry + skeleton may be authored inline (`vertices` / `indices` /
+/// `skeleton`) or imported with `source` from a glTF (`.glb` / `.gltf`) or
+/// binary `.fbx` file. The import fills the mesh, the skeleton bind pose,
+/// and (for glTF) any morph targets; animations are imported separately by
+/// [Animation](#animation) assets referencing the same file.
+///
+/// The `customize_character` example ships a neutral unclothed body
+/// (`base_humanoid.glb`, about 21k vertices, A-pose bind) with a 25-joint
+/// skeleton (`root`, `hips`, `spine`, `chest`,
+/// `upper_chest`, `neck`, `head`, and `clavicle` / `upper_arm` / `forearm` /
+/// `hand` / `thumb` / `thigh` / `shin` / `foot` / `toe` with an `_l` / `_r`
+/// suffix), the morph targets a [`CharacterShape`](#charactershape) slider set
+/// names (`weight+/-`, `muscle`, `shoulders+/-`, `hips+/-`, `chest+/-`,
+/// `belly`, `head+/-`, `jaw+/-`, `nose+/-`, `brow`, `cheeks+/-`,
+/// `chin+/-`, `eyes+/-`, `lips+/-`, `mouth_width+/-`, `ears+/-`,
+/// `cheekbones+/-`), and a rotation-only `idle` clip an Animation can import from
+/// the same file; a [`CharacterModel`](#charactermodel) is the usual way to
+/// declare it.
+///
+/// The `skeleton` (joint hierarchy and bind pose) is provided as an arg
+/// (authored inline alongside `vertices`/`indices`, or filled in from the
+/// imported `.glb`) and is baked into the mesh at build time.
+///
+/// Normals and tangents are computed automatically at build time. Do not
+/// supply them.
+///
+/// ```rust
+/// # use concinnity_engine::components::SkinnedMesh;
+/// SkinnedMesh {
+///     position: [0.0, 1.0, 0.0],
+///     ..Default::default()
+/// };
+/// ```
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[serde(default)]
+pub struct SkinnedMesh {
+    /// Optional path to a `.glb` / `.gltf` / `.fbx` file. When set, the
+    /// build imports `vertices` / `indices` / `skeleton` from it; an
+    /// inline-authored mesh leaves this empty.
+    pub source: String,
+    /// Which skinned mesh of `source` to import, in file declaration order
+    /// (default 0). A character split into several meshes bound to one
+    /// skeleton (body, hair, clothes) needs one `SkinnedMesh` per part, each
+    /// naming its own index.
+    pub skin_index: u32,
+    /// Skinned vertex list.
+    pub vertices: Vec<SkinnedVertexData>,
+    /// Triangle index list.
+    pub indices: Vec<u16>,
+    /// Morph-target names, one per target, in target order. Filled from the
+    /// source file's target names when importing; empty for a mesh without
+    /// morph targets.
+    pub morph_target_names: Vec<String>,
+    /// Dense morph-target deltas, target-major: entry `t * vertex_count + v`
+    /// is target `t`'s delta for vertex `v`. Length must be
+    /// `morph_target_names.len() * vertices.len()`. An [Animation](#animation)
+    /// with a `morph_track` drives the per-target weights at runtime.
+    pub morph_deltas: Vec<MorphDelta>,
+    /// [Material](#material); provides the albedo texture plus lighting
+    /// parameters.
+    pub material: Option<MaterialHandle>,
+    /// World-space position.
+    pub position: [f32; 3],
+    /// World rotation, Euler degrees [pitch, yaw, roll], YXZ order.
+    pub rotation_deg: [f32; 3],
+    /// World scale.
+    pub scale: [f32; 3],
+    /// Number of level-of-detail versions to generate, including the original.
+    /// `1` (the default) generates none; values are clamped to `[1, 8]`.
+    pub lod_levels: u32,
+    /// Camera distances at which to switch to each lower-detail version. When
+    /// non-empty, must have exactly `lod_levels - 1` entries; empty lets the
+    /// build choose defaults.
+    #[serde(default)]
+    pub lod_distances: Vec<f32>,
+    /// How many runtime copies of this mesh may exist at once beyond the
+    /// authored one. `0` (the default) means the mesh is not runtime-spawnable.
+    /// A non-zero value pre-reserves that many extra instance slots at load: the
+    /// engine appends that many hidden bind-pose copies to the skinned geometry
+    /// so a runtime spawn can claim one without growing any GPU buffer, and a
+    /// despawn returns it to the pool. Spawns past the reserve are dropped (a
+    /// warning is logged). Capped at 4096.
+    pub max_instances: u32,
+    /// Optional character capsule. When set, the mesh collides with the
+    /// scene as a kinematic character and is moved by the root motion of its
+    /// [Animation](#animation) clips (those with `root_motion` set): the
+    /// capsule slides along obstacles and settles under gravity, and the
+    /// rendered mesh follows it. The capsule stands on the mesh origin (its
+    /// feet), centered `half_height + radius` above it.
+    pub capsule: Option<CharacterCapsule>,
+    /// Injected at load time from the compiled blob payload.
+    #[serde(skip)]
+    pub locator: Option<PayloadLocator>,
+}
+
+/// A kinematic character capsule for a [`SkinnedMesh`](#skinnedmesh), in world
+/// units (after the mesh's `scale`).
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
+#[serde(default)]
+pub struct CharacterCapsule {
+    /// Half-height of the capsule's cylindrical section.
+    #[asset(default = 0.5)]
+    pub half_height: f32,
+    /// Capsule radius.
+    #[asset(default = 0.3)]
+    pub radius: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_vertex_with_only_a_position_binds_fully_to_its_first_joint() {
+        // Importers emit position-only vertices for unweighted geometry; the
+        // defaults have to make that render white and rigid rather than black
+        // and collapsed to the origin.
+        let v: SkinnedVertexData = crate::test_support::from_json(r#"{"pos":[1,2,3]}"#);
+        assert_eq!(v.pos, [1.0, 2.0, 3.0]);
+        assert_eq!(v.color, [1.0, 1.0, 1.0]);
+        assert_eq!(v.uv, [0.0, 0.0]);
+        assert_eq!(v.joints, [0, 0, 0, 0]);
+        assert_eq!(v.weights, [1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_blank_joint_is_a_root() {
+        let joint: SkeletonJoint = crate::test_support::from_json("{}");
+        assert_eq!(joint.parent, -1);
+    }
+}
+
+/// Build a runtime `Skeleton` from authored joint definitions. Mirrors the
+/// conversion graphics init does at world load time: each
+/// `SkeletonJoint.parent` becomes `Some(usize)` for valid indices (negative values
+/// mark roots), and each `SkeletonJoint`'s translation / rotation / scale becomes the
+/// joint's bind `JointPose`. Used at init and by the asset hot-reload's
+/// skeleton-shape change path.
+pub fn build_skeleton_from_joint_defs(
+    defs: &[SkeletonJoint],
+) -> crate::animation::skeleton::Skeleton {
+    use crate::animation::skeleton as skinning;
+    let joints = defs
+        .iter()
+        .map(|jd| skinning::Joint {
+            name: jd.name.clone(),
+            parent: (jd.parent >= 0).then_some(usize::saturating_from(jd.parent)),
+            bind: skinning::JointPose {
+                translation: jd.translation,
+                rotation_deg: jd.rotation_deg,
+                scale: jd.scale,
+            },
+        })
+        .collect();
+    skinning::Skeleton::new(joints)
+}
+
+impl SkinnedMesh {
+    /// Column-major world matrix built from the mesh's transform, in the same
+    /// construction order (scale, YXZ rotation, translate) as `Prop::model_matrix`.
+    pub fn model_matrix(&self) -> [[f32; 4]; 4] {
+        crate::animation::skeleton::JointPose {
+            translation: self.position,
+            rotation_deg: self.rotation_deg,
+            scale: self.scale,
+        }
+        .to_matrix()
+    }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+    use alloc::vec;
+
+    #[test]
+    fn build_skeleton_from_joint_defs_preserves_count_and_parent_links() {
+        let defs = vec![
+            SkeletonJoint {
+                name: "root".into(),
+                parent: -1,
+                translation: [0.0, 0.0, 0.0],
+                rotation_deg: [0.0, 0.0, 0.0],
+                scale: [1.0, 1.0, 1.0],
+            },
+            SkeletonJoint {
+                name: "tip".into(),
+                parent: 0,
+                translation: [0.0, 1.0, 0.0],
+                rotation_deg: [0.0, 0.0, 0.0],
+                scale: [1.0, 1.0, 1.0],
+            },
+            SkeletonJoint {
+                name: "tail".into(),
+                parent: 1,
+                translation: [0.0, 1.0, 0.0],
+                rotation_deg: [0.0, 0.0, 0.0],
+                scale: [1.0, 1.0, 1.0],
+            },
+        ];
+        let skel = build_skeleton_from_joint_defs(&defs);
+        assert_eq!(skel.len(), 3);
+        let joints = skel.joints();
+        assert_eq!(joints[0].parent, None);
+        assert_eq!(joints[1].parent, Some(0));
+        assert_eq!(joints[2].parent, Some(1));
+    }
+
+    #[test]
+    fn build_skeleton_from_joint_defs_treats_negative_parent_as_root() {
+        // Any negative parent (not just -1) collapses to None; mirrors the
+        // init-time semantics so a hot-reload from the same SkeletonJoint shape
+        // produces the same Skeleton.
+        let defs = vec![SkeletonJoint {
+            name: "root".into(),
+            parent: -42,
+            translation: [1.0, 2.0, 3.0],
+            rotation_deg: [0.0, 0.0, 0.0],
+            scale: [1.0, 1.0, 1.0],
+        }];
+        let skel = build_skeleton_from_joint_defs(&defs);
+        assert_eq!(skel.joints()[0].parent, None);
+    }
+
+    #[test]
+    fn model_matrix_places_translation_in_last_column() {
+        let mesh = SkinnedMesh {
+            position: [2.0, 3.0, 4.0],
+            scale: [1.0, 1.0, 1.0],
+            ..SkinnedMesh::default()
+        };
+        let m = mesh.model_matrix();
+        // Column-major: the translation lives in the last column, identity
+        // scale keeps the diagonal at 1.
+        assert_eq!([m[3][0], m[3][1], m[3][2]], [2.0, 3.0, 4.0]);
+        assert_eq!(m[3][3], 1.0);
+        assert_eq!(m[0][0], 1.0);
+    }
+}

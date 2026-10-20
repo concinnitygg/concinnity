@@ -7,8 +7,8 @@ use concinnity_cook::WorldSource;
 use concinnity_cook::authoring::registry::RegisteredType;
 pub(crate) use concinnity_cook::build_compiled;
 use concinnity_cook::build_only::LoadedWorld;
-use concinnity_core::ecs::{BlobMeshBounds, BlobSceneGroups, ComponentAsset, World};
-use concinnity_core::resource::{
+use concinnity_engine::ecs::{BlobMeshBounds, BlobSceneGroups, ComponentAsset, World};
+use concinnity_engine::resource::{
     ColorLutSources, EnvironmentMapSourceInfo, EnvironmentMapSources, MaterialNames, MeshSource,
     MeshSources, TextureSource, TextureSources,
 };
@@ -46,7 +46,7 @@ fn scan_color_lut_source(
 
 // The first declared file-backed EnvironmentMap's re-bake inputs, or `None` (a
 // procedural `generator` has no file to watch). The face-size / sample defaults
-// mirror the EnvironmentMap schema defaults in `concinnity-core/src/components/environment_map.rs`.
+// mirror the EnvironmentMap schema defaults in `concinnity-engine/src/components/environment_map.rs`.
 fn scan_environment_map_source(
     assets: &[concinnity_cook::authoring::world::WorldJsonlAsset],
 ) -> Option<EnvironmentMapSourceInfo> {
@@ -101,7 +101,7 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
 
     // The material name catalog, read before the result is taken apart below.
     let material_names =
-        MaterialNames(result.resource_names(concinnity_core::blob::ResourceKind::Material));
+        MaterialNames(result.resource_names(concinnity_engine::blob::ResourceKind::Material));
 
     let payload_sections: Vec<Option<Vec<u8>>> = result.payloads.into_iter().map(Some).collect();
     let mut world = concinnity_runtime::world_from(BlobData::new(payload_sections));
@@ -122,11 +122,11 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     // Load the compiled resource stream into its per-kind tables, exactly as the
     // shipped runtime's `load_blob` does, so the in-memory `cn debug` world reads
     // audio clips and textures by handle too.
-    concinnity_core::resource::install_tables(&mut world, &mut result.resources);
+    concinnity_engine::resource::install_tables(&mut world, &mut result.resources);
     world.insert_resource(BlobSceneGroups(result.scene_groups));
     world.insert_resource(BlobMeshBounds(result.mesh_bounds));
     if let Some(budget) = result.physics_budget {
-        world.insert_resource(concinnity_core::ecs::WorldPhysicsBudget(budget));
+        world.insert_resource(concinnity_engine::ecs::WorldPhysicsBudget(budget));
     }
     // Dev-only source catalogs for the hot-reload watcher (see the scan above).
     world.insert_resource(ColorLutSources(color_lut_source));
@@ -217,7 +217,7 @@ pub(crate) fn build_world_file_as(
 // fewer backends than this `cn`.
 pub(crate) fn build_world_file_for(
     json_path: &str,
-    targets: concinnity_core::platform::PlatformSet,
+    targets: concinnity_engine::platform::PlatformSet,
 ) -> std::io::Result<()> {
     build_world(json_path, json_path, Verbosity::Normal, targets)
 }
@@ -226,7 +226,7 @@ fn build_world(
     json_path: &str,
     shown: &str,
     verbosity: Verbosity,
-    targets: concinnity_core::platform::PlatformSet,
+    targets: concinnity_engine::platform::PlatformSet,
 ) -> std::io::Result<()> {
     let tree = crate::project::require()?;
     let content = std::fs::read_to_string(json_path)?;
@@ -421,12 +421,12 @@ mod tests {
         // identified so its id resolves to it; nothing was dropped on the way
         // through compile + assembly.
         let identified = world
-            .query::<concinnity_core::components::Identity>()
+            .query::<concinnity_engine::components::Identity>()
             .count();
         assert_eq!(identified, expanded);
         assert_eq!(world.component_count(), 2 * expanded);
         let index = world
-            .resource::<concinnity_core::ecs::EntityById>()
+            .resource::<concinnity_engine::ecs::EntityById>()
             .expect("assembly identifies every entity");
         assert_eq!(index.len(), expanded);
     }

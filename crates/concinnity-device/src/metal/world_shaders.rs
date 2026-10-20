@@ -5,9 +5,9 @@
 // by a scene other than the start scene). The streaming pump calls in here as
 // those scenes pin and unpin, handing over a pipeline its worker already built.
 
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
-use concinnity_core::render::shader::programs::surface::GrassShading;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
+use concinnity_engine::render::shader::programs::surface::GrassShading;
 use std::sync::Arc;
 
 use super::MtlContext;
@@ -23,7 +23,7 @@ impl MtlContext {
     pub(super) fn install_world_shader(
         &mut self,
         bucket: u32,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<()> {
         self.cull.world_pipelines.slot(bucket)?;
@@ -52,7 +52,7 @@ impl MtlContext {
     pub(super) fn update_world_shader(
         &mut self,
         bucket: u32,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<PipelineSwap> {
         if bucket == 0 {
@@ -84,7 +84,7 @@ impl MtlContext {
     // of the default Shader reaches them.
     fn update_grass_twins(
         &mut self,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
     ) -> RenderResult<()> {
         let twins = self.cull.world_pipelines.grass_twins();
         for (twin, grass) in [

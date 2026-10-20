@@ -28,6 +28,7 @@ vulkan = ["concinnity-device/vulkan"]
 alloc-detail = ["concinnity-core/detail"]
 
 [dependencies]
+concinnity-engine = { workspace = true }
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
 concinnity-device = { workspace = true }
@@ -56,13 +57,15 @@ objc2-app-kit = { workspace = true }
 objc2-core-foundation = { workspace = true }
 
 [dev-dependencies]
-concinnity-core = { workspace = true, features = ["test-support"] }
+concinnity-engine = { workspace = true, features = ["test-support"] }
+concinnity-core = { workspace = true }
 concinnity-testing = { workspace = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
 tempfile = { workspace = true }
 
 [build-dependencies]
 concinnity-toolchain = { workspace = true }
+concinnity-engine = { workspace = true }
 concinnity-core = { workspace = true }
 
 [lints]

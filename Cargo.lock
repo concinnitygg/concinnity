@@ -389,6 +389,7 @@ dependencies = [
  "concinnity-cook",
  "concinnity-core",
  "concinnity-dev",
+ "concinnity-engine",
  "concinnity-host",
  "concinnity-runtime",
  "concinnity-testing",
@@ -405,6 +406,7 @@ dependencies = [
  "basisu",
  "bytemuck",
  "concinnity-core",
+ "concinnity-engine",
  "concinnity-host",
  "concinnity-shader",
  "concinnity-testing",
@@ -433,21 +435,8 @@ dependencies = [
 name = "concinnity-core"
 version = "0.20.0"
 dependencies = [
- "bytemuck",
- "ciborium",
- "concinnity-derive",
- "erased-serde",
- "fontdue",
- "hashbrown 0.17.1",
  "libm",
- "postcard",
- "rayon",
- "serde",
- "serde_bytes",
- "serde_json",
  "spin",
- "thiserror 2.0.18",
- "tracing",
 ]
 
 [[package]]
@@ -468,6 +457,7 @@ dependencies = [
  "clap",
  "concinnity-cook",
  "concinnity-core",
+ "concinnity-engine",
  "concinnity-host",
  "concinnity-runtime",
  "concinnity-shader",
@@ -498,6 +488,7 @@ dependencies = [
  "block2",
  "bytemuck",
  "concinnity-core",
+ "concinnity-engine",
  "concinnity-host",
  "concinnity-shader",
  "concinnity-testing",
@@ -523,11 +514,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "concinnity-engine"
+version = "0.20.0"
+dependencies = [
+ "bytemuck",
+ "ciborium",
+ "concinnity-core",
+ "concinnity-derive",
+ "erased-serde",
+ "fontdue",
+ "hashbrown 0.17.1",
+ "libm",
+ "postcard",
+ "rayon",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "spin",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "concinnity-ffi"
 version = "0.20.0"
 dependencies = [
  "cbindgen",
- "concinnity-core",
+ "concinnity-engine",
  "concinnity-host",
  "concinnity-runtime",
  "concinnity-testing",
@@ -543,6 +556,7 @@ version = "0.20.0"
 dependencies = [
  "ciborium",
  "concinnity-core",
+ "concinnity-engine",
  "concinnity-testing",
  "libc",
  "rayon",
@@ -560,6 +574,7 @@ version = "0.20.0"
 dependencies = [
  "concinnity-core",
  "concinnity-device",
+ "concinnity-engine",
  "concinnity-host",
  "concinnity-testing",
  "concinnity-toolchain",
@@ -586,7 +601,7 @@ dependencies = [
 name = "concinnity-shader"
 version = "0.20.0"
 dependencies = [
- "concinnity-core",
+ "concinnity-engine",
  "concinnity-testing",
  "spirv-cross2",
 ]
@@ -596,6 +611,7 @@ name = "concinnity-testing"
 version = "0.0.0"
 dependencies = [
  "concinnity-core",
+ "concinnity-engine",
  "png",
  "tempfile",
 ]
@@ -605,6 +621,7 @@ name = "concinnity-toolchain"
 version = "0.20.0"
 dependencies = [
  "concinnity-core",
+ "concinnity-engine",
  "concinnity-shader",
  "concinnity-testing",
  "tempfile",

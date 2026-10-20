@@ -2,8 +2,8 @@
 
 use alloc::boxed::Box;
 
-use concinnity_core::Driver;
-use concinnity_core::ecs::HEADLESS_SYSTEMS;
+use concinnity_engine::Driver;
+use concinnity_engine::ecs::HEADLESS_SYSTEMS;
 
 use crate::world::Inner;
 
@@ -27,7 +27,7 @@ pub(crate) fn select(world: Inner) -> Box<dyn Driver> {
 // with something to draw on a build or machine that cannot draw it.
 #[cfg(feature = "std")]
 pub(crate) fn adopt(mut runtime: concinnity_runtime::Runtime) -> Box<dyn Driver> {
-    use concinnity_core::render::backend::render_mode::Resolution;
+    use concinnity_engine::render::backend::render_mode::Resolution;
     match runtime.render_resolution() {
         Resolution::Headless(_) => headless(runtime.into_world()),
         Resolution::Rendered | Resolution::Unavailable(_) => Box::new(runtime),
@@ -39,7 +39,10 @@ pub(crate) fn adopt(mut runtime: concinnity_runtime::Runtime) -> Box<dyn Driver>
 // them. A world's `Window` is inert here, since there is no render system for
 // it to gate in.
 pub(crate) fn headless(world: Inner) -> Box<dyn Driver> {
-    Box::new(concinnity_core::App::with_systems(world, HEADLESS_SYSTEMS))
+    Box::new(concinnity_engine::App::with_systems(
+        world,
+        HEADLESS_SYSTEMS,
+    ))
 }
 
 #[cfg(test)]

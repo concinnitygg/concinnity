@@ -1,14 +1,14 @@
 //! Vulkan's share of screen-space global illumination, which is its settings and
 //! where the pass reads and writes this frame. Every stage -- the pipelines, the
 //! depth pyramids, the accumulation and all the draws -- is written once in
-//! `concinnity_core::render::post::ssgi` and reaches Vulkan through
+//! `concinnity_engine::render::post::ssgi` and reaches Vulkan through
 //! `VkPostDevice`.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::SsgiParams;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::post::ssgi::settings::{SsgiFrame, SsgiSettings};
-use concinnity_core::render::post::ssgi::{
+use concinnity_engine::gfx::render_types::SsgiParams;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::ssgi::settings::{SsgiFrame, SsgiSettings};
+use concinnity_engine::render::post::ssgi::{
     SsgiPass, SsgiPipelines, SsgiResolveInputs, SsgiTraceInputs,
 };
 

@@ -11,15 +11,30 @@ mod gate;
 mod judge;
 mod lent;
 mod pooled;
-#[cfg(test)]
-pub(crate) mod test_pools;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_pools;
 mod timing;
 
 pub use gate::FanOutGate;
 pub use judge::FanOutJudge;
 pub use lent::Lent;
-pub(crate) use pooled::Pooled;
+pub use pooled::Pooled;
 pub use timing::{FanOutClock, FanOutTimer, FanOutTiming};
+
+/// How a tick's independent work executes. `Parallel` lets systems fan their
+/// safe internal work across the job pool; `Serial` (or the resource being
+/// absent, the editor's case) keeps every system's work on the stepping
+/// thread -- the determinism oracle and the escape hatch
+/// (`cn run --serial-schedule`). Both modes must produce identical world
+/// state; the engine's schedule-determinism test is the gate on that claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScheduleMode {
+    /// Keep every system's work on the stepping thread.
+    Serial,
+    #[default]
+    /// Let systems fan safe internal work across the job pool.
+    Parallel,
+}
 
 /// A caller's way of running independent work at the same time.
 ///

@@ -4,12 +4,12 @@
 //! resources.
 
 use ash::vk;
-use concinnity_core::gfx::auto_exposure;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::backend::init::{PlanarBudget, WorldFx};
-use concinnity_core::render::decal;
-use concinnity_core::render::planar_reflection::PlanarReflectors;
-use concinnity_core::settings::ResolvedGraphics;
+use concinnity_engine::gfx::auto_exposure;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::{PlanarBudget, WorldFx};
+use concinnity_engine::render::decal;
+use concinnity_engine::render::planar_reflection::PlanarReflectors;
+use concinnity_engine::settings::ResolvedGraphics;
 
 use super::ray_tracing::RtResources;
 use super::{Features, InitGpu};

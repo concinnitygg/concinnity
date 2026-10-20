@@ -1,7 +1,7 @@
 //! Hot-reloaded Shader programs, shared between the tooling that edits a running
 //! world and the streaming pump that installs them.
 
-use concinnity_core::components::ShaderPrograms;
+use concinnity_engine::components::ShaderPrograms;
 use hashbrown::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 

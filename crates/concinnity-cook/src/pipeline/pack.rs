@@ -1,10 +1,10 @@
 //! The payload cache probe that runs ahead of desugar, and the compile + pack
 //! pass that turns the resolved defs into blob sections.
 
-use concinnity_core::blob::{MeshBoundsRecord, SceneGroup};
-use concinnity_core::components::FileKind;
-use concinnity_core::ecs::{BlobAssetDef, ResourceRecord};
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::blob::{MeshBoundsRecord, SceneGroup};
+use concinnity_engine::components::FileKind;
+use concinnity_engine::ecs::{BlobAssetDef, ResourceRecord};
 use concinnity_host::thread::asset_id;
 use rayon::prelude::*;
 use std::path::Path;
@@ -23,7 +23,7 @@ const PAYLOAD: crate::cache::CacheEntryKind = crate::cache::CacheEntryKind::Payl
 
 // The resource kind of a job selected by `collect_resource_jobs`. Every entry
 // there was chosen by having one, so the lookup cannot fail.
-fn job_resource_kind(rt: RegisteredType) -> concinnity_core::blob::ResourceKind {
+fn job_resource_kind(rt: RegisteredType) -> concinnity_engine::blob::ResourceKind {
     rt.resource_kind()
         .expect("a resource job carries a resource type")
 }
@@ -51,7 +51,7 @@ pub(in crate::pipeline) struct MeshCacheEntry {
 pub(in crate::pipeline) fn probe_mesh_payload_cache(
     assets: &[WorldJsonlAsset],
     assets_dir: Option<&Path>,
-    targets: concinnity_core::platform::PlatformSet,
+    targets: concinnity_engine::platform::PlatformSet,
 ) -> std::collections::HashMap<String, MeshCacheEntry> {
     let mut out = std::collections::HashMap::new();
     let empty: [WorldJsonlAsset; 0] = [];
@@ -122,7 +122,7 @@ const RESOURCE_CACHE_DISC_BASE: u8 = 128;
 // (SkinnedMesh) carries alongside its payload (empty for everything else; it
 // bakes from the authored args, so it sits outside the payload cache).
 struct PendingResource {
-    kind: concinnity_core::blob::ResourceKind,
+    kind: concinnity_engine::blob::ResourceKind,
     handle: u32,
     bytes: Vec<u8>,
     is_data: bool,
@@ -146,7 +146,8 @@ pub(in crate::pipeline) struct CompiledOutput {
 // static mesh (VoxelChunk voxel data, a malformed payload); absence means the
 // runtime decodes that payload eagerly.
 fn mesh_bounds_record(handle: u32, bytes: &[u8]) -> Option<MeshBoundsRecord> {
-    let (verts, idxs, _) = concinnity_core::gfx::mesh_payload::deserialize_with_lods(bytes).ok()?;
+    let (verts, idxs, _) =
+        concinnity_engine::gfx::mesh_payload::deserialize_with_lods(bytes).ok()?;
     let first = verts.first()?;
     let mut min = first.pos;
     let mut max = first.pos;
@@ -172,10 +173,10 @@ pub(in crate::pipeline) struct PackContext<'a> {
     pub(in crate::pipeline) assets: &'a [WorldJsonlAsset],
     pub(in crate::pipeline) resource_jobs: &'a [ResourceJob],
     pub(in crate::pipeline) partition: &'a crate::compile::scene_partition::ScenePartition,
-    pub(in crate::pipeline) mesh_source_handles: &'a concinnity_core::resource::ResourceHandles,
+    pub(in crate::pipeline) mesh_source_handles: &'a concinnity_engine::resource::ResourceHandles,
     pub(in crate::pipeline) max_blob_bytes: u64,
     pub(in crate::pipeline) assets_dir: Option<&'a Path>,
-    pub(in crate::pipeline) targets: concinnity_core::platform::PlatformSet,
+    pub(in crate::pipeline) targets: concinnity_engine::platform::PlatformSet,
     pub(in crate::pipeline) mesh_cache: &'a std::collections::HashMap<String, MeshCacheEntry>,
     pub(in crate::pipeline) progress: Progress<'a>,
 }
@@ -302,7 +303,8 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
             continue;
         }
         let id = asset_id::intern(&asset.id);
-        if let Some(handle) = mesh_source_handles.get(concinnity_core::blob::ResourceKind::Mesh, id)
+        if let Some(handle) =
+            mesh_source_handles.get(concinnity_engine::blob::ResourceKind::Mesh, id)
         {
             // Handle -> asset name for mesh payloads riding component defs,
             // so a consumer can find any sub-mesh payload by unified handle
@@ -356,7 +358,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
     // record order in the metadata streams is unchanged (locators are
     // per-record, so packing order is independent).
     let mut packer = PayloadPacker::new(max_blob_bytes);
-    let mut resource_locators: Vec<Option<concinnity_core::ecs::PayloadLocator>> =
+    let mut resource_locators: Vec<Option<concinnity_engine::ecs::PayloadLocator>> =
         vec![None; resource_pending.len()];
 
     for group in 0..=partition.scenes.len() {
@@ -418,7 +420,7 @@ struct CompileShared<'a> {
     assets: &'a [WorldJsonlAsset],
     named_src: &'a [usize],
     assets_dir: Option<&'a Path>,
-    targets: concinnity_core::platform::PlatformSet,
+    targets: concinnity_engine::platform::PlatformSet,
     mesh_cache: &'a std::collections::HashMap<String, MeshCacheEntry>,
     stage: &'a StageProgress<'a>,
     cache_hits: &'a AtomicUsize,
@@ -555,7 +557,7 @@ fn compile_resource(
 // the cook alone reads carries bytes.
 fn texture_record(cook_only: bool) -> Vec<u8> {
     if cook_only {
-        concinnity_core::resource::TextureRecord { cook_only }.to_bytes()
+        concinnity_engine::resource::TextureRecord { cook_only }.to_bytes()
     } else {
         Vec::new()
     }
@@ -599,7 +601,7 @@ mod tests {
         let probed = probe_mesh_payload_cache(
             &assets,
             None,
-            concinnity_core::platform::Platform::Metal.into(),
+            concinnity_engine::platform::Platform::Metal.into(),
         );
 
         let mut names: Vec<&str> = probed.keys().map(String::as_str).collect();
@@ -632,13 +634,13 @@ mod tests {
         let probed = probe_mesh_payload_cache(
             &assets,
             None,
-            concinnity_core::platform::Platform::Metal.into(),
+            concinnity_engine::platform::Platform::Metal.into(),
         );
         assert_eq!(probed.len(), 1);
         assert!(probed.contains_key("m"));
     }
 
-    use concinnity_core::blob::ResourceKind;
+    use concinnity_engine::blob::ResourceKind;
 
     fn procedural_mesh_def() -> BlobAssetDef {
         asset_api::create_asset_def(&AssetRequest {
@@ -690,8 +692,8 @@ mod tests {
             &mut named,
             &[0],
             PackContext {
-                targets: concinnity_core::platform::PlatformSet::single(
-                    concinnity_core::platform::Platform::Metal,
+                targets: concinnity_engine::platform::PlatformSet::single(
+                    concinnity_engine::platform::Platform::Metal,
                 ),
                 assets: &assets,
                 resource_jobs: &resource_jobs,
@@ -778,8 +780,8 @@ mod tests {
             &mut named,
             &[],
             PackContext {
-                targets: concinnity_core::platform::PlatformSet::single(
-                    concinnity_core::platform::Platform::Metal,
+                targets: concinnity_engine::platform::PlatformSet::single(
+                    concinnity_engine::platform::Platform::Metal,
                 ),
                 assets: &assets,
                 resource_jobs: &resource_jobs,
@@ -815,14 +817,14 @@ mod tests {
             serde_json::json!({"generator": "box"}),
         )];
         let mut named = vec![("shape".to_string(), procedural_mesh_def())];
-        let mut handles = concinnity_core::resource::ResourceHandles::default();
+        let mut handles = concinnity_engine::resource::ResourceHandles::default();
         crate::resource_handles::assign_mesh_source_handles(&mut handles, &assets);
         let out = compile_and_pack_payloads(
             &mut named,
             &[0],
             PackContext {
-                targets: concinnity_core::platform::PlatformSet::single(
-                    concinnity_core::platform::Platform::Metal,
+                targets: concinnity_engine::platform::PlatformSet::single(
+                    concinnity_engine::platform::Platform::Metal,
                 ),
                 assets: &assets,
                 resource_jobs: &[],
@@ -876,8 +878,8 @@ mod tests {
             &mut named,
             &[0],
             PackContext {
-                targets: concinnity_core::platform::PlatformSet::single(
-                    concinnity_core::platform::Platform::Metal,
+                targets: concinnity_engine::platform::PlatformSet::single(
+                    concinnity_engine::platform::Platform::Metal,
                 ),
                 assets: &assets,
                 resource_jobs: &resource_jobs,
@@ -911,7 +913,7 @@ mod tests {
     // thread's tables would bake different bytes.
     #[test]
     fn parallel_resource_compile_matches_a_serial_compile_in_job_order() {
-        use concinnity_core::ecs::asset_id::AssetId;
+        use concinnity_engine::ecs::asset_id::AssetId;
         use concinnity_host::thread::asset_id;
 
         let tri = serde_json::json!({
@@ -952,7 +954,7 @@ mod tests {
         let names: Vec<&str> = assets.iter().map(|a| a.id.as_str()).collect();
         asset_id::reset_interner();
         asset_id::intern_all(&names);
-        let handles = concinnity_core::resource::ResourceHandles::from_assets(
+        let handles = concinnity_engine::resource::ResourceHandles::from_assets(
             assets.iter().enumerate().filter_map(|(i, a)| {
                 a.asset_type
                     .resource_kind()
@@ -977,8 +979,8 @@ mod tests {
             &mut [],
             &[],
             PackContext {
-                targets: concinnity_core::platform::PlatformSet::single(
-                    concinnity_core::platform::Platform::Metal,
+                targets: concinnity_engine::platform::PlatformSet::single(
+                    concinnity_engine::platform::Platform::Metal,
                 ),
                 assets: &assets,
                 resource_jobs: &resource_jobs,
@@ -1020,20 +1022,20 @@ mod tests {
 
         // The reference itself resolved through the build's tables rather than
         // a fallback: stone's albedo is moss_tex's handle, hero bakes its id.
-        let stone: concinnity_core::components::Material =
+        let stone: concinnity_engine::components::Material =
             postcard::from_bytes(&out.resources[0].data_bytes).unwrap();
         assert_eq!(
             stone.albedo,
-            Some(concinnity_core::ecs::TextureHandle::new(1))
+            Some(concinnity_engine::ecs::TextureHandle::new(1))
         );
-        let (hero_id, _): (u32, concinnity_core::components::SkinnedMesh) =
+        let (hero_id, _): (u32, concinnity_engine::components::SkinnedMesh) =
             postcard::from_bytes(&out.resources[2].data_bytes).unwrap();
         assert_eq!(hero_id, 4);
     }
 
     #[test]
     fn only_a_cook_only_texture_carries_a_record() {
-        use concinnity_core::resource::TextureRecord;
+        use concinnity_engine::resource::TextureRecord;
         assert!(texture_record(false).is_empty());
         assert_eq!(
             TextureRecord::from_bytes(&texture_record(true)),
@@ -1058,8 +1060,8 @@ mod tests {
             &mut named,
             &[0],
             PackContext {
-                targets: concinnity_core::platform::PlatformSet::single(
-                    concinnity_core::platform::Platform::Metal,
+                targets: concinnity_engine::platform::PlatformSet::single(
+                    concinnity_engine::platform::Platform::Metal,
                 ),
                 assets: &assets,
                 resource_jobs: &[],
@@ -1107,8 +1109,8 @@ mod tests {
             &mut named,
             &[0],
             PackContext {
-                targets: concinnity_core::platform::PlatformSet::single(
-                    concinnity_core::platform::Platform::Metal,
+                targets: concinnity_engine::platform::PlatformSet::single(
+                    concinnity_engine::platform::Platform::Metal,
                 ),
                 assets: &assets,
                 resource_jobs: &[],
@@ -1161,8 +1163,8 @@ mod tests {
             &mut named,
             &[0, 1],
             PackContext {
-                targets: concinnity_core::platform::PlatformSet::single(
-                    concinnity_core::platform::Platform::Metal,
+                targets: concinnity_engine::platform::PlatformSet::single(
+                    concinnity_engine::platform::Platform::Metal,
                 ),
                 assets: &assets,
                 resource_jobs: &[],

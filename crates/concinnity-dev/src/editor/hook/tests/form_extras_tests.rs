@@ -5,7 +5,7 @@
 //! edit keeps the form open and writes nothing.
 
 use concinnity_cook::build_only::include::SourcedEntry;
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 use std::path::PathBuf;
 
 use super::fixtures::{entry, hook, set_field, world_with_fields};

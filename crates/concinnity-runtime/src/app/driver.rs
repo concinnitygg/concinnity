@@ -1,9 +1,9 @@
 //! The windowed loop as a [`Driver`]: what a host holds when the loop it runs
 //! is a runtime value rather than a compile-time type.
 
-use concinnity_core::Driver;
-use concinnity_core::ecs::World;
-use concinnity_core::error::WorldError;
+use concinnity_engine::Driver;
+use concinnity_engine::ecs::World;
+use concinnity_engine::error::WorldError;
 
 use crate::app::runtime::Runtime;
 
@@ -28,7 +28,7 @@ impl Driver for Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{AppConfig, FramePriority};
+    use concinnity_engine::components::{AppConfig, FramePriority};
 
     // Starting through the trait reaches the windowed loop's own start, budgets
     // and all, and the second call is refused the same way the inherent one is.

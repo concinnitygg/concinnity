@@ -4,8 +4,8 @@
 //! (`tick` checks it first), and only a button press closes it -- a click-away
 //! is not a cancel, since the dialog guards destructive actions.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::modal::{self, Dialog};

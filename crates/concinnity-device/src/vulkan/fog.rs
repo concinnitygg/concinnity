@@ -18,12 +18,12 @@
 //! Mirrors src/directx/fog.rs and src/metal/fog.rs.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::environment::volumetric_fog;
-use concinnity_core::render::frame::plan::FogBlocks;
-use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
+use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::environment::volumetric_fog;
+use concinnity_engine::render::frame::plan::FogBlocks;
+use concinnity_engine::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::context::VkContext;
@@ -787,7 +787,7 @@ impl VkContext {
 
 #[cfg(test)]
 mod tests {
-    use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams};
+    use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams};
     use std::mem::size_of;
 
     #[test]

@@ -56,19 +56,19 @@
 //! per-material hit shaders, which screen-space reflections do not.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::buffers::align_up;
-use concinnity_core::render::buffers::retire_pool::RetirePool;
-use concinnity_core::render::rt_accel::geom::{RtDynamicMode, pack_row_major_3x4};
-use concinnity_core::render::rt_accel::refit::{BlasUpdate, SkinnedRefit};
-use concinnity_core::render::rt_accel::topology::blas_vertex_count;
-use concinnity_core::render::rt_accel::{
+use concinnity_engine::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::buffers::align_up;
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::render::rt_accel::geom::{RtDynamicMode, pack_row_major_3x4};
+use concinnity_engine::render::rt_accel::refit::{BlasUpdate, SkinnedRefit};
+use concinnity_engine::render::rt_accel::topology::blas_vertex_count;
+use concinnity_engine::render::rt_accel::{
     AccelBook, EmptyHead, FrameRing, HeadRefresh, InstanceBlas, RefreshMode, RefreshStep,
     RtAccelSteps, RtDriveInputs, RtUpdate, ScratchRing, SeedSet, StaticRing, drive_update,
 };
-use concinnity_core::render::uniforms::SkinParams;
+use concinnity_engine::render::uniforms::SkinParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkGeometry;
@@ -2729,7 +2729,7 @@ impl super::context::VkContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::gfx::mesh_payload;
+    use concinnity_engine::gfx::mesh_payload;
 
     // Distinct fake buffer handles for the descriptor-cache rule.
     fn buf(raw: u64) -> vk::Buffer {
@@ -2788,7 +2788,7 @@ mod tests {
     #[test]
     fn an_empty_host_buffer_still_holds_one_element() {
         assert_eq!(
-            host_buffer_size::<concinnity_core::gfx::render_types::RtGeomEntry>(&[]),
+            host_buffer_size::<concinnity_engine::gfx::render_types::RtGeomEntry>(&[]),
             128
         );
         assert_eq!(host_buffer_size::<u8>(&[]), 16);

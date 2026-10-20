@@ -5,10 +5,10 @@
 //! `classify_tier` (core's render/backend/probe.rs) maps these to a tier so every
 //! backend classifies the same way.
 
-use concinnity_core::render::backend::{
+use concinnity_engine::render::backend::{
     DeviceCapabilities, DeviceProbe, GpuClassInput, GpuProfile, GpuVendor, classify_tier,
 };
-use concinnity_core::render::output::upscaler::UpscalerAvailability;
+use concinnity_engine::render::output::upscaler::UpscalerAvailability;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice, MTLGPUFamily};
 

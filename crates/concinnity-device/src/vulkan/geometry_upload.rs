@@ -17,12 +17,12 @@
 //! allocator itself.
 
 use ash::vk;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::error::map_vk_result;
-use concinnity_core::render::buffers::staging_uploads::{StageError, StagingUploads};
+use concinnity_engine::render::buffers::staging_uploads::{StageError, StagingUploads};
 
 // Which shared buffer a staged write lands in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -260,7 +260,7 @@ mod tests {
     use super::*;
     use crate::vulkan::test_gpu::{TestGpu, test_gpu};
     use concinnity_core::math::SaturatingFrom;
-    use concinnity_core::render::buffers::staging::STAGING_MIN_CAPACITY;
+    use concinnity_engine::render::buffers::staging::STAGING_MIN_CAPACITY;
 
     const HOST: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::from_raw(
         vk::MemoryPropertyFlags::HOST_VISIBLE.as_raw()

@@ -3,10 +3,10 @@
 // Published at world start, before any system's init reads them. A value an
 // embedder already inserted is kept.
 
-use concinnity_core::budget::ResidentMemory;
-use concinnity_core::ecs::{Clock, PipelineContext, ScheduleMode};
-use concinnity_core::platform::CompiledPlatforms;
-use concinnity_core::settings::{SettingsRevision, StoredSettings};
+use concinnity_engine::budget::ResidentMemory;
+use concinnity_engine::ecs::{Clock, PipelineContext, ScheduleMode};
+use concinnity_engine::platform::CompiledPlatforms;
+use concinnity_engine::settings::{SettingsRevision, StoredSettings};
 use concinnity_host::store::paths::StateTree;
 
 pub(crate) fn publish(ctx: &mut PipelineContext<'_>) {
@@ -37,8 +37,8 @@ fn insert_absent<T: core::any::Any + Send>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::ecs::World;
-    use concinnity_core::platform::GraphicsApiStatus;
+    use concinnity_engine::ecs::World;
+    use concinnity_engine::platform::GraphicsApiStatus;
 
     #[test]
     fn a_world_without_a_state_tree_stores_nothing() {

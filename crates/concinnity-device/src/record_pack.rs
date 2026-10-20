@@ -6,8 +6,8 @@ use std::cell::Cell;
 
 use concinnity_core::fanout::Fanout;
 use concinnity_core::fanout::{FanOutJudge, FanOutTiming};
-use concinnity_core::gfx::render_types::{DrawObject, GpuObjectData};
-use concinnity_core::render::record_pack::{
+use concinnity_engine::gfx::render_types::{DrawObject, GpuObjectData};
+use concinnity_engine::render::record_pack::{
     MAX_PACK_CHUNKS, PackChunk, PackView, StaticPack, chunk_count,
 };
 use concinnity_host::thread::jobs::pool;
@@ -56,10 +56,10 @@ impl RecordPacker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::gfx::render_types::{FarFieldTint, GpuDrawArgs, MaterialUniforms};
     use concinnity_core::math::SaturatingFrom;
-    use concinnity_core::render::record_pack::{MIN_CHUNK_RECORDS, pool_object_record};
-    use concinnity_core::render::temporal::model_history::{HistoryMode, ModelHistory};
+    use concinnity_engine::gfx::render_types::{FarFieldTint, GpuDrawArgs, MaterialUniforms};
+    use concinnity_engine::render::record_pack::{MIN_CHUNK_RECORDS, pool_object_record};
+    use concinnity_engine::render::temporal::model_history::{HistoryMode, ModelHistory};
 
     fn object(i: usize) -> DrawObject {
         let x = i as f32;

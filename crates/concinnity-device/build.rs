@@ -19,9 +19,9 @@
 //! 5. Derive the hash of the shader-compile sources that `shader_cache` folds
 //!    into every artifact key (see `emit_shader_compile_source_hash`).
 
-use concinnity_core::platform::Platform;
-use concinnity_core::render::shader::programs::metal::bindless_textures;
-use concinnity_core::render::shader::programs::{ShaderProgram, Table, dx, metal, shared, spd};
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::shader::programs::metal::bindless_textures;
+use concinnity_engine::render::shader::programs::{ShaderProgram, Table, dx, metal, shared, spd};
 use concinnity_shader::HlslTarget;
 use concinnity_toolchain::{
     Backend, EmittedMsl, ShaderArtifact, hash_sources, msl_binds, msl_binds_a_resource,
@@ -751,7 +751,7 @@ const SHADER_COMPILE_SOURCES: &[&str] = &[
 // that reads the main pass's depth gets both variants. Every array a program
 // binds is unsized or a single resource, so no capacity reaches the source.
 fn precompile_spirv() {
-    use concinnity_core::render::shader::programs::vk;
+    use concinnity_engine::render::shader::programs::vk;
 
     concinnity_toolchain::precompile_shader_artifacts(
         &artifacts(&vk::TABLE, Platform::Vulkan, |_| HlslTarget::Spirv),

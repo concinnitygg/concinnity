@@ -13,10 +13,10 @@
 //! `draw_shadow_view` from their own ICB.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowPassPush, ShadowUniforms};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::shadow::bias;
+use concinnity_engine::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowPassPush, ShadowUniforms};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shadow::bias;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -214,7 +214,7 @@ impl MtlContext {
         enc.set_vertex_buffer(
             &self.scene.vertex_buffer,
             0,
-            concinnity_core::render::shader::programs::metal::SHADOW_MESH_VERTICES_BUFFER,
+            concinnity_engine::render::shader::programs::metal::SHADOW_MESH_VERTICES_BUFFER,
         );
 
         // This view's command slots live at `[v*stride, v*stride + stride)` in

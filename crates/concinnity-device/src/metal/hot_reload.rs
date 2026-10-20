@@ -8,9 +8,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use crate::metal::cull::ShadowViewIcb;
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::shader::programs::surface::GrassShading;
+use concinnity_engine::gfx::mesh_payload;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shader::programs::surface::GrassShading;
 use objc2::rc::Retained;
 use objc2_metal::{MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction};
 
@@ -126,11 +126,11 @@ impl MtlContext {
         };
         let taa = rebuild_if_live!(
             self.taa.pass.is_some(),
-            concinnity_core::render::post::taa::build_pipeline(&post_device)
+            concinnity_engine::render::post::taa::build_pipeline(&post_device)
         );
         let bloom = rebuild_if_live!(
             self.bloom.is_some(),
-            concinnity_core::render::post::bloom::build_pipelines(&post_device)
+            concinnity_engine::render::post::bloom::build_pipelines(&post_device)
         );
         // The main pass rebuilds together with the GPU cull and the bindless
         // argument encoders, whose layouts come from the same sources. A world
@@ -201,19 +201,19 @@ impl MtlContext {
         let static_vdesc = static_vertex_descriptor();
         let ssao = rebuild_if_live!(
             self.ssao.pass.is_some(),
-            concinnity_core::render::post::ssao::build_pipelines(&post_device)
+            concinnity_engine::render::post::ssao::build_pipelines(&post_device)
         );
         let ssr_resolve = rebuild_if_live!(
             self.ssr.resolve.is_some(),
-            concinnity_core::render::post::ssr::build_pipeline(&post_device)
+            concinnity_engine::render::post::ssr::build_pipeline(&post_device)
         );
         let reflection_composite = rebuild_if_live!(
             self.ssr.composite.is_some(),
-            concinnity_core::render::post::reflection_composite::build_pipelines(&post_device)
+            concinnity_engine::render::post::reflection_composite::build_pipelines(&post_device)
         );
         let ssgi = rebuild_if_live!(
             self.ssgi.pass.is_some(),
-            concinnity_core::render::post::ssgi::build_pipelines(&post_device)
+            concinnity_engine::render::post::ssgi::build_pipelines(&post_device)
         );
         let rt_reflections = rebuild_if_live!(
             self.rt.pipelines.resolve.is_some(),
@@ -343,7 +343,7 @@ impl MtlContext {
     // by [`Self::reload_shaders`].
     pub(super) fn update_default_world_shader(
         &mut self,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<BucketPipelines>,
     ) -> RenderResult<()> {
         // A scene-less world never built a main pipeline; there is nothing for

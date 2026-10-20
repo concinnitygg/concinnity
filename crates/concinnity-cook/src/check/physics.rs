@@ -3,8 +3,8 @@
 //! Also the authored shape the build sizes a world's spawn reservation from:
 //! which of its assets can create collider-bearing props while it runs.
 
-use concinnity_core::components::PropColliderShape;
 use concinnity_core::math::narrow_f32;
+use concinnity_engine::components::PropColliderShape;
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
@@ -185,7 +185,7 @@ pub(crate) fn collider_spawn_sources(assets: &[WorldJsonlAsset]) -> ColliderSpaw
     let is_collider_prop =
         |name: &serde_json::Value| name.as_str().is_some_and(|n| collider_props.contains(&n));
 
-    let defaults = concinnity_core::components::cook::Spawner::default();
+    let defaults = concinnity_engine::components::cook::Spawner::default();
     for asset in assets {
         match asset.asset_type {
             RegisteredType::Spawner if asset.args.get("template").is_some_and(is_collider_prop) => {
@@ -406,7 +406,7 @@ mod tests {
                 serde_json::json!({"template": "crate"}),
             ),
         ];
-        let defaults = concinnity_core::components::cook::Spawner::default();
+        let defaults = concinnity_engine::components::cook::Spawner::default();
         let spawner = &collider_spawn_sources(&assets).spawners[0];
         assert_eq!(spawner.interval, defaults.interval);
         assert_eq!(spawner.lifetime, defaults.lifetime);

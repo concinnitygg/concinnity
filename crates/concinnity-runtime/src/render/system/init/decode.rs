@@ -10,9 +10,9 @@ use super::{
     retained_blobs, skinned, skinned_mesh_source_map, tables, texture, texture_catalog,
 };
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::environment::terrain::LoadedTerrain;
-use concinnity_core::render::overlay::maps::{Atlas, AtlasPool};
-use concinnity_core::render::world_load::scene_deferral::ShaderDeferral;
+use concinnity_engine::render::environment::terrain::LoadedTerrain;
+use concinnity_engine::render::overlay::maps::{Atlas, AtlasPool};
+use concinnity_engine::render::world_load::scene_deferral::ShaderDeferral;
 
 // One world Shader as decoded at init: its compiled programs, or nothing for
 // a bucket a non-start scene owns.
@@ -63,7 +63,7 @@ pub(super) struct WorldPayloads {
     pub(super) mesh: draw_list::MeshGeometry,
     pub(super) deferred_mesh_sources: draw_list::DeferredMeshSources,
     pub(super) proc_mesh_args_snapshot:
-        hashbrown::HashMap<AssetId, (String, concinnity_core::components::ProceduralMesh)>,
+        hashbrown::HashMap<AssetId, (String, concinnity_engine::components::ProceduralMesh)>,
     pub(super) model_map: hashbrown::HashMap<AssetId, Vec<SubMeshRef>>,
     pub(super) room_geometry: Vec<draw_list::RoomGeometry>,
     pub(super) terrains: Vec<LoadedTerrain>,
@@ -251,7 +251,7 @@ impl GraphicsSystem {
         let mut environment_map_source = None;
         if capture_sources
             && let Some(info) = ctx
-                .resource::<concinnity_core::resource::EnvironmentMapSources>()
+                .resource::<concinnity_engine::resource::EnvironmentMapSources>()
                 .and_then(|s| s.0.clone())
         {
             environment_map_source = Some(EnvironmentMapSource {
@@ -280,7 +280,7 @@ impl GraphicsSystem {
         let mut color_lut_source = None;
         if capture_sources
             && let Some(src) = ctx
-                .resource::<concinnity_core::resource::ColorLutSources>()
+                .resource::<concinnity_engine::resource::ColorLutSources>()
                 .and_then(|c| c.0.clone())
         {
             color_lut_source = Some(ColorLutSource {
@@ -432,7 +432,7 @@ impl GraphicsSystem {
         // payload decode: draw records use the blob's baked bounds, and the
         // mesh streamer decodes the payload when the owning scene pins.
         let deferred_mesh_sources =
-            concinnity_core::render::world_load::scene_deferral::deferred_mesh_sources(
+            concinnity_engine::render::world_load::scene_deferral::deferred_mesh_sources(
                 ctx, streaming,
             );
         let mesh = draw_list::load_mesh_geometry(
@@ -457,7 +457,7 @@ impl GraphicsSystem {
         // live in the same blob and must be consumed before it is released
         let (room_geometry, room_blob_indices) = draw_list::load_room_geometry(ctx)?;
         let (terrains, terrain_blob_indices) =
-            concinnity_core::render::environment::terrain::load_terrains(ctx)?;
+            concinnity_engine::render::environment::terrain::load_terrains(ctx)?;
 
         let shaders = self.decode_shaders(ctx, streaming, capture_sources)?;
 
@@ -471,7 +471,7 @@ impl GraphicsSystem {
             .ok()?;
         let (asset_source_map, texture_name_to_slot) = if capture_sources {
             texture_catalog(
-                ctx.resource::<concinnity_core::resource::TextureSources>(),
+                ctx.resource::<concinnity_engine::resource::TextureSources>(),
                 texture_count,
             )
         } else {
@@ -498,7 +498,7 @@ impl GraphicsSystem {
         };
 
         let deferred_slots =
-            concinnity_core::render::world_load::scene_deferral::deferred_texture_slots(
+            concinnity_engine::render::world_load::scene_deferral::deferred_texture_slots(
                 ctx,
                 streaming,
                 textures.locators.len(),

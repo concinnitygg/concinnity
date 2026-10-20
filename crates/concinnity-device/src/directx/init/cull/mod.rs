@@ -3,8 +3,8 @@
 //! shadow, G-buffer and two-pass occlusion passes built over them.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::backend::init::{SceneData, WorldShader};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::{SceneData, WorldShader};
 
 use super::InitGpu;
 use crate::directx::context::{DxDescriptors, DxTargets};
@@ -190,7 +190,7 @@ fn write_instance_records(
     bindless: &BindlessPass,
     compute: &ComputeCull,
 ) {
-    use concinnity_core::gfx::render_types::{
+    use concinnity_engine::gfx::render_types::{
         GpuDrawArgs, GpuObjectData, draw_args_flags, instance_object_records,
     };
     if plan.n_instances == 0 || bindless.object_ptrs.is_empty() {

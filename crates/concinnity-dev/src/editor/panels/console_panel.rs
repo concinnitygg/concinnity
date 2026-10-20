@@ -5,9 +5,9 @@
 //! The log model and command dispatch live in `console.rs` and
 //! `hook/edit/console.rs`.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
 
 use super::console::{ConsoleLine, Severity};
 use super::registry::PanelKey;
@@ -248,7 +248,7 @@ pub(crate) fn hide_all(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()

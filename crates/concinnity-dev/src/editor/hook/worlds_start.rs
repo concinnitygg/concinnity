@@ -5,8 +5,8 @@
 //! the screen. Opening then commits what is already showing, so the world the
 //! user picked is not compiled twice.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
 use std::path::Path;
 
 use super::{EditorHook, short_status};

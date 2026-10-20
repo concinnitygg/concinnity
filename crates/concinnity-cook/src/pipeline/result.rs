@@ -1,8 +1,8 @@
 //! What a pipeline run hands back: the compiled defs and packed blobs, plus the
 //! dev-only source catalogs a `cn debug` build reads back by handle.
 
-use concinnity_core::blob::{MeshBoundsRecord, PhysicsBudgetRecord, ResourceKind, SceneGroup};
-use concinnity_core::ecs::{BlobAssetDef, ResourceRecord};
+use concinnity_engine::blob::{MeshBoundsRecord, PhysicsBudgetRecord, ResourceKind, SceneGroup};
+use concinnity_engine::ecs::{BlobAssetDef, ResourceRecord};
 
 /// A texture's identity + on-disk source, in `TextureHandle` order. Now that
 /// Texture is a resource (no `source` on a component the renderer drains),
@@ -139,14 +139,14 @@ mod tests {
         let result = build_pipeline_from_str(
             world,
             None,
-            concinnity_core::platform::Platform::Metal.into(),
+            concinnity_engine::platform::Platform::Metal.into(),
         )
         .expect("build");
         let bytes = result
             .resource_payload(ResourceKind::SkinnedMesh, "prism")
             .expect("named payload");
         let payload =
-            concinnity_core::gfx::mesh_payload::deserialize_skinned_with_lods(bytes).unwrap();
+            concinnity_engine::gfx::mesh_payload::deserialize_skinned_with_lods(bytes).unwrap();
         assert_eq!(payload.vertices.len(), 3);
         assert_eq!(payload.joints[0].name, "root");
         // The wrong name or the wrong kind finds nothing.

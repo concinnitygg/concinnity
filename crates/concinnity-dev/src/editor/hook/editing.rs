@@ -3,7 +3,7 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{args_with_id, replace_args};
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use super::form_extras::{self, with_optional_id};
 use super::{

@@ -19,11 +19,11 @@ mod placement;
 mod shape;
 
 use concinnity_cook::authoring::registry::{RegisteredType, ScopeResolution};
-use concinnity_core::components::{
+use concinnity_engine::components::{
     CharacterCapsule, CharacterShape, DirectionalLight, GraphicsConfig, Transform, VolumetricFog,
 };
-use concinnity_core::ecs::{ComponentAsset, Entity, World};
-use concinnity_core::render::live_preview::shape as shape_preview;
+use concinnity_engine::ecs::{ComponentAsset, Entity, World};
+use concinnity_engine::render::live_preview::shape as shape_preview;
 pub(crate) use diff::{args_changes, same_assets};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -134,7 +134,7 @@ fn plan_one(world: &World, entries: &[Value], change: &diff::ArgsChange) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::Sprite;
+    use concinnity_engine::components::Sprite;
     use concinnity_host::thread::asset_id;
     use serde_json::json;
 

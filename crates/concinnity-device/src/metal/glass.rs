@@ -7,15 +7,15 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components::GlassPanel;
-use concinnity_core::geometry::glass_quad::build_glass_quad;
-use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::planar_reflection::PlanarFramePlan;
-use concinnity_core::render::transparent;
-use concinnity_core::render::transparent::SeeThroughMesh;
-use concinnity_core::render::uniforms::{GlassParams, TransparentView};
+use concinnity_engine::components::GlassPanel;
+use concinnity_engine::geometry::glass_quad::build_glass_quad;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::planar_reflection::PlanarFramePlan;
+use concinnity_engine::render::transparent;
+use concinnity_engine::render::transparent::SeeThroughMesh;
+use concinnity_engine::render::uniforms::{GlassParams, TransparentView};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{

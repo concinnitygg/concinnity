@@ -12,9 +12,9 @@
 //! Read-only: the panel has no controls beyond its close button, so a body press
 //! is swallowed rather than resolved to an action.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::health::{self, HealthSnapshot, Meter, TagRow};
 use super::registry::PanelKey;
@@ -311,10 +311,10 @@ fn place_text(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::budget::drift::{DriftVerdict, MemoryDrift};
-    use concinnity_core::components::{Sprite, TextLabel};
     use concinnity_core::math::SaturatingFrom;
     use concinnity_core::memory::{Ledger, MemStats, MemTag, Realm};
+    use concinnity_engine::budget::drift::{DriftVerdict, MemoryDrift};
+    use concinnity_engine::components::{Sprite, TextLabel};
 
     const GB: u64 = 1024 * 1024 * 1024;
 

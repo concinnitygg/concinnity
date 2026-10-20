@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use super::edit::sdf_form::SdfExtras;
 use super::edit::shader_form::ShaderExtras;

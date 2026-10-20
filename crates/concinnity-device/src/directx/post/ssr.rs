@@ -2,15 +2,15 @@
 //! target the resolve writes, where the resolve's inputs come from this frame,
 //! and which scene texture the post stack consumes once a reflection path has
 //! run. The resolve itself -- its pipeline and its draw -- is written once in
-//! `concinnity_core::render::post::ssr` and reaches D3D12 through
+//! `concinnity_engine::render::post::ssr` and reaches D3D12 through
 //! `DxPostDevice`, which also binds the probe cube table and the frame's
 //! `ProbeSet` a missed ray falls back to.
 
-use concinnity_core::gfx::render_types::SsrParams;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::post::device::{PostExtent, PostPassDevice};
-use concinnity_core::render::post::ssr::settings::SsrSettings;
-use concinnity_core::render::post::ssr::{SsrInputs, SsrPass, target_desc};
+use concinnity_engine::gfx::render_types::SsrParams;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::device::{PostExtent, PostPassDevice};
+use concinnity_engine::render::post::ssr::settings::SsrSettings;
+use concinnity_engine::render::post::ssr::{SsrInputs, SsrPass, target_desc};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::context::DxContext;

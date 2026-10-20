@@ -1,6 +1,6 @@
 //! Why a blob file could not be read.
 
-use concinnity_core::blob::BlobError;
+use concinnity_engine::blob::BlobError;
 use thiserror::Error;
 
 /// Why a blob file could not be read.

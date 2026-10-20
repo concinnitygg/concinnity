@@ -1,4 +1,4 @@
-//! The atmosphere for the Vulkan backend (see `concinnity_core::render::environment::atmosphere`):
+//! The atmosphere for the Vulkan backend (see `concinnity_engine::render::environment::atmosphere`):
 //! the tables, the compute pass that builds them, the haze pass that blends
 //! the aerial volume over the opaque scene, and the sky pipeline that draws
 //! the sky-view table behind it. The irradiance cube the last kernel writes is
@@ -17,14 +17,14 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::environment::atmosphere::{
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::environment::atmosphere::{
     AERIAL_SIZE, AirTables, AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
     IRRADIANCE_FACE, MULTISCATTER_SIZE, SKY_CUBE_FACE, SKY_CUBE_PLAN, SKY_VIEW_HEIGHT,
     SKY_VIEW_WIDTH, SkyCubeKey, SkyCubeSchedule, SkyCubeWork, TRANSMITTANCE_HEIGHT,
     TRANSMITTANCE_WIDTH, TableReadiness,
 };
-use concinnity_core::render::shader::programs::ShaderProgram;
+use concinnity_engine::render::shader::programs::ShaderProgram;
 
 use super::allocator::{PooledBuffer, PooledImage};
 use super::builtin_shaders::{
@@ -1120,7 +1120,7 @@ impl VkContext {
 
     // The view block's `irradiance` lane.
     pub(in crate::vulkan) fn irradiance_lane(&self) -> f32 {
-        concinnity_core::render::environment::sky::irradiance_lane(
+        concinnity_engine::render::environment::sky::irradiance_lane(
             self.scene.prefilter_mip_count > 0,
             self.atmosphere.is_some(),
         )

@@ -1,6 +1,6 @@
 // JSON arg parsing for the extrude generator (a 2D profile in the XZ plane
 // extruded along Y, authored by the macOS Mesh Editor); the geometry itself is
-// `concinnity_core::geometry::build_extrude`.
+// `concinnity_engine::geometry::build_extrude`.
 
 use super::json_args::{f32_arg, u32_arg};
 use concinnity_core::math::narrow_f32;
@@ -42,7 +42,7 @@ pub(super) fn build_extrude(args: &serde_json::Value) -> GeomResult {
     let corner_radius = f32_arg(args, "corner_radius", 0.0);
     let corner_segments = u32_arg(args, "corner_segments", 8)?;
 
-    concinnity_core::geometry::build_extrude(&profile, height, corner_radius, corner_segments)
+    concinnity_engine::geometry::build_extrude(&profile, height, corner_radius, corner_segments)
 }
 
 #[cfg(test)]

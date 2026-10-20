@@ -5,7 +5,7 @@ use concinnity_host::store::paths::StateTree;
 // settings system saves it into the world's own state tree.
 #[test]
 fn a_first_launch_persists_the_auto_preset_into_the_state_tree() {
-    use concinnity_core::ecs::System;
+    use concinnity_engine::ecs::System;
     let dir = concinnity_testing::TempTree::new();
     let tree = StateTree::at(dir.path());
     let (_state, hooks) = recording_hooks();
@@ -13,11 +13,11 @@ fn a_first_launch_persists_the_auto_preset_into_the_state_tree() {
     world.insert_resource(tree.clone());
     let mut gs = GraphicsSystem::new(Some(&tree));
     gs.test_hooks = Some(hooks);
-    let mut settings = concinnity_core::settings::system::SettingsSystem::new()
+    let mut settings = concinnity_engine::settings::system::SettingsSystem::new()
         .with_store(Box::new(crate::persist::settings::FileStore::new(&tree)));
     {
         let mut ctx = world.context();
-        concinnity_core::ecs::decompose::run(&mut ctx);
+        concinnity_engine::ecs::decompose::run(&mut ctx);
         System::init(&mut gs, &mut ctx);
         settings.step(&mut ctx);
     }
@@ -87,8 +87,8 @@ fn init_builds_draw_list_and_render_handles() {
 // nothing. The chips surviving to the parked resource guards that.
 #[test]
 fn init_parks_overlay_assets_with_the_hud_chips() {
-    use concinnity_core::components::{DebugHud, StatHud};
-    use concinnity_core::render::overlay::OverlayAssets;
+    use concinnity_engine::components::{DebugHud, StatHud};
+    use concinnity_engine::render::overlay::OverlayAssets;
 
     let (_state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -130,11 +130,11 @@ fn take_backend_yields_the_backend_once() {
     let mut world = scene_builder().build();
     let _gs = init_graphics(&mut world, hooks);
     assert!(
-        concinnity_core::ecs::ActiveRenderBackend::take(world.context().resources).is_some(),
+        concinnity_engine::ecs::ActiveRenderBackend::take(world.context().resources).is_some(),
         "the built backend is taken"
     );
     assert!(
-        concinnity_core::ecs::ActiveRenderBackend::take(world.context().resources).is_none(),
+        concinnity_engine::ecs::ActiveRenderBackend::take(world.context().resources).is_none(),
         "and only once"
     );
 }
@@ -149,7 +149,7 @@ fn pending_backend_reuses_instance_and_ends_with_new_world() {
     let (state_a, hooks_a) = recording_hooks();
     let mut world_a = titled_scene("world A").build();
     let _gs_a = init_graphics(&mut world_a, hooks_a);
-    let backend_a = concinnity_core::ecs::ActiveRenderBackend::take(world_a.context().resources)
+    let backend_a = concinnity_engine::ecs::ActiveRenderBackend::take(world_a.context().resources)
         .expect("world A built a backend");
 
     // Transplant it into world B (a different world, same swapchain config).
@@ -257,7 +257,7 @@ fn reload_world_failure_marks_graphics_failed() {
     let mut world_a = scene_builder().build();
     let _gs_a = init_graphics(&mut world_a, hooks_a);
     let backend_a =
-        concinnity_core::ecs::ActiveRenderBackend::take(world_a.context().resources).unwrap();
+        concinnity_engine::ecs::ActiveRenderBackend::take(world_a.context().resources).unwrap();
     state_a.lock().fail_reload = Some(error::RenderError::DeviceLost {
         reason: error::DeviceLostReason::Removed,
         detail: "boom".to_string(),
@@ -346,7 +346,7 @@ fn ui_only_world_trims_scene_features() {
 // saved choice and the world's.
 #[test]
 fn launch_vsync_overrides_persisted_and_authored_config() {
-    let mut settings = concinnity_core::settings::StoredSettings::default();
+    let mut settings = concinnity_engine::settings::StoredSettings::default();
     settings.graphics.vsync = Some(false);
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
@@ -365,7 +365,7 @@ fn launch_vsync_overrides_persisted_and_authored_config() {
 // The stored choices reach the backend over the world's authored values.
 #[test]
 fn persisted_settings_override_authored_config() {
-    let mut settings = concinnity_core::settings::StoredSettings::default();
+    let mut settings = concinnity_engine::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Custom);
     settings.graphics.vsync = Some(true);
     settings.graphics.fps_cap = Some(30);
@@ -386,7 +386,7 @@ fn persisted_settings_override_authored_config() {
 
 #[test]
 fn low_preset_ceiling_clamps_quality_knobs() {
-    let mut settings = concinnity_core::settings::StoredSettings::default();
+    let mut settings = concinnity_engine::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Low);
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
@@ -482,7 +482,7 @@ fn first_declared_scene_applies_start_visibility() {
         let mut ctx = world.context();
         ctx.events_mut::<SceneCommand>().send(SceneCommand {
             scene: scene_b,
-            transition: concinnity_core::components::SceneTransition::Cut,
+            transition: concinnity_engine::components::SceneTransition::Cut,
         });
     }
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);

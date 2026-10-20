@@ -5,7 +5,7 @@
 //! nothing left reads it.
 
 use concinnity_cook::build_only::include::SourcedEntry;
-use concinnity_core::render::shader::programs::vocabulary::sdf;
+use concinnity_engine::render::shader::programs::vocabulary::sdf;
 use std::path::Path;
 
 use super::shader_fixtures::{click, message, pick, toasts};

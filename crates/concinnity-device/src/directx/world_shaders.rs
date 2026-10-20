@@ -13,10 +13,10 @@
 // Unlike Metal there is no on-disk GPU-binary cache behind the build: see
 // `docs/todos.md` for why the D3D12 pipeline-library equivalent is still open.
 
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
-use concinnity_core::render::shader::programs::surface::GrassShading;
-use concinnity_core::render::shader::world_pipelines::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
+use concinnity_engine::render::shader::programs::surface::GrassShading;
+use concinnity_engine::render::shader::world_pipelines::{
     BucketSource, check_rebuild, replace_bucket,
 };
 use std::sync::Arc;
@@ -37,7 +37,7 @@ impl DxContext {
     pub(in crate::directx) fn install_world_shader(
         &mut self,
         bucket: u32,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<()> {
         let grass = self.cull.world_pipelines.grass(bucket as usize);
@@ -52,7 +52,7 @@ impl DxContext {
     fn bucket_psos(
         &self,
         bucket: u32,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         grass: GrassShading,
         prepared: Option<PreparedPipelines>,
         live_prepass: bool,
@@ -201,7 +201,7 @@ impl DxContext {
     pub(in crate::directx) fn update_world_shader(
         &mut self,
         bucket: u32,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<PipelineSwap> {
         if bucket == 0 {
@@ -229,7 +229,7 @@ impl DxContext {
     // of the default Shader reaches them.
     fn update_grass_twins(
         &mut self,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
     ) -> RenderResult<()> {
         let twins = self.cull.world_pipelines.grass_twins();
         for (twin, grass) in [

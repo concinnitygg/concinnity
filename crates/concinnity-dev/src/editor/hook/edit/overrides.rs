@@ -8,7 +8,7 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{
     ID_KEY, args_with_id, args_without_id, find_entry, replace_args,
 };
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::{EditorHook, FormTemplate, declared_id, entry_type, short_status};
 use crate::editor::overrides;

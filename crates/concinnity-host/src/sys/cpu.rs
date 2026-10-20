@@ -7,7 +7,7 @@
 //! `sysinfo`, matching `memory`: one syscall per platform, `None` when the
 //! platform call is unavailable or fails, and callers degrade to "unknown".
 
-use concinnity_core::budget::cpu::CpuRate;
+use concinnity_engine::budget::cpu::CpuRate;
 use std::time::{Duration, Instant};
 
 /// The cores this process may run on, at least one.

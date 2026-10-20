@@ -1,6 +1,6 @@
 use super::*;
 use crate::compile::program::CompileFailure;
-use concinnity_core::render::shader::source;
+use concinnity_engine::render::shader::source;
 
 const PATH: &str = "shaders/blob.hlsl";
 

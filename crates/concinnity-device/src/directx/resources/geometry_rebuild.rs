@@ -5,10 +5,10 @@
 //! round-trip (READBACK staging for the old contents, UPLOAD staging for
 //! the new ones) where Metal can just read `StorageModeShared` `contents()`.
 
-use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::{backend, rt_accel::geom, slots::geometry_repack};
+use concinnity_engine::gfx::mesh_payload::{SkinnedVertex, Vertex};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::{backend, rt_accel::geom, slots::geometry_repack};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT;
 

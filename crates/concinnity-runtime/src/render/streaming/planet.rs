@@ -1,6 +1,6 @@
 // The threads that build a planet's terrain tile meshes for core's tile pool.
 
-use concinnity_core::planet::{PlanetShape, TileId, TileMesh, tile_mesh};
+use concinnity_engine::planet::{PlanetShape, TileId, TileMesh, tile_mesh};
 
 use concinnity_host::thread::worker::Worker;
 

@@ -5,8 +5,8 @@
 //! The guard is the workspace's one process-global lock, shared with every
 //! other crate's tests rather than kept as a second, private lock.
 
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_host::store::paths::StateTree;
 pub(crate) fn lock() -> concinnity_testing::ExclusiveAccess {
     prepare();
@@ -62,7 +62,7 @@ pub(crate) fn isolate_state_dir() {
 // sprite id, one blank `TextLabel` per label id, and one blank `TextInput` per
 // field id. Panels that declare no text fields pass an empty `fields` slice.
 pub(crate) fn injected_world(sprites: &[AssetId], labels: &[AssetId], fields: &[AssetId]) -> World {
-    use concinnity_core::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
     let mut world = World::new();
     for &id in sprites {
         world.push_identified(id, Sprite::default());

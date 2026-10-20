@@ -1,8 +1,8 @@
 // The I/O half of a `screenshot` action: the burst core's extraction names and
 // schedules starts here, with its directory made and its time stamp taken.
 
-use concinnity_core::ecs::{PipelineContext, ScreenshotRequest};
-use concinnity_core::render::frame::extract::{FrameExtractor, ScreenshotBurst};
+use concinnity_engine::ecs::{PipelineContext, ScreenshotRequest};
+use concinnity_engine::render::frame::extract::{FrameExtractor, ScreenshotBurst};
 
 use crate::crash::utc_now;
 
@@ -28,8 +28,8 @@ fn start_requested_in(dir: &str, ctx: &mut PipelineContext<'_>, extractor: &mut 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::ecs::World;
-    use concinnity_core::render::frame::snapshot::RenderSnapshot;
+    use concinnity_engine::ecs::World;
+    use concinnity_engine::render::frame::snapshot::RenderSnapshot;
 
     #[test]
     fn a_request_captures_its_frames_in_a_row_into_a_made_directory() {

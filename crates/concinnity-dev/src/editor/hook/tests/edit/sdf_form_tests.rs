@@ -4,9 +4,9 @@
 //! Shader limit leaving the field kinds open, and an edited volume listing who
 //! else reads its field.
 
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
 use std::path::Path;
 
 use super::shader_fixtures::{

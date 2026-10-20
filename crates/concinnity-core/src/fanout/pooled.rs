@@ -1,19 +1,19 @@
 use core::fmt;
 
+use super::ScheduleMode;
 use super::{Fanout, Inline, Lent};
-use crate::ecs::ScheduleMode;
 use crate::fanout::FanOutTiming;
 
-// A pool as a system holds it: erased over the host's pool type, typed by the
-// items the system hands out, picked per schedule mode.
-pub(crate) trait Pooled<T>: fmt::Debug + Send + Sync {
-    // Units of work the pool `mode` picks runs at once.
+/// A pool as a system holds it: erased over the host's pool type, typed by the
+/// items the system hands out, picked per schedule mode.
+pub trait Pooled<T>: fmt::Debug + Send + Sync {
+    /// Units of work the pool `mode` picks runs at once.
     fn workers(&self, mode: ScheduleMode) -> usize;
 
-    // Run `body` over every item on the pool `mode` picks.
+    /// Run `body` over every item on the pool `mode` picks.
     fn for_each(&self, mode: ScheduleMode, items: &mut [T], body: &(dyn Fn(&mut T) + Send + Sync));
 
-    // `for_each`, reporting how long the caller waited against the work.
+    /// `for_each`, reporting how long the caller waited against the work.
     fn for_each_timed(
         &self,
         mode: ScheduleMode,

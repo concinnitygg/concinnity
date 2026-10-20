@@ -2,7 +2,7 @@
 //! (macOS), DirectX 12 (Windows), Vulkan (Windows/Linux) - plus the shared native
 //! Win32 window/input layer. build.rs resolves the backends a build compiles in
 //! (the target's native one, plus Vulkan with the `vulkan` feature) into one
-//! backend_* cfg each; a target with none compiles no GPU code at all. Depends on concinnity-core, whose
+//! backend_* cfg each; a target with none compiles no GPU code at all. Depends on concinnity-engine, whose
 //! `render` module holds the RenderBackend/SceneControl trait seam these
 //! implement plus the render-prep feeding it; owns no gameplay, ECS-runtime,
 //! audio, or physics. The client drives these through a

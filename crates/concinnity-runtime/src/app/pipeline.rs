@@ -19,12 +19,12 @@
 //! channel returns render stats, op-replay results, and the consumed snapshot
 //! for buffer reuse.
 
-use concinnity_core::ecs::Parked;
-use concinnity_core::ecs::StepResult;
-use concinnity_core::input::snapshot::InputPacket;
-use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::frame::feedback::FrameFeedback;
-use concinnity_core::render::frame::snapshot::RenderSnapshot;
+use concinnity_engine::ecs::Parked;
+use concinnity_engine::ecs::StepResult;
+use concinnity_engine::input::snapshot::InputPacket;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::frame::feedback::FrameFeedback;
+use concinnity_engine::render::frame::snapshot::RenderSnapshot;
 use concinnity_host::thread::set_current_thread_role;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
@@ -34,8 +34,8 @@ use crate::app::budget::main_thread_role;
 use crate::app::frame_gate::FrameGo;
 use crate::app::runtime::Runtime;
 use crate::render::system::submit::submit;
-use concinnity_core::render::frame::submit::{FramePolicy, GoTiming};
-use concinnity_core::shutdown::ShutdownToken;
+use concinnity_engine::render::frame::submit::{FramePolicy, GoTiming};
+use concinnity_engine::shutdown::ShutdownToken;
 use concinnity_host::clock::micros_since;
 
 // The channel pair, published (parked, so the per-step take never re-boxes)
@@ -272,7 +272,7 @@ fn wait_for_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::backend::recording::{Call, recording_backend};
+    use concinnity_engine::render::backend::recording::{Call, recording_backend};
 
     // The input a go-ahead carries is sampled after the window's events are
     // pumped, so it never misses events that arrived since the last draw.

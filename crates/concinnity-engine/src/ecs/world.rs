@@ -1,0 +1,902 @@
+//! A world: its data, the systems built to run over it, and their schedule.
+//!
+//! The data half is components, resources, events, the compiled-payload store,
+//! the frame profile, and the frame scratch -- exactly the five things a
+//! [`PipelineContext`] borrows, owned in one place. Over it run the systems a
+//! host's [`SystemTable`] gates in, in table order, under a schedule derived
+//! from what each declares it touches.
+//!
+//! Building and running one needs no operating system: the two ties a step
+//! would otherwise have are seams instead -- the [`Clock`] resource for the
+//! per-system profile micros, and the debug-build access validator's hooks in
+//! [`access_check`](crate::ecs::access_check).
+
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_core::memory::{Arena, MemTag};
+
+use crate::ecs::asset_fields::ClampedParam;
+use crate::ecs::asset_id::AssetId;
+use crate::ecs::user_system::{self, UserSystem};
+use crate::ecs::waves::{self, ExecSchedule};
+use crate::ecs::{
+    BuiltSystem, Clock, ComponentAsset, ComponentId, ComponentSlot, ComponentStorage, Entity,
+    EnvironmentMapHandle, EventStore, Events, FontHandle, FrameContext, MaterialHandle, MeshHandle,
+    NoPayloads, PayloadStore, Phase, PipelineContext, Resources, RuntimeComponent, StepResult,
+    System, SystemEntry, SystemTable,
+};
+use crate::error::WorldError;
+use crate::profile::FrameProfile;
+
+// The per-frame scratch reserve. An engine constant rather than an authored
+// field: a schema field would be blob churn for a knob nobody should have to
+// set, and the frame loop reports any frame that outgrows it.
+//
+// A frame's draw scales with the runtime requests it drains: 2,000 visibility
+// requests in one frame measured 24 KiB, so this holds on the order of 87,000.
+const FRAME_SCRATCH_BYTES: usize = 1 << 20;
+
+/// What one frame's scratch reserve cost and whether it held. A non-zero
+/// `overflows` means some frame fell back to the heap, so `peak` understates
+/// what the frame actually wanted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScratchStats {
+    /// The reserve's size in bytes.
+    pub capacity: usize,
+    /// The most bytes any frame took from it.
+    pub peak: usize,
+    /// Requests the reserve declined, sending the caller to the heap.
+    pub overflows: u64,
+}
+
+/// A world: its component storage, its resources, the compiled payloads it
+/// loads from, and the systems that run over all three.
+///
+/// Constructing one and filling it with components needs no systems, so this is
+/// the whole world for any caller that only builds or inspects content.
+/// [`start`](World::start) is what gives it systems, from the table the caller
+/// hands it.
+pub struct World {
+    components: ComponentStorage,
+    // Compiled payloads, behind the store seam rather than a concrete type, so
+    // a world names no blob file format and no filesystem.
+    blob: Box<dyn PayloadStore + Send>,
+    profile: FrameProfile,
+    // Type-keyed engine singletons (e.g. the per-frame FrameInput snapshot
+    // the renderer publishes) and the event queues.
+    resources: Resources,
+    // Per-frame scratch, reset at the top of every step. Owned here because
+    // `reset` needs `&mut`, which is what proves no system still holds an
+    // allocation from the frame just finished.
+    scratch: Arena,
+    // Requests the scratch reserve could not satisfy, over the world's whole
+    // life. The arena's own counter is cleared each frame once reported, so
+    // this is what survives to say the reserve wants raising.
+    scratch_overflows: u64,
+    // The systems built for this world, in run order.
+    systems: Vec<BuiltSystem>,
+    // Systems registered on this world from outside the table, held until
+    // `start` merges each into the schedule at the phase it named.
+    registered: Vec<UserSystem>,
+    // The table `start` built them from, kept for the schedule rebuild a
+    // finished system triggers.
+    entries: &'static [SystemEntry],
+    // Set once the systems have been built, so a second `start()` on the same
+    // world does not append them twice.
+    systems_built: bool,
+    // The executable schedule over the built systems: declared ordering edges
+    // validated + conflict waves from each system's declared access. Built at
+    // the end of `start()` (after init, when data-dependent declarations are
+    // final) and rebuilt when a `Done` system leaves the set.
+    schedule: Option<ExecSchedule>,
+    // Values `add_component` moved into their declared ranges, by asset type,
+    // held until the runtime reports them.
+    clamped: Vec<(&'static str, ClampedParam)>,
+}
+
+// A world must stay movable to the simulation thread; a !Send member in any
+// system, component, or resource breaks the pipelined driver's thread handoff.
+const _: () = {
+    const fn require_send<T: Send>() {}
+    require_send::<World>();
+};
+
+impl core::fmt::Debug for World {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("World")
+            .field("components", &self.components.len())
+            .field("systems", &self.systems.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for World {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl World {
+    /// An empty world, for contexts that have no compiled payloads (e.g. unit
+    /// tests, or worlds built entirely from runtime-only components).
+    pub fn new() -> Self {
+        Self::from_payloads(Box::new(NoPayloads))
+    }
+
+    /// A world backed by a compiled payload store.
+    pub fn from_payloads(blob: Box<dyn PayloadStore + Send>) -> Self {
+        Self {
+            components: ComponentStorage::default(),
+            blob,
+            profile: FrameProfile::default(),
+            resources: Resources::new(),
+            scratch: Arena::tagged(FRAME_SCRATCH_BYTES, MemTag::Scratch),
+            scratch_overflows: 0,
+            systems: Vec::new(),
+            registered: Vec::new(),
+            entries: &[],
+            systems_built: false,
+            schedule: None,
+            clamped: Vec::new(),
+        }
+    }
+
+    /// Pre-size the component columns from the blob manifest's per-type record
+    /// counts, so the bulk `add` loop that follows never reallocates mid-push.
+    pub fn reserve_components(&mut self, counts: &[(u8, u32)]) {
+        for &(discriminant, count) in counts {
+            self.components
+                .reserve(ComponentId::new(discriminant), count as usize);
+        }
+    }
+
+    /// Add a component loaded from a blob def on a new entity, identified by
+    /// the def's asset id when it has one (see [`World::identify`]).
+    pub fn add(&mut self, component: ComponentAsset, id: Option<AssetId>) -> Entity {
+        let entity = self.components.push(component);
+        if let Some(id) = id {
+            self.identify(entity, id);
+        }
+        entity
+    }
+
+    /// Add one component to the world.
+    ///
+    /// Only a [`RuntimeComponent`] can be added: a build-only asset is consumed
+    /// by the cook and never reaches a world. The value passes the same clamps
+    /// a cooked world's does; each ranged field it moved is kept for
+    /// [`take_clamped_params`](Self::take_clamped_params).
+    pub fn add_component<C: RuntimeComponent>(&mut self, c: C) {
+        let (component, clamped) = c.into().validated();
+        let asset = component.type_name();
+        self.clamped.extend(clamped.into_iter().map(|c| (asset, c)));
+        self.components.push(component);
+    }
+
+    /// Every value [`add_component`](Self::add_component) moved into its
+    /// declared range since the last call, with its asset type's name.
+    pub fn take_clamped_params(&mut self) -> Vec<(&'static str, ClampedParam)> {
+        core::mem::take(&mut self.clamped)
+    }
+
+    /// Add a baked mesh `payload` and return the handle a
+    /// [`Prop`](crate::components::Prop) references it by.
+    ///
+    /// The world names the mesh itself (from the minted range) and holds the
+    /// payload directly, so no compiled blob is involved; handles count up in
+    /// call order, after any the build assigned. A payload baked from a
+    /// [`ProceduralMesh`](crate::components::ProceduralMesh) also adds that
+    /// mesh, carrying the minted id, as the record of what was generated.
+    ///
+    /// Errors once the world has minted [`AssetId::MINTED_CAPACITY`] names.
+    pub fn add_mesh(
+        &mut self,
+        payload: crate::bake::payload::MeshPayload,
+    ) -> Result<MeshHandle, WorldError> {
+        let (bytes, procedural) = payload.into_parts();
+        let mut ctx = self.context();
+        let id = ctx.mint_id()?;
+        let handle = crate::resource::append_mesh(&mut ctx, id, bytes);
+        if let Some(mesh) = procedural {
+            ctx.push_identified(id, mesh);
+        }
+        Ok(handle)
+    }
+
+    /// Add a material and return the handle a
+    /// [`Prop`](crate::components::Prop) references it by. The value's fields
+    /// are clamped into their valid ranges on the way in, the same way the
+    /// cook clamps an authored material.
+    pub fn add_material(&mut self, material: crate::components::Material) -> MaterialHandle {
+        crate::resource::append_material(&mut self.context(), material)
+    }
+
+    /// Add a baked image-based-lighting `payload` (see
+    /// [`bake::payload::environment_map`](crate::bake::payload::environment_map))
+    /// with the map's runtime fields `record` (whether it is drawn as the
+    /// background) and return its handle. The renderer lights with the map at
+    /// handle 0.
+    pub fn add_environment_map(
+        &mut self,
+        payload: Vec<u8>,
+        record: crate::resource::EnvironmentMapRecord,
+    ) -> EnvironmentMapHandle {
+        crate::resource::append_environment_map(&mut self.context(), payload, record)
+    }
+
+    /// Add a baked glyph-atlas `payload` (see
+    /// [`bake::payload::font`](crate::bake::payload::font)) and return the
+    /// handle a text component references it by.
+    pub fn add_font(&mut self, payload: Vec<u8>) -> FontHandle {
+        crate::resource::append_font(&mut self.context(), payload)
+    }
+
+    /// Remove and drop every component of type C.
+    pub fn remove_all<C: ComponentSlot>(&mut self) {
+        let _ = crate::ecs::entity_by_id::drain::<C>(&mut self.components, &mut self.resources);
+    }
+
+    /// Whether the world holds neither components nor systems.
+    pub fn is_empty(&self) -> bool {
+        self.components.is_empty() && self.systems.is_empty()
+    }
+
+    /// Components across every typed column.
+    pub fn component_count(&self) -> usize {
+        self.components.len()
+    }
+
+    /// Iterate every stored component of a given type. Mirrors
+    /// `PipelineContext::query`; useful in tests that hold a `World` directly.
+    pub fn query<C: ComponentSlot>(&self) -> core::slice::Iter<'_, C> {
+        C::column(&self.components).map_or(&[][..], |c| c).iter()
+    }
+
+    /// Mutable iteration over all components of type C. Mirror of
+    /// `PipelineContext::query_mut` for code holding a `World` directly rather
+    /// than a per-system `PipelineContext`.
+    pub fn query_mut<C: ComponentSlot>(&mut self) -> core::slice::IterMut<'_, C> {
+        self.components.values_mut::<C>().iter_mut()
+    }
+
+    /// Allocate an entity that owns no components yet, to be filled with
+    /// [`insert`](World::insert). Mirror of `PipelineContext`'s entity
+    /// allocation, for code holding a `World` directly.
+    pub fn spawn(&mut self) -> Entity {
+        self.components.spawn()
+    }
+
+    /// Push a runtime-produced component into the matching typed slot,
+    /// returning its minted entity. Mirror of `PipelineContext::push`.
+    pub fn push<C: ComponentSlot>(&mut self, c: C) -> Entity {
+        self.components.push_typed(c)
+    }
+
+    /// Borrow one entity's component, for code holding a `World` directly.
+    /// Mirror of `PipelineContext::get`.
+    pub fn get<C: ComponentSlot>(&self, entity: Entity) -> Option<&C> {
+        self.components.get::<C>(entity)
+    }
+
+    /// Mutably borrow one entity's component. Mirror of
+    /// `PipelineContext::get_mut`.
+    pub fn get_mut<C: ComponentSlot>(&mut self, entity: Entity) -> Option<&mut C> {
+        self.components.get_mut::<C>(entity)
+    }
+
+    /// Add a component to an existing entity. `false`, leaving the world
+    /// unchanged, when the entity is dead or already holds C. Mirror of
+    /// `PipelineContext::insert`.
+    pub fn insert<C: ComponentSlot>(&mut self, entity: Entity, c: C) -> bool {
+        self.components.insert_typed(entity, c)
+    }
+
+    /// Overwrite an existing component with a rebuilt one, keeping the entity
+    /// and its other components. `false` when the entity holds no component of
+    /// that type. An editing tool that rebuilds one component from changed
+    /// authoring data writes it back through here rather than reloading the
+    /// world around it.
+    pub fn replace_component(&mut self, entity: Entity, asset: ComponentAsset) -> bool {
+        self.components.replace(entity, asset)
+    }
+
+    /// Whether an entity is still live. Mirror of `PipelineContext::is_alive`;
+    /// guards name-index resolves against entities despawned by the start-time
+    /// drains (Window, Shadows, Scene, ...).
+    pub fn is_alive(&self, entity: Entity) -> bool {
+        self.components.is_alive(entity)
+    }
+
+    // The component storage and the resources, borrowed together.
+    pub(crate) fn storage_and_resources(&mut self) -> (&mut ComponentStorage, &mut Resources) {
+        (&mut self.components, &mut self.resources)
+    }
+
+    /// Read-only join over two component types, for code holding a `World`
+    /// directly (the decomposition round-trip tests). Mirror of
+    /// `PipelineContext::join2`.
+    pub fn join2<A: ComponentSlot, B: ComponentSlot>(
+        &self,
+    ) -> impl Iterator<Item = (Entity, &A, &B)> {
+        self.components.join2::<A, B>()
+    }
+
+    /// How many components of each type the world holds, one entry per
+    /// populated type.
+    pub fn component_census(&self) -> Vec<(u8, u32)> {
+        self.components.component_census()
+    }
+
+    /// Whether the world holds anything to draw: geometry, text, a sprite, a
+    /// screen, or a window (see
+    /// [`ComponentTag::renders`](crate::ecs::ComponentTag::renders)).
+    ///
+    /// This is what decides a world runs windowed rather than headless. Some
+    /// of the columns it reads are drained during [`start`](World::start), so
+    /// ask before starting the world.
+    pub fn renders(&self) -> bool {
+        self.components.renders()
+    }
+
+    /// Borrow the event queue for event type E, if any have been sent. Mirror of
+    /// `PipelineContext::events`, for code holding a `World` directly (tests).
+    pub fn events<E: 'static>(&self) -> Option<&Events<E>> {
+        self.resources.get::<EventStore>()?.get::<E>()
+    }
+
+    /// Mutably borrow (creating if absent) the event queue for event type E.
+    /// Mirror of `PipelineContext::events_mut`, for code holding a `World`
+    /// directly: tests, and the editor's debug-driven command injection.
+    pub fn events_mut<E: Send + 'static>(&mut self) -> &mut Events<E> {
+        self.event_store().get_mut_or_create::<E>()
+    }
+
+    /// Seed (or replace) a singleton resource that persists across steps.
+    pub fn insert_resource<T: core::any::Any + Send>(&mut self, value: T) {
+        self.resources.insert(value);
+    }
+
+    /// Borrow a published singleton resource.
+    pub fn resource<T: core::any::Any>(&self) -> Option<&T> {
+        self.resources.get::<T>()
+    }
+
+    /// Mutably borrow a published singleton resource.
+    pub fn resource_mut<T: core::any::Any>(&mut self) -> Option<&mut T> {
+        self.resources.get_mut::<T>()
+    }
+
+    /// Withdraw a published singleton resource. Presence-keyed protocols turn
+    /// off by removing their resource, so the reading system pays nothing
+    /// beyond noticing the absence.
+    pub fn remove_resource<T: core::any::Any>(&mut self) -> Option<T> {
+        self.resources.remove::<T>()
+    }
+
+    /// Per-frame profiling data: system CPU timings and render-backend stats
+    /// from the most recently completed frame.
+    pub fn profile(&self) -> &FrameProfile {
+        &self.profile
+    }
+
+    /// What the frame scratch cost and whether it was big enough, for the
+    /// `memory` query and the Health panel. `peak` is what sizes the reserve.
+    pub fn scratch_stats(&self) -> ScratchStats {
+        ScratchStats {
+            capacity: self.scratch.capacity(),
+            peak: self.scratch.peak(),
+            overflows: self.scratch_overflows,
+        }
+    }
+
+    /// The systems' view of this world for one tick. The caller holds the
+    /// returned context for the whole tick, so the borrow of `self` is what
+    /// keeps the world's data still while systems run over it.
+    pub fn context(&mut self) -> PipelineContext<'_> {
+        self.systems_and_context().1
+    }
+
+    /// The `EventStore` resource, created on first use. Every queue
+    /// `events_mut` ever handed out (here or on a `PipelineContext`) lives in
+    /// this one resource, so no per-type rotation list can fall out of sync.
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "the expect follows the insert that guarantees it"
+    )]
+    pub fn event_store(&mut self) -> &mut EventStore {
+        if !self.resources.contains::<EventStore>() {
+            self.resources.insert(EventStore::new());
+        }
+        self.resources
+            .get_mut::<EventStore>()
+            .expect("EventStore was just inserted")
+    }
+
+    /// Advance every event queue once, before systems run, so each queue's
+    /// two-frame retention holds for readers that run after the writer.
+    fn update_events(&mut self) {
+        if let Some(store) = self.resources.get_mut::<EventStore>() {
+            store.update_all();
+        }
+    }
+
+    /// Hand the whole frame's scratch back. `&mut self` is the proof that no
+    /// allocation from the last frame survives.
+    fn reset_scratch(&mut self) {
+        self.scratch.reset();
+    }
+
+    /// Release every resident compiled payload, returning the bytes freed. Run
+    /// once every system has inited and cached what it keeps.
+    fn release_payloads(&mut self) -> usize {
+        self.blob.release_all_resident()
+    }
+
+    /// The world's systems, in schedule order.
+    pub fn systems(&self) -> &[BuiltSystem] {
+        &self.systems
+    }
+
+    /// The built system of type `S`, if the world built one.
+    pub fn system<S: System>(&self) -> Option<&S> {
+        self.systems.iter().find_map(BuiltSystem::downcast_ref::<S>)
+    }
+
+    /// Mutable access to the built system of type `S`, so a caller holding the
+    /// world can drive it between steps.
+    pub fn system_mut<S: System>(&mut self) -> Option<&mut S> {
+        self.systems
+            .iter_mut()
+            .find_map(BuiltSystem::downcast_mut::<S>)
+    }
+
+    /// Disjoint mutable borrows of the system list and the resource map, for a
+    /// caller that drives a system against something parked in a resource (the
+    /// `cn debug` hot-reload drive reaches the render backend that way).
+    pub fn systems_and_resources(&mut self) -> (&mut [BuiltSystem], &mut Resources) {
+        (&mut self.systems, &mut self.resources)
+    }
+
+    /// Systems built for this world.
+    pub fn system_count(&self) -> usize {
+        self.systems.len()
+    }
+
+    /// The system names `table` would build for this world's current content,
+    /// in run order. Runs the same gates [`start`](World::start) runs, so
+    /// tooling that reports a world's schedule cannot drift from the runtime;
+    /// the probe constructs and discards each gated system, which is why
+    /// constructors must stay cheap and side-effect-free. It reads the world
+    /// as it stands: before `start` the table's `complete_world` pass has not
+    /// run, so a system only an injected default turns on is not listed yet,
+    /// and after `start` has drained the gating components it reports the
+    /// systems a rebuild of the CURRENT content would get, not the built set.
+    pub fn system_manifest(&self, table: &SystemTable) -> Vec<&'static str> {
+        let mut names = Vec::new();
+        for phase in Phase::ALL {
+            names.extend(
+                table
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.phase == phase)
+                    .filter(|entry| (entry.gate)(self).is_some())
+                    .map(|entry| entry.name),
+            );
+            names.extend(
+                self.registered
+                    .iter()
+                    .filter(|s| s.phase == phase)
+                    .map(|s| s.name),
+            );
+        }
+        names
+    }
+
+    /// Register a system on this world, to run in `phase` under `name`.
+    ///
+    /// This is how a system the engine's table does not list joins the tick.
+    /// Registration order is run order within a phase, and every table entry in
+    /// a phase runs before every system registered into it, so a registration
+    /// never reorders the engine's own tick.
+    ///
+    /// `name` is what the profile, the log and the schedule address the system
+    /// by. It must not repeat a table entry's name or an earlier registration's,
+    /// since both the ordering edges and the schedule's lookups key on it;
+    /// [`start`](World::start) returns
+    /// [`DuplicateSystemName`](WorldError::DuplicateSystemName) on a repeat.
+    ///
+    /// Registrations are read once, by `start`. Adding one to a world that has
+    /// already started does nothing.
+    pub fn add_system<S: System>(&mut self, phase: Phase, name: &'static str, system: S) {
+        self.registered.push(UserSystem {
+            phase,
+            name,
+            system: Box::new(system),
+        });
+    }
+
+    /// Systems registered on this world, in run order, whether or not it has
+    /// started.
+    pub fn registered_systems(&self) -> Vec<&'static str> {
+        let mut names: Vec<(Phase, usize, &'static str)> = self
+            .registered
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.phase, i, s.name))
+            .collect();
+        names.sort_unstable();
+        names.into_iter().map(|(_, _, name)| name).collect()
+    }
+
+    // Disjoint borrows of the system list and the tick's context over the data
+    // half. Splitting the two is what lets a system step against the world it
+    // lives in.
+    fn systems_and_context(&mut self) -> (&mut Vec<BuiltSystem>, PipelineContext<'_>) {
+        (
+            &mut self.systems,
+            PipelineContext {
+                components: &mut self.components,
+                blob: &mut *self.blob,
+                profile: &mut self.profile,
+                resources: &mut self.resources,
+                frame: FrameContext::new(&self.scratch),
+            },
+        )
+    }
+
+    /// Build the systems `table` gates in for this world's content and run
+    /// their `init`.
+    pub fn start(&mut self, table: &SystemTable) -> Result<(), WorldError> {
+        // The host's completion pass, before the gates read the world: an
+        // injected component brings its own system into the schedule. Guarded
+        // by the same once-per-world flag as the build below, so a second
+        // `start` neither re-injects nor re-gates. A repeated system name
+        // refuses the start before anything runs.
+        if !self.systems_built {
+            let registered: Vec<&'static str> = self.registered.iter().map(|s| s.name).collect();
+            let table_names: Vec<&'static str> = table.entries.iter().map(|e| e.name).collect();
+            if let Some(name) = user_system::colliding_name(&registered, &table_names) {
+                return Err(WorldError::DuplicateSystemName(name));
+            }
+            if let Some(complete) = table.complete_world {
+                let mut ctx = self.context();
+                complete(&mut ctx)?;
+            }
+        }
+        self.build_systems(table);
+        let (systems, mut ctx) = self.systems_and_context();
+        // The host's load-time pass, before systems init: the engine gives each
+        // loaded placement its per-instance components here.
+        if let Some(before_init) = table.before_init {
+            before_init(&mut ctx);
+        }
+        let names: Vec<&str> = systems.iter().map(BuiltSystem::name).collect();
+        for i in table.init_order(&names) {
+            systems[i].init(&mut ctx);
+        }
+        // Every system has inited and cached the payloads it keeps; nothing
+        // reads compiled payloads at runtime. Free every blob section still
+        // resident: the shipped runtime's blob 0, the audio / SDF / terrain
+        // blobs the graphics init sweep held back for their later
+        // consumers, and every blob in a world with no renderer to run
+        // that sweep at all.
+        self.release_payloads();
+        // Access declarations are final once every system has inited, so this
+        // is the earliest the edges can be validated and the waves derived.
+        let schedule = waves::build(&self.systems, self.entries);
+        // Pre-create the event queues declared systems can touch, so their
+        // `events_mut` never grows the store's map mid-tick.
+        if let Some(prepare_events) = table.prepare_events
+            && !schedule.is_empty()
+        {
+            for i in 0..schedule.len() {
+                let access = schedule.access(i);
+                prepare_events(self.event_store(), access);
+            }
+        }
+        self.schedule = Some(schedule);
+        Ok(())
+    }
+
+    // Construct the systems the table gates in, in table order, just before
+    // `init`. Each entry is present only when its gating content is, and is
+    // built from it by the entry's gate. Runs at most once per world (guarded
+    // by `systems_built`) so a system whose gating components survive `init` is
+    // not built twice.
+    fn build_systems(&mut self, table: &SystemTable) {
+        if self.systems_built {
+            return;
+        }
+        self.systems_built = true;
+        self.entries = table.entries;
+
+        // Phase by phase: the table's entries in table order, then the systems
+        // registered into that phase in registration order. A stable sort is
+        // what keeps registration order within a phase.
+        let mut registered = core::mem::take(&mut self.registered);
+        registered.sort_by_key(|s| s.phase);
+        let mut registered = registered.into_iter().peekable();
+        for phase in Phase::ALL {
+            for entry in table.entries.iter().filter(|e| e.phase == phase) {
+                if let Some(system) = (entry.gate)(self) {
+                    self.systems.push(BuiltSystem::new(entry.name, system));
+                }
+            }
+            while let Some(next) = registered.next_if(|s| s.phase == phase) {
+                self.systems.push(BuiltSystem::new(next.name, next.system));
+            }
+        }
+    }
+
+    /// Tick -- systems run in order, Done systems are removed.
+    /// Returns Done when no systems remain, Stop on hard halt.
+    pub fn step(&mut self) -> StepResult {
+        // Dev builds sample the tracked heap around the frame and each system
+        // step, so per-frame allocation churn is visible in the profile. The
+        // counters are process-wide: a delta includes concurrent threads
+        // (streaming workers, the pipelined render half), so per-system
+        // attribution is approximate while the frame total is exact churn.
+        #[cfg(debug_assertions)]
+        let frame_alloc_start = concinnity_core::memory::alloc_count();
+        // Rotate the profiler's system-timing buffers so the frame that just
+        // finished becomes the readable snapshot for this frame's readers.
+        self.profile.begin_frame();
+        // Advance every event queue once per frame, before systems run, so each
+        // queue's two-frame retention holds for readers that run after the
+        // writer.
+        self.update_events();
+        // Hand the whole frame's scratch back before anything runs.
+        self.reset_scratch();
+        // The host's monotonic clock, read once per tick. A world running
+        // without one records zero micros per system.
+        let clock = self.resources.get::<Clock>().copied();
+        let (systems, mut ctx) = self.systems_and_context();
+        let mut i = 0;
+        let mut removed_any = false;
+        while i < systems.len() {
+            let name = systems[i].name();
+            let started = clock.map_or(0, |c| c.read());
+            #[cfg(debug_assertions)]
+            let alloc_start = concinnity_core::memory::alloc_count();
+            #[cfg(debug_assertions)]
+            crate::ecs::access_check::set_active(Some((systems[i].access(), name)));
+            let result = systems[i].step(&mut ctx);
+            #[cfg(debug_assertions)]
+            crate::ecs::access_check::set_active(None);
+            let micros = clock.map_or(0, |c| {
+                u32::saturating_from(c.read().saturating_sub(started))
+            });
+            ctx.profile.record_system(name, micros);
+            #[cfg(debug_assertions)]
+            if let (Some(start), Some(end)) = (alloc_start, concinnity_core::memory::alloc_count())
+            {
+                ctx.profile
+                    .record_system_allocs(name, u32::saturating_from(end.saturating_sub(start)));
+            }
+            match result {
+                StepResult::Stop => return StepResult::Stop,
+                StepResult::Done => {
+                    systems.remove(i);
+                    removed_any = true;
+                }
+                StepResult::Continue => {
+                    i += 1;
+                }
+            }
+        }
+        if removed_any && self.schedule.is_some() {
+            self.schedule = Some(waves::build(&self.systems, self.entries));
+        }
+        self.take_scratch_overflows();
+        #[cfg(debug_assertions)]
+        if let (Some(start), Some(end)) =
+            (frame_alloc_start, concinnity_core::memory::alloc_count())
+        {
+            self.profile.set_frame_allocs(u32::saturating_from(
+                end.saturating_sub(start).min(u64::from(u32::MAX)),
+            ));
+        }
+        if self.systems.is_empty() {
+            StepResult::Done
+        } else {
+            StepResult::Continue
+        }
+    }
+
+    /// Fold the frame's declined scratch requests into the world's running
+    /// total, returning what this frame declined. A frame that outgrew the
+    /// reserve fell back to the heap and still rendered, so nothing breaks; the
+    /// count is what a host surfaces to say the reserve is undersized.
+    fn take_scratch_overflows(&mut self) -> u32 {
+        let overflows = self.scratch.overflows();
+        if overflows > 0 {
+            self.scratch.clear_overflows();
+            self.scratch_overflows = self.scratch_overflows.saturating_add(u64::from(overflows));
+        }
+        overflows
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::TextLabel;
+
+    #[test]
+    fn a_new_world_is_empty() {
+        let world = World::new();
+        assert!(world.is_empty());
+        assert_eq!(world.component_count(), 0);
+    }
+
+    #[test]
+    fn components_are_queryable_after_add() {
+        let mut world = World::new();
+        world.add_component(TextLabel {
+            content: "hello".into(),
+            ..Default::default()
+        });
+        assert!(!world.is_empty());
+        assert_eq!(world.component_count(), 1);
+        assert_eq!(world.query::<TextLabel>().count(), 1);
+        assert_eq!(world.query::<TextLabel>().next().unwrap().content, "hello");
+    }
+
+    #[test]
+    fn a_procedural_payload_adds_its_mesh_under_the_minted_id() {
+        let mesh = crate::components::ProceduralMesh {
+            generator: "box".into(),
+            ..Default::default()
+        };
+        let payload = crate::bake::payload::procedural_mesh(mesh.clone()).expect("a box bakes");
+        let bytes = payload.as_bytes().to_vec();
+
+        let mut world = World::new();
+        let handle = world.add_mesh(payload).expect("the first mint");
+
+        let payloads = world
+            .resource::<crate::resource::RuntimeMeshPayloads>()
+            .expect("the runtime payload store");
+        let (id, stored) = payloads.iter().nth(handle.index()).expect("the payload");
+        assert_eq!(stored, &bytes[..]);
+        let added: Vec<_> = world.query::<crate::components::ProceduralMesh>().collect();
+        assert_eq!(added, [&mesh]);
+        assert_eq!(
+            world.get_by_id::<crate::components::ProceduralMesh>(id),
+            Some(&mesh)
+        );
+    }
+
+    #[test]
+    fn a_raw_mesh_payload_adds_no_procedural_mesh() {
+        let vertex = |pos: [f32; 3]| crate::components::VertexData {
+            pos,
+            color: [1.0; 3],
+            uv: [0.0; 2],
+        };
+        let triangle = crate::components::Mesh {
+            vertices: alloc::vec![
+                vertex([0.0, 0.0, 0.0]),
+                vertex([1.0, 0.0, 0.0]),
+                vertex([0.0, 1.0, 0.0]),
+            ],
+            indices: alloc::vec![0, 1, 2],
+            ..Default::default()
+        };
+        let payload = crate::bake::payload::mesh(&triangle).expect("a triangle bakes");
+
+        let mut world = World::new();
+        let handle = world.add_mesh(payload).expect("the first mint");
+
+        assert_eq!(handle.index(), 0);
+        assert_eq!(
+            world.query::<crate::components::ProceduralMesh>().count(),
+            0
+        );
+    }
+
+    #[test]
+    fn reserve_components_leaves_the_world_empty() {
+        let mut world = World::new();
+        world.reserve_components(&[(TextLabel::DISCRIMINANT, 8)]);
+        assert!(world.is_empty());
+        assert_eq!(world.query::<TextLabel>().count(), 0);
+    }
+
+    #[test]
+    fn a_pushed_component_is_reachable_by_its_entity() {
+        let mut world = World::new();
+        let entity = world.push(TextLabel {
+            content: "one".into(),
+            ..Default::default()
+        });
+        assert!(world.is_alive(entity));
+        assert_eq!(world.get::<TextLabel>(entity).unwrap().content, "one");
+        world.get_mut::<TextLabel>(entity).unwrap().content = "two".into();
+        assert_eq!(world.get::<TextLabel>(entity).unwrap().content, "two");
+        world.despawn(entity);
+        assert!(!world.is_alive(entity));
+    }
+
+    #[test]
+    fn remove_all_drains_one_column() {
+        let mut world = World::new();
+        world.add_component(TextLabel::default());
+        world.add_component(TextLabel::default());
+        assert_eq!(world.component_count(), 2);
+        world.remove_all::<TextLabel>();
+        assert!(world.is_empty());
+    }
+
+    #[test]
+    fn the_census_counts_each_populated_type() {
+        let mut world = World::new();
+        world.add_component(TextLabel::default());
+        world.add_component(TextLabel::default());
+        let census = world.component_census();
+        assert_eq!(census, alloc::vec![(TextLabel::DISCRIMINANT, 2)]);
+    }
+
+    #[test]
+    fn resources_round_trip() {
+        let mut world = World::new();
+        assert!(world.resource::<u32>().is_none());
+        world.insert_resource(7u32);
+        assert_eq!(world.resource::<u32>(), Some(&7));
+        *world.resource_mut::<u32>().unwrap() = 9;
+        assert_eq!(world.remove_resource::<u32>(), Some(9));
+        assert!(world.resource::<u32>().is_none());
+    }
+
+    #[test]
+    fn events_are_readable_after_send() {
+        let mut world = World::new();
+        assert!(world.events::<u8>().is_none());
+        world.events_mut::<u8>().send(3);
+        assert_eq!(
+            world.events::<u8>().expect("queue was just created").len(),
+            1
+        );
+    }
+
+    // Two frames' worth of rotation: the queue's retention must outlive one
+    // update so a reader running after the writer still sees the send.
+    #[test]
+    fn update_events_retains_a_send_for_one_frame() {
+        let mut world = World::new();
+        world.events_mut::<u8>().send(3);
+        world.update_events();
+        assert_eq!(world.events::<u8>().unwrap().len(), 1);
+        world.update_events();
+        assert_eq!(world.events::<u8>().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn the_context_sees_the_worlds_components() {
+        let mut world = World::new();
+        world.add_component(TextLabel {
+            content: "ctx".into(),
+            ..Default::default()
+        });
+        let ctx = world.context();
+        assert_eq!(ctx.query::<TextLabel>().next().unwrap().content, "ctx");
+    }
+
+    // The reserve is whole at rest, and a world that never allocated from it
+    // has declined nothing.
+    #[test]
+    fn a_quiet_world_reports_no_scratch_overflow() {
+        let mut world = World::new();
+        assert_eq!(world.take_scratch_overflows(), 0);
+        let stats = world.scratch_stats();
+        assert_eq!(stats.capacity, FRAME_SCRATCH_BYTES);
+        assert_eq!(stats.overflows, 0);
+    }
+
+    #[test]
+    fn an_empty_payload_store_frees_nothing() {
+        let mut world = World::new();
+        assert_eq!(world.release_payloads(), 0);
+    }
+}

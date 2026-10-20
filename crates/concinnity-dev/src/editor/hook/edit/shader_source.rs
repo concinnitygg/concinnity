@@ -7,9 +7,9 @@
 //! Leaving a file with unsaved edits asks first; a change on disk is followed
 //! while the buffer is clean.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
-use concinnity_core::render::shader::programs::vocabulary::ENTRIES;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::shader::programs::vocabulary::ENTRIES;
 
 use super::shaders_state::{SourceState, vocabulary_of};
 use crate::debug::hot_reload::ReloadSubject;

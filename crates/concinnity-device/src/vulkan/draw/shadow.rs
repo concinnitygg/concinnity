@@ -21,8 +21,8 @@
 //! `PassId::Shadow` here.
 
 use ash::vk;
-use concinnity_core::gfx::render_types;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types;
 
 use super::super::context::VkContext;
 use crate::vulkan::depth;

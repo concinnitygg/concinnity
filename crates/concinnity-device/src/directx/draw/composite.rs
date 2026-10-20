@@ -6,11 +6,13 @@
 //! buffer (see [`UploadRing`](crate::directx::upload_ring::UploadRing)) and binds sub-views into it, so no per-frame
 //! GPU buffers are allocated.
 
-use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms, TextVertex};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::fullscreen;
-use concinnity_core::render::fullscreen::TextBindCache;
+use concinnity_engine::gfx::render_types::{
+    CompositeParams, TextDrawCall, TextUniforms, TextVertex,
+};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::fullscreen;
+use concinnity_engine::render::fullscreen::TextBindCache;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16_UINT;

@@ -4,8 +4,8 @@
 //! goes through this one seam -- and writes the view matrix with the pose, as
 //! the engine's own controller does, so the frame draws from what was written.
 
-use concinnity_core::components::Camera3D;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::Camera3D;
+use concinnity_engine::ecs::World;
 
 use crate::editor::viewport::framing::CameraPose;
 
@@ -26,7 +26,7 @@ pub(super) fn write(world: &mut World, pose: &CameraPose) {
     cam.yaw = pose.yaw;
     cam.pitch = pose.pitch;
     cam.view_matrix =
-        concinnity_core::gfx::camera::view_matrix(pose.position, pose.yaw, pose.pitch);
+        concinnity_engine::gfx::camera::view_matrix(pose.position, pose.yaw, pose.pitch);
 }
 
 #[cfg(test)]
@@ -71,7 +71,7 @@ mod tests {
         let cam = world.query::<Camera3D>().next().expect("the camera");
         assert_eq!(
             cam.view_matrix,
-            concinnity_core::gfx::camera::view_matrix(pose.position, pose.yaw, pose.pitch)
+            concinnity_engine::gfx::camera::view_matrix(pose.position, pose.yaw, pose.pitch)
         );
     }
 }

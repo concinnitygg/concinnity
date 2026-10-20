@@ -7,8 +7,8 @@
 //! imports open in the standard edit form for full arg editing.
 
 use concinnity_cook::authoring::world::{entry_handle, entry_handles, set_entry_id};
-use concinnity_core::components::{FrameInput, InputKey};
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, InputKey};
+use concinnity_engine::ecs::World;
 use std::path::Path;
 
 use crate::editor::hook::{

@@ -1,16 +1,16 @@
 //! Vulkan's share of screen-space reflections: the settings, the reflection
 //! target the resolve writes, and where the resolve's inputs come from this
 //! frame. The resolve itself -- its pipeline and its draw -- is written once in
-//! `concinnity_core::render::post::ssr` and reaches Vulkan through
+//! `concinnity_engine::render::post::ssr` and reaches Vulkan through
 //! `VkPostDevice`, which also binds the forward global set it reads the
 //! reflection probes from.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::SsrParams;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::post::device::PostPassDevice;
-use concinnity_core::render::post::ssr::settings::SsrSettings;
-use concinnity_core::render::post::ssr::{SsrInputs, SsrPass, target_desc};
+use concinnity_engine::gfx::render_types::SsrParams;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::device::PostPassDevice;
+use concinnity_engine::render::post::ssr::settings::SsrSettings;
+use concinnity_engine::render::post::ssr::{SsrInputs, SsrPass, target_desc};
 
 use crate::vulkan::context::VkContext;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkPostDevice, post_extent};

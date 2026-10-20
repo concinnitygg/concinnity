@@ -3,7 +3,7 @@
 //! swapchain acquire/present, queue submit, and device-memory allocation.
 
 use ash::vk;
-use concinnity_core::render::backend::error::{DeviceLostReason, RenderError};
+use concinnity_engine::render::backend::error::{DeviceLostReason, RenderError};
 
 // Pure mapping from a VkResult to the boundary class, testable without a GPU.
 // `context` names the failing call for the log. Vulkan reports loss as one

@@ -1,13 +1,13 @@
 // The DirectX half of the single-source shader compile: everything the
-// declarations in `concinnity_core::render::shader::programs::dx::TABLE` need
+// declarations in `concinnity_engine::render::shader::programs::dx::TABLE` need
 // a compiler, a content-addressed cache, or a filesystem for, over the
 // declarations it brings into the backend's scope.
 
-use concinnity_core::platform::Platform;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::shader::programs::dx;
-pub(super) use concinnity_core::render::shader::programs::shared::*;
-pub(super) use concinnity_core::render::shader::programs::spd::{
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shader::programs::dx;
+pub(super) use concinnity_engine::render::shader::programs::shared::*;
+pub(super) use concinnity_engine::render::shader::programs::spd::{
     HIZ_SPD_MSAA, HIZ_SPD_SINGLE, HIZ_SPD_TAIL,
 };
 use concinnity_shader::HlslTarget;
@@ -97,8 +97,8 @@ mod tests {
     // host without a compiler embeds nothing, and every name misses together.
     #[test]
     fn every_variant_is_embedded_under_its_lookup_name() {
-        use concinnity_core::render::shader::programs::dx::TABLE;
-        use concinnity_core::render::shader::source::source_digest;
+        use concinnity_engine::render::shader::programs::dx::TABLE;
+        use concinnity_engine::render::shader::source::source_digest;
 
         let embedded: Vec<_> = TABLE
             .variants()

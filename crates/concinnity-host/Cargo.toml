@@ -16,6 +16,7 @@ include = [
 ]
 
 [dependencies]
+concinnity-engine = { workspace = true }
 concinnity-core = { workspace = true }
 
 ciborium = { workspace = true }

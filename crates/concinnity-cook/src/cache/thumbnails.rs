@@ -14,7 +14,7 @@
 //! entry and nothing else. Stamping on the file itself would be wrong: the
 //! payload cache shares this segment, so every build would bump it.
 
-use concinnity_core::blob::CacheEntryKind;
+use concinnity_engine::blob::CacheEntryKind;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 

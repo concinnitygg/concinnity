@@ -16,10 +16,10 @@
 //! Both size the read-back from the copyable footprint: D3D12 aligns each row
 //! to `D3D12_TEXTURE_DATA_PITCH_ALIGNMENT` (256 bytes), which the decode strips.
 
-use concinnity_core::gfx::image_decode::PixelLayout;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::output::hdr::HdrEncoding;
+use concinnity_engine::gfx::image_decode::PixelLayout;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::output::hdr::HdrEncoding;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 

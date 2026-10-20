@@ -3,14 +3,14 @@
 //! bindless texture argument buffer.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::cull_status::CullStatus;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::{lod, render_types};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::shader::programs::metal::bindless_textures;
-use concinnity_core::render::temporal::model_history::HistoryMode;
-use concinnity_core::transform::IDENTITY;
+use concinnity_engine::gfx::cull_status::CullStatus;
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::{lod, render_types};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::metal::bindless_textures;
+use concinnity_engine::render::temporal::model_history::HistoryMode;
+use concinnity_engine::transform::IDENTITY;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSString, ns_string};
@@ -25,7 +25,7 @@ use super::encode::ComputeEncode;
 use super::init::pipelines::BucketPipelines;
 use super::pipeline::{cull_encode_library, ns_str};
 use super::scoped_encoder::ScopedEncoder;
-use concinnity_core::render::uniforms::metal::{CullUniforms, EncodeParams};
+use concinnity_engine::render::uniforms::metal::{CullUniforms, EncodeParams};
 
 // One shadow pass's GPU-driven views: an ICB with one region of `cull_count()`
 // command slots per view (view `v` at base `v * cull_count()`), the argument
@@ -86,7 +86,7 @@ pub(crate) struct CullState {
     // `install_world_shader` builds it when that scene pins. Draws carrying a
     // `None` bucket are skipped.
     pub world_pipelines:
-        concinnity_core::render::shader::world_pipelines::WorldPipelines<BucketPipelines>,
+        concinnity_engine::render::shader::world_pipelines::WorldPipelines<BucketPipelines>,
     // The phase-1 decision kernel (`cull.hlsl`). `Some` only when `bindless`
     // is set; every other pipeline here is `Some` exactly when it is.
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
@@ -223,7 +223,7 @@ pub(super) fn metal_flat_pool_indices(
     normal_map_slot: usize,
     material: &render_types::MaterialUniforms,
 ) -> FlatPoolIndices {
-    use concinnity_core::gfx::render_types::{albedo_pool_index, normal_pool_index};
+    use concinnity_engine::gfx::render_types::{albedo_pool_index, normal_pool_index};
     let cap = u32::saturating_from(BINDLESS_TEXTURE_COUNT).saturating_sub(1);
     let tc = u32::saturating_from(texture_count);
     let clamp = |i: u32| i.min(cap);
@@ -450,8 +450,8 @@ impl MtlContext {
         cam_pos: [f32; 3],
         history: HistoryMode,
     ) -> RenderResult<Option<RecordBuffers>> {
-        use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData, draw_args_flags};
-        use concinnity_core::render::record_pack::{GrassRoute, PackView, StaticPack};
+        use concinnity_engine::gfx::render_types::{GpuDrawArgs, GpuObjectData, draw_args_flags};
+        use concinnity_engine::render::record_pack::{GrassRoute, PackView, StaticPack};
         let n_cull = self.cull_count();
         if n_cull == 0 {
             return Ok(None);
@@ -930,7 +930,7 @@ impl MtlContext {
         object_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
         draw_args_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
     ) -> RenderResult<()> {
-        use concinnity_core::gfx::render_types::{MAX_SHADOWED_SPOTS, NUM_SHADOW_CASCADES};
+        use concinnity_engine::gfx::render_types::{MAX_SHADOWED_SPOTS, NUM_SHADOW_CASCADES};
         let Some(pipeline) = &self.cull.shadow_pipeline else {
             return Ok(());
         };
@@ -1332,8 +1332,8 @@ mod capacity_tests {
 #[cfg(test)]
 mod tests {
     use super::metal_flat_pool_indices;
-    use concinnity_core::gfx::render_types::{MaterialUniforms, NO_NORMAL_MAP_SLOT};
     use concinnity_core::math::SaturatingFrom;
+    use concinnity_engine::gfx::render_types::{MaterialUniforms, NO_NORMAL_MAP_SLOT};
 
     #[test]
     fn flat_pool_indices_share_one_handle_indexed_pool() {

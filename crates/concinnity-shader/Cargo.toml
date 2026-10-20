@@ -22,7 +22,7 @@ include = [
 spirv-cross = ["dep:spirv-cross2"]
 
 [dependencies]
-concinnity-core = { workspace = true }
+concinnity-engine = { workspace = true }
 spirv-cross2 = { version = "0.7.1", default-features = false, features = ["msl"], optional = true }
 
 [lints]

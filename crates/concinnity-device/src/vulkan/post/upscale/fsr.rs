@@ -13,8 +13,8 @@ use std::ffi::c_void;
 
 use ash::vk;
 use ash::vk::Handle;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::temporal::reactive_mask::ReactiveReader;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 
 use super::{
     OutputWrites, UpscaleInputs, UpscaleOutput, UpscalerGpu, VkUpscaleBackend, open_library,

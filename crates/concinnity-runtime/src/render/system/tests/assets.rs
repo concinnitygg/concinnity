@@ -1,14 +1,14 @@
 use super::*;
-use concinnity_core::components::{
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::{
     Decal, GlassPanel, Grass, InstanceTransform, InstancedProp, ParticleEmitter, ReflectionProbe,
     SdfVolume, Story, StoryImage, StoryNode, StoryPage, StoryStage, Terrain, TerrainLayer,
     VolumetricFog, WaterSurface, Wind,
 };
-use concinnity_core::ecs::ResourceKind;
-use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::probe::capture::ProbePlacement;
-use concinnity_core::terrain::TerrainGrid;
-use concinnity_core::terrain::payload::TerrainPayload;
+use concinnity_engine::ecs::ResourceKind;
+use concinnity_engine::render::probe::capture::ProbePlacement;
+use concinnity_engine::terrain::TerrainGrid;
+use concinnity_engine::terrain::payload::TerrainPayload;
 
 // A w x h font atlas in the compiled payload format, carrying one glyph so the
 // cap-height derivation has metrics to read.
@@ -37,7 +37,7 @@ impl WorldBuilder {
         let locator = self.payload(bytes);
         let handle = u32::saturating_from(self.kind_records(kind).len());
         self.kind_records(kind)
-            .push(concinnity_core::ecs::ResourceRecord {
+            .push(concinnity_engine::ecs::ResourceRecord {
                 resource_kind: kind,
                 handle,
                 payload: Some(locator),
@@ -51,8 +51,8 @@ impl WorldBuilder {
     fn kind_records(
         &mut self,
         kind: ResourceKind,
-    ) -> &mut Vec<concinnity_core::ecs::ResourceRecord> {
-        use concinnity_core::ecs::ResourceKind;
+    ) -> &mut Vec<concinnity_engine::ecs::ResourceRecord> {
+        use concinnity_engine::ecs::ResourceKind;
         match kind {
             ResourceKind::Texture => &mut self.texture_records,
             ResourceKind::Font => &mut self.font_records,
@@ -86,7 +86,7 @@ fn text_naming_no_font_falls_back_to_the_built_in_face() {
 
     let labels: Vec<TextLabel> = world.context().query::<TextLabel>().cloned().collect();
     let overlay = world
-        .resource::<concinnity_core::render::overlay::OverlayAssets>()
+        .resource::<concinnity_engine::render::overlay::OverlayAssets>()
         .expect("OverlayAssets parked at init");
     let face = overlay
         .fonts
@@ -140,7 +140,7 @@ fn a_world_whose_text_names_its_fonts_registers_no_fallback() {
     assert!(!gs.failed);
 
     let overlay = world
-        .resource::<concinnity_core::render::overlay::OverlayAssets>()
+        .resource::<concinnity_engine::render::overlay::OverlayAssets>()
         .expect("OverlayAssets parked at init");
     assert_eq!(overlay.fonts.len(), 1);
     assert!(overlay.fonts.resolve(None).is_none());
@@ -188,7 +188,7 @@ fn fonts_and_sprite_textures_share_the_text_atlas_pool() {
     drop(s);
 
     let overlay = world
-        .resource::<concinnity_core::render::overlay::OverlayAssets>()
+        .resource::<concinnity_engine::render::overlay::OverlayAssets>()
         .expect("OverlayAssets parked at init");
     // A font's handle IS its atlas slot, so the pool's leading slots are the
     // fonts in handle order.
@@ -233,7 +233,7 @@ fn a_sprite_with_an_unknown_texture_keeps_its_tint() {
     );
     assert!(
         world
-            .resource::<concinnity_core::render::overlay::OverlayAssets>()
+            .resource::<concinnity_engine::render::overlay::OverlayAssets>()
             .unwrap()
             .sprite_texture_slots
             .is_empty()
@@ -299,7 +299,7 @@ fn an_unreadable_environment_map_payload_fails_init() {
     let mut b = scene_builder();
     // A locator past the end of the blob's only section.
     b.env_map_records
-        .push(concinnity_core::ecs::ResourceRecord {
+        .push(concinnity_engine::ecs::ResourceRecord {
             resource_kind: ResourceKind::EnvironmentMap,
             handle: 0,
             payload: Some(PayloadLocator {
@@ -337,8 +337,8 @@ fn volumetric_fog_resolves_into_the_backend_init() {
     );
     // The fog a world reload dedupes against is parked beside the backend,
     // seeded from whatever was passed into the backend constructor.
-    let pushed =
-        world.resource::<concinnity_core::render::environment::volumetric_fog::PushedFogSettings>();
+    let pushed = world
+        .resource::<concinnity_engine::render::environment::volumetric_fog::PushedFogSettings>();
     assert!(pushed.is_some_and(|fog| fog.0.is_some()));
 }
 
@@ -358,8 +358,8 @@ fn disabled_volumetric_fog_skips_the_fog_pass() {
 
     assert!(!gs.failed);
     assert!(!lock(&state).init.as_ref().unwrap().fog);
-    let pushed =
-        world.resource::<concinnity_core::render::environment::volumetric_fog::PushedFogSettings>();
+    let pushed = world
+        .resource::<concinnity_engine::render::environment::volumetric_fog::PushedFogSettings>();
     assert!(pushed.is_some_and(|fog| fog.0.is_none()));
 }
 
@@ -512,7 +512,7 @@ impl WorldBuilder {
     fn push_material(&mut self, mat: &Material) -> MaterialHandle {
         let handle = u32::saturating_from(self.material_records.len());
         self.material_records
-            .push(concinnity_core::ecs::ResourceRecord {
+            .push(concinnity_engine::ecs::ResourceRecord {
                 resource_kind: ResourceKind::Material,
                 handle,
                 payload: None,
@@ -544,7 +544,7 @@ fn an_undecodable_material_record_fails_init() {
     let (_state, hooks) = recording_hooks();
     let mut b = scene_builder();
     b.material_records
-        .push(concinnity_core::ecs::ResourceRecord {
+        .push(concinnity_engine::ecs::ResourceRecord {
             resource_kind: ResourceKind::Material,
             handle: 1,
             payload: None,
@@ -672,7 +672,7 @@ fn story_stage_images_are_resident_before_any_sprite_references_them() {
         "every stage image is decoded into the pool ahead of the swap"
     );
     let overlay = world
-        .resource::<concinnity_core::render::overlay::OverlayAssets>()
+        .resource::<concinnity_engine::render::overlay::OverlayAssets>()
         .unwrap();
     for slot in &slots {
         assert!(

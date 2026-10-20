@@ -9,12 +9,12 @@
 //! are reflected and tracked by the temporal history just like the rest of
 //! the scene. Mirrors src/metal/decal.rs.
 
-use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
-use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::decal::{DecalRecord, DecalSet};
-use concinnity_core::transform::mat4_inverse;
+use concinnity_engine::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::decal::{DecalRecord, DecalSet};
+use concinnity_engine::transform::mat4_inverse;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -71,7 +71,7 @@ pub(in crate::directx) fn rebuild_decal_pso(
 
 // The SRV heap reserves a fixed block of `MAX_DECALS` per-decal albedo
 // descriptors at init.
-pub(in crate::directx) const MAX_DECALS: usize = concinnity_core::render::decal::MAX_DECALS;
+pub(in crate::directx) const MAX_DECALS: usize = concinnity_engine::render::decal::MAX_DECALS;
 
 // The unit cube in `[-0.5, 0.5]^3`, the local space a decal's `inv_model` maps into.
 const CUBE_VERTS: [[f32; 3]; 8] = cube_corners(0.5);
@@ -79,7 +79,7 @@ const CUBE_VERTS: [[f32; 3]; 8] = cube_corners(0.5);
 // `DecalView` (per-frame) and `DecalParams` (per-decal) are GPU-free layout
 // structs that live in `core::render`; re-export them so
 // `crate::directx::decal::{DecalView,DecalParams}` are unchanged.
-pub(in crate::directx) use concinnity_core::render::uniforms::{DecalParams, DecalView};
+pub(in crate::directx) use concinnity_engine::render::uniforms::{DecalParams, DecalView};
 
 // Root-signature layout (binds 1:1 with the `decal.hlsl` declarations, whose
 // `register()` annotations `DXIL_ENTRY_ABI` in build.rs pins):

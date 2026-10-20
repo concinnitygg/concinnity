@@ -5,7 +5,7 @@
 // the schema walk that produces them. Page assembly from the finished bodies
 // lives in `page.rs`.
 
-use concinnity_core::ecs::asset_fields::{ApplyClass, ParamMeta};
+use concinnity_engine::ecs::asset_fields::{ApplyClass, ParamMeta};
 use std::collections::HashMap;
 
 // A JSON-shaped description of a field's type. `Enum` carries the accepted
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn a_parameter_states_its_range_and_when_it_applies() {
-        use concinnity_core::ecs::asset_fields::ParamRange;
+        use concinnity_engine::ecs::asset_fields::ParamRange;
         let mut f = field("blend", FieldType::Float, false, Some("0.5"), "How much.");
         f.param = ParamMeta {
             range: ParamRange {

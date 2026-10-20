@@ -1,13 +1,13 @@
 //! Which upscaler a world's request resolves to, and the order the backends
 //! fall back through when one fails to initialize.
 
-use concinnity_core::components::UpscalerBackend;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::output::dlss::DlssPreset;
-use concinnity_core::render::output::upscaler::{
+use concinnity_engine::components::UpscalerBackend;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::output::dlss::DlssPreset;
+use concinnity_engine::render::output::upscaler::{
     UpscalerAvailability, VendorUpscaler, upscaler_order,
 };
-use concinnity_core::settings::ResolvedGraphics;
+use concinnity_engine::settings::ResolvedGraphics;
 
 /// What temporal upscaling was asked for: the upscaler, and the render preset
 /// DLSS runs if it is the one built. Kept by a backend so a resize rebuilds
@@ -130,7 +130,7 @@ fn vendor_of(backend: ResolvedBackend) -> Option<VendorUpscaler> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::UpscalerBackend as B;
+    use concinnity_engine::components::UpscalerBackend as B;
 
     fn avail(dlss: bool, xess: bool, fsr: bool) -> UpscalerAvailability {
         UpscalerAvailability { dlss, xess, fsr }

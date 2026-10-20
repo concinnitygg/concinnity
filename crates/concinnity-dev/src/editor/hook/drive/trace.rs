@@ -7,11 +7,11 @@
 //! the transport on the node that fired. Closing both panels withdraws the
 //! request, so the running world records nothing.
 
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{
     ExecutionTrace, FrameTime, TraceEvent, TracePaths, TraceRequest, World,
 };
-use concinnity_core::math::SaturatingFrom;
 
 use crate::editor::behavior::path::Path;
 use crate::editor::behavior::pulse::{self, NodePulse};
@@ -72,7 +72,7 @@ impl EditorHook {
             .and_then(|h| self.handle_name(h))
             .and_then(|name| trace::id_of(&name))
             .and_then(|id| world.entity_of(id))
-            .map(concinnity_core::ecs::Entity::to_bits);
+            .map(concinnity_engine::ecs::Entity::to_bits);
         let breakpoints = self.resolve_breakpoints(world);
         world.insert_resource(TraceRequest {
             entity,

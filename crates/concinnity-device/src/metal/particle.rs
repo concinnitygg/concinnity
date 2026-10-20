@@ -17,11 +17,11 @@
 //! tests the resolved scene depth itself, so opaque geometry hides a sprite.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleFrame, ParticleSystem};
-use concinnity_core::render::temporal::reactive_mask::ReactiveWrite;
-use concinnity_core::render::uniforms::ParticleView;
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::particles::{ParticleEmitterRecord, ParticleFrame, ParticleSystem};
+use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
+use concinnity_engine::render::uniforms::ParticleView;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -34,7 +34,7 @@ use objc2_metal::{
 };
 // GPU-free repr(C) structs; live in `core::render` so their layout tests
 // count toward coverage. Re-exported so this file's existing paths are unchanged.
-use concinnity_core::render::uniforms::GpuParticle;
+use concinnity_engine::render::uniforms::GpuParticle;
 
 use super::builtin_shaders::compute_pipeline;
 use super::context::MtlContext;

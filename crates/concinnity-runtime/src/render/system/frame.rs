@@ -4,12 +4,12 @@
 // camera-relative view rebase run in core's StreamingSystem just before it.
 
 use crate::app::pipeline::PipelinedFrames;
-use concinnity_core::ecs::ActiveRenderBackend;
-use concinnity_core::ecs::{Clock, PipelineContext, StepResult};
-use concinnity_core::input::mailbox::InputMailbox;
-use concinnity_core::input::snapshot::InputPacket;
-use concinnity_core::render::frame::outcome::{self, Submitted};
-use concinnity_core::render::frame::snapshot::RenderSnapshot;
+use concinnity_engine::ecs::ActiveRenderBackend;
+use concinnity_engine::ecs::{Clock, PipelineContext, StepResult};
+use concinnity_engine::input::mailbox::InputMailbox;
+use concinnity_engine::input::snapshot::InputPacket;
+use concinnity_engine::render::frame::outcome::{self, Submitted};
+use concinnity_engine::render::frame::snapshot::RenderSnapshot;
 use concinnity_host::clock::micros_since;
 use std::time::Instant;
 
@@ -140,17 +140,17 @@ impl GraphicsSystem {
         let vendor = ctx
             .resource::<backend::GpuProfile>()
             .map_or(backend::GpuVendor::Other, |g| g.vendor);
-        concinnity_core::settings::system::gate_unavailable_rows(ctx, &self.caps, vendor);
+        concinnity_engine::settings::system::gate_unavailable_rows(ctx, &self.caps, vendor);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{GlobalTransform, RenderHandle};
-    use concinnity_core::ecs::World;
-    use concinnity_core::gfx::render_types::DrawIndex;
-    use concinnity_core::render::frame::feedback;
+    use concinnity_engine::components::{GlobalTransform, RenderHandle};
+    use concinnity_engine::ecs::World;
+    use concinnity_engine::gfx::render_types::DrawIndex;
+    use concinnity_engine::render::frame::feedback;
 
     fn translated(x: f32) -> [[f32; 4]; 4] {
         [
@@ -191,7 +191,7 @@ mod tests {
         let consumer = std::thread::spawn(move || {
             for stop in [false, true] {
                 let snapshot = snapshot_rx.recv().expect("a snapshot arrives");
-                let render_stats = concinnity_core::profile::RenderStats {
+                let render_stats = concinnity_engine::profile::RenderStats {
                     draw_calls: 7,
                     ..Default::default()
                 };

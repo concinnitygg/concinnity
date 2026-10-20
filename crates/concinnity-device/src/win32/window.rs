@@ -2,9 +2,9 @@
 //! message pump, shared by the DirectX backend and the Vulkan backend's
 //! Windows window (vulkan/window/win32.rs).
 
-use concinnity_core::components::WindowMode;
-use concinnity_core::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::WindowMode;
+use concinnity_engine::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
@@ -731,7 +731,7 @@ pub(crate) fn create_window(
     height: u32,
     title_bar: bool,
 ) -> Result<(HWND, Box<WindowState>), String> {
-    concinnity_core::window::policy::assert_windows_allowed("the Win32 window");
+    concinnity_engine::window::policy::assert_windows_allowed("the Win32 window");
 
     // Reuse a window parked by a prior backend's drop (editor live-swap) rather
     // than popping a new one, so a world reload keeps the same OS window.

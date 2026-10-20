@@ -7,7 +7,7 @@
 //! the touched assets.
 
 use concinnity_cook::authoring::world::replace_args;
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::{EditorHook, LightingData, declared_id, entry_type, short_status};
 use crate::editor::panels::form::{self, FormField};

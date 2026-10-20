@@ -23,13 +23,13 @@
 //! the skinned tail is not drawn into a mirror (static + instance + chunk only).
 
 use ash::vk;
-use concinnity_core::gfx::render_types::ClusterParams;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::planar_reflection::{
+use concinnity_engine::gfx::render_types::ClusterParams;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::planar_reflection::{
     self, MirrorFrame, MirrorShading, MirrorView, PLANAR_CROP_MARGIN, PlanarReflectors,
 };
-use concinnity_core::render::probe::radiance::FaceStorage;
+use concinnity_engine::render::probe::radiance::FaceStorage;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{HDR_FORMAT, VkContext};
@@ -456,7 +456,7 @@ impl PlanarReflectionSet {
         // Per-(plane, frame) reflected-frustum cull output: a DEVICE_LOCAL indirect +
         // status SSBO each, sized by the build-time object count (resize never
         // touches them).
-        use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
+        use concinnity_engine::gfx::render_types::{GpuDrawArgs, GpuObjectData};
         let object_range = (cull.cull_count * size_of::<GpuObjectData>()).max(4) as u64;
         let args_range = (cull.cull_count * size_of::<GpuDrawArgs>()).max(4) as u64;
         let indirect_size =

@@ -201,7 +201,7 @@ pub(in crate::pipeline) fn desugar_animation_imports(
 pub(in crate::pipeline) fn desugar_root_motion(
     assets: &mut [WorldJsonlAsset],
 ) -> std::io::Result<()> {
-    use concinnity_core::components::Animation;
+    use concinnity_engine::components::Animation;
 
     // This deserializes each flagged clip (whose `target` is a name reference),
     // so the name resolver must be installed. The full pipeline resets the

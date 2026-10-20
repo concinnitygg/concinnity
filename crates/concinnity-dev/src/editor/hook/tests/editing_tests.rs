@@ -5,8 +5,8 @@
 //! disclosed vector. Also what survives a reinjection, a panel toggle, and a
 //! delete that shifts the open form's index.
 
-use concinnity_core::components::{FrameInput, Sprite, TextInput};
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, Sprite, TextInput};
+use concinnity_engine::ecs::World;
 
 use super::fixtures::{
     click_row, entry, entry_with_args, hook, row_of, seed_tree, set_field, world_with_fields,

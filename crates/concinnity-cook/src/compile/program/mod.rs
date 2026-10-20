@@ -21,9 +21,9 @@
 
 use std::path::Path;
 
-use concinnity_core::platform::{Platform, PlatformSet};
-use concinnity_core::render::shader::compiled::CompiledProgram;
-use concinnity_core::render::shader::source;
+use concinnity_engine::platform::{Platform, PlatformSet};
+use concinnity_engine::render::shader::compiled::CompiledProgram;
+use concinnity_engine::render::shader::source;
 use concinnity_shader::diagnostics;
 
 mod failure;

@@ -8,8 +8,8 @@
 
 use std::borrow::Cow;
 
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::shader::programs::surface;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::surface;
 use dispatch2::DispatchData;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -67,12 +67,12 @@ pub(super) fn cull_encode_library(
 // The world Shader's MSL for `program`: the cook's text, or a compile of the
 // current templates when it predates them.
 fn world_msl<'a>(
-    programs: &'a concinnity_core::components::ShaderPrograms,
+    programs: &'a concinnity_engine::components::ShaderPrograms,
     program: &surface::Program,
     hot_reload: bool,
 ) -> RenderResult<Cow<'a, [u8]>> {
     let req = crate::shader::surface_source::Request {
-        platform: concinnity_core::platform::Platform::Metal,
+        platform: concinnity_engine::platform::Platform::Metal,
         hot_reload,
     };
     crate::shader::surface_source::artifact(programs, program, req, crate::shader::compile::cooked)
@@ -90,7 +90,7 @@ fn world_label(program: &surface::Program) -> String {
 pub(super) fn world_function(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
-    programs: &concinnity_core::components::ShaderPrograms,
+    programs: &concinnity_engine::components::ShaderPrograms,
     program: &surface::Program,
 ) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLFunction>>> {
     let msl = world_msl(programs, program, hot_reload)?;
@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn the_bucket_count_matches_render_types() {
-        use concinnity_core::gfx::render_types::MAX_DRAW_BUCKETS;
+        use concinnity_engine::gfx::render_types::MAX_DRAW_BUCKETS;
         assert_eq!(encode_const("MAX_DRAW_BUCKETS") as usize, MAX_DRAW_BUCKETS);
     }
 }

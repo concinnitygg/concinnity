@@ -3,8 +3,8 @@
 //! working directory at a fresh project for the edits that write files under
 //! its assets.
 
-use concinnity_core::components::ShaderStage;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::ShaderStage;
+use concinnity_engine::ecs::World;
 use concinnity_host::store::paths::StateTree;
 use std::path::{Path, PathBuf};
 
@@ -60,7 +60,7 @@ pub(super) fn shader_names(h: &EditorHook) -> Vec<String> {
 pub(super) fn form_world() -> World {
     let mut world = world_with_fields();
     for id in modal::ids().field_ids() {
-        world.push_identified(id, concinnity_core::components::TextInput::default());
+        world.push_identified(id, concinnity_engine::components::TextInput::default());
     }
     world
 }

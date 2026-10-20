@@ -7,12 +7,12 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components::{InputKey, KeyEvent, KeyPress, WindowMode};
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::math::narrow_f32;
-use concinnity_core::window::clipboard::Clipboard;
-use concinnity_core::window::display_mode::DisplayMode;
+use concinnity_engine::components::{InputKey, KeyEvent, KeyPress, WindowMode};
+use concinnity_engine::input::keymap::KeyMap;
+use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::window::clipboard::Clipboard;
+use concinnity_engine::window::display_mode::DisplayMode;
 use objc2::rc::Retained;
 use objc2_app_kit::{
     NSApplication, NSCursor, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSScreen,

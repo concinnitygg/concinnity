@@ -3,11 +3,11 @@
 //! over it (name parsing, arg reserialization, closed-vocabulary field listing,
 //! and reference-field listing). Consumed by the build pipeline and the
 //! in-engine editor; never by the runtime ECS, which loads components straight
-//! from their blob discriminants (`concinnity_core::ecs::ComponentAsset::from_baked`).
+//! from their blob discriminants (`concinnity_engine::ecs::ComponentAsset::from_baked`).
 //!
 //! The vocabulary arrives in three groups. The two the runtime can reach -- the
 //! components a world stores and the resources the cook compiles into the blob
-//! -- are the single source of truth in `concinnity_core::ecs::registry` (the
+//! -- are the single source of truth in `concinnity_engine::ecs::registry` (the
 //! `for_each_component!` macro). The third, the authoring-only types the cook
 //! expands away, is this crate's own: it lives in [`build_only`], and
 //! `for_each_authored_type!` composes the two so `RegisteredType` spans the
@@ -17,11 +17,11 @@ pub mod build_only;
 
 use crate::authoring::AuthoringError;
 pub use build_only::BuildOnlyAsset;
-use concinnity_core::components::{AppConfig, Camera3D, CameraTrack, File, Room, Spawner};
-use concinnity_core::ecs::{
+use concinnity_engine::components::{AppConfig, Camera3D, CameraTrack, File, Room, Spawner};
+use concinnity_engine::ecs::{
     ActionField, AssetFields, ComponentTag, EnumField, FieldTable, RefField, ResourceKind,
 };
-pub use concinnity_core::ecs::{AssetOrigin, AssetPayload};
+pub use concinnity_engine::ecs::{AssetOrigin, AssetPayload};
 use concinnity_host::thread::asset_id;
 use std::sync::OnceLock;
 
@@ -111,7 +111,7 @@ macro_rules! __meta_payload {
 macro_rules! __meta_args_ty {
     ($default:path;) => { $default };
     ($default:path; runtime $($r:tt)*) => { NoArgs };
-    ($default:path; args: $a:ident $($r:tt)*) => { concinnity_core::components::cook::$a };
+    ($default:path; args: $a:ident $($r:tt)*) => { concinnity_engine::components::cook::$a };
     ($default:path; $t:tt $($r:tt)*) => { __meta_args_ty!($default; $($r)*) };
 }
 
@@ -228,7 +228,7 @@ macro_rules! __meta_is_data {
     ($t:tt $($r:tt)*) => { __meta_is_data!($($r)*) };
 }
 
-// Hand a callback the whole declarable vocabulary: concinnity-core's `stored`
+// Hand a callback the whole declarable vocabulary: concinnity-engine's `stored`
 // and `resource` groups plus the `build_only` group this crate owns, in one
 // invocation shaped like a single list.
 //
@@ -245,7 +245,7 @@ macro_rules! __append_build_only {
 
 macro_rules! for_each_authored_type {
     ($cb:ident) => {
-        concinnity_core::for_each_component!(__append_build_only; $cb;);
+        concinnity_engine::for_each_component!(__append_build_only; $cb;);
     };
 }
 
@@ -332,11 +332,11 @@ macro_rules! define_registered_type {
             /// pass-through types, the `args:` override for the divergent
             /// ones, and an empty schema for a runtime-only component.
             #[cfg(feature = "schema")]
-            pub fn schema(self) -> &'static concinnity_core::ecs::schema::TypeSchema {
+            pub fn schema(self) -> &'static concinnity_engine::ecs::schema::TypeSchema {
                 match self {
                     $(
                         Self::$variant => <__meta_args_ty!($ty; $($meta)*)
-                            as concinnity_core::ecs::schema::Schema>::SCHEMA
+                            as concinnity_engine::ecs::schema::Schema>::SCHEMA
                     ),+
                 }
             }
@@ -655,7 +655,9 @@ pub fn set_reference(
 #[cfg(test)]
 mod authored_tests {
     use super::*;
-    use concinnity_core::components::{CharacterShape, DirectionalLight, EnvironmentMap, Texture};
+    use concinnity_engine::components::{
+        CharacterShape, DirectionalLight, EnvironmentMap, Texture,
+    };
 
     #[test]
     fn set_reference_names_a_field_the_typed_value_cannot_carry() {
@@ -705,7 +707,7 @@ mod authored_tests {
     #[test]
     fn authored_types_report_their_registered_name() {
         assert_eq!(
-            <concinnity_core::components::cook::Room as Authored>::TYPE,
+            <concinnity_engine::components::cook::Room as Authored>::TYPE,
             "Room"
         );
         assert_eq!(<DirectionalLight as Authored>::TYPE, "DirectionalLight");
@@ -718,8 +720,8 @@ mod authored_tests {
     #[test]
     fn the_reported_name_round_trips_through_the_registry() {
         for name in [
-            <concinnity_core::components::cook::Room as Authored>::TYPE,
-            <concinnity_core::components::cook::Camera3D as Authored>::TYPE,
+            <concinnity_engine::components::cook::Room as Authored>::TYPE,
+            <concinnity_engine::components::cook::Camera3D as Authored>::TYPE,
             <DirectionalLight as Authored>::TYPE,
         ] {
             assert!(
@@ -754,18 +756,21 @@ pub fn bake_divergent(
     }
     match ct {
         RegisteredType::Camera3D => {
-            bake!(Camera3D, concinnity_core::components::cook::Camera3D)
+            bake!(Camera3D, concinnity_engine::components::cook::Camera3D)
         }
         RegisteredType::CameraTrack => {
-            bake!(CameraTrack, concinnity_core::components::cook::CameraTrack)
+            bake!(
+                CameraTrack,
+                concinnity_engine::components::cook::CameraTrack
+            )
         }
-        RegisteredType::Room => bake!(Room, concinnity_core::components::cook::Room),
-        RegisteredType::File => bake!(File, concinnity_core::components::cook::File),
+        RegisteredType::Room => bake!(Room, concinnity_engine::components::cook::Room),
+        RegisteredType::File => bake!(File, concinnity_engine::components::cook::File),
         RegisteredType::Spawner => {
-            bake!(Spawner, concinnity_core::components::cook::Spawner)
+            bake!(Spawner, concinnity_engine::components::cook::Spawner)
         }
         RegisteredType::AppConfig => {
-            bake!(AppConfig, concinnity_core::components::cook::AppConfig)
+            bake!(AppConfig, concinnity_engine::components::cook::AppConfig)
         }
         _ => Ok(None),
     }
@@ -774,7 +779,7 @@ pub fn bake_divergent(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::ProceduralMesh;
+    use concinnity_engine::components::ProceduralMesh;
 
     #[test]
     fn registration_predicates_follow_origin_and_payload() {
@@ -802,7 +807,7 @@ mod tests {
     // the authored path converge on identical components.
     #[test]
     fn bake_divergent_round_trips_through_from_baked() {
-        use concinnity_core::ecs::Component;
+        use concinnity_engine::ecs::Component;
         use concinnity_host::thread::asset_id;
 
         let args = serde_json::json!({"size": [16.0, 20.0, 3.5]});
@@ -987,7 +992,7 @@ mod tests {
                 "indirect_lighting": { "ambient_intensity": -2.0 }
             }))
             .unwrap();
-        let loaded: concinnity_core::components::GraphicsConfig =
+        let loaded: concinnity_engine::components::GraphicsConfig =
             postcard::from_bytes(&baked).unwrap();
         assert_eq!(loaded.indirect_lighting.ambient_intensity, Some(0.0));
         assert_eq!(loaded.indirect_lighting.ssgi_rays, None);

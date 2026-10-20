@@ -3,27 +3,27 @@
 // backends identically.
 
 use ash::vk;
-use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::{
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::auto_exposure;
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::{
     InstancedCluster, LightUniforms, PostProcessParams, PostProcessTunables,
 };
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::FrameParams;
-use concinnity_core::render::buffers::retire_pool::RetirePool;
-use concinnity_core::render::frame::plan::drive_frame;
-use concinnity_core::render::light::lights::LightData;
-use concinnity_core::render::probe::book::ProbeBook;
-use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::shader::reload::ShaderReload;
-use concinnity_core::render::{
+use concinnity_engine::input::keymap::KeyMap;
+use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::render::backend::FrameParams;
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::render::frame::plan::drive_frame;
+use concinnity_engine::render::light::lights::LightData;
+use concinnity_engine::render::probe::book::ProbeBook;
+use concinnity_engine::render::scene_state::SceneState;
+use concinnity_engine::render::shader::reload::ShaderReload;
+use concinnity_engine::render::{
     backend, backend::error, backend::init, decal, environment::volumetric_fog, output::hdr,
     shadow::spot, slots::rewrites,
 };
-use concinnity_core::window::display_mode;
-use concinnity_core::{components, profile};
+use concinnity_engine::window::display_mode;
+use concinnity_engine::{components, profile};
 
 use super::allocator::PooledBuffer;
 use super::geometry_upload::{CopySubmit, GeometryDest, GeometryUploads};
@@ -294,7 +294,7 @@ pub(super) struct VkInstanced {
 impl VkInstanced {
     pub(super) fn new(clusters: Vec<InstancedCluster>) -> Self {
         Self {
-            any_lod: concinnity_core::gfx::lod::any_cluster_has_lod(&clusters),
+            any_lod: concinnity_engine::gfx::lod::any_cluster_has_lod(&clusters),
             clusters,
         }
     }
@@ -342,7 +342,7 @@ pub(super) struct VkCull {
     // GPU-culled command buffer through the shared bindless pipeline layout.
     // `None` marks a bucket whose Shader is not resident yet: its scene has not
     // pinned, so the pass skips those draws (see `world_shaders.rs`).
-    pub(super) world_pipelines: concinnity_core::render::shader::world_pipelines::WorldPipelines<
+    pub(super) world_pipelines: concinnity_engine::render::shader::world_pipelines::WorldPipelines<
         super::pipeline::BucketPipelines,
     >,
     // Commands reserved per shader-bucket region in the indirect buffers, fixed at
@@ -599,12 +599,12 @@ pub(super) struct VkUniforms {
     // The values the ring carries, which slots of it are stale, and the local
     // lights' reach. `record_frame` writes the frame's own slot, so no
     // in-flight read is ever raced.
-    pub(super) lights: concinnity_core::render::light::state::LightState,
+    pub(super) lights: concinnity_engine::render::light::state::LightState,
     // Per-frame-in-flight canopy block (global set 0 binding 21), persistently
     // mapped and rewritten each frame, and the block last written, which a
     // probe capture snapshots.
     pub(super) canopy_buffers: Vec<PooledBuffer>,
-    pub(super) canopy: concinnity_core::render::uniforms::canopy::CanopyParams,
+    pub(super) canopy: concinnity_engine::render::uniforms::canopy::CanopyParams,
     // The canopy's view tables (binding 22).
     pub(super) canopy_tables: super::canopy::VkCanopyTables,
 }
@@ -814,7 +814,7 @@ pub(super) struct VkTargets {
     // aliasing planner manages). Owns each managed transient's image + memory;
     // features read them back by label and the executor's barrier registry
     // resolves them the same way. It manages the transients the planner in
-    // crates/concinnity-core/src/render/render_graph/transient.rs declares.
+    // crates/concinnity-engine/src/render/render_graph/transient.rs declares.
     pub(super) transient_pool: super::transient_pool::TransientImagePool,
 }
 
@@ -863,14 +863,14 @@ pub(super) struct VkRayTracing {
     // How the TLAS is kept current when props move (the launch's `--rt-dynamic`
     // request); read by the per-frame `rt_dynamic_update`. Inert when `accel`
     // is `None`.
-    pub(super) dynamic_mode: concinnity_core::render::rt_accel::geom::RtDynamicMode,
+    pub(super) dynamic_mode: concinnity_engine::render::rt_accel::geom::RtDynamicMode,
     // Whether skinned meshes join the TLAS (the launch's `--rt-skinned-geometry`
     // request; in by default). Clear it and the BVH covers static + instanced
     // geometry only, isolating the skinned trace path.
     pub(super) skinned_geometry: bool,
     // Whether the per-frame BVH update is failing, so a failure is logged once
     // per streak rather than every frame.
-    pub(super) update_streak: concinnity_core::render::rt_accel::FailureStreak,
+    pub(super) update_streak: concinnity_engine::render::rt_accel::FailureStreak,
     // The compute-skinning pipeline (`rt_skin`) skinned geometry joins the BVH
     // through, built with the RT pass. `None` when the kernel failed to compile.
     pub(super) skin: Option<crate::vulkan::raytrace::SkinPipeline>,
@@ -1163,7 +1163,7 @@ pub(crate) struct VkContext {
     pub(super) grass: Option<super::grass::GrassResources>,
     // How this frame's view resolves the grass: where it coarsens, thins and
     // hands over to the canopy. `None` without grass.
-    pub(super) grass_lod: Option<concinnity_core::render::environment::grass::GrassLodView>,
+    pub(super) grass_lod: Option<concinnity_engine::render::environment::grass::GrassLodView>,
 
     // Auto-exposure (EV adaptation). See [`AutoExposureState`].
     pub(super) auto_exposure: AutoExposureState,
@@ -1593,7 +1593,7 @@ impl VkContext {
     // count, so only its scalar intensity / distance are updated.
     pub(crate) fn update_quality_params(
         &mut self,
-        g: &concinnity_core::settings::ResolvedGraphics,
+        g: &concinnity_engine::settings::ResolvedGraphics,
     ) {
         if let (Some(live), Some(cur)) = (g.ssao(), self.ssao.as_mut().map(|s| &mut s.settings)) {
             *cur = live;

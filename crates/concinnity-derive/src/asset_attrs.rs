@@ -48,7 +48,7 @@ impl AssetAttrs {
 
     /// The field's `ParamMeta` as a const expression.
     pub(crate) fn meta_expr(&self) -> TokenStream {
-        let fields = quote!(::concinnity_core::ecs::asset_fields);
+        let fields = quote!(::concinnity_engine::ecs::asset_fields);
         let bound = |expr: &Option<Expr>| {
             if let Some(expr) = expr {
                 quote!(::core::option::Option::Some((#expr) as f64))

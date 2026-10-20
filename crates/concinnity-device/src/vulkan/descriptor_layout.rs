@@ -15,9 +15,9 @@
 //! where they are built.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::FALLBACK_TEXTURE_COUNT;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::uniforms::BINDLESS_POOL_SIZE;
+use concinnity_engine::gfx::render_types::FALLBACK_TEXTURE_COUNT;
+use concinnity_engine::render::uniforms::BINDLESS_POOL_SIZE;
 
 // One descriptor binding: (binding index, descriptor type, shader stages).
 pub(in crate::vulkan) type Binding = (u32, vk::DescriptorType, vk::ShaderStageFlags);

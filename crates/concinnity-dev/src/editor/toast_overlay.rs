@@ -6,7 +6,7 @@
 //! toasts have no title bar, drag, focus rank, or View toggle, and they draw
 //! above all of that chrome.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use super::hud_ids::{Family, family_base, hud_ids};
 use super::notify::{Level, Stack};

@@ -1,0 +1,404 @@
+//! Mirror a camera across a world plane and oblique-clip the projection so
+//! geometry behind the plane never leaks into the reflection.
+
+use crate::gfx::render_types::ClusterCamera;
+use crate::render::depth::camera_oblique_projection;
+use crate::transform::{Mat4, mat4_inverse, mat4_mul};
+use concinnity_core::math::vec3::length;
+
+type Vec4 = [f32; 4];
+
+pub(super) fn mat_vec(m: Mat4, v: Vec4) -> Vec4 {
+    let mut out = [0.0f32; 4];
+    for row in 0..4 {
+        for k in 0..4 {
+            out[row] += m[k][row] * v[k];
+        }
+    }
+    out
+}
+
+fn transpose(m: Mat4) -> Mat4 {
+    let mut out = [[0.0f32; 4]; 4];
+    for col in 0..4 {
+        for row in 0..4 {
+            out[col][row] = m[row][col];
+        }
+    }
+    out
+}
+
+// Normalize a plane so its normal is unit length (scaling d to match). A zero
+// normal is returned unchanged (degenerate, callers guard separately).
+pub(crate) fn normalize_plane(plane: Vec4) -> Vec4 {
+    let len = length([plane[0], plane[1], plane[2]]);
+    if len < 1e-12 {
+        return plane;
+    }
+    let inv = 1.0 / len;
+    [
+        plane[0] * inv,
+        plane[1] * inv,
+        plane[2] * inv,
+        plane[3] * inv,
+    ]
+}
+
+// Householder reflection of world points across `plane` (unit normal). A point
+// p maps to p - 2 (n.p + d) n; this 4x4 applies that to homogeneous points.
+pub(crate) fn reflection_matrix(plane: Vec4) -> Mat4 {
+    let [nx, ny, nz, d] = plane;
+    [
+        [1.0 - 2.0 * nx * nx, -2.0 * ny * nx, -2.0 * nz * nx, 0.0],
+        [-2.0 * nx * ny, 1.0 - 2.0 * ny * ny, -2.0 * nz * ny, 0.0],
+        [-2.0 * nx * nz, -2.0 * ny * nz, 1.0 - 2.0 * nz * nz, 0.0],
+        [-2.0 * nx * d, -2.0 * ny * d, -2.0 * nz * d, 1.0],
+    ]
+}
+
+// Reflect a single world point across the plane (the reflected camera eye).
+pub(crate) fn reflect_point(p: [f32; 3], plane: Vec4) -> [f32; 3] {
+    let dist = plane[0] * p[0] + plane[1] * p[1] + plane[2] * p[2] + plane[3];
+    [
+        p[0] - 2.0 * dist * plane[0],
+        p[1] - 2.0 * dist * plane[1],
+        p[2] - 2.0 * dist * plane[2],
+    ]
+}
+
+// The reflected view matrix: reflect a world point across the plane, then apply
+// the camera view. Equivalent to rendering the scene from the mirrored camera.
+pub(crate) fn reflected_view(view: Mat4, plane: Vec4) -> Mat4 {
+    mat4_mul(view, reflection_matrix(plane))
+}
+
+// Transform a world-space plane into a view space. Planes transform by the
+// inverse-transpose of the world->view matrix: plane_view = (V^-1)^T . plane.
+pub(crate) fn plane_in_view(plane_world: Vec4, view: Mat4) -> Vec4 {
+    mat_vec(transpose(mat4_inverse(view)), plane_world)
+}
+
+/// Flip a plane so its normal points toward `point` (the kept side faces the
+/// camera). The reflection matrix is sign-invariant, but the oblique near-plane
+/// clip is not: it keeps the +n side, so the normal must face the viewer or the
+/// mirror render clips the wrong half. A no-op when `point` already lies on the
+/// +n side, which is the horizontal-water-above-camera case, so water renders
+/// identically with or without this orientation.
+pub fn orient_plane_toward(plane: Vec4, point: [f32; 3]) -> Vec4 {
+    let signed = plane[0] * point[0] + plane[1] * point[1] + plane[2] * point[2] + plane[3];
+    if signed < 0.0 {
+        [-plane[0], -plane[1], -plane[2], -plane[3]]
+    } else {
+        plane
+    }
+}
+
+/// The matrices a planar reflection pass needs for one mirror plane.
+#[derive(Clone, Copy, Debug)]
+pub struct PlanarMatrices {
+    /// Reflected view matrix (world -> mirrored view).
+    pub view: Mat4,
+    /// The camera projection with oblique near-plane clipping applied.
+    pub proj: Mat4,
+    /// Reflected view-projection with oblique near-plane clipping applied.
+    pub view_proj: Mat4,
+    /// The camera eye reflected across the plane (LOD / view-direction anchor).
+    pub eye: [f32; 3],
+}
+
+impl PlanarMatrices {
+    /// The camera a mirror render's light clusters are binned for, over a
+    /// `width` x `height` target: the reflected eye seen through the oblique
+    /// projection, so a fragment the mirror rasterizes lands in the cluster
+    /// built around it.
+    pub fn cluster_camera(&self, near: f32, range: f32, width: u32, height: u32) -> ClusterCamera {
+        ClusterCamera {
+            view: self.view,
+            proj: self.proj,
+            position: self.eye,
+            near,
+            range,
+            width,
+            height,
+        }
+    }
+}
+
+/// Build the mirror view + oblique-clipped view-projection + reflected eye for a
+/// camera (`view` / `proj` / `cam_pos`) reflecting across `plane_world`. The clip
+/// plane is nudged a hair below the surface (`clip_bias`, world units along the
+/// normal) so fragments exactly on the surface are not clipped by precision.
+pub fn planar_matrices(
+    view: Mat4,
+    proj: Mat4,
+    cam_pos: [f32; 3],
+    plane_world: Vec4,
+    clip_bias: f32,
+) -> PlanarMatrices {
+    let plane = normalize_plane(plane_world);
+    let r_view = reflected_view(view, plane);
+    // Push the clip plane slightly toward the kept (normal) side so geometry
+    // right at the waterline survives the near-plane test.
+    let clip_world = [plane[0], plane[1], plane[2], plane[3] + clip_bias];
+    let clip_view = plane_in_view(clip_world, r_view);
+    let r_proj = camera_oblique_projection(proj, clip_view);
+    PlanarMatrices {
+        view: r_view,
+        proj: r_proj,
+        view_proj: mat4_mul(r_proj, r_view),
+        eye: reflect_point(cam_pos, plane),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::depth::camera_projection;
+
+    // Apply a column-major transform to a homogeneous point.
+    fn xform(m: Mat4, p: [f32; 4]) -> [f32; 4] {
+        mat_vec(m, p)
+    }
+
+    fn approx(a: f32, b: f32, eps: f32) -> bool {
+        (a - b).abs() <= eps
+    }
+
+    #[test]
+    fn reflection_is_an_involution() {
+        // Reflecting twice returns the original point (R * R = I).
+        let plane = normalize_plane([0.0, 1.0, 0.0, -2.0]); // y = 2
+        let p = [3.0, 5.0, -1.0];
+        let once = reflect_point(p, plane);
+        let twice = reflect_point(once, plane);
+        assert!(approx(twice[0], p[0], 1e-5));
+        assert!(approx(twice[1], p[1], 1e-5));
+        assert!(approx(twice[2], p[2], 1e-5));
+    }
+
+    #[test]
+    fn reflection_across_y_plane_flips_height_about_it() {
+        // y = 2 plane: a point at y=5 reflects to y=-1 (mirror about 2).
+        let plane = normalize_plane([0.0, 1.0, 0.0, -2.0]);
+        let r = reflect_point([3.0, 5.0, -1.0], plane);
+        assert!(approx(r[0], 3.0, 1e-5));
+        assert!(approx(r[1], -1.0, 1e-5));
+        assert!(approx(r[2], -1.0, 1e-5));
+    }
+
+    #[test]
+    fn reflection_matrix_matches_point_reflection() {
+        let plane = normalize_plane([0.2, 0.9, -0.3, 1.4]);
+        let m = reflection_matrix(plane);
+        let p = [1.3, -2.1, 0.7];
+        let via_matrix = xform(m, [p[0], p[1], p[2], 1.0]);
+        let via_point = reflect_point(p, plane);
+        for i in 0..3 {
+            assert!(approx(via_matrix[i], via_point[i], 1e-4), "component {i}");
+        }
+        assert!(approx(via_matrix[3], 1.0, 1e-5));
+    }
+
+    #[test]
+    fn inverse_round_trips() {
+        let m = camera_projection(1.1, 1.7, 0.2);
+        let id = mat4_mul(m, mat4_inverse(m));
+        for (c, col) in id.iter().enumerate() {
+            for (r, &val) in col.iter().enumerate() {
+                let expect = if c == r { 1.0 } else { 0.0 };
+                assert!(approx(val, expect, 1e-4), "[{c}][{r}]");
+            }
+        }
+    }
+
+    #[test]
+    fn oblique_clip_puts_the_plane_at_the_near_depth() {
+        // A view-space plane at z = -5 facing the camera (kept side is farther,
+        // z < -5). After oblique clipping the reversed-depth projection, a point
+        // ON the plane maps to ndc.z ~= 1 (the near plane), a point in front (far
+        // side) to ndc.z in (0, 1), and a point behind the plane past 1
+        // (clipped).
+        let proj = camera_projection(1.2, 1.0, 0.1);
+        // Plane z = -5: n.p + d = 0 with kept side n.p + d > 0 toward -z (far).
+        // Choose C so the far/kept side is positive: C = (0,0,-1,-5) -> for
+        // p=(0,0,-50): -(-50)-5 = 45 > 0 (kept); p=(0,0,-2): 2-5 = -3 < 0 (clip).
+        let c = [0.0, 0.0, -1.0, -5.0];
+        let pobl = camera_oblique_projection(proj, c);
+
+        let ndc_z = |z: f32| {
+            let clip = xform(pobl, [0.0, 0.0, z, 1.0]);
+            clip[2] / clip[3]
+        };
+        assert!(approx(ndc_z(-5.0), 1.0, 1e-3), "on-plane ndc.z");
+        let front = ndc_z(-50.0);
+        assert!(front > 0.0 && front < 1.0, "far side in [0,1]: {front}");
+        assert!(ndc_z(-2.0) > 1.0, "near side clipped");
+    }
+
+    #[test]
+    fn oblique_clip_preserves_x_and_y_projection() {
+        // Only the depth row changes; x/y of a projected point are untouched.
+        let proj = camera_projection(1.0, 1.5, 0.1);
+        let c = [0.0, 0.0, -1.0, -8.0];
+        let pobl = camera_oblique_projection(proj, c);
+        let p = [2.0, 1.5, -20.0, 1.0];
+        let a = xform(proj, p);
+        let b = xform(pobl, p);
+        assert!(approx(a[0] / a[3], b[0] / b[3], 1e-5), "ndc.x");
+        assert!(approx(a[1] / a[3], b[1] / b[3], 1e-5), "ndc.y");
+    }
+
+    #[test]
+    fn planar_matrices_clip_below_the_water_plane() {
+        // A camera above a horizontal water plane (y = 0, normal up). The mirror
+        // pass must clip world geometry BELOW the plane (it would otherwise leak
+        // into the reflection). Verify a below-water point lands past the near
+        // plane (ndc.z > 1 under reversed depth) and an above-water point stays
+        // in [0, 1].
+        let plane = [0.0, 1.0, 0.0, 0.0]; // y = 0, normal +y (kept side: above)
+        // Simple camera at (0, 3, 6) looking toward -z and slightly down. Build a
+        // view that just translates (identity rotation is enough for the depth
+        // sign test since reflection + projection handle the rest).
+        let view = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, -3.0, -6.0, 1.0],
+        ];
+        let proj = camera_projection(1.2, 1.6, 0.1);
+        let m = planar_matrices(view, proj, [0.0, 3.0, 6.0], plane, 0.0);
+
+        let ndc_z = |p: [f32; 3]| {
+            let clip = xform(m.view_proj, [p[0], p[1], p[2], 1.0]);
+            clip[2] / clip[3]
+        };
+        // Above water, in front of the camera: visible (0..1).
+        let above = ndc_z([0.0, 2.0, -4.0]);
+        assert!(above > 0.0 && above < 1.0, "above-water visible: {above}");
+        // Below water, in front of the camera: clipped (ndc.z > 1).
+        let below = ndc_z([0.0, -2.0, -4.0]);
+        assert!(below > 1.0, "below-water clipped: {below}");
+        // The reflected eye sits below the plane (mirror of y = 3).
+        assert!(approx(m.eye[1], -3.0, 1e-5), "reflected eye height");
+    }
+
+    // The light-binning kernel places a cluster by unprojecting the tile's NDC
+    // corners through `inv_view_proj` (at the far depth) and slicing along
+    // `view_forward`; the mirror's fragment places itself by its rasterized
+    // position and `-(view * p).z`. Both must agree for every reflected point,
+    // through the oblique projection.
+    #[test]
+    fn a_mirror_fragment_finds_the_cluster_built_around_it() {
+        let plane = [0.0, 1.0, 0.0, 0.0];
+        let cam_pos = [1.0, 3.0, 8.0];
+        let view = crate::gfx::projection::look_at(cam_pos, [0.0, 0.5, -6.0], [0.0, 1.0, 0.0]);
+        let proj = camera_projection(1.1, 1.6, 0.1);
+        let m = planar_matrices(view, proj, cam_pos, plane, 0.02);
+        let params = crate::gfx::render_types::ClusterParams::for_camera(
+            &m.cluster_camera(0.1, 120.0, 1600, 1000),
+            4,
+            0,
+        );
+        assert_eq!(params.use_clusters, 1);
+
+        for p in [[0.0, 2.0, -4.0], [3.5, 0.4, -12.0], [-6.0, 7.0, -30.0]] {
+            let clip = xform(m.view_proj, [p[0], p[1], p[2], 1.0]);
+            assert!(clip[3] > 0.0, "{p:?} is in front of the mirror camera");
+            let ndc = [clip[0] / clip[3], clip[1] / clip[3]];
+
+            let h = xform(params.inv_view_proj, [ndc[0], ndc[1], 0.0, 1.0]);
+            let ray = concinnity_core::math::vec3::normalize_clamped(
+                [
+                    h[0] - h[3] * params.cam_pos[0],
+                    h[1] - h[3] * params.cam_pos[1],
+                    h[2] - h[3] * params.cam_pos[2],
+                ],
+                1e-12,
+            );
+            let to_p = concinnity_core::math::vec3::normalize_clamped(
+                [p[0] - m.eye[0], p[1] - m.eye[1], p[2] - m.eye[2]],
+                1e-12,
+            );
+            let along = concinnity_core::math::vec3::dot(ray, to_p);
+            assert!(approx(along, 1.0, 1e-4), "{p:?}: ray off by {along}");
+
+            let kernel_depth = concinnity_core::math::vec3::dot(
+                [p[0] - m.eye[0], p[1] - m.eye[1], p[2] - m.eye[2]],
+                params.view_forward,
+            );
+            let fragment_depth = -xform(m.view, [p[0], p[1], p[2], 1.0])[2];
+            assert!(
+                approx(kernel_depth, fragment_depth, 1e-3),
+                "{p:?}: kernel {kernel_depth} vs fragment {fragment_depth}"
+            );
+        }
+    }
+
+    #[test]
+    fn orient_plane_faces_the_camera() {
+        // A vertical pane at z = -3 with normal pointing toward -z. A camera in
+        // front of it (at +z relative to the pane) must flip the normal so the
+        // kept (oblique-clip) side faces the viewer.
+        let plane = normalize_plane([0.0, 0.0, -1.0, -3.0]); // n.p + d = 0 -> z = -3
+        let cam = [0.0, 1.0, 0.0]; // in front of the pane (z = 0 > -3 side)
+        let oriented = orient_plane_toward(plane, cam);
+        let signed =
+            oriented[0] * cam[0] + oriented[1] * cam[1] + oriented[2] * cam[2] + oriented[3];
+        assert!(signed > 0.0, "camera must be on the +normal (kept) side");
+        // It flipped the original (which faced away from the camera).
+        assert!(approx(oriented[2], 1.0, 1e-5), "normal flipped toward +z");
+    }
+
+    #[test]
+    fn orient_plane_is_noop_for_water_above_camera() {
+        // Horizontal water plane y = 2, normal +y. A camera above it keeps the
+        // plane unchanged, so water renders identically with the orientation step.
+        let plane = normalize_plane([0.0, 1.0, 0.0, -2.0]);
+        let cam = [3.0, 5.0, -1.0]; // above the plane
+        let oriented = orient_plane_toward(plane, cam);
+        for i in 0..4 {
+            assert!(
+                approx(oriented[i], plane[i], 1e-6),
+                "component {i} unchanged"
+            );
+        }
+    }
+
+    #[test]
+    fn reflected_frustum_captures_geometry_behind_the_camera() {
+        // A vertical mirror at z = -5 (unit normal +z, facing the camera). The
+        // camera sits at the origin looking down -z, toward the mirror. An object
+        // BEHIND the camera (z = +3) is outside the main frustum, but its
+        // reflection is visible in the mirror -- so the reflected-frustum cull must
+        // capture it where the main-camera set would miss it (the V1 gap).
+        let plane = [0.0, 0.0, 1.0, 5.0]; // n.p + d = 0 -> z = -5
+        let view = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let proj = camera_projection(1.2, 1.6, 0.1);
+        let cam_pos = [0.0, 0.0, 0.0];
+        let m = planar_matrices(view, proj, cam_pos, plane, 0.0);
+
+        // One object behind the camera.
+        let bb_min = [-0.5, -0.5, 2.5];
+        let bb_max = [0.5, 0.5, 3.5];
+
+        // The main camera rejects it (behind the near plane).
+        let main_frustum = crate::gfx::frustum::Frustum::from_camera(proj, None);
+        assert!(
+            !main_frustum.intersects_aabb(bb_min, bb_max),
+            "object behind the camera must be outside the main frustum"
+        );
+
+        // The reflected frustum captures it. This is the frustum the GPU mirror
+        // cull tests each record against.
+        let reflected_frustum = crate::gfx::frustum::Frustum::from_camera(m.view_proj, None);
+        assert!(
+            reflected_frustum.intersects_aabb(bb_min, bb_max),
+            "object behind the camera must be visible in the reflection"
+        );
+    }
+}

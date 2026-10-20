@@ -6,9 +6,9 @@
 //! rebuild paths that write fresh buffers.
 
 use ash::vk;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::backend::{GeometryEdit, SceneHost};
-use concinnity_core::render::scene_state::{GeometryBuffer, GeometryWriter, SceneState};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::{GeometryEdit, SceneHost};
+use concinnity_engine::render::scene_state::{GeometryBuffer, GeometryWriter, SceneState};
 
 use super::super::allocator::DeviceAllocator;
 use super::super::context::{VkContext, debug_assert_main_thread};

@@ -7,9 +7,9 @@
 //! Selecting an icon goes through the same handle-keyed selection the mesh pick
 //! uses, so the form, tree, and gizmo all follow for free.
 
-use concinnity_core::components::{Camera3D, FrameInput, Transform};
-use concinnity_core::ecs::{Entity, PickIndex, World};
-use concinnity_core::math::pick::ray_aabb;
+use concinnity_engine::components::{Camera3D, FrameInput, Transform};
+use concinnity_engine::ecs::{Entity, PickIndex, World};
+use concinnity_engine::gfx::pick::ray_aabb;
 use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::{EditorHook, entry_type, pick};

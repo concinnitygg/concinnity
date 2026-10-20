@@ -16,6 +16,7 @@ concinnity-core = { path = "crates/concinnity-core", version = "0.20" }
 concinnity-derive = { path = "crates/concinnity-derive", version = "0.20" }
 concinnity-dev = { path = "crates/concinnity-dev", version = "0.20" }
 concinnity-device = { path = "crates/concinnity-device", version = "0.20" }
+concinnity-engine = { path = "crates/concinnity-engine", version = "0.20" }
 concinnity-runtime = { path = "crates/concinnity-runtime", version = "0.20" }
 concinnity-host = { path = "crates/concinnity-host", version = "0.20" }
 concinnity-shader = { path = "crates/concinnity-shader", version = "0.20" }
@@ -104,6 +105,7 @@ cook = ["std", "dep:concinnity-cook"]
 vulkan = ["std", "concinnity-runtime/vulkan", "concinnity-dev?/vulkan"]
 
 [dependencies]
+concinnity-engine = { workspace = true }
 concinnity-core = { workspace = true }
 concinnity-runtime = { workspace = true, optional = true }
 concinnity-host = { workspace = true, optional = true }

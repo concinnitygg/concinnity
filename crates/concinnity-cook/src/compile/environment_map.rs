@@ -32,9 +32,9 @@
 //!
 //! Face order matches `CubemapTexture`: +X, -X, +Y, -Y, +Z, -Z.
 
-use concinnity_core::bake::environment_map::source::{bake_payload, generate_sky_equirect};
-use concinnity_core::bake::environment_map::stars::generate_stars_equirect;
-use concinnity_core::components::{EnvironmentMap, FramePriority};
+use concinnity_engine::bake::environment_map::source::{bake_payload, generate_sky_equirect};
+use concinnity_engine::bake::environment_map::stars::generate_stars_equirect;
+use concinnity_engine::components::{EnvironmentMap, FramePriority};
 use concinnity_host::thread::jobs;
 use serde::Deserialize;
 use std::path::Path;
@@ -45,7 +45,7 @@ use crate::codec::hdr::HdrImage;
 //
 // The three tunables (prefilter/irradiance face size, prefilter sample count)
 // have a single source of truth: the `EnvironmentMap` `Default` impl in
-// concinnity-core. Args are deserialized through that struct, so a field absent
+// concinnity-engine. Args are deserialized through that struct, so a field absent
 // from the JSONL inherits that default instead of a constant duplicated here.
 
 fn resolve_args(args: &serde_json::Value) -> Result<EnvironmentMap, String> {
@@ -72,7 +72,7 @@ fn resolve_args(args: &serde_json::Value) -> Result<EnvironmentMap, String> {
     }
     // The baked dimensions are checked by the bake itself, so an authored map
     // and a typed one are refused the same way.
-    concinnity_core::bake::environment_map::check_sizes(&params)?;
+    concinnity_engine::bake::environment_map::check_sizes(&params)?;
     Ok(params)
 }
 
@@ -118,7 +118,7 @@ pub(crate) fn environment_map_payload_key_args(
 // The runtime fields the record carries beside the payload.
 pub(crate) fn compile_environment_map_data(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     resolve_args(args)
-        .map(|map| concinnity_core::resource::EnvironmentMapRecord::from(&map).to_bytes())
+        .map(|map| concinnity_engine::resource::EnvironmentMapRecord::from(&map).to_bytes())
 }
 
 // Source containers an equirectangular panorama can arrive in.
@@ -214,8 +214,8 @@ pub fn decode_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::bake::environment_map::deserialize;
     use concinnity_core::math::SaturatingFrom;
+    use concinnity_engine::bake::environment_map::deserialize;
 
     #[test]
     fn validate_environment_map_args_requires_source_or_generator() {
@@ -276,7 +276,7 @@ mod tests {
     // renderer reads it without the payload changing.
     #[test]
     fn the_record_data_carries_the_background_flag() {
-        use concinnity_core::resource::{EnvironmentMapTable, ResourceEntry};
+        use concinnity_engine::resource::{EnvironmentMapTable, ResourceEntry};
         let table = |args| {
             EnvironmentMapTable(vec![ResourceEntry {
                 data_bytes: compile_environment_map_data(&args).unwrap(),
@@ -299,8 +299,8 @@ mod tests {
         let rt = crate::authoring::registry::RegisteredType::EnvironmentMap;
         let ctx = crate::asset::BuildCtx {
             name: "env",
-            targets: concinnity_core::platform::PlatformSet::single(
-                concinnity_core::platform::Platform::Metal,
+            targets: concinnity_engine::platform::PlatformSet::single(
+                concinnity_engine::platform::Platform::Metal,
             ),
             assets_dir: None,
             all_assets: &[],

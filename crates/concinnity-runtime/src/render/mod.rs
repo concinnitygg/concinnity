@@ -1,7 +1,7 @@
 //! The graphics driver: `GraphicsSystem`, the load threads and payload sources
 //! behind core's streaming pools, and the standalone startup-error window. The
-//! decisions they act on live in `concinnity_core::settings` and
-//! `concinnity_core::render`.
+//! decisions they act on live in `concinnity_engine::settings` and
+//! `concinnity_engine::render`.
 
 // The bundled glyph atlas baked into the binary: the face the startup error
 // screen draws with, and the fallback for a world whose labels name no Font.

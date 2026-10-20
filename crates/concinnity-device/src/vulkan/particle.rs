@@ -21,14 +21,14 @@
 //! src/directx/particle.rs and src/metal/particle.rs.
 
 use ash::vk;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::ParticleParams;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::math::saturating_u32;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleFrame, ParticleSystem};
-use concinnity_core::render::temporal::reactive_mask::ReactiveWrite;
-use concinnity_core::render::uniforms::{GpuParticle, ParticleView};
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::ParticleParams;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::particles::{ParticleEmitterRecord, ParticleFrame, ParticleSystem};
+use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
+use concinnity_engine::render::uniforms::{GpuParticle, ParticleView};
 
 use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
@@ -47,7 +47,8 @@ use crate::vulkan::owned::{
 
 // The per-emitter descriptor pool reserves a fixed block of `2 * MAX_EMITTERS`
 // sets at init (one compute set + one render set per emitter).
-pub(in crate::vulkan) const MAX_EMITTERS: usize = concinnity_core::render::particles::MAX_EMITTERS;
+pub(in crate::vulkan) const MAX_EMITTERS: usize =
+    concinnity_engine::render::particles::MAX_EMITTERS;
 
 // `GpuParticle` (one simulation-pool slot) and `ParticleView` (the render-pass
 // view UBO) are GPU-free layout structs that live in `core::render`

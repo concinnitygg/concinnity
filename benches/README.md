@@ -42,7 +42,7 @@ cargo bench -- --json out.json   # machine-readable report
   benchmarks use. World populate (with and without the manifest pre-size),
   column iteration, targeted lookups, and column drain. `World::despawn` is
   `#[cfg(test)]` and so is not reachable here.
-- `render`: the GPU-free render-prep layer (`concinnity_core::render`). Light
+- `render`: the GPU-free render-prep layer (`concinnity_engine::render`). Light
   packing for the clustered forward pass, the streaming planner's per-frame
   re-rank under sustained pool pressure (churn asserted), and draw-slot
   recycling. No backend is involved; the BVH build and frustum query are
@@ -55,14 +55,14 @@ macro or the private type they drive is expanded by its consumers rather than
 called across a crate boundary. They run as ignored tests, and report through
 the same `Bench::run` instrument:
 
-- the ECS storage primitives (`concinnity-core`). Spawn and despawn churn,
+- the ECS storage primitives (`concinnity-engine`). Spawn and despawn churn,
   dense column scans, two- and three-way joins (partner columns shuffled so
   probes pay a real scattered read), targeted lookups, and the event queue;
   plus the three-way join comparison that sized the draw-list build path.
 
   ```
-  cargo test -p concinnity-core --release -- --ignored --nocapture --test-threads=1 bench_storage
-  cargo test -p concinnity-core --release -- --ignored --nocapture join_probe
+  cargo test -p concinnity-engine --release -- --ignored --nocapture --test-threads=1 bench_storage
+  cargo test -p concinnity-engine --release -- --ignored --nocapture join_probe
   ```
 
 - the allocation layer (`concinnity_core::memory`). Frame arena against the heap
@@ -73,7 +73,7 @@ the same `Bench::run` instrument:
   cargo test -p concinnity-core --release -- --ignored --nocapture --test-threads=1 memory::bench
   ```
 
-- the rigid-body simulation (`concinnity_core::physics`). Stepping benches rebuild
+- the rigid-body simulation (`concinnity_engine::physics`). Stepping benches rebuild
   an identical stacked world and step it a fixed count per iteration, so the
   measured work is bit-identical run to run (asserted, so a change that breaks
   determinism fails loudly): sustained-contact settling, contact-free fall, the
@@ -85,15 +85,15 @@ the same `Bench::run` instrument:
   which the determinism assertion checks.
 
   ```
-  cargo test -p concinnity-core --release -- --ignored --nocapture --test-threads=1 physics::bench
+  cargo test -p concinnity-engine --release -- --ignored --nocapture --test-threads=1 physics::bench
   ```
 
-- the render-prep BVH (`concinnity_core::render::bvh`). Build and frustum query
+- the render-prep BVH (`concinnity_engine::render::bvh`). Build and frustum query
   over a 10k-object scene, against the item type the builder is generic over,
   which its consumers rather than this package supply.
 
   ```
-  cargo test -p concinnity-core --release -- --ignored --nocapture --test-threads=1 bench_bvh
+  cargo test -p concinnity-engine --release -- --ignored --nocapture --test-threads=1 bench_bvh
   ```
 
 ## Reading the report

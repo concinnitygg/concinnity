@@ -12,8 +12,8 @@
 //! took its place.
 
 use concinnity_cook::authoring::world::{entry_handle, find_entry};
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
 
 use super::EditorHook;

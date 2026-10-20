@@ -5,12 +5,12 @@
 //! side of it is covered.
 //!
 //! Styled after the engine's own scene-loading overlay
-//! (`concinnity-core/src/defaults/loading.rs`): a black field with the word
+//! (`concinnity-engine/src/defaults/loading.rs`): a black field with the word
 //! over it. There is no progress bar, because there is no progress to report --
 //! the compile is one call, and a bar frozen mid-sweep reads as a hang.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hud_ids::{Family, family_base, hud_ids};
 use crate::editor::{theme, widget};
@@ -55,7 +55,7 @@ pub(crate) fn hide(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_engine::components::{Sprite, TextLabel};
 
     fn injected_world() -> World {
         let mut world = World::new();

@@ -35,18 +35,18 @@
 //!     template's caveat). Volumes whose bbox sits fully behind
 //!     rasterized geometry pay the full march cost.
 
-use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::render_types::LightUniforms;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::platform::Platform;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::backend::init::SdfVolumeSource;
-use concinnity_core::render::sdf::programs::SdfPrograms;
-use concinnity_core::render::sdf::volume::SdfVolume;
-use concinnity_core::render::shader::programs::raymarch::{Family, ProxyFaces, VolumeFlags};
+use concinnity_engine::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::gfx::render_types::LightUniforms;
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::SdfVolumeSource;
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::sdf::volume::SdfVolume;
+use concinnity_engine::render::shader::programs::raymarch::{Family, ProxyFaces, VolumeFlags};
 use std::ffi::c_void;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -54,12 +54,12 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 // One declaration for all three backends, in `core::render::uniforms`.
 // Re-exported so `crate::directx::raymarch::{RaymarchView, RaymarchVolumeUniforms}`
 // stay the paths the encode and `volume_uniforms_from` sites use.
-pub(in crate::directx) use concinnity_core::render::uniforms::{
+pub(in crate::directx) use concinnity_engine::render::uniforms::{
     RaymarchView, RaymarchVolumeUniforms,
 };
 
-use concinnity_core::render::uniforms::{GBufferView, PassCamera};
-use concinnity_core::transform::mat4_inverse;
+use concinnity_engine::render::uniforms::{GBufferView, PassCamera};
+use concinnity_engine::transform::mat4_inverse;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use super::post::gbuffer::GbufferPrepassView;
@@ -1577,4 +1577,4 @@ fn draw_volume_cube(cmd: &ID3D12GraphicsCommandList, pso: &ID3D12PipelineState, 
 const _LIGHT_LAYOUT_REF: usize = size_of::<LightUniforms>();
 
 // The `RaymarchView` / `RaymarchVolumeUniforms` layout tests live with the
-// structs in `concinnity_core::render::uniforms::directx`.
+// structs in `concinnity_engine::render::uniforms::directx`.

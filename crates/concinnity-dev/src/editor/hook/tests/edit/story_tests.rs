@@ -4,9 +4,9 @@
 //! reports, and the starter file a create writes along with the import that
 //! names it.
 
-use concinnity_core::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress};
-use concinnity_core::ecs::World;
-use concinnity_core::window::clipboard::Clipboard;
+use concinnity_engine::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress};
+use concinnity_engine::ecs::World;
+use concinnity_engine::window::clipboard::Clipboard;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::hook;

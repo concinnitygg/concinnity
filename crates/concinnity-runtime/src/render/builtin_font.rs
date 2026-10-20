@@ -6,8 +6,8 @@
 // the renderer's fallback for any TextLabel or TextInput naming no Font, which
 // is the engine's one answer to that whichever way the world was assembled.
 
-use concinnity_core::ecs::FontHandle;
-use concinnity_core::render::overlay::text::LoadedFont;
+use concinnity_engine::ecs::FontHandle;
+use concinnity_engine::render::overlay::text::LoadedFont;
 
 const BAKED_ATLAS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtin_font.bin"));
 
@@ -23,7 +23,7 @@ pub(crate) struct BuiltinFont {
 // `None` means the embedded payload did not parse, which leaves the caller no
 // way to draw text with it.
 pub(crate) fn load(handle: FontHandle) -> Option<BuiltinFont> {
-    match concinnity_core::bake::font::load_face(handle.0 as usize, BAKED_ATLAS) {
+    match concinnity_engine::bake::font::load_face(handle.0 as usize, BAKED_ATLAS) {
         Ok((loaded, atlas)) => Some(BuiltinFont { loaded, atlas }),
         Err(e) => {
             tracing::error!("built-in font atlas failed to decode: {e}");

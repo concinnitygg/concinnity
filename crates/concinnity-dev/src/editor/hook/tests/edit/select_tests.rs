@@ -3,7 +3,7 @@
 //! which entry list each relationship is fed, that a hit replaces the selection
 //! wholesale, and that a miss reports without disturbing what was selected.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{select, selected};

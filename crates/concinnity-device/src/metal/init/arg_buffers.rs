@@ -2,7 +2,7 @@
 //! sampler block, and the gates that decide when a texture block's ring slot is
 //! rewritten.
 
-use concinnity_core::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 
 use super::{InitGpu, pipelines};
 use crate::metal::bindless_args::{ResidencySet, SlotGates};

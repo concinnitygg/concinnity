@@ -36,8 +36,8 @@
 
 use super::builtin_shaders::compute_pipeline;
 use super::error::allocation_failed;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::hiz::spd;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::hiz::spd;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSRange, ns_string};
@@ -48,7 +48,7 @@ use objc2_metal::{
 // GPU-free repr(C) push struct; lives in `core::render` so its layout test
 // counts toward coverage. Re-exported so this file's existing `HizParams` path
 // is unchanged.
-use concinnity_core::render::uniforms::HizParams;
+use concinnity_engine::render::uniforms::HizParams;
 
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;

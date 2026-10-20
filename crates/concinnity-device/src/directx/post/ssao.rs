@@ -2,15 +2,17 @@
 //! pass binds while it is off, and the view of the pool's `ao_output` the blur
 //! writes. The depth copy, kernel and blur -- their pipelines, the depth copy
 //! and raw occlusion they own and every draw -- are written once in
-//! `concinnity_core::render::post::ssao` and reach D3D12 through
+//! `concinnity_engine::render::post::ssao` and reach D3D12 through
 //! `DxPostDevice`. The view normal + linear depth they read come from the
 //! unified G-buffer pre-pass.
 
-use concinnity_core::gfx::render_types::SsaoParams;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::post::ssao::settings::SsaoSettings;
-use concinnity_core::render::post::ssao::{OCCLUSION_FORMAT, SsaoInputs, SsaoPass, SsaoPipelines};
+use concinnity_engine::gfx::render_types::SsaoParams;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::ssao::settings::SsaoSettings;
+use concinnity_engine::render::post::ssao::{
+    OCCLUSION_FORMAT, SsaoInputs, SsaoPass, SsaoPipelines,
+};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::allocator::PooledTexture;

@@ -37,7 +37,7 @@ mod rig;
 
 use crate::authoring::world::args_with_id;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::transform::{
+use concinnity_engine::transform::{
     IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul, mat4_transform_point,
 };
 use rig::{SkinnedPart, rig_entries};

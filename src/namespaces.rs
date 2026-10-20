@@ -5,7 +5,7 @@
 // follows.
 //
 // The groups come from two lists: the runtime's (`stored` and `resource`, in
-// concinnity-core) and the authoring-only one (`build_only`, in
+// concinnity-engine) and the authoring-only one (`build_only`, in
 // concinnity-cook, which the runtime tier never links). One derived check per
 // list, so each name is checked for being both reachable and reachable through
 // the right namespace. The entries' metadata blocks are captured and ignored.
@@ -17,7 +17,7 @@ macro_rules! assert_runtime_groups_are_partitioned {
         stored: { $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? },
         resource: { $( $rvariant:ident => $rty:path { $($rmeta:tt)* } ),+ $(,)? } $(,)?
     ) => {
-        fn a_world_holds<T: concinnity_core::ecs::RuntimeComponent>() {}
+        fn a_world_holds<T: concinnity_engine::ecs::RuntimeComponent>() {}
 
         #[test]
         fn the_components_namespace_is_the_stored_group() {
@@ -25,7 +25,7 @@ macro_rules! assert_runtime_groups_are_partitioned {
         }
 
         #[cfg(feature = "cook")]
-        fn the_cook_compiles<T: concinnity_core::ecs::ResourceAsset>() {}
+        fn the_cook_compiles<T: concinnity_engine::ecs::ResourceAsset>() {}
 
         // The five types whose authored form diverges are in both namespaces by
         // design, and are checked above through their runtime form; a bare name
@@ -38,7 +38,7 @@ macro_rules! assert_runtime_groups_are_partitioned {
     };
 }
 
-concinnity_core::for_each_component!(assert_runtime_groups_are_partitioned);
+concinnity_engine::for_each_component!(assert_runtime_groups_are_partitioned);
 
 // The same, for the group the authoring registry owns. Gated whole: without
 // `cook` there is no `cook` namespace to reach these through, and no

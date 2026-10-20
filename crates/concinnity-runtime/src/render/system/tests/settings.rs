@@ -1,11 +1,11 @@
 use super::*;
-use concinnity_core::benchmark::BenchmarkRun;
-use concinnity_core::components::{
+use concinnity_engine::benchmark::BenchmarkRun;
+use concinnity_engine::components::{
     BenchmarkConfig, FrameCapture, KeyBinding, UiAction, WindowMode,
 };
-use concinnity_core::render::backend::init::EmbeddedSurface;
-use concinnity_core::render::rt_accel::geom::RtDynamicMode;
-use concinnity_core::window::display_mode::DisplayMode;
+use concinnity_engine::render::backend::init::EmbeddedSurface;
+use concinnity_engine::render::rt_accel::geom::RtDynamicMode;
+use concinnity_engine::window::display_mode::DisplayMode;
 
 // The `--quality-preset` launch flag has to reach the CEILING, not merely the
 // menu label. On a mid-tier GPU `Auto` resolves to the `High` ceiling, which
@@ -17,7 +17,7 @@ fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
     let authored = effects(|e| {
         e.reflections.ray_traced = true;
     });
-    let mut settings = concinnity_core::settings::StoredSettings::default();
+    let mut settings = concinnity_engine::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Auto);
 
     let (clamped, hooks) = recording_hooks_with(profile_at(GpuTier::MidDiscrete));
@@ -197,7 +197,7 @@ fn an_embedded_surface_resource_reaches_the_backend() {
 // publishes the mode list and the frame-rate cap.
 #[test]
 fn persisted_display_and_system_overrides_reach_the_backend() {
-    let mut settings = concinnity_core::settings::StoredSettings::default();
+    let mut settings = concinnity_engine::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Custom);
     settings.graphics.window_mode = Some(WindowMode::Fullscreen);
     settings.graphics.resolution = Some([1920, 1080, 60]);
@@ -228,7 +228,7 @@ fn persisted_display_and_system_overrides_reach_the_backend() {
     // rather than publishing an empty dropdown.
     assert!(
         !world
-            .resource::<concinnity_core::ecs::DisplayModes>()
+            .resource::<concinnity_engine::ecs::DisplayModes>()
             .expect("mode list published for the dropdown")
             .0
             .is_empty()

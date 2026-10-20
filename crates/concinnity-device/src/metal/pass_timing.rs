@@ -72,7 +72,7 @@ use objc2_metal::{
 // timing to flow. The passes.rs `every_pass_id_round_trips_to_its_name` test
 // forces those edits at compile time, and `slot_pair` debug_asserts the index
 // at runtime, so a missed registration cannot silently report zero GPU time.
-pub(super) use concinnity_core::render::render_graph::{PASS_COUNT, PASS_NAMES, PassId};
+pub(super) use concinnity_engine::render::render_graph::{PASS_COUNT, PASS_NAMES, PassId};
 
 // `NSUInteger::MAX` sentinel for an unused sample slot inside a render-pass
 // or compute-pass `sampleBufferAttachments[0]`. Metal treats this as

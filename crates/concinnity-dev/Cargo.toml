@@ -26,7 +26,8 @@ ciborium = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 concinnity-runtime = { workspace = true }
 concinnity-cook = { workspace = true, features = ["schema"] }
-concinnity-core = { workspace = true, features = ["schema"] }
+concinnity-engine = { workspace = true, features = ["schema"] }
+concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
 notify = { workspace = true, features = ["macos_fsevent"] }
 png = { workspace = true }
@@ -46,7 +47,8 @@ objc2-app-kit = { workspace = true }
 objc2-foundation = { workspace = true }
 
 [dev-dependencies]
-concinnity-core = { workspace = true, features = ["test-support"] }
+concinnity-engine = { workspace = true, features = ["test-support"] }
+concinnity-core = { workspace = true }
 concinnity-shader = { workspace = true }
 concinnity-testing = { workspace = true }
 tempfile = { workspace = true }

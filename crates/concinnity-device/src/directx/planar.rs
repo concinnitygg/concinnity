@@ -27,13 +27,13 @@
 //! instanced + chunk geometry only -- skinned meshes are not drawn into the mirror
 //! (the bindless face render omits the skinned tail), exactly like the probe capture.
 
-use concinnity_core::gfx::render_types::ClusterParams;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::planar_reflection::{
+use concinnity_engine::gfx::render_types::ClusterParams;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::planar_reflection::{
     self, MirrorFrame, MirrorShading, MirrorView, PLANAR_CROP_MARGIN, PixelRect, PlanarReflectors,
 };
-use concinnity_core::render::probe::radiance::FaceStorage;
+use concinnity_engine::render::probe::radiance::FaceStorage;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 

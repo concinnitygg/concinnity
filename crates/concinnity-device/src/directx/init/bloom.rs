@@ -1,8 +1,8 @@
 //! Bloom: the shared chain and the view of the pool's `bloom_top` it writes, at
 //! the drawable size.
 
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::post::device::PostExtent;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::device::PostExtent;
 
 use crate::directx::context::DxTargets;
 use crate::directx::post::bloom::BloomResources;

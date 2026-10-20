@@ -5,8 +5,8 @@
 //! tracks the saved list across one.
 
 use concinnity_cook::authoring::world::parse_world_jsonl;
-use concinnity_core::components::{FrameInput, KeyEvent, KeyMods, KeyPress, TextLabel};
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, KeyEvent, KeyMods, KeyPress, TextLabel};
+use concinnity_engine::ecs::World;
 use concinnity_host::store::paths::StateTree;
 
 use super::fixtures::{entry, hook, set_field, world_with_fields, world_with_input};
@@ -254,7 +254,7 @@ fn undo_drops_entry_indexed_ui_state() {
 // field owns the keyboard or the world holds the cursor (play mode).
 #[test]
 fn ctrl_z_y_step_history_unless_typing_or_playing() {
-    use concinnity_core::components::InputKey;
+    use concinnity_engine::components::InputKey;
     let step = |h: &mut EditorHook, key: InputKey| {
         let mut world = world_with_input(FrameInput {
             viewport: [1280.0, 720.0],
@@ -445,7 +445,7 @@ fn the_preview_builds_the_included_entries() {
     let (world, _) = h.build_preview_world().expect("the world builds");
     assert_eq!(
         world
-            .query::<concinnity_core::components::PointLight>()
+            .query::<concinnity_engine::components::PointLight>()
             .count(),
         3
     );

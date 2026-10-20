@@ -4,11 +4,11 @@
 //! to `crate::mcp::AppServer`, which parses the HTTP request and answers the
 //! MCP message it carried from the verb table in `super::super::catalog`.
 
-use concinnity_core::components::Camera3D;
-use concinnity_core::ecs::World;
 use concinnity_core::fanout::Fanout;
-use concinnity_core::render::streaming::pools::{StreamingPressure, StreamingRuntime};
-use concinnity_core::shutdown::ShutdownToken;
+use concinnity_engine::components::Camera3D;
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::streaming::pools::{StreamingPressure, StreamingRuntime};
+use concinnity_engine::shutdown::ShutdownToken;
 use concinnity_host::thread::{ThreadRole, asset_id, set_current_thread_role};
 use std::io::BufReader;
 use std::net::{TcpListener, TcpStream};
@@ -168,8 +168,8 @@ impl FrameHook for DebugServer {
         // Process thread + memory budgets (fixed at start) plus the live RSS
         // (one cheap syscall per tick, dev-only), for the `budget` query.
         if let (Some(threads), Some(memory)) = (
-            world.resource::<concinnity_core::budget::ThreadBudget>(),
-            world.resource::<concinnity_core::budget::MemoryBudget>(),
+            world.resource::<concinnity_engine::budget::ThreadBudget>(),
+            world.resource::<concinnity_engine::budget::MemoryBudget>(),
         ) {
             state.budget = Some(BudgetSnapshot {
                 threads: BudgetThreads {

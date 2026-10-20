@@ -75,7 +75,7 @@ pub(crate) fn schema_impls(
 }
 
 pub(crate) fn schema_path() -> TokenStream {
-    quote!(::concinnity_core::ecs::schema)
+    quote!(::concinnity_engine::ecs::schema)
 }
 
 fn field_entry(f: &AuthoredField<'_>, container: &ContainerAttrs) -> syn::Result<TokenStream> {
@@ -205,7 +205,7 @@ mod tests {
     fn containers_unwrap_by_spelling() {
         let out = ty(quote!(Option<Vec<[f32; 3]>>));
         assert!(
-            out.starts_with(":: concinnity_core :: ecs :: schema :: FieldType :: Optional"),
+            out.starts_with(":: concinnity_engine :: ecs :: schema :: FieldType :: Optional"),
             "{out}"
         );
         assert!(
@@ -241,6 +241,6 @@ mod tests {
     fn a_leaf_tries_reference_then_description_then_nothing() {
         let out = ty(quote!(Ref<Prop>));
         assert!(out.contains("TypeByDescription as _"), "{out}");
-        assert!(out.contains("(&& & :: concinnity_core"), "{out}");
+        assert!(out.contains("(&& & :: concinnity_engine"), "{out}");
     }
 }

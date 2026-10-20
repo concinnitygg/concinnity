@@ -5,10 +5,10 @@
 //! (runtime spawn commands, camera motion) around it. Each session constructs
 //! exactly one driver, so a reload is never applied twice.
 
-use concinnity_core::animation::{AnimationSystem, skeleton};
-use concinnity_core::components::{SkeletonPose, StoryReload};
-use concinnity_core::ecs::World;
-use concinnity_core::gfx::render_types::SkinnedIndex;
+use concinnity_engine::animation::{AnimationSystem, skeleton};
+use concinnity_engine::components::{SkeletonPose, StoryReload};
+use concinnity_engine::ecs::World;
+use concinnity_engine::gfx::render_types::SkinnedIndex;
 use concinnity_runtime::live_edit;
 use std::sync::Arc;
 

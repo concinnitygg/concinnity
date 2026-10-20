@@ -2,7 +2,7 @@
 //! passes.
 
 use ash::vk;
-use concinnity_core::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 
 use crate::vulkan::owned::{OwnedRenderPass, VkDevice};
 

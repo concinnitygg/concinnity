@@ -2,7 +2,7 @@
 //! kernel that fills it. Its PSOs are the shader buckets' own, built while a
 //! G-buffer exists.
 
-use concinnity_core::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::CullPlan;

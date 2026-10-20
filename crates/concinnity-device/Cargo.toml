@@ -20,6 +20,7 @@ include = [
 vulkan = ["dep:ash", "dep:libloading"]
 
 [dependencies]
+concinnity-engine = { workspace = true }
 concinnity-core = { workspace = true }
 concinnity-host = { workspace = true }
 concinnity-shader = { workspace = true }
@@ -68,6 +69,7 @@ concinnity-shader = { workspace = true, features = ["spirv-cross"] }
 concinnity-testing = { workspace = true }
 
 [build-dependencies]
+concinnity-engine = { workspace = true }
 concinnity-core = { workspace = true }
 concinnity-shader = { workspace = true }
 concinnity-toolchain = { workspace = true }

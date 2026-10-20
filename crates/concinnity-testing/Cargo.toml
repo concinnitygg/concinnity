@@ -8,6 +8,7 @@ description = "Test scaffolding for the Concinnity workspace: temp trees, synthe
 publish = false
 
 [dependencies]
+concinnity-engine = { workspace = true }
 concinnity-core = { workspace = true }
 
 png = { workspace = true }

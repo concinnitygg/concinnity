@@ -15,11 +15,11 @@
 //! compiled through `builtin_shaders`; the ray-traced fragments need shader model
 //! 6.5 for their inline ray query, the base pair 6.0.
 
-use concinnity_core::components::GlassPanel;
-use concinnity_core::geometry::glass_quad::build_glass_quad;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::uniforms::GlassParams;
+use concinnity_engine::components::GlassPanel;
+use concinnity_engine::geometry::glass_quad::build_glass_quad;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::uniforms::GlassParams;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::DeviceAllocator;
@@ -303,7 +303,7 @@ pub(in crate::directx) fn build_glass_mesh_producer(
 #[cfg(test)]
 mod tests {
     // The `TransparentView` / `GlassParams` layout tests live with the structs
-    // in `concinnity_core::render::uniforms`, and are checked against the compiled
+    // in `concinnity_engine::render::uniforms`, and are checked against the compiled
     // shader by `shader_layout`.
 
     // The glass shaders compile at runtime from the shared single source, so a

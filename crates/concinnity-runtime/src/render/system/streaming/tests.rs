@@ -1,7 +1,7 @@
-use concinnity_core::ecs::Ref;
-use concinnity_core::gfx::render_types::{MaterialUniforms, NO_NORMAL_MAP_SLOT};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::recording::{Call, SharedRecording, recording_backend};
+use concinnity_engine::ecs::Ref;
+use concinnity_engine::gfx::render_types::{MaterialUniforms, NO_NORMAL_MAP_SLOT};
+use concinnity_engine::render::backend::recording::{Call, SharedRecording, recording_backend};
 
 use super::*;
 
@@ -321,7 +321,7 @@ fn voxel_setup_without_a_material_falls_back_to_the_defaults() {
     assert_eq!(cs.material.normal_map_slot, NO_NORMAL_MAP_SLOT);
     assert_eq!(
         cs.origin_chunk,
-        concinnity_core::geometry::chunk_coord::ChunkCoord::new(0, 0)
+        concinnity_engine::geometry::chunk_coord::ChunkCoord::new(0, 0)
     );
 }
 

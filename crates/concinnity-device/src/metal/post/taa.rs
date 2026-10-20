@@ -1,13 +1,13 @@
 //! Metal's share of temporal anti-aliasing, which is the toggle and the jitter
 //! counter. The resolve itself -- its pipeline, its ping-pong accumulation
 //! targets, the history-validity gate and the draw -- is written once in
-//! `concinnity_core::render::post::taa` and reaches Metal through
+//! `concinnity_engine::render::post::taa` and reaches Metal through
 //! `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLTexture;

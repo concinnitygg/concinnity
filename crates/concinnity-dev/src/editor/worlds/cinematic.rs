@@ -10,8 +10,8 @@
 //! the live preview's `Camera3D` each frame and the world's own pose is put
 //! back the moment the screen hands the session a world.
 
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use crate::editor::hud_ids::{Family, family_base};
 use crate::editor::viewport::framing::{CameraPose, bounding_sphere, fit_distance};

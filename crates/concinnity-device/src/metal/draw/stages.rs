@@ -1,16 +1,16 @@
 //! The stages `MtlContext::draw_frame` runs in order around its render-graph
 //! dispatch.
 
-use concinnity_core::gfx::render_types::LineVertex;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::profile;
-use concinnity_core::render::backend::error;
-use concinnity_core::render::frame::plan::{
+use concinnity_engine::gfx::render_types::LineVertex;
+use concinnity_engine::profile;
+use concinnity_engine::render::backend::error;
+use concinnity_engine::render::frame::plan::{
     CameraInputs, EffectInputs, FramePlan, PlanInputs, SurfaceInputs,
 };
-use concinnity_core::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
-use concinnity_core::render::temporal::model_history::HistoryMode;
-use concinnity_core::render::temporal::reactive_mask::ReactiveReader;
+use concinnity_engine::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
+use concinnity_engine::render::temporal::model_history::HistoryMode;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLDevice as _};
@@ -84,7 +84,7 @@ impl MtlContext {
         // Reset this frame's render stats; the draw counters below accumulate
         // into `diagnostics.frame_stats`, and `render_stats()` reports them (plus the GPU
         // frame time) to the profiler overlay.
-        let counts = concinnity_core::render::backend::object_counts::object_counts(
+        let counts = concinnity_engine::render::backend::object_counts::object_counts(
             self.state.draw.objects.len(),
             self.instanced.clusters.iter().map(|c| c.instances.len()),
             self.state.skinned.draw_objects.iter().map(|o| o.visible),
@@ -337,7 +337,7 @@ impl MtlContext {
                     self.ssgi
                         .pass
                         .as_ref()
-                        .map(concinnity_core::render::post::ssgi::SsgiPass::frame),
+                        .map(concinnity_engine::render::post::ssgi::SsgiPass::frame),
                 ),
                 rt: self.rt.settings,
                 history_scale: self.pre_exposure.history_scale(),

@@ -12,11 +12,11 @@
 //! as the DirectX and Metal hosts.
 
 use ash::vk;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::environment::water::WaterBody;
-use concinnity_core::render::environment::water::frame::WaterMotion;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::environment::water::WaterBody;
+use concinnity_engine::render::environment::water::frame::WaterMotion;
 
-use concinnity_core::render::shader::programs::ShaderProgram;
+use concinnity_engine::render::shader::programs::ShaderProgram;
 
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::transparent::{
@@ -230,7 +230,7 @@ fn build_water_rt_pipelines(
 #[cfg(test)]
 mod tests {
     // The `WaterParams` / `WaterWaveGpu` layout tests live with the structs in
-    // `concinnity_core::render::uniforms`, and are checked against the compiled shader
+    // `concinnity_engine::render::uniforms`, and are checked against the compiled shader
     // by `shader_layout`.
 
     // Compile the water vertex + fragment shaders (both MSAA variants) so a

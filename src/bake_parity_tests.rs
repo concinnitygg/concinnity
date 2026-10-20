@@ -96,7 +96,7 @@ fn raw_world() -> World {
 fn mesh_payload(world: &mut World) -> Vec<u8> {
     let (id, mesh) = world
         .inner()
-        .join2::<ProceduralMesh, concinnity_core::components::Identity>()
+        .join2::<ProceduralMesh, concinnity_engine::components::Identity>()
         .next()
         .map(|(_, mesh, identity)| (identity.id(), mesh.clone()))
         .expect("the cube's mesh");
@@ -110,7 +110,7 @@ fn mesh_payload(world: &mut World) -> Vec<u8> {
             .to_vec(),
         None => world
             .inner()
-            .resource::<concinnity_core::resource::RuntimeMeshPayloads>()
+            .resource::<concinnity_engine::resource::RuntimeMeshPayloads>()
             .expect("the runtime payload store")
             .get(id)
             .expect("the mesh's payload")
@@ -123,7 +123,7 @@ fn mesh_payload(world: &mut World) -> Vec<u8> {
 fn environment_payload(world: &mut World) -> Vec<u8> {
     let entry = world
         .inner()
-        .resource::<concinnity_core::resource::EnvironmentMapTable>()
+        .resource::<concinnity_engine::resource::EnvironmentMapTable>()
         .expect("the environment map table")
         .0
         .first()
@@ -172,7 +172,7 @@ fn the_material_data_bytes_are_byte_identical() {
     let bytes = |world: &World| {
         world
             .inner()
-            .resource::<concinnity_core::resource::MaterialTable>()
+            .resource::<concinnity_engine::resource::MaterialTable>()
             .expect("the material table")
             .data_bytes(0)
             .expect("the cube's material is at handle 0")
@@ -189,8 +189,8 @@ fn the_resolved_handles_match() {
     let handles = |world: &World| {
         let prop = world.inner().query::<Prop>().next().expect("the cube prop");
         (
-            prop.mesh.map(concinnity_core::ecs::Handle::index),
-            prop.material.map(concinnity_core::ecs::Handle::index),
+            prop.mesh.map(concinnity_engine::ecs::Handle::index),
+            prop.material.map(concinnity_engine::ecs::Handle::index),
         )
     };
     assert_eq!(handles(&raw_world()), handles(&cooked_world()));

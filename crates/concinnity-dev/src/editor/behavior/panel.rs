@@ -12,10 +12,10 @@
 //! out says nothing, and the body never moves under the user either way.
 //! `hook/edit/behavior.rs` owns the actions.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::edit::{self, Pick};
 use super::graph::{Card, CardKind, Chart};
@@ -1393,7 +1393,7 @@ mod tests {
     use super::*;
     use crate::editor::asset_handle::AssetHandle;
     use crate::editor::entry_list::EntryList;
-    use concinnity_core::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()

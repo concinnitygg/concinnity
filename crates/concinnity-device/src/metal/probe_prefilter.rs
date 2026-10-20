@@ -17,8 +17,8 @@
 //! bake now stays on the GPU timeline.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::probe::capture::PrefilterPlan;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::probe::capture::PrefilterPlan;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSRange, ns_string};

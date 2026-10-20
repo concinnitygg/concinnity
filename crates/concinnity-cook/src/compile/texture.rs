@@ -3,7 +3,7 @@
 //! (PNG / JPEG / DDS / TGA / glb-embedded images) into RGBA pixels for both the
 //! build pipeline and the `cn debug` asset hot-reload path.
 //!
-//! Payload format: `concinnity_core::bake::texture::serialize`. RGBA8 images
+//! Payload format: `concinnity_engine::bake::texture::serialize`. RGBA8 images
 //! are stored with their full box-filtered mip chain, so the runtime uploads
 //! levels without generating any.
 //!
@@ -18,15 +18,15 @@
 //! 3. No other files need to change.
 
 // The pre-compiled payload `deserialize` / `serialize` and the resolution-cap
-// `downscale_rgba` stay in concinnity-core (no image-decode deps); the file ->
+// `downscale_rgba` stay in concinnity-engine (no image-decode deps); the file ->
 // pixels decoders below live here in the build crate alongside the png / jpeg /
 // gltf crates.
-use concinnity_core::bake::texture::{
-    TextureFormat, TextureImage, TextureMip, downscale_rgba, serialize,
-};
-use concinnity_core::components::Texture;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::math::noise::{lattice_hash, lattice_value, lcg_hash};
+use concinnity_engine::bake::texture::{
+    TextureFormat, TextureImage, TextureMip, downscale_rgba, serialize,
+};
+use concinnity_engine::components::Texture;
 use serde::Deserialize;
 use std::path::Path;
 
@@ -1280,7 +1280,7 @@ mod tests {
     // compile_texture_payload: file-backed branch and payload envelope
 
     fn deserialize(payload: &[u8]) -> TextureImage {
-        concinnity_core::bake::texture::deserialize(payload).expect("deserialize payload")
+        concinnity_engine::bake::texture::deserialize(payload).expect("deserialize payload")
     }
 
     #[test]
@@ -1299,7 +1299,7 @@ mod tests {
         assert_eq!((image.width(), image.height()), (2, 1));
         assert_eq!(image.mips[0].data, data);
         // The stored chain is the one the backends used to box-filter at upload.
-        let reference = concinnity_core::render::mipmap::generate_mip_chain(2, 1, &data);
+        let reference = concinnity_engine::render::mipmap::generate_mip_chain(2, 1, &data);
         assert_eq!(image.mips.len(), reference.len());
         for (mip, level) in image.mips.iter().zip(&reference) {
             assert_eq!((mip.width, mip.height), (level.width, level.height));

@@ -4,7 +4,7 @@
 //! other entries.
 
 use concinnity_cook::authoring::world::{entry_handles, find_entry};
-use concinnity_core::components::ShaderStage;
+use concinnity_engine::components::ShaderStage;
 
 use super::form_extras::{ExtraControl, ExtraRow};
 use super::shader_edit::check_name;
@@ -626,7 +626,7 @@ mod tests {
     }
 
     fn render_types_max() -> usize {
-        concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS
+        concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS
     }
 
     #[test]

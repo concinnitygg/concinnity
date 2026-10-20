@@ -3,8 +3,8 @@
 // runtime samples the finished curve (`animation::root_motion::RootTrack`), it
 // never re-derives it.
 
-use concinnity_core::animation::root_motion::RootKey;
-use concinnity_core::components::Animation;
+use concinnity_engine::animation::root_motion::RootKey;
+use concinnity_engine::components::Animation;
 
 // Strip the root joint's travel out of `tracks` and bake it into
 // `root_track`, per the `root_motion` / `root_motion_y` flags. Runs once

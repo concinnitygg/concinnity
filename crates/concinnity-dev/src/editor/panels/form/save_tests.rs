@@ -79,7 +79,7 @@ fn an_unbuildable_entry_with_references_at_none_still_reads() {
     let model = saved_with_no_references("CharacterModel", &json!({"source": "a.glb"}));
     serde_json::from_value::<CharacterModel>(Value::Object(model)).expect("CharacterModel args");
     let prop = saved_with_no_references("Prop", &json!({"prefab": "p"}));
-    let prop = serde_json::from_value::<concinnity_core::components::Prop>(Value::Object(prop))
+    let prop = serde_json::from_value::<concinnity_engine::components::Prop>(Value::Object(prop))
         .expect("Prop args");
     assert!(prop.prefab.is_empty());
 }

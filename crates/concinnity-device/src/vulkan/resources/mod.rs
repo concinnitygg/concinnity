@@ -18,7 +18,7 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::texture;

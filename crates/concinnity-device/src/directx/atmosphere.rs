@@ -1,4 +1,4 @@
-//! The atmosphere for the D3D12 backend (see `concinnity_core::render::environment::atmosphere`):
+//! The atmosphere for the D3D12 backend (see `concinnity_engine::render::environment::atmosphere`):
 //! the tables, the compute pass that builds them, the haze pass that blends
 //! the aerial volume over the opaque scene, and the sky pipeline that draws
 //! the sky-view table behind it. The irradiance cube the last kernel writes
@@ -16,14 +16,14 @@
 use concinnity_core::math::SaturatingFrom;
 use std::cell::Cell;
 
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::environment::atmosphere::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::environment::atmosphere::{
     AERIAL_SIZE, AirTables, AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
     IRRADIANCE_FACE, MULTISCATTER_SIZE, SKY_CUBE_FACE, SKY_CUBE_PLAN, SKY_VIEW_HEIGHT,
     SKY_VIEW_WIDTH, SkyCubeKey, SkyCubeSchedule, SkyCubeWork, TRANSMITTANCE_HEIGHT,
     TRANSMITTANCE_WIDTH, TableReadiness,
 };
-use concinnity_core::render::shader::programs::ShaderProgram;
+use concinnity_engine::render::shader::programs::ShaderProgram;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -857,7 +857,7 @@ impl DxContext {
 
     // The view block's `irradiance` lane.
     pub(in crate::directx) fn irradiance_lane(&self) -> f32 {
-        concinnity_core::render::environment::sky::irradiance_lane(
+        concinnity_engine::render::environment::sky::irradiance_lane(
             self.scene.env_map.prefilter_mip_count > 0,
             self.atmosphere.is_some(),
         )

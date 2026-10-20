@@ -7,9 +7,9 @@
 //! called with `hot_reload = true`. Production `cn run` never sets it. Mirrors
 //! `src/metal/hot_reload.rs`.
 
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::shader::programs::surface::GrassShading;
-use concinnity_core::render::shader::world_pipelines::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::surface::GrassShading;
+use concinnity_engine::render::shader::world_pipelines::{
     BucketSource, check_rebuild, replace_bucket,
 };
 
@@ -90,7 +90,7 @@ impl DxContext {
         // Bloom (live outside a resize).
         let bloom_rebuilt = rebuild_if_live!(
             self.bloom.is_some(),
-            concinnity_core::render::post::bloom::build_pipelines(&self.post_device(0))
+            concinnity_engine::render::post::bloom::build_pipelines(&self.post_device(0))
         );
 
         // Every shader bucket's main and G-buffer pre-pass PSOs, from the
@@ -285,25 +285,25 @@ impl DxContext {
         // SSAO (only when the world opted in).
         let ssao_rebuilt = rebuild_if_live!(
             self.ssao.resources.is_some(),
-            concinnity_core::render::post::ssao::build_pipelines(&self.post_device(0))
+            concinnity_engine::render::post::ssao::build_pipelines(&self.post_device(0))
         );
 
         // SSR (only when the resolve itself is authored).
         let ssr_rebuilt = rebuild_if_live!(
             self.ssr.as_ref().is_some_and(|s| s.resolve.is_some()),
-            concinnity_core::render::post::ssr::build_pipeline(&self.post_device(0))
+            concinnity_engine::render::post::ssr::build_pipeline(&self.post_device(0))
         );
 
         // SSGI (only when IndirectLighting.technique == ssgi).
         let ssgi_rebuilt = rebuild_if_live!(
             self.ssgi.is_some(),
-            concinnity_core::render::post::ssgi::build_pipelines(&self.post_device(0))
+            concinnity_engine::render::post::ssgi::build_pipelines(&self.post_device(0))
         );
 
         // TAA (only when AntiAliasing.mode).
         let taa_rebuilt = rebuild_if_live!(
             self.taa.is_some(),
-            concinnity_core::render::post::taa::build_pipeline(&self.post_device(0))
+            concinnity_engine::render::post::taa::build_pipeline(&self.post_device(0))
         );
 
         // RT reflections (only when DXR + DXC compile + accel build all succeeded
@@ -321,7 +321,7 @@ impl DxContext {
         // Reflection composite (blur + composite PSOs); only when built.
         let refl_composite_rebuilt = rebuild_if_live!(
             self.reflection_composite.is_some(),
-            concinnity_core::render::post::reflection_composite::build_pipelines(
+            concinnity_engine::render::post::reflection_composite::build_pipelines(
                 &self.post_device(0)
             )
         );
@@ -417,7 +417,7 @@ impl DxContext {
     // mirroring `reload_shaders`.
     pub(in crate::directx) fn update_default_world_shader(
         &mut self,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<BucketPsos>,
     ) -> RenderResult<()> {
         let new = replace_bucket(
@@ -445,7 +445,7 @@ impl DxContext {
     // the live pre-pass, so a live pair is kept whole.
     pub(super) fn build_world_main_pso(
         &self,
-        world: Option<&concinnity_core::components::ShaderPrograms>,
+        world: Option<&concinnity_engine::components::ShaderPrograms>,
         engine_default: &super::init::pipelines::BindlessMainShaders,
     ) -> RenderResult<BucketPsos> {
         let targets = self

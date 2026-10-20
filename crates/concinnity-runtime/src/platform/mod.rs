@@ -16,9 +16,9 @@ pub(crate) mod device;
 
 use std::sync::OnceLock;
 
-use concinnity_core::platform::select::{native_platform, resolve};
-use concinnity_core::platform::{GraphicsApiStatus, Platform, PlatformSet};
-use concinnity_core::settings::api_trial::Step;
+use concinnity_engine::platform::select::{native_platform, resolve};
+use concinnity_engine::platform::{GraphicsApiStatus, Platform, PlatformSet};
+use concinnity_engine::settings::api_trial::Step;
 use concinnity_host::store::paths::StateTree;
 
 static SELECTED: OnceLock<Platform> = OnceLock::new();
@@ -113,12 +113,12 @@ pub fn select_persisted(tree: Option<&StateTree>) -> Platform {
 )]
 fn persisted_request(tree: Option<&StateTree>) -> Option<Platform> {
     let mut settings = crate::persist::settings::load(tree);
-    let launch = concinnity_core::settings::api_trial::plan(
+    let launch = concinnity_engine::settings::api_trial::plan(
         settings.graphics.graphics_api,
         settings.graphics.graphics_api_trial,
     );
     if let Some(step) = launch.step {
-        concinnity_core::settings::api_trial::apply(step, &mut settings.graphics);
+        concinnity_engine::settings::api_trial::apply(step, &mut settings.graphics);
         let _ = LAUNCH_STEP.set(step);
         if let Err(e) = crate::persist::settings::save(&settings, tree) {
             tracing::warn!("graphics API choice: could not save settings: {e}");
@@ -143,11 +143,11 @@ mod tests {
     // launch after it gives the choice up.
     #[test]
     fn an_unconfirmed_choice_is_tried_once_then_dropped() {
-        use concinnity_core::settings::GraphicsApiTrial;
+        use concinnity_engine::settings::GraphicsApiTrial;
 
         let dir = concinnity_testing::TempTree::new();
         let tree = StateTree::at(dir.path());
-        let mut settings = concinnity_core::settings::StoredSettings::default();
+        let mut settings = concinnity_engine::settings::StoredSettings::default();
         settings.graphics.graphics_api = Some(Platform::Vulkan);
         settings.graphics.graphics_api_trial = Some(GraphicsApiTrial::Untried);
         crate::persist::settings::save(&settings, Some(&tree)).unwrap();
@@ -166,7 +166,7 @@ mod tests {
     fn a_confirmed_choice_is_requested_without_a_write() {
         let dir = concinnity_testing::TempTree::new();
         let tree = StateTree::at(dir.path());
-        let mut settings = concinnity_core::settings::StoredSettings::default();
+        let mut settings = concinnity_engine::settings::StoredSettings::default();
         settings.graphics.graphics_api = Some(Platform::Vulkan);
         crate::persist::settings::save(&settings, Some(&tree)).unwrap();
         let before = std::fs::read(tree.settings_path()).unwrap();

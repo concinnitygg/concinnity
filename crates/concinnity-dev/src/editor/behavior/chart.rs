@@ -8,9 +8,9 @@
 //! the authored `ScrollPanels`), so a card panned past the canvas edge is drawn as
 //! the part still inside it and drops its text once too little is left to read.
 
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::graph::{Card, CardKind, Chart};
 use super::panel::CHAR_W;
@@ -558,7 +558,7 @@ pub(crate) fn hide_all(world: &mut World, ids: ChartIds) {
 mod tests {
     use super::super::graph;
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_engine::components::{Sprite, TextLabel};
     use serde_json::json;
 
     // Any base will do here: what the tests check is what is drawn, not which

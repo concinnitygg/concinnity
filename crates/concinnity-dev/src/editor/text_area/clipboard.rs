@@ -2,8 +2,8 @@
 //! clipboard (a headless run, or a backend without one): text copied inside the
 //! editor still pastes inside the editor.
 
-use concinnity_core::ecs::World;
-use concinnity_core::window::clipboard::Clipboard;
+use concinnity_engine::ecs::World;
+use concinnity_engine::window::clipboard::Clipboard;
 
 #[derive(Debug, Default)]
 pub(crate) struct InternalClipboard {

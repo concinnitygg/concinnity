@@ -2,7 +2,7 @@
 //! and drives the system loop with a per-frame hook. The production
 //! `cn run` path (compiled-blob playback) lives in the runtime crate's `app::run`.
 
-use concinnity_core::launch::LaunchRequest;
+use concinnity_engine::launch::LaunchRequest;
 use concinnity_runtime::Runtime;
 
 use crate::command::resolve_world_path;

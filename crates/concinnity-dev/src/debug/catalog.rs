@@ -48,7 +48,7 @@ mod tests {
     use crate::debug::verb::Kind;
     use crate::debug::verbs::testing::Engine;
     use crate::test_support;
-    use concinnity_core::ecs::World;
+    use concinnity_engine::ecs::World;
     use serde_json::json;
     use std::collections::BTreeSet;
 

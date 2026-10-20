@@ -5,9 +5,9 @@
 //! gizmo writes while a drag is in flight. Propagation, the pick index, the
 //! selection rings, and the renderer all follow it.
 
-use concinnity_core::components::Transform;
-use concinnity_core::ecs::World;
 use concinnity_core::math::narrow_f32;
+use concinnity_engine::components::Transform;
+use concinnity_engine::ecs::World;
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 

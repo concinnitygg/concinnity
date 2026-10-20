@@ -79,23 +79,23 @@
 //! resources are ever introduced, the point-1 assumption breaks even within a
 //! queue, and explicit `MTLFence`s become necessary.)
 
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::{
+use concinnity_core::math::narrow_f32;
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::{
     ClusterParams, FogFroxelParams, FogParams, RtParams, SsaoParams, SsgiParams, SsrParams,
     TextDrawCall,
 };
-use concinnity_core::math::narrow_f32;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::particles::ParticleFrame;
-use concinnity_core::render::planar_reflection::PlanarFramePlan;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::particles::ParticleFrame;
+use concinnity_engine::render::planar_reflection::PlanarFramePlan;
 #[cfg(debug_assertions)]
-use concinnity_core::render::render_graph;
-use concinnity_core::render::render_graph::{
+use concinnity_engine::render::render_graph;
+use concinnity_engine::render::render_graph::{
     CompiledGraph, CompiledPass, PassId, PassQueue, PassRecorder, PassScratch, execute_passes,
     presenter_index,
 };
-use concinnity_core::render::temporal::reactive_mask::ReactiveMaskPlan;
-use concinnity_core::render::uniforms::{GBufferView, PassCamera};
+use concinnity_engine::render::temporal::reactive_mask::ReactiveMaskPlan;
+use concinnity_engine::render::uniforms::{GBufferView, PassCamera};
 use concinnity_host::thread::jobs;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -849,7 +849,7 @@ impl MtlContext {
             PassId::Transparent => {
                 let scene_pre_taa =
                     pass_input(params.scene_pre_taa, PassId::Transparent, "scene_pre_taa")?;
-                let view = concinnity_core::render::uniforms::TransparentView::new(
+                let view = concinnity_engine::render::uniforms::TransparentView::new(
                     &self.pass_camera(params),
                     self.lights.uniforms(),
                 );

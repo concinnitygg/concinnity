@@ -1,14 +1,14 @@
 // Hot-reload's half of the single-source shader assembly.
 //
-// The assembly itself lives in `concinnity_core::render::shader::source`, below the
+// The assembly itself lives in `concinnity_engine::render::shader::source`, below the
 // backends, so this crate's runtime compile and the build script's precompile
 // cannot key different text for the same program. What stays here is the one
 // part that needs a filesystem: under hot-reload a shader's checkout copy wins
 // over the embedded one, so an edit is picked up without a rebuild.
 
-use concinnity_core::platform::Platform;
-use concinnity_core::render::shader::programs::Variant;
-use concinnity_core::render::shader::source::Splice;
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::shader::programs::Variant;
+use concinnity_engine::render::shader::source::Splice;
 
 /// The exact source text a program compiles for `platform`. `file` names the
 /// shader under core's `src/render/shader/hlsl/`; under `hot_reload` its checkout
@@ -23,7 +23,7 @@ pub(crate) fn assemble(
     splices: &[Splice<'_>],
 ) -> String {
     let resolve = |f: &str| hot_reload.then(|| from_checkout(f)).flatten();
-    concinnity_core::render::shader::source::assemble_with_splices(
+    concinnity_engine::render::shader::source::assemble_with_splices(
         file, platform, defines, resolve, splices,
     )
 }
@@ -40,7 +40,7 @@ pub(crate) fn assemble_variant(hot_reload: bool, platform: Platform, v: Variant<
 // shader revisions one session touches.
 pub(crate) fn from_checkout(file: &str) -> Option<&'static str> {
     let path = format!(
-        "{}/../concinnity-core/src/render/shader/hlsl/{}",
+        "{}/../concinnity-engine/src/render/shader/hlsl/{}",
         env!("CARGO_MANIFEST_DIR"),
         file
     );

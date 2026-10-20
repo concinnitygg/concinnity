@@ -2,9 +2,9 @@
 //! the per-frame global and shadow global sets.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{self, InstancedCluster, ShadowUniforms};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
+use concinnity_engine::gfx::render_types::{self, InstancedCluster, ShadowUniforms};
+use concinnity_engine::render::backend::error::RenderResult;
 
 use super::InitGpu;
 use super::cull::CullPlan;

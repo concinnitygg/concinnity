@@ -4,9 +4,9 @@
 //! panel stops answering, each region's scroll, and where the secondary panels
 //! park while a drag is in flight.
 
-use concinnity_core::components::{FrameInput, Sprite, TextInput, TextLabel};
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::{FrameInput, Sprite, TextInput, TextLabel};
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::fixtures::{
     behavior, behavior_session, close_rect_of, entry, hook, seed_tree, select_behavior, set_input,

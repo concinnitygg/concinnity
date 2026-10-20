@@ -9,10 +9,10 @@
 //! in `directx/cull.rs`.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::shader::programs::surface::{self, GrassShading};
-use concinnity_core::render::shader::world_pipelines::BucketSource;
-use concinnity_core::render::shadow::bias;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::surface::{self, GrassShading};
+use concinnity_engine::render::shader::world_pipelines::BucketSource;
+use concinnity_engine::render::shadow::bias;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -30,12 +30,12 @@ use crate::directx::texture::HDR_FORMAT;
 // the engine template still matches, else a compile here. The DXIL pool is
 // unbounded, so no pool size reaches the text.
 pub(in crate::directx) fn world_entry(
-    world: &concinnity_core::components::ShaderPrograms,
+    world: &concinnity_engine::components::ShaderPrograms,
     program: &surface::Program,
     hot_reload: bool,
 ) -> RenderResult<Vec<u8>> {
     let req = crate::shader::surface_source::Request {
-        platform: concinnity_core::platform::Platform::DirectX,
+        platform: concinnity_engine::platform::Platform::DirectX,
         hot_reload,
     };
     crate::shader::surface_source::artifact(world, program, req, crate::shader::compile::cooked)
@@ -285,7 +285,7 @@ pub(in crate::directx) struct BucketPsos {
     pub prepass: Option<ID3D12PipelineState>,
     // The world Shader the bucket compiles, `None` for the engine's own
     // programs, kept so the pre-pass can be built or rebuilt later.
-    pub programs: Option<concinnity_core::components::ShaderPrograms>,
+    pub programs: Option<concinnity_engine::components::ShaderPrograms>,
     // What of the grass the main fragment shades.
     pub grass: GrassShading,
 }
@@ -345,7 +345,7 @@ pub(in crate::directx) fn build_world_shader_pso(
     info_queue: Option<&ID3D12InfoQueue>,
     targets: WorldPsoTargets<'_>,
     bucket: usize,
-    programs: &concinnity_core::components::ShaderPrograms,
+    programs: &concinnity_engine::components::ShaderPrograms,
     grass: GrassShading,
 ) -> RenderResult<BucketPsos> {
     let vs = world_entry(programs, &surface::MAIN_VERTEX, targets.hot_reload)?;
@@ -376,7 +376,7 @@ pub(in crate::directx) fn build_world_shader_pso(
 // A world Shader's pre-pass stages, or empty ones with a warning when they do
 // not compile.
 fn world_prepass_stages(
-    programs: &concinnity_core::components::ShaderPrograms,
+    programs: &concinnity_engine::components::ShaderPrograms,
     hot_reload: bool,
     bucket: usize,
 ) -> (Vec<u8>, Vec<u8>) {
@@ -432,7 +432,7 @@ pub(in crate::directx) fn build_prepass_for(
 // Where a bucket's pre-pass stages come from.
 #[derive(Clone, Copy)]
 pub(in crate::directx) enum PrepassSource<'a> {
-    World(&'a concinnity_core::components::ShaderPrograms, bool),
+    World(&'a concinnity_engine::components::ShaderPrograms, bool),
     Engine(&'a BindlessMainShaders),
 }
 

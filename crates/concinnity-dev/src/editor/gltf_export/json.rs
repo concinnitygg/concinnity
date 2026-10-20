@@ -3,9 +3,9 @@
 //! engine's importer and Blender both read), a skin, and the bufferView /
 //! accessor tables packed by `buffer.rs`.
 
-use concinnity_core::components::SkeletonJoint;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::transform::{decompose, trs_matrix};
+use concinnity_engine::components::SkeletonJoint;
+use concinnity_engine::transform::{decompose, trs_matrix};
 use serde_json::{Value, json};
 
 use super::buffer::BinBuffer;

@@ -3,14 +3,14 @@
 //! side-effect bundle, and `run_frame`, the per-frame entry the debug drive
 //! calls. Built from `HotReloadSources` (captured in the lib at init).
 
-use concinnity_core::animation::skeleton;
-use concinnity_core::bake::texture::TextureImage;
-use concinnity_core::components::{SkeletonJoint, Story};
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::gfx::render_types::SkinnedIndex;
-use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::environment::volumetric_fog::PushedFogSettings;
-use concinnity_core::render::world_load::source_maps::{
+use concinnity_engine::animation::skeleton;
+use concinnity_engine::bake::texture::TextureImage;
+use concinnity_engine::components::{SkeletonJoint, Story};
+use concinnity_engine::gfx::mesh_payload;
+use concinnity_engine::gfx::render_types::SkinnedIndex;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::environment::volumetric_fog::PushedFogSettings;
+use concinnity_engine::render::world_load::source_maps::{
     ColorLutSource, EnvironmentMapSource, MeshSourceMap, ProceduralMeshSourceMap,
     SkinnedMeshSourceMap, TextureSourceMap,
 };
@@ -52,9 +52,9 @@ pub(crate) struct DecodedColorLut {
 }
 
 // One decoded static `Mesh`, ready for the render thread to dispatch into
-// either an in-place [`concinnity_core::render::backend::RenderBackend::update_mesh_geometry`]
+// either an in-place [`concinnity_engine::render::backend::RenderBackend::update_mesh_geometry`]
 // per draw slot or a queued
-// [`concinnity_core::render::backend::RenderBackend::rebuild_static_geometry`] when any
+// [`concinnity_engine::render::backend::RenderBackend::rebuild_static_geometry`] when any
 // LOD slice's size changed. `entry_idx` indexes into
 // `state.meshes.entries` so the applier can look up `draw_indices` for
 // fan-out to every `Prop` that shares the mesh.

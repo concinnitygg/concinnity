@@ -40,7 +40,7 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::descriptor_layout::{Binding, PoolSizes};
@@ -56,9 +56,9 @@ use crate::vulkan::owned::{
 use crate::vulkan::record::Recorder;
 
 use crate::vulkan::builtin_shaders::CompileProgram;
-use concinnity_core::render::hiz::spd::{self, Plan};
-use concinnity_core::render::uniforms::HizSpdParams;
-use concinnity_core::render::uniforms::vulkan::CullHizParams;
+use concinnity_engine::render::hiz::spd::{self, Plan};
+use concinnity_engine::render::uniforms::HizSpdParams;
+use concinnity_engine::render::uniforms::vulkan::CullHizParams;
 
 // Compute pipelines + image + per-mip views + descriptor sets for the Hi-Z
 // build, plus the cull-read set (set 1 of the cull pipeline) and its per-frame

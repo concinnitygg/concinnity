@@ -21,9 +21,9 @@ mod skin;
 
 pub(crate) use anim::fbx_animation_names;
 pub use anim::import_fbx_animation;
-use concinnity_core::components::VertexData;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::transform::{
+use concinnity_engine::components::VertexData;
+use concinnity_engine::transform::{
     IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul, mat4_transform_point,
 };
 use fbxcel::low::v7400::AttributeValue;

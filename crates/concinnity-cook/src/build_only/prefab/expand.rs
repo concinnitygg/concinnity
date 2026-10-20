@@ -567,7 +567,7 @@ mod tests {
         assert_eq!(a["parent"], "p");
         assert_eq!(a["interactable"], true);
         assert_eq!(a["pickup"], true);
-        let collider: concinnity_core::components::PropCollider =
+        let collider: concinnity_engine::components::PropCollider =
             serde_json::from_value(a["collider"].clone()).unwrap();
         assert_eq!(collider.radius, 0.25);
         // A entry without a collider does not grow an empty one.

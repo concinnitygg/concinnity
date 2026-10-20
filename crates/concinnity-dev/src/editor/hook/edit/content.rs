@@ -5,7 +5,7 @@
 //! to typed icon chips.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::{EditorHook, scroll_step};
 use crate::editor::panels::content_panel::{self, ContentAction};

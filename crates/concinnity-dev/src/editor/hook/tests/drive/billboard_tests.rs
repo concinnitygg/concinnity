@@ -3,9 +3,9 @@
 //! billboard and a mesh overlap, and the session's hide and lock flags applying
 //! to billboards as they do to meshes.
 
-use concinnity_core::components::{PointLight, Transform};
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::{PointLight, Transform};
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::tests::fixtures::{active, click_at, entry, hook, pick_world};
@@ -57,7 +57,7 @@ fn billboard_click_selects_the_light_and_seeds_its_transform() {
     // The seeded Transform mirrors the authored position, so the gizmo's
     // member resolve works on the light.
     let entity = world
-        .resource::<concinnity_core::ecs::EntityById>()
+        .resource::<concinnity_engine::ecs::EntityById>()
         .unwrap()
         .iter()
         .next()

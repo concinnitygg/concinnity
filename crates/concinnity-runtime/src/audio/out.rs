@@ -4,10 +4,10 @@
 //! decoded. Generic over the kira backend so tests drive the real mixer through
 //! kira's mock backend; production uses the default (cpal) backend.
 
-use concinnity_core::audio::EmitterId;
-use concinnity_core::audio::out::{Acoustics, AudioOut, PlayOn, VoiceId};
-use concinnity_core::components::{AudioBus, AudioTarget};
 use concinnity_core::math::Quat;
+use concinnity_engine::audio::EmitterId;
+use concinnity_engine::audio::out::{Acoustics, AudioOut, PlayOn, VoiceId};
+use concinnity_engine::components::{AudioBus, AudioTarget};
 use hashbrown::HashMap;
 use kira::backend::{Backend, DefaultBackend};
 use kira::effect::EffectBuilder;

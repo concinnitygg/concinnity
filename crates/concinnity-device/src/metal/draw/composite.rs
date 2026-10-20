@@ -16,11 +16,11 @@
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use std::cell::Cell;
 
-use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::render_types::TextDrawCall;
-use concinnity_core::render::backend::error::RenderError;
-use concinnity_core::render::fullscreen;
-use concinnity_core::render::fullscreen::TextBindCache;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::gfx::render_types::TextDrawCall;
+use concinnity_engine::render::backend::error::RenderError;
+use concinnity_engine::render::fullscreen;
+use concinnity_engine::render::fullscreen::TextBindCache;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -160,7 +160,7 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
         idx: usize,
         call: &TextDrawCall,
         binds: &mut TextBindCache,
-    ) -> concinnity_core::render::backend::error::RenderResult<()> {
+    ) -> concinnity_engine::render::backend::error::RenderResult<()> {
         if call.vertices.is_empty() {
             return Ok(());
         }
@@ -235,7 +235,7 @@ impl MtlContext {
         scene_color: &Retained<ProtocolObject<dyn MTLTexture>>,
         text_calls: &[TextDrawCall],
         reactive_valid: bool,
-    ) -> concinnity_core::render::backend::error::RenderResult<u32> {
+    ) -> concinnity_engine::render::backend::error::RenderResult<u32> {
         let composite_pass_desc = self
             .window()
             .view

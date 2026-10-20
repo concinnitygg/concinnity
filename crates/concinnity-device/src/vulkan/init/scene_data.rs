@@ -2,11 +2,11 @@
 //! the per-frame uniform rings and clustered-light binning.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{AreaLightData, GpuLight, LightUniforms};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::backend::init::SceneData;
-use concinnity_core::render::light::ltc;
+use concinnity_engine::gfx::render_types::{AreaLightData, GpuLight, LightUniforms};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::SceneData;
+use concinnity_engine::render::light::ltc;
 
 use super::InitGpu;
 use crate::vulkan::context::{VkAreaLight, VkGeometry, VkUniforms};
@@ -122,7 +122,7 @@ pub(super) fn build_scene_resources(
     // Per-frame `ProbeSet` UBO ring (global set 0 binding 7): the
     // reflection-probe count + per-probe parallax boxes. Persistently mapped;
     // `record_frame` writes `self.probe.set` here each frame.
-    let probe_set_ubo_size = size_of::<concinnity_core::render::uniforms::ProbeSet>() as u64;
+    let probe_set_ubo_size = size_of::<concinnity_engine::render::uniforms::ProbeSet>() as u64;
     let mut probe_set_ubo_buffers = Vec::with_capacity(frames);
     for _ in 0..frames {
         probe_set_ubo_buffers.push(alloc.create_buffer(
@@ -146,7 +146,7 @@ pub(super) fn build_scene_resources(
         )?);
     }
     // Per-frame-in-flight canopy block ring, rewritten each frame.
-    let canopy = concinnity_core::render::uniforms::canopy::CanopyParams::default();
+    let canopy = concinnity_engine::render::uniforms::canopy::CanopyParams::default();
     let mut canopy_buffers = Vec::with_capacity(frames);
     for _ in 0..frames {
         let ubo = alloc.create_buffer(
@@ -193,7 +193,7 @@ pub(super) fn build_scene_resources(
             probe_set_ubo_buffers,
             light_ubo_buffers,
             local_light_buffer,
-            lights: concinnity_core::render::light::state::LightState::new(
+            lights: concinnity_engine::render::light::state::LightState::new(
                 light_uniforms,
                 local_lights,
                 frames,

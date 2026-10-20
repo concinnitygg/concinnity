@@ -1,6 +1,6 @@
 //! The PNG writer behind every backend's screenshot readback.
 
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 
 use std::io::Write;
 

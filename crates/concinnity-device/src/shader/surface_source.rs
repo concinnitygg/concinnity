@@ -12,11 +12,11 @@
 // machine with no compiler says so, naming the Shader, rather than drawing
 // nothing. The sibling of `raymarch_source`.
 
-use concinnity_core::components::ShaderPrograms;
-use concinnity_core::platform::Platform;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::shader::programs::surface::{self, Sources};
-use concinnity_core::render::shader::source;
+use concinnity_engine::components::ShaderPrograms;
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shader::programs::surface::{self, Sources};
+use concinnity_engine::render::shader::source;
 use std::borrow::Cow;
 
 /// Which host asks, and whether it assembles from the checkout.
@@ -70,9 +70,9 @@ fn source(program: &surface::Program, req: Request, sources: &Sources<'_>) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::ShaderSource;
-    use concinnity_core::render::backend::error::RenderError;
-    use concinnity_core::render::shader::compiled::CompiledProgram;
+    use concinnity_engine::components::ShaderSource;
+    use concinnity_engine::render::backend::error::RenderError;
+    use concinnity_engine::render::shader::compiled::CompiledProgram;
 
     const SHADE: &str = "float4 shade(VertexOut v, GpuObjectData od) { return (float4)(1.0); }";
 

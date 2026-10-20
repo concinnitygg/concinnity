@@ -1,16 +1,16 @@
 //! The stages `DxContext::draw_frame` runs in order around `record_frame`, and
 //! the per-frame inputs `record_frame` derives before its graph dispatch.
 
-use concinnity_core::gfx::render_types::LineVertex;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::profile;
-use concinnity_core::profile::PassTiming;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::backend::pass_timing;
-use concinnity_core::render::frame::plan::{
+use concinnity_engine::gfx::render_types::LineVertex;
+use concinnity_engine::profile;
+use concinnity_engine::profile::PassTiming;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::pass_timing;
+use concinnity_engine::render::frame::plan::{
     CameraInputs, EffectInputs, FramePlan, PlanInputs, SurfaceInputs,
 };
-use concinnity_core::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
+use concinnity_engine::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::Threading::WaitForSingleObject;
@@ -279,7 +279,7 @@ impl DxContext {
         // `draw_calls` through `inc_draw_calls` (an interior-mutability path
         // because the encoders run through `&self`); the rest is filled here
         // from context state.
-        let counts = concinnity_core::render::backend::object_counts::object_counts(
+        let counts = concinnity_engine::render::backend::object_counts::object_counts(
             self.state.draw.objects.len(),
             self.instanced.clusters.iter().map(|c| c.instances.len()),
             self.state.skinned.draw_objects.iter().map(|o| o.visible),
@@ -311,7 +311,7 @@ impl DxContext {
                 .auto_exposure
                 .adaptation
                 .as_ref()
-                .map(concinnity_core::gfx::auto_exposure::ExposureAdaptation::current_ev),
+                .map(concinnity_engine::gfx::auto_exposure::ExposureAdaptation::current_ev),
             // Captured from the resolved `HdrOutputMode` at init. `None` on
             // the SDR path (chip blanks). Mirrors `MtlContext::render_stats`.
             max_edr: self.hw.max_edr(),

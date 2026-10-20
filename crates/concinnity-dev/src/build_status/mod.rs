@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use concinnity_cook::build_only::LoadedWorld;
 use concinnity_cook::{BuildProgress, BuildReport, BuildStage};
-use concinnity_core::platform::PlatformSet;
+use concinnity_engine::platform::PlatformSet;
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 
 use board::{Board, NoteLevel, Outcome, RowState, Step};

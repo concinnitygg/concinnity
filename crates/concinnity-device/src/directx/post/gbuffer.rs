@@ -13,11 +13,11 @@
 //! un-jittered current / previous VPs in-shader so projection jitter never
 //! contaminates motion. Mirrors src/metal/post/gbuffer.rs.
 
-use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::uniforms::ModelHistoryParams;
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::depth::DEPTH_CLEAR;
+use concinnity_engine::render::uniforms::ModelHistoryParams;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -60,7 +60,7 @@ const GBUFFER_VIEW_UBO_SIZE: u64 = size_of::<GBufferView>() as u64;
 // `GBufferView` (the `GbView` cbuffer) is a GPU-free layout struct that lives in
 // `core::render`; re-export it so
 // `crate::directx::post::gbuffer::GBufferView` is unchanged.
-pub(in crate::directx) use concinnity_core::render::uniforms::GBufferView;
+pub(in crate::directx) use concinnity_engine::render::uniforms::GBufferView;
 
 // Root signatures
 

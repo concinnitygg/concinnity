@@ -1,0 +1,458 @@
+//! Builder API for the render graph. A `GraphBuilder` collects resource
+//! declarations and pass declarations; once every pass has been added,
+//! the caller hands the builder to `compile()` (see [`super::compile`])
+//! to produce a frozen, topologically-sorted `CompiledGraph`.
+//!
+//! All state mutation happens here; the compile pass is a pure read.
+
+use super::passes::PassId;
+use super::types::{
+    BufferDesc, BufferHandle, PassKind, ReadStages, ResourceId, ResourceOrigin, TextureDesc,
+    TextureHandle,
+};
+use alloc::vec::Vec;
+use concinnity_core::math::SaturatingFrom;
+
+// One entry in the builder's resource arena. Texture and buffer kinds
+// live in the same Vec so a `ResourceId` is unique across both, which
+// keeps the executor's lookup table flat. The `version` counter tracks
+// how many `write_*` calls have produced a new version of this
+// resource; reading the latest version means reading the resource as
+// of `version - 1` (the last write index).
+#[derive(Debug, Clone)]
+pub(super) enum ResourceDecl {
+    Texture {
+        label: &'static str,
+        desc: TextureDesc,
+        origin: ResourceOrigin,
+        // `0` until the first write; increments per `write_texture`.
+        version: u32,
+    },
+    Buffer {
+        label: &'static str,
+        desc: BufferDesc,
+        origin: ResourceOrigin,
+        version: u32,
+    },
+}
+
+impl ResourceDecl {
+    pub(super) fn label(&self) -> &'static str {
+        match self {
+            Self::Texture { label, .. } | Self::Buffer { label, .. } => label,
+        }
+    }
+
+    pub(super) fn origin(&self) -> ResourceOrigin {
+        match self {
+            Self::Texture { origin, .. } | Self::Buffer { origin, .. } => *origin,
+        }
+    }
+
+    pub(super) fn bump_version(&mut self) -> u32 {
+        match self {
+            Self::Texture { version, .. } | Self::Buffer { version, .. } => {
+                *version += 1;
+                *version
+            }
+        }
+    }
+
+    // The texture description (format / size / sample count), or `None` for a
+    // buffer. The compile pass carries it onto `CompiledResource` so the
+    // aliasing planner can size each transient resource.
+    pub(super) fn texture_desc(&self) -> Option<TextureDesc> {
+        match self {
+            Self::Texture { desc, .. } => Some(*desc),
+            Self::Buffer { .. } => None,
+        }
+    }
+
+    // The buffer description (size / usage), or `None` for a texture. The compile
+    // pass carries it onto `CompiledResource` so a backend can derive the
+    // resource's barrier class from its declared usage.
+    pub(super) fn buffer_desc(&self) -> Option<BufferDesc> {
+        match self {
+            Self::Buffer { desc, .. } => Some(*desc),
+            Self::Texture { .. } => None,
+        }
+    }
+}
+
+// One side of a pass's read or write declaration. Bundles the resource
+// id with the *version of that resource the pass touches*: for a write
+// that's the post-write version (== `version` after `bump_version`);
+// for a read it's the version current when the read was declared.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ResourceVersion {
+    pub(super) resource: ResourceId,
+    pub(super) version: u32,
+}
+
+impl ResourceVersion {
+    // Stable resource index, the same value the executor uses to look up
+    // the GPU object in its handle→resource map.
+    pub fn resource_index(self) -> usize {
+        self.resource.index()
+    }
+    pub fn version(self) -> u32 {
+        self.version
+    }
+}
+
+/// One `read_*` declaration: the resource version the pass reads, plus the
+/// shader stage it reads it in. The stage defaults to the one the pass's
+/// [`PassKind`] implies and is named explicitly where that default is wrong, so
+/// the barrier deriver's read-run union is the union of what the readers really
+/// declared rather than of what their kinds suggest.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ResourceRead {
+    pub(super) version: ResourceVersion,
+    pub(super) stage: ReadStages,
+}
+
+impl ResourceRead {
+    /// Stable resource index, the same value a write declaration reports.
+    pub fn resource_index(self) -> usize {
+        self.version.resource_index()
+    }
+    /// The version of the resource this read observes.
+    pub fn version(self) -> u32 {
+        self.version.version()
+    }
+    /// The read's `(resource, version)` pair, for the code that treats reads and
+    /// writes alike (resource lifetimes, the transition-reliance replay).
+    pub fn resource_version(self) -> ResourceVersion {
+        self.version
+    }
+    /// The shader stage the pass reads in.
+    pub fn stage(self) -> ReadStages {
+        self.stage
+    }
+}
+
+// One pass declaration. Reads and writes are kept in declaration order
+// for stable executor dispatch. `presents` marks the terminal pass; the
+// compile pass validates exactly one pass per graph has it set.
+#[derive(Debug, Clone)]
+pub(super) struct PassDecl {
+    pub(super) id: PassId,
+    pub(super) kind: PassKind,
+    pub(super) reads: Vec<ResourceRead>,
+    pub(super) writes: Vec<ResourceVersion>,
+    pub(super) presents: bool,
+}
+
+// Collects resource and pass declarations to feed `compile()`. Held by
+// value, never shared; each frame's graph builds fresh.
+pub(crate) struct GraphBuilder {
+    pub(super) resources: Vec<ResourceDecl>,
+    pub(super) passes: Vec<PassDecl>,
+}
+
+impl Default for GraphBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GraphBuilder {
+    pub(crate) fn new() -> Self {
+        Self {
+            resources: Vec::with_capacity(32),
+            passes: Vec::with_capacity(super::passes::PASS_COUNT),
+        }
+    }
+
+    // Declare an engine-owned texture the graph references but does
+    // not allocate. Returns a fresh handle at version 0.
+    pub(crate) fn import_texture(
+        &mut self,
+        label: &'static str,
+        desc: TextureDesc,
+    ) -> TextureHandle {
+        self.push_texture(label, desc, ResourceOrigin::Imported)
+    }
+
+    // Declare an engine-owned buffer the graph references but does
+    // not allocate. Returns a fresh handle at version 0.
+    pub(crate) fn import_buffer(&mut self, label: &'static str, desc: BufferDesc) -> BufferHandle {
+        self.push_buffer(label, desc, ResourceOrigin::Imported)
+    }
+
+    // Declare a graph-tracked transient texture. The graph just tracks
+    // lifetime; it does not yet allocate from a pool.
+    pub(crate) fn create_texture(
+        &mut self,
+        label: &'static str,
+        desc: TextureDesc,
+    ) -> TextureHandle {
+        self.push_texture(label, desc, ResourceOrigin::Transient)
+    }
+
+    // Buffer counterpart to `create_texture`.
+    #[cfg(test)]
+    pub(crate) fn create_buffer(&mut self, label: &'static str, desc: BufferDesc) -> BufferHandle {
+        self.push_buffer(label, desc, ResourceOrigin::Transient)
+    }
+
+    // Add a pass to the graph. Returns a `PassBuilder` that the caller
+    // uses to declare what the pass reads / writes. Passes are
+    // dispatched in the order returned by `compile`'s topological
+    // sort, not in the order they were added here; the order this
+    // matters for is purely "tie-breaking when toposort has flexibility".
+    pub(crate) fn add_pass(&mut self, id: PassId, kind: PassKind) -> PassBuilder<'_> {
+        let pass_idx = self.passes.len();
+        self.passes.push(PassDecl {
+            id,
+            kind,
+            reads: Vec::with_capacity(4),
+            writes: Vec::with_capacity(2),
+            presents: false,
+        });
+        PassBuilder {
+            builder: self,
+            pass_idx,
+        }
+    }
+
+    fn push_texture(
+        &mut self,
+        label: &'static str,
+        desc: TextureDesc,
+        origin: ResourceOrigin,
+    ) -> TextureHandle {
+        let resource = ResourceId(u32::saturating_from(self.resources.len()));
+        self.resources.push(ResourceDecl::Texture {
+            label,
+            desc,
+            origin,
+            version: 0,
+        });
+        TextureHandle {
+            resource,
+            version: 0,
+        }
+    }
+
+    fn push_buffer(
+        &mut self,
+        label: &'static str,
+        desc: BufferDesc,
+        origin: ResourceOrigin,
+    ) -> BufferHandle {
+        let resource = ResourceId(u32::saturating_from(self.resources.len()));
+        self.resources.push(ResourceDecl::Buffer {
+            label,
+            desc,
+            origin,
+            version: 0,
+        });
+        BufferHandle {
+            resource,
+            version: 0,
+        }
+    }
+}
+
+// Pass-level fluent builder returned by `GraphBuilder::add_pass`. Drops
+// without doing anything; the pass declaration lives in
+// `GraphBuilder.passes` from the moment `add_pass` returns; this struct
+// only mediates safe `&mut` access to it.
+pub(crate) struct PassBuilder<'g> {
+    builder: &'g mut GraphBuilder,
+    pass_idx: usize,
+}
+
+impl PassBuilder<'_> {
+    // Declare that this pass reads `h` in the stage its `PassKind` implies.
+    // Silently no-ops on `TextureHandle::INVALID` so conditional graph builds
+    // stay branch-free. Returns `&mut Self` for chaining.
+    pub(crate) fn read_texture(&mut self, h: TextureHandle) -> &mut Self {
+        self.push_read(h.resource, h.version, h.is_valid(), None)
+    }
+
+    // Declare that this pass reads `h` in `stage` rather than in the one its
+    // `PassKind` implies: the water draw samples the ocean's arrays in its
+    // vertex stage as well as its fragment stage.
+    pub(crate) fn read_texture_in_stage(
+        &mut self,
+        h: TextureHandle,
+        stage: ReadStages,
+    ) -> &mut Self {
+        self.push_read(h.resource, h.version, h.is_valid(), Some(stage))
+    }
+
+    // Declare that this pass reads `h`. Same INVALID-safety as
+    // `read_texture`.
+    pub(crate) fn read_buffer(&mut self, h: BufferHandle) -> &mut Self {
+        self.push_read(h.resource, h.version, h.is_valid(), None)
+    }
+
+    // Declare that this pass reads `h` in `stage` rather than in the one its
+    // `PassKind` implies. The one case today is the particle draw, whose vertex
+    // shader pulls each billboard's particle out of the simulation pool: a
+    // render pass, but not a fragment read.
+    pub(crate) fn read_buffer_in_stage(&mut self, h: BufferHandle, stage: ReadStages) -> &mut Self {
+        self.push_read(h.resource, h.version, h.is_valid(), Some(stage))
+    }
+
+    // Record one read, resolving its stage against the pass's kind when the
+    // caller named none.
+    fn push_read(
+        &mut self,
+        resource: ResourceId,
+        version: u32,
+        valid: bool,
+        stage: Option<ReadStages>,
+    ) -> &mut Self {
+        if valid {
+            let pass = &mut self.builder.passes[self.pass_idx];
+            let stage = stage.unwrap_or_else(|| ReadStages::for_pass_kind(pass.kind));
+            pass.reads.push(ResourceRead {
+                version: ResourceVersion { resource, version },
+                stage,
+            });
+        }
+        self
+    }
+
+    // Declare that this pass writes `h`. Returns a new handle pointing
+    // at the post-write version; the input handle stays valid as a
+    // reference to the pre-write content.
+    //
+    // Returns `TextureHandle::INVALID` when called with the invalid
+    // sentinel so optional passes can chain freely.
+    pub(crate) fn write_texture(&mut self, h: TextureHandle) -> TextureHandle {
+        if !h.is_valid() {
+            return TextureHandle::INVALID;
+        }
+        let new_version = self.builder.resources[h.resource.index()].bump_version();
+        self.builder.passes[self.pass_idx]
+            .writes
+            .push(ResourceVersion {
+                resource: h.resource,
+                version: new_version,
+            });
+        TextureHandle {
+            resource: h.resource,
+            version: new_version,
+        }
+    }
+
+    // Buffer counterpart to `write_texture`.
+    pub(crate) fn write_buffer(&mut self, h: BufferHandle) -> BufferHandle {
+        if !h.is_valid() {
+            return BufferHandle::INVALID;
+        }
+        let new_version = self.builder.resources[h.resource.index()].bump_version();
+        self.builder.passes[self.pass_idx]
+            .writes
+            .push(ResourceVersion {
+                resource: h.resource,
+                version: new_version,
+            });
+        BufferHandle {
+            resource: h.resource,
+            version: new_version,
+        }
+    }
+
+    // Mark this pass as the one that writes the final swapchain image.
+    // The compile pass requires exactly one of these per graph; failing
+    // that produces a `GraphError::MissingPresenter` or
+    // `GraphError::MultiplePresenters`.
+    pub(crate) fn presents(&mut self) -> &mut Self {
+        self.builder.passes[self.pass_idx].presents = true;
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::types::{BufferUsage, PixelFormat, TextureSize, TextureUsage};
+    use super::*;
+
+    fn dummy_tex_desc() -> TextureDesc {
+        TextureDesc::texture_2d(
+            TextureSize::Drawable,
+            TextureSize::Drawable,
+            PixelFormat::Rgba16Float,
+            TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
+        )
+    }
+
+    fn dummy_buf_desc() -> BufferDesc {
+        BufferDesc {
+            size_bytes: None,
+            usage: BufferUsage::STORAGE,
+        }
+    }
+
+    #[test]
+    fn create_texture_assigns_dense_ids() {
+        let mut b = GraphBuilder::new();
+        let a = b.import_texture("a", dummy_tex_desc());
+        let c = b.create_texture("c", dummy_tex_desc());
+        assert_eq!(a.resource.index(), 0);
+        assert_eq!(c.resource.index(), 1);
+        assert_eq!(a.version, 0);
+        assert_eq!(c.version, 0);
+    }
+
+    #[test]
+    fn write_bumps_version_and_returns_new_handle() {
+        let mut b = GraphBuilder::new();
+        let h0 = b.create_texture("t", dummy_tex_desc());
+        let h1 = {
+            let mut p = b.add_pass(PassId::Main, PassKind::Render);
+            p.write_texture(h0)
+        };
+        assert_eq!(h0.version, 0);
+        assert_eq!(h1.version, 1);
+        assert_eq!(h0.resource, h1.resource);
+    }
+
+    #[test]
+    fn read_write_record_declarations() {
+        let mut b = GraphBuilder::new();
+        let t = b.create_texture("t", dummy_tex_desc());
+        let buf = b.create_buffer("b", dummy_buf_desc());
+        {
+            let mut p = b.add_pass(PassId::Main, PassKind::Render);
+            p.read_texture(t).read_buffer(buf);
+            let _ = p.write_texture(t);
+        }
+
+        let pass = &b.passes[0];
+        assert_eq!(pass.reads.len(), 2);
+        assert_eq!(pass.writes.len(), 1);
+        assert_eq!(pass.reads[0].version.resource, t.resource);
+        assert_eq!(pass.reads[1].version.resource, buf.resource);
+        // Neither read named a stage, so both took the pass kind's.
+        assert_eq!(pass.reads[0].stage(), ReadStages::FRAGMENT);
+        assert_eq!(pass.writes[0].version, 1);
+    }
+
+    #[test]
+    fn invalid_handle_skips_declaration() {
+        let mut b = GraphBuilder::new();
+        let out = {
+            let mut p = b.add_pass(PassId::Composite, PassKind::Render);
+            p.read_texture(TextureHandle::INVALID);
+            p.write_texture(TextureHandle::INVALID)
+        };
+
+        assert!(!out.is_valid());
+        let pass = &b.passes[0];
+        assert!(pass.reads.is_empty());
+        assert!(pass.writes.is_empty());
+    }
+
+    #[test]
+    fn presents_marks_the_pass() {
+        let mut b = GraphBuilder::new();
+        b.add_pass(PassId::Composite, PassKind::Render).presents();
+        assert!(b.passes[0].presents);
+    }
+}

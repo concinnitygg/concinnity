@@ -1,9 +1,9 @@
 //! What a verb's handler is handed: the world snapshot to read, and a way to run
 //! work on the engine thread and wait for its result.
 
-use concinnity_core::ecs::World;
-use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::world_load::source_maps::TextureNameSlots;
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::world_load::source_maps::TextureNameSlots;
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
@@ -137,7 +137,7 @@ fn wait<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::backend::NullBackend;
+    use concinnity_engine::render::backend::NullBackend;
     use std::sync::Arc;
 
     // Stand in for the engine: stamp each frame and run what it queued until

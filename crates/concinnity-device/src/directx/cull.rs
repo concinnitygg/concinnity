@@ -15,13 +15,13 @@
 //! signature built by `create_cull_command_signature`. Mirrors src/metal/cull.rs.
 
 use concinnity_core::fanout::FanOutTiming;
-use concinnity_core::gfx::frustum::{Frustum, Plane};
-use concinnity_core::gfx::lod;
-use concinnity_core::gfx::render_types::MAX_SHADOWED_SPOTS;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::temporal::model_history::HistoryMode;
-use concinnity_core::render::uniforms::directx::CullParams;
+use concinnity_engine::gfx::frustum::{Frustum, Plane};
+use concinnity_engine::gfx::lod;
+use concinnity_engine::gfx::render_types::MAX_SHADOWED_SPOTS;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::temporal::model_history::HistoryMode;
+use concinnity_engine::render::uniforms::directx::CullParams;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::allocator::PooledBuffer;
@@ -68,7 +68,7 @@ pub(in crate::directx) struct CullState {
     // pre-pass. `None` marks a bucket whose Shader is not resident yet: its
     // scene has not pinned, so both passes skip those draws (see
     // `world_shaders.rs`).
-    pub world_pipelines: concinnity_core::render::shader::world_pipelines::WorldPipelines<
+    pub world_pipelines: concinnity_engine::render::shader::world_pipelines::WorldPipelines<
         super::init::pipelines::BucketPsos,
     >,
     // Commands reserved per shader-bucket region in the indirect buffers, fixed
@@ -282,8 +282,8 @@ struct RegionCullPass<'a> {
 impl DxContext {
     // Where this frame's draws growing grass route: the grass twins, and where
     // the blades start handing the field to the canopy.
-    fn grass_route(&self) -> concinnity_core::render::record_pack::GrassRoute {
-        concinnity_core::render::record_pack::GrassRoute {
+    fn grass_route(&self) -> concinnity_engine::render::record_pack::GrassRoute {
+        concinnity_engine::render::record_pack::GrassRoute {
             twins: self.cull.world_pipelines.grass_twins(),
             far_start: self.grass_lod.get().map_or(0.0, |l| l.fade_start()),
         }
@@ -333,11 +333,11 @@ impl DxContext {
         cam_pos: [f32; 3],
         history: HistoryMode,
     ) -> FanOutTiming {
-        use concinnity_core::gfx::render_types::{
+        use concinnity_engine::gfx::render_types::{
             GpuDrawArgs, GpuObjectData, albedo_pool_index, draw_args_bucket_bits, draw_args_flags,
             normal_pool_index, pack_skinned_record,
         };
-        use concinnity_core::render::record_pack::{
+        use concinnity_engine::render::record_pack::{
             PackView, StaticPack, draw_bucket, pool_object_record,
         };
         let (Some(&objects), Some(&args)) = (
@@ -719,7 +719,7 @@ impl DxContext {
         render_mask: u32,
         cam_pos: [f32; 3],
     ) {
-        use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;
+        use concinnity_engine::gfx::render_types::NUM_SHADOW_CASCADES;
         let (Some(pso), Some(indirect), Some(status)) = (
             self.cull.cull_pso_shadow.as_ref(),
             self.cull.shadow_indirect_buffers.get(frame_idx),

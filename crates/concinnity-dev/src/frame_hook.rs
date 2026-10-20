@@ -3,8 +3,8 @@
 //! Implemented by the editor's `EditorHook`, the debug server, and the
 //! hot-reload driver; the editor's `MultiHook` runs several in order.
 
-use concinnity_core::ecs::World;
-use concinnity_core::shutdown::ShutdownToken;
+use concinnity_engine::ecs::World;
+use concinnity_engine::shutdown::ShutdownToken;
 use concinnity_runtime::Runtime;
 
 pub(crate) trait FrameHook: Send {

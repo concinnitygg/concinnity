@@ -12,7 +12,7 @@ use crate::authoring::resource_type::is_mesh_source;
 use crate::authoring::world::WorldJsonlAsset;
 use crate::check::asset_refs::{CrossRef, RefKind};
 use crate::check::cross_reference::cross_refs_for;
-use concinnity_core::ecs::RefField;
+use concinnity_engine::ecs::RefField;
 
 /// The names of every asset `asset` references, in field/declaration order.
 /// Names are returned as authored; callers resolve them against the world's

@@ -1,7 +1,7 @@
 //! Character-model schema: a body conforming to a `CharacterSchema`.
 
-use concinnity_core::components::CharacterCapsule;
-use concinnity_core::ecs::{MaterialHandle, NameRef};
+use concinnity_engine::components::CharacterCapsule;
+use concinnity_engine::ecs::{MaterialHandle, NameRef};
 
 use super::character_schema::CharacterSchema;
 
@@ -27,7 +27,9 @@ use super::character_schema::CharacterSchema;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct CharacterModel {
     /// The [`CharacterSchema`](#characterschema) the source conforms to, by
@@ -98,8 +100,8 @@ mod tests {
     fn install_len_resolvers() {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
-            concinnity_core::ecs::set_handle_resolver(
-                concinnity_core::ecs::HandleKind::Material,
+            concinnity_engine::ecs::set_handle_resolver(
+                concinnity_engine::ecs::HandleKind::Material,
                 |_, n| Some(u32::saturating_from(n.len())),
             );
         });

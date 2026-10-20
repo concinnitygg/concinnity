@@ -7,9 +7,9 @@
 //! the queue until a backend is parked, so a call made before the render loop
 //! exists is applied once it does; a world job never waits on one.
 
-use concinnity_core::ecs::World;
-use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::world_load::source_maps::TextureNameSlots;
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::world_load::source_maps::TextureNameSlots;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -82,7 +82,7 @@ impl RuntimeQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::backend::NullBackend;
+    use concinnity_engine::render::backend::NullBackend;
     use std::sync::mpsc;
 
     fn world_job(tx: &mpsc::Sender<&'static str>, tag: &'static str) -> WorldJob {

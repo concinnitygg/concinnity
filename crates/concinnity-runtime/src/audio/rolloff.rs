@@ -1,7 +1,7 @@
 //! Maps authored `AudioEmitter` attenuation onto kira's spatial-track
 //! parameters; core's `audio::distance` sanitizes the range.
 
-use concinnity_core::components::Rolloff;
+use concinnity_engine::components::Rolloff;
 use kira::Easing;
 
 // The volume curve between min and max distance. kira interpolates the

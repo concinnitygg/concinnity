@@ -35,14 +35,14 @@
 //! draws -- so it runs only under the RT root signature and is inert while RT
 //! is off.
 
-use concinnity_core::components::GlassPanel;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::planet::Rebase;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::temporal::reactive_mask::ReactiveWrite;
+use concinnity_engine::components::GlassPanel;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::gfx::render_types::RtParams;
+use concinnity_engine::planet::Rebase;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::depth::DEPTH_CLEAR;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -69,13 +69,15 @@ const RT_PARAMS_UBO_SIZE: u64 = 144;
 // `TransparentView` (the per-frame view cbuffer) is a GPU-free layout struct
 // that lives in `core::render`; re-export it so the encode path and the
 // graph's view builder can keep naming it through this module.
-use concinnity_core::render::transparent::producer::{self, TransparentProducers, WaterParamsSink};
-use concinnity_core::render::transparent::{SeeThroughMesh, TransparentFramePlan};
-pub(in crate::directx) use concinnity_core::render::uniforms::TransparentView;
-use concinnity_core::render::uniforms::{GlassMeshParams, WaterParams};
+use concinnity_engine::render::transparent::producer::{
+    self, TransparentProducers, WaterParamsSink,
+};
+use concinnity_engine::render::transparent::{SeeThroughMesh, TransparentFramePlan};
+pub(in crate::directx) use concinnity_engine::render::uniforms::TransparentView;
+use concinnity_engine::render::uniforms::{GlassMeshParams, WaterParams};
 use std::sync::Mutex;
 
-pub(in crate::directx) use concinnity_core::render::transparent::Producer;
+pub(in crate::directx) use concinnity_engine::render::transparent::Producer;
 
 // One drawable record's GPU state: a static world-space (glass) or
 // origin-centered grid (water) VB + IB plus a per-record uniform CBV. Built
@@ -771,7 +773,7 @@ pub(in crate::directx) struct TransparentSceneTargets {
 pub(in crate::directx) struct TransparentContent<'a> {
     pub glass_panels: &'a [GlassPanel],
     pub glass_planar_slots: &'a [Option<usize>],
-    pub water_surfaces: &'a [concinnity_core::render::environment::water::WaterBody],
+    pub water_surfaces: &'a [concinnity_engine::render::environment::water::WaterBody],
     pub water_planar_slots: &'a [Option<usize>],
     // Indices into the context's draw objects of every see-through material.
     // Empty when no material opted in; those meshes then render opaque.

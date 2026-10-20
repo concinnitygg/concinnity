@@ -2,15 +2,15 @@
 //! pass binds while it is off, and where the kernel's inputs come from this
 //! frame. The depth copy, kernel and blur -- their pipelines, the depth copy and
 //! raw occlusion they own and every draw -- are written once in
-//! `concinnity_core::render::post::ssao` and reach Metal through
+//! `concinnity_engine::render::post::ssao` and reach Metal through
 //! `MtlPostDevice`. The depth + normal they read come from the unified G-buffer
 //! pre-pass.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::post::ssao::settings::SsaoSettings;
-use concinnity_core::render::post::ssao::{SsaoInputs, SsaoPass};
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::ssao::settings::SsaoSettings;
+use concinnity_engine::render::post::ssao::{SsaoInputs, SsaoPass};
 use objc2::runtime::ProtocolObject;
 
 use crate::metal::context::MtlContext;

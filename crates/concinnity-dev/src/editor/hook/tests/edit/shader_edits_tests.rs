@@ -3,7 +3,7 @@
 //! its files, and deleting a Shader with or without its files. Each is one
 //! undo step; an open source panel on an affected file closes first.
 
-use concinnity_core::components::ShaderStage;
+use concinnity_engine::components::ShaderStage;
 
 use super::shader_fixtures::{
     args, click, in_project, key, material, message, pick, shader, shader_names, write,

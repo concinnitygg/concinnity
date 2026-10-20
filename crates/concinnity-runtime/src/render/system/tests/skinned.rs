@@ -1,8 +1,8 @@
 use super::*;
-use concinnity_core::animation::skinned_mesh_map::SkinnedMeshNameIndex;
-use concinnity_core::components::{CharacterCapsule, SkinnedMesh};
-use concinnity_core::ecs::{ResourceKind, ResourceRecord};
-use concinnity_core::render::frame::queues::ActiveRenderQueues;
+use concinnity_engine::animation::skinned_mesh_map::SkinnedMeshNameIndex;
+use concinnity_engine::components::{CharacterCapsule, SkinnedMesh};
+use concinnity_engine::ecs::{ResourceKind, ResourceRecord};
+use concinnity_engine::render::frame::queues::ActiveRenderQueues;
 
 // Morph targets upload right after the skinned geometry, and a failed morph
 // upload fails init the way a failed geometry upload does.

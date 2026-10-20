@@ -3,7 +3,7 @@
 //! grayscale. Color-mapped images are not supported. The image-descriptor origin
 //! bit is honored so bottom-left-origin files are flipped to top-row-first.
 
-use concinnity_core::bake::decode::checked_product;
+use concinnity_engine::bake::decode::checked_product;
 
 const HEADER_LEN: usize = 18;
 

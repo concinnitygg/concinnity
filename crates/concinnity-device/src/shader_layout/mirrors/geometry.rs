@@ -6,22 +6,22 @@
 //! across separate buffers. Each leg mirrors the struct its own host binds;
 //! everything else is one declaration for all three.
 
-use concinnity_core::gfx::render_types::{
+use concinnity_engine::gfx::render_types::{
     ParticleParams, ShadowPassPush, ShadowUniforms, TextUniforms,
 };
-use concinnity_core::render::uniforms::directx::CullParams as DxCullParams;
-use concinnity_core::render::uniforms::grass::{
+use concinnity_engine::render::uniforms::directx::CullParams as DxCullParams;
+use concinnity_engine::render::uniforms::grass::{
     GpuGrassBlade, GrassBendParams, GrassLayerGpu, GrassParams, GrassTileGpu, PlanetGrassTileGpu,
 };
-use concinnity_core::render::uniforms::metal::CullUniforms as MetalCullParams;
-use concinnity_core::render::uniforms::ocean::OceanFftParams;
-use concinnity_core::render::uniforms::vulkan::{CullHizParams, CullParams as VkCullParams};
-use concinnity_core::render::uniforms::{
+use concinnity_engine::render::uniforms::metal::CullUniforms as MetalCullParams;
+use concinnity_engine::render::uniforms::ocean::OceanFftParams;
+use concinnity_engine::render::uniforms::vulkan::{CullHizParams, CullParams as VkCullParams};
+use concinnity_engine::render::uniforms::{
     DecalParams, DecalView, GBufferView, GpuParticle, LineView, ParticleView, SkinParams,
 };
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror, on};
-use concinnity_core::platform::Platform;
+use concinnity_engine::platform::Platform;
 
 const METAL: &[Platform] = &[Platform::Metal];
 const VULKAN: &[Platform] = &[Platform::Vulkan];

@@ -2,12 +2,12 @@
 // changes where the world is, carrying the names the world declares rather than
 // the ids a build interns.
 
-use concinnity_core::components::{AuthoredAction, NamedAction};
+use concinnity_engine::components::{AuthoredAction, NamedAction};
 use serde_json::Value;
 
 /// A move an action makes through the world's places.
 ///
-/// The flow half of [`UiAction`](concinnity_core::components::UiAction): the
+/// The flow half of [`UiAction`](concinnity_engine::components::UiAction): the
 /// variants that change where the world is, carrying the names a world declares
 /// rather than the ids a build interns. Operating a settings row, folding a
 /// settings group, or saving a screenshot changes no place, so none has a
@@ -87,8 +87,8 @@ pub fn read_action(value: &Value) -> Option<Move> {
 
 #[cfg(test)]
 mod tests {
-    use concinnity_core::components::{SettingVerb, StoryCommand};
-    use concinnity_core::settings::SettingKey;
+    use concinnity_engine::components::{SettingVerb, StoryCommand};
+    use concinnity_engine::settings::SettingKey;
     use serde_json::json;
 
     use super::*;

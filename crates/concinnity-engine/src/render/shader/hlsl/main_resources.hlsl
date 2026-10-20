@@ -1,0 +1,427 @@
+// The forward main pass's resources and shading, spliced at a shader's
+// MAIN_RESOURCES marker: the records it binds, every binding of each backend's
+// layout, the accessors `main_shading.hlsl` reads them through, and that body.
+// `main_bindless.hlsl` splices it for the GPU-culled surfaces, and the grass
+// draws splice it too, so every opaque draw of the main pass lands on the same
+// slots and is lit by the same model.
+//
+// Every array it binds is unsized or a single resource -- the texture pool, the
+// probe records and the probe cube array -- so no define sizes it: the host
+// decides each length at run time.
+//
+// Only the resource declarations differ per binding model, selected by the
+// backend define and bridged into the shading through the UPPER_CASE resource
+// macros and the sampling accessors below:
+//
+//   default            - the engine's Vulkan layout: scene resources and the
+//                        engine samplers = descriptor set 0 (bindings 0-20),
+//                        objects + texture pool = set 1.
+//   CN_BACKEND_METAL   - the engine's Metal binding layout, which is what the
+//                        host encoders write: discrete buffers pinned by
+//                        register() (b/t numbers ARE the Metal buffer
+//                        indices), the texture-only argument buffer at
+//                        buffer(7), and the engine sampler block at
+//                        buffer(10).
+//   CN_BACKEND_DIRECTX - the engine's DirectX bindless root signature: every
+//                        register pinned to the layout in
+//                        directx/init/pipelines.rs.
+//
+// Under SURFACE_PREPASS it adds the G-buffer pre-pass's own view block, the
+// previous frame's models and the draw args to whichever binding model is
+// selected, and VIEW becomes a copy an entry can rewind to the previous frame.
+
+// ---- Shared CPU-visible records ----
+
+{MAIN_TYPES}
+
+{PROBE_TYPES}
+
+// Mirrors `GpuMaterialParams` in concinnity-engine/src/gfx/render_types.rs (32 B):
+// one material's eight Shader parameters. Row 0 is all zeros.
+struct GpuMaterialParams
+{
+    float4 values[2];
+};
+
+// Mirrors `CanopyLayerGpu` in concinnity-engine/src/render/uniforms/canopy.rs
+// (64 B): one grass layer as the far field past its blades reads it.
+struct CanopyLayer
+{
+    float4 root_color_variation;
+    float4 tip_color_macro;
+    // x = clump size, y = height variance, z = leaf area, w = mean bend.
+    float4 shape;
+    uint seed;
+    float sky_projection;
+    float _pad0;
+    float _pad1;
+    // xyz = linear RGB of the litter under the blades, w = clumping.
+    float4 litter_clumping;
+};
+
+// Matches MAX_CANOPY_LAYERS in render::uniforms::canopy.
+#define CANOPY_MAX_LAYERS 16
+
+// Mirrors `CanopyParams` in concinnity-engine/src/render/uniforms/canopy.rs
+// (1488 B): every far field's layers, the planet's axes in the frame, the
+// noise its height is summed from, and where the blades hand the field to it.
+struct CanopyParams
+{
+    float4 planet_rows[3];
+    float planet_radius;
+    float meadow_scale;
+    float meadow_mean;
+    uint layer_count;
+    CanopyLayer layers[CANOPY_MAX_LAYERS];
+    float4 ground_turn[3];
+    uint4 ground_salts[4];
+    float ground_frequency;
+    float ground_height_scale;
+    float ground_cell;
+    uint ground_octaves;
+    // x = where the blades start handing the field over, y = where they end,
+    // z = the hand-off's phase (see grass_crossfade_shows_blades); w unused.
+    float4 band;
+};
+
+// ---- Resource bindings ----
+
+#ifdef CN_BACKEND_METAL
+
+// The Metal argument buffer at buffer(7) holds texture handles only, and
+// `metal/cull.rs` writes it by argument id. A member's register number IS its
+// `[[id(n)]]`: the fixed members take 0..7 and the pool comes last, unsized, so
+// no id depends on how many textures the pool holds.
+[[vk::binding(0, 1)]] [[cn::metal_argument_buffer(7)]]
+Texture2DArray<float> shadow_map : register(t0, space1);
+[[vk::binding(1, 1)]] TextureCube<float4> irradiance_cube : register(t1, space1);
+[[vk::binding(2, 1)]] TextureCube<float4> prefilter_cube : register(t2, space1);
+// The screen-space indirect light (see `screen_indirect_at`).
+[[vk::binding(3, 1)]] Texture2D<float4> screen_indirect : register(t3, space1);
+// Local reflection-probe prefiltered radiance, one cube-array slice per probe.
+[[vk::binding(4, 1)]] TextureCubeArray<float4> probe_cubes : register(t4, space1);
+// Spot shadow map array: one depth slice per shadow-casting spot light.
+[[vk::binding(5, 1)]] Texture2DArray<float> spot_shadow_map : register(t5, space1);
+// The two LTC lookup tables, sampled at (roughness, sqrt(1 - NdV)).
+[[vk::binding(6, 1)]] Texture2D<float4> ltc_matrix : register(t6, space1);
+[[vk::binding(7, 1)]] Texture2D<float4> ltc_magnitude : register(t7, space1);
+// Bindless texture pool: [albedo textures..] ++ [normal maps..]. The object
+// record's albedo_index / normal_index address it directly.
+[[vk::binding(8, 1)]] Texture2D<float4> tex_pool[] : register(t8, space1);
+
+// The engine's static samplers at buffer(10), mirrored from the host
+// MTLSamplerDescriptors. Apart from the textures because indirect-command-buffer
+// execution cannot see encoder-bound sampler state.
+[[vk::binding(0, 2)]] [[cn::metal_argument_buffer(10)]]
+SamplerState tex_sampler : register(s0, space2);
+[[vk::binding(1, 2)]] SamplerComparisonState shadow_sampler : register(s1, space2);
+[[vk::binding(2, 2)]] SamplerState cube_sampler : register(s2, space2);
+
+// register() numbers pin the Metal buffer slots directly (b and t share the
+// index space there). buffer(1) is the vertex stream.
+[[vk::binding(0, 0)]] ConstantBuffer<ViewUniforms> view_cb : register(b0);
+[[vk::binding(1, 0)]] ConstantBuffer<LightUniforms> lights_cb : register(b4);
+[[vk::binding(2, 0)]] ConstantBuffer<ShadowUniforms> shadow_cb : register(b5);
+[[vk::binding(3, 0)]] ConstantBuffer<ProbeSet> probe_set_cb : register(b6);
+// Per-scene local lights (point + spot + area) for the forward pass.
+[[vk::binding(4, 0)]] StructuredBuffer<GpuLight> local_lights_sb : register(t8);
+[[vk::binding(5, 0)]] StructuredBuffer<GpuObjectData> objects_sb : register(t9);
+[[vk::binding(6, 0)]] ConstantBuffer<ClusterParams> cluster_cb : register(b11);
+// Per-cluster light lists and probe masks the LightCull compute pass writes.
+[[vk::binding(7, 0)]] StructuredBuffer<uint> cluster_list_sb : register(t12);
+// Spot shadow slice projections, indexed by GpuLight.shadow_index.
+[[vk::binding(8, 0)]] StructuredBuffer<SpotShadowData> spot_shadows_sb : register(t13);
+[[vk::binding(9, 0)]] StructuredBuffer<AreaLightData> area_lights_sb : register(t14);
+// One parallax record per live reflection probe.
+[[vk::binding(10, 0)]] StructuredBuffer<ProbeUniforms> probe_records_sb : register(t15);
+// The material parameter table, indexed by GpuObjectData.params_index.
+[[vk::binding(11, 0)]] StructuredBuffer<GpuMaterialParams> material_params_sb : register(t16);
+// The far field's canopy block, and its layers' view tables.
+[[vk::binding(15, 0)]] ConstantBuffer<CanopyParams> canopy_cb : register(b21);
+[[vk::binding(16, 0)]] StructuredBuffer<float4> canopy_tables_sb : register(t22);
+// The shared vertex stream as floats, where a planet tile's morph reads its
+// neighbors.
+[[vk::binding(17, 0)]] StructuredBuffer<float> mesh_vertices : register(t23);
+float mesh_float(uint i) { return mesh_vertices[i]; }
+
+// The pool's sampler, under the name the other hosts declare it by.
+#define linear_sampler tex_sampler
+
+#elif defined(CN_BACKEND_DIRECTX)
+
+// Every register below is pinned to the bindless main root signature in
+// directx/init/pipelines.rs. Root constant at b0, root CBVs at b1-b5, root SRVs
+// at t1/t2/t3/t8/t9/t15/t17, descriptor tables for the rest, and the unbounded
+// texture pool in space1.
+struct ObjectId { uint value; };
+
+ConstantBuffer<ObjectId> objid_cb : register(b0);
+ConstantBuffer<ViewUniforms> view_cb : register(b1);
+ConstantBuffer<LightUniforms> lights_cb : register(b2);
+ConstantBuffer<ShadowUniforms> shadow_cb : register(b3);
+ConstantBuffer<ProbeSet> probe_set_cb : register(b4);
+ConstantBuffer<ClusterParams> cluster_cb : register(b5);
+
+Texture2DArray<float> shadow_map : register(t0);
+// Per-scene local lights (point + spot + area) for the forward pass.
+StructuredBuffer<GpuLight> local_lights_sb : register(t1);
+// Per-cluster light lists and probe masks the LightCull compute pass writes.
+StructuredBuffer<uint> cluster_list_sb : register(t2);
+StructuredBuffer<GpuObjectData> objects_sb : register(t3);
+// The screen-space indirect light (see `screen_indirect_at`).
+Texture2D<float4> screen_indirect : register(t4);
+TextureCube<float4> irradiance_cube : register(t5);
+TextureCube<float4> prefilter_cube : register(t6);
+// Local reflection-probe prefiltered radiance, one cube-array slice per probe,
+// and the parallax record of each.
+TextureCubeArray<float4> probe_cubes : register(t7);
+StructuredBuffer<ProbeUniforms> probe_records_sb : register(t8);
+// Spot shadow slice projections, indexed by GpuLight.shadow_index.
+StructuredBuffer<SpotShadowData> spot_shadows_sb : register(t15);
+Texture2DArray<float> spot_shadow_map : register(t16);
+StructuredBuffer<AreaLightData> area_lights_sb : register(t17);
+// The two LTC lookup tables, sampled at (roughness, sqrt(1 - NdV)).
+Texture2D<float4> ltc_matrix : register(t18);
+Texture2D<float4> ltc_magnitude : register(t19);
+// The material parameter table, indexed by GpuObjectData.params_index.
+StructuredBuffer<GpuMaterialParams> material_params_sb : register(t20);
+// The far field's canopy block, and its layers' view tables.
+ConstantBuffer<CanopyParams> canopy_cb : register(b8);
+StructuredBuffer<float4> canopy_tables_sb : register(t24);
+// The shared vertex stream as a raw view, where a planet tile's morph reads
+// its neighbors.
+ByteAddressBuffer mesh_vertices : register(t9);
+float mesh_float(uint i) { return asfloat(mesh_vertices.Load(i * 4u)); }
+// Bindless texture pool: [albedo textures..] ++ [normal maps..]. Unbounded so
+// the shader never over-declares the host's per-frame descriptor region.
+Texture2D<float4> tex_pool[] : register(t0, space1);
+
+SamplerComparisonState shadow_sampler : register(s0);
+SamplerState linear_sampler : register(s1);
+SamplerState cube_sampler : register(s2);
+
+
+#else // the Vulkan descriptor sets
+
+// Set 0 is the forward global set: every texture a sampled image, read through
+// the three engine samplers at bindings 18-20 the way the DirectX root
+// signature reads its static samplers. Set 1 holds the object records and the
+// texture pool.
+[[vk::binding(0, 0)]] ConstantBuffer<ViewUniforms> view_cb : register(b0);
+[[vk::binding(1, 0)]] ConstantBuffer<LightUniforms> lights_cb : register(b1);
+[[vk::binding(2, 0)]] ConstantBuffer<ShadowUniforms> shadow_cb : register(b2);
+[[vk::binding(3, 0)]] Texture2DArray<float> shadow_map : register(t3);
+[[vk::binding(4, 0)]] TextureCube<float4> irradiance_cube : register(t4);
+[[vk::binding(5, 0)]] TextureCube<float4> prefilter_cube : register(t5);
+// The screen-space indirect light (see `screen_indirect_at`).
+[[vk::binding(6, 0)]] Texture2D<float4> screen_indirect : register(t6);
+[[vk::binding(7, 0)]] ConstantBuffer<ProbeSet> probe_set_cb : register(b7);
+[[vk::binding(8, 0)]] TextureCubeArray<float4> probe_cubes : register(t8);
+// Per-scene local lights (point + spot + area) for the forward pass.
+[[vk::binding(9, 0)]] StructuredBuffer<GpuLight> local_lights_sb : register(t9);
+[[vk::binding(10, 0)]] ConstantBuffer<ClusterParams> cluster_cb : register(b10);
+// Per-cluster light lists and probe masks the LightCull compute pass writes.
+[[vk::binding(11, 0)]] StructuredBuffer<uint> cluster_list_sb : register(t11);
+// Spot shadow depth array: one layer per shadow-casting spot.
+[[vk::binding(12, 0)]] Texture2DArray<float> spot_shadow_map : register(t12);
+// Spot shadow slice projections, indexed by GpuLight.shadow_index.
+[[vk::binding(13, 0)]] StructuredBuffer<SpotShadowData> spot_shadows_sb : register(t13);
+[[vk::binding(14, 0)]] StructuredBuffer<AreaLightData> area_lights_sb : register(t14);
+// The two LTC lookup tables, sampled at (roughness, sqrt(1 - NdV)).
+[[vk::binding(15, 0)]] Texture2D<float4> ltc_matrix : register(t15);
+[[vk::binding(16, 0)]] Texture2D<float4> ltc_magnitude : register(t16);
+// One parallax record per live reflection probe.
+[[vk::binding(17, 0)]] StructuredBuffer<ProbeUniforms> probe_records_sb : register(t17);
+[[vk::binding(18, 0)]] SamplerComparisonState shadow_sampler : register(s0);
+[[vk::binding(19, 0)]] SamplerState cube_sampler : register(s1);
+[[vk::binding(20, 0)]] SamplerState linear_sampler : register(s2);
+
+[[vk::binding(0, 1)]] StructuredBuffer<GpuObjectData> objects_sb : register(t0, space1);
+// Bindless texture pool: [albedo textures..] ++ [normal maps..]. The object
+// record's albedo_index / normal_index address it directly.
+[[vk::binding(1, 1)]] Texture2D<float4> tex_pool[] : register(t1, space1);
+// The material parameter table, indexed by GpuObjectData.params_index.
+[[vk::binding(2, 1)]] StructuredBuffer<GpuMaterialParams> material_params_sb : register(t2, space1);
+// The shared vertex stream as floats, where a planet tile's morph reads its
+// neighbors.
+[[vk::binding(3, 1)]] StructuredBuffer<float> mesh_vertices : register(t3, space1);
+float mesh_float(uint i) { return mesh_vertices[i]; }
+// The far field's canopy block, and its layers' view tables.
+[[vk::binding(21, 0)]] ConstantBuffer<CanopyParams> canopy_cb : register(b21);
+[[vk::binding(22, 0)]] StructuredBuffer<float4> canopy_tables_sb : register(t22);
+
+
+#endif // binding model
+
+// The surface's tangent frame follows the morph.
+#define TILE_MORPH_TANGENT
+{TILE_MORPH}
+
+#ifdef SURFACE_PREPASS
+
+{GBUFFER_COMMON}
+
+// The model-history ring slot the PREVIOUS frame's `model_history.hlsl`
+// dispatch filled, and this frame's draw args, read only for
+// `DRAW_NO_HISTORY`. Both indexed by object id, like the object records.
+#ifdef CN_BACKEND_METAL
+[[vk::binding(12, 0)]] ConstantBuffer<GbView> gb_view : register(b3);
+[[vk::binding(13, 0)]] StructuredBuffer<float4x4> prev_models : register(t17);
+[[vk::binding(14, 0)]] StructuredBuffer<GpuDrawArgs> draw_args : register(t18);
+#elif defined(CN_BACKEND_DIRECTX)
+ConstantBuffer<GbView> gb_view : register(b6);
+StructuredBuffer<float4x4> prev_models : register(t21);
+StructuredBuffer<GpuDrawArgs> draw_args : register(t22);
+#else
+[[vk::binding(0, 2)]] ConstantBuffer<GbView> gb_view : register(b0, space2);
+[[vk::binding(1, 2)]] StructuredBuffer<float4x4> prev_models : register(t1, space2);
+[[vk::binding(2, 2)]] StructuredBuffer<GpuDrawArgs> draw_args : register(t2, space2);
+#endif
+
+// The vertex hook reads the clock through VIEW, and the pre-pass runs it a
+// second time at the previous frame's clock for motion, so VIEW is a copy the
+// entry can rewind.
+static ViewUniforms surface_view;
+#define VIEW surface_view
+
+#else
+
+#define VIEW view_cb
+
+#endif
+#define LIGHTS lights_cb
+#define SHADOW_UNI shadow_cb
+#define PROBE_SET probe_set_cb
+#define PROBE_RECORDS probe_records_sb
+#define CLUSTER cluster_cb
+#define OBJECTS objects_sb
+#define LOCAL_LIGHTS local_lights_sb
+#define CLUSTER_LIST cluster_list_sb
+#define SPOT_SHADOWS spot_shadows_sb
+#define AREA_LIGHTS area_lights_sb
+#define MATERIAL_PARAMS material_params_sb
+#define CANOPY canopy_cb
+#define CANOPY_TABLES canopy_tables_sb
+#define probe_cube_sampler cube_sampler
+
+float4 pool_sample(uint idx, float2 uv)
+{
+    return tex_pool[NonUniformResourceIndex(idx)].Sample(linear_sampler, uv);
+}
+float shadow_map_cmp(float3 uv_layer, float ref)
+{
+    return shadow_map.SampleCmp(shadow_sampler, uv_layer, ref);
+}
+float spot_shadow_cmp(float3 uv_layer, float ref)
+{
+    return spot_shadow_map.SampleCmp(shadow_sampler, uv_layer, ref);
+}
+float2 shadow_map_size()
+{
+    uint w, h, e;
+    shadow_map.GetDimensions(w, h, e);
+    return float2(float(w), float(h));
+}
+float2 spot_shadow_map_size()
+{
+    uint w, h, e;
+    spot_shadow_map.GetDimensions(w, h, e);
+    return float2(float(w), float(h));
+}
+// The screen-space indirect light at a pixel of the main camera's view.
+struct ScreenIndirect
+{
+    // The share of the environment's ambient light that reaches the surface:
+    // the ambient occlusion, lowered further where the bounce rays hit.
+    float visibility;
+    // Light bounced off nearby surfaces, as irradiance over pi: what a white
+    // diffuse surface reflects. Zero without the bounce.
+    float3 bounce;
+};
+
+// The bound target holds the visibility in r and, when `VIEW.screen_bounce` is
+// set, the bounce at the frame's pre-exposure in gba; it is SSAO's occlusion
+// alone, or 1x1 white, otherwise. A probe or mirror face reads neither, since
+// both describe the main camera's view. The cube sampler clamps to edge, so
+// the border texels never wrap.
+ScreenIndirect screen_indirect_at(float2 screen_xy)
+{
+    ScreenIndirect s;
+    s.visibility = 1.0;
+    s.bounce = (float3)(0.0);
+    if (VIEW.ambient_occlusion > 0.5)
+    {
+        uint w, h;
+        screen_indirect.GetDimensions(w, h);
+        float4 t = screen_indirect.Sample(cube_sampler, screen_xy / float2(float(w), float(h)));
+        s.visibility = t.r;
+        if (VIEW.screen_bounce > 0.5)
+        {
+            s.bounce = t.gba / VIEW.pre_exposure;
+        }
+    }
+    return s;
+}
+float3 irradiance_sample(float3 n)
+{
+    return irradiance_cube.Sample(cube_sampler, SKY_DIR(n)).rgb;
+}
+float3 prefilter_sample_bias(float3 dir, float lod)
+{
+    return prefilter_cube.SampleBias(cube_sampler, SKY_DIR(dir), lod).rgb * SKY_CUBE_READ;
+}
+float4 ltc_matrix_sample(float2 uv)
+{
+    return ltc_matrix.SampleLevel(cube_sampler, uv, 0.0);
+}
+float2 ltc_magnitude_sample(float2 uv)
+{
+    return ltc_magnitude.SampleLevel(cube_sampler, uv, 0.0).xy;
+}
+
+{PROBE_COMMON}
+
+// The environment prefilter cube's mip for ray `R` at the roughness mip `lod`,
+// widened by the ray's screen footprint as a probe tap's is.
+float prefilter_footprint_level(float3 R, float lod)
+{
+    uint size, height, mips;
+    prefilter_cube.GetDimensions(0, size, height, mips);
+    float sweep = max(length(ddx(R)), length(ddy(R)));
+    return lod + max(log2(sweep * 0.5 * float(size)), 0.0);
+}
+
+// The reflection tap `shade_surface` reads for a surface of `roughness`, into
+// `radiance`: the fragment's `probes` where any probe is baked, fading to the
+// imported environment prefilter cube (or to nothing without one) far outside
+// every probe box, else that cube alone. False when there is neither.
+bool environment_specular(ProbeMask probes, float3 world_pos, float3 R, float roughness,
+                          out float3 radiance)
+{
+    bool sky = VIEW.prefilter_mip_count > 0.5;
+    float sky_lod = roughness * (VIEW.prefilter_mip_count - 1.0);
+    if (PROBE_SET.count > 0u)
+    {
+        // The level is taken here, where every lane of the quad still runs.
+        float sky_level = sky ? prefilter_footprint_level(R, sky_lod) : 0.0;
+        float sky_share;
+        radiance = probe_mask_specular(probes, world_pos, R, probe_lod(roughness), sky_share);
+        if (sky_share > 0.0)
+        {
+            float3 sky_radiance = sky
+                ? prefilter_cube.SampleLevel(cube_sampler, SKY_DIR(R), sky_level).rgb * SKY_CUBE_READ
+                : (float3)(0.0);
+            radiance = lerp(radiance, sky_radiance, sky_share);
+        }
+        return true;
+    }
+    if (sky)
+    {
+        radiance = prefilter_sample_bias(R, sky_lod);
+        return true;
+    }
+    radiance = (float3)(0.0);
+    return false;
+}
+
+{MAIN_SHADING}

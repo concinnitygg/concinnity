@@ -10,9 +10,9 @@
 //
 // This is build-time-only authoring logic; the asset data structs it operates
 // on, and their runtime `Component` impls, live in
-// concinnity-core.
+// concinnity-engine.
 
-use concinnity_core::components::{
+use concinnity_engine::components::{
     AnimationGraph, Behavior, Camera3D, InstancedProp, Model, PhysicsJoint, PhysicsJointKind, Prop,
     VoxelChunk, VoxelWorld,
 };

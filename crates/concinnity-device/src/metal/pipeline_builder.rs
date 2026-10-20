@@ -5,12 +5,12 @@
 // and the two settings the descriptors read. The swap on the frame thread then
 // only replaces a reference.
 
-use concinnity_core::components::ShaderPrograms;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
-use concinnity_core::render::sdf::programs::SdfPrograms;
-use concinnity_core::render::shader::programs::raymarch::VolumeFlags;
-use concinnity_core::render::shader::programs::surface::GrassShading;
+use concinnity_engine::components::ShaderPrograms;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::{PipelineBuilder, PreparedPipelines};
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
+use concinnity_engine::render::shader::programs::surface::GrassShading;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLDevice;

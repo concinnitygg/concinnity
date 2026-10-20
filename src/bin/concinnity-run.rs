@@ -28,7 +28,7 @@ concinnity_core::install_global_allocator!();
 // Metal `.metallib`, DirectX DXIL, Vulkan SPIR-V. `cn` and this runtime compile
 // independently, so the runtime bakes a fixed marker plus the shader-platform
 // keys of every backend it can render with (`metal` / `directx` / `vulkan`,
-// comma-separated, matching `concinnity_core::platform::Platform::key`); `cn
+// comma-separated, matching `concinnity_engine::platform::Platform::key`); `cn
 // export` scans these bytes, refuses a player it cannot cook for, and cooks the
 // blobs for exactly those platforms. `main` takes the static's address through
 // a `black_box` so no linker dead-strips it. A build with no backend stamps an

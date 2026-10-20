@@ -7,12 +7,12 @@
 // against with its own. The pipeline library is the frame thread's, so a
 // worker's PSO builds uncached.
 
-use concinnity_core::components::ShaderPrograms;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
-use concinnity_core::render::sdf::programs::SdfPrograms;
-use concinnity_core::render::shader::programs::raymarch::VolumeFlags;
-use concinnity_core::render::shader::programs::surface::GrassShading;
+use concinnity_engine::components::ShaderPrograms;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{PipelineBuilder, PreparedPipelines};
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
+use concinnity_engine::render::shader::programs::surface::GrassShading;
 use windows::Win32::Graphics::Direct3D12::{ID3D12Device, ID3D12InfoQueue, ID3D12RootSignature};
 
 use super::init::pipelines::{BucketPsos, BucketRootSigs, WorldPsoTargets, build_world_shader_pso};

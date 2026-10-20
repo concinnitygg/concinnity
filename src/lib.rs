@@ -126,7 +126,7 @@ pub use world::World;
 
 // Why a world could not be built, started, or added to: what the world's own
 // calls return, and what [`Error`] carries.
-pub use concinnity_core::error::{AssetError, PayloadError, WorldError};
+pub use concinnity_engine::error::{AssetError, PayloadError, WorldError};
 
 // Why a world's compiled data could not be loaded, carried by
 // [`Error::UnreadableData`].
@@ -137,18 +137,18 @@ pub use concinnity_runtime::WorldLoadError;
 // because `#[macro_export]` puts them there: the component mask a system's
 // access declaration is built from, and the declaration of an application's own
 // component types. `system` is where both are documented.
-pub use concinnity_core::{component_mask, declare_components};
+pub use concinnity_engine::{component_mask, declare_components};
 
 // The dense per-kind handles the world's data-entry methods return and a
 // component's reference fields hold.
-pub use concinnity_core::ecs::{EnvironmentMapHandle, FontHandle, MaterialHandle, MeshHandle};
+pub use concinnity_engine::ecs::{EnvironmentMapHandle, FontHandle, MaterialHandle, MeshHandle};
 
 // The identity a component names another by, and the typed reference field
 // that holds one (a `Prop`'s `parent`). A world built here assigns ids itself:
 // an authoring build interns them from declared names, which is not a step a
 // Rust-built world takes.
-pub use concinnity_core::ecs::Ref;
-pub use concinnity_core::ecs::asset_id::AssetId;
+pub use concinnity_engine::ecs::Ref;
+pub use concinnity_engine::ecs::asset_id::AssetId;
 
 /// The runtime component vocabulary (`Camera3D`, `Room`, `DirectionalLight`,
 /// `Transform`, ...): every type a [`World`] holds, each addable with
@@ -161,15 +161,15 @@ pub use concinnity_core::ecs::asset_id::AssetId;
 /// names are ambiguous under two globs.
 pub mod components {
     // The curated stored group, globbed rather than named one by one. Curation
-    // is at the source (`concinnity_core::components::stored`), where a type
+    // is at the source (`concinnity_engine::components::stored`), where a type
     // and its registry group are both in view; `namespaces` pins the two to
     // each other.
-    pub use concinnity_core::components::stored::*;
+    pub use concinnity_engine::components::stored::*;
 }
 
 /// What a launch asks of the run, and the flags it is read from.
 pub mod launch {
-    pub use concinnity_core::launch::{
+    pub use concinnity_engine::launch::{
         LAUNCH_FLAGS, LaunchArgs, LaunchArgsError, LaunchFlag, QUALITY_PRESET_VALUES, usage,
     };
 }

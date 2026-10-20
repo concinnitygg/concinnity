@@ -11,7 +11,7 @@
 //! Nothing here is a hand-written number. Every expected value comes from the
 //! compiled module of the shader that actually ships.
 
-use concinnity_core::platform::Platform;
+use concinnity_engine::platform::Platform;
 use concinnity_shader::layout::StructLayout;
 
 // One Rust field: where `#[repr(C)]` puts it and how wide it is.

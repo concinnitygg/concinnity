@@ -7,11 +7,11 @@
 //! where the item type they need lives.
 
 use crate::support::Bench;
-use concinnity_core::components::{PointLight, RectAreaLight, SpotLight};
-use concinnity_core::gfx::render_types::DrawIndex;
-use concinnity_core::render::light::lights::build_light_data;
-use concinnity_core::render::slots::draw_slot::DrawSlotAllocator;
-use concinnity_core::render::streaming::StreamPlanner;
+use concinnity_engine::components::{PointLight, RectAreaLight, SpotLight};
+use concinnity_engine::gfx::render_types::DrawIndex;
+use concinnity_engine::render::light::lights::build_light_data;
+use concinnity_engine::render::slots::draw_slot::DrawSlotAllocator;
+use concinnity_engine::render::streaming::StreamPlanner;
 
 const OBJECTS: usize = 10_000;
 const STREAM_ITEMS: usize = 4_096;

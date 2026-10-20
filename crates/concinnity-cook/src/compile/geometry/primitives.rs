@@ -1,5 +1,5 @@
 // JSON arg parsing for the box, cylinder, plane, and sphere generators; the
-// geometry itself is `concinnity_core::geometry`.
+// geometry itself is `concinnity_engine::geometry`.
 
 use super::json_args::{f32_arg, u32_arg};
 
@@ -9,20 +9,20 @@ type GeomResult = Result<(Verts, Vec<u16>), String>;
 pub(super) fn build_box(args: &serde_json::Value) -> GeomResult {
     let he =
         super::parse_f32x3(args.get("half_extents"), "half_extents").unwrap_or([0.5, 0.5, 0.5]);
-    Ok(concinnity_core::geometry::build_box(he))
+    Ok(concinnity_engine::geometry::build_box(he))
 }
 
 pub(super) fn build_cylinder(args: &serde_json::Value) -> GeomResult {
     let radius = f32_arg(args, "radius", 0.5);
     let height = f32_arg(args, "height", 1.0);
     let segments = u32_arg(args, "segments", 16)?;
-    concinnity_core::geometry::build_cylinder(radius, height, segments)
+    concinnity_engine::geometry::build_cylinder(radius, height, segments)
 }
 
 pub(super) fn build_plane(args: &serde_json::Value) -> GeomResult {
     let half_width = f32_arg(args, "half_width", 1.0);
     let half_depth = f32_arg(args, "half_depth", 1.0);
-    Ok(concinnity_core::geometry::build_plane(
+    Ok(concinnity_engine::geometry::build_plane(
         half_width, half_depth,
     ))
 }
@@ -31,7 +31,7 @@ pub(super) fn build_sphere(args: &serde_json::Value) -> GeomResult {
     let radius = f32_arg(args, "radius", 1.0);
     let rings = u32_arg(args, "rings", 12)?;
     let segments = u32_arg(args, "segments", 16)?;
-    concinnity_core::geometry::build_sphere(radius, rings, segments)
+    concinnity_engine::geometry::build_sphere(radius, rings, segments)
 }
 
 #[cfg(test)]

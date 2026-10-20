@@ -1,5 +1,5 @@
 use super::{Core, SYSTEMS};
-use concinnity_core::ecs::{Phase, SystemEntry};
+use concinnity_engine::ecs::{Phase, SystemEntry};
 
 const ENTRIES: &[SystemEntry] = SYSTEMS.entries;
 

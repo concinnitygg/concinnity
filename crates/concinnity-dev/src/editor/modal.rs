@@ -7,7 +7,7 @@
 //! hook routes every press and wheel to it before anything else, and its draw
 //! layer sits above all other chrome.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use super::hud_ids::{Family, family_base, hud_ids};
 use super::widget::{self, point_in};
@@ -255,8 +255,8 @@ pub(crate) fn hide(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextAlign, TextInput, TextLabel};
-    use concinnity_core::ecs::asset_id::AssetId;
+    use concinnity_engine::components::{Sprite, TextAlign, TextInput, TextLabel};
+    use concinnity_engine::ecs::asset_id::AssetId;
 
     const VP: [f32; 2] = [1280.0, 720.0];
     const PLAIN: Controls = Controls {

@@ -1,9 +1,9 @@
 //! Hardware ray-traced reflections: the resolve and skinning pipelines, and the
 //! scene acceleration structure built over the uploaded geometry.
 
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::backend::init::{RenderLaunch, SceneData};
-use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::{RenderLaunch, SceneData};
+use concinnity_engine::render::post::rt_reflections::RtReflectionSettings;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLDevice;
 
@@ -107,9 +107,9 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
         accel,
         dynamic_mode: launch.rt_dynamic,
         skinned_geometry: launch.rt_skinned_geometry,
-        update_streak: concinnity_core::render::rt_accel::FailureStreak::default(),
+        update_streak: concinnity_engine::render::rt_accel::FailureStreak::default(),
         pipelines,
-        retired: concinnity_core::render::buffers::retire_pool::RetirePool::new(),
+        retired: concinnity_engine::render::buffers::retire_pool::RetirePool::new(),
     })
 }
 

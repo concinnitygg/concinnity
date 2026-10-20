@@ -1,4 +1,4 @@
-//! The grass field on Vulkan (see `concinnity_core::render::environment::grass`): the bend
+//! The grass field on Vulkan (see `concinnity_engine::render::environment::grass`): the bend
 //! pass that relaxes and stamps the trampling field, the kernel that places
 //! this frame's visible blades and, a second time, the nearest shadow
 //! cascade's, the indirect draws, one per detail level, that render them at the
@@ -19,22 +19,22 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::planet::Rebase;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::environment::grass::bend::GRASS_BEND_WORDS;
-use concinnity_core::render::environment::grass::lod::{
+use concinnity_engine::planet::Rebase;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::environment::grass::bend::GRASS_BEND_WORDS;
+use concinnity_engine::render::environment::grass::lod::{
     GRASS_BAND_REGION, GRASS_LOD_COUNT, GRASS_REGION_COUNT,
 };
-use concinnity_core::render::environment::grass::{
+use concinnity_engine::render::environment::grass::{
     FRAME_PLANET_TILE_RECORDS, FRAME_TILE_RECORDS, GrassBender, GrassCamera, GrassField,
     GrassFrameState, GrassPass, GrassShadowView, GrassView,
 };
-use concinnity_core::render::render_graph::PassId;
-use concinnity_core::render::uniforms::grass::{
+use concinnity_engine::render::render_graph::PassId;
+use concinnity_engine::render::uniforms::grass::{
     GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassBendParams, GrassParams, GrassTileGpu,
     PlanetGrassTileGpu, grass_args_offset,
 };
-use concinnity_core::render::{backend::pass_timing, shadow::bias};
+use concinnity_engine::render::{backend::pass_timing, shadow::bias};
 
 use super::allocator::PooledBuffer;
 use super::builtin_shaders::{self, CompileProgram};

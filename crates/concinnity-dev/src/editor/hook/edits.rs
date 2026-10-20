@@ -4,8 +4,8 @@
 use concinnity_cook::authoring::refs::{count_references, rename_references};
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{ID_KEY, entry_handle, set_entry_id};
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::{EditorHook, EntryId, EntryList, FormTarget, declared_id, entry_type};
 use crate::editor::entry_list::build_text;

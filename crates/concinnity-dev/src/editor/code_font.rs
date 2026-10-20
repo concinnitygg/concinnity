@@ -5,8 +5,8 @@
 
 use std::sync::OnceLock;
 
-use concinnity_core::bake;
-use concinnity_core::ecs::{FontHandle, World};
+use concinnity_engine::bake;
+use concinnity_engine::ecs::{FontHandle, World};
 
 const FONT_BYTES: &[u8] = include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf");
 const FONT_FILE: &str = "JetBrainsMono-Regular.ttf";
@@ -64,7 +64,7 @@ pub(crate) fn advance() -> f32 {
 // on the built-in face: misaligned columns beat invisible text.
 pub(crate) fn inject(world: &mut World) -> Option<FontHandle> {
     match baked() {
-        Ok(b) => Some(concinnity_core::resource::append_font(
+        Ok(b) => Some(concinnity_engine::resource::append_font(
             &mut world.context(),
             b.payload.clone(),
         )),

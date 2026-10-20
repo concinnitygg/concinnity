@@ -55,7 +55,7 @@
 //!
 //! Re-audit this list whenever a new pass migrates onto the fan-out.
 
-use concinnity_core::render::{backend::parallel_ctx, render_graph};
+use concinnity_engine::render::{backend::parallel_ctx, render_graph};
 use windows::Win32::Graphics::Direct3D12::ID3D12GraphicsCommandList;
 
 use super::context::DxContext;

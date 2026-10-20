@@ -17,7 +17,7 @@ use crate::editor::panels::asset_tree::TreeGroup;
 use crate::editor::panels::assets_panel::PanelAction;
 use crate::editor::panels::{asset_tree, form};
 use crate::editor::{overrides, widget};
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::tests::fixtures::{
     a_promotable_asset, click_row, entry, entry_target, expandable_hook, hook, row_of, seed_tree,

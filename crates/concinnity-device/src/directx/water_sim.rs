@@ -1,4 +1,4 @@
-//! The simulated ocean on D3D12 (see `concinnity_core::render::environment::water::ocean`):
+//! The simulated ocean on D3D12 (see `concinnity_engine::render::environment::water::ocean`):
 //! the cascade arrays the water draw samples, and the `WaterSim` node that
 //! fills them each frame from the shared `water_fft.hlsl` kernels.
 //!
@@ -13,13 +13,13 @@
 //! access and is bound as a root UAV.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::environment::water::ocean::foam::FoamClock;
-use concinnity_core::render::environment::water::ocean::initial::initial_spectrum;
-use concinnity_core::render::environment::water::ocean::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::environment::water::ocean::foam::FoamClock;
+use concinnity_engine::render::environment::water::ocean::initial::initial_spectrum;
+use concinnity_engine::render::environment::water::ocean::{
     MAX_OCEAN_CASCADES, OceanPlan, OceanQuality,
 };
-use concinnity_core::render::uniforms::ocean::{
+use concinnity_engine::render::uniforms::ocean::{
     OceanFftParams, ocean_mip_groups, ocean_mip_levels,
 };
 use std::cell::Cell;
@@ -191,7 +191,7 @@ impl OceanKernels {
             .uav(7, Visibility::All);
         debug_assert_eq!(sig.len(), FOAM_ROOT + 1);
         let root_sig = sig.build(device, "ocean root sig")?;
-        let kernel = |program: &concinnity_core::render::shader::programs::ShaderProgram,
+        let kernel = |program: &concinnity_engine::render::shader::programs::ShaderProgram,
                       label: &str| {
             compute_pso(device, &root_sig, &program.compile(hot_reload)?, label)
         };

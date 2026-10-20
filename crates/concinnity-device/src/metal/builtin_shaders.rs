@@ -1,5 +1,5 @@
 // The Metal half of the single-source shader compile: everything the
-// declarations in `concinnity_core::render::shader::programs::metal::TABLE` need
+// declarations in `concinnity_engine::render::shader::programs::metal::TABLE` need
 // a compiler, a content-addressed cache, or a filesystem for, over the
 // declarations it brings into the backend's scope.
 //
@@ -12,14 +12,14 @@
 
 use std::borrow::Cow;
 
-use concinnity_core::platform::Platform;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-pub(super) use concinnity_core::render::shader::programs::ShaderProgram;
-use concinnity_core::render::shader::programs::Variant;
-pub(super) use concinnity_core::render::shader::programs::metal::{
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+pub(super) use concinnity_engine::render::shader::programs::ShaderProgram;
+use concinnity_engine::render::shader::programs::Variant;
+pub(super) use concinnity_engine::render::shader::programs::metal::{
     HIZ_DOWNSAMPLE, HIZ_INIT_MSAA, HIZ_INIT_SINGLE,
 };
-pub(super) use concinnity_core::render::shader::programs::shared::*;
+pub(super) use concinnity_engine::render::shader::programs::shared::*;
 use concinnity_shader::HlslTarget;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -107,7 +107,7 @@ mod tests {
     // both hot-reload modes, so embedded and disk agree on existence.
     #[test]
     fn variants_assemble_source_with_their_defines() {
-        use concinnity_core::render::shader::programs::metal::TABLE;
+        use concinnity_engine::render::shader::programs::metal::TABLE;
         assert_eq!(
             TABLE.msaa,
             [false],

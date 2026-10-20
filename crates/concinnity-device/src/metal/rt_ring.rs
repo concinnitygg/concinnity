@@ -31,8 +31,8 @@ use objc2_metal::{
     MTLPrimitiveAccelerationStructureDescriptor, MTLResource as _, MTLResourceOptions,
 };
 
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::rt_accel::refit::SkinnedRefit;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::rt_accel::refit::SkinnedRefit;
 
 use super::error::allocation_failed;
 use super::frame_rings::grow_to;

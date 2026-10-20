@@ -14,14 +14,14 @@
 //! DirectX + Metal.
 
 use ash::vk;
-use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::backend::{
+use concinnity_engine::gfx::mesh_payload::{SkinnedVertex, Vertex};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{
     DrawGeometryUpdate, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
 };
-use concinnity_core::render::buffers::range_alloc::RangeAllocator;
-use concinnity_core::render::{rt_accel::geom, slots::geometry_repack};
+use concinnity_engine::render::buffers::range_alloc::RangeAllocator;
+use concinnity_engine::render::{rt_accel::geom, slots::geometry_repack};
 
 use super::super::context::VkContext;
 use super::super::texture::one_shot_submit;

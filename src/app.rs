@@ -5,7 +5,7 @@ use alloc::boxed::Box;
 #[cfg(feature = "std")]
 use std::path::Path;
 
-use concinnity_core::Driver;
+use concinnity_engine::Driver;
 
 use crate::{Error, World, driver};
 
@@ -87,9 +87,9 @@ impl App {
     /// # }
     /// ```
     #[must_use]
-    pub fn with_system<S: concinnity_core::ecs::System>(
+    pub fn with_system<S: concinnity_engine::ecs::System>(
         mut self,
-        phase: concinnity_core::ecs::Phase,
+        phase: concinnity_engine::ecs::Phase,
         name: &'static str,
         system: S,
     ) -> Self {

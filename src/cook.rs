@@ -108,7 +108,7 @@ pub use concinnity_cook::authoring::registry::build_only::{
     PrefabEntry, PrefabKind, ProportionGroup, SceneImport, SchemaJoint, SchemaKey, SchemaRegion,
     SettingsProfile, ShapePreset, Slider, StoryImport, SynthParams, SynthesizedTarget,
 };
-pub use concinnity_core::components::cook::*;
+pub use concinnity_engine::components::cook::*;
 
 use crate::{World, error};
 
@@ -249,7 +249,7 @@ impl WorldBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::DirectionalLight;
+    use concinnity_engine::components::DirectionalLight;
 
     #[test]
     fn a_compiled_world_is_the_facade_world() {
@@ -285,7 +285,7 @@ mod tests {
     fn declared_reports_names_and_types_in_order() {
         let mut spec = world();
         spec.assets_in("project/assets")
-            .add("menu", &concinnity_core::components::Scene::default())
+            .add("menu", &concinnity_engine::components::Scene::default())
             .add("sun", &DirectionalLight::default());
         assert_eq!(spec.assets_dir(), Some(Path::new("project/assets")));
         let declared: Vec<_> = spec.declared().collect();
@@ -299,7 +299,7 @@ mod tests {
         // declared, which validation rejects.
         spec.add(
             "orphan",
-            &concinnity_core::components::CharacterShape::default(),
+            &concinnity_engine::components::CharacterShape::default(),
         )
         .reference("target", "no_such_body");
         let err = spec.compile().expect_err("an unresolved reference fails");

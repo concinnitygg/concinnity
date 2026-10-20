@@ -3,9 +3,9 @@
 // slot, bound as the bindless main pass's root SRV at t20. A slot's copy is
 // rewritten only after a row changed.
 
-use concinnity_core::gfx::render_types::{GpuMaterialParams, MATERIAL_PARAM_COUNT};
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::material_params::MaterialParamTable;
+use concinnity_engine::gfx::render_types::{GpuMaterialParams, MATERIAL_PARAM_COUNT};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::material_params::MaterialParamTable;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};

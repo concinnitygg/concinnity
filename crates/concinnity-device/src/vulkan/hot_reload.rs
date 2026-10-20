@@ -8,9 +8,9 @@
 //! `directx/hot_reload.rs` and `metal/hot_reload.rs`.
 
 use ash::vk;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::shader::programs::surface::GrassShading;
-use concinnity_core::render::shader::world_pipelines::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::surface::GrassShading;
+use concinnity_engine::render::shader::world_pipelines::{
     BucketSource, check_rebuild, replace_bucket,
 };
 
@@ -93,7 +93,7 @@ impl VkContext {
         // Bloom (live from init to teardown, 3 pipelines).
         let bloom_rebuilt = rebuild_if_live!(
             self.bloom.is_some(),
-            concinnity_core::render::post::bloom::build_pipelines(&self.post_device(0))
+            concinnity_engine::render::post::bloom::build_pipelines(&self.post_device(0))
         );
 
         // Every shader bucket's main and G-buffer pre-pass pipelines, from the
@@ -201,19 +201,19 @@ impl VkContext {
         // copy, kernel + blur.
         let ssao_rebuilt = rebuild_if_live!(
             self.ssao.is_some(),
-            concinnity_core::render::post::ssao::build_pipelines(&self.post_device(0))
+            concinnity_engine::render::post::ssao::build_pipelines(&self.post_device(0))
         );
 
         // SSR (only when the world opted in). Rebuilds the resolve.
         let ssr_rebuilt = rebuild_if_live!(
             self.ssr.is_some(),
-            concinnity_core::render::post::ssr::build_pipeline(&self.post_device(0))
+            concinnity_engine::render::post::ssr::build_pipeline(&self.post_device(0))
         );
 
         // SSGI (only when indirect_lighting: ssgi). Rebuilds its four pipelines.
         let ssgi_rebuilt = rebuild_if_live!(
             self.ssgi.is_some(),
-            concinnity_core::render::post::ssgi::build_pipelines(&self.post_device(0))
+            concinnity_engine::render::post::ssgi::build_pipelines(&self.post_device(0))
         );
 
         // RT reflections (only when the world opted in + the GPU supports it).
@@ -228,7 +228,7 @@ impl VkContext {
         // Rebuilds the roughness blur + composite pipelines.
         let reflection_composite_rebuilt = rebuild_if_live!(
             self.reflection_composite.is_some(),
-            concinnity_core::render::post::reflection_composite::build_pipelines(
+            concinnity_engine::render::post::reflection_composite::build_pipelines(
                 &self.post_device(0)
             )
         );
@@ -237,7 +237,7 @@ impl VkContext {
         // pipeline; the velocity channel lives on the unified G-buffer pre-pass.
         let taa_rebuilt = rebuild_if_live!(
             self.taa.is_some(),
-            concinnity_core::render::post::taa::build_pipeline(&self.post_device(0))
+            concinnity_engine::render::post::taa::build_pipeline(&self.post_device(0))
         );
 
         // Particles (only when ≥1 emitter is live or has ever been
@@ -366,7 +366,7 @@ impl VkContext {
     // pipelines untouched and the session keeps rendering.
     pub(in crate::vulkan) fn update_default_world_shader(
         &mut self,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<BucketPipelines>,
     ) -> RenderResult<()> {
         let new = replace_bucket(
@@ -395,7 +395,7 @@ impl VkContext {
     // pre-pass, so a live pair is kept whole.
     fn build_world_main_pipeline(
         &self,
-        world: Option<&concinnity_core::components::ShaderPrograms>,
+        world: Option<&concinnity_engine::components::ShaderPrograms>,
         engine: &BindlessSpv,
     ) -> RenderResult<BucketPipelines> {
         let targets = self.bucket_pipeline_targets().ok_or_else(|| {

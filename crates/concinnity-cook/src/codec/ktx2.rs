@@ -18,8 +18,8 @@
 // runtime upload path handle single-layer 2D textures only.
 
 use basisu::{DecodeFlags, SourceFormat, TargetFormat, Transcoder};
-use concinnity_core::bake::texture::{TextureFormat, TextureImage, TextureMip};
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::bake::texture::{TextureFormat, TextureImage, TextureMip};
 use ktx2::{Format, Reader, SupercompressionScheme};
 
 // VkFormat values for the BCn block formats this compiler accepts, matched

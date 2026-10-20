@@ -1,13 +1,13 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::render_types::{ClusterParams, InstancedCluster, NUM_SHADOW_CASCADES};
-use concinnity_core::profile;
-use concinnity_core::render::probe::book::ProbeBook;
-use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::shader::reload::ShaderReload;
-use concinnity_core::render::{
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::gfx::render_types::{ClusterParams, InstancedCluster, NUM_SHADOW_CASCADES};
+use concinnity_engine::profile;
+use concinnity_engine::render::probe::book::ProbeBook;
+use concinnity_engine::render::scene_state::SceneState;
+use concinnity_engine::render::shader::reload::ShaderReload;
+use concinnity_engine::render::{
     backend, backend::error, backend::init, decal, output::hdr, particles, shadow::spot,
 };
 use objc2::rc::Retained;
@@ -40,7 +40,7 @@ use super::transient_pool::TransientTexturePool;
 // carries pool indices into it. Worlds with more than this many textures fall
 // back to clamped indices (logged once at init).
 pub(super) const BINDLESS_TEXTURE_COUNT: usize =
-    concinnity_core::render::uniforms::BINDLESS_POOL_SIZE;
+    concinnity_engine::render::uniforms::BINDLESS_POOL_SIZE;
 
 // Fragment buffer index the bindless static pass binds its `BindlessTextures`
 // argument buffer at. Discrete `[[texture(n)]]` bindings make a fragment
@@ -107,7 +107,7 @@ pub(super) struct ProbeState {
     // here and freed once the frames-in-flight fence guarantees the bake has
     // retired.
     pub retire_pool:
-        concinnity_core::render::buffers::retire_pool::RetirePool<super::probe::RetiredBake>,
+        concinnity_engine::render::buffers::retire_pool::RetirePool<super::probe::RetiredBake>,
 }
 
 // Cascaded shadow map resources + the cascade schedule. `enabled` is false when
@@ -162,7 +162,7 @@ pub(super) struct FrameRings {
     // same slots as `object`. Written by `build_record_buffers`.
     pub draw_args: super::frame_rings::TransientRing,
     // Which `object` / `draw_args` slots already hold the instance tail.
-    pub instance_tail: concinnity_core::render::record_pack::StaticSlots,
+    pub instance_tail: concinnity_engine::render::record_pack::StaticSlots,
     // Packs the static draws' records into those slots.
     pub packer: crate::record_pack::RecordPacker,
     // Ring of per-frame model-history buffers for the GPU-driven G-buffer /
@@ -178,7 +178,7 @@ pub(super) struct FrameRings {
     // `build_probe_records`.
     pub probe_records: super::frame_rings::TransientRing,
     // Which `probe_records` slots hold the book's current records.
-    pub probe_tail: concinnity_core::render::record_pack::StaticSlots,
+    pub probe_tail: concinnity_engine::render::record_pack::StaticSlots,
     // Ring of per-skinned-object joint-palette buffers, one inner buffer per
     // object. Written by `build_joint_buffers`.
     pub joint: super::frame_rings::JointRing,
@@ -584,13 +584,13 @@ pub(crate) struct MtlContext {
     pub(super) scene: MtlSceneAssets,
     // All scene lights packed and pushed to the fragment shader at buffer(4),
     // with the local lights' reach. Pushed every draw, so no copy is ever stale.
-    pub(super) lights: concinnity_core::render::light::state::LightState,
+    pub(super) lights: concinnity_engine::render::light::state::LightState,
     // The far field's canopy block, refreshed each frame and pushed to the
     // fragment shader at buffer(21).
-    pub(super) canopy: concinnity_core::render::uniforms::canopy::CanopyParams,
+    pub(super) canopy: concinnity_engine::render::uniforms::canopy::CanopyParams,
     // How this frame's view resolves the grass: where it coarsens, thins and
     // hands over to the canopy. `None` without grass.
-    pub(super) grass_lod: Option<concinnity_core::render::environment::grass::GrassLodView>,
+    pub(super) grass_lod: Option<concinnity_engine::render::environment::grass::GrassLodView>,
     // Its layers' view tables, at buffer(22).
     pub(super) canopy_tables: super::canopy::CanopyTables,
     // Cascaded shadow map + its schedule. See [`ShadowState`].
@@ -616,7 +616,7 @@ pub(crate) struct MtlContext {
     // of 0 skips the bloom passes entirely.
     pub(super) post_process: render_types::PostProcessParams,
     // The scale the frame's HDR chain is written at, advanced once per frame.
-    pub(super) pre_exposure: concinnity_core::gfx::auto_exposure::PreExposure,
+    pub(super) pre_exposure: concinnity_engine::gfx::auto_exposure::PreExposure,
     // Temporal-anti-aliasing feature state: the toggle, resolve pipeline,
     // ping-pong history buffers, and per-frame bookkeeping. See [`TaaState`].
     pub(super) taa: TaaState,
@@ -680,7 +680,7 @@ pub(crate) struct MtlContext {
     // The world default Shader's compiled programs, `None` for the engine's
     // own. Kept past init for the skinned pipeline built at upload and for the
     // hot-reload rebuild.
-    pub(super) world_shader: Option<concinnity_core::components::ShaderPrograms>,
+    pub(super) world_shader: Option<concinnity_engine::components::ShaderPrograms>,
     // Keep each presented drawable's texture retained so `screenshot` can
     // blit it back (the view is blit-readable under the same flag). On under
     // the dev loop and `cn run --screenshot`; false in plain production.
@@ -1171,7 +1171,7 @@ impl MtlContext {
             .auto_exposure
             .adaptation
             .as_ref()
-            .map(concinnity_core::gfx::auto_exposure::ExposureAdaptation::current_ev);
+            .map(concinnity_engine::gfx::auto_exposure::ExposureAdaptation::current_ev);
         // Surface the active panel's EDR headroom. `None` on SDR: both the
         // world-opt-out case and the request-on-an-SDR-display fallback case
         // map to the same blank chip.

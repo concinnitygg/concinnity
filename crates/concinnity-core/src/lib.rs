@@ -1,96 +1,27 @@
-//! concinnity-core: the engine's RUNTIME vocabulary and the CPU compute over it.
-//! The types the renderer, the cook pipeline, the subsystem crates, and the
-//! editor all have to agree on and none of them owns: the backend-agnostic GPU
-//! data layouts the CPU and the shaders both name, the transform math those
-//! layouts are expressed in, the skeleton, clip, and morph-target types
-//! animation is authored and sampled in, the ECS storage mechanism plus the
-//! component definitions and the registry built from them, the post-process /
-//! quality setting structs, the behavior virtual machine that evaluates
-//! declarative logic, and the `.cnb` blob container format the cooked world
-//! travels in.
+//! concinnity-core: the `no_std` foundation every Concinnity crate shares.
 //!
-//! Above that vocabulary, the kernels that compute over it and belong to no
-//! single consumer: skinning and pose blending, IK, LOD decimation,
-//! rasterization, IBL convolution, the procedural geometry generators, and the
-//! payload codecs (`build`, `decode`). Each asset's AUTHORED schema (what a
-//! world.jsonl declares) sits in `components` beside the runtime half it bakes
-//! into; the build-only assets, which never reach a running world, live with
-//! their registry group in concinnity-cook, the build-side crate that also owns
-//! the asset COMPILE pipeline and that this crate has no edge into.
+//! The scalar, vector and rotation math the engine is expressed in
+//! ([`math`]), the allocation layer it measures and arenas its frames through
+//! ([`memory`]), how a host lends its threads to work that can split
+//! ([`fanout`]), and the small primitives with no better owner ([`fnv`],
+//! [`utc`]). Nothing here knows about worlds, components or rendering; that
+//! is `concinnity-engine`, which builds on this crate.
 
 #![no_std]
 
 extern crate alloc;
-// The derive macros emit `::concinnity_core::` paths, which resolve here too.
-extern crate self as concinnity_core;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 extern crate std;
 
-/// The version of everything a cooked blob's bytes depend on: the
-/// postcard-visible component schema, the blob container's record shapes, and
-/// the payload formats in [`bake`]. Stamped into every blob header and folded
-/// into the cook's payload cache key.
-///
-/// A blob whose stored version differs was written by a different engine and
-/// fails the load check instead of mis-decoding.
-///
-/// # Bumping
-///
-/// Bump this when a change makes previously cooked bytes unreadable or stale:
-///
-/// - reordering a serialized struct's fields, or an enum's variants
-/// - swapping a serialized field's type for one that encodes to the same width
-/// - changing what a `build` payload serializer writes
-///
-/// Adding or removing a serialized field needs no bump: a blob frame is
-/// length-delimited and `blob::decode_exact` rejects one that does not decode
-/// exactly, so a stale record fails the load on its own.
-pub const SCHEMA_VERSION: u32 = 3;
-
-pub mod animation;
-mod app;
-pub mod audio;
-pub mod bake;
-pub mod behavior;
-pub mod benchmark;
-pub mod blob;
-pub mod budget;
-pub mod camera;
-pub mod components;
-pub mod controller;
-pub mod defaults;
-pub mod ecs;
-pub mod error;
+#[cfg(any(test, feature = "test-support"))]
+pub mod bench;
 pub mod fanout;
 pub mod fnv;
-pub(crate) mod frame_report;
-pub mod geometry;
-pub mod gfx;
-pub(crate) mod hud;
-pub mod input;
-pub mod launch;
 pub mod math;
 pub mod memory;
-pub mod physics;
-pub mod planet;
-pub mod platform;
-pub mod profile;
-pub mod render;
-pub mod resource;
-pub mod settings;
-pub mod shutdown;
-pub mod sky;
-pub mod spawn;
-pub mod story;
-pub mod terrain;
-#[cfg(test)]
-mod test_support;
-pub mod transform;
-pub(crate) mod ui;
 pub mod utc;
-pub mod window;
 
-// The headless driver over a world and the trait any loop that runs one
-// implements, named at the crate root because they are the counterpart to
-// `ecs::World` rather than a corner of the module tree.
-pub use app::{App, Driver};
+// The test binary counts its own heap, so the allocation benchmarks and the
+// memory tests read live counters.
+#[cfg(test)]
+install_global_allocator!();

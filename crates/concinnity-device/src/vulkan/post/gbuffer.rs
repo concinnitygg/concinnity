@@ -21,11 +21,11 @@
 //! pipelines frames-in-flight deep.
 
 use ash::vk;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::uniforms::{GBufferView, ModelHistoryParams};
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::{GpuDrawArgs, GpuObjectData};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::uniforms::{GBufferView, ModelHistoryParams};
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::VkContext;

@@ -14,8 +14,8 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::vec;
 use std::vec::Vec;
 
+use crate::bench::{Pace, bench};
 use crate::memory::{Arena, InlineVec, MemTag, Pool, Realm, TrackingAlloc};
-use crate::test_support::{Pace, bench};
 
 const FRAME_ITEMS: usize = 4_096;
 const POOL_CHURN: usize = 1_024;

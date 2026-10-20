@@ -8,7 +8,7 @@
 //! store's entry for it. Both switches run behind the confirmation dialog
 //! whenever the open world has unsaved edits.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 use std::path::Path;
 
 use crate::editor::entry_list::EntryList;

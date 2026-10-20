@@ -10,9 +10,9 @@
 //! depth it last rendered.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types::{ShadowUniforms, SpotShadowData};
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::shadow::csm;
+use concinnity_engine::gfx::render_types::{ShadowUniforms, SpotShadowData};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shadow::csm;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;

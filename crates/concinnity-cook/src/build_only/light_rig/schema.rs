@@ -1,6 +1,6 @@
 //! Named light-grouping schema.
 
-use concinnity_core::ecs::{NameRef, RefTarget};
+use concinnity_engine::ecs::{NameRef, RefTarget};
 
 /// A named grouping of lights.
 ///
@@ -19,7 +19,7 @@ use concinnity_core::ecs::{NameRef, RefTarget};
 /// };
 /// ```
 #[derive(
-    Debug, Default, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields,
+    Debug, Default, Clone, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
 )]
 #[serde(default)]
 pub struct LightRig {

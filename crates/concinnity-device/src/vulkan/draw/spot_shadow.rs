@@ -11,10 +11,10 @@
 //! which stays correct until a caster moves.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{ShadowUniforms, SpotShadowData};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::{shadow::csm, shadow::spot};
+use concinnity_engine::gfx::render_types::{ShadowUniforms, SpotShadowData};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::{shadow::csm, shadow::spot};
 
 use super::shadow::ShadowView;
 use crate::vulkan::allocator::{DeviceAllocator, PooledBuffer};

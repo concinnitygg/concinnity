@@ -30,13 +30,13 @@
 //! sums every resident item. The per-frame system timings are the one thing
 //! accumulated every tick, because a rate needs the whole window.
 
-use concinnity_core::budget::drift::MemoryDrift;
-use concinnity_core::budget::{MemoryBudget, ThreadBudget};
-use concinnity_core::ecs::World;
 use concinnity_core::math::narrow_f32;
 use concinnity_core::memory::{LedgerSnapshot, MemStats, MemTag, Realm, SizeClass};
-use concinnity_core::render::backend::GpuProfile;
-use concinnity_core::render::streaming::pools::StreamingRuntime;
+use concinnity_engine::budget::drift::MemoryDrift;
+use concinnity_engine::budget::{MemoryBudget, ThreadBudget};
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::backend::GpuProfile;
+use concinnity_engine::render::streaming::pools::StreamingRuntime;
 use concinnity_host::sys::cpu::CpuSampler;
 use concinnity_host::sys::memory;
 use std::time::{Duration, Instant};
@@ -396,7 +396,7 @@ fn pool_bytes(world: &World) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::budget::drift::DriftVerdict;
+    use concinnity_engine::budget::drift::DriftVerdict;
 
     const GB: u64 = 1024 * 1024 * 1024;
 

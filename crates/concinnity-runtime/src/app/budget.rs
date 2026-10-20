@@ -1,8 +1,8 @@
 //! The role the frame threads take from the published thread budget.
 
-use concinnity_core::budget::ThreadBudget;
-use concinnity_core::components::FramePriority;
-use concinnity_core::ecs::World;
+use concinnity_engine::budget::ThreadBudget;
+use concinnity_engine::components::FramePriority;
+use concinnity_engine::ecs::World;
 use concinnity_host::thread::ThreadRole;
 
 /// The role the render and simulation threads take for `world`: its published

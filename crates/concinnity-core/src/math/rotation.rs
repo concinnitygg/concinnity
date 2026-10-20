@@ -125,25 +125,6 @@ mod tests {
 
     // The axis-angle quaternion agrees with the canonical single-axis one, and
     // a zero axis has no direction to turn about.
-    // Rotating by a quaternion agrees with the rotation matrix the transform
-    // convention builds from the same Euler angles.
-    #[test]
-    fn quat_rotate_matches_the_euler_matrix() {
-        let euler = [20.0, -35.0, 12.0];
-        let q = quat_from_euler_yxz_deg(euler);
-        let m = crate::transform::trs_matrix([0.0; 3], euler, [1.0; 3]);
-        let v = [0.3, -1.2, 0.7];
-        let expected: [f32; 3] =
-            core::array::from_fn(|i| m[0][i] * v[0] + m[1][i] * v[1] + m[2][i] * v[2]);
-        assert!(close(quat_rotate(q, v), expected, 1e-5));
-        let q90 = quat_from_axis_angle([0.0, 1.0, 0.0], core::f32::consts::FRAC_PI_2);
-        assert!(close(
-            quat_rotate(q90, [1.0, 0.0, 0.0]),
-            [0.0, 0.0, -1.0],
-            1e-6
-        ));
-    }
-
     #[test]
     fn axis_angle_matches_the_canonical_axis_rotation() {
         let want = about_axis(1, 0.7);

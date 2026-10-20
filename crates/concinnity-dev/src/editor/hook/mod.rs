@@ -33,12 +33,12 @@
 //! re-serializes the entry list to world.jsonl and stops there: the compiled
 //! blobs are refreshed by an explicit build, not by editing.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::{
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::{
     CursorShape, DesiredCursor, FlyCam, HiddenAssets, HudLayers, MenuOverride, ViewOverrides,
     World, WorldLines,
 };
-use concinnity_core::shutdown::ShutdownToken;
+use concinnity_engine::shutdown::ShutdownToken;
 use concinnity_runtime::Runtime;
 use concinnity_runtime::live_edit::PendingBackend;
 

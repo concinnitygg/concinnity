@@ -161,7 +161,7 @@ fn check_renderable_contract(assets: &[WorldJsonlAsset], errors: &mut Vec<String
 // filler: the count is exactly what the world declares.
 fn check_shader_budget(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
     let shaders = names_of_type(assets, RegisteredType::Shader);
-    let max = concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
+    let max = concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
     if shaders.len() > max {
         let mut names: Vec<&str> = shaders.into_iter().collect();
         names.sort_unstable();
@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn more_shaders_than_buckets_is_an_error() {
-        let max = concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
+        let max = concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
         let mut assets = render_stack();
         for i in 0..max {
             assets.push(shader(&format!("extra_{i}")));

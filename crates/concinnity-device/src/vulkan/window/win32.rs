@@ -7,12 +7,12 @@
 //! created directly through `VK_KHR_win32_surface`.
 
 use ash::vk;
-use concinnity_core::components::WindowMode;
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::window::clipboard::Clipboard;
-use concinnity_core::window::display_mode::DisplayMode;
+use concinnity_engine::components::WindowMode;
+use concinnity_engine::input::keymap::KeyMap;
+use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::window::clipboard::Clipboard;
+use concinnity_engine::window::display_mode::DisplayMode;
 
 use crate::win32::display_mode::{self, FullscreenDisplayMode};
 use crate::win32::window;

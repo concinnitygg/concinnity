@@ -17,10 +17,10 @@
 //! off; init does that only when capture is enabled.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::image_decode::PixelLayout;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::output::hdr::HdrEncoding;
+use concinnity_engine::gfx::image_decode::PixelLayout;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::output::hdr::HdrEncoding;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{

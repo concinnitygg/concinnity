@@ -6,7 +6,7 @@
 //! Pure geometry, item derivation, and draw here; the open / click / commit
 //! flow lives in `hook/drive/create_menu.rs`.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use super::hud_ids::{Family, family_base, hud_ids};
 use super::panels::assets_panel;
@@ -282,7 +282,7 @@ mod tests {
 
         let text = |id| {
             world
-                .get_by_id::<concinnity_core::components::TextLabel>(id)
+                .get_by_id::<concinnity_engine::components::TextLabel>(id)
                 .expect("label present")
                 .content
                 .clone()

@@ -12,11 +12,11 @@
 //! from sub-ranges of it, so no GPU buffer is created per label per frame.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::fullscreen;
-use concinnity_core::render::fullscreen::TextBindCache;
+use concinnity_engine::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::fullscreen;
+use concinnity_engine::render::fullscreen::TextBindCache;
 
 use super::super::context::VkContext;
 use super::super::record::cmd_push_constants;

@@ -1,4 +1,4 @@
-use concinnity_core::components::{File, FileKind};
+use concinnity_engine::components::{File, FileKind};
 
 impl crate::asset::BuildAsset for File {
     fn compile_payload(
@@ -26,8 +26,8 @@ mod tests {
     fn ctx() -> BuildCtx<'static> {
         BuildCtx {
             name: "model",
-            targets: concinnity_core::platform::PlatformSet::single(
-                concinnity_core::platform::Platform::Metal,
+            targets: concinnity_engine::platform::PlatformSet::single(
+                concinnity_engine::platform::Platform::Metal,
             ),
             assets_dir: None,
             all_assets: &[],

@@ -1,0 +1,461 @@
+//! Per-frame profiling data. Backend-agnostic: `World::step` records each
+//! system's CPU step time here, the active render backend writes its draw /
+//! GPU stats here, and `StatHud` reads it back to drive the on-screen HUD.
+//! The debug server's `profile` command also reports it for headless
+//! verification.
+
+use alloc::vec::Vec;
+use concinnity_core::math::SaturatingFrom;
+
+use concinnity_core::fanout::FanOutTiming;
+
+/// Maximum number of per-pass GPU timings tracked by [`RenderStats`]: one per
+/// render-graph `PassId`, which a compile-time assertion in
+/// `render::pass_timing` holds it to, with headroom for new passes. Unused
+/// slots carry the `""` sentinel name and a zero microsecond reading.
+pub const MAX_PASS_TIMINGS: usize = 48;
+
+/// One per-pass GPU timing measurement: a stable pass name and the GPU
+/// microseconds spent in that pass during the most recently completed frame.
+/// Empty-string entries are unused slots, not real passes.
+pub type PassTiming = (&'static str, u32);
+
+/// When a frame's GPU work ended, on the host's process-wide monotonic clock,
+/// named by the time the input it shows was sampled on that same clock. Two of
+/// them give the interval between completed frames; one gives how stale the
+/// frame's input was by the time its GPU work ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GpuDone {
+    /// When the frame's input was sampled, in microseconds.
+    pub input_sampled_us: u64,
+    /// When the frame's GPU work ended, in microseconds.
+    pub done_us: u64,
+}
+
+impl GpuDone {
+    /// Microseconds from the input sample to the end of the GPU work.
+    pub fn latency_us(self) -> u32 {
+        u32::saturating_from(
+            self.done_us
+                .saturating_sub(self.input_sampled_us)
+                .min(u64::from(u32::MAX)),
+        )
+    }
+}
+
+/// Per-frame render-backend statistics.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RenderStats {
+    /// CPU-issued geometry draw calls this frame: the shadow, main, and
+    /// composite + text passes. The optional screen-space-effect passes (SSR,
+    /// SSAO, TAA, bloom) issue a fixed handful of fullscreen draws and are not
+    /// counted here -- `gpu_frame_us` still covers their GPU time.
+    pub draw_calls: u32,
+    /// Renderable objects in the scene this frame: static draw objects, every
+    /// instanced-cluster instance, and skinned meshes.
+    pub objects: u32,
+    /// Visible skinned objects this frame: the authored skinned meshes plus any
+    /// live runtime-spawned instances, excluding the hidden pre-reserved
+    /// instance-pool slots. Unlike `objects` (which counts the whole pre-reserved
+    /// pool and so stays flat across skinned spawn/despawn), this tracks the live
+    /// count, so a spawn bumps it and a despawn drops it.
+    pub skinned_visible: u32,
+    /// Free slots remaining in the pre-reserved skinned instance pool across all
+    /// templates. Drains by one when a skinned instance spawns and refills when
+    /// one despawns, so a probe can watch the free-list recycle directly.
+    pub skinned_pool_free: u32,
+    /// GPU time of the most recently completed frame, in microseconds: the
+    /// span of its graphics-queue work after the previous frame's ended, so in
+    /// steady state it is never longer than the frame interval. The part of
+    /// the span shared with the previous frame is `gpu_overlap_us`.
+    /// Async-queue work is left out; it overlaps the span rather than extending
+    /// it. Reported one or more frames late: the GPU timestamps are only known
+    /// once that frame's command buffer completion handler fires.
+    pub gpu_frame_us: u32,
+    /// Microseconds of the same frame's graphics-queue span that ran while the
+    /// previous frame's work was still on the GPU. Its passes are timed in
+    /// full, so they add up to `gpu_frame_us` plus this. Zero on a backend that
+    /// does not split the span.
+    pub gpu_overlap_us: u32,
+    /// When the most recently completed frame's GPU work ended on the host
+    /// clock, beside the input sample time that names that frame. Reported as
+    /// late as `gpu_frame_us`; `None` on a backend that cannot place its GPU
+    /// completion on the host clock, or for a frame whose input time is
+    /// unknown.
+    pub gpu_done: Option<GpuDone>,
+    /// Microseconds the CPU spent blocked on the GPU for this frame: the
+    /// frames-in-flight fence or semaphore that paces the CPU against GPU
+    /// retirement (inside the backend's per-frame draw call, or ahead of it in
+    /// `prepare_frame`), plus the swapchain / drawable acquire.
+    /// Backend-agnostic, and part of whatever CPU frame cost the caller timed
+    /// around `draw_frame` -- a GPU-bound frame otherwise reports as CPU-bound,
+    /// because the wait is wall time inside the draw call. `render_cpu_us` is
+    /// the same frame's submission with this taken out.
+    pub gpu_wait_us: u32,
+    /// Microseconds of CPU work the render side spent submitting this frame:
+    /// replaying its recorded backend effects, updating backend state, and
+    /// recording and submitting the draw, less `gpu_wait_us`. Measured on the
+    /// thread that submits, around the same frame as the wait, so the two
+    /// always describe one frame. Left at zero by the backend itself, which
+    /// cannot see the whole submission.
+    pub render_cpu_us: u32,
+    /// Microseconds the render side spent replaying the frame's recorded
+    /// backend effects (slot ops, settings appliers, streaming uploads) before
+    /// drawing it. Part of `render_cpu_us`; left at zero by the backend.
+    pub replay_us: u32,
+    /// Wall microseconds the backend spent in its queue submit and present.
+    /// Part of the submission, and on a backend that counts its present as a
+    /// wait on the display, part of `gpu_wait_us` too. Zero on a backend that
+    /// does not time it.
+    pub submit_present_us: u32,
+    /// The render thread's wait on this frame's parallel pass recording,
+    /// against the recording work the workers did. Part of `render_cpu_us`.
+    /// All zero on a backend that records serially.
+    pub recording_fan_out: FanOutTiming,
+    /// The render thread's packing of this frame's per-draw cull records: on
+    /// that thread alone while the work is small, across the job pool once it
+    /// is large enough to pay. All zero on a frame that packed none.
+    pub packing_fan_out: FanOutTiming,
+    /// CPU microseconds each pass took to record inside that fan-out, indexed
+    /// by `PassId as usize`. Zero for a pass that did not run or was recorded
+    /// outside the fan-out.
+    pub pass_record_us: [u32; MAX_PASS_TIMINGS],
+    /// Bytes of GPU memory currently allocated by the render device. On
+    /// unified-memory hardware (Apple Silicon) this is the device's share of
+    /// system memory rather than dedicated VRAM.
+    pub vram_bytes: u64,
+    /// Bytes the render graph's transient pool holds: the aliased footprint of
+    /// the slots backing the graph-owned transients. Part of `vram_bytes`, which
+    /// is a device-wide total; carried separately so the shared memory ledger can
+    /// attribute it rather than leaving it in the unaccounted remainder.
+    pub transient_pool_bytes: u64,
+    /// Per-pass GPU microseconds for the most recently completed frame.
+    /// Filled by the active backend only when its GPU supports timestamp
+    /// sampling; otherwise every slot stays at the default
+    /// `("", 0)`. Slot order is backend-defined and stable for the process
+    /// lifetime.
+    pub pass_times_us: [PassTiming; MAX_PASS_TIMINGS],
+    /// Bit `i` set when slot `i` of `pass_times_us` ran on the async compute
+    /// queue, beside the graphics queue rather than inside its span. Those
+    /// passes overlap `gpu_frame_us` instead of adding to it. Zero on a backend
+    /// that records every pass on one queue.
+    pub async_pass_mask: u64,
+    /// Current adapted exposure value (EV) from the auto-exposure EMA.
+    /// `None` when the world did not opt in to auto-exposure (or the active
+    /// backend has not yet wired the readout). The `StatHud` overlay reads
+    /// this to render the on-screen EV chip; downstream consumers can map
+    /// it to an exposure multiplier via `2^ev`.
+    pub auto_exposure_ev: Option<f32>,
+    /// Active display's reported maximum extended-range color-component
+    /// multiplier when the renderer is on the HDR path. `Some(2.0)` on a
+    /// typical HDR400 panel, `Some(8.0+)` on HDR1000-class panels; `None`
+    /// on SDR (because the world disabled HDR, the platform fell back, or
+    /// the active backend has not wired the readout). The `StatHud` overlay
+    /// reads this to render the on-screen `EDR` chip; the value is also
+    /// the linear scaling factor between SDR reference white and the
+    /// panel's peak brightness, so a color-grading consumer can interpret
+    /// it directly.
+    pub max_edr: Option<f32>,
+}
+
+impl Default for RenderStats {
+    fn default() -> Self {
+        Self {
+            draw_calls: 0,
+            objects: 0,
+            skinned_visible: 0,
+            skinned_pool_free: 0,
+            gpu_frame_us: 0,
+            gpu_overlap_us: 0,
+            gpu_done: None,
+            gpu_wait_us: 0,
+            render_cpu_us: 0,
+            replay_us: 0,
+            submit_present_us: 0,
+            recording_fan_out: FanOutTiming::default(),
+            packing_fan_out: FanOutTiming::default(),
+            pass_record_us: [0; MAX_PASS_TIMINGS],
+            vram_bytes: 0,
+            transient_pool_bytes: 0,
+            pass_times_us: [("", 0); MAX_PASS_TIMINGS],
+            async_pass_mask: 0,
+            auto_exposure_ev: None,
+            max_edr: None,
+        }
+    }
+}
+
+/// Timing collected for one frame and read back by the profiler overlay.
+///
+/// The system timings are double-buffered: a frame accumulates into
+/// `current`, and `begin_frame` rotates the just-finished frame into `last`
+/// so a reader always sees a complete frame rather than a partial one.
+#[derive(Debug, Default)]
+pub struct FrameProfile {
+    // System CPU step times from the last fully completed frame, in step
+    // order: `(system name, microseconds)`.
+    last: Vec<(&'static str, u32)>,
+    // Accumulator for the frame currently in progress.
+    current: Vec<(&'static str, u32)>,
+    // Heap allocations counted during each system's step, rotated with the
+    // timings. Sampled by the frame loop in dev builds only; empty otherwise.
+    // The counters are process-wide, so a delta includes what other threads
+    // (streaming workers, the pipelined render half) allocated meanwhile --
+    // attribution is approximate, the frame total is exact churn.
+    last_allocs: Vec<(&'static str, u32)>,
+    current_allocs: Vec<(&'static str, u32)>,
+    // Heap allocations counted across the whole most recent frame. `None` in
+    // release builds and in binaries without the tracking allocator.
+    frame_allocs: Option<u32>,
+    // Render handoff recorded by the step in progress, claimed by that step's
+    // `record_system`.
+    pending_handoff: u32,
+    // Per-system render handoff, rotated with the timings. Only systems that
+    // recorded one appear.
+    last_handoffs: Vec<(&'static str, u32)>,
+    current_handoffs: Vec<(&'static str, u32)>,
+    // Fan-out timing recorded by the step in progress, claimed by that step's
+    // `record_system` like the handoff.
+    pending_fan_out: Option<FanOutTiming>,
+    // Per-system fan-out timing, rotated with the timings. Only systems that
+    // recorded one appear.
+    last_fan_outs: Vec<(&'static str, FanOutTiming)>,
+    current_fan_outs: Vec<(&'static str, FanOutTiming)>,
+    /// Render-backend stats for the most recent drawn frame. Left at the
+    /// default when no graphics backend is running.
+    pub render: RenderStats,
+}
+
+impl FrameProfile {
+    /// Rotate the system-timing buffers at the start of a frame: the frame
+    /// that just finished becomes the readable snapshot and the accumulator
+    /// is cleared for the new frame.
+    pub fn begin_frame(&mut self) {
+        core::mem::swap(&mut self.last, &mut self.current);
+        self.current.clear();
+        core::mem::swap(&mut self.last_allocs, &mut self.current_allocs);
+        self.current_allocs.clear();
+        core::mem::swap(&mut self.last_handoffs, &mut self.current_handoffs);
+        self.current_handoffs.clear();
+        self.pending_handoff = 0;
+        core::mem::swap(&mut self.last_fan_outs, &mut self.current_fan_outs);
+        self.current_fan_outs.clear();
+        self.pending_fan_out = None;
+    }
+
+    /// Record one system's CPU step time for the in-progress frame. A render
+    /// handoff recorded during that step is attributed to the system here.
+    pub fn record_system(&mut self, name: &'static str, micros: u32) {
+        self.current.push((name, micros));
+        let handoff = core::mem::take(&mut self.pending_handoff);
+        if handoff > 0 {
+            self.current_handoffs.push((name, handoff));
+        }
+        if let Some(fan_out) = self.pending_fan_out.take() {
+            self.current_fan_outs.push((name, fan_out));
+        }
+    }
+
+    /// Record time the step in progress spent handing its frame to the
+    /// renderer: the whole submission when it runs on the stepping thread, or
+    /// the wait for the render thread to take the frame when that runs on its
+    /// own. Either way the time belongs to the render side, which reports its
+    /// own CPU work as [`RenderStats::render_cpu_us`], so a reader takes it out
+    /// of the step's span to leave the step's own work.
+    pub fn record_render_handoff(&mut self, micros: u32) {
+        self.pending_handoff = self.pending_handoff.saturating_add(micros);
+    }
+
+    /// Record a parallel fan-out the step in progress waited on. Several in one
+    /// step are merged, and the result is attributed to the system by its
+    /// `record_system`.
+    pub fn record_fan_out(&mut self, timing: FanOutTiming) {
+        self.pending_fan_out = Some(match self.pending_fan_out {
+            Some(earlier) => earlier.merge(timing),
+            None => timing,
+        });
+    }
+
+    /// Record the heap allocations counted during one system's step.
+    pub fn record_system_allocs(&mut self, name: &'static str, allocs: u32) {
+        self.current_allocs.push((name, allocs));
+    }
+
+    /// Record the heap allocations counted across the frame that just finished.
+    /// Written at the end of a step rather than rotated: the value is complete
+    /// the moment the frame is, so readers between steps see the latest frame.
+    pub fn set_frame_allocs(&mut self, allocs: u32) {
+        self.frame_allocs = Some(allocs);
+    }
+
+    /// System step times from the last fully completed frame, in step order.
+    /// Read by the runtime debug server's `profile` command (a binary-only
+    /// module), so the lib build sees no caller.
+    pub fn system_timings(&self) -> &[(&'static str, u32)] {
+        &self.last
+    }
+
+    /// Per-system heap-allocation counts from the last fully completed frame,
+    /// in step order. Empty unless the frame loop sampled them (dev builds with
+    /// the tracking allocator installed).
+    pub fn system_allocs(&self) -> &[(&'static str, u32)] {
+        &self.last_allocs
+    }
+
+    /// Heap allocations counted across the most recent frame, under the same
+    /// conditions as `system_allocs`.
+    pub fn frame_allocs(&self) -> Option<u32> {
+        self.frame_allocs
+    }
+
+    /// Per-system render handoff from the last fully completed frame, paired
+    /// with that frame's [`system_timings`](Self::system_timings). Only the
+    /// systems that recorded one appear.
+    pub fn render_handoffs(&self) -> &[(&'static str, u32)] {
+        &self.last_handoffs
+    }
+
+    /// Per-system fan-out timing from the last fully completed frame, paired
+    /// with that frame's [`system_timings`](Self::system_timings). Only the
+    /// systems that fanned work out appear.
+    pub fn system_fan_outs(&self) -> &[(&'static str, FanOutTiming)] {
+        &self.last_fan_outs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn gpu_done_latency_runs_from_the_input_sample_to_the_end_of_the_gpu_work() {
+        let done = GpuDone {
+            input_sampled_us: 1_000,
+            done_us: 46_000,
+        };
+        assert_eq!(done.latency_us(), 45_000);
+    }
+
+    #[test]
+    fn gpu_done_before_its_sample_reads_as_no_latency() {
+        let done = GpuDone {
+            input_sampled_us: 2_000,
+            done_us: 1_000,
+        };
+        assert_eq!(done.latency_us(), 0);
+    }
+
+    use super::*;
+
+    #[test]
+    fn timings_empty_until_first_rotation() {
+        let mut p = FrameProfile::default();
+        p.record_system("A", 100);
+        // Nothing is readable until begin_frame rotates the accumulator.
+        assert!(p.system_timings().is_empty());
+        p.begin_frame();
+        assert_eq!(p.system_timings(), &[("A", 100)]);
+    }
+
+    #[test]
+    fn a_render_handoff_is_attributed_to_the_step_that_recorded_it() {
+        let mut p = FrameProfile::default();
+        p.record_system("A", 10);
+        p.record_render_handoff(300);
+        p.record_render_handoff(200);
+        p.record_system("G", 900);
+        p.record_system("B", 20);
+        assert!(p.render_handoffs().is_empty());
+        p.begin_frame();
+        assert_eq!(p.render_handoffs(), &[("G", 500)]);
+        // A frame that hands nothing off rotates in empty.
+        p.record_system("G", 40);
+        p.begin_frame();
+        assert!(p.render_handoffs().is_empty());
+    }
+
+    #[test]
+    fn a_handoff_no_step_claimed_does_not_leak_into_the_next_frame() {
+        let mut p = FrameProfile::default();
+        p.record_render_handoff(700);
+        p.begin_frame();
+        p.record_system("A", 10);
+        p.begin_frame();
+        assert!(p.render_handoffs().is_empty());
+    }
+
+    #[test]
+    fn a_fan_out_is_attributed_to_the_step_that_waited_on_it() {
+        let fan_out = |wall_us| FanOutTiming {
+            wall_us,
+            longest_job_us: wall_us / 2,
+            ..FanOutTiming::default()
+        };
+        let mut p = FrameProfile::default();
+        p.record_system("A", 10);
+        p.record_fan_out(fan_out(300));
+        p.record_fan_out(fan_out(500));
+        p.record_system("B", 900);
+        p.record_system("C", 20);
+        assert!(p.system_fan_outs().is_empty());
+        p.begin_frame();
+        assert_eq!(
+            p.system_fan_outs(),
+            &[("B", fan_out(300).merge(fan_out(500)))]
+        );
+        // One no step claimed does not leak into the next frame.
+        p.record_fan_out(fan_out(40));
+        p.begin_frame();
+        p.record_system("B", 40);
+        p.begin_frame();
+        assert!(p.system_fan_outs().is_empty());
+    }
+
+    #[test]
+    fn begin_frame_rotates_and_clears() {
+        let mut p = FrameProfile::default();
+        p.record_system("A", 10);
+        p.record_system("B", 20);
+        p.begin_frame();
+        assert_eq!(p.system_timings(), &[("A", 10), ("B", 20)]);
+        // The next frame records fresh values; the snapshot only updates on
+        // the following begin_frame.
+        p.record_system("A", 99);
+        assert_eq!(p.system_timings(), &[("A", 10), ("B", 20)]);
+        p.begin_frame();
+        assert_eq!(p.system_timings(), &[("A", 99)]);
+    }
+
+    // Alloc counts rotate with the timings, and stay empty when the frame
+    // loop never sampled them (release builds, untracked binaries).
+    #[test]
+    fn alloc_counts_rotate_with_the_timings() {
+        let mut p = FrameProfile::default();
+        p.record_system("A", 10);
+        p.begin_frame();
+        assert!(p.system_allocs().is_empty(), "unsampled stays empty");
+
+        p.record_system("A", 10);
+        p.record_system_allocs("A", 3);
+        assert!(p.system_allocs().is_empty(), "readable only after rotation");
+        p.begin_frame();
+        assert_eq!(p.system_allocs(), &[("A", 3)]);
+    }
+
+    // The whole-frame count is written when the frame ends, so it reads back
+    // immediately rather than one rotation late.
+    #[test]
+    fn frame_allocs_read_back_without_a_rotation() {
+        let mut p = FrameProfile::default();
+        assert_eq!(p.frame_allocs(), None);
+        p.set_frame_allocs(42);
+        assert_eq!(p.frame_allocs(), Some(42));
+        p.begin_frame();
+        assert_eq!(p.frame_allocs(), Some(42), "rotation leaves it in place");
+    }
+
+    #[test]
+    fn render_stats_default_is_zero() {
+        let p = FrameProfile::default();
+        assert_eq!(p.render, RenderStats::default());
+        assert_eq!(p.render.draw_calls, 0);
+    }
+}

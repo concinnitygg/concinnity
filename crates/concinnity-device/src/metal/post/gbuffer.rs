@@ -9,13 +9,13 @@
 
 use crate::metal::depth::CLEAR_DEPTH;
 use crate::metal::error::allocation_failed;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::shader::programs::metal::prepass_buffers::{
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::metal::prepass_buffers::{
     DRAW_ARGS as PREPASS_DRAW_ARGS_INDEX, PREV_MODELS as PREPASS_PREV_MODELS_INDEX,
     VIEW as PREPASS_VIEW_INDEX,
 };
-use concinnity_core::render::uniforms::{GBufferView, ViewUniforms};
+use concinnity_engine::render::uniforms::{GBufferView, ViewUniforms};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -183,7 +183,7 @@ pub(in crate::metal) struct GbufferPrepassViews<'a> {
     pub gbuffer: &'a GBufferView,
     pub main: &'a ViewUniforms,
     pub raymarch: &'a crate::metal::raymarch::RaymarchView,
-    pub frustum: &'a concinnity_core::gfx::frustum::Frustum,
+    pub frustum: &'a concinnity_engine::gfx::frustum::Frustum,
 }
 
 // The GPU-driven per-frame buffers the G-buffer pre-pass consumes: the
@@ -427,7 +427,7 @@ impl MtlContext {
         enc.set_vertex_buffer(
             &self.scene.vertex_buffer,
             0,
-            concinnity_core::render::shader::programs::metal::MAIN_MESH_VERTICES_BUFFER,
+            concinnity_engine::render::shader::programs::metal::MAIN_MESH_VERTICES_BUFFER,
         );
 
         let counts = self.draw_record_counts();

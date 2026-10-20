@@ -19,9 +19,9 @@
 //! `RGBA16F`); a fixed 4 B/px would overflow the copy on the HDR path.
 
 use ash::vk;
-use concinnity_core::gfx::image_decode::PixelLayout;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::output::hdr::{HdrEncoding, HdrOutputMode};
+use concinnity_engine::gfx::image_decode::PixelLayout;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::output::hdr::{HdrEncoding, HdrOutputMode};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;

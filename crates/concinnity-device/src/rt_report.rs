@@ -1,7 +1,7 @@
 //! How a failed ray-tracing acceleration-structure update is reported.
 
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::rt_accel::{FailureStreak, RtUpdate, StreakChange};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::rt_accel::{FailureStreak, RtUpdate, StreakChange};
 
 /// Log a failed BVH update once when a failure streak begins and once when it
 /// ends, rather than on every frame. The renderer keeps the last BVH either way,

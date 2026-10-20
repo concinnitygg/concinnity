@@ -2,8 +2,8 @@
 //! target and its MSAA resolve, the views the depth- and scene-sampling passes
 //! bind, and the render graph's transient pool.
 
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::heap_layout::{DSV_MAIN_DEPTH_SLOT, RtvHeapLayout};

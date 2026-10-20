@@ -6,10 +6,10 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::backend::init::{EmbeddedSurface, SwapchainConfig};
-use concinnity_core::render::output::hdr;
-use concinnity_core::render::output::hdr::HdrOutputMode;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::{EmbeddedSurface, SwapchainConfig};
+use concinnity_engine::render::output::hdr;
+use concinnity_engine::render::output::hdr::HdrOutputMode;
 use objc2::MainThreadOnly;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

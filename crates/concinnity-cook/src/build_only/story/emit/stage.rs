@@ -1,5 +1,5 @@
-use concinnity_core::components::{NamedAction, StoryCommand};
-use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
+use concinnity_engine::components::{NamedAction, StoryCommand};
+use concinnity_engine::gfx::overlay::UI_REFERENCE_SIZE;
 
 use super::names::StoryNames;
 use super::widgets::{LabelStyle, hit_region, label, rounded_sprite_fit, screen, stage_sprite};

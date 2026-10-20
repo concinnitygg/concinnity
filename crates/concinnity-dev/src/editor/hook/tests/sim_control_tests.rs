@@ -5,10 +5,10 @@
 //! camera's exchange with play, and the trace request the live panels ask for.
 
 use concinnity_cook::authoring::world::replace_args;
-use concinnity_core::components::{
+use concinnity_engine::components::{
     Behavior, BehaviorLiteral, FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, Sprite, Variables,
 };
-use concinnity_core::ecs::{ComponentAsset, TraceRequest, World};
+use concinnity_engine::ecs::{ComponentAsset, TraceRequest, World};
 use concinnity_host::thread::asset_id;
 
 use super::fixtures::{behavior, entry, entry_with_args, hook, playing_hook};

@@ -1,11 +1,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use super::error::allocation_failed;
-use concinnity_core::bake::texture::{TextureFormat, TextureImage};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::output::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
+use concinnity_engine::bake::texture::{TextureFormat, TextureImage};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::depth::DEPTH_CLEAR;
+use concinnity_engine::render::output::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureType, MTLTextureUsage};
@@ -155,7 +155,7 @@ pub(super) fn upload_cubemap(
     face_size: u32,
     bytes: &[u8],
 ) -> RenderResult<PooledTexture> {
-    let needed = concinnity_core::bake::environment_map::cube_mip_byte_len(face_size, 0)
+    let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, 0)
         .map_err(RenderError::Other)?;
     let face_bytes = needed / 6;
     if bytes.len() < needed {
@@ -384,7 +384,7 @@ fn upload_prefilter_cube(
     let texture = alloc.alloc_texture(&desc)?;
     for (mip, bytes) in mip_bytes.iter().enumerate() {
         let mip_face_size = face_size >> mip;
-        let needed = concinnity_core::bake::environment_map::cube_mip_byte_len(face_size, mip)
+        let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, mip)
             .map_err(RenderError::Other)?;
         let face_bytes = needed / 6;
         if bytes.len() < needed {
@@ -460,7 +460,7 @@ pub(super) fn create_shadow_map_array(
 // `hdr_resolve` for tonemap + FXAA.
 //
 // A world that resolved to one sample (temporal anti-aliasing or temporal
-// upscaling: see `concinnity_core::components::hdr_sample_count`) has no
+// upscaling: see `concinnity_engine::components::hdr_sample_count`) has no
 // `hdr_color` and no `depth`. The Main pass then writes `hdr_resolve` and
 // `depth_resolve` directly and stores rather than resolving, which is why every
 // consumer below reads the resolve pair either way.

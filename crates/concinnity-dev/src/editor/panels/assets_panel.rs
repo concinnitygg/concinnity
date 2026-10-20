@@ -27,10 +27,10 @@
 //! the body; picking a type opens the add form.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
@@ -1150,7 +1150,7 @@ pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
 
     // An upper bound on the body font's per-character advance (it measures
     // ~8.2px), for the geometry guards that keep a clipped caption clear of the

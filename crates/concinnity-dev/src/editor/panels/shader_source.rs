@@ -5,7 +5,7 @@
 //! is `shader_diagnostics`; what a new file starts as is `shader_templates`
 //! and `sdf_templates`.
 
-use concinnity_core::components::ShaderStage;
+use concinnity_engine::components::ShaderStage;
 use std::path::{Path, PathBuf};
 
 use super::shader_edit::ShaderEdit;

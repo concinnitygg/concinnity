@@ -17,13 +17,13 @@
 //! graph orders.
 
 use ash::vk;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types;
 use concinnity_core::math::{SaturatingFrom, saturating_u32};
-use concinnity_core::render::uniforms::vulkan::{CullHizParams, CullParams};
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::uniforms::vulkan::{CullHizParams, CullParams};
 
 use crate::vulkan::record::cmd_push_constants;
-use concinnity_core::transform::IDENTITY;
+use concinnity_engine::transform::IDENTITY;
 
 use super::context::VkContext;
 
@@ -421,7 +421,7 @@ impl VkContext {
 mod tests {
     use concinnity_core::math::SaturatingFrom;
     // The `CullParams` layout test lives with the struct in
-    // `concinnity_core::render::uniforms::vulkan`. The struct-size == push-range
+    // `concinnity_engine::render::uniforms::vulkan`. The struct-size == push-range
     // cross-check stays here, where `CULL_PUSH_CONSTANT_BYTES` is defined.
     #[test]
     fn cull_params_size_matches_push_range() {

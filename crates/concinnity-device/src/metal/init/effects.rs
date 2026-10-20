@@ -5,19 +5,19 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use crate::metal::post::upscale::UpscaleJitter;
-use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::auto_exposure::{AutoExposureSettings, ExposureAdaptation};
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
-use concinnity_core::render::post::ssao::SsaoPass;
-use concinnity_core::render::post::ssao::settings::SsaoSettings;
-use concinnity_core::render::post::ssgi::SsgiPass;
-use concinnity_core::render::post::ssgi::settings::SsgiSettings;
-use concinnity_core::render::post::ssr::SsrPass;
-use concinnity_core::render::post::ssr::settings::SsrSettings;
-use concinnity_core::render::uniforms::ExposureMeasurement;
-use concinnity_core::settings::ResolvedGraphics;
+use concinnity_engine::gfx::auto_exposure;
+use concinnity_engine::gfx::auto_exposure::{AutoExposureSettings, ExposureAdaptation};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::rt_reflections::RtReflectionSettings;
+use concinnity_engine::render::post::ssao::SsaoPass;
+use concinnity_engine::render::post::ssao::settings::SsaoSettings;
+use concinnity_engine::render::post::ssgi::SsgiPass;
+use concinnity_engine::render::post::ssgi::settings::SsgiSettings;
+use concinnity_engine::render::post::ssr::SsrPass;
+use concinnity_engine::render::post::ssr::settings::SsrSettings;
+use concinnity_engine::render::uniforms::ExposureMeasurement;
+use concinnity_engine::settings::ResolvedGraphics;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};

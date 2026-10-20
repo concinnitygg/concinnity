@@ -4,10 +4,10 @@
 //! takes the preview's camera, what it refuses to take, when it hands the pose
 //! back, and that a shot never reaches the authored world.
 
-use concinnity_core::components::{
+use concinnity_engine::components::{
     Camera3D, CameraController, FollowController, Sprite, TextLabel,
 };
-use concinnity_core::ecs::{FrameTime, PickEntry, PickIndex, World};
+use concinnity_engine::ecs::{FrameTime, PickEntry, PickIndex, World};
 use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::tests::fixtures::{
@@ -40,7 +40,7 @@ fn camera(controller: Option<CameraController>) -> Camera3D {
         fov_y_degrees: 60.0,
         near: 0.05,
         view_distance: None,
-        view_matrix: concinnity_core::gfx::camera::view_matrix(
+        view_matrix: concinnity_engine::gfx::camera::view_matrix(
             AUTHORED.position,
             AUTHORED.yaw,
             AUTHORED.pitch,
@@ -215,7 +215,7 @@ fn an_uncontrolled_and_a_free_fly_camera_are_both_taken_and_given_back() {
         let cam = world.query::<Camera3D>().next().expect("the camera");
         assert_eq!(
             cam.view_matrix,
-            concinnity_core::gfx::camera::view_matrix(
+            concinnity_engine::gfx::camera::view_matrix(
                 AUTHORED.position,
                 AUTHORED.yaw,
                 AUTHORED.pitch

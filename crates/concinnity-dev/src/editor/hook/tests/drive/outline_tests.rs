@@ -1,8 +1,8 @@
 //! The extent-outline drive (`hook/drive/outline.rs`): the lines a selected
 //! `TriggerVolume` publishes for its own shape.
 
-use concinnity_core::components::{Sprite, TriggerVolume};
-use concinnity_core::ecs::WorldLines;
+use concinnity_engine::components::{Sprite, TriggerVolume};
+use concinnity_engine::ecs::WorldLines;
 use concinnity_host::thread::asset_id;
 
 use crate::frame_hook::FrameHook;
@@ -51,7 +51,7 @@ fn selected_trigger_volume_publishes_its_line_outline() {
     let icons = billboards::MAX_BILLBOARDS;
     assert!(
         world
-            .join2::<Sprite, concinnity_core::components::Identity>()
+            .join2::<Sprite, concinnity_engine::components::Identity>()
             .filter(|(_, s, identity)| s.visible && ids.contains(&identity.id()))
             .count()
             <= icons,

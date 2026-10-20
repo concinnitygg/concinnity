@@ -23,18 +23,18 @@
 //! init.
 
 use ash::vk;
-use concinnity_core::components::SdfVolume;
-use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_core::math::{SaturatingFrom, saturating_u32};
-use concinnity_core::platform::Platform;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::backend::init::SdfVolumeSource;
-use concinnity_core::render::sdf::programs::SdfPrograms;
-use concinnity_core::render::shader::programs::raymarch::{Family, ProxyFaces, VolumeFlags};
-use concinnity_core::transform::mat4_inverse;
+use concinnity_engine::components::SdfVolume;
+use concinnity_engine::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::gfx::render_types::{LightUniforms, ShadowUniforms};
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::SdfVolumeSource;
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::shader::programs::raymarch::{Family, ProxyFaces, VolumeFlags};
+use concinnity_engine::transform::mat4_inverse;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{HDR_FORMAT, VkContext};
@@ -63,7 +63,7 @@ const CUBE_INDEX_COUNT: u32 = 36;
 // One declaration for all three backends, in `core::render::uniforms`.
 // Re-exported so `crate::vulkan::raymarch::{RaymarchView, RaymarchVolumeUniforms}`
 // stay the paths the encode and `volume_uniforms_from` sites use.
-pub(in crate::vulkan) use concinnity_core::render::uniforms::{
+pub(in crate::vulkan) use concinnity_engine::render::uniforms::{
     RaymarchView, RaymarchVolumeUniforms,
 };
 
@@ -71,7 +71,7 @@ pub(in crate::vulkan) use concinnity_core::render::uniforms::{
 // 16-byte block is declared, not just the live `u32`: the shared source spells
 // it out to the padding the other two hosts allocate, and a range narrower than
 // what the shader declares is a validation finding.
-use concinnity_core::render::uniforms::{GBufferView, PassCamera, RaymarchShadowCascade};
+use concinnity_engine::render::uniforms::{GBufferView, PassCamera, RaymarchShadowCascade};
 
 mod swap;
 
@@ -1375,7 +1375,7 @@ impl VkContext {
             viewport: [0.0, 0.0],
             time: elapsed,
             prefilter_mip_count: 0.0,
-            sky_rot: concinnity_core::sky::SkyOrientation::IDENTITY_ROWS,
+            sky_rot: concinnity_engine::sky::SkyOrientation::IDENTITY_ROWS,
             cur_vp: [[0.0; 4]; 4],
             prev_vp: [[0.0; 4]; 4],
             view_mat: [[0.0; 4]; 4],

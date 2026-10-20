@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::{Arc, Mutex};
 
-use concinnity_core::profile::RenderStats;
+use concinnity_engine::profile::RenderStats;
 
 use super::InitGpu;
 use crate::metal::context::{Diagnostics, FrameRings};
@@ -12,7 +12,7 @@ use crate::metal::frame_rings::{JointRing, TransientRing};
 use crate::metal::material_params::MaterialParamRing;
 use crate::metal::pass_timing::PassTimingResources;
 use crate::record_pack::RecordPacker;
-use concinnity_core::render::record_pack::StaticSlots;
+use concinnity_engine::render::record_pack::StaticSlots;
 
 // The bindless buffers an async reflection-probe bake reads across frames
 // (object, draw-args, and the skinned joint palettes) get one EXTRA ring
@@ -25,7 +25,7 @@ use concinnity_core::render::record_pack::StaticSlots;
 // metal/probe.rs `bake_ring_slot`.
 pub(super) fn build_rings(
     gpu: &InitGpu<'_>,
-    material_params: Vec<concinnity_core::gfx::render_types::GpuMaterialParams>,
+    material_params: Vec<concinnity_engine::gfx::render_types::GpuMaterialParams>,
 ) -> FrameRings {
     let frames_in_flight = gpu.frames_in_flight;
     FrameRings {

@@ -57,7 +57,7 @@ impl PostSupport {
     pub(in crate::vulkan) fn new(
         device: &crate::vulkan::owned::VkDevice,
         frames: usize,
-    ) -> concinnity_core::render::backend::error::RenderResult<Self> {
+    ) -> concinnity_engine::render::backend::error::RenderResult<Self> {
         Ok(Self {
             cache: pass_cache::PostPassCache::new(),
             arena: set_arena::PostSetArena::new(device, frames)?,

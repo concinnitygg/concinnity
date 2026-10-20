@@ -2,9 +2,9 @@
 //! that seeds the chunk allocators. Placing, moving and removing chunks is
 //! scene bookkeeping, done in `SceneState`.
 
-use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::render::backend::error;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::super::com;

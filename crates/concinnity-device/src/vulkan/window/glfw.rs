@@ -11,13 +11,13 @@
 //! component is present. GLFW's `CursorDisabled` mode delivers raw relative
 //! deltas directly via `CursorPos` events, so no manual warping is needed.
 
-use concinnity_core::components::{InputKey, KeyEvent, KeyMods, KeyPress, WindowMode};
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::window::display_mode;
-use concinnity_core::window::display_mode::DisplayMode;
+use concinnity_engine::components::{InputKey, KeyEvent, KeyMods, KeyPress, WindowMode};
+use concinnity_engine::input::keymap::KeyMap;
+use concinnity_engine::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::window::display_mode;
+use concinnity_engine::window::display_mode::DisplayMode;
 
 // Owns the GLFW library handle, the window, and the event receiver.
 //
@@ -220,7 +220,7 @@ impl GlfwWindow {
         resizable: bool,
         title_bar: bool,
     ) -> RenderResult<Self> {
-        concinnity_core::window::policy::assert_windows_allowed("the GLFW window");
+        concinnity_engine::window::policy::assert_windows_allowed("the GLFW window");
 
         // No error callback: glfw-rs transmutes the code into an Error enum
         // that stops at GLFW 3.3, so a 3.4 code (PlatformUnavailable on a

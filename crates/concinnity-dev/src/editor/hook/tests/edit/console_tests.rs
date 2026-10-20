@@ -6,10 +6,10 @@
 
 // A world holding the console's command-line field.
 
-use concinnity_core::components::{
+use concinnity_engine::components::{
     FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, TextInput, TextLabel,
 };
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::tests::fixtures::{
     entry, hook, select, world_with_fields, world_with_input,

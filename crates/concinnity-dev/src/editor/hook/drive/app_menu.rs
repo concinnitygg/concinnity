@@ -7,7 +7,7 @@
 //! View menu is a second way into the same panel toggles, sharing their one
 //! apply (`toggle_view_row`).
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
 

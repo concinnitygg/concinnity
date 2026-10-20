@@ -7,10 +7,10 @@
 //! between the scene's actual luminance and the exposure applied to it that is
 //! invisible at human-scale eye-adaptation rates. Mirrors `metal/auto_exposure.rs`.
 
-use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::auto_exposure::HISTOGRAM_BINS;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::uniforms::{AutoExposureParams, ExposureMeasurement};
+use concinnity_engine::gfx::auto_exposure;
+use concinnity_engine::gfx::auto_exposure::HISTOGRAM_BINS;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::uniforms::{AutoExposureParams, ExposureMeasurement};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};

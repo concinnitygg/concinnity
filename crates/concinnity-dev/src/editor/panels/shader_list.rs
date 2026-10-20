@@ -5,8 +5,8 @@
 //! Shader's latest reload outcome as it bears on that file.
 
 use concinnity_cook::authoring::world::entry_handles;
-use concinnity_core::components::ShaderStage;
-use concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
+use concinnity_engine::components::ShaderStage;
+use concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
 
 use super::sdf_field_list::{FieldDecl, field_rows};
 use super::shader_diagnostics::Tone;

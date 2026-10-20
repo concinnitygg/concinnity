@@ -16,7 +16,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use concinnity_core::blob::{
+use concinnity_engine::blob::{
     CACHE_SEGMENT_VERSION, CacheEntry, CacheEntryKind, CacheMeta, encode_cnb, parse_cnb,
 };
 

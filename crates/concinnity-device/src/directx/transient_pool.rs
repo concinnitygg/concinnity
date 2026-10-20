@@ -21,8 +21,8 @@
 //! the consumer keeps its disabled-feature fallback.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::render_graph::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::render_graph::{
     ClearValue, PixelFormat, TextureUsage, TransientSlot, TransientTexture,
 };
 use std::collections::HashMap;
@@ -389,10 +389,10 @@ fn resting_state(m: &TransientTexture) -> D3D12_RESOURCE_STATES {
 mod tests {
     use super::super::post::gbuffer::GBUFFER_ROUGHNESS_CLEAR;
     use super::*;
-    use concinnity_core::render::depth::DEPTH_CLEAR;
-    use concinnity_core::render::post::device::PostExtent;
-    use concinnity_core::render::post::{bloom, ssao};
-    use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
+    use concinnity_engine::render::depth::DEPTH_CLEAR;
+    use concinnity_engine::render::post::device::PostExtent;
+    use concinnity_engine::render::post::{bloom, ssao};
+    use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};
 
     fn planned(render: (u32, u32), output: (u32, u32)) -> Vec<TransientSlot> {
         let gates = PoolGates {

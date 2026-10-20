@@ -1,7 +1,7 @@
 //! Scene-import schema.
 
-use concinnity_core::components::Scene;
-use concinnity_core::ecs::NameRef;
+use concinnity_engine::components::Scene;
+use concinnity_engine::ecs::NameRef;
 
 /// Imports a 3D scene file as a single declaration.
 ///
@@ -35,7 +35,9 @@ use concinnity_core::ecs::NameRef;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct SceneImport {
     /// Path to the scene file, relative to the project root. `.fbx` or `.glb`.

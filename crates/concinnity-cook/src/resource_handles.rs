@@ -3,15 +3,15 @@
 //! A resource (mesh, texture, material, ...) is addressed at runtime by a dense
 //! per-kind handle, and the table index *is* the handle. The rules that decide
 //! it -- per-kind declaration order, and block order across the four geometry
-//! producers -- are `concinnity_core::resource::ResourceHandles`, shared with
+//! producers -- are `concinnity_engine::resource::ResourceHandles`, shared with
 //! the typed bake builder so the two producers of a world can never drift. What
 //! lives here is the authored-world half: classifying JSON assets into those
 //! spaces, the resolver seams a reference name deserializes through, and the
 //! per-type compile dispatch.
 
-use concinnity_core::components::{Material, SkeletonJoint, SkinnedMesh};
-use concinnity_core::ecs::{HandleKind, set_handle_resolver};
-use concinnity_core::resource::ResourceHandles;
+use concinnity_engine::components::{Material, SkeletonJoint, SkinnedMesh};
+use concinnity_engine::ecs::{HandleKind, set_handle_resolver};
+use concinnity_engine::resource::ResourceHandles;
 use concinnity_host::thread::asset_id;
 use serde::Deserialize;
 use std::cell::RefCell;
@@ -332,10 +332,10 @@ pub(crate) fn reset_resource_handles() {
 mod tests {
     use super::*;
     use crate::authoring::world::WorldJsonlAsset;
-    use concinnity_core::blob::ResourceKind;
-    use concinnity_core::components::{AudioCue, AudioEmitter, Decal, Prop};
-    use concinnity_core::ecs::{AudioClipHandle, MaterialHandle, ShaderHandle, TextureHandle};
     use concinnity_core::math::SaturatingFrom;
+    use concinnity_engine::blob::ResourceKind;
+    use concinnity_engine::components::{AudioCue, AudioEmitter, Decal, Prop};
+    use concinnity_engine::ecs::{AudioClipHandle, MaterialHandle, ShaderHandle, TextureHandle};
 
     // The classification tests (which types are resources, mesh-source blocks)
     // live in `crate::authoring::resource_type` with the classifiers.

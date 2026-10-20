@@ -16,12 +16,12 @@
 //! split, ~90 s with main-only) but never went away. The mechanism appears
 //! fundamentally incompatible with our usage on this hardware / macOS 26.4
 //! combo.
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::planar_reflection::PixelRect;
-use concinnity_core::render::post::reflection_path::ReflectionPath;
-use concinnity_core::render::probe::radiance::FaceStorage;
-use concinnity_core::render::uniforms::{FaceCamera, ViewUniforms};
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::planar_reflection::PixelRect;
+use concinnity_engine::render::post::reflection_path::ReflectionPath;
+use concinnity_engine::render::probe::radiance::FaceStorage;
+use concinnity_engine::render::uniforms::{FaceCamera, ViewUniforms};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -150,7 +150,7 @@ impl MtlContext {
 
     // The frame's unlit flag for ViewUniforms, from the viewport view mode.
     fn shade_mode(&self) -> f32 {
-        if self.state.view.mode == concinnity_core::gfx::view_modes::ViewMode::Unlit {
+        if self.state.view.mode == concinnity_engine::gfx::view_modes::ViewMode::Unlit {
             1.0
         } else {
             0.0
@@ -249,7 +249,7 @@ impl MtlContext {
         );
         // Wireframe view: fill mode is encoder state that indirect commands
         // inherit, so the one call covers the ICB sub-paths too.
-        if self.state.view.mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe {
+        if self.state.view.mode == concinnity_engine::gfx::view_modes::ViewMode::Wireframe {
             encoder.setTriangleFillMode(objc2_metal::MTLTriangleFillMode::Lines);
         }
 
@@ -383,7 +383,7 @@ impl MtlContext {
         let draw_calls =
             self.encode_main_geometry_into(&encoder, &view_uniforms, gpu, pass.icb_override);
         // A face is always rendered lit, whatever the viewport shows.
-        if self.draws_sky(concinnity_core::gfx::view_modes::ViewMode::Lit) {
+        if self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit) {
             self.encode_sky(&encoder, &view_uniforms);
         }
         Ok(draw_calls)
@@ -460,7 +460,7 @@ impl MtlContext {
                 .ok_or_else(|| RenderError::Other("failed to get render encoder".to_string()))?,
             ns_string!("main2 pass"),
         );
-        if self.state.view.mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe {
+        if self.state.view.mode == concinnity_engine::gfx::view_modes::ViewMode::Wireframe {
             encoder.setTriangleFillMode(objc2_metal::MTLTriangleFillMode::Lines);
         }
 
@@ -677,7 +677,7 @@ impl MtlContext {
         enc.set_vertex_buffer(
             &self.scene.vertex_buffer,
             0,
-            concinnity_core::render::shader::programs::metal::MAIN_MESH_VERTICES_BUFFER,
+            concinnity_engine::render::shader::programs::metal::MAIN_MESH_VERTICES_BUFFER,
         );
         enc.set_fragment_value(self.lights.uniforms(), 4);
         enc.set_fragment_value(&self.canopy, 21);

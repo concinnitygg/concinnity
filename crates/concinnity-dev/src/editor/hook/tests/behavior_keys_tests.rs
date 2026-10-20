@@ -4,7 +4,7 @@
 //! the views, and the clipboard verbs. Each also asserts what the keys stand
 //! down for: a focused field keeps them.
 
-use concinnity_core::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress};
+use concinnity_engine::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress};
 
 use super::fixtures::{
     behavior, behavior_escape_input, behavior_session, open_args, press_behavior_key, press_remove,

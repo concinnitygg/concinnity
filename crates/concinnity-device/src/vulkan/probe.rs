@@ -7,7 +7,7 @@
 //! never replaced.
 //!
 //! The cube math + the staggered-bake state machine are backend-agnostic
-//! (`concinnity_core::render::probe::capture`); this module drives the placement intake + the
+//! (`concinnity_engine::render::probe::capture`); this module drives the placement intake + the
 //! GPU capture, mirroring `crate::directx::probe` / `crate::metal::probe`.
 //!
 //! `set_reflection_probes` converts the graphics-system placements (auto-seeding a
@@ -25,14 +25,14 @@
 //! shaders (see the `reflection_probes.md` DX/VK port checklist).
 
 use ash::vk;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::probe::bake::{CAPTURE_FACES, ProbeBake, ProbeBakeDevice};
-use concinnity_core::render::probe::book::ProbeBook;
-use concinnity_core::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
-use concinnity_core::render::probe::radiance::FaceStorage;
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::probe::bake::{CAPTURE_FACES, ProbeBake, ProbeBakeDevice};
+use concinnity_engine::render::probe::book::ProbeBook;
+use concinnity_engine::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
+use concinnity_engine::render::probe::radiance::FaceStorage;
 
 use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
@@ -46,8 +46,8 @@ use super::set_writes::SetWrites;
 use super::texture::{GpuImage, ImageSpec, create_image, create_image_view};
 use crate::vulkan::depth;
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, VkDevice};
-use concinnity_core::render::uniforms::FaceCamera;
-use concinnity_core::render::uniforms::vulkan::CullParams;
+use concinnity_engine::render::uniforms::FaceCamera;
+use concinnity_engine::render::uniforms::vulkan::CullParams;
 
 // What a runtime capture bakes: face size, mip count, GGX sample count and firefly
 // clamp, shared with the DirectX and Metal backends (and with the build-time CPU
@@ -643,7 +643,7 @@ impl VkContext {
         // SAFETY: `indirect` is the caller's cull output, ordered before this read by its barrier.
         unsafe { device.cmd_draw_indexed_indirect(cmd, indirect, 0, draw_count, stride) };
         // A face is always rendered lit, whatever the viewport shows.
-        if self.draws_sky(concinnity_core::gfx::view_modes::ViewMode::Lit) {
+        if self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit) {
             self.encode_sky(cmd, global_set, self.current_frame);
         }
         // SAFETY: `cmd` is a command buffer in the recording state inside the render pass begun
@@ -706,7 +706,7 @@ impl ProbeBakeDevice for VkContext {
             &bake.object_buf,
             &bake.draw_args_buf,
             eye,
-            concinnity_core::render::temporal::model_history::HistoryMode::Untracked,
+            concinnity_engine::render::temporal::model_history::HistoryMode::Untracked,
         );
 
         // The capture cube each face copies into, and the probe cube the
@@ -1036,7 +1036,7 @@ impl BakeResources {
     }
 
     fn new(ctx: &VkContext) -> RenderResult<Self> {
-        use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
+        use concinnity_engine::gfx::render_types::{GpuDrawArgs, GpuObjectData};
         let device = &ctx.hw.device;
         let alloc = &ctx.hw.alloc;
         let msaa = ctx.targets.msaa_samples != vk::SampleCountFlags::TYPE_1;

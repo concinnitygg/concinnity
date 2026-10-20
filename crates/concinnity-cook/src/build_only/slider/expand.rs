@@ -7,8 +7,8 @@
 // are prefixed with the Slider's own name so generated elements never collide
 // with hand-authored assets, and every element joins the Slider's `screen`.
 
-use concinnity_core::components::{NamedAction, SettingVerb};
-use concinnity_core::settings::{SettingKey, SettingKind};
+use concinnity_engine::components::{NamedAction, SettingVerb};
+use concinnity_engine::settings::{SettingKey, SettingKind};
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::Slider;

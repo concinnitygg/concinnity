@@ -2,10 +2,10 @@
 //! that traces it, and the reflection composite the SSR resolve shares.
 
 use ash::vk;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::backend::init::{RenderLaunch, SceneData};
-use concinnity_core::render::buffers::retire_pool::RetirePool;
-use concinnity_core::settings::ResolvedGraphics;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::{RenderLaunch, SceneData};
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::settings::ResolvedGraphics;
 
 use super::InitGpu;
 use super::effects::shared_post_device;
@@ -18,7 +18,7 @@ use crate::vulkan::post::reflection_composite::{
     VkReflectionCompositePass, build_reflection_composite,
 };
 use crate::vulkan::post::rt_reflections::RtReflectionsResources;
-use concinnity_core::render::post::reflection_path::ReflectionPath;
+use concinnity_engine::render::post::reflection_path::ReflectionPath;
 
 #[derive(Clone, Copy)]
 pub(super) struct RtInputs<'a> {

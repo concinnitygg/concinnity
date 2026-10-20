@@ -7,7 +7,7 @@
 //! never replaced.
 //!
 //! The cube math + the staggered-bake state machine are backend-agnostic
-//! (`concinnity_core::render::probe::capture`); this module drives the GPU capture, mirroring
+//! (`concinnity_engine::render::probe::capture`); this module drives the GPU capture, mirroring
 //! `crate::metal::probe`. The bake is STAGGERED + ASYNCHRONOUS across frames so the
 //! render thread never blocks: one probe is in flight at a time, its six cube faces
 //! submitted one per frame into a capture cube, then convolved into the probe cube
@@ -38,17 +38,17 @@
 //!   * Single bounce + cold-first-frame lighting (the shadow map may be unpopulated when
 //!     a probe bakes on an early frame), exactly like Metal.
 
-use concinnity_core::gfx::render_types;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::planar_reflection::PixelRect;
-use concinnity_core::render::probe::bake::{
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::depth::DEPTH_CLEAR;
+use concinnity_engine::render::planar_reflection::PixelRect;
+use concinnity_engine::render::probe::bake::{
     CAPTURE_FACES, ProbeBake, ProbeBakeDevice, capture_ring_slot,
 };
-use concinnity_core::render::probe::book::ProbeBook;
-use concinnity_core::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
-use concinnity_core::render::probe::radiance::FaceStorage;
+use concinnity_engine::render::probe::book::ProbeBook;
+use concinnity_engine::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
+use concinnity_engine::render::probe::radiance::FaceStorage;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -246,7 +246,7 @@ impl DxContext {
         self.build_record_buffers(
             slot,
             eye,
-            concinnity_core::render::temporal::model_history::HistoryMode::Untracked,
+            concinnity_engine::render::temporal::model_history::HistoryMode::Untracked,
         );
         if let Some(params) = self.cull.material_params.as_mut() {
             params.upload(slot);
@@ -323,7 +323,7 @@ impl DxContext {
             let vp = capture::face_view_projection(eye, face);
             let view_mat = capture::face_view_matrix(eye, face);
             let view =
-                super::draw::ViewUniforms::face(concinnity_core::render::uniforms::FaceCamera {
+                super::draw::ViewUniforms::face(concinnity_engine::render::uniforms::FaceCamera {
                     vp,
                     view: view_mat,
                     cam_pos: eye,
@@ -885,7 +885,7 @@ impl DxContext {
         }
         self.inc_draw_calls(1);
         // A face is always rendered lit, whatever the viewport shows.
-        if self.draws_sky(concinnity_core::gfx::view_modes::ViewMode::Lit) {
+        if self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit) {
             self.encode_sky(cmd, view_gva, self.current_frame);
         }
     }

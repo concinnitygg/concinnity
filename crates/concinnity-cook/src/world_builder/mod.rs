@@ -7,8 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
-use concinnity_core::ecs::{ComponentAsset, ResourceRecord, World};
-use concinnity_core::platform::PlatformSet;
+use concinnity_engine::ecs::{ComponentAsset, ResourceRecord, World};
+use concinnity_engine::platform::PlatformSet;
 use concinnity_host::store::blob::BlobData;
 
 use crate::authoring::registry::{Authored, RegisteredType, asset_entry, set_reference};
@@ -251,7 +251,7 @@ impl WorldBuilder {
         // texture pool and every material's albedo handle resolves out of
         // range. Same call the runtime makes when it loads a blob file.
         log_resource_footprint(&result.resources);
-        concinnity_core::resource::install_tables(&mut world, &mut result.resources);
+        concinnity_engine::resource::install_tables(&mut world, &mut result.resources);
 
         Ok(world)
     }
@@ -309,20 +309,20 @@ fn log_resource_footprint(records: &[ResourceRecord]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Camera3D, DirectionalLight};
+    use concinnity_engine::components::{Camera3D, DirectionalLight};
 
     // None of these declarations carries a shader, so the platform only names
     // a backend the compile never reaches; Metal is what the rest of this
     // crate's tests name.
     fn builder() -> WorldBuilder {
-        world(concinnity_core::platform::Platform::Metal)
+        world(concinnity_engine::platform::Platform::Metal)
     }
 
     // The typed path: authored structs instead of string-keyed specs, across
     // all three shapes (args override, pass-through component, resource).
     #[test]
     fn typed_builder_compiles_a_world() {
-        use concinnity_core::components::cook::Room;
+        use concinnity_engine::components::cook::Room;
 
         let world = builder()
             .add(
@@ -352,7 +352,7 @@ mod tests {
         assert_eq!(sun.intensity, 2.2);
         // Room is `compiled`: the cook generated its geometry into the blob.
         let room = world
-            .query::<concinnity_core::components::Room>()
+            .query::<concinnity_engine::components::Room>()
             .next()
             .expect("the room compiled into a component");
         assert_eq!(room.half_width, 8.0, "size is halved by the bake");
@@ -366,7 +366,7 @@ mod tests {
         // declared, which validation rejects.
         spec.add(
             "orphan",
-            &concinnity_core::components::CharacterShape::default(),
+            &concinnity_engine::components::CharacterShape::default(),
         )
         .reference("target", "no_such_body");
         let err = spec.compile().expect_err("an unresolved reference fails");
@@ -441,7 +441,7 @@ mod tests {
     // it exactly as it resolves an authored reference.
     #[test]
     fn a_named_reference_resolves_to_its_handle() {
-        use concinnity_core::components::{Material, ProceduralMesh, Prop};
+        use concinnity_engine::components::{Material, ProceduralMesh, Prop};
 
         let world = builder()
             .add(
@@ -472,9 +472,12 @@ mod tests {
             .expect("the prop compiled into a component");
         // The handle types are not part of the public surface (a reference
         // is only ever named), so compare the resolved indices.
-        assert_eq!(prop.mesh.map(concinnity_core::ecs::Handle::index), Some(0));
         assert_eq!(
-            prop.material.map(concinnity_core::ecs::Handle::index),
+            prop.mesh.map(concinnity_engine::ecs::Handle::index),
+            Some(0)
+        );
+        assert_eq!(
+            prop.material.map(concinnity_engine::ecs::Handle::index),
             Some(0)
         );
     }
@@ -484,7 +487,7 @@ mod tests {
     #[test]
     fn declared_reports_names_and_types_in_order() {
         let mut spec = builder();
-        spec.add("menu", &concinnity_core::components::Scene::default())
+        spec.add("menu", &concinnity_engine::components::Scene::default())
             .add("sun", &DirectionalLight::default());
         let declared: Vec<_> = spec.declared().collect();
         assert_eq!(declared, [("menu", "Scene"), ("sun", "DirectionalLight")]);
@@ -589,7 +592,7 @@ mod tests {
     // name the caller chose, and that file is a world the runtime can read.
     #[test]
     fn write_blob_writes_a_readable_world_at_the_named_path() {
-        use concinnity_core::ecs::ComponentSlot;
+        use concinnity_engine::ecs::ComponentSlot;
 
         let tree = concinnity_testing::TempTree::new();
         let primary = tree.join("data/0");

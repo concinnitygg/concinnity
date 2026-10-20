@@ -2,11 +2,11 @@
 //! params blocks carry no host-shape gate, so each is checked against all three
 //! targets.
 
-use concinnity_core::gfx::render_types::{
+use concinnity_engine::gfx::render_types::{
     CompositeParams, PostProcessParams, SsaoParams, SsgiParams, SsrParams,
 };
-use concinnity_core::render::environment::atmosphere::AtmosphereParams;
-use concinnity_core::render::uniforms::{
+use concinnity_engine::render::environment::atmosphere::AtmosphereParams;
+use concinnity_engine::render::uniforms::{
     AutoExposureParams, ExposureMeasurement, HizParams, TaaParams,
 };
 

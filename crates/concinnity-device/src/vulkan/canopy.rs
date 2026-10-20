@@ -3,8 +3,8 @@
 // when the tables changed since that slot was last written.
 
 use ash::vk;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::environment::grass::canopy_table::MAX_CANOPY_TABLE_ROWS;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::environment::grass::canopy_table::MAX_CANOPY_TABLE_ROWS;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 

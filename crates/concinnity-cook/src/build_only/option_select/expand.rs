@@ -4,7 +4,7 @@
 // option list at runtime); a setting with two options (an Off/On toggle) expands
 // to a `<`/`>` stepper (name + `<` + value + `>` over two regions firing
 // its `prev` / `next`). The option count is read from the shared
-// registry in `concinnity_core::settings`, so the row form always matches
+// registry in `concinnity_engine::settings`, so the row form always matches
 // the setting the engine will apply.
 //
 // The value label shows a placeholder here; the runtime corrects it to the live
@@ -12,8 +12,8 @@
 // so generated elements stay scoped to its Screen via the build pipeline's
 // `<screen>_*` rule and never collide with hand-authored assets.
 
-use concinnity_core::components::{NamedAction, SettingVerb};
-use concinnity_core::settings::{SettingKey, SettingKind};
+use concinnity_engine::components::{NamedAction, SettingVerb};
+use concinnity_engine::settings::{SettingKey, SettingKind};
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::OptionSelect;
@@ -27,8 +27,8 @@ use crate::build_only::ui_spec::{font_sizes, label_value};
 // runtime-enumerated option list like `resolution`) rather than a `<`/`>`
 // stepper.
 fn is_dropdown(setting: SettingKey) -> bool {
-    concinnity_core::settings::options(setting).is_some_and(|o| o.len() > 2)
-        || concinnity_core::settings::is_dynamic_dropdown(setting)
+    concinnity_engine::settings::options(setting).is_some_and(|o| o.len() > 2)
+        || concinnity_engine::settings::is_dynamic_dropdown(setting)
 }
 
 // Where the control group (the `<` button + value + `>`) starts, as a fraction

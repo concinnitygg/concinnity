@@ -1,7 +1,7 @@
 // A field's default as the JSON an author would write: produced by running the
 // type's `Default` the way serde does for an omitted key, then serialized.
 
-use concinnity_core::ecs::schema::{DefaultValue, FieldDefault, FieldSchema, TypeSchema};
+use concinnity_engine::ecs::schema::{DefaultValue, FieldDefault, FieldSchema, TypeSchema};
 use serde_json::Value;
 
 /// A type's defaults, serialized once for all of its fields.
@@ -73,14 +73,14 @@ pub(super) fn default_text(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::ecs::schema::{Body, FieldType};
+    use concinnity_engine::ecs::schema::{Body, FieldType};
 
     const FIELD: fn(FieldDefault) -> FieldSchema = |default| FieldSchema {
         key: "scale",
         doc: "",
         ty: || FieldType::Float,
         default,
-        param: concinnity_core::ecs::asset_fields::ParamMeta::NONE,
+        param: concinnity_engine::ecs::asset_fields::ParamMeta::NONE,
     };
 
     const CONTAINER: TypeSchema = TypeSchema {

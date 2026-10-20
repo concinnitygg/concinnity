@@ -54,14 +54,14 @@
 
 use ash::{Device, vk};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error;
-use concinnity_core::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::render::backend::error;
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
-use concinnity_core::render::buffers::block_pool::Placement;
-use concinnity_core::render::buffers::block_pool::{BlockGrowth, BlockPool, ReserveError};
+use concinnity_engine::render::buffers::block_pool::Placement;
+use concinnity_engine::render::buffers::block_pool::{BlockGrowth, BlockPool, ReserveError};
 
 const GROWTH: BlockGrowth = BlockGrowth::STANDARD;
 

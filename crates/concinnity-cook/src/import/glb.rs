@@ -11,10 +11,10 @@
 //! wrappers (`import_skinned_glb`, `import_glb_animation`, ...) live in
 //! `crate::import::gltf` and call into here.
 
-use concinnity_core::animation::skeleton::JointPose;
-use concinnity_core::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::transform::euler_yxz_from_quat;
+use concinnity_engine::animation::skeleton::JointPose;
+use concinnity_engine::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
+use concinnity_engine::transform::euler_yxz_from_quat;
 use concinnity_host::store::source::resolve_source_path;
 use std::collections::HashMap;
 use std::path::Path;
@@ -412,7 +412,7 @@ fn import_geometry(
     doc: &GltfDoc,
     remap: &[usize],
 ) -> Result<SkinnedGeometry, String> {
-    use concinnity_core::components::MorphDelta;
+    use concinnity_engine::components::MorphDelta;
 
     let mut vertices: Vec<SkinnedVertexData> = Vec::new();
     let mut indices: Vec<u16> = Vec::new();

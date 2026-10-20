@@ -1,4 +1,4 @@
-use concinnity_core::components::Room;
+use concinnity_engine::components::Room;
 
 impl crate::asset::BuildAsset for Room {
     fn compile_payload(
@@ -18,8 +18,8 @@ mod tests {
     fn ctx() -> BuildCtx<'static> {
         BuildCtx {
             name: "lobby",
-            targets: concinnity_core::platform::PlatformSet::single(
-                concinnity_core::platform::Platform::Metal,
+            targets: concinnity_engine::platform::PlatformSet::single(
+                concinnity_engine::platform::Platform::Metal,
             ),
             assets_dir: None,
             all_assets: &[],

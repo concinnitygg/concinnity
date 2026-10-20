@@ -15,9 +15,9 @@
 //! same frame `GraphicsSystem` draws it. The whole HUD toggles with F1 (see
 //! `hook.rs`).
 
-use concinnity_core::components::{FrameInput, TextAlign};
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::{FrameInput, TextAlign};
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::hud_ids::{Family, family_base, hud_ids};
 use super::sim::SimState;
@@ -425,7 +425,7 @@ fn place_label(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_engine::components::{Sprite, TextLabel};
 
     fn state(dirty: bool, view: bool, visible: bool) -> HudState {
         HudState {

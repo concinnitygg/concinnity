@@ -2,7 +2,7 @@
 //! and the cook expands into the components they stand for, gone before a blob
 //! is written.
 //!
-//! Their list lives here rather than in concinnity-core's `for_each_component!`
+//! Their list lives here rather than in concinnity-engine's `for_each_component!`
 //! because nothing in the runtime can hold one: they have no `ComponentTag`, no
 //! `ComponentAsset` variant, no column, and no `Component` impl. What they do
 //! have is a [`RegisteredType`](super::RegisteredType) variant, so the
@@ -38,12 +38,12 @@ pub use crate::build_only::story::schema::StoryImport;
 /// `ComponentAsset` variant, no column, no `Component` impl. Carries no methods
 /// -- it exists so the registry's groups are checkable at compile time and so
 /// the list is discoverable in the docs. The stored group carries
-/// `concinnity_core::ecs::RuntimeComponent` instead, and the resource group
-/// `concinnity_core::ecs::ResourceAsset`.
+/// `concinnity_engine::ecs::RuntimeComponent` instead, and the resource group
+/// `concinnity_engine::ecs::ResourceAsset`.
 pub trait BuildOnlyAsset {}
 
 /// The authoring-only list. `$cb` receives it as a `build_only:` group shaped
-/// exactly like concinnity-core's groups, so one callback serves both.
+/// exactly like concinnity-engine's groups, so one callback serves both.
 ///
 /// The `$cb, $prefix` form prepends tokens to what `$cb` receives, which is how
 /// `for_each_authored_type!` hands a callback core's groups and this one
@@ -80,7 +80,7 @@ macro_rules! __impl_build_only {
     (build_only: { $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? } $(,)?) => {
         $(
             impl BuildOnlyAsset for $ty {}
-            impl concinnity_core::ecs::RefTarget for $ty {
+            impl concinnity_engine::ecs::RefTarget for $ty {
                 const TYPES: &'static [&'static str] = &[stringify!($variant)];
             }
         )+
@@ -96,7 +96,7 @@ mod tests {
 
     // The composition is what keeps this group in the one authoring registry:
     // the list lives in this crate while the other two come from
-    // concinnity-core, and a callback that saw only core's would silently drop
+    // concinnity-engine, and a callback that saw only core's would silently drop
     // every name below. Derived from the list, so an entry added or removed
     // updates the check with it.
     macro_rules! assert_registered_as_build_only {

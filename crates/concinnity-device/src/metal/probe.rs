@@ -56,12 +56,12 @@
 //!     direct + ambient lighting without contact shadows.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::probe::bake::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::probe::bake::{
     CAPTURE_FACES, ProbeBake, ProbeBakeDevice, capture_ring_slot,
 };
-use concinnity_core::render::probe::book::ProbeBook;
-use concinnity_core::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
+use concinnity_engine::render::probe::book::ProbeBook;
+use concinnity_engine::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -235,7 +235,7 @@ impl MtlContext {
             .build_record_buffers(
                 slot,
                 eye,
-                concinnity_core::render::temporal::model_history::HistoryMode::Untracked,
+                concinnity_engine::render::temporal::model_history::HistoryMode::Untracked,
             )?
             .ok_or_else(|| RenderError::Other("probe: no static geometry to bake".into()))?;
         let (object_buffer, draw_args) = (records.objects, records.draw_args);

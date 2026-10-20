@@ -8,8 +8,8 @@
 //! log sink.
 
 use concinnity_cook::authoring::world::{entry_handle, find_entry, set_entry_id};
-use concinnity_core::components::{FrameInput, InputKey};
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, InputKey};
+use concinnity_engine::ecs::World;
 use std::sync::atomic::Ordering;
 
 use crate::editor::entry_list::build_text;

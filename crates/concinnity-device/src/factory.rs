@@ -5,9 +5,9 @@
 //! client holds only a `Box<dyn RenderBackend>` and never names a concrete
 //! backend context.
 
-use concinnity_core::platform::Platform;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::{backend, backend::init};
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::{backend, backend::init};
 
 /// The graphics APIs this build can render with, the target's native one
 /// first. Empty on a target with no window layer.

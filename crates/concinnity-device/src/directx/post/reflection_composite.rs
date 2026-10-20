@@ -1,16 +1,16 @@
 //! DirectX's share of the reflection composite, which is where its inputs come
 //! from this frame. The roughness blur and the composite -- their pipelines,
 //! their targets and both draws -- are written once in
-//! `concinnity_core::render::post::reflection_composite` and reach D3D12
+//! `concinnity_engine::render::post::reflection_composite` and reach D3D12
 //! through `DxPostDevice`.
 //!
 //! Shared by both reflection paths: `encode_ssr_resolve` /
 //! `encode_rt_reflections` each render their reflection target, then call
 //! `encode_reflection_composite` with that target's SRV.
 
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::post::reflection_composite::{
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::reflection_composite::{
     ReflectionCompositeInputs, ReflectionCompositePass,
 };
 use windows::Win32::Graphics::Direct3D12::*;

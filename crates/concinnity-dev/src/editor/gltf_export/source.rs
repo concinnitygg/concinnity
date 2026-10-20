@@ -7,10 +7,10 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::WorldJsonlAsset;
-use concinnity_core::components::CharacterShape;
-use concinnity_core::ecs::ResourceKind;
-use concinnity_core::geometry::payload_joints_to_defs;
-use concinnity_core::gfx::mesh_payload::{SkinnedPayload, deserialize_skinned_with_lods};
+use concinnity_engine::components::CharacterShape;
+use concinnity_engine::ecs::ResourceKind;
+use concinnity_engine::geometry::payload_joints_to_defs;
+use concinnity_engine::gfx::mesh_payload::{SkinnedPayload, deserialize_skinned_with_lods};
 
 use super::ExportMesh;
 

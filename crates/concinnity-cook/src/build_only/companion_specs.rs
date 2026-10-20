@@ -6,7 +6,7 @@
 // the world.
 //
 // This is build-time-only authoring logic; the asset data structs live in
-// concinnity-core alongside their runtime `Component` impls.
+// concinnity-engine alongside their runtime `Component` impls.
 
 use crate::authoring::registry::RegisteredType;
 

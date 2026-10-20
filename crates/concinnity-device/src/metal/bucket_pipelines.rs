@@ -4,11 +4,11 @@
 // pre-pass exists only while a G-buffer consumer is on, and a pre-pass that
 // fails to build costs that bucket its G-buffer draws, never its shading.
 
-use concinnity_core::components::ShaderPrograms;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::shader::programs::surface::GrassShading;
-use concinnity_core::render::shader::programs::{ShaderProgram, shared, surface};
-use concinnity_core::render::shader::world_pipelines::replace_bucket;
+use concinnity_engine::components::ShaderPrograms;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::surface::GrassShading;
+use concinnity_engine::render::shader::programs::{ShaderProgram, shared, surface};
+use concinnity_engine::render::shader::world_pipelines::replace_bucket;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice, MTLFunction, MTLRenderPipelineState, MTLVertexDescriptor};
@@ -263,11 +263,11 @@ fn sync_prepass(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::ShaderSource;
-    use concinnity_core::platform::Platform;
-    use concinnity_core::render::shader::compiled::CompiledProgram;
-    use concinnity_core::render::shader::programs::surface;
-    use concinnity_core::render::shader::source;
+    use concinnity_engine::components::ShaderSource;
+    use concinnity_engine::platform::Platform;
+    use concinnity_engine::render::shader::compiled::CompiledProgram;
+    use concinnity_engine::render::shader::programs::surface;
+    use concinnity_engine::render::shader::source;
     use objc2_metal::MTLCreateSystemDefaultDevice;
 
     const SHADE: &str =

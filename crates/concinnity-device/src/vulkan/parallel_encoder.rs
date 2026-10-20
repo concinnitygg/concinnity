@@ -55,7 +55,7 @@
 //!
 //! Re-audit this list whenever a new pass migrates onto the fan-out.
 
-use concinnity_core::render::backend::parallel_ctx;
+use concinnity_engine::render::backend::parallel_ctx;
 
 use super::context::VkContext;
 

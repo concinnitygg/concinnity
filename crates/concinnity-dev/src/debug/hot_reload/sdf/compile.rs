@@ -2,11 +2,11 @@
 //! and the compile and pipeline builds a worker runs.
 
 use concinnity_cook::compile::sdf_field::CompiledField;
-use concinnity_core::components::ShaderSource;
 use concinnity_core::fanout::Fanout;
-use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
-use concinnity_core::render::shader::programs::raymarch::VolumeFlags;
-use concinnity_core::render::world_load::source_maps::SdfFieldEntry;
+use concinnity_engine::components::ShaderSource;
+use concinnity_engine::render::backend::{PipelineBuilder, PreparedPipelines};
+use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
+use concinnity_engine::render::world_load::source_maps::SdfFieldEntry;
 use std::collections::HashMap;
 
 use crate::debug::hot_reload::report::ReloadFailure;

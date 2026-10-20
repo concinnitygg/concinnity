@@ -10,7 +10,7 @@
 //! `metal/display_mode.rs`.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::window::display_mode::{DisplayMode, best_native_index};
+use concinnity_engine::window::display_mode::{DisplayMode, best_native_index};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{
     CDS_FULLSCREEN, ChangeDisplaySettingsExW, DEVMODEW, DISP_CHANGE_SUCCESSFUL,

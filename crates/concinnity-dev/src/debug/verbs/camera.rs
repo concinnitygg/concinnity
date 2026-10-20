@@ -4,11 +4,11 @@
 //! straight onto the `Camera3D` and zero the controller velocity, so a
 //! free-fly camera does not drift the pose away.
 
-use concinnity_core::behavior::camera_driver;
-use concinnity_core::components::Camera3D;
-use concinnity_core::controller::camera::Camera3DSystem;
-use concinnity_core::ecs::World;
-use concinnity_core::render::temporal::history_reset::{HistoryResetCauses, PendingHistoryReset};
+use concinnity_engine::behavior::camera_driver;
+use concinnity_engine::components::Camera3D;
+use concinnity_engine::controller::camera::Camera3DSystem;
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::temporal::history_reset::{HistoryResetCauses, PendingHistoryReset};
 use serde_json::json;
 
 use crate::debug::call::Call;
@@ -243,7 +243,7 @@ fn reset_controller_velocity(world: &mut World) {
 mod tests {
     use super::*;
     use crate::debug::verbs::testing::Engine;
-    use concinnity_core::components::CameraController;
+    use concinnity_engine::components::CameraController;
 
     fn camera_world() -> World {
         let mut world = World::new();

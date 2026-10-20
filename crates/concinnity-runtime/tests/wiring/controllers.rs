@@ -2,13 +2,13 @@
 // a controller, and the paths that need the load-time decomposition and the
 // other systems the table builds beside them.
 
-use concinnity_core::components::{
+use concinnity_engine::components::{
     Camera3D, CameraController, FollowController, FrameInput, Interactable, KeyBinding,
     PhysicsConfig, Prop, PropCollider, PropColliderShape, Screen, ScreenCommand, Transform,
     UiAction,
 };
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{EventCursor, SkinnedMeshHandle, World};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{EventCursor, SkinnedMeshHandle, World};
 use concinnity_host::thread::asset_id::intern;
 
 use concinnity_runtime::SYSTEMS;
@@ -34,7 +34,7 @@ fn system_names(world: &World) -> Vec<&'static str> {
     world
         .systems()
         .iter()
-        .map(concinnity_core::ecs::BuiltSystem::name)
+        .map(concinnity_engine::ecs::BuiltSystem::name)
         .collect()
 }
 
@@ -166,16 +166,16 @@ fn interact_rotates_transform() {
 // distance so the view is never cut.
 #[test]
 fn wall_behind_the_camera_pulls_it_in() {
-    use concinnity_core::components::CharacterRig;
-    use concinnity_core::ecs::FrameTime;
-    use concinnity_core::gfx::render_types::SkinnedIndex;
+    use concinnity_engine::components::CharacterRig;
+    use concinnity_engine::ecs::FrameTime;
+    use concinnity_engine::gfx::render_types::SkinnedIndex;
 
     let mut world = World::new();
     world.add_component(follow_camera());
     world.add_component(CharacterRig::new(
         SkinnedMeshHandle::new(intern("hero").0),
         SkinnedIndex(0),
-        concinnity_core::transform::IDENTITY,
+        concinnity_engine::transform::IDENTITY,
         0.5,
         0.3,
     ));

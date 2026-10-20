@@ -14,10 +14,10 @@
 //! (the floor for the inline ray query) through `builtin_shaders`; the Metal and
 //! Vulkan hosts bind the same source at their own slots.
 
-use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
+use concinnity_engine::gfx::render_types::RtParams;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::rt_reflections::RtReflectionSettings;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 

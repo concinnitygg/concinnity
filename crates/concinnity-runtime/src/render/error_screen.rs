@@ -7,12 +7,12 @@
 // there would be unavailable at the moment it is needed. When the window cannot
 // be created the caller keeps its original console-and-exit path.
 
-use concinnity_core::components::Window;
-use concinnity_core::ecs::FontHandle;
-use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::backend::init::BackendInit;
-use concinnity_core::render::overlay::error_screen::{self, dismissed};
-use concinnity_core::render::overlay::text::{FontSet, build_text_calls};
+use concinnity_engine::components::Window;
+use concinnity_engine::ecs::FontHandle;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::backend::init::BackendInit;
+use concinnity_engine::render::overlay::error_screen::{self, dismissed};
+use concinnity_engine::render::overlay::text::{FontSet, build_text_calls};
 
 // The single atlas slot the embedded face occupies: this screen uploads it
 // alone, with no world fonts beside it.
@@ -80,7 +80,7 @@ fn run_loop(backend: &mut dyn RenderBackend, message: &str, fonts: &FontSet) {
         let text_calls = build_text_calls(&screen.labels, fonts, [win_w, win_h]);
 
         // The screen draws overlay text only, so no camera is involved.
-        backend.update_view(concinnity_core::transform::IDENTITY);
+        backend.update_view(concinnity_engine::transform::IDENTITY);
         // Metal pumps its window events inside `draw_frame`, so the draw comes
         // before the input sample, exactly as the world's frame path orders it.
         if let Err(e) = backend.draw_frame(error_screen::frame_params(

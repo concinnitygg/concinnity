@@ -4,13 +4,13 @@
 // capsule follows, and the shape asset is consumed. The mesh that comes out
 // is a plain SkinnedMesh with no shape work left for the runtime.
 
-use concinnity_core::animation::proportions::ProportionLayer;
-use concinnity_core::components::{
+use concinnity_core::math::vec3;
+use concinnity_engine::animation::proportions::ProportionLayer;
+use concinnity_engine::components::{
     CharacterCapsule, CharacterShape, MorphDelta, SkeletonJoint, SkinnedMesh,
     build_skeleton_from_joint_defs,
 };
-use concinnity_core::math::vec3;
-use concinnity_core::transform::{self, Mat4, mat4_transform_point};
+use concinnity_engine::transform::{self, Mat4, mat4_transform_point};
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
@@ -300,7 +300,7 @@ pub(crate) fn bake_shapes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{
+    use concinnity_engine::components::{
         CharacterCapsule, JointProportion, ShapeSlider, SkinnedVertexData,
     };
 

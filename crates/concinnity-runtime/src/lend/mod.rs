@@ -3,7 +3,7 @@
 //! publish at world start.
 //!
 //! The table holds core's systems (`CoreSystems`, each entry defined once in
-//! concinnity-core) with this crate's own among them. Table order is run order.
+//! concinnity-engine) with this crate's own among them. Table order is run order.
 //! A core system's phase, edges, gate and description come from its core entry;
 //! this file decides only where this crate's systems sit. A new core system is
 //! listed here in its run position after its entry is added to `CoreSystems`.
@@ -20,17 +20,17 @@
 //! Event-carried couplings (`RootMotionEvent`, `GroundProbes`, `SettingCommand`) are
 //! order-robust thanks to the event store's two-frame retention.
 
-use concinnity_core::audio::out::AudioOut;
-use concinnity_core::behavior::BehaviorStore;
-use concinnity_core::ecs::{
+use concinnity_core::fanout::Lent;
+use concinnity_engine::audio::out::AudioOut;
+use concinnity_engine::behavior::BehaviorStore;
+use concinnity_engine::ecs::{
     CoreSystems, Phase, PipelineContext, SystemEntry, SystemHost, SystemTable, TransientSaves,
     World, boxed,
 };
-use concinnity_core::fanout::Lent;
-use concinnity_core::input::system::PadSource;
-use concinnity_core::planet::StartBuilder;
-use concinnity_core::settings::system::SettingsStore;
-use concinnity_core::story::StoryStore;
+use concinnity_engine::input::system::PadSource;
+use concinnity_engine::planet::StartBuilder;
+use concinnity_engine::settings::system::SettingsStore;
+use concinnity_engine::story::StoryStore;
 use concinnity_host::store::paths::StateTree;
 use concinnity_host::thread::jobs::{self, JobPool};
 
@@ -112,7 +112,7 @@ fn before_init(ctx: &mut PipelineContext<'_>) {
     #[cfg(debug_assertions)]
     access_check::install_hook();
     resources::publish(ctx);
-    concinnity_core::ecs::decompose::run(ctx);
+    concinnity_engine::ecs::decompose::run(ctx);
 }
 
 /// The system table a world starts from: one entry per system, in run order,
@@ -155,9 +155,9 @@ pub const SYSTEMS: &SystemTable = &SystemTable {
         "StreamingSystem",
         "GraphicsSystem",
     ],
-    complete_world: Some(concinnity_core::defaults::run),
+    complete_world: Some(concinnity_engine::defaults::run),
     before_init: Some(before_init),
-    prepare_events: Some(concinnity_core::ecs::access_id::prepare_events),
+    prepare_events: Some(concinnity_engine::ecs::access_id::prepare_events),
 };
 
 #[cfg(test)]

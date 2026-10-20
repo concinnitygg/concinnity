@@ -5,11 +5,11 @@
 //! the same way the editor's View menu does, through the world's
 //! `ViewOverrides`.
 
-use concinnity_core::components::{InputKey, SettingCommand, SettingOp};
-use concinnity_core::ecs::{ViewOverrides, World};
-use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
-use concinnity_core::input::keymap::Bindable;
-use concinnity_core::settings::SettingKey;
+use concinnity_engine::components::{InputKey, SettingCommand, SettingOp};
+use concinnity_engine::ecs::{ViewOverrides, World};
+use concinnity_engine::gfx::view_modes::{ShowFlags, ViewMode};
+use concinnity_engine::input::keymap::Bindable;
+use concinnity_engine::settings::SettingKey;
 use serde_json::{Value, json};
 
 use crate::debug::call::Call;
@@ -257,7 +257,7 @@ fn view_mode(name: &str) -> Option<ViewMode> {
 mod tests {
     use super::*;
     use crate::debug::verbs::testing::Engine;
-    use concinnity_core::ecs::EventCursor;
+    use concinnity_engine::ecs::EventCursor;
 
     fn sent(engine: &Engine) -> Vec<SettingCommand> {
         engine

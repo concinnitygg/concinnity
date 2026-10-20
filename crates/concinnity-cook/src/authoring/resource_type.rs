@@ -8,9 +8,9 @@
 //! than just its type name. The per-type compile dispatch lives in
 //! concinnity-cook, where the compilers are.
 
-use concinnity_core::components::FileKind;
-use concinnity_core::ecs::ResourceKind;
-use concinnity_core::resource::MeshBlock;
+use concinnity_engine::components::FileKind;
+use concinnity_engine::ecs::ResourceKind;
+use concinnity_engine::resource::MeshBlock;
 
 use crate::authoring::registry::RegisteredType;
 
@@ -19,7 +19,7 @@ use crate::authoring::registry::RegisteredType;
 // through the type-name classifier above: File is polymorphic (only a mesh-kind
 // File is geometry, which the type name alone cannot tell), and the four kinds
 // must draw from one dense space in a fixed order. The assignment itself is
-// `concinnity_core::resource::ResourceHandles`, shared with the typed bake
+// `concinnity_engine::resource::ResourceHandles`, shared with the typed bake
 // builder; what lives here is the classifier that reads authored args.
 
 // True when a `File`'s args name a mesh-kind file (the only File that produces

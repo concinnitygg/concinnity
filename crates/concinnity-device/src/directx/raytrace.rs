@@ -38,15 +38,15 @@
 //! and clusters the BLAS cover, the instance and geometry-table order, and when
 //! to update -- is the shared `AccelBook`.
 
-use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::rt_accel::geom::{
+use concinnity_engine::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::rt_accel::geom::{
     RtDynamicMode, instance_id_and_mask, pack_row_major_3x4,
 };
-use concinnity_core::render::rt_accel::refit::{BlasUpdate, SkinnedRefit};
-use concinnity_core::render::rt_accel::topology::blas_vertex_count;
-use concinnity_core::render::rt_accel::{
+use concinnity_engine::render::rt_accel::refit::{BlasUpdate, SkinnedRefit};
+use concinnity_engine::render::rt_accel::topology::blas_vertex_count;
+use concinnity_engine::render::rt_accel::{
     AccelBook, EmptyHead, FrameRing, HeadRefresh, InstanceBlas, RefreshMode, RefreshStep,
     RtAccelSteps, RtDriveInputs, RtUpdate, ScratchRing, SeedSet, StaticRing, drive_update,
     seed_wanted,
@@ -72,7 +72,7 @@ use crate::directx::root_sig::{RootSig, Visibility};
 const VERTEX_STRIDE: u64 = 56;
 
 // Shared with the Metal and Vulkan hosts: one `.hlsl` declares it.
-use concinnity_core::render::uniforms::SkinParams;
+use concinnity_engine::render::uniforms::SkinParams;
 
 // Whether the active GPU supports the DXR feature tier inline `RayQuery` needs.
 // Tier 1.1 is required because the reflection pass traces from a pixel shader
@@ -1999,7 +1999,7 @@ mod tests {
     #[test]
     fn an_empty_upload_slot_still_holds_one_element() {
         assert_eq!(
-            upload_ring_size::<concinnity_core::gfx::render_types::RtGeomEntry>(&[]),
+            upload_ring_size::<concinnity_engine::gfx::render_types::RtGeomEntry>(&[]),
             128
         );
         assert_eq!(upload_ring_size::<u8>(&[]), 4);

@@ -3,14 +3,14 @@
 //! only the integer, so every cross-reference lookup is an integer compare.
 //!
 //! This module owns the interner and installs it into the runtime crate's
-//! resolver seam (`concinnity_core::ecs::resolver::set_name_resolver`) so a name-string
+//! resolver seam (`concinnity_engine::ecs::resolver::set_name_resolver`) so a name-string
 //! reference deserializes to a dense id during a build. At runtime references
 //! are already integers, so the seam is never consulted.
 
 use std::cell::RefCell;
 use std::sync::Once;
 
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::name_interner::NameInterner;
 
@@ -26,7 +26,7 @@ thread_local! {
 pub fn ensure_name_resolver() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        concinnity_core::ecs::resolver::set_name_resolver(|name| {
+        concinnity_engine::ecs::resolver::set_name_resolver(|name| {
             INTERNER.with(|i| i.borrow_mut().intern(name))
         });
     });
@@ -117,9 +117,9 @@ pub fn intern_all(names: &[&str]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::Prop;
-    use concinnity_core::ecs::Ref;
     use concinnity_core::math::SaturatingFrom;
+    use concinnity_engine::components::Prop;
+    use concinnity_engine::ecs::Ref;
 
     #[test]
     fn intern_is_idempotent_and_dense() {

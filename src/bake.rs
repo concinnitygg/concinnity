@@ -59,15 +59,15 @@ use alloc::vec::Vec;
 /// `CameraTrack` are the authored forms of the components of the same names,
 /// which [`camera`] and [`camera_track`] bake. The `cook` module carries these
 /// same types under its own namespace, along with the ones that need an importer.
-pub use concinnity_core::components::cook::{
+pub use concinnity_engine::components::cook::{
     Camera3D, CameraTrack, EnvironmentMap, Font, Material, Mesh, VertexData,
 };
 
 /// Baked geometry, for [`World::add_mesh`](crate::World::add_mesh).
-pub use concinnity_core::bake::payload::MeshPayload;
+pub use concinnity_engine::bake::payload::MeshPayload;
 
-use concinnity_core::components::{self, ProceduralMesh};
-use concinnity_core::resource::EnvironmentMapRecord;
+use concinnity_engine::components::{self, ProceduralMesh};
+use concinnity_engine::resource::EnvironmentMapRecord;
 
 // A payload only a bake in this module constructs, so what a data-entry method
 // takes is known to be the kind it installs.
@@ -140,7 +140,7 @@ payload! {
 /// Bake a [`ProceduralMesh`]'s generator into its geometry payload, for
 /// [`World::add_mesh`](crate::World::add_mesh).
 pub fn procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, crate::Error> {
-    concinnity_core::bake::payload::procedural_mesh(mesh).map_err(crate::Error::Bake)
+    concinnity_engine::bake::payload::procedural_mesh(mesh).map_err(crate::Error::Bake)
 }
 
 /// Bake a raw [`Mesh`]'s vertices and indices into its geometry payload, for
@@ -148,7 +148,7 @@ pub fn procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, crate::Error
 /// derived from the triangles; a `source` naming a model file needs the cook
 /// module's importer.
 pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, crate::Error> {
-    concinnity_core::bake::payload::mesh(mesh).map_err(crate::Error::Bake)
+    concinnity_engine::bake::payload::mesh(mesh).map_err(crate::Error::Bake)
 }
 
 /// Convolve an [`EnvironmentMap`]'s generator into its image-based-lighting
@@ -159,7 +159,7 @@ pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, crate::Error> {
 /// engine's job pool; without it they run on the calling thread.
 #[cfg(feature = "std")]
 pub fn environment_map(map: &EnvironmentMap) -> Result<EnvironmentMapPayload, crate::Error> {
-    concinnity_core::bake::payload::environment_map(map, concinnity_host::thread::jobs::pool())
+    concinnity_engine::bake::payload::environment_map(map, concinnity_host::thread::jobs::pool())
         .map(|bytes| EnvironmentMapPayload::new(bytes, map))
         .map_err(crate::Error::Bake)
 }
@@ -169,7 +169,7 @@ pub fn environment_map(map: &EnvironmentMap) -> Result<EnvironmentMapPayload, cr
 /// on the calling thread.
 #[cfg(not(feature = "std"))]
 pub fn environment_map(map: &EnvironmentMap) -> Result<EnvironmentMapPayload, crate::Error> {
-    concinnity_core::bake::payload::environment_map(map, &concinnity_core::fanout::Inline)
+    concinnity_engine::bake::payload::environment_map(map, &concinnity_core::fanout::Inline)
         .map(|bytes| EnvironmentMapPayload::new(bytes, map))
         .map_err(crate::Error::Bake)
 }
@@ -178,7 +178,7 @@ pub fn environment_map(map: &EnvironmentMap) -> Result<EnvironmentMapPayload, cr
 /// [`World::add_font`](crate::World::add_font). Only the built-in face bakes;
 /// a `path` naming a TTF file needs the cook module's importer.
 pub fn font(font: &Font) -> Result<FontPayload, crate::Error> {
-    concinnity_core::bake::payload::font(font)
+    concinnity_engine::bake::payload::font(font)
         .map(FontPayload)
         .map_err(crate::Error::Bake)
 }
@@ -293,7 +293,7 @@ mod tests {
 
         let table = world
             .inner()
-            .resource::<concinnity_core::resource::FontTable>()
+            .resource::<concinnity_engine::resource::FontTable>()
             .expect("the font table");
         assert!(
             table
@@ -346,7 +346,7 @@ mod tests {
             ..Default::default()
         })
         .expect("the sky bakes");
-        let view = concinnity_core::bake::environment_map::deserialize(payload.as_bytes())
+        let view = concinnity_engine::bake::environment_map::deserialize(payload.as_bytes())
             .expect("the payload reads back");
         assert_eq!(view.prefilter_face, 16);
 
@@ -359,7 +359,7 @@ mod tests {
     // renderer reads its background from with the flag off.
     #[test]
     fn a_hidden_background_survives_the_bake_into_the_world() {
-        use concinnity_core::resource::EnvironmentMapTable;
+        use concinnity_engine::resource::EnvironmentMapTable;
         let payload = environment_map(&EnvironmentMap {
             generator: "sky".into(),
             prefilter_face_size: 16,

@@ -10,8 +10,8 @@
 //! own files: bloom/TAA/SSAO in directx/post/, cull at directx/cull.rs,
 //! main + shadow in directx/init/pipelines.rs.
 
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::backend::error::RenderResult;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 

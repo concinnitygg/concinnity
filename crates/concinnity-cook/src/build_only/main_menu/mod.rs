@@ -16,8 +16,8 @@ mod settings_tab;
 #[cfg(test)]
 mod tests;
 
-use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::overlay::UI_REFERENCE_SIZE;
 use rows::settings_tabs;
 use screen::{MenuMetrics, emit_menu_screen};
 use settings_tab::emit_settings_tab;
@@ -28,7 +28,7 @@ use super::ui_spec::font_sizes;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::{MainMenu, MenuItemAction};
 use crate::authoring::spec::{asset, spec_to_value};
-use concinnity_core::components::{AuthoredAction, NamedAction};
+use concinnity_engine::components::{AuthoredAction, NamedAction};
 
 // Top margin of a centered menu as a fraction of the reference height. The menu
 // is top-aligned (not vertically centered) so the heading and tab bar hold a
@@ -91,7 +91,7 @@ pub(crate) fn expand_main_menus(assets: &mut Vec<serde_json::Value>) -> Result<(
     }
 
     // Menus lay out against a fixed reference canvas; the renderer uniformly
-    // scales the overlay to the live window (see concinnity_core::gfx::overlay), so the
+    // scales the overlay to the live window (see concinnity_engine::gfx::overlay), so the
     // declared Window size does not affect the menu layout.
     let (win_w, win_h) = (UI_REFERENCE_SIZE[0], UI_REFERENCE_SIZE[1]);
     let font_px_by_name = font_sizes(assets);

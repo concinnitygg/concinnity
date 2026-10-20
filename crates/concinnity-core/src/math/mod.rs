@@ -9,7 +9,6 @@ pub mod dmat3;
 pub mod dvec3;
 mod interp;
 pub mod noise;
-pub mod pick;
 mod rotation;
 mod scalar;
 pub mod vec3;

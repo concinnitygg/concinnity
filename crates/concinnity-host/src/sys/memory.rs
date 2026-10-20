@@ -1,5 +1,5 @@
 //! Memory queries used to compute the process memory budget (see
-//! `concinnity_core::budget`) and to report live usage. Two values, each best-effort: the
+//! `concinnity_engine::budget`) and to report live usage. Two values, each best-effort: the
 //! machine's total physical RAM (the budget is a fraction of it) and this
 //! process's resident set size (what it is actually using now).
 //!

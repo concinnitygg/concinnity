@@ -10,13 +10,13 @@
 //! bloom, decals, fog, particles, and the uploaded geometry are untouched (so no
 //! particle-sim reset and no multi-second geometry re-upload).
 
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::backend::feature_plan::{BackendFacts, FeaturePlan};
-use concinnity_core::render::backend::init;
-use concinnity_core::render::render_graph::{BackendTraits, BuildStatus, FeatureGates};
-use concinnity_core::settings::ResolvedGraphics;
-use concinnity_core::settings::apply::{ApplyPlan, SettingsTarget, apply_plan};
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan};
+use concinnity_engine::render::backend::init;
+use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus, FeatureGates};
+use concinnity_engine::settings::ResolvedGraphics;
+use concinnity_engine::settings::apply::{ApplyPlan, SettingsTarget, apply_plan};
 
 use super::auto_exposure::AutoExposureGpu;
 use super::context::MtlContext;
@@ -247,7 +247,7 @@ impl MtlContext {
             self.rt.retire_accel(self.frame_ring_index);
         }
         // Reset the failure streak so a later toggle-on starts clean.
-        self.rt.update_streak = concinnity_core::render::rt_accel::FailureStreak::default();
+        self.rt.update_streak = concinnity_engine::render::rt_accel::FailureStreak::default();
 
         // Auto-exposure. When it turns off the static path uses
         // `self.post_process.exposure` (the authored / slider EV), already set,

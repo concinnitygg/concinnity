@@ -1,14 +1,14 @@
 //! Material-palette schema: a named set of Material entries with short aliases.
 
-use concinnity_core::components::Texture;
-use concinnity_core::ecs::NameRef;
+use concinnity_engine::components::Texture;
+use concinnity_engine::ecs::NameRef;
 
 /// A named set of [Material](#material) entries with short aliases.
 ///
 /// Expands into [Material](#material) assets named `<palette_name>_<alias>`.
 /// [Prop](#prop)s reference the expanded names.
 #[derive(
-    Debug, Default, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields,
+    Debug, Default, Clone, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
 )]
 #[serde(default)]
 pub struct MaterialPalette {
@@ -23,7 +23,9 @@ pub struct MaterialPalette {
 /// expanded [Material](#material) name) plus the Material fields the expansion
 /// fills in. The [Texture](#texture)s named by `albedo` / `normal_map` resolve
 /// on the expanded Material.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct PaletteEntry {
     /// Alias suffix; the expanded material is named `<palette>_<alias>`.

@@ -14,7 +14,7 @@
 // independently of it, and a metallib from a superseded one loads perfectly
 // well, which is exactly what makes replaying it invisible.
 
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_shader::HlslTarget;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;

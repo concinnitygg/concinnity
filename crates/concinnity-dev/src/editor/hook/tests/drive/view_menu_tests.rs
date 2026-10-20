@@ -1,7 +1,7 @@
 //! The Display menu (`hook/drive/view_menu.rs`): the render mode and the
 //! viewport flags its rows set.
 
-use concinnity_core::components::FrameInput;
+use concinnity_engine::components::FrameInput;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::hook;

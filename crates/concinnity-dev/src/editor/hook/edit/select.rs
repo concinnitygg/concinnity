@@ -3,7 +3,7 @@
 //! (or, for origin, a fresh cook so the grouping matches the outliner) and
 //! replaces the selection with what comes back.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::EditorHook;

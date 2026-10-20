@@ -6,8 +6,8 @@
 //! and the gutter marks the lines its diagnostics name. The reference column
 //! (`shader_reference_panel.rs`) sits at the right, beside the text.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
 
 use super::registry::PanelKey;
 use super::shader_diagnostics::{Status, Tone};
@@ -365,9 +365,9 @@ fn place_header(world: &mut World, view: &SourceView<'_>, o: [f32; 2], w: f32, d
 mod tests {
     use super::*;
     use crate::editor::panels::shader_reference::{RefRow, Reference};
-    use concinnity_core::components::TextLabel;
-    use concinnity_core::ecs::asset_id::AssetId;
-    use concinnity_core::render::shader::programs::vocabulary::ENTRIES;
+    use concinnity_engine::components::TextLabel;
+    use concinnity_engine::ecs::asset_id::AssetId;
+    use concinnity_engine::render::shader::programs::vocabulary::ENTRIES;
 
     const M: Metrics = Metrics {
         line_h: 20.0,

@@ -4,9 +4,9 @@
 // records. A frame's copy is rewritten only after a row changed.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{GpuMaterialParams, MATERIAL_PARAM_COUNT};
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::material_params::MaterialParamTable;
+use concinnity_engine::gfx::render_types::{GpuMaterialParams, MATERIAL_PARAM_COUNT};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::material_params::MaterialParamTable;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;

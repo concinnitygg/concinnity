@@ -13,9 +13,9 @@
 //! covered. The spot slices draw through the same `draw_shadow_view` from their
 //! own indirect buffer.
 
-use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::depth::DEPTH_CLEAR;
+use concinnity_engine::gfx::render_types::NUM_SHADOW_CASCADES;
+use concinnity_engine::render::depth::DEPTH_CLEAR;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 

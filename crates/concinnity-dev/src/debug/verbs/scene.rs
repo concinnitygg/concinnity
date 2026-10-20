@@ -4,11 +4,11 @@
 //! through the real path; the reply fires once the event is sent, and a name
 //! that does not resolve is a clean error.
 
-use concinnity_core::components::{
+use concinnity_engine::components::{
     DespawnRequest, ReparentRequest, SpawnRequest, StoryCommand, Transform,
 };
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
 
 use crate::debug::call::Call;
@@ -223,7 +223,7 @@ mod tests {
     use super::*;
     use crate::debug::verbs::testing::Engine;
     use crate::test_support;
-    use concinnity_core::ecs::EventCursor;
+    use concinnity_engine::ecs::EventCursor;
     use serde_json::json;
 
     fn queued_reply() -> Reply {
@@ -277,7 +277,7 @@ mod tests {
         assert_eq!(
             seen[0]
                 .parent
-                .and_then(concinnity_core::components::EntityTarget::name),
+                .and_then(concinnity_engine::components::EntityTarget::name),
             Some(AssetId(1))
         );
 

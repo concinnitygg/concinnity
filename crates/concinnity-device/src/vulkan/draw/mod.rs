@@ -12,22 +12,22 @@ mod stages;
 
 use ash::vk;
 use concinnity_core::fanout::FanOutTiming;
-use concinnity_core::gfx::lod;
-use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::backend::FrameParams;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::backend::pass_timing;
-use concinnity_core::render::frame::plan::{
+use concinnity_engine::gfx::lod;
+use concinnity_engine::gfx::render_types::{LightUniforms, ShadowUniforms};
+use concinnity_engine::render::backend::FrameParams;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::pass_timing;
+use concinnity_engine::render::frame::plan::{
     CameraInputs, EffectInputs, FrameDevice, FramePlan, PlanInputs, SurfaceInputs, camera_inputs,
 };
-use concinnity_core::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
-use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::temporal::model_history::HistoryMode;
+use concinnity_engine::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
+use concinnity_engine::render::scene_state::SceneState;
+use concinnity_engine::render::temporal::model_history::HistoryMode;
 // `ViewUniforms` (the std140 main-pass `ViewBlock` UBO) is a GPU-free layout
 // struct that lives in `core::render`; re-export it so
 // `crate::vulkan::draw::ViewUniforms` is unchanged for the passes that fill it.
-pub(in crate::vulkan) use concinnity_core::render::uniforms::ViewUniforms;
+pub(in crate::vulkan) use concinnity_engine::render::uniforms::ViewUniforms;
 
 use super::context::VkContext;
 use super::graph_exec::GraphFrameParams;
@@ -35,8 +35,8 @@ use super::graph_exec::GraphFrameParams;
 impl VkContext {
     // Where this frame's draws growing grass route: the grass twins, and where
     // the blades start handing the field to the canopy.
-    fn grass_route(&self) -> concinnity_core::render::record_pack::GrassRoute {
-        concinnity_core::render::record_pack::GrassRoute {
+    fn grass_route(&self) -> concinnity_engine::render::record_pack::GrassRoute {
+        concinnity_engine::render::record_pack::GrassRoute {
             twins: self.cull.world_pipelines.grass_twins(),
             far_start: self.grass_lod.map_or(0.0, |l| l.fade_start()),
         }
@@ -74,7 +74,7 @@ impl VkContext {
     // bake shares that body and deliberately leaves its instance tail zeroed,
     // which disables instances in a bake.
     fn patch_instance_lod_into(&self, buf: &super::allocator::PooledBuffer, cam_pos: [f32; 3]) {
-        use concinnity_core::gfx::render_types::{GpuDrawArgs, draw_args_flags};
+        use concinnity_engine::gfx::render_types::{GpuDrawArgs, draw_args_flags};
         if !self.instanced.any_lod {
             return;
         }
@@ -113,11 +113,11 @@ impl VkContext {
         cam_pos: [f32; 3],
         history: HistoryMode,
     ) -> FanOutTiming {
-        use concinnity_core::gfx::render_types::{
+        use concinnity_engine::gfx::render_types::{
             GpuDrawArgs, GpuObjectData, albedo_pool_index, draw_args_bucket_bits, draw_args_flags,
             normal_pool_index, pack_skinned_record,
         };
-        use concinnity_core::render::record_pack::{
+        use concinnity_engine::render::record_pack::{
             PackView, StaticPack, draw_bucket, pool_object_record,
         };
         let texture_count = u32::saturating_from(self.scene.textures.len());
@@ -570,7 +570,7 @@ impl FrameDevice for VkContext {
         self.size_grass([extent.width, extent.height], frame_idx)?;
         self.grass_lod = self.grass.as_ref().map(|g| {
             g.field.lod_view(
-                concinnity_core::render::environment::grass::lod::focal_length(
+                concinnity_engine::render::environment::grass::lod::focal_length(
                     extent.height,
                     params.fov_y_radians,
                 ),

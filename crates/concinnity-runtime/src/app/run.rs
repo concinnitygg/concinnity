@@ -12,9 +12,9 @@
 //! nor remotely driven. The interpreted (`cn debug`) path with hot-reload and
 //! the command channel lives in the editor crate.
 
-use concinnity_core::ecs::ScheduleMode;
-use concinnity_core::error::WorldError;
-use concinnity_core::render::backend::error::RenderError;
+use concinnity_engine::ecs::ScheduleMode;
+use concinnity_engine::error::WorldError;
+use concinnity_engine::render::backend::error::RenderError;
 use concinnity_host::store::paths::StateTree;
 use tracing_subscriber::EnvFilter;
 
@@ -22,7 +22,7 @@ use crate::app::blob::BlobSource;
 use crate::app::runloop;
 use crate::app::runtime::Runtime;
 use crate::app::startup_error::StartupError;
-use concinnity_core::launch::{LaunchRequest, PipelineMode};
+use concinnity_engine::launch::{LaunchRequest, PipelineMode};
 
 // Default tracing filter applied when RUST_LOG is unset: info for debug
 // builds, warn for release builds. A RUST_LOG value always takes precedence.
@@ -221,7 +221,7 @@ fn report_render_failure(cause: &RenderError) {
 fn finish_frame_captures(runtime: &mut Runtime) {
     if let Some(backend) = runtime
         .world_mut()
-        .resource_mut::<concinnity_core::ecs::ActiveRenderBackend>()
+        .resource_mut::<concinnity_engine::ecs::ActiveRenderBackend>()
         .and_then(|slot| slot.0.as_mut())
     {
         backend.finish_captures();

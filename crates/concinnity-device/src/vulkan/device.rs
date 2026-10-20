@@ -2,7 +2,7 @@
 
 use ash::{Device, vk};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use std::ffi::{CStr, CString, c_void};
 
 use super::error::map_vk_result;
@@ -606,7 +606,7 @@ fn enable_bindless_features(head: *mut c_void) {
 
 // The requested HDR sample count clamped to what this device reports for the
 // HDR format. `requested` is 1 whenever a temporal technique is active (see
-// `concinnity_core::components::hdr_sample_count`), which collapses the whole
+// `concinnity_engine::components::hdr_sample_count`), which collapses the whole
 // main pass to the single-sample path: no resolve attachment, and the color
 // image is the scene spine.
 pub(super) fn resolve_sample_count(

@@ -1,12 +1,12 @@
 // Payload residency: which blob payload sections are in memory right now.
 //
 // This is runtime memory policy, not format, so it sits here rather than in
-// `concinnity_core::blob` -- it deals in file paths and lazy disk reads, both of
+// `concinnity_engine::blob` -- it deals in file paths and lazy disk reads, both of
 // which that module is deliberately free of.
 
-use concinnity_core::ecs::PayloadLocator;
-use concinnity_core::error::PayloadError;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::ecs::PayloadLocator;
+use concinnity_engine::error::PayloadError;
 
 // State of one blob file's payload section.
 //
@@ -180,7 +180,7 @@ impl BlobData {
 
 // The runtime `PayloadStore` a `PipelineContext` hands to systems. A thin
 // adapter over the inherent API so the pure ECS mechanism names no blob type.
-impl concinnity_core::ecs::PayloadStore for BlobData {
+impl concinnity_engine::ecs::PayloadStore for BlobData {
     fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], PayloadError> {
         Self::read(self, locator)
     }
@@ -201,8 +201,8 @@ impl concinnity_core::ecs::PayloadStore for BlobData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::SCHEMA_VERSION;
-    use concinnity_core::blob::{BlobMeta, encode_cnb};
+    use concinnity_engine::SCHEMA_VERSION;
+    use concinnity_engine::blob::{BlobMeta, encode_cnb};
 
     fn locator(blob_index: u32, offset: u64, len: u64) -> PayloadLocator {
         PayloadLocator {

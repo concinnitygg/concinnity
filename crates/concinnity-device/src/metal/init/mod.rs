@@ -23,13 +23,13 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use crate::metal::canopy::CanopyTables;
-use concinnity_core::gfx::render_types::{ClusterParams, PostProcessParams};
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::backend::feature_plan::{BackendFacts, FeaturePlan};
-use concinnity_core::render::backend::init::BackendInit;
-use concinnity_core::render::scene_state::{DrawList, SceneState};
-use concinnity_core::render::shader::reload::ShaderReload;
-use concinnity_core::settings::ResolvedGraphics;
+use concinnity_engine::gfx::render_types::{ClusterParams, PostProcessParams};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan};
+use concinnity_engine::render::backend::init::BackendInit;
+use concinnity_engine::render::scene_state::{DrawList, SceneState};
+use concinnity_engine::render::shader::reload::ShaderReload;
+use concinnity_engine::settings::ResolvedGraphics;
 
 use self::effects::EffectSettings;
 use super::context::{MtlContext, MtlHardware, debug_assert_main_thread};
@@ -136,7 +136,7 @@ impl Features {
 
 impl MtlContext {
     // Create a window and Metal render pipeline from the assembled backend
-    // inputs (see `concinnity_core::render::backend::init::BackendInit` for per-field docs).
+    // inputs (see `concinnity_engine::render::backend::init::BackendInit` for per-field docs).
     // The shadow pass is engine-internal and enabled whenever
     // `shadows.map_size > 0`.
     pub(crate) fn new(init: BackendInit<'_>) -> RenderResult<Self> {
@@ -243,7 +243,7 @@ impl MtlContext {
                 scene.env_map.irradiance = cubes.irradiance;
                 scene.env_map.prefilter = cubes.prefilter;
                 scene.env_map.prefilter_mip_count =
-                    concinnity_core::render::environment::atmosphere::SKY_CUBE_PLAN.mips();
+                    concinnity_engine::render::environment::atmosphere::SKY_CUBE_PLAN.mips();
                 Some(state)
             }
 
@@ -346,7 +346,7 @@ impl MtlContext {
             graph_scratch: None,
             instanced,
             scene,
-            lights: concinnity_core::render::light::state::LightState::new(
+            lights: concinnity_engine::render::light::state::LightState::new(
                 light_uniforms,
                 &local_lights,
                 1,
@@ -362,7 +362,7 @@ impl MtlContext {
             composite,
             bloom,
             post_process: features.post_process,
-            pre_exposure: concinnity_core::gfx::auto_exposure::PreExposure::UNIT,
+            pre_exposure: concinnity_engine::gfx::auto_exposure::PreExposure::UNIT,
             taa,
             upscale,
             ssao,

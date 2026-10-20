@@ -12,8 +12,8 @@
 
 use super::error::allocation_failed;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::buffers::growth::grow_capacity;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::buffers::growth::grow_capacity;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
@@ -118,12 +118,12 @@ pub(super) unsafe fn records_mut<T: bytemuck::AnyBitPattern + bytemuck::NoUninit
     let bytes = len.saturating_mul(size_of::<T>());
     let base = buffer.contents().as_ptr().cast::<T>();
     if bytes > buffer.length() || !base.is_aligned() {
-        return Err(concinnity_core::render::backend::error::RenderError::Other(
-            format!(
+        return Err(
+            concinnity_engine::render::backend::error::RenderError::Other(format!(
                 "record view of {bytes} bytes does not fit or align in a {}-byte ring buffer",
                 buffer.length()
-            ),
-        ));
+            )),
+        );
     }
     // SAFETY: `buffer` is shared storage, so `contents()` is a live CPU mapping of
     // `length()` bytes, which the check above proved covers `len` aligned records

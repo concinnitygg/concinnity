@@ -7,7 +7,7 @@
 
 use concinnity_cook::authoring::refs::retarget_references;
 use concinnity_cook::authoring::world::find_entry;
-use concinnity_core::components::ShaderStage;
+use concinnity_engine::components::ShaderStage;
 use std::path::{Path, PathBuf};
 
 use crate::editor::hook::EditorHook;

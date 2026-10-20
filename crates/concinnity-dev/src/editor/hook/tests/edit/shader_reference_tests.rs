@@ -2,9 +2,9 @@
 //! a name clicked goes in at the caret, a heading folds its group, the toggle
 //! hides the column, and the wheel over it scrolls its rows.
 
-use concinnity_core::components::ShaderStage;
-use concinnity_core::ecs::World;
-use concinnity_core::render::shader::programs::vocabulary::ENTRIES;
+use concinnity_engine::components::ShaderStage;
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::shader::programs::vocabulary::ENTRIES;
 use std::path::Path;
 
 use crate::editor::hook::EditorHook;

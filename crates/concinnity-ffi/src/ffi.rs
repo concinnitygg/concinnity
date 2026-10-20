@@ -14,9 +14,9 @@ use core::ptr::NonNull;
 use std::os::raw::{c_char, c_int};
 use std::sync::{Mutex, OnceLock};
 
-use concinnity_core::ecs::StepResult;
-use concinnity_core::error::WorldError;
-use concinnity_core::render::backend::init::EmbeddedSurface;
+use concinnity_engine::ecs::StepResult;
+use concinnity_engine::error::WorldError;
+use concinnity_engine::render::backend::init::EmbeddedSurface;
 use concinnity_host::store::paths::StateTree;
 use concinnity_runtime::{Runtime, StartupError};
 
@@ -379,7 +379,7 @@ mod tests {
         let unreadable = StartupError::UnreadableData {
             blob: blob.clone(),
             cause: concinnity_runtime::WorldLoadError::Asset(
-                concinnity_core::error::AssetError::UnknownComponent { discriminant: 9 },
+                concinnity_engine::error::AssetError::UnknownComponent { discriminant: 9 },
             ),
         };
 

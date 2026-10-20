@@ -1,7 +1,7 @@
 // Resolves the `setting` string a settings-row asset (OptionSelect, Slider)
 // authors into the engine's typed key, once, at expansion time.
 
-use concinnity_core::settings::{SettingKey, SettingKind};
+use concinnity_engine::settings::{SettingKey, SettingKind};
 
 // The setting row asset `name` (an `asset_type`) binds. A blank key, a key that
 // names no setting, or a setting of another kind than `kind` is a build error

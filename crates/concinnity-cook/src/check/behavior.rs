@@ -14,7 +14,7 @@
 
 use serde_json::Value;
 
-use concinnity_core::components::SceneTransition;
+use concinnity_engine::components::SceneTransition;
 
 use crate::authoring::registry::{RegisteredType, ScopeResolution};
 use crate::check::fault::{Fault, Locate, Step, field};

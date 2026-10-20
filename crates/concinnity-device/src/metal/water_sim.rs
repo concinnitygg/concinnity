@@ -1,4 +1,4 @@
-//! The simulated ocean on Metal (see `concinnity_core::render::environment::water::ocean`):
+//! The simulated ocean on Metal (see `concinnity_engine::render::environment::water::ocean`):
 //! the cascade arrays the water draw samples, and the `WaterSim` node that
 //! fills them each frame from the shared `water_fft.hlsl` kernels. Every
 //! resource here is device-created and hazard-tracked, and the kernels run
@@ -8,12 +8,12 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::environment::water::ocean::OceanPlan;
-use concinnity_core::render::environment::water::ocean::foam::FoamClock;
-use concinnity_core::render::environment::water::ocean::initial::initial_spectrum;
-use concinnity_core::render::render_graph::PassId;
-use concinnity_core::render::uniforms::ocean::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::environment::water::ocean::OceanPlan;
+use concinnity_engine::render::environment::water::ocean::foam::FoamClock;
+use concinnity_engine::render::environment::water::ocean::initial::initial_spectrum;
+use concinnity_engine::render::render_graph::PassId;
+use concinnity_engine::render::uniforms::ocean::{
     OCEAN_FFT_THREADS, OCEAN_MIP_GROUP, OceanFftParams, ocean_mip_groups, ocean_mip_levels,
 };
 use objc2::rc::Retained;

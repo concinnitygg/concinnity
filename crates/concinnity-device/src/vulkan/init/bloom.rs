@@ -2,8 +2,8 @@
 //! one, at the output (swapchain) resolution.
 
 use ash::vk;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::post::bloom::BloomPass;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::bloom::BloomPass;
 
 use super::InitGpu;
 use super::effects::shared_post_device;

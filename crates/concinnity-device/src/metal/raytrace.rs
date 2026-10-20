@@ -40,14 +40,14 @@
 //! when to update -- is the shared `AccelBook`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::buffers::retire_pool::RetirePool;
-use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
-use concinnity_core::render::rt_accel::geom::RtDynamicMode;
-use concinnity_core::render::rt_accel::refit::{BlasUpdate, SkinnedShape};
-use concinnity_core::render::rt_accel::{
+use concinnity_engine::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::render::post::rt_reflections::RtReflectionSettings;
+use concinnity_engine::render::rt_accel::geom::RtDynamicMode;
+use concinnity_engine::render::rt_accel::refit::{BlasUpdate, SkinnedShape};
+use concinnity_engine::render::rt_accel::{
     AccelBook, EmptyHead, FailureStreak, InstanceBlas, RefreshMode, RefreshStep, RtAccelSteps,
     RtUpdate, SeedSet, SlotLiveness, StaticRing, empty_head,
 };
@@ -67,7 +67,7 @@ use objc2_metal::{
 };
 use std::ptr::NonNull;
 // Shared with the Vulkan and DirectX hosts: one `.hlsl` declares it.
-use concinnity_core::render::uniforms::SkinParams;
+use concinnity_engine::render::uniforms::SkinParams;
 
 use super::builtin_shaders::compute_pipeline;
 use super::context::write_buffer_slice;
@@ -1846,7 +1846,7 @@ pub(super) fn upload_buffer<T: Copy>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::gfx::render_types;
+    use concinnity_engine::gfx::render_types;
 
     #[test]
     fn pack_instance_transform_drops_affine_row_and_keeps_columns() {

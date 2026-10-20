@@ -1,6 +1,6 @@
 //! Vulkan-side executor for the render graph. `VkContext::execute_graph`
 //! walks the `CompiledGraph` produced by the shared
-//! `concinnity_core::render::render_graph::build_frame_graph`
+//! `concinnity_engine::render::render_graph::build_frame_graph`
 //! and dispatches each pass to its `encode_*` method. Mirrors the Metal +
 //! DirectX executors: every backend now drives the same builder.
 //!
@@ -31,20 +31,20 @@
 //!     the executor rejects them as graph nodes.
 
 use ash::{Device, vk};
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::{ClusterParams, LineVertex, TextDrawCall};
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::frame::plan::{EffectBlocks, FogBlocks};
-use concinnity_core::render::particles::ParticleFrame;
-use concinnity_core::render::planar_reflection::PlanarFramePlan;
-use concinnity_core::render::render_graph::{
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::{ClusterParams, LineVertex, TextDrawCall};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::frame::plan::{EffectBlocks, FogBlocks};
+use concinnity_engine::render::particles::ParticleFrame;
+use concinnity_engine::render::planar_reflection::PlanarFramePlan;
+use concinnity_engine::render::render_graph::{
     AliasRows, BarrierOp, BarrierTable, CompiledGraph, CompiledPass, GraphResourceClass, PassId,
     PassRecorder, PassScratch, execute_passes,
 };
-use concinnity_core::render::temporal::reactive_mask::{ReactiveMaskPlan, ReactiveWrite};
-use concinnity_core::render::uniforms::GBufferView;
-use concinnity_core::render::{backend::pass_timing, render_graph};
+use concinnity_engine::render::temporal::reactive_mask::{ReactiveMaskPlan, ReactiveWrite};
+use concinnity_engine::render::uniforms::GBufferView;
+use concinnity_engine::render::{backend::pass_timing, render_graph};
 use concinnity_host::thread::jobs;
 
 use super::barrier_translate::{VkResting, vk_restore, vk_transition};
@@ -450,7 +450,9 @@ fn emit_pass_epilogue(
 #[cfg(debug_assertions)]
 fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry) {
     use super::barrier_translate::vk_state;
-    use concinnity_core::render::render_graph::{ResourceState, barrier_coverage_gaps_for_driven};
+    use concinnity_engine::render::render_graph::{
+        ResourceState, barrier_coverage_gaps_for_driven,
+    };
 
     let driven: Vec<bool> = registry.driven().collect();
     let gaps = barrier_coverage_gaps_for_driven(graph, &driven);
@@ -524,7 +526,7 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry
 // the frustum + camera position.
 pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // What may be trampling the grass this frame.
-    pub grass_benders: &'a [concinnity_core::render::environment::grass::GrassBender],
+    pub grass_benders: &'a [concinnity_engine::render::environment::grass::GrassBender],
     pub cmd: vk::CommandBuffer,
     pub image_index: u32,
     pub frame_idx: usize,

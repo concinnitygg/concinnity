@@ -316,9 +316,9 @@ mod tests {
         PressureSnapshot,
     };
     use crate::debug::verbs::testing::ask;
-    use concinnity_core::profile::RenderStats;
-    use concinnity_core::render::streaming::pools::StreamingStats;
-    use concinnity_core::shutdown::ShutdownToken;
+    use concinnity_engine::profile::RenderStats;
+    use concinnity_engine::render::streaming::pools::StreamingStats;
+    use concinnity_engine::shutdown::ShutdownToken;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 

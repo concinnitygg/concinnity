@@ -27,11 +27,11 @@
 
 use super::error::allocation_failed;
 use concinnity_core::math::narrow_f32;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::planar_reflection::{
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::planar_reflection::{
     self, MirrorFrame, MirrorView, PLANAR_CROP_MARGIN, PlanarReflectors,
 };
-use concinnity_core::render::probe::radiance::FaceStorage;
+use concinnity_engine::render::probe::radiance::FaceStorage;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{

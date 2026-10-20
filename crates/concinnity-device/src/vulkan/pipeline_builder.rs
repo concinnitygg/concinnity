@@ -9,12 +9,12 @@
 
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard};
 
-use concinnity_core::components::ShaderPrograms;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
-use concinnity_core::render::sdf::programs::SdfPrograms;
-use concinnity_core::render::shader::programs::raymarch::VolumeFlags;
-use concinnity_core::render::shader::programs::surface::GrassShading;
+use concinnity_engine::components::ShaderPrograms;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{PipelineBuilder, PreparedPipelines};
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
+use concinnity_engine::render::shader::programs::surface::GrassShading;
 
 use super::owned::VkDevice;
 use super::pipeline::{BucketPipelineTargets, BucketPipelines, build_world_shader_pipeline};

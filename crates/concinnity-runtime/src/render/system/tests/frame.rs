@@ -36,7 +36,7 @@ fn jump_to_undeclared_scene_warns_and_changes_nothing() {
         .events_mut::<SceneCommand>()
         .send(SceneCommand {
             scene: AssetId(99),
-            transition: concinnity_core::components::SceneTransition::Cut,
+            transition: concinnity_engine::components::SceneTransition::Cut,
         });
     let captured = Captured::default();
     let writer = captured.clone();
@@ -157,7 +157,7 @@ fn window_close_stops_after_wait_idle() {
 // next frame draws it instead, and only the drawn one is logged.
 #[test]
 fn a_dropped_frame_hands_its_history_reset_to_the_next() {
-    use concinnity_core::render::temporal::history_reset::{
+    use concinnity_engine::render::temporal::history_reset::{
         HistoryResetCauses, PendingHistoryReset,
     };
 
@@ -275,7 +275,7 @@ fn pipelined_max_frames_counts_frames_sent() {
 // the schedule use.
 #[test]
 fn system_trait_delegates_to_init_and_step() {
-    use concinnity_core::ecs::System;
+    use concinnity_engine::ecs::System;
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
     let mut gs = GraphicsSystem {
@@ -284,7 +284,7 @@ fn system_trait_delegates_to_init_and_step() {
     };
     {
         let mut ctx = world.context();
-        concinnity_core::ecs::decompose::run(&mut ctx);
+        concinnity_engine::ecs::decompose::run(&mut ctx);
         gs.init(&mut ctx);
     }
     assert!(
@@ -328,7 +328,7 @@ fn a_step_without_a_parked_backend_finishes_the_system() {
     let (_state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
     let mut gs = init_graphics(&mut world, hooks);
-    concinnity_core::ecs::ActiveRenderBackend::take(world.context().resources)
+    concinnity_engine::ecs::ActiveRenderBackend::take(world.context().resources)
         .expect("backend was parked");
 
     assert_eq!(step(&mut gs, &mut world), StepResult::Done);

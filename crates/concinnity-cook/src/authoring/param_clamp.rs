@@ -2,7 +2,7 @@
 //! outside its field's `#[asset(min = ..., max = ...)]` range is moved to the
 //! nearest bound, and the load reports each one rather than failing.
 
-use concinnity_core::ecs::AssetFields;
+use concinnity_engine::ecs::AssetFields;
 
 /// `value` with every ranged field clamped into its range, passing `warn` one
 /// message per value that moved.
@@ -27,7 +27,7 @@ pub(crate) fn clamp_authored<T: AssetFields>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{IndirectLighting, Shadows};
+    use concinnity_engine::components::{IndirectLighting, Shadows};
 
     #[test]
     fn an_out_of_range_value_is_clamped_with_one_warning_each() {

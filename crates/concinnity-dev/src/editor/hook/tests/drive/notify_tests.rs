@@ -3,7 +3,7 @@
 //! drive settles into once the queue empties, and the new-fault latch that
 //! keeps a behavior fault from toasting every frame.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::behavior::panel::Status;
 use crate::editor::hook::tests::fixtures::hook;

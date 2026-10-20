@@ -10,10 +10,10 @@
 // write state.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::probe::capture::PrefilterPlan;
-use concinnity_core::render::record_pack::StaticSlots;
-use concinnity_core::render::uniforms::{ProbeUniforms, grown_probe_capacity};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::probe::capture::PrefilterPlan;
+use concinnity_engine::render::record_pack::StaticSlots;
+use concinnity_engine::render::uniforms::{ProbeUniforms, grown_probe_capacity};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -318,7 +318,7 @@ impl ProbeSetGpu {
         alloc: &super::allocator::DeviceAllocator,
         frames: usize,
     ) -> RenderResult<Self> {
-        let capacity = concinnity_core::render::uniforms::DEFAULT_PROBE_RECORD_CAPACITY;
+        let capacity = concinnity_engine::render::uniforms::DEFAULT_PROBE_RECORD_CAPACITY;
         Ok(Self {
             cubes: None,
             stand_in: ProbeCubeArray::stand_in(device)?,

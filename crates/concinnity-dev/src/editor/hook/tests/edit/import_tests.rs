@@ -3,8 +3,8 @@
 //! environment map an HDR resolves to and the retarget of an existing one, and
 //! the relative path the native browse fills in.
 
-use concinnity_core::components::InputKey;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::InputKey;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{entry, entry_target, hook, key_input};

@@ -12,8 +12,8 @@
 //! follows the resolution (the bloom chain's octaves) moves no other slot.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::context::{BACK_BUFFERS, DxContext};
@@ -23,7 +23,7 @@ use crate::directx::texture::{
     HDR_FORMAT, create_hdr_color_target, create_hdr_resolve_target, create_main_depth_texture,
     write_hdr_srv,
 };
-use concinnity_core::render::post::device::PostExtent;
+use concinnity_engine::render::post::device::PostExtent;
 
 impl DxContext {
     // Poll the window state and, if the client area resized since the last

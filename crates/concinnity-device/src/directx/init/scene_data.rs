@@ -1,10 +1,10 @@
 //! Scene data: the probe-set, view, light and shadow constant-buffer rings, the
 //! static local-light buffer, and the clustered light binning.
 
-use concinnity_core::gfx::render_types::{GpuLight, LightUniforms, ShadowUniforms};
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::shadow::csm;
-use concinnity_core::render::uniforms::{ProbeSet, ViewUniforms};
+use concinnity_engine::gfx::render_types::{GpuLight, LightUniforms, ShadowUniforms};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shadow::csm;
+use concinnity_engine::render::uniforms::{ProbeSet, ViewUniforms};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::InitGpu;
@@ -182,7 +182,7 @@ pub(super) fn build_uniforms(
         light_ubo_resources,
         light_ubo_ptrs,
         local_light_buffer,
-        lights: concinnity_core::render::light::state::LightState::new(
+        lights: concinnity_engine::render::light::state::LightState::new(
             light_uniforms,
             local_lights,
             frames,

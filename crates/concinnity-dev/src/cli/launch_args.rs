@@ -3,7 +3,7 @@
 
 use clap::builder::PossibleValuesParser;
 use clap::{Arg, ArgAction, ArgMatches, Command};
-use concinnity_core::launch::{LAUNCH_FLAGS, LaunchArgs};
+use concinnity_engine::launch::{LAUNCH_FLAGS, LaunchArgs};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LaunchArgsArg(pub(crate) LaunchArgs);
@@ -61,7 +61,7 @@ impl clap::FromArgMatches for LaunchArgsArg {
 mod tests {
     use super::*;
     use clap::{CommandFactory, Parser};
-    use concinnity_core::settings::QualityPreset;
+    use concinnity_engine::settings::QualityPreset;
 
     #[derive(Debug, Parser)]
     struct Probe {

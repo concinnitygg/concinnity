@@ -10,9 +10,9 @@
 //! file's removes that file, and a field's opens it, selects its volumes or
 //! deletes them.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
 
 use super::asset_list::{self, ROW_H};
 use super::registry::PanelKey;
@@ -356,8 +356,8 @@ fn place_row(world: &mut World, slot: usize, row: &Row, rect: [f32; 4], mouse: [
 mod tests {
     use super::*;
     use crate::editor::panels::shader_source::SourceKey;
-    use concinnity_core::components::{ShaderStage, TextLabel};
-    use concinnity_core::ecs::asset_id::AssetId;
+    use concinnity_engine::components::{ShaderStage, TextLabel};
+    use concinnity_engine::ecs::asset_id::AssetId;
 
     fn injected_world() -> World {
         ids().test_world()

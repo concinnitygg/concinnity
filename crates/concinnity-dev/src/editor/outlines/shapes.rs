@@ -4,10 +4,10 @@
 //! renderer's line pass; oriented shapes take a column-major model matrix
 //! (`Transform::model_matrix` convention, `m[col][row]`).
 
-use concinnity_core::geometry::glass_quad::plane_basis;
-use concinnity_core::gfx::lines::Line;
 use concinnity_core::math::vec3::{add, scale};
-use concinnity_core::transform::mat4_transform_point;
+use concinnity_engine::geometry::glass_quad::plane_basis;
+use concinnity_engine::gfx::lines::Line;
+use concinnity_engine::transform::mat4_transform_point;
 
 // Full-circle resolution. High enough that a large range sphere still reads
 // as a curve, cheap enough to ignore (a circle is 32 segments).
@@ -338,7 +338,7 @@ pub(crate) fn push_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::Transform;
+    use concinnity_engine::components::Transform;
 
     const STROKE: Stroke = Stroke {
         color: [1.0, 0.5, 0.0, 1.0],

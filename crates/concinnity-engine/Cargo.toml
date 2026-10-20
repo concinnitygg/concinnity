@@ -1,0 +1,54 @@
+[package]
+name = "concinnity-engine"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "The no_std Concinnity engine: ECS, components and their registry, every system, and render preparation"
+readme = "README.md"
+keywords = ["gamedev", "graphics", "ecs", "concinnity"]
+categories = ["game-engines", "no-std"]
+include = [
+    "/README.md",
+    "/src",
+    "/tests",
+    "/build.rs",
+]
+
+[features]
+# Per-size-class allocation histograms (see concinnity-core's `detail`).
+detail = ["concinnity-core/detail"]
+# The authored schema's static description, rustdoc included, for authoring tools.
+schema = ["dep:erased-serde"]
+# A do-nothing and a recording `RenderBackend` for other crates' tests.
+test-support = []
+
+[dependencies]
+
+bytemuck = { workspace = true, features = ["derive"] }
+concinnity-core = { workspace = true }
+concinnity-derive = { workspace = true }
+erased-serde = { version = "0.4", default-features = false, features = ["alloc"], optional = true }
+fontdue = { version = "0.9", default-features = false, features = ["hashbrown", "simd"] }
+hashbrown = { workspace = true }
+libm = "0.2"
+postcard = { workspace = true, features = ["alloc"] }
+serde = { workspace = true, features = ["alloc", "derive"] }
+serde_bytes = { version = "0.11", default-features = false, features = ["alloc"] }
+spin = { version = "0.12.3", default-features = false, features = ["once", "spin_mutex"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+concinnity-core = { workspace = true, features = ["test-support"] }
+ciborium = { workspace = true }
+rayon = { workspace = true }
+serde_json = { workspace = true, features = ["preserve_order"] }
+
+[build-dependencies]
+rayon = { workspace = true }
+
+[lints]
+workspace = true

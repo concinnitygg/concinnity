@@ -149,9 +149,9 @@ fn key_from_parts(
     let mut hasher = Sha256::new();
     // Covers the runtime half of the pipeline the binary identity in the
     // segment header does not: the payload serializers in
-    // `concinnity_core::bake`, and the asset schema the baked records inside a
+    // `concinnity_engine::bake`, and the asset schema the baked records inside a
     // payload encode against.
-    hasher.update(concinnity_core::SCHEMA_VERSION.to_le_bytes());
+    hasher.update(concinnity_engine::SCHEMA_VERSION.to_le_bytes());
     hasher.update([discriminant]);
 
     let args_bytes = serde_json::to_vec(args).unwrap_or_default();
@@ -234,7 +234,7 @@ fn resolve_source(s: &str, ctx: &BuildCtx<'_>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::platform::{Platform, PlatformSet};
+    use concinnity_engine::platform::{Platform, PlatformSet};
     use serde_json::json;
 
     fn ctx() -> BuildCtx<'static> {

@@ -13,7 +13,7 @@ pub(crate) use image::{CaptureImage, save_png};
 pub(crate) use readback::Mapped;
 pub(crate) use writer::{PendingCapture, RetiredCapture};
 
-use concinnity_core::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 
 use readback::ReadbackPool;
 use writer::CaptureWriter;
@@ -160,7 +160,7 @@ impl<B: Clone, T> FrameCaptures<B, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::gfx::image_decode::PixelLayout;
+    use concinnity_engine::gfx::image_decode::PixelLayout;
 
     static BYTES: [u8; 8] = [0; 8];
 

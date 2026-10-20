@@ -4,7 +4,7 @@
 //! stack reads the composite's output as the scene every frame, so the RT node
 //! keeps writing it while the BVH is missing. The roughness blur
 //! and the composite -- their pipelines, their targets and both draws -- are
-//! written once in `concinnity_core::render::post::reflection_composite` and
+//! written once in `concinnity_engine::render::post::reflection_composite` and
 //! reach Vulkan through `VkPostDevice`.
 //!
 //! Both reflection paths feed one composite: `encode_ssr_resolve` /
@@ -12,11 +12,11 @@
 //! `encode_reflection_composite` with that target's view.
 
 use ash::vk;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::post::reflection_composite::{
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::reflection_composite::{
     ReflectionCompositeInputs, ReflectionCompositePass,
 };
-use concinnity_core::render::post::reflection_path::ReflectionPath;
+use concinnity_engine::render::post::reflection_path::ReflectionPath;
 
 use super::super::context::VkContext;
 use super::super::texture::GpuImage;

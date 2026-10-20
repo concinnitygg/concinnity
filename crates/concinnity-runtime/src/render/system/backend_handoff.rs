@@ -1,17 +1,17 @@
 // The render backend's construction, and the handoff of it and the init-built
 // runtime state to the world's shared resources.
 
-use concinnity_core::ecs::PipelineContext;
-use concinnity_core::gfx::render_types::SkinnedIndex;
-use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::backend::init::BackendInit;
-use concinnity_core::render::environment::volumetric_fog::{FogSettings, PushedFogSettings};
-use concinnity_core::render::frame::queues::{ActiveRenderQueues, RenderQueues};
-use concinnity_core::render::overlay::OverlayAssets;
-use concinnity_core::render::scene::flow::ActiveSceneFlow;
-use concinnity_core::render::slots::render_slots::RenderSlots;
-use concinnity_core::render::world_load::source_maps::TextureNameSlots;
+use concinnity_engine::ecs::PipelineContext;
+use concinnity_engine::gfx::render_types::SkinnedIndex;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::BackendInit;
+use concinnity_engine::render::environment::volumetric_fog::{FogSettings, PushedFogSettings};
+use concinnity_engine::render::frame::queues::{ActiveRenderQueues, RenderQueues};
+use concinnity_engine::render::overlay::OverlayAssets;
+use concinnity_engine::render::scene::flow::ActiveSceneFlow;
+use concinnity_engine::render::slots::render_slots::RenderSlots;
+use concinnity_engine::render::world_load::source_maps::TextureNameSlots;
 
 use super::GraphicsSystem;
 use crate::live_edit::hot_reload_sources::HotReloadSources;
@@ -123,7 +123,7 @@ impl GraphicsSystem {
             ),
         }));
 
-        ctx.insert_resource(concinnity_core::ecs::Parked(self.backend.take()));
+        ctx.insert_resource(concinnity_engine::ecs::Parked(self.backend.take()));
         // Beside it, the state tooling edits the running world through: the fog
         // a reload dedupes against, and under hot-reload capture the
         // texture-name map and the source catalogs.

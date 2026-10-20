@@ -12,7 +12,7 @@
 //! state root in target/ so bench runs never touch a real project's state.
 
 use concinnity_cook::{build_pipeline_from_str, prepare_world};
-use concinnity_core::blob::{BlobMeta, WorldManifest, encode_cnb, parse_cnb};
+use concinnity_engine::blob::{BlobMeta, WorldManifest, encode_cnb, parse_cnb};
 use std::fmt;
 
 use crate::support::Bench;
@@ -120,17 +120,17 @@ pub(crate) fn benches(bench: &mut Bench) {
             .map(Vec::as_slice)
             .unwrap_or_default();
         let image =
-            encode_cnb(concinnity_core::SCHEMA_VERSION, &meta, payload).expect("blob encodes");
+            encode_cnb(concinnity_engine::SCHEMA_VERSION, &meta, payload).expect("blob encodes");
 
         bench.run(&bench_name("blob_encode", label), n as u64, || {
-            encode_cnb(concinnity_core::SCHEMA_VERSION, &meta, payload)
+            encode_cnb(concinnity_engine::SCHEMA_VERSION, &meta, payload)
                 .expect("blob encodes")
                 .len()
         });
 
         bench.run(&bench_name("blob_parse", label), n as u64, || {
             let (meta, payload_start) =
-                parse_cnb::<BlobMeta>(concinnity_core::SCHEMA_VERSION, &image)
+                parse_cnb::<BlobMeta>(concinnity_engine::SCHEMA_VERSION, &image)
                     .expect("blob parses");
             (meta.defs.len(), payload_start)
         });

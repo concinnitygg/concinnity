@@ -25,20 +25,22 @@
 //! as the DirectX and Metal hosts.
 
 use ash::vk;
-use concinnity_core::components::GlassPanel;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::buffers::align_up;
-use concinnity_core::render::temporal::reactive_mask::ReactiveWrite;
-pub(in crate::vulkan) use concinnity_core::render::uniforms::TransparentView;
+use concinnity_engine::components::GlassPanel;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::gfx::render_types::RtParams;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::buffers::align_up;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
+pub(in crate::vulkan) use concinnity_engine::render::uniforms::TransparentView;
 // `TransparentView` (the per-frame view UBO) is a GPU-free layout struct that
 // lives in `core::render`; re-export it so the encode path and the graph's
 // view builder can keep naming it through this module.
-use concinnity_core::render::transparent::producer::{self, TransparentProducers, WaterParamsSink};
-use concinnity_core::render::transparent::{SeeThroughMesh, TransparentFramePlan};
-use concinnity_core::render::uniforms::{GlassMeshParams, WaterParams};
+use concinnity_engine::render::transparent::producer::{
+    self, TransparentProducers, WaterParamsSink,
+};
+use concinnity_engine::render::transparent::{SeeThroughMesh, TransparentFramePlan};
+use concinnity_engine::render::uniforms::{GlassMeshParams, WaterParams};
 use std::sync::Mutex;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -60,7 +62,7 @@ use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSetLayout, VkDevice,
 };
-use concinnity_core::planet::Rebase;
+use concinnity_engine::planet::Rebase;
 
 // The live acceleration-structure handles wired into the transparent RT
 // descriptor ring. Passed once at init (`None` when RT is not live at launch)
@@ -91,7 +93,7 @@ pub(in crate::vulkan) struct TransparentRtDynamic {
     pub skinned_indices: vk::Buffer,
 }
 
-pub(in crate::vulkan) use concinnity_core::render::transparent::Producer;
+pub(in crate::vulkan) use concinnity_engine::render::transparent::Producer;
 
 // Per-record GPU state: the static world-space quad (glass) or origin-centered
 // grid (water) VB + IB and one params UBO + descriptor set per frame slot. A
@@ -1237,7 +1239,7 @@ pub(in crate::vulkan) struct TransparentSceneTargets<'a> {
 pub(in crate::vulkan) struct TransparentContent<'a> {
     pub glass_panels: &'a [GlassPanel],
     pub glass_planar_slots: &'a [Option<usize>],
-    pub water_surfaces: &'a [concinnity_core::render::environment::water::WaterBody],
+    pub water_surfaces: &'a [concinnity_engine::render::environment::water::WaterBody],
     pub water_planar_slots: &'a [Option<usize>],
     // The simulated oceans' arrays, `None` for a world with no water.
     pub ocean: Option<OceanViews>,

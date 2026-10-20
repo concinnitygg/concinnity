@@ -7,7 +7,7 @@
 //! `write_mesh_scratch` (used by `cn run`, so the geometry never stays a second
 //! RAM copy past GPU upload).
 
-use concinnity_core::render::streaming::pools::{
+use concinnity_engine::render::streaming::pools::{
     DecodedMesh, DeferredMeshPayload, ItemLoad, decode_deferred_payload, decode_mesh, encode_mesh,
 };
 use std::fs::File;
@@ -156,7 +156,7 @@ pub(crate) fn spawn_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::gfx::mesh_payload::Vertex;
+    use concinnity_engine::gfx::mesh_payload::Vertex;
 
     fn mk_vertex(x: f32) -> Vertex {
         Vertex {

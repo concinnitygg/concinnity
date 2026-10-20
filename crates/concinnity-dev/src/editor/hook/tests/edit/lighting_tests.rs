@@ -3,9 +3,9 @@
 //! parse, the immediate commit a bool toggle makes, the missing singleton an add
 //! row appends, and the focus it yields when it is not frontmost.
 
-use concinnity_core::components::{FrameInput, Sprite};
-use concinnity_core::ecs::World;
 use concinnity_core::math::narrow_f32;
+use concinnity_engine::components::{FrameInput, Sprite};
+use concinnity_engine::ecs::World;
 
 use crate::frame_hook::FrameHook;
 

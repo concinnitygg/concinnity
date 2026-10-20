@@ -1,16 +1,16 @@
 //! Screen-space reflections: the reflection target the SSR and ray-traced
 //! resolves write, and where the resolve's inputs come from this frame. The
 //! resolve itself -- its pipeline and its draw -- is written once in
-//! `concinnity_core::render::post::ssr` and reaches Metal through
+//! `concinnity_engine::render::post::ssr` and reaches Metal through
 //! `MtlPostDevice`; the composite that blends the target over the scene is in
 //! `reflection_composite.rs`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use crate::metal::error::allocation_failed;
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::post::ssr::settings::SsrSettings;
-use concinnity_core::render::post::ssr::{SsrInputs, SsrPass};
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::ssr::settings::SsrSettings;
+use concinnity_engine::render::post::ssr::{SsrInputs, SsrPass};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureUsage};

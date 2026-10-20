@@ -5,9 +5,9 @@
 //! decoders, so these live here in the build crate; the editor's debug server
 //! drives them.
 
-use concinnity_core::components::{MorphDelta, SkinnedVertexData};
-use concinnity_core::geometry::payload_joints_to_defs;
-use concinnity_core::gfx::mesh_payload::{deserialize_skinned, deserialize_with_lods};
+use concinnity_engine::components::{MorphDelta, SkinnedVertexData};
+use concinnity_engine::geometry::payload_joints_to_defs;
+use concinnity_engine::gfx::mesh_payload::{deserialize_skinned, deserialize_with_lods};
 
 use crate::compile::geometry::{
     SkinnedLods, compile_mesh_payload, compile_skinned_mesh_payload_with_lods,
@@ -18,9 +18,9 @@ type LodAlternates = Vec<(f32, Vec<u16>)>;
 
 // Imported skinned mesh: runtime vertices, indices, and the bind-pose skeleton.
 type SkinnedImport = (
-    Vec<concinnity_core::gfx::mesh_payload::SkinnedVertex>,
+    Vec<concinnity_engine::gfx::mesh_payload::SkinnedVertex>,
     Vec<u16>,
-    Vec<concinnity_core::components::SkeletonJoint>,
+    Vec<concinnity_engine::components::SkeletonJoint>,
 );
 
 /// Decode a file-backed `Mesh` primitive from a pre-parsed glTF document the
@@ -47,7 +47,7 @@ pub fn decode_mesh_from_parsed_glb(
     lod_distances: &[f32],
 ) -> Result<
     (
-        Vec<concinnity_core::gfx::mesh_payload::Vertex>,
+        Vec<concinnity_engine::gfx::mesh_payload::Vertex>,
         Vec<u16>,
         LodAlternates,
     ),
@@ -77,7 +77,7 @@ pub struct InlineSkinnedImport {
     /// Triangle indices into `vertices`.
     pub indices: Vec<u16>,
     /// Bind-pose skeleton, parents before children.
-    pub skeleton: Vec<concinnity_core::components::SkeletonJoint>,
+    pub skeleton: Vec<concinnity_engine::components::SkeletonJoint>,
     /// Morph-target names, in target order.
     pub morph_target_names: Vec<String>,
     /// Dense target-major morph deltas (`t * vertices.len() + v`).

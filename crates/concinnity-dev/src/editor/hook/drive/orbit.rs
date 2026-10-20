@@ -5,8 +5,8 @@
 //! capture nor the gameplay input gate -- the cursor stays visible and the
 //! world's camera controller stays frozen.
 
-use concinnity_core::components::{Camera3D, FrameInput};
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{Camera3D, FrameInput};
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hud;
@@ -90,7 +90,7 @@ impl EditorHook {
             cam.yaw = cam_yaw;
             cam.pitch = cam_pitch;
             cam.view_matrix =
-                concinnity_core::gfx::camera::view_matrix(position, cam_yaw, cam_pitch);
+                concinnity_engine::gfx::camera::view_matrix(position, cam_yaw, cam_pitch);
         }
     }
 }

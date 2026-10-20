@@ -3,12 +3,14 @@
 //! sets, and the pipelines of each material-referenced shader bucket.
 
 use ash::vk;
-use concinnity_core::gfx::render_types;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::backend::init::WorldShader;
-use concinnity_core::render::shader::programs::surface::GrassShading;
-use concinnity_core::render::shader::world_pipelines::{BucketPlan, BucketSource, WorldPipelines};
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::WorldShader;
+use concinnity_engine::render::shader::programs::surface::GrassShading;
+use concinnity_engine::render::shader::world_pipelines::{
+    BucketPlan, BucketSource, WorldPipelines,
+};
 
 use super::CullPlan;
 use crate::vulkan::context::{VkDescriptors, VkSceneAssets, VkTargets};

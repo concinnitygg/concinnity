@@ -10,10 +10,10 @@
 //! stamping the texture onto whatever surface fills the box.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::decal::DecalSet;
-use concinnity_core::render::uniforms::DecalView;
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::decal::DecalSet;
+use concinnity_engine::render::uniforms::DecalView;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;

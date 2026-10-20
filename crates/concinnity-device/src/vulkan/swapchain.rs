@@ -3,9 +3,9 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::output::hdr;
-use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::output::hdr;
+use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};
 
 use super::allocator::DeviceAllocator;
 use super::context::{HDR_FORMAT, VkContext, VkTargets};
@@ -808,7 +808,7 @@ pub(super) fn create_swapchain_inner(
         hdr_mode,
         vsync,
     } = config;
-    use concinnity_core::render::output::hdr::{HdrEncoding, HdrOutputMode};
+    use concinnity_engine::render::output::hdr::{HdrEncoding, HdrOutputMode};
     // SAFETY: a property query on a live handle; it only reads.
     let caps = unsafe { surface_loader.get_physical_device_surface_capabilities(pd, surface) }
         .map_err(|e| super::error::map_vk_result(e, "surface caps"))?;

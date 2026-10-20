@@ -2,7 +2,7 @@
 //! unique parent directory of its resolved sources. A bare-filename source has
 //! no parent and is skipped; only the `reload-assets` tool call reaches it.
 
-use concinnity_core::render::world_load::source_maps::{
+use concinnity_engine::render::world_load::source_maps::{
     FileSourced, SdfFieldMap, ShaderSourceMap, SourceMap,
 };
 use std::collections::BTreeSet;
@@ -48,11 +48,11 @@ impl WatchDirs for SdfFieldMap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{SdfVolume, Shader};
-    use concinnity_core::ecs::asset_id::AssetId;
-    use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
-    use concinnity_core::render::backend::init::SdfVolumeSource;
-    use concinnity_core::render::world_load::source_maps::{
+    use concinnity_engine::components::{SdfVolume, Shader};
+    use concinnity_engine::ecs::asset_id::AssetId;
+    use concinnity_engine::gfx::render_types::{DrawIndex, SkinnedIndex};
+    use concinnity_engine::render::backend::init::SdfVolumeSource;
+    use concinnity_engine::render::world_load::source_maps::{
         MeshSourceEntry, MeshSourceMap, SkinnedMeshSourceEntry, SkinnedMeshSourceMap,
         TextureSourceMap,
     };

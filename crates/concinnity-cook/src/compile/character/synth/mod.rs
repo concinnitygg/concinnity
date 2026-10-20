@@ -11,8 +11,8 @@ pub(crate) mod mirror;
 pub(crate) mod surface_offset;
 pub(crate) mod taper;
 
-use concinnity_core::components::{MorphDelta, SkinnedVertexData};
 use concinnity_core::math::vec3;
+use concinnity_engine::components::{MorphDelta, SkinnedVertexData};
 
 use super::frame::BoneFrame;
 use crate::authoring::registry::build_only::{KeyPolarity, SynthParams};
@@ -110,8 +110,8 @@ pub(crate) fn polarized(
 pub(crate) mod test_support {
     use super::*;
     use crate::compile::character::frame::bone_frames;
-    use concinnity_core::components::SkeletonJoint;
     use concinnity_core::math::SaturatingFrom;
+    use concinnity_engine::components::SkeletonJoint;
 
     pub(crate) fn joint(name: &str, parent: i32, translation: [f32; 3]) -> SkeletonJoint {
         SkeletonJoint {

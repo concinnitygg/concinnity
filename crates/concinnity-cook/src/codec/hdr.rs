@@ -16,7 +16,7 @@
 // six cube faces using bilinear interpolation in HDR space.
 
 #[cfg(test)]
-use concinnity_core::bake::decode::{ByteReader, checked_product};
+use concinnity_engine::bake::decode::{ByteReader, checked_product};
 
 pub(crate) const CUBE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"CUBE");
 pub(crate) const CUBE_FORMAT_RGBA32F: u32 = 0;
@@ -79,7 +79,7 @@ pub(crate) fn load_file(path: &str) -> Result<HdrImage, String> {
 
 // The in-memory image type and the equirect→cube resampler live with the IBL
 // bake in core; this module decodes source files into that type.
-pub(crate) use concinnity_core::bake::environment_map::source::{HdrImage, equirect_to_cube};
+pub(crate) use concinnity_engine::bake::environment_map::source::{HdrImage, equirect_to_cube};
 
 // Decode a Radiance .hdr blob. Supports both the run-length-encoded
 // scanline format and the older raw 4-byte-per-pixel layout.

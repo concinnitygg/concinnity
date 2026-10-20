@@ -3,8 +3,8 @@
 //! prefab row creates, and the dismissal rules -- a click away closes it, a
 //! claimed region does not reach it.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
 use concinnity_host::thread::asset_id;
 
 use crate::frame_hook::FrameHook;

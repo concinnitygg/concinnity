@@ -21,8 +21,8 @@
 //! otherwise and the consumer falls back exactly as it did before.
 
 use ash::vk;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::render_graph::{
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::render_graph::{
     PixelFormat, TextureUsage, TransientSlot, TransientTexture,
 };
 use std::collections::HashMap;
@@ -444,9 +444,9 @@ pub(in crate::vulkan) fn sample_count(samples: u32) -> vk::SampleCountFlags {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::post::device::PostExtent;
-    use concinnity_core::render::post::{bloom, ssao};
-    use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
+    use concinnity_engine::render::post::device::PostExtent;
+    use concinnity_engine::render::post::{bloom, ssao};
+    use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};
 
     #[test]
     fn translated_images_match_the_feature_formats() {

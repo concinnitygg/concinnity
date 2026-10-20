@@ -21,13 +21,13 @@ mod spot_shadow;
 mod stages;
 
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::backend::FrameParams;
-use concinnity_core::render::environment::grass::lod as grass_lod;
-use concinnity_core::render::frame::plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
-use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::rt_accel::RtUpdate;
-use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::{backend::error, render_graph};
+use concinnity_engine::render::backend::FrameParams;
+use concinnity_engine::render::environment::grass::lod as grass_lod;
+use concinnity_engine::render::frame::plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::rt_accel::RtUpdate;
+use concinnity_engine::render::scene_state::SceneState;
+use concinnity_engine::render::{backend::error, render_graph};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLCommandQueue as _};
@@ -385,9 +385,10 @@ impl FrameDevice for MtlContext {
                         super::pass_timing::frame_span(&buf.0, mask, async_mask)
                     {
                         let previous = span_end.fetch_max(end, AtomicOrdering::Relaxed);
-                        let span = concinnity_core::render::backend::pass_timing::FrameSpan::after(
-                            start, end, previous,
-                        );
+                        let span =
+                            concinnity_engine::render::backend::pass_timing::FrameSpan::after(
+                                start, end, previous,
+                            );
                         let micros = |ns: u64| u32::saturating_from(ns / 1000);
                         frame_us = micros(span.own);
                         overlap_us = micros(span.overlap);
@@ -399,7 +400,7 @@ impl FrameDevice for MtlContext {
                 // GPU work ended on the host clock.
                 if let (Some(input_sampled_us), Ok(mut slot)) = (input_sampled_us, gpu_done.lock())
                 {
-                    *slot = Some(concinnity_core::profile::GpuDone {
+                    *slot = Some(concinnity_engine::profile::GpuDone {
                         input_sampled_us,
                         done_us: concinnity_host::clock::monotonic_micros(),
                     });
@@ -475,7 +476,7 @@ impl MtlContext {
         joint_buffers: &[Retained<ProtocolObject<dyn MTLBuffer>>],
         topology_dirty: bool,
     ) -> error::RenderResult<RtUpdate> {
-        use concinnity_core::render::rt_accel::{RtDriveInputs, drive_update, seed_wanted};
+        use concinnity_engine::render::rt_accel::{RtDriveInputs, drive_update, seed_wanted};
         let mode = self.rt.dynamic_mode;
         let exclude_seethrough = self.seethrough_meshes_enabled();
         let albedo_count = self.scene.textures.len();

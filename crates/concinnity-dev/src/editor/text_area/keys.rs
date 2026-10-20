@@ -2,7 +2,7 @@
 //! builds shortcuts on Command and word steps on Option, Windows and Linux both
 //! on Control.
 
-use concinnity_core::components::{InputKey, KeyPress};
+use concinnity_engine::components::{InputKey, KeyPress};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Platform {
@@ -104,7 +104,7 @@ pub(crate) fn command(press: KeyPress, platform: Platform) -> Option<Command> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::KeyMods;
+    use concinnity_engine::components::KeyMods;
 
     fn cmd(key: InputKey, mods: KeyMods, platform: Platform) -> Option<Command> {
         command(KeyPress::new(key, mods), platform)

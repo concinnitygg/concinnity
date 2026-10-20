@@ -11,17 +11,17 @@
 //! `src/metal/decal.rs`.
 
 use ash::vk;
-use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
-use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::decal::DecalRecord;
-use concinnity_core::transform::mat4_inverse;
+use concinnity_engine::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::decal::DecalRecord;
+use concinnity_engine::transform::mat4_inverse;
 use std::cell::Cell;
 // `DecalView` (per-frame, 144 bytes) is the layout struct shared with the other
 // backends; the per-decal `DecalParams` (160 bytes, inside the 256-byte stride
 // slot) rides the set's slots. Both mirror `shaders/decal.hlsl`.
-use concinnity_core::render::uniforms::DecalView;
+use concinnity_engine::render::uniforms::DecalView;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
@@ -38,7 +38,7 @@ use crate::vulkan::owned::{
 
 // The descriptor pool reserves a fixed block of `MAX_DECALS` per-decal albedo
 // sets at init.
-pub(in crate::vulkan) const MAX_DECALS: usize = concinnity_core::render::decal::MAX_DECALS;
+pub(in crate::vulkan) const MAX_DECALS: usize = concinnity_engine::render::decal::MAX_DECALS;
 
 // The unit cube in `[-0.5, 0.5]^3`, the local space a decal's `inv_model` maps into.
 const CUBE_VERTS: [[f32; 3]; 8] = cube_corners(0.5);

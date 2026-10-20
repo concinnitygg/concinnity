@@ -2,8 +2,8 @@
 // present under the right parent and every bipolar key has both targets,
 // plus the model's own args. Every problem is reported, in one pass.
 
-use concinnity_core::components::SkeletonJoint;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::SkeletonJoint;
 
 use crate::authoring::registry::build_only::{CharacterModel, CharacterSchema, KeyPolarity};
 

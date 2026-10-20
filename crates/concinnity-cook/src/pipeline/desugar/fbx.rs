@@ -97,7 +97,7 @@ pub(in crate::pipeline) fn desugar_fbx_meshes(
     progress: &StageProgress<'_>,
 ) -> std::io::Result<()> {
     use crate::import::fbx::FbxScene;
-    use concinnity_core::components::VertexData;
+    use concinnity_engine::components::VertexData;
     use std::collections::HashMap;
 
     type Chunk = (Vec<VertexData>, Vec<u16>);

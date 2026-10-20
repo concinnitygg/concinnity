@@ -1,13 +1,13 @@
 //! DirectX's share of bloom: the view of the pool's top octave the chain writes
 //! through, and the one state change the chain owns. The chain itself -- its
 //! pipelines, the octaves below the top, and every draw -- is written once in
-//! `concinnity_core::render::post::bloom` and reaches D3D12 through
+//! `concinnity_engine::render::post::bloom` and reaches D3D12 through
 //! `DxPostDevice`.
 
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::post::bloom::{BloomPass, BloomPipelines, top_extent};
-use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::render_graph::PixelFormat;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::bloom::{BloomPass, BloomPipelines, top_extent};
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::render_graph::PixelFormat;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::context::DxContext;

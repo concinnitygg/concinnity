@@ -4,7 +4,7 @@
 //! consumes. What those actions then do to the world is asserted beside the
 //! module that does it.
 
-use concinnity_core::components::FrameInput;
+use concinnity_engine::components::FrameInput;
 
 use super::fixtures::{entry, hook, set_input, world_with_fields, world_with_input};
 

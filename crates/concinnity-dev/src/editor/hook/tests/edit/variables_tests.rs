@@ -5,8 +5,8 @@
 //! removing a declaration leaves behind, and the re-check each change runs over
 //! the behaviors reading it.
 
-use concinnity_core::components::{InputKey, TextInput};
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{InputKey, TextInput};
+use concinnity_engine::ecs::World;
 
 use crate::editor::behavior::panel::BehaviorAction;
 use crate::editor::hook::tests::fixtures::{behavior, entry_with_args, hook, key_input};

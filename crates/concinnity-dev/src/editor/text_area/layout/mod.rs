@@ -3,10 +3,10 @@
 //! caret, and the scrollbars. Only the visible rows have elements, from a fixed
 //! pool of reserved ids the owning panel injects.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::markers::{GutterMarker, Severity, marker_on};
 use super::pointer::Bar;

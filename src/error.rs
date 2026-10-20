@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 #[cfg(feature = "std")]
 use std::path::PathBuf;
 
-use concinnity_core::error::WorldError;
+use concinnity_engine::error::WorldError;
 
 /// The facade's failure type: why a value could not be baked, a world could not
 /// be compiled or loaded, or an app could not run it.
@@ -151,7 +151,7 @@ pub(crate) fn from_cook(error: concinnity_cook::WorldBuildError) -> Error {
 mod tests {
     use super::Error;
     use alloc::string::ToString;
-    use concinnity_core::error::WorldError;
+    use concinnity_engine::error::WorldError;
 
     // The one variant every tier reports, so the signature ports whether or
     // not there is an operating system underneath it.
@@ -175,7 +175,7 @@ mod tests {
     #[cfg(feature = "std")]
     fn load_failure() -> concinnity_runtime::WorldLoadError {
         concinnity_runtime::WorldLoadError::Asset(
-            concinnity_core::error::AssetError::UnknownComponent { discriminant: 9 },
+            concinnity_engine::error::AssetError::UnknownComponent { discriminant: 9 },
         )
     }
 
@@ -183,7 +183,7 @@ mod tests {
     mod std_tier {
         use super::super::Error;
         use super::load_failure;
-        use concinnity_core::error::{AssetError, WorldError};
+        use concinnity_engine::error::{AssetError, WorldError};
         use core::error::Error as _;
         use std::io::ErrorKind;
         use std::path::PathBuf;

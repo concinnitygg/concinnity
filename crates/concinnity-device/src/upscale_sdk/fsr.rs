@@ -14,9 +14,9 @@
 use std::ffi::c_void;
 use std::ptr;
 
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::depth::{CAMERA_DEPTH, DepthMapping};
-use concinnity_core::render::temporal::history_reset::UpscalerResetLatch;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::depth::{CAMERA_DEPTH, DepthMapping};
+use concinnity_engine::render::temporal::history_reset::UpscalerResetLatch;
 
 use super::camera::FrameClock;
 use super::{SdkLibrary, UpscaleCamera, UpscaleExtent, entry_point};

@@ -3,7 +3,7 @@
 //! removing chunks is scene bookkeeping, done in `SceneState`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 use objc2_metal::{MTLBuffer, MTLResourceOptions};
 
 use crate::metal::context::{MtlContext, copy_buffer_prefix};

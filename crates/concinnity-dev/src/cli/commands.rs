@@ -1,10 +1,10 @@
 // The command tree itself: every subcommand `concinnity` accepts and the
 // arguments it takes. Parsing only -- what each command does lives behind
 // `dispatch`.
-use concinnity_core::launch::LaunchRequest;
+use concinnity_engine::launch::LaunchRequest;
 use std::num::NonZeroU32;
 
-use concinnity_core::gfx::view_modes::ShowFlags;
+use concinnity_engine::gfx::view_modes::ShowFlags;
 
 use super::launch_args::LaunchArgsArg;
 use super::value_enums::{
@@ -411,9 +411,9 @@ mod tests {
     use super::*;
     use crate::cli::Cli;
     use clap::Parser;
-    use concinnity_core::render::output::dlss::DlssPreset;
-    use concinnity_core::render::rt_accel::geom::RtDynamicMode;
-    use concinnity_core::settings::QualityPreset;
+    use concinnity_engine::render::output::dlss::DlssPreset;
+    use concinnity_engine::render::rt_accel::geom::RtDynamicMode;
+    use concinnity_engine::settings::QualityPreset;
 
     // Every world-launching command carries the render flags, and each one
     // defaults to absent (which the engine resolves to today's behavior).
@@ -472,9 +472,9 @@ mod tests {
             LaunchRequest {
                 capture: false,
                 dev_loop: true,
-                args: concinnity_core::launch::LaunchArgs {
+                args: concinnity_engine::launch::LaunchArgs {
                     quality_preset: Some(QualityPreset::Ultra),
-                    ..concinnity_core::launch::LaunchArgs::NONE
+                    ..concinnity_engine::launch::LaunchArgs::NONE
                 },
                 validation: Some(true),
                 rt_dynamic: Some(RtDynamicMode::Rebuild),

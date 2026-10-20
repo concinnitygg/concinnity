@@ -4,9 +4,9 @@
 //! open state, the hidden pass -- lives on the registry and its consumers; each
 //! impl supplies only what is panel-specific.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::EditorHook;
 use crate::editor::behavior::panel::ViewMode;

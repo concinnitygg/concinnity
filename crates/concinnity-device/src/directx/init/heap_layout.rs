@@ -52,7 +52,7 @@
 //! The RTV heap follows the same cascade in `RtvHeapLayout`, and the DSV heap's
 //! fixed slots are the `DSV_*` constants.
 
-use concinnity_core::gfx::render_types::{MAX_SHADOWED_SPOTS, NUM_SHADOW_CASCADES};
+use concinnity_engine::gfx::render_types::{MAX_SHADOWED_SPOTS, NUM_SHADOW_CASCADES};
 
 use super::HIZ_MAX_MIPS;
 use crate::directx::atmosphere::{ATMOSPHERE_SRV_SLOTS, ATMOSPHERE_UAV_SLOTS, SKY_CUBE_SLOTS};

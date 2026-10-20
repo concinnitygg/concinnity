@@ -1,8 +1,8 @@
 //! Render-resolution scene targets: the depth-stencil states, the HDR scene
 //! target, and the render graph's transient texture pool.
 
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLDevice;
 

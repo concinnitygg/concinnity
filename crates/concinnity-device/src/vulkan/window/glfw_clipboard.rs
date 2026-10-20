@@ -1,7 +1,7 @@
 // The Linux system clipboard, reached through the GLFW window (GLFW owns the
 // X11 selection / Wayland data-device plumbing).
 
-use concinnity_core::window::clipboard::Clipboard;
+use concinnity_engine::window::clipboard::Clipboard;
 
 use super::glfw::GlfwWindow;
 

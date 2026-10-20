@@ -13,16 +13,16 @@
 //! larger ring replaced outlives the submits that still name it.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::Interface;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::error::map_hresult;
 use super::texture::transition_barrier;
-use concinnity_core::render::buffers::staging_uploads::{StageError, StagingUploads};
-use concinnity_core::render::buffers::upload_ring::UploadBuffer;
+use concinnity_engine::render::buffers::staging_uploads::{StageError, StagingUploads};
+use concinnity_engine::render::buffers::upload_ring::UploadBuffer;
 
 // Which shared buffer a staged write lands in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -291,7 +291,7 @@ fn new_copy_list(device: &ID3D12Device) -> RenderResult<CopyList> {
 mod tests {
     use super::*;
     use crate::directx::texture::one_shot_submit;
-    use concinnity_core::render::buffers::staging::STAGING_MIN_CAPACITY;
+    use concinnity_engine::render::buffers::staging::STAGING_MIN_CAPACITY;
     use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 
     // A device, its direct queue and an allocator over them, or None where no

@@ -6,8 +6,8 @@
 //! in their extra chrome (the Assets panel adds hover / selection tints, a
 //! triple-dot menu, and delete); that stays in `assets_panel.rs`, layered over this base.
 
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, place_sprite};
@@ -199,7 +199,7 @@ pub(crate) fn layout_scrollbar(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_engine::components::{Sprite, TextLabel};
 
     fn entry(name: &str, ty: &str) -> serde_json::Value {
         serde_json::json!({"type": ty, "args": {"$id": name}})

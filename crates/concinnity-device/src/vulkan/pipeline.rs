@@ -3,10 +3,10 @@
 // cooked artifacts.
 
 use ash::vk;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::shader::programs::surface::{self, GrassShading};
-use concinnity_core::render::shader::world_pipelines::BucketSource;
-use concinnity_core::render::shadow::bias;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::surface::{self, GrassShading};
+use concinnity_engine::render::shader::world_pipelines::BucketSource;
+use concinnity_engine::render::shadow::bias;
 
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{OwnedPipeline, VkDevice};
@@ -205,12 +205,12 @@ impl<'d> GraphicsStages<'d> {
 // The world Shader's `program`, as SPIR-V: the cook's artifact when the
 // engine template still matches, else a compile here.
 pub(super) fn world_entry(
-    world: &concinnity_core::components::ShaderPrograms,
+    world: &concinnity_engine::components::ShaderPrograms,
     program: &surface::Program,
     hot_reload: bool,
 ) -> RenderResult<Vec<u8>> {
     let req = crate::shader::surface_source::Request {
-        platform: concinnity_core::platform::Platform::Vulkan,
+        platform: concinnity_engine::platform::Platform::Vulkan,
         hot_reload,
     };
     crate::shader::surface_source::artifact(world, program, req, crate::shader::compile::cooked)
@@ -296,7 +296,7 @@ pub(super) struct BucketPipelines {
     pub prepass: Option<OwnedPipeline>,
     // The world Shader the bucket compiles, `None` for the engine's own
     // programs, kept so the pre-pass can be built or rebuilt later.
-    pub programs: Option<concinnity_core::components::ShaderPrograms>,
+    pub programs: Option<concinnity_engine::components::ShaderPrograms>,
     // What of the grass the main fragment shades.
     pub grass: GrassShading,
 }
@@ -366,7 +366,7 @@ pub(super) fn build_world_shader_pipeline(
     device: &VkDevice,
     targets: BucketPipelineTargets,
     bucket: usize,
-    programs: &concinnity_core::components::ShaderPrograms,
+    programs: &concinnity_engine::components::ShaderPrograms,
     grass: GrassShading,
 ) -> RenderResult<BucketPipelines> {
     let vert = world_entry(programs, &surface::MAIN_VERTEX, targets.hot_reload)?;
@@ -390,7 +390,7 @@ pub(super) fn build_world_prepass(
     device: &VkDevice,
     prepass: PrepassTargets,
     bucket: usize,
-    programs: &concinnity_core::components::ShaderPrograms,
+    programs: &concinnity_engine::components::ShaderPrograms,
     hot_reload: bool,
 ) -> Option<OwnedPipeline> {
     let stages = world_entry(programs, &surface::PREPASS_VERTEX, hot_reload).and_then(|vs| {
@@ -681,17 +681,17 @@ mod tests {
     #[test]
     fn a_world_shader_compiles_its_own_bindless_pair() {
         concinnity_shader::require_dxc!();
-        let programs = concinnity_core::components::ShaderPrograms {
+        let programs = concinnity_engine::components::ShaderPrograms {
             name: "wall".to_string(),
             vertex: None,
-            fragment: concinnity_core::components::ShaderSource {
+            fragment: concinnity_engine::components::ShaderSource {
                 path: "shaders/wall.hlsl".to_string(),
                 text: "float4 shade(VertexOut v, GpuObjectData od) { return (float4)(1.0); }"
                     .to_string(),
             },
             programs: Vec::new(),
         };
-        let compiled: Vec<Vec<u8>> = concinnity_core::render::shader::programs::surface::ALL
+        let compiled: Vec<Vec<u8>> = concinnity_engine::render::shader::programs::surface::ALL
             .iter()
             .map(|p| world_entry(&programs, p, false).unwrap())
             .collect();

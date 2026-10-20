@@ -8,7 +8,7 @@
 //! delete, adding or removing a vertex file) are edits in `shader_edits.rs`
 //! and `sdf_edits.rs`.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use super::shaders_state::RowsKey;
 use crate::debug::hot_reload::ReloadReports;

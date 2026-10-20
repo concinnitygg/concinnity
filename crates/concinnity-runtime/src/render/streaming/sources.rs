@@ -2,10 +2,10 @@
 
 use hashbrown::HashMap;
 
-use concinnity_core::ecs::PayloadLocator;
+use concinnity_engine::ecs::PayloadLocator;
 use concinnity_host::store::blob::{blob_path, payload_section_start};
 
-use concinnity_core::render::streaming::pools::DeferredMeshPayload;
+use concinnity_engine::render::streaming::pools::DeferredMeshPayload;
 
 // Blob `blob_index`'s file and where its payload section starts in it, so a
 // locator's payload-section offset becomes an absolute file offset.
@@ -73,7 +73,7 @@ pub(crate) fn disk_mesh_payload(locator: &PayloadLocator) -> Option<DeferredMesh
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::bake::texture;
+    use concinnity_engine::bake::texture;
 
     // The RAM-resident source decodes a compiled texture payload on fetch.
     #[test]

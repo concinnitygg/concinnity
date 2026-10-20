@@ -9,7 +9,7 @@ use super::rows::{
 use super::{TOP_MARGIN_FRAC, cursor_sprite, opaque};
 use crate::authoring::registry::build_only::MainMenu;
 use crate::authoring::spec::{asset, spec_to_value};
-use concinnity_core::components::{NamedAction, SettingVerb};
+use concinnity_engine::components::{NamedAction, SettingVerb};
 
 // Average glyph advance as a fraction of the font pixel size, used to estimate
 // a label's width when laying out the settings tab bar (the menu items and

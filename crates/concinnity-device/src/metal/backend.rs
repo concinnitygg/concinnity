@@ -1,23 +1,23 @@
 //! `RenderBackend` impl for `MtlContext`, one impl block per trait family; the
 //! bodies come from `crate::forward`.
 
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::gfx::mesh_payload::SkinnedVertex;
-use concinnity_core::gfx::render_types::{MATERIAL_PARAM_COUNT, SkinnedDrawObject};
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::profile::RenderStats;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::backend::{
+use concinnity_engine::gfx::mesh_payload;
+use concinnity_engine::gfx::mesh_payload::SkinnedVertex;
+use concinnity_engine::gfx::render_types::{MATERIAL_PARAM_COUNT, SkinnedDrawObject};
+use concinnity_engine::input::keymap::KeyMap;
+use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::profile::RenderStats;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::{
     BackendProbe, DrawStreaming, FrameParams, LiveEdit, RenderBackend, RenderTuning, SceneEffects,
     SkinnedDraws, SkinnedIndex, WindowControl,
 };
-use concinnity_core::render::{
+use concinnity_engine::render::{
     backend, backend::init, decal, environment::volumetric_fog, particles, probe::capture,
 };
-use concinnity_core::window::clipboard::Clipboard;
-use concinnity_core::window::display_mode;
-use concinnity_core::{bake, components};
+use concinnity_engine::window::clipboard::Clipboard;
+use concinnity_engine::window::display_mode;
+use concinnity_engine::{bake, components};
 
 use super::context::{MtlContext, debug_assert_main_thread};
 use crate::forward::forward;
@@ -132,10 +132,10 @@ impl WindowControl for MtlContext {
 
 impl RenderTuning for MtlContext {
     forward! { assert = debug_assert_main_thread;
-        fn apply_settings(&mut self, graphics: &concinnity_core::settings::ResolvedGraphics, plan: &concinnity_core::settings::apply::ApplyPlan) -> RenderResult<()>;
+        fn apply_settings(&mut self, graphics: &concinnity_engine::settings::ResolvedGraphics, plan: &concinnity_engine::settings::apply::ApplyPlan) -> RenderResult<()>;
         fn set_reflection_probes(&mut self, probes: &[capture::ProbePlacement]);
         fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]);
-        fn move_local_lights(&mut self, lights: &concinnity_core::render::light::lights::LightData, uniforms: &concinnity_core::gfx::render_types::LightUniforms) -> RenderResult<()>;
+        fn move_local_lights(&mut self, lights: &concinnity_engine::render::light::lights::LightData, uniforms: &concinnity_engine::gfx::render_types::LightUniforms) -> RenderResult<()>;
         fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>);
     }
 }
@@ -147,7 +147,7 @@ impl LiveEdit for MtlContext {
         fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> RenderResult<Vec<backend::SkinnedSlotLayout>>;
         fn set_material_params(&mut self, row: u32, params: [f32; MATERIAL_PARAM_COUNT]);
         fn update_world_shader(&mut self, bucket: u32, programs: &components::ShaderPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
-        fn replace_sdf_volume_pipelines(&mut self, volume: usize, programs: &concinnity_core::render::sdf::programs::SdfPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
+        fn replace_sdf_volume_pipelines(&mut self, volume: usize, programs: &concinnity_engine::render::sdf::programs::SdfPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
         fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()>;
         fn rebuild_static_geometry(&mut self, changes: Vec<backend::DrawGeometryUpdate>) -> RenderResult<()>;
     }

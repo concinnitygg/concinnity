@@ -15,7 +15,7 @@
 //! last time round has retired.
 
 use ash::vk;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use std::sync::Mutex;
 
 use crate::vulkan::descriptor_layout::PoolSizes;

@@ -9,7 +9,7 @@
 //! physical device), which resolves the run to headless.
 
 use ash::vk;
-use concinnity_core::render::backend::{
+use concinnity_engine::render::backend::{
     DeviceCapabilities, DeviceProbe, GpuClassInput, GpuProfile, GpuVendor,
     apple_family_from_device_name, classify_tier,
 };

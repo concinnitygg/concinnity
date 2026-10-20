@@ -3,9 +3,9 @@
 //! render passes.
 
 use ash::vk;
-use concinnity_core::gfx::render_types;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::RenderResult;
 
 use super::CullPlan;
 use super::bindless::BindlessPass;

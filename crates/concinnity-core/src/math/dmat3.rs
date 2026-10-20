@@ -8,41 +8,42 @@ use crate::math::narrow_f32;
 /// A column-major double-precision 3x3 matrix, `m[col][row]`.
 pub type DMat3 = [[f64; 3]; 3];
 
-pub(crate) const DMAT3_IDENTITY: DMat3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+/// The identity rotation.
+pub const DMAT3_IDENTITY: DMat3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
-// `m * v`.
-pub(crate) fn mul_vec(m: &DMat3, v: DVec3) -> DVec3 {
+/// `m * v`.
+pub fn mul_vec(m: &DMat3, v: DVec3) -> DVec3 {
     core::array::from_fn(|i| m[0][i] * v[0] + m[1][i] * v[1] + m[2][i] * v[2])
 }
 
-// `transpose(m) * v`: the inverse rotation of an orthonormal `m`.
-pub(crate) fn mul_transpose_vec(m: &DMat3, v: DVec3) -> DVec3 {
+/// `transpose(m) * v`: the inverse rotation of an orthonormal `m`.
+pub fn mul_transpose_vec(m: &DMat3, v: DVec3) -> DVec3 {
     [dot(m[0], v), dot(m[1], v), dot(m[2], v)]
 }
 
-// `m` with every entry times `s`.
-pub(crate) fn scale_mat(m: &DMat3, s: f64) -> DMat3 {
+/// `m` with every entry times `s`.
+pub fn scale_mat(m: &DMat3, s: f64) -> DMat3 {
     m.map(|c| scale(c, s))
 }
 
-// `a * b`.
-pub(crate) fn mul(a: &DMat3, b: &DMat3) -> DMat3 {
+/// `a * b`.
+pub fn mul(a: &DMat3, b: &DMat3) -> DMat3 {
     [mul_vec(a, b[0]), mul_vec(a, b[1]), mul_vec(a, b[2])]
 }
 
-// The columns of `m` made orthonormal again (Gram-Schmidt, `y` first, so the
-// column a frame's up rides on drifts least), keeping right-handedness.
-pub(crate) fn orthonormalize(m: &DMat3) -> DMat3 {
+/// The columns of `m` made orthonormal again (Gram-Schmidt, `y` first, so the
+/// column a frame's up rides on drifts least), keeping right-handedness.
+pub fn orthonormalize(m: &DMat3) -> DMat3 {
     let y = normalize_or(m[1], [0.0, 1.0, 0.0]);
     let z = normalize_or(sub(m[2], scale(y, dot(m[2], y))), [0.0, 0.0, 1.0]);
     let x = cross(y, z);
     [x, y, z]
 }
 
-// The rotation taking `+Y` onto the unit vector `to` along the shortest arc:
-// the one that turns nothing about `to` itself. Straight down has no shortest
-// arc; it turns half a turn about `+X`.
-pub(crate) fn arc_from_up(to: DVec3) -> DMat3 {
+/// The rotation taking `+Y` onto the unit vector `to` along the shortest arc:
+/// the one that turns nothing about `to` itself. Straight down has no shortest
+/// arc; it turns half a turn about `+X`.
+pub fn arc_from_up(to: DVec3) -> DMat3 {
     let c = to[1];
     if c <= -1.0 + 1e-12 {
         return [[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]];
@@ -57,8 +58,8 @@ pub(crate) fn arc_from_up(to: DVec3) -> DMat3 {
     ]
 }
 
-// The rotation the unit quaternion `[x, y, z, w]` describes.
-pub(crate) fn mat_of_quat(q: [f32; 4]) -> DMat3 {
+/// The rotation the unit quaternion `[x, y, z, w]` describes.
+pub fn mat_of_quat(q: [f32; 4]) -> DMat3 {
     let [x, y, z, w] = q.map(f64::from);
     let n = libm::sqrt(x * x + y * y + z * z + w * w);
     let [x, y, z, w] = if n > 0.0 {
@@ -85,8 +86,8 @@ pub(crate) fn mat_of_quat(q: [f32; 4]) -> DMat3 {
     ]
 }
 
-// The unit quaternion `[x, y, z, w]` of the rotation `m`.
-pub(crate) fn quat_of(m: &DMat3) -> [f32; 4] {
+/// The unit quaternion `[x, y, z, w]` of the rotation `m`.
+pub fn quat_of(m: &DMat3) -> [f32; 4] {
     let (m00, m11, m22) = (m[0][0], m[1][1], m[2][2]);
     let trace = m00 + m11 + m22;
     let q = if trace > 0.0 {

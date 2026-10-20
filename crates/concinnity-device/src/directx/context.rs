@@ -3,25 +3,25 @@
 // drive all three backends identically.
 
 use crate::gpu_wait::GpuWait;
-use concinnity_core::gfx::render_types::{
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::gfx::render_types::{
     InstancedCluster, LightUniforms, PostProcessParams, PostProcessTunables,
 };
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::backend::FrameParams;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::buffers::retire_pool::RetirePool;
-use concinnity_core::render::frame::plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
-use concinnity_core::render::post::reflection_path::ReflectionPath;
-use concinnity_core::render::probe::book::ProbeBook;
-use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::shader::reload::ShaderReload;
-use concinnity_core::render::{
+use concinnity_engine::input::keymap::KeyMap;
+use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::render::backend::FrameParams;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::render::frame::plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
+use concinnity_engine::render::post::reflection_path::ReflectionPath;
+use concinnity_engine::render::probe::book::ProbeBook;
+use concinnity_engine::render::scene_state::SceneState;
+use concinnity_engine::render::shader::reload::ShaderReload;
+use concinnity_engine::render::{
     backend, backend::init, backend::pass_timing, light::lights, output::hdr, slots::rewrites,
 };
-use concinnity_core::window::display_mode;
-use concinnity_core::{components, profile};
+use concinnity_engine::window::display_mode;
+use concinnity_engine::{components, profile};
 use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
 use windows::Win32::Foundation::CloseHandle;
@@ -83,7 +83,7 @@ pub(super) fn build_timestamp_resources(
     }
     // Heap holds one block of [whole_frame_start, whole_frame_end, then
     // PASS_COUNT (start, end) pairs] per in-flight frame. See
-    // `concinnity_core::render::backend::pass_timing` for the slot layout.
+    // `concinnity_engine::render::backend::pass_timing` for the slot layout.
     //
     // Timing: `execute_graph` issues an EndQuery before and after each pass's
     // encode, and the resolve at the end of the command list copies the whole block
@@ -203,7 +203,7 @@ pub(super) struct DxUniforms {
     // The values the light ring carries, which slots of it are stale, and the
     // local lights' reach. `record_frame` writes the frame's own slot, so no
     // in-flight read is raced.
-    pub lights: concinnity_core::render::light::state::LightState,
+    pub lights: concinnity_engine::render::light::state::LightState,
     pub shadow_ubo_resources: Vec<PooledBuffer>,
     pub shadow_ubo_ptrs: Vec<*mut u8>,
     // Per-frame CBVs holding the live probe count, bound at root param [11] by
@@ -307,7 +307,7 @@ pub(super) struct DxInstanced {
 impl DxInstanced {
     pub(super) fn new(clusters: Vec<InstancedCluster>) -> Self {
         Self {
-            any_lod: concinnity_core::gfx::lod::any_cluster_has_lod(&clusters),
+            any_lod: concinnity_engine::gfx::lod::any_cluster_has_lod(&clusters),
             clusters,
         }
     }
@@ -559,10 +559,10 @@ pub(super) struct DxRayTracing {
     pub accel: Option<super::raytrace::RtAccelData>,
     // How the acceleration structure is kept current as props move (the
     // launch's `--rt-dynamic` request; `Auto` by default).
-    pub dynamic_mode: concinnity_core::render::rt_accel::geom::RtDynamicMode,
+    pub dynamic_mode: concinnity_engine::render::rt_accel::geom::RtDynamicMode,
     // Whether the per-frame BVH update is failing, so a failure is logged once
     // per streak rather than every frame.
-    pub update_streak: concinnity_core::render::rt_accel::FailureStreak,
+    pub update_streak: concinnity_engine::render::rt_accel::FailureStreak,
     // BVHs dropped mid-run (a refresh removed the last geometry), held until no
     // frame still in flight can trace them, timed against `retire_tick`, which
     // advances once per frame.
@@ -730,7 +730,7 @@ pub(crate) struct DxContext {
     // bloom chain runs and feeds the bloom-prefilter + composite root constants.
     pub(super) post_process: PostProcessParams,
     // The scale the frame's HDR chain is written at, advanced once per frame.
-    pub(super) pre_exposure: concinnity_core::gfx::auto_exposure::PreExposure,
+    pub(super) pre_exposure: concinnity_engine::gfx::auto_exposure::PreExposure,
 
     // Unified geometry G-buffer pre-pass. `Some` whenever any screen-space
     // consumer (SSR, SSGI, SSAO, TAA, or temporal upscaling) is enabled: one
@@ -838,7 +838,7 @@ pub(crate) struct DxContext {
     pub(super) grass: Option<super::grass::GrassResources>,
     // How this frame's view resolves the grass: where it coarsens, thins and
     // hands over to the canopy. `None` without grass.
-    pub(super) grass_lod: Cell<Option<concinnity_core::render::environment::grass::GrassLodView>>,
+    pub(super) grass_lod: Cell<Option<concinnity_engine::render::environment::grass::GrassLodView>>,
     // The far field's canopy block, one copy per frame in flight. See
     // [`super::canopy`].
     pub(super) canopy: super::canopy::DxCanopy,
@@ -1361,7 +1361,7 @@ impl DxContext {
         self.spot_shadow.frusta = data
             .spot_shadows
             .iter()
-            .map(concinnity_core::render::shadow::spot::slice_frustum)
+            .map(concinnity_engine::render::shadow::spot::slice_frustum)
             .collect();
         self.state.planner.shadow.reset_spots();
         self.uniforms.lights.move_local(&data.lights, uniforms);
@@ -1392,7 +1392,7 @@ impl DxContext {
     // optional `resolve` half), so a SSGI-only build with no resolve is skipped.
     pub(crate) fn update_quality_params(
         &mut self,
-        g: &concinnity_core::settings::ResolvedGraphics,
+        g: &concinnity_engine::settings::ResolvedGraphics,
     ) {
         if let (Some(live), Some(res)) = (g.ssao(), self.ssao.resources.as_mut()) {
             res.settings = live;

@@ -11,10 +11,10 @@
 // Mirrors `metal/world_shaders.rs` and `directx/world_shaders.rs`.
 
 use ash::vk;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
-use concinnity_core::render::shader::programs::surface::GrassShading;
-use concinnity_core::render::shader::world_pipelines::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
+use concinnity_engine::render::shader::programs::surface::GrassShading;
+use concinnity_engine::render::shader::world_pipelines::{
     BucketSource, check_rebuild, replace_bucket,
 };
 
@@ -34,7 +34,7 @@ impl VkContext {
     pub(in crate::vulkan) fn install_world_shader(
         &mut self,
         bucket: u32,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<()> {
         let grass = self.cull.world_pipelines.grass(bucket as usize);
@@ -53,7 +53,7 @@ impl VkContext {
     fn bucket_pipelines(
         &self,
         bucket: u32,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         grass: GrassShading,
         prepared: Option<PreparedPipelines>,
         live_prepass: bool,
@@ -87,7 +87,7 @@ impl VkContext {
     pub(in crate::vulkan) fn update_world_shader(
         &mut self,
         bucket: u32,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<PipelineSwap> {
         if bucket == 0 {
@@ -115,7 +115,7 @@ impl VkContext {
     // of the default Shader reaches them.
     fn update_grass_twins(
         &mut self,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
     ) -> RenderResult<()> {
         let twins = self.cull.world_pipelines.grass_twins();
         for (twin, grass) in [
@@ -172,7 +172,7 @@ impl VkContext {
         let device = self.hw.device.clone();
         let engine = &self.cull.bindless_main_spv;
         let build =
-            |bucket: usize, programs: Option<&concinnity_core::components::ShaderPrograms>| {
+            |bucket: usize, programs: Option<&concinnity_engine::components::ShaderPrograms>| {
                 match programs {
                     Some(programs) => {
                         build_world_prepass(&device, prepass, bucket, programs, targets.hot_reload)

@@ -3,39 +3,39 @@
 // never read or written: a test's settings are the `StoredSettings` resource
 // it inserts, and the injection seam supplies the GPU profile and backend.
 
-use concinnity_core::bake::texture;
-use concinnity_core::components::{
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::bake::texture;
+use concinnity_engine::components::{
     BackgroundOverrides, Camera3D, CharacterRig, FrameInput, GlobalTransform, GraphicsConfig,
     HitRegion, Material, Prop, RenderHandle, Scene, SceneCommand, Shader, ShaderPrograms,
     SkeletonPose, SkinnedMesh, Sprite, StreamingConfig, TextLabel, UiAction, Window,
 };
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{
     ComponentSlot, FontHandle, FrameRateCap, MaterialHandle, MenuActive, MenuOverride, MeshHandle,
     PayloadLocator, Ref, ScreenStack, StepResult, TextureHandle, World,
 };
-use concinnity_core::geometry::chunk_coord;
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
-use concinnity_core::launch::{LaunchArgs, LaunchRequest};
-use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::init::SwapchainConfig;
-use concinnity_core::render::backend::{GpuProfile, GpuTier, GpuVendor};
-use concinnity_core::render::shader::compiled::CompiledProgram;
-use concinnity_core::render::{backend, backend::error, overlay::text};
-use concinnity_core::resource::{
+use concinnity_engine::geometry::chunk_coord;
+use concinnity_engine::gfx::mesh_payload;
+use concinnity_engine::gfx::render_types::{DrawIndex, SkinnedIndex};
+use concinnity_engine::launch::{LaunchArgs, LaunchRequest};
+use concinnity_engine::render::backend::init::SwapchainConfig;
+use concinnity_engine::render::backend::{GpuProfile, GpuTier, GpuVendor};
+use concinnity_engine::render::shader::compiled::CompiledProgram;
+use concinnity_engine::render::{backend, backend::error, overlay::text};
+use concinnity_engine::resource::{
     ColorLutTable, EnvironmentMapTable, FontTable, MaterialTable, MeshTable, SkinnedMeshTable,
     TextureTable,
 };
-use concinnity_core::settings::{ResolvedGraphics, SettingKey};
+use concinnity_engine::settings::{ResolvedGraphics, SettingKey};
 use concinnity_host::store::blob::BlobData;
 use std::sync::{Arc, Mutex};
 
 use super::GraphicsSystem;
-use concinnity_core::render::backend::recording::{
+use concinnity_engine::render::backend::recording::{
     Call, RecordingBackend, RecordingState, SharedRecording,
 };
-use concinnity_core::settings::quality::QualityPreset;
+use concinnity_engine::settings::quality::QualityPreset;
 use hooks::{TestHooks, recording_hooks, recording_hooks_with};
 
 mod assets;
@@ -65,20 +65,20 @@ type PendingAdd = Box<dyn FnOnce(&mut World)>;
 struct WorldBuilder {
     pending: Vec<PendingAdd>,
     section: Vec<u8>,
-    texture_records: Vec<concinnity_core::ecs::ResourceRecord>,
+    texture_records: Vec<concinnity_engine::ecs::ResourceRecord>,
     // Material data-resource records; each `push_textured_quad` bakes one Material
     // into `data_bytes` at the next handle, mirroring cook.
-    material_records: Vec<concinnity_core::ecs::ResourceRecord>,
+    material_records: Vec<concinnity_engine::ecs::ResourceRecord>,
     // Mesh resource records; each `push_textured_quad` Mesh takes the next
     // handle in declaration order, matching the runtime's mesh-source table.
-    mesh_records: Vec<concinnity_core::ecs::ResourceRecord>,
+    mesh_records: Vec<concinnity_engine::ecs::ResourceRecord>,
     // The singleton / pooled media kinds `push_resource` fills: font atlases,
     // the color-grading LUT, the IBL environment, and skinned geometry. Each
     // stays empty unless a test authors one.
-    font_records: Vec<concinnity_core::ecs::ResourceRecord>,
-    color_lut_records: Vec<concinnity_core::ecs::ResourceRecord>,
-    env_map_records: Vec<concinnity_core::ecs::ResourceRecord>,
-    skinned_records: Vec<concinnity_core::ecs::ResourceRecord>,
+    font_records: Vec<concinnity_engine::ecs::ResourceRecord>,
+    color_lut_records: Vec<concinnity_engine::ecs::ResourceRecord>,
+    env_map_records: Vec<concinnity_engine::ecs::ResourceRecord>,
+    skinned_records: Vec<concinnity_engine::ecs::ResourceRecord>,
 }
 
 impl WorldBuilder {
@@ -124,7 +124,7 @@ impl WorldBuilder {
         let container = ShaderPrograms {
             name: "shader".into(),
             vertex: None,
-            fragment: concinnity_core::components::ShaderSource {
+            fragment: concinnity_engine::components::ShaderSource {
                 path: "shaders/wall.hlsl".into(),
                 text: "float4 shade(VertexOut v, GpuObjectData od) { return 1.0; }".into(),
             },
@@ -158,8 +158,8 @@ impl WorldBuilder {
         let _ = mesh;
         let mesh_handle = MeshHandle::new(u32::saturating_from(self.mesh_records.len()));
         self.mesh_records
-            .push(concinnity_core::ecs::ResourceRecord {
-                resource_kind: concinnity_core::ecs::ResourceKind::Mesh,
+            .push(concinnity_engine::ecs::ResourceRecord {
+                resource_kind: concinnity_engine::ecs::ResourceKind::Mesh,
                 handle: mesh_handle.0,
                 payload: Some(mesh_loc),
                 data_bytes: Vec::new(),
@@ -170,8 +170,8 @@ impl WorldBuilder {
         // first texture) regardless of any texture's asset id.
         let handle = u32::saturating_from(self.texture_records.len());
         self.texture_records
-            .push(concinnity_core::ecs::ResourceRecord {
-                resource_kind: concinnity_core::ecs::ResourceKind::Texture,
+            .push(concinnity_engine::ecs::ResourceRecord {
+                resource_kind: concinnity_engine::ecs::ResourceKind::Texture,
                 handle,
                 payload: Some(tex_loc),
                 data_bytes: Vec::new(),
@@ -187,8 +187,8 @@ impl WorldBuilder {
         })
         .unwrap();
         self.material_records
-            .push(concinnity_core::ecs::ResourceRecord {
-                resource_kind: concinnity_core::ecs::ResourceKind::Material,
+            .push(concinnity_engine::ecs::ResourceRecord {
+                resource_kind: concinnity_engine::ecs::ResourceKind::Material,
                 handle: mat_handle,
                 payload: None,
                 data_bytes: mat_bytes,
@@ -292,15 +292,15 @@ fn init_graphics(world: &mut World, hooks: TestHooks) -> GraphicsSystem {
     let mut gs = GraphicsSystem::new(None);
     gs.test_hooks = Some(hooks);
     let mut ctx = world.context();
-    concinnity_core::ecs::decompose::run(&mut ctx);
-    concinnity_core::ecs::System::init(&mut gs, &mut ctx);
+    concinnity_engine::ecs::decompose::run(&mut ctx);
+    concinnity_engine::ecs::System::init(&mut gs, &mut ctx);
     gs
 }
 
 // Whether the world's parked backend slot currently holds a backend.
 fn backend_parked(world: &World) -> bool {
     world
-        .resource::<concinnity_core::ecs::ActiveRenderBackend>()
+        .resource::<concinnity_engine::ecs::ActiveRenderBackend>()
         .is_some_and(|slot| slot.0.is_some())
 }
 
@@ -314,12 +314,12 @@ fn backend_parked(world: &World) -> bool {
 // its persistent state / cursors from parked resources, and these tests never
 // leave a drained event in retention across a second step.
 fn step(gs: &mut GraphicsSystem, world: &mut World) -> StepResult {
-    use concinnity_core::ecs::System;
+    use concinnity_engine::ecs::System;
     let mut ctx = world.context();
-    concinnity_core::render::overlay::OverlaySystem::new().step(&mut ctx);
-    concinnity_core::spawn::SpawnSystem::new().step(&mut ctx);
-    concinnity_core::settings::system::SettingsSystem::new().step(&mut ctx);
-    concinnity_core::render::streaming::pools::StreamingSystem::default().step(&mut ctx);
+    concinnity_engine::render::overlay::OverlaySystem::new().step(&mut ctx);
+    concinnity_engine::spawn::SpawnSystem::new().step(&mut ctx);
+    concinnity_engine::settings::system::SettingsSystem::new().step(&mut ctx);
+    concinnity_engine::render::streaming::pools::StreamingSystem::default().step(&mut ctx);
     let result = gs.run_step(&mut ctx);
     if result != StepResult::Stop {
         // InputSystem's init seeds the one FrameInput row; the fresh
@@ -328,7 +328,7 @@ fn step(gs: &mut GraphicsSystem, world: &mut World) -> StepResult {
         if ctx.query::<FrameInput>().next().is_none() {
             ctx.push(FrameInput::default());
         }
-        concinnity_core::input::system::InputSystem::new().step(&mut ctx);
+        concinnity_engine::input::system::InputSystem::new().step(&mut ctx);
     }
     result
 }
@@ -391,9 +391,9 @@ fn effects_scene(effects: ResolvedGraphics) -> WorldBuilder {
 // The resolved settings snapshot init hands to SettingsSystem: the live values
 // every settings row displays and cycles, after the world's config, the
 // persisted overrides, and the preset ceiling have all settled.
-fn settings_state(world: &World) -> &concinnity_core::settings::system::SettingsState {
+fn settings_state(world: &World) -> &concinnity_engine::settings::system::SettingsState {
     world
-        .resource::<concinnity_core::settings::system::SettingsSlot>()
+        .resource::<concinnity_engine::settings::system::SettingsSlot>()
         .expect("SettingsSlot parked at init")
         .0
         .as_ref()
@@ -426,8 +426,8 @@ fn push_skinned_payload(b: &mut WorldBuilder, name: AssetId, sm: SkinnedMesh, pa
     let handle = u32::saturating_from(b.skinned_records.len());
     let data = postcard::to_allocvec(&(name.0, sm)).unwrap();
     b.skinned_records
-        .push(concinnity_core::ecs::ResourceRecord {
-            resource_kind: concinnity_core::ecs::ResourceKind::SkinnedMesh,
+        .push(concinnity_engine::ecs::ResourceRecord {
+            resource_kind: concinnity_engine::ecs::ResourceKind::SkinnedMesh,
             handle,
             payload: Some(locator),
             data_bytes: data,
@@ -457,7 +457,7 @@ fn skinned_payload_with_morphs(
     lods: &[(f32, Vec<u16>)],
     morphs: &mesh_payload::PayloadMorphs,
 ) -> Vec<u8> {
-    use concinnity_core::gfx::mesh_payload::{
+    use concinnity_engine::gfx::mesh_payload::{
         PayloadJoint, SkinnedVertex, serialize_skinned_with_lods,
     };
     let vertices: Vec<SkinnedVertex> = (0..n)

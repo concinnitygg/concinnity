@@ -16,10 +16,10 @@
 //! below the field (its own row pool here, so it can coexist with the Assets
 //! panel's combo).
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::form::{self, FieldKind, FormField};
 use super::form_extras::{self, ExtraRow};
@@ -1194,7 +1194,7 @@ pub(crate) fn override_menu_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
 
     fn test_origin() -> [f32; 2] {
         default_origin(1280.0)

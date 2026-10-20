@@ -7,7 +7,7 @@
 // name to embedded bytes is generated beside them.
 //
 // The single-source half never touches a directory: its programs and their text
-// come from `concinnity_core::render`, which embeds every shader, so this
+// come from `concinnity_engine::render`, which embeds every shader, so this
 // compiles the same bytes whether the crate is built from the workspace or
 // unpacked from a registry tarball with no sibling checkout beside it. Each
 // program takes the dxc / spirv-cross route to MSL, and that MSL is kept for
@@ -20,9 +20,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use concinnity_core::platform::Platform;
-use concinnity_core::render::shader::programs::{Table, Variant};
-use concinnity_core::render::shader::source;
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::shader::programs::{Table, Variant};
+use concinnity_engine::render::shader::source;
 use concinnity_shader::metallib;
 
 use crate::shader_artifacts::{embed, stub_lookup_source};
@@ -143,7 +143,7 @@ impl Job {
         // Assembly answers an unknown name with empty text, which would reach
         // the compiler as a missing entry point rather than a typo.
         assert!(
-            concinnity_core::render::shader::embedded::embedded(file).is_some(),
+            concinnity_engine::render::shader::embedded::embedded(file).is_some(),
             "no embedded shader named {file}"
         );
         Self {
@@ -256,7 +256,7 @@ mod tests {
     // the renderer assembles for it, so an unedited shader is a content hit.
     #[test]
     fn a_program_job_is_keyed_by_artifact_name_over_the_assembled_source() {
-        use concinnity_core::render::shader::programs::shared;
+        use concinnity_engine::render::shader::programs::shared;
         let variant = shared::FOG_FRAG.at(false);
         let job = Job::program(variant);
         assert_eq!(job.name, "fog_frag.hlsl");

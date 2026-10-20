@@ -4,10 +4,10 @@
 //! declarations that can drift apart. The water body and the fog froxel kernel
 //! bind the shared `ShadowUniforms` from `light_types.hlsl`.
 
-use concinnity_core::gfx::render_types::{
+use concinnity_engine::gfx::render_types::{
     FogFroxelParams, FogParams, RtGeomEntry, RtParams, ShadowUniforms,
 };
-use concinnity_core::render::uniforms::{
+use concinnity_engine::render::uniforms::{
     GlassMeshParams, GlassParams, ProbeSet, ProbeUniforms, TransparentView, WaterOceanGpu,
     WaterParams, WaterRippleGpu, WaterSeaFaceGpu, WaterSeaGpu, WaterWaveGpu,
 };

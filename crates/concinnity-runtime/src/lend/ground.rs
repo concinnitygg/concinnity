@@ -1,7 +1,7 @@
 // The background thread that builds a planet's ground patches, so sampling
 // tens of thousands of heights never lands on a frame.
 
-use concinnity_core::planet::{GroundBuilder, PatchRequest, PatchResult, PlanetShape};
+use concinnity_engine::planet::{GroundBuilder, PatchRequest, PatchResult, PlanetShape};
 
 use concinnity_host::thread::worker::Worker;
 
@@ -42,7 +42,7 @@ impl GroundBuilder for GroundWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::planet::LocalFrame;
+    use concinnity_engine::planet::LocalFrame;
 
     #[test]
     fn the_worker_builds_what_it_is_asked_for() {

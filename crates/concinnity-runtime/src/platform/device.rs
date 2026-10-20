@@ -6,10 +6,10 @@
 //! construction reports `Unsupported`, and a machine with no GPU is what the
 //! probe reports.
 
-use concinnity_core::platform::Platform;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::backend::init::BackendInit;
-use concinnity_core::render::backend::{DeviceProbe, RenderBackend};
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::BackendInit;
+use concinnity_engine::render::backend::{DeviceProbe, RenderBackend};
 use std::sync::OnceLock;
 
 /// Whether a rendering backend compiles into this build. False leaves the
@@ -61,7 +61,7 @@ pub(crate) fn init_backend(init: BackendInit<'_>) -> RenderResult<Box<dyn Render
     {
         let _ = init;
         Err(
-            concinnity_core::render::backend::error::RenderError::Unsupported {
+            concinnity_engine::render::backend::error::RenderError::Unsupported {
                 op: "init_backend",
             },
         )
@@ -73,8 +73,8 @@ pub(crate) fn init_backend(init: BackendInit<'_>) -> RenderResult<Box<dyn Render
 #[cfg(all(test, not(any(backend_metal, backend_dx, backend_vk))))]
 mod tests {
     use super::*;
-    use concinnity_core::components::Window;
-    use concinnity_core::render::backend::error::RenderError;
+    use concinnity_engine::components::Window;
+    use concinnity_engine::render::backend::error::RenderError;
 
     #[test]
     fn a_build_with_no_backend_reports_unsupported() {

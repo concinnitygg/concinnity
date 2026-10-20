@@ -2,8 +2,8 @@
 //! indent / outdent, the clipboard, and undo / redo. Every edit goes through
 //! the history, so each one can be taken back.
 
-use concinnity_core::components::KeyEvent;
-use concinnity_core::window::clipboard::Clipboard;
+use concinnity_engine::components::KeyEvent;
+use concinnity_engine::window::clipboard::Clipboard;
 
 use super::buffer::{Pos, normalize_newlines, ordered};
 use super::history::{Change, Cursor, EditKind};

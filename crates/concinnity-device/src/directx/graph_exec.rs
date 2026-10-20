@@ -1,6 +1,6 @@
 //! DirectX-side executor for the render graph. `DxContext::execute_graph`
 //! walks the `CompiledGraph` produced by the shared
-//! `concinnity_core::render::render_graph::build_frame_graph`
+//! `concinnity_engine::render::render_graph::build_frame_graph`
 //! and dispatches each pass to its `encode_*` method. Mirrors the Metal +
 //! Vulkan executors; every backend now drives the same builder.
 //!
@@ -42,20 +42,20 @@
 //! reads those pools in its vertex stage, with the transition between them
 //! derived from the graph rather than emitted inline.
 
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::{ClusterParams, TextDrawCall};
 use concinnity_core::math::narrow_f32;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::frame::plan::{EffectBlocks, FogBlocks};
-use concinnity_core::render::particles::ParticleFrame;
-use concinnity_core::render::planar_reflection::PlanarFramePlan;
-use concinnity_core::render::render_graph::{
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::{ClusterParams, TextDrawCall};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::frame::plan::{EffectBlocks, FogBlocks};
+use concinnity_engine::render::particles::ParticleFrame;
+use concinnity_engine::render::planar_reflection::PlanarFramePlan;
+use concinnity_engine::render::render_graph::{
     AliasRows, BarrierOp, BarrierTable, CompiledGraph, CompiledPass, GraphResourceClass, PassId,
     PassRecorder, PassScratch, execute_passes,
 };
-use concinnity_core::render::uniforms::{GBufferView, PassCamera};
-use concinnity_core::render::{backend::pass_timing, render_graph};
-use concinnity_core::transform::mat4_inverse;
+use concinnity_engine::render::uniforms::{GBufferView, PassCamera};
+use concinnity_engine::render::{backend::pass_timing, render_graph};
+use concinnity_engine::transform::mat4_inverse;
 use concinnity_host::thread::jobs;
 use std::mem::ManuallyDrop;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -472,7 +472,9 @@ fn emit_graph_restores(
 #[cfg(debug_assertions)]
 fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &DxBarrierRegistry) {
     use super::barrier_translate::d3d12_state;
-    use concinnity_core::render::render_graph::{ResourceState, barrier_coverage_gaps_for_driven};
+    use concinnity_engine::render::render_graph::{
+        ResourceState, barrier_coverage_gaps_for_driven,
+    };
 
     let driven: Vec<bool> = registry.driven().collect();
     let gaps = barrier_coverage_gaps_for_driven(graph, &driven);
@@ -664,9 +666,9 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     pub effects: EffectBlocks,
     // How the particle and transparent passes treat the reactive mask, and
     // whether TAA, the upscaler or the reactive view reads it.
-    pub reactive: concinnity_core::render::temporal::reactive_mask::ReactiveMaskPlan,
+    pub reactive: concinnity_engine::render::temporal::reactive_mask::ReactiveMaskPlan,
     // What may be trampling the grass this frame.
-    pub grass_benders: &'a [concinnity_core::render::environment::grass::GrassBender],
+    pub grass_benders: &'a [concinnity_engine::render::environment::grass::GrassBender],
     // This frame's particle clock, advanced before recording; `None` when the
     // particle passes are inert.
     pub particle: Option<ParticleFrame>,

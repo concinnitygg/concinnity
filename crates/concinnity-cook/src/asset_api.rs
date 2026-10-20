@@ -3,7 +3,7 @@
 //! This module is the single place where "type name + JSON args → `BlobAssetDef`"
 //! is implemented.
 use crate::authoring::AuthoringError;
-use concinnity_core::ecs::{AssetOrigin, BlobAssetDef};
+use concinnity_engine::ecs::{AssetOrigin, BlobAssetDef};
 
 use crate::authoring::registry::{RegisteredType, Registration};
 
@@ -89,8 +89,8 @@ fn resolve_args(reg: &Registration, supplied: Option<&serde_json::Value>) -> ser
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::ProceduralMesh;
-    use concinnity_core::ecs::AssetPayload;
+    use concinnity_engine::components::ProceduralMesh;
+    use concinnity_engine::ecs::AssetPayload;
 
     fn shader_reg() -> Registration {
         Registration {

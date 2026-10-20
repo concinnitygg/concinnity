@@ -3,7 +3,7 @@
 //! the selected mesh, and the schema a character model supplies its presets
 //! from. The slider drag itself is `tests/drag/shape_tests.rs`.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::declared_id;
 use crate::editor::hook::tests::fixtures::{hook, select, shape_world_entries};

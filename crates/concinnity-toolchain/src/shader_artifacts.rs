@@ -7,7 +7,7 @@
 //! that embeds its shaders needs no compiler on the host that runs it, which is
 //! otherwise a hard runtime dependency of the DirectX and Vulkan backends.
 //!
-//! The declarations come from `concinnity_core::render::shader::programs`, the
+//! The declarations come from `concinnity_engine::render::shader::programs`, the
 //! same table the renderer iterates, so the text compiled here is the text the
 //! renderer would have compiled.
 
@@ -84,7 +84,7 @@ pub fn precompile_shader_artifacts(
         |artifact| {
             (
                 artifact.name.clone(),
-                concinnity_core::render::shader::source::source_digest(&artifact.source),
+                concinnity_engine::render::shader::source::source_digest(&artifact.source),
                 art_dir.join(&artifact.name),
             )
         },

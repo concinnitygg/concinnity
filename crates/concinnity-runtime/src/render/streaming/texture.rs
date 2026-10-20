@@ -6,8 +6,8 @@
 //! in memory); `DiskPayloadSource` re-reads them from their blob files on disk
 //! (used by `cn run`, so the bytes never stay RAM-resident).
 
-use concinnity_core::bake::texture::{self, TextureImage};
-use concinnity_core::render::streaming::pools::ItemLoad;
+use concinnity_engine::bake::texture::{self, TextureImage};
+use concinnity_engine::render::streaming::pools::ItemLoad;
 use std::sync::Arc;
 
 use concinnity_host::thread::worker::Worker;

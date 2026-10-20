@@ -4,7 +4,7 @@
 //! that assigns to the prop under the cursor instead.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::components::Transform;
+use concinnity_engine::components::Transform;
 use concinnity_host::thread::asset_id;
 
 use crate::frame_hook::FrameHook;

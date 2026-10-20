@@ -9,11 +9,11 @@
 //! interleaving-dependent under the atomic counter and must never be treated
 //! as world state.
 
-use concinnity_core::components::{
+use concinnity_engine::components::{
     Behavior, BehaviorExpr, BehaviorNode, BehaviorQuery, BehaviorSource, BodyDynamics, Collider,
     ContactEvent, PhysicsConfig, Prop, PropCollider, Transform,
 };
-use concinnity_core::ecs::{ScheduleMode, StepResult, World};
+use concinnity_engine::ecs::{ScheduleMode, StepResult, World};
 
 use concinnity_core::fnv::Fnv1a;
 use concinnity_runtime::SYSTEMS;
@@ -128,7 +128,7 @@ fn build_world() -> World {
         world.insert(
             e,
             Collider(PropCollider {
-                shape: concinnity_core::components::PropColliderShape::Cuboid,
+                shape: concinnity_engine::components::PropColliderShape::Cuboid,
                 half_extents: [0.4, 0.4, 0.4],
                 ..Default::default()
             }),

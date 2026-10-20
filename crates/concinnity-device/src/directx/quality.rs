@@ -23,20 +23,20 @@
 //! slot; the dynamic `scene_srv_for_post` picks the RT output over SSR each frame,
 //! so no rewire or rebuild is needed.
 
-use concinnity_core::gfx::{auto_exposure, render_types};
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::backend::feature_plan::{BackendFacts, FeaturePlan};
-use concinnity_core::render::backend::init;
-use concinnity_core::render::post::reflection_path::ReflectionPath;
-use concinnity_core::render::post::rt_reflections;
-use concinnity_core::render::render_graph::{
+use concinnity_engine::gfx::{auto_exposure, render_types};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan};
+use concinnity_engine::render::backend::init;
+use concinnity_engine::render::post::reflection_path::ReflectionPath;
+use concinnity_engine::render::post::rt_reflections;
+use concinnity_engine::render::render_graph::{
     BackendTraits, BuildStatus, FeatureGates, PoolGates, plan_pool_slots,
 };
-use concinnity_core::settings::ResolvedGraphics;
-use concinnity_core::settings::apply::{ApplyPlan, SettingsTarget, apply_plan};
+use concinnity_engine::settings::ResolvedGraphics;
+use concinnity_engine::settings::apply::{ApplyPlan, SettingsTarget, apply_plan};
 use windows::Win32::Graphics::Direct3D12::*;
 
-use concinnity_core::render::post::device::PostExtent;
+use concinnity_engine::render::post::device::PostExtent;
 
 use super::context::DxContext;
 use super::post::gbuffer::GbufferSlots;

@@ -1,9 +1,9 @@
 // The host half of frame submission: core's `submit::submit` timed by
 // the monotonic clock, with a device loss reported to the crash handler.
 
-use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::frame::snapshot::RenderSnapshot;
-use concinnity_core::render::frame::submit::{self, FramePolicy, SubmitOutcome};
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::frame::snapshot::RenderSnapshot;
+use concinnity_engine::render::frame::submit::{self, FramePolicy, SubmitOutcome};
 
 pub(crate) fn submit(
     policy: &mut FramePolicy,
@@ -25,8 +25,8 @@ pub(crate) fn submit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::profile::RenderStats;
-    use concinnity_core::render::backend::recording::recording_backend;
+    use concinnity_engine::profile::RenderStats;
+    use concinnity_engine::render::backend::recording::recording_backend;
     use concinnity_host::clock::micros_since;
     use std::time::Instant;
 

@@ -1,11 +1,11 @@
 //! The std runtime: what runs a compiled world on an operating system.
-//! `concinnity_core` makes every decision; this crate holds the run loop and
+//! `concinnity_engine` makes every decision; this crate holds the run loop and
 //! host entry ([`Runtime`], [`run_from`]), the graphics driver that builds a
 //! `Box<dyn RenderBackend>` through concinnity-device and submits each frame
 //! without naming a concrete backend, and what core's systems are lent through
 //! `SystemHost`: the job pool, the planet ground thread, the kira audio output,
 //! gilrs gamepads and the file stores behind saves and settings. It also
-//! installs crash capture and the allocator. Depends on concinnity-core,
+//! installs crash capture and the allocator. Depends on concinnity-engine,
 //! concinnity-host and concinnity-device (no concinnity-cook, no image
 //! decoders). A host that edits a running world (concinnity-dev) does it
 //! through [`live_edit`]; everything else it drives is the ordinary host API.

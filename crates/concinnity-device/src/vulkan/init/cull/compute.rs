@@ -3,10 +3,10 @@
 //! against.
 
 use ash::vk;
-use concinnity_core::gfx::render_types;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::backend::init::SceneData;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::SceneData;
 
 use super::CullPlan;
 use super::bindless::BindlessPass;
@@ -234,7 +234,7 @@ pub(super) fn build_compute_cull(
     // geometry) and the world declares instanced props. Mirrors
     // `directx/init/mod.rs`.
     if n_instances > 0 && !object_buffers.is_empty() {
-        use concinnity_core::gfx::render_types::{
+        use concinnity_engine::gfx::render_types::{
             GpuDrawArgs, GpuObjectData, draw_args_flags, instance_object_records,
         };
         let records = instance_object_records(

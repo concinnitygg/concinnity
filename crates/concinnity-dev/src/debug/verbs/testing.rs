@@ -1,7 +1,7 @@
 //! Calls answered the way a running engine answers them, for verb tests.
 
-use concinnity_core::ecs::World;
-use concinnity_core::render::backend::NullBackend;
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::backend::NullBackend;
 use serde_json::{Map, Value};
 use std::sync::{Arc, Mutex};
 

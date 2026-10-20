@@ -1,7 +1,7 @@
 use super::*;
-use concinnity_core::budget::{MemoryBudget, ThreadBudget};
-use concinnity_core::components::{AppConfig, FramePriority};
-use concinnity_core::ecs::FrameRateCap;
+use concinnity_engine::budget::{MemoryBudget, ThreadBudget};
+use concinnity_engine::components::{AppConfig, FramePriority};
+use concinnity_engine::ecs::FrameRateCap;
 
 fn thread_budget(runtime: &Runtime) -> ThreadBudget {
     *runtime.world().resource().expect("thread budget published")
@@ -112,9 +112,9 @@ fn the_launch_request_survives_a_world_load_and_restart() {
 // report is scheduled; an ordinary one leaves a declared config inert.
 #[test]
 fn only_a_benchmark_launch_arms_the_world() {
-    use concinnity_core::benchmark::BenchmarkRun;
-    use concinnity_core::components::BenchmarkConfig;
-    use concinnity_core::launch::LaunchArgs;
+    use concinnity_engine::benchmark::BenchmarkRun;
+    use concinnity_engine::components::BenchmarkConfig;
+    use concinnity_engine::launch::LaunchArgs;
 
     let declared = || {
         let mut world = World::new();
@@ -144,8 +144,8 @@ fn only_a_benchmark_launch_arms_the_world() {
 // launch's and are what the run publishes.
 #[test]
 fn an_apps_args_replace_the_launchs() {
-    use concinnity_core::benchmark::BenchmarkRun;
-    use concinnity_core::launch::LaunchArgs;
+    use concinnity_engine::benchmark::BenchmarkRun;
+    use concinnity_engine::launch::LaunchArgs;
 
     let mut world = World::new();
     let args = LaunchArgs {

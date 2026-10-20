@@ -1,6 +1,6 @@
 //! Why a declared world did not compile.
 
-use concinnity_core::error::AssetError;
+use concinnity_engine::error::AssetError;
 use thiserror::Error;
 
 /// Why a declared world did not compile into a runnable world or a blob file.

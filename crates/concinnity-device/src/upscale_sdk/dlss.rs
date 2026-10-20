@@ -13,10 +13,10 @@
 use std::ffi::c_void;
 use std::fmt;
 
-use concinnity_core::components::UpscaleQuality;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::depth::{CAMERA_DEPTH, DepthMapping};
-use concinnity_core::render::output::dlss::{DlssPreset, NGX_API_VERSION};
+use concinnity_engine::components::UpscaleQuality;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::depth::{CAMERA_DEPTH, DepthMapping};
+use concinnity_engine::render::output::dlss::{DlssPreset, NGX_API_VERSION};
 
 use super::UpscaleExtent;
 

@@ -11,11 +11,11 @@
 //! Shared by the payload build and by `cn debug`'s hot reload, so an edit
 //! recompiles through exactly the path the cook took.
 
-use concinnity_core::components::ShaderSource;
-use concinnity_core::platform::Platform;
-use concinnity_core::render::sdf::programs::SdfPrograms;
-use concinnity_core::render::shader::programs::raymarch::{self, Family};
-use concinnity_core::render::shader::source::SourceFile;
+use concinnity_engine::components::ShaderSource;
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::shader::programs::raymarch::{self, Family};
+use concinnity_engine::render::shader::source::SourceFile;
 use concinnity_shader::diagnostics::Diagnostic;
 
 use crate::compile::program::{self, ProgramError};

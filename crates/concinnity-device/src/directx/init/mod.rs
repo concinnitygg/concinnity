@@ -20,13 +20,13 @@
 //! `heap_layout.rs` holds every heap's slot layout, `pipelines.rs` the main-pass
 //! root signature and PSO builders, and `adapter.rs` the adapter selection.
 
-use concinnity_core::gfx::render_types::{FALLBACK_TEXTURE_COUNT, PostProcessParams};
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::backend::feature_plan::{BackendFacts, FeaturePlan};
-use concinnity_core::render::backend::init::{self, BackendInit, PlanarBudget, WorldShader};
-use concinnity_core::render::scene_state::{DrawList, SceneState};
-use concinnity_core::render::shader::reload::ShaderReload;
-use concinnity_core::settings::ResolvedGraphics;
+use concinnity_engine::gfx::render_types::{FALLBACK_TEXTURE_COUNT, PostProcessParams};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan};
+use concinnity_engine::render::backend::init::{self, BackendInit, PlanarBudget, WorldShader};
+use concinnity_engine::render::scene_state::{DrawList, SceneState};
+use concinnity_engine::render::shader::reload::ShaderReload;
+use concinnity_engine::settings::ResolvedGraphics;
 
 use self::heap_layout::{RtvHeapLayout, SrvHeapParams};
 use super::context::{
@@ -60,7 +60,7 @@ pub(in crate::directx) use bootstrap::swapchain_flags;
 // Per-mip Hi-Z UAV slots reserved at init: the deepest pyramid the two SPD
 // dispatches write at any size, so the heap layout survives a resize.
 pub(in crate::directx) const HIZ_MAX_MIPS: usize =
-    concinnity_core::render::hiz::spd::MAX_MIPS as usize;
+    concinnity_engine::render::hiz::spd::MAX_MIPS as usize;
 
 // The hardware every init stage creates resources through, and whether the
 // shader compiles it makes resolve from disk for hot reload.
@@ -138,7 +138,7 @@ impl Features {
 
 impl DxContext {
     // Construct a fresh context (new device + window + swapchain) from the
-    // assembled backend inputs (see `concinnity_core::render::backend::init::BackendInit`).
+    // assembled backend inputs (see `concinnity_engine::render::backend::init::BackendInit`).
     pub(crate) fn new(init: BackendInit<'_>) -> RenderResult<Self> {
         Self::build(init, None)
     }
@@ -468,7 +468,7 @@ impl DxContext {
             composite,
             bloom: Some(bloom),
             post_process: features.post_process,
-            pre_exposure: concinnity_core::gfx::auto_exposure::PreExposure::UNIT,
+            pre_exposure: concinnity_engine::gfx::auto_exposure::PreExposure::UNIT,
             gbuffer,
             taa,
             ssao,

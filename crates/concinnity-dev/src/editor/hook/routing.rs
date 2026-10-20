@@ -2,8 +2,8 @@
 //! wheel region, title-bar dragging, and click hit-testing across the top bar and
 //! the registered panels (front-to-back).
 
-use concinnity_core::components::{FrameInput, InputKey};
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, InputKey};
+use concinnity_engine::ecs::World;
 
 use super::{Drag, EditorHook, bookmarks, scroll_step};
 use crate::editor::hud::{self, HudState};

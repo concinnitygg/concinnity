@@ -6,13 +6,13 @@
 //! the outline), so form edits and drags update immediately. The lines ride
 //! the renderer's line pass, which handles depth: occluded runs draw faint.
 
-use concinnity_core::components::{
+use concinnity_core::math::narrow_f32;
+use concinnity_engine::components::{
     Collider, PointLight, RectAreaLight, ReflectionProbe, SPOT_MAX_ANGLE_DEG, SpotLight, Transform,
     TriggerVolume,
 };
-use concinnity_core::ecs::{Entity, World};
-use concinnity_core::gfx::lines::Line;
-use concinnity_core::math::narrow_f32;
+use concinnity_engine::ecs::{Entity, World};
+use concinnity_engine::gfx::lines::Line;
 
 use concinnity_cook::authoring::world::entry_handles;
 
@@ -230,7 +230,7 @@ fn push_camera(ctx: &ShapeCtx<'_>, out: &mut Vec<Line>) {
     let authored = billboards::position_of(&args).unwrap_or([0.0; 3]);
     let origin = anchored_position(ctx.world, ctx.entity, authored);
     let view =
-        concinnity_core::gfx::camera::view_matrix(origin, num("yaw", 0.0), num("pitch", 0.0));
+        concinnity_engine::gfx::camera::view_matrix(origin, num("yaw", 0.0), num("pitch", 0.0));
     let right = [view[0][0], view[1][0], view[2][0]];
     let up = [view[0][1], view[1][1], view[2][1]];
     let forward = [-view[0][2], -view[1][2], -view[2][2]];
@@ -306,8 +306,8 @@ fn anchored_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Camera3D, PropCollider};
-    use concinnity_core::ecs::ComponentSlot;
+    use concinnity_engine::components::{Camera3D, PropCollider};
+    use concinnity_engine::ecs::ComponentSlot;
     use concinnity_host::thread::asset_id;
 
     const VP: [f32; 2] = [1280.0, 720.0];
@@ -421,7 +421,7 @@ mod tests {
             TriggerVolume {
                 position: [0.0; 3],
                 collider: PropCollider {
-                    shape: concinnity_core::components::PropColliderShape::Ball,
+                    shape: concinnity_engine::components::PropColliderShape::Ball,
                     radius: 2.0,
                     ..Default::default()
                 },
@@ -433,7 +433,7 @@ mod tests {
 
         // A gizmo-dragged Transform moves the outline off the authored spot.
         let e = world
-            .resource::<concinnity_core::ecs::EntityById>()
+            .resource::<concinnity_engine::ecs::EntityById>()
             .unwrap()
             .iter()
             .next()
@@ -461,13 +461,13 @@ mod tests {
         let mut world = world_with(
             "crate",
             Collider(PropCollider {
-                shape: concinnity_core::components::PropColliderShape::Cuboid,
+                shape: concinnity_engine::components::PropColliderShape::Cuboid,
                 half_extents: [1.0, 1.0, 1.0],
                 ..Default::default()
             }),
         );
         let e = world
-            .resource::<concinnity_core::ecs::EntityById>()
+            .resource::<concinnity_engine::ecs::EntityById>()
             .unwrap()
             .iter()
             .next()
@@ -590,7 +590,7 @@ mod tests {
             "shot",
             Camera3D {
                 position: [0.0; 3],
-                view_matrix: concinnity_core::gfx::camera::view_matrix([0.0; 3], 0.0, 0.0),
+                view_matrix: concinnity_engine::gfx::camera::view_matrix([0.0; 3], 0.0, 0.0),
                 fov_y_degrees: 75.0,
                 near: 0.05,
                 view_distance: None,

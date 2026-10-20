@@ -585,7 +585,7 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
 
         // 3D scene files: one SceneImport line. The build expands it into
         // Textures / Materials / Meshes / Models / Props at compile time, so
-        // world.jsonl stays compact (see concinnity_core::bake::import).
+        // world.jsonl stays compact (see concinnity_engine::bake::import).
         //
         // A `.glb` is checked for the panorama-sphere packaging first: those
         // files carry an environment image, not geometry, and importing one as

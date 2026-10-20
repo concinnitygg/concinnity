@@ -8,7 +8,7 @@
 //! `list_panel`; the rows are label-only (no checkbox) and read from the templates
 //! crate.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use super::list_panel::{self, ListIds, Row};
 use super::registry::PanelKey;
@@ -94,7 +94,7 @@ pub(crate) fn place(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_engine::components::{Sprite, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()

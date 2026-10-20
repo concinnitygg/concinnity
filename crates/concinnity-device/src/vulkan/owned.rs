@@ -30,8 +30,8 @@
 //! context's retiring objects are drained by its successor.
 
 use ash::vk;
-use concinnity_core::render::buffers::retire_pool::RetirePool;
-use concinnity_core::render::shadow::bias;
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::render::shadow::bias;
 use std::sync::{Arc, Mutex};
 
 // One retired object, tagged with the call that destroys it.

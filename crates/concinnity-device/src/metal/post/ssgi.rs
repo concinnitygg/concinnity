@@ -1,14 +1,14 @@
 //! Metal's share of screen-space global illumination, which is its settings and
 //! where the pass reads and writes this frame. Every stage -- the pipelines, the
 //! depth pyramids, the accumulation and all the draws -- is written once in
-//! `concinnity_core::render::post::ssgi` and reaches Metal through
+//! `concinnity_engine::render::post::ssgi` and reaches Metal through
 //! `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::post::ssgi::settings::SsgiSettings;
-use concinnity_core::render::post::ssgi::{SsgiPass, SsgiResolveInputs, SsgiTraceInputs};
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::ssgi::settings::SsgiSettings;
+use concinnity_engine::render::post::ssgi::{SsgiPass, SsgiResolveInputs, SsgiTraceInputs};
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLTexture;
 

@@ -23,16 +23,16 @@
 //! resolved settings never turn RT on for an RT-incapable GPU or beside XeSS.
 
 use ash::vk;
-use concinnity_core::gfx::{auto_exposure, render_types};
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::backend::feature_plan::{BackendFacts, FeatureChange, FeaturePlan};
-use concinnity_core::render::backend::init;
-use concinnity_core::render::post::rt_reflections;
-use concinnity_core::render::render_graph::{
+use concinnity_engine::gfx::{auto_exposure, render_types};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeatureChange, FeaturePlan};
+use concinnity_engine::render::backend::init;
+use concinnity_engine::render::post::rt_reflections;
+use concinnity_engine::render::render_graph::{
     BackendTraits, BuildStatus, FeatureGates, PoolGates, plan_pool_slots,
 };
-use concinnity_core::settings::ResolvedGraphics;
-use concinnity_core::settings::apply::{ApplyPlan, SettingsTarget, apply_plan};
+use concinnity_engine::settings::ResolvedGraphics;
+use concinnity_engine::settings::apply::{ApplyPlan, SettingsTarget, apply_plan};
 
 use super::context::VkContext;
 use super::post::SsaoResources;

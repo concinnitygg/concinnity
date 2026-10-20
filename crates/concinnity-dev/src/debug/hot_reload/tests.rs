@@ -2,16 +2,16 @@
 //! module). Pull each submodule's items in explicitly.
 
 use super::watch_dirs::WatchDirs;
-use concinnity_core::animation::skeleton;
-use concinnity_core::bake::texture::TextureImage;
-use concinnity_core::components::{ProceduralMesh, SkeletonJoint, Story, StoryReload};
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{EventCursor, World};
-use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
-use concinnity_core::gfx::{mesh_payload, render_types};
-use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::render::world_load::source_maps::*;
-use concinnity_core::render::{
+use concinnity_engine::animation::skeleton;
+use concinnity_engine::bake::texture::TextureImage;
+use concinnity_engine::components::{ProceduralMesh, SkeletonJoint, Story, StoryReload};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{EventCursor, World};
+use concinnity_engine::gfx::render_types::{DrawIndex, SkinnedIndex};
+use concinnity_engine::gfx::{mesh_payload, render_types};
+use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::render::world_load::source_maps::*;
+use concinnity_engine::render::{
     backend, backend::error, environment::volumetric_fog, scene_state, slots::draw_slot,
 };
 use concinnity_runtime::live_edit::hot_reload_sources::HotReloadSources;
@@ -622,7 +622,7 @@ fn state_with_only_shaders_still_spawns_a_watcher() {
     // A world whose only reloadable sources are Shader files (no textures, no
     // meshes, no LUTs, no IBL, no world.jsonl) still wants the watcher alive
     // so a shader save triggers the recompile.
-    use concinnity_core::render::world_load::source_maps::{
+    use concinnity_engine::render::world_load::source_maps::{
         ShaderFile, ShaderSourceEntry, ShaderSourceMap,
     };
     let path = concinnity_host::scratch::path("asset_hot_reload_shader_only.hlsl")
@@ -634,7 +634,7 @@ fn state_with_only_shaders_still_spawns_a_watcher() {
             name: "lit".to_string(),
             bucket: 0,
             files: vec![ShaderFile {
-                stage: concinnity_core::components::ShaderStage::Fragment,
+                stage: concinnity_engine::components::ShaderStage::Fragment,
                 resolved_path: path,
             }],
         }],
@@ -2358,8 +2358,8 @@ fn armed_driver_survives_a_drive_over_an_empty_world() {
 
 #[test]
 fn apply_effects_splices_the_matching_skeleton_pose_only() {
-    use concinnity_core::animation::skeleton::{Joint, JointPose, Skeleton};
-    use concinnity_core::components::SkeletonPose;
+    use concinnity_engine::animation::skeleton::{Joint, JointPose, Skeleton};
+    use concinnity_engine::components::SkeletonPose;
 
     let mut world = World::new();
     world.add_component(SkeletonPose::new(

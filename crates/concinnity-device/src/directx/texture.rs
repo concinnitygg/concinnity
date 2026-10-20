@@ -3,10 +3,10 @@
 // default heap (GPU-local) via CopyTextureRegion on a one-shot command list.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::mipmap;
-use concinnity_core::render::output::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::depth::DEPTH_CLEAR;
+use concinnity_engine::render::mipmap;
+use concinnity_engine::render::output::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
@@ -283,8 +283,8 @@ pub(super) struct TextureLevel<'a> {
 }
 
 // DXGI equivalent of a compiled texture payload format.
-fn dxgi_texture_format(format: concinnity_core::bake::texture::TextureFormat) -> DXGI_FORMAT {
-    use concinnity_core::bake::texture::TextureFormat;
+fn dxgi_texture_format(format: concinnity_engine::bake::texture::TextureFormat) -> DXGI_FORMAT {
+    use concinnity_engine::bake::texture::TextureFormat;
     match format {
         TextureFormat::Rgba8 => DXGI_FORMAT_R8G8B8A8_UNORM,
         TextureFormat::Bc1 => DXGI_FORMAT_BC1_UNORM,
@@ -300,7 +300,7 @@ fn dxgi_texture_format(format: concinnity_core::bake::texture::TextureFormat) ->
 // result, which picks the view format back off the resource.
 pub(super) fn upload_texture_image_deferred(
     alloc: &DeviceAllocator,
-    image: &concinnity_core::bake::texture::TextureImage,
+    image: &concinnity_engine::bake::texture::TextureImage,
 ) -> RenderResult<(PooledTexture, UploadInFlight)> {
     image.validate().map_err(RenderError::Other)?;
     let levels: Vec<TextureLevel<'_>> = image
@@ -318,7 +318,7 @@ pub(super) fn upload_texture_image_deferred(
 // Synchronous `upload_texture_image_deferred`.
 pub(super) fn upload_texture_image(
     alloc: &DeviceAllocator,
-    image: &concinnity_core::bake::texture::TextureImage,
+    image: &concinnity_engine::bake::texture::TextureImage,
 ) -> RenderResult<PooledTexture> {
     let (texture, in_flight) = upload_texture_image_deferred(alloc, image)?;
     wait_for_queue(alloc.device(), alloc.queue())?;
@@ -1472,7 +1472,7 @@ fn upload_cube_resource(
     mip_count: u32,
     bytes: &[u8],
 ) -> RenderResult<PooledTexture> {
-    let needed = concinnity_core::bake::environment_map::cube_mip_byte_len(face_size, 0)
+    let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, 0)
         .map_err(RenderError::Other)?;
     if mip_count == 1 && bytes.len() < needed {
         return Err(RenderError::Other(format!(
@@ -1556,7 +1556,7 @@ fn upload_face_major_into_cube(
         )));
     }
     for (mip, slab) in mip_bytes.iter().enumerate().take(mip_count as usize) {
-        let needed = concinnity_core::bake::environment_map::cube_mip_byte_len(face_size, mip)
+        let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, mip)
             .map_err(RenderError::Other)?;
         if slab.len() < needed {
             return Err(RenderError::Other(format!(

@@ -1,10 +1,10 @@
 //! The `Runtime` value: a world plus the loop state that drives it.
 
-use concinnity_core::budget::{MemoryBudget, ThreadBudget};
-use concinnity_core::components::AppConfig;
-use concinnity_core::ecs::{StepResult, World};
-use concinnity_core::error::WorldError;
 use concinnity_core::fanout::Fanout;
+use concinnity_engine::budget::{MemoryBudget, ThreadBudget};
+use concinnity_engine::components::AppConfig;
+use concinnity_engine::ecs::{StepResult, World};
+use concinnity_engine::error::WorldError;
 use concinnity_host::store::paths::StateTree;
 use concinnity_host::sys::{cpu, memory};
 use concinnity_host::thread::jobs::{self, configure, pool};
@@ -16,12 +16,12 @@ use crate::app::render_mode;
 use crate::app::startup_error::StartupError;
 use crate::lend::SYSTEMS;
 use crate::render::system::RenderInitFailure;
-use concinnity_core::ecs::ActiveRenderBackend;
-use concinnity_core::input::mailbox::InputMailbox;
-use concinnity_core::launch::LaunchRequest;
-use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::backend::render_mode::{RenderMode, Resolution};
-use concinnity_core::shutdown::ShutdownToken;
+use concinnity_engine::ecs::ActiveRenderBackend;
+use concinnity_engine::input::mailbox::InputMailbox;
+use concinnity_engine::launch::LaunchRequest;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::backend::render_mode::{RenderMode, Resolution};
+use concinnity_engine::shutdown::ShutdownToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeStatus {
@@ -181,17 +181,17 @@ impl Runtime {
         for (id, asset) in assets {
             world.add(asset, id);
         }
-        world.insert_resource(concinnity_core::ecs::BlobSceneGroups(scene_groups));
-        world.insert_resource(concinnity_core::ecs::BlobMeshBounds(mesh_bounds));
+        world.insert_resource(concinnity_engine::ecs::BlobSceneGroups(scene_groups));
+        world.insert_resource(concinnity_engine::ecs::BlobMeshBounds(mesh_bounds));
         // Absent for a world with no physics content, which is also a world
         // with no PhysicsSystem to read it.
         if let Some(budget) = physics_budget {
-            world.insert_resource(concinnity_core::ecs::WorldPhysicsBudget(budget));
+            world.insert_resource(concinnity_engine::ecs::WorldPhysicsBudget(budget));
         }
         // Load the blob's resource stream into the per-kind tables the systems
         // read by handle. AudioSystem reads the AudioClipTable at init; the
         // renderer reads the TextureTable to build its shared texture pool.
-        concinnity_core::resource::install_tables(&mut world, &mut resources);
+        concinnity_engine::resource::install_tables(&mut world, &mut resources);
         self.world = world;
     }
 

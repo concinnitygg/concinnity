@@ -6,8 +6,8 @@
 //! Escape, or a history jump dismisses it.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
 
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::{EditorHook, drag, names_of_types};

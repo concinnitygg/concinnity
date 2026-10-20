@@ -3,11 +3,11 @@
 //! acquires, or adopts from the outgoing context on a live world reload.
 
 use ash::vk;
-use concinnity_core::components;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::{backend::init, backend::pass_timing, output::hdr};
-use concinnity_core::settings::ResolvedGraphics;
+use concinnity_engine::components;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::{backend::init, backend::pass_timing, output::hdr};
+use concinnity_engine::settings::ResolvedGraphics;
 use std::ffi::{CStr, CString, c_char};
 
 use crate::vulkan::context::{SwapchainState, VkHardware};

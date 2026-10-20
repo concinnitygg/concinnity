@@ -7,8 +7,8 @@
 //! area takes the frame's key events and pointer while it holds focus and the
 //! panel is frontmost.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
 
 use super::story_state::story_area;
 use crate::editor::hook::{EditorHook, entry_type, short_status};

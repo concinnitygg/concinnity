@@ -1,7 +1,7 @@
 use core::fmt;
 
 use super::Fanout;
-use crate::ecs::ScheduleMode;
+use super::ScheduleMode;
 
 /// A host's pool as a system holds it: the pool each schedule mode runs on.
 ///

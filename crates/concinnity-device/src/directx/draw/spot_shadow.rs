@@ -9,9 +9,9 @@
 //! `SpotShadowScheduler`) picks which slices redraw; a skipped slice keeps the
 //! depth it last rendered, which stays correct until a caster moves.
 
-use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::shadow::spot;
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::render::shadow::spot;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::shadow::ShadowView;

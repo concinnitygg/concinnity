@@ -24,9 +24,9 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::ID_KEY;
-use concinnity_core::components::{AuthoredAction, NamedAction, StoryCommand};
-use concinnity_core::ecs::{ActionField, RefField};
 use concinnity_core::math::narrow_f32;
+use concinnity_engine::components::{AuthoredAction, NamedAction, StoryCommand};
+use concinnity_engine::ecs::{ActionField, RefField};
 use serde_json::{Map, Value};
 
 // The form's default (and minimum) scrolling window: the number of field rows the
@@ -104,7 +104,7 @@ pub(crate) fn sparse_defaults(ty: &str) -> Option<Map<String, Value>> {
     if ty != "GraphicsConfig" {
         return None;
     }
-    match serde_json::to_value(concinnity_core::components::GraphicsConfig::explicit_defaults()) {
+    match serde_json::to_value(concinnity_engine::components::GraphicsConfig::explicit_defaults()) {
         Ok(Value::Object(m)) => Some(m),
         _ => None,
     }

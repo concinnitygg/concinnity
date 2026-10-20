@@ -3,10 +3,10 @@
 //! two-pass occlusion passes built over them.
 
 use ash::vk;
-use concinnity_core::bake::texture::TextureImage;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::backend::init::{SceneData, WorldShader};
+use concinnity_engine::bake::texture::TextureImage;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::{SceneData, WorldShader};
 
 use super::InitGpu;
 use crate::vulkan::context::{

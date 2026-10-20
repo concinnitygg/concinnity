@@ -6,9 +6,9 @@
 //! drives own -- when a drag or glide starts, what it writes to the live camera,
 //! and what hands control back.
 
-use concinnity_core::components::{Camera3D, FrameInput, InputKey, Transform};
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{FrameTime, PickEntry, PickIndex, World};
+use concinnity_engine::components::{Camera3D, FrameInput, InputKey, Transform};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{FrameTime, PickEntry, PickIndex, World};
 use concinnity_host::thread::asset_id;
 
 use super::fixtures::VP;
@@ -29,7 +29,7 @@ fn camera_world(pos: [f32; 3]) -> (World, AssetId) {
     let mut world = World::new();
     world.add_component(Camera3D {
         position: pos,
-        view_matrix: concinnity_core::gfx::camera::view_matrix(pos, 0.0, 0.0),
+        view_matrix: concinnity_engine::gfx::camera::view_matrix(pos, 0.0, 0.0),
         fov_y_degrees: 90.0,
         near: 0.05,
         view_distance: None,
@@ -119,7 +119,11 @@ fn alt_drag_tumbles_the_camera_around_the_selection() {
     // The view matrix is rewritten alongside the pose, never left stale.
     assert_eq!(
         camera(&world).view_matrix,
-        concinnity_core::gfx::camera::view_matrix(after, camera(&world).yaw, camera(&world).pitch)
+        concinnity_engine::gfx::camera::view_matrix(
+            after,
+            camera(&world).yaw,
+            camera(&world).pitch
+        )
     );
 }
 

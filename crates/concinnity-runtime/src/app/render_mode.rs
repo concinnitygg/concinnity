@@ -1,8 +1,8 @@
 //! The machine's half of how a world runs: the build's render backend and the
-//! GPU probe, fed to `concinnity_core::render::backend::render_mode::resolve_with`.
+//! GPU probe, fed to `concinnity_engine::render::backend::render_mode::resolve_with`.
 
-use concinnity_core::ecs::World;
-use concinnity_core::render::backend::render_mode::{Resolution, resolve_with};
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::backend::render_mode::{Resolution, resolve_with};
 
 /// Resolve how `world` runs on this build and machine, logging a headless
 /// outcome so a run that did not open a window says why. The GPU probe only
@@ -20,8 +20,8 @@ pub(crate) fn resolve_and_report(world: &World) -> Resolution {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{PhysicsConfig, TextLabel};
-    use concinnity_core::render::backend::render_mode::HeadlessReason;
+    use concinnity_engine::components::{PhysicsConfig, TextLabel};
+    use concinnity_engine::render::backend::render_mode::HeadlessReason;
 
     // What a world with something to draw lands on depends on this build's
     // backend and the host's GPU, so the assertion is on the reason: it is

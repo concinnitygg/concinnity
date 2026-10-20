@@ -15,7 +15,7 @@
 //!   that world's graphics init, which reloads the world into it instead of
 //!   building a new backend.
 
-use concinnity_core::render::backend::RenderBackend;
+use concinnity_engine::render::backend::RenderBackend;
 
 pub mod hot_reload_sources;
 pub mod shader_overrides;

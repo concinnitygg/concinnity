@@ -3,9 +3,9 @@
 //! content. The reader and the lazy payload residency are
 //! `concinnity_host::store::blob`'s.
 
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{ComponentAsset, World};
-use concinnity_core::error::AssetError;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{ComponentAsset, World};
+use concinnity_engine::error::AssetError;
 use concinnity_host::store::blob::{
     BlobData, BlobLoadError, BlobMeta, ResourceRecord, WorldManifest,
 };
@@ -54,9 +54,9 @@ type NamedComponent = (Option<AssetId>, ComponentAsset);
 pub(crate) struct LoadedBlob {
     pub(crate) components: Vec<NamedComponent>,
     pub(crate) resources: Vec<ResourceRecord>,
-    pub(crate) scene_groups: Vec<concinnity_core::ecs::SceneGroup>,
-    pub(crate) mesh_bounds: Vec<concinnity_core::ecs::MeshBoundsRecord>,
-    pub(crate) physics_budget: Option<concinnity_core::ecs::PhysicsBudgetRecord>,
+    pub(crate) scene_groups: Vec<concinnity_engine::ecs::SceneGroup>,
+    pub(crate) mesh_bounds: Vec<concinnity_engine::ecs::MeshBoundsRecord>,
+    pub(crate) physics_budget: Option<concinnity_engine::ecs::PhysicsBudgetRecord>,
     pub(crate) manifest: WorldManifest,
     pub(crate) blob: BlobData,
 }

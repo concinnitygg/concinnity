@@ -9,9 +9,9 @@
 //! build's own checker reporting on the result. `hook/edit/variables.rs` owns the
 //! actions and `editor/panels/variables.rs` turns the args into these rows.
 
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::registry::PanelKey;
 use super::variables::Row;
@@ -567,7 +567,7 @@ pub(crate) fn status_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()

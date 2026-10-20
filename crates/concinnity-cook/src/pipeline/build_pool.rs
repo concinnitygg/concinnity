@@ -26,10 +26,10 @@ pub(in crate::pipeline) fn build_pool() -> std::io::Result<rayon::ThreadPool> {
 mod tests {
     use super::*;
     use crate::authoring::registry::RegisteredType;
-    use concinnity_core::blob::ResourceKind;
-    use concinnity_core::components::Material;
-    use concinnity_core::ecs::TextureHandle;
-    use concinnity_core::resource::ResourceHandles;
+    use concinnity_engine::blob::ResourceKind;
+    use concinnity_engine::components::Material;
+    use concinnity_engine::ecs::TextureHandle;
+    use concinnity_engine::resource::ResourceHandles;
 
     // Every pool thread resolves names and handles exactly as the thread that
     // built the pool does, however the work is spread across it.

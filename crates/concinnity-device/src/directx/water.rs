@@ -11,9 +11,9 @@
 //! `builtin_shaders`; the ray-traced fragment needs shader model 6.5 for its
 //! inline ray query, the base pair 6.0.
 
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::environment::water::WaterBody;
-use concinnity_core::render::environment::water::frame::WaterMotion;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::environment::water::WaterBody;
+use concinnity_engine::render::environment::water::frame::WaterMotion;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::DeviceAllocator;
@@ -23,7 +23,7 @@ use crate::directx::context::dump_on_err;
 use crate::directx::transparent::{
     RecordUpload, ShapePsos, TransparentProducer, create_transparent_pso, upload_record,
 };
-use concinnity_core::render::shader::programs::ShaderProgram;
+use concinnity_engine::render::shader::programs::ShaderProgram;
 
 // The programs one water shape draws with: a rectangle's, or a planet sea's.
 struct WaterPrograms {
@@ -230,7 +230,7 @@ impl WaterBuild<'_> {
 #[cfg(test)]
 mod tests {
     // The `WaterParams` / `WaterWaveGpu` layout tests live with the structs in
-    // `concinnity_core::render::uniforms`, and are checked against the compiled shader
+    // `concinnity_engine::render::uniforms`, and are checked against the compiled shader
     // by `shader_layout`.
 
     // The water shaders compile at runtime from the shared single source, so a

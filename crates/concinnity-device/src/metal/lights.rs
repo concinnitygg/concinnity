@@ -4,11 +4,11 @@
 //! from the first light and cached -- the cascade shadow direction -- is
 //! re-derived here, since nothing else refreshes it.
 
-use concinnity_core::components::DirectionalLight;
-use concinnity_core::gfx::render_types::LightUniforms;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::light::lights::LightData;
-use concinnity_core::render::shadow::spot;
+use concinnity_engine::components::DirectionalLight;
+use concinnity_engine::gfx::render_types::LightUniforms;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::light::lights::LightData;
+use concinnity_engine::render::shadow::spot;
 
 use super::context::{MtlContext, write_buffer_slice};
 

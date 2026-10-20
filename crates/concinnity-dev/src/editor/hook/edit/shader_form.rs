@@ -5,7 +5,7 @@
 //! world default ride the same undo step.
 
 use concinnity_cook::authoring::world::entry_handles;
-use concinnity_core::components::ShaderStage;
+use concinnity_engine::components::ShaderStage;
 
 use super::shader_edits::new_shader_file;
 use crate::editor::entry_list::EntryList;

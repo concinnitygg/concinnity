@@ -4,9 +4,9 @@
 //! frame (no rebuild); releasing commits the working values to the entry as
 //! ONE edit, so undo reverts the whole drag; Escape restores the start state.
 
-use concinnity_core::components::{CharacterCapsule, CharacterShape, FrameInput};
-use concinnity_core::ecs::World;
-use concinnity_core::render::live_preview::shape as shape_preview;
+use concinnity_engine::components::{CharacterCapsule, CharacterShape, FrameInput};
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::live_preview::shape as shape_preview;
 use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::EditorHook;

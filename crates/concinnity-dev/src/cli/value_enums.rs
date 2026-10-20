@@ -1,9 +1,9 @@
 // The argv mirrors of engine types. The value-enum derives live here so no
 // layer below the command line carries a clap dependency.
-use concinnity_core::gfx::view_modes::ShowFlags;
-use concinnity_core::platform::Platform;
-use concinnity_core::render::output::dlss::DlssPreset;
-use concinnity_core::render::rt_accel::geom::RtDynamicMode;
+use concinnity_engine::gfx::view_modes::ShowFlags;
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::output::dlss::DlssPreset;
+use concinnity_engine::render::rt_accel::geom::RtDynamicMode;
 
 use crate::export::BundleFormat;
 

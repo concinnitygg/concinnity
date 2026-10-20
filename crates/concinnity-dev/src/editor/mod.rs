@@ -119,9 +119,9 @@ mod widget_slider;
 mod worlds;
 
 use concinnity_cook::authoring::world::WORLD_JSONL;
-use concinnity_core::ecs::World;
-use concinnity_core::launch::LaunchRequest;
-use concinnity_core::shutdown::ShutdownToken;
+use concinnity_engine::ecs::World;
+use concinnity_engine::launch::LaunchRequest;
+use concinnity_engine::shutdown::ShutdownToken;
 use concinnity_runtime::Runtime;
 use hook::EditorHook;
 
@@ -314,7 +314,7 @@ impl FrameHook for MultiHook {
 mod tests {
     use super::*;
     use concinnity_cook::authoring::world::{parse_world_jsonl, write_world_jsonl};
-    use concinnity_core::components::TextLabel;
+    use concinnity_engine::components::TextLabel;
 
     // An empty (or whitespace-only) world seeds to just the render marker, so an
     // empty session still opens a window.

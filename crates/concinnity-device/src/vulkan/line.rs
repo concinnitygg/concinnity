@@ -12,10 +12,10 @@
 //! Mirrors src/directx/line.rs and src/metal/line.rs.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::LineVertex;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::buffers::growth::grow_capacity;
+use concinnity_engine::gfx::render_types::LineVertex;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::buffers::growth::grow_capacity;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
@@ -41,7 +41,7 @@ const MIN_VERTEX_CAPACITY: u64 = 64 * 1024;
 
 // `LineView` is a GPU-free layout struct that lives in `core::render`;
 // re-export it so `crate::vulkan::line::LineView` is the local path.
-pub(in crate::vulkan) use concinnity_core::render::uniforms::LineView;
+pub(in crate::vulkan) use concinnity_engine::render::uniforms::LineView;
 
 // Line-pass state on the context: the resources, built on the first frame that
 // submits lines so a world that never draws any pays nothing, plus the

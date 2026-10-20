@@ -19,10 +19,10 @@
 //! pass encoders run through `&MtlContext`, whose parallel-encode contract is
 //! read-only field access (see `metal/parallel_encoder.rs`).
 
-use concinnity_core::gfx::render_types::TextDrawCall;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::error::RenderResult;
-use concinnity_core::render::buffers;
+use concinnity_engine::gfx::render_types::TextDrawCall;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::buffers;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
@@ -148,7 +148,7 @@ impl TextUploadRing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::gfx::render_types::TextVertex;
+    use concinnity_engine::gfx::render_types::TextVertex;
 
     // A call carrying `glyphs` quads: 4 vertices + 6 indices each, the shape
     // `gfx::text::build_text_calls` emits.
@@ -212,7 +212,7 @@ mod tests {
         let mut ranges = Vec::new();
         let total = plan_text_upload(&calls, &mut ranges) as u64;
         let reserved =
-            concinnity_core::render::fullscreen::text_upload_bytes(&calls, TEXT_UPLOAD_ALIGN);
+            concinnity_engine::render::fullscreen::text_upload_bytes(&calls, TEXT_UPLOAD_ALIGN);
         assert!(
             total <= reserved,
             "planned {total} exceeded reserved {reserved}"

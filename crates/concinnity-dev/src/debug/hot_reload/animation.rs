@@ -5,8 +5,8 @@
 //! the setter (`apply_reloaded_clip`). Mirrors the path the desugar pass takes at
 //! build time, so a hot-reloaded clip is byte-identical to a fresh `cn build`.
 
-use concinnity_core::animation::AnimationSystem;
-use concinnity_core::animation::skeleton::{AnimationClip, JointTrack, Keyframe};
+use concinnity_engine::animation::AnimationSystem;
+use concinnity_engine::animation::skeleton::{AnimationClip, JointTrack, Keyframe};
 use std::collections::HashMap;
 
 use super::signals::ReloadSignals;
@@ -134,9 +134,9 @@ fn imported_to_clip(
 mod tests {
     use super::*;
     use crate::test_support;
-    use concinnity_core::components::Animation;
-    use concinnity_core::ecs::{SkinnedMeshHandle, World};
-    use concinnity_core::launch::LaunchRequest;
+    use concinnity_engine::components::Animation;
+    use concinnity_engine::ecs::{SkinnedMeshHandle, World};
+    use concinnity_engine::launch::LaunchRequest;
     use concinnity_host::thread::asset_id::intern;
 
     // Minimal in-memory GLB fixture: a one-triangle skinned mesh with a

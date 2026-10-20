@@ -4,9 +4,9 @@
 //! geometry, so there is nothing to place or hide here: an empty list is the
 //! off state, and the renderer drops the pass with it.
 
-use concinnity_core::components::Camera3D;
-use concinnity_core::ecs::World;
-use concinnity_core::gfx::lines::Line;
+use concinnity_engine::components::Camera3D;
+use concinnity_engine::ecs::World;
+use concinnity_engine::gfx::lines::Line;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::viewport::axes;
@@ -35,7 +35,7 @@ mod tests {
         let mut world = World::new();
         world.add_component(Camera3D {
             position: [0.0; 3],
-            view_matrix: concinnity_core::gfx::camera::view_matrix([0.0; 3], 0.0, 0.0),
+            view_matrix: concinnity_engine::gfx::camera::view_matrix([0.0; 3], 0.0, 0.0),
             fov_y_degrees: 90.0,
             near: 0.05,
             view_distance: Some(300.0),

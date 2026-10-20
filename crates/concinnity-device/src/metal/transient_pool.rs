@@ -34,8 +34,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use super::error::allocation_failed;
-use concinnity_core::render::backend::error::{RenderError, RenderResult};
-use concinnity_core::render::render_graph::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::render_graph::{
     PixelFormat, TextureUsage, TransientSlot, TransientTexture,
 };
 use objc2::rc::Retained;
@@ -301,9 +301,9 @@ impl MtlContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::post::device::PostExtent;
-    use concinnity_core::render::post::{bloom, ssao};
-    use concinnity_core::render::render_graph::{self, PoolGates, plan_pool_slots};
+    use concinnity_engine::render::post::device::PostExtent;
+    use concinnity_engine::render::post::{bloom, ssao};
+    use concinnity_engine::render::render_graph::{self, PoolGates, plan_pool_slots};
 
     #[test]
     fn translated_descriptors_match_the_feature_formats() {
