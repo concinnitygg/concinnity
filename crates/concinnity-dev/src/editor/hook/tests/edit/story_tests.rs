@@ -211,14 +211,11 @@ fn story_load_missing_file_shows_status() {
 }
 
 // Create writes the starter file, adds the StoryImport entry (a normal world
-// edit), and loads it for editing. Serialized via the cwd lock: the new file
-// lands relative to the project root.
+// edit), and loads it for editing. In a working directory of its own: the new
+// file lands relative to the project root.
 #[test]
 fn story_create_writes_starter_and_adds_the_import() {
-    let _guard = crate::test_support::lock();
-    let tree = concinnity_testing::TempTree::new();
-    let old = std::env::current_dir().unwrap();
-    std::env::set_current_dir(tree.path()).unwrap();
+    let state = crate::test_support::in_temp_cwd();
 
     let mut h = hook(Vec::new());
     h.open[PanelKey::Story] = true;
@@ -236,11 +233,9 @@ fn story_create_writes_starter_and_adds_the_import() {
     assert_eq!(h.story.area.text(), story::STARTER_STORY);
     assert!(h.story.focus, "the new story is ready to type into");
     assert!(!h.make_story_view([0.0, 0.0]).create);
-    let written = std::fs::read_to_string(tree.join("story.md")).unwrap();
+    let written = std::fs::read_to_string(state.tree().join("story.md")).unwrap();
     assert_eq!(written, story::STARTER_STORY);
     // A second create is a no-op while an import exists.
     h.create_story();
     assert_eq!(h.entries.len(), 1);
-
-    std::env::set_current_dir(old).unwrap();
 }

@@ -13,6 +13,18 @@ pub(crate) fn lock() -> concinnity_testing::ExclusiveAccess {
     concinnity_testing::exclusive()
 }
 
+// The same exclusive access, with the working directory moved into a fresh
+// tree of the guard's own. Dropping the guard puts the old directory back
+// before the tree is removed -- on a panic too -- so a failed test never leaves
+// the rest of the binary inside a directory that no longer exists.
+//
+// The one way a test here moves the working directory: never call
+// `set_current_dir` by hand.
+pub(crate) fn in_temp_cwd() -> concinnity_testing::GlobalState {
+    prepare();
+    concinnity_testing::GlobalState::acquire().with_cwd()
+}
+
 // What every guard here sets up before taking the lock.
 #[expect(
     clippy::let_underscore_must_use,

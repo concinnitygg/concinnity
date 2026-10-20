@@ -137,13 +137,20 @@ pub(super) fn message(h: &EditorHook) -> String {
 // Run `test` with the working directory at a fresh project whose assets live
 // under it, as `cn editor` runs.
 pub(super) fn in_project(test: impl FnOnce(&Path)) {
-    let _guard = crate::test_support::lock();
-    let tree = concinnity_testing::TempTree::new();
-    let old = std::env::current_dir().unwrap();
-    std::env::set_current_dir(tree.path()).unwrap();
-    let root = std::env::current_dir().unwrap();
+    // Hands the binary's other tests back their project however `test` ends.
+    // Bound after the cwd guard, so it drops first, while the lock is held.
+    struct Reopen;
+    impl Drop for Reopen {
+        fn drop(&mut self) {
+            crate::test_support::isolate_state_dir();
+        }
+    }
+
+    let state = crate::test_support::in_temp_cwd();
+    // Canonical, as the working directory reads back: on macOS the temporary
+    // directory sits behind the `/private` symlink.
+    let root = state.root().canonicalize().expect("the tree resolves");
+    let _reopen = Reopen;
     crate::project::open(StateTree::at(&root));
     test(&root);
-    std::env::set_current_dir(old).unwrap();
-    crate::test_support::isolate_state_dir();
 }

@@ -233,10 +233,13 @@ fn thumbnail_summary(board: &Board, report: &BuildReport) -> Option<String> {
 
 // `path` relative to the working directory when it lies under it.
 fn shown_path(path: &Path) -> String {
-    let relative = std::env::current_dir()
-        .ok()
-        .and_then(|cwd| path.strip_prefix(cwd).ok().map(Path::to_path_buf));
-    relative.as_deref().unwrap_or(path).display().to_string()
+    shown_path_from(path, std::env::current_dir().ok().as_deref())
+}
+
+// `path` relative to `base` when it lies under it.
+fn shown_path_from(path: &Path, base: Option<&Path>) -> String {
+    let relative = base.and_then(|base| path.strip_prefix(base).ok());
+    relative.unwrap_or(path).display().to_string()
 }
 
 #[cfg(test)]
@@ -253,13 +256,22 @@ mod tests {
         );
     }
 
+    // Against a fixed base rather than the process's working directory, which
+    // other tests in this binary move.
     #[test]
     fn a_path_under_the_working_directory_is_shown_relative() {
-        let cwd = std::env::current_dir().unwrap();
+        let base = Path::new("/project");
         assert_eq!(
-            shown_path(&cwd.join("worlds").join("a.jsonl")),
+            shown_path_from(&base.join("worlds").join("a.jsonl"), Some(base)),
             Path::new("worlds").join("a.jsonl").display().to_string()
         );
-        assert_eq!(shown_path(Path::new("x/y.jsonl")), "x/y.jsonl");
+        assert_eq!(
+            shown_path_from(Path::new("x/y.jsonl"), Some(base)),
+            "x/y.jsonl"
+        );
+        assert_eq!(
+            shown_path_from(Path::new("/elsewhere/a.jsonl"), None),
+            "/elsewhere/a.jsonl"
+        );
     }
 }

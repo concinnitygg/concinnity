@@ -205,12 +205,10 @@ fn import_rows_list_and_open_in_the_edit_form() {
 // everything the pick feeds runs through `accept_browsed_path`.
 #[test]
 fn import_browse_result_fills_the_path_field_relatively() {
-    let _guard = crate::test_support::lock();
-    let (mut h, mut world, dir) = import_session();
-    let old = std::env::current_dir().unwrap();
-    std::env::set_current_dir(dir.path()).unwrap();
+    let state = crate::test_support::in_temp_cwd();
+    let (mut h, mut world, _unused) = import_session();
 
-    let assets = dir.dir("assets");
+    let assets = state.tree().dir("assets");
     let picked = assets.join("hero.glb");
     std::fs::write(&picked, b"glb").unwrap();
     h.import.status = Some(import_panel::ImportStatus::Error("stale error".to_string()));
@@ -231,6 +229,4 @@ fn import_browse_result_fills_the_path_field_relatively() {
     assert_eq!(h.entries.len(), 1);
     assert_eq!(h.entries[0]["type"], "SceneImport");
     assert_eq!(h.entries[0]["args"]["source"], "assets/hero.glb");
-
-    std::env::set_current_dir(old).unwrap();
 }

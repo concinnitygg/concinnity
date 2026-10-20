@@ -33,6 +33,7 @@ const SELF: &str = "global_state_discipline.rs";
 // own mutexes, which are not this one.
 const GUARDS: &[&str] = &[
     "test_support::lock()",
+    "test_support::in_temp_cwd()",
     "GlobalState::acquire()",
     "exclusive()",
     "Output::new()",
