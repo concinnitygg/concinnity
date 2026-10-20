@@ -22,11 +22,8 @@ pub use pooled::Pooled;
 pub use timing::{FanOutClock, FanOutTimer, FanOutTiming};
 
 /// How a tick's independent work executes. `Parallel` lets systems fan their
-/// safe internal work across the job pool; `Serial` (or the resource being
-/// absent, the editor's case) keeps every system's work on the stepping
-/// thread -- the determinism oracle and the escape hatch
-/// (`cn run --serial-schedule`). Both modes must produce identical world
-/// state; the engine's schedule-determinism test is the gate on that claim.
+/// safe internal work across the job pool; `Serial` keeps every system's work
+/// on the stepping thread. Both modes must produce identical results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ScheduleMode {
     /// Keep every system's work on the stepping thread.

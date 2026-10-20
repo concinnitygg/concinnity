@@ -88,7 +88,7 @@ pub fn vec3_add(dst: &mut [f32; 3], src: [f32; 3]) {
 /// Unit-length `n`, falling back to `+Y` when it is too short to have a
 /// direction.
 pub fn vec3_normalize(n: [f32; 3]) -> [f32; 3] {
-    normalize_or(n, 1e-6, [0.0, 1.0, 0.0])
+    normalize_or(n, MIN_DIRECTION_LEN, [0.0, 1.0, 0.0])
 }
 
 /// Newell-style face normal from three CCW positions. Shared with the cook

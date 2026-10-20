@@ -2,7 +2,7 @@
 //! and the allocators that hand memory out in bulk instead of one block at a
 //! time.
 //!
-//! Five things live here, in files that do not depend on each other:
+//! Five things live here:
 //!
 //!   counters   the global heap's live / peak / churn, sharded per thread and
 //!              driven by `TrackingAlloc` (`tracking`)
@@ -42,9 +42,9 @@ mod tracking;
 
 pub use arena::{Arena, ArenaVec};
 pub use counters::MemStats;
-pub use detail::{SizeClass, size_classes};
+pub use detail::{SizeClass, SizeClasses, size_classes};
 pub use inline_vec::{InlineVec, IntoIter as InlineVecIntoIter};
-pub use ledger::{Ledger, LedgerSnapshot};
+pub use ledger::{Ledger, LedgerSnapshot, TagUsage};
 pub use pool::{Pool, PoolHandle};
 pub use tag::{MemTag, Realm};
 pub use tracking::TrackingAlloc;

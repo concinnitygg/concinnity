@@ -24,8 +24,10 @@ test-support = []
 detail = []
 
 [dependencies]
-libm = "0.2"
-spin = { version = "0.12.3", default-features = false, features = ["once", "spin_mutex"] }
+libm = { workspace = true }
+
+[dev-dependencies]
+spin = { workspace = true, features = ["spin_mutex"] }
 
 [lints]
 workspace = true

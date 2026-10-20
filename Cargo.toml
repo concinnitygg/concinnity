@@ -31,6 +31,7 @@ gltf = { version = "1", default-features = false }
 hashbrown = "0.17.1"
 hex = "0.4.3"
 kira = { version = "0.12", default-features = false, features = ["mp3", "ogg", "vorbis", "flac", "wav", "pcm"] }
+libm = "0.2"
 notify = { version = "8", default-features = false }
 objc2 = "0.6.4"
 objc2-app-kit = "0.3.2"
@@ -42,6 +43,7 @@ rayon = "1"
 serde = { version = "1", default-features = false }
 serde_json = "1"
 sha2 = "0.11.0"
+spin = { version = "0.12.3", default-features = false }
 tempfile = "3.25.0"
 thiserror = { version = "2.0.18", default-features = false }
 tracing = { version = "0.1.44", default-features = false }
