@@ -72,6 +72,10 @@ where
     }
 
     // Run `job` on a worker as the newest request for `key`.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a dropped receiver means the reload state was rebuilt and no longer wants the result"
+    )]
     pub(super) fn submit(
         &mut self,
         key: K,
@@ -83,8 +87,6 @@ where
             .name("cn-shader-reload".into())
             .spawn(move || {
                 set_current_thread_role(ThreadRole::Background);
-                // A dropped receiver means the reload state was rebuilt for
-                // another world; the result is no longer wanted.
                 let _ = tx.send(Finished {
                     key,
                     generation,
@@ -161,8 +163,8 @@ mod tests {
         let (old_done, old_finished) = channel::<()>();
         queue
             .submit(7, move || {
-                let _ = old_gate.recv();
-                let _ = old_done.send(());
+                old_gate.recv().unwrap();
+                old_done.send(()).unwrap();
                 "old"
             })
             .unwrap();

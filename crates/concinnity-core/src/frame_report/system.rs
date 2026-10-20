@@ -7,9 +7,9 @@ use crate::ecs::{
 };
 use crate::math::{SaturatingFrom, narrow_f32, round, round_f64};
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::fmt::Write as _;
+use core::fmt::{self, Write};
 
 use crate::benchmark::BenchmarkRun;
 use crate::camera_track::CameraTrackStatus;
@@ -20,7 +20,7 @@ use crate::profile::RenderStats;
 use crate::frame_report::capture::CaptureSchedule;
 use crate::frame_report::hidden::HiddenFrames;
 use crate::frame_report::reduce::{ReduceOptions, Report};
-use crate::frame_report::report::to_text;
+use crate::frame_report::report::write_report;
 use crate::frame_report::sample::{FrameRun, FrameSample, FrameTiming};
 use crate::frame_report::shown::ShownFrames;
 
@@ -134,41 +134,46 @@ impl FrameReportSystem {
 
     // The whole report: the reduction, then a line for each thing it left out.
     fn text(&self) -> String {
-        let mut text = match Report::of(&self.run, self.options) {
-            Some(report) => to_text(&report),
-            None => format!(
-                "frame report: no frames past the {:.1}s warm-up, so there is nothing to measure\n",
+        fmt::from_fn(|out| self.write_text(out)).to_string()
+    }
+
+    fn write_text(&self, text: &mut impl Write) -> fmt::Result {
+        match Report::of(&self.run, self.options) {
+            Some(report) => write_report(text, &report)?,
+            None => writeln!(
+                text,
+                "frame report: no frames past the {:.1}s warm-up, so there is nothing to measure",
                 self.options.warmup_seconds,
-            ),
-        };
+            )?,
+        }
         if self.hidden.total() > 0 {
             let phases: Vec<String> = self
                 .hidden
                 .by_phase()
                 .map(|(phase, count)| format!("{} {count}", self.run.phase_name(phase)))
                 .collect();
-            let _ = writeln!(
+            writeln!(
                 text,
                 "frame report: the window was hidden, so {} frame(s) past the warm-up ({}) were left out of the measurement",
                 self.hidden.total(),
                 phases.join(", "),
-            );
+            )?;
         }
         for skipped in &self.hidden_captures {
-            let _ = writeln!(
+            writeln!(
                 text,
                 "frame report: the window was hidden {:.1}s after the warm-up, so {} was not captured",
                 skipped.seconds, skipped.path,
-            );
+            )?;
         }
         for missed in self.captures.missed() {
-            let _ = writeln!(
+            writeln!(
                 text,
                 "frame report: the run ended before {:.1}s after the warm-up, so {} was not captured",
                 missed.seconds, missed.path,
-            );
+            )?;
         }
-        text
+        Ok(())
     }
 }
 

@@ -140,7 +140,7 @@ fn write_jsonl_persists_entries_atomically() {
     assert_eq!(parsed[1]["args"]["$id"], "lamp");
     assert!(!std::path::Path::new(&format!("{path_str}.tmp")).exists());
 
-    let _ = std::fs::remove_file(&path);
+    std::fs::remove_file(&path).unwrap();
 }
 
 // A fresh project has no `worlds/` until its first save, so the write creates

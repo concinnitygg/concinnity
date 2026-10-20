@@ -2,55 +2,54 @@
 
 use alloc::format;
 use alloc::string::String;
-use core::fmt::Write;
+use core::fmt::{self, Write};
 
 use crate::frame_report::reduce::{FanOutCost, FrameCost, PhaseReport, Report, SlowFrame};
 
 const MICROS_PER_MILLI: f32 = 1_000.0;
 const BYTES_PER_MIB: f32 = (1 << 20) as f32;
 
-/// Render a report as plain text.
+/// Write a report as plain text.
 ///
 /// Frame time leads every row because it is the number a player feels; the
 /// budget count beside it is what a mean would hide.
-pub(super) fn to_text(report: &Report) -> String {
-    let mut out = String::new();
-    let _ = writeln!(
+pub(super) fn write_report(out: &mut impl Write, report: &Report) -> fmt::Result {
+    writeln!(
         out,
         "frame report: {} measured frame(s), {} warm-up frame(s) dropped, budget {:.2} ms",
         report.overall.frame.count,
         report.warmup_dropped,
         report.budget_us as f32 / MICROS_PER_MILLI,
-    );
+    )?;
     if !report.completed {
-        let _ = writeln!(
+        writeln!(
             out,
             "  NOTE: the run ended before its last phase did, so this covers part of it only",
-        );
+        )?;
     }
-    let _ = writeln!(out);
-    let _ = writeln!(
+    writeln!(out)?;
+    writeln!(
         out,
         "{:<16} {:>7} {:>8} {:>8} {:>8} {:>8} {:>9} {:>8} {:>8}",
         "phase", "frames", "p50 ms", "p95 ms", "p99 ms", "max ms", "over bgt", "cpu ms", "gpu ms",
-    );
-    write_row(&mut out, &report.overall);
+    )?;
+    write_row(out, &report.overall)?;
     for phase in &report.phases {
-        write_row(&mut out, phase);
+        write_row(out, phase)?;
     }
 
-    let _ = writeln!(out);
-    let _ = writeln!(
+    writeln!(out)?;
+    writeln!(
         out,
         "peak GPU memory {:.0} MiB, mean blocked-on-GPU {:.2} ms, mean {} draw call(s) over {} object(s)",
         report.overall.vram_peak_bytes as f32 / BYTES_PER_MIB,
         report.overall.gpu_wait_mean_us as f32 / MICROS_PER_MILLI,
         report.overall.draw_calls_mean,
         report.overall.objects_mean,
-    );
-    write_pacing(&mut out, report);
-    write_input_latency(&mut out, report);
-    write_slowest(&mut out, &report.slowest);
+    )?;
+    write_pacing(out, report)?;
+    write_input_latency(out, report)?;
+    write_slowest(out, &report.slowest)?;
 
     // The pass block is medians, like the table above it, because a backend
     // that mistimes one frame does it by orders of magnitude. The system block
@@ -58,7 +57,7 @@ pub(super) fn to_text(report: &Report) -> String {
     // heading carries the total its shares are taken against.
     for phase in &report.phases {
         write_block(
-            &mut out,
+            out,
             &format!(
                 "{} GPU passes, median {:.2} ms",
                 phase.name,
@@ -75,9 +74,9 @@ pub(super) fn to_text(report: &Report) -> String {
                 };
                 (name, p.median_us, p.share)
             }),
-        );
+        )?;
         write_block(
-            &mut out,
+            out,
             &format!(
                 "{} CPU work, mean {:.2} ms",
                 phase.name,
@@ -88,28 +87,28 @@ pub(super) fn to_text(report: &Report) -> String {
                 .systems
                 .iter()
                 .map(|s| (s.name.clone(), s.mean_us, s.share)),
-        );
-        write_fan_outs(&mut out, &phase.name, &phase.fan_outs);
+        )?;
+        write_fan_outs(out, &phase.name, &phase.fan_outs)?;
     }
-    out
+    Ok(())
 }
 
 // A phase's fan-outs: how long each held the thread waiting on it, against
 // the work its jobs contained. Nothing when none ran.
-fn write_fan_outs(out: &mut String, phase: &str, fan_outs: &[FanOutCost]) {
+fn write_fan_outs(out: &mut impl Write, phase: &str, fan_outs: &[FanOutCost]) -> fmt::Result {
     if fan_outs.is_empty() {
-        return;
+        return Ok(());
     }
     let ms = |us: u32| us as f32 / MICROS_PER_MILLI;
-    let _ = writeln!(out);
-    let _ = writeln!(out, "{phase} fan-outs, mean ms waited against work:");
-    let _ = writeln!(
+    writeln!(out)?;
+    writeln!(out, "{phase} fan-outs, mean ms waited against work:")?;
+    writeln!(
         out,
         "  {:<20} {:>8} {:>9} {:>8} {:>8} {:>8}",
         "", "wall", "first job", "job sum", "longest", "tail",
-    );
+    )?;
     for f in fan_outs {
-        let _ = writeln!(
+        writeln!(
             out,
             "  {:<20} {:>8.3} {:>9.3} {:>8.3} {:>8.3} {:>8.3}",
             f.name,
@@ -118,102 +117,106 @@ fn write_fan_outs(out: &mut String, phase: &str, fan_outs: &[FanOutCost]) {
             ms(f.job_sum_us),
             ms(f.longest_job_us),
             ms(f.tail_us),
-        );
+        )?;
     }
+    Ok(())
 }
 
 // A named cost breakdown, or nothing at all when there is none to show. An
 // empty CPU block is the report saying the CPU was not what limited the
 // stretch, which is worth more than a ranking of noise.
 fn write_block(
-    out: &mut String,
+    out: &mut impl Write,
     heading: &str,
     of_what: &str,
     rows: impl Iterator<Item = (String, u32, f32)>,
-) {
+) -> fmt::Result {
     let mut started = false;
     for (name, mean_us, share) in rows {
         if !started {
-            let _ = writeln!(out);
-            let _ = writeln!(out, "{heading}:");
+            writeln!(out)?;
+            writeln!(out, "{heading}:")?;
             started = true;
         }
         // A negative share is a row taken away from the others.
         let sign = if share < 0.0 { -1.0 } else { 1.0 };
-        let _ = writeln!(
+        writeln!(
             out,
             "  {:<20} {:>7.3} ms  {:>5.1}% {of_what}",
             name,
             sign * mean_us as f32 / MICROS_PER_MILLI,
             share * 100.0,
-        );
+        )?;
     }
+    Ok(())
 }
 
 // How evenly each stretch's motion matched its frame times, and how often the
 // simulated frame moved under the camera.
-fn write_pacing(out: &mut String, report: &Report) {
-    let _ = writeln!(out);
-    let _ = writeln!(
+fn write_pacing(out: &mut impl Write, report: &Report) -> fmt::Result {
+    writeln!(out)?;
+    writeln!(
         out,
         "camera pacing, run time shown per finished frame over GPU frame interval (1.00x is even):"
-    );
-    let _ = writeln!(
+    )?;
+    writeln!(
         out,
         "  {:<16} {:>7} {:>7} {:>7} {:>7} {:>8}",
         "phase", "p5", "p50", "p95", "still", "rebases",
-    );
+    )?;
     for phase in core::iter::once(&report.overall).chain(&report.phases) {
         let p = &phase.pacing;
-        let _ = writeln!(
+        writeln!(
             out,
             "  {:<16} {:>6.2}x {:>6.2}x {:>6.2}x {:>7} {:>8}",
             phase.name, p.p5, p.p50, p.p95, p.still_frames, phase.rebases,
-        );
+        )?;
     }
+    Ok(())
 }
 
 // How stale each stretch's input was by the time its frames' GPU work ended.
 // One line when the backend measured none.
-fn write_input_latency(out: &mut String, report: &Report) {
-    let _ = writeln!(out);
+fn write_input_latency(out: &mut impl Write, report: &Report) -> fmt::Result {
+    writeln!(out)?;
     if report.overall.input_latency.frames == 0 {
-        let _ = writeln!(
+        writeln!(
             out,
             "input latency: not measured (the backend cannot place its GPU work on the host clock)"
-        );
-        return;
+        )?;
+        return Ok(());
     }
-    let _ = writeln!(out, "input latency, input sample to GPU work done:");
-    let _ = writeln!(
+    writeln!(out, "input latency, input sample to GPU work done:")?;
+    writeln!(
         out,
         "  {:<16} {:>9} {:>9} {:>7}",
         "phase", "p50 ms", "p95 ms", "frames",
-    );
+    )?;
     let ms = |us: u32| us as f32 / MICROS_PER_MILLI;
     for phase in core::iter::once(&report.overall).chain(&report.phases) {
         let l = &phase.input_latency;
-        let _ = writeln!(
+        writeln!(
             out,
             "  {:<16} {:>9.2} {:>9.2} {:>7}",
             phase.name,
             ms(l.p50_us),
             ms(l.p95_us),
             l.frames,
-        );
+        )?;
     }
+    Ok(())
 }
 
 // The slowest frames, each with the costs that say where its time went.
-fn write_slowest(out: &mut String, frames: &[SlowFrame]) {
+fn write_slowest(out: &mut impl Write, frames: &[SlowFrame]) -> fmt::Result {
     if frames.is_empty() {
-        return;
+        return Ok(());
     }
     let ms = |us: u32| us as f32 / MICROS_PER_MILLI;
-    let _ = writeln!(out);
-    let _ = writeln!(out, "slowest frames:");
+    writeln!(out)?;
+    writeln!(out, "slowest frames:")?;
     for frame in frames {
-        let _ = writeln!(
+        writeln!(
             out,
             "  {:.2} ms at {:.2} s in {}: cpu {:.2} ms, blocked on GPU {:.2} ms, gpu {:.2} ms (gaps {:.2}, overlap {:.2}), run step {:.2} ms{}",
             ms(frame.frame_us),
@@ -226,13 +229,13 @@ fn write_slowest(out: &mut String, frames: &[SlowFrame]) {
             ms(frame.gpu_overlap_us),
             ms(frame.run_step_us),
             if frame.rebased { ", frame moved" } else { "" },
-        );
-        write_costs(out, "cpu", &frame.cpu);
-        write_costs(out, "gpu", &frame.passes);
-        write_costs(out, "record", &frame.recording);
-        write_costs(out, "render", &frame.render);
+        )?;
+        write_costs(out, "cpu", &frame.cpu)?;
+        write_costs(out, "gpu", &frame.passes)?;
+        write_costs(out, "record", &frame.recording)?;
+        write_costs(out, "render", &frame.render)?;
         for f in &frame.fan_outs {
-            let _ = writeln!(
+            writeln!(
                 out,
                 "    fan-out {}: wall {:.2}, first job {:.2}, job sum {:.2}, longest {:.2}, tail {:.2}",
                 f.name,
@@ -241,33 +244,35 @@ fn write_slowest(out: &mut String, frames: &[SlowFrame]) {
                 ms(f.job_sum_us),
                 ms(f.longest_job_us),
                 ms(f.tail_us),
-            );
+            )?;
         }
     }
+    Ok(())
 }
 
 // One `label: name ms, name ms` line, or nothing when there are no costs.
-fn write_costs(out: &mut String, label: &str, costs: &[FrameCost]) {
+fn write_costs(out: &mut impl Write, label: &str, costs: &[FrameCost]) -> fmt::Result {
     if costs.is_empty() {
-        return;
+        return Ok(());
     }
-    let _ = write!(out, "    {label}:");
+    write!(out, "    {label}:")?;
     for (i, cost) in costs.iter().enumerate() {
         let separator = if i == 0 { "" } else { "," };
-        let _ = write!(
+        write!(
             out,
             "{separator} {} {:.2}",
             cost.name,
             cost.us as f32 / MICROS_PER_MILLI
-        );
+        )?;
     }
-    let _ = writeln!(out);
+    writeln!(out)?;
+    Ok(())
 }
 
 // One line of the summary table.
-fn write_row(out: &mut String, phase: &PhaseReport) {
+fn write_row(out: &mut impl Write, phase: &PhaseReport) -> fmt::Result {
     let ms = |us: u32| us as f32 / MICROS_PER_MILLI;
-    let _ = writeln!(
+    writeln!(
         out,
         "{:<16} {:>7} {:>8.2} {:>8.2} {:>8.2} {:>8.2} {:>8.1}% {:>8.2} {:>8.2}",
         phase.name,
@@ -279,7 +284,8 @@ fn write_row(out: &mut String, phase: &PhaseReport) {
         phase.frame.over_budget_share() * 100.0,
         ms(phase.cpu.p50_us),
         ms(phase.gpu.p50_us),
-    );
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -292,6 +298,10 @@ mod tests {
     use alloc::string::ToString;
     use alloc::vec;
     use alloc::vec::Vec;
+
+    fn to_text(report: &Report) -> String {
+        fmt::from_fn(|out| write_report(out, report)).to_string()
+    }
 
     fn sample(run_seconds: f32, phase: Option<u32>, frame_us: u32) -> FrameSample {
         FrameSample {

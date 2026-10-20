@@ -69,6 +69,10 @@ impl<B: Clone, T> FrameCaptures<B, T> {
     /// Keep a `len`-byte read-back buffer ready, when this run captures, so a
     /// capture never allocates on the frame it is taken. A failure resurfaces
     /// on the capture itself, which allocates again.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a failure resurfaces on the capture itself, which allocates again"
+    )]
     pub(crate) fn reserve(
         &mut self,
         len: usize,

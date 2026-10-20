@@ -89,6 +89,10 @@ impl GlobalState {
 }
 
 impl Drop for GlobalState {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a drop has nowhere to report, and the tree is removed either way"
+    )]
     fn drop(&mut self) {
         // Leave the tree before it is removed: a working directory that no
         // longer exists is a state some hosts refuse to remove from.

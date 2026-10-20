@@ -44,13 +44,16 @@ impl<'a> Call<'a> {
 
     /// Run `apply` against the live world at the next frame start and return
     /// its result.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the caller may have stopped waiting, which is not the engine's error"
+    )]
     pub(super) fn on_world<T: Send + 'static>(
         &self,
         apply: impl FnOnce(&mut World, &mut Option<CameraMotion>) -> Result<T, String> + Send + 'static,
     ) -> Result<T, String> {
         let (reply, answer) = sync_channel(1);
         self.queue.push_world(Box::new(move |world, motion| {
-            // The caller may have stopped waiting, which is not the engine's error.
             let _ = reply.send(apply(world, motion));
         }));
         wait(self.verb, &answer, REPLY_TIMEOUT)
@@ -58,6 +61,10 @@ impl<'a> Call<'a> {
 
     /// Run `apply` against the parked render backend once one exists, waiting
     /// up to `timeout` for its result.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the caller may have stopped waiting, which is not the engine's error"
+    )]
     pub(super) fn on_backend<T: Send + 'static>(
         &self,
         timeout: Duration,

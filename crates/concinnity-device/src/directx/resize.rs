@@ -136,12 +136,15 @@ impl DxContext {
             // SAFETY: the fence for this frame slot was already waited on, so no submission still
             // references what is being reset.
             unsafe {
-                let _ = self.commands.end_command_allocators[i].Reset();
+                if let Err(e) = self.commands.end_command_allocators[i].Reset() {
+                    tracing::warn!("resize: could not reset an end command allocator: {e}");
+                }
                 if self.commands.end_command_lists[i]
                     .Reset(&self.commands.end_command_allocators[i], None)
                     .is_ok()
+                    && let Err(e) = self.commands.end_command_lists[i].Close()
                 {
-                    let _ = self.commands.end_command_lists[i].Close();
+                    tracing::warn!("resize: could not close an end command list: {e}");
                 }
             }
         }

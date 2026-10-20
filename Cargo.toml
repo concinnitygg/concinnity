@@ -189,6 +189,7 @@ iter_over_hash_type = "warn"
 clone_on_ref_ptr = "warn"
 get_unwrap = "warn"
 try_err = "warn"
+let_underscore_must_use = "warn"
 fn_to_numeric_cast_any = "warn"
 # No runtime panics; clippy.toml exempts tests.
 unwrap_used = "warn"

@@ -41,6 +41,10 @@ pub(crate) fn reload_assets(state: &AssetHotReloadState) {
 // into the worker closure so the worker has no reference back to
 // AssetHotReloadState's storage and the render thread keeps mutating its
 // own copies freely.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a dropped receiver means the asset state went away and no longer wants the batch"
+)]
 fn spawn_asset_decode_worker(state: &AssetHotReloadState) {
     let has_work = !state.map.entries.is_empty()
         || state.color_lut.is_some()
@@ -80,8 +84,6 @@ fn spawn_asset_decode_worker(state: &AssetHotReloadState) {
             // par_iter to fan textures across cores.
             let batch =
                 pool().scope(|| decode_asset_batch(&textures, color_lut, &meshes, &skinned));
-            // Receiver dropped means the asset state went away before the
-            // decode finished; the send fails silently and the worker exits.
             let _ = tx.send(batch);
         }) {
         Ok(_) => {
@@ -110,6 +112,10 @@ fn spawn_asset_decode_worker(state: &AssetHotReloadState) {
 // the convolution often takes seconds (much longer than texture / mesh
 // decode) and the user benefits from re-triggering envmap and asset
 // reloads independently.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a dropped receiver means the asset state went away and no longer wants the map"
+)]
 fn spawn_envmap_worker(state: &AssetHotReloadState) {
     let Some(env_map) = state.environment_map.as_ref() else {
         return;

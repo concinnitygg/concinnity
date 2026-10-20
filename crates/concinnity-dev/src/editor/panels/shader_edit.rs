@@ -4,7 +4,7 @@
 //! distance field is `sdf_field_edit`.
 
 use concinnity_cook::authoring::world::is_label_of;
-use std::fmt::Write as _;
+use std::fmt;
 
 use super::shader_list::ShaderDecl;
 use super::shader_source::{SourceKey, same_file, stage_name};
@@ -121,28 +121,27 @@ pub(crate) fn delete_message(shaders: &[ShaderDecl], i: usize) -> String {
     let Some(shader) = shaders.get(i) else {
         return String::new();
     };
-    let mut out = format!("Delete Shader '{}'?", shader.name);
     let remaining = shaders.len() > 1;
     let fallback = if remaining {
         "the default Shader"
     } else {
         "the engine's own shading"
     };
-    match shader.materials.len() {
-        0 => {}
-        1 => {
-            let _ = write!(out, " 1 Material falls back to {fallback}.");
+    fmt::from_fn(|out| {
+        write!(out, "Delete Shader '{}'?", shader.name)?;
+        match shader.materials.len() {
+            0 => {}
+            1 => write!(out, " 1 Material falls back to {fallback}.")?,
+            n => write!(out, " {n} Materials fall back to {fallback}.")?,
         }
-        n => {
-            let _ = write!(out, " {n} Materials fall back to {fallback}.");
+        if shader.default
+            && let Some(next) = shaders.iter().enumerate().find(|&(j, _)| j != i)
+        {
+            write!(out, " '{}' becomes the world default.", next.1.name)?;
         }
-    }
-    if shader.default
-        && let Some(next) = shaders.iter().enumerate().find(|&(j, _)| j != i)
-    {
-        let _ = write!(out, " '{}' becomes the world default.", next.1.name);
-    }
-    out
+        Ok(())
+    })
+    .to_string()
 }
 
 // The dialog's "Also delete its files" box, off. It is disabled when every
@@ -174,19 +173,22 @@ pub(crate) fn file_name(path: &str) -> &str {
 // The toast after a delete: the Shader, the files deleted, and those that
 // could not be.
 pub(crate) fn deleted_message(name: &str, deleted: &[String], failed: &[String]) -> String {
-    let mut out = format!("Deleted Shader '{name}'");
-    if !deleted.is_empty() {
-        let names: Vec<&str> = deleted.iter().map(|p| file_name(p)).collect();
-        let _ = write!(
-            out,
-            " and {}; undo restores the Shader but not its files",
-            names.join(", ")
-        );
-    }
-    if !failed.is_empty() {
-        let _ = write!(out, "; could not delete {}", failed.join("; "));
-    }
-    out
+    let names: Vec<&str> = deleted.iter().map(|p| file_name(p)).collect();
+    fmt::from_fn(|out| {
+        write!(out, "Deleted Shader '{name}'")?;
+        if !names.is_empty() {
+            write!(
+                out,
+                " and {}; undo restores the Shader but not its files",
+                names.join(", ")
+            )?;
+        }
+        if !failed.is_empty() {
+            write!(out, "; could not delete {}", failed.join("; "))?;
+        }
+        Ok(())
+    })
+    .to_string()
 }
 
 // The toast after removing a Shader's vertex file.

@@ -39,6 +39,10 @@ impl VkContext {
     // Block on the next frame slot's fence ahead of the draw. The fence stays
     // signaled until the draw resets it, so the draw's own wait returns at
     // once, and a failure surfaces there.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a failed wait surfaces on the draw's own wait on the same fence"
+    )]
     pub(crate) fn prepare_frame(&mut self) {
         if self.frame_is_parked() {
             return;

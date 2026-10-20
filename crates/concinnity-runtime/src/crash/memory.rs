@@ -9,7 +9,7 @@
 //! Rendering allocates and runs later, with the report's other sections.
 
 use concinnity_core::memory::MemStats;
-use std::fmt::Write as _;
+use std::fmt;
 
 // The tracked heap and process RSS at crash time. Either half is `None` when
 // its source is unavailable: no binary installed the tracking allocator, or the
@@ -31,24 +31,22 @@ impl MemorySnapshot {
     // Header lines in the same `key: value` form as the rest of the header. An
     // unavailable source says so rather than reporting a zero, which would read
     // as a real measurement of an empty heap.
-    pub(crate) fn write_into(&self, out: &mut String) {
+    pub(crate) fn write_into(&self, out: &mut impl fmt::Write) -> fmt::Result {
         match self.heap {
             Some(h) => {
-                let _ = writeln!(out, "heap-live: {}", bytes(h.live_bytes));
-                let _ = writeln!(out, "heap-peak: {}", bytes(h.peak_bytes));
-                let _ = writeln!(
+                writeln!(out, "heap-live: {}", bytes(h.live_bytes))?;
+                writeln!(out, "heap-peak: {}", bytes(h.peak_bytes))?;
+                writeln!(
                     out,
                     "heap-churn: {} alloc / {} free",
                     h.alloc_count, h.free_count
-                );
+                )?;
             }
-            None => out.push_str("heap: <unavailable>\n"),
+            None => out.write_str("heap: <unavailable>\n")?,
         }
         match self.rss_bytes {
-            Some(rss) => {
-                let _ = writeln!(out, "rss: {}", bytes(rss));
-            }
-            None => out.push_str("rss: <unavailable>\n"),
+            Some(rss) => writeln!(out, "rss: {}", bytes(rss)),
+            None => out.write_str("rss: <unavailable>\n"),
         }
     }
 }
@@ -79,7 +77,7 @@ mod tests {
 
     fn rendered(snap: MemorySnapshot) -> String {
         let mut out = String::new();
-        snap.write_into(&mut out);
+        snap.write_into(&mut out).unwrap();
         out
     }
 

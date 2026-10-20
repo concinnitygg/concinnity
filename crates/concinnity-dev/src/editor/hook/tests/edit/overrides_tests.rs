@@ -234,7 +234,7 @@ fn materializing_a_preset_prefab_authors_it_as_a_world_line() {
         "the preset's entries came across verbatim"
     );
 
-    let _ = std::fs::remove_file(dir.join("cn_test_prefab.json"));
+    std::fs::remove_file(dir.join("cn_test_prefab.json")).unwrap();
 }
 
 // The jump walks the form's scroll window to the next overridden field and

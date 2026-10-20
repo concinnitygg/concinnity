@@ -251,6 +251,16 @@ fn reset_dir(dir: &Path) -> io::Result<()> {
 // are always siblings of blob 0 named by index, so the single-file form can
 // only carry a world that has none -- the player refuses the mismatch rather
 // than reading `1` and `2` out of the folder it was launched from.
+// Remove `path`, a file or a directory, when it exists.
+fn remove_any(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => fs::remove_dir_all(path),
+        Ok(_) => fs::remove_file(path),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 fn copy_blobs(data_src: &Path, data_dst: &Path) -> io::Result<usize> {
     let blobs = blobs_in(data_src)?;
     if blobs.is_empty() {
@@ -261,8 +271,7 @@ fn copy_blobs(data_src: &Path, data_dst: &Path) -> io::Result<usize> {
     }
     // Whatever the previous export left here: the two forms occupy the same
     // name, so a shrinking world would otherwise write a file over a directory.
-    let _ = fs::remove_file(data_dst);
-    let _ = fs::remove_dir_all(data_dst);
+    remove_any(data_dst)?;
 
     if let [(_, only)] = blobs.as_slice() {
         if let Some(parent) = data_dst.parent() {

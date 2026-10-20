@@ -397,10 +397,10 @@ mod tests {
         let count = u16::MAX as usize + 3;
         let mut obj = String::with_capacity(count * 12);
         for i in 0..count {
-            let _ = writeln!(obj, "v {i} 0 0");
+            writeln!(obj, "v {i} 0 0").unwrap();
         }
         for tri in 0..count / 3 {
-            let _ = writeln!(obj, "f {} {} {}", tri * 3 + 1, tri * 3 + 2, tri * 3 + 3);
+            writeln!(obj, "f {} {} {}", tri * 3 + 1, tri * 3 + 2, tri * 3 + 3).unwrap();
         }
         let err = parse_obj(&obj).unwrap_err();
         assert_eq!(err, "mesh exceeds 65535 unique vertices (u16 index limit)");

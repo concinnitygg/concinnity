@@ -126,7 +126,6 @@ mod tests {
         let image = source.fetch(0).expect("fetch ok");
         assert_eq!((image.width(), image.height()), (2, 1));
         assert!(image.mips[0].data.iter().all(|&b| b == 0xCD));
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

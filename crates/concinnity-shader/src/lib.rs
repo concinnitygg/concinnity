@@ -325,6 +325,10 @@ fn with_scratch<T>(
 
 // Run `f` in a scratch directory of its own under `work_dir`, removed
 // afterwards whatever `f` returned.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a scratch directory left behind does not change the result"
+)]
 pub(crate) fn in_scratch<T>(
     work_dir: &Path,
     f: impl FnOnce(&Path) -> Result<T, String>,

@@ -220,7 +220,7 @@ mod tests {
             for g in 0..n {
                 for r in 0..n {
                     let d = (n - 1) as f32;
-                    let _ = writeln!(s, "{} {} {}", r as f32 / d, g as f32 / d, b as f32 / d);
+                    writeln!(s, "{} {} {}", r as f32 / d, g as f32 / d, b as f32 / d).unwrap();
                 }
             }
         }

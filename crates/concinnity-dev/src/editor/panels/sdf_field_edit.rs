@@ -7,7 +7,6 @@ use super::shader_edit::file_name;
 use super::shader_list::ShaderDecl;
 use super::shader_source::same_file;
 use crate::editor::widget_check::Check;
-use std::fmt::Write as _;
 
 // What deleting a field does: the volumes removed, and who still reads its
 // file after, an included volume the editor cannot remove or a Shader
@@ -52,17 +51,18 @@ fn quoted(names: &[String]) -> String {
 
 // What the dialog asks.
 pub(crate) fn delete_message(field: &FieldDecl, delete: &FieldDelete) -> String {
-    let mut out = format!("Delete the SDF field {}?", field.declared);
+    let declared = &field.declared;
     match delete.removed.len() {
-        0 => {}
-        1 => {
-            let _ = write!(out, " Its volume {} is deleted.", quoted(&delete.removed));
-        }
-        _ => {
-            let _ = write!(out, " Its volumes {} are deleted.", quoted(&delete.removed));
-        }
+        0 => format!("Delete the SDF field {declared}?"),
+        1 => format!(
+            "Delete the SDF field {declared}? Its volume {} is deleted.",
+            quoted(&delete.removed)
+        ),
+        _ => format!(
+            "Delete the SDF field {declared}? Its volumes {} are deleted.",
+            quoted(&delete.removed)
+        ),
     }
-    out
 }
 
 // The dialog's "Also delete its files" box, off. It is disabled while
@@ -90,25 +90,19 @@ pub(crate) fn deleted_message(
     removed: &[String],
     file: Option<Result<(), String>>,
 ) -> String {
-    let mut out = format!(
+    let head = format!(
         "Deleted the SDF field {} ({})",
         field.declared,
         quoted(removed)
     );
     match file {
-        Some(Ok(())) => {
-            let _ = write!(
-                out,
-                " and {}; undo restores the volumes but not the file",
-                file_name(&field.declared)
-            );
-        }
-        Some(Err(e)) => {
-            let _ = write!(out, "; could not delete {}: {e}", field.path);
-        }
-        None => {}
+        Some(Ok(())) => format!(
+            "{head} and {}; undo restores the volumes but not the file",
+            file_name(&field.declared)
+        ),
+        Some(Err(e)) => format!("{head}; could not delete {}: {e}", field.path),
+        None => head,
     }
-    out
 }
 
 #[cfg(test)]

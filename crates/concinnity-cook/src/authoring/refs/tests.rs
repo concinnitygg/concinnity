@@ -432,7 +432,7 @@ fn a_renamed_world_still_builds() {
         rename_in(&mut world, from, to);
     }
     let text = world.iter().fold(String::new(), |mut text, e| {
-        let _ = writeln!(text, "{}", serde_json::json!([e["type"], e["args"]]));
+        writeln!(text, "{}", serde_json::json!([e["type"], e["args"]])).unwrap();
         text
     });
     let loaded = crate::build_only::prepare_world(text.as_str(), None)

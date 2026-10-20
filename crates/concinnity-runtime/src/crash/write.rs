@@ -30,6 +30,10 @@ pub(crate) fn unique_stem(dir: &Path, base: &str) -> String {
 
 // Write `report` to `<dir>/<stem>.txt`, section by section with a flush after
 // each. Never overwrites an existing file.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the report is already written; syncing it is best effort"
+)]
 pub(crate) fn write_report_named(
     dir: &Path,
     stem: &str,
@@ -63,6 +67,10 @@ pub(crate) fn emit(report: &CrashReport) -> Option<PathBuf> {
 // rest, treating a `.txt`/`.dmp` pair as one report. A `.dmp` without its
 // sidecar still counts, so a dump from a failed report write survives until
 // it ages out.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "pruning old reports is best effort"
+)]
 pub(crate) fn prune(dir: &Path, keep: usize) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;

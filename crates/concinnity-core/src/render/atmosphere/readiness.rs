@@ -20,6 +20,10 @@ pub struct TableReadiness {
 
 impl TableReadiness {
     /// Note that this frame records the atmosphere pass.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a count at its ceiling is meant to stay there"
+    )]
     pub fn note_recorded(&self) {
         // Saturating: a long run never wraps back to "not ready".
         let _ = self

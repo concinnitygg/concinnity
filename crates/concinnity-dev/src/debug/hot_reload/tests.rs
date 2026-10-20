@@ -1565,7 +1565,7 @@ fn reload_assets_spawns_an_envmap_worker() {
         .unwrap()
         .take()
         .expect("envmap worker scheduled");
-    let _ = rx.recv();
+    assert!(rx.recv().is_ok());
 }
 
 // poll_pending_assets: remaining apply branches

@@ -3,7 +3,7 @@
 
 use alloc::format;
 use alloc::string::{String, ToString};
-use core::fmt::Write as _;
+use core::fmt;
 
 use crate::camera_track::CameraTrackStatus;
 use crate::ecs::PipelineContext;
@@ -79,17 +79,19 @@ fn file_name(
     frame: u64,
     track_seconds: Option<f32>,
 ) -> String {
-    let mut name = stamp.to_string();
-    if let Some((index, count)) = shot {
-        let width = count.to_string().len();
-        let _ = write!(name, "-{index:0width$}of{count}");
-    }
-    let _ = write!(name, "-frame{frame}");
-    if let Some(seconds) = track_seconds {
-        let _ = write!(name, "-track{seconds:.2}s");
-    }
-    name.push_str(".png");
-    name
+    fmt::from_fn(|name| {
+        name.write_str(stamp)?;
+        if let Some((index, count)) = shot {
+            let width = count.to_string().len();
+            write!(name, "-{index:0width$}of{count}")?;
+        }
+        write!(name, "-frame{frame}")?;
+        if let Some(seconds) = track_seconds {
+            write!(name, "-track{seconds:.2}s")?;
+        }
+        name.write_str(".png")
+    })
+    .to_string()
 }
 
 #[cfg(test)]

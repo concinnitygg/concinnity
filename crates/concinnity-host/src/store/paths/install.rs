@@ -65,6 +65,10 @@ fn app_name_from_exe(exe: &Path) -> String {
 // Whether `dir` accepts new files. Probes by creating (and removing) a uniquely
 // named file; a read-only install (Program Files) fails here. A missing dir is
 // treated as writable -- the runtime creates `saves/` under it on first save.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a leftover probe file does not change the answer"
+)]
 fn dir_is_writable(dir: &Path) -> bool {
     if !dir.exists() {
         return true;

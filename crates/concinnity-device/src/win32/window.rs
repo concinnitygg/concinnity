@@ -153,18 +153,18 @@ pub(crate) fn capture_cursor(hwnd: HWND, state: &mut WindowState) {
         };
         // SAFETY: `hwnd` is this window's live handle, and both points are live locals the calls
         // convert in place.
-        unsafe {
-            let _ = ClientToScreen(hwnd, &raw mut tl);
-            let _ = ClientToScreen(hwnd, &raw mut br);
-        }
-        let screen_rect = RECT {
-            left: tl.x,
-            top: tl.y,
-            right: br.x,
-            bottom: br.y,
+        let converted = unsafe {
+            ClientToScreen(hwnd, &raw mut tl).as_bool()
+                && ClientToScreen(hwnd, &raw mut br).as_bool()
         };
-        // SAFETY: `screen_rect` is a live local the call only reads.
-        let _ = unsafe { ClipCursor(Some(&raw const screen_rect)) };
+        if converted {
+            set_cursor_clip(Some(&RECT {
+                left: tl.x,
+                top: tl.y,
+                right: br.x,
+                bottom: br.y,
+            }));
+        }
     }
     // Discard any spurious deltas accumulated before capture.
     state.mouse_dx = 0.0;
@@ -177,12 +177,9 @@ pub(crate) fn release_cursor(state: &mut WindowState) {
     }
     state.cursor_captured = false;
     state.recapture_on_click = true;
-    // SAFETY: neither call borrows state: one drops the clip, the other adjusts this thread's
-    // cursor display count.
-    unsafe {
-        let _ = ClipCursor(None);
-        ShowCursor(true);
-    }
+    set_cursor_clip(None);
+    // SAFETY: adjusts this thread's cursor display count; it borrows nothing.
+    unsafe { ShowCursor(true) };
 }
 
 // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
@@ -281,8 +278,7 @@ pub(crate) fn update_ui_cursor_confinement(state: &mut WindowState) {
         // (see `release_menu_clip`).
         // SAFETY: a read of the foreground window handle; it borrows nothing.
         if unsafe { GetForegroundWindow() } == state.hwnd {
-            // SAFETY: `rect` is a live local the call only reads.
-            let _ = unsafe { ClipCursor(Some(&raw const rect)) };
+            set_cursor_clip(Some(&rect));
             state.menu_clip_active = true;
         } else {
             state.menu_clip_active = false;
@@ -307,9 +303,18 @@ pub(crate) fn update_ui_cursor_confinement(state: &mut WindowState) {
 fn release_menu_clip(state: &mut WindowState) {
     if state.menu_clip_active {
         state.menu_clip_active = false;
-        // SAFETY: the call releases this thread's clip and borrows nothing.
-        let _ = unsafe { ClipCursor(None) };
+        set_cursor_clip(None);
     }
+}
+
+// Confine the cursor to `rect` in screen coordinates, or release it with `None`.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the clip is best effort: the OS drops it with the foreground, and capture reapplies it"
+)]
+fn set_cursor_clip(rect: Option<&RECT>) {
+    // SAFETY: `rect`, when given, is a live reference the call only reads.
+    let _ = unsafe { ClipCursor(rect.map(core::ptr::from_ref)) };
 }
 
 // NOTE: the window-mode / window-size helpers below mirror the Metal
@@ -323,6 +328,10 @@ fn release_menu_clip(state: &mut WindowState) {
 // (SetFullscreenState) is deliberately avoided -- it is documented as fraught
 // with alt-tab, multi-display, and resolution-change issues. SetWindowPos fires
 // WM_SIZE, which the resize path turns into a ResizeBuffers.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "ShowWindow returns the previous visibility, not an error"
+)]
 pub(crate) fn set_window_mode(state: &mut WindowState, mode: WindowMode) {
     let hwnd = state.hwnd;
     // Record the mode so the per-frame cursor confinement can tell fullscreen
@@ -343,8 +352,10 @@ pub(crate) fn set_window_mode(state: &mut WindowState, mode: WindowMode) {
                     right: w,
                     bottom: h,
                 };
-                let _ = AdjustWindowRect(&raw mut rect, style, false);
-                let _ = SetWindowPos(
+                if let Err(e) = AdjustWindowRect(&raw mut rect, style, false) {
+                    tracing::warn!("window mode: AdjustWindowRect failed: {e}");
+                }
+                if let Err(e) = SetWindowPos(
                     hwnd,
                     None,
                     80,
@@ -352,7 +363,9 @@ pub(crate) fn set_window_mode(state: &mut WindowState, mode: WindowMode) {
                     rect.right - rect.left,
                     rect.bottom - rect.top,
                     SWP_FRAMECHANGED | SWP_NOZORDER,
-                );
+                ) {
+                    tracing::warn!("window mode: SetWindowPos failed: {e}");
+                }
             }
             WindowMode::Borderless | WindowMode::Fullscreen => {
                 SetWindowLongPtrW(
@@ -360,8 +373,8 @@ pub(crate) fn set_window_mode(state: &mut WindowState, mode: WindowMode) {
                     GWL_STYLE,
                     isize::saturating_from((WS_POPUP | WS_VISIBLE).0),
                 );
-                if let Some(rect) = monitor_rect(hwnd) {
-                    let _ = SetWindowPos(
+                if let Some(rect) = monitor_rect(hwnd)
+                    && let Err(e) = SetWindowPos(
                         hwnd,
                         None,
                         rect.left,
@@ -369,7 +382,9 @@ pub(crate) fn set_window_mode(state: &mut WindowState, mode: WindowMode) {
                         rect.right - rect.left,
                         rect.bottom - rect.top,
                         SWP_FRAMECHANGED | SWP_NOZORDER,
-                    );
+                    )
+                {
+                    tracing::warn!("window mode: SetWindowPos failed: {e}");
                 }
             }
         }
@@ -391,8 +406,10 @@ pub(crate) fn set_window_size(state: &mut WindowState, width: u32, height: u32) 
             right: i32::saturating_from(width),
             bottom: i32::saturating_from(height),
         };
-        let _ = AdjustWindowRect(&raw mut rect, windowed_style(state.title_bar), false);
-        let _ = SetWindowPos(
+        if let Err(e) = AdjustWindowRect(&raw mut rect, windowed_style(state.title_bar), false) {
+            tracing::warn!("window size: AdjustWindowRect failed: {e}");
+        }
+        if let Err(e) = SetWindowPos(
             hwnd,
             None,
             0,
@@ -400,7 +417,9 @@ pub(crate) fn set_window_size(state: &mut WindowState, width: u32, height: u32) 
             rect.right - rect.left,
             rect.bottom - rect.top,
             SWP_NOMOVE | SWP_NOZORDER,
-        );
+        ) {
+            tracing::warn!("window size: SetWindowPos failed: {e}");
+        }
     }
 }
 
@@ -509,7 +528,7 @@ unsafe extern "system" fn wnd_proc(
                 if state.cursor_captured {
                     state.cursor_captured = false;
                     state.recapture_on_click = true;
-                    let _ = ClipCursor(None);
+                    set_cursor_clip(None);
                     ShowCursor(true);
                 }
                 // Alt+Tab consumes the Alt release, so drop the held modifiers
@@ -656,12 +675,15 @@ fn install_window_state(hwnd: HWND, win_state: &mut WindowState) {
     };
     // SAFETY: `rid` is a live local, and the element size passed alongside it is that local's own
     // type.
-    let _ = unsafe {
+    let registered = unsafe {
         windows::Win32::UI::Input::RegisterRawInputDevices(
             &[rid],
             u32::saturating_from(size_of::<windows::Win32::UI::Input::RAWINPUTDEVICE>()),
         )
     };
+    if let Err(e) = registered {
+        tracing::warn!("raw mouse input is unavailable: {e}");
+    }
     // SAFETY: the stored address is that of a `WindowState` held in a `Box` whose heap allocation
     // outlives the window, so `wnd_proc` can dereference it for as long as the window delivers
     // messages.
@@ -699,6 +721,10 @@ fn adopt_parked_window(hwnd: HWND, title_bar: bool) -> (HWND, Box<WindowState>) 
     (hwnd, win_state)
 }
 
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "showing and focusing a new window is best effort; a click into it focuses it"
+)]
 pub(crate) fn create_window(
     title: &str,
     width: u32,
@@ -723,7 +749,7 @@ pub(crate) fn create_window(
                 GWL_STYLE,
                 isize::saturating_from(windowed_style(title_bar).0),
             );
-            let _ = SetWindowPos(
+            if let Err(e) = SetWindowPos(
                 hwnd,
                 None,
                 0,
@@ -731,7 +757,9 @@ pub(crate) fn create_window(
                 0,
                 0,
                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
-            );
+            ) {
+                tracing::warn!("parked window restyle: SetWindowPos failed: {e}");
+            }
         }
         return Ok((hwnd, state));
     }
@@ -868,6 +896,10 @@ pub(crate) fn take_input_snapshot(state: &mut WindowState) -> InputSnapshot {
     })
 }
 
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "TranslateMessage reports whether it posted a character message, not an error"
+)]
 pub(crate) fn pump_messages() {
     let mut msg = MSG::default();
     // SAFETY: `msg` is a live local the pump fills.

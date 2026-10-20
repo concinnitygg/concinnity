@@ -7,6 +7,10 @@
 use std::path::Path;
 
 // Dump the current (healthy) process, used from the panic hook.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "removing a partial dump is best effort; the text report already landed"
+)]
 pub(crate) fn write_self_dump(dir: &Path, stem: &str) {
     let Ok((mut file, path)) = super::write::create_dump_file(dir, stem) else {
         return;
@@ -19,6 +23,10 @@ pub(crate) fn write_self_dump(dir: &Path, stem: &str) {
 
 // Dump using the native fault handler's crash context, so the dump records
 // the faulting thread and exception rather than the handler.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "removing a partial dump is best effort; the text report already landed"
+)]
 pub(crate) fn write_fault_dump(dir: &Path, stem: &str, ctx: &crash_handler::CrashContext) {
     let Ok((mut file, path)) = super::write::create_dump_file(dir, stem) else {
         return;

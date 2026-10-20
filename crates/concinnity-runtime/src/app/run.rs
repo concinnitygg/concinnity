@@ -44,6 +44,10 @@ fn log_filter() -> EnvFilter {
 /// configured: the CLI entry points call it directly, and the FFI entry point
 /// (`cn_init`) calls it for the macOS app. Safe to call once per process. The
 /// crash ring layer rides along so crash reports carry the recent log lines.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a subscriber the host already installed takes precedence"
+)]
 pub fn init_logging() {
     use tracing_subscriber::Layer;
     use tracing_subscriber::layer::SubscriberExt;

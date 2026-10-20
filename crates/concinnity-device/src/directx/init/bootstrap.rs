@@ -116,9 +116,13 @@ pub(super) fn setup(
         // `denied` array it points into) outlives the `AddStorageFilterEntries` call at the end of
         // the block.
         let iq = device.cast::<ID3D12InfoQueue>().ok().inspect(|iq| unsafe {
-            let _ = iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, false);
-            let _ = iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, false);
-            let _ = iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, false);
+            let unbroken = iq
+                .SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, false)
+                .and_then(|()| iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, false))
+                .and_then(|()| iq.SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, false));
+            if let Err(e) = unbroken {
+                tracing::warn!("d3d12 info queue: could not turn off break-on-severity: {e}");
+            }
             // A pipeline-library miss is how `pso_library` asks whether the
             // blob already holds a PSO, and it builds the PSO when the answer
             // is no. Every cold run would otherwise warn once per pipeline
@@ -139,7 +143,9 @@ pub(super) fn setup(
                 },
                 ..Default::default()
             };
-            let _ = iq.AddStorageFilterEntries(&raw const filter);
+            if let Err(e) = iq.AddStorageFilterEntries(&raw const filter) {
+                tracing::warn!("d3d12 info queue: could not install the message filter: {e}");
+            }
         });
         if iq.is_none() {
             tracing::warn!("d3d12 info queue: unavailable; layer messages will not be logged");

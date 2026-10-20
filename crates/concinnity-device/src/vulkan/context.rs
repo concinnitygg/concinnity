@@ -1279,6 +1279,10 @@ static MAIN_THREAD_ID: std::sync::OnceLock<std::thread::ThreadId> = std::sync::O
 
 // Record the calling thread as the main (render) thread. Called once from
 // `VkContext::new`, which always runs on the main thread.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the main thread is the same for every context a process makes"
+)]
 pub(super) fn record_main_thread() {
     let _ = MAIN_THREAD_ID.set(std::thread::current().id());
 }
@@ -1393,7 +1397,9 @@ impl VkContext {
             tracing::error!("geometry upload submit failed: {e}");
         }
         // SAFETY: a wait on this device's own queues; it takes no borrowed state.
-        let _ = unsafe { self.hw.device.device_wait_idle() };
+        if let Err(e) = unsafe { self.hw.device.device_wait_idle() } {
+            tracing::error!("device wait idle failed: {e}");
+        }
     }
 
     // Render statistics for the most recent `draw_frame`, for the profiler

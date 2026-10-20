@@ -67,8 +67,10 @@ impl PipelineBuilder for TestBuilder {
         _bucket: u32,
         programs: &ShaderPrograms,
     ) -> RenderResult<PreparedPipelines> {
-        if let Some(gate) = &self.gate {
-            let _ = gate.lock().unwrap().recv();
+        if let Some(gate) = &self.gate
+            && gate.lock().unwrap().recv().is_err()
+        {
+            return Err(RenderError::ShaderCompile("the gate closed".into()));
         }
         if self.reject {
             return Err(RenderError::ShaderCompile("pipeline state failed".into()));

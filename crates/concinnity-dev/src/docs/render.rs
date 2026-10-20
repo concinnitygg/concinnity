@@ -7,7 +7,6 @@
 
 use concinnity_core::ecs::asset_fields::{ApplyClass, ParamMeta};
 use std::collections::HashMap;
-use std::fmt::Write as _;
 
 // A JSON-shaped description of a field's type. `Enum` carries the accepted
 // string values; `Named`/`NamedEnum` carry a documented type's name, which is
@@ -174,7 +173,9 @@ pub(super) fn render_field_bullet(f: &FieldEntry) -> String {
     let lower = doc.to_lowercase();
     match &f.default {
         Some(def) if def != "null" && !doc_states_default(&lower) => {
-            let _ = write!(s, " Defaults to `{def}`.");
+            s.push_str(" Defaults to `");
+            s.push_str(def);
+            s.push_str("`.");
         }
         _ if f.optional && !doc_states_optional(&lower) => {
             s.push_str(" Optional.");
@@ -226,7 +227,9 @@ pub(super) fn render_values(values: &[EnumValue]) -> String {
     }
     let mut s = String::from("## Values\n\n");
     for v in values {
-        let _ = write!(s, "- `{}`", v.value);
+        s.push_str("- `");
+        s.push_str(&v.value);
+        s.push('`');
         let doc = v.doc.trim();
         if !doc.is_empty() {
             s.push_str(": ");

@@ -131,6 +131,10 @@ mod imp {
             class.live.fetch_add(1, Relaxed);
         }
 
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "the update never declines, so it cannot fail"
+        )]
         pub(crate) fn record_free(&self, size: usize) {
             let live = &self.classes[class_of(size)].live;
             let _ = live.fetch_update(Relaxed, Relaxed, |n| Some(n.saturating_sub(1)));

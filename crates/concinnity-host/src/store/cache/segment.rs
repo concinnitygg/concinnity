@@ -171,7 +171,11 @@ impl Segment {
         if self.items.is_empty() {
             // A cache nothing needs leaves nothing behind. The stamp goes with
             // it, which costs the next run a discard of an empty segment.
-            let _ = fs::remove_file(path);
+            if let Err(e) = fs::remove_file(path)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!("cache segment: could not remove {}: {e}", path.display());
+            }
             self.dirty = false;
             return false;
         }

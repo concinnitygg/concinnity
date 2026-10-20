@@ -82,6 +82,10 @@ impl BuildRequest {
     // Run the build on a thread of its own, reporting through `done`. A build
     // that cannot be started reports that instead, so the bucket is never left
     // waiting on a result that will not come.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a dropped bucket no longer waits on the build"
+    )]
     pub(super) fn spawn(self, builder: Option<Arc<dyn PipelineBuilder>>) {
         let bucket = self.bucket;
         let done = self.done.clone();

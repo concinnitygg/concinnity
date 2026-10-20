@@ -15,6 +15,10 @@ use super::write;
 // process lifetime.
 static HANDLER: OnceLock<CrashHandler> = OnceLock::new();
 
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a handler installed by a racing call already holds the slot"
+)]
 pub(crate) fn install() {
     if HANDLER.get().is_some() {
         return;
@@ -33,6 +37,10 @@ pub(crate) fn install() {
     }
 }
 
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a fault handler has nowhere to report its own failure"
+)]
 fn report_fault(ctx: &CrashContext) {
     // The dump lands before the report is gathered. Naming it still costs a
     // path and a few directory probes, but everything else the report needs --

@@ -2,7 +2,7 @@
 //! terminal: the caller picks the width and whether to paint.
 
 use concinnity_core::math::SaturatingFrom;
-use std::fmt::Write as _;
+use std::fmt;
 use std::time::{Duration, Instant};
 
 use super::board::{Board, Note, NoteLevel, Outcome, Row, RowState};
@@ -84,16 +84,16 @@ impl Line {
         if !color {
             return self.plain_text();
         }
-        let mut out = String::new();
-        for (tone, text) in &self.0 {
-            match tone.sgr() {
-                "" => out.push_str(text),
-                sgr => {
-                    let _ = write!(out, "\x1b[{sgr}m{text}\x1b[0m");
+        fmt::from_fn(|out| {
+            for (tone, text) in &self.0 {
+                match tone.sgr() {
+                    "" => out.write_str(text)?,
+                    sgr => write!(out, "\x1b[{sgr}m{text}\x1b[0m")?,
                 }
             }
-        }
-        out
+            Ok(())
+        })
+        .to_string()
     }
 }
 

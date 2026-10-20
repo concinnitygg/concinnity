@@ -13,7 +13,7 @@
 
 use concinnity_cook::{build_pipeline_from_str, prepare_world};
 use concinnity_core::blob::{BlobMeta, WorldManifest, encode_cnb, parse_cnb};
-use std::fmt::Write as _;
+use std::fmt;
 
 use crate::support::Bench;
 
@@ -22,8 +22,11 @@ const BLOB_BENCHES: [&str; 2] = ["blob_encode", "blob_parse"];
 const BENCHES: [&str; 4] = ["prepare_world", "build", BLOB_BENCHES[0], BLOB_BENCHES[1]];
 
 fn world_jsonl(props: usize) -> String {
-    let mut out = String::with_capacity(props * 128 + 512);
-    out.push_str(concat!(
+    fmt::from_fn(|out| write_world_jsonl(out, props)).to_string()
+}
+
+fn write_world_jsonl(out: &mut impl fmt::Write, props: usize) -> fmt::Result {
+    out.write_str(concat!(
         "[\"Camera3D\",{\"$id\":\"cam\",\"position\":[0,2,12]}]\n",
         "[\"GraphicsConfig\",{\"$id\":\"gfx\",",
         "\"frame_pacing\":{\"vsync\":false},\"shadows\":{\"map_size\":0}}]\n",
@@ -31,17 +34,17 @@ fn world_jsonl(props: usize) -> String {
         "{\"$id\":\"bench_mesh\",\"generator\":\"box\",\"half_extents\":[0.4,0.4,0.4]}]\n",
         "[\"Texture\",{\"$id\":\"bench_tex\",\"generator\":\"checker\",\"resolution\":64}]\n",
         "[\"Material\",{\"$id\":\"bench_mat\",\"albedo\":\"bench_tex\",\"roughness\":0.6}]\n",
-    ));
+    ))?;
     for i in 0..props {
         let x = (i % 100) as f32 * 1.2;
         let z = (i / 100) as f32 * 1.2;
-        let _ = writeln!(
+        writeln!(
             out,
             "[\"Prop\",{{\"mesh\":\"bench_mesh\",\"material\":\"bench_mat\",\
              \"position\":[{x},0.45,{z}]}}]"
-        );
+        )?;
     }
-    out
+    Ok(())
 }
 
 fn bench_name(what: &str, label: &str) -> String {

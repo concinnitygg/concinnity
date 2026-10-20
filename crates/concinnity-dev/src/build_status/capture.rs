@@ -17,6 +17,10 @@ static ACTIVE: Mutex<Option<(Arc<Shared>, Level)>> = Mutex::new(None);
 // Install the process's tracing subscriber: this layer plus the crash ring,
 // which keeps the recent log for a crash report. A no-op once installed, or
 // when another subscriber already is.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a subscriber already installed takes precedence"
+)]
 pub(super) fn install() {
     static INSTALLED: OnceLock<()> = OnceLock::new();
     INSTALLED.get_or_init(|| {
@@ -130,6 +134,10 @@ struct MessageVisitor {
 }
 
 impl tracing::field::Visit for MessageVisitor {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "writing to a String cannot fail"
+    )]
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         use std::fmt::Write as _;
         match field.name() {

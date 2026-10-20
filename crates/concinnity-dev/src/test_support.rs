@@ -14,9 +14,13 @@ pub(crate) fn lock() -> concinnity_testing::ExclusiveAccess {
 }
 
 // What every guard here sets up before taking the lock.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the first install of the test subscriber wins"
+)]
 fn prepare() {
     // Route tracing output through the harness's per-test capture so expected
-    // ERROR logs stay hidden on pass but replay on failure. First install wins.
+    // ERROR logs stay hidden on pass but replay on failure.
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
     // Nothing in this crate's tests has a window to open, so a call that
     // reaches one is a regression: panic naming the backend rather than block.

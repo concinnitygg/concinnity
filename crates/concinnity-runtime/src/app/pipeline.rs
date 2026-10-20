@@ -133,6 +133,10 @@ pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
 // (`GoTiming`). Each frame then replays its ops, submits, and sends the
 // feedback. Returns whether the stop was a device loss, and how many frames
 // reached the backend.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a send fails only once the sim has stopped, with nothing left to tell"
+)]
 fn render_half(
     backend: &mut dyn RenderBackend,
     go: &FrameGo,
@@ -179,7 +183,6 @@ fn render_half(
             stop,
             skipped: outcome.skipped,
         };
-        // A send failure means the sim already stopped; nothing left to tell.
         let _ = feedback_tx.send(feedback);
         if stop {
             return RenderHalfOutcome {

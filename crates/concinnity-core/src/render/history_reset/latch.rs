@@ -41,6 +41,10 @@ impl Default for UpscalerResetLatch {
 
 impl UpscalerResetLatch {
     /// Discard the history on the next dispatch.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a reset already pending is kept as it is"
+    )]
     pub fn request(&self) {
         let _ = self.0.compare_exchange(
             PENDING_NONE,

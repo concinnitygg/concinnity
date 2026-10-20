@@ -334,6 +334,10 @@ fn push_splice(out: &mut String, splice: &Splice<'_>, file: &str, line: usize) {
     push_line_directive(out, line, file);
 }
 
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "writing to a String cannot fail"
+)]
 fn push_line_directive(out: &mut String, line: usize, path: &str) {
     use core::fmt::Write as _;
     let _ = writeln!(out, "#line {line} \"{}\"", escape_path(path));
@@ -342,6 +346,10 @@ fn push_line_directive(out: &mut String, line: usize, path: &str) {
 // `path` as the body of an HLSL string literal: backslashes (a Windows
 // separator) and quotes escaped, and a control character as a fixed-width octal
 // escape, so the compiler reads back exactly `path`.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "writing to a String cannot fail"
+)]
 fn escape_path(path: &str) -> Cow<'_, str> {
     if !path
         .chars()

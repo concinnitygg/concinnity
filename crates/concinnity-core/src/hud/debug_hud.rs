@@ -10,7 +10,7 @@ use crate::ecs::{Access, FrameTime, PipelineContext, Ref, StepResult, System, Wo
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::fmt::Write as _;
+use core::fmt;
 
 use crate::budget::{MemoryBudget, ResidentMemory, ThreadBudget};
 use crate::components::{Camera3D, DebugHud, FrameInput, TextLabel};
@@ -52,21 +52,22 @@ fn passes_text(slots: &[PassTiming]) -> String {
     // PassId-order (alphabetical-ish across a typical frame).
     entries.sort_by_key(|e| core::cmp::Reverse(e.1));
     entries.truncate(PASSES_CHIP_TOP_N);
-    let mut out = String::from("PASSES");
-    for (name, micros) in entries {
-        out.push('\n');
-        out.push_str(name);
-        out.push(' ');
-        // Format compactly. < 1 ms reads as raw µs (e.g. "120 us"); ≥ 1 ms
-        // reads as a single-decimal millisecond figure ("1.2 ms"). Keeps
-        // the column width steady across the typical 50 µs to 5 ms band.
-        if micros < 1000 {
-            let _ = write!(out, "{micros} us");
-        } else {
-            let _ = write!(out, "{:.1} ms", micros as f32 / 1000.0);
+    fmt::from_fn(|out| {
+        out.write_str("PASSES")?;
+        for &(name, micros) in &entries {
+            write!(out, "\n{name} ")?;
+            // Format compactly. < 1 ms reads as raw µs (e.g. "120 us"); ≥ 1 ms
+            // reads as a single-decimal millisecond figure ("1.2 ms"). Keeps
+            // the column width steady across the typical 50 µs to 5 ms band.
+            if micros < 1000 {
+                write!(out, "{micros} us")?;
+            } else {
+                write!(out, "{:.1} ms", micros as f32 / 1000.0)?;
+            }
         }
-    }
-    out
+        Ok(())
+    })
+    .to_string()
 }
 
 // Build the cursor-position chip text from the latest window-space cursor

@@ -195,7 +195,9 @@ impl Drop for FileWriter {
         // Dropping the sender lets the thread drain what is queued, then exit.
         if let Some(Some(Running { tx, thread })) = self.running.take() {
             drop(tx);
-            let _ = thread.join();
+            if thread.join().is_err() {
+                tracing::warn!("{}: the writer thread panicked", self.name);
+            }
         }
     }
 }

@@ -8,7 +8,6 @@ mod render;
 mod terminal;
 
 use concinnity_core::math::SaturatingFrom;
-use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -175,13 +174,19 @@ impl BuildStatus {
         self.end(Outcome::Failed, Some(detail));
     }
 
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the redraw thread may already have stopped on its own"
+    )]
     fn end(&mut self, outcome: Outcome, summary: Option<String>) {
         if std::mem::replace(&mut self.ended, true) {
             return;
         }
         if let Some((stop, handle)) = self.redraw.take() {
             let _ = stop.send(());
-            let _ = handle.join();
+            if handle.join().is_err() {
+                tracing::warn!("build status: the redraw thread panicked");
+            }
         }
         capture::release();
         self.shared.board().end(outcome, summary, Instant::now());
@@ -207,7 +212,9 @@ fn load_summary(authored: usize, assets: usize, injected: usize) -> String {
     };
     if injected > 0 {
         let added = render::counted(u32::saturating_from(injected), "default");
-        let _ = write!(summary, " · {added} added");
+        summary.push_str(" · ");
+        summary.push_str(&added);
+        summary.push_str(" added");
     }
     summary
 }

@@ -139,11 +139,12 @@ mod tests {
     fn a_poisoned_queue_still_takes_jobs() {
         let queue = RuntimeQueue::default();
         let poisoner = queue.clone();
-        let _ = std::thread::spawn(move || {
+        let joined = std::thread::spawn(move || {
             let _held = poisoner.jobs.lock().unwrap();
             panic!("poison");
         })
         .join();
+        assert!(joined.is_err());
         assert!(queue.jobs.is_poisoned());
 
         let (tx, _rx) = mpsc::channel();

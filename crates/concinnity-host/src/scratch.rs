@@ -90,6 +90,10 @@ impl Scratch {
 }
 
 impl Drop for Scratch {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "removing scratch on drop is best effort"
+    )]
     fn drop(&mut self) {
         let _ = if self.directory {
             std::fs::remove_dir_all(&self.path)

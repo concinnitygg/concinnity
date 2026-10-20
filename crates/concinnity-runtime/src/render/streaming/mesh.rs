@@ -75,6 +75,10 @@ impl MeshPayloadSource for DiskMeshSource {
 }
 
 impl Drop for DiskMeshSource {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the scratch file is regenerated on the next world build, so removing it is best effort"
+    )]
     fn drop(&mut self) {
         // The scratch file is regenerated on the next world build/run, so a
         // dropped source has no reason to keep it.

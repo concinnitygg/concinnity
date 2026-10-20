@@ -125,6 +125,10 @@ struct ConsoleTracingLayer {
 struct MessageVisitor(String);
 
 impl tracing::field::Visit for MessageVisitor {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "writing to a String cannot fail"
+    )]
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
             use std::fmt::Write;
@@ -157,6 +161,10 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ConsoleTracingLaye
 // (same RUST_LOG handling as the engine's `init_logging`) plus the console
 // mirror for this crate's INFO+ events. Replaces the `init_logging` call in
 // the editor entry point; a no-op if a subscriber is already installed.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a subscriber already installed takes precedence"
+)]
 pub(crate) fn install_tracing(sink: ConsoleSink) {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;

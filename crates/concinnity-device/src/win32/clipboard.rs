@@ -31,6 +31,10 @@ impl OpenClipboardGuard {
 }
 
 impl Drop for OpenClipboardGuard {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a drop has nowhere to report, and the next open reports a clipboard still held"
+    )]
     fn drop(&mut self) {
         // SAFETY: the guard exists only while this thread holds the clipboard open.
         let _ = unsafe { CloseClipboard() };
@@ -38,6 +42,10 @@ impl Drop for OpenClipboardGuard {
 }
 
 impl Clipboard for WindowState {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "GlobalUnlock reports an error once the block is fully unlocked, the expected outcome here"
+    )]
     fn text(&mut self) -> Option<String> {
         let _open = OpenClipboardGuard::open(self.hwnd)?;
         // SAFETY: the clipboard is open, so the handle it returns stays valid until it
@@ -56,6 +64,10 @@ impl Clipboard for WindowState {
         }
     }
 
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "GlobalUnlock reports an error once the block is fully unlocked; freeing on a failure path is best effort"
+    )]
     fn set_text(&mut self, text: &str) {
         let units = encode_units(text);
         let Some(_open) = OpenClipboardGuard::open(self.hwnd) else {

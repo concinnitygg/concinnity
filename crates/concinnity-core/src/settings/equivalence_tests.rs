@@ -776,7 +776,7 @@ fn the_settings_chain_resolves_every_case_as_pinned() {
     let listing = actual
         .iter()
         .fold(String::new(), |mut listing, (name, digest)| {
-            let _ = writeln!(listing, "    (\"{name}\", 0x{digest:016x}),");
+            writeln!(listing, "    (\"{name}\", 0x{digest:016x}),").unwrap();
             listing
         });
     let expected: Vec<(String, u64)> = EXPECTED

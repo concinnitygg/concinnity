@@ -1,9 +1,9 @@
 // The flags a launch accepts, described once for every front that offers them.
 
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::fmt::Write as _;
+use core::fmt;
 
 /// One flag a launch accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,23 +69,27 @@ pub fn usage() -> String {
     let rows: Vec<(String, String)> = LAUNCH_FLAGS
         .iter()
         .map(|flag| {
-            let mut left = format!("--{}", flag.name);
-            if let Some(value) = flag.value {
-                let _ = write!(left, " <{value}>");
-            }
-            let mut description = String::from(flag.description);
-            if !flag.values.is_empty() {
-                let _ = write!(description, " [{}]", flag.values.join(", "));
-            }
+            let left = match flag.value {
+                Some(value) => format!("--{} <{value}>", flag.name),
+                None => format!("--{}", flag.name),
+            };
+            let description = if flag.values.is_empty() {
+                flag.description.to_string()
+            } else {
+                format!("{} [{}]", flag.description, flag.values.join(", "))
+            };
             (left, description)
         })
         .collect();
     let width = rows.iter().map(|(left, _)| left.len()).max().unwrap_or(0);
-    let mut out = String::from("Options:\n");
-    for (left, description) in rows {
-        let _ = writeln!(out, "  {left:<width$}  {description}");
-    }
-    out
+    fmt::from_fn(|out| {
+        out.write_str("Options:\n")?;
+        for (left, description) in &rows {
+            writeln!(out, "  {left:<width$}  {description}")?;
+        }
+        Ok(())
+    })
+    .to_string()
 }
 
 #[cfg(test)]

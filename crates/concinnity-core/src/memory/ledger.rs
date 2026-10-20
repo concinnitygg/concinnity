@@ -161,6 +161,10 @@ impl Ledger {
     /// Give up `bytes` under `tag`. Saturates at zero: a reporter that
     /// double-releases should read as holding nothing, never as holding an
     /// enormous amount.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the update never declines, so it cannot fail"
+    )]
     pub fn release(&self, tag: MemTag, realm: Realm, bytes: u64) {
         let cell = self.cell(tag, realm);
         let _ = cell

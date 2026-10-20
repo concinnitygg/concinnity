@@ -21,6 +21,10 @@ static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 /// Replace `path` with whatever `write` emits, creating the directory above it
 /// if needed. A failure anywhere leaves the existing file untouched and no temp
 /// behind.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the publish error is what the caller needs; removing the temp is best effort"
+)]
 pub fn replace(
     path: &Path,
     write: impl FnOnce(&mut BufWriter<File>) -> io::Result<()>,

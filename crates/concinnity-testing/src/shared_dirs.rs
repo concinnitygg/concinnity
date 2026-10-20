@@ -108,6 +108,10 @@ fn ensure(parent: &Path, name: &str) -> PathBuf {
 // `parent/name`, made new rather than emptied, so it dates from this call and
 // not from whoever held the name last. Emptying an already empty root leaves
 // that older date in place, which a sweep reads as an owner that is gone.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a root that cannot be removed is still created and used"
+)]
 fn claim(parent: &Path, name: &str) -> PathBuf {
     let dir = resolve(parent, name);
     let _ = std::fs::remove_dir_all(&dir);
@@ -136,6 +140,10 @@ fn create(dir: &Path) {
 
 // Drop the state roots beside `keep` that nothing has touched in a while. A
 // live sibling is a running test process, and its root is minutes old at most.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a stale root that cannot be removed is left for the next sweep"
+)]
 fn sweep(family: &Path, keep: &Path, now: SystemTime) {
     let Ok(entries) = std::fs::read_dir(family) else {
         return;

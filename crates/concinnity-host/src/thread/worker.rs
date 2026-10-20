@@ -135,8 +135,10 @@ impl<Req, Res, K> Drop for Worker<Req, Res, K> {
             thread.requests = None;
         }
         for thread in &mut self.threads {
-            if let Some(handle) = thread.handle.take() {
-                let _ = handle.join();
+            if let Some(handle) = thread.handle.take()
+                && handle.join().is_err()
+            {
+                tracing::warn!("a worker thread panicked outside a request");
             }
         }
     }

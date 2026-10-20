@@ -910,6 +910,10 @@ static MAIN_THREAD_ID: OnceLock<u32> = OnceLock::new();
 
 // Record the calling thread as the main (render) thread. Called once from
 // `DxContext::new`, which always runs on the main thread.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the main thread is the same for every context a process makes"
+)]
 pub(super) fn record_main_thread() {
     // SAFETY: a read of the calling thread's own id; it borrows nothing.
     let _ = MAIN_THREAD_ID.set(unsafe { GetCurrentThreadId() });

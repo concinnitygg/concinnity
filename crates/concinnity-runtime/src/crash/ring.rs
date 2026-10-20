@@ -47,6 +47,10 @@ impl LogRing {
         lines.push_back(buf);
     }
 
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a bounded line truncates instead of failing"
+    )]
     pub(crate) fn push_event(
         &self,
         level: tracing::Level,
@@ -109,6 +113,10 @@ struct LineVisitor<'a, 'b> {
 }
 
 impl tracing::field::Visit for LineVisitor<'_, '_> {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a bounded line truncates instead of failing"
+    )]
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
             let _ = write!(self.line, "{value:?}");
@@ -146,7 +154,7 @@ mod tests {
 
     fn push_line(ring: &LogRing, text: &str) {
         ring.push_with(|line| {
-            let _ = write!(line, "{text}");
+            write!(line, "{text}").unwrap();
         });
     }
 

@@ -4,7 +4,7 @@
 
 use concinnity_core::utc::UtcTime;
 use concinnity_host::store::blob::SCHEMA_VERSION;
-use std::fmt::Write as _;
+use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::memory::MemorySnapshot;
@@ -96,39 +96,42 @@ impl CrashReport {
     }
 
     fn header(&self) -> String {
-        let mut out = String::with_capacity(256);
-        out.push_str("concinnity crash report\n");
-        let _ = writeln!(out, "kind: {}", self.kind.label());
-        let _ = writeln!(out, "time: {} UTC", self.time.display());
-        let _ = writeln!(out, "engine: {}", env!("CARGO_PKG_VERSION"));
-        let _ = writeln!(out, "schema: {SCHEMA_VERSION:#010x}");
-        let _ = writeln!(
+        fmt::from_fn(|out| self.write_header(out)).to_string()
+    }
+
+    fn write_header(&self, out: &mut impl fmt::Write) -> fmt::Result {
+        out.write_str("concinnity crash report\n")?;
+        writeln!(out, "kind: {}", self.kind.label())?;
+        writeln!(out, "time: {} UTC", self.time.display())?;
+        writeln!(out, "engine: {}", env!("CARGO_PKG_VERSION"))?;
+        writeln!(out, "schema: {SCHEMA_VERSION:#010x}")?;
+        writeln!(
             out,
             "os: {} {}",
             std::env::consts::OS,
             std::env::consts::ARCH
-        );
-        self.memory.write_into(&mut out);
+        )?;
+        self.memory.write_into(out)?;
         for (key, value) in &self.notes {
-            let _ = writeln!(out, "{key}: {value}");
+            writeln!(out, "{key}: {value}")?;
         }
-        out.push('\n');
-        out
+        writeln!(out)
     }
 
     fn summary(&self) -> String {
-        let mut out = String::with_capacity(self.message.len().min(MAX_MESSAGE_BYTES) + 64);
-        out.push_str("message: ");
-        out.push_str(&self.message[..self.message.floor_char_boundary(MAX_MESSAGE_BYTES)]);
-        out.push('\n');
+        fmt::from_fn(|out| self.write_summary(out)).to_string()
+    }
+
+    fn write_summary(&self, out: &mut impl fmt::Write) -> fmt::Result {
+        let message = &self.message[..self.message.floor_char_boundary(MAX_MESSAGE_BYTES)];
+        writeln!(out, "message: {message}")?;
         if let Some(thread) = &self.thread {
-            let _ = writeln!(out, "thread: {thread}");
+            writeln!(out, "thread: {thread}")?;
         }
         if let Some(location) = &self.location {
-            let _ = writeln!(out, "location: {location}");
+            writeln!(out, "location: {location}")?;
         }
-        out.push('\n');
-        out
+        writeln!(out)
     }
 
     fn backtrace_section(&self) -> String {

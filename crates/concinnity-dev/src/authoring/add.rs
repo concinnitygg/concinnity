@@ -31,6 +31,10 @@ use concinnity_cook::authoring::world::{
 /// default scaffold; `Some("minimal-3d-world")` layers that template's
 /// entries. Unknown names error out before touching the world file. `id`
 /// declares the `$id` written into the world (see [`apply_id_override`]).
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the build or rename error is what the caller needs; removing the temp is best effort"
+)]
 pub(crate) fn add_to_path(
     world_path: &str,
     id: Option<&str>,

@@ -150,6 +150,12 @@ fn placed(n: usize) -> (Bake, Mock) {
     (bake, mock)
 }
 
+// Advance one frame that should not fail.
+fn step(bake: &mut Bake, mock: &mut Mock) {
+    let report = bake.advance(mock, &());
+    assert!(report.failed.is_none(), "{:?}", report.failed);
+}
+
 // Advance until the queue drains and nothing is in flight, failing a test that
 // never gets there.
 fn run_to_idle(bake: &mut Bake, mock: &mut Mock) -> Vec<BakeReport> {
@@ -193,7 +199,7 @@ fn one_probe_renders_every_face_then_convolves_every_mip_then_installs() {
 fn each_frame_submits_at_most_one_face_and_one_mip() {
     let (mut bake, mut mock) = placed(3);
     for _ in 0..200 {
-        let _ = bake.advance(&mut mock, &());
+        step(&mut bake, &mut mock);
         let events = mock.drain();
         let faces = events
             .iter()
@@ -267,12 +273,12 @@ fn the_convolution_waits_for_the_faces_to_retire() {
     let (mut bake, mut mock) = placed(1);
     mock.faces_retire = false;
     for _ in 0..20 {
-        let _ = bake.advance(&mut mock, &());
+        step(&mut bake, &mut mock);
     }
     let events = mock.drain();
     assert_eq!(events.len(), 1 + CAPTURE_FACES, "{events:?}");
     mock.faces_retire = true;
-    let _ = bake.advance(&mut mock, &());
+    step(&mut bake, &mut mock);
     assert_eq!(mock.drain(), [Event::Begin(0), Event::Mip(0, 0)]);
 }
 
@@ -281,7 +287,7 @@ fn the_install_waits_for_the_convolution_to_retire() {
     let (mut bake, mut mock) = placed(1);
     mock.mips_retire = false;
     for _ in 0..50 {
-        let _ = bake.advance(&mut mock, &());
+        step(&mut bake, &mut mock);
     }
     assert_eq!(mock.book.count(), 0);
     assert!(bake.prefilter().is_some());
@@ -296,7 +302,7 @@ fn a_capture_waits_for_a_free_convolution_slot() {
     let (mut bake, mut mock) = placed(2);
     mock.mips_retire = false;
     for _ in 0..50 {
-        let _ = bake.advance(&mut mock, &());
+        step(&mut bake, &mut mock);
     }
     // The second probe captured every face but cannot hand over while the
     // first still holds the convolution slot.
@@ -314,7 +320,7 @@ fn a_scene_that_is_not_ready_keeps_the_queue() {
     let (mut bake, mut mock) = placed(2);
     mock.ready = false;
     for _ in 0..10 {
-        let _ = bake.advance(&mut mock, &());
+        step(&mut bake, &mut mock);
     }
     assert!(mock.drain().is_empty());
     assert!(mock.book.pending());
@@ -327,11 +333,11 @@ fn a_scene_that_is_not_ready_keeps_the_queue() {
 fn an_unsupported_device_abandons_the_queue_and_keeps_what_installed() {
     let (mut bake, mut mock) = placed(3);
     while mock.book.count() < 1 {
-        let _ = bake.advance(&mut mock, &());
+        step(&mut bake, &mut mock);
     }
     // The install frame handed probe 1 to the convolution; the next one starts
     // probe 2's capture beside it.
-    let _ = bake.advance(&mut mock, &());
+    step(&mut bake, &mut mock);
     mock.drain();
     mock.supported = false;
     let report = bake.advance(&mut mock, &());
@@ -352,7 +358,7 @@ fn an_unsupported_device_abandons_the_queue_and_keeps_what_installed() {
 fn an_idle_bake_asks_the_device_nothing() {
     let (mut bake, mut mock) = placed(0);
     mock.supported = false;
-    let _ = bake.advance(&mut mock, &());
+    step(&mut bake, &mut mock);
     assert!(mock.drain().is_empty());
 }
 
@@ -360,7 +366,7 @@ fn fail_at(fault: Fault) -> (Bake, Mock, Vec<BakeReport>) {
     let (mut bake, mut mock) = placed(3);
     // Let the first probe install so the failure has something to keep.
     while mock.book.count() < 1 {
-        let _ = bake.advance(&mut mock, &());
+        step(&mut bake, &mut mock);
     }
     mock.fault = Some(fault);
     let reports = run_to_idle(&mut bake, &mut mock);
@@ -425,7 +431,7 @@ fn a_failed_first_mip_releases_the_new_convolution() {
 fn placing_again_abandons_the_bake_in_flight_and_requeues() {
     let (mut bake, mut mock) = placed(2);
     for _ in 0..3 {
-        let _ = bake.advance(&mut mock, &());
+        step(&mut bake, &mut mock);
     }
     mock.drain();
     bake.place(&mut mock, placements(1)).unwrap();

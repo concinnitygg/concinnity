@@ -17,7 +17,7 @@
 use ash::vk::Handle;
 use ash::{Device, vk};
 use concinnity_core::math::SaturatingFrom;
-use std::fmt::Write as _;
+use std::fmt;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -234,12 +234,7 @@ pub(in crate::vulkan) fn shutdown(device: &Device) {
 // The cache entry this device's blob is stored under: its identity is the
 // device, so the key is what makes a blob built on another GPU a miss.
 fn entry_key(uuid: &[u8; vk::UUID_SIZE]) -> String {
-    let hex = uuid
-        .iter()
-        .fold(String::with_capacity(uuid.len() * 2), |mut hex, b| {
-            let _ = write!(hex, "{b:02x}");
-            hex
-        });
+    let hex = fmt::from_fn(|f| uuid.iter().try_for_each(|b| write!(f, "{b:02x}")));
     format!("vk-{hex}")
 }
 

@@ -154,7 +154,10 @@ pub(super) unsafe fn create_graphics(
                 let pso: ID3D12PipelineState = unsafe { device.CreateGraphicsPipelineState(desc) }?;
                 // SAFETY: `name` is a NUL-terminated wide buffer live for the call, and `pso` was
                 // just created from this device.
-                let _ = unsafe { state.library.StorePipeline(PCWSTR(name.as_ptr()), &pso) };
+                if let Err(e) = unsafe { state.library.StorePipeline(PCWSTR(name.as_ptr()), &pso) }
+                {
+                    tracing::warn!("pipeline library: could not store a pipeline: {e}");
+                }
                 Ok(pso)
             })
         }
@@ -195,7 +198,10 @@ pub(super) unsafe fn create_compute(
                 let pso: ID3D12PipelineState = unsafe { device.CreateComputePipelineState(desc) }?;
                 // SAFETY: `name` is a NUL-terminated wide buffer live for the call, and `pso` was
                 // just created from this device.
-                let _ = unsafe { state.library.StorePipeline(PCWSTR(name.as_ptr()), &pso) };
+                if let Err(e) = unsafe { state.library.StorePipeline(PCWSTR(name.as_ptr()), &pso) }
+                {
+                    tracing::warn!("pipeline library: could not store a pipeline: {e}");
+                }
                 Ok(pso)
             })
         }

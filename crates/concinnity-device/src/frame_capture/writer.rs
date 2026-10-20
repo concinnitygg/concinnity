@@ -172,7 +172,9 @@ impl Drop for CaptureWriter {
     fn drop(&mut self) {
         if let Some(Running { sender, thread }) = self.running.take() {
             drop(sender);
-            let _ = thread.join();
+            if thread.join().is_err() {
+                tracing::warn!("frame capture: the writer thread panicked");
+            }
         }
     }
 }

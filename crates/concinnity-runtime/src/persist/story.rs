@@ -45,7 +45,11 @@ impl FileStore {
     fn path(&self, slot: SaveSlot) -> PathBuf {
         if let Some(once) = &self.empty_first {
             once.call_once(|| {
-                let _ = std::fs::remove_dir_all(&self.dir);
+                if let Err(e) = std::fs::remove_dir_all(&self.dir)
+                    && e.kind() != std::io::ErrorKind::NotFound
+                {
+                    tracing::warn!("story saves: could not clear {}: {e}", self.dir.display());
+                }
             });
         }
         match slot {

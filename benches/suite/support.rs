@@ -10,7 +10,7 @@
 //! body builds it should also tear down, or the heap column will show the drift.
 
 use concinnity_core::math::SaturatingFrom;
-use std::fmt::Write as _;
+use std::fmt;
 use std::time::Instant;
 
 use concinnity_core::memory::Realm;
@@ -307,10 +307,14 @@ fn json_escape(s: &str) -> String {
 }
 
 pub(crate) fn json_report(records: &[Record]) -> String {
-    let mut out = String::from("[\n");
+    fmt::from_fn(|out| write_json_report(out, records)).to_string()
+}
+
+fn write_json_report(out: &mut impl fmt::Write, records: &[Record]) -> fmt::Result {
+    out.write_str("[\n")?;
     for (i, r) in records.iter().enumerate() {
         let comma = if i + 1 < records.len() { "," } else { "" };
-        let _ = writeln!(
+        writeln!(
             out,
             "  {{\"name\":\"{}\",\"items\":{},\"iters\":{},\"median_ns\":{},\"p95_ns\":{},\
              \"allocs_per_iter\":{},\"frees_per_iter\":{},\"heap_bytes_per_iter\":{},\
@@ -324,8 +328,7 @@ pub(crate) fn json_report(records: &[Record]) -> String {
             r.frees_per_iter,
             r.heap_bytes_per_iter,
             r.device_bytes_per_iter,
-        );
+        )?;
     }
-    out.push_str("]\n");
-    out
+    out.write_str("]\n")
 }

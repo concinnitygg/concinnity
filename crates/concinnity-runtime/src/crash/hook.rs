@@ -14,6 +14,10 @@ use super::write;
 static INSTALL: Once = Once::new();
 static IN_HOOK: AtomicBool = AtomicBool::new(false);
 
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a panic while reporting must not replace the panic being reported"
+)]
 pub(crate) fn install() {
     INSTALL.call_once(|| {
         let prev = std::panic::take_hook();

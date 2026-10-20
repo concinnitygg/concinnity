@@ -9,7 +9,6 @@
 
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use std::fmt::Write as _;
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
@@ -176,15 +175,14 @@ fn compose_refusal(
     agility_bundled: bool,
     agility_dir: impl Fn() -> Option<String>,
 ) -> String {
-    let mut message = if rejections.is_empty() {
+    let message = if rejections.is_empty() {
         "no D3D12 adapter found".to_string()
     } else {
         format!("no usable D3D12 adapter: {}", rejections.join("; "))
     };
     if agility_bundled {
-        let _ = write!(
-            message,
-            ". This binary was built with CN_ENABLE_AGILITY_SDK=1, so it bundles \
+        return format!(
+            "{message}. This binary was built with CN_ENABLE_AGILITY_SDK=1, so it bundles \
              Microsoft's Agility SDK and needs D3D12Core.dll in {}; without it \
              D3D12 fails to start and every adapter reports unsupported. Copy \
              that directory next to the executable, or rebuild without the \

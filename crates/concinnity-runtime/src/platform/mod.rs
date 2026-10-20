@@ -107,6 +107,10 @@ pub fn select_persisted(tree: Option<&StateTree>) -> Platform {
 
 // The API the settings in `tree` ask this launch for, after moving the choice's
 // trial along (and saving it) the way the launch plan says.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the first launch decision of a process is the one that stands"
+)]
 fn persisted_request(tree: Option<&StateTree>) -> Option<Platform> {
     let mut settings = crate::persist::settings::load(tree);
     let launch = concinnity_core::settings::api_trial::plan(

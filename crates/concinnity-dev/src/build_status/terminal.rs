@@ -1,7 +1,7 @@
 //! Where a build's status lands: redrawn in place on a terminal, or appended
 //! line by line to a pipe or log, where a redraw would only be noise.
 
-use std::fmt::Write as _;
+use std::fmt;
 use std::io::IsTerminal;
 use std::time::Instant;
 
@@ -52,49 +52,59 @@ impl Surface {
         last: bool,
     ) -> String {
         let color = self.colored();
-        let mut out = String::new();
         let notes = board.take_notes();
         let footer = if last { render::footer(board) } else { None };
+        let rows = &board.rows;
         match self {
             Self::Live { drawn } => {
-                out.push_str(SYNC_BEGIN);
-                if *drawn > 0 {
-                    let _ = write!(out, "\x1b[{drawn}A");
-                }
-                out.push_str("\x1b[J");
-                for line in notes.iter().flat_map(render::note) {
-                    let _ = writeln!(out, "{}", line.paint(color));
-                }
                 // One column spare, so no line lands on the terminal's last
                 // column and wraps.
                 let fit = width.saturating_sub(1);
-                for row in &board.rows {
-                    let line = render::row(row, now, tick).fit(fit);
-                    let _ = writeln!(out, "{}", line.paint(color));
-                }
-                *drawn = board.rows.len();
-                if let Some(footer) = footer {
-                    let _ = writeln!(out, "{}", footer.fit(fit).paint(color));
-                }
-                out.push_str(SYNC_END);
+                let footer = footer.map(|footer| footer.fit(fit));
+                let text = fmt::from_fn(|out| {
+                    out.write_str(SYNC_BEGIN)?;
+                    if *drawn > 0 {
+                        write!(out, "\x1b[{drawn}A")?;
+                    }
+                    out.write_str("\x1b[J")?;
+                    for line in notes.iter().flat_map(render::note) {
+                        writeln!(out, "{}", line.paint(color))?;
+                    }
+                    for row in rows {
+                        let line = render::row(row, now, tick).fit(fit);
+                        writeln!(out, "{}", line.paint(color))?;
+                    }
+                    if let Some(footer) = &footer {
+                        writeln!(out, "{}", footer.paint(color))?;
+                    }
+                    out.write_str(SYNC_END)
+                })
+                .to_string();
+                *drawn = rows.len();
+                text
             }
             Self::Stream { printed } => {
-                for line in notes.iter().flat_map(render::note) {
-                    let _ = writeln!(out, "{}", line.paint(color));
-                }
-                let closed = board.rows[*printed..]
+                let closed = rows[*printed..]
                     .iter()
-                    .take_while(|r| !r.is_running());
-                for row in closed {
-                    let _ = writeln!(out, "{}", render::row(row, now, tick).paint(color));
-                    *printed += 1;
-                }
-                if let Some(footer) = footer {
-                    let _ = writeln!(out, "{}", footer.paint(color));
-                }
+                    .take_while(|r| !r.is_running())
+                    .count();
+                let text = fmt::from_fn(|out| {
+                    for line in notes.iter().flat_map(render::note) {
+                        writeln!(out, "{}", line.paint(color))?;
+                    }
+                    for row in &rows[*printed..*printed + closed] {
+                        writeln!(out, "{}", render::row(row, now, tick).paint(color))?;
+                    }
+                    if let Some(footer) = &footer {
+                        writeln!(out, "{}", footer.paint(color))?;
+                    }
+                    Ok(())
+                })
+                .to_string();
+                *printed += closed;
+                text
             }
         }
-        out
     }
 }
 
