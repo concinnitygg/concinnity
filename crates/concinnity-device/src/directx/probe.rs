@@ -466,7 +466,7 @@ impl DxContext {
         );
 
         // Resolve (MSAA) + copy the face into its slice of the capture cube.
-        Self::copy_face_to_capture(&cmd, bake, face)?;
+        Self::copy_face_to_capture(&cmd, bake, face);
 
         // SAFETY: the command list is live and in the recording state, which is what `Close`
         // requires.
@@ -497,11 +497,7 @@ impl DxContext {
     // the next face; the resolve target rests in PIXEL_SHADER_RESOURCE. Face order is
     // the hardware cube order (`gfx::cubemap`), so slice `face` is the face a sampler
     // finds looking that way.
-    fn copy_face_to_capture(
-        cmd: &ID3D12GraphicsCommandList,
-        bake: &RenderingBake,
-        face: usize,
-    ) -> RenderResult<()> {
+    fn copy_face_to_capture(cmd: &ID3D12GraphicsCommandList, bake: &RenderingBake, face: usize) {
         let sample_count = bake.sample_count;
         // Subresource index of mip 0 of array slice `face`, which D3D12 orders
         // mip-major within a slice.
@@ -592,7 +588,6 @@ impl DxContext {
             // SAFETY: the list is recording, and the color image is owned by the bake.
             unsafe { cmd.ResourceBarrier(&[to_rt]) };
         }
-        Ok(())
     }
 
     // Record convolution step `mip` of a bake: mip 0 is the firefly-clamped mirror

@@ -490,6 +490,10 @@ fn make_executable(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "matches the Unix version, which can fail"
+)]
 fn make_executable(_path: &Path) -> io::Result<()> {
     Ok(())
 }

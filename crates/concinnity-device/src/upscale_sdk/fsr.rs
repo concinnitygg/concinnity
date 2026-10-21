@@ -300,6 +300,13 @@ extern "C" fn ffx_message_sink(ty: u32, message: *const u16) {
     }
 }
 
+#[cfg_attr(
+    windows,
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "fills an optional FFX callback slot that other targets leave empty"
+    )
+)]
 fn message_callback() -> FfxApiMessage {
     #[cfg(windows)]
     {

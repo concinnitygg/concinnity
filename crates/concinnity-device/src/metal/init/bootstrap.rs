@@ -120,7 +120,7 @@ pub(super) fn setup(
             signals,
             window_delegate,
             hdr_mode,
-        } = setup_window_and_view(mtm, &device, config, hdr)?;
+        } = setup_window_and_view(mtm, &device, config, hdr);
         // Second queue + per-queue events for the render graph's
         // two-queue schedule. Falls back to a single-queue submission
         // when the device will not create them.
@@ -168,7 +168,7 @@ pub(crate) fn setup_window_and_view(
     device: &ProtocolObject<dyn MTLDevice>,
     config: WindowConfig<'_>,
     hdr: HdrRequest,
-) -> RenderResult<WindowSetup> {
+) -> WindowSetup {
     // Resolve the swapchain color-output mode. EDR support is per-display,
     // so the answer depends on which screen the window will land on. In
     // windowed mode we use `NSWindow::screen()` after attaching; in embedded
@@ -239,7 +239,7 @@ pub(crate) fn setup_window_and_view(
     let drawable = mtk_view.drawableSize();
     let (initial_w, initial_h) = initial_target_size((drawable.width, drawable.height), &config);
 
-    Ok(WindowSetup {
+    WindowSetup {
         window,
         mtk_view,
         pump_events,
@@ -248,7 +248,7 @@ pub(crate) fn setup_window_and_view(
         signals,
         window_delegate,
         hdr_mode,
-    })
+    }
 }
 
 // Re-resolve the swapchain color-output mode on the view a live world reload
