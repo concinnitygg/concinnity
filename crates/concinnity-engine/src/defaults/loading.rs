@@ -100,7 +100,7 @@ pub(super) fn inject(ctx: &mut PipelineContext<'_>, minter: &mut Minter) -> Resu
         )?);
     }
     if overlay.label.is_none() {
-        let font = minter.hud_font(ctx)?;
+        let font = super::hud_font(ctx)?;
         let id = minter.id()?;
         ctx.push_identified(
             id,

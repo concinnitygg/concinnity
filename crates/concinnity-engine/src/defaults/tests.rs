@@ -1,4 +1,4 @@
-use crate::ecs::{Ref, World};
+use crate::ecs::{FontHandle, Ref, World};
 use alloc::vec::Vec;
 
 use super::*;

@@ -244,8 +244,7 @@ impl EditorHook {
         let Some(ray) = pick::camera_ray(world, vp, mouse) else {
             return;
         };
-        let hit = self
-            .ray_hit_names(world, &ray)
+        let hit = Self::ray_hit_names(world, &ray)
             .into_iter()
             .find_map(|name| {
                 let idx = find_entry(&self.entries, &name)?;
@@ -268,7 +267,7 @@ impl EditorHook {
     }
 
     // The names of the pick-index entries the ray strikes, nearest first.
-    fn ray_hit_names(&self, world: &World, ray: &PickRay) -> Vec<String> {
+    fn ray_hit_names(world: &World, ray: &PickRay) -> Vec<String> {
         let Some(index) = world.resource::<PickIndex>() else {
             return Vec::new();
         };

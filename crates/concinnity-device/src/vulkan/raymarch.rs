@@ -508,9 +508,9 @@ fn write_shadow_view_set(
 // the shared lights, and the shared shadow VPs.
 #[derive(Clone, Copy)]
 struct RaymarchViewSetBuffers {
-    view_ubo: vk::Buffer,
-    light_ubo: vk::Buffer,
-    shadow_ubo: vk::Buffer,
+    view: vk::Buffer,
+    light: vk::Buffer,
+    shadow: vk::Buffer,
 }
 
 // The image/sampler pairs bound into one per-frame view set: the CSM shadow
@@ -537,9 +537,9 @@ fn write_view_set(
     textures: RaymarchViewSetTextures,
 ) {
     let RaymarchViewSetBuffers {
-        view_ubo,
-        light_ubo,
-        shadow_ubo,
+        view: view_ubo,
+        light: light_ubo,
+        shadow: shadow_ubo,
     } = buffers;
     let RaymarchViewSetTextures {
         shadow_map_view,
@@ -1070,9 +1070,9 @@ impl RaymarchResources {
                 device,
                 set,
                 RaymarchViewSetBuffers {
-                    view_ubo: view_ubos[i].buffer(),
-                    light_ubo: light_ubos[i].buffer(),
-                    shadow_ubo: shadow_ubos[i].buffer(),
+                    view: view_ubos[i].buffer(),
+                    light: light_ubos[i].buffer(),
+                    shadow: shadow_ubos[i].buffer(),
                 },
                 RaymarchViewSetTextures {
                     shadow_map_view,

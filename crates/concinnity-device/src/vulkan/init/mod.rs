@@ -245,7 +245,7 @@ impl VkContext {
             scene_data::SceneInputs {
                 world: &world,
                 local_lights: &local_lights,
-                light_uniforms,
+                light_uniforms: &light_uniforms,
             },
         )?;
         let shadow = shadow::build_shadow(&gpu, &shadows)?;

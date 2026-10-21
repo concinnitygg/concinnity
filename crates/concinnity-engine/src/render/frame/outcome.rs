@@ -87,6 +87,10 @@ pub fn settle(
 // Apply frame `frame`'s replay outcome and render stats to the world. A backend
 // without GPU-timed stats reports the default (all zeros), which the profiler
 // shows as "--".
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "the stats are amended and stored, so a borrow would only add a copy"
+)]
 fn apply(
     ctx: &mut PipelineContext<'_>,
     frame: u64,

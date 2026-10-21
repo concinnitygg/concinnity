@@ -38,6 +38,7 @@ impl GraphicsSystem {
         not(test),
         expect(
             clippy::needless_pass_by_ref_mut,
+            clippy::unused_self,
             reason = "test builds swap in a hook through `self`"
         )
     )]

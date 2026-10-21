@@ -81,7 +81,9 @@ fn inline(line: &str, out: &mut Vec<Span>) {
 
 // `` `code` ``: the end just past the closing backtick run of the same length.
 fn code_span(s: &Scan) -> Option<usize> {
-    let ticks = (0..).take_while(|&i| s.peek(i) == Some('`')).count();
+    let ticks = (0..s.len().saturating_sub(s.at))
+        .take_while(|&i| s.peek(i) == Some('`'))
+        .count();
     let mut i = s.at + ticks;
     while i < s.len() {
         let run = (i..s.len()).take_while(|&j| s.chars[j] == '`').count();
@@ -107,7 +109,7 @@ fn link(s: &Scan) -> Option<usize> {
 // marks. An opening mark is followed by text and a closing one follows text;
 // underscores inside a word (`snake_case`) mark nothing.
 fn emphasis(s: &Scan, mark: char) -> Option<usize> {
-    let marks = (0..)
+    let marks = (0..s.len().saturating_sub(s.at))
         .take_while(|&i| s.peek(i) == Some(mark))
         .count()
         .min(2);

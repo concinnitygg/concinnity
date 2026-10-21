@@ -42,7 +42,7 @@ impl EditorHook {
         if let Some(i) = self.templates.detail {
             let window =
                 template_panel::rows_for_height(self.effective_size(PanelKey::TemplateDetail)[1]);
-            let max = self.template_rows(i).len().saturating_sub(window);
+            let max = Self::template_rows(i).len().saturating_sub(window);
             self.templates.detail_scroll = scroll_step(self.templates.detail_scroll, delta, max);
         }
     }

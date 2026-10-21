@@ -183,7 +183,7 @@ impl EditorHook {
 
     // The per-frame Template detail view data (title, description, grouped rows),
     // borrowed for both hit-testing and layout.
-    pub(super) fn template_detail_data(&self, i: usize) -> TemplateDetailData {
+    pub(super) fn template_detail_data(i: usize) -> TemplateDetailData {
         let (title, description) = concinnity_cook::authoring::template::TEMPLATES
             .get(i)
             .map(|t| (format!("Template {}", t.title), t.description.to_string()))
@@ -191,7 +191,7 @@ impl EditorHook {
         TemplateDetailData {
             title,
             description,
-            rows: self.template_rows(i),
+            rows: Self::template_rows(i),
         }
     }
 

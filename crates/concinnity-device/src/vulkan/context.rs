@@ -221,16 +221,14 @@ impl VkSkinned {
 
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`.
-    pub(super) fn destroy(&mut self, device: &VkDevice) {
+    pub(super) fn destroy(&mut self) {
         self.vertex_buffer = PooledBuffer::null();
         self.index_buffer = PooledBuffer::null();
         self.joint_buffers.clear();
         self.morph_delta_unique.clear();
         self.morph_weight_buffers.clear();
         // GPU-driven main-pass skinning resources.
-        if let Some(skin) = self.skin.take() {
-            skin.destroy(device);
-        }
+        self.skin = None;
         self.deformed.clear();
     }
 }
@@ -270,13 +268,6 @@ pub(super) struct VkDescriptors {
     // The cascade shadow pass's set 0 per frame, over `VkShadow`'s layout and
     // uniform ring.
     pub(super) shadow_global_sets: Vec<vk::DescriptorSet>,
-}
-
-impl VkDescriptors {
-    // Destroy the shared descriptor pool (which frees every set allocated from
-    // it: global_sets / shadow_global_sets) and the set layout. Called from
-    // `VkContext::drop` after `wait_idle`.
-    pub(super) fn destroy(&self, _device: &VkDevice) {}
 }
 
 // Instanced-prop clusters. Every instance folds into the GPU-driven cull
@@ -1317,6 +1308,10 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 }
 
 impl VkContext {
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "keeps the `RenderBackend::draw_frame` signature it serves"
+    )]
     pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
         drive_frame(self, params)
     }
@@ -1846,11 +1841,7 @@ impl VkContext {
         // Render passes.
 
         // Skinned-mesh resources.
-        self.skinned.destroy(device);
-
-        // Main descriptor pool + the set layouts (the pool frees the global /
-        // text_atlas sets).
-        self.descriptors.destroy(device);
+        self.skinned.destroy();
 
         // Geometry.
         self.geometry.destroy();

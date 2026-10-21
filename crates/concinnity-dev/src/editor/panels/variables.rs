@@ -78,7 +78,8 @@ pub(crate) fn unique_name(args: Option<&Value>, base: &str) -> String {
     if !taken.contains(&base) {
         return base.to_string();
     }
-    (2..)
+    // One more candidate than there are names, so one is always free.
+    (2..=taken.len() + 2)
         .map(|n| format!("{base}_{n}"))
         .find(|name| !taken.iter().any(|t| *t == name))
         .unwrap_or_else(|| base.to_string())

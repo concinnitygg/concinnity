@@ -277,8 +277,6 @@ pub(super) struct SkinPipeline {
 }
 
 impl SkinPipeline {
-    pub(super) fn destroy(&self, _device: &VkDevice) {}
-
     // Forget what every set was last pointed at, so the next RT rebuild re-points
     // each one. Called when the BVH whose deformed buffers they name is replaced.
     pub(in crate::vulkan) fn forget_wired(&mut self) {

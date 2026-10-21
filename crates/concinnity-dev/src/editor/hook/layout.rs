@@ -208,7 +208,7 @@ impl EditorHook {
     }
 
     // The world-line entries of template `i` (its typed specs via the app bridge).
-    pub(super) fn template_entries(&self, i: usize) -> Vec<serde_json::Value> {
+    pub(super) fn template_entries(i: usize) -> Vec<serde_json::Value> {
         concinnity_cook::authoring::template::TEMPLATES
             .get(i)
             .map(crate::authoring::world_template_entries)
@@ -217,8 +217,8 @@ impl EditorHook {
 
     // Template `i`'s assets as the shared grouped rows (types + names alphabetical,
     // identical to the Assets panel's list).
-    pub(super) fn template_rows(&self, i: usize) -> Vec<ListRow> {
-        asset_list::grouped_rows(&self.template_entries(i), None)
+    pub(super) fn template_rows(i: usize) -> Vec<ListRow> {
+        asset_list::grouped_rows(&Self::template_entries(i), None)
     }
 
     // The View panel's toggle rows: one checkbox per `registry::VIEW_ROWS`

@@ -47,6 +47,7 @@ impl EditorHook {
     #[cfg(not(target_os = "macos"))]
     #[expect(
         clippy::needless_pass_by_ref_mut,
+        clippy::unused_self,
         reason = "same signature as the macOS menu driver"
     )]
     pub(in crate::editor::hook) fn drive_app_menu(&mut self, _world: &mut World) {}

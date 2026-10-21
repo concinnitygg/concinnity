@@ -31,9 +31,9 @@ const OTHER_BOUND: u32 = 3;
 /// Consecutive-failure streaks per error class, carried across frames.
 #[derive(Debug, Default)]
 pub struct FramePolicy {
-    swapchain_streak: u32,
-    oom_streak: u32,
-    other_streak: u32,
+    swapchain: u32,
+    oom: u32,
+    other: u32,
 }
 
 impl FramePolicy {
@@ -45,13 +45,11 @@ impl FramePolicy {
     pub(super) fn on_frame_error(&mut self, error: &RenderError) -> FrameAction {
         match error {
             RenderError::DeviceLost { .. } => FrameAction::ShutdownDeviceLost,
-            RenderError::SwapchainOutOfDate => {
-                bump(&mut self.swapchain_streak, SWAPCHAIN_BOUND, error)
-            }
-            RenderError::OutOfDeviceMemory(_) => bump(&mut self.oom_streak, OOM_BOUND, error),
+            RenderError::SwapchainOutOfDate => bump(&mut self.swapchain, SWAPCHAIN_BOUND, error),
+            RenderError::OutOfDeviceMemory(_) => bump(&mut self.oom, OOM_BOUND, error),
             RenderError::ShaderCompile(_)
             | RenderError::Unsupported { .. }
-            | RenderError::Other(_) => bump(&mut self.other_streak, OTHER_BOUND, error),
+            | RenderError::Other(_) => bump(&mut self.other, OTHER_BOUND, error),
         }
     }
 }

@@ -118,7 +118,7 @@ pub(crate) struct Push {
     pub(crate) soft: Softness,
     pub(crate) inv_h: f32,
     /// Ceiling on the speed a passed bound is pushed back out at.
-    pub(crate) max_push: f32,
+    pub(crate) max_speed: f32,
     pub(crate) use_bias: bool,
 }
 
@@ -133,7 +133,7 @@ pub(crate) fn solve_limit(row: LimitRow, total: &mut f32, push: &Push) -> f32 {
         (row.separation * push.inv_h, 1.0, 0.0)
     } else if push.use_bias {
         (
-            (push.soft.bias_rate * row.separation).max(-push.max_push),
+            (push.soft.bias_rate * row.separation).max(-push.max_speed),
             push.soft.mass_scale,
             push.soft.impulse_scale,
         )
@@ -276,7 +276,7 @@ mod tests {
         Push {
             soft: Softness::new(60.0, 2.0, 1.0 / 240.0),
             inv_h: 240.0,
-            max_push: 3.0,
+            max_speed: 3.0,
             use_bias,
         }
     }

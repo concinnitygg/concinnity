@@ -440,8 +440,8 @@ fn bias(error: Vec3, push: &Push) -> Vec3 {
     }
     let wanted = error * push.soft.bias_rate;
     let speed = wanted.length();
-    if speed > push.max_push.min(MAX_CORRECTION) {
-        wanted * (push.max_push.min(MAX_CORRECTION) / speed)
+    if speed > push.max_speed.min(MAX_CORRECTION) {
+        wanted * (push.max_speed.min(MAX_CORRECTION) / speed)
     } else {
         wanted
     }
@@ -555,7 +555,7 @@ mod tests {
         Push {
             soft: Softness::new(60.0, 5.0, 1.0 / 240.0),
             inv_h: 240.0,
-            max_push: 3.0,
+            max_speed: 3.0,
             use_bias,
         }
     }

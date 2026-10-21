@@ -54,9 +54,9 @@ pub(crate) fn copy_path(path: &Path, taken: impl Fn(&Path) -> bool) -> PathBuf {
     let ext = ext.unwrap_or_default();
     let named = |suffix: String| path.with_file_name(format!("{stem}_copy{suffix}{ext}"));
     std::iter::once(named(String::new()))
-        .chain((1..).map(|i| named(format!("_{i}"))))
+        .chain((1..=u32::MAX).map(|i| named(format!("_{i}"))))
         .find(|p| !taken(p))
-        .expect("an unbounded search finds a free name")
+        .expect("four billion candidates hold a free name")
 }
 
 // `declared` naming the file `name` in the same place.

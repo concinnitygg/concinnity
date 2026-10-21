@@ -57,6 +57,10 @@ impl MtlContext {
     // until unified memory is exhausted and the GPU faults / the host panics.
     // Draining per frame frees each frame's command buffers once the GPU
     // retires them, bounding VRAM to the work actually in flight.
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "keeps the `RenderBackend::draw_frame` signature it serves"
+    )]
     pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
         objc2::rc::autoreleasepool(|_| drive_frame(self, params))
     }

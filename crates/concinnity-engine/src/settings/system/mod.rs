@@ -184,7 +184,7 @@ impl SettingsSystem {
     // Apply this tick's commands against the parked state. With no parked
     // state (graphics init has not succeeded) or op queue the commands wait
     // in retention.
-    fn apply(&self, ctx: &mut PipelineContext<'_>) {
+    fn apply(ctx: &mut PipelineContext<'_>) {
         let Some(mut state) = SettingsSlot::take(ctx.resources) else {
             return;
         };
@@ -214,7 +214,7 @@ impl core::fmt::Debug for SettingsState {
 
 impl System for SettingsSystem {
     fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
-        self.apply(ctx);
+        Self::apply(ctx);
         // Written in the same step that made the change, so a tick that stops
         // the run still persists it.
         self.persist(ctx);

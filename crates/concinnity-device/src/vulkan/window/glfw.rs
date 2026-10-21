@@ -765,6 +765,10 @@ impl GlfwWindow {
 
     // GLFW window coordinates start below whatever decoration the desktop
     // draws, so nothing overlaps the top of the frame.
+    #[expect(
+        clippy::unused_self,
+        reason = "every window backend answers through its window"
+    )]
     pub(crate) fn top_content_inset(&self) -> f32 {
         0.0
     }

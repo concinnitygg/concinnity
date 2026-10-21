@@ -946,6 +946,10 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 }
 
 impl DxContext {
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "keeps the `RenderBackend::draw_frame` signature it serves"
+    )]
     pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()> {
         drive_frame(self, params)
     }

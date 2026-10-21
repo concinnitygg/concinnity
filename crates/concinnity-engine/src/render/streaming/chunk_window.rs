@@ -179,7 +179,6 @@ impl ChunkWindow {
     // camera, the effective full-detail radius, and (for hysteresis) the detail
     // it is currently tracked at.
     fn target_detail(
-        &self,
         c: ChunkCoord,
         camera: ChunkCoord,
         current: Option<ChunkDetail>,
@@ -285,7 +284,7 @@ impl ChunkWindow {
             .states
             .iter()
             .filter(|(c, slot)| {
-                self.target_detail(**c, camera, Some(slot.detail), near_radius) != slot.detail
+                Self::target_detail(**c, camera, Some(slot.detail), near_radius) != slot.detail
             })
             .map(|(c, _)| *c)
             .collect();
@@ -315,7 +314,7 @@ impl ChunkWindow {
 
         let mut to_load = Vec::with_capacity(candidates.len());
         for &c in &candidates {
-            let detail = self.target_detail(c, camera, None, near_radius);
+            let detail = Self::target_detail(c, camera, None, near_radius);
             self.states.insert(
                 c,
                 Slot {

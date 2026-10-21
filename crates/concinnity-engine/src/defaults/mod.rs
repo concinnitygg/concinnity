@@ -26,8 +26,8 @@ mod loading;
 mod physics;
 
 use crate::components::{EngineDefaults, Window};
+use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::{AssetId, AssetIdsExhausted, MintedIds};
-use crate::ecs::{FontHandle, PipelineContext};
 use crate::error::WorldError;
 
 pub use font::{HUD_FONT_SIZE_PX, HudFont, hud_font};
@@ -105,13 +105,6 @@ impl Minter {
     // The next name for an injected component.
     fn id(&mut self) -> Result<AssetId, AssetIdsExhausted> {
         self.ids.next_id()
-    }
-
-    // The font every injected chip and label draws with. Baked into the world
-    // on first use and shared from there, so the chips of both HUDs and the
-    // loading label land on one atlas.
-    fn hud_font(&self, ctx: &mut PipelineContext<'_>) -> Result<FontHandle, WorldError> {
-        hud_font(ctx)
     }
 }
 

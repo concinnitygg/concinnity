@@ -53,7 +53,7 @@ pub(super) fn build_area_lights(
 pub(super) struct SceneInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
     pub(super) local_lights: &'a [GpuLight],
-    pub(super) light_uniforms: LightUniforms,
+    pub(super) light_uniforms: &'a LightUniforms,
 }
 
 // Upload the geometry, the per-frame uniform rings and the local lights, and
@@ -166,7 +166,7 @@ pub(super) fn build_scene_resources(
     )?;
 
     for ubo in &light_ubo_buffers {
-        upload_light_uniforms(ubo, &light_uniforms);
+        upload_light_uniforms(ubo, light_uniforms);
     }
     // Empty scene keeps the 1-element placeholder (nothing copied in).
     upload_static_records(&local_light_buffer, local_lights);
@@ -194,7 +194,7 @@ pub(super) fn build_scene_resources(
             light_ubo_buffers,
             local_light_buffer,
             lights: concinnity_engine::render::light::state::LightState::new(
-                light_uniforms,
+                *light_uniforms,
                 local_lights,
                 frames,
             ),

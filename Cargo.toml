@@ -164,20 +164,12 @@ similar_names = "allow"
 many_single_char_names = "allow"
 pub_underscore_fields = "allow"
 struct_excessive_bools = "allow"
-fn_params_excessive_bools = "allow"
 must_use_candidate = "allow"
 missing_errors_doc = "allow"
-# Large values here are usually consumed, where a move beats a borrow and copy.
-large_types_passed_by_value = "allow"
-# Local items read best beside their only use; `Default::default()` fills fields whose type is plain.
+# Local items read best beside their only use.
 items_after_statements = "allow"
-default_trait_access = "allow"
 # Handlers and callbacks keep the signature their caller expects.
 unnecessary_wraps = "allow"
-unused_self = "allow"
-# Unit suffixes like `_us` name what a field holds; unbounded ranges here end in `find`.
-struct_field_names = "allow"
-maybe_infinite_iter = "allow"
 # Exact float compares here are change detection, tie-breaks and sentinels; an epsilon changes behavior.
 float_cmp = "allow"
 # Not yet enforced: each call site needs a decision, not a mechanical fix.

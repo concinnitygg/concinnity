@@ -189,7 +189,7 @@ impl Solver {
         let push = |soft: Softness, use_bias: bool| Push {
             soft,
             inv_h,
-            max_push: config.max_push_velocity,
+            max_speed: config.max_push_velocity,
             use_bias,
         };
 

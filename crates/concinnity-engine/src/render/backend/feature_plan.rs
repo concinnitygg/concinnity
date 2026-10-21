@@ -106,12 +106,24 @@ mod tests {
     use super::*;
     use crate::components::AaMode;
 
-    fn graphics(taa: bool, upscaling: bool, ssr: bool, rt: bool) -> ResolvedGraphics {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Feature {
+        Taa,
+        Upscaling,
+        Ssr,
+        Rt,
+    }
+
+    fn graphics(on: &[Feature]) -> ResolvedGraphics {
         let mut g = ResolvedGraphics::default();
-        g.anti_aliasing.mode = if taa { AaMode::Taa } else { AaMode::Off };
-        g.anti_aliasing.upscaling = upscaling;
-        g.reflections.screen_space = ssr;
-        g.reflections.ray_traced = rt;
+        g.anti_aliasing.mode = if on.contains(&Feature::Taa) {
+            AaMode::Taa
+        } else {
+            AaMode::Off
+        };
+        g.anti_aliasing.upscaling = on.contains(&Feature::Upscaling);
+        g.reflections.screen_space = on.contains(&Feature::Ssr);
+        g.reflections.ray_traced = on.contains(&Feature::Rt);
         g
     }
 
@@ -122,7 +134,7 @@ mod tests {
 
     #[test]
     fn rt_needs_a_capable_device_and_reports_a_refusal() {
-        let g = graphics(false, false, false, true);
+        let g = graphics(&[Feature::Rt]);
         let on = FeaturePlan::resolve(&g, CAPABLE);
         assert!(on.rt.is_some() && !on.rt_refused);
         assert!(on.ssr_resources && on.gbuffer, "rt reuses the ssr plumbing");
@@ -139,7 +151,7 @@ mod tests {
 
     #[test]
     fn an_upscaler_keeps_the_velocity_and_drops_the_taa_resolve() {
-        let g = graphics(true, false, false, false);
+        let g = graphics(&[Feature::Taa]);
         let plain = FeaturePlan::resolve(&g, CAPABLE);
         assert!(plain.temporal && plain.taa_resolve && plain.gbuffer);
         let upscaled = FeaturePlan::resolve(
@@ -152,7 +164,7 @@ mod tests {
         assert!(upscaled.temporal && !upscaled.taa_resolve);
         // An upscaler alone still takes the velocity pre-pass.
         let alone = FeaturePlan::resolve(
-            &graphics(false, false, false, false),
+            &graphics(&[]),
             BackendFacts {
                 upscaling: true,
                 ..CAPABLE
@@ -164,20 +176,20 @@ mod tests {
     #[test]
     fn the_upscaler_fact_is_the_callers_not_the_settings() {
         // The settings request an upscaler, but the caller reports none built.
-        let g = graphics(false, true, false, false);
+        let g = graphics(&[Feature::Upscaling]);
         assert!(!FeaturePlan::resolve(&g, CAPABLE).temporal);
     }
 
     #[test]
     fn the_gbuffer_follows_every_screen_space_consumer() {
-        let g = graphics(false, false, false, false);
+        let g = graphics(&[]);
         let p = FeaturePlan::resolve(&g, CAPABLE);
         assert_eq!(
             p.gbuffer,
             p.ssao || p.ssgi || p.temporal || p.ssr_resources,
             "{p:?}"
         );
-        let ssr = FeaturePlan::resolve(&graphics(false, false, true, false), CAPABLE);
+        let ssr = FeaturePlan::resolve(&graphics(&[Feature::Ssr]), CAPABLE);
         assert!(ssr.ssr && ssr.ssr_resources && ssr.gbuffer);
     }
 

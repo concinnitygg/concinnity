@@ -262,7 +262,7 @@ impl SettingsState {
             _ if !stepper => return misrouted(cmd),
             K::GraphicsQuality => return self.apply_quality_preset(ctx, cfg, cmd),
             K::Resolution => return self.apply_resolution(ctx, ops, cfg, cmd),
-            K::GraphicsApi => return self.apply_graphics_api(ctx, cfg, cmd),
+            K::GraphicsApi => return Self::apply_graphics_api(ctx, cfg, cmd),
             key @ (K::Vsync
             | K::PerfStats
             | K::ShowFps
@@ -392,7 +392,6 @@ impl SettingsState {
     // Restart-required: the choice is persisted and tried on the next launch,
     // while this one keeps the backend it built.
     fn apply_graphics_api(
-        &self,
         ctx: &mut PipelineContext<'_>,
         cfg: &mut StoredSettings,
         cmd: &SettingCommand,

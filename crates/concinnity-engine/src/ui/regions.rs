@@ -127,22 +127,35 @@ pub(super) fn setting_row_disabled(
     matches!(action, Some(UiAction::Setting { key, .. }) if disabled_rows.contains(key))
 }
 
-// A region's `(hovered, fire)`. While the focus cursor is set it owns the hover
-// slot: the focused region styles and fires on confirm, and the mouse's region
-// does neither. Otherwise the mouse hovers, a click fires, and an unfocused
-// confirm may fall through to a full-canvas region.
-fn hover_and_fire(
-    has_focus: bool,
-    pad_focused: bool,
-    mouse_hovered: bool,
-    clicked: bool,
-    confirm: bool,
-    fallback_fire: bool,
-) -> (bool, bool) {
-    if has_focus {
-        (pad_focused, pad_focused && confirm)
-    } else {
-        (mouse_hovered, (mouse_hovered && clicked) || fallback_fire)
+// What drives a region this frame: the focus cursor while it is set, else the
+// mouse.
+#[derive(Debug, Clone, Copy)]
+enum Driver {
+    // `focused`: the cursor rests on this region.
+    Focus {
+        focused: bool,
+        confirm: bool,
+    },
+    // `fallback_fire`: an unfocused confirm falling through to a full-canvas
+    // region.
+    Mouse {
+        hovered: bool,
+        clicked: bool,
+        fallback_fire: bool,
+    },
+}
+
+// A region's `(hovered, fire)`. The focused region styles and fires on
+// confirm, and while focus is set the mouse's region does neither. Otherwise the
+// mouse hovers, a click fires, and the fallback fires regardless.
+fn hover_and_fire(driver: Driver) -> (bool, bool) {
+    match driver {
+        Driver::Focus { focused, confirm } => (focused, focused && confirm),
+        Driver::Mouse {
+            hovered,
+            clicked,
+            fallback_fire,
+        } => (hovered, (hovered && clicked) || fallback_fire),
     }
 }
 
@@ -241,14 +254,19 @@ impl UiInputSystem {
                 mouse_hovered = mouse_hovered && point_in_rect(qx, qy, *band);
             }
             let fallback_fire = confirm_fallback && full_window && !confirm_used;
-            let (hovered, fire) = hover_and_fire(
-                focus_index.is_some(),
-                pad_focused,
-                mouse_hovered,
-                input.left_click,
-                intent.confirm,
-                fallback_fire,
-            );
+            let driver = if focus_index.is_some() {
+                Driver::Focus {
+                    focused: pad_focused,
+                    confirm: intent.confirm,
+                }
+            } else {
+                Driver::Mouse {
+                    hovered: mouse_hovered,
+                    clicked: input.left_click,
+                    fallback_fire,
+                }
+            };
+            let (hovered, fire) = hover_and_fire(driver);
 
             if hovered && !entry.was_hovered {
                 set_label_style(ctx, r.label.map(Ref::id), r.hover_color, r.hover_scale);
@@ -396,15 +414,27 @@ mod tests {
     #[test]
     fn mouse_hovers_and_clicks_without_focus() {
         assert_eq!(
-            hover_and_fire(false, false, true, false, false, false),
+            hover_and_fire(Driver::Mouse {
+                hovered: true,
+                clicked: false,
+                fallback_fire: false
+            }),
             (true, false)
         );
         assert_eq!(
-            hover_and_fire(false, false, true, true, false, false),
+            hover_and_fire(Driver::Mouse {
+                hovered: true,
+                clicked: true,
+                fallback_fire: false
+            }),
             (true, true)
         );
         assert_eq!(
-            hover_and_fire(false, false, false, true, false, false),
+            hover_and_fire(Driver::Mouse {
+                hovered: false,
+                clicked: true,
+                fallback_fire: false
+            }),
             (false, false)
         );
     }
@@ -412,11 +442,19 @@ mod tests {
     #[test]
     fn unfocused_confirm_fires_only_through_the_fallback() {
         assert_eq!(
-            hover_and_fire(false, false, true, false, true, false),
+            hover_and_fire(Driver::Mouse {
+                hovered: true,
+                clicked: false,
+                fallback_fire: false
+            }),
             (true, false)
         );
         assert_eq!(
-            hover_and_fire(false, false, false, false, true, true),
+            hover_and_fire(Driver::Mouse {
+                hovered: false,
+                clicked: false,
+                fallback_fire: true
+            }),
             (false, true)
         );
     }
@@ -425,15 +463,24 @@ mod tests {
     fn focus_owns_the_hover_slot() {
         // The mouse's region neither hovers nor fires while focus is elsewhere.
         assert_eq!(
-            hover_and_fire(true, false, true, true, true, true),
+            hover_and_fire(Driver::Focus {
+                focused: false,
+                confirm: true
+            }),
             (false, false)
         );
         assert_eq!(
-            hover_and_fire(true, true, false, false, false, false),
+            hover_and_fire(Driver::Focus {
+                focused: true,
+                confirm: false
+            }),
             (true, false)
         );
         assert_eq!(
-            hover_and_fire(true, true, false, false, true, false),
+            hover_and_fire(Driver::Focus {
+                focused: true,
+                confirm: true
+            }),
             (true, true)
         );
     }

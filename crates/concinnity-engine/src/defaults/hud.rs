@@ -70,7 +70,7 @@ where
         .filter(|&i| slots[i](&mut hud).is_none())
         .collect();
     if !unset.is_empty() {
-        let font = minter.hud_font(ctx)?;
+        let font = super::hud_font(ctx)?;
         for i in unset {
             let id = minter.id()?;
             *slots[i](&mut hud) = Some(Ref::new(id));

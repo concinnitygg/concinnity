@@ -77,12 +77,12 @@ fn record_skinned_claim(
 pub struct SpawnSystem {
     // Cursors into the Events<DespawnRequest>, Events<ReparentRequest> and
     // Events<SpawnRequest> queues.
-    despawn_cmd_cursor: EventCursor,
-    reparent_cmd_cursor: EventCursor,
-    spawn_cmd_cursor: EventCursor,
+    despawns: EventCursor,
+    reparents: EventCursor,
+    spawns: EventCursor,
     // Cursor into the Events<VisibilityRequest> queue (runtime show/hide:
     // Behavior show/hide nodes).
-    visibility_cmd_cursor: EventCursor,
+    visibility: EventCursor,
 }
 
 impl SpawnSystem {
@@ -153,9 +153,7 @@ impl SpawnSystem {
         // gone from the GlobalTransform x RenderHandle join this frame and
         // contributes nothing to any pass.
         let despawn_targets = match ctx.events::<DespawnRequest>() {
-            Some(events) => {
-                frame.collect(events.read(&mut self.despawn_cmd_cursor).map(|r| r.target))
-            }
+            Some(events) => frame.collect(events.read(&mut self.despawns).map(|r| r.target)),
             None => frame.collect([]),
         };
         for &target in &despawn_targets {
@@ -169,7 +167,7 @@ impl SpawnSystem {
         // slots. After the despawn drain so a request naming a just-removed
         // entity simply finds nothing to switch.
         let vis_reqs = match ctx.events::<VisibilityRequest>() {
-            Some(events) => frame.collect(events.read(&mut self.visibility_cmd_cursor).copied()),
+            Some(events) => frame.collect(events.read(&mut self.visibility).copied()),
             None => frame.collect([]),
         };
         for &req in &vis_reqs {
@@ -184,7 +182,7 @@ impl SpawnSystem {
         // drain so a reparent naming a just-removed entity simply finds
         // nothing to move.
         let reparents = match ctx.events::<ReparentRequest>() {
-            Some(events) => frame.collect(events.read(&mut self.reparent_cmd_cursor).copied()),
+            Some(events) => frame.collect(events.read(&mut self.reparents).copied()),
             None => frame.collect([]),
         };
         for &req in &reparents {
@@ -208,7 +206,7 @@ impl SpawnSystem {
         // slots. After the despawn / reparent drains so a spawn can reuse
         // slots freed this same frame.
         let spawn_reqs = match ctx.events::<SpawnRequest>() {
-            Some(events) => frame.collect(events.read(&mut self.spawn_cmd_cursor).copied()),
+            Some(events) => frame.collect(events.read(&mut self.spawns).copied()),
             None => frame.collect([]),
         };
         for &req in &spawn_reqs {

@@ -13,6 +13,7 @@ const REMEMBERED_TICKS: usize = 16;
 
 /// One newly completed frame, against the one completed before it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[expect(clippy::struct_field_names, reason = "the shared suffix is the unit")]
 pub(crate) struct Shown {
     /// Microseconds of run time the camera's pose advanced between the two.
     pub step_us: u32,

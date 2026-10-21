@@ -398,7 +398,7 @@ fn template_pick_opens_detail_then_apply_adds_idempotently() {
 fn template_detail_rows_and_close() {
     let mut h = hook(Vec::new());
     h.open_template_detail(0);
-    let rows = h.template_rows(0);
+    let rows = EditorHook::template_rows(0);
     let names = rows.iter().filter(|r| !r.is_header).count();
     assert_eq!(
         names,

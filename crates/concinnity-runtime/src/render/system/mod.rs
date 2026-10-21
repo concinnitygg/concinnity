@@ -149,6 +149,13 @@ impl GraphicsSystem {
     // Detect the GPU performance profile for quality auto-config and what the
     // device can run. Probes the real device in production; a test-injected
     // profile takes its place so unit tests never create a GPU handle.
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::unused_self,
+            reason = "test builds read an injected profile through `self`"
+        )
+    )]
     fn detect_device(&self) -> backend::DeviceProbe {
         #[cfg(test)]
         if let Some(hooks) = &self.test_hooks {

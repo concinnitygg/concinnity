@@ -27,6 +27,10 @@ pub(super) struct AtmosphereDrive {
 }
 
 impl AtmosphereDrive {
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "stored, so a borrow would only add a copy"
+    )]
     pub(super) fn new(settings: AtmosphereSettings) -> Self {
         Self {
             settings,
